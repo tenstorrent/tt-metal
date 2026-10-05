@@ -1479,6 +1479,7 @@
 #         the ~180 GB tilized-cache read over NFS. A cold cache BUILD exceeds it.
 #   [2/3] 35 min: same profile as [1/3] (5 ring chunks instead of 2; compile/IO dominate).
 #   [3/3] 30 min: one runtime build + 6 short prefills, no golden readback; cache read + JIT dominate.
+# test weka path
 - name: "(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@2.5k, 5k@1k + variable-chunk smoke 1k vs 8k"
   fabric_profile: torus_xy
   cmd: |
@@ -1492,9 +1493,9 @@
       export LOGURU_LEVEL=INFO
       export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
       export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-      export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
-      export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
-      export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
+      export HF_MODEL=/mnt/weka/model-weights/llm/openai/gpt-oss-120b
+      export TT_CACHE_PATH=/mnt/weka/model-weights/llm/openai/gpt-oss-120b
+      export PREFILL_TRACE_DIR=/mnt/weka/model-weights/llm/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
       export GPT_OSS_WEIGHTS_FROM_CACHE=1
       export EXPERT_DTYPE=bf8
       export PREFILL_CHUNKED=1
@@ -1510,9 +1511,9 @@
       export LOGURU_LEVEL=INFO
       export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
       export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-      export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
-      export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
-      export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
+      export HF_MODEL=/mnt/weka/model-weights/llm/openai/gpt-oss-120b
+      export TT_CACHE_PATH=/mnt/weka/model-weights/llm/openai/gpt-oss-120b
+      export PREFILL_TRACE_DIR=/mnt/weka/model-weights/llm/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
       export GPT_OSS_WEIGHTS_FROM_CACHE=1
       export EXPERT_DTYPE=bf8
       export PREFILL_CHUNKED=1
@@ -1528,8 +1529,8 @@
       export LOGURU_LEVEL=INFO
       export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
       export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-      export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
-      export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
+      export HF_MODEL=/mnt/weka/model-weights/llm/openai/gpt-oss-120b
+      export TT_CACHE_PATH=/mnt/weka/model-weights/llm/openai/gpt-oss-120b
       export GPT_OSS_WEIGHTS_FROM_CACHE=1
       export EXPERT_DTYPE=bf8
       export VARCHUNK_SMALL=1024
@@ -1585,6 +1586,7 @@
 # an earlier one failed; the job fails if any of them failed.
 # Full 2K accuracy remains a required local check; restore its CI job before
 # project completion (see the model README).
+# test weka path
 - name: "(Llama-3.1-8B) prefill components, decoder + book top-5 accuracy 2k, 4k"
   fabric_profile: torus_xy
   cmd: |
@@ -1595,7 +1597,7 @@
     t0=$SECONDS
     rc=0
     (
-      export LLAMA31_8B_CHECKPOINT=/mnt/models/meta-llama/Llama-3.1-8B-Instruct
+      export LLAMA31_8B_CHECKPOINT=/mnt/weka/model-weights/llm/meta-llama/Llama-3.1-8B-Instruct
       # No set -e: the unit tests run even if the host tests fail; exit 1 if either failed.
       timeout -k 2m 25m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=16
@@ -1615,7 +1617,7 @@
     t0=$SECONDS
     rc=0
     (
-      export LLAMA31_8B_CHECKPOINT=/mnt/models/meta-llama/Llama-3.1-8B-Instruct
+      export LLAMA31_8B_CHECKPOINT=/mnt/weka/model-weights/llm/meta-llama/Llama-3.1-8B-Instruct
       timeout -k 2m 15m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
         export OMP_NUM_THREADS=16
@@ -1650,6 +1652,7 @@
 
 # One SC1 allocation checks the KV table and all layers of one active slot at PCC >= 0.99.
 # Use the first 32K tokens of the saved 128K reference; the model retains two cache slots.
+# test weka path
 - name: "(Llama-3.1-8B) prefill KV table and runner accuracy 32k, SC1"
   cmd: |
     set -euo pipefail
@@ -1660,7 +1663,7 @@
     cd "${TT_METAL_HOME}"
     export PREFILL_MAX_SEQ_LEN=32768
     export PREFILL_PRODUCER_NUM_USERS=1
-    export PREFILL_PRODUCER_SLOT_TRACES=/mnt/models/llama-3.1-8b-prefill-cache/golden/llama31_8b_kv_131072_32L
+    export PREFILL_PRODUCER_SLOT_TRACES=/mnt/weka/model-cache/stable/llama-3.1-8b-prefill-cache/golden/llama31_8b_kv_131072_32L
     exec bash models/demos/llama_3p1_8b_d_p/scripts/ci/run_prefill_acceptance.sh
   test_type: llama31_prefill_runner
   test_tags: [llama31, runner, kv_cache]
