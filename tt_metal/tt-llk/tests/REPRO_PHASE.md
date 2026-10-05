@@ -60,3 +60,34 @@ for t in unpack math pack; do
   cmp /tmp/text_0.bin /tmp/text_100.bin && echo "$t: same code"
 done
 ```
+
+## Results: silicon against Versim (2026-10-05)
+
+Silicon: the n150 in IRD machine bgd-lab-08. Versim: `/proj_sw/user_dev/ndivnic/tt-umd-simulators/build/versim-wormhole-b0`.
+For every build, the `.text` sections of `unpack.elf`, `math.elf` and `pack.elf` are identical between the silicon
+and the Versim run. TILE_LOOP cycles for 256 tiles; the CSV files are in `repro_phase_results/`.
+
+### Experiment 2: N nops in `_llk_pack_init_` (commit d8bed466332, no injected load)
+
+| N | inner `ttpacr` | silicon, peers idle | Versim, peers idle | silicon, peers end | Versim, peers end |
+|--:|---|--:|--:|--:|--:|
+| 0 | 0xf1d4 | 9,070 | 9,070 | 11,674 | 11,664 |
+| 1 | 0xf1dc | 9,317 | 9,313 | 11,669 | 11,418 |
+| 2 | 0xf1e0 | 9,064 | 9,070 | 11,664 | 11,653 |
+| 3 | 0xf1e4 | 9,071 | 9,070 | 11,668 | running |
+| 4 | 0xf1e8 | 9,316 | 9,317 | 11,658 | running |
+
+### Experiment 1: one L1 load at runtime spin iteration K, one ELF (commit 81f48070eda)
+
+| K | silicon | Versim |
+|--:|--:|--:|
+| 0 (no load) | 9,070 | 9,070 |
+| 100 | 9,323 | 9,323 |
+| 125 | 9,320 | 9,320 |
+| 150 | 9,317 | 9,317 |
+| 175 | 9,314 | running |
+| 200 | 9,070 | running |
+| 225 | 9,309 | running |
+| 250 to 350 | 9,306 to 9,294 | running |
+| 375 | 9,070 | running |
+| 400 | 9,289 | running |
