@@ -431,10 +431,11 @@ public:
     }
 
     std::string rvv_compile_flags(const Params& params) const override {
-        // Only TRISC0 of each Neo has the vector unit on Quasar.
-        constexpr uint32_t trisc_per_neo = 4;
+        // Only TRISC0 of each Neo has the vector unit on Quasar. This is the single source of truth:
+        // a kernel only opts in, and the build applies these flags wherever they are non-empty.
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
-              params.processor_class == HalProcessorClassType::COMPUTE && params.processor_id % trisc_per_neo == 0)) {
+              params.processor_class == HalProcessorClassType::COMPUTE &&
+              params.processor_id % NUM_TRISC_CORES == 0)) {
             return {};
         }
 

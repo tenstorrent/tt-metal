@@ -323,9 +323,10 @@ public:
     virtual std::vector<std::string> srcs(const Params& params) const = 0;
     // Returns a string of common flags to be added to compiler and linker command lines.
     virtual std::string common_flags(const Params& params) const = 0;
-    // Returns the compiler flags that enable RISC-V Vector (Zve32f) code generation for an
-    // opt-in kernel compile on this processor (see ComputeConfig::enable_trisc2_rvv), or an
-    // empty string when the processor has no vector unit / the arch does not support it.
+    // Returns the compiler flags that enable RISC-V Vector code generation for an opt-in kernel
+    // compile on this processor (ComputeConfig::enable_trisc2_rvv, QuasarComputeConfig::
+    // enable_trisc0_rvv), or an empty string when the processor has no vector unit / the arch does
+    // not support it. This is the only place that decides which processor has the vector unit.
     // Applied per kernel at recipe-export time, never to firmware or default kernel builds.
     virtual std::string rvv_compile_flags(const Params& /*params*/) const { return {}; }
     // Returns the path to the linker script, relative to the tt-metal root.

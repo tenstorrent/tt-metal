@@ -22,10 +22,14 @@ struct ComputeHardwareConfig {
 
     struct Compute1XXConfig {
         Precision bfp_pack_precision_mode = Precision::Approximate;
+
+        bool enable_trisc2_rvv = false;
     };
     std::optional<Compute1XXConfig> config_1xx = std::nullopt;
 
-    struct Compute2XXConfig {};
+    struct Compute2XXConfig {
+        bool enable_trisc0_rvv = false;
+    };
     std::optional<Compute2XXConfig> config_2xx = std::nullopt;
 };
 ```

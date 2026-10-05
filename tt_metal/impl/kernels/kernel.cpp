@@ -111,6 +111,15 @@ fs::path resolve_compiler_include_dir(const fs::path& given) {
     }
     return resolved;
 }
+
+// The HAL decides which compute processors get RVV flags (JitBuildState::supports_rvv). A kernel
+// that opts in where none do (e.g. Wormhole) would otherwise silently build scalar code.
+void validate_rvv_opt_in(const JitBuildSettings& kernel, bool any_build_supports_rvv) {
+    TT_FATAL(
+        !kernel.get_rvv_enabled() || any_build_supports_rvv,
+        "Kernel {} enables RVV code generation, but no compute processor on this architecture supports it",
+        kernel.get_full_kernel_name());
+}
 }  // namespace
 
 KernelSource::KernelSource(std::string source, SourceType source_type, fs::path path) :
@@ -1031,6 +1040,7 @@ void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_
     uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
     auto build_states = BuildEnvManager::get_instance(extract_context_id(device))
                             .get_kernel_build_states(device->build_id(), tensix_core_type, compute_class_idx);
+    validate_rvv_opt_in(*this, std::ranges::any_of(build_states, &JitBuildState::supports_rvv));
     jit_build_subset(build_states, this);
 }
 
@@ -1548,11 +1558,17 @@ void QuasarComputeKernel::generate_binaries(IDevice* device, JitBuildOptions&) c
     const uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
 
     // One compile/link per TRISC slot (UNPACK/MATH/PACK/ISOLATE_SFPU), shared across all NEOs using that slot.
+    std::vector<const JitBuildState*> build_states;
+    build_states.reserve(this->trisc_binary_groups_.size());
     for (const auto& group : this->trisc_binary_groups_) {
         const int processor_id = static_cast<int>(enchantum::to_underlying(group[0]));
-        const JitBuildState& build_state = BuildEnvManager::get_instance(extract_context_id(device)).get_kernel_build_state(
-            device->build_id(), tensix_core_type, compute_class_idx, processor_id);
-        jit_build(build_state, this);
+        build_states.push_back(&BuildEnvManager::get_instance(extract_context_id(device))
+                                    .get_kernel_build_state(device->build_id(), tensix_core_type, compute_class_idx, processor_id));
+    }
+    validate_rvv_opt_in(
+        *this, std::ranges::any_of(build_states, [](const JitBuildState* state) { return state->supports_rvv(); }));
+    for (const JitBuildState* build_state : build_states) {
+        jit_build(*build_state, this);
     }
 }
 
