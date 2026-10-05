@@ -1080,6 +1080,94 @@ def test_eltwise_unary_sfpu_signbit(
     )
 
 
+# Both int32 extremes, both signs and zero. INT_MIN is deliverable because the words go in
+# as two's complement; StimuliSpec would clamp it to INT_MIN + 1, so the input is built here.
+_SIGNBIT_INT32_VALUES = [-(2**31), -100, -5, -1, 0, 1, 5, 100, 2**31 - 1]
+
+
+@parametrize(
+    dest_acc=[DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_signbit_int32(
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    """signbit on Int32 returns bit 31 of every two's-complement input word as 0 or 1.
+
+    The values repeat over every lane rather than heading each face, so neighbouring rows
+    differ: a body run under another op's SFPLOADMACRO program stores a value derived from
+    the wrong row, and the exact compare catches it.
+    """
+    _skip_coverage_unsupported(MathOperation.Signbit)
+
+    formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    tile_cnt = num_elements // (TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1])
+    values = torch.tensor(_SIGNBIT_INT32_VALUES, dtype=torch.int32)
+    src_A = values.repeat(num_elements // values.numel() + 1)[:num_elements]
+
+    golden_tensor = get_golden_generator(UnarySFPUGolden)(
+        MathOperation.Signbit,
+        src_A,
+        formats.output_format,
+        dest_acc,
+        formats.input_format,
+        input_dimensions,
+    )
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=MathOperation.Signbit),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_A.clone(),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=tile_cnt,
+            twos_complement=True,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+    )
+
+    res_tensor = torch.tensor(configuration.run().result, dtype=torch.int64)
+    golden = golden_tensor.to(torch.int64)
+    assert res_tensor.shape == golden.shape, "Result and golden differ in length"
+    mismatch = torch.nonzero(res_tensor != golden).flatten()
+    assert mismatch.numel() == 0, (
+        f"{mismatch.numel()} of {golden.numel()} words differ from bit 31 of the input; first: "
+        + ", ".join(
+            f"[{i}] in {int(src_A[i])} got {int(res_tensor[i]) & 0xFFFFFFFF:#x} want {int(golden[i])}"
+            for i in mismatch[:8].tolist()
+        )
+    )
+
+
 # Predicate ops (write 1.0/0.0). Finite-only stimuli give constant output (PCC
 # undefined), so drive them with a spec interleaving +inf / -inf / nan and finite values.
 ISINF_ISNAN_MATHOPS = [
