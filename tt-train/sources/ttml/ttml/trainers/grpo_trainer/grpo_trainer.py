@@ -134,32 +134,21 @@ ROLLOUT_SOURCES = ("ttml",)
 def build_rollout_sampler(
     source: str,
     *,
-    transformer_config: Any,
-    device_config: Any,
-    model_source: str,
+    model: Any,
+    tokenizer: Any,
     max_completion_length: int,
     temperature: float,
     completions_per_prompt: int,
 ) -> RolloutSampler:
     """Build the :class:`RolloutSampler` named by ``source``.
 
-    ``"ttml"`` builds a :class:`TTMLRolloutSampler`, which opens the device and
-    loads the ttml model and tokenizer for ``transformer_config.model_type``
-    from ``model_source``.
+    ``"ttml"`` builds a :class:`TTMLRolloutSampler` that generates with
+    ``model`` and ``tokenizer`` (the trainer's own) on the already-open device.
     """
     if source == "ttml":
-        # Imported lazily so ``import ttml.trainers`` doesn't pull in transformers / huggingface_hub.
         from .ttml_rollout_sampler import TTMLRolloutSampler
 
-        return TTMLRolloutSampler(
-            model_kind=transformer_config.model_type,
-            transformer_config=transformer_config,
-            device_config=device_config,
-            model_source=model_source,
-            max_completion_length=max_completion_length,
-            temperature=temperature,
-            completions_per_prompt=completions_per_prompt,
-        )
+        return TTMLRolloutSampler(model, tokenizer, max_completion_length, temperature, completions_per_prompt)
     raise ValueError(f"unknown rollout_source {source!r}; expected one of {list(ROLLOUT_SOURCES)}")
 
 
@@ -192,7 +181,7 @@ class GRPOConfig:
     num_generations: int
     warmup_steps: int
     # Which RolloutSampler the trainer builds (see ROLLOUT_SOURCES above).
-    # "ttml": in-process TTMLRolloutSampler that also owns the policy model.
+    # "ttml": in-process TTMLRolloutSampler that generates with the trainer's policy model.
     rollout_source: str
     # LR schedule shape AFTER warmup. Names match HuggingFace transformers / TRL
     # so users familiar with those configs can map yamls directly:
@@ -1005,17 +994,19 @@ class GRPOTrainer:
         """
         Args:
             transformer_config: Model config; ``model_type`` selects the model
-                family for the rollout sampler.
-            device_config: Device mesh config the rollout sampler opens.
+                family.
+            device_config: Device mesh config the trainer opens.
             model_source: HuggingFace model ID or local checkpoint directory
-                the rollout sampler loads, and whose HF config is saved with
-                checkpoints.
+                the trainer loads the model from, and whose HF config is saved
+                with checkpoints.
 
-        The trainer builds its :class:`RolloutSampler` from
-        ``config.rollout_source`` and exposes it as ``self.rollout_sampler``.
-        For ``"ttml"`` the sampler also owns the policy model and tokenizer
-        (``self.model`` / ``self.tokenizer``); the trainer runs its own forward
-        pass with gradients on that model and never changes its run mode.
+        The trainer opens the device and builds the policy model and tokenizer
+        (``self.model`` / ``self.tokenizer``) with
+        :func:`~ttml.trainers.grpo_trainer.grpo_ttml_model.setup_ttml_model`,
+        then builds its :class:`RolloutSampler` from ``config.rollout_source``
+        with that model and tokenizer, exposed as ``self.rollout_sampler``. The
+        trainer runs its own forward pass with gradients on the model and never
+        changes its run mode.
         """
         if optimizer_dict is None:
             raise ValueError("GRPOTrainer: 'optimizer_dict' is required.")
@@ -1029,17 +1020,20 @@ class GRPOTrainer:
         self.callbacks: List[Any] = list(callbacks or [])
         self.model_source = model_source
 
+        # Imported lazily so ``import ttml.trainers`` doesn't pull in transformers / huggingface_hub.
+        from .grpo_ttml_model import setup_ttml_model
+
+        self.model: Any
+        self.tokenizer: Any
+        self.model, self.tokenizer = setup_ttml_model(transformer_config, device_config, model_source)
         self.rollout_sampler: RolloutSampler = build_rollout_sampler(
             config.rollout_source,
-            transformer_config=transformer_config,
-            device_config=device_config,
-            model_source=model_source,
+            model=self.model,
+            tokenizer=self.tokenizer,
             max_completion_length=config.max_completion_length,
             temperature=config.temperature,
             completions_per_prompt=config.num_generations,
         )
-        self.model: Any = self.rollout_sampler.model
-        self.tokenizer: Any = self.rollout_sampler.tokenizer
 
         # Per-step accumulator rebuilt every optimizer step by
         # ``_reset_step_metrics``. Callbacks can inject additional keys here
@@ -1196,11 +1190,11 @@ class GRPOTrainer:
         #     ``initialize_parallelism_context`` and synced with
         #     ``synchronize_gradients``. This is the general-purpose DDP/TP
         #     mechanism used across ttml (the shared trainer, the non-GRPO qwen3
-        #     examples, etc.); the Llama rollout sampler initializes it.
-        #   * Named-mesh DDP — the sampler opened a named mesh (via
+        #     examples, etc.); ``setup_ttml_model`` initializes it for Llama.
+        #   * Named-mesh DDP — ``setup_ttml_model`` opened a named mesh (via
         #     ``ttml.open_device_mesh``) with a "dp" axis of size > 1 and synced
         #     with ``sync_gradients`` over that axis. This is the FSDP-oriented
-        #     backend; the Qwen3 rollout sampler takes ONLY this route and never
+        #     backend; the Qwen3 path takes ONLY this route and never
         #     initializes a parallelism context.
         # Checking the context alone (as the code originally did) leaves
         # ``ddp_enabled`` False on the Qwen3 path — which then trips
@@ -1216,7 +1210,7 @@ class GRPOTrainer:
             mesh is not None and mesh.has_axis("dp") and mesh.axis_size("dp") > 1
         )
         # FSDP is configured through a named mesh (axis "fsdp"), opened via
-        # ``ttml.open_device_mesh`` by the rollout sampler — not the parallelism
+        # ``ttml.open_device_mesh`` by ``setup_ttml_model`` — not the parallelism
         # context that context-based DDP uses. When an "fsdp" axis is present the
         # batch is sliced across the whole mesh (dim 0) exactly like DDP, and
         # gradients are synchronised with ``ttml.sync_gradients`` over the
@@ -1567,14 +1561,14 @@ class GRPOTrainer:
         if self._fsdp_enabled:
             ttml.sync_gradients(self.model.parameters(), axis_names=self._fsdp_sync_axes)
         elif self._ddp_context_enabled:
-            # Parallelism-context DDP (Llama sampler): a parallelism context
+            # Parallelism-context DDP (Llama): a parallelism context
             # is initialized, so use its gradient sync. ``sync_gradients`` would
             # be a silent no-op here — it reduces over named mesh axes, and this
             # path opens no named mesh (``maybe_mesh()`` is None), so it would
             # leave gradients un-averaged.
             ttml.core.distributed.synchronize_gradients(self.model.parameters())
         elif self._ddp_enabled:
-            # Named-mesh DDP (Qwen3 sampler): no parallelism context exists,
+            # Named-mesh DDP (Qwen3): no parallelism context exists,
             # so all-reduce + average grads over the "dp" mesh axis — the same
             # primitive FSDP uses. The loss normalization divides by
             # ``grad_sync_world_size`` (= the "dp" axis size here), matched to

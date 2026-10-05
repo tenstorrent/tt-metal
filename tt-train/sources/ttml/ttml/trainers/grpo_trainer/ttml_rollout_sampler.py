@@ -4,8 +4,6 @@
 
 from __future__ import annotations
 
-import logging
-import os
 from typing import Any, List, Tuple
 
 import numpy as np
@@ -13,19 +11,13 @@ import torch
 import ttnn
 
 import ttml
-from ttml.common.config import DeviceConfig, TransformerConfig
-from ttml.common.utils import build_causal_mask, build_mesh, no_grad, round_up_to_tile, run_mode
-from ttml.models import RunnerType, WeightTyingType
+from ttml.common.utils import build_causal_mask, no_grad, round_up_to_tile, run_mode
 from ttml.modules import RunMode
-from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
-from ttml.models.qwen3 import Qwen3, create_qwen3_config_from_hf
+from ttml.models.llama import Llama
+from ttml.models.qwen3 import Qwen3
 from ttml.models.qwen3.kv_cache import KVCache as Qwen3KVCache
-from ttml.models.qwen3.weights import load_weights_from_hf
-from huggingface_hub import snapshot_download
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 from .grpo_trainer import RolloutBatch, RolloutSampler
-from .llama_composite_kv import LlamaCompositeKV
 
 TILE_SIZE = 32
 
@@ -59,102 +51,53 @@ def async_read_to_host(tensors: List[Any], mesh_device: Any) -> Tuple[List[Any],
     return hosts, done
 
 
-def load_checkpoint(model: Any, checkpoint_path: str, dp_mapper: Any = None) -> None:
-    from safetensors.numpy import load_file
-    import ml_dtypes
-
-    checkpoint = load_file(checkpoint_path)
-    parameters = model.parameters()
-    loaded, missing = 0, []
-
-    for name, param in parameters.items():
-        if name in checkpoint:
-            arr = checkpoint[name].astype(ml_dtypes.bfloat16)
-            if arr.ndim == 1:
-                arr = arr.reshape(1, 1, 1, -1)
-            elif arr.ndim == 2:
-                arr = arr.reshape(1, 1, arr.shape[0], arr.shape[1])
-            restored = ttml.autograd.Tensor.from_numpy(arr, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, dp_mapper)
-            param.assign(restored)
-            loaded += 1
-        else:
-            missing.append(name)
-
-    print(f"Loaded {loaded}/{len(parameters)} parameters from {checkpoint_path}")
-    if missing:
-        print(f"Warning: {len(missing)} parameters not found in checkpoint:")
-        for n in missing:
-            print(f"  - {n}")
-
-
-def load_hf_state_dict(model_source: str) -> dict:
-    """Return a HuggingFace float state-dict for ``model_source``."""
-    if os.path.isdir(model_source):
-        path = model_source
-    else:
-        path = snapshot_download(
-            repo_id=model_source,
-            allow_patterns=["*.safetensors", "*.json", "*.model", "*.txt"],
-        )
-    hf_model = AutoModelForCausalLM.from_pretrained(path, torch_dtype=torch.float32, trust_remote_code=True)
-    state_dict = hf_model.state_dict()
-    del hf_model
-    return state_dict
-
-
 class TTMLRolloutSampler(RolloutSampler):
     """Concrete :class:`RolloutSampler` for the ttml Llama and Qwen3 models.
 
-    Opens the device, builds the model and tokenizer from ``model_source``,
-    and runs a KV-cached, right-padded prefill + decode loop that returns a
-    :class:`RolloutBatch` with per-token ``log pi_old(a_t | s_t)`` captured on
-    device via a fused ``cross_entropy_loss`` gather.
+    Generates with a model and tokenizer it is given (built by
+    :func:`~ttml.trainers.grpo_trainer.grpo_ttml_model.setup_ttml_model` and
+    owned by the trainer) on the already-open device. Runs a KV-cached,
+    right-padded prefill + decode loop that returns a :class:`RolloutBatch` with
+    per-token ``log pi_old(a_t | s_t)`` captured on device via a fused
+    ``cross_entropy_loss`` gather.
 
     Args:
-        model_kind: ``"llama"`` or ``"qwen3"``.
-        transformer_config: Llama reads its architecture from here; Qwen3 only
-            reads ``max_sequence_length`` and ``runner_type`` and takes the
-            architecture from the HF config of ``model_source``.
-        device_config: Device mesh config. Device initialisation is delegated
-            to :meth:`setup_device`, which tests may override.
-        model_source: HuggingFace model ID or local directory.
+        model: A ttml ``Llama`` (e.g. ``LlamaCompositeKV``) or ``Qwen3``.
+        tokenizer: The HuggingFace tokenizer matching ``model``.
         max_completion_length: Maximum generated tokens per completion, and
             the width of ``RolloutBatch.logprobs``.
         temperature: Sampling temperature (0 = greedy).
         completions_per_prompt: Completions generated per prompt.
     """
 
-    _SUPPORTED_KINDS = ("llama", "qwen3")
-
     def __init__(
         self,
-        model_kind: str,
-        transformer_config: TransformerConfig,
-        device_config: DeviceConfig,
-        model_source: str,
+        model: Any,
+        tokenizer: Any,
         max_completion_length: int,
         temperature: float,
-        completions_per_prompt: int = 1,
+        completions_per_prompt: int,
     ) -> None:
-        if model_kind not in self._SUPPORTED_KINDS:
-            raise ValueError(
-                f"TTMLRolloutSampler: model_kind must be one of {self._SUPPORTED_KINDS}, got {model_kind!r}"
-            )
+        if isinstance(model, Qwen3):
+            self._kind = "qwen3"
+        elif isinstance(model, Llama):
+            self._kind = "llama"
+        else:
+            raise TypeError(f"TTMLRolloutSampler supports ttml Llama and Qwen3 models, got {type(model).__name__}")
 
-        self._kind = model_kind
+        self._model = model
+        self._tokenizer = tokenizer
         self._max_completion_length = max_completion_length
         self._temperature = temperature
         self._completions_per_prompt = completions_per_prompt
 
-        self._mesh: Any = None
-        self._mesh_device: Any = self.setup_device(device_config)
-
-        if model_kind == "llama":
-            self._build_llama(transformer_config, device_config, model_source)
+        self._mesh_device: Any = ttml.autograd.AutoContext.get_instance().get_device()
+        self._num_devices = self._mesh_device.get_num_devices()
+        if self._kind == "llama":
+            self._init_llama_layout()
         else:
-            self._build_qwen3(transformer_config, device_config, model_source)
+            self._init_qwen3_layout()
 
-        tokenizer = self._tokenizer
         pad_token = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
         if pad_token is None:
             raise ValueError("TTMLRolloutSampler: could not resolve pad_token from tokenizer")
@@ -167,73 +110,12 @@ class TTMLRolloutSampler(RolloutSampler):
         self._weight_version: int = 0
 
     # --------------------------------------------------------------
-    # Device + model construction
+    # Batch sharding + KV-cache sizes, read from the open device and model
     # --------------------------------------------------------------
 
-    def setup_device(self, device_config: DeviceConfig) -> Any:
-        """Open the device and return the ``ttnn.MeshDevice``.
-
-        Llama opens the ``AutoContext`` device directly (as
-        ``LlamaGRPOCompleter``); Qwen3 opens a named mesh so an ``"fsdp"`` axis
-        exists (as ``Qwen3GRPOCompleter``). Tests may override this to reuse an
-        already-open device.
-        """
-        if self._kind == "llama":
-            if device_config.total_devices() > 1:
-                ttml.core.distributed.enable_fabric(device_config.total_devices())
-            autograd_ctx = ttml.autograd.AutoContext.get_instance()
-            autograd_ctx.open_device(device_config.mesh_shape, device_config.device_ids)
-            return autograd_ctx.get_device()
-
-        mesh = build_mesh(device_config)
-        device_ids = tuple(device_config.device_ids) if device_config.device_ids else None
-        ttml.open_device_mesh(mesh, device_ids)
-        self._mesh = mesh
-        return ttml.autograd.AutoContext.get_instance().get_device()
-
-    def _build_llama(self, tf_config: TransformerConfig, device_config: DeviceConfig, model_source: str) -> None:
+    def _init_llama_layout(self) -> None:
         mesh_device = self._mesh_device
         autograd_ctx = ttml.autograd.AutoContext.get_instance()
-        self._num_devices = mesh_device.get_num_devices()
-
-        tokenizer = AutoTokenizer.from_pretrained(model_source)
-        tf_config.vocab_size = len(tokenizer)
-
-        rope_scaling = LlamaRopeScalingConfig(
-            scaling_factor=getattr(tf_config, "scaling_factor", 0.0) or 0.0,
-            high_freq_factor=getattr(tf_config, "high_freq_factor", 4.0) or 4.0,
-            low_freq_factor=getattr(tf_config, "low_freq_factor", 1.0) or 1.0,
-            original_context_length=getattr(tf_config, "original_context_length", 0) or 0,
-        )
-
-        runner_type = RunnerType.from_string(str(tf_config.runner_type))
-        weight_tying = WeightTyingType.Disabled
-        if tf_config.weight_tying:
-            weight_tying = WeightTyingType.from_string(str(tf_config.weight_tying))
-
-        llama_cfg = LlamaConfig(
-            hidden_size=tf_config.embedding_dim,
-            intermediate_size=tf_config.intermediate_dim,
-            num_hidden_layers=tf_config.num_blocks,
-            num_attention_heads=tf_config.num_heads,
-            num_key_value_heads=tf_config.num_groups,
-            vocab_size=len(tokenizer),
-            max_position_embeddings=tf_config.max_sequence_length,
-            rope_theta=tf_config.theta or 10000.0,
-            attention_dropout=tf_config.dropout_prob,
-            mlp_dropout=tf_config.dropout_prob,
-            runner_type=runner_type,
-            weight_tying=weight_tying,
-            rope_scaling=rope_scaling,
-        )
-
-        tt_model = LlamaCompositeKV(llama_cfg)
-
-        if device_config.enable_ddp:
-            # NOTE: TP is intentionally disabled here. cross_entropy_loss assumes full-vocab logits.
-            autograd_ctx.initialize_parallelism_context(
-                ttml.autograd.DistributedConfig(enable_ddp=True, enable_tp=False)
-            )
 
         ddp_enabled = (
             autograd_ctx.is_parallelism_context_initialized()
@@ -246,34 +128,19 @@ class TTMLRolloutSampler(RolloutSampler):
         ddp_axis = autograd_ctx.get_parallelism_context().get_ddp_axis() if ddp_enabled else None
         self._seed_axes = [int(ddp_axis)] if ddp_axis is not None else None
 
-        local_safetensors = os.path.isdir(model_source) and any(
-            f == "model.safetensors" for f in os.listdir(model_source)
-        )
-        if local_safetensors:
-            logging.info("Loading model from local safetensors: %s", model_source)
-            load_checkpoint(tt_model, model_source, dp_mapper=self._dp_mapper)
-        else:
-            logging.info("Downloading model from HuggingFace: %s", model_source)
-            model_repo_path = snapshot_download(
-                repo_id=model_source,
-                allow_patterns=["*.safetensors", "*.json", "*.model", "*.txt"],
-            )
-            load_from_safetensors(tt_model, model_repo_path, llama_cfg)
+        cfg = self._model.config
+        self._num_layers = cfg.num_hidden_layers
+        self._num_kv_groups = cfg.num_key_value_heads
+        self._head_dim = cfg.hidden_size // cfg.num_attention_heads
+        self._max_seq_len = cfg.max_position_embeddings
 
-        self._tokenizer = tokenizer
-        self._model = tt_model
-        self._num_layers = tf_config.num_blocks
-        self._num_kv_groups = tf_config.num_groups
-        self._head_dim = getattr(tf_config, "head_dim", None) or (tf_config.embedding_dim // tf_config.num_heads)
-        self._max_seq_len = tf_config.max_sequence_length
-
-    def _build_qwen3(self, tf_config: TransformerConfig, device_config: DeviceConfig, model_source: str) -> None:
-        mesh = self._mesh
+    def _init_qwen3_layout(self) -> None:
+        mesh = ttml.mesh()
         mesh_device = self._mesh_device
-        self._num_devices = mesh_device.get_num_devices()
 
-        fsdp_enabled = bool(device_config.enable_fsdp) and mesh.has_axis("fsdp") and mesh.axis_size("fsdp") > 1
-        ddp_enabled = bool(device_config.enable_ddp) and mesh.has_axis("dp") and mesh.axis_size("dp") > 1
+        # build_mesh only names an axis "fsdp" / "dp" when enable_fsdp / enable_ddp is set.
+        fsdp_enabled = mesh.has_axis("fsdp") and mesh.axis_size("fsdp") > 1
+        ddp_enabled = mesh.has_axis("dp") and mesh.axis_size("dp") > 1
 
         batch_sharded = fsdp_enabled or ddp_enabled
         self._dp_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(mesh_device, 0) if batch_sharded else None
@@ -289,55 +156,11 @@ class TTMLRolloutSampler(RolloutSampler):
         if fsdp_enabled:
             self._seed_axes.append(mesh.axis_index("fsdp"))
 
-        tokenizer = AutoTokenizer.from_pretrained(model_source, trust_remote_code=True)
-
-        max_seq_len = int(getattr(tf_config, "max_sequence_length", 2048) or 2048)
-        hf_config = AutoConfig.from_pretrained(model_source, trust_remote_code=True)
-        runner_type = RunnerType.from_string(str(tf_config.runner_type))
-        qwen_config = create_qwen3_config_from_hf(hf_config, max_seq_len, runner_type=runner_type)
-        tie = bool(getattr(hf_config, "tie_word_embeddings", False))
-
-        logging.info(
-            "Building ttml Qwen3 model (hidden=%d, layers=%d)", qwen_config.hidden_size, qwen_config.num_hidden_layers
-        )
-
-        if fsdp_enabled and bool(device_config.lazy_parameter_init):
-            with ttml.lazy_init():
-                tt_model = Qwen3(qwen_config)
-            for block in tt_model.blocks:
-                ttml.fsdp.fully_shard(block, reshard_after_forward=True)
-            ttml.fsdp.fully_shard(tt_model, reshard_after_forward=True)
-            ttml.materialize_module(tt_model)
-
-            hf_state_dict = load_hf_state_dict(model_source)
-            load_weights_from_hf(tt_model, hf_state_dict, qwen_config, tie_word_embeddings=tie, sharded=True)
-            del hf_state_dict
-        else:
-            tt_model = Qwen3(qwen_config)
-
-            hf_state_dict = load_hf_state_dict(model_source)
-            load_weights_from_hf(tt_model, hf_state_dict, qwen_config, tie_word_embeddings=tie)
-            del hf_state_dict
-
-            if fsdp_enabled:
-                for block in tt_model.blocks:
-                    ttml.fsdp.fully_shard(block, reshard_after_forward=True)
-                ttml.fsdp.fully_shard(tt_model, reshard_after_forward=True)
-
-        self._tokenizer = tokenizer
-        self._model = tt_model
-        self._num_layers = qwen_config.num_hidden_layers
+        cfg = self._model.config
+        self._num_layers = cfg.num_hidden_layers
         self._num_kv_groups = None
         self._head_dim = None
-        self._max_seq_len = max_seq_len
-
-    @property
-    def tokenizer(self) -> Any:
-        return self._tokenizer
-
-    @property
-    def model(self) -> Any:
-        return self._model
+        self._max_seq_len = cfg.max_position_embeddings
 
     @property
     def temperature(self) -> float:
