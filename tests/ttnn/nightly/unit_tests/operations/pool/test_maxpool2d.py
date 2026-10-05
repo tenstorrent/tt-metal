@@ -921,6 +921,8 @@ def test_max_pool2d_return_indices_block_shard_empty_core_rows(device, input_hw,
     output = ttnn.to_torch(tt_output).reshape(1, out_h, out_w, channels).permute(0, 3, 1, 2)
     indices = ttnn.to_torch(tt_indices).reshape(1, out_h, out_w, channels).permute(0, 3, 1, 2).to(torch.int64)
 
-    assert torch.equal(output, torch_output)
+    assert torch.equal(output, torch_output), f"max values differ at {(output != torch_output).sum()} positions"
     gathered = torch_input.flatten(2).gather(2, indices.flatten(2)).reshape(indices.shape)
-    assert torch.equal(gathered, torch_output)
+    assert torch.equal(
+        gathered, torch_output
+    ), f"{(gathered != torch_output).sum()} returned indices do not point at the max input value"
