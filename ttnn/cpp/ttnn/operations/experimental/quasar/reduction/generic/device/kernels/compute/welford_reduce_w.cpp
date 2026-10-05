@@ -48,7 +48,7 @@ void kernel_main() {
     // For FP32 input c_0 is flagged UnpackToDestFp32 by the program factory so the welford SFPU
     // intake (transpose_tile) reads with full FP32 precision. For BF16 input c_0 is Default.
     constexpr auto cb_in = tt::CBIndex::c_0;
-    // True when input is FP32; gates the transpose_wh re-init / welford PreserveStats recovery
+    // True when input is FP32; gates the transpose_init re-init / welford PreserveStats recovery
     // in the Wt-inner loop (transpose_tile's UnpackToDestFp32 path clobbers the welford SFPU
     // replay buffer). On BF16 input that path is inactive, so the recovery is gated out.
     constexpr bool welford_fp32_input = get_named_compile_time_arg_val("welford_fp32_input") != 0;
@@ -101,7 +101,7 @@ void kernel_main() {
         // loop: one acquire before the loop, one commit after the last tile.
         reconfig_data_format_srca(cb_in);
         // cb_in's UnpackToDestFp32 mode (FP32 input only) was already programmed by
-        // compute_kernel_hw_startup(cb_in, cb_out) at kernel entry, so _init_short is
+        // compute_kernel_hw_startup(cb_in, cb_out) at kernel entry, so transpose_init is
         // enough here. For BF16 input cb_in is Default mode and the same call works.
         transpose_init(cb_in);
         tile_regs_acquire();

@@ -57,8 +57,8 @@ struct CopyBlockMatmulPartialsConfig {
     bool fp32_dest_acc_en = false;
     // Whether or not to sync full/half DST between MATH and PACK:
     bool dst_full_sync_en = false;
-    // Compute kernel exercised by the test. Defaults to the per-tile copy_block / pack_block kernel;
-    // the single-block-call variant points this at eltwise_copy_pack_block.cpp.
+    // Compute kernel exercised by the test. Defaults to the kernel that loops copy_block per tile with
+    // a single pack_block; the single-copy_block variant points this at eltwise_copy_pack_block.cpp.
     std::string compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp";
 };
 
@@ -340,8 +340,8 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeCopyBlockComputeBottleneck) {
     }
 }
 
-// Same coverage as TensixComputeCopyBlockMultiple, but issues one copy_block / pack_block call per
-// ublock instead of a loop of single-tile calls. The golden is an identity copy, so results must
+// Same coverage as TensixComputeCopyBlockMultiple, but issues one copy_block call per ublock instead
+// of a loop of single-tile copy_block calls (pack_block is one call per ublock in both). The golden is an identity copy, so results must
 // match bit-for-bit.
 TEST_F(LLKMeshDeviceFixture, TensixComputeCopyPackBlockMultiple) {
     for (bool fp32_dest_acc_en : {true, false}) {

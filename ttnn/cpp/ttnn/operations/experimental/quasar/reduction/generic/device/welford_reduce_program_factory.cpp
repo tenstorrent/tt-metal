@@ -296,7 +296,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         reduce_defines["WELFORD_POST_MUL"] = "1";
     }
 
-    // welford_fp32_input gates the transpose_wh re-init / welford PreserveStats recovery in the
+    // welford_fp32_input gates the transpose_init re-init / welford PreserveStats recovery in the
     // W-reduce compute kernel's wt-inner loop, needed because transpose_tile's UnpackToDestFp32
     // path clobbers the welford SFPU replay buffer on FP32 input. H- and HW-reduce kernels read
     // the input via copy_tile (no transpose) and don't need this flag.

@@ -1184,7 +1184,7 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
                 mul_init(CbA, CbB, static_cast<uint32_t>(acc_to_dest), __builtin_LINE());
             }
         } else {
-            // Use the *_init_short form from bcast.h:352-446 (math init + unpack init only,
+            // Use the per-op {op}_bcast_{dim}_init form from bcast.h (math init + unpack init only,
             // no hw_configure / pack_dest_init / sync_init — the full init is undefined
             // mid-MAIN). The operand form reads the actual tensor shape from CB metadata via
             // get_operand_tensor_shape, matching `add_bcast_rows_init` /
