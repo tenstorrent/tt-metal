@@ -102,7 +102,9 @@ bands) on quietbox and reproduced byte-identically on an exabox glx host (cross-
 
 ## Gotchas banked
 - Sharing one `RUNNER_TEMP` on NFS races on conftest `order_records` mkdir → node-local
-  per-host RUNNER_TEMP (workers copy the prebuilt ELFs local).
+  per-chip `RUNNER_TEMP` under a unique per-job temporary root. The root is
+  removed when the driver exits, so a later job cannot reuse a stale staged
+  build.
 - Galaxy hosts need a generous `SFPU_WAIT_TIMEOUT` (harness default 2 s times out on a
   cold first dispatch); band-0 (all-denormal patterns) is slow-or-hangs for a few ops
   (softplus/hardshrink/add1/softshrink) even at 120 s — investigate per-op, don't force.

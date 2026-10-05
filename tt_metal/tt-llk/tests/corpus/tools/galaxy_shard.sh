@@ -209,11 +209,15 @@ golden_args=()
 # NFS venv stampede the fileserver and get SIGINT-killed mid-import.  A few
 # seconds apart spreads the one-time import so every chip's harness comes up.
 # Streaming itself is device-bound and unaffected.
+RUN_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/galaxy-shard.XXXXXX") \
+  || { echo "FATAL: cannot create node-local run directory" >&2; exit 2; }
+trap 'rm -rf -- "$RUN_ROOT"' EXIT
 pids=()
 chips=()
 for k in $(seq 0 $((NPAR-1))); do
-  RT="/tmp/galaxy-shard-rt-$k"
-  [ -d "$RT/tt-llk-build/sources" ] || { mkdir -p "$RT"; cp -a "$BUILD/tt-llk-build" "$RT/"; }
+  RT="$RUN_ROOT/rt-$k"
+  mkdir -p "$RT"
+  cp -a "$BUILD/tt-llk-build" "$RT/"
   start=$(( k * SLICE ))
   sdir="$OUT/slice-$k"
   # A slice verdict left by an earlier run must never stand in for THIS run's
