@@ -137,8 +137,16 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
 bool bf16_dest_log1p();
 template <int ITERATIONS>
 void calculate_log1p_bf16();
+void init_log1p_bf16();
 // Whether BF16 DEST runs the generated log1p kernel as one call over the whole tile.
 inline constexpr bool log1p_bf16_whole_tile = true;
+// Sets up the generated BF16 log1p kernel for the instance it serves.
+template <bool bf16_kernel>
+inline void log1p_bf16_tile_init() {
+    if constexpr (bf16_kernel) {
+        init_log1p_bf16();
+    }
+}
 
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_log1p() {
@@ -164,16 +172,8 @@ inline void calculate_log1p() {
  * @tparam FAST_APPROX Ignored
  * @tparam is_fp32_dest_acc_en If true, DEST registers are fp32, and output does not need to be rounded to bfloat16
  */
-void init_log1p_bf16();
-
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
 inline void log1p_init() {
-    if constexpr (!is_fp32_dest_acc_en && !FAST_APPROX) {
-        if (bf16_dest_log1p()) {
-            init_log1p_bf16();
-            return;
-        }
-    }
     math::reset_counters(p_setrwc::SET_ABD_F);
     const float LOG_TWO = 0.693147182f;       // 0x1.62e430p-1
     const float TWO_TO_M23 = 1.19209290e-7f;  // 0x1.0p-23

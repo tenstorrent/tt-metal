@@ -19,6 +19,7 @@ namespace ckernel {
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void log1p_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(log1p, sfpu::log1p_init, (APPROX, fast_and_approx, is_fp32_dest_acc_en)));
+    MATH(ckernel::sfpu::log1p_bf16_tile_init<!is_fp32_dest_acc_en>());
 }
 
 // clang-format off
