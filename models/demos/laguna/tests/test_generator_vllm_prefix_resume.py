@@ -319,18 +319,21 @@ def test_resumed_prefill_slices_absolute_range_but_retains_absolute_start():
     assert bridge.gen.uploads[0].tolist() == [12, 13, 14, 0, 0, 0, 0, 0]
     assert bridge.gen.uploads[1].tolist() == [25, 26, 0, 0, 0, 0, 0, 0]
     assert [call["start_pos"] for call in bridge.model.prefills] == [2, 5]
-    assert [call["user_id"] for call in bridge.model.prefills] == [0, 1]
-    guarded_page_table = bridge._test_pt_calls[0]
-    fill_page_table = bridge._test_fill_pt_calls[0]
-    assert guarded_page_table[0, :10].tolist() == [0, 1, 2, 3, 4, 99, 99, 99, 99, 99]
-    assert guarded_page_table[1, :10].tolist() == [10, 11, 12, 13, 14, 15, 16, 99, 99, 99]
-    assert torch.all(guarded_page_table[:, 10:] == 99)
-    assert fill_page_table[0, :3].tolist() == [2, 3, 4]
-    assert fill_page_table[1, :2].tolist() == [15, 16]
-    assert torch.all(fill_page_table[0, 3:] == -1)
-    assert torch.all(fill_page_table[1, 2:] == -1)
-    assert all(torch.equal(call["page_table"], guarded_page_table) for call in bridge.model.prefills)
-    assert all(torch.equal(call["fill_page_table"], fill_page_table) for call in bridge.model.prefills)
+    # Each request runs with its own one-row table as row 0 (the shape warmup builds), never a [batch, width]
+    # table indexed by user_id.
+    assert [call["user_id"] for call in bridge.model.prefills] == [0, 0]
+    guarded = bridge._test_pt_calls
+    fills = bridge._test_fill_pt_calls
+    assert [tuple(table.shape) for table in guarded] == [(1, 32), (1, 32)]
+    assert guarded[0][0, :10].tolist() == [0, 1, 2, 3, 4, 99, 99, 99, 99, 99]
+    assert guarded[1][0, :10].tolist() == [10, 11, 12, 13, 14, 15, 16, 99, 99, 99]
+    assert all(torch.all(table[:, 10:] == 99) for table in guarded)
+    assert fills[0][0, :3].tolist() == [2, 3, 4]
+    assert fills[1][0, :2].tolist() == [15, 16]
+    assert torch.all(fills[0][0, 3:] == -1)
+    assert torch.all(fills[1][0, 2:] == -1)
+    assert all(torch.equal(call["page_table"], table) for call, table in zip(bridge.model.prefills, guarded))
+    assert all(torch.equal(call["fill_page_table"], table) for call, table in zip(bridge.model.prefills, fills))
     assert all(call["kv_cache"] is kv_cache for call in bridge.model.prefills)
     assert [call["fill_page_table_base_pos"] for call in bridge.model.prefills] == [2, 5]
     assert [call["runtime_offsets"] for call in bridge.model.prefills] == [

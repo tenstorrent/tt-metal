@@ -506,6 +506,32 @@ class LagunaForCausalLM:
         self._program_cache_entries_after_trace = count
         print(f"[laguna] TTNN program cache frozen after trace: entries={count}", flush=True)
 
+    _PROGRAM_CACHE_LOG = os.environ.get("TT_LAGUNA_PROGRAM_CACHE_LOG", "0") == "1"
+
+    def _log_program_cache_growth(self, call: str) -> None:
+        """TT_LAGUNA_PROGRAM_CACHE_LOG=1 (diagnostic): after warmup, report every serving call that compiled
+        new TTNN programs. Called at the start of each prefill/decode with a description of that call; growth
+        since the previous check is attributed to the previous call. Compiling mid-request costs tens of ms."""
+        if not self._PROGRAM_CACHE_LOG or not getattr(self, "_program_log_armed", False):
+            return
+        count = int(self.mesh_device.num_program_cache_entries())
+        last = getattr(self, "_program_log_count", count)
+        if count > last:
+            print(
+                f"[laguna program-cache] +{count - last} new programs during {self._program_log_call} "
+                f"(total {count})",
+                flush=True,
+            )
+        self._program_log_count = count
+        self._program_log_call = call
+
+    def _arm_program_cache_log(self) -> None:
+        if self._PROGRAM_CACHE_LOG:
+            self._program_log_armed = True
+            self._program_log_count = int(self.mesh_device.num_program_cache_entries())
+            self._program_log_call = "warmup"
+            print(f"[laguna program-cache] logging armed after warmup: entries={self._program_log_count}", flush=True)
+
     # --------------------------------------------------------------------- #
     # Construction
     # --------------------------------------------------------------------- #
@@ -1705,6 +1731,11 @@ class LagunaForCausalLM:
         final real chunk reaches the LM head and sampler. Short cold requests retain the finite bucket
         ladder, and D1 retains one monolithic bucket. In all cases the scheduled length may be any
         positive value up to context and only precompiled, trace-safe compute shapes are used."""
+        if self._PROGRAM_CACHE_LOG:
+            self._log_program_cache_growth(
+                f"prefill(reqs={len(prompt_lens) if prompt_lens is not None else '?'}, "
+                f"lens={list(prompt_lens)[:4] if prompt_lens is not None else '?'}, start={start_pos})"
+            )
         tokens = torch.as_tensor(tokens, dtype=torch.int64)
         if tokens.dim() == 1:
             tokens = tokens.unsqueeze(0)
@@ -1745,8 +1776,16 @@ class LagunaForCausalLM:
         runtime_bs = int(kv_cache[0]["block_size"])
         if any(int(entry["block_size"]) != runtime_bs for entry in kv_cache):
             raise ValueError("resumed prefill runtime offsets require a uniform KV block size across layers")
+        # vLLM's chunked prefill splits the step's token budget across requests at any token, so with several
+        # sequences a request can resume mid-block (32 users with ~600-token prompts share one 8192-token step).
+        # paged_fill_cache and chunked SDPA need block-aligned starts, so such a chunk restarts at its block
+        # boundary: the plugin passes the whole token row, the up to block_size-1 recomputed rows rewrite their KV
+        # from the same tokens and earlier context, and only the chunk's last row is sampled.
+        realigned = [(start - start % runtime_bs, end) for start, end, _ in ranges]
+        if any(start != aligned for (start, _, _), (aligned, _) in zip(ranges, realigned)):
+            self.gen.counters["prefill_block_realign"] = self.gen.counters.get("prefill_block_realign", 0) + 1
+        ranges = [(start, end, end - start) for start, end in realigned]
         plans = [self._prefill_plan_for_range(chunk_len, start, runtime_bs) for start, _, chunk_len in ranges]
-        compute_spans = [plan[-1].relative_start + plan[-1].bucket_len for plan in plans]
         if bool(self._PREFIX_CACHE_ENABLED) and int(self.D) == 2:
             for u, ((start, end, _), plan) in enumerate(zip(ranges, plans)):
                 if start > 0:
@@ -1793,19 +1832,25 @@ class LagunaForCausalLM:
                 absolute_end = absolute_start + chunk.real_len
                 L = int(chunk.bucket_len)
 
-                # Protect and rebase the active row for this absolute subchunk.
-                # Other rows retain whole-request guards; they are not executed in
-                # this iteration but keep the shared [batch,width] buffer valid.
-                protected_ranges = list(ranges)
-                protected_buckets = list(compute_spans)
-                protected_ranges[u] = (absolute_start, absolute_end, int(chunk.real_len))
-                protected_buckets[u] = L
+                # Protect and rebase this request's row for this absolute subchunk, as a one-row table run as
+                # row 0. A [batch, width] table indexed by user_id gave every batch size a new persistent buffer
+                # (allocated under the resident decode trace) and every row index a new slice program, so
+                # several sequences compiled programs mid-request; one-row tables are the shape warmup builds.
+                row_table = None if page_table is None else torch.as_tensor(page_table, dtype=torch.int32).reshape(
+                    -1, torch.as_tensor(page_table).shape[-1]
+                )[u : u + 1]
+                row_tables = (
+                    None
+                    if page_tables_per_layer is None
+                    else [torch.as_tensor(t, dtype=torch.int32).reshape(-1, torch.as_tensor(t).shape[-1])[u : u + 1]
+                          for t in page_tables_per_layer]
+                )
                 pt, fill_pt = self._prepare_prefill_page_tables(
-                    page_table,
-                    page_tables_per_layer,
+                    row_table,
+                    row_tables,
                     kv_cache,
-                    protected_ranges,
-                    protected_buckets,
+                    [(absolute_start, absolute_end, int(chunk.real_len))],
+                    [L],
                     operation=f"prefill request {u} stream chunk {chunk_idx}",
                 )
 
@@ -1821,7 +1866,7 @@ class LagunaForCausalLM:
                         pt,
                         fill_page_table=fill_pt,
                         fill_page_table_base_pos=absolute_start,
-                        user_id=u,
+                        user_id=0,
                         start_pos=absolute_start,
                         runtime_offsets=runtime_offsets,
                         valid_seq_len=chunk.real_len,
@@ -1845,7 +1890,7 @@ class LagunaForCausalLM:
                         pt,
                         fill_page_table=fill_pt,
                         fill_page_table_base_pos=absolute_start,
-                        user_id=u,
+                        user_id=0,
                         start_pos=absolute_start,
                         runtime_offsets=runtime_offsets,
                     )
@@ -2030,6 +2075,63 @@ class LagunaForCausalLM:
         except Exception as e:  # noqa: BLE001 - diagnostic probe, report any failure verbatim
             self._spec_log(f"PROBE FAILED under resident decode trace: {type(e).__name__}: {e}")
 
+    def _spec_serves_exactly(self, sampling_params) -> bool:
+        """DFlash and n-gram serving reproduce plain greedy decoding only: device sampling, temperature 0 and no
+        repetition/presence/frequency penalty (they never apply penalties)."""
+        return (
+            sampling_params is not None
+            and self._spec_is_greedy(sampling_params)
+            and not penalties_active(sampling_params)
+        )
+
+    def _eager_decode_fallback(
+        self,
+        tokens,
+        pos,
+        page_table,
+        kv_cache,
+        page_tables_per_layer,
+        hybrid_cache,
+        sampling_params,
+        kwargs,
+        read_from_device,
+        token_buffer,
+        reset_batch,
+    ):
+        """One eager decode step for a request that DFlash / n-gram serving does not serve exactly (logprobs or
+        other host sampling, temperature > 0, penalties). Raising here used to kill the engine. Device-sampling
+        requests are sampled on the host and the token is written to ``token_buffer`` (allocated at warmup,
+        before any trace) for the async readback.
+
+        With async scheduling the plugin overlaps steady decode steps, so a steady step's host token/position can
+        lag the last sampled token by one (the traced path feeds the token back on device; DFlash and n-gram
+        follow their own position). A steady device-sampling step therefore continues from the token this
+        method sampled last; a batch reset (new request) takes the plugin's input."""
+        if hybrid_cache:
+            pt = self._hybrid_page_tables_to_device(page_tables_per_layer, purpose="speculative-mode fallback decode")
+        else:
+            pt = self._page_table_to_device(page_table)
+        if sampling_params is None:
+            self._fallback_next = None
+            return self._decode_host_sampling(tokens, pos, pt, kv_cache, read_from_device)
+        B = tokens.shape[0]
+        follow = getattr(self, "_fallback_next", None)
+        if B == 1 and not reset_batch and follow is not None:
+            pos = torch.tensor([follow[0]], dtype=pos.dtype)
+            tokens = torch.tensor([[follow[1]]], dtype=tokens.dtype)
+        logits = self._decode_host_sampling(tokens, pos, pt, kv_cache, read_from_device=True)
+        sampled = sample_penalized(
+            logits.reshape(B, self.vocab), sampling_params, kwargs.get("prompt_tokens"), kwargs.get("output_tokens"), pos
+        )
+        self.gen.counters["spec_mode_fallback_decode"] = self.gen.counters.get("spec_mode_fallback_decode", 0) + 1
+        self._fallback_next = (int(pos.reshape(-1)[0]) + 1, int(sampled.reshape(-1)[0])) if B == 1 else None
+        if read_from_device:
+            return sampled
+        if token_buffer is None or B != 1:
+            raise RuntimeError(f"speculative-mode fallback decode needs a warmed batch-1 token buffer (B={B})")
+        ttnn.copy_host_to_device_tensor(self._host_rank4_tok_batch(sampled.to(torch.int64).reshape(-1, 1), 1), token_buffer)
+        return [token_buffer]
+
     def _spec_is_greedy(self, sampling_params):
         try:
             t = sampling_params.temperature
@@ -2156,7 +2258,8 @@ class LagunaForCausalLM:
                 guard=not single,  # single mode: never fall back to a K1=1 native step (would need a 2nd trace)
             )
             self._spec_log(f"serve INIT: traced={traced} k_max={k_max} single={single}")
-            self._spec_tok = self.gen._rep(torch.zeros([1, 1, 1, 1], dtype=torch.int32), ttnn.uint32)
+            if self._spec_tok is None:
+                self._spec_tok = self.gen._rep(torch.zeros([1, 1, 1, 1], dtype=torch.int32), ttnn.uint32)
         # per-call context refresh (the request's block table grows as it advances)
         self._spec.kv_cache = kv_cache
         self._spec.page_table = page_table
@@ -2922,6 +3025,11 @@ class LagunaForCausalLM:
 
         Host sampling (``sampling_params is None``, compat mode for min_p/logprobs/etc.): eager decode
         returning logits; never used for the measured perf path."""
+        if self._PROGRAM_CACHE_LOG:
+            self._log_program_cache_growth(
+                f"decode(B={len(tokens)}, pos0={int(torch.as_tensor(start_pos).reshape(-1)[0])}, "
+                f"host_sampling={sampling_params is None})"
+            )
         tokens = torch.as_tensor(tokens, dtype=torch.int64).reshape(-1, 1)
         B = tokens.shape[0]
         pos = torch.as_tensor(start_pos, dtype=torch.int32).reshape(B)
@@ -2934,6 +3042,11 @@ class LagunaForCausalLM:
         )
 
         if self._DFLASH_SERVING_ENABLED:
+            if not self._spec_serves_exactly(sampling_params):
+                return self._eager_decode_fallback(
+                    tokens, pos, page_table, kv_cache, page_tables_per_layer, hybrid_cache, sampling_params,
+                    kwargs, read_from_device, self._dflash_tok, reset_batch,
+                )
             return self._dflash_serve(
                 tokens,
                 pos,
@@ -2961,9 +3074,16 @@ class LagunaForCausalLM:
 
         # FULL served spec-decode: in this mode the normal decode trace was OMITTED at warmup, so ALL decode
         # goes through the traced verify path. Requires --max-num-seqs 1 (B==1, no padding) + greedy.
-        if self._spec_mode == "1" and B == 1 and sampling_params is not None and self._spec_is_greedy(sampling_params):
-            return self._spec_serve(
-                tokens, pos, page_table, kv_cache, page_tables_per_layer, reset_batch, kwargs, read_from_device
+        if self._spec_mode == "1":
+            if B == 1 and self._spec_serves_exactly(sampling_params):
+                return self._spec_serve(
+                    tokens, pos, page_table, kv_cache, page_tables_per_layer, reset_batch, kwargs, read_from_device
+                )
+            # This mode captures no normal decode trace (only the verify traces), so the traced path below would
+            # capture one mid-request; serve the step eagerly instead.
+            return self._eager_decode_fallback(
+                tokens, pos, page_table, kv_cache, page_tables_per_layer, hybrid_cache, sampling_params,
+                kwargs, read_from_device, self._spec_tok, reset_batch,
             )
 
         if sampling_params is not None and penalties_active(sampling_params):
@@ -3359,6 +3479,7 @@ class LagunaForCausalLM:
                 flush=True,
             )
             self._report_dram("dflash_ready", enforce=True)
+            self._arm_program_cache_log()
             return None
         # SPEC-DECODE served mode (TT_LAGUNA_SPEC_DECODE=1): capture the VERIFY traces (K1=1..k_max+1) and
         # OMIT the normal decode trace. Two resident CCL-bearing traces (normal decode + verify) deadlock
@@ -3372,6 +3493,8 @@ class LagunaForCausalLM:
             # Tests whether multi-trace COEXISTENCE is the intermittent-corruption source: the standalone driver
             # (single fixed-K verify trace) is correct; serving uses adaptive-K -> up to 5 coexisting traces.
             draft_lens = [k_max] if single else list(range(0, k_max + 1))
+            if self._spec_tok is None:  # token buffer for served rounds and fallback steps, before any capture
+                self._spec_tok = self.gen._rep(torch.zeros([1, 1, 1, 1], dtype=torch.int32), ttnn.uint32)
             self.warmup_verify_decode_multi(draft_lens, kv_cache, int(num_blocks) if num_blocks else 1)
             print(
                 f"[laguna spec] warmup: captured verify traces K1={[d + 1 for d in draft_lens]}; "
@@ -3380,6 +3503,7 @@ class LagunaForCausalLM:
             )
             self._report_dram("trace", enforce=True)
             self._freeze_program_cache_after_trace()
+            self._arm_program_cache_log()
             return None
         if B in self._decode:
             return None
@@ -3396,4 +3520,5 @@ class LagunaForCausalLM:
             self._decode_state(B, kv_cache, pt_persist)
         self._report_dram("trace", enforce=True)
         self._freeze_program_cache_after_trace()
+        self._arm_program_cache_log()
         return None

@@ -622,3 +622,59 @@ def test_vllm_dflash_output_buffer_and_runtime_guards(monkeypatch, expect_error)
 def test_normal_target_forward_sources_remain_dflash_free():
     assert "dflash" not in inspect.getsource(LagunaModel.prefill_layers).lower()
     assert "dflash" not in inspect.getsource(LagunaModel.decode_layers).lower()
+
+
+def test_speculative_modes_serve_only_plain_greedy_requests():
+    """DFlash and n-gram reproduce plain greedy decoding only; host sampling (logprobs), temperature > 0 and
+    penalties go to the eager fallback (they used to kill the engine or have their penalties ignored)."""
+
+    bridge = object.__new__(LagunaForCausalLM)
+    greedy = SimpleNamespace(temperature=torch.tensor([0.0]))
+    assert bridge._spec_serves_exactly(greedy)
+    assert not bridge._spec_serves_exactly(None)
+    assert not bridge._spec_serves_exactly(SimpleNamespace(temperature=torch.tensor([0.7])))
+    assert not bridge._spec_serves_exactly(
+        SimpleNamespace(temperature=torch.tensor([0.0]), repetition_penalty=torch.tensor([1.2]))
+    )
+    assert not bridge._spec_serves_exactly(
+        SimpleNamespace(temperature=torch.tensor([0.0]), frequency_penalty=torch.tensor([0.5]))
+    )
+
+
+def test_eager_fallback_decode_samples_on_host_into_the_warm_token_buffer(monkeypatch):
+    bridge = object.__new__(LagunaForCausalLM)
+    bridge.vocab = 8
+    bridge.gen = SimpleNamespace(counters={})
+    logits = torch.zeros(1, 8)
+    logits[0, 5] = 10.0
+    calls = []
+    bridge._page_table_to_device = lambda table: ("pt", table)
+    bridge._decode_host_sampling = lambda tokens, pos, pt, kv, read_from_device: (
+        calls.append(read_from_device) or (logits if read_from_device else ["logit-shards"])
+    )
+    bridge._host_rank4_tok_batch = lambda token, batch: token
+    copied = []
+    monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", lambda source, target: copied.append((source, target)))
+    tokens, pos = torch.tensor([[7]]), torch.tensor([20])
+    buffer = object()
+
+    # Host sampling (logprobs): logits go back to the plugin, nothing is sampled here.
+    assert bridge._eager_decode_fallback(tokens, pos, [[0]], [], None, False, None, {}, False, buffer, True) == [
+        "logit-shards"
+    ]
+    # Penalized greedy request: sampled on the host (argmax here) and written to the warm token buffer.
+    params = SimpleNamespace(temperature=torch.tensor([0.0]), repetition_penalty=torch.tensor([1.0]))
+    assert bridge._eager_decode_fallback(tokens, pos, [[0]], [], None, False, params, {}, False, buffer, True) == [buffer]
+    assert int(copied[-1][0].reshape(-1)[0]) == 5 and copied[-1][1] is buffer
+    # A steady (overlapped) step continues from the token it sampled, not the plugin's possibly stale input.
+    seen = []
+    bridge._decode_host_sampling = lambda tokens, pos, pt, kv, read_from_device: (
+        seen.append((int(tokens.reshape(-1)[0]), int(pos.reshape(-1)[0]))) or logits
+    )
+    stale_tokens, stale_pos = torch.tensor([[7]]), torch.tensor([20])
+    bridge._eager_decode_fallback(stale_tokens, stale_pos, [[0]], [], None, False, params, {}, False, buffer, False)
+    assert seen[-1] == (5, 21)
+    # A batch reset (new request) takes the plugin's input; synchronous readback returns the sampled ids directly.
+    assert bridge._eager_decode_fallback(tokens, pos, [[0]], [], None, False, params, {}, True, buffer, True).tolist() == [5]
+    assert seen[-1] == (7, 20)
+    assert bridge.gen.counters["spec_mode_fallback_decode"] == 3
