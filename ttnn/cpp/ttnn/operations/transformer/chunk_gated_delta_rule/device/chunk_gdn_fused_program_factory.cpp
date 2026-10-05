@@ -21,7 +21,8 @@
 // share one row segment, producers east of receivers, so NOC_1's -x-then-y routes of different heads
 // never share a link; heads that do not fit the rows go to the leftover columns as vertical blocks.
 //
-// Handshake: receiver (h, v) reserves its 7 slots for chunk c, resets its VALID word,
+// Handshake (specification: chunk_gdn_handoff_protocol.md in this directory): receiver (h, v) reserves its 7 slots
+// for chunk c, resets its VALID word,
 // then atomically increments credit[h] on the producer that owns chunk c. That producer sends only
 // at credit[h] == NV, resets the word, writes, waits for the write ACKS (a flush proves departure
 // only), then multicasts VALID to the rectangle. The credit words are BH x nbuf plain L1 words in the last
