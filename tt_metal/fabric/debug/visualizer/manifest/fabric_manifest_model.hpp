@@ -6,6 +6,8 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
+#include <string>
 #include <vector>
 
 #include <hostdevcommon/fabric_common.h>
@@ -17,6 +19,29 @@
 // (write_fabric_manifest) adds what only ControlPlane and the cluster know (routing plane, peer, cross-host,
 // wrap, cores) and serializes the manifest.
 namespace tt::tt_fabric::manifest {
+
+// A capturable range of L1.
+struct L1Region {
+    uint32_t address = 0;
+    uint32_t size = 0;
+    // Set for arrays: size == num_elements * size_per_element.
+    std::optional<uint32_t> num_elements;
+    std::optional<uint32_t> size_per_element;
+    // Schema string, e.g. "u32" or "struct:EDMChannelWorkerLocationInfo" (schema_name()).
+    std::string schema;
+    // If true, the host zeroes the region before launch (get_fabric_router_addresses_to_clear()).
+    bool cleared_by_host = false;
+};
+
+// A router's L1 credit counter arrays, shared by every VC that uses counter credits. The to_sender arrays are
+// indexed by this router's sender compact index, and the receiver arrays by the peer router's sender compact index
+// (the receiver counts credits for the peer's sender channels).
+struct L1CreditCounters {
+    L1Region to_sender_ack;
+    L1Region to_sender_completion;
+    L1Region receiver_ack;
+    L1Region receiver_completion;
+};
 
 // High level information about a particular router.
 struct RouterIdentity {
@@ -45,6 +70,8 @@ struct Router {
     RouterIdentity identity;
     EthLink link;
     RouterShape shape;
+    // Always reserved, although not always used. Whether a VC uses them is its mesh's credit_transport backing.
+    L1CreditCounters credit_counters;
 };
 
 // Information about a chip.
