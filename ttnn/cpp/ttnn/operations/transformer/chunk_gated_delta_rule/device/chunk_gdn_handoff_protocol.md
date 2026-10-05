@@ -230,3 +230,16 @@ round-robin plus extras with a share of every head) are the two maps in use; the
 that the map covers every (head, chunk) exactly once and that each producer's n-th item names it as the owner. A
 dynamic owner (producers claiming items at runtime) needs the receiver to learn the owner before it credits; I1 and I2
 then rest on the claim order instead of the static map.
+
+## 13. Runtime checks
+
+The invariants above that only hold at run time are checked in the kernels where the watcher's `ASSERT` is compiled
+(`WATCHER_ENABLED`); release kernels are unchanged. The CI legs that run the fused tests with the watcher exercise them
+on every chunk.
+
+| id | invariant | where | check |
+|---|---|---|---|
+| C1 | exact-NV credits (I1) | producer, credit poll | `ASSERT(credit <= NV)` on every poll: an over-credit reports instead of hanging |
+| C2 | every credit consumed | producer, teardown | all BH × NBUF credit words are zero after the barriers |
+| C3' | the producer's rings advance by exactly n per item | producer, before the sends of its n-th item | `get_read_ptr(cb) == base + (n mod NBUF) · n_tiles · tile_bytes` for the seven CBs |
+| C6 | stage of each core in a hang dump | both | `WAYPOINT`s `TXCB` (CB wait), `TXCR` (credit wait), `TXBR` (barrier), `TXVL` (flag), `DONE` on the producer |
