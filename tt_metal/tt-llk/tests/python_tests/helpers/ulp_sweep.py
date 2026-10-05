@@ -999,7 +999,6 @@ def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
     """
     from helpers.sfpu_accuracy_budget import usable_budget_ceiling
 
-    order = ("in", "out", "approx", "dest")
     head, _, comment = key_line.rstrip("\n").partition("#")
     measured_by = _MEASURED_BY.format(suffix=suffix)
     existing = _MEASURED_BY_RE.sub("", comment).strip().rstrip(";").strip()

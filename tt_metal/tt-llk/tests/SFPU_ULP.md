@@ -139,7 +139,8 @@ or the sweep has nothing to feed it.
 
 The emitter keeps an op's key line -- its name and any header comment -- and only adds
 or replaces the `measured by:` clause on it; it never writes a key line itself. So a
-*new* op needs one by hand first. Add the name and nothing else:
+*new* op needs one by hand first. Add the name and one placeholder row (a key with no
+rows fails to load):
 
 ```yaml
 MyOp:
@@ -168,8 +169,8 @@ MyOp:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-
 
 Four verdicts:
 
-- **`max_ulp: N`** — enrolled. `N` is the measurement plus 1.1x headroom, floored at 1
-  except where the measurement was 0.
+- **`max_ulp: N`** — enrolled. `N` is the measurement plus 1.1x headroom, rounded up
+  (a measured 1 becomes 2), except that a measured 0 stays 0.
 - **`metric: tolerance`, "budget would be N > C-step ceiling"** — past
   `usable_budget_ceiling`, so a step budget would no longer be *tighter* than the
   tolerance it replaces. The op keeps tolerance + PCC on that cell and the number is
