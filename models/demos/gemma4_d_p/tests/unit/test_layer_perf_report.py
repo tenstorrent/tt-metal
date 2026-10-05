@@ -48,15 +48,15 @@ def _cell(layer_type, chunk_idx, layer_idx, measured_ms, chunk_size=8192):
     }
 
 
-def _write_ops_csv(profiler_dir, cells):
-    reports = profiler_dir / "reports" / "r"
+def _write_ops_csv(profiler_dir, cells, run="r", op="MatmulDeviceOperation"):
+    reports = profiler_dir / "reports" / run
     reports.mkdir(parents=True)
-    path = reports / "ops_perf_results_r.csv"
+    path = reports / f"ops_perf_results_{run}.csv"
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["OP CODE", "OP TYPE"])
         for c in cells:
-            writer.writerows([[c["start_signpost"], "signpost"], ["MatmulDeviceOperation", "tt_dnn_device"]])
+            writer.writerows([[c["start_signpost"], "signpost"], [op, "tt_dnn_device"]])
             writer.writerow([c["stop_signpost"], "signpost"])
     return path
 
@@ -253,7 +253,7 @@ def test_main_rejects_ops_csv_older_than_manifest(tmp_path, monkeypatch):
     os.utime(stale, (manifest.stat().st_mtime - 60,) * 2)
     monkeypatch.setattr(lpr, "run_tt_perf_report", lambda *_: pytest.fail("reported a stale ops CSV"))
     assert lpr.main(["--profiler-dir", str(tmp_path / "profiler")]) == 1
-    assert not (tmp_path / "perf").exists()
+    assert "report failed" in (tmp_path / "perf" / lpr.SUMMARY_NAME).read_text()
 
 
 def test_main_keeps_chunk_sizes_apart_in_one_ops_csv(tmp_path, monkeypatch):
@@ -295,3 +295,47 @@ def test_ci_cells_are_first_second_middle_last(n_chunks, global_idxs, local_idxs
     from models.demos.gemma4_d_p.demo.text_demo_prefill import layer_perf_ci_cells
 
     assert layer_perf_ci_cells(n_chunks) == {"global": global_idxs, "local": local_idxs}
+
+
+def test_main_reports_each_manifest_from_its_own_ops_csv(tmp_path, monkeypatch):
+    monkeypatch.setenv("PREFILL_SUMMARIES", str(tmp_path))
+    monkeypatch.delenv("OMPI_COMM_WORLD_RANK", raising=False)
+    sessions = {}
+    for chunk_size, mtime in ((2048, 100), (4096, 200), (8192, 300)):
+        cell = _cell("global", 0, 5, 1.0, chunk_size=chunk_size)
+        manifest = lpr.write_manifest(
+            f"sz{chunk_size}", [cell], context_len=262144, chunk_size=chunk_size, mesh_shape=(8, 4)
+        )
+        ops_csv = _write_ops_csv(tmp_path / "profiler", [cell], run=f"sz{chunk_size}", op=f"Op{chunk_size}")
+        os.utime(manifest, (mtime, mtime))
+        os.utime(ops_csv, (mtime + 50, mtime + 50))
+        sessions[cell["start_signpost"]] = f"Op{chunk_size}"
+
+    sliced = {}
+
+    def fake_report(ops_csv, start, stop, out_csv):
+        _, rows = lpr.read_ops_csv(ops_csv)
+        sliced[start] = [r["OP CODE"] for r in rows if r["OP TYPE"] != "signpost"]
+        _write_cell_csv(out_csv, [("MatmulDeviceOperation", "1500.0", "100.0")])
+        return True
+
+    monkeypatch.setattr(lpr, "run_tt_perf_report", fake_report)
+    assert lpr.main(["--profiler-dir", str(tmp_path / "profiler")]) == 0
+    assert sliced == {start: [op] for start, op in sessions.items()}
+    copied = sorted(p.name for p in (tmp_path / lpr.MANIFEST_DIR).glob("ops_perf_results_*.csv"))
+    assert copied == ["ops_perf_results_sz2048.csv", "ops_perf_results_sz4096.csv", "ops_perf_results_sz8192.csv"]
+
+
+def test_match_skips_ops_csvs_older_than_the_manifest(tmp_path):
+    cell = _cell("global", 0, 5, 1.0)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("{}")
+    old = _write_ops_csv(tmp_path / "profiler", [cell], run="old")
+    new = _write_ops_csv(tmp_path / "profiler", [cell], run="new")
+    os.utime(manifest, (200, 200))
+    os.utime(old, (100, 100))
+    os.utime(new, (300, 300))
+    m = {"cells": [cell]}
+    assert lpr.match_ops_csvs([manifest], [m], lpr.find_ops_csvs(tmp_path / "profiler")) == [new]
+    os.utime(new, (150, 150))
+    assert lpr.match_ops_csvs([manifest], [m], lpr.find_ops_csvs(tmp_path / "profiler")) == [None]
