@@ -54,12 +54,10 @@ uint32_t recipe_dense_k_tiles(const std::optional<SDPAProgramConfig>& program_co
     return k_chunk / 32;
 }
 
-uint32_t recipe_compute_q_tiles(const PrecisionPolicy& policy, uint32_t q_tiles) {
-    // LOW_PRECISION builds the single-row tail group; STANDARD's (unfused exp ring build) does not fit the kernel
-    // config buffer with it, so STANDARD pads.
-    const bool padded =
-        policy.recurrent_state == RecurrentState::ReferenceMaxFP32 && policy.selection.recipe != Recipe::E;
-    return padded && q_tiles % 2 != 0 ? q_tiles + 1 : q_tiles;
+uint32_t recipe_compute_q_tiles(const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, bool masked) {
+    const bool unfused_standard =
+        policy.selection.recipe == Recipe::B && (masked || recipe_subblock_width(k_tiles) < 2);
+    return unfused_standard && q_tiles % 2 != 0 ? q_tiles + 1 : q_tiles;
 }
 
 namespace {
@@ -77,13 +75,21 @@ uint64_t drop_fused_cbs(ProgramDescriptor::CBDescriptors& cbs) {
 }
 }  // namespace
 
-uint64_t recipe_drop_fused(ProgramDescriptor::CBDescriptors& cbs, KernelDescriptor::Defines& defines) {
+uint64_t recipe_drop_fused(ProgramDescriptor::CBDescriptors& cbs, KernelDescriptor::Defines& defines, uint32_t q_tiles) {
+    const bool lofi = std::any_of(defines.begin(), defines.end(), [](const auto& d) { return d.first == "SDPA_RECIPE_LOFI"; });
+    if (q_tiles % 2 != 0 && !lofi) {
+        return 0;
+    }
     const uint64_t freed = drop_fused_cbs(cbs);
     std::erase_if(defines, [](const auto& define) { return define.first == "SDPA_RECIPE_FUSED"; });
     return freed;
 }
 
-uint64_t recipe_drop_fused(ProgramDescriptor::CBDescriptors& cbs, std::map<std::string, std::string>& defines) {
+uint64_t recipe_drop_fused(
+    ProgramDescriptor::CBDescriptors& cbs, std::map<std::string, std::string>& defines, uint32_t q_tiles) {
+    if (q_tiles % 2 != 0 && !defines.contains("SDPA_RECIPE_LOFI")) {
+        return 0;
+    }
     const uint64_t freed = drop_fused_cbs(cbs);
     defines.erase("SDPA_RECIPE_FUSED");
     return freed;
@@ -261,7 +267,7 @@ static void check_recipe_l1_fit(ProgramDescriptor& program, IDevice& device, uin
     const uint64_t available =
         device.l1_size_per_core() - device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     if (bytes > available) {
-        bytes -= recipe_drop_fused(program.cbs, program.kernels.front().defines);
+        bytes -= recipe_drop_fused(program.cbs, program.kernels.front().defines, q_chunk / 32);
     }
     TT_FATAL(
         bytes <= available,
@@ -397,7 +403,7 @@ static std::vector<Tensor> run_recipe_segments(
         outputs.push_back(create_device_tensor(segment[0].tensor_spec(), q.device()));
     }
     const auto& output = outputs.front();
-    const uint32_t compute_q_tiles = recipe_compute_q_tiles(policy, q_tiles);
+    const uint32_t compute_q_tiles = recipe_compute_q_tiles(policy, q_tiles, k_tiles, attn_mask.has_value());
     auto program = recipe_compute_program(policy, grid, k_chunks, compute_q_tiles, k_tiles, d_tiles);
     // QK row-group height the compute consumes the mask in: FAST uses legacy streaming subblocks
     // (two rows for even Q chunks), FP32 recipes single rows, paired BF16 recipes row pairs.
