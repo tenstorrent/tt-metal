@@ -209,9 +209,11 @@ tt_fabric::FabricManagerMode MetalEnvImpl::get_fabric_manager() const { return f
 uint8_t MetalEnvImpl::get_num_fabric_active_routing_planes() const { return num_fabric_active_routing_planes_; }
 
 void MetalEnvImpl::configure_fabric(const FabricConfigDescriptor& fabric) {
+    // The control plane is the first object built from the fabric configuration, so its existence marks the
+    // configuration as committed.
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
     TT_FATAL(
-        !fabric_frozen_.load(std::memory_order_relaxed),
+        !control_plane_,
         "configure_fabric() is not allowed after the fabric topology has been materialized by get_system_mesh() or a "
         "create_* call. Configure fabric before those calls.");
 
@@ -289,15 +291,6 @@ void MetalEnvImpl::enable_fabric_for_dispatch() {
         }
     }
     this->initialize_fabric_config();
-}
-
-void MetalEnvImpl::freeze_fabric() {
-    // Already frozen: the release store that published it synchronizes the fabric fields with this acquire load.
-    if (fabric_frozen_.load(std::memory_order_acquire)) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(control_plane_mutex_);
-    fabric_frozen_.store(true, std::memory_order_release);
 }
 
 // configure_fabric() is the public way to set fabric, and it refuses changes once the topology is materialized.
@@ -488,9 +481,6 @@ void MetalEnvImpl::initialize_control_plane() {
 }
 
 void MetalEnvImpl::initialize_control_plane_impl() {
-    // Building the control plane reads the fabric configuration. Caller holds control_plane_mutex_.
-    fabric_frozen_.store(true, std::memory_order_release);
-
     if (custom_mesh_graph_desc_path_.has_value()) {
         log_debug(tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
         std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path_.value());
@@ -583,7 +573,6 @@ void MetalEnvImpl::construct_control_plane() {
 
 distributed::SystemMesh& MetalEnvImpl::get_system_mesh() {
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
-    fabric_frozen_.store(true, std::memory_order_release);
     if (!system_mesh_) {
         if (!control_plane_) {
             this->initialize_control_plane_impl();
@@ -760,8 +749,6 @@ private:
 
 std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
     const distributed::MeshDeviceConfig& config, const CreateMeshDeviceOptions& options) {
-    // Topology is about to be built from the current fabric configuration.
-    impl_->freeze_fabric();
     // Associate a context ID for the mesh device's dependencies to easily access the MetalContext::instance(contextId)
     // TODO: Remove this and directly pass in the MetalEnv reference
     // If the control plane / system mesh was already accessed, the env owns a registered context; reuse it
@@ -789,7 +776,6 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
 
 std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh(
     ChipId device_id, const CreateMeshDeviceOptions& options) {
-    impl_->freeze_fabric();
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
@@ -812,7 +798,6 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh(
 
 std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_meshes(
     ttsl::Span<const ChipId> device_ids, const CreateMeshDeviceOptions& options) {
-    impl_->freeze_fabric();
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);

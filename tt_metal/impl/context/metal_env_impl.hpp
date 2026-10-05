@@ -52,9 +52,6 @@ public:
     const FabricConfigDescriptor& fabric_config_descriptor() const { return fabric_desc_; }
     void configure_fabric(const FabricConfigDescriptor& fabric);
 
-    // Marks the requested fabric configuration immutable. Called when the topology is first materialized.
-    void freeze_fabric();
-
     bool check_use_count_zero() const;
 
     void acquire();
@@ -158,10 +155,6 @@ private:
     // --- Fabric config state ---
     // What configure_fabric was asked for. fabric_config_ below is the runtime value.
     FabricConfigDescriptor fabric_desc_ = {};
-    // Set once the topology is materialized (get_system_mesh, create_*, or the first core-descriptor lookup).
-    // configure_fabric throws afterwards. Guarded by control_plane_mutex_; the atomic lets freeze_fabric skip the
-    // lock once set.
-    std::atomic<bool> fabric_frozen_{false};
 
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     tt_fabric::FabricReliabilityMode fabric_reliability_mode_ =
