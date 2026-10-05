@@ -5412,6 +5412,26 @@ class TopKGolden:
 
 
 @register_golden
+class MaxPoolWithIndicesGolden:
+    """Column-wise arg-max over the first ``num_rows`` rows of a values tile, carrying an
+    indices tile in lockstep (SFPU ``calculate_max_pool_with_indices``).
+
+    Operates on logical (untilized) 32x32 tiles. Returns ``(values_row, indices_row, argmax_row)``:
+    the per-column maximum, the index-tile entry at the row that held it, and that row.
+    On a tie any row holding the maximum is a valid result, so callers must check tied
+    columns by value rather than against ``indices_row``.
+    """
+
+    def __call__(self, values, indices, num_rows, data_format):
+        torch_format = format_dict[data_format]
+        values = values.reshape(32, 32)[:num_rows].to(torch.float32)
+        indices = indices.reshape(32, 32)[:num_rows]
+        values_row, argmax_row = torch.max(values, dim=0)
+        indices_row = indices.gather(0, argmax_row.unsqueeze(0)).squeeze(0)
+        return values_row.to(torch_format), indices_row.to(torch_format), argmax_row
+
+
+@register_golden
 class SdpaSfpuGolden:
     # Columns the kernel writes to.
     TRANSFORMED_COLS = (0, 2, 4, 6, 8, 10, 12, 14)

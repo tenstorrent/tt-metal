@@ -74,6 +74,7 @@
 #include "llk_math_eltwise_binary_sfpu_binary_comp.h"
 #include "ckernel_sfpu_copy_dest_values.h"
 #include "ckernel_sfpu_reduce.h"
+#include "ckernel_sfpu_max_pool_indices.h"
 #endif
 #define MATH(...) __VA_ARGS__
 #else
@@ -815,8 +816,6 @@ ALWI void sfpu_reduce_init() {
         reduce, sfpu::init_reduce, (pool_type, format, is_fp32_dest_acc_en), 1 /* block_ct_dim */));
 }
 
-#ifndef ARCH_QUASAR  // BH/WH-only ops below
-
 // clang-format off
 /**
  * Performs MaxPool with indices algorithm on the data tile and index tile
@@ -863,8 +862,6 @@ ALWI void max_reduce_with_indices_init() {
     MATH((SFPU_BINARY_INIT_FN(
         max_pool_with_indices, sfpu::init_max_pool_with_indices, (true /* APPROXIMATE */, layout))));
 }
-
-#endif  // !ARCH_QUASAR
 
 // clang-format off
 /**
