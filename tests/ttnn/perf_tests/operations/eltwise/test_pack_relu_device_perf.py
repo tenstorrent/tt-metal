@@ -17,8 +17,9 @@ generated program must be faster by more than MARGIN.
 Each call is also broken down by RISC, to show which processor bounds the program: the kernel
 duration of each RISC from its first start to its last end over all cores, and the mean over
 cores of each RISC's own kernel zone. ttnn.identity, the copy program with no SFPU work, is timed
-beside them as the floor any unary program on these operands can reach, and every shape is also
-timed with the tensors in L1, where no DRAM transfer bounds the program.
+beside them as the floor any unary program on these operands can reach, and the calls are also
+timed on height-sharded tensors, where every tile is already in its core's L1 and no NoC transfer
+bounds the program.
 """
 
 import glob
@@ -31,9 +32,9 @@ import ttnn
 from loguru import logger
 
 SHAPES = [(512, 512), (1024, 1024)]
-# Shapes and memories timed only to break the calls down; the margin is checked on SHAPES in DRAM.
-BREAKDOWN_SHAPES = [(512, 512), (1024, 1024), (2048, 2048)]
-MEMORIES = {"dram": ttnn.DRAM_MEMORY_CONFIG, "l1": ttnn.L1_MEMORY_CONFIG}
+# Tile rows per core of the height-sharded calls, SHARD_WIDTH wide; timed only to break the calls down.
+SHARD_ROWS = (1, 4, 16)
+SHARD_WIDTH = 256
 REPEATS = 5
 MARGIN = 0.05
 # Inputs inside the range the generated kernel is fitted on.
@@ -153,24 +154,39 @@ def _profile(name, path, call, x, memory, height, width):
         signpost(f"{name}-{path}-{memory}-{height}x{width}-{repeat}-end")
 
 
+def _layouts(device):
+    """(memory, shape, memory config) of every profiled call; the margin is checked on SHAPES in DRAM."""
+    grid = device.compute_with_storage_grid_size()
+    layouts = [("dram", (height, width), ttnn.DRAM_MEMORY_CONFIG) for height, width in SHAPES]
+    for rows in SHARD_ROWS:
+        shard = (32 * rows, SHARD_WIDTH)
+        config = ttnn.create_sharded_memory_config(
+            shape=shard,
+            core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        layouts.append(("sharded", (shard[0] * grid.x * grid.y, SHARD_WIDTH), config))
+    return layouts
+
+
 def test_pack_relu_profiled_calls(device):
     """The proofs, then the calls the device-perf test profiles, between signposts that name each one."""
     if not (ttnn.device.is_blackhole(device) or ttnn.device.is_wormhole_b0(device)):
         pytest.skip("the generated kernels exist for Blackhole and Wormhole only")
     for name, (fused, reference, boards) in CASES.items():
         _prove_reference(name, fused, reference, boards, device)
-    for memory, memory_config in MEMORIES.items():
-        for height, width in BREAKDOWN_SHAPES:
-            x = _inputs((1, 1, height, width), torch.bfloat16, device, memory_config)
-            _profile("identity", "copy", lambda x: ttnn.identity(x), x, memory, height, width)
-            for name, (fused, reference, boards) in CASES.items():
-                if _board(device) not in boards:
-                    continue
-                for path, call in (("old", reference), ("fused", fused)):
-                    _profile(name, path, call, x, memory, height, width)
-            ttnn.synchronize_device(device)
-            ttnn.ReadDeviceProfiler(device)
-            ttnn.deallocate(x)
+    for memory, (height, width), memory_config in _layouts(device):
+        x = _inputs((1, 1, height, width), torch.bfloat16, device, memory_config)
+        _profile("identity", "copy", lambda x: ttnn.identity(x), x, memory, height, width)
+        for name, (fused, reference, boards) in CASES.items():
+            if _board(device) not in boards:
+                continue
+            for path, call in (("old", reference), ("fused", fused)):
+                _profile(name, path, call, x, memory, height, width)
+        ttnn.synchronize_device(device)
+        ttnn.ReadDeviceProfiler(device)
+        ttnn.deallocate(x)
 
 
 def _regions(csv_path):
@@ -185,6 +201,11 @@ def _regions(csv_path):
         elif current is not None and str(row["DEVICE KERNEL DURATION [ns]"]) not in ("-", "nan"):
             regions[current].append(row)
     return regions
+
+
+def _calls(regions):
+    """The profiled calls, each the signpost name of its repeats without the repeat index, in profiled order."""
+    return list(dict.fromkeys(region.rsplit("-", 1)[0] for region in regions))
 
 
 def _column(rows, column):
@@ -223,40 +244,37 @@ def _breakdown(regions, device_log, board):
         values = sorted(v for v in values if v == v)
         return values[len(values) // 2] if values else float("nan")
 
-    names = ["identity"] + [name for name, (_, _, boards) in CASES.items() if board in boards]
-    for memory in MEMORIES:
-        for height, width in BREAKDOWN_SHAPES:
-            for name in names:
-                for path in ("copy",) if name == "identity" else ("old", "fused"):
-                    calls = [regions.get(f"{name}-{path}-{memory}-{height}x{width}-{r}", []) for r in range(REPEATS)]
-                    if not all(calls):
-                        logger.info(f"BREAKDOWN {name} {path} {board} {memory} {height}x{width} not profiled")
-                        continue
-                    first = median(_column(c, "DEVICE KERNEL DURATION [ns]") for c in calls)
-                    cells = [f"kernel={first:.0f}"]
-                    for label, column in (
-                        ("core_avg", "DEVICE KERNEL DURATION PER CORE AVG [ns]"),
-                        ("core_max", "DEVICE KERNEL DURATION PER CORE MAX [ns]"),
-                        ("start_skew", "DEVICE KERNEL FIRST TO LAST START [ns]"),
-                    ):
-                        cells.append(f"{label}={median(_column(c, column) for c in calls):.0f}")
-                    for risc in RISCS:
-                        span = median(_column(c, f"DEVICE {risc} KERNEL DURATION [ns]") for c in calls)
-                        cells.append(f"{risc}={span:.0f}")
-                    per_core = []
-                    for risc in RISCS:
-                        means, maxes, cores = [], [], 0
-                        for c in calls:
-                            runs = [zones.get(int(row["GLOBAL CALL COUNT"]), {}).get(risc) for row in c]
-                            if runs and all(runs):
-                                means.append(sum(r[0] for r in runs))
-                                maxes.append(sum(r[1] for r in runs))
-                                cores = runs[0][2]
-                        if means:
-                            per_core.append(f"{risc}={median(means):.0f}/{median(maxes):.0f}")
-                    if per_core:
-                        cells.append(f"per-core mean/max over {cores} cores: " + " ".join(per_core))
-                    logger.info(f"BREAKDOWN {name} {path} {board} {memory} {height}x{width} ns " + " ".join(cells))
+    for key in _calls(regions):
+        name, path, memory, shape = key.split("-")
+        calls = [regions.get(f"{key}-{r}", []) for r in range(REPEATS)]
+        if not all(calls):
+            logger.info(f"BREAKDOWN {name} {path} {board} {memory} {shape} not profiled")
+            continue
+        first = median(_column(c, "DEVICE KERNEL DURATION [ns]") for c in calls)
+        cells = [f"kernel={first:.0f}"]
+        for label, column in (
+            ("core_avg", "DEVICE KERNEL DURATION PER CORE AVG [ns]"),
+            ("core_max", "DEVICE KERNEL DURATION PER CORE MAX [ns]"),
+            ("start_skew", "DEVICE KERNEL FIRST TO LAST START [ns]"),
+        ):
+            cells.append(f"{label}={median(_column(c, column) for c in calls):.0f}")
+        for risc in RISCS:
+            span = median(_column(c, f"DEVICE {risc} KERNEL DURATION [ns]") for c in calls)
+            cells.append(f"{risc}={span:.0f}")
+        per_core = []
+        for risc in RISCS:
+            means, maxes, cores = [], [], 0
+            for c in calls:
+                runs = [zones.get(int(row["GLOBAL CALL COUNT"]), {}).get(risc) for row in c]
+                if runs and all(runs):
+                    means.append(sum(r[0] for r in runs))
+                    maxes.append(sum(r[1] for r in runs))
+                    cores = runs[0][2]
+            if means:
+                per_core.append(f"{risc}={median(means):.0f}/{median(maxes):.0f}")
+        if per_core:
+            cells.append(f"per-core mean/max over {cores} cores: " + " ".join(per_core))
+        logger.info(f"BREAKDOWN {name} {path} {board} {memory} {shape} ns " + " ".join(cells))
 
 
 def _cb_waits(regions, board):
@@ -264,23 +282,20 @@ def _cb_waits(regions, board):
         values = sorted(v for v in values if v == v)
         return values[len(values) // 2] if values else float("nan")
 
-    names = ["identity"] + [name for name, (_, _, boards) in CASES.items() if board in boards]
-    for memory in MEMORIES:
-        for height, width in BREAKDOWN_SHAPES:
-            for name in names:
-                for path in ("copy",) if name == "identity" else ("old", "fused"):
-                    calls = [regions.get(f"{name}-{path}-{memory}-{height}x{width}-{r}", []) for r in range(REPEATS)]
-                    if not all(calls):
-                        continue
-                    cells = [
-                        f"{label}={median(_column(c, column) for c in calls):.0f}"
-                        for label, column in (
-                            ("kernel", "DEVICE KERNEL DURATION [ns]"),
-                            ("unpack_wait_front_sum", "DEVICE COMPUTE CB WAIT FRONT [ns]"),
-                            ("pack_reserve_back_sum", "DEVICE COMPUTE CB RESERVE BACK [ns]"),
-                        )
-                    ]
-                    logger.info(f"CBWAIT {name} {path} {board} {memory} {height}x{width} ns " + " ".join(cells))
+    for key in _calls(regions):
+        name, path, memory, shape = key.split("-")
+        calls = [regions.get(f"{key}-{r}", []) for r in range(REPEATS)]
+        if not all(calls):
+            continue
+        cells = [
+            f"{label}={median(_column(c, column) for c in calls):.0f}"
+            for label, column in (
+                ("kernel", "DEVICE KERNEL DURATION [ns]"),
+                ("unpack_wait_front_sum", "DEVICE COMPUTE CB WAIT FRONT [ns]"),
+                ("pack_reserve_back_sum", "DEVICE COMPUTE CB RESERVE BACK [ns]"),
+            )
+        ]
+        logger.info(f"CBWAIT {name} {path} {board} {memory} {shape} ns " + " ".join(cells))
 
 
 @pytest.mark.models_device_performance_bare_metal
