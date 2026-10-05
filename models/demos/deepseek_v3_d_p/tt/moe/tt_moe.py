@@ -762,8 +762,8 @@ class TtMoe(LightweightModule):
 
         # Build the per-device [local_real_tokens, pad_side] config once and share the
         # SAME tensor between the gate topk (sentinel-marks padded rows) and the dispatch
-        # op (bounds its token loop). This is only valid in DEVICE_FP32, where the gate
-        # actually sentinel-marks padded tokens so routing_setup/combine stay consistent
+        # op (bounds its token loop). This is only valid in DEVICE_FP32 and GPT_DEVICE, where
+        # the gate sentinel-marks padded tokens so routing_setup/combine stay consistent
         # with a shortened dispatch loop. In other gate modes padded tokens keep real
         # expert indices, so dispatch must process the full range -> padding_config=None.
         #
@@ -779,7 +779,8 @@ class TtMoe(LightweightModule):
         #     on-device. A caller that wanted padding awareness OFF under trace would pass
         #     actual_isl=None and get a capture with no padding-aware path at all.
         padding_config = None
-        if actual_isl is not None and self.gate.fallback_mode == GateComputeMode.DEVICE_FP32:
+        gate_marks_padding = self.gate.fallback_mode in (GateComputeMode.DEVICE_FP32, GateComputeMode.GPT_DEVICE)
+        if actual_isl is not None and gate_marks_padding:
             if metadata is not None:
                 # Traced path: the per-chunk scalars live on-device in the metadata tensors, so build
                 # the config with the device op. The host builder's from_torch cannot run inside a
