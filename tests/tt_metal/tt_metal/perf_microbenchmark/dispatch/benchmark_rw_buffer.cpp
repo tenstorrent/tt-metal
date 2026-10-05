@@ -28,6 +28,7 @@
 #include "context/metal_context.hpp"
 #include "mesh_coord.hpp"
 #include <llrt/tt_cluster.hpp>
+#include "perf/perf_contract_benchmark.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -488,6 +489,11 @@ int main(int argc, char** argv) {
         }
     }
 
+    // The devices stay open for the whole run, so AICLK read here is the clock every case runs at.
+    const auto& cluster = MetalContext::instance().get_cluster();
+    tt::perf::add_run_context("aiclk_mhz", std::to_string(cluster.get_device_aiclk(0)));
+    tt::perf::add_run_context("iommu", cluster.is_iommu_enabled() ? "on" : "off");
+    tt::perf::declare_metric("bytes_per_second", {"B/s", tt::perf::Better::Higher, tt::perf::Aggregate::Median});
     benchmark::RunSpecifiedBenchmarks();
     benchmark::Shutdown();
 
