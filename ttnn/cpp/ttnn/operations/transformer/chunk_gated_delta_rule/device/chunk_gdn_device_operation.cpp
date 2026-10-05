@@ -474,6 +474,7 @@ std::vector<Tensor> chunk_gdn(
             attrs.nbuf);
         attrs.unicast = fused_cfg->unicast;
         attrs.posted = fused_cfg->posted;
+        attrs.handoff_checks = fused_cfg->handoff_checks;
         TT_FATAL(
             !attrs.posted || attrs.unicast,
             "chunk_gdn_fused: posted writes require the unicast transport (unicast=true)");

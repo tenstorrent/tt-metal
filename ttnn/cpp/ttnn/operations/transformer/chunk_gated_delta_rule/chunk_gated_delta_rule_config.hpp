@@ -45,6 +45,10 @@ struct ChunkGdnFusedProgramConfig {
     uint32_t handoff_depth = 2;  // hand-off ring slots per CB, 1..8: how many chunks a producer may run ahead
     bool unicast = true;         // per-receiver unicast writes; false = the linked multicast chain
     bool posted = false;         // posted unicast data writes, VALID ordered by in-order delivery; needs unicast
+    // Debug: compile the hand-off protocol's run-time checks that need protocol-visible state into the two
+    // dataflow kernels (sequence-valued VALID flags, a per-slot data canary); they report through the watcher's
+    // ASSERT, so run with TT_METAL_WATCHER. Costs one extra 4-byte write per receiver per chunk. Hashed.
+    bool handoff_checks = false;
 };
 
 using ChunkGdnProgramConfig =

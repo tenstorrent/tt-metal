@@ -164,6 +164,13 @@ void kernel_main() {
     // (init barrier).
     volatile tt_l1_ptr uint32_t* credit =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CircularBuffer(CB_CREDIT).get_read_ptr() + CREDIT_OFF);
+#ifdef GDN_HANDOFF_CHECKS
+    // C8 canary words: one per slot in the tile behind the credit tile (same address on every core of the union).
+    // This core's own words are the payload source of the remote writes into the receivers' words.
+    constexpr uint32_t CANARY_OFF = CREDIT_OFF + get_tile_size(CB_CREDIT);
+    volatile tt_l1_ptr uint32_t* canary =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CircularBuffer(CB_CREDIT).get_read_ptr() + CANARY_OFF);
+#endif
     for (uint32_t i = 0; i < BH * NBUF; i++) {
         noc_semaphore_set(credit + i, 0);
     }
@@ -307,6 +314,30 @@ void kernel_main() {
             send_shared(cb_qdecay, ck, base_qdecay + slot * ck * tb);
             send_shared(cb_kdec_t, kc, base_kdec_t + slot * kc * tb);
             send_shared(cb_dl, 1, base_dl + slot * 1 * tb);
+#ifdef GDN_HANDOFF_CHECKS
+            // C8: the chunk index as the LAST data write of the item, into every receiver's canary word for this
+            // slot; the receiver asserts it after VALID (a witness of data-before-flag, I4, and of the slot being
+            // written only after its previous chunk was consumed, I5). Same transport as the data.
+            canary[slot] = c;
+            const uint32_t canary_addr = reinterpret_cast<uint32_t>(canary + slot);
+            for (uint32_t v = 0; v < NV; v++) {
+                if constexpr (POSTED) {
+                    noc.async_write<NocOptions::POSTED>(
+                        CoreLocalMem<uint32_t>(canary_addr),
+                        ucast_dst,
+                        4,
+                        {},
+                        {.noc_x = rcv_x(v), .noc_y = rcv_y(v), .addr = canary_addr});
+                } else {
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(canary_addr),
+                        ucast_dst,
+                        4,
+                        {},
+                        {.noc_x = rcv_x(v), .noc_y = rcv_y(v), .addr = canary_addr});
+                }
+            }
+#endif
         }
         WAYPOINT("TXBR");
         {
@@ -323,6 +354,12 @@ void kernel_main() {
             }
         }
         WAYPOINT("TXVL");
+#ifdef GDN_HANDOFF_CHECKS
+        // C7: the flag carries the chunk's sequence value c + 1 instead of VALID; the receiver waits for exactly
+        // that value, so a flag of the wrong chunk or a stale one can never pass (I2, I6). The barrier above acked
+        // the previous remote set sourced from this local word, so rewriting it here is safe (I7).
+        Semaphore<>(SEM_VALID + slot).set(c + 1);
+#endif
         {
             DeviceZoneScopedN("tx_valid");
             set_valid(slot);

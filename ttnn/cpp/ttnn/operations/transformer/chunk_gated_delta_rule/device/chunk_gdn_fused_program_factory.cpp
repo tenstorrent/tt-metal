@@ -182,7 +182,9 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     // (1b) The u/mask CB, ALSO on the union: 3 mask tiles (prep reads them once) + 1 credit tile whose
     // BH x nbuf leading words are the producer-side credit counters credit[h][slot].
     // Union-declared so the receivers can address a producer's credit word from their own CB base.
-    const uint32_t u_tiles = gdn_handoff::kMaskTiles + 1;
+    // + one canary tile behind the credit tile when the run-time checks are compiled in (the kernels derive its
+    // offset as CREDIT_OFF + tile_bytes).
+    const uint32_t u_tiles = gdn_handoff::kMaskTiles + 1 + (attrs.handoff_checks ? 1 : 0);
     const uint32_t credit_off_bytes = gdn_handoff::kMaskTiles * tile_f32;
     add_cb(union_set, fcb::u, u_tiles);
 
@@ -343,11 +345,20 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     // and identical on both NoCs.
     const bool writer_on_noc1 = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch()) == NOC::NOC_1;
 
+    // The protocol's run-time checks (handoff_checks) are a define on both hand-off kernels.
+    KernelDescriptor::Defines writer_defines;
+    KernelDescriptor::Defines receiver_defines{{"GDN_FUSED_RECEIVER", "1"}};
+    if (attrs.handoff_checks) {
+        writer_defines.push_back({"GDN_HANDOFF_CHECKS", "1"});
+        receiver_defines.push_back({"GDN_HANDOFF_CHECKS", "1"});
+    }
+
     KernelDescriptor fused_writer{
         .kernel_source = kdir + "dataflow/writer_chunk_gdn_fused.cpp",
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = prod_set,
         .compile_time_args = fused_writer_ct,
+        .defines = writer_defines,
         .config = WriterConfigDescriptor{},
     };
     fused_writer.runtime_args.reserve(P);
@@ -357,7 +368,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = rcv_set,
         .compile_time_args = receiver_ct,
-        .defines = {{"GDN_FUSED_RECEIVER", "1"}},
+        .defines = receiver_defines,
         .config = ReaderConfigDescriptor{},
     };
     receiver_reader.runtime_args.reserve(R);

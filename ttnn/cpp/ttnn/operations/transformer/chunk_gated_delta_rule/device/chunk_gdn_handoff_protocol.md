@@ -235,4 +235,11 @@ on every chunk.
 | C3 | slot-address agreement (§2.1) | receiver, at the push of chunk c | `get_write_ptr(cb) == base + (c mod NBUF) · n · tile_bytes` for the six shared CBs and `base + ((c · cvl) mod (cv · NBUF)) · tile_bytes` for v_beta: both rings advance exactly as the producer's formulas assume |
 | C4 | flag state before the reset (I2, I6) | receiver, in `issue(c)` | `valid[s] == VALID` for c ≥ NBUF (the consumed chunk c − NBUF left it so), `INVALID` for the first round |
 | C5 | end state | receiver, teardown | every chunk issued and consumed; each used slot's flag still VALID |
+| C7 | the flag belongs to this chunk (I2, I4, I6, I7 end to end) | both, `handoff_checks` | the producer sets `valid[s]` to **c + 1** after its barrier and the receiver waits for exactly `c + 1`; a flag of the wrong chunk, a stale flag or a reordering across slots hangs the equality wait instead of passing; C4 and C5 take their sequence-value forms |
+| C8 | data before flag (I4), slot written only after consumption (I5) | both, `handoff_checks` | one canary word per slot in the tile behind the credit tile: the producer writes the chunk index there as the LAST data write before its barrier, the receiver asserts it after VALID and poisons it |
 | C6 | stage of each core in a hang dump | both | `WAYPOINT`s `TXCB` (CB wait), `TXCR` (credit wait), `TXBR` (barrier), `TXVL` (flag) on the producer; `RXRS` (reserve), `RXVL` (VALID wait) on the receiver; `DONE` at exit on both |
+
+C1 to C6 need only the watcher. C7 and C8 change protocol-visible state (the flag value, one extra 4-byte write per
+receiver per chunk), so they are compiled in only with `ChunkGdnFusedProgramConfig(handoff_checks=True)`, a hashed
+field that is a define on the two hand-off kernels; they report through the watcher's `ASSERT`, so run them with the
+watcher enabled.

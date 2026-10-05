@@ -393,6 +393,15 @@ void kernel_main() {
     // address on every core of the program — so this receiver can name head h's words on any
     // producer without being told an address. Word (h, slot) is at CREDIT_OFF + 4*(h*NBUF + slot).
     const uint32_t credit_base = CircularBuffer(CB_CREDIT).get_read_ptr() + CREDIT_OFF + 4 * h * NBUF;
+#ifdef GDN_HANDOFF_CHECKS
+    // C8 canary words (this core's, written remotely by the producers): the tile behind the credit tile.
+    constexpr uint32_t CANARY_OFF = CREDIT_OFF + get_tile_size(CB_CREDIT);
+    volatile tt_l1_ptr uint32_t* canary =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CircularBuffer(CB_CREDIT).get_read_ptr() + CANARY_OFF);
+    for (uint32_t s = 0; s < NBUF; s++) {
+        canary[s] = 0xFFFFFFFFu;  // no chunk index
+    }
+#endif
 #if GDN_HANDOFF_WATCHER_CHECKS
     // C3: the producer computes this core's slot addresses from the global chunk index (base + (c % NBUF) * n * tb,
     // and the NV*NBUF-slot ring for v_beta); the write pointers must land exactly there at every push, i.e. this
@@ -437,7 +446,11 @@ void kernel_main() {
 #if GDN_HANDOFF_WATCHER_CHECKS
         // C4: the slot's flag is exactly where the protocol leaves it: VALID from the consumed chunk c - NBUF (I2), or
         // the launch value INVALID for the first round. Anything else is a lost or early flag (I6).
+#ifdef GDN_HANDOFF_CHECKS
+        ASSERT(valid_word(slot) == (c >= NBUF ? c - NBUF + 1 : INVALID));  // C7 flags carry chunk + 1
+#else
         ASSERT(valid_word(slot) == (c >= NBUF ? VALID : INVALID));
+#endif
 #endif
         // Reset the slot's flag BEFORE crediting: a fast producer may set VALID immediately after
         // the credit lands, and a late reset would overwrite it (lost wakeup -> deadlock).
@@ -464,8 +477,22 @@ void kernel_main() {
         WAYPOINT("RXVL");
         {
             DeviceZoneScopedN("rx_wait_valid");
+#ifdef GDN_HANDOFF_CHECKS
+            Semaphore<>(SEM_VALID + (c % NBUF)).wait(c + 1);  // C7: exactly this chunk's flag
+#else
             Semaphore<>(SEM_VALID + (c % NBUF)).wait(VALID);
+#endif
         }
+#ifdef GDN_HANDOFF_CHECKS
+        {
+            // C8: the canary the producer wrote last before its barrier must hold this chunk's index; poison it so a
+            // stale value cannot satisfy the slot's next chunk.
+            const uint32_t slot = c % NBUF;
+            invalidate_l1_cache();
+            ASSERT(canary[slot] == c);
+            canary[slot] = ~c;
+        }
+#endif
 
 #if GDN_HANDOFF_WATCHER_CHECKS
         {
@@ -498,7 +525,12 @@ void kernel_main() {
     // C5: every chunk was issued and consumed, and each used slot's flag still shows its last chunk's VALID.
     ASSERT(next == NC);
     for (uint32_t s = 0; s < std::min(NBUF, NC); s++) {
+#ifdef GDN_HANDOFF_CHECKS
+        const uint32_t last_c = NC - 1 - ((NC - 1 - s) % NBUF);  // the last chunk that used slot s
+        ASSERT(valid_word(s) == last_c + 1);
+#else
         ASSERT(valid_word(s) == VALID);
+#endif
     }
 #endif
     for (uint32_t s = 0; s < NBUF; s++) {

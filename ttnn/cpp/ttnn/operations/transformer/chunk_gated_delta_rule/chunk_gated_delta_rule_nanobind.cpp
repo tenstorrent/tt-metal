@@ -218,32 +218,45 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             unicast (bool): default True. Per-receiver unicast writes; False sends the linked
                 multicast chain.
             posted (bool): default False. Posted unicast data writes with the VALID flag ordered by
-                in-order delivery; requires unicast.)doc")
+                in-order delivery; requires unicast.
+            handoff_checks (bool): default False. Debug: compile the hand-off protocol's run-time
+                checks into the kernels (sequence-valued VALID flags, a per-slot data canary); they
+                report through the watcher's ASSERT, so run with TT_METAL_WATCHER set.)doc")
         .def(
-            nb::init<std::optional<uint32_t>, std::optional<uint32_t>, std::optional<bool>, uint32_t, bool, bool>(),
+            nb::init<
+                std::optional<uint32_t>,
+                std::optional<uint32_t>,
+                std::optional<bool>,
+                uint32_t,
+                bool,
+                bool,
+                bool>(),
             nb::kw_only(),
             nb::arg("num_producers") = nb::none(),
             nb::arg("num_receivers") = nb::none(),
             nb::arg("row_local") = nb::none(),
             nb::arg("handoff_depth") = 2,
             nb::arg("unicast") = true,
-            nb::arg("posted") = false)
+            nb::arg("posted") = false,
+            nb::arg("handoff_checks") = false)
         .def_rw("num_producers", &ChunkGdnFusedProgramConfig::num_producers)
         .def_rw("num_receivers", &ChunkGdnFusedProgramConfig::num_receivers)
         .def_rw("row_local", &ChunkGdnFusedProgramConfig::row_local)
         .def_rw("handoff_depth", &ChunkGdnFusedProgramConfig::handoff_depth)
         .def_rw("unicast", &ChunkGdnFusedProgramConfig::unicast)
         .def_rw("posted", &ChunkGdnFusedProgramConfig::posted)
+        .def_rw("handoff_checks", &ChunkGdnFusedProgramConfig::handoff_checks)
         .def("__repr__", [](const ChunkGdnFusedProgramConfig& c) {
             return fmt::format(
                 "ChunkGdnFusedProgramConfig(num_producers={}, num_receivers={}, row_local={}, handoff_depth={}, "
-                "unicast={}, posted={})",
+                "unicast={}, posted={}, handoff_checks={})",
                 py_opt(c.num_producers),
                 py_opt(c.num_receivers),
                 py_opt(c.row_local),
                 c.handoff_depth,
                 py_bool(c.unicast),
-                py_bool(c.posted));
+                py_bool(c.posted),
+                py_bool(c.handoff_checks));
         });
 
     // Host-side geometry oracle: what the fused op will choose for (grid, BH, NC, Vt) when the program
