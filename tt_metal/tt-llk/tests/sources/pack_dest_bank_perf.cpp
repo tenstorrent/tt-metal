@@ -251,6 +251,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         PROFILER_SYNC();
     }
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+    {
+        // Math posts one section more than the loop packs; release it only once it is posted.
+        _llk_packer_wait_for_math_done_();
+    }
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
