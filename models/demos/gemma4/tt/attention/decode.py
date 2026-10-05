@@ -9,6 +9,8 @@ Uses HF-style ttnn.experimental.rotary_embedding (no transformation matrices).
 
 import os
 
+from loguru import logger
+
 import ttnn
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
@@ -37,10 +39,18 @@ from .weights import AttentionWeights
 _Q_SHARDED_MEM_CACHE: dict = {}
 
 
+_ACTIVE_ROWS_LOGGED = False
+
+
 def sdpa_active_row_allocation() -> bool:
     """GEMMA4_SDPA_ACTIVE_ROWS=1 turns on active-row core allocation in the paged decode SDPA
-    (tenstorrent/tt-metal#59300); default off."""
-    return os.environ.get("GEMMA4_SDPA_ACTIVE_ROWS", "0") == "1"
+    (tenstorrent/tt-metal#59300); default off. Logged once so a server log shows which mode ran."""
+    global _ACTIVE_ROWS_LOGGED
+    on = os.environ.get("GEMMA4_SDPA_ACTIVE_ROWS", "0") == "1"
+    if not _ACTIVE_ROWS_LOGGED:
+        _ACTIVE_ROWS_LOGGED = True
+        logger.info(f"gemma4 decode SDPA active-row core allocation: {'on' if on else 'off'}")
+    return on
 
 
 def _q_sharded_mem_key(B, qkv_dim, config, weights, tp):
