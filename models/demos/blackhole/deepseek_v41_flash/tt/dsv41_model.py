@@ -619,7 +619,15 @@ class Model:
         t_start = time.perf_counter()
         S = int(lens.max())
         C = chunk or -(-S // 128) * 128
-        S_pad = max(-(-S // C) * C, s_pad_max or 0)
+        S_pad = -(-S // C) * C
+        # DSV41_PREFILL_SPAD_MAX (tokens): size the chunk trace's per-context tables (sparse / indexer / latent) ONCE for this padded length, so a later
+        # LONGER prompt of the same chunk size replays the same capture instead of re-capturing (and OOMing). Only the real chunks run.
+        spad_env = int(os.environ.get("DSV41_PREFILL_SPAD_MAX", "0") or 0)
+        if not spad_env and os.environ.get("DSV41_PREFILL_ROW_TOKENS") == "auto2":  # auto2: sized once for the build's max context
+            spad_env = int(self.max_ctx)
+        s_pad_max = max(s_pad_max or 0, spad_env)
+        s_pad_max = -(-s_pad_max // C) * C if s_pad_max else None
+        S_dyn = max(S_pad, s_pad_max or 0)
         self.log(f"  prefill_dyn: admit users")
         self.admit_users(lens, max_new_tokens)
         self.sink.set_lengths(lens)
@@ -651,8 +659,8 @@ class Model:
             self._hooks_set = pm
         if "nohead" in bis:
             pm.post_replay_hooks[:] = [h for h in pm.post_replay_hooks if not getattr(h, "is_post_chunk", False)]
-        self.log(f"  prefill_dyn: run chunks (trace={enable_trace}, C={C}, S_pad={S_pad}, bisect={bis!r})")
-        if enable_trace and getattr(pm, "dyn", None) is not None and (pm.dyn.C != C or pm.dyn.S_pad != S_pad):
+        self.log(f"  prefill_dyn: run chunks (trace={enable_trace}, C={C}, S_pad={S_pad}, S_dyn={S_dyn}, bisect={bis!r})")
+        if enable_trace and getattr(pm, "dyn", None) is not None and (pm.dyn.C != C or pm.dyn.S_pad != S_dyn):
             self.log_dram("before teardown (old S_pad %d)" % pm.dyn.S_pad)
             pm.teardown_dyn()
             pm.dyn_out = None  # the last chunk's output streams (fp32 [32,1,4,5120] tiles: ~320 MiB/bank per 4096 tokens/row) of the captured trace
@@ -661,11 +669,11 @@ class Model:
             self.log_dram("after teardown")
             self.live_tensor_report("after teardown")
         if enable_trace:
-            pm.run_traced_chunks(tp, C, hashes=hashes)
+            pm.run_traced_chunks(tp, C, hashes=hashes, S_pad_max=s_pad_max)
             self.log_dram("after run_traced_chunks")
             self.log("  prefill_dyn: chunks done")
         else:
-            pm.setup_dyn(C, S_pad)
+            pm.setup_dyn(C, S_dyn)
             for _, pl in pm.layers:
                 pl.pa.reset_dyn()
             for ci in range(S_pad // C):
