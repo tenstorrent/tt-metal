@@ -2544,6 +2544,9 @@ bool process_cmd(
         case CQ_PREFETCH_CMD_EXEC_BUF_END:
             // DPRINT("exec_buf_end: {}\n", cmd_ptr);
             ASSERT(exec_buf);
+            // A short trace can end before its prefetched pages arrive. Finish those reads
+            // before completion returns the shared command buffer to the host producer.
+            noc_async_read_barrier_with_trid(1);
             stride = process_exec_buf_relay_inline_cmd<DispatchRelayInlineState>(
                 cmd_ptr, downstream_data_ptr, exec_buf_state);
             done = true;
