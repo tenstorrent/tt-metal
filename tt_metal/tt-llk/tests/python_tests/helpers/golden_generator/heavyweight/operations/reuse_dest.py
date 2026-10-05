@@ -128,10 +128,11 @@ class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
         contiguous, because the kernel walks a block at a time.
 
         Pass a list as `dest_out` to also collect each output tile's Dest
-        contents as they stood *before* the pack. That separates two ways a
-        datum can disagree with silicon — the value the math left in Dest, and
-        what the packer then made of it — which the packed output alone
-        cannot.
+        contents as they stood *before* the pack: the intermediate value the
+        golden expects, to show beside a packed-output mismatch. It narrows
+        whether the math or the packer disagreed, but deciding that needs the
+        device's own Dest too -- most simply a Float16-output run, where the
+        device's packed result is its Dest.
         """
         src_a, src_b = stimuli
         geometry = dict(num_faces=num_faces, face_r_dim=face_r_dim)
