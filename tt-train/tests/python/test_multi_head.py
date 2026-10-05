@@ -18,6 +18,7 @@ import pytest
 import ttnn
 import ttml
 
+pytestmark = pytest.mark.requires_device
 
 # (batch, seq_len, num_heads, head_dim). head_dim is a multiple of 32 and seq_len a multiple
 # of 32, which is the whole domain the op accepts.
@@ -27,6 +28,7 @@ SHAPES = [
     (1, 96, 8, 32),  # seq_len tile-aligned but not a power of two
     (1, 32, 1, 64),
     (2, 32, 16, 32),
+    (1, 32, 8, 128),
 ]
 
 

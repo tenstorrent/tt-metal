@@ -122,6 +122,7 @@ const std::vector<SplitShape>& shapes() {
         {"h8_d32_s96", 1, 96, 8, 32},
         {"h1_d64_s32", 1, 32, 1, 64},
         {"b2_h16_d32_s32", 2, 32, 16, 32},
+        {"h8_d128_s32", 1, 32, 8, 128},
     };
     return cases;
 }
