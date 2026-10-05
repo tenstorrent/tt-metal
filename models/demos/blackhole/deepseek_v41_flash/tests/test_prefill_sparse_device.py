@@ -129,6 +129,15 @@ def test_prefill_sparse(mesh_device):
         for L in layers:
             pas[L].alloc_dyn(ctx)
             pas[L].reset_dyn()
+    prof = os.environ.get("DSV41_PS_PROF")
+    if prof:
+        import json
+
+        from models.demos.blackhole.deepseek_v41_flash.tests.op_table_recorder import OpRecorder
+
+        rec = OpRecorder()
+        rec.install()
+        saved = {}
     passes = [False, True] if os.environ.get("DSV41_PS_BOTH") == "1" else [force]
     for force_pass in passes:
         for sp_ in sps.values():
@@ -154,6 +163,9 @@ def test_prefill_sparse(mesh_device):
                     mesh_mapper=shard,
                 )
                 ttnn.synchronize_device(md)
+                if prof:
+                    rec.rows, rec.zero, rec.marks = [], {}, []
+                    rec.enabled = True
                 t0 = time.perf_counter()
                 if dyn:
                     if L == layers[0]:
@@ -164,6 +176,14 @@ def test_prefill_sparse(mesh_device):
                     out = pas[L].forward(h, S, s0=s0)
                 ttnn.synchronize_device(md)
                 times[L].append(time.perf_counter() - t0)
+                if (
+                    prof
+                ):  # device profiler drain after every layer forward; the recorded calls of the last chunk go to rows.json (tools/opsum.py joins them with the digest)
+                    rec.enabled = False
+                    ttnn.ReadDeviceProfiler(md)
+                    if s0 == S - C:
+                        saved[L] = list(rec.rows)
+                        json.dump(saved, open(os.path.join(os.environ["TT_METAL_PROFILER_DIR"], "rows.json"), "w"))
                 o = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float().reshape(U * C, 5120)
                 got[L][s0 : s0 + C] = o[:C]
                 if L in sps:
