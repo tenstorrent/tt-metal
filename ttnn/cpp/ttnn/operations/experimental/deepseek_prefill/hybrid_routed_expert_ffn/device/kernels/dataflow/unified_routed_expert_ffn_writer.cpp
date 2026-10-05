@@ -503,6 +503,7 @@ void kernel_main() {
                     cb_out_buf.pop_front(this_tiles);
                 }
             }
+            HYB_CHUNK_DONE(chunk, chunk_M_max);
         }  // end chunk loop
         HYB_EXPERT_DONE();
     }  // end per-local-expert loop
