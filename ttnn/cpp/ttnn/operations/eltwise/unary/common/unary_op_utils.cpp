@@ -1173,6 +1173,32 @@ std::map<std::string, std::string> get_block_defines(
     return block_defines;
 }
 
+std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    DataType input_dtype,
+    DataType output_dtype,
+    bool fp32_dest_acc_en,
+    tt::ARCH arch) {
+    // The generated kernels are fitted for BF16 data in a 16-bit DEST and exist for Blackhole and
+    // Wormhole only.
+    if (op_chain.size() != 1 || input_dtype != DataType::BFLOAT16 || output_dtype != DataType::BFLOAT16 ||
+        fp32_dest_acc_en || (arch != tt::ARCH::BLACKHOLE && arch != tt::ARCH::WORMHOLE_B0)) {
+        return std::nullopt;
+    }
+    const auto& op = op_chain[0];
+    std::string op_name;
+    switch (op.type()) {
+        case UnaryOpType::LGAMMA: op_name = "lgamma"; break;
+        default: return std::nullopt;
+    }
+    return std::map<std::string, std::string>{
+        {"SFPU_OP_CHAIN_0", "SFPU_OP_CHAIN_0_INIT_0 SFPU_OP_CHAIN_0_FUNC_0"},
+        {"SFPU_OP_CHAIN_0_INIT_0", fmt::format("{}_tile_init();", op_name)},
+        {"SFPU_OP_CHAIN_0_FUNC_0", fmt::format("{}_tile(0);", op_name)},
+        {get_macro_definition(op.type()), "1"},
+    };
+}
+
 // update split eltwise ops include macros
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines) {
     defines[get_macro_definition(op_type)] = "1";

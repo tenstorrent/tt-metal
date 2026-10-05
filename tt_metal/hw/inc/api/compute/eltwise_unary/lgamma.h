@@ -10,6 +10,9 @@
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #include "llk_math_eltwise_ternary_sfpu_macros.h"
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
+#include "ckernel_sfpu_lgamma_bf16.h"
+#endif
 #endif
 
 namespace ckernel {
@@ -122,5 +125,35 @@ ALWI void lgamma_adjusted_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, u
  * Please refer to documentation for any_init.
  */
 ALWI void lgamma_adjusted_tile_init() { MATH(SFPU_TERNARY_INIT(lgamma)); }
+
+// Blackhole and Wormhole only: ckernel_sfpu_lgamma_bf16.h exists under those ckernel trees.
+// Quasar keeps the op's own kernel.
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
+
+// clang-format off
+/**
+ * Performs element-wise computation of lgamma on each element of a tile in DEST, which holds
+ * BF16 data, with one pass of a generated SFPU kernel. The DEST register buffer must be in acquired
+ * state via *acquire_dst* call. This call is blocking and is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void lgamma_tile(uint32_t idst) {
+    static_assert(!is_fp32_dest_acc_en, "lgamma_tile evaluates BF16 DEST");
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_lgamma_bf16, (32), idst, VectorMode::None));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void lgamma_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+
+#endif  // ARCH_BLACKHOLE || ARCH_WORMHOLE
 
 }  // namespace ckernel
