@@ -3195,12 +3195,12 @@ static void validate_prefetcher_pipes_deliver_each_worker_its_shard(
     const auto& bds = in1_tensor.mesh_buffer().get_reference_buffer()->buffer_distribution_spec();
     TT_FATAL(
         bds.has_value(),
-        "matmul mcast_in0 over prefetcher_pipes needs a receiver-contiguous weight, which carries a buffer "
+        "matmul over prefetcher_pipes needs a receiver-contiguous weight, which carries a buffer "
         "distribution spec");
     const ShardDistributionStrategy strategy = bds->shard_distribution_strategy();
     TT_FATAL(
         strategy == ShardDistributionStrategy::ROUND_ROBIN_1D || strategy == ShardDistributionStrategy::CONTIGUOUS_1D,
-        "matmul mcast_in0 over prefetcher_pipes needs a ROUND_ROBIN_1D or CONTIGUOUS_1D weight, but its shard "
+        "matmul over prefetcher_pipes needs a ROUND_ROBIN_1D or CONTIGUOUS_1D weight, but its shard "
         "distribution strategy is {}",
         strategy);
 
@@ -3221,7 +3221,7 @@ static void validate_prefetcher_pipes_deliver_each_worker_its_shard(
         const auto it = receiver_of_shard.find({bank, bank_local_shard});
         TT_FATAL(
             it != receiver_of_shard.end() && it->second == workers[i],
-            "matmul mcast_in0 over prefetcher_pipes computes output block {} on worker {}. That block's weight shard "
+            "matmul over prefetcher_pipes computes output block {} on worker {}. That block's weight shard "
             "sits at bank-local shard {} of DRAM bank {} under the weight's {} distribution, but the pipes deliver "
             "that shard to {}. Pair each bank with the workers whose shards it holds.",
             i,
@@ -3230,6 +3230,79 @@ static void validate_prefetcher_pipes_deliver_each_worker_its_shard(
             bank,
             strategy,
             it == receiver_of_shard.end() ? std::string("no receiver") : it->second.str());
+    }
+}
+
+// in1 delivered over PrefetcherPipes, shared by the mcast_in0 and gather_in0 bodies. A producer (the
+// Tensor prefetcher, or any worker-sender pipe's) writes each worker's in1 K-blocks straight into a
+// PrefetcherPipe ring on that worker, so in1 is neither read from DRAM nor moved between workers.
+// Every pipe is declared as a parameter, and the in1 reader binds them all under one accessor; each
+// worker holds exactly one pipe's receiver. The pipes carry one K-block per entry, which is what the
+// producer writes; in1 is a relay over the rings that pages each entry as its tiles, so compute
+// consumes in1 exactly as it does from DRAM. The relay covers the ring's whole K-blocks, and a
+// block's tiles never wrap: the pipe skips any trailing gap.
+struct In1PrefetcherPipeRelay {
+    Group<PrefetcherPipeParameter> parameters;
+    Group<PrefetcherPipeParamName> names;
+    DataflowBufferSpec relay_dfb;
+};
+
+// `workers` lists the workers in row-major order; worker i computes output column block i. Validation
+// has checked that the ring holds at least two K-blocks, the reader's one block of lookahead.
+static In1PrefetcherPipeRelay make_in1_prefetcher_pipe_relay(
+    const ttnn::PrefetcherPipeList& prefetcher_pipes,
+    const MeshTensor& in1_tensor,
+    const CoreRangeSet& worker_cores,
+    const std::vector<CoreCoord>& workers,
+    const DFBSpecName& relay_name,
+    uint32_t in1_block_num_tiles,
+    uint32_t in1_single_tile_size,
+    tt::DataFormat in1_data_format,
+    const tt::tt_metal::Tile& in1_tile) {
+    const CoreRangeSet pipe_receivers =
+        tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(ttnn::prefetcher_pipe_refs(prefetcher_pipes));
+    TT_FATAL(
+        pipe_receivers.num_cores() == worker_cores.num_cores() && pipe_receivers.contains(worker_cores),
+        "matmul over prefetcher_pipes needs the pipes' receivers to be exactly the {} workers that compute an output "
+        "block ({}), but they are {}. Worker i in row-major order computes output column block i.",
+        worker_cores.num_cores(),
+        worker_cores.str(),
+        pipe_receivers.str());
+    if (prefetcher_pipes.front()->sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Dram) {
+        validate_prefetcher_pipes_deliver_each_worker_its_shard(prefetcher_pipes, in1_tensor, workers);
+    }
+
+    const uint32_t entry_size = in1_block_num_tiles * in1_single_tile_size;
+    const uint32_t ring_size = prefetcher_pipes.front()->ring_size();
+    const uint32_t relay_size = ring_size - ring_size % entry_size;
+    In1PrefetcherPipeRelay relay;
+    for (size_t p = 0; p < prefetcher_pipes.size(); ++p) {
+        const PrefetcherPipeParamName name{fmt::format("in1_prefetcher_pipe_{}", p)};
+        relay.names.push_back(name);
+        relay.parameters.push_back(PrefetcherPipeParameter{
+            .unique_id = name,
+            .receivers = prefetcher_pipes[p]->receiver_cores(),
+            .ring_size = ring_size,
+            .entry_size = entry_size,
+        });
+    }
+    relay.relay_dfb = DataflowBufferSpec{
+        .unique_id = relay_name,
+        .entry_size = in1_single_tile_size,
+        .num_entries = relay_size / in1_single_tile_size,
+        .data_format_metadata = in1_data_format,
+        .tile_format_metadata = in1_tile,
+        .advanced_options = {.prefetcher_pipe_relays = relay.names},
+    };
+    return relay;
+}
+
+// Supplies the pipes `relay` declared, in its order.
+static void add_in1_prefetcher_pipe_run_args(
+    ProgramRunArgs& run_args, const In1PrefetcherPipeRelay& relay, const ttnn::PrefetcherPipeList& prefetcher_pipes) {
+    for (size_t p = 0; p < prefetcher_pipes.size(); ++p) {
+        run_args.advanced_options.prefetcher_pipe_args.emplace(
+            relay.names[p], PrefetcherPipeArgument{*prefetcher_pipes[p]});
     }
 }
 
@@ -3750,52 +3823,20 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         dataflow_buffers.size(),
         dataflow_buffers.front().unique_id.get());
 
-    // in1. Under PrefetcherPipe delivery it is a relay over the pipes' rings. The pipes carry one
-    // K-block per entry, which is what the producer writes; the relay pages each entry as its tiles,
-    // so compute consumes in1 exactly as it does from DRAM. The relay covers the ring's whole
-    // K-blocks, and a block's tiles never wrap: the pipe skips any trailing gap. Every pipe is
-    // declared as a parameter and bound by the in1 reader under one accessor; each worker holds
-    // exactly one pipe's receiver.
-    Group<PrefetcherPipeParameter> prefetcher_pipe_parameters;
-    Group<PrefetcherPipeParamName> prefetcher_pipe_names;
-    const uint32_t in1_pipe_entry_size = in1_block_tiles * in1_single_tile_size;
+    // in1. Under PrefetcherPipe delivery it is a relay over the pipes' rings (see In1PrefetcherPipeRelay).
+    std::optional<In1PrefetcherPipeRelay> in1_pipe_relay;
     if (use_prefetcher_pipes) {
-        const CoreRangeSet pipe_receivers =
-            tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(ttnn::prefetcher_pipe_refs(prefetcher_pipes));
-        TT_FATAL(
-            pipe_receivers.num_cores() == all_cores_with_work.num_cores() &&
-                pipe_receivers.contains(all_cores_with_work),
-            "matmul mcast_in0 over prefetcher_pipes needs the pipes' receivers to be exactly the {} workers that "
-            "compute an output block ({}), but they are {}. Receiver i in row-major order computes output columns "
-            "[i * per_core_N, (i + 1) * per_core_N).",
-            all_cores_with_work.num_cores(),
-            all_cores_with_work.str(),
-            pipe_receivers.str());
-        if (prefetcher_pipes.front()->sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Dram) {
-            validate_prefetcher_pipes_deliver_each_worker_its_shard(
-                prefetcher_pipes, in1_tensor, corerange_to_cores(all_cores, num_cores_with_work, row_major));
-        }
-        // Validation has checked the ring holds at least two K-blocks.
-        const uint32_t ring_size = prefetcher_pipes.front()->ring_size();
-        const uint32_t in1_relay_size = ring_size - ring_size % in1_pipe_entry_size;
-        for (size_t p = 0; p < prefetcher_pipes.size(); ++p) {
-            const PrefetcherPipeParamName name{fmt::format("in1_prefetcher_pipe_{}", p)};
-            prefetcher_pipe_names.push_back(name);
-            prefetcher_pipe_parameters.push_back(PrefetcherPipeParameter{
-                .unique_id = name,
-                .receivers = prefetcher_pipes[p]->receiver_cores(),
-                .ring_size = ring_size,
-                .entry_size = in1_pipe_entry_size,
-            });
-        }
-        dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = IN1_DFB,
-            .entry_size = in1_single_tile_size,
-            .num_entries = in1_relay_size / in1_single_tile_size,
-            .data_format_metadata = in1_data_format,
-            .tile_format_metadata = in1_tile,
-            .advanced_options = {.prefetcher_pipe_relays = prefetcher_pipe_names},
-        });
+        in1_pipe_relay = make_in1_prefetcher_pipe_relay(
+            prefetcher_pipes,
+            in1_tensor,
+            all_cores_with_work,
+            corerange_to_cores(all_cores, num_cores_with_work, row_major),
+            IN1_DFB,
+            in1_block_tiles,
+            in1_single_tile_size,
+            in1_data_format,
+            in1_tile);
+        dataflow_buffers.push_back(in1_pipe_relay->relay_dfb);
     } else {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = IN1_DFB,
@@ -4231,7 +4272,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             // The pipes' receiver kernel: one accessor over every pipe, one of which is present on each
             // worker. It publishes each delivered entry to cb_in1 and acks it once compute is done.
             in1_sender.advanced_options.prefetcher_pipe_bindings = {
-                {.pipe_parameter_names = prefetcher_pipe_names, .accessor_name = "in1"}};
+                {.pipe_parameter_names = in1_pipe_relay->names, .accessor_name = "in1"}};
         }
         if (!output_is_sharded) {
             in1_sender_rta_names.push_back("last_num_blocks_w_dim");
@@ -4598,9 +4639,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     if (bias_tensor.has_value()) {
         run_args.tensor_args.emplace(BIAS, *bias_tensor);
     }
-    for (size_t p = 0; p < prefetcher_pipes.size(); ++p) {
-        run_args.advanced_options.prefetcher_pipe_args.emplace(
-            prefetcher_pipe_names[p], PrefetcherPipeArgument{*prefetcher_pipes[p]});
+    if (in1_pipe_relay.has_value()) {
+        add_in1_prefetcher_pipe_run_args(run_args, *in1_pipe_relay, prefetcher_pipes);
     }
 
     ProgramSpec spec{
@@ -4610,7 +4650,385 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         .semaphores = std::move(semaphores),
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = std::move(work_units),
-        .advanced_options = {.prefetcher_pipe_parameters = std::move(prefetcher_pipe_parameters)},
+        .advanced_options =
+            {.prefetcher_pipe_parameters =
+                 in1_pipe_relay.has_value() ? std::move(in1_pipe_relay->parameters) : Group<PrefetcherPipeParameter>{}},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
+}
+
+// gather_in0 over PrefetcherPipes. The ring is the activation's shard grid in row-major order: worker
+// i holds in0 shard i and computes output column block i. Each step it forwards the in0 shard it holds
+// to the previous worker, so at step s worker i holds shard (i + s) % ring_size and needs that in1
+// K-block; the pipes' producer streams each worker its K-blocks in exactly that order (the Tensor
+// prefetcher's identity rotation). in1 is then consumed front to back as it arrives, the same
+// one-block-lookahead loop as mcast_in0 over pipes.
+//
+// The legacy MeshWorkload builder keeps every other gather_in0 transport (DRAM, L1-sharded and
+// GlobalCircularBuffer in1), hop cores, several weights and the fused reduce-scatter signaler;
+// validation confines this body to what it builds.
+static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifacts(
+    const tt_metal::distributed::MeshDevice& device,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool fp32_dest_acc_en,
+    bool packer_l1_acc,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    const std::optional<UnaryWithParam>& fused_activation,
+    const MeshTensor& in0_tensor,
+    const MeshTensor& in1_tensor,
+    const MeshTensor& out_tensor,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const tt::tt_metal::Tile& output_tile,
+    tt::DataFormat in0_data_format,
+    tt::DataFormat in1_data_format,
+    tt::DataFormat output_data_format,
+    bool untilize_out,
+    const ttnn::PrefetcherPipeList& prefetcher_pipes) {
+    TT_FATAL(
+        !prefetcher_pipes.empty(),
+        "The Metal 2.0 gather_in0 matmul reads in1 only from prefetcher_pipes; every other in1 transport is built by "
+        "the MeshWorkload factory");
+
+    constexpr bool row_major = true;
+    const CoreRangeSet ring_cores = in0_tensor.shard_spec()->grid;
+    const std::vector<CoreCoord> ring = corerange_to_cores(ring_cores, std::nullopt, row_major);
+    const auto ring_size = static_cast<uint32_t>(ring.size());
+
+    // Validation has checked that the in0 shards tile K exactly, so every shard is one unpadded K-block.
+    const uint32_t in0_block_w = in0_tensor.shard_spec()->shape[1] / in0_tile.get_width();
+    const uint32_t num_blocks = ring_size;
+
+    // Only enable packer l1 accumulation when there are spills, otherwise unnecessary overhead for
+    // reconfigs are added
+    const bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
+    const tt::DataFormat interm0_data_format =
+        packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
+                         : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+
+    const uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    const uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
+    const uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
+    const uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
+
+    const uint32_t in0_num_subblocks = per_core_M / out_subblock_h;
+    const uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
+    const uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
+    const uint32_t in1_num_subblocks = per_core_N / out_subblock_w;
+    const uint32_t in1_block_num_tiles = out_subblock_w * in0_block_w * in1_num_subblocks;
+    const uint32_t in1_block_w = out_subblock_w * in1_num_subblocks;
+    const uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
+    const uint32_t out_block_num_tiles = per_core_M * per_core_N;
+    TT_FATAL(
+        out_block_num_tiles == out_subblock_num_tiles || !untilize_out,
+        "untilize_out is not supported for cases that out_block_num_subblocks > 1");
+
+    const KernelSpecName IN0_RING{"in0_ring"};
+    const KernelSpecName IN1_READER{"in1_reader"};
+    const KernelSpecName COMPUTE{"compute"};
+
+    const DFBSpecName IN0_DFB{"in0"};
+    const DFBSpecName IN2_DFB{"in2"};
+    const DFBSpecName IN1_DFB{"in1"};
+    const DFBSpecName OUT_DFB{"out"};
+    const DFBSpecName INTERM0_DFB{"intermed0"};
+
+    const TensorParamName IN0{"in0"};
+    const TensorParamName OUTPUT{"output"};
+
+    const SemaphoreSpecName RING_SIGNAL_SEM{"in0_ring_signal"};
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Dataflow buffers
+    ////////////////////////////////////////////////////////////////////////////
+    Group<DataflowBufferSpec> dataflow_buffers;
+
+    // in0: this worker's own shard, in place in the activation.
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = IN0_DFB,
+        .entry_size = in0_single_tile_size,
+        .num_entries = in0_block_num_tiles,
+        .data_format_metadata = in0_data_format,
+        .tile_format_metadata = in0_tile,
+        .borrowed_from = IN0,
+    });
+    // in2: the other ring_size - 1 shards, as the ring delivers them. The in0 ring reader writes a
+    // peer's slot at its own slot's address, which holds because every ring worker runs this one
+    // buffer set. A one-worker ring receives nothing but still binds the buffer, so keep one entry.
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = IN2_DFB,
+        .entry_size = in0_single_tile_size,
+        .num_entries = std::max((ring_size - 1) * in0_block_num_tiles, 1u),
+        .data_format_metadata = in0_data_format,
+        .tile_format_metadata = in0_tile,
+    });
+
+    In1PrefetcherPipeRelay in1_pipe_relay = make_in1_prefetcher_pipe_relay(
+        prefetcher_pipes,
+        in1_tensor,
+        ring_cores,
+        ring,
+        IN1_DFB,
+        in1_block_num_tiles,
+        in1_single_tile_size,
+        in1_data_format,
+        in1_tile);
+    dataflow_buffers.push_back(in1_pipe_relay.relay_dfb);
+
+    // The output stays in the sharded output tensor. The partials share its region unless their format
+    // differs or an untilized output has to be reassembled from several subblocks; when they share,
+    // the two are aliases of each other and both borrow the output.
+    const bool separate_out_and_interm0 =
+        (interm0_data_format != output_data_format) || (untilize_out && in1_num_subblocks > 1);
+    const uint32_t out_size = out_block_num_tiles * output_single_tile_size;
+    const uint32_t interm0_size = separate_out_and_interm0 ? out_block_num_tiles * interm0_single_tile_size : out_size;
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = OUT_DFB,
+        .entry_size = output_single_tile_size,
+        .num_entries = out_block_num_tiles,
+        .data_format_metadata = output_data_format,
+        .tile_format_metadata = output_tile,
+        .borrowed_from = OUTPUT,
+        .advanced_options =
+            {.alias_with = separate_out_and_interm0 ? Group<DFBSpecName>{} : Group<DFBSpecName>{INTERM0_DFB}},
+    });
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = INTERM0_DFB,
+        .entry_size = interm0_single_tile_size,
+        .num_entries = interm0_size / interm0_single_tile_size,
+        .data_format_metadata = interm0_data_format,
+        .tile_format_metadata = output_tile,
+        .borrowed_from = separate_out_and_interm0 ? std::nullopt : std::optional<TensorParamName>(OUTPUT),
+        .advanced_options =
+            {.alias_with = separate_out_and_interm0 ? Group<DFBSpecName>{} : Group<DFBSpecName>{OUT_DFB}},
+    });
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Semaphores
+    ////////////////////////////////////////////////////////////////////////////
+    Group<SemaphoreSpec> semaphores = {
+        SemaphoreSpec{.unique_id = RING_SIGNAL_SEM, .target_nodes = ring_cores},
+    };
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Kernels
+    ////////////////////////////////////////////////////////////////////////////
+    // in0 moves between workers on the DRAM-write NOC and in1 is delivered by the pipes; the reader
+    // pinning matches the legacy builder (in0 on RISCV_1, in1 on RISCV_0).
+    const tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
+
+    Group<KernelSpec> kernels;
+
+    kernels.push_back(KernelSpec{
+        .unique_id = IN0_RING,
+        .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+                  "reader_bmm_tile_layout_in0_ring_all_gather_metal2.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = IN0_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = IN2_DFB, .accessor_name = "in2", .endpoint_type = DFBEndpointType::PRODUCER},
+            },
+        .semaphore_bindings = {SemaphoreBinding{
+            .semaphore_spec_name = RING_SIGNAL_SEM, .accessor_name = "in0_ring_signal"}},
+        .compile_time_args =
+            {
+                {"shard_width_in_tiles", in0_block_w},
+                {"shard_height_in_tiles", per_core_M},
+                {"ring_size", ring_size},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"next_core_noc_x", "next_core_noc_y"}},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .config_1xx =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                        .noc = in0_noc,
+                    },
+            },
+    });
+
+    {
+        KernelSpec in1_reader{
+            .unique_id = IN1_READER,
+            .source =
+                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+                "reader_bmm_tile_layout_in1_ring_all_gather_metal2.cpp",
+            .dfb_bindings =
+                {
+                    DFBBinding{
+                        .dfb_spec_name = IN1_DFB, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER},
+                    DFBBinding{
+                        .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER},
+                },
+            .compile_time_args =
+                {
+                    {"in1_block_num_tiles", in1_block_num_tiles},
+                    {"num_blocks", num_blocks},
+                    {"out_block_num_tiles", out_block_num_tiles},
+                },
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .config_1xx =
+                        DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                            .noc = in1_noc,
+                        },
+                },
+        };
+        // One accessor over every pipe, one of which is present on each worker.
+        in1_reader.advanced_options.prefetcher_pipe_bindings = {
+            {.pipe_parameter_names = in1_pipe_relay.names, .accessor_name = "in1"}};
+        kernels.push_back(std::move(in1_reader));
+    }
+
+    {
+        std::map<std::string, std::string> mm_kernel_defines;
+        KernelSpec::CompileTimeArgs compute_cta = {
+            {"in0_block_w", in0_block_w},
+            {"in0_num_subblocks", in0_num_subblocks},
+            {"in0_block_num_tiles", in0_block_num_tiles},
+            {"in0_subblock_num_tiles", in0_subblock_num_tiles},
+            {"in1_num_subblocks", in1_num_subblocks},
+            {"in1_block_num_tiles", in1_block_num_tiles},
+            {"in1_block_w", in1_block_w},
+            {"num_blocks", num_blocks},
+            {"out_subblock_h", out_subblock_h},
+            {"out_subblock_w", out_subblock_w},
+            {"out_subblock_num_tiles", out_subblock_num_tiles},
+            {"out_block_num_tiles", out_block_num_tiles},
+            {"untilize_out", static_cast<uint32_t>(untilize_out)},
+        };
+        if (fused_activation.has_value()) {
+            if (fused_activation->op_type == UnaryOpType::RELU) {
+                mm_kernel_defines["PACK_RELU"] = "1";
+            } else {
+                mm_kernel_defines["SFPU_ACTIVATION"] = "1";
+                using ttnn::operations::matmul::utilities::get_activation_params;
+                const auto params = get_activation_params(fused_activation.value());
+                compute_cta.insert({"activation_type", static_cast<uint32_t>(params.type)});
+                compute_cta.insert({"activation_param0", params.param0});
+                compute_cta.insert({"activation_param1", params.param1});
+                compute_cta.insert({"activation_param2", params.param2});
+            }
+        }
+        if (packer_l1_acc_en) {
+            mm_kernel_defines["PACKER_L1_ACC"] = "1";
+        }
+        if (fp32_dest_acc_en) {
+            mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
+        }
+        ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+            device.arch(), ring_size, mm_kernel_defines);
+        ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+            device.arch(), ring_size, mm_kernel_defines, throttle_level);
+
+        auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
+        // fp32 K-partials are reloaded into DEST between blocks; marking them UnpackToDest sends the
+        // reload straight to DEST instead of through SrcA, which would truncate them to TF32. Metal
+        // 2.0 also requires an entry for every Float32 buffer this kernel consumes with 32-bit DEST,
+        // so the rest get UnpackToSrc.
+        if (fp32_dest_acc_en) {
+            auto add_if_float32 = [&](const DFBSpecName& name, tt::DataFormat fmt) {
+                if (fmt != tt::DataFormat::Float32) {
+                    return;
+                }
+                compute_hw.unpack_modes.emplace(
+                    name,
+                    name == INTERM0_DFB ? tt::tt_metal::UnpackMode::UnpackToDest
+                                        : tt::tt_metal::UnpackMode::UnpackToSrc);
+            };
+            add_if_float32(IN0_DFB, in0_data_format);
+            add_if_float32(IN2_DFB, in0_data_format);
+            add_if_float32(IN1_DFB, in1_data_format);
+            add_if_float32(INTERM0_DFB, interm0_data_format);
+        }
+
+        kernels.push_back(KernelSpec{
+            .unique_id = COMPUTE,
+            .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/"
+                      "bmm_large_block_zm_fused_bias_activation_gathered_metal2.cpp",
+            .compiler_options =
+                {
+                    .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_defines),
+                    // The legacy builder's ComputeConfig defaults to O3; Metal 2.0's CompilerOptions
+                    // defaults to O2, so it has to be stated.
+                    .opt_level = KernelBuildOptLevel::O3,
+                },
+            .dfb_bindings =
+                {
+                    DFBBinding{
+                        .dfb_spec_name = IN0_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
+                    DFBBinding{
+                        .dfb_spec_name = IN2_DFB, .accessor_name = "in2", .endpoint_type = DFBEndpointType::CONSUMER},
+                    DFBBinding{
+                        .dfb_spec_name = IN1_DFB, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER},
+                    DFBBinding{
+                        .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER},
+                    // The partials are filled and re-read by this kernel alone.
+                    DFBBinding{
+                        .dfb_spec_name = INTERM0_DFB,
+                        .accessor_name = "intermed0",
+                        .endpoint_type = DFBEndpointType::PRODUCER},
+                    DFBBinding{
+                        .dfb_spec_name = INTERM0_DFB,
+                        .accessor_name = "intermed0",
+                        .endpoint_type = DFBEndpointType::CONSUMER},
+                },
+            .compile_time_args = std::move(compute_cta),
+            .hw_config = compute_hw,
+        });
+    }
+
+    Group<WorkUnitSpec> work_units = {
+        WorkUnitSpec{.name = "ring", .kernels = {IN0_RING, IN1_READER, COMPUTE}, .target_nodes = ring_cores},
+    };
+
+    Group<TensorParameter> tensor_parameters = {
+        TensorParameter{.unique_id = IN0, .spec = in0_tensor.tensor_spec()},
+        TensorParameter{.unique_id = OUTPUT, .spec = out_tensor.tensor_spec()},
+    };
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Runtime args
+    ////////////////////////////////////////////////////////////////////////////
+    KernelRunArgs in0_ring_run_args{.kernel = IN0_RING};
+    for (uint32_t i = 0; i < ring_size; ++i) {
+        const CoreCoord next_core_noc = device.worker_core_from_logical_core(ring[(i + ring_size - 1) % ring_size]);
+        AddRuntimeArgsForNode(
+            in0_ring_run_args.runtime_arg_values,
+            ring[i],
+            {{"next_core_noc_x", static_cast<uint32_t>(next_core_noc.x)},
+             {"next_core_noc_y", static_cast<uint32_t>(next_core_noc.y)}});
+    }
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.push_back(std::move(in0_ring_run_args));
+    run_args.tensor_args = {
+        {IN0, in0_tensor},
+        {OUTPUT, out_tensor},
+    };
+    add_in1_prefetcher_pipe_run_args(run_args, in1_pipe_relay, prefetcher_pipes);
+
+    ProgramSpec spec{
+        .name = "matmul_multi_core_reuse_mcast_1d_gather_in0",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .semaphores = std::move(semaphores),
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units = std::move(work_units),
+        .advanced_options = {.prefetcher_pipe_parameters = std::move(in1_pipe_relay.parameters)},
     };
 
     return ttnn::device_operation::ProgramArtifacts{
@@ -6128,8 +6546,6 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
     auto mcast_in0 = program_config.mcast_in0;
     auto gather_in0 = program_config.gather_in0;
 
-    TT_FATAL(!gather_in0, "create_program_artifacts does not support gather_in0 mode");
-
     TT_FATAL(
         operation_attributes.compute_kernel_config.has_value(),
         "Error: compute_kernel_config field should have been populated");
@@ -6169,6 +6585,33 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
     const auto Mt = get_M_dim(a_shape_padded, in0_tile, fuse_batch);
     const auto Kt = get_K_dim(a_shape_padded, in0_tile);
     const auto Nt = get_N_dim(b_shape_padded, in1_tile);
+
+    // gather_in0 runs on the activation's shard grid rather than on a rectangle of the worker grid,
+    // so none of the grid placement below applies to it.
+    if (gather_in0) {
+        return reuse_mcast_1d_optimized_helpers::create_program_gather_in0_artifacts(
+            device,
+            compute_kernel_config,
+            fp32_dest_acc_en,
+            packer_l1_acc,
+            ttnn::get_throttle_level(compute_kernel_config),
+            out_subblock_h,
+            out_subblock_w,
+            per_core_M,
+            per_core_N,
+            program_config.fused_activation,
+            in0_tensor,
+            in1_tensor,
+            output,
+            in0_tile,
+            in1_tile,
+            output_tile,
+            in0_data_format,
+            in1_data_format,
+            output_data_format,
+            untilize_out,
+            operation_attributes.prefetcher_pipes);
+    }
 
     // The 1D mcast matmul only supports rectangular sub-device worker grids, because the in0/in1
     // multicast targets a single bounding-box rectangle and the per-core index math assumes a
