@@ -30,3 +30,12 @@ def kimi_k3_checkpoint_dir() -> Path:
     if value is None:
         pytest.skip("set KIMI_K3_CKPT to the pinned Kimi-K3 checkpoint subset")
     return Path(value)
+
+
+@pytest.fixture(scope="session")
+def glm_5_3_flash_checkpoint_dir() -> Path:
+    """Return the explicitly selected pinned GLM-5.3-Flash checkpoint subset (index + layer-0 shard)."""
+    value = os.getenv("GLM_5_3_FLASH_CKPT")
+    if value is None:
+        pytest.skip("set GLM_5_3_FLASH_CKPT to the pinned GLM-5.3-Flash checkpoint subset")
+    return Path(value)
