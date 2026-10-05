@@ -36,8 +36,18 @@ ALWI void gelu_tile_init() {
 // clang-format on
 template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tile(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_gelu,
+        (fast_and_approx, is_fp32_dest_acc_en, 32),
+        idst,
+        VectorMode::None));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu, (fast_and_approx, is_fp32_dest_acc_en), idst, VectorMode::RC));
+#endif
 }
 
 #ifndef ARCH_QUASAR
@@ -48,8 +58,18 @@ ALWI void gelu_tile_init_pack() {
 
 template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tile_pack(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_gelu,
+        (fast_and_approx, is_fp32_dest_acc_en, 32),
+        idst,
+        VectorMode::None));
+#else
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu, (fast_and_approx, is_fp32_dest_acc_en), idst, VectorMode::RC));
+#endif
 }
 
 /**
@@ -80,12 +100,22 @@ ALWI void gelu_tanh_tile_init_pack() {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tanh_tile(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en, 32), idst, VectorMode::None));
+#else
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en), idst, VectorMode::RC));
+#endif
 }
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tanh_tile_pack(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en, 32), idst, VectorMode::None));
+#else
     PACK(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en), idst, VectorMode::RC));
+#endif
 }
 
 /**
@@ -120,6 +150,15 @@ ALWI void gelu_derivative_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_derivative_tile(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_gelu_derivative_polynomial,
+        (fast_and_approx, is_fp32_dest_acc_en, 32),
+        idst,
+        VectorMode::None));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -127,6 +166,7 @@ ALWI void gelu_derivative_tile(uint32_t idst) {
         (fast_and_approx, is_fp32_dest_acc_en),
         idst,
         VectorMode::RC));
+#endif
 }
 
 #endif

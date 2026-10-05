@@ -42,6 +42,15 @@ ALWI void rsqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (
 // clang-format on
 template <RsqrtMode mode = RsqrtMode::Default, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void rsqrt_tile(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_rsqrt,
+        (APPROX, 32 /* ITERATIONS */, is_fp32_dest_acc_en, FAST_APPROX),
+        idst,
+        VectorMode::None));
+#else
     [[maybe_unused]] constexpr bool FAST_APPROX = mode == RsqrtMode::Fast;
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -50,6 +59,7 @@ ALWI void rsqrt_tile(uint32_t idst) {
         (APPROX, 8 /* ITERATIONS */, is_fp32_dest_acc_en, FAST_APPROX),
         idst,
         VectorMode::RC));
+#endif
 }
 
 }  // namespace ckernel

@@ -132,6 +132,16 @@ ALWI void relu_max_tile_init() { MATH(SFPU_UNARY_INIT(relu_max)); }
 
 #ifndef ARCH_QUASAR
 ALWI void relu_max_tile_pack(uint32_t idst, uint32_t param0) {
+#ifdef ARCH_BLACKHOLE
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _relu_max_,
+        (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 32 /*ITERATIONS*/, uint32_t /*T*/),
+        idst,
+        VectorMode::None,
+        param0 /*threshold*/));
+#else
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -140,6 +150,7 @@ ALWI void relu_max_tile_pack(uint32_t idst, uint32_t param0) {
         idst,
         VectorMode::RC,
         param0 /*threshold*/));
+#endif
 }
 
 ALWI void relu_max_tile_int32(uint32_t idst, uint32_t param0) {
@@ -238,7 +249,11 @@ ALWI void relu_tile_int32(uint32_t idst) {
  */
 // clang-format on
 ALWI void leaky_relu_tile(uint32_t idst, uint32_t slope = 0) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lrelu, (APPROX, 32), idst, VectorMode::None, slope));
+#else
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lrelu, (APPROX), idst, VectorMode::RC, slope));
+#endif
 }
 
 ALWI void leaky_relu_tile_init() { MATH(SFPU_UNARY_INIT(lrelu)); }

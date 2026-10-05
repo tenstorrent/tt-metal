@@ -31,6 +31,18 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_softplus,
+        (APPROX, is_fp32_dest_acc_en, 32),
+        idst,
+        VectorMode::None,
+        beta,
+        beta_reciprocal,
+        threshold));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -41,6 +53,7 @@ ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, 
         beta,
         beta_reciprocal,
         threshold));
+#endif
 }
 
 /**
@@ -52,6 +65,18 @@ ALWI void softplus_tile_init() { MATH(SFPU_UNARY_INIT(softplus)); }
 // Pack-thread variants: Quasar has no pack-thread SFPU, so these are gated off there.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void softplus_tile_pack(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
+#ifdef ARCH_BLACKHOLE
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_softplus,
+        (APPROX, is_fp32_dest_acc_en, 32),
+        idst,
+        VectorMode::None,
+        beta,
+        beta_reciprocal,
+        threshold));
+#else
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -62,6 +87,7 @@ ALWI void softplus_tile_pack(uint32_t idst, uint32_t beta, uint32_t beta_recipro
         beta,
         beta_reciprocal,
         threshold));
+#endif
 }
 
 ALWI void softplus_tile_init_pack() { PACK(SFPU_UNARY_INIT(softplus)); }
