@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <type_traits>
 #include <utility>
@@ -294,10 +295,10 @@ public:
 
     // Hands the worker a parallel_for job, taking over one of the job's references. A job the worker has not
     // picked up yet is dropped: its caller runs any calls it still has.
-    void offer(ParallelJob* job);
+    void offer(ParallelJob* job) noexcept;
 
     // Enters the kernel only if the worker is parked.
-    void wake() {
+    void wake() noexcept {
         if (parked_.load(std::memory_order_seq_cst) != 0 && parked_.exchange(0, std::memory_order_seq_cst) != 0) {
             futex_wake_one(parked_);
         }
@@ -363,12 +364,12 @@ public:
     const std::vector<NumaAwareExecutor*>& participants() const { return participants_; }
 
     // Takes one reference for the caller and one for each participant.
-    void start() { refs_.store(participants_.size() + 1, std::memory_order_relaxed); }
+    void start() noexcept { refs_.store(participants_.size() + 1, std::memory_order_relaxed); }
 
     // Worker: wakes the participants below this one that still have calls to run, runs this worker's calls, and
     // drops the worker's reference. A job that has finished may point at executors being stopped, so it is only
     // dropped.
-    void run_participant(NumaAwareExecutor* executor) {
+    void run_participant(NumaAwareExecutor* executor) noexcept {
         if (!remaining_.finished()) {
             const size_t position =
                 std::find(participants_.begin(), participants_.end(), executor) - participants_.begin();
@@ -383,7 +384,7 @@ public:
     }
 
     // Runs `call` unless another thread has claimed it.
-    void run(size_t call) {
+    void run(size_t call) noexcept {
         if (claims_[call].claimed.exchange(true, std::memory_order_acq_rel)) {
             return;
         }
@@ -399,14 +400,14 @@ public:
     }
 
     // Caller: waits for every call, returns the first exception, and drops the caller's reference.
-    std::exception_ptr finish() {
+    std::exception_ptr finish() noexcept {
         remaining_.wait();
         auto exception = exception_;
         release();
         return exception;
     }
 
-    void release() {
+    void release() noexcept {
         if (refs_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
             delete this;
         }
@@ -414,7 +415,7 @@ public:
 
 private:
     template <typename Fn>
-    void for_each_child(size_t position, Fn fn) const {
+    void for_each_child(size_t position, Fn fn) const noexcept {
         for (size_t child = (position * WAKE_FANOUT) + 1;
              child <= (position * WAKE_FANOUT) + WAKE_FANOUT && child < participants_.size();
              child++) {
@@ -424,7 +425,7 @@ private:
 
     // Wakes the participant at `position` if the caller has not already claimed all of its calls, and otherwise
     // wakes its children in its place.
-    void wake_subtree(size_t position) {
+    void wake_subtree(size_t position) noexcept {
         for (size_t call = 0; call < executor_of_call_.size(); call++) {
             if (executor_of_call_[call] == participants_[position] &&
                 !claims_[call].claimed.load(std::memory_order_relaxed)) {
@@ -462,7 +463,7 @@ inline void NumaAwareExecutor::stop() {
     }
 }
 
-inline void NumaAwareExecutor::offer(ParallelJob* job) {
+inline void NumaAwareExecutor::offer(ParallelJob* job) noexcept {
     // seq_cst pairs with the worker's check before it parks.
     if (auto* stale = job_.exchange(job, std::memory_order_seq_cst)) {
         stale->release();
@@ -562,10 +563,12 @@ public:
         if (device_ids.empty()) {
             return;
         }
-        auto* job = new ParallelJob(fn, device_ids.size());
+        auto owned = std::make_unique<ParallelJob>(fn, device_ids.size());
         for (size_t call = 0; call < device_ids.size(); call++) {
-            job->assign(call, workers_[phys_device_to_thread_id_.at(device_ids[call])].get());
+            owned->assign(call, workers_[phys_device_to_thread_id_.at(device_ids[call])].get());
         }
+        // Nothing below throws: once offered, workers hold the job and the job refers to fn.
+        auto* job = owned.release();
         job->start();
         const auto& participants = job->participants();
         // Wake the first participant as soon as it has the job; it wakes the others as it starts.
