@@ -85,6 +85,8 @@ class Operand:
     acc_atol: float = 0.0
     acc_rtol: float = 0.0
     acc_pcc: float = 1.0
+    atol: Optional[float] = None
+    rtol: Optional[float] = None
 
     def __post_init__(self):
         self.tile_count_x = self.dimensions[1] // self.tile_shape.total_col_dim()
@@ -256,6 +258,8 @@ class OperandRegistry:
         data_format: DataFormat,
         intervals: Optional[List[Tuple[float, float]]] = None,
         tile_dims: Optional[Tuple[int, int]] = None,
+        atol: Optional[float] = None,
+        rtol: Optional[float] = None,
     ) -> Operand:
         if name in self.operands:
             operand = self.operands[name]
@@ -283,6 +287,8 @@ class OperandRegistry:
             is_output=False,
             intervals=intervals,
             tile_shape=tile_shape,
+            atol=atol,
+            rtol=rtol,
         )
         self.operands[name] = operand
         return operand
