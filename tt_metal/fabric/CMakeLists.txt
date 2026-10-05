@@ -85,6 +85,7 @@ target_link_libraries(
         metal_common_libs
         enchantum::enchantum
         fmt::fmt-header-only
+        nlohmann_json::nlohmann_json
         yaml-cpp::yaml-cpp
         Metalium::Metal::Impl
         TT::Metalium::HostDevCommon
