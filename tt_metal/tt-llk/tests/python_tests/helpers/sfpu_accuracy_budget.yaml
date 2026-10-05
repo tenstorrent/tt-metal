@@ -3737,9 +3737,10 @@ SigmoidAppx:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + stride
 # included: they are exact by construction, so the emitter keeps a strided 0 rather than
 # flooring it (EXACT_BY_CONSTRUCTION_OPS). The in-tree WH kernels
 # branch on `abs(v) == 0`, so -0.0 is answered as zero (fixed in #55306), and a
-# recurrence is a regression, not specified behaviour. Their block-float inputs read one
-# lane off, like Signbit's: the -0.0 lane, which the golden's own block quantization
-# turns non-zero. The op-wide tolerance row answers only what the sweep does not drive.
+# recurrence is a regression, not specified behaviour. Their block-float inputs measure 0
+# like Signbit's: the one -0.0 lane the golden's own block quantization turns non-zero is
+# masked by `flushed_inputs`. The op-wide tolerance row answers only what the sweep does
+# not drive.
 Sign:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-02, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, max_ulp: 0}  # max 0 ULP
