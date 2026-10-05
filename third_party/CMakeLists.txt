@@ -210,14 +210,26 @@ add_library(zoo INTERFACE)
 add_library(Zoo::Zoo ALIAS zoo)
 target_include_directories(zoo SYSTEM INTERFACE "$<BUILD_INTERFACE:${zoo_SOURCE_DIR}/inc>")
 
-file(GLOB_RECURSE ZOO_HEADERS "${zoo_SOURCE_DIR}/inc/*.h")
+# Only what zoo/FunctionPolicy.h reaches is installed; the rest of zoo stays out of the public install.
 target_sources(
     zoo
     INTERFACE
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${zoo_SOURCE_DIR}/inc
-        FILES ${ZOO_HEADERS}
+        FILES
+            ${zoo_SOURCE_DIR}/inc/zoo/AlignedStorage.h
+            ${zoo_SOURCE_DIR}/inc/zoo/Any/DerivedVTablePolicy.h
+            ${zoo_SOURCE_DIR}/inc/zoo/Any/Traits.h
+            ${zoo_SOURCE_DIR}/inc/zoo/Any/VTablePolicy.h
+            ${zoo_SOURCE_DIR}/inc/zoo/AnyContainer.h
+            ${zoo_SOURCE_DIR}/inc/zoo/FunctionPolicy.h
+            ${zoo_SOURCE_DIR}/inc/zoo/meta/InplaceType.h
+            ${zoo_SOURCE_DIR}/inc/zoo/meta/NotBasedOn.h
+            ${zoo_SOURCE_DIR}/inc/zoo/meta/copy_and_move_abilities.h
+            ${zoo_SOURCE_DIR}/inc/zoo/meta/traits.h
+            ${zoo_SOURCE_DIR}/inc/zoo/pp/platform.h
+            ${zoo_SOURCE_DIR}/inc/zoo/utility.h
 )
 
 ############################################################################################################################
