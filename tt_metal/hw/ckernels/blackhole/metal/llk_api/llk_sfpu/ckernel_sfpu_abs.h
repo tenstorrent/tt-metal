@@ -29,6 +29,7 @@ inline void calculate_abs() {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_abs_int32() {
     // SFPU microcode
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         // sfpi::abs(vInt) lowers to the dedicated SFPABS integer instruction (mod 0),
         // matching the raw TTI sequence (SFPLOAD + SFPABS + SFPSTORE = 3 SFPU ops).

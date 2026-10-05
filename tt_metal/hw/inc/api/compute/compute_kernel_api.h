@@ -559,7 +559,11 @@ ALWI void abs_tile_init() { MATH(SFPU_UNARY_INIT(abs)); }
  */
 // clang-format on
 ALWI void abs_tile_int32(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs_int32, (APPROX, 32), idst, VectorMode::None));
+#else
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs_int32, (APPROX), idst, VectorMode::RC));
+#endif
 }
 
 // clang-format off
