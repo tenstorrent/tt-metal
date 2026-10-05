@@ -873,8 +873,9 @@ def _exact_op_driver_variants():
 
 
 def _exact_driver_skips():
-    """Driver variants of an exact op that the driver itself skips, with why. Read from
-    the driver's own list, so the waiver cannot outlive the skip."""
+    """Driver variants of an exact op that the driver itself skips, with why. They never
+    run, so whatever they resolve to gates nothing; read from the driver's own list, so
+    the exclusion cannot outlive the skip."""
     from test_eltwise_unary_sfpu import _ISINF_ISNAN_BF16_DEST_UNSUPPORTED
 
     return {
@@ -893,12 +894,12 @@ def test_every_driven_variant_of_an_exact_op_is_gated_or_waived():
     the Float16_b variants fall back to tolerance while it still passes. This walks every
     variant the hand-built drivers run an exact op in, on a float non-block output, and
     requires each to resolve to a step budget -- at the Dest the variant asks for and at
-    the one it is promoted to -- or to be a variant the driver skips. The swept cells of
-    the unary exact ops are held by the test after this one."""
+    the one it is promoted to. A variant the driver skips never runs and is left out.
+    The swept cells of the unary exact ops are held by the test after this one."""
     from helpers.data_format_inference import effective_dest_acc
 
-    waived = _exact_driver_skips()
-    ungated, used = [], set()
+    skipped = _exact_driver_skips()
+    ungated = []
     for driver, op, formats, approx, dest in _exact_op_driver_variants():
         out_fmt = formats.output_format
         if not has_ulp_gate(out_fmt) or out_fmt in _ULP_PROXY_DTYPES:
@@ -917,9 +918,7 @@ def test_every_driven_variant_of_an_exact_op_is_gated_or_waived():
             )
             if contract.metric is Metric.ULP:
                 continue
-            key = (driver, op, formats.input_format, d)
-            if key in waived:
-                used.add(key)
+            if (driver, op, formats.input_format, d) in skipped:
                 continue
             ungated.append(
                 f"{driver}: {op.name} {formats.input_format.name}->{out_fmt.name} "
@@ -928,12 +927,6 @@ def test_every_driven_variant_of_an_exact_op_is_gated_or_waived():
     assert not ungated, (
         "exact-op variant(s) a driver runs that resolve to no step budget, so a "
         "regression there passes on tolerance:\n  " + "\n  ".join(sorted(set(ungated)))
-    )
-    assert used == set(waived), "stale driver-skip waiver(s): " + ", ".join(
-        sorted(
-            f"{k[0]} {k[1].name} {k[2].name} dest={k[3].name}"
-            for k in set(waived) - used
-        )
     )
 
 
