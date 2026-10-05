@@ -30,11 +30,11 @@ constexpr std::uint32_t SFPU_CTRL_INDEX_TRACKING = 0x4;  // Control Register bit
 constexpr std::uint32_t MAX_POOL_SWAP_IMM12_FP32 = 0x1;  // SFPSWAP imm12 bit 0 = FP32 compare
 
 // Replay slots for the sort network init_max_pool_with_indices() records for its layout:
-// max_pool_sort_tile_() or max_pool_sort_row_major_(), both 2 x SFPTRANSP + 5 x (SFPSWAP + SFPNOP).
+// max_pool_sort_tile_() or max_pool_sort_row_major_(), both 2 x SFPTRANSP + 5 x SFPSWAP.
 constexpr std::uint32_t MAX_POOL_SORT_START = 0;
-constexpr std::uint32_t MAX_POOL_SORT_LEN = 12;
-constexpr std::uint32_t MAX_POOL_FOLD_TILE_START = 8;  // TILE only: its last two swaps, LREG0/LREG1 and LREG2/LREG3
-constexpr std::uint32_t MAX_POOL_FOLD_TILE_LEN = 4;
+constexpr std::uint32_t MAX_POOL_SORT_LEN = 7;
+constexpr std::uint32_t MAX_POOL_FOLD_TILE_START = 5;  // TILE only: its last two swaps, LREG0/LREG1 and LREG2/LREG3
+constexpr std::uint32_t MAX_POOL_FOLD_TILE_LEN = 2;
 
 /**
  * @brief Compare-exchange one LREG pair so the larger value ends up in VC, the smaller in VD.
@@ -43,14 +43,12 @@ constexpr std::uint32_t MAX_POOL_FOLD_TILE_LEN = 4;
  * @tparam VD: Value LREG that receives the smaller of the pair, values = <LREG0-LREG3>
  * @note Index tracking makes LREG[VC+4] / LREG[VD+4] follow the exchange, which is what carries the
  *       indices alongside the values. Enable it with @ref init_max_pool_with_indices first.
- * @note The trailing SFPNOP is mandatory: SFPSWAP is a 2-cycle op, and the SFPU misses the hazard of a
- *       2-cycle op followed by SFPSWAP (erratum TEN-4581). It costs no throughput, since SFPSWAP
- *       issues at most every other cycle.
+ * @note No SFPNOP follows: SFPSWAP always stalls the pipeline on the next cycle, so the next
+ *       instruction cannot observe a half-written result (TEN-4581 lists SFPSWAP as safe).
  */
 template <std::uint32_t VC, std::uint32_t VD>
 inline __attribute__((always_inline)) void max_pool_swap_() {
     TTI_SFPSWAP(MAX_POOL_SWAP_IMM12_FP32, VC, VD, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);  // TEN-4581
 }
 
 /**
@@ -61,7 +59,7 @@ inline __attribute__((always_inline)) void max_pool_swap_() {
  * store order - after which two more swaps fold the 4-row groups together.
  *
  * @note This is the TILE-layout body @ref init_max_pool_with_indices records into the replay buffer,
- *       so its instruction count must stay MAX_POOL_SORT_LEN and its last 4 instructions must stay
+ *       so its instruction count must stay MAX_POOL_SORT_LEN and its last 2 instructions must stay
  *       the two swaps MAX_POOL_FOLD_TILE_START names.
  */
 inline __attribute__((always_inline)) void max_pool_sort_tile_() {
@@ -394,7 +392,7 @@ template <bool APPROXIMATION_MODE, ckernel::DataLayout layout = ckernel::DataLay
 inline void init_max_pool_with_indices() {
     // LREG4-7 become the indices of LREG0-3 and follow every SFPSWAP exchange
     ckernel::math::_sfpu_load_config32_(p_sfpconfig::SFPU_CTRL, 0x0 /* upper16 */, SFPU_CTRL_INDEX_TRACKING);
-    // SFPCONFIG is 2-cycle and must not be followed directly by SFPSWAP (TEN-4581)
+    // Let the SFPU_CTRL write land before the first SFPSWAP relies on index tracking
     TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);
     TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);
 
