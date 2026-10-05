@@ -585,7 +585,7 @@ def test_hybrid_routed_expert_combine_overlap(mesh_device, device_params, thresh
     case = _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=variant == "dg0-only")
     # Run the device first: the reference rewrites the host dispatched buffer in place.
     actuals = [ttnn.to_torch(case.overlapped(), mesh_composer=case.composer)]
-    # Twice: the second run is a program-cache hit, which reuses the cached arena and fwd_arrived.
+    # Twice: the second run is a program-cache hit, which reuses the cached arena and ring semaphores.
     actuals.append(ttnn.to_torch(case.overlapped(), mesh_composer=case.composer))
     expected = case.torch_reference()
 
@@ -654,8 +654,8 @@ def test_hybrid_routed_expert_combine_overlap_perf(mesh_device, device_params, t
     Every program is replayed from a trace, as the model runs it, and timed as wall time per replay. One eager
     call of each first compiles it: compiling writes to the device, which a capture does not allow.
 
-    The routed expert comes first: its first call sizes its arena to all free L1, and combine's fwd_arrived
-    takes a piece of L1 from its own first call on. The overlap keeps an arena of its own, so it comes last.
+    The routed expert comes first: its first call sizes its arena to all free L1, and combine's ring semaphores
+    take a piece of L1 from its own first call on. The overlap keeps an arena of its own, so it comes last.
     """
     if variant == "8x1-submesh":
         mesh_device = mesh_device.create_submesh(ttnn.MeshShape(8, 1))

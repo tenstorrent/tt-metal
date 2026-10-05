@@ -33,11 +33,13 @@ struct CombineFabric2dProgramFactory {
 };
 
 // What a program sharing the chip with combine hands it instead of letting it allocate. The routed expert's L1
-// arena covers every worker core and must be allocated AFTER fwd_arrived, which is the one allocation combine
-// makes: the allocator reserves an address on every core at once, so an arena taken first leaves no room, and
-// combine's static circular buffers would clash with it wherever they sit.
+// arena covers every worker core and must be allocated AFTER fwd_arrived and final_arrived, the only allocations
+// combine makes: the allocator reserves an address on every core at once, so an arena taken first leaves no room,
+// and combine's static circular buffers would clash with it wherever they sit.
 struct CombineL1 {
-    const tt::tt_metal::GlobalSemaphore* fwd_arrived = nullptr;  // null: combine allocates its own
+    // Both or neither; null: combine allocates its own.
+    const tt::tt_metal::GlobalSemaphore* fwd_arrived = nullptr;
+    const tt::tt_metal::GlobalSemaphore* final_arrived = nullptr;
     tt::tt_metal::Buffer* arena = nullptr;  // null: circular buffers are static, at the allocator base
 };
 

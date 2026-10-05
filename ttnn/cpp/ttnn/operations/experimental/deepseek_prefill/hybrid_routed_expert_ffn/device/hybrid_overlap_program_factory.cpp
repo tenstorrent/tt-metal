@@ -53,12 +53,13 @@ namespace {
 
 struct OverlapL1 {
     std::optional<tt::tt_metal::GlobalSemaphore> fwd_arrived;
+    std::optional<tt::tt_metal::GlobalSemaphore> final_arrived;
     // Released by combine's collector to the routed expert's writers; see kernels/hybrid_expert_done.hpp.
     std::optional<tt::tt_metal::GlobalSemaphore> go;
     std::shared_ptr<ttnn::Tensor> arena;
 };
 
-// The two global semaphores first, then the arena under them. The other order cannot work: an arena over all of L1
+// The global semaphores first, then the arena under them. The other order cannot work: an arena over all of L1
 // leaves the semaphore nowhere to go, and it cannot be allocated per call like the solo arena because its address is a
 // compile-time argument of combine's kernels.
 OverlapL1 allocate_overlap_l1(ttnn::MeshDevice* mesh, bool with_arena) {
@@ -68,6 +69,8 @@ OverlapL1 allocate_overlap_l1(ttnn::MeshDevice* mesh, bool with_arena) {
 
     OverlapL1 l1;
     l1.fwd_arrived =
+        ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
+    l1.final_arrived =
         ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
     const tt::tt_metal::CoreRangeSet re_cores(tt::tt_metal::CoreRange(
         tt::tt_metal::CoreCoord{0, kOriginY}, tt::tt_metal::CoreCoord{kGridX - 1, kOriginY + kGridY - 1}));
@@ -95,11 +98,14 @@ OverlapL1 allocate_overlap_l1(ttnn::MeshDevice* mesh, bool with_arena) {
     l1.arena = std::make_shared<ttnn::Tensor>(create_device_tensor(spec, mesh));
     const auto* arena = l1.arena->buffer();
     TT_FATAL(
-        arena->address() + arena->aligned_size_per_bank() <= std::min(l1.fwd_arrived->address(), l1.go->address()),
-        "hybrid routed expert: the L1 arena [0x{:x}, +{} B) runs into the global semaphores at 0x{:x} / 0x{:x}",
+        arena->address() + arena->aligned_size_per_bank() <=
+            std::min({l1.fwd_arrived->address(), l1.final_arrived->address(), l1.go->address()}),
+        "hybrid routed expert: the L1 arena [0x{:x}, +{} B) runs into the global semaphores at 0x{:x} / 0x{:x} / "
+        "0x{:x}",
         arena->address(),
         arena->aligned_size_per_bank(),
         l1.fwd_arrived->address(),
+        l1.final_arrived->address(),
         l1.go->address());
     return l1;
 }
@@ -136,7 +142,7 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     auto* mesh = t.x.device();
     // Without the fused pass the routed expert has no arena to lay its buffers over, and neither op needs one: each
-    // keeps static circular buffers on its own rows, both below fwd_arrived.
+    // keeps static circular buffers on its own rows, all below the global semaphores.
     const bool run_fused_pass = op.hybrid_token_threshold > 0;
     const auto l1 = allocate_overlap_l1(mesh, run_fused_pass);
     tt::tt_metal::Buffer* arena = run_fused_pass ? l1.arena->buffer() : nullptr;
@@ -160,7 +166,7 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
         combine_inputs(t),
         output,
         tensor_coords,
-        combine::CombineL1{.fwd_arrived = &*l1.fwd_arrived, .arena = arena},
+        combine::CombineL1{.fwd_arrived = &*l1.fwd_arrived, .final_arrived = &*l1.final_arrived, .arena = arena},
         &collectors);
 
     for (auto& program : workload.programs) {
@@ -188,7 +194,7 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
         program.descriptor = tt::tt_metal::merge_program_descriptors({program.descriptor, re});
     }
 
-    // combine_fabric2d already holds fwd_arrived through its semaphore list.
+    // combine_fabric2d already holds fwd_arrived and final_arrived through its semaphore list.
     workload.semaphores.push_back(*l1.go);
     if (l1.arena) {
         workload.buffers.push_back({l1.arena, l1.arena->buffer()});
