@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+import pytest
+
+from models.experimental.ops.quasar.qwen3_vl.tests.e2e.config import RunConfig
+
+
+def pytest_addoption(parser):
+    g = parser.getgroup("qwen3_vl_e2e")
+    g.addoption("--qwen-size", default="tiny", choices=["tiny", "demo"])
+    g.addoption("--qwen-vision-layers", type=int, default=2)
+    g.addoption("--qwen-text-layers", type=int, default=2)
+    g.addoption("--qwen-decode-steps", type=int, default=1)
+    g.addoption("--qwen-deepstack-at", type=int, default=None)
+    g.addoption(
+        "--qwen-kv-blocks", type=int, default=None, help="Paged KV-cache blocks of 32 tokens (default: preset)."
+    )
+    g.addoption("--qwen-host-ops", default="")
+    g.addoption("--qwen-disable-wa", default="")
+    g.addoption("--qwen-quasar-config", action="store_true", default=False)
+    g.addoption("--qwen-expect-grid", default=None)
+    g.addoption("--qwen-run-dir", default="generated/qwen3_vl_quasar/adhoc")
+
+
+@pytest.fixture
+def qwen_run_config(request):
+    return RunConfig.from_options(request.config.getoption)
