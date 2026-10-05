@@ -231,7 +231,7 @@ def test_prefill_sparse(mesh_device):
             print(msg, flush=True)
             torch.save(
                 {"got": got[L].to(torch.bfloat16), "ids": ids_dev[L]},
-                f"/mnt/tt-data/ssinghal/dsv4-logs/h46x_dev_S{S}_C{C}_{tag}_L{L}.pt",
+                f"/mnt/tt-data/ssinghal/dsv4-logs/h46x_dev_S{S}_C{C}_{tag}_L{L}{os.environ.get('DSV41_PS_TAG', '')}.pt",
             )
         if (
             dyn and os.environ.get("DSV41_PS_TEARDOWN") == "1"
