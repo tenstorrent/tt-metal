@@ -28,6 +28,7 @@
 #include <gtest/gtest.h>
 
 #include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
+#include "tt_metal/distributed/shm_owner_liveness.hpp"
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -134,7 +135,7 @@ TEST(ShmResourceTrackerManifest, OwnManifestRecordsStartTime) {
     std::ifstream ifs(manifest);
     std::string first_line;
     ASSERT_TRUE(std::getline(ifs, first_line));
-    EXPECT_EQ(first_line, fmt::format("start {}", ShmResourceTracker::process_start_time(getpid())));
+    EXPECT_EQ(first_line, fmt::format("start {}", process_start_time(getpid())));
     EXPECT_TRUE(manifest_test_has_line(manifest, "shm " + name));
 
     tracker.untrack_shm(name);
@@ -144,7 +145,7 @@ TEST(ShmResourceTrackerManifest, OwnManifestRecordsStartTime) {
 TEST(ShmResourceTrackerManifest, ScanReapsOwnerWhosePidBelongsToAnotherProcess) {
     ManifestTestChild bystander;
     ASSERT_GT(bystander.pid(), 0) << std::strerror(errno);
-    const uint64_t bystander_start = ShmResourceTracker::process_start_time(bystander.pid());
+    const uint64_t bystander_start = process_start_time(bystander.pid());
     ASSERT_NE(bystander_start, 0u);
     const std::string name = fmt::format("/tt_test_manifest_reused_{}", getpid());
     // The dead owner started at a different time than the process now holding its pid.
@@ -162,7 +163,7 @@ TEST(ShmResourceTrackerManifest, ScanReapsOwnerWhosePidBelongsToAnotherProcess) 
 TEST(ShmResourceTrackerManifest, ScanReapsPredecessorThatHeldOurOwnPid) {
     // The recreated worker was handed the dead owner's pid, so the stale
     // manifest sits at this process's own manifest path.
-    const uint64_t my_start = ShmResourceTracker::process_start_time(getpid());
+    const uint64_t my_start = process_start_time(getpid());
     ASSERT_NE(my_start, 0u);
     const std::string name = fmt::format("/tt_test_manifest_ownpid_{}", getpid());
     manifest_test_plant(getpid(), my_start + 1, name);
@@ -187,7 +188,7 @@ TEST(ShmResourceTrackerManifest, ScanReapsPredecessorThatHeldOurOwnPid) {
 TEST(ShmResourceTrackerManifest, ScanKeepsLiveOwnerWithMatchingStartTime) {
     ManifestTestChild owner;
     ASSERT_GT(owner.pid(), 0) << std::strerror(errno);
-    const uint64_t owner_start = ShmResourceTracker::process_start_time(owner.pid());
+    const uint64_t owner_start = process_start_time(owner.pid());
     ASSERT_NE(owner_start, 0u);
     const std::string name = fmt::format("/tt_test_manifest_live_{}", getpid());
     manifest_test_plant(owner.pid(), owner_start, name);

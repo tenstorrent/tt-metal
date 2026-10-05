@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
+#include "shm_owner_liveness.hpp"
 
 #include <mutex>
 #include <tt-logger/tt-logger.hpp>
@@ -52,6 +53,51 @@ uint64_t read_manifest_start_time(const std::string& manifest_path) {
     }
 }
 
+// Reads /proc/<pid>/stat: `state` is field 3, `num_threads` field 20 and
+// `start_time` field 22. comm may contain spaces and parentheses, so fields are
+// tokenised after the last ')'. False when the entry cannot be read.
+bool read_proc_stat(pid_t pid, char& state, long& num_threads, uint64_t& start_time) {
+    if (pid <= 0) {
+        return false;
+    }
+    std::ifstream stat_file(fmt::format("/proc/{}/stat", pid));
+    std::string line;
+    if (!stat_file.is_open() || !std::getline(stat_file, line)) {
+        return false;
+    }
+    const auto comm_end = line.rfind(')');
+    if (comm_end == std::string::npos) {
+        return false;
+    }
+    std::istringstream fields(line.substr(comm_end + 1));
+    std::string token;
+    if (!(fields >> token) || token.empty()) {
+        return false;
+    }
+    state = token[0];
+    // num_threads is the 17th token after state, start_time the 19th.
+    try {
+        for (int i = 0; i < 19; ++i) {
+            if (!(fields >> token)) {
+                return false;
+            }
+            if (i == 16) {
+                num_threads = std::stol(token);
+            }
+        }
+        start_time = static_cast<uint64_t>(std::stoull(token));
+    } catch (...) {
+        return false;
+    }
+    return true;
+}
+
+// What /proc says about a pid that kill(2) still accepts. A zombie (exited, not
+// yet reaped) is dead. The state belongs to the thread-group leader, though: a
+// live process whose main thread left through pthread_exit() also shows 'Z'
+// while its other threads run, so 'Z' only counts with no other threads.
+bool proc_says_dead(char state, long num_threads) { return state == 'X' || (state == 'Z' && num_threads <= 1); }
+
 struct sigaction prev_sigint, prev_sigterm;
 
 void invoke_previous_handler(int sig, const struct sigaction& prev) {
@@ -92,7 +138,7 @@ std::string ShmResourceTracker::manifest_path_for_pid(pid_t pid) {
     return fmt::format("/dev/shm/tt_socket_manifest_{}", pid);
 }
 
-pid_t ShmResourceTracker::pid_from_shm_name(const std::string& shm_name) {
+pid_t pid_from_shm_name(const std::string& shm_name) {
     // Expected format: [/]tt_{prefix}_{pid}_{random}_{counter} (NamedShm::make_unique_name).
     const std::string filename = (!shm_name.empty() && shm_name[0] == '/') ? shm_name.substr(1) : shm_name;
     if (!filename.starts_with("tt_")) {
@@ -117,48 +163,42 @@ bool ShmResourceTracker::is_pid_alive(pid_t pid) {
     if (pid <= 0) {
         return false;
     }
-    return kill(pid, 0) == 0 || errno == EPERM;
-}
-
-uint64_t ShmResourceTracker::process_start_time(pid_t pid) {
-    if (pid <= 0) {
-        return 0;
-    }
-    std::ifstream stat_file(fmt::format("/proc/{}/stat", pid));
-    std::string line;
-    if (!stat_file.is_open() || !std::getline(stat_file, line)) {
-        return 0;
-    }
-    // "pid (comm) state ppid ... starttime ..." — comm may contain spaces, so
-    // tokenize after the last ')'. starttime is field 22, i.e. the 20th token
-    // after the closing parenthesis (state is the first).
-    const auto comm_end = line.rfind(')');
-    if (comm_end == std::string::npos) {
-        return 0;
-    }
-    std::istringstream fields(line.substr(comm_end + 1));
-    std::string token;
-    for (int i = 0; i < 20; ++i) {
-        if (!(fields >> token)) {
-            return 0;
-        }
-    }
-    try {
-        return static_cast<uint64_t>(std::stoull(token));
-    } catch (...) {
-        return 0;
-    }
-}
-
-bool ShmResourceTracker::is_process_alive(pid_t pid, uint64_t start_time) {
-    if (!is_pid_alive(pid)) {
+    if (kill(pid, 0) != 0 && errno != EPERM) {
         return false;
     }
-    if (start_time == 0) {
-        return true;
+    // kill(2) also succeeds for a zombie: a process that exited and has not
+    // been reaped yet. Its resources are as orphaned as a reaped one's.
+    char state = 0;
+    long num_threads = 0;
+    uint64_t start_time = 0;
+    return !(read_proc_stat(pid, state, num_threads, start_time) && proc_says_dead(state, num_threads));
+}
+
+uint64_t process_start_time(pid_t pid) {
+    char state = 0;
+    long num_threads = 0;
+    uint64_t start_time = 0;
+    return read_proc_stat(pid, state, num_threads, start_time) ? start_time : 0;
+}
+
+bool is_process_alive(pid_t pid, uint64_t start_time) {
+    if (pid <= 0) {
+        return false;
     }
-    const uint64_t current = process_start_time(pid);
-    return current == 0 || current == start_time;
+    if (kill(pid, 0) != 0 && errno != EPERM) {
+        return false;
+    }
+    // One /proc read answers both questions (this runs inside 1 ms poll loops).
+    char state = 0;
+    long num_threads = 0;
+    uint64_t current = 0;
+    if (!read_proc_stat(pid, state, num_threads, current)) {
+        return true;  // /proc not readable: nothing contradicts kill(2)
+    }
+    if (proc_says_dead(state, num_threads)) {
+        return false;
+    }
+    return start_time == 0 || current == 0 || current == start_time;
 }
 
 ShmResourceTracker::ShmResourceTracker() :
