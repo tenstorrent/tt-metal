@@ -69,7 +69,16 @@ enum SpscControlBuffer {
     // the BroadcastRing. 8 slots so SPSC_CONTROL_END stays inside the 64-word vector.
     SPSC_STALL_COUNT_0 = 2 * PROFILER_SPSC_MAX_RISC + 2,
     SPSC_STALL_COUNT_MAX = 8,
-    SPSC_CONTROL_END = SPSC_STALL_COUNT_0 + SPSC_STALL_COUNT_MAX,  // first unused word; grow the layout here
+    // An active eth core that runs a link sync port writes the port's stamp records to a ring in L1, separate from the
+    // core's profiler rings. That ring's tail is word 31, in the same 64 B block (words 16 to 31) as the profiler
+    // rings' tails, so that the eth relay's one read of that block gets all of them.
+    SPSC_LINK_SYNC_TAIL = 31,
+    SPSC_LINK_SYNC_HEAD = SPSC_STALL_COUNT_0 + SPSC_STALL_COUNT_MAX,  // how far the eth relay has read that ring
+    // The host starts and stops the port by writing a LinkSyncCtl here, and the port writes kResidentDoneWord to the
+    // done word once it has stopped.
+    SPSC_LINK_SYNC_CTL,
+    SPSC_LINK_SYNC_DONE,
+    SPSC_CONTROL_END,  // first unused word; grow the layout here
 };
 // Runtime-id slot of Tensix RISC `risc`: 21..23, then 29..30 past the tails.
 constexpr std::uint32_t spsc_state_prog_word(std::uint32_t risc) {
@@ -86,8 +95,9 @@ static_assert(
 static_assert(
     PROFILER_SPSC_TENSIX_RISC == 5 && SPSC_STATE_TIMER_0 >= PROFILER_SPSC_TENSIX_RISC &&
         SPSC_STATE_TIMER_0 + PROFILER_SPSC_TENSIX_RISC <= SPSC_STATE_PROG_0 &&
-        SPSC_STATE_PROG_0 + 3 == SPSC_RING_TAIL_0 && spsc_state_prog_word(PROFILER_SPSC_TENSIX_RISC - 1) < 32,
-    "lane state must fill the unowned words of the tails' 64 B block");
+        SPSC_STATE_PROG_0 + 3 == SPSC_RING_TAIL_0 &&
+        spsc_state_prog_word(PROFILER_SPSC_TENSIX_RISC - 1) < SPSC_LINK_SYNC_TAIL && SPSC_LINK_SYNC_TAIL < 32,
+    "lane state and the link sync tail must fit the unowned words of the tails' 64 B block");
 
 // Host->relay stop word: quiesce drains everything with every wait still holding, then the relay exits.
 static constexpr std::uint32_t kRelayStopQuiesce = 1;
@@ -251,7 +261,7 @@ constexpr std::uint32_t spsc_span_frame_words(std::uint32_t payload_words) {
     return (n + SPSC_SPAN_PAGE_WORDS - 1u) & ~(SPSC_SPAN_PAGE_WORDS - 1u);
 }
 
-// ---- Clock sync: records and the sample ring ------------------------------------------------------------------------
+// ---- Clock sync: records, the sample ring and link ports ------------------------------------------------------------
 
 constexpr std::uint32_t kEthRefclkHz = 50'000'000u;
 static_assert(1'000'000'000u % kEthRefclkHz == 0);
@@ -343,7 +353,30 @@ struct SyncSampleRing {
     alignas(64) SyncSample samples[kSyncSampleRingSamples];
 };
 
+// The link sync measures a link in rounds, one every 10 ms. A round is one exchange of timestamped frames over the
+// link.
+constexpr std::uint32_t kLinkSyncRoundTicks = kEthRefclkHz / 100;
+// With the sync check on, a link runs a round every 1 ms instead. The host solves the clock sync from every
+// kLinkSyncCheckSolveEvery-th round, as often as without the check, and the sync check measures the sync's accuracy
+// against the other rounds.
+constexpr std::uint32_t kLinkSyncCheckRoundTicks = kEthRefclkHz / 1000;
+constexpr std::uint32_t kLinkSyncCheckSolveEvery = kLinkSyncRoundTicks / kLinkSyncCheckRoundTicks;
+// Each round a port records the egress stamps its received frames carry and its own ingress stamps of them.
+constexpr std::uint32_t kLinkSyncRecordsPerRound = 2;
+enum class LinkSyncCtl : std::uint32_t { Idle, Run, Stop };
+enum class LinkSyncRole : std::uint32_t { None, Transmitter, Receiver };
+constexpr std::uint32_t kLinkSyncSlotWords = 32;  // room for one burst of the port's frames
+constexpr std::uint32_t kLinkSyncRingRecords = 8;
 static_assert(
-    (kSyncRingRecords & (kSyncRingRecords - 1)) == 0 && (kSyncSampleRingSamples & (kSyncSampleRingSamples - 1)) == 0);
+    (kSyncRingRecords & (kSyncRingRecords - 1)) == 0 && (kSyncSampleRingSamples & (kSyncSampleRingSamples - 1)) == 0 &&
+    (kLinkSyncRingRecords & (kLinkSyncRingRecords - 1)) == 0);
+static_assert(kLinkSyncRingRecords <= kSyncFrameRecords);
+
+// A link sync port's L1 region. It sits at the top of the active eth core's unreserved region, at the same address on
+// both ports.
+struct LinkSyncL1 {
+    std::uint32_t slots[kLinkSyncSlotWords];
+    alignas(32) SyncRecord ring[kLinkSyncRingRecords];
+};
 
 }  // namespace kernel_profiler
