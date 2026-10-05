@@ -5,7 +5,9 @@
 from pathlib import Path
 
 import pytest
+import torch
 
+from models.experimental.ops.quasar.qwen3_vl.tests.e2e import pcc as P
 from models.experimental.ops.quasar.qwen3_vl.tests.e2e.config import HF_MODEL_ID, RunConfig, parse_grid
 from models.experimental.ops.quasar.qwen3_vl.tests.e2e.presets import PRESETS, build_inputs
 from models.experimental.ops.quasar.qwen3_vl.tt.quasar_config import truncate_hf_config, vision_padded_seq_len
@@ -126,3 +128,64 @@ def test_reference_tiny_stage_shapes():
         "text.logits.decode0",
         "text.logits.decode1",
     }
+
+
+def test_pcc_identical_and_constant():
+    x = torch.randn(64, 32)
+    assert P.pcc(x, x) == pytest.approx(1.0)
+    assert P.pcc(torch.ones(4), torch.ones(4)) == 1.0
+    assert P.pcc(torch.ones(4), torch.zeros(4)) == 0.0
+
+
+def test_compare_statuses():
+    g = {"a": torch.randn(10, 4), "b": torch.randn(10, 4), "c": torch.randn(3), "d": torch.randn(3)}
+    act = {
+        "a": g["a"].clone(),
+        "b": torch.randn(10, 4),
+        "c": torch.tensor([1.0, float("nan"), 0.0]),
+        "d": torch.randn(4),
+    }
+    res = {r.stage: r.status for r in P.compare(g, act, lambda s: 0.99, {})}
+    assert res == {"a": "PASS", "b": "FAIL", "c": "NONFINITE", "d": "SHAPE"}
+    act.pop("a")
+    assert {r.stage: r.status for r in P.compare(g, act, lambda s: 0.99, {})}["a"] == "MISSING"
+
+
+def test_verdict_first_failure_in_stage_order():
+    rs = [
+        P.StageResult("vision.block0", 1, 0, 0.99, "PASS", 0),
+        P.StageResult("text.layer0", 0.5, 1, 0.99, "FAIL", 0),
+        P.StageResult("text.layer1", 0.4, 1, 0.99, "FAIL", 0),
+    ]
+    v = P.verdict(rs, [], {}, [])
+    assert v.status == "FAIL" and v.first_failure == "text.layer0" and "text.layer0" in v.markdown
+
+
+def test_verdict_host_ops_is_diagnostic_even_when_all_pass():
+    rs = [P.StageResult("vision.block0", 1, 0, 0.99, "PASS", 0)]
+    v = P.verdict(rs, ["ttnn.linear"], {"host:ttnn.linear": 3}, [])
+    assert v.status == "DIAGNOSTIC" and "ttnn.linear" in v.markdown
+
+
+def test_thresholds_patterns_and_preset_override(tmp_path, expect_error):
+    f = tmp_path / "t.json"
+    f.write_text('{"default": {"text.layer*": 0.99, "text.logits.*": 0.98}, "demo": {"text.layer*": 0.97}}')
+    assert P.thresholds_for("tiny", f)("text.layer1") == 0.99
+    assert P.thresholds_for("demo", f)("text.layer1") == 0.97
+    assert P.thresholds_for("tiny", f)("text.logits.decode0") == 0.98
+    with expect_error(KeyError, "no threshold"):
+        P.thresholds_for("tiny", f)("unknown.stage")
+
+
+def test_shipped_thresholds_cover_all_stages():
+    t = P.thresholds_for("tiny")
+    for s in [
+        "vision.block0",
+        "vision.deepstack0",
+        "vision.merger",
+        "text.layer3",
+        "text.norm",
+        "text.logits.prefill",
+        "text.logits.decode2",
+    ]:
+        assert 0.9 < t(s) <= 1.0
