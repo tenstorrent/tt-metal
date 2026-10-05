@@ -14,12 +14,14 @@
 #if defined(GDN_FUSED_PRODUCER)
 #include "chunk_gdn_fused_map.hpp"
 #endif
+#include "chunk_gdn_handoff.hpp"
 
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_g = 3, cb_beta = 4;
 constexpr uint32_t cb_eye = 5, cb_tril = 6, cb_ones = 7;
 // Three 32x32 WY-inverse quadrant masks (Qtl|Qbr|Q10) packed into one [1,1,32,96] tensor.
 // Loaded once into the cb_u slot (17), which the stable-form prep no longer uses.
 constexpr uint32_t cb_mask = 17;
+static_assert(cb_mask == gdn_handoff::kCbU, "mask CB index drifted from chunk_gdn_handoff.hpp");
 
 void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
@@ -190,7 +192,7 @@ void kernel_main() {
     issue(eye_acc, cb_eye, 0, cc, tb_f);
     issue(tril_acc, cb_tril, 0, cc, tb_f);
     issue(ones_acc, cb_ones, 0, cc, tb_f);
-    issue(mask_acc, cb_mask, 0, 3, tb_f);  // Qtl, Qbr, Q10 (tiles 0,1,2)
+    issue(mask_acc, cb_mask, 0, gdn_handoff::kMaskTiles, tb_f);  // Qtl, Qbr, Q10 (tiles 0,1,2)
     noc.async_read_barrier();
     if (wi_count > 0) {
         publish_item();
@@ -198,7 +200,7 @@ void kernel_main() {
     publish(cb_eye, cc);
     publish(cb_tril, cc);
     publish(cb_ones, cc);
-    publish(cb_mask, 3);
+    publish(cb_mask, gdn_handoff::kMaskTiles);
 
     for (uint32_t i = 1; i < wi_count; i++) {
         issue_item(item_wi(i));

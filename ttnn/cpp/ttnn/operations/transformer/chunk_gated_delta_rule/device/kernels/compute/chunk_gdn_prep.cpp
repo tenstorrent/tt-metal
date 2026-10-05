@@ -22,6 +22,7 @@
 #include "api/compute/common.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "chunk_gdn_math.hpp"
+#include "../dataflow/chunk_gdn_handoff.hpp"
 
 namespace {
 
@@ -40,6 +41,12 @@ constexpr uint32_t cb_dl = cb_vnew;
 constexpr uint32_t cb_mask = cb_u;
 // k_dec before its transpose (ck tiles). Reuses the scan's cb_out slot (no o output in prep).
 constexpr uint32_t cb_kdec = cb_out;
+// The seven outputs the fused program hands to the scan receivers, and the mask CB: one shared map.
+static_assert(
+    cb_Tinv == gdn_handoff::kCbTinv && cb_vbeta == gdn_handoff::kCbVbeta && cb_w == gdn_handoff::kCbNkd &&
+        cb_qdecay == gdn_handoff::kCbQdecay && cb_intra == gdn_handoff::kCbIntra &&
+        cb_kdec_t == gdn_handoff::kCbKdecT && cb_dl == gdn_handoff::kCbDl && cb_mask == gdn_handoff::kCbU,
+    "prep CB indices drifted from ../dataflow/chunk_gdn_handoff.hpp");
 
 constexpr GdnPrepCbs CBS{
     .q = cb_q,
@@ -100,7 +107,7 @@ void kernel_main() {
     WAIT(cb_eye, cc);
     WAIT(cb_tril, cc);
     WAIT(cb_ones, cc);
-    WAIT(cb_mask, 3);  // Qtl, Qbr, Q10 (used by invert_block)
+    WAIT(cb_mask, gdn_handoff::kMaskTiles);  // Qtl, Qbr, Q10 (used by invert_block)
 
     // PHASE A (prep): state-independent per-chunk quantities. No recurrent state here; the
     // sequential state scan lives in the separate scan kernel. Outputs (per chunk) u, w, k_dec_t,
