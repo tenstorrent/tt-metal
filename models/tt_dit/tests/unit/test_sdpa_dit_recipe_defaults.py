@@ -23,6 +23,7 @@ from models.tt_dit.models.vae.minimax_h3 import decoder_minimax_h3
 from models.tt_dit.pipelines.wan.quant_config import QuantConfig
 
 BALANCED, FAST, LOW = ttnn.SDPAPrecision.BALANCED, ttnn.SDPAPrecision.FAST, ttnn.SDPAPrecision.LOW_PRECISION
+STANDARD = ttnn.SDPAPrecision.STANDARD
 
 # (module, class, constructor kwargs that reach the recipe resolution)
 MODULES = {
@@ -70,8 +71,8 @@ def _resolve(monkeypatch, name, blackhole, **overrides):
 
 
 # MiniMax-H3 attention and Wan self-attention default to LOW_PRECISION with BFP8 K/V; every other denoiser
-# attention to FAST with BF16 K/V.
-DEFAULTS = {name: (FAST, ttnn.bfloat16) for name in MODULES} | {
+# attention to STANDARD with BF16 K/V.
+DEFAULTS = {name: (STANDARD, ttnn.bfloat16) for name in MODULES} | {
     "minimax_h3": (LOW, ttnn.bfloat8_b),
     "wan": (LOW, ttnn.bfloat8_b),
 }
@@ -83,8 +84,8 @@ def test_denoiser_default_recipe(name):
     assert getattr(cls, "sdpa_self_precision_default", cls.sdpa_precision_default) == DEFAULTS[name][0]
 
 
-def test_wan_cross_attention_default_is_fast(monkeypatch):
-    assert _resolve(monkeypatch, "wan", True, is_self=False) == (FAST, ttnn.bfloat16)
+def test_wan_cross_attention_default_is_standard(monkeypatch):
+    assert _resolve(monkeypatch, "wan", True, is_self=False) == (STANDARD, ttnn.bfloat16)
 
 
 def test_vae_default_recipes():
@@ -113,27 +114,27 @@ def test_legacy_off_blackhole(expect_error, monkeypatch, name):
         _resolve(monkeypatch, name, False, sdpa_precision=FAST)
 
 
-@pytest.mark.parametrize("name", sorted(n for n in MODULES if DEFAULTS[n][0] == FAST))
+@pytest.mark.parametrize("name", sorted(n for n in MODULES if DEFAULTS[n][0] == STANDARD))
 def test_low_precision_kv_needs_low_precision(expect_error, monkeypatch, name):
-    # A FAST default keeps BF16 KV; a packed KV dtype needs an explicit LOW_PRECISION.
+    # A STANDARD default keeps BF16 KV; a packed KV dtype needs an explicit LOW_PRECISION.
     with expect_error(ValueError, ""):
         _resolve(monkeypatch, name, True, sdpa_kv_dtype=ttnn.bfloat8_b)
 
 
 def test_ltx_quant_profile_self_attention_recipe(monkeypatch):
-    # The shipped BFP8-input legacy tier maps to FAST on BF16 inputs (self-attention only).
+    # The shipped BFP8-input legacy tier maps to STANDARD on BF16 inputs (self-attention only).
     from models.tt_dit.models.transformers.ltx import quant_config
 
     monkeypatch.setattr(quant_config, "LTX_QUANT_ACTIVATIONS", True)
     profile = LtxQuantProfile.all_bf8_lofi()
-    assert profile.sdpa_self_recipe() == (FAST, None)
-    assert _resolve(monkeypatch, "ltx", True, quant_config=profile, is_self=True) == (FAST, ttnn.bfloat16)
-    assert _resolve(monkeypatch, "ltx", True, quant_config=profile, is_self=False) == (FAST, ttnn.bfloat16)
+    assert profile.sdpa_self_recipe() == (STANDARD, None)
+    assert _resolve(monkeypatch, "ltx", True, quant_config=profile, is_self=True) == (STANDARD, ttnn.bfloat16)
+    assert _resolve(monkeypatch, "ltx", True, quant_config=profile, is_self=False) == (STANDARD, ttnn.bfloat16)
     monkeypatch.setattr(quant_config, "LTX_QUANT_ACTIVATIONS", False)
     assert profile.sdpa_self_recipe() == (None, None)
 
 
 def test_wan_quant_presets_map_to_recipes():
     assert QuantConfig.default().ring_sdpa.precision is None  # keeps WanAttention's default
-    assert QuantConfig.all_lofi().ring_sdpa.precision == FAST
-    assert QuantConfig.all_bf8_lofi().ring_sdpa.precision == FAST
+    assert QuantConfig.all_lofi().ring_sdpa.precision == STANDARD
+    assert QuantConfig.all_bf8_lofi().ring_sdpa.precision == STANDARD

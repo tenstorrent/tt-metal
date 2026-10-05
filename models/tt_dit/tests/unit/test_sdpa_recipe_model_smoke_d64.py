@@ -42,7 +42,7 @@ VARIANTS = {
     "ACCURATE": (ttnn.SDPAPrecision.ACCURATE, None),
     "LOW_PRECISION": (ttnn.SDPAPrecision.LOW_PRECISION, ttnn.bfloat8_b),
 }
-# The default recipe is FAST (sdpa_precision_default), so "default" uses FAST's gates.
+# The default recipe is STANDARD (sdpa_precision_default); "default" uses the same gates as FAST.
 ABS_BOUND = {"default": 3.0, "FAST": 3.0, "ACCURATE": 1.0, "LOW_PRECISION": 3.0}
 MARGIN = 1.0  # allowed excess over the legacy tt L2 vs torch (percentage points)
 

@@ -108,9 +108,8 @@ class QuantConfig:
     def all_lofi() -> QuantConfig:
         """All compute LoFi, rest default."""
         lc = LinearQuantConfig(math_fidelity=ttnn.MathFidelity.LoFi)
-        # LoFi SDPA. On Blackhole: FAST, the cheapest recipe at least as accurate as legacy LoFi SDPA
-        # (LOW_PRECISION measured slower).
-        sc = SDPAQuantConfig(math_fidelity=ttnn.MathFidelity.LoFi, precision=ttnn.SDPAPrecision.FAST)
+        # LoFi SDPA. On Blackhole: STANDARD, the cheapest recipe at least as accurate as legacy LoFi SDPA.
+        sc = SDPAQuantConfig(math_fidelity=ttnn.MathFidelity.LoFi, precision=ttnn.SDPAPrecision.STANDARD)
         return QuantConfig(
             self_attn_qkv=lc,
             self_attn_out=lc,
@@ -143,14 +142,14 @@ class QuantConfig:
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc=False,
         )
-        # BFP8 SDPA inputs, HiFi2. On Blackhole: FAST on BF16 inputs, the cheapest recipe at least as
+        # BFP8 SDPA inputs, HiFi2. On Blackhole: STANDARD on BF16 inputs, the cheapest recipe at least as
         # accurate as legacy BFP8-input SDPA (LOW_PRECISION with BFP8 KV is less accurate on peaked
         # softmax).
         sc = SDPAQuantConfig(
             input_dtype=ttnn.bfloat8_b,
             math_fidelity=ttnn.MathFidelity.HiFi2,
             fp32_dest_acc=False,
-            precision=ttnn.SDPAPrecision.FAST,
+            precision=ttnn.SDPAPrecision.STANDARD,
         )
         return QuantConfig(
             self_attn_qkv=lc,

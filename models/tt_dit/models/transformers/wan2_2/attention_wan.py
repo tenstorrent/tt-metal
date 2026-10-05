@@ -21,12 +21,12 @@ from ....utils.tensor import bf16_tensor
 
 
 class WanAttention(Module):
-    # Named SDPA recipe of every SDPA call in this module on Blackhole. Cross-attention defaults to FAST
-    # (legacy streaming numerics with the approximate exponential). Self-attention defaults to LOW_PRECISION
+    # Named SDPA recipe of every SDPA call in this module on Blackhole. Cross-attention defaults to STANDARD
+    # (FP32 reference-max state, fused K chunks). Self-attention defaults to LOW_PRECISION
     # with BFP8 K/V: on a Blackhole Galaxy (4x8, 190 W) Wan2.2 T2V 720p denoising runs 12% faster than FAST
     # (2.22 vs 2.52 s/step) with the same attention error (2.47% / 2.31% vs FAST 2.54% / 2.41% at 480p /
     # 720p, real weights) and equivalent videos. Pass sdpa_precision to choose another recipe.
-    sdpa_precision_default = ttnn.SDPAPrecision.FAST
+    sdpa_precision_default = ttnn.SDPAPrecision.STANDARD
     sdpa_self_precision_default = ttnn.SDPAPrecision.LOW_PRECISION
     sdpa_self_kv_dtype_default = ttnn.bfloat8_b  # with the default self-attention recipe only
 

@@ -33,10 +33,10 @@ LTX_DEDUP_GATE_GATHER = os.environ.get("LTX_DEDUP_GATE_GATHER", "1") in ("1", "t
 
 class LTXAttention(Module):
     # Named SDPA recipe of every SDPA call in this module on Blackhole. DiT models default to
-    # FAST (legacy streaming numerics with the approximate exponential): at the models' shapes it
-    # is as accurate as the legacy HiFi2 / BF16-dest / exact-exp setup within a few percent and at
-    # least as fast. Pass sdpa_precision to opt up (e.g. BALANCED).
-    sdpa_precision_default = ttnn.SDPAPrecision.FAST
+    # STANDARD (FP32 reference-max state, fused K chunks): on Blackhole it is faster per core than the legacy
+    # FAST kernel at every chunk size (1.07x geomean, D128) and far more accurate at long K. Pass
+    # sdpa_precision to opt up (e.g. BALANCED) or down (LOW_PRECISION).
+    sdpa_precision_default = ttnn.SDPAPrecision.STANDARD
 
     # Legacy ring SDPA chunks (non-Blackhole only): (is_blackhole, sp_factor, tp_factor) -> (q, k).
     sdpa_chunk_size_map = {

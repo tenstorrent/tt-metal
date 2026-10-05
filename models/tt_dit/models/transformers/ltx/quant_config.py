@@ -111,13 +111,13 @@ class LtxQuantProfile:
 
         The legacy tier narrows the SDPA inputs to ``sdpa_input_dtype`` (BFP8) under
         ``LTX_QUANT_ACTIVATIONS`` and keeps HiFi2. The cheapest recipe at least as accurate as that is
-        FAST on BF16 inputs (LOW_PRECISION with BFP8 KV is less accurate on peaked softmax at the
+        STANDARD on BF16 inputs (LOW_PRECISION with BFP8 KV is less accurate on peaked softmax at the
         model shapes).
         ``(None, None)`` (inputs stay BF16) keeps the attention's default recipe.
         """
         if not LTX_QUANT_ACTIVATIONS or self.sdpa_input_dtype == ttnn.bfloat16:
             return None, None
-        return ttnn.SDPAPrecision.FAST, None
+        return ttnn.SDPAPrecision.STANDARD, None
 
     @staticmethod
     def all_bf8_lofi() -> LtxQuantProfile:

@@ -42,7 +42,7 @@ def test_quant_config_sets_the_recipe_on_blackhole():
     _apply_sdpa_config(attention, QuantConfig.default().ring_sdpa, arch=None)
     assert attention.sdpa_precision == ttnn.SDPAPrecision.BALANCED  # default keeps WanAttention's recipe
     _apply_sdpa_config(attention, QuantConfig.all_bf8_lofi().ring_sdpa, arch=None)
-    assert (attention.sdpa_precision, attention.sdpa_kv_dtype) == (ttnn.SDPAPrecision.FAST, ttnn.bfloat16)
+    assert (attention.sdpa_precision, attention.sdpa_kv_dtype) == (ttnn.SDPAPrecision.STANDARD, ttnn.bfloat16)
     assert attention.sdpa_compute_kernel_config is None and not hasattr(attention, "_sdpa_input_dtype")
 
 

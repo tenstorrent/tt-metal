@@ -3,13 +3,13 @@
 """Device smoke tests: opt-in SDPA recipes wired into the Mochi, Wan2.2 and LTX-2 video attentions
 (LTX-2 audio: test_sdpa_recipe_model_smoke_ltx_audio.py).
 
-Random weights (no checkpoints). Each case builds a fresh tt module per variant (legacy, FAST, ACCURATE,
+Random weights (no checkpoints). Each case builds a fresh tt module per variant (legacy, STANDARD, ACCURATE,
 LOW_PRECISION with bfp8 K/V) from the SAME torch state dict and inputs and compares every output with the
 torch reference module (the diffusers attention the model tests use) and with the legacy tt output.
 
 The torch reference runs in fp32 on the bf16-rounded weights and inputs the device sees. Gate per recipe
 variant: L2 vs torch <= legacy L2 vs torch + margin (0.5 points, 1.0 for bfp8 LOW_PRECISION), and L2 vs torch
-<= the absolute bound (3% FAST / LOW_PRECISION, 1% ACCURATE). If the legacy tt output itself misses the bound
+<= the absolute bound (3% STANDARD / LOW_PRECISION, 1% ACCURATE). If the legacy tt output itself misses the bound
 vs torch, the absolute bound may be met vs the legacy tt output instead. L2 is 100 * ||a - b|| / ||b||.
 """
 
@@ -39,7 +39,7 @@ VARIANTS = {
     "legacy": (LEGACY, None, None, None),  # the module's legacy SDPA config (tests/unit/sdpa_legacy.py)
     # The module's default recipe; run_variants gates it like the named variant it resolves to (default_as).
     "default": (None, None, 3.0, 0.5),
-    "FAST": (P.FAST, None, 3.0, 0.5),
+    "STANDARD": (P.STANDARD, None, 3.0, 0.5),
     "ACCURATE": (P.ACCURATE, None, 1.0, 0.5),
     # bfp8 K/V storage adds its own quantization error on top of the recipe; allow 1 point over legacy.
     "LOW_PRECISION_bfp8": (P.LOW_PRECISION, ttnn.bfloat8_b, 3.0, 1.0),
@@ -98,7 +98,7 @@ def _gather(mesh_device, tt_out, sp_axis, tp_axis, sp_dim=2, tp_dim=3):
     )
 
 
-def run_variants(record_property, label: str, torch_outs: dict, run_tt, default_as: str = "FAST") -> None:
+def run_variants(record_property, label: str, torch_outs: dict, run_tt, default_as: str = "STANDARD") -> None:
     """run_tt(precision, kv_dtype) -> dict name->torch tensor (same keys as torch_outs). The "default" variant is
     gated like ``default_as``, the named variant the module's default recipe resolves to."""
     tt_outs = {}
@@ -515,7 +515,7 @@ def test_ltx_recipe_accepts_general_mask(mesh_device) -> None:
     tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
     tt_mask = bf16_tensor(torch.zeros(1, 1, seq_len, seq_len), device=mesh_device)
 
-    tt_model = _ltx_model(mesh_device, ccl_manager, parallel_config, dim, heads, True, P.FAST)
+    tt_model = _ltx_model(mesh_device, ccl_manager, parallel_config, dim, heads, True, P.STANDARD)
     tt_model.load_torch_state_dict(dict(state))
     rope = dict(rope_cos=tt_cos, rope_sin=tt_sin, trans_mat=tt_trans_mat)
     masked = _gather(mesh_device, tt_model(spatial_1BND=tt_x, N=seq_len, attn_mask=tt_mask, **rope), 0, 1)
@@ -523,7 +523,7 @@ def test_ltx_recipe_accepts_general_mask(mesh_device) -> None:
     assert torch.isfinite(masked.float()).all()
     assert rel_l2(masked.float(), unmasked.float()) < 1e-3
 
-    tt_cross = _ltx_model(mesh_device, ccl_manager, parallel_config, dim, heads, False, P.FAST)
+    tt_cross = _ltx_model(mesh_device, ccl_manager, parallel_config, dim, heads, False, P.STANDARD)
     tt_cross.load_torch_state_dict(dict(state))
     out = tt_cross(spatial_1BND=tt_x, N=seq_len, prompt_1BLP=tt_x, attn_mask=tt_mask, attn_kv_len=128)
     assert torch.isfinite(_gather(mesh_device, out, 0, 1).float()).all()

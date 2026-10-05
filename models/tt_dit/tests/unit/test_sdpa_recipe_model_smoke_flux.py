@@ -43,7 +43,7 @@ VARIANTS = {
     "ACCURATE": (ttnn.SDPAPrecision.ACCURATE, None),
     "LOW_PRECISION": (ttnn.SDPAPrecision.LOW_PRECISION, ttnn.bfloat8_b),
 }
-# The default recipe is FAST (sdpa_precision_default), so "default" uses FAST's gates.
+# The default recipe is STANDARD (sdpa_precision_default); "default" uses the same gates as FAST.
 # LOW_PRECISION's error is dominated by its input rounding (RNE7 Q, RNE5+BFP8 KV) and stays near 3% on
 # FLUX.2 random weights (2.9-3.1% measured on main 5546eed75c) even where legacy is ~1.8%.
 ABS_BOUND = {"default": 3.0, "FAST": 3.0, "ACCURATE": 1.0, "LOW_PRECISION": 3.5}

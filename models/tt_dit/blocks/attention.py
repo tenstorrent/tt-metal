@@ -29,10 +29,10 @@ if TYPE_CHECKING:
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
 class Attention(Module):
     # Named SDPA recipe of every SDPA call in this module on Blackhole. DiT models default to
-    # FAST (legacy streaming numerics with the approximate exponential): at the models' shapes it
-    # is as accurate as the legacy HiFi2 / BF16-dest / exact-exp setup within a few percent and at
-    # least as fast. Pass sdpa_precision to opt up (e.g. BALANCED).
-    sdpa_precision_default = ttnn.SDPAPrecision.FAST
+    # STANDARD (FP32 reference-max state, fused K chunks): on Blackhole it is faster per core than the legacy
+    # FAST kernel at every chunk size (1.07x geomean, D128) and far more accurate at long K. Pass
+    # sdpa_precision to opt up (e.g. BALANCED) or down (LOW_PRECISION).
+    sdpa_precision_default = ttnn.SDPAPrecision.STANDARD
 
     def __init__(
         self,
