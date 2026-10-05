@@ -159,7 +159,13 @@ Abs:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-1
 
 # ── Derived from the accuracy sweep ───────────────────────────────────────
 #
-# Derived from the sweep parquet by the budget emitter, not written by hand.
+# Two kinds of row. An op whose key line says `measured by: exhaustive ... sweep` was
+# written by `pytest test_unary_sfpu_ulp.py --ulp-emit` from the run's own
+# measurements, except a row with its own dated comment. A row whose comment reads
+# `p99.9 ..., 2048 pts, 2026-09-17` was derived once from a sampled run of
+# accuracy/test_sfpu_accuracy.py (its parquet output) by a script that is not in the
+# tree; nothing regenerates it. Rows the emitter keeps verbatim -- a `near_zero_atol`
+# floor, an op-wide `atol`/`rtol` -- are hand-maintained, and say so.
 # Every key pins `in` as well as `out`: what reaches the SFPU is already quantized by
 # the unpack, and a Bfp8_b input carries 7 magnitude bits behind a shared block
 # exponent where an fp32 input carries 23. Measured on WH, 36 of 44 functional-sweep
@@ -168,8 +174,8 @@ Abs:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-1
 # say: tanh fp32->fp32 at dest_acc=Yes agrees to 22 mantissa bits, which a cell mixing
 # all three input formats reported as 8.
 #
-# Regenerate wholesale rather than editing a row: the trailing comment is the
-# measurement, and a number changed without it is a guess.
+# Regenerate an `exhaustive` block with `--ulp-emit` rather than editing a row: the
+# comment is the measurement, and a number changed without it is a guess.
 
 Acosh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-10-05, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 3 ULP, block-quantized, so tolerance

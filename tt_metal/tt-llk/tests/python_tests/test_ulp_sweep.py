@@ -8,7 +8,6 @@ worth pinning is about what it must *not* touch. The table's rows are contracts,
 regeneration that quietly drops one weakens a gate with nothing to notice.
 """
 
-import os
 import re
 
 import pytest
@@ -125,10 +124,10 @@ def test_a_second_regeneration_replaces_the_run_identity(table):
     """The key line carries which sweep the rows below came from, so a re-emit has to
     replace it. Appending would accumulate one stale run identity per regeneration, and
     the oldest would read as current."""
-    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    record("Gelu", _CELL, 5)
     write_table(table, "sweep A, wormhole, 2026-09-23")
     MEASURED.clear()
-    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    record("Gelu", _CELL, 5)
     write_table(table, "sweep B, wormhole, 2026-09-24")
 
     key_line = _key_line(table, "Gelu")
@@ -148,14 +147,10 @@ def test_a_row_a_narrower_re_emit_did_not_supersede_keeps_its_own_run(table):
         "Gelu:  # 0 ULP, 16 variants, 2026-09-18\n" "  - {out: Float32, max_ulp: 0}\n",
         encoding="utf-8",
     )
-    for approx in ("No", "Yes"):
-        for dest in ("No", "Yes"):
-            record("Gelu", ("Float16", "Float16", approx, dest), 5)
+    _record_full_grid("Gelu", "Float16", "Float16", 5)
     write_table(table, "sweep A, wormhole, 2026-09-23")
     MEASURED.clear()
-    for approx in ("No", "Yes"):
-        for dest in ("No", "Yes"):
-            record("Gelu", ("Float16_b", "Float16_b", approx, dest), 1)
+    _record_full_grid("Gelu", "Float16_b", "Float16_b", 1)
     write_table(table, "sweep B, wormhole, 2026-09-24")
 
     assert "measured by: sweep B, wormhole, 2026-09-24" in _key_line(table, "Gelu")
@@ -186,9 +181,7 @@ def test_a_re_emit_credits_no_run_with_a_hand_written_note_or_an_arch_row(table)
         ("Float16_b", "sweep B, wormhole, 2026-09-24"),
     ):
         MEASURED.clear()
-        for approx in ("No", "Yes"):
-            for dest in ("No", "Yes"):
-                record("Gelu", (in_fmt, in_fmt, approx, dest), 1)
+        _record_full_grid("Gelu", in_fmt, in_fmt, 1)
         write_table(table, run)
     rows = _rows(table)
     assert any(r.endswith("# fp32 output, not swept") for r in rows)
@@ -206,10 +199,8 @@ def test_a_demotion_names_the_budget_that_crossed_the_line(table):
     from helpers.ulp_sweep import _verdict
 
     assert _verdict(100, "Float16_b") == ("tolerance", 110)
-    for approx in ("No", "Yes"):
-        for dest in ("No", "Yes"):
-            record("Gelu", ("Float16_b", "Float16_b", approx, dest), 100)
-            record("Gelu", ("Float16_b", "Bfp8_b", approx, dest), 3)
+    _record_full_grid("Gelu", "Float16_b", "Float16_b", 100)
+    _record_full_grid("Gelu", "Float16_b", "Bfp8_b", 3)
     write_table(table, "today")
     rows = _rows(table)
     assert any(
