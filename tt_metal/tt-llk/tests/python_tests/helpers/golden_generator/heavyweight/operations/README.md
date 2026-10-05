@@ -289,7 +289,11 @@ one tile per *block*. Raises if the tile count is not a multiple of the depth.
 #### `run_l1(l1_buffers, cfg, *, trace=None)`
 
 Runs on real L1 buffers and returns an L1 buffer, skipping both conversions —
-for chaining operations the way a kernel does.
+for chaining operations the way a kernel does. A sequence fills `in0`, `in1`, …;
+a chain that folds tiles (`in0_t1` and up) or seeds Dest (reuse-dest's `seed`)
+needs a mapping or `Registers` keyed by register name. The buffers are checked
+against the chain's inputs first, so a missing one is named and an unused one is
+refused.
 
 All three set `self.last_chain`, which failures print to show the pipeline that
 actually ran.
