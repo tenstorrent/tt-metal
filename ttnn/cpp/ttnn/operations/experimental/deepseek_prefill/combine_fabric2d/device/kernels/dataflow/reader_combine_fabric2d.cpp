@@ -574,8 +574,12 @@ struct Reader {
     // would read an output whose last tokens have not landed.
     //
     // The bump is a flushing atomic, so the far router has pushed the writes ahead of it before counting
-    // them. What is left is subtracted rather than zeroed, for the same reason as `fwd_arrived`: the upstream
-    // chip may already be counting the next launch's tokens.
+    // them.
+    //
+    // The counter is NOT meant to end at zero. It outlives the launch, and the upstream chip does not wait for
+    // us before starting the next one, so it can bump between the wait and the subtract below; those bumps
+    // are the next launch's and must survive. Hence `>=` rather than `==` in the wait, and subtracting exactly
+    // this launch's count rather than a set(0), which would drop them and hang the next launch's wait.
     void wait_for_final_writes() const {
         const uint32_t expected = expected_final_writes();
         volatile tt_l1_ptr uint32_t* final_arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.final_sem_addr);
