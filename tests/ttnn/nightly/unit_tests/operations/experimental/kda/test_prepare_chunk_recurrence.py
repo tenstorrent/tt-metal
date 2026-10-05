@@ -517,6 +517,131 @@ def test_prepare_chunk_recurrence_strong_scalar_decay(device: ttnn.Device, chunk
         ttnn.deallocate(output)
 
 
+# Real-weight gate sources: (checkpoint env var, layer key prefix). Hidden states are synthetic (unit-RMS Gaussian
+# through the layer's input RMSNorm); A_log, dt_bias, f_a and f_b are the checkpoint's, so the per-channel gate
+# spread (strong and weak channels side by side) is the model's own.
+_REAL_GATE_LAYERS = {
+    "k3-layer1": ("KIMI_K3_CKPT", "language_model.model.layers.1."),
+    "glm-layer0": ("GLM_5_3_FLASH_CKPT", "model.language_model.layers.0."),
+}
+_GATE_LOWER_BOUND = -5.0  # Kimi K3 and GLM-5.3-Flash gate_lower_bound
+
+
+def _real_weight_gates(source: str, num_heads: int, sequence: int, *, seed: int) -> torch.Tensor:
+    """Bounded KDA gates [1, sequence, num_heads*128] (BF16 values) of the num_heads most strongly decaying heads."""
+    import json
+    import os
+    from pathlib import Path
+
+    from safetensors import safe_open
+
+    from models.demos.deepseek_v3_d_p.reference.kda.ops import kda_gate_reference
+
+    env, prefix = _REAL_GATE_LAYERS[source]
+    root = os.getenv(env)
+    if not root:
+        pytest.skip(f"set {env} to the pinned checkpoint subset for real-weight gates")
+    root = Path(root)
+    weight_map = json.loads((root / "model.safetensors.index.json").read_text())["weight_map"]
+    names = ("self_attn.A_log", "self_attn.dt_bias", "self_attn.f_a_proj.weight", "self_attn.f_b_proj.weight")
+    names += ("input_layernorm.weight",)
+    tensors = {}
+    for name in names:
+        with safe_open(root / weight_map[prefix + name], "pt") as shard:
+            tensors[name] = shard.get_tensor(prefix + name)
+    eps = json.loads((root / "config.json").read_text()).get("text_config", {}).get("rms_norm_eps", 1e-5)
+    hidden = tensors["input_layernorm.weight"].numel()
+    generator = torch.Generator().manual_seed(seed)
+    x = torch.randn(sequence, hidden, generator=generator)
+    x = (
+        x * torch.rsqrt(x.square().mean(-1, keepdim=True) + eps) * tensors["input_layernorm.weight"].float()
+    ).bfloat16()
+    raw = (x @ tensors["self_attn.f_a_proj.weight"].T).bfloat16() @ tensors["self_attn.f_b_proj.weight"].T
+    key_dim = 128
+    heads = tensors["self_attn.dt_bias"].numel() // key_dim
+    a_log = tensors["self_attn.A_log"].reshape(-1)[:heads]  # K3 pads A_log to 128 heads
+    gate = kda_gate_reference(
+        raw.float().reshape(1, sequence, heads, key_dim), a_log, tensors["self_attn.dt_bias"], _GATE_LOWER_BOUND
+    )
+    strongest = gate.mean(dim=(0, 1, 3)).argsort()[:num_heads]
+    return gate[:, :, strongest].reshape(1, sequence, num_heads * key_dim).to(torch.bfloat16).float()
+
+
+def _per_channel_gate_inputs(gate_case: str) -> tuple[torch.Tensor, ...]:
+    """K3/GLM-like per-channel gates in [-5, 0] with fractional BF16 values (H=2, N=2, K=V=128)."""
+    num_heads, num_chunks, key_dim, value_dim = 2, 2, 128, 128
+    q, k, v, g, beta = _host_inputs(num_heads, num_chunks, key_dim, value_dim, seed=4242)
+    generator = torch.Generator().manual_seed(4243)
+    if gate_case == "uniform-5":
+        g = _GATE_LOWER_BOUND * torch.rand(g.shape, generator=generator)
+    elif gate_case == "const-5":  # TF32-exact control: the strong-decay test's input class at |G_last| = 160
+        g = torch.full_like(g, _GATE_LOWER_BOUND)
+    elif gate_case == "mixed-5-weak":  # saturating and long-memory channels in the same key dot product
+        weak = -(10 ** (-4 + 2 * torch.rand(g.shape, generator=generator)))
+        g = torch.where(torch.arange(g.shape[-1]) % 2 == 0, torch.full_like(g, _GATE_LOWER_BOUND), weak)
+    else:
+        g = _real_weight_gates(gate_case, num_heads, num_chunks * CHUNK_SIZE, seed=4244)
+    g = g.to(torch.bfloat16).float()  # KDA_GATE_DTYPE
+    assert float(g.min()) >= _GATE_LOWER_BOUND and float(g.max()) <= 0.0
+    return q, k, v, g, beta
+
+
+_FRACTIONAL_GATE_XFAIL = pytest.mark.xfail(
+    strict=True,
+    reason="k_dec_t = k*exp(G_last/2 - G)*exp(G_last/2) loses precision when its anchored exponent arguments carry "
+    "fractional bits (|G_last| ~ 80-130): last-token k_dec_t peak error ~8-9e-3 > 3e-3 (tt_metal_tracker-g1b.7)",
+)
+
+
+# K3/GLM per-channel gates inside the supported range [-5, 0] (tt_metal_tracker-g1b.7, test T2). Unlike the
+# constant gates of the strong-decay test (exact in TF32), fractional gates exercise the precision of the prep's
+# exponent arguments. Peak gates are the strong-decay test's. The real-weight cases use the checkpoint's gate
+# weights with synthetic hidden states and the two most strongly decaying heads of the layer.
+@pytest.mark.parametrize(
+    "gate_case",
+    [
+        pytest.param("uniform-5", id="uniform-5", marks=_FRACTIONAL_GATE_XFAIL),
+        pytest.param("const-5", id="const-5"),
+        pytest.param("mixed-5-weak", id="mixed-5-weak"),
+        pytest.param("k3-layer1", id="k3-layer1"),
+        pytest.param("glm-layer0", id="glm-layer0", marks=_FRACTIONAL_GATE_XFAIL),
+    ],
+)
+def test_prepare_chunk_recurrence_per_channel_gate_range(device: ttnn.Device, gate_case: str) -> None:
+    host_inputs = _per_channel_gate_inputs(gate_case)
+    num_heads = host_inputs[-1].shape[0]
+    output_bf16_mask = _PRODUCTION_OUTPUT_BF16_MASK
+    expected = _oracle(host_inputs, num_heads, output_bf16_mask)
+    outputs = _run(
+        _device_inputs(host_inputs, device),
+        num_heads,
+        output_bf16_mask=output_bf16_mask,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=_production_compute_config(device),
+    )
+    actual = tuple(ttnn.to_torch(output) for output in outputs)
+    g = _reshape_flat(host_inputs[3], num_heads, 2, 128)
+    chunk_decay = -g.sum(dim=2)
+    logger.info(
+        f"{gate_case}: per-chunk |G_last| over (head, chunk, channel) max={float(chunk_decay.max()):.2f} "
+        f"median={float(chunk_decay.median()):.3g} min={float(chunk_decay.min()):.3g}"
+    )
+    for name, expected_output, actual_output in zip(OUTPUT_NAMES, expected, actual):
+        error = (expected_output.float() - actual_output.float()).abs()
+        index = tuple(int(i) for i in torch.nonzero(error == error.max())[0])
+        logger.info(
+            f"{gate_case} {name}: max_abs_err={float(error.max()):.3e} at {index} "
+            f"(|expected|max={float(expected_output.float().abs().max()):.3e})"
+        )
+    for output in outputs:
+        ttnn.deallocate(output)
+    _assert_outputs_accurate(expected, actual, context=gate_case)
+    for name, threshold in _STRONG_DECAY_PEAK_ERROR.items():
+        index = OUTPUT_NAMES.index(name)
+        max_abs = float((expected[index].float() - actual[index].float()).abs().max())
+        assert max_abs <= threshold, f"{gate_case} {name} max abs error {max_abs:.3e} > {threshold:.1e}"
+
+
 @pytest.mark.parametrize("output_bf16_mask", [0, 0x26])
 def test_prepare_chunk_recurrence_unbounded_legacy_call_matches_explicit_bounds(device, output_bf16_mask):
     case = _UNIT_TEST_CASE
