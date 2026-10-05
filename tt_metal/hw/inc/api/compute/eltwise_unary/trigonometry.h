@@ -271,6 +271,7 @@ ALWI void atan_tile(uint32_t idst) {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void atan_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(atan, sfpu::atan_init, (true /*APPROXIMATION_MODE*/, is_fp32_dest_acc_en)));
+    MATH(ckernel::sfpu::atan_bf16_tile_init<!is_fp32_dest_acc_en>());
 }
 
 // clang-format off
