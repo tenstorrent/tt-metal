@@ -636,7 +636,7 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
         .unique_id = exp::KernelSpecName{"paths"},
         .source = kPathsKernel,
         .num_threads = 1,
-        .hw_config = exp::DataMovementHardwareConfig{},
+        .hw_config = dm_config(DataMovementProcessor::RISCV_0, NOC::NOC_0),
     };
     k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
@@ -690,7 +690,7 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwUnresolvedSlotIsOpaque) {
         .unique_id = exp::KernelSpecName{"unresolved"},
         .source = kUnresolvedSlotKernel,
         .num_threads = 1,
-        .hw_config = exp::DataMovementHardwareConfig{},
+        .hw_config = dm_config(DataMovementProcessor::RISCV_0, NOC::NOC_0),
     };
     k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
