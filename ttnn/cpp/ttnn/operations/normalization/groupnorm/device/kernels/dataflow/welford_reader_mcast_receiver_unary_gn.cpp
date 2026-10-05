@@ -300,4 +300,6 @@ void kernel_main() {
         dfb_repack_out.pop_front(per_core_N);
     }
 #endif
+
+    noc.async_atomic_barrier();
 }
