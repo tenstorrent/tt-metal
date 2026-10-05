@@ -94,7 +94,9 @@ def test_publish_rejects_unknown_pipeline(tmp_path, monkeypatch):
         publish(str(tmp_path), str(tmp_path / "x.parquet"), "wormhole")
 
 
-@pytest.mark.parametrize("pipeline", ["pr", "nightly", "baseline", "merge_baseline"])
+@pytest.mark.parametrize(
+    "pipeline", ["pr", "nightly", "baseline", "merge_baseline", "manual"]
+)
 def test_publish_accepts_every_allowed_pipeline(tmp_path, monkeypatch, pipeline):
     sub = tmp_path / "perf_a"
     sub.mkdir()
