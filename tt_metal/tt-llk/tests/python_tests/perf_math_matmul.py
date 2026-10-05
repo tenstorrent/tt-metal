@@ -249,7 +249,7 @@ class REPRO_KNOB(_TemplateParameter):
 
 import os as _os
 REPRO_LOOP_FACTOR = int(_os.environ.get("REPRO_LOOP_FACTOR", "64"))
-REPRO_KNOBS = [(2, 0, int(_os.environ.get('REPRO_TAIL', '6000')), 0, 0, 0, 15, 0, 0, 0, 0)]
+REPRO_KNOBS = [(2, 0, int(_os.environ.get('REPRO_TAIL', '6000')), 0, 0, 0, int(_os.environ.get('REPRO_INJ', '15')), 0, 0, 0, 0)]
 
 
 @pytest.mark.perf
