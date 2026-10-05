@@ -237,6 +237,8 @@ on every chunk.
 | C5 | end state | receiver, teardown | every chunk issued and consumed; each used slot's flag still VALID |
 | C7 | the flag belongs to this chunk (I2, I4, I6, I7 end to end) | both, `handoff_checks` | the producer sets `valid[s]` to **c + 1** after its barrier and the receiver waits for exactly `c + 1`; a flag of the wrong chunk, a stale flag or a reordering across slots hangs the equality wait instead of passing; C4 and C5 take their sequence-value forms |
 | C8 | data before flag (I4), slot written only after consumption (I5) | both, `handoff_checks` | one canary word per slot in the tile behind the credit tile: the producer writes the chunk index there as the LAST data write before its barrier, the receiver asserts it after VALID and poisons it |
+| C9 | liveness | both, `handoff_checks` | the credit wait and the VALID wait are bounded (`kHandoffSpinLimit` polls, ~0.2 s): on expiry the core pushes a timeout trace word and asserts, so a deadlock names the wait, the chunk, the slot and the value seen |
+| C10 | event trace | both, `handoff_checks` | one packed word per protocol step (`handoff_trace_word`: stage, chunk, slot, value) in the watcher's ring buffer: credit seen, barrier done, flag sent on the producer; issued, flag seen on the receiver; Blackhole keeps the last 32 per core, printed by the watcher when an assert trips and in its log dumps |
 | C6 | stage of each core in a hang dump | both | `WAYPOINT`s `TXCB` (CB wait), `TXCR` (credit wait), `TXBR` (barrier), `TXVL` (flag) on the producer; `RXRS` (reserve), `RXVL` (VALID wait) on the receiver; `DONE` at exit on both |
 
 C1 to C6 need only the watcher. C7 and C8 change protocol-visible state (the flag value, one extra 4-byte write per

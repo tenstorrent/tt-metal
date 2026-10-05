@@ -33,6 +33,24 @@ constexpr uint32_t kFusedSemInit = 1;
 constexpr uint32_t kFusedSemValid = 2;
 constexpr uint32_t kMaxSemaphores = 16;  // mirrors tt::tt_metal::NUM_SEMAPHORES (host impl constant)
 
+// Debug trace (handoff_checks + watcher): one word per protocol step in the watcher's ring buffer, stage:4 | chunk:12 |
+// slot:4 | value:12, so a hang dump shows the last steps of each core. Stages 14 / 15 are the bounded-wait timeouts
+// (C9).
+enum HandoffTraceStage : uint32_t {
+    kTxCreditSeen = 1,
+    kTxBarrierDone = 2,
+    kTxValidSent = 3,
+    kRxIssued = 4,
+    kRxValidSeen = 5,
+    kTxCreditTimeout = 14,
+    kRxValidTimeout = 15,
+};
+constexpr uint32_t handoff_trace_word(uint32_t stage, uint32_t chunk, uint32_t slot, uint32_t value) {
+    return (stage << 28) | ((chunk & 0xFFFu) << 16) | ((slot & 0xFu) << 12) | (value & 0xFFFu);
+}
+// Polls before a hand-off wait is declared dead (C9): ~0.2 s on the RISC, >1000x the longest legitimate wait.
+constexpr uint32_t kHandoffSpinLimit = 10000000;
+
 // Protocol tag: the LAST compile-time arg of the fused writer and the fused receiver reader. Both kernels
 // static_assert on it, so an added, removed or reordered trailing compile-time arg on either side fails to compile.
 constexpr uint32_t kHandoffTagVersion = 1;
