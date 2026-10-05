@@ -49,8 +49,6 @@ from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
 from ttml.models.qwen3 import Qwen3, create_qwen3_config_from_hf
 from ttml.models.qwen3.weights import load_weights_from_hf
-from huggingface_hub import snapshot_download
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 from .llama_composite_kv import LlamaCompositeKV
 
@@ -85,15 +83,21 @@ def load_checkpoint(model: Any, checkpoint_path: str, dp_mapper: Any = None) -> 
             print(f"  - {n}")
 
 
+def _download_hf_repo(model_source: str) -> str:
+    """Download the safetensors / config / tokenizer files of HF repo ``model_source``; return the local path."""
+    from huggingface_hub import snapshot_download
+
+    return snapshot_download(
+        repo_id=model_source,
+        allow_patterns=["*.safetensors", "*.json", "*.model", "*.txt"],
+    )
+
+
 def load_hf_state_dict(model_source: str) -> dict:
     """Return a HuggingFace float state-dict for ``model_source``."""
-    if os.path.isdir(model_source):
-        path = model_source
-    else:
-        path = snapshot_download(
-            repo_id=model_source,
-            allow_patterns=["*.safetensors", "*.json", "*.model", "*.txt"],
-        )
+    from transformers import AutoModelForCausalLM
+
+    path = model_source if os.path.isdir(model_source) else _download_hf_repo(model_source)
     hf_model = AutoModelForCausalLM.from_pretrained(path, torch_dtype=torch.float32, trust_remote_code=True)
     state_dict = hf_model.state_dict()
     del hf_model
@@ -152,6 +156,8 @@ def open_device(model_kind: str, device_config: DeviceConfig) -> Any:
 def _build_llama(
     tf_config: TransformerConfig, device_config: DeviceConfig, model_source: str, mesh_device: Any
 ) -> Tuple[Any, Any]:
+    from transformers import AutoTokenizer
+
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
 
     tokenizer = AutoTokenizer.from_pretrained(model_source)
@@ -202,16 +208,14 @@ def _build_llama(
         load_checkpoint(tt_model, model_source, dp_mapper=dp_mapper)
     else:
         logging.info("Downloading model from HuggingFace: %s", model_source)
-        model_repo_path = snapshot_download(
-            repo_id=model_source,
-            allow_patterns=["*.safetensors", "*.json", "*.model", "*.txt"],
-        )
-        load_from_safetensors(tt_model, model_repo_path, llama_cfg)
+        load_from_safetensors(tt_model, _download_hf_repo(model_source), llama_cfg)
 
     return tt_model, tokenizer
 
 
 def _build_qwen3(tf_config: TransformerConfig, device_config: DeviceConfig, model_source: str) -> Tuple[Any, Any]:
+    from transformers import AutoConfig, AutoTokenizer
+
     mesh = ttml.mesh()
     fsdp_enabled = bool(device_config.enable_fsdp) and mesh.has_axis("fsdp") and mesh.axis_size("fsdp") > 1
 
