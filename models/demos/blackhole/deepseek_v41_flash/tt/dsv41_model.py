@@ -517,6 +517,11 @@ class Model:
                 mesh_mapper=self._mp(),
             )
             self._upload_rows(host)
+        if (
+            os.environ.get("DSV41_UNI_NODECODE") == "1"
+        ):  # prefill-only unified mode: no decode weights, no decode compile pass
+            self._warm = True
+            return
         snaps = self.dec.snapshot_states()
         self.last_logits = (
             self.dec.forward()

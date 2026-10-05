@@ -90,7 +90,10 @@ class UnifiedMoEShared:
         )  # per device [1, 1, 12]
         self.gidx = ttnn.squeeze(ttnn.squeeze(t, 0), 0)
         self.ckc = _ckc()
-        self.num_links = int(os.environ.get("DSV41_UNI_LINKS", "1"))
+        self.num_links = int(
+            os.environ.get("DSV41_UNI_LINKS", "2")
+        )  # fabric links of dispatch / combine / offset_cumsum (2 available per row hop)
+        self.workers = int(os.environ.get("DSV41_UNI_WORKERS", "2"))  # worker cores per sender of the dispatch op
         self.topology = ttnn.Topology.Linear
         self.l1_small = (
             os.environ.get("DSV41_UNI_L1SMALL", "1") == "1"
@@ -181,7 +184,7 @@ class DSV41UnifiedMoE:
             weights if weights is not None else build_expert_weights(md, layer_id, log=log)
         )
 
-    def forward(self, x_rm, scores, indices):
+    def forward(self, x_rm, scores, indices, upto=99):
         """x_rm [1,N,D] bf16 ROW_MAJOR; scores [N,1,1,k] bf16 RM; indices [N,1,1,k] uint16 RM (the router outputs, N = tokens of this row)."""
         md = self.md
         N = x_rm.shape[1]
@@ -200,6 +203,8 @@ class DSV41UnifiedMoE:
             use_l1_small_for_semaphores=sh.l1_small,
         )
         ttnn.deallocate(hist)
+        if upto == 1:
+            return offsets, counts, region_offsets
         idx3 = ttnn.reshape(indices, [1, N, TOPK])
         disp, meta = ttnn.experimental.deepseek_prefill.dispatch(
             input_tensor=x_rm,
@@ -220,10 +225,12 @@ class DSV41UnifiedMoE:
             topology=sh.topology,
             fp8_output=False,
             subdevice_id=None,
-            num_workers_per_sender=2,
+            num_workers_per_sender=sh.workers,
             use_l1_small_for_semaphores=sh.l1_small,
         )
         ttnn.deallocate(offsets)
+        if upto == 2:
+            return disp, meta, counts, region_offsets
         disp2 = ttnn.reshape(disp, [sh.max_buf, x_rm.shape[2]])
         out = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
             disp2,
@@ -238,6 +245,8 @@ class DSV41UnifiedMoE:
             activation=ttnn.RoutedExpertActivation.ClampedSiluGlu,
         )
         ttnn.deallocate(disp)
+        if upto == 3:
+            return out, meta, counts, region_offsets
         out5 = ttnn.reshape(out, [1, 1, sh.max_buf, out.shape[-1]])
         comb = ttnn.experimental.deepseek_prefill.combine(
             out5,
@@ -260,6 +269,8 @@ class DSV41UnifiedMoE:
         ttnn.deallocate(meta)
         ttnn.deallocate(counts)
         ttnn.deallocate(region_offsets)
+        if upto == 4:
+            return comb
         w5 = ttnn.reshape(scores, [1, 1, N, TOPK, 1])
         i5 = ttnn.reshape(indices, [1, 1, N, TOPK])
         summed = ttnn.experimental.deepseek_prefill.post_combine_reduce(
