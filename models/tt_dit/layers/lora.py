@@ -221,8 +221,13 @@ class LoRAMixin:
         use_scale = adapter.scale if scale is None else float(scale)
 
         # Idempotent: don't subtract-and-re-add the same delta — that round-trip
-        # accumulates bf16 quantization drift in W.
+        # accumulates bf16 quantization drift in W. Re-binding is still allowed to
+        # REALIZE an intent whose effect is missing (``active_idx`` set while
+        # ``_delta_applied`` is false, e.g. bound before the weights were loaded):
+        # returning on intent alone is the shape of bug this file already has one of.
         if self.active_idx == idx and self.active_scale == use_scale:
+            if self.is_loaded():
+                self.reapply_after_load()
             return
 
         if self.active_idx is not None:
@@ -293,7 +298,18 @@ class LoRAMixin:
             self._free_runtime_ab()
 
     def _lora_on_load(self) -> None:
-        """A (re)load has just restored the base weight. Put the active adapter back on it."""
+        """A (re)load has just restored the base weight. Put the active adapter back on it.
+
+        This assumes what every caller in the tree does: that a weight arriving from a cache or a
+        state dict is the BASE weight. Loading an ALREADY-FUSED weight into a layer whose
+        ``_delta_applied`` is false — which is what a page-in would be if the cache had been written
+        while an adapter was bound — would merge the delta a second time. Nothing can detect that
+        from the tensor, so it is a contract on the caller: never persist a weight cache from a
+        model with an adapter bound. ``cache.load_model`` keeps it by construction (it saves
+        immediately after ``load_torch_state_dict``, before any pipeline binds), and the
+        MiniMax-H3 pipeline additionally keys its cache directory on the host-fused adapter so a
+        fused cache can never be read back as a base one.
+        """
         self.reapply_after_load()
 
     def deallocate_weights(self) -> None:  # type: ignore[override]

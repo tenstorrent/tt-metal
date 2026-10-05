@@ -36,7 +36,7 @@ from models.common.utility_functions import comp_pcc
 
 from ....experimental.lora.h3_adapter_loader import fuse_h3_adapter_into_state_dict, load_h3_adapter_into
 from ....experimental.lora.promote import promote_to_lora
-from ....layers.linear import ColParallelLinear, RowParallelLinear
+from ....layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ....layers.lora import LoRAMixin
 from ....models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ....utils import tensor as tensor_utils
@@ -66,6 +66,32 @@ def _host_delta(A: torch.Tensor, B: torch.Tensor, scale: float) -> torch.Tensor:
 
 def _rel_err(got: torch.Tensor, want: torch.Tensor) -> float:
     return (got - want).norm().item() / max(want.norm().item(), 1e-12)
+
+
+# ---------------------------------------------------------------- what promotion still shadows
+
+
+def test_promoted_class_shadows_forward_and_refuses_runtime_mode() -> None:
+    """Lock in the part of the base-first MRO that is NOT fixed, only guarded.
+
+    ``promote`` wires the weight lifecycle explicitly, but ``LoRAMixin.forward`` and
+    ``forward_fused_addcmul`` are still shadowed by the base on a promoted class. In fuse mode that
+    is harmless — the mixin's versions only do anything in runtime mode — so the containment is
+    ``promote_to_lora`` refusing runtime mode. If someone makes promotion mixin-first, or
+    reintroduces runtime promotion, this test is the thing that notices.
+    """
+    from ....experimental.lora.promote import _promoted_class
+
+    for base in (Linear, ColParallelLinear, RowParallelLinear):
+        promoted = _promoted_class(base)
+        assert promoted.forward is base.forward, f"{promoted.__name__}.forward is no longer the base's"
+        assert promoted.__mro__.index(base) < promoted.__mro__.index(LoRAMixin)
+        # ... while the lifecycle IS wired, by the explicit wrappers rather than by the MRO.
+        for name in ("deallocate_weights", "load", "_mark_loaded"):
+            assert name in promoted.__dict__, f"{promoted.__name__} lost its {name} wrapper"
+
+    with pytest.raises(ValueError, match="runtime"):  # allow-pytest.raises: the guard IS the contract
+        promote_to_lora(object(), mode="runtime")
 
 
 # ---------------------------------------------------------------- the lifecycle, on bare Linears
