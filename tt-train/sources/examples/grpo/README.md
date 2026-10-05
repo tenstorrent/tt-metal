@@ -50,8 +50,9 @@ Notes:
 
 - The model family comes from `model_type` in the config's model yaml
   (`"llama"` or `"qwen3"`), and the runner (gradient checkpointing or not)
-  from its `runner_type`. The configs set `rollout_source: "ttml"` in
-  `grpo_config`, so `GRPOTrainer` builds a `TTMLRolloutSampler` for that model;
+  from its `runner_type`. `GRPOTrainer` builds that model, and since the configs
+  set `rollout_source: "ttml"` in `grpo_config`, it generates rollouts with it
+  through a `TTMLRolloutSampler`;
   for Qwen3 FSDP see [FSDP](../../../docs/GRPO_TRAINER.md#fsdp) in the trainer doc.
 - `model_source` in the training config selects the HuggingFace ID or local
   path (default: `meta-llama/Llama-3.2-1B-Instruct`).
@@ -83,8 +84,8 @@ per-step CSV from `GRPOMonitor` into a training curve.
 
 ## Device Config
 
-`TTMLRolloutSampler` (built by `GRPOTrainer`) opens the trainer's
-device mesh from the `device_config:` block of the training YAML,
+`GRPOTrainer` opens its device mesh from the `device_config:` block of
+the training YAML,
 wrapped in a `DeviceConfig` object (defined in
 [`ttml/common/config.py`](../../ttml/ttml/common/config.py)):
 
@@ -97,13 +98,13 @@ device_config:
 | Field         | Type              | Default   | Description                                                                                                                                                              |
 | ------------- | ----------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `enable_ddp`  | `bool`            | `false`   | Enable distributed data-parallel training across the trainer's mesh.                                                                                                     |
-| `enable_fsdp` | `bool`            | `false`   | Enable fully-sharded data parallel. Supported for Qwen3 by `TTMLRolloutSampler`; shards params / grads / optimizer state across the `"fsdp"` mesh axis.                |
+| `enable_fsdp` | `bool`            | `false`   | Enable fully-sharded data parallel. Supported for Qwen3; shards params / grads / optimizer state across the `"fsdp"` mesh axis.                                     |
 | `mesh_shape`  | `list[int]`       | `[1, 1]`  | Shape of the device mesh `[rows, cols]`. Total devices = `rows * cols`.                                                                                                  |
 | `device_ids`  | `list[int]`       | `null`    | Specific device IDs to use (default: auto-select).                                                                                                                       |
 
 Device setup (`enable_fabric`, `open_device`,
-`initialize_parallelism_context`) is performed inside the
-`TTMLRolloutSampler` constructor, not the trainer. FSDP-specific behavior — including the
+`initialize_parallelism_context`) is performed by `setup_ttml_model`,
+which the `GRPOTrainer` constructor calls. FSDP-specific behavior — including the
 requirement that `checkpointing: false` — is documented in the
 [FSDP subsection](../../../docs/GRPO_TRAINER.md#fsdp) of the trainer
 doc.
