@@ -412,23 +412,83 @@ def test_zero_relu_and_no_relu():
 # Packer edge mask
 
 
-def test_a_set_bit_keeps_the_datum_and_a_clear_bit_zeroes_it():
-    mask = PackEdgeMask(masks=(0x00FF,), select=0, mode=EdgeMaskMode.ZERO)
-    out = mask.apply(torch.ones(32))
-    expected = ([1.0] * 8 + [0.0] * 8) * 2  # bit i % 16
-    assert out.tolist() == expected
+ROW = [1.0] * 16
+FIRST_ONLY = [1.0] + [0.0] * 15
+
+
+@pytest.mark.parametrize(
+    "masked_when_set, word, expected_row",
+    [
+        # Quasar: a set bit masks. 0xFFFE masks datums 1..15, 0x0000 passes all.
+        (True, 0xFFFE, FIRST_ONLY),
+        (True, 0x0000, ROW),
+        (True, 0xFFFF, [0.0] * 16),
+        # Wormhole/Blackhole: a set bit keeps. 0x0001 keeps datum 0, 0xFFFF passes all.
+        (False, 0x0001, FIRST_ONLY),
+        (False, 0xFFFF, ROW),
+        (False, 0x0000, [0.0] * 16),
+    ],
+)
+def test_mask_polarity(masked_when_set, word, expected_row):
+    out = PackEdgeMask(masks=(word,)).apply(
+        torch.ones(32), masked_when_set=masked_when_set
+    )
+    assert out.tolist() == expected_row * 2
+
+
+@pytest.mark.parametrize(
+    "blocks, keep_first_word",
+    [(QUASAR, 0xFFFE), (WORMHOLE, 0x0001), (BLACKHOLE, 0x0001)],
+    ids=["quasar", "wormhole", "blackhole"],
+)
+def test_dest_to_l1_uses_the_architectures_polarity(blocks, keep_first_word):
+    """The register value each architecture's reduce uses to keep column 0."""
+    dest = blocks.src_to_dest(torch.ones(TILE), DataFormat.Float16_b)
+    l1 = blocks.dest_to_l1(
+        dest,
+        DataFormat.Float16_b,
+        DataFormat.Float16_b,
+        edge_mask=PackEdgeMask(masks=(keep_first_word,)),
+    )
+    back = blocks.unpack_from_l1(l1, DataFormat.Float16_b).float()
+    assert back.tolist() == FIRST_ONLY * (TILE // 16)
 
 
 def test_negative_saturate_mode_replaces_with_minus_inf():
-    mask = PackEdgeMask(masks=(0xFFFE,), mode=EdgeMaskMode.NEG_SATURATE)
-    out = mask.apply(torch.ones(16))
+    mask = PackEdgeMask(masks=(0x0001,), mode=EdgeMaskMode.NEG_SATURATE)
+    out = mask.apply(torch.ones(16), masked_when_set=True)
     assert out[0].item() == float("-inf")
     assert out[1:].tolist() == [1.0] * 15
 
 
-def test_the_per_datum_selector_picks_a_mask_per_datum():
-    mask = PackEdgeMask(masks=(0xFFFF, 0x0000), select=[0, 1] * 8)
-    assert mask.apply(torch.ones(16)).tolist() == [1.0, 0.0] * 8
+def test_the_selector_picks_one_mask_per_row():
+    mask = PackEdgeMask(masks=(0x0000, 0xFFFF), select=[0, 1, 1, 0])
+    out = mask.apply(torch.ones(64), masked_when_set=True)
+    assert out.tolist() == ROW + [0.0] * 16 + [0.0] * 16 + ROW
+
+
+@pytest.mark.parametrize(
+    "word, rows_on_mask_1",
+    [
+        (0x00000000, []),  # EDGE_MASK_FACE_ALL_ROWS_MASK_0
+        (0x00000001, [0]),  # EDGE_MASK_FACE_ROW0_MASK_1
+        (0x00010001, [0, 8]),  # EDGE_MASK_FACE_ROW0_ROW8_MASK_1
+        (0x55555555, list(range(16))),  # EDGE_MASK_FACE_ALL_ROWS_MASK_1
+    ],
+)
+def test_face_select_words_expand_to_one_selector_per_row(word, rows_on_mask_1):
+    mask = PackEdgeMask.from_face_select_words((0xFFFF, 0x0000), [word] * 4)
+    face = [1 if row in rows_on_mask_1 else 0 for row in range(16)]
+    assert list(mask.select) == face * 4
+
+
+def test_quasar_reduce_col_keeps_rows_0_and_8_of_each_face():
+    """Quasar's REDUCE_COL config: mask0 ALL, mask1 NONE on rows 0 and 8."""
+    mask = PackEdgeMask.from_face_select_words((0xFFFF, 0x0000), [0x00010001] * 4)
+    out = mask.apply(torch.ones(TILE), masked_when_set=True).reshape(64, 16)
+    kept_rows = [r for r in range(64) if out[r].sum() == 16]
+    assert kept_rows == [0, 8, 16, 24, 32, 40, 48, 56]
+    assert out.sum().item() == 8 * 16
 
 
 @pytest.mark.parametrize(
@@ -437,6 +497,9 @@ def test_the_per_datum_selector_picks_a_mask_per_datum():
         dict(masks=(0xFFFF,) * 5),  # at most four masks
         dict(masks=()),
         dict(masks=(0x10000,)),  # each mask is 16 bits
+        dict(masks=(0xFFFF, 0x0000), select=2),  # selects a mask that does not exist
+        dict(masks=(0xFFFF, 0x0000), select=[0, 1, 2]),
+        dict(masks=(0xFFFF,), select=[-1]),
     ],
 )
 def test_an_out_of_range_edge_mask_is_refused(kwargs):
@@ -444,9 +507,14 @@ def test_an_out_of_range_edge_mask_is_refused(kwargs):
         PackEdgeMask(**kwargs)
 
 
-def test_a_selector_shorter_than_the_data_is_refused():
-    with pytest.raises(ValueError):
-        PackEdgeMask(masks=(0xFFFF,), select=[0] * 4).apply(torch.ones(16))
+def test_a_selector_shorter_than_the_rows_is_refused():
+    with pytest.raises(ValueError, match="rows"):
+        PackEdgeMask(masks=(0xFFFF,), select=[0]).apply(torch.ones(32))
+
+
+def test_data_that_is_not_whole_rows_is_refused():
+    with pytest.raises(ValueError, match="rows"):
+        PackEdgeMask(masks=(0xFFFF,)).apply(torch.ones(20))
 
 
 # ---------------------------------------------------------------------------
