@@ -542,7 +542,7 @@ _ULP_MEASURE_PATH: Optional[str] = None
 _ULP_MEASURE_WARNED: bool = False
 
 
-def _promoted(in_fmt, out_fmt, dest) -> bool:
+def _promoted(in_fmt, out_fmt, dest, arch) -> bool:
     """Whether TestConfig ran this variant with another ``dest_acc`` than it names: on
     Wormhole and Blackhole an exponent-B input packed to Float16 needs a 32-bit Dest,
     so a ``No`` request runs the ``Yes`` kernel -- against a golden a driver built for
@@ -551,8 +551,45 @@ def _promoted(in_fmt, out_fmt, dest) -> bool:
 
     if in_fmt is None or out_fmt is None or dest is None:
         return False
-    # The one rule, read where TestConfig reads it, rather than re-derived here.
-    return effective_dest_acc(in_fmt, out_fmt, dest) != dest
+    # The one rule, read where TestConfig reads it, rather than re-derived here, for the
+    # architecture the contract was resolved for.
+    return effective_dest_acc(in_fmt, out_fmt, dest, arch) != dest
+
+
+def prepare_ulp_measure_file() -> None:
+    """Create ``--ulp-measure``'s file empty, once per session, on the controller.
+
+    The parent is created so a later write cannot raise ``FileNotFoundError``, and the
+    file truncated so a second run does not fold its rows in with the first's. Like
+    every recorder write, a failure here -- an unwritable directory, a path that is a
+    directory, a full disk -- warns and turns the recorder off rather than aborting the
+    session: the flag is reporting only and must not fail a run before it compares
+    anything.
+    """
+    global _ULP_MEASURE_PATH, _ULP_MEASURE_WARNED
+    if not _ULP_MEASURE_PATH:
+        return
+    path = Path(_ULP_MEASURE_PATH)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+    except OSError as exc:
+        logger.warning(
+            "--ulp-measure: cannot prepare {}: {}; recording nothing this session",
+            path,
+            exc,
+        )
+        _ULP_MEASURE_WARNED = True
+        _ULP_MEASURE_PATH = None
+
+
+def _consume_ulp_query() -> None:
+    """Drop ``accuracy_contract``'s pending query and ambiguity flag. Called once per
+    :func:`passed_test`, on every path, after the recorder had its chance to read them.
+    """
+    from . import sfpu_accuracy_budget as budget
+
+    budget.LAST_QUERY, budget.PENDING_AMBIGUOUS = None, False
 
 
 def _record_ulp_measurement(distance, *, mask) -> None:
@@ -578,8 +615,8 @@ def _record_ulp_measurement(distance, *, mask) -> None:
     ambiguous, budget.PENDING_AMBIGUOUS = budget.PENDING_AMBIGUOUS, False
     if query is None or ambiguous or query[0] != budget._current_test():
         return
-    test_id, op, in_fmt, out_fmt, approx, dest = query
-    if _promoted(in_fmt, out_fmt, dest):
+    test_id, op, in_fmt, out_fmt, approx, dest, arch = query
+    if _promoted(in_fmt, out_fmt, dest, arch):
         return
     stats = ulp_stats(distance, mask)
     row = {
@@ -589,6 +626,9 @@ def _record_ulp_measurement(distance, *, mask) -> None:
         "out": out_fmt.name,
         "approx": getattr(approx, "name", None),
         "dest": getattr(dest, "name", None),
+        # The architecture whose contract this reading belongs to, spelled as the
+        # table's `arch:` rows spell it.
+        "arch": arch.name,
         # `lanes` and `unmeasurable` too: max 0 over 0 lanes is not a bit-exact cell.
         **{k: stats[k] for k in ("max", "lanes", "unmeasurable")},
     }
@@ -1013,21 +1053,37 @@ def passed_test(
             # Raising here would turn a pass into an error under flags that must not
             # be able to change a verdict, so neither consumer gets a measurement.
             logger.warning(
-                "ULP report skipped — golden {} and result {} differ in shape; the "
-                "verdict above compared them broadcast",
+                "{} skipped — golden {} and result {} differ in shape; the verdict "
+                "above compared them broadcast",
+                "ULP report" if _ULP_REPORT else "--ulp-measure",
                 tuple(golden_tensor.shape),
                 tuple(res_tensor.shape),
             )
         else:
-            unenrolled = ulp_distance(golden_tensor, res_tensor)
+            # Ranked with fp16 subnormals flushed, as every step-budget gate ranks them
+            # (`assert_against_contract`, the exhaustive sweep): one --ulp-measure file
+            # then holds one kind of fp16 reading, and a tolerance cell's figure is the
+            # one its gate would see if enrolled. A no-op for bf16 and fp32, which flush
+            # by default.
+            unenrolled = ulp_distance(golden_tensor, res_tensor, flush_subnormals=True)
             _record_ulp_measurement(unenrolled, mask=None)
             if _ULP_REPORT:
                 logger.info(
                     "ULP report — {}",
                     ulp_verdict_message(
-                        golden_tensor, res_tensor, unenrolled, output_data_format
+                        golden_tensor,
+                        res_tensor,
+                        unenrolled,
+                        output_data_format,
+                        flush_subnormals=True,
                     ),
                 )
+
+    # Whatever path the comparison took -- recorded above, a shape mismatch, an output
+    # with no per-element ULP -- the query it was resolved for is spent, so a later
+    # comparison in the same test cannot inherit it, nor the next lookup read as
+    # ambiguous.
+    _consume_ulp_query()
 
     if output_data_format.is_mx_format():
         # Every MX low-bit format is judged by its lattice-aware compare

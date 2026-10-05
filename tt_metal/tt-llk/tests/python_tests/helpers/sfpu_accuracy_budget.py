@@ -51,7 +51,10 @@ from .ulp import MANTISSA_BITS_FOR_ULP, MAX_MEANINGFUL_ULP, has_ulp_gate, ulp_dt
 MEASURED_ARCH = ChipArchitecture.WORMHOLE
 
 #: The variant :func:`accuracy_contract` was last asked about and nothing has consumed
-#: yet, as ``(test_id, op, input_format, output_format, approx_mode, dest_acc)``. Read
+#: yet, as ``(test_id, op, input_format, output_format, approx_mode, dest_acc, arch)``.
+#: *arch* is the one the contract was resolved for, so a reading names which
+#: architecture's budget it belongs to and the promotion check reads that, not whatever
+#: chip the process happens to target. Read
 #: only by the ``--ulp-measure`` recorder, which tags each reading with it: a driver
 #: resolves its contract immediately before it compares, and the test id alone cannot
 #: name the variant (the per-op sweeps put the op in the function, not the parameters).
@@ -461,7 +464,15 @@ def accuracy_contract(
     # Recomputed, never only set: an ambiguous test that skips before comparing would
     # otherwise hand its flag to the next test and drop that test's reading.
     PENDING_AMBIGUOUS = LAST_QUERY is not None and LAST_QUERY[0] == here
-    LAST_QUERY = (here, op.name, input_format, output_format, approx_mode, dest_acc)
+    LAST_QUERY = (
+        here,
+        op.name,
+        input_format,
+        output_format,
+        approx_mode,
+        dest_acc,
+        arch,
+    )
 
     table = _SFPU_ACCURACY_BUDGET.get(op)
     if table is None:

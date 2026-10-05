@@ -873,7 +873,8 @@ def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
         # 393 from the sorted sweep. Enrolling the second would hide the first.
         return ("block", measured)
     # In exact arithmetic: `100 * 1.1` is 110.00000000000001 in binary floating point,
-    # so a float ceil wrote 111 -- and 12 for a measured 10 -- one step past the rule.
+    # so a float ceil wrote 111, one step past the rule. And from `str`: `Fraction(1.1)`
+    # is the binary double, which gives 12 for a measured 10 where the rule says 11.
     budget = math.ceil(Fraction(measured) * Fraction(str(EMIT_HEADROOM)))
     if budget > usable_budget_ceiling(DataFormat[out_fmt]):
         # The *budget* is what crosses the line, not the measurement: with 1.1x headroom
@@ -943,8 +944,8 @@ def _collapse(decided: Dict[Tuple, Tuple]) -> List[dict]:
     return rows
 
 
-#: The run identity, stated once on the op's key line rather than on each of its ~2,000
-#: rows (a quarter of the file). Rows this run did not supersede keep their own suffix,
+#: The run identity, stated once on the op's key line rather than on each of the ~2,000
+#: rows in the table (a quarter of the file). Rows this run did not supersede keep their own suffix,
 #: or are given one by :func:`_stamp_kept`.
 _MEASURED_BY = "measured by: {suffix}, except where a row says otherwise"
 
@@ -957,6 +958,15 @@ _MEASURED_BY_RE = re.compile(
 #: A run identity names its date; a row without one relied on its key line for it.
 _DATED = re.compile(r"\d{4}-\d{2}-\d{2}")
 
+#: The notes :func:`_render` writes, whole. Only such a note is an earlier emit's figure
+#: and can be credited to the outgoing run; a hand-written note that merely starts the
+#: same way -- Frac's `max 384 ULP, 40 variants / 737k lanes, ...` from a sample -- is
+#: not.
+_EMITTED_NOTE = re.compile(
+    r"max \d+ ULP(, budget would be \d+ > \d+-step ceiling|, block-quantized, so "
+    r"tolerance)?|not measurable: .+"
+)
+
 
 def _stamp_kept(kept: List[str], key_line: str) -> List[str]:
     """*kept* with each row that names no run of its own stamped with the one it had.
@@ -964,10 +974,14 @@ def _stamp_kept(kept: List[str], key_line: str) -> List[str]:
     ``_render`` replaces the key line's ``measured by:`` clause with this run's, and a
     row this run did not supersede would then be credited to it -- a pair-narrowed
     re-emit, or a sampled ``{out: Float32, max_ulp: 0}`` under an exhaustive clause the
-    sweep cannot produce. So before the clause goes, it goes onto those rows: a row that
-    already carries a note (``max 1 ULP``, from an earlier emit) gets the outgoing
-    clause's run, and a bare row -- hand-authored, never emitted -- the key line's own
-    header comment, which is the provenance it was written against.
+    sweep cannot produce. So before the clause goes, it goes onto those rows: a row
+    whose note is one ``_render`` writes (``max 1 ULP``, from an earlier emit) gets the
+    outgoing clause's run, and a bare row -- hand-authored, never emitted -- the key
+    line's own header comment, which is the provenance it was written against.
+
+    Left alone: a row whose note is hand-written (``see the Bfp8_b note above``, a
+    sample's figures), since no run on the key line measured it and crediting one would
+    be a guess, and an ``arch:`` row, which a run on this arch never measures.
     """
     _, _, comment = key_line.rstrip("\n").partition("#")
     clause = _MEASURED_BY_RE.search(comment)
@@ -981,8 +995,12 @@ def _stamp_kept(kept: List[str], key_line: str) -> List[str]:
     for row in kept:
         body, _, note = row.rstrip("\n").partition("#")
         note = note.strip()
-        origin = (outgoing or header) if note else (header or outgoing)
-        if _DATED.search(note) or not origin:
+        if note:
+            emitted = _EMITTED_NOTE.fullmatch(note)
+            origin = (outgoing or header) if emitted else ""
+        else:
+            origin = header or outgoing
+        if _DATED.search(note) or not origin or "arch" in _row_fields(row):
             stamped.append(row)
             continue
         stamped.append(f"{body.rstrip()}  # {note + ', ' if note else ''}{origin}\n")

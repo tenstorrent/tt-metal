@@ -168,6 +168,37 @@ def test_a_row_a_narrower_re_emit_did_not_supersede_keeps_its_own_run(table):
     assert "2026" not in second  # this run's rows name it through the key line
 
 
+def test_a_re_emit_credits_no_run_with_a_hand_written_note_or_an_arch_row(table):
+    """Only a note `_render` writes is an earlier emit's figure. A hand-written one --
+    "fp32 output, not swept", or Frac's sampled `max 384 ULP, 40 variants / ...`, which
+    starts like an emitted note -- names no run on the key line, and an `arch:` row is
+    one no Wormhole run measured; crediting either to the outgoing clause made the
+    provenance audit read a sample as exhaustive."""
+    table.write_text(
+        "Gelu:\n"
+        "  - {in: Float16_b, out: Float32, max_ulp: 9}  # fp32 output, not swept\n"
+        "  - {out: Float16, metric: tolerance}  # max 384 ULP, 40 variants / 737k lanes\n"
+        "  - {in: Float16_b, out: Float16_b, arch: BLACKHOLE, max_ulp: 44}  # bh\n",
+        encoding="utf-8",
+    )
+    for in_fmt, run in (
+        ("Float16", "sweep A, wormhole, 2026-09-23"),
+        ("Float16_b", "sweep B, wormhole, 2026-09-24"),
+    ):
+        MEASURED.clear()
+        for approx in ("No", "Yes"):
+            for dest in ("No", "Yes"):
+                record("Gelu", (in_fmt, in_fmt, approx, dest), 1)
+        write_table(table, run)
+    rows = _rows(table)
+    assert any(r.endswith("# fp32 output, not swept") for r in rows)
+    assert any(r.endswith("# max 384 ULP, 40 variants / 737k lanes") for r in rows)
+    assert any(r.endswith("max_ulp: 44}  # bh") for r in rows)
+    # And the first run's emitted rows still go with it.
+    first = next(r for r in rows if "in: Float16, out: Float16," in r)
+    assert first.endswith("# max 1 ULP, sweep A, wormhole, 2026-09-23")
+
+
 def test_a_demotion_names_the_budget_that_crossed_the_line(table):
     """`_verdict` hands back the *budget* on a demotion, so the note's "budget would be
     N > C-step ceiling" is checkable. Handing back the measurement read "budget would
@@ -301,13 +332,18 @@ def test_an_incomplete_grid_is_refused_rather_than_collapsed(table):
         write_table(table, "today")
 
 
-def test_the_emitted_budget_uses_the_declared_headroom():
-    """The factor was hardcoded beside the constant, so tuning it did nothing."""
+def test_the_emitted_budget_uses_the_declared_headroom(monkeypatch):
+    """The factor was hardcoded beside the constant, so tuning it did nothing. The exact
+    figures pin the arithmetic; the retune is what ties `_verdict` to the constant, which
+    the literals alone do not -- a `_verdict` hard-coding 11/10 passes them."""
+    from helpers import ulp_sweep
     from helpers.ulp_sweep import _verdict
 
     assert _verdict(100, "Float32") == ("ulp", 110)  # exactly 1.1x, not float-rounded
     assert _verdict(10, "Float32") == ("ulp", 11)
     assert EMIT_HEADROOM == 1.1  # the two figures above are written against it
+    monkeypatch.setattr(ulp_sweep, "EMIT_HEADROOM", 1.5)
+    assert _verdict(10, "Float32") == ("ulp", 15)
     # Zero is exact and stays exact: the sweep saw every value.
     assert _verdict(0, "Float32") == ("ulp", 0)
     # A block float never enrols from a sorted sweep, however small the reading.
