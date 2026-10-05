@@ -113,8 +113,8 @@ double block_cost(
     // The q*k*d term is the QK and PV matmuls in equal parts; each pays its own subblock-width penalty
     // (a one-tile K chunk narrows QK only, so it does not slow PV or the softmax state work).
     const double matmul = 0.5 * (qk_subblock_penalty(policy, build.qk_width) + subblock_penalty(build.pv_width));
-    // Dense/joint STANDARD computes an odd Q chunk with one padding row (recipe_compute_q_tiles).
-    const uint32_t rows = dense ? recipe_compute_q_tiles(policy, q_tiles) : q_tiles;
+    // Dense/joint unfused STANDARD computes an odd Q chunk with one padding row (recipe_compute_q_tiles).
+    const uint32_t rows = dense ? recipe_compute_q_tiles(policy, q_tiles, k_tiles) : q_tiles;
     const double compute = m.c * (static_cast<double>(rows) * k_tiles * d * matmul + m.ck * rows * d);
     return std::max(compute, m.bw * k_tiles * d);
 }
@@ -348,15 +348,20 @@ RecipeL1Estimate recipe_l1_bytes(
     TT_FATAL(!rejection, "Unsupported SDPA recipe geometry: {}", *rejection);
     const bool fast = policy.selection.recipe == Recipe::A;
     const uint64_t q_slot = uint64_t{q_tiles} * d_tiles * kBf16Tile;
+    // The factories' L1 fallback drops the fused chunks' CBs, except for an odd STANDARD Q chunk (recipe_drop_fused).
+    auto droppable_fused = [&](uint32_t rows, const RecipeBuild& build) -> uint64_t {
+        return rows % 2 != 0 && policy.selection.recipe == Recipe::B ? 0 : build.fused_cb_bytes;
+    };
     switch (op) {
         case RecipeOp::Dense:
         case RecipeOp::Joint: {
-            const auto build = recipe_build(policy, recipe_compute_q_tiles(policy, q_tiles), k_tiles, d_tiles);
+            const uint32_t rows = recipe_compute_q_tiles(policy, q_tiles, k_tiles, context.mask_page_bytes > 0);
+            const auto build = recipe_build(policy, rows, k_tiles, d_tiles);
             // attn_mask CB: two row groups when they fit, one otherwise (sdpa_recipe.cpp). The minimum layout
             // also drops the fused chunks' CBs (check_recipe_l1_fit).
             const uint64_t mask_group =
                 uint64_t{recipe_mask_group_rows(policy, q_tiles)} * k_tiles * context.mask_page_bytes;
-            return {build.cb_bytes + 2 * mask_group, build.cb_bytes - build.fused_cb_bytes + mask_group};
+            return {build.cb_bytes + 2 * mask_group, build.cb_bytes - droppable_fused(rows, build) + mask_group};
         }
         case RecipeOp::Ring: {
             if (fast) {
@@ -367,7 +372,7 @@ RecipeL1Estimate recipe_l1_bytes(
             const auto build = recipe_build(policy, q_tiles, k_tiles, d_tiles);
             const uint64_t bytes = build.cb_bytes + kRingRecipeExtraBytes;
             // The factory's fallbacks: drop the fused chunks' CBs, then single-slot Q.
-            return {bytes, bytes - build.fused_cb_bytes - q_slot};
+            return {bytes, bytes - droppable_fused(q_tiles, build) - q_slot};
         }
         case RecipeOp::ExpRing: {
             if (fast) {
@@ -379,7 +384,7 @@ RecipeL1Estimate recipe_l1_bytes(
             // mailbox of a device-tensor logical_n (counted unconditionally).
             const auto build = recipe_build(policy, q_tiles, k_tiles, d_tiles);
             const uint64_t bytes = build.cb_bytes - q_slot + 64;
-            return {bytes, bytes - build.fused_cb_bytes};  // the factory drops the fused chunks' CBs to fit
+            return {bytes, bytes - droppable_fused(q_tiles, build)};  // the factory drops the fused chunks' CBs to fit
         }
     }
     TT_THROW("Unknown SDPA recipe op");
@@ -411,7 +416,7 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
             }
             // Ring / exp ring round STANDARD's odd Q chunk up to the next even one (sdpa.cpp); the even
             // candidate is costed on its own.
-            if (!dense && qt % 2 != 0 && recipe_compute_q_tiles(p.policy, qt) != qt) {
+            if (!dense && qt % 2 != 0 && recipe_compute_q_tiles(p.policy, qt, kt) != qt) {
                 continue;
             }
             // Dense/joint L1 grows with Q and K: stop at the first K that does not fit.
