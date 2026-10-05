@@ -388,7 +388,11 @@ class TestTriage:
         self.run_triage_script("check_l1_status.py")
 
     def test_check_eth_status(self):
-        self.run_triage_script("check_eth_status.py")
+        results = self.run_triage_script("check_eth_status.py") or []
+        for check_result in results:
+            data = check_result.result
+            decoded = (data.port_status, data.link, data.retrain_count, data.heartbeat)
+            assert None not in decoded, f"{check_result.location.to_user_str()} was not decoded: {decoded}"
 
     def test_check_noc_locations(self):
         self.run_triage_script("check_noc_locations.py")
