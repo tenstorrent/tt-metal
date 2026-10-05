@@ -21,7 +21,7 @@
 // inside a vague-linkage function (inline, template, class-template member) makes such objects COMDAT, which
 // GCC will not put in a named section (without LTO a "section type conflict", with LTO an lto1 ICE). The
 // handle's label is local to the object and guarded by .ifndef, so however many times an inlined site is
-// expanded there is one handle and one record for it; TT_ZONE_TU_TAG (this TU's index in its link, from
+// expanded there is one handle and one record for it; TT_PROFILER_TU_ID (this TU's index in its link, from
 // jit_build/build.cpp) keeps labels apart when LTO merges a link's TUs into one assembly. .tt_zone_str is
 // "MS" so __FILE__ is stored once per file; .tt_zone_meta has a real sh_entsize of 16 so the host walks a
 // plain array.
@@ -51,11 +51,11 @@
 #define TT_ZONE_STR(x) TT_ZONE_STR_(x)
 
 // This TU's index among the objects of its link, injected by the JIT build; a TU built outside it is alone.
-#ifndef TT_ZONE_TU_TAG
-#define TT_ZONE_TU_TAG 0
+#ifndef TT_PROFILER_TU_ID
+#define TT_PROFILER_TU_ID 0
 #endif
 
-#define TT_ZONE_LABEL(ctr) "__tt_zone_" TT_ZONE_STR(TT_ZONE_TU_TAG) "_" TT_ZONE_STR(ctr)
+#define TT_ZONE_LABEL(ctr) "__tt_zone_" TT_ZONE_STR(TT_PROFILER_TU_ID) "_" TT_ZONE_STR(ctr)
 
 // Declares `site` as this zone site's type; site::id() returns the site's id in two instructions with no
 // memory access. Usable at namespace or block scope. `ctr` is a parameter because __COUNTER__ increments on
