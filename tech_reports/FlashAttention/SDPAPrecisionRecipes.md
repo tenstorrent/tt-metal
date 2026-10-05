@@ -136,6 +136,11 @@ pass-outer and ring-inner.
   trace can replay with new lengths.
 - For LOW_PRECISION, prepare K/V before they are communicated.
 - Ring's third output is internal scratch, not an LSE.
+- With several Q chunks per core, each chunk's state (FP32 O and l, maxima) is checkpointed to the third output
+  around every Q chunk on every ring step. For STANDARD this is streamed: the last K chunk hands finished O row
+  groups to the writer, a restore acks maxima and sums first and then each O row as it lands, and compute waits
+  only for the rows it is about to accumulate onto. LOW_PRECISION checkpoints synchronously (its ring kernels
+  have no room for the streaming code).
 
 ## LOW_PRECISION inputs
 
@@ -175,6 +180,7 @@ Compile-time defines set by the host:
 | `SDPA_RECIPE_MASK` | an attn_mask | additive mask on the reduce path |
 | `SDPA_RECIPE_QK_W`, `SDPA_RECIPE_PV_W` | all | matmul subblock widths |
 | `SDPA_RECIPE_RING` (in the ring kernels) | ring, exp ring | key-tail masking, resident state |
+| `SDPA_RING_STREAM_STATE` | ring STANDARD with fused chunks | streamed multi-Q checkpoints |
 
 **Code size.** Each program must fit the 70656 B kernel config buffer, and the ring and exp ring LOW_PRECISION
 kernels sit within a few hundred bytes of it. The reduce path (`SDPA_RECIPE_COLD`), normalization and the ring
