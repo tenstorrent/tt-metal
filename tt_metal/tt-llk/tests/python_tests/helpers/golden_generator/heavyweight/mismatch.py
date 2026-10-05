@@ -10,9 +10,13 @@ highlighted, which answers *where* in the tile. What it cannot answer is:
   and the step is relative to each element's own magnitude. Ranked by absolute
   error, the top of a table is large-magnitude datums that comfortably pass
   while the one that actually failed sits further down.
-* **which stage** -- a datum can disagree because the math left a different
-  value in Dest, or because the packer treated the same value differently.
-  Those need different fixes and the packed output cannot distinguish them.
+* **where to look next** -- a datum can disagree because the device's math
+  left a different value in Dest, or because its packer treated the same value
+  differently. Telling those apart needs the *device's* pre-pack Dest, which
+  this report does not have. What it shows is the golden's, which narrows the
+  question: a device zero against a golden Dest above the Dest format's
+  smallest normal is not explained by flush-to-zero alone. To settle it, re-run
+  with a Float16 output, where the device's packed result *is* its Dest.
 
 So this adds a step-ranked table, the golden's pre-pack Dest beside it, and the
 chain that produced it. Use it alongside ``passed_test``, not instead of it.
@@ -176,8 +180,8 @@ def describe_mismatch(
                 f">= {floor:.3g} ({dest_format}'s smallest normal) for {above} "
                 f"of them"
                 + (
-                    " -> the device would have held those, so the divergence is "
-                    "in the math or the pack, not Dest FTZ"
+                    " -> if the device's math matched, its Dest would have held "
+                    "those, so Dest FTZ alone does not explain them"
                     if above
                     else " -> consistent with Dest FTZ"
                 )
