@@ -148,6 +148,7 @@ def test_loudbox_kimi_k3_accuracy(
     inputs: str,
     schedule: str,
     request: pytest.FixtureRequest,
+    tmp_path: Path,
 ) -> None:
     spec = loudbox_kda_case(weights, layout, schedule, inputs)
     checkpoint_dir: Path | None = request.getfixturevalue("kimi_k3_checkpoint_dir") if weights == "real" else None
@@ -214,6 +215,25 @@ def test_loudbox_kimi_k3_accuracy(
         failures.append(f"repeated schedule is not bit-identical: {mismatched}")
     for row in rows:
         print(f"KDA_LOUDBOX_ROW {spec.name} " + json.dumps(row, sort_keys=True))
+    if failures:
+        # Keep the failing tensors for offline localization (which heads / key channels carry the error).
+        dump = tmp_path / f"{spec.name}.pt"
+        torch.save(
+            {"device": runs[0], "expected": [{name: _expected(r, name) for name in runs[0][0]} for r in references]},
+            dump,
+        )
+        print(f"KDA_LOUDBOX_DUMP={dump}")
+        for chunk, (snapshot, reference) in enumerate(zip(runs[0], references, strict=True)):
+            error = (snapshot["recurrent_sp0"] - reference.state.recurrent).abs()[0]  # [heads, key, value]
+            per_key = error.amax(-1).flatten()
+            top = torch.topk(per_key, 8)
+            print(
+                f"KDA_LOUDBOX_RECURRENT_PEAKS chunk {chunk}: per-head max |err| "
+                f"{[round(float(v), 4) for v in error.amax((-1, -2))]}; top (head, key): "
+                + ", ".join(
+                    f"({int(i) // error.shape[1]},{int(i) % error.shape[1]})={float(v):.3e}" for v, i in zip(*top)
+                )
+            )
     print(
         "KDA_LOUDBOX_ACCURACY="
         + json.dumps(
