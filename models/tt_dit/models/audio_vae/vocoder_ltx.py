@@ -377,6 +377,14 @@ class Vocoder(Module):
         self._tpad_mask_cache = {}
         return self._device_to_host(self._forward_device(self._upload_BCT(x_BCT)))
 
+    def c12_trace_key(self, shape):
+        identity = getattr(self, "c12_identity", None)
+        if identity is None:
+            return tuple(shape)
+        from ...utils.c12 import trace_key
+
+        return trace_key(shape, identity)
+
     def forward_BCT_traced(self, x_BCT: torch.Tensor) -> torch.Tensor:
         """:meth:`forward_BCT` with the device graph captured and replayed.
 
@@ -385,7 +393,9 @@ class Vocoder(Module):
         dispatch is the dominant lever, and ``_forward_device`` is already a fixed-shape
         device-in/device-out region for exactly this reason.
         """
-        y_dev = self._forward_device(self._upload_BCT(x_BCT), traced=True, tracer_trace_key=tuple(x_BCT.shape))
+        y_dev = self._forward_device(
+            self._upload_BCT(x_BCT), traced=True, tracer_trace_key=self.c12_trace_key(x_BCT.shape)
+        )
         return self._device_to_host(y_dev)
 
     def forward_traced(self, mel_spec: torch.Tensor) -> torch.Tensor:
@@ -395,7 +405,7 @@ class Vocoder(Module):
         persistent buffer and replay. Requires a ``trace_region_size`` large enough for the traces.
         """
         y_dev = self._forward_device(
-            self._host_to_device(mel_spec), traced=True, tracer_trace_key=tuple(mel_spec.shape)
+            self._host_to_device(mel_spec), traced=True, tracer_trace_key=self.c12_trace_key(mel_spec.shape)
         )
         return self._device_to_host(y_dev)
 
@@ -444,6 +454,14 @@ class Vocoder(Module):
             if t_pad:
                 x_BTC_torch = torch.nn.functional.pad(x_BTC_torch, (0, 0, 0, t_pad))
         self._t_pad = t_pad
+        if getattr(self, "c12_identity", None) is not None:
+            target = self.resblocks[16].convs2[0]
+            rate = 1
+            for r in self.upsample_rates:
+                rate *= r
+            target.bind_input(
+                batch=B, local_t=(T + t_pad) // self.parallel_config.factor * rate, tail_samples=t_pad * rate
+            )
 
         return ttnn.from_torch(x_BTC_torch, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
 

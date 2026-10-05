@@ -161,6 +161,10 @@ class LTXAudioDecoderAdapter:
         main_voc = self._build_vocoder(
             voc_cfg, apply_final_activation=True, parallel_config=audio_parallel_config, ccl_manager=audio_ccl
         )
+        # Experiment selection is main-vocoder-only and precedes all weight/cache loads.
+        c12_mode = os.environ.get("LTX_C12_MODE", "off")
+        if c12_mode not in ("", "off", "0"):
+            self._configure_c12(main_voc, voc_cfg, c12_mode)
         bwe_voc = self._build_vocoder(
             bwe_cfg, apply_final_activation=False, parallel_config=bwe_pc, ccl_manager=audio_ccl
         )
@@ -219,6 +223,35 @@ class LTXAudioDecoderAdapter:
             ccl_manager=ccl_manager,
         )
 
+    def _configure_c12(self, main_voc, config, mode):
+        import hashlib
+
+        from ...layers.audio_c12 import install_c12
+        from ...utils.c12 import MODULE_PATH, digest, parse_mode
+
+        parse_mode(mode)  # Reject misspelled modes before checkpoint reads.
+        evidence = None
+        with safe_open(self._checkpoint_path, framework="pt") as checkpoint:
+            prefix = "vocoder." + MODULE_PATH
+            if prefix + ".weight" in checkpoint.keys():
+                weight = checkpoint.get_tensor(prefix + ".weight").float()
+                bias = (
+                    checkpoint.get_tensor(prefix + ".bias").float() if prefix + ".bias" in checkpoint.keys() else None
+                )
+                evidence = {
+                    "source_id": cache_module.source_id(self._checkpoint_path),
+                    "config_sha256": digest(config),
+                    "module_path": MODULE_PATH,
+                    "weight_shape": list(weight.shape),
+                    "weight_sha256": hashlib.sha256(weight.contiguous().numpy().tobytes()).hexdigest(),
+                    "bias_shape": None if bias is None else list(bias.shape),
+                    "bias_sha256": None
+                    if bias is None
+                    else hashlib.sha256(bias.contiguous().numpy().tobytes()).hexdigest(),
+                    "loaded_dtype": "float32",
+                }
+        install_c12(main_voc, mode=mode, config=config, checkpoint=evidence)
+
     def _audio_decoder_state_provider(self) -> dict[str, torch.Tensor]:
         """Audio mel-VAE decoder weights from the checkpoint, prefix-stripped to the module keys."""
         logger.info("Audio decoder cache miss — loading from checkpoint")
@@ -250,6 +283,18 @@ class LTXAudioDecoderAdapter:
         """
         if self._mel_decoder is None or self._vocoder_with_bwe is None:
             return
+        c12_identity = getattr(self._vocoder_with_bwe.vocoder, "c12_identity", None)
+        if c12_identity is not None:
+            from pathlib import Path
+
+            root = os.environ.get("TT_DIT_CACHE_DIR")
+            if root is None or str(Path(root).resolve()) != self._vocoder_with_bwe.vocoder.c12_cache_root:
+                raise ValueError("C12 cache root changed after experiment construction")
+        if (
+            c12_identity is not None
+            and cache_module.source_id(self._checkpoint_path) != c12_identity["checkpoint"]["source_id"]
+        ):
+            raise ValueError("C12 checkpoint changed after experiment construction; start a fresh process/cache root")
         if self._mel_decoder.is_loaded() and self._vocoder_with_bwe.is_loaded():
             return
 
@@ -257,6 +302,7 @@ class LTXAudioDecoderAdapter:
         blocking_key = conv3d_blocking_hash(self._vocoder_with_bwe)
         dec_subfolder = f"audio_dec_{blocking_key}" if blocking_key else "audio_dec"
         voc_subfolder = f"audio_voc_{blocking_key}" if blocking_key else "audio_voc"
+        voc_subfolder += getattr(self._vocoder_with_bwe.vocoder, "c12_cache_suffix", "")
 
         if not self._mel_decoder.is_loaded():
             cache_module.load_model(
