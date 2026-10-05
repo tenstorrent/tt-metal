@@ -327,7 +327,7 @@ def test_height_sharded_memory(device, interpolation_mode):
     assert comparison_passed, f"{interpolation_mode} height sharded memory test failed"
 
 
-@skip_for_blackhole("Incorrect result on BH github issue #36263")
+@skip_for_blackhole("Incorrect result on BH: https://github.com/tenstorrent/tt-metal/issues/36263")
 @pytest.mark.parametrize(
     "interpolation_mode, input_shape, num_cores, shard_height",
     [
