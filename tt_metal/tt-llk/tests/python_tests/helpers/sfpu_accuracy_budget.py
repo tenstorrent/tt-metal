@@ -51,6 +51,7 @@ from .ulp import (  # FLUSH_SUBNORMAL_OUTPUTS re-exported: the step gates read i
     has_ulp_gate,
     ulp_dtype,
 )
+from .ulp_provenance import PROVENANCE_FIELDS, Provenance
 
 #: The architecture every unkeyed budget was measured on. Anywhere else an op resolves
 #: to the tolerance metric until the sweep has been re-run there.
@@ -458,10 +459,36 @@ def _read_yaml(path: Path) -> Dict[str, Any]:
     return loaded
 
 
+def _check_provenance(where: str, row: Dict[str, Any]) -> None:
+    """A row's provenance fields, against themselves and its contract. The figure a
+    budget came from is part of the row: a step budget without one is a guess, and the
+    table's rule is that no number in it is."""
+    provenance = Provenance.of(row)
+    problems = provenance.problems()
+    tolerance = row.get("metric") == "tolerance"
+    if not tolerance and "max_ulp" in row and provenance.measured is None:
+        problems.append(
+            "a `max_ulp` row needs the `measured` figure it came from, and the `run` or "
+            "`sampled` date it was measured on"
+        )
+    if provenance.nonfinite is not None and not tolerance:
+        problems.append(
+            "`nonfinite` lanes hold a cell on tolerance, so it belongs on a "
+            "`metric: tolerance` row"
+        )
+    if provenance.measured_all is not None and "near_zero_atol" not in row:
+        problems.append(
+            "`measured_all` is the worst lane a `near_zero_atol` floor rescues; the "
+            "row has no floor"
+        )
+    if problems:
+        raise ValueError(f"{where} {row}: " + "; ".join(problems))
+
+
 def _row_to_entry(
     where: str, row: Dict[str, Any]
 ) -> Tuple[BudgetKey, AccuracyContract]:
-    unknown = set(row) - set(_KEY_FIELDS) - _CONTRACT_FIELDS
+    unknown = set(row) - set(_KEY_FIELDS) - _CONTRACT_FIELDS - set(PROVENANCE_FIELDS)
     if unknown:
         raise ValueError(f"{where}: unknown field(s) {sorted(unknown)}")
     key = BudgetKey(
@@ -475,7 +502,9 @@ def _row_to_entry(
     metric = _enum_member(Metric, contract.pop("metric", "ulp"), where)
     # AccuracyContract.__post_init__ owns the rest of the validation, so a row that is
     # half-converted between the two metrics is refused there rather than here.
-    return key, AccuracyContract(metric=metric, **contract)
+    entry = key, AccuracyContract(metric=metric, **contract)
+    _check_provenance(where, row)
+    return entry
 
 
 def _load_table(path: Path = _TABLE_PATH) -> Dict[MathOperation, _BudgetTable]:

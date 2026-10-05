@@ -11,6 +11,7 @@ two are free to drift unless something says they may not.
 
 import ast
 import sys
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -31,7 +32,7 @@ from helpers.ulp_budget_diff import (
     render_budget_diff,
     render_headroom,
 )
-from helpers.ulp_provenance import KeyLine, Kind, Provenance, RunIdentity
+from helpers.ulp_provenance import Provenance
 
 #: The tool's short key spelling -> the registry's BudgetKey field. Both of its copies
 #: of the key list are held to this one by test_the_key_dimensions_are_the_registrys.
@@ -53,12 +54,12 @@ def _pinned(key):
     )
 
 
-_HEADER = "Abs:  # measured by: sweep X, wormhole, 2026-01-01"
+_HEADER = "Abs:  # a header is prose: no code reads it"
 _BASE_ROWS = (
-    "{in: Float16_b, out: Float16_b, max_ulp: 1}  # max 1 ULP",
-    "{in: Float16, out: Float16_b, max_ulp: 4}  # max 3 ULP",
-    "{in: Bfp8_b, out: Bfp8_b, metric: tolerance}  # max 393 ULP, block-quantized",
-    "{in: Float32, out: Float32, max_ulp: 2}  # max 1 ULP",
+    "{in: Float16_b, out: Float16_b, max_ulp: 1, measured: 1, run: 2026-01-01}",
+    "{in: Float16, out: Float16_b, max_ulp: 4, measured: 3, run: 2026-01-01}",
+    "{in: Bfp8_b, out: Bfp8_b, metric: tolerance, measured: 393, run: 2026-01-01}",
+    "{in: Float32, out: Float32, max_ulp: 2, measured: 1, run: 2026-01-01}",
 )
 _BF16 = (("in", "Float16_b"), ("out", "Float16_b"))
 
@@ -104,14 +105,27 @@ def _refuses(kind):
 
 
 @pytest.mark.parametrize(
-    "comment, remeasured",
-    [("max 1 ULP", False), ("max 8 ULP, re-measured 2026-02-02", True)],
-    ids=["comment-untouched", "re-measured"],
+    "provenance, remeasured",
+    [
+        ("measured: 1, run: 2026-01-01", False),
+        ("measured: 1, run: 2026-01-01}  # re-measured 2026-02-02, honestly", False),
+        ("measured: 8, run: 2026-02-02", True),
+        ("measured: 1, run: 2026-02-02", True),
+    ],
+    ids=["untouched", "only-the-prose", "re-measured", "same-figure-new-run"],
 )
-def test_a_raised_budget_is_a_regression_marked_by_its_provenance(comment, remeasured):
-    """The raise is always surfaced. Whether the row's comment changed with it is what
-    separates a re-measurement from a number fitted to a failure."""
-    head = _edited(0, f"{{in: Float16_b, out: Float16_b, max_ulp: 9}}  # {comment}")
+def test_a_raised_budget_is_a_regression_marked_by_its_provenance(
+    provenance, remeasured
+):
+    """The raise is always surfaced. Whether the row's measurement fields changed with
+    it is what separates a re-measurement from a number fitted to a failure; editing
+    the prose beside the row does not count."""
+    if "}" in provenance:
+        body, _, comment = provenance.partition("}")
+        row = f"{{in: Float16_b, out: Float16_b, max_ulp: 9, {body}}}{comment}"
+    else:
+        row = f"{{in: Float16_b, out: Float16_b, max_ulp: 9, {provenance}}}"
+    head = _edited(0, row)
     (change,) = _changes(_BASE, head)
     assert change.kind == "raised" and change.is_regression
     assert change.remeasured is remeasured
@@ -121,7 +135,8 @@ def test_losing_the_gate_entirely_is_a_regression():
     """Demotion to tolerance is the loosest change: the cell stops being judged on a
     step budget at all, and a bounds check cannot see it."""
     head = _edited(
-        0, "{in: Float16_b, out: Float16_b, metric: tolerance}  # max 14337 ULP"
+        0,
+        "{in: Float16_b, out: Float16_b, metric: tolerance, measured: 14337, run: 2026-01-01}",
     )
     assert _kinds(_BASE, head)[_BF16] == "ungated"
 
@@ -136,11 +151,11 @@ def test_deleting_a_gated_row_is_a_regression_and_a_figureless_tolerance_row_is_
 
 def test_tightening_and_newly_gating_are_not_regressions():
     head = _head(
-        "{in: Float16_b, out: Float16_b, max_ulp: 0}  # max 0 ULP",
+        "{in: Float16_b, out: Float16_b, max_ulp: 0, measured: 0, run: 2026-01-01}",
         _BASE_ROWS[1],
-        "{in: Bfp8_b, out: Bfp8_b, max_ulp: 3}  # max 2 ULP",
+        "{in: Bfp8_b, out: Bfp8_b, max_ulp: 3, measured: 2, run: 2026-01-01}",
         _BASE_ROWS[3],
-        "{in: Float16, out: Float32, max_ulp: 7}  # max 6 ULP",
+        "{in: Float16, out: Float32, max_ulp: 7, measured: 6, run: 2026-01-01}",
     )
     changes = _changes(_BASE, head)
     assert not any(c.is_regression for c in changes)
@@ -152,18 +167,23 @@ def test_a_row_the_sweep_collapses_is_not_a_loss_while_its_cells_keep_their_budg
     deletes `approx`-keyed rows and writes one without. Nothing any query resolves to
     has changed, and a row diff reported 16 of these as regressions."""
     base = _head(
-        '{in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 36018}  # a',
-        '{in: Float16_b, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 36018}  # b',
+        '{in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 36018, measured: 32744, run: 2026-01-01}  # a',
+        '{in: Float16_b, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 36018, measured: 32744, run: 2026-01-01}  # b',
     )
-    same = _head('{in: Float16_b, out: Float32, dest: "Yes", max_ulp: 36018}  # c')
+    same = _head(
+        '{in: Float16_b, out: Float32, dest: "Yes", max_ulp: 36018, measured: 32744, run: 2026-01-01}  # c'
+    )
     changes = _changes(base, same)
     assert not any(c.is_regression for c in changes)
     # The one honest difference: a query with `approx` unset matched neither keyed row
     # before and matches the collapsed one now, so that variant is newly gated.
     assert [(c.kind, c.variants) for c in changes] == [("gated", 1)]
     # A raise through the collapsed row is one change covering both variants,
-    # re-measured because the deciding row's comment is new.
-    raised = _head('{in: Float16_b, out: Float32, dest: "Yes", max_ulp: 36030}  # c')
+    # re-measured because the deciding row's measurement is new.
+    raised = _head(
+        '{in: Float16_b, out: Float32, dest: "Yes", max_ulp: 36030, measured: 32755, '
+        "run: 2026-02-02}"
+    )
     (change,) = [c for c in _changes(base, raised) if c.is_regression]
     assert change.kind == "raised" and change.variants == 2 and change.remeasured
 
@@ -221,20 +241,22 @@ def test_a_tie_between_equally_specific_rows_is_refused_rather_than_ordered():
     "head_row, kind",
     [
         (
-            "{in: Bfp8_b, out: Bfp8_b, metric: tolerance}  # max 500 ULP",
+            "{in: Bfp8_b, out: Bfp8_b, metric: tolerance, measured: 500, run: 2026-01-02}",
             "baseline_raised",
         ),
         (
-            "{in: Bfp8_b, out: Bfp8_b, metric: tolerance}  # not measurable: 3 lane(s) "
-            "disagreeing with the golden about being finite (x); max 393 ULP over the "
-            "65000 measurable lanes",
+            "{in: Bfp8_b, out: Bfp8_b, metric: tolerance, measured: 393, nonfinite: 3, "
+            "run: 2026-01-02}  # not measurable: lanes disagreeing with the golden",
             "baseline_raised",
         ),
         (
             "{in: Bfp8_b, out: Bfp8_b, metric: tolerance}  # block-quantized",
             "baseline_dropped",
         ),
-        ("{in: Bfp8_b, out: Bfp8_b, metric: tolerance}  # max 12 ULP", None),
+        (
+            "{in: Bfp8_b, out: Bfp8_b, metric: tolerance, measured: 12, run: 2026-01-02}",
+            None,
+        ),
     ],
     ids=["max-raised", "nonfinite-appears", "figure-deleted", "max-lowered"],
 )
@@ -252,14 +274,17 @@ def test_a_re_emit_that_splits_a_tolerance_row_drops_no_baseline():
     leaves ``dest`` unset then matches nothing, but no measured cell -- every one names
     in, out, approx and dest -- loses its figure, so nothing the headroom report judges
     has loosened. Raising either half still reads as a raise."""
-    one = '{in: Float16_b, out: Float32, approx: "Yes", metric: tolerance}  # max 9 ULP'
+    one = (
+        '{in: Float16_b, out: Float32, approx: "Yes", metric: tolerance, measured: 9, '
+        "run: 2026-01-01}"
+    )
 
     def split(no, yes):
         return _head(
             '{in: Float16_b, out: Float32, approx: "Yes", dest: "No", metric: '
-            f"tolerance}}  # max {no} ULP",
+            f"tolerance, measured: {no}, run: 2026-01-02}}",
             '{in: Float16_b, out: Float32, approx: "Yes", dest: "Yes", metric: '
-            f"tolerance}}  # max {yes} ULP",
+            f"tolerance, measured: {yes}, run: 2026-01-02}}",
         )
 
     assert not [c for c in _changes(_head(one), split(9, 8)) if c.is_regression]
@@ -342,30 +367,30 @@ def test_the_measured_arch_is_the_registrys():
 
 _FLOOR_CASES = [
     (
-        "{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 1.0e-07}  # max 1 ULP",
-        "{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 5.0e-05}  # max 1 ULP",
+        "{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 1.0e-07, measured: 1, run: 2026-01-01}",
+        "{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 5.0e-05, measured: 1, run: 2026-01-01}",
         "floor_widened",
     ),
     (
-        "{in: Float16_b, out: Float16_b, max_ulp: 2}  # max 1 ULP",
-        "{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 5.0e-05}  # max 1 ULP",
+        "{in: Float16_b, out: Float16_b, max_ulp: 2, measured: 1, run: 2026-01-01}",
+        "{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 5.0e-05, measured: 1, run: 2026-01-01}",
         "floor_widened",
     ),
     # A smaller max_ulp must not mask a wider floor: the floor can more than pay for it.
     (
-        "{in: Float16_b, out: Float16_b, max_ulp: 8, near_zero_atol: 1.0e-07}  # max 1 ULP",
-        "{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 5.0e-02}  # max 1 ULP",
+        "{in: Float16_b, out: Float16_b, max_ulp: 8, near_zero_atol: 1.0e-07, measured: 1, run: 2026-01-01}",
+        "{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 5.0e-02, measured: 1, run: 2026-01-01}",
         "floor_widened",
     ),
     (
-        "{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 5.0e-05}  # max 1 ULP",
-        "{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 1.0e-07}  # max 1 ULP",
+        "{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 5.0e-05, measured: 1, run: 2026-01-01}",
+        "{in: Float16_b, out: Float16_b, max_ulp: 2, near_zero_atol: 1.0e-07, measured: 1, run: 2026-01-01}",
         None,
     ),
     # On a tolerance row nothing consults the floor.
     (
-        "{in: Float16_b, out: Float16_b, metric: tolerance}  # max 393 ULP",
-        "{in: Float16_b, out: Float16_b, metric: tolerance, near_zero_atol: 0.5}  # max 393 ULP",
+        "{in: Float16_b, out: Float16_b, metric: tolerance, measured: 393, run: 2026-01-01}",
+        "{in: Float16_b, out: Float16_b, metric: tolerance, near_zero_atol: 0.5, measured: 393, run: 2026-01-01}",
         None,
     ),
 ]
@@ -406,7 +431,9 @@ def test_an_unchanged_table_reports_nothing():
 
 
 def test_the_report_names_the_cell_the_change_and_the_label():
-    head = _head("{in: Float16_b, out: Float16_b, max_ulp: 9}  # max 1 ULP")
+    head = _head(
+        "{in: Float16_b, out: Float16_b, max_ulp: 9, measured: 1, run: 2026-01-01}"
+    )
     report = render_budget_diff(_changes(_BASE, head), "ulp-budget-raise-approved")
     assert "loosen a gate" in report
     assert "in: Float16_b, out: Float16_b" in report
@@ -425,56 +452,46 @@ def test_an_anchor_and_its_alias_are_both_real_rows():
     is what caught it."""
     table = parse_table(
         "GeluAppx:\n"
-        "  - &shared {max_ulp: 3}  # max 2 ULP\n"
+        "  - &shared {max_ulp: 3, measured: 2, run: 2026-01-01}\n"
         "SigmoidAppx:\n"
         "  - *shared  # same cause, same number\n"
     )
     assert {cell[0] for cell in table} == {"GeluAppx", "SigmoidAppx"}
     assert all(row.max_ulp == 3 for row in table.values())
-    # Each keeps its own comment, so a re-measurement on one is visible.
-    assert table[("SigmoidAppx", ())].provenance == Provenance.hand(
-        "same cause, same number"
-    )
-    assert table[("GeluAppx", ())].provenance == Provenance(Kind.EMITTED, measured=2)
+    # The alias is the anchor's row, measurement included: re-measuring one is
+    # re-measuring both.
+    shared = Provenance(measured=2, run=date(2026, 1, 1))
+    assert {row.provenance for row in table.values()} == {shared}
 
 
 def test_a_merge_key_row_is_read_through():
     """The registry loads the table with PyYAML's SafeLoader, which resolves `<<`."""
     table = parse_table(
         "Base:\n"
-        "  - &b {out: Float16_b, max_ulp: 2}  # max 1 ULP\n"
+        "  - &b {out: Float16_b, max_ulp: 2, measured: 1, run: 2026-01-01}\n"
         "Abs:\n"
-        "  - {<<: *b, max_ulp: 5}  # max 4 ULP\n"
+        "  - {<<: *b, max_ulp: 5, measured: 4, run: 2026-01-01}\n"
     )
     assert table[("Abs", (("out", "Float16_b"),))].max_ulp == 5
 
 
-def test_a_row_without_a_comment_inherits_its_op_header():
-    """The table puts the run identity on the op header, once, and many gated rows carry
-    no inline comment. Without the fallback their provenance is permanently empty, so a
-    raise on one could never register as re-measured. A row's own comment still wins."""
+def test_only_a_rows_own_fields_mark_a_re_measurement():
+    """A row's measurement is its own fields; a changed header line or comment beside
+    it is prose and re-measures nothing, so it cannot launder a raise."""
 
-    def run(sweep):
-        return RunIdentity(sweep=sweep, arch="wormhole", date="2026-01-01")
-
-    def table(sweep, budget):
+    def table(header, budget, provenance):
         return parse_table(
-            f"Abs:  # {KeyLine(run=run(sweep)).render()}\n"
-            f"  - {{out: Float32, max_ulp: {budget}}}\n"
-            "  - {out: Float16_b, max_ulp: 1}  # max 0 ULP, its own row\n"
+            f"Abs:  # {header}\n"
+            f"  - {{out: Float32, max_ulp: {budget}, {provenance}}}  # prose\n"
         )
 
-    base = table("sweep A", 1)
-    assert base[("Abs", (("out", "Float32"),))].provenance == KeyLine(
-        run=run("sweep A")
-    )
-    own = base[("Abs", (("out", "Float16_b"),))].provenance
-    assert own == Provenance.hand("max 0 ULP, its own row")
-    # Raising the comment-less row shows as re-measured only through a new header.
-    (raised,) = [c for c in compare(base, table("sweep B", 4)) if c.is_regression]
-    assert raised.kind == "raised" and raised.remeasured
-    (stale,) = [c for c in compare(base, table("sweep A", 4)) if c.is_regression]
-    assert stale.kind == "raised" and not stale.remeasured
+    base = table("sweep A", 1, "measured: 1, run: 2026-01-01")
+    for head, remeasured in (
+        (table("sweep B", 4, "measured: 1, run: 2026-01-01"), False),
+        (table("sweep A", 4, "measured: 3, run: 2026-02-02"), True),
+    ):
+        (raised,) = [c for c in compare(base, head) if c.is_regression]
+        assert raised.kind == "raised" and raised.remeasured is remeasured
 
 
 def test_an_unquoted_yaml_boolean_names_the_same_cell_as_a_quoted_one():
@@ -492,13 +509,12 @@ def test_an_unquoted_yaml_boolean_names_the_same_cell_as_a_quoted_one():
 
 
 def test_a_not_measurable_row_still_records_the_measurable_lanes_maximum():
-    """The emitter writes both numbers into one note; each reader takes its own, and
-    the finite lanes of a demoted cell stay judged."""
+    """The emitter writes both numbers as fields; each reader takes its own, and the
+    finite lanes of a demoted cell stay judged."""
     table = parse_table(
-        'I1:\n  - {in: Float16_b, out: Float32, dest: "No", metric: tolerance}  # not '
-        "measurable: 31120 lane(s) disagreeing with the golden about being finite "
-        "(golden -> result: x=91: inf -> -1.16e37); max 7 ULP over the 34159 measurable "
-        "lanes\n"
+        'I1:\n  - {in: Float16_b, out: Float32, dest: "No", metric: tolerance, '
+        "measured: 7, nonfinite: 31120, run: 2026-01-01}  # not measurable: lanes "
+        "disagreeing with the golden about being finite (x=91: inf -> -1.16e37)\n"
     )
     row = next(iter(table.values()))
     assert recorded_nonfinite(row) == 31120
@@ -512,8 +528,8 @@ def test_a_duplicated_cell_is_refused_rather_than_judged():
     with _refuses(DuplicateRow) as caught:
         parse_table(
             _head(
-                "{in: Float16_b, out: Float16_b, max_ulp: 9}  # max 1 ULP",
-                "{in: Float16_b, out: Float16_b, max_ulp: 1}  # max 1 ULP",
+                "{in: Float16_b, out: Float16_b, max_ulp: 9, measured: 1, run: 2026-01-01}",
+                "{in: Float16_b, out: Float16_b, max_ulp: 1, measured: 1, run: 2026-01-01}",
             )
         )
     assert caught.value.cell == ("Abs", _BF16)
@@ -563,12 +579,13 @@ def test_an_exact_cell_at_its_zero_budget_is_not_a_warning():
 
 def test_a_tolerance_cell_is_judged_against_its_recorded_measurement():
     """No budget, so the sweep passes it whatever it measures -- this is the only place
-    a regression there can show. The row's own "max N ULP" is the baseline; a cell
+    a regression there can show. The row's own ``measured`` is the baseline; a cell
     whose row records none is not judged at all."""
     table = parse_table(
         "Abs:\n"
-        "  - {in: Float16_b, out: Float16_b, metric: tolerance}  # max 393 ULP, budget 433 > ceiling 7\n"
-        "  - {in: Float16, out: Float16_b, metric: tolerance}  # block-quantized, so tolerance\n"
+        "  - {in: Float16_b, out: Float16_b, metric: tolerance, measured: 393, "
+        "run: 2026-01-01}\n"
+        "  - {in: Float16, out: Float16_b, metric: tolerance}  # max 9 ULP, prose\n"
     )
     report, over = render_headroom(table, _measured(("Float16_b", "Float16_b", 393)))
     assert over == 0 and "regressed" not in report
@@ -628,7 +645,12 @@ def test_a_tolerance_cell_with_no_recorded_figure_is_counted_not_passed_silently
 
 #: The modules the slim runner loads, by path: the tool, and the one sibling it reads
 #: the table through.
-_SLIM_MODULES = ("ulp_budget_diff.py", "ulp_provenance.py")
+_SLIM_MODULES = (
+    "ulp_budget_diff.py",
+    "ulp_provenance.py",
+    "migrate_provenance_to_fields.py",
+)
+_SLIM_SIBLINGS = {"ulp_provenance", "migrate_provenance_to_fields"}
 
 
 @pytest.mark.parametrize("module", _SLIM_MODULES)
@@ -646,11 +668,11 @@ def test_the_tool_imports_nothing_but_the_standard_library_and_yaml(module):
             # A relative import would reach back into `helpers`; only the sibling the
             # runner also has on its path is allowed.
             if node.level:
-                assert (node.level, node.module) == (1, "ulp_provenance"), node.module
+                assert node.level == 1 and node.module in _SLIM_SIBLINGS, node.module
                 continue
             if node.module:
                 roots.add(node.module.split(".")[0])
-    allowed = set(sys.stdlib_module_names) | {"yaml", "ulp_provenance"}
+    allowed = set(sys.stdlib_module_names) | {"yaml"} | _SLIM_SIBLINGS
     assert roots <= allowed, f"imports outside stdlib + yaml: {sorted(roots - allowed)}"
     assert "helpers" not in roots and "torch" not in roots
 
@@ -860,13 +882,13 @@ def test_the_headroom_report_fails_an_overflow_the_row_does_not_account_for():
     or any on a row that names none -- is a regression the sweep must fail on."""
     table = parse_table(
         "Exp:\n"
-        '  - {in: Float32, out: Bfp8_b, dest: "Yes", metric: tolerance}'
-        "  # not measurable: 2 lane(s) disagreeing with the golden about being finite "
-        "(golden -> result: x=3e38: 3e38 -> inf)\n"
-        '  - {in: Float16, out: Float16, dest: "No", metric: tolerance}  # max 511 ULP\n'
+        '  - {in: Float32, out: Bfp8_b, dest: "Yes", metric: tolerance, measured: 0, '
+        "nonfinite: 2, run: 2026-01-01}  # not measurable: x=3e38: 3e38 -> inf\n"
+        '  - {in: Float16, out: Float16, dest: "No", metric: tolerance, measured: 511, '
+        "run: 2026-01-01}\n"
         "Exp2:\n"
-        '  - {in: Float32, out: Bfp8_b, dest: "Yes", metric: tolerance}'
-        "  # not measurable: 2 lane(s) non-finite against a finite golden (x=3e38)\n"
+        '  - {in: Float32, out: Bfp8_b, dest: "Yes", metric: tolerance, nonfinite: 2}'
+        "  # a parked row without a figure for the rest\n"
     )
 
     def judged(cells=None):
@@ -885,9 +907,9 @@ def test_the_headroom_report_fails_an_overflow_the_row_does_not_account_for():
     assert judged({at_row: 2}) == 0  # what the row accounts for
     assert judged({at_row: 3}) == 1  # one more lane than it names
     assert judged({plain: 1}) == 1  # any on a row that names none
-    # The older spelling of a "not measurable" row still names its count.
+    # The count stands on its own, with or without a figure for the rest of the cell.
     (exp2,) = [row for (op, _), row in table.items() if op == "Exp2"]
-    assert recorded_nonfinite(exp2) == 2
+    assert (recorded_nonfinite(exp2), recorded_max(exp2)) == (2, None)
     # A measurement written before the count existed judges as before.
     _, regressions = render_headroom(
         table,
@@ -907,7 +929,9 @@ def _write(tmp_path, name, text):
     return str(path)
 
 
-_RAISED = _edited(0, "{in: Float16_b, out: Float16_b, max_ulp: 9}  # max 1 ULP")
+_RAISED = _edited(
+    0, "{in: Float16_b, out: Float16_b, max_ulp: 9, measured: 1, run: 2026-01-01}"
+)
 
 
 @pytest.mark.parametrize(
@@ -1077,8 +1101,7 @@ def test_a_skipped_tolerance_cell_counts_as_measured_through_its_overflow_row():
     """A tolerance cell nothing can measure records only its non-finite lane count; that
     row is the cell's measurement, so the cell is not reported as unrecorded."""
     table = parse_table(
-        "Neg:\n  - {in: Float16_b, out: Float16_b, metric: tolerance}"
-        "  # not measurable: 3 lane(s) non-finite\n"
+        "Neg:\n  - {in: Float16_b, out: Float16_b, metric: tolerance, nonfinite: 3}\n"
     )
     row = dict(_row("Neg", "Float16_b", "Float16_b", "No", "No", 0), nonfinite=3)
     report, regressions = render_headroom(
@@ -1125,3 +1148,25 @@ def test_a_named_junit_report_that_is_missing_fails_the_comparison(tmp_path, cap
     ]
     assert main(argv) == 1
     assert "No JUnit report" in capsys.readouterr().out
+
+
+def test_a_base_from_before_the_field_format_is_compared_as_migrated(tmp_path):
+    """The change that moved provenance into row fields is diffed against a base whose
+    figures are in comments. Read as it is, that base records nothing, and every
+    migrated not-measurable row read as a raised lane count; migrated in memory first,
+    a pure format change reports no change at all."""
+    legacy = (
+        "Abs:  # measured by: exhaustive Float16_b sweep, wormhole, 2026-01-01, except "
+        "where a row says otherwise\n"
+        '  - {in: Float16_b, out: Float16_b, dest: "Yes", metric: tolerance}  # not '
+        "measurable: 6 lane(s) disagreeing with the golden about being finite (golden "
+        "-> result: x=3e38: 3e38 -> inf); max 393 ULP over the 65000 measurable lanes\n"
+        "  - {in: Float16, out: Float16_b, max_ulp: 4}  # max 3 ULP\n"
+    )
+    from helpers.migrate_provenance_to_fields import migrate
+
+    base = _write(tmp_path, "base.yaml", legacy)
+    head = _write(tmp_path, "head.yaml", migrate(legacy))
+    out = tmp_path / "r.md"
+    assert main(["diff", "--base", base, "--head", head, "--out", str(out)]) == 0
+    assert "No budget changed" in out.read_text(encoding="utf-8")

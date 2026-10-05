@@ -27,13 +27,15 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from xml.etree import ElementTree
 
 if __package__:
-    from .ulp_provenance import BudgetTable, KeyLine, Kind, Provenance
+    from .migrate_provenance_to_fields import migrate
+    from .ulp_provenance import BudgetTable, Provenance
 else:  # run by path on the slim runner, where `helpers/__init__.py` cannot import
-    from ulp_provenance import BudgetTable, KeyLine, Kind, Provenance
+    from migrate_provenance_to_fields import migrate
+    from ulp_provenance import BudgetTable, Provenance
 
 #: The key dimensions of a row, in the order a cell is named in a report. The registry's
 #: own map is ``sfpu_accuracy_budget._KEY_FIELDS``; a host test holds the two equal.
@@ -76,9 +78,9 @@ class Row:
     op: str
     key: Tuple[Tuple[str, str], ...]
     max_ulp: Optional[int]
-    #: The row's own provenance, or its op's key line when it has no comment: the table
-    #: states the run once there, and updating either registers as a re-measurement.
-    provenance: Union[Provenance, KeyLine]
+    #: The measurement the row records, from its own fields. A raise that comes with a
+    #: new one is a re-measurement; one that leaves it as it was is a number edited.
+    provenance: Provenance
     #: The near-zero floor is part of the gate: `ulp_elementwise_valid` accepts a lane
     #: inside it however many steps out it is, so widening it loosens the gate.
     near_zero_atol: Optional[float] = None
@@ -116,7 +118,7 @@ class Change:
     differently than the base did, since a collapsed row governs several. *held_before*
     and *held_after* say what the cell was held to on each side, as the report shows it.
 
-    *remeasured* is whether the deciding row's provenance comment differs from the same
+    *remeasured* is whether the deciding row's provenance (its measurement fields) differs from the same
     row's in the base table -- the table's rule for raising a budget. Read off that one
     row, not off the two rows the cell resolves to: when a deleted row hands its cells to
     a broader one, those two comments differ although no comment was touched.
@@ -194,7 +196,7 @@ def parse_table(text: str) -> Dict[Cell, Row]:
             op=row.op,
             key=cell[1],
             max_ulp=row.max_ulp,
-            provenance=row.provenance or table.blocks[row.op].key_line,
+            provenance=row.provenance,
             near_zero_atol=row.near_zero_atol,
             atol=_number(values.get("atol")),
             rtol=_number(values.get("rtol")),
@@ -455,7 +457,7 @@ def compare(base: Dict[Cell, Row], head: Dict[Cell, Row]) -> List[Change]:
 
 
 def _remeasured(base: Dict[Cell, Row], row: Optional[Row]) -> bool:
-    """Whether *row*, the head row deciding a cell, carries a provenance comment the base
+    """Whether *row*, the head row deciding a cell, carries provenance the base
     table's same row did not -- a new row's comment is new by definition."""
     if row is None:
         return False
@@ -515,9 +517,9 @@ def render_budget_diff(changes: List[Change], label_hint: str) -> str:
     if regressions:
         out += [
             f"**{len(regressions)} cell(s) loosen a gate.** A budget may only be raised "
-            "by re-measuring and updating that row's provenance comment in the same "
-            "change — that is the table's own rule, and it is what makes every number "
-            "in it traceable.",
+            "by re-measuring and updating that row's `measured` figure and its date in "
+            "the same change — that is the table's own rule, and it is what makes "
+            "every number in it traceable.",
             "",
             *_md_table(
                 ("cell", "change", "before", "after", "re-measured"),
@@ -555,7 +557,7 @@ def _allowed_note(regressions: List[Change], label_hint: str) -> str:
     if unmeasured:
         note += (
             f"\n**{len(unmeasured)} of them carry no fresh measurement** -- the row's "
-            "provenance comment is unchanged, so the budget was edited rather than "
+            "measurement is unchanged, so the budget was edited rather than "
             "re-measured:\n\n"
         )
         note += "".join(
@@ -605,10 +607,7 @@ def _nonfinite_cells(rows: Iterable[dict]) -> Dict[Cell, int]:
 def recorded_nonfinite(row: Row) -> int:
     """How many non-finite lanes the row already accounts for: the count on a "not
     measurable" row, 0 on any other."""
-    p = row.provenance
-    if isinstance(p, Provenance) and p.kind is Kind.UNMEASURABLE:
-        return p.nonfinite_lanes or 0
-    return 0
+    return row.provenance.nonfinite or 0
 
 
 def recorded_max(row: Row) -> Optional[int]:
@@ -622,10 +621,7 @@ def recorded_max(row: Row) -> Optional[int]:
     pinned = dict(row.key)
     if "in" not in pinned or "out" not in pinned:
         return None
-    p = row.provenance
-    if isinstance(p, KeyLine):
-        p = p.header_provenance
-    return None if p is None else p.recorded_max
+    return row.provenance.measured
 
 
 def _headroom_line(cell: Cell, worst: int, reference: int, verdict: str) -> str:
@@ -847,10 +843,21 @@ def render_headroom(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _in_fields(text: str) -> str:
+    """*text* with its provenance in row fields. A revision from before provenance moved
+    out of the comments -- the base of the change that moved it -- is migrated in
+    memory; read as it is, its comments' figures would be absent and every one the
+    migrated table carries would read as raised."""
+    rows = BudgetTable(text).rows
+    if not rows or any(row.provenance.as_fields() for row in rows):
+        return text
+    return migrate(text)
+
+
 def _diff(args) -> Tuple[str, int]:
     changes = compare(
-        parse_table(args.base.read_text(encoding="utf-8")),
-        parse_table(args.head.read_text(encoding="utf-8")),
+        parse_table(_in_fields(args.base.read_text(encoding="utf-8"))),
+        parse_table(_in_fields(args.head.read_text(encoding="utf-8"))),
     )
     report = render_budget_diff(changes, args.label_hint)
     regressions = [c for c in changes if c.is_regression]
