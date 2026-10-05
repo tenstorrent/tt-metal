@@ -213,6 +213,17 @@ class V41EngramTable:
         self.head_dim, self.row_ids = weight.shape[1], row_ids
         self.rows = pack_rows(weight, scale)
 
+    @classmethod
+    def from_packed(cls, rows: torch.Tensor, head_dim: int, row_ids: torch.Tensor | None = None) -> "V41EngramTable":
+        """A table from rows already packed (``pack_rows`` bytes, uint16 ``[R, PACKED_WIDTH]``), e.g. a checkpoint
+        table packed in chunks and read back from a file (``engram_checkpoint``): the full table never has to exist
+        unpacked in memory."""
+        assert rows.dtype == torch.uint16 and rows.shape[1:] == (PACKED_WIDTH,), (rows.dtype, rows.shape)
+        assert row_ids is None or row_ids.shape == (rows.shape[0],)
+        table = cls.__new__(cls)
+        table.head_dim, table.row_ids, table.rows = head_dim, row_ids, rows
+        return table
+
     def _local(self, ids: torch.Tensor) -> torch.Tensor:
         if self.row_ids is None:
             return ids
