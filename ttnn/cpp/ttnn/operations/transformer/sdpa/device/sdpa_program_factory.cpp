@@ -212,7 +212,7 @@ WindowedSetup setup_windowed_cbs(
     cb_ids.windowed_q_offset = cb_ids.q_in;
     cb_ids.windowed_cu_reader = cb_ids.q_in;
     cb_ids.windowed_k_range = cb_ids.q_in;
-    if (attrs.windowed_mode == WindowedMode::None) {
+    if (!is_windowed_mode(attrs.windowed_mode)) {
         return w;
     }
     // 1-tile CB holding cu_window_seqlens, loaded once by the writer.
@@ -253,7 +253,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // by the compute via the provided-mask path. Like regular SDPA it honors the streaming-vs-standard
     // selection: streaming kernel when fp32_dest_acc_en is false (Blackhole default), standard otherwise.
     const WindowedMode windowed_mode = operation_attributes.windowed_mode;
-    const bool is_windowed = windowed_mode != WindowedMode::None;
+    const bool is_windowed = is_windowed_mode(windowed_mode);
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
     const auto& input_tensor_v = tensor_args.v.value_or(tensor_args.k);
@@ -265,10 +265,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     if (not scale.has_value()) {
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1]));
     }
-    // Windowed causal is realized by the windowed K range and mask generator, so every kernel causal path
-    // (lightweight causal mask, zigzag balancing, causal K bound, chain-forwarding exclusion) keys off
-    // regular causal only.
-    const bool is_causal = operation_attributes.is_causal && !is_windowed;
+    // Whether the kernels run their own causal paths (lightweight causal mask, zigzag balancing, causal K
+    // bound, chain-forwarding exclusion). Off for windowed causal, which the windowed K range and mask
+    // generator realize instead.
+    const bool use_causal_kernel = operation_attributes.is_causal && !is_windowed;
     const auto& chunk_start_idx = operation_attributes.chunk_start_idx;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
     const auto& program_config = operation_attributes.program_config;
@@ -353,7 +353,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     - If no mask provided: writer generates a mask with 0 for valid K and -inf for padded K
     In causal case, the causal mask naturally handles masking of padded K tokens.
     */
-    const bool use_padded_mask = (!is_causal) && ((padded_Sk != Sk) || (padded_Sq != Sq));
+    const bool use_padded_mask = (!use_causal_kernel) && ((padded_Sk != Sk) || (padded_Sq != Sq));
 
     const uint32_t Sq_chunk_t = q_chunk_size / TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
@@ -455,7 +455,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // Q-chunk space evenly across cores. Pair-distribute when causal + even q_num_chunks so every
     // core gets balanced light/heavy work after the shared zigzag remap (reader/writer/compute CT 32/20/29).
     const uint32_t total_q_chunks = B * NQH * q_num_chunks;
-    const bool global_q_pair_distribute = is_causal && (q_num_chunks % 2 == 0);
+    const bool global_q_pair_distribute = use_causal_kernel && (q_num_chunks % 2 == 0);
     uint32_t global_q_base_chunks_per_core = 0;
     uint32_t global_q_cores_doing_extra = 0;
     uint32_t global_q_extra_chunks_per_core = 0;
@@ -488,9 +488,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // (apply_provided_mask_streaming) and must win over the structured lightweight palette: forcing
     // lightweight_mask false (via !use_provided_mask below) routes cb_mask_in sizing/dtype to the
     // full Sq×Sk provided-mask branch instead of the 1–4-tile palette.
-    const bool lightweight_causal = is_causal && !use_provided_mask && !is_windowed && !has_sliding_window;
+    const bool lightweight_causal = use_causal_kernel && !use_provided_mask && !is_windowed && !has_sliding_window;
     const bool lightweight_streaming_mask = use_streaming_compute && !use_provided_mask && !is_windowed &&
-                                            (is_causal || has_sliding_window || generated_padding_mask);
+                                            (use_causal_kernel || has_sliding_window || generated_padding_mask);
     const bool lightweight_mask = lightweight_causal || lightweight_streaming_mask;
     // Non-causal partial-tile K (Sk % TILE != 0) needs a partial-tile mask in cb_mask_in.
     // Not used for a dense provided mask (the reader neginf-fills padded positions in the mask).
@@ -504,7 +504,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;   // double buffer
     uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
     uint32_t mask_tiles = lightweight_mask
-                              ? lightweight_mask_tile_count(is_causal, has_sliding_window, lw_partial_active)
+                              ? lightweight_mask_tile_count(use_causal_kernel, has_sliding_window, lw_partial_active)
                               : Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
@@ -583,7 +583,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     const uint32_t scale_packed = std::bit_cast<uint32_t>(scale.value_or(1.0f));
 
-    const bool use_zigzag_balancing = is_causal;
+    const bool use_zigzag_balancing = use_causal_kernel;
 
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       B,
@@ -600,7 +600,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
                                                       Sk_chunk_t,
                                                       k_num_chunks,
                                                       num_cores,
-                                                      static_cast<uint32_t>(is_causal),
+                                                      static_cast<uint32_t>(use_causal_kernel),
                                                       static_cast<uint32_t>(use_provided_mask),
                                                       static_cast<uint32_t>(broadcast_provided_mask_batch),
                                                       static_cast<uint32_t>(broadcast_provided_mask_heads),
@@ -647,7 +647,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     uint32_t receiver_semaphore_id = 0;
     uint32_t valid_semaphore_id = 0;
 
-    if (!is_causal) {
+    if (!use_causal_kernel) {
         sender_semaphore_id = 0;
         receiver_semaphore_id = 1;
         valid_semaphore_id = 2;
@@ -678,7 +678,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         k_num_chunks,
         packed_identity_scalar,
         num_cores,
-        static_cast<uint32_t>(is_causal),
+        static_cast<uint32_t>(use_causal_kernel),
         static_cast<uint32_t>(use_provided_mask),
         static_cast<uint32_t>(generated_padding_mask),
         static_cast<uint32_t>(is_chunked),
@@ -720,7 +720,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         out_out_subblock_h,
         out_in0_num_subblocks,
         out_in1_num_subblocks,
-        static_cast<uint32_t>(is_causal),
+        static_cast<uint32_t>(use_causal_kernel),
         static_cast<uint32_t>(compute_use_provided_mask),
         static_cast<uint32_t>(generated_padding_mask),
         static_cast<uint32_t>(is_chunked),
@@ -816,8 +816,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     cb_ids.k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
     cb_ids.v_in = allocate_tile_cb(v_tiles, v_tile_size, v_df);
 
-    const bool needs_mask_cb =
-        use_provided_mask || is_causal || generated_padding_mask || sliding_window_size.value_or(0) > 0 || is_windowed;
+    const bool needs_mask_cb = use_provided_mask || use_causal_kernel || generated_padding_mask ||
+                               sliding_window_size.value_or(0) > 0 || is_windowed;
     // Only create mask buffer if it's going to be used.
     if (needs_mask_cb) {
         // Lightweight mask: Float16_b, mask_tiles already computed (1 for padding, 2 for causal).
@@ -885,7 +885,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     // Semaphores for KV chain forwarding (non-causal only).
     // IDs match the order they were assigned above: sender=0, receiver=1, valid=2.
-    if (!is_causal) {
+    if (!use_causal_kernel) {
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = sender_semaphore_id,
             .core_type = tt::CoreType::WORKER,
@@ -927,7 +927,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // lock-step-forward K between cores whose Q chunks now need DIFFERENT K ranges — the semaphore
     // handshake counts diverge and the cores deadlock. Narrowing saves far more K reads than
     // forwarding did.
-    if (!is_causal && !is_chunked && !has_sliding_window && !is_windowed) {
+    if (!use_causal_kernel && !is_chunked && !has_sliding_window && !is_windowed) {
         head_segments.resize(total_heads);
 
         log_debug(tt::LogOp, "=== Building KV chain forwarding topology ===");
@@ -961,7 +961,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
             // Walk the core's [g_start, g_start + g_count) linear range and split into
             // contiguous (nb, nq, q_chunk_range) segments. Non-causal here (chain section is
-            // !is_causal), so the zigzag remap is off and the decompose is identity.
+            // !use_causal_kernel), so the zigzag remap is off and the decompose is identity.
             uint32_t g_start = i * global_q_base_chunks_per_core +
                                std::min(i, global_q_cores_doing_extra) * global_q_extra_chunks_per_core;
             uint32_t g_count = global_q_base_chunks_per_core +
@@ -1467,7 +1467,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         reader_args.push_back(read_offset);  // read_offset
 
         // Add chain metadata for non-causal case
-        if (!is_causal) {
+        if (!use_causal_kernel) {
             reader_args.push_back(static_cast<uint32_t>(chain.participates));
             reader_args.push_back(static_cast<uint32_t>(chain.is_injector));
             reader_args.push_back(static_cast<uint32_t>(chain.is_sink));

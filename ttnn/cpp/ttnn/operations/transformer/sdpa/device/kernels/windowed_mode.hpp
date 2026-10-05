@@ -19,3 +19,6 @@ enum class WindowedMode : uint32_t {
     Bidirectional = 1,  // Token t in window [cu[i], cu[i+1]) attends to the whole window.
     Causal = 2,         // Token t in window [cu[i], cu[i+1]) attends to cu[i]..t.
 };
+
+// True for both windowed modes: cu_window_seqlens drives the K range and the generated mask.
+constexpr bool is_windowed_mode(WindowedMode mode) { return mode != WindowedMode::None; }
