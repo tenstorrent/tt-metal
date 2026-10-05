@@ -8,7 +8,7 @@ FORMAL_OUT ?= $(HOME)/craq-keep/formal-current
 FORMAL_OPS ?= *
 
 .PHONY: prove-all prove-all-anchor prove-all-selftest prove-all-manifest \
-        prove-all-force shard-selftest formal formal-selftest
+        prove-all-force shard-selftest tri-manifest-selftest formal formal-selftest
 
 ## prove current LLK/knob selections; requires FORMAL_SIM and FORMAL_SELECTION
 formal:
@@ -41,6 +41,9 @@ prove-all-selftest:
 ## guard the 32-chip shard arithmetic + combiner fail-closed paths (no hardware)
 shard-selftest:
 	python3 selftest_galaxy_shard.py
+
+tri-manifest-selftest:
+	python3 selftest_tri_campaign_manifest.py
 
 ## print the data-driven routing manifest census (no proving)
 prove-all-manifest:
