@@ -78,13 +78,27 @@ def describe_mismatch(
     if g.numel() != a.numel():
         return f"GOLDEN MISMATCH {context}\n  length {g.numel()} vs {a.numel()}"
 
+    # Non-finite datums follow passed_test: a NaN pair or two equal infinities
+    # match, anything else involving NaN or Inf is a mismatch. Left to the
+    # subtraction, NaN - x and inf - inf are NaN, which fails `err > 0`, so the
+    # report would count the actual failure as agreeing and rank finite noise.
+    matching_nonfinite = (torch.isnan(g) & torch.isnan(a)) | (
+        torch.isinf(g) & torch.isinf(a) & (g == a)
+    )
     err = (g - a).abs()
-    lattice = lattice_step(torch.maximum(g.abs(), a.abs()), output_format)
+    err = torch.where(matching_nonfinite, torch.zeros_like(err), err)
+    err = torch.where(torch.isnan(err), torch.full_like(err, float("inf")), err)
+    # The magnitude is zeroed for non-finite datums exactly as
+    # _mxfp_block_aware_compare does, so the per-block steps match its verdict.
+    magnitude = torch.nan_to_num(
+        torch.maximum(g.abs(), a.abs()), nan=0.0, posinf=0.0, neginf=0.0
+    )
+    lattice = lattice_step(magnitude, output_format)
     if lattice:
-        # A step of 0 means both values were 0, so the error is 0 too. Dividing
-        # would give NaN, and torch sorts NaN first descending -- which empties
-        # the table below, since it stops at the first zero-error datum.
-        steps = torch.zeros_like(err)
+        # A step of 0 means the magnitude was 0 -- both values zero, or a
+        # non-finite datum. Dividing would give NaN, and torch sorts NaN first
+        # descending, so keep the error as is: 0 for zeros, inf for a mismatch.
+        steps = err.clone()
         nonzero = lattice[0] > 0
         steps[nonzero] = err[nonzero] / lattice[0][nonzero]
     else:
