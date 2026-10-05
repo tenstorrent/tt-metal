@@ -40,7 +40,8 @@ PV and row sums are added. The recipes differ in the arithmetic of each step.
   exp(scale·(m_ref,old − m_ref,new)), rounding the state to BF16 once. To keep P in range while S exceeds
   m_ref, the approximate exp's input offset is lowered by τ = 28·ln 2 (exactly 28 octaves, so P is 2⁻²⁸ times
   FAST's P bit for bit and cancels in O / l). Saturation then starts τ + 0.72 above m_ref, past θ. See
-  `streaming/recipe_streaming.hpp`.
+  `streaming/recipe_streaming.hpp`, and [Fused K chunks](#fused-k-chunks-standard-low_precision) for how K chunks
+  after the first skip the row maximum.
 - **BALANCED / ACCURATE** hold scores and state in FP32. The score exp is Schraudolph's bit trick on a 2⁻¹⁰
   grid in log2, refined by a cubic, and carries a constant factor of about 0.970 that cancels in O / l.
   Across the mantissa, the refined exp ripples ±0.24% (BALANCED) or ±0.10% (ACCURATE). See
@@ -50,6 +51,33 @@ PV and row sums are added. The recipes differ in the arithmetic of each step.
   beforehand, so the truncation loses nothing further. Its state is kept like STANDARD's, and the final
   O / l multiply runs at HiFi2 so O is not truncated.
 
+## Fused K chunks (STANDARD, LOW_PRECISION)
+
+With the reference maximum fixed, a K chunk does not need its row maximum before the exp. Every K chunk after a
+Q chunk's first runs a fused chunk (`streaming/recipe_fused_chunk.hpp`) that streams row groups through
+QK → exp → PV without the max reduction:
+
+- **m_ref folded into QK.** The QK matmul gains one inner step, [Q | M] × [Kᵀ ; −e₀], where M holds m_ref in
+  column 0 and −e₀ is −1 in row 0, so DEST receives S − m_ref directly. Both operands of that step are exact in
+  one fidelity phase (m_ref is truncated to 7 bits, −1 has one), so STANDARD replays its HiFi2 image once and
+  only its inner 0–15 half (`INNER_HALF`). The extra step costs 1/(2·D/32) of the QK work.
+- **Exp on the pack thread.** The packer's SFPU takes the exp in place and packs P once, L1-accumulating it
+  onto per-row partial sums.
+- **Saturation check and redo.** A row whose chunk sums reach the redo threshold may have saturated the exp
+  (S − m_ref beyond τ + 0.72). Its row group is redone on the reduce path: the real maximum with the θ select,
+  P, PV, and one rescale of its O and l rows. Groups are checked in units (two groups for STANDARD, one for
+  LOW_PRECISION); a unit that fires is re-checked group by group, so only groups that need it are redone and
+  every other group keeps m_ref. The output is the same as checking each group alone.
+- **Software pipeline.** QK of group g, the check of the unit ending at g − 1 and the PV of an older group are
+  interleaved in K pieces, so the FPU's PV overlaps the pack thread's exp. Dense STANDARD runs Q chunks of up
+  to six tiles in one-row groups so the pipeline has enough groups; the ring kernels and LOW_PRECISION keep
+  two-row groups.
+
+Fused chunks need a QK subblock of at least two tiles and no attn_mask; the factories drop their CBs
+(29–31) and run the reduce path when they do not fit L1. Errors are unchanged against the unfused chunks
+(19 input distributions: fused/unfused rel-L2 ratio geomean 0.94, at most 1.04), and every later optimization in this path is
+bit-identical.
+
 ## Accuracy and throughput
 
 Relative L2 error (%) against FP64 attention on the same BF16 inputs. Q is 256 rows, D128, one head, with
@@ -57,21 +85,22 @@ normally distributed inputs. "Outliers" multiplies each Q, K and V element by 10
 
 Throughput is TFLOP/s per Tensix core. It was measured on one Blackhole core with K/V resident in L1 (no DRAM
 traffic), D128 and a K sequence of 8192. Legacy FAST is 1.99 TFLOP/s at Q256/K512. "vs FAST" is the geometric
-mean ratio over Q chunks 128–320 and K chunks 128–512. STANDARD and LOW_PRECISION are furthest behind FAST at K128
-(STANDARD 0.84, LOW_PRECISION 0.91–0.98, BFP8/BFP4 K/V lowest); BALANCED and ACCURATE at K512 (0.60 and 0.44).
+mean ratio over Q chunks 128–320 and K chunks 128–512. STANDARD is at or above FAST at every chunk pair (lowest
+1.01, at Q128/K384) and LOW_PRECISION at least 1.21× (Q128/K128); BALANCED and ACCURATE are furthest behind at
+K512 (0.61 and 0.45).
 
 | Recipe | K 4096 | K 32768 | K 262144 | K 262144 outliers | TFLOP/s/core (Q256/K512) | vs FAST |
 |---|---:|---:|---:|---:|---:|---:|
 | FAST | 2.54 | 2.75 | 18.2 | 5.27 | 1.99 | 1.00 |
-| STANDARD | 2.46 | 2.55 | 3.19 | 4.40 | 1.81 | 0.88 |
-| BALANCED | 0.39 | 0.39 | 0.38 | 0.59 | 1.21 | 0.63 |
-| ACCURATE | 0.18 | 0.18 | 0.18 | 0.41 | 0.88 | 0.46 |
-| LOW_PRECISION, BF16 K/V | 2.96 | 2.98 | 3.53 | 13.6 | 2.26 | 1.06 |
-| LOW_PRECISION, BFP8 K/V | 3.05 | 3.05 | 3.61 | 13.5 | 2.20 | 1.02 |
-| LOW_PRECISION, BFP4 K/V | 16.9 | 16.9 | 16.8 | 42.7 | 2.18 | 1.02 |
+| STANDARD | 2.37 | 2.42 | 3.04 | 4.39 | 2.09 | 1.07 |
+| BALANCED | 0.39 | 0.39 | 0.38 | 0.59 | 1.21 | 0.64 |
+| ACCURATE | 0.18 | 0.18 | 0.18 | 0.41 | 0.88 | 0.47 |
+| LOW_PRECISION, BF16 K/V | 2.92 | 2.94 | 3.44 | 13.5 | 2.86 | 1.37 |
+| LOW_PRECISION, BFP8 K/V | 3.00 | 3.00 | 3.51 | 13.4 | 2.86 | 1.37 |
+| LOW_PRECISION, BFP4 K/V | 16.8 | 16.9 | 16.7 | 42.9 | 2.85 | 1.37 |
 
 FAST's BF16 running state swamps at long K. With small logits (Q and K scaled by 0.25), FAST's error is 3.7% at
-K 32768 and 53% at K 262144, against 1.6% and 2.5% for STANDARD. BFP8/BFP4 K/V gain nothing over BF16 at the
+K 32768 and 53% at K 262144, against 1.5% and 2.3% for STANDARD. BFP8/BFP4 K/V gain nothing over BF16 at the
 compute level; they cut K/V bandwidth and L1 to about a half or a quarter.
 
 ## Support
@@ -121,3 +150,34 @@ v = ttnn.transformer.prepare_sdpa_input(v, is_query=False, dtype=ttnn.bfloat8_b)
 Call it after any Q transforms (RoPE, norms) and before K/V are cached or communicated. A plain cast to
 BFP8/BFP4 is not equivalent: it skips the 5-bit rounding that LoFi relies on, and the packer's shared-exponent
 rounding differs from the round-to-nearest-even with saturation in `prepare_bfp4.cpp`.
+
+## Kernel map
+
+| File | Role |
+|---|---|
+| `kernels/compute/sdpa_recipe.cpp` | Dense / joint compute kernel: Q-chunk loop over `sdpa_segment_v2` |
+| `kernels/compute/ring_joint_sdpa_recipe.cpp`, `exp_ring_joint_sdpa_recipe.cpp` | Ring and exp ring compute: one recurrent state per Q chunk across ring steps (`streaming/recipe_ring.hpp`) |
+| `streaming/recipe_streaming.hpp` | Shared K-chunk step: reduce path (first chunk, redo), FP32 / reference-max state, normalization |
+| `streaming/recipe_fused_chunk.hpp` | Fused K chunk (above) |
+| `streaming/recipe_sfpu.hpp`, `recipe_tail.hpp` | Exp variants, key-tail masking |
+| `streaming/recipe_checkpoint.hpp`, `dataflow/recipe_state_transfer.hpp` | Ring multi-Q state checkpoints (compute side, writer side) |
+| `dataflow/reader_recipe.cpp`, `ring_joint_*_impl.hpp`, `exp_ring_joint_*_impl.hpp` | Readers / writers; the ring and exp ring bodies are shared with the legacy kernels through a `Policy` struct (legacy FAST kernels compile unchanged) |
+| `sdpa_recipe.cpp`, `sdpa_recipe_blocking.cpp` | Host: recipe → CB layout and defines; chunk chooser |
+
+Compile-time defines set by the host:
+
+| Define | Set for | Meaning |
+|---|---|---|
+| `SDPA_RECIPE_FP32` | BALANCED, ACCURATE | FP32 scores and state (DEST in FP32) |
+| `SDPA_RECIPE_ACCURATE` | ACCURATE | HiFi4 PV and the tighter exp fit |
+| `SDPA_RECIPE_LOFI` | LOW_PRECISION | LoFi matmuls (prepared inputs) |
+| `SDPA_RECIPE_FUSED` | STANDARD, LOW_PRECISION with QK width ≥ 2 | fused K chunks (inactive with `SDPA_RECIPE_MASK`) |
+| `SDPA_RECIPE_MASK` | an attn_mask | additive mask on the reduce path |
+| `SDPA_RECIPE_QK_W`, `SDPA_RECIPE_PV_W` | all | matmul subblock widths |
+| `SDPA_RECIPE_RING` (in the ring kernels) | ring, exp ring | key-tail masking, resident state |
+
+**Code size.** Each program must fit the 70656 B kernel config buffer, and the ring and exp ring LOW_PRECISION
+kernels sit within a few hundred bytes of it. The reduce path (`SDPA_RECIPE_COLD`), normalization and the ring
+unpack copy of the fused chunk are size-optimized and out of line; the ring kernels build unpack/pack at -O2
+with fused chunks. New code in these paths should be checked against the ring/exp ring LOW_PRECISION BFP8
+tests (Q224 two-pass, Wan Q320).
