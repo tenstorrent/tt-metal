@@ -83,8 +83,8 @@ class Model:
         sh = _Shards()
         pool = ThreadPoolExecutor(max_workers=2)
         futs = {}
-        submit = (
-            lambda L: futs.setdefault(L, pool.submit(load_layer, L, True, max_ctx + 128, self.use_indexer))
+        submit = lambda L: (
+            futs.setdefault(L, pool.submit(load_layer, L, True, max_ctx + 128, self.use_indexer))
             if L in self.layer_ids
             else None
         )
@@ -574,10 +574,14 @@ class Model:
         self._res, self._last_pos, self._want_logits = {}, lens - 1, want_logits
         if getattr(self, "_hooks_set", None) is not pm:
             pm.pre_replay_hooks.append(lambda s0, C_: self.sink.update(s0, C_))
-            pm.post_replay_hooks.append(self._post_chunk)
+            hook = lambda s0, C_: self._post_chunk(s0, C_)
+            # the async replay loop only synchronizes (and calls the hook) for chunks that hold some user's last prompt token
+            hook.needs_sync = lambda s0, C_: bool(((self._last_pos >= s0) & (self._last_pos < s0 + C_)).any())
+            hook.is_post_chunk = True
+            pm.post_replay_hooks.append(hook)
             self._hooks_set = pm
         if "nohead" in bis:
-            pm.post_replay_hooks[:] = [h for h in pm.post_replay_hooks if h != self._post_chunk]
+            pm.post_replay_hooks[:] = [h for h in pm.post_replay_hooks if not getattr(h, "is_post_chunk", False)]
         self.log(f"  prefill_dyn: run chunks (trace={enable_trace}, C={C}, S_pad={S_pad}, bisect={bis!r})")
         if enable_trace and getattr(pm, "dyn", None) is not None and (pm.dyn.C != C or pm.dyn.S_pad != S_pad):
             self.log_dram("before teardown (old S_pad %d)" % pm.dyn.S_pad)

@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 import torch
 
 import ttnn
+from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d, recording, replay
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import clear_chunk_caches, pad_len
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active
 
@@ -23,6 +24,7 @@ T = 32
 ER_RM = (
     os.environ.get("DSV41_ENGRAM_UPLOAD", "rm") == "rm"
 )  # Engram rows uploaded row-major and tilized on the device (="tile": old host tilize)
+PF_ASYNC = os.environ.get("DSV41_PF_ASYNC", "1") == "1"  # traced chunk replays enqueued without a per-chunk device sync
 HEAD_FUSED = (
     os.environ.get("DSV41_HEAD_FUSED", "1") == "1"
 )  # one head trace for all users, last-token rows picked on the device
@@ -151,16 +153,16 @@ class DSV41PrefillModel:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=self.shard_rc,
             )
-            ttnn.copy_host_to_device_tensor(htok, tok)
+            h2d(htok, tok)
         else:
-            ttnn.copy_host_to_device_tensor(self._host(prepped["tok"], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), tok)
+            h2d(self._host(prepped["tok"], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), tok)
         for lid, dev in er.items():
             t1 = time.perf_counter()
             h = self._host(
                 prepped[lid], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT if ER_RM else ttnn.TILE_LAYOUT
             )  # row-major upload: the 32-token slices are tilized on the device (host tilize was ~0.7 s per 16k-token chunk)
             t2 = time.perf_counter()
-            ttnn.copy_host_to_device_tensor(h, dev)
+            h2d(h, dev)
             t3 = time.perf_counter()
             self.timing["host_tilize"] = self.timing.get("host_tilize", 0.0) + t2 - t1
             self.timing["h2d_copy"] = self.timing.get("h2d_copy", 0.0) + t3 - t2
@@ -339,7 +341,7 @@ class DSV41PrefillModel:
             n = T * (self.cols if self.cs else 1)
             sel = torch.zeros(1, 1, 1, n)
             sel[0, 0, 0, (c % self.cols) * T + off if self.cs else off] = 1.0
-            ttnn.copy_host_to_device_tensor(
+            h2d(
                 ttnn.from_torch(
                     sel, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(self.md)
                 ),
@@ -573,12 +575,19 @@ class DSV41PrefillModel:
         def prep(ci):
             return self.prep_inputs(tk[:, ci * C : (ci + 1) * C], None if hs is None else hs[:, ci * C : (ci + 1) * C])
 
+        def prep_rec(ci):
+            """prep + ALL the host work of the chunk's uploads (Engram rows tensors, rope tables, masks, sink index tables) in the worker thread; the
+            device copies are only recorded and replayed by the main thread."""
+            pre = prep(ci)
+            with recording() as ops:
+                self.upload_inputs(pre, bufs)
+                self.begin_chunk(ci * C, C)
+            return ops
+
         pool = ThreadPoolExecutor(1)
-        fut = pool.submit(prep, 0)
         if self.dyn_trace is None:  # compile pass (eager, chunk 0), then capture
             t0 = time.perf_counter()
-            self.upload_inputs(fut.result(), bufs)
-            fut = pool.submit(prep, 1) if n > 1 else None
+            self.upload_inputs(prep(0), bufs)
             self.begin_chunk(0, C)
             self.forward_device(bufs, S, 0, C, dyn=True)
             ttnn.synchronize_device(self.md)
@@ -615,29 +624,53 @@ class DSV41PrefillModel:
             ttnn.end_trace_capture(self.md, self.dyn_trace, cq_id=0)
             ttnn.synchronize_device(self.md)
             self.timing["compile_and_capture"] = time.perf_counter() - t0
-            fut = pool.submit(prep, 0)
+        fut = pool.submit(prep_rec, 0)
         t_run = time.perf_counter()
+        # Asynchronous replay loop (DSV41_PF_ASYNC=1): the per-chunk uploads and the trace are enqueued on CQ 0 (in-order: a chunk's uploads only land
+        # after the previous replay finished), so the host work of chunk i+1 (index tables, Engram rows, uploads) overlaps the replay of chunk i. The
+        # host runs at most 2 replays ahead (event of replay ci-2 awaited before chunk ci). Chunks whose post hooks read the replay's outputs
+        # (ragged last-token head) synchronize as before. DSV41_PF_ASYNC=0 restores the per-chunk synchronize_device.
+        events = []
         for ci in range(n):
             t0 = time.perf_counter()
-            pre = fut.result()
+            if PF_ASYNC and ci >= 2:
+                ttnn.event_synchronize(events[ci - 2])
+            t_ev = time.perf_counter()
+            ops = fut.result()
             if ci + 1 < n:
-                fut = pool.submit(prep, ci + 1)
-            self.upload_inputs(pre, bufs)
-            self.begin_chunk(ci * C, C)
-            t1 = time.perf_counter()
+                fut = pool.submit(prep_rec, ci + 1)
+            t_g = time.perf_counter()
+            replay(ops)
+            del ops
+            t_u = time.perf_counter()
+            t1 = t_u
             ttnn.execute_trace(self.md, self.dyn_trace, cq_id=0, blocking=False)
-            ttnn.synchronize_device(self.md)
+            need = (not PF_ASYNC) or any(
+                getattr(hk, "needs_sync", lambda s0_, C_: True)(ci * C, C) for hk in self.post_replay_hooks
+            )
+            if PF_ASYNC:
+                events.append(ttnn.record_event(self.md, 0))
+            if need:
+                ttnn.synchronize_device(self.md)
+                for (
+                    hk
+                ) in (
+                    self.post_replay_hooks
+                ):  # e.g. the ragged last-token head: dyn_out = (xs, pres) is valid for THIS chunk only
+                    hk(ci * C, C)
             t2 = time.perf_counter()
-            for (
-                hk
-            ) in (
-                self.post_replay_hooks
-            ):  # e.g. the ragged last-token head: dyn_out = (xs, pres) is valid for THIS chunk only
-                hk(ci * C, C)
-            self.timing["host_per_chunk"] = self.timing.get("host_per_chunk", 0.0) + t1 - t0
-            self.timing["replay_per_chunk"] = self.timing.get("replay_per_chunk", 0.0) + t2 - t1
+            tm = self.timing
+            tm["dev_wait"] = tm.get("dev_wait", 0.0) + t_ev - t0
+            tm["gather_wait"] = tm.get("gather_wait", 0.0) + t_g - t_ev
+            tm["upload"] = tm.get("upload", 0.0) + t_u - t_g
+            tm["begin_chunk"] = tm.get("begin_chunk", 0.0) + t1 - t_u
+            tm["host_per_chunk"] = tm.get("host_per_chunk", 0.0) + t1 - t_ev
+            tm["replay_per_chunk"] = tm.get("replay_per_chunk", 0.0) + t2 - t1 + t_ev - t0
             if n > 4 and (ci + 1) % 8 == 0:
-                print(f"  traced chunk {ci + 1}/{n} done at {time.perf_counter() - t_run:.1f} s", flush=True)
+                print(f"  traced chunk {ci + 1}/{n} enqueued at {time.perf_counter() - t_run:.1f} s", flush=True)
+        t0 = time.perf_counter()
+        ttnn.synchronize_device(self.md)
+        self.timing["replay_per_chunk"] += time.perf_counter() - t0
         pool.shutdown()
         t0 = time.perf_counter()
         if type(self).last_logits is DSV41PrefillModel.last_logits:

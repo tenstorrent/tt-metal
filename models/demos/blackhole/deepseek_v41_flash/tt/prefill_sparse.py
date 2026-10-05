@@ -26,6 +26,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM, LOCAL_HEADS, WINDOW
+from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d
 from models.demos.blackhole.deepseek_v41_flash.tt.indexer import DIM as IDIM
 from models.demos.blackhole.deepseek_v41_flash.tt.indexer import HEADS as IHEADS
 from models.demos.blackhole.deepseek_v41_flash.tt.indexer import TOPK, DSV41DecodeIndexer
@@ -630,7 +631,7 @@ class DSV41PrefillSparse:
 
     @staticmethod
     def _upd_hook(ctx, s0):
-        ttnn.copy_host_to_device_tensor(
+        h2d(
             ttnn.from_torch(perm_table(s0 == 0), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ctx._rep),
             ctx.sp_perm,
         )
@@ -649,7 +650,7 @@ class DSV41PrefillSparse:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ctx._rep,
             )
-            ttnn.copy_host_to_device_tensor(host, dev)
+            h2d(host, dev)
 
     @staticmethod
     def _build_hook(ctx):
