@@ -588,12 +588,33 @@ def test_dsv41_demo_session(mesh_device, device_params):
     DSV41_SESSION=gsm8k_b16,prefill_128_b16,same_prompt_b16 pytest demo/text_demo.py -k session"""
     ids = os.environ.get("DSV41_SESSION", "prefill_128_b16,gsm8k_b16").split(",")
     byid = {s.id: s for s in SCENARIOS}
+    modes = [
+        i.partition("@")[2] for i in ids
+    ]  # optional prefill-optimisation mode per scenario: id@m (baseline) / @P / @R / @E (see tests/test_prefill_scen_device.py)
+    ids = [i.partition("@")[0] for i in ids]
     chosen = [byid[i] for i in ids]
     build_len = max(s.values[3] for s in chosen)
     cache = {}
-    for s in chosen:
+    for s, mode in zip(chosen, modes):
         prompts, bs, rep, msl, mgt, pp, sp, dtr, ptr, pch, wu, ins, eos = s.values
-        logger.info(f"=== session scenario {s.id} ===")
+        if mode:
+            os.environ["DSV41_PF_MHC"] = "packed" if set(mode) & set("PRE") else "0"
+            os.environ["DSV41_PF_ROUTE_OWN"] = "1" if set(mode) & set("RE") else "0"
+            os.environ["DSV41_PF_ENGRAM_OWN"] = "1" if "E" in mode else "0"
+            for _, (_, m_, _) in cache.items():  # force a new prefill trace capture in the new mode
+                pm_ = getattr(m_, "prefill_model", None)
+                if pm_ is not None and getattr(pm_, "dyn", None) is not None:
+                    pm_.teardown_dyn()
+                    pm_.dyn_out = None
+                    pm_.head_out = []
+        logger.info(
+            f"=== session scenario {s.id} ==="
+            + (
+                f" MODE {mode}: PF_MHC={os.environ['DSV41_PF_MHC']} ROUTE_OWN={os.environ['DSV41_PF_ROUTE_OWN']} ENGRAM_OWN={os.environ['DSV41_PF_ENGRAM_OWN']}"
+                if mode
+                else ""
+            )
+        )
         os.environ["DSV41_RAGGED"] = "1" if s.id.endswith("_ragged") else "2" if s.id.endswith("_ragged_u4") else "0"
         _run_demo(
             mesh_device,
