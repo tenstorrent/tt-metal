@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 from pathlib import Path
 
@@ -1163,6 +1164,32 @@ _OUTPUT_RATE_FIELDS = ("sampling_rate", "sample_rate")
 # a token or tensor output is fully covered by PCC and exact agreement.
 _SIGNAL_QUALITY_CHECKS = ("wer", "mos")
 
+# AND EACH ROW ON ITS OWN. Scored only as a batch total, 31 good rows hide one that collapsed: a
+# free-running row that falls into a repeat loop runs long, drops words and sounds wrong, while the
+# corpus WER and the mean MOS move by less than their margins -- and the PCC gates, teacher-forced
+# onto the pipeline's own trajectory, render the loop faithfully. A text-to-speech port shipped two
+# such rows out of 32 with every e2e case green. So the scores are also held per row, each row
+# against the golden's rendering of the SAME prompt: relative bounds, never absolute, so a prompt
+# the reference itself stumbles on is tolerated, and wide enough to sit inside the scorers' per-clip
+# noise (a word or two on a short prompt; the per-clip MOS predictor is far noisier than its mean).
+_ROW_LENGTH_RATIO = 1.5  # a row may run at most this much longer than the golden's row ...
+_ROW_LENGTH_SLACK_FRAMES = 8  # ... plus this many frames, so a short row is not held to the ratio alone
+_ROW_WER_MARGIN = 0.20  # absolute word error rate, per row
+_ROW_MOS_MARGIN = 0.75  # per-row MOS, on the predictor's own scale
+
+# Written ONCE and read by both the builder's checklist (_TT_ONLY_CONTRACT) and the G7 graduation
+# message (_signal_quality_gate), so the two cannot drift apart the way a copied sentence does.
+PER_ROW_QUALITY_RULE = (
+    "Assert them PER ROW as well as over the corpus, each row against the golden's rendering of the "
+    "SAME prompt: a row may not run longer than %.1fx the golden's row plus %d frames (a repeat loop "
+    "runs long), its WER may not exceed the golden's row WER by more than %.2f (a loop drops words), "
+    "and its MOS may not fall more than %.2f below the golden's row MOS (a loop sounds wrong). A "
+    "corpus total pools the rows, so one row can collapse inside its margin while every other check "
+    "stays green; the per-row bounds are relative to the golden's own row, never absolute."
+    % (_ROW_LENGTH_RATIO, _ROW_LENGTH_SLACK_FRAMES, _ROW_WER_MARGIN, _ROW_MOS_MARGIN)
+)
+_PER_ROW_RULE_SLOT = "<PER_ROW_QUALITY_RULE>"
+
 
 def _identifier_mentions(identifier: str, token: str) -> bool:
     """True when `identifier` names `token` -- as the whole name or one underscore-separated part.
@@ -1366,8 +1393,9 @@ def _signal_quality_gate(demo_dir: Path):
         "score: intelligibility (WER of a speech-recognition pass over the output against the "
         "text the pipeline was asked to render) and predicted naturalness (a no-reference MOS "
         "estimate). Compute both on the real, full-length output -- not on a truncated gate "
-        "window -- and assert each against a threshold, do not merely print them."
+        "window -- and assert each against a threshold, do not merely print them. "
         % " and no ".join(check.upper() for check in missing)
+        + PER_ROW_QUALITY_RULE
     )
 
 
@@ -2251,6 +2279,7 @@ OUTPUT CORRECTNESS (what the PCC/correctness test must ASSERT, not report):
      Read the thresholds from the reference (score the HF golden the same way
      and require the TT output to be no worse by a stated margin) rather than
      inventing absolute numbers.
+     <PER_ROW_QUALITY_RULE>
 
 ALLOWED HF USAGE (SETUP / REFERENCE ONLY — NOT the forward path):
   1. hf_model.config.<X> / hf_model.generation_config.<X> — pure attribute reads
@@ -2263,6 +2292,11 @@ ALLOWED HF USAGE (SETUP / REFERENCE ONLY — NOT the forward path):
      inputs. The trace_step itself must be pure TT.
 ============================================================================================
 """
+# Item 5's per-row sentence is the one rule above, wrapped to the checklist's own column.
+_TT_ONLY_CONTRACT = _TT_ONLY_CONTRACT.replace(
+    "     " + _PER_ROW_RULE_SLOT,
+    textwrap.fill(PER_ROW_QUALITY_RULE, width=78, initial_indent="     ", subsequent_indent="     "),
+)
 
 
 def _build_cc_fix_prompt(*, model_id, demo_dir, pcc) -> str:

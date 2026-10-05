@@ -18,6 +18,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from scripts.tt_hw_planner.commands import emit_e2e as E
 from scripts.tt_hw_planner.commands.emit_e2e import (
     _identifier_mentions,
     _renders_signal,
@@ -106,3 +107,59 @@ def test_identifier_matching_is_by_part_not_substring() -> None:
     assert not _identifier_mentions("answer", "wer")
     assert not _identifier_mentions("lower", "wer")
     assert not _identifier_mentions("moses", "mos")
+
+
+# --------------------------------------------------------------------------------------------
+# the scores are required PER ROW, in both places the rule is read, from one constant
+# --------------------------------------------------------------------------------------------
+
+
+def _one_line(text: str) -> str:
+    return " ".join(text.split())
+
+
+def test_the_per_row_rule_names_the_three_ways_a_row_collapses() -> None:
+    """A repeat loop runs long, drops words and sounds wrong; each bound is against the golden's own
+    row, with the numbers coming from the named constants rather than being retyped."""
+    rule = E.PER_ROW_QUALITY_RULE
+    assert "PER ROW" in rule and "golden's rendering of the SAME prompt" in rule
+    for axis in ("runs long", "drops words", "sounds wrong"):
+        assert axis in rule, axis
+    assert "never absolute" in rule
+    assert ("%.1fx" % E._ROW_LENGTH_RATIO) in rule and ("plus %d frames" % E._ROW_LENGTH_SLACK_FRAMES) in rule
+    assert ("%.2f (a loop drops words)" % E._ROW_WER_MARGIN) in rule
+    assert ("%.2f below the golden's row MOS" % E._ROW_MOS_MARGIN) in rule
+
+
+def test_the_builder_s_checklist_carries_the_per_row_rule_verbatim() -> None:
+    """Item 5 of the TT-only contract is where a builder learns what to score; the rule is spliced in
+    from the one constant (wrapped), and the placeholder it replaces is gone."""
+    contract = E._TT_ONLY_CONTRACT
+    assert E._PER_ROW_RULE_SLOT not in contract, "the per-row slot was never filled"
+    assert _one_line(E.PER_ROW_QUALITY_RULE) in _one_line(contract)
+    # it sits inside the signal-scoring item, after the corpus-margin sentence it extends
+    item = contract.index("SCORE A RENDERED SIGNAL")
+    assert contract.index("inventing absolute numbers.") < contract.index("PER ROW") and item < contract.index(
+        "PER ROW"
+    )
+    assert contract.index("PER ROW") < contract.index("ALLOWED HF USAGE")
+
+
+def test_the_graduation_message_carries_the_per_row_rule(tmp_path: Path) -> None:
+    """The G7 message a signal pipeline without scores is refused with is the same rule."""
+    r = _signal_quality_gate(_demo(tmp_path, _SIGNAL_PIPELINE, _PRINTED_ONLY_TEST))
+    assert r and _one_line(E.PER_ROW_QUALITY_RULE) in _one_line(r)
+    assert "do not merely print them." in r
+
+
+def test_the_rule_is_written_once() -> None:
+    """Two readers, one source: the sentence must not exist as a second copy anywhere in the module."""
+    src = Path(E.__file__).read_text()
+    assert src.count("Assert them PER ROW as well as over the corpus") == 1
+
+
+def test_the_per_row_rule_reaches_the_rendered_builder_prompt(tmp_path: Path, monkeypatch) -> None:
+    """The checklist is only read through the agent prompt; the rule has to survive the render."""
+    monkeypatch.setattr(E, "_required_heads_block", lambda model_id, all_tasks: "")
+    prompt = E._build_agent_prompt(model_id="some/model", demo_dir=tmp_path, pcc=0.99)
+    assert _one_line(E.PER_ROW_QUALITY_RULE) in _one_line(prompt)
