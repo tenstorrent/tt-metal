@@ -33,9 +33,10 @@ from ttml.common.utils import no_grad, round_up_to_tile
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
 from ttml.trainers.grpo_trainer import GRPOCompleter
+from ttml.trainers.grpo_trainer.grpo_ttml_model import weights_ref_hf_dict
+from ttml.trainers.grpo_trainer.llama_composite_kv import LlamaCompositeKV
 
 from .mpi_rollout import MPIRolloutClient
-from .llama_overrides import LlamaCompositeKV
 
 
 @dataclass
@@ -291,7 +292,7 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
         Call once before ``GRPOTrainer.train()`` to overwrite the worker's dummy
         boot weights; the caller re-invokes it to re-sync during training.
         """
-        hf_dict = self._model.weights_ref_hf_dict()
+        hf_dict = weights_ref_hf_dict(self._model)
         try:
             self._client.send_weights(hf_dict)
         finally:
