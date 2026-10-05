@@ -354,6 +354,7 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "topology": ttnn.Topology.Ring,
         "coresident": False,
         "dit_fsdp": True,
+        "bucket_denoise": True,
         "use_persistent_ccl_buffers": False,
         "bucket_ladder": {"t2va": MINIMAX_H3_BUCKET_LADDER_4X8, "ref2va": MINIMAX_H3_REF2VA_BUCKET_LADDER_4X8},
     },
@@ -714,6 +715,11 @@ class MiniMaxH3Pipeline:
             self._transformer.register_coresident_exclusions(self._text_encoder, *self._vae.modules)
             for module in self._vae.modules:
                 module.register_coresident_exclusions(self._text_encoder, self._transformer)
+            # The video VAE decoder needs most of a 12 GB chip; the ref2va image/video reference encoders
+            # must not stay resident across the decode. They reload on demand via `MiniMaxH3Vae._ensure_loaded`.
+            self._vae.decoder.register_coresident_exclusions(
+                *(module for module in self._vae.modules if module is not self._vae.decoder)
+            )
 
         if self.coresident:
             self._prepare_transformer()
@@ -2767,6 +2773,10 @@ class MiniMaxH3Pipeline:
                 device=self.mesh_device,
             )
 
+        # The refiner / projection pass runs its collectives outside the step loop's transient scope
+        # below, so on untraced non-persistent presets its cap-sized all-gather pairs stayed cached for
+        # the life of the process (3.3 GB/device at the Blackhole caps) and starved the VAE decoder on
+        # 12 GB chips. Free them here; traced presets keep the pairs a capture replays.
         static_transient = (
             self.ccl_manager.transient_ping_pong_buffers()
             if not (self.use_persistent_ccl_buffers or self.trace_denoise)
