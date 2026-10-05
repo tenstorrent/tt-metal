@@ -232,6 +232,16 @@ def _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces=4, face_r_dim=MAX_FACE_R_DI
 
     One E8M0 scale byte per 32-element block.
 
+    Two register-level effects are applied, both shared with the other MX
+    formats via ``_apply_gasket_range``:
+
+      - **Block scale 0xFF NaNs the whole block**, zeros included. (This used
+        to zero the block here; the hardware NaNs it, as ``unpack_mxfp4``
+        already did.)
+      - **No subnormals.** The gasket lands the result in an 8-bit-exponent
+        register, so a decoded value saturates to +/-Inf at unbiased exponent
+        >= 128 and flushes to +/-0 at <= -127.
+
     Args:
         packed_bytes: List of bytes in [all scales][all elements] format
         fp8_dtype: ml_dtypes dtype (float8_e5m2 or float8_e4m3fn)
@@ -315,6 +325,10 @@ def unpack_mxfp8r(
     """
     Unpack MXFP8R format (E5M2 variant) to bfloat16 tensor.
 
+    A 0xFF block scale NaNs the whole block, and values outside the register's
+    exponent range saturate to +/-Inf or flush to +/-0 rather than becoming
+    subnormal -- see :func:`_unpack_mxfp8`.
+
     Args:
         packed_bytes: Packed MX data in FULLY SEPARATED layout [all_scales][all_elements]
         num_faces: Number of faces to unpack (1, 2, or 4). Defaults to 4.
@@ -341,6 +355,10 @@ def unpack_mxfp8p(
 ):
     """
     Unpack MXFP8P format (E4M3 variant) to bfloat16 tensor.
+
+    A 0xFF block scale NaNs the whole block, and values outside the register's
+    exponent range saturate to +/-Inf or flush to +/-0 rather than becoming
+    subnormal -- see :func:`_unpack_mxfp8`.
 
     Args:
         packed_bytes: Packed MX data in FULLY SEPARATED layout [all_scales][all_elements]
@@ -380,6 +398,10 @@ def unpack_mxfp4(
     Per Tensix hardware documentation:
       - Block exp = 0xFF (255): NaN block, all elements become NaN
       - Block exp = 0x00 (0): neutral-ish scale for zeros
+
+    The register has no subnormals, so a decoded value saturates to +/-Inf at
+    unbiased exponent >= 128 and flushes to +/-0 at <= -127 -- the same rule
+    MXFP8 uses, applied through the shared ``_apply_gasket_range``.
 
     Args:
         packed_bytes: Packed MX data in FULLY SEPARATED layout [all_scales][all_elements]

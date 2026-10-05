@@ -24,7 +24,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Union
 
 import torch
 from helpers.format_config import DataFormat
-from helpers.llk_params import PackerReluType, StochasticRounding
+from helpers.llk_params import DestAccumulation, PackerReluType, StochasticRounding
 from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES, MAX_TILE_ELEMENTS
 
 from ..data_transfer_blocks.data_transfer_blocks import DataTransferBlocks
@@ -349,7 +349,7 @@ class Golden:
         in_formats: Union[DataFormat, Sequence[DataFormat]],
         out_format: DataFormat,
         *,
-        dest_acc: bool = False,
+        dest_acc: Union[bool, DestAccumulation] = False,
         dest_format: Optional[DataFormat] = None,
         num_faces: int = MAX_NUM_FACES,
         face_r_dim: int = MAX_FACE_R_DIM,

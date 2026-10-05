@@ -8,6 +8,7 @@ from typing import List, Optional, Sequence, Union
 import torch
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
+    DestAccumulation,
     EltwiseBinaryReuseDestType,
     MathFidelity,
     MathOperation,
@@ -112,7 +113,7 @@ class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
         *,
         inner_dim: int = 1,
         output_tiles_in_block: int = 1,
-        dest_acc: bool = False,
+        dest_acc: Union[bool, DestAccumulation] = False,
         dest_format: Optional[DataFormat] = None,
         num_faces: int = MAX_NUM_FACES,
         face_r_dim: int = MAX_FACE_R_DIM,

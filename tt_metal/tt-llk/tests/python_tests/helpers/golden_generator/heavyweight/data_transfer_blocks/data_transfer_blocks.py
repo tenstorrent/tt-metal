@@ -29,7 +29,12 @@ from typing import ClassVar, FrozenSet, Mapping, Optional, Sequence, Union
 
 import torch
 from helpers.format_config import DataFormat
-from helpers.llk_params import PackerReluType, StochasticRounding, format_dict
+from helpers.llk_params import (
+    DestAccumulation,
+    PackerReluType,
+    StochasticRounding,
+    format_dict,
+)
 
 from .l1_codec import (
     MODELLED_L1_FORMATS,
@@ -84,6 +89,26 @@ DEST_STORAGE_FORMATS = frozenset(
 DEST_32_BIT_FORMATS = frozenset({DataFormat.Float32, DataFormat.Int32})
 
 L1Buffer = Union[Sequence[int], bytes]
+
+
+def as_dest_acc(dest_acc: Union[bool, DestAccumulation]) -> bool:
+    """Normalise an accumulation setting to a plain bool.
+
+    Accepts ``DestAccumulation`` as well as a bool, because the rest of the
+    harness passes the enum and a bare ``bool`` parameter cannot be trusted to
+    notice: ``DestAccumulation`` defines no ``__bool__``, so ``DestAccumulation.No``
+    is **truthy**. Passed to a bool parameter it reads as "accumulation on" and
+    silently selects a 32-bit Dest -- the model then runs at fp32 where the
+    device had 16 bits, which looks like an arithmetic discrepancy rather than
+    a wiring mistake.
+
+    Taking the enum here and reducing to a bool once keeps the codec boundary
+    (``helpers.pack`` / ``helpers.unpack``, which size tiles from a bool) plain
+    while the ops speak the harness's own vocabulary.
+    """
+    if isinstance(dest_acc, DestAccumulation):
+        return dest_acc is DestAccumulation.Yes
+    return bool(dest_acc)
 
 
 class DataTransferBlocks(ABC):
@@ -362,7 +387,9 @@ class DataTransferBlocks(ABC):
         return self._to_dest_storage(values, dest_format)
 
     def dest_format_for(
-        self, l1_input_format: DataFormat, dest_acc: bool = False
+        self,
+        l1_input_format: DataFormat,
+        dest_acc: Union[bool, DestAccumulation] = False,
     ) -> DataFormat:
         """The Dest format for an op whose *input* was `l1_input_format`.
 
@@ -384,6 +411,7 @@ class DataTransferBlocks(ABC):
         the harness lands the src in Tf32, which is what ``_src_format`` returns.
         """
         self._check_supported(l1_input_format)
+        dest_acc = as_dest_acc(dest_acc)
         if l1_input_format.is_integer():
             return DataFormat.Int32 if dest_acc else l1_input_format
         if dest_acc:
@@ -407,7 +435,7 @@ class DataTransferBlocks(ABC):
         self,
         dest_format: Optional[DataFormat],
         l1_input_format: DataFormat,
-        dest_acc: bool,
+        dest_acc: Union[bool, DestAccumulation],
     ) -> DataFormat:
         """The Dest format to run with: derived from the input, or validated.
 
@@ -420,6 +448,7 @@ class DataTransferBlocks(ABC):
         wrong precision -- full fp32 where the device had 16 bits, or the
         reverse -- which is indistinguishable from a maths bug downstream.
         """
+        dest_acc = as_dest_acc(dest_acc)
         if dest_format is None:
             return self.dest_format_for(l1_input_format, dest_acc)
         self._check_dest_format(dest_format)
