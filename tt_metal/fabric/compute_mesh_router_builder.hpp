@@ -68,6 +68,8 @@ public:
 
     void create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) override;
 
+    manifest::Router collect_manifest_router(const ChipRoutingFacts& chip_facts) const override;
+
     // ============ Compute-Mesh Specific Methods ============
 
     /**
