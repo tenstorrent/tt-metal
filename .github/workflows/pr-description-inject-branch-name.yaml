@@ -61,6 +61,30 @@ jobs:
               badges.join("\n"),
             ].join("\n");
 
+            // Keep the "Ping pending code owners" checkbox (read by
+            // codeowners-group-analysis.yaml) in every PR: if the author deleted it
+            // or the PR was opened without the template, add it back unticked,
+            // just above CI Status. An existing box keeps its ticked state.
+            const pingCheckboxRegex = /^\s*[-*] \[[ xX]\] Ping pending code owners/m;
+            if (!pingCheckboxRegex.test(body)) {
+              const codeownersSection = [
+                "### Code owners",
+                "<!-- Tick to ping pending code owners on Slack (same as commenting /codeowners ping).",
+                "     Untick and tick again to re-ping. Leave unticked until the PR is ready for their review. -->",
+                "- [ ] Ping pending code owners",
+              ].join("\n");
+              const codeownersRegex = /### Code owners[\s\S]*?(?=\n#{1,6} |\s*$)/;
+              const ciStatusIndex = body.indexOf("### CI Status");
+              if (codeownersRegex.test(body)) {
+                // Heading survived but the checkbox line was deleted or reworded.
+                body = body.replace(codeownersRegex, codeownersSection);
+              } else if (ciStatusIndex !== -1) {
+                body = body.slice(0, ciStatusIndex) + codeownersSection + "\n\n" + body.slice(ciStatusIndex);
+              } else {
+                body = body.trimEnd() + "\n\n" + codeownersSection;
+              }
+            }
+
             // Replace existing CI Status section if present, otherwise append
             const ciStatusRegex = /### CI Status[\s\S]*?(?=\n#{1,6} |\s*$)/;
             if (ciStatusRegex.test(body)) {
