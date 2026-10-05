@@ -874,8 +874,8 @@ def _exact_op_driver_variants():
 
 def _exact_driver_skips():
     """Driver variants of an exact op that the driver itself skips, with why. They never
-    run, so whatever they resolve to gates nothing; read from the driver's own list, so
-    the exclusion cannot outlive the skip."""
+    run, so the table may hold no step budget for them; read from the driver's own
+    list, so the set cannot outlive the skip."""
     from test_eltwise_unary_sfpu import _ISINF_ISNAN_BF16_DEST_UNSUPPORTED
 
     return {
@@ -894,12 +894,14 @@ def test_every_driven_variant_of_an_exact_op_is_gated_or_waived():
     the Float16_b variants fall back to tolerance while it still passes. This walks every
     variant the hand-built drivers run an exact op in, on a float non-block output, and
     requires each to resolve to a step budget -- at the Dest the variant asks for and at
-    the one it is promoted to. A variant the driver skips never runs and is left out.
-    The swept cells of the unary exact ops are held by the test after this one."""
+    the one it is promoted to. A variant the driver skips never runs, so it must resolve
+    to *no* step budget: one there claims a measurement nobody took -- which is how a
+    re-sort that dropped Isinf/Isnan/Isneginf's `not measured` rows showed up. The swept
+    cells of the unary exact ops are held by the test after this one."""
     from helpers.data_format_inference import effective_dest_acc
 
     skipped = _exact_driver_skips()
-    ungated = []
+    ungated, claimed = [], []
     for driver, op, formats, approx, dest in _exact_op_driver_variants():
         out_fmt = formats.output_format
         if not has_ulp_gate(out_fmt) or out_fmt in _ULP_PROXY_DTYPES:
@@ -916,17 +918,22 @@ def test_every_driven_variant_of_an_exact_op_is_gated_or_waived():
                 dest_acc=d,
                 arch=MEASURED_ARCH,
             )
+            cell = f"{driver}: {op.name} {formats.input_format.name}->{out_fmt.name}"
+            if (driver, op, formats.input_format, d) in skipped:
+                if contract.metric is Metric.ULP:
+                    claimed.append(f"{cell} dest={d.name}")
+                continue
             if contract.metric is Metric.ULP:
                 continue
-            if (driver, op, formats.input_format, d) in skipped:
-                continue
-            ungated.append(
-                f"{driver}: {op.name} {formats.input_format.name}->{out_fmt.name} "
-                f"dest={d.name}"
-            )
+            ungated.append(f"{cell} dest={d.name}")
     assert not ungated, (
         "exact-op variant(s) a driver runs that resolve to no step budget, so a "
         "regression there passes on tolerance:\n  " + "\n  ".join(sorted(set(ungated)))
+    )
+    assert not claimed, (
+        "variant(s) the driver skips that resolve to a step budget, a measurement the "
+        "table does not have; key a `not measured` tolerance row on them:\n  "
+        + "\n  ".join(sorted(set(claimed)))
     )
 
 
