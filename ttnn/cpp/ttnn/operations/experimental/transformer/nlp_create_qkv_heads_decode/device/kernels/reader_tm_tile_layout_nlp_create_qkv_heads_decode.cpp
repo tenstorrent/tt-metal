@@ -206,8 +206,9 @@ void kernel_main() {
         }
     }
 #else
-    qkv_x += (num_kv_cores % num_x);
-    qkv_y += (num_kv_cores / num_x);
+    // V starts on the core after Q and K. Index from the core count so x carries into y.
+    qkv_x = (num_q_cores + num_kv_cores) % num_x;
+    qkv_y = (num_q_cores + num_kv_cores) / num_x;
     qkv_noc_x = get_vararg(qkv_x);
     qkv_noc_y = get_vararg(num_x + qkv_y);
     qkv_read_addr = q_start_addr + in_tile_offset_by_batch;
