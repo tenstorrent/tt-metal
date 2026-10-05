@@ -252,11 +252,6 @@ void kernel_main() {
         if constexpr (!is_avg_pool || !is_large_kernel) {
             clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), DataflowBuffer(in_cb_id), clear_value_dfb);
         }
-        // Reader 0 fills and pushes the tile; reader 1 is its consumer, so reader 1 releases it
-        // once the clearing above has read it.
-        if constexpr (reader_id == 1) {
-            clear_value_dfb.pop_front(1);
-        }
     }
 
     // initialize the scalar CB
@@ -366,6 +361,16 @@ void kernel_main() {
             if (use_split_reader && ind == end) {
                 first_row_value = false;
             }
+        }
+    }
+
+    // The pop shouldn't happen until after the loop above, because
+    // read_kernel_with_top_left_index copies from the same CB (passed into the function
+    // via clear_value_cb_id).
+    if constexpr (is_avg_pool || need_to_initialize_in_cb) {
+        // Reader 0 fills and pushes the clear tile; reader 1 is its consumer so it pops it.
+        if constexpr (reader_id == 1) {
+            clear_value_dfb.pop_front(1);
         }
     }
 
