@@ -14,7 +14,7 @@ Speed strategy:
   * Skip the HuggingFace weight download: ``snapshot_download`` is patched to
     return a directory holding only the tiny model's ``config.json``, and
     ``load_from_safetensors`` to do nothing, in ``grpo.utils.llama_completer``
-    and ``ttml.trainers.rollout.ttml_rollout_sampler``, so the model keeps its random init.
+    and ``ttml.trainers.grpo_trainer.ttml_rollout_sampler``, so the model keeps its random init.
   * ``max_completion_length=4`` so autoregressive generation is cheap.
   * Exactly one optimizer step (``gradient_accumulation_steps=1``,
     ``num_iterations=1``, ``prompts_to_train=2``). On this single device
@@ -50,7 +50,7 @@ from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.modules import RunMode
 from ttml.trainers import GRPOConfig, GRPOTrainer, TrainerCallback, get_grpo_config
 from ttml.trainers.grpo_trainer import layout_microbatch, place_old_nlog_probs, save_checkpoint
-from ttml.trainers.rollout.ttml_rollout_sampler import TTMLRolloutSampler
+from ttml.trainers.grpo_trainer.ttml_rollout_sampler import TTMLRolloutSampler
 
 
 # The ``LlamaGRPOCompleter`` reference implementation lives under the examples
@@ -210,7 +210,7 @@ def _patch_tiny_checkpoint(monkeypatch, checkpoint_dir, **config_overrides) -> N
     ``huggingface_hub`` / ``ttml.models.llama``.
     """
     from grpo.utils import llama_completer
-    from ttml.trainers.rollout import ttml_rollout_sampler
+    from ttml.trainers.grpo_trainer import ttml_rollout_sampler
 
     (checkpoint_dir / "config.json").write_text(json.dumps({**TINY_HF_CONFIG, **config_overrides}))
     for module in (llama_completer, ttml_rollout_sampler):
@@ -646,7 +646,7 @@ def test_validate_clip_grad_norm_rejects_sharded_params(monkeypatch, expect_erro
     ],
 )
 def test_build_lr_scheduler_trajectory(lr_scheduler_type, warmup_steps, total_steps, min_lr_rate, expected):
-    from ttml.trainers.grpo_trainer import _build_lr_scheduler
+    from ttml.trainers.grpo_trainer.grpo_trainer import _build_lr_scheduler
 
     base_lr = 0.1
     opt = ttml.optimizers.create_optimizer({"type": "AdamW", "lr": base_lr}, ttml.NamedParameters())
