@@ -1,0 +1,23 @@
+[dumpfile] "n0.window.vcd"
+[timestart] 99942
+[zoom] -4
+@28
+versim_wormhole_pack_repro.math_riscv_l1_read
+versim_wormhole_pack_repro.math_riscv_l1_write
+versim_wormhole_pack_repro.p0_l1_wren
+versim_wormhole_pack_repro.p1_l1_wren
+versim_wormhole_pack_repro.p2_l1_wren
+versim_wormhole_pack_repro.p3_l1_wren
+versim_wormhole_pack_repro.p0_l1_ready
+versim_wormhole_pack_repro.p1_l1_ready
+versim_wormhole_pack_repro.p2_l1_ready
+versim_wormhole_pack_repro.p3_l1_ready
+@22
+versim_wormhole_pack_repro.dest_read_request_packers_3210
+versim_wormhole_pack_repro.dest_read_grant_packers_3210
+versim_wormhole_pack_repro.l1_arbiter_packet_accept
+versim_wormhole_pack_repro.i_l1_tdma_reqif_ready
+@28
+versim_wormhole_pack_repro.pack_riscv_instr_push
+versim_wormhole_pack_repro.pack_riscv_instr_queue_ready
+versim_wormhole_pack_repro.clk
