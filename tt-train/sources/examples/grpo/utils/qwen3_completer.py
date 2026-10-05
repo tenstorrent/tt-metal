@@ -36,8 +36,7 @@ from transformers import AutoConfig, AutoTokenizer
 from ttml.trainers.grpo_trainer import GRPOCompleter
 from ttml.common.sampling import positions_to_tensor
 
-from ttml.trainers.rollout.device_utils import deallocate_tensors, async_read_to_host
-from ttml.trainers.rollout.ttml_rollout_sampler import load_hf_state_dict
+from ttml.trainers.grpo_trainer.ttml_rollout_sampler import async_read_to_host, deallocate_tensors, load_hf_state_dict
 from ttml.common.utils import build_mesh
 from ttml.models.qwen3.weights import load_weights_from_hf
 from ttml.models.qwen3.kv_cache import KVCache

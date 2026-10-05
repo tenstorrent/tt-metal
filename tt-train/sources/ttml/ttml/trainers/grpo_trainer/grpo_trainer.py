@@ -26,8 +26,7 @@ from safetensors.numpy import save_file
 from ttml.common.utils import build_causal_mask, create_optimizer, round_up_to_tile
 from ttml.modules import RunMode
 
-from .callback import TrainerCallback
-from .rollout import ROLLOUT_SOURCES, RolloutBatch, RolloutSampler, build_rollout_sampler
+from ..callback import TrainerCallback
 
 try:
     import wandb as _wandb  # type: ignore
@@ -96,6 +95,75 @@ class GRPOCompleter(ABC):
 
 
 @dataclass
+class RolloutBatch:
+    """Describes multiple rollout samples (not a specific count).
+
+    Fields:
+        batch_id: Monotonic counter picked by the producer.
+        weight_version: Which theta version produced this batch. The trainer
+            can use it to detect / down-weight stale samples.
+        prompts: B ragged prompt token IDs.
+        completions: B ragged completion token IDs (one per prompt in
+            single-generation mode; per prompt-completion pair otherwise).
+        logprobs: [B, max_completion_length] float32. Per-generated-token
+            log pi_old(a_t | s_t). Padding positions are don't-care; the
+            trainer masks them out.
+    """
+
+    batch_id: int
+    weight_version: int
+    prompts: List[List[int]]
+    completions: List[List[int]]
+    logprobs: np.ndarray
+
+
+class RolloutSampler(ABC):
+    """Abstract base for producers of :class:`RolloutBatch`."""
+
+    @abstractmethod
+    def generate(self, prompts: List[List[int]]) -> RolloutBatch:
+        """Generate completions for a batch of tokenised prompts and return them
+        packaged (with per-token log pi_old and producer metadata) as a
+        :class:`RolloutBatch`.
+        """
+
+
+ROLLOUT_SOURCES = ("ttml",)
+
+
+def build_rollout_sampler(
+    source: str,
+    *,
+    transformer_config: Any,
+    device_config: Any,
+    model_source: str,
+    max_completion_length: int,
+    temperature: float,
+    completions_per_prompt: int,
+) -> RolloutSampler:
+    """Build the :class:`RolloutSampler` named by ``source``.
+
+    ``"ttml"`` builds a :class:`TTMLRolloutSampler`, which opens the device and
+    loads the ttml model and tokenizer for ``transformer_config.model_type``
+    from ``model_source``.
+    """
+    if source == "ttml":
+        # Imported lazily so ``import ttml.trainers`` doesn't pull in transformers / huggingface_hub.
+        from .ttml_rollout_sampler import TTMLRolloutSampler
+
+        return TTMLRolloutSampler(
+            model_kind=transformer_config.model_type,
+            transformer_config=transformer_config,
+            device_config=device_config,
+            model_source=model_source,
+            max_completion_length=max_completion_length,
+            temperature=temperature,
+            completions_per_prompt=completions_per_prompt,
+        )
+    raise ValueError(f"unknown rollout_source {source!r}; expected one of {list(ROLLOUT_SOURCES)}")
+
+
+@dataclass
 class GRPOConfig:
     epsilon: float
     # Number of completions resident on a single device within one micro-batch.
@@ -123,7 +191,7 @@ class GRPOConfig:
     max_completion_length: int
     num_generations: int
     warmup_steps: int
-    # Which RolloutSampler the trainer builds (see ttml.trainers.rollout.ROLLOUT_SOURCES).
+    # Which RolloutSampler the trainer builds (see ROLLOUT_SOURCES above).
     # "ttml": in-process TTMLRolloutSampler that also owns the policy model.
     rollout_source: str
     # LR schedule shape AFTER warmup. Names match HuggingFace transformers / TRL
