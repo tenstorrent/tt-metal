@@ -306,6 +306,48 @@ def _run_demo(
         prefilled_token = prefilled_token.view(-1)
         logger.info("FIRSTTOK_IDS " + json.dumps([int(t) for t in prefilled_token[:batch_size]]))
         generator.m.log_dram("PF_END (after prefill, trace held)")
+        if (
+            os.environ.get("DSV41_PREFILL_ONLY") == "1"
+        ):  # prefill measurement (DSV41_UNI_NODECODE: no decode possible): TTFT + first tokens, no decode
+            prefill_t = profiler.get_duration("inference_prefill")
+            real_tokens = sum(decoding_pos[:batch_size])
+            logger.info(f"PREFILL_ONLY first tokens {prefilled_token[:batch_size].tolist()}")
+            logger.info(
+                f"TTFT (whole batch of {batch_size} users, ISL max {max(decoding_pos[:batch_size])}): {prefill_t * 1000:.0f} ms "
+                f"-> prefill {real_tokens / prefill_t:.0f} tok/s ({prefill_t / batch_size * 1000:.0f} ms/user amortised)"
+            )
+            if hasattr(generator.m, "prefill_model"):
+                logger.info(f"prefill timing {getattr(generator.m.prefill_model, 'timing', {})}")
+            if os.environ.get(
+                "DSV41_PREFILL_LOGITS"
+            ):  # one more prefill (not timed) returning the logits of every user's last token
+                _, lg_ = generator.prefill_forward_text(input_tokens_prefill, return_logits=True, **prefill_kw)
+                lg_ = lg_[:batch_size].float()
+                torch.save(lg_, os.environ["DSV41_PREFILL_LOGITS"])
+                for u_ in range(min(batch_size, 2)):
+                    v_, i_ = lg_[u_].topk(5)
+                    logger.info(
+                        f"PREFILL_ONLY user {u_} top5 ids {i_.tolist()} logits {[round(float(x), 3) for x in v_]}"
+                    )
+            for rt_ in [
+                int(x) for x in os.environ.get("DSV41_ROWTOK_SWEEP", "").split(",") if x
+            ]:  # chunk-size sweep: DSV41_PREFILL_ROW_TOKENS per entry, 2 calls each
+                os.environ["DSV41_PREFILL_ROW_TOKENS"] = str(rt_)
+                try:
+                    for rep_ in range(2):
+                        t_ = time.perf_counter()
+                        generator.prefill_forward_text(input_tokens_prefill, **prefill_kw)
+                        dt_ = time.perf_counter() - t_
+                    tm_ = generator.m.timing
+                    nrow_ = rt_ // users_per_row * users_per_row  # tokens per row per chunk
+                    logger.info(
+                        f"ROWTOK_SWEEP row_tokens={rt_} chunk={max(128, rt_ // users_per_row // 128 * 128)}: TTFT {dt_ * 1e3:.0f} ms, {real_tokens / dt_:.0f} tok/s, "
+                        f"replay_loop {tm_.get('total_replay_loop', float('nan')):.2f} s, replay {tm_.get('replay_per_chunk', float('nan')):.2f} s, host {tm_.get('host_per_chunk', float('nan')):.2f} s"
+                    )
+                except Exception as e_:
+                    logger.info(f"ROWTOK_SWEEP row_tokens={rt_} FAILED: {type(e_).__name__}: {str(e_)[:300]}")
+                    break
+            return
         pre_spec = None
         if spec_k and os.environ.get("DSV41_SPEC_DIAG") == "1":
             # DIAG: row-0 logits of the first spec round (position S, token = first) vs ONE plain decode step on the same prefill state, tail replay vs full replay seeding

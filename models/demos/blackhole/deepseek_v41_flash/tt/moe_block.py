@@ -142,6 +142,39 @@ class DSV41MoEBlock:
             torch_gate_bias=weights["gate_bias"],
             bias_shift=gate_bias_shift,
         )
+        if __import__("os").environ.get("DSV41_UNI_NODECODE") == "1":
+            # PREFILL-ONLY measurement mode (DSV41_PREFILL_MOE=unified): no moe_compute expert weights on the device (DRAM would not fit them next to the
+            # unified-layout copy); decode through this block is not possible. Scratch buffers / config as TTMoEDecode.__init__ builds them.
+            self.decode = self._weightless_decode(mesh_device, decode_cfg, buffers)
+        else:
+            self._build_decode(mesh_device, decode_cfg, weights, shared_in_moe, buffers)
+        self.decode._mesh = mesh_device
+
+    @staticmethod
+    def _weightless_decode(mesh_device, cfg, buffers):
+        from types import SimpleNamespace
+
+        from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, effective_matmul_ring_size
+
+        from models.common.modules.moe.tt_moe_decode import _TTMoEDecodeBuffers
+
+        dec = object.__new__(_TailDecode)
+        dec.config = cfg
+        dec.expert_state = SimpleNamespace(tt_expert_mapping=None, tt_w0_w1=None, tt_w2=None)
+        if buffers is None:
+            bd = cfg.buffers.model_dump()
+            bd["compute_tilize_drain_core"] = ttnn.experimental.get_moe_tilize_drain_core(
+                mesh_device,
+                cfg.compute.output_height_shard_dim,
+                auto_output_width_shard_dim(cfg.hidden_size, matmul_ring_size=effective_matmul_ring_size(mesh_device)),
+                cfg.hidden_size,
+                mux_core_range_set=cfg.compute.mux_core_range_set,
+            )
+            buffers = _TTMoEDecodeBuffers(mesh_device, **bd)
+        dec.buffers = buffers
+        return dec
+
+    def _build_decode(self, mesh_device, decode_cfg, weights, shared_in_moe, buffers):
         self.decode = _TailDecode(
             mesh_device=mesh_device,
             config=decode_cfg,
@@ -154,7 +187,6 @@ class DSV41MoEBlock:
             weight_cache_dir=weights.get("cache_dir"),
             buffers=buffers,
         )
-        self.decode._mesh = mesh_device
 
     def warmup(self):
         """Compile the MoE programs once, steering where ``moe_compute``'s persistent semaphore lands in L1.
@@ -167,6 +199,8 @@ class DSV41MoEBlock:
         outputs cannot fit in it, the semaphore can.
         """
         md = self.mesh_device
+        if __import__("os").environ.get("DSV41_UNI_NODECODE") == "1":
+            return  # prefill-only unified mode: no moe_compute weights, nothing to compile
         nb = ttnn.get_memory_view(md, ttnn.BufferType.L1).num_banks
         tile_row = lambda n_tiles_per_bank: ttnn.empty(
             [1, 1, 32, 32 * nb * n_tiles_per_bank],

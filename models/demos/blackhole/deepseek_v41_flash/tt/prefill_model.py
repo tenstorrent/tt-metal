@@ -202,6 +202,8 @@ class DSV41PrefillModel:
             self._moe_warm = True  # eager, before the first prefill compile / capture (see DSV41PrefillMoE.warmup)
             seen = set()
             for _, pl_ in self.layers:
+                if getattr(pl_, "umoe", None) is not None and os.environ.get("DSV41_UNI_NODECODE") == "1":
+                    continue  # prefill-only unified mode: no moe_compute weights to warm the baseline program with
                 if id(pl_.pmoe) not in seen:
                     seen.add(id(pl_.pmoe))
                     pl_.pmoe.warmup()
