@@ -246,7 +246,7 @@ def _run_sfpu_binary_llk_golden(
 
 
 # ===========================================================================
-# Family 1 — integer ops (add, mul, gt, lt, le, ge, copy_dest), Int32 only.
+# Family 1 — integer ops (add, mul, gt, lt, le, ge, copy_dest, gcd), Int32 only.
 # Ported from test_sfpu_binary_quasar.py.
 # ===========================================================================
 def _prepare_int_stimuli(
@@ -268,8 +268,82 @@ def _prepare_int_stimuli(
     if clamp_inputs is not None:
         src_A = torch.clamp(src_A, -clamp_inputs, clamp_inputs)
         src_B = torch.clamp(src_B, -clamp_inputs, clamp_inputs)
+    if mathop == MathOperation.SfpuGcd:
+        _plant_gcd_lanes(src_A, src0_idx, src1_idx)
     return src_A, tile_cnt_A, src_B
 
+
+_INT31_MAX = 2**31 - 1
+
+# Edge pairs for GCD; uniform int32 stimuli are almost always coprime.
+_GCD_EDGE_PAIRS = [
+    (0, 0),
+    (0, 12),
+    (12, 0),
+    (0, -_INT31_MAX),
+    (-_INT31_MAX, 0),
+    (12345, 12345),
+    (-7, -7),
+    (_INT31_MAX, _INT31_MAX),
+    (-_INT31_MAX, _INT31_MAX),
+    (-48, 18),
+    (48, -18),
+    (-48, -18),
+    (1, 1),
+    (1, 2),
+    (2, 1),
+    (15, 40),
+    (40, 15),
+    (1 << 30, 1 << 20),
+    (1 << 20, 1 << 30),
+    (1 << 30, 1 << 30),
+    (1, 1 << 30),
+    (1 << 30, 3 << 28),
+    (3 << 28, 1 << 30),
+    (-(1 << 30), 6 << 20),
+    (_INT31_MAX, 1),
+    (1836311903, 1134903170),
+    (1134903170, 1836311903),
+    (-1836311903, 1134903170),
+    # Both operands above 0x7F800000 (FP32 NaN bit patterns) probe SFPSWAP's compare format.
+    (2147483647, 2139095041),
+    (2139095041, 2147483647),
+    (2147483646, 2139095042),
+    (2143289344, 2139095041),
+    (2147483646, 2143289344),
+    (2147483646, 2147483644),
+    (2139095044, 2147483644),
+    (2147483647, 2147483646),
+    (2139095041, 7),
+    (2147483646, 1000),
+]
+
+
+def _plant_gcd_lanes(src_A, src0_idx, src1_idx):
+    """Overwrite the head of each operand tile with GCD edge pairs, followed by
+    pairs sharing a random common factor so most lanes have a non-trivial gcd."""
+    elems = MAX_TILE_ELEMENTS
+    edge_a = torch.tensor([a for a, _ in _GCD_EDGE_PAIRS], dtype=src_A.dtype)
+    edge_b = torch.tensor([b for _, b in _GCD_EDGE_PAIRS], dtype=src_A.dtype)
+    n_common = elems // 2
+    g = torch.randint(1, 1 << 15, (n_common,), dtype=torch.int64)
+    x = torch.randint(0, 1 << 16, (n_common,), dtype=torch.int64)
+    y = torch.randint(0, 1 << 16, (n_common,), dtype=torch.int64)
+    sx = torch.where(torch.rand(n_common) < 0.5, -1, 1)
+    sy = torch.where(torch.rand(n_common) < 0.5, -1, 1)
+    common_a = (sx * g * x).to(src_A.dtype)
+    common_b = (sy * g * y).to(src_A.dtype)
+    lane_a = torch.cat([edge_a, common_a])
+    lane_b = torch.cat([edge_b, common_b])
+    n = len(lane_a)
+    src_A[src0_idx * elems : src0_idx * elems + n] = lane_a
+    src_A[src1_idx * elems : src1_idx * elems + n] = lane_b
+
+
+_INT_CLAMP = {
+    MathOperation.SfpuElwmulInt: 1000,
+    MathOperation.SfpuGcd: _INT31_MAX,
+}
 
 # Shared with perf_eltwise_binary_sfpu_quasar.py. tile_indices stays functional-only.
 INT_SWEEP = dict(
@@ -283,6 +357,7 @@ INT_SWEEP = dict(
         MathOperation.SfpuElwLe,
         MathOperation.SfpuElwGe,
         MathOperation.SfpuCopyDest,
+        MathOperation.SfpuGcd,
     ],
 )
 
@@ -304,9 +379,11 @@ def test_eltwise_binary_sfpu_int_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU integer ops (add, mul, gt, lt, le, ge, copy_dest), Int32."""
+    """Binary SFPU integer ops (add, mul, gt, lt, le, ge, copy_dest, gcd), Int32."""
     binary_op = mathop.cpp_enum_value
-    clamp_inputs = 1000 if mathop == MathOperation.SfpuElwmulInt else None
+    # int MUL clamps to keep the product in range; GCD clamps to the 31-bit magnitude
+    # contract (SFPABS saturates INT_MIN).
+    clamp_inputs = _INT_CLAMP.get(mathop)
     _run_sfpu_binary_llk_golden(
         formats,
         dest_acc,

@@ -109,6 +109,7 @@
 #include "llk_sfpu/ckernel_sfpu_copy_dest_values.h" // copy_dest_value / copy_dest_value_init (Dest-to-Dest copy)
 #include "llk_sfpu/ckernel_sfpu_div_int32.h"        // calculate_div_int32 / div_init (int32 / int32 -> fp32)
 #include "llk_sfpu/ckernel_sfpu_div_int32_floor.h"  // calculate_div_int32_trunc / calculate_div_int32_floor
+#include "llk_sfpu/ckernel_sfpu_gcd.h"              // calculate_gcd (int32 gcd)
 #include "llk_sfpu/ckernel_sfpu_int_sum.h"          // add_int (Dest tile += the next tile) / sum_int_init
 #include "llk_sfpu/ckernel_sfpu_isclose.h"          // calculate_sfpu_isclose / isclose_init
 #include "llk_sfpu/ckernel_sfpu_logaddexp.h"        // calculate_sfpu_logaddexp / calculate_sfpu_logaddexp_init
@@ -1585,6 +1586,10 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             SFPU_BINARY_CALL(
                 DST_SYNC, is_fp32_dest_acc_en, copy_dest_value, (DataFormat::Float32, false, ITERATIONS), src0_tile, dst_tile, 0 /* unused */, VectorMode::RC);
         }
+    }
+    else if constexpr (OP == BinaryOp::GCD)
+    {
+        SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_gcd, (ITERATIONS), src0_tile, src1_tile, dst_tile, VectorMode::RC);
     }
     else if constexpr (quasar_binary_op_is_quant(OP))
     {
