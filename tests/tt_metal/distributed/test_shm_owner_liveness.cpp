@@ -11,6 +11,7 @@
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -239,19 +240,27 @@ char proc_state_letter(pid_t pid) {
     return (comm_end == std::string::npos || comm_end + 2 >= line.size()) ? '\0' : line[comm_end + 2];
 }
 
+void* pause_forever(void*) {
+    for (;;) {
+        pause();
+    }
+    return nullptr;
+}
+
 TEST(ShmOwnerLiveness, LeaderZombieWithLiveThreadsIsAlive) {
-    // A process whose main thread left through pthread_exit() while another thread keeps
-    // running shows 'Z' in /proc/<pid>/stat for the rest of its life. It is alive.
+    // A process whose main thread exited while another thread keeps running shows 'Z' in
+    // /proc/<pid>/stat for the rest of its life. It is alive. The leader leaves through the
+    // raw exit syscall (only that thread ends; pthread_exit would unwind through gtest's frames).
     signal(SIGCHLD, SIG_DFL);
     const pid_t child = fork();
     ASSERT_GE(child, 0) << std::strerror(errno);
     if (child == 0) {
-        std::thread([] {
-            for (;;) {
-                pause();
-            }
-        }).detach();
-        pthread_exit(nullptr);
+        pthread_t worker;
+        if (pthread_create(&worker, nullptr, pause_forever, nullptr) != 0) {
+            _exit(2);
+        }
+        syscall(SYS_exit, 0);
+        _exit(3);
     }
     const uint64_t start = process_start_time(child);
     bool leader_zombie = false;
