@@ -359,7 +359,7 @@
 # run a PR's new file on hardware before it merges.
 - name: "ttnn eltwise generated bf16 accuracy"
   cmd: >-
-    pytest --timeout 300 -v
+    pytest --timeout 300 -s -v
     tests/ttnn/unit_tests/operations/eltwise/test_selu_bw_ulp.py
   skus:
     wh_n300_civ2:
