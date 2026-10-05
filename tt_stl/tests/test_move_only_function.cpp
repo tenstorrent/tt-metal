@@ -169,6 +169,16 @@ TEST(MoveOnlyFunctionTest, CPU_CallingMoveAssignedFromThrows) {
     EXPECT_THROW(src(), std::bad_function_call);  // NOLINT(bugprone-use-after-move)
 }
 
+// Same for a heap-stored target, whose move steals the pointer rather than moving the object.
+TEST(MoveOnlyFunctionTest, CPU_CallingMovedFromHeapTargetThrows) {
+    std::uint64_t big[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    move_only_function<std::uint64_t()> src{[big]() { return big[0]; }};
+    move_only_function<std::uint64_t()> dst{std::move(src)};
+    ASSERT_FALSE(static_cast<bool>(src));         // NOLINT(bugprone-use-after-move)
+    EXPECT_THROW(src(), std::bad_function_call);  // NOLINT(bugprone-use-after-move)
+    EXPECT_EQ(dst(), 1u);
+}
+
 // Heap-stored targets corrupt on self-move without the guard in operator=.
 TEST(MoveOnlyFunctionTest, CPU_SelfMoveAssignIsSafe) {
     struct Big {

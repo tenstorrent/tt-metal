@@ -36,6 +36,15 @@ struct is_std_function : std::false_type {};
 template <typename R, typename... A>
 struct is_std_function<std::function<R(A...)>> : std::true_type {};
 
+template <typename T>
+inline constexpr bool is_nullable_callable_v =
+    std::is_pointer_v<T> || std::is_member_pointer_v<T> || is_std_function<T>::value;
+
+template <typename F, typename Self, typename R, typename... Args>
+concept MoveOnlyFunctionTarget =
+    !std::is_same_v<std::remove_cvref_t<F>, Self> && !is_in_place_type<std::remove_cvref_t<F>>::value &&
+    std::is_invocable_r_v<R, std::decay_t<F>, Args...> && std::is_invocable_r_v<R, std::decay_t<F>&, Args...>;
+
 // std::move_only_function yields an empty wrapper for a null pointer or an empty std::function;
 // the backing type stores them as ordinary engaged targets. Only those two -- not a general
 // emptiness probe; a new source type needs a case here rather than falling through as engaged.
@@ -79,17 +88,18 @@ public:
     move_only_function() noexcept = default;
     move_only_function(std::nullptr_t) noexcept {}
 
-    // The base move leaves the source engaged. Assign nullptr rather than reset(): reset() clears
-    // the target but keeps its invoker, so calling the source would run the moved-out callable.
-    move_only_function(move_only_function&& other) noexcept : Base(static_cast<Base&&>(other)) {
-        other.Base::operator=(nullptr);
-    }
+    move_only_function(move_only_function&& other) noexcept : Base(static_cast<Base&&>(other)) { clear(other); }
 
     template <typename F>
         requires(
-            !std::is_same_v<std::remove_cvref_t<F>, move_only_function> &&
-            !detail::is_in_place_type<std::remove_cvref_t<F>>::value &&
-            std::is_invocable_r_v<R, std::decay_t<F>, Args...> && std::is_invocable_r_v<R, std::decay_t<F>&, Args...>)
+            detail::MoveOnlyFunctionTarget<F, move_only_function, R, Args...> &&
+            !detail::is_nullable_callable_v<std::decay_t<F>>)
+    move_only_function(F&& f) : Base(std::forward<F>(f)) {}
+
+    template <typename F>
+        requires(
+            detail::MoveOnlyFunctionTarget<F, move_only_function, R, Args...> &&
+            detail::is_nullable_callable_v<std::decay_t<F>>)
     move_only_function(F&& f) : Base() {
         if (!detail::is_empty_callable(f)) {
             Base::operator=(Base{std::forward<F>(f)});
@@ -113,13 +123,13 @@ public:
     move_only_function& operator=(move_only_function&& other) noexcept {
         if (this != &other) {
             Base::operator=(static_cast<Base&&>(other));
-            other.Base::operator=(nullptr);
+            clear(other);
         }
         return *this;
     }
 
     move_only_function& operator=(std::nullptr_t) noexcept {
-        Base::operator=(nullptr);
+        clear(*this);
         return *this;
     }
 
@@ -141,6 +151,16 @@ public:
     friend void swap(move_only_function& a, move_only_function& b) noexcept { a.swap(b); }
 
     friend bool operator==(const move_only_function& f, std::nullptr_t) noexcept { return !f; }
+
+private:
+    using Executor = zoo::Executor<R(Args...)>;
+
+    // The base keeps the target and its invoker separately and its move leaves both in the source;
+    // reset() empties only the target, so the invoker has to be reset too.
+    static void clear(move_only_function& f) noexcept {
+        f.Base::reset();
+        static_cast<Executor&>(f).executor_ = Executor::DefaultExecutor;
+    }
 };
 
 }  // namespace ttsl
