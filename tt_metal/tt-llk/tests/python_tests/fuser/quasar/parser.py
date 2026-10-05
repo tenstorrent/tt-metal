@@ -373,6 +373,17 @@ UNARY_SFPU_OPS = {
     MathOperation.AltComplexRotate90,
     MathOperation.Softcap,
     MathOperation.TanhDerivative,
+    MathOperation.Sin,
+    MathOperation.Cos,
+    MathOperation.Tan,
+    MathOperation.Atan,
+    MathOperation.Asin,
+    MathOperation.Acos,
+    MathOperation.Sinh,
+    MathOperation.Cosh,
+    MathOperation.Asinh,
+    MathOperation.Acosh,
+    MathOperation.Atanh,
 }
 
 BINARY_SFPU_OPS = {

@@ -216,6 +216,26 @@ void init_unary_sfpu_operation_quasar()
     {
         init_trigonometry<OPERATION, is_fp32_dest_acc_en>();
     }
+    else if constexpr (OPERATION == SfpuType::tan)
+    {
+        tangent_init<APPROX>();
+    }
+    else if constexpr (OPERATION == SfpuType::atan)
+    {
+        atan_init<APPROX, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == SfpuType::sinh)
+    {
+        sinh_init<APPROX, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == SfpuType::cosh)
+    {
+        cosh_init<APPROX, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == SfpuType::asin || OPERATION == SfpuType::acos)
+    {
+        asin_acos_init<is_fp32_dest_acc_en>();
+    }
     else if constexpr (OPERATION == SfpuType::cumsum)
     {
         cumsum_init<APPROX>();
@@ -633,6 +653,30 @@ void call_unary_sfpu_operation_quasar(
         // at compile time. APPROXIMATION_MODE=false selects the full-polynomial (accurate) path.
         SFPU_UNARY_CALL(
             DST_SYNC, is_fp32_dest_acc_en, calculate_trigonometry, (OPERATION, false /* APPROX */, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::tan)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_tangent, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::atan)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_atan, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::sinh)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_sinh, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::cosh)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_cosh, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::asin)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_asin, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::acos)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_acos, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::negative)
     {

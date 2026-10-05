@@ -195,9 +195,13 @@ enum class SfpuType : std::uint32_t
     abs_int32,
     // Named by compute API init macros for the ported SFPI kernels; Quasar's init wrappers ignore
     // the SfpuType, so these only need to exist.
+    acos,
     add_top_row,
     addcdiv,
     addcmul,
+    asin,
+    atan,
+    cosh,
     div_int32,
     div_int32_floor,
     div_int32_trunc,
@@ -208,8 +212,10 @@ enum class SfpuType : std::uint32_t
     mac,
     mask,
     remainder_int32,
+    sinh,
     situ_glu,
     snake_beta,
+    tan,
     max_pool_with_indices,
 };
 
