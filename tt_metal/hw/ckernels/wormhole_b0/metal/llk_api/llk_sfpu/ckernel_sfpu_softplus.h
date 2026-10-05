@@ -161,20 +161,11 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
     v_endif;
 }
 
-bool bf16_dest_softplus();
-template <int ITERATIONS>
-void calculate_softplus_bf16();
 // Whether BF16 DEST runs the generated softplus kernel as one call over the whole tile.
-inline constexpr bool softplus_bf16_whole_tile = true;
+inline constexpr bool softplus_bf16_whole_tile = false;
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_softplus(std::uint32_t param0, std::uint32_t param1, std::uint32_t param2) {
-    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
-        if (bf16_dest_softplus() && param0 == 0x3f800000u && param1 == 0x3f800000u && param2 == 0x41a00000u) {
-            calculate_softplus_bf16<ITERATIONS>();
-            return;
-        }
-    }
     const float beta = Converter::as_float(param0);
     const float beta_reciprocal = Converter::as_float(param1);
     const float threshold = Converter::as_float(param2);
@@ -185,5 +176,3 @@ inline void calculate_softplus(std::uint32_t param0, std::uint32_t param1, std::
 }
 
 }  // namespace ckernel::sfpu
-
-#include "ckernel_sfpu_softplus_bf16.h"

@@ -1500,13 +1500,12 @@ _BF16_EXHAUSTIVE_OPS = [
     (MathOperation.Softplus, ApproximationMode.No, 1),
 ]
 # Boards where the op keeps its stock kernel, which this sweep does not test.
-_BF16_STOCK_BOARDS = {}
+_BF16_STOCK_BOARDS = {
+    MathOperation.Softplus: (ChipArchitecture.WORMHOLE,),
+}
 # Special input classes where the kernel returns its stock kernel's class instead of torch's.
 _BF16_STOCK_SPECIALS = {
-    MathOperation.Softplus: {
-        ChipArchitecture.BLACKHOLE: ("neg_nan",),
-        ChipArchitecture.WORMHOLE: ("neg_nan",),
-    },
+    MathOperation.Softplus: {ChipArchitecture.BLACKHOLE: ("neg_nan",)},
 }
 
 
@@ -1535,15 +1534,11 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
         input_dimensions_B=dimensions,
         spec_A=sweep_spec(),
     )
-    # The sweep pads with +0. The specials go in that padding, under the edge sweep's
-    # gates for what the golden defines and the pipeline delivers.
+    # The sweep pads with +0 and drops -0. The specials go in that padding, under the
+    # edge sweep's gates for what the golden defines and the pipeline delivers.
     specials = [0.0]
     if negative_zero_delivered(formats.input_format, dest_acc):
         specials.append(-0.0)
-    else:
-        # The kernel reads an undelivered -0 as +0, so the golden must too: rsqrt(-0)
-        # is -inf, which the +0 the pipeline delivers can never return.
-        src_A[(src_A == 0) & torch.signbit(src_A.float())] = 0.0
     nonfinite = mathop in SPECIALS_READY_OPS and specials_safe(
         formats.input_format, formats.output_format, dest_acc
     )
