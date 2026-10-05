@@ -29,7 +29,7 @@
    "precomputed_adaln": false,
    "profile": null,
    "qkv_dtype": "bfloat16",
-   "why": "the (1,4) preset asks for no quant profile; TP=4 divides the DiT to ~16.6 GB/chip and the measured default already clears the 90 s budget at 75.5 s, so there is nothing to buy by quantizing ON LATENCY -- but see p300x2.quality_fix_measured: stage 06 found the served-point quality defect lives on this bf16 path and goes away at bf8 for free, so the reason to quantize this mesh is accuracy, not speed. This block records the stage-05 sweep as it was taken."
+   "why": "the (1,4) preset asks for no quant profile; TP=4 divides the DiT to ~16.6 GB/chip and the measured default already clears the 90 s budget at 75.5 s, so there is nothing to buy by quantizing. This block records the stage-05 sweep as it was taken. CORRECTED 2026-10-05 (06b): the stage-06 note that once stood here -- that the served-point quality defect lived on this bf16 path and went away at bf8 -- is withdrawn. The defect was the LoRA bind dying on a weight page-in, and this mesh now serves correct output at bf16. See p300x2.quality."
   },
   "p300x2_text_encoder": "device",
   "rejected": [
@@ -701,7 +701,7 @@
  },
  "p300x2": {
   "audio_shift": 3.0,
-  "choice_reason": "chosen on LATENCY ONLY, and the output at this point is DEFECTIVE -- read `quality` before using any of this block. within budget. Stage 06 took the e2e from 75.5 s to 71.7 s here: the (1,4) preset has sp_axis 0 over a mesh of shape (1,4), so sp_factor is 1 and the ring-free windowed SDPA path applies on this mesh too -- but with 14 heads per device rather than p150's 56, and the chunk-size optimum moves with head count, so this mesh takes (512, 128) where p150 takes (384, 256). Measured at 14 heads at all three lengths this profile can serve: 19328 -11.8%, 22464 -4.2%, 37760 -4.8% against the 56-head pick. CLIP 0.3344 against stage 05's 0.3087 at the same point; the chunking changes flash attention's reduction order, so this is a different trajectory rather than the same clip measured again, and the delta is inside the point-to-point CLIP spread this file documents under datatype_sweep.clip_bar_note.",
+  "choice_reason": "chosen on latency and canvas; the quality fence this line used to carry is LIFTED -- see `quality`, re-taken 2026-10-05 on the build that fixed the on-device LoRA bind. Within budget. Stage 06 took the e2e from 75.5 s to 71.7 s here: the (1,4) preset has sp_axis 0 over a mesh of shape (1,4), so sp_factor is 1 and the ring-free windowed SDPA path applies on this mesh too -- but with 14 heads per device rather than p150's 56, and the chunk-size optimum moves with head count, so this mesh takes (512, 128) where p150 takes (384, 256). Measured at 14 heads at all three lengths this profile can serve: 19328 -11.8%, 22464 -4.2%, 37760 -4.8% against the 56-head pick. CLIP 0.3344 against stage 05's 0.3087 at the same point; the chunking changes flash attention's reduction order, so this is a different trajectory rather than the same clip measured again, and the delta is inside the point-to-point CLIP spread this file documents under datatype_sweep.clip_bar_note.",
   "clip": 0.3344,
   "dit_dtype_policy": {
    "activation_dtype": null,
@@ -711,13 +711,17 @@
    "precomputed_adaln": false,
    "profile": null,
    "qkv_dtype": "bfloat16",
-   "why": "the (1,4) preset asks for no quant profile: TP=4 divides the DiT to ~16.6 GB/chip and the measured default already clears the 90 s budget at 75.5 s, so there was nothing to buy by quantizing ON LATENCY. CORRECTED 2026-09-30 (06 fix2): that is no longer the whole story. The bf16 path here is where the served-point quality defect lives -- ctlE runs this point at bf8_weights_bf8_out_nofp32acc and the defect goes away at equal or better wall time. See `quality_fix_measured`. The reason to quantize this mesh is ACCURACY, which is not a sentence anyone expected to write."
+   "why": "the (1,4) preset asks for no quant profile: TP=4 divides the DiT to ~16.6 GB/chip and the measured default clears the 90 s budget, so there is nothing to buy by quantizing on latency. CORRECTED 2026-10-05 (06b): the stage-06 sentence that the served-point quality defect 'lives on this bf16 path' is WITHDRAWN. The defect was the on-device LoRA bind not surviving a weight page-in; it is fixed in the shared layer and this profile's quality is re-taken as good at bf16. bf8 appeared to cure it only because a quant profile also moves the adapter to the host fuse. Nothing about the dtype needs to change."
   },
   "dit_quant_profile": null,
-  "e2e_s": 71.7,
+  "e2e_note": "WORST of five prompts on the fixed build (stage 06b), against stage 06's 71.7 s worst-of-two. The difference is the fix's one new per-request cost: re-applying the adapter on the DiT page-in re-uploads 208 rank-128 A/B pairs from host. It is invisible in phases_s -- denoising is unchanged (36.1 s on the coastline prompt against the no-adapter control's 35.9 s, so the merge still has no per-step cost) -- and shows up as wall-minus-phases going 17.6 s -> 20.1 s, flat across all five clips. Peak DRAM is unchanged at 19.94 GiB (lora_cache_capacity is 0, so the factors are freed per apply). Still inside the 90 s budget. Removable: LoRAMixin's A/B LRU exists for exactly this re-merge and would buy the 2.4 s back for about 0.5 GiB/device; not taken in 06b because it moves the memory profile this record was measured at.",
+  "e2e_s": 74.6,
   "e2e_samples_s": [
-   71.3,
-   71.7
+   74.6,
+   74.4,
+   68.2,
+   72.5,
+   72.2
   ],
   "frames_max": {
    "1344x768": 124,
@@ -734,9 +738,10 @@
    "encoder": 0.006,
    "vae": 11.177
   },
-  "quality": "DEFECTIVE -- DO NOT SERVE THIS PROFILE ON THIS EVIDENCE. Five prompts at this exact point produce model-visible degenerate output: one clip fails a critical content check with the video ~4x darker than the same prompt and seed on p150 (mean 4.0 against 13.9), temporal motion collapses 4-5x to a 0.70-0.89 floor on 3 of 5 prompts where p150 gives 2.94-4.51, and one served prompt renders as content-free flat texture (CLIP 0.1867). prove_h3's ABSOLUTE floors cannot see any of it (its CLIP floor is 0.1449 and its motion floor 0.3), which is why the single clip behind `clip: 0.3344` below passed 16/16. Nothing in stage 06 caused this -- it is proven arm-matched across the optimization and the conditioner is eliminated -- and stage 06's e2e numbers in this block are correct as LATENCY. They are not a statement that the output is good. See artifacts/s06/results.json p300x2_served_point_quality_anomaly.",
-  "quality_fix_measured": "A one-axis bisect (ctlD/ctlE) puts the cause on the DiT DTYPE, not the mesh: this same point run at p150's bf8_weights_bf8_out_nofp32acc profile, with mesh and adaLN branch held at the served values, clears the failing critical check (1 -> 0), restores the dark prompt to 11.2/19.6 against p150's 13.9/22.1 and its motion to 2.97 against p150's 3.15, and takes the content-free prompt's CLIP from 0.1867 to 0.3653 -- at 59.1/64.5 s, no slower. That is 2 prompts x 1 sample, so it is a diagnosis and a candidate, NOT a landed default. Stage 07 should re-measure it properly and, if it holds, set a quant profile on the (1,4) preset. artifacts/s06/controls/ctlE_p300x2_bf8.json.",
-  "quality_ok": false,
+  "quality": "RE-TAKEN 2026-10-05 (stage 06b) on the fixed build and now GOOD. The stage-06 defect was not a working-point problem at all: the on-device LoRA bind was inert across the DiT page-in this `coresident: False` preset performs before every denoise, so every clip ever recorded on this profile was BASE-model output. Fixed in tt_dit's shared LoRA layer (commit 'Keep a fuse-mode LoRA bound across a weight page-out'). Five prompts, seed 7, one build, warm, at this exact point: CLIP 0.3239 / 0.3589 / 0.3690 / 0.3218 / 0.3381, temporal motion 8.47 / 6.44 / 1.28 / 3.10 / 1.96. The motion collapse is gone (it was a 0.70-0.89 floor on 3 of 5), the content-free coastline clip is gone (CLIP 0.1867 -> 0.3690) and the dark blacksmith clip is back in p150's range (video mean 4.0 -> 11.1 against p150's 13.9). Cross-checked against stage 06's INDEPENDENT bf16 host-fuse control ctlF, a different code path to the same model, on its two prompts: coastline 0.3690/1.28/107.7 here against ctlF's 0.3647/1.239/108.5, blacksmith 0.3218/3.10/11.1 against 0.3227/2.529/10.4. artifacts/s06b/results.json.",
+  "quality_fix_measured": "SUPERSEDED 2026-10-05 by the real fix; kept only so the stage-06 reading is not silently deleted. The one-axis bisect that produced it was sound as measurement and wrong as diagnosis: ctlE's bf8 arm recovered the output because setting a quant profile ALSO switches the adapter onto the host-fuse path (`_lora_fuses_on_host`), not because bf16 arithmetic was the problem. ctlF held the dtype at bf16, forced the host fuse, and recovered everything too -- which already exonerated the dtype inside stage 06. There is no accuracy reason to quantize this mesh. See artifacts/s06b/results.json.",
+  "quality_known_exception": "1 of the 5 clips fails exactly one critical prove_h3 check and it is NOT this profile's problem: 'a red fox trotting through fresh snow at dawn, crisp footsteps crunching' scores audio rms 0.0019 against prove_h3's absolute 0.002 floor. The SAME prompt and point run through the independent host-fuse path (MINIMAX_H3_FORCE_HOST_FUSE=1) gives 0.0018 and fails the same check, with CLIP 0.3598 against 0.3589 and motion 6.32 against 6.44 -- so the two adapter-application paths agree and the quiet audio is the prompt. It is also the quietest prompt of the five on p150 (rms 0.00500 at 73 frames, the lowest of its five), and this clip is 124 frames / 5.2 s of audio against p150's 73 / 3.0 s, so sparse footsteps spread over a longer clip land lower in RMS. Stage 07 owns the call: either prove_h3's audio floor is made duration-aware, or this prompt is expected to fail it on a 5 s clip. Nothing here says the model is wrong. artifacts/s06b/s06b_ctlH_fox_hostfuse.json.",
+  "quality_ok": true,
   "short_edge_max": 768,
   "steps": 5,
   "text_encoder": "device",
