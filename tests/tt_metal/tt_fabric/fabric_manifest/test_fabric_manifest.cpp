@@ -10,11 +10,14 @@
 #include <nlohmann/json.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
+#include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "fabric_fixture.hpp"
@@ -22,6 +25,7 @@
 #include "llrt/hal.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
+#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
 
@@ -38,6 +42,8 @@ using manifest::chip_key;
 using manifest::lower_enum_name;
 using manifest::mesh_key;
 using manifest::router_key;
+using manifest::schema_name;
+using manifest::schema_name_of;
 
 std::set<std::string> keys_of(const json& object) {
     std::set<std::string> keys;
@@ -189,15 +195,23 @@ void check_top_level(
             "packet_header_size_bytes",
             "max_payload_size_bytes",
             "channel_buffer_size_bytes",
-            is_2d ? "routing_2d_route_buffer_size" : "routing_1d_extension_words"}));
+            is_2d ? "routing_2d_route_buffer_size" : "routing_1d_extension_words",
+            "multi_txq"}));
     EXPECT_EQ(block.at("is_2d_routing"), is_2d);
+    EXPECT_TRUE(block.at("multi_txq").is_boolean());
 
     for (const auto& entry : std::filesystem::directory_iterator(manifest_path.parent_path())) {
         EXPECT_EQ(entry.path().string().find(".tmp."), std::string::npos) << entry.path();
     }
 }
 
-// Every mesh in the mesh graph appears under its M key, with its shape and express setting.
+bool is_local_mesh(MeshId mesh_id) {
+    const auto local_mesh_ids = control_plane().get_local_mesh_id_bindings();
+    return std::ranges::find(local_mesh_ids, mesh_id) != local_mesh_ids.end();
+}
+
+// Every mesh in the mesh graph appears under its M key, with its shape and express setting. Only this host's meshes
+// have a credit transport; other hosts' meshes are described by their own manifests.
 void check_meshes(const json& manifest) {
     const auto& mesh_graph = control_plane().get_mesh_graph();
     std::set<std::string> expected_keys;
@@ -208,10 +222,14 @@ void check_meshes(const json& manifest) {
         const auto& mesh = manifest.at("meshes").at(mesh_key(mesh_id));
 
         const auto shape = mesh_graph.get_mesh_shape(mesh_id);
-        EXPECT_EQ(
-            keys_of(mesh),
-            (shape.dims() == 2 ? std::set<std::string>{"shape", "torus", "express_routing", "chips"}
-                               : std::set<std::string>{"shape", "express_routing", "chips"}));
+        std::set<std::string> expected_mesh_keys = {"shape", "express_routing", "chips"};
+        if (shape.dims() == 2) {
+            expected_mesh_keys.insert("torus");
+        }
+        if (is_local_mesh(mesh_id)) {
+            expected_mesh_keys.insert("credit_transport");
+        }
+        EXPECT_EQ(keys_of(mesh), expected_mesh_keys);
         ASSERT_EQ(mesh.at("shape").size(), shape.dims());
         for (size_t dim = 0; dim < shape.dims(); ++dim) {
             EXPECT_EQ(mesh.at("shape").at(dim), shape[dim]);
@@ -289,7 +307,7 @@ void check_routers_match_active_channels(const json& manifest) {
 void check_router_blocks(const std::vector<RouterEntry>& routers) {
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
-        EXPECT_EQ(keys_of(*entry.router), (std::set<std::string>{"identity", "link", "shape"}));
+        EXPECT_EQ(keys_of(*entry.router), (std::set<std::string>{"identity", "link", "shape", "credit_counters"}));
     }
 }
 
@@ -419,6 +437,130 @@ void check_router_shape(const std::vector<RouterEntry>& routers) {
     }
 }
 
+// A local mesh lists the credit backing of every VC its routers send on, with a reason exactly when the VC is on L1
+// counters. Each reason sits only on the VCs it applies to, and matches the fact it names: multi_txq on VC0 and VC1
+// with two TX queues, express on VC1 with express routing, and no_completion_register on VC2 wherever VC2 exists.
+void check_credit_transport(const json& manifest, const std::vector<RouterEntry>& routers) {
+    const bool multi_txq = manifest.at("fabric_context").at("multi_txq").get<bool>();
+    for (const auto& mesh_id : control_plane().get_mesh_graph().get_all_mesh_ids()) {
+        if (!is_local_mesh(mesh_id)) {
+            continue;
+        }
+        SCOPED_TRACE(mesh_key(mesh_id));
+        const auto& mesh = manifest.at("meshes").at(mesh_key(mesh_id));
+        const auto& transport = mesh.at("credit_transport");
+        const bool express = mesh.at("express_routing").get<bool>();
+
+        std::set<std::string> vcs_with_senders;
+        for (const auto& entry : routers) {
+            if (entry.node.mesh_id != mesh_id) {
+                continue;
+            }
+            const auto& senders = entry.router->at("shape").at("senders_per_vc");
+            for (uint32_t vc = 0; vc < senders.size(); ++vc) {
+                if (senders.at(vc).get<uint32_t>() > 0) {
+                    vcs_with_senders.insert(fmt::format("vc{}", vc));
+                }
+            }
+        }
+        const auto listed = keys_of(transport);
+        EXPECT_TRUE(std::ranges::includes(listed, vcs_with_senders));
+        std::set<std::string> all_vcs;
+        for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            all_vcs.insert(fmt::format("vc{}", vc));
+        }
+        EXPECT_TRUE(std::ranges::includes(all_vcs, listed));
+
+        for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            const auto vc_key = fmt::format("vc{}", vc);
+            if (!transport.contains(vc_key)) {
+                continue;
+            }
+            SCOPED_TRACE(vc_key);
+            const auto& entry = transport.at(vc_key);
+            EXPECT_EQ(keys_of(entry), (std::set<std::string>{"backing", "reasons"}));
+            std::set<std::string> reasons;
+            for (const auto& reason : entry.at("reasons")) {
+                EXPECT_TRUE(reasons.insert(reason.get<std::string>()).second) << "repeated reason " << reason;
+            }
+            EXPECT_EQ(entry.at("backing"), reasons.empty() ? "stream_register" : "l1_counter");
+
+            std::set<std::string> expected_reasons;
+            if (multi_txq && vc <= 1) {
+                expected_reasons.insert(lower_enum_name(L1CreditCounterReason::MULTI_TXQ));
+            }
+            if (express && vc == 1) {
+                expected_reasons.insert(lower_enum_name(L1CreditCounterReason::EXPRESS));
+            }
+            if (vc == 2) {
+                expected_reasons.insert(lower_enum_name(L1CreditCounterReason::NO_COMPLETION_REGISTER));
+            }
+            EXPECT_EQ(reasons, expected_reasons);
+        }
+    }
+}
+
+// The four counter arrays are u32 arrays of one size, back to back in the order the kernel sends them in, each long
+// enough for every sender channel it is indexed by, and the host clears all of them or none.
+void check_router_credit_counters(const std::vector<RouterEntry>& routers) {
+    const std::array<std::pair<const char*, const char*>, 4> arrays = {{
+        {"to_sender_ack", "own_sender_compact"},
+        {"to_sender_completion", "own_sender_compact"},
+        {"receiver_ack", "peer_sender_compact"},
+        {"receiver_completion", "peer_sender_compact"},
+    }};
+    for (const auto& entry : routers) {
+        SCOPED_TRACE(entry.path);
+        const auto& counters = entry.router->at("credit_counters");
+        EXPECT_EQ(
+            keys_of(counters),
+            (std::set<std::string>{"to_sender_ack", "to_sender_completion", "receiver_ack", "receiver_completion"}));
+
+        uint32_t num_senders = 0;
+        for (const auto& count : entry.router->at("shape").at("senders_per_vc")) {
+            num_senders += count.get<uint32_t>();
+        }
+
+        std::optional<uint32_t> next_address;
+        std::optional<uint32_t> first_size;
+        std::optional<bool> first_cleared_by_host;
+        for (const auto& [name, index_space] : arrays) {
+            SCOPED_TRACE(name);
+            const auto& array = counters.at(name);
+            EXPECT_EQ(
+                keys_of(array),
+                (std::set<std::string>{
+                    "address",
+                    "size",
+                    "num_elements",
+                    "size_per_element",
+                    "schema",
+                    "cleared_by_host",
+                    "index_space"}));
+            EXPECT_EQ(array.at("index_space"), index_space);
+            EXPECT_EQ(array.at("schema"), "u32");
+            EXPECT_EQ(array.at("size_per_element"), sizeof(uint32_t));
+
+            const auto address = array.at("address").get<uint32_t>();
+            const auto size = array.at("size").get<uint32_t>();
+            const auto num_elements = array.at("num_elements").get<uint32_t>();
+            EXPECT_EQ(size, num_elements * sizeof(uint32_t));
+            // The receiver arrays are indexed by the peer router's sender channels; both ends are built from the same
+            // config.
+            EXPECT_GE(num_elements, num_senders);
+            if (next_address.has_value()) {
+                EXPECT_EQ(address, *next_address);
+            }
+            next_address = address + size;
+            EXPECT_EQ(size, first_size.value_or(size));
+            first_size = size;
+            const auto cleared_by_host = array.at("cleared_by_host").get<bool>();
+            EXPECT_EQ(cleared_by_host, first_cleared_by_host.value_or(cleared_by_host));
+            first_cleared_by_host = cleared_by_host;
+        }
+    }
+}
+
 }  // namespace
 
 // ============ Tests ============
@@ -448,6 +590,20 @@ TEST(ManifestNames, Spellings) {
 
     EXPECT_EQ(lower_enum_name(FabricConfig::FABRIC_1D), "fabric_1d");
     EXPECT_EQ(lower_enum_name(FabricConfig::FABRIC_2D), "fabric_2d");
+
+    EXPECT_EQ(lower_enum_name(L1CreditCounterReason::MULTI_TXQ), "multi_txq");
+    EXPECT_EQ(lower_enum_name(L1CreditCounterReason::EXPRESS), "express");
+    EXPECT_EQ(lower_enum_name(L1CreditCounterReason::NO_COMPLETION_REGISTER), "no_completion_register");
+
+    EXPECT_EQ(schema_name(field::Uint{}, 4), "u32");
+    EXPECT_EQ(schema_name(field::Uint{}, 1), "u8");
+    EXPECT_EQ(schema_name(field::Int{}, 2), "i16");
+    EXPECT_EQ(schema_name(field::Enum{"RouterState"}, 4), "enum:RouterState");
+    EXPECT_EQ(schema_name(field::Struct{"WorkerXY"}, 4), "struct:WorkerXY");
+    EXPECT_EQ(schema_name(field::Packed{"direction_table", 2}, 16), "packed:direction_table");
+    EXPECT_EQ(schema_name(field::Bytes{}, 1), "bytes");
+    EXPECT_EQ(schema_name(field::Pad{}, 1), "pad");
+    EXPECT_EQ(schema_name_of<uint32_t>(), "u32");
 }
 
 TEST_F(Fabric1DManifestFixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config, suite_start_); }
@@ -476,5 +632,11 @@ TEST_F(Fabric2DManifestFixture, PeersAreSymmetric) { check_peers_are_symmetric(m
 
 TEST_F(Fabric1DManifestFixture, RouterShape) { check_router_shape(routers_); }
 TEST_F(Fabric2DManifestFixture, RouterShape) { check_router_shape(routers_); }
+
+TEST_F(Fabric1DManifestFixture, CreditTransport) { check_credit_transport(manifest_, routers_); }
+TEST_F(Fabric2DManifestFixture, CreditTransport) { check_credit_transport(manifest_, routers_); }
+
+TEST_F(Fabric1DManifestFixture, RouterCreditCounters) { check_router_credit_counters(routers_); }
+TEST_F(Fabric2DManifestFixture, RouterCreditCounters) { check_router_credit_counters(routers_); }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

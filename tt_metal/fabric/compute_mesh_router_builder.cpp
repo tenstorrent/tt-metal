@@ -980,12 +980,16 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
 }
 
 manifest::Router ComputeMeshRouterBuilder::collect_manifest_router(const ChipRoutingFacts& chip_facts) const {
+    const auto& builder_context = fabric_context_.get_builder_context();
+    const auto addresses_to_clear = builder_context.get_fabric_router_addresses_to_clear();
     ManifestRouterInputs inputs{
         .erisc_builder = *erisc_builder_,
         .vc_shape = vc_shape_,
         .location = location_,
         .chip_facts = chip_facts,
         .control_plane = fabric_context_.get_control_plane(),
+        .stream_assignment = builder_context.get_stream_assignment(local_node_.mesh_id),
+        .addresses_to_clear = addresses_to_clear,
         .named_ct_args_per_risc = {},
     };
     for (uint32_t risc_id = 0; risc_id < get_configured_risc_count(); ++risc_id) {
