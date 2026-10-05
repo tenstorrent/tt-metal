@@ -3,14 +3,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from ttnn.operations.golden_common import golden_to_output_dtype
 
 # set golden functions
 
 
-def _golden_function(input_tensor, *args, **kwargs):
+def _golden_function(input_tensor, *args, fast_and_approximate_mode=False, **kwargs):
     import torch
 
-    return torch.exp(input_tensor)
+    result = torch.exp(input_tensor)
+    if fast_and_approximate_mode:
+        # Fast exp is specified against exact exp within a 5% relative error, so degenerate outputs
+        # use that bound instead of the default near-exact allclose tolerance.
+        ttnn.decorators.set_golden_comparison_config(
+            result, method="allclose", scope="degenerate", rtol=0.05, atol=1e-6
+        )
+    return result
 
 
 ttnn.attach_golden_function(ttnn.exp, _golden_function)
@@ -56,25 +64,25 @@ def _golden_function(
 ttnn.attach_golden_function(ttnn.experimental.create_qkv_heads_from_separate_tensors, _golden_function)
 
 
-def _golden_function(tensor, grid_size, shard_spec, num_slices, slice, *args, **kwargs):
+def _golden_function(tensor, grid_size, shard_spec, num_slices, slice, *args, output_dtype=None, **kwargs):
     tensor = tensor.reshape(1, 1, -1, tensor.shape[-1])
     slice_size = tensor.shape[-2] // num_slices
     start = slice * slice_size
     stop = start + slice_size
     tensor = tensor[:, :, start:stop, :]
-    return tensor
+    return golden_to_output_dtype(tensor, output_dtype)
 
 
 ttnn.attach_golden_function(ttnn.interleaved_to_sharded_partial, _golden_function)
 
 
-def _golden_function(slice, tensor, num_slices, slice_id, *args, **kwargs):
+def _golden_function(slice, tensor, num_slices, slice_id, *args, output_dtype=None, **kwargs):
     original_shape = tensor.shape
     tensor = tensor.reshape(1, 1, -1, tensor.shape[-1])
     slice_size = tensor.shape[-2] // num_slices
     start = slice_id * slice_size
     stop = start + slice_size
-    tensor[:, :, start:stop, :] = slice
+    tensor[:, :, start:stop, :] = golden_to_output_dtype(slice, output_dtype)
     return tensor.reshape(original_shape)
 
 
@@ -85,6 +93,13 @@ def _golden_function(in0, in1, math_op, dim, *args, **kwargs):
     import torch
 
     if dim in {ttnn.BcastOpDim.W, ttnn.BcastOpDim.H, ttnn.BcastOpDim.HW}:
+        # The device broadcasts only the first column (W), row (H) or element (HW) of in1's tile,
+        # even when in1 spans a full tile along the broadcast dimension.
+        if dim in {ttnn.BcastOpDim.W, ttnn.BcastOpDim.HW}:
+            in1 = in1[..., :1]
+        if dim in {ttnn.BcastOpDim.H, ttnn.BcastOpDim.HW}:
+            in1 = in1[..., :1, :]
+
         # Perform the operation
         if math_op == ttnn.BcastOpMath.ADD:
             res = in0 + in1
@@ -122,10 +137,21 @@ def _nop_golden_function(input_tensor, *args, **kwargs):
     return input_tensor
 
 
-ttnn.attach_golden_function(ttnn.interleaved_to_sharded, _nop_golden_function)
-ttnn.attach_golden_function(ttnn.sharded_to_interleaved, _nop_golden_function)
+def _sharding_conversion_golden_function(input_tensor, *args, output_dtype=None, **kwargs):
+    # Every sharding-conversion overload ends its positional arguments with an optional output_dtype.
+    if output_dtype is None and args and isinstance(args[-1], ttnn.DataType):
+        output_dtype = args[-1]
+    return golden_to_output_dtype(input_tensor, output_dtype)
+
+
+def _tilize_golden_function(input_tensor, *args, dtype=None, **kwargs):
+    return golden_to_output_dtype(input_tensor, dtype)
+
+
+ttnn.attach_golden_function(ttnn.interleaved_to_sharded, _sharding_conversion_golden_function)
+ttnn.attach_golden_function(ttnn.sharded_to_interleaved, _sharding_conversion_golden_function)
 ttnn.attach_golden_function(ttnn.reshard, _nop_golden_function)
-ttnn.attach_golden_function(ttnn.tilize, _nop_golden_function)
+ttnn.attach_golden_function(ttnn.tilize, _tilize_golden_function)
 
 
 def _slice_write_golden_function(input_tensor, output_tensor, start, end, step, *args, **kwargs):
