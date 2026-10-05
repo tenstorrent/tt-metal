@@ -7,10 +7,10 @@
 #include <unistd.h>
 
 #include <cstdio>
-#include <span>
 #include <string>
 #include <string_view>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal::streaming_profiler {
@@ -37,9 +37,7 @@ constexpr SyncName kSyncNames[] = {
     {"SYNC-CB-POP", 1010},
 };
 
-}  // namespace
-
-uint32_t ZoneCsvConsumer::sync_legacy_id(std::string_view name) {
+uint32_t sync_legacy_id(std::string_view name) {
     for (const SyncName& s : kSyncNames) {
         if (name == s.name) {
             return s.legacy_id;
@@ -48,17 +46,19 @@ uint32_t ZoneCsvConsumer::sync_legacy_id(std::string_view name) {
     return 0;
 }
 
-// The reader pairs START/END rows by order and type; the id only has to be stable per name and never 0.
-uint32_t ZoneCsvConsumer::name_hash(std::string_view name) {
+// Returns the name's stable CSV id, which is never 0 and is above every kSyncNames id.
+uint32_t name_hash(std::string_view name) {
     uint32_t h = 2166136261u;
     for (unsigned char ch : name) {
         h = (h ^ ch) * 16777619u;
     }
-    return (h & 0x7FFFFFFu) | 0x8000000u;  // outside the legacy sync-id range
+    return (h & 0x7FFFFFFu) | 0x8000000u;
 }
 
-ZoneCsvConsumer::ZoneCsvConsumer(const std::string& path) : path_(path), f_(std::fopen(path.c_str(), "w")) {
-    TT_FATAL(f_ != nullptr, "streaming profiler: cannot open {} for the zone CSV", path);
+}  // namespace
+
+ZoneCsvConsumer::ZoneCsvConsumer(const std::string& path) : path_(path), file_(std::fopen(path.c_str(), "w")) {
+    TT_FATAL(file_ != nullptr, "streaming profiler: cannot open {} for the zone CSV", path);
 }
 
 ZoneCsvConsumer::Row ZoneCsvConsumer::row_for(const api::Core& core) {
@@ -68,60 +68,66 @@ ZoneCsvConsumer::Row ZoneCsvConsumer::row_for(const api::Core& core) {
     r.core_y = static_cast<uint16_t>(core.physical.y);
     r.logical_x = static_cast<uint16_t>(core.logical.x);
     r.logical_y = static_cast<uint16_t>(core.logical.y);
-    r.risc = static_cast<uint8_t>(core.risc);
+    r.processor = static_cast<uint8_t>(core.processor);
     return r;
 }
 
 void ZoneCsvConsumer::operator()(const Batch& batch) {
     dropped_ += batch.dropped_bytes();
-    if (freq_mhz_ == 0.0) {
-        if (!batch.zones().empty()) {
-            freq_mhz_ = batch.zones().front().frequency_ghz() * 1000.0;
-        } else if (!batch.timestamped_data().empty()) {
-            freq_mhz_ = batch.timestamped_data().begin()->frequency_ghz() * 1000.0;
-        }
-    }
     for (const api::Zone& z : batch.zones()) {
-        // Both rows emitted: the classic reader pairs ZONE_START with ZONE_END itself.
+        if (!header_written_) {
+            zone_cycles_ += z.end_device_cycles() - z.start_device_cycles();
+            zone_ns_ += z.duration().count();
+        }
         const uint32_t id = name_hash(z.site().name);
         for (int end = 0; end < 2; end++) {
             Row& r = rows_.emplace_back(row_for(z.core()));
             r.timer_id = id;
-            r.timestamp = end ? z.end_timestamp() : z.start_timestamp();
-            r.prog = z.runtime_id();
+            r.timestamp = end ? z.end_device_cycles() : z.start_device_cycles();
+            r.runtime_id = z.runtime_id();
             r.zone_name = z.site().name;
             r.type = end ? "ZONE_END" : "ZONE_START";
         }
     }
     for (const api::TimestampedData& d : batch.timestamped_data()) {
-        // Sync events only: the reader interprets `data` as a CB id or semaphore address.
-        const uint32_t legacy = sync_legacy_id(d.site().name);
-        if (legacy == 0) {
-            continue;
-        }
-        const std::span<const uint64_t> payload = d.payload();
-        if (payload.empty()) {
-            empty_payloads_++;  // a semaphore event at address 0 would invent a dependency
-            continue;
-        }
+        const uint32_t sync_id = sync_timer_id(d.site().name);
         Row& r = rows_.emplace_back(row_for(d.core()));
-        r.timer_id = legacy;
-        r.timestamp = d.timestamp();
-        r.data = payload.front();
+        r.timer_id = sync_id != 0 ? sync_id : name_hash(d.site().name);
+        r.timestamp = d.device_cycles();
+        // The CSV has one data column, so a record with several values writes its first.
+        r.data = d.payload().front();
+        if (sync_id == 0) {
+            r.runtime_id = d.runtime_id();
+            r.zone_name = d.site().name;
+        }
         r.type = "TS_DATA";
+    }
+    for (const api::Event& e : batch.events()) {
+        Row& r = rows_.emplace_back(row_for(e.core()));
+        r.timer_id = name_hash(e.site().name);
+        r.timestamp = e.device_cycles();
+        r.runtime_id = e.runtime_id();
+        r.zone_name = e.site().name;
+        r.type = "TS_EVENT";
     }
 }
 
 void ZoneCsvConsumer::write_csv() {
-    FILE* const f = f_;
-    // core_x/core_y are the NoC 0 coordinate, as in the device profiler log this file mirrors, so a reader of that
-    // log needs no special case; the logical coordinate rides in two trailing columns.
-    std::fprintf(f, "ARCH: blackhole, CHIP_FREQ[MHz]: %.0f, Max Compute Cores: 0\n", freq_mhz_);
-    std::fprintf(
-        f,
-        "PCIe slot, core_x, core_y, RISC processor type, timer_id, "
-        "time[cycles since reset], data, run host ID, trace id, trace id counter, "
-        "zone name, type, source line, source file, meta data, logical_x, logical_y\n");
+    if (rows_.empty()) {
+        return;
+    }
+    FILE* const f = file_.get();
+    if (!header_written_) {
+        const double freq_mhz =
+            zone_ns_ != 0 ? 1000.0 * static_cast<double>(zone_cycles_) / static_cast<double>(zone_ns_) : 0.0;
+        std::fprintf(f, "ARCH: blackhole, CHIP_FREQ[MHz]: %.0f, Max Compute Cores: 0\n", freq_mhz);
+        std::fprintf(
+            f,
+            "PCIe slot, core_x, core_y, RISC processor type, timer_id, "
+            "time[cycles since reset], data, run host ID, trace id, trace id counter, "
+            "zone name, type, source line, source file, meta data, logical_x, logical_y\n");
+        header_written_ = true;
+    }
     // The PID, not a constant: two hand-concatenated captures then carry different ids and the reader's
     // multi-run warning still fires.
     const uint32_t run_id = static_cast<uint32_t>(::getpid());
@@ -132,26 +138,27 @@ void ZoneCsvConsumer::write_csv() {
             r.chip,
             r.core_x,
             r.core_y,
-            r.risc < kRiscNames.size() ? kRiscNames[r.risc] : "UNKNOWN",
+            kProcessorNames[r.processor],
             r.timer_id,
             static_cast<unsigned long long>(r.timestamp),
             static_cast<unsigned long long>(r.data),
             run_id,
-            r.prog,
+            r.runtime_id,
             static_cast<int>(r.zone_name.size()),
             r.zone_name.empty() ? "" : r.zone_name.data(),
             r.type,
             r.logical_x,
             r.logical_y);
     }
-    std::fclose(f);
-    std::fprintf(
-        stderr,
-        "[streaming profiler zone-csv] wrote %zu row(s) to %s (dropped records: %llu, events with no payload: %llu)\n",
+    std::fflush(f);
+    log_info(
+        tt::LogMetal,
+        "[streaming profiler] zone CSV: wrote {} rows to {} ({} dropped bytes)",
         rows_.size(),
-        path_.c_str(),
-        static_cast<unsigned long long>(dropped_),
-        static_cast<unsigned long long>(empty_payloads_));
+        path_,
+        dropped_);
+    rows_.clear();
+    dropped_ = 0;
 }
 
 }  // namespace tt::tt_metal::streaming_profiler
