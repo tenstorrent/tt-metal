@@ -73,7 +73,8 @@ inline void execute_high_fidelity_gapool()
 /**
  * @brief Move destination tile to source registers for mul_reduce_scalar
  *
- * Moves data from destination registers to source A or B registers.
+ * Moves a whole tile from destination registers to source A, or its first 16 rows to source B (the scaler rows 0 to 3 and
+ * the rest of the 16x16 block the pooling reads).
  *
  * @tparam binary_reuse_dest Direction: DEST_TO_SRCA or DEST_TO_SRCB
  * @tparam from_dest_base: DEST_TO_SRCA re-anchors at the DEST buffer base for every idst, not only for idst 0
@@ -135,18 +136,7 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_([[maybe_unused]] std::
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 4, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 4);
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 8, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 8);
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 12, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 12);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 16, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 16);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 20, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 20);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 24, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 24);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 28, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 28);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 32, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 32);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 36, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 36);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 40, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 40);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 44, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 44);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 48, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 48);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 52, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 52);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 56, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 56);
-        TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 60, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 60);
+        // The pooling passes read SrcB rows 0 to 15 only.
     }
 }
 
