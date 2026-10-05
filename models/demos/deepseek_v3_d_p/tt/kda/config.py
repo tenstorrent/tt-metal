@@ -117,7 +117,10 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
     """Return the production K3 program configuration with caller-owned per-axis CCL topology."""
     # Fixed production/proxy geometries; native worker capacity is validated by
     # the recurrence constructor for the actual TP-local head count and device.
-    group_chunks = {32: 1, 64: 2, 128: 4, 256: 8, 320: 10, 640: 20, 1280: 20, 2560: 20, 5120: 20}
+    # 640 rows (Galaxy SP8xTP4 per chip, LoudBox LB-A/LB-B): two groups of 10. One group of 20 makes the
+    # recurrent scan split V across four cores per head and re-read the V-independent inputs per block;
+    # measured 0.17 ms faster per layer on LoudBox (tt_metal_tracker-g1b.5.15).
+    group_chunks = {32: 1, 64: 2, 128: 4, 256: 8, 320: 10, 640: 10, 1280: 20, 2560: 20, 5120: 20}
     if active_seq_len_local not in group_chunks:
         raise ValueError(f"no tuned Kimi-K3 recurrence configuration for local T={active_seq_len_local}")
     return KDAProgramConfig(
@@ -147,7 +150,9 @@ def glm_5_3_flash_program_config(*, active_seq_len_local: int, tp_ccl_topology: 
     if active_seq_len_local != 640:
         raise ValueError(f"no tuned GLM-5.3-Flash recurrence configuration for local T={active_seq_len_local}")
     return KDAProgramConfig(
-        recurrence=KDARecurrenceProgramConfig(local_scan_strategy="grouped", summary_group_chunks=20),
+        # Two groups of 10 chunks, as Kimi K3 at 640 rows: 0.15 ms faster per layer than one group of 20 on
+        # LoudBox (tt_metal_tracker-g1b.5.15).
+        recurrence=KDARecurrenceProgramConfig(local_scan_strategy="grouped", summary_group_chunks=10),
         qkv_channel_chunk_size=512,
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,

@@ -161,7 +161,7 @@ def test_program_config_rejects_invalid_values(
         config_type(**kwargs)
 
 
-@pytest.mark.parametrize("local_rows,expected_group_chunks", [(640, 20), (1280, 20), (2560, 20), (320, 10)])
+@pytest.mark.parametrize("local_rows,expected_group_chunks", [(640, 10), (1280, 20), (2560, 20), (320, 10)])
 def test_kimi_k3_fixed_geometry_configuration(local_rows, expected_group_chunks):
     from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
 

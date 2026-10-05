@@ -71,7 +71,7 @@ def test_loudbox_program_config_is_explicit(model: str, layout_name: str) -> Non
     # Both layouts run Galaxy's per-chip work: 640 local rows and a quarter of the heads.
     assert (layout.local_rows, chip_config.num_heads) == (640, chip_heads)
     assert program_config.recurrence.local_scan_strategy == "grouped"
-    assert program_config.recurrence.summary_group_chunks == 20  # 640 rows = 20 chunks of 32
+    assert program_config.recurrence.summary_group_chunks == 10  # 640 rows = 2 groups of 10 chunks of 32
     assert program_config.qkv_channel_chunk_size == 512
     assert program_config.gated_rms_output_dtype == ttnn.bfloat16
     assert program_config.output_projection_math_fidelity == ttnn.MathFidelity.HiFi2
