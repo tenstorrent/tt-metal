@@ -15,10 +15,11 @@ Layer indices count the ResNet layers from 0 (layer1); level indices the FPN lev
 # not show it; their weights lack the trained backbone's outlier channels.
 FP32_ACC_STAGES = (2, 3)
 
-# Layers whose activations are kept in DRAM because their convs do not fit in L1. layer1 and
-# layer2 work on 6 x 232 x 400 x 256 tensors (285 MB in bfloat16), and layer4's 2048-channel
-# 1x1 convs overflow L1 when sharded. The fp32 accumulation layers join them: their larger
-# destination buffers overflow L1 next to sharded activations.
+# Layers whose activations are kept in DRAM because their convs do not fit in L1; today all
+# four. layer1 and layer2 work on 6 x 232 x 400 x 256 tensors (285 MB in bfloat16), and
+# layer4's 2048-channel 1x1 convs overflow L1 when sharded. The fp32 accumulation layers join
+# them: with fp32 accumulation, layer3's L1-sharded convs fail to allocate (their circular
+# buffers clash with L1 buffers), so layer3 is in DRAM only because of FP32_ACC_STAGES.
 DRAM_ACTIVATION_STAGES = tuple(sorted({0, 1, 3} | set(FP32_ACC_STAGES)))
 
 # FPN levels whose convs keep their activations in DRAM because they do not fit in L1:
@@ -36,3 +37,22 @@ DRAM_CONV_SLICES = 8
 # conv is (C3, C4). Both come from the UniAD port and are not re-tuned for 928x1600.
 BLOCK_SHARDED_DOWNSAMPLE_STAGES = (2, 3)
 BLOCK_SHARDED_LEVELS = (0, 1)
+
+
+def tt_resnet_kwargs():
+    """TtResNet's memory and precision arguments for this configuration."""
+    return dict(
+        dram_activation_stages=DRAM_ACTIVATION_STAGES,
+        dram_conv_slices=DRAM_CONV_SLICES,
+        block_sharded_downsample_stages=BLOCK_SHARDED_DOWNSAMPLE_STAGES,
+        fp32_acc_stages=FP32_ACC_STAGES,
+    )
+
+
+def tt_fpn_kwargs():
+    """TtFPN's memory arguments for this configuration."""
+    return dict(
+        dram_activation_levels=DRAM_ACTIVATION_LEVELS,
+        dram_conv_slices=DRAM_CONV_SLICES,
+        block_sharded_levels=BLOCK_SHARDED_LEVELS,
+    )

@@ -39,8 +39,10 @@ class TtnnConv2D:
         ``dealloc_act`` lets conv2d free the L1-sharded copy it makes of a DRAM input once the
         halo has read it; the DRAM input itself is never freed.
 
-        ``output_dtype`` is the dtype the conv emits, None for its input's. conv2d keeps its
-        partial sums in the output dtype, so a bfloat8_b output also accumulates in bfloat8_b."""
+        ``output_dtype`` is the dtype the conv emits, None for its input's. A spatial conv, on
+        conv2d's own path with packer_l1_acc off, keeps its partial sums between reduction blocks
+        in the output dtype; a 1x1 stride-1 conv runs as a matmul (conv2d lowers it, or
+        ``ttnn.linear`` above), which keeps them in fp32 with ``fp32_dest_acc_en``."""
         self.dram_activation = dram_activation
         self.input_dtype = input_dtype
         self.input_layout = input_layout
