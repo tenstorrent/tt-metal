@@ -13,6 +13,8 @@ stored. Each output must have the reference's class and a pure ULP error, |refer
 ulp(rounded reference), below 1.
 The inputs in DECLARED are stored as the class given there, the first row that holds; where
 that differs from torch, it is the class the TT-NN op this kernel replaces stores.
+Each run logs one ULP line: the largest pure ULP error against torch and the outputs of
+another class, for this program and for the path it replaces on the same input.
 """
 
 import pytest
@@ -53,6 +55,27 @@ def _reference(x):
     return torch.special.multigammaln(x, 4)
 
 
+def _old_path(x, memory_config=None):
+    result = ttnn.lgamma(x, memory_config=memory_config)
+    result = ttnn.add(
+        result,
+        ttnn.lgamma(ttnn.subtract(x, 0.5, memory_config=memory_config), memory_config=memory_config),
+        memory_config=memory_config,
+    )
+    result = ttnn.add(
+        result,
+        ttnn.lgamma(ttnn.subtract(x, 1.0, memory_config=memory_config), memory_config=memory_config),
+        memory_config=memory_config,
+    )
+    result = ttnn.add(
+        result,
+        ttnn.lgamma(ttnn.subtract(x, 1.5, memory_config=memory_config), memory_config=memory_config),
+        memory_config=memory_config,
+    )
+    result = ttnn.add(result, 3.434189657547, memory_config=memory_config)
+    return result
+
+
 def _round_to_bfloat16(t):
     """Round float64 to BF16 once (round-to-odd into float32, then nearest-even), then flush."""
     f32 = t.to(torch.float32)
@@ -87,14 +110,29 @@ def _pure_ulp(reference, actual):
     return torch.where(same_class, ulp, torch.full_like(ulp, float("inf")))
 
 
+def _versus_torch(x64, output):
+    """The largest pure ULP error against torch over outputs of torch's stored class, and the number
+    of outputs of another class."""
+    ulp = torch.minimum(_pure_ulp(_reference(x64), output), _pure_ulp(_reference(_flush(x64)), output))
+    mismatched = torch.isinf(ulp)
+    return (ulp[~mismatched].max().item() if (~mismatched).any() else 0.0), int(mismatched.sum())
+
+
 @run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
 def test_multigammaln_exhaustive_bfloat16(device):
     x = generate_all_bfloat16_bitpatterns(torch.bfloat16)
     tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     actual = ttnn.to_torch(ttnn.multigammaln(tt_x)).to(torch.bfloat16)
+    # The path this program replaces, on the same input (see the device-perf test).
+    stock = ttnn.to_torch(_old_path(tt_x)).to(torch.bfloat16)
 
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
     x64 = x.to(torch.float64)
+    (ours, ours_classes), (old, old_classes) = _versus_torch(x64, actual), _versus_torch(x64, stock)
+    print(
+        f"ULP multigammaln {board} ours={ours:.3f} stock={old:.3f} "
+        f"ours_class_mismatches={ours_classes} stock_class_mismatches={old_classes}"
+    )
     expected = torch.full(x.shape, -1, dtype=torch.int8)
     for inputs, stored in DECLARED[board]:
         lanes = eval(inputs, {"torch": torch, "x": x64, "daz": _flush(x64), "SMALLEST_NORMAL": SMALLEST_NORMAL})
