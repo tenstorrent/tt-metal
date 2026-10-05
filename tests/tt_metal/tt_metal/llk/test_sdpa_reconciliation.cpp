@@ -271,6 +271,184 @@ void run_sdpa_tail(
     }
 }
 
+// Run the complete chunk API, including online softmax across two chunks and
+// normalization. Layout 0 preserves the original shared K/V defaults; layout 1
+// preserves separate V; layout 2 stores [K, padding, V, padding] in each row.
+void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, bool full_sync) {
+    auto& cq = mesh.mesh_command_queue();
+    const CoreCoord core{0, 0};
+    constexpr std::uint32_t rounds = 3;
+    constexpr std::uint32_t chunks = 2;
+    constexpr std::uint32_t chunk_tiles = 2;
+    constexpr std::uint32_t qk_tiles = 2;
+    constexpr std::uint32_t v_tiles = 2;
+    constexpr std::uint32_t width = qk_tiles * 32;
+    constexpr std::uint32_t tokens = chunks * chunk_tiles * 32;
+    constexpr std::uint32_t short_tile_bytes = sdpa_tail_elements * sizeof(bfloat16);
+    constexpr std::uint32_t full_tile_bytes = 1024 * sizeof(bfloat16);
+    const std::uint32_t row_tiles = layout == 2 ? 6 : qk_tiles;
+    const std::uint32_t v_offset = layout == 2 ? 3 : 0;
+    const bool separate_v = layout == 1;
+    Program program = CreateProgram();
+    auto make_buffer = [&](std::uint32_t bytes) {
+        return distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = bytes},
+            {.page_size = bytes, .buffer_type = BufferType::DRAM},
+            &mesh);
+    };
+    auto input_q = make_buffer(rounds * qk_tiles * short_tile_bytes);
+    auto input_k = make_buffer(rounds * chunks * chunk_tiles * row_tiles * full_tile_bytes);
+    auto input_v = make_buffer(rounds * chunks * chunk_tiles * v_tiles * full_tile_bytes);
+    auto output = make_buffer(rounds * v_tiles * short_tile_bytes);
+    for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_16}) {
+        CreateCircularBuffer(
+            program,
+            core,
+            CircularBufferConfig(qk_tiles * short_tile_bytes, {{cb, tt::DataFormat::Float16_b}})
+                .set_page_size(cb, short_tile_bytes)
+                .set_tile_dims(cb, Tile({sdpa_tail_rows, sdpa_tail_cols})));
+    }
+    for (const auto cb : {tt::CBIndex::c_1, tt::CBIndex::c_2}) {
+        const auto tiles = chunk_tiles * (cb == tt::CBIndex::c_1 ? row_tiles : v_tiles);
+        CreateCircularBuffer(
+            program,
+            core,
+            CircularBufferConfig(tiles * full_tile_bytes, {{cb, tt::DataFormat::Float16_b}})
+                .set_page_size(cb, full_tile_bytes));
+    }
+    const std::vector<std::uint32_t> args{rounds, chunks, layout, row_tiles, v_offset};
+    const auto reader = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_sdpa_merged_kv.cpp",
+        core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = args});
+    const auto writer = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/sdpa_merged_kv.cpp",
+        core,
+        ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = false,
+            .dst_full_sync_en = full_sync,
+            .math_approx_mode = false,
+            .compile_args = args});
+
+    std::vector<bfloat16> q(rounds * qk_tiles * sdpa_tail_elements);
+    // Large finite sentinels make accidentally contracting padding or reading
+    // V from the K prefix visible in the independent attention golden.
+    std::vector<bfloat16> k(rounds * chunks * chunk_tiles * row_tiles * 1024, bfloat16(8.0f));
+    std::vector<bfloat16> v(rounds * chunks * chunk_tiles * v_tiles * 1024);
+    std::vector<float> golden(rounds * v_tiles * sdpa_tail_elements);
+    auto full_index = [](std::uint32_t row, std::uint32_t col) {
+        return (row / 16 * 2 + col / 16) * 256 + row % 16 * 16 + col % 16;
+    };
+    auto q_value = [](std::uint32_t round, std::uint32_t row, std::uint32_t dim) {
+        return static_cast<float>(static_cast<int>((round * 3 + row * 7 + dim * 5) % 17) - 8) / 16.0f;
+    };
+    auto k_value = [](std::uint32_t round, std::uint32_t token, std::uint32_t dim) {
+        return static_cast<float>((round * 5 + token * 7 + dim * 3) % 17) / 16.0f;
+    };
+    auto v_value = [&](std::uint32_t round, std::uint32_t token, std::uint32_t dim) {
+        return layout == 0 ? k_value(round, token, dim)
+                           : 0.5f + static_cast<float>((round * 11 + token * 3 + dim * 7) % 23) / 16.0f;
+    };
+    for (std::uint32_t round = 0; round < rounds; ++round) {
+        for (std::uint32_t row = 0; row < sdpa_tail_rows; ++row) {
+            for (std::uint32_t dim = 0; dim < width; ++dim) {
+                q[(round * qk_tiles + dim / 32) * sdpa_tail_elements + sdpa_tail_face_index(row, dim % 32)] =
+                    bfloat16(q_value(round, row, dim));
+            }
+        }
+        for (std::uint32_t token = 0; token < tokens; ++token) {
+            for (std::uint32_t dim = 0; dim < width; ++dim) {
+                const auto tile_row = round * chunks * chunk_tiles + token / 32;
+                const auto within_tile = full_index(token % 32, dim % 32);
+                k[(tile_row * row_tiles + dim / 32) * 1024 + within_tile] = bfloat16(k_value(round, token, dim));
+                v[(tile_row * v_tiles + dim / 32) * 1024 + within_tile] = bfloat16(v_value(round, token, dim));
+                if (layout == 2) {
+                    k[(tile_row * row_tiles + v_offset + dim / 32) * 1024 + within_tile] =
+                        bfloat16(v_value(round, token, dim));
+                }
+            }
+        }
+        for (std::uint32_t row = 0; row < sdpa_tail_rows; ++row) {
+            std::array<double, tokens> scores{};
+            for (std::uint32_t token = 0; token < tokens; ++token) {
+                for (std::uint32_t dim = 0; dim < width; ++dim) {
+                    scores[token] += q_value(round, row, dim) * k_value(round, token, dim);
+                }
+                scores[token] *= 0.5;
+            }
+            const double maximum = *std::max_element(scores.begin(), scores.end());
+            double denominator = 0.0;
+            for (auto& score : scores) {
+                score = std::exp(score - maximum);
+                denominator += score;
+            }
+            for (std::uint32_t dim = 0; dim < v_tiles * 32; ++dim) {
+                double numerator = 0.0;
+                for (std::uint32_t token = 0; token < tokens; ++token) {
+                    numerator += scores[token] * v_value(round, token, dim);
+                }
+                golden[(round * v_tiles + dim / 32) * sdpa_tail_elements + sdpa_tail_face_index(row, dim % 32)] =
+                    numerator / denominator;
+            }
+        }
+    }
+    distributed::EnqueueWriteMeshBuffer(cq, input_q, pack_bfloat16_vec_into_uint32_vec(q), true);
+    distributed::EnqueueWriteMeshBuffer(cq, input_k, pack_bfloat16_vec_into_uint32_vec(k), true);
+    if (separate_v) {
+        distributed::EnqueueWriteMeshBuffer(cq, input_v, pack_bfloat16_vec_into_uint32_vec(v), true);
+    }
+    SetRuntimeArgs(program, reader, core, {input_q->address(), input_k->address(), input_v->address()});
+    SetRuntimeArgs(program, writer, core, {output->address(), 0, rounds * v_tiles});
+    distributed::MeshWorkload workload;
+    const distributed::MeshCoordinate zero(0, 0);
+    workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
+    std::vector<std::uint32_t> result;
+    distributed::EnqueueReadMeshBuffer(cq, result, output, true);
+    const auto actual = unpack_uint32_vec_into_bfloat16_vec(result);
+    ASSERT_EQ(actual.size(), golden.size());
+    double squared_error = 0.0;
+    double squared_golden = 0.0;
+    for (std::uint32_t index = 0; index < actual.size(); ++index) {
+        const float value = static_cast<float>(actual[index]);
+        ASSERT_TRUE(std::isfinite(value)) << "output index=" << index;
+        // Account for the existing BF16 QK/OV accumulation and fast approximate
+        // exponential; these are unchanged by the layout parameters.
+        ASSERT_NEAR(value, golden[index], 0.03f * std::abs(golden[index])) << "output index=" << index;
+        squared_error += std::pow(static_cast<double>(value) - golden[index], 2);
+        squared_golden += std::pow(static_cast<double>(golden[index]), 2);
+    }
+    ASSERT_LT(std::sqrt(squared_error / squared_golden), 0.02);
+}
+
+Program make_sdpa_chunk_compile_program(const std::vector<std::uint32_t>& args) {
+    Program program = CreateProgram();
+    const CoreCoord core{0, 0};
+    for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2, tt::CBIndex::c_3, tt::CBIndex::c_16}) {
+        auto config = CircularBufferConfig(2048, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, 2048);
+        if (cb == tt::CBIndex::c_0 || cb == tt::CBIndex::c_16) {
+            config.set_unpack_face_geometry(cb, 8, 2);
+        }
+        CreateCircularBuffer(program, core, config);
+    }
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/sdpa_chunk_compile_limits.cpp",
+        core,
+        ComputeConfig{.math_fidelity = MathFidelity::LoFi, .fp32_dest_acc_en = false, .compile_args = args});
+    return program;
+}
+
 }  // namespace
 
 TEST_F(LLKBlackholeSingleCardFixture, SdpaRecipFidelityAndSignalling) {
@@ -302,6 +480,15 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaTailShortFaceProducerAndUntilize) {
     }
 }
 
+TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkMergedKvAndDefaultLayouts) {
+    for (const auto layout : {0u, 1u, 2u}) {
+        for (const bool full_sync : {false, true}) {
+            SCOPED_TRACE(::testing::Message() << "layout=" << layout << ", full_sync=" << full_sync);
+            run_sdpa_merged_kv(*devices_.at(0), layout, full_sync);
+        }
+    }
+}
+
 TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkSemaphoreCompileLimits) {
     // This is a compile-time contract test; these programs are never launched.
     // 14 tiles with unit signaling and 16 tiles with grouped signaling fit the
@@ -309,22 +496,36 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkSemaphoreCompileLimits) {
     for (const auto& args : {std::vector<std::uint32_t>{14, 1, 1}, {16, 2, 2}, {16, 1, 2}, {16, 2, 1}}) {
         SCOPED_TRACE(::testing::Message() << "chunk=" << args[0] << ", qk=" << args[1] << ", exp=" << args[2]);
         const bool fits = args[0] / args[1] + 1 <= 15 && args[0] / args[2] + 1 <= 15;
-        Program program = CreateProgram();
-        const CoreCoord core{0, 0};
-        for (const auto cb :
-             {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2, tt::CBIndex::c_3, tt::CBIndex::c_16}) {
-            auto config = CircularBufferConfig(2048, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, 2048);
-            if (cb == tt::CBIndex::c_0 || cb == tt::CBIndex::c_16) {
-                config.set_unpack_face_geometry(cb, 8, 2);
-            }
-            CreateCircularBuffer(program, core, config);
-        }
-        CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/sdpa_chunk_compile_limits.cpp",
-            core,
-            ComputeConfig{.math_fidelity = MathFidelity::LoFi, .fp32_dest_acc_en = false, .compile_args = args});
+        auto compile_args = args;
+        compile_args.insert(compile_args.end(), {2, 2, 0, 0, 0});
+        auto program = make_sdpa_chunk_compile_program(compile_args);
         if (fits) {
+            EXPECT_NO_THROW(program.impl().compile(&this->device()));
+        } else {
+            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
+        }
+    }
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkMergedKvCompileLimits) {
+    // row_tiles, V width, V offset, contraction, separate-V, accepted.
+    // An odd physical stride is valid when the QK contraction remains even.
+    const std::array<std::array<std::uint32_t, 6>, 8> cases{{
+        {6, 2, 3, 2, 0, 1},
+        {5, 2, 3, 2, 0, 1},
+        {2, 2, 0, 0, 1, 1},
+        {6, 2, 3, 1, 0, 0},
+        {6, 2, 3, 3, 0, 0},
+        {6, 2, 3, 8, 0, 0},
+        {6, 2, 5, 2, 0, 0},
+        {6, 2, 1, 2, 1, 0},
+    }};
+    for (const auto& test : cases) {
+        SCOPED_TRACE(
+            ::testing::Message() << "row_tiles=" << test[0] << ", v_tiles=" << test[1] << ", v_offset=" << test[2]
+                                 << ", qk_tiles=" << test[3] << ", separate_v=" << test[4]);
+        auto program = make_sdpa_chunk_compile_program({2, 1, 1, test[0], test[1], test[2], test[3], test[4]});
+        if (test[5]) {
             EXPECT_NO_THROW(program.impl().compile(&this->device()));
         } else {
             EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);

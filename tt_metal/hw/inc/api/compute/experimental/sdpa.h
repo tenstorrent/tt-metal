@@ -311,11 +311,15 @@ template <
     // output_granularity = number of O·V output tiles produced per FPU->SFPU signal.
     std::uint32_t output_granularity = 1,
     bool mm_pack_init = true,
-    // separate_v=false: single-CB (MLA) layout — V is read from cb_k at stride num_tiles_k.
+    // separate_v=false: single-CB layout — V is read from cb_k at stride num_tiles_k.
     // separate_v=true:  two-CB (GQA) layout — V is read from its own cb_v at stride num_tiles_v
     //                   (V tiles contiguous in cb_v), and cb_v is waited on / popped separately.
     bool separate_v = false,
-    bool configure_mask_extent = false>
+    bool configure_mask_extent = false,
+    // Offset of V within each single-CB row; separate V buffers require zero.
+    std::uint32_t v_tile_offset = 0,
+    // QK contraction width; zero uses the full num_tiles_k row.
+    std::uint32_t qk_contract_tiles = 0>
 void compute_sdpa_chunk(
     std::uint32_t cb_q,
     std::uint32_t cb_k,
@@ -332,6 +336,7 @@ void compute_sdpa_chunk(
     bool mask_chunk,
     std::uint32_t ov_kt_dim = chunk_size) {
     constexpr std::uint16_t scale_bf16 = scale_fp32 >> 16;
+    constexpr std::uint32_t qk_kt = qk_contract_tiles ? qk_contract_tiles : num_tiles_k;
     static_assert(DST_ACCUM_MODE == false, "compute_sdpa_chunk: FP32 destination accumulation mode is not supported");
     static_assert(
         num_tiles_v % output_granularity == 0,
@@ -342,14 +347,18 @@ void compute_sdpa_chunk(
     // The custom-MM unpacks issue a single MOP of (kt_dim/2)-1 iterations and only support an even
     // kt_dim >= 2 (see the "kt_dim: even number from 2 to 256" note in the unpack LLK headers). With
     // kt_dim < 2 the count underflows to ~4 billion and the unpacker hangs silently. Fail at compile
-    // time instead. OV matmul: kt_dim = chunk_size (Sk_chunk_t); QK matmul: kt_dim = num_tiles_k (DHt).
+    // time instead. OV matmul: kt_dim = chunk_size (Sk_chunk_t); QK matmul: kt_dim = qk_kt.
     static_assert(
         chunk_size >= 2 && chunk_size % 2 == 0,
         "compute_sdpa_chunk: chunk_size (Sk_chunk_t = OV-matmul kt_dim) must be even and >= 2; "
         "k_chunk_size of 32 gives Sk_chunk_t=1, which underflows the OV custom-MM unpack MOP and hangs");
     static_assert(
-        num_tiles_k >= 2 && num_tiles_k % 2 == 0,
-        "compute_sdpa_chunk: num_tiles_k (QK-matmul kt_dim) must be even and >= 2 for the custom-MM unpack");
+        qk_kt >= 2 && qk_kt % 2 == 0,
+        "compute_sdpa_chunk: QK contraction must be even and >= 2 for the custom-MM unpack");
+    static_assert(qk_kt <= num_tiles_k, "compute_sdpa_chunk: QK contraction must fit inside the K row");
+    static_assert(
+        separate_v ? v_tile_offset == 0 : v_tile_offset <= num_tiles_k && num_tiles_v <= num_tiles_k - v_tile_offset,
+        "compute_sdpa_chunk: v_tile_offset requires the single-CB layout and V must fit inside the row");
     static_assert(
         chunk_size / qk_signal_granularity + 1 <= 15,
         "compute_sdpa_chunk: QK posts (chunk_size/qk_signal_granularity)+1 must fit the 4-bit semaphore");
@@ -365,8 +374,8 @@ void compute_sdpa_chunk(
     // Q @ K (FPU)
     // Make sure SFPU of previous chunk is done (sem is zero)
     MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
-    sdpa_custom_mm_block<transpose_k, qk_signal_granularity, configure_mask_extent>(
-        cb_q, cb_k, cb_mask, 0, 0, mm1_dst_offset, num_tiles_k, chunk_size, mask_chunk);
+    sdpa_custom_mm_block<transpose_k, qk_signal_granularity, configure_mask_extent, num_tiles_k>(
+        cb_q, cb_k, cb_mask, 0, 0, mm1_dst_offset, qk_kt, chunk_size, mask_chunk);
 
     // Reduce Max (SFPU)
     PACK((llk_math_sfpu_sdpa_reduce_max_row<
@@ -424,7 +433,7 @@ void compute_sdpa_chunk(
         }
     }
 
-    // MM (FPU). Single-CB (MLA): V is read from cb_k at stride num_tiles_k. Two-CB (GQA):
+    // MM (FPU). Single-CB: V starts at v_tile_offset in cb_k, at stride num_tiles_k. Two-CB (GQA):
     // V lives in its own cb_v (contiguous, stride num_tiles_v) and must be waited on
     // separately. separate_v is compile-time, so ov_cb / in1_k_stride fold to constants.
     if constexpr (separate_v) {
@@ -443,7 +452,7 @@ void compute_sdpa_chunk(
         cb_q,
         ov_cb,
         0,
-        0,
+        v_tile_offset,
         mm1_dst_offset,
         mm2_dst_offset,
         transpose_v,

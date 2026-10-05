@@ -2029,18 +2029,26 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
     read_transposed    : selects the transposed SrcA (in1) L1 walk in the unpack LLK.
     mm_transpose       : the `transpose` init flag threaded through the unpack/math inits
                          (addr_mod SrcA increment + Haloize_mode).
+    sdpa_row_stride    : physical SrcA row width in tiles for read_transposed. None
+                         omits the LLK argument; zero and kt_dim retain tight packing.
+    sdpa_input_tile_offset : leading SrcA tiles skipped before the matmul input.
     """
 
     signal_granularity: int = 1
     read_transposed: bool = False
     mm_transpose: bool = False
+    sdpa_row_stride: int | None = None
+    sdpa_input_tile_offset: int = 0
 
     def convert_to_cpp(self) -> str:
         lines = [
             f"#define SIGNAL_GRANULARITY {self.signal_granularity}",
             f"#define READ_TRANSPOSED {str(self.read_transposed).lower()}",
             f"#define MM_TRANSPOSE {str(self.mm_transpose).lower()}",
+            f"#define SDPA_INPUT_TILE_OFFSET {self.sdpa_input_tile_offset}",
         ]
+        if self.sdpa_row_stride is not None:
+            lines.append(f"#define SDPA_ROW_STRIDE {self.sdpa_row_stride}")
         return "\n".join(lines)
 
 
