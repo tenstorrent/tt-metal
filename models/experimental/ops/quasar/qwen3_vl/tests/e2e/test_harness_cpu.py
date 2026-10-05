@@ -356,3 +356,19 @@ def test_scatter_rows_matches_index_put():
     want = base.clone()
     want[idx] = rows
     assert torch.equal(out, want) and not torch.equal(base, want)  # input left untouched
+
+
+def test_bf16_precision_keeps_fp32_dest_acc_when_asked():
+    from models.experimental.ops.quasar.qwen3_vl.tt.quasar_config import bf16_decoders_precision
+
+    conf = bf16_decoders_precision(1, "Qwen3-VL-4B-Instruct", fp32_dest_acc=True).decoder_optimizations[0]
+    assert all(v.value == "hifi4" for v in conf.op_fidelity_settings.values())
+
+
+def test_fp32_dest_acc_requested_reads_env(monkeypatch):
+    from models.experimental.ops.quasar.qwen3_vl.tt.quasar_config import fp32_dest_acc_requested
+
+    monkeypatch.delenv("QWEN_QSR_FP32_DEST_ACC", raising=False)
+    assert not fp32_dest_acc_requested()
+    monkeypatch.setenv("QWEN_QSR_FP32_DEST_ACC", "1")
+    assert fp32_dest_acc_requested()
