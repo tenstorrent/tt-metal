@@ -6,8 +6,13 @@
 namespace sdpa::streaming {
 
 struct StateTransfer {
-    enum Action : uint32_t { Save, Restore };
-    enum Word : uint32_t { Operation, Slot, Numerator, Maximum, Denominator, Chunks, Words };
+    // Save / Restore move a whole Q block's state while compute waits. The streamed actions (ring kernels with
+    // fused chunks, SDPA_RING_STREAM_STATE) overlap it with compute: SaveRows moves the O rows [Row0, Row0 + Rows)
+    // as the last K chunk finishes them, SaveTail the remaining O rows from Row0 plus maxima, sums and header;
+    // RestoreStream acks once for header, maxima and sums, then once per O row as it lands. A SaveTail with
+    // Rows = 1 acks once its bytes have left L1 (the next block reuses the banks without a restore).
+    enum Action : uint32_t { Save, Restore, SaveRows, SaveTail, RestoreStream };
+    enum Word : uint32_t { Operation, Slot, Numerator, Maximum, Denominator, Chunks, Row0, Rows, Words };
     static constexpr uint32_t page_bytes = 4096;
 
     // Raw bytes of one Q block's state planes, for q_tiles query tile rows: the FP32 numerator (the BF16
