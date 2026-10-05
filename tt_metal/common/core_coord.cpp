@@ -166,6 +166,8 @@ CoreRangeSet::CoreRangeSet(const std::set<CoreRange>& core_ranges) : ranges_(cor
 
 CoreRangeSet::CoreRangeSet(const CoreRange& core_range) : ranges_{core_range} {}
 
+CoreRangeSet::CoreRangeSet(const CoreCoord& core_coord) : ranges_{CoreRange(core_coord)} {}
+
 CoreRangeSet::CoreRangeSet(ttsl::Span<const CoreCoord> core_coords) {
     std::vector<CoreRange> core_ranges;
     core_ranges.reserve(core_coords.size());

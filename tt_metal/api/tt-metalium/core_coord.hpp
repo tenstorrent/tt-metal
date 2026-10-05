@@ -116,6 +116,8 @@ public:
 
     CoreRangeSet(const CoreRange& core_range);
 
+    CoreRangeSet(const CoreCoord& core_coord);
+
     CoreRangeSet(ttsl::Span<const CoreCoord> core_coords);
 
     CoreRangeSet() = default;

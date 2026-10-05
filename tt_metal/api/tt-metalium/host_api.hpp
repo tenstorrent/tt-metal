@@ -310,12 +310,12 @@ void UpdateDynamicCircularBufferAddressAndTotalSize(
  * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
  * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
  * | program       | The program to which semaphore will be added to      | Program &                                                 |              | Yes      |
- * | core_spec     | Range of the Tensix coordinates using the semaphore  | const std::variant<CoreRange,CoreRangeSet> &              |              | Yes      |
+ * | core_spec     | Range of the Tensix coordinates using the semaphore  | const std::variant<CoreCoord,CoreRange,CoreRangeSet> &    |              | Yes      |
  * | initial_value | Initial value of the semaphore                       | uint32_t                                                  |              | Yes      |
  */
 // clang-format on
 uint32_t CreateSemaphore(
-    Program& program, const std::variant<CoreRange, CoreRangeSet>& core_spec, uint32_t initial_value);
+    Program& program, const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec, uint32_t initial_value);
 
 // clang-format off
 /**

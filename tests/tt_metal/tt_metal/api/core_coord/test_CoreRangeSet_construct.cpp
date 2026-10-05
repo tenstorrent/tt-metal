@@ -19,6 +19,14 @@ TEST_F(CoreCoordFixture, CPU_TestCoreRangeSetValidConstruct) {
     EXPECT_EQ(valid_ranges.ranges().size(), 2);
 }
 
+TEST_F(CoreCoordFixture, CPU_TestCoreRangeSetImplicitConstructFromCoreCoord) {
+    ::CoreCoord coord{3, 4};
+    ::CoreRangeSet from_coord = coord;
+    EXPECT_EQ(from_coord, ::CoreRangeSet(::CoreRange(coord)));
+    EXPECT_EQ(from_coord.ranges().size(), 1);
+    EXPECT_TRUE(from_coord.contains(coord));
+}
+
 TEST_F(CoreCoordFixture, CPU_TestCoreRangeSetInvalidConstruct) {
     ::CoreRange overlapping_range({1, 2}, {3, 3});
     EXPECT_ANY_THROW(::CoreRangeSet(std::vector{this->cr1, this->cr2, overlapping_range}));
