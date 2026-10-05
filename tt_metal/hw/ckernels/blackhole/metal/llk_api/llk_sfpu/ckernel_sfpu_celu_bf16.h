@@ -22,7 +22,7 @@ struct CeluBf16Config {
     static constexpr uint32_t kLowerBits = 0xc0c80000u;
     static constexpr uint32_t kTerminalBits = 0xbf800000u;
     static constexpr bool kOrdered = false;
-    static constexpr bool kRawIngress = false;
+    static constexpr bool kRawIngress = true;
     static constexpr bool kRawTerminal = false;
     static constexpr uint32_t degree(uint32_t segment) { return kDegree[segment]; }
     static constexpr int park_row(uint32_t index) { return kParkRows[index]; }
