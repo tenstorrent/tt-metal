@@ -74,7 +74,8 @@ def init_dummy_backbone_weights(torch_model, seed=0, input_std=1.0):
             if hasattr(module, "bn3") and isinstance(module.bn3, nn.modules.batchnorm._BatchNorm):
                 uniform_(module.bn3.weight, *RESIDUAL_BN_GAMMA)
 
-        torch_model.conv1.weight /= input_std
+        if input_std != 1.0:
+            torch_model.conv1.weight /= input_std
 
     torch_model.eval()
     return torch_model

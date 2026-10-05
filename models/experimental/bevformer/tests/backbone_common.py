@@ -9,14 +9,7 @@ import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
-from models.experimental.bevformer.config.backbone_config import (
-    BLOCK_SHARDED_DOWNSAMPLE_STAGES,
-    BLOCK_SHARDED_LEVELS,
-    DRAM_ACTIVATION_LEVELS,
-    DRAM_ACTIVATION_STAGES,
-    DRAM_CONV_SLICES,
-    FP32_ACC_STAGES,
-)
+from models.experimental.bevformer.config import backbone_config
 from models.experimental.bevformer.reference.fpn import FPN
 from models.experimental.bevformer.reference.resnet import ResNet
 from models.experimental.bevformer.tests.backbone_weights import init_dummy_backbone_weights, init_dummy_fpn_weights
@@ -68,6 +61,17 @@ FPN_KWARGS = dict(
 BACKBONE_OUTPUT_DTYPES = [ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16]
 
 
+# BEVFormer-base's image normalization (img_norm_cfg): subtract this BGR mean and divide by
+# std (1, 1, 1), so the images stay in pixel units, not unit scale.
+IMAGE_MEAN_BGR = (103.530, 116.280, 123.675)
+# Random structure at these cell sizes and amplitudes, in pixel units, plus per-pixel noise.
+IMAGE_NOISE_SCALES = ((8, 80.0), (32, 40.0), (128, 20.0))
+IMAGE_PIXEL_NOISE = 8.0
+# The std of random_image_batch, measured over full batches; its mean is near zero. Re-measure
+# it when the noise constants change: the dummy backbone's stem is scaled by it.
+IMAGE_STD = 19.5
+
+
 # The references only run forward; without autograd they keep no activations for backward.
 def build_reference_backbone():
     return init_dummy_backbone_weights(ResNet(**RESNET_KWARGS), input_std=IMAGE_STD).requires_grad_(False)
@@ -79,22 +83,10 @@ def build_reference_fpn():
 
 def tt_resnet_kwargs():
     """The TtResNet arguments matching RESNET_KWARGS."""
-    return dict(
-        out_indices=RESNET_KWARGS["out_indices"],
-        dram_activation_stages=DRAM_ACTIVATION_STAGES,
-        dram_conv_slices=DRAM_CONV_SLICES,
-        block_sharded_downsample_stages=BLOCK_SHARDED_DOWNSAMPLE_STAGES,
-        fp32_acc_stages=FP32_ACC_STAGES,
-    )
+    return dict(out_indices=RESNET_KWARGS["out_indices"], **backbone_config.tt_resnet_kwargs())
 
 
-def tt_fpn_kwargs():
-    """The TtFPN arguments for this configuration."""
-    return dict(
-        dram_activation_levels=DRAM_ACTIVATION_LEVELS,
-        dram_conv_slices=DRAM_CONV_SLICES,
-        block_sharded_levels=BLOCK_SHARDED_LEVELS,
-    )
+tt_fpn_kwargs = backbone_config.tt_fpn_kwargs
 
 
 def to_conv_layout(nchw, device, dtype, layout=ttnn.TILE_LAYOUT):
@@ -114,15 +106,6 @@ def assert_pcc(expected, actual, pcc):
     passed, message = assert_with_pcc(expected, actual, pcc)
     logger.info(f"PCC {message} (threshold {pcc})")
     return passed, message
-
-
-# BEVFormer-base's image normalization (img_norm_cfg): BGR pixels minus this mean, std 1.
-IMAGE_MEAN_BGR = (103.530, 116.280, 123.675)
-# Random structure at these cell sizes and amplitudes, in pixel units, plus per-pixel noise.
-IMAGE_NOISE_SCALES = ((8, 80.0), (32, 40.0), (128, 20.0))
-IMAGE_PIXEL_NOISE = 8.0
-# The std of random_image_batch (measured over a full batch); the mean is near zero.
-IMAGE_STD = 19.5
 
 
 def random_image_batch():

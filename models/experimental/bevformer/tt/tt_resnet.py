@@ -159,9 +159,9 @@ class TtBottleneck:
         ``dram_conv_slices`` width slices; a DCN conv2 is unaffected. ``dram_input`` only
         covers the convs that read the block input, for a block fed by a DRAM layer whose own
         activations fit in L1. ``block_sharded_downsample`` block-shards the downsample conv.
-        ``fp32_acc`` accumulates conv1, a non-DCN conv2, conv3 and the downsample in an fp32
-        destination register (their partial sums between reduction blocks stay bfloat16); a DCN
-        conv2 always does (TtModulatedDeformConv2dPack)."""
+        ``fp32_acc`` turns on fp32 destination accumulation (``fp32_dest_acc_en``) for conv1, a
+        non-DCN conv2, conv3 and the downsample; a DCN conv2 always has it
+        (TtModulatedDeformConv2dPack)."""
         self.with_dcn = "conv_offset" in conv_pth.conv2
         self.is_downsample = "downsample" in conv_pth
 
@@ -273,7 +273,8 @@ class TtResNet:
         matmul. A layer that follows one of them and is not listed itself reads its input from
         DRAM the same way. ``block_sharded_downsample_stages`` lists the layers whose downsample
         conv is block sharded, and ``fp32_acc_stages`` the layers whose convs accumulate in an fp32
-        destination register (see TtBottleneck)."""
+        destination register (see TtBottleneck). The defaults keep everything in L1 at bfloat16
+        accumulation; ``config/backbone_config.tt_resnet_kwargs`` gives BEVFormer-base's values."""
         self.out_indices = out_indices
         self.maxpool_args = conv_args.maxpool
         stage_config = dict(
