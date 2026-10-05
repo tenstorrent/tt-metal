@@ -37,10 +37,8 @@ namespace sfpu {
  * - base < 0, pow = non-integer: Returns NaN (complex result)
  * - Overflow/underflow: Clamped to appropriate limits
  *
- * Parity limit: the odd/even test below converts pow through vSMag16, which saturates at
- * +/-32767, so any larger |pow| reads as non-integer and a negative base returns NaN
- * where the true result is finite: (-1)**40000 gives NaN rather than 1. The inline claim
- * that "large powers will approach 0/Inf" does not hold when |base| == 1.
+ * Parity: whether pow is an integer, and whether it is odd, is read from its mantissa (see
+ * the body), so a negative base with an integer exponent gets its sign at every magnitude.
  *
  * @note This function assumes that the programmable constants are set to the following values:
  * - vConstFloatPrgm0 = 1.4426950408889634f;
@@ -121,7 +119,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
 
     // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
     // Check valid base range
-    // r78: integer-ness and parity of the exponent, at every magnitude
+    // Integer-ness and parity of the exponent, at every magnitude
     // A fixed-width integer convert cannot supply them: convert<vSMag16> saturates at
     // +-32767, so an exponent of 32768 or more read as a non-integer and sent every negative
     // base to NaN, where IEEE 754 defines the result.
@@ -221,11 +219,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
  * - base < 0, pow = non-integer: Returns NaN (complex result)
  * - Overflow/underflow: Clamped to appropriate limits
  *
- * Parity limit: the same vSMag16 saturation described on _sfpu_binary_power_21f_ above.
- * In this body it also costs the zero-base sign: a -0 base loses it for odd pow in
- * 32767 < |pow| < 2**24, because the saturated pow reads as non-integer and the
- * negative-base branch overwrites y with a positive NaN before the fills below copy its
- * sign. A +0 base is unaffected, and the magnitude stays correct throughout.
+ * Parity: read from the mantissa, as in _sfpu_binary_power_21f_ above.
  */
 sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat pow) {
     // The algorithm works in two steps:
@@ -335,17 +329,14 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     v_if(out_exp >= 255) { y = std::numeric_limits<float>::infinity(); }
     v_endif;
 
-    // |pow| removes a -0 exponent: convert<vSMag16> would round trip that back to something the
-    // bit-exact compare below reports as non-integer (on BH, not on WH) and gives NaN instead of 1
-    // for a -0 base. Kept on WH too, where it passes only because that conversion happens to
-    // preserve the sign of a -0, which is not a guarantee. Free either way: the zero-base block
-    // below needs |pow|, so this hoist reuses its abs and the instruction count is unchanged.
+    // |pow| is computed once here: the parity test, the zero-exponent restore and the
+    // zero-base block below all read it.
     sfpi::vFloat abs_pow = sfpi::abs(pow);
 
     v_if(base < 0.0f) {  // negative base
         // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
         // Check valid base range
-        // r78: integer-ness and parity of the exponent, at every magnitude
+        // Integer-ness and parity of the exponent, at every magnitude
         // A fixed-width integer convert cannot supply them: convert<vSMag16> saturates at
         // +-32767, so an exponent of 32768 or more read as a non-integer and sent every negative
         // base to NaN, where IEEE 754 defines the result.
