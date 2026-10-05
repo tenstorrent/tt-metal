@@ -6,6 +6,7 @@
 #pragma once
 
 #include <cstdint>
+#include <utility>
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -69,13 +70,47 @@ inline void _calculate_reciprocal_fast_7b_(const int iterations) {
 #endif
 }
 
-// BF16 reciprocal using a Newton correction on the BF16 LSB. `iterations` is even (8 or 32).
-inline void _calculate_reciprocal_fast_8b_3c_(const int iterations) {
+// Step R loads vector R and stores vector R - 2; the slot after each LOADMACRO, where its arecip and copy execute,
+// holds no Simple or MAD instruction.
+template <int R, int N>
+sfpi_inline void _recip_8b_step_() {
+    constexpr auto y = [](int v) { return v % 3; };
+    constexpr auto e = [](int v) { return 3 + v % 2; };
+    constexpr int x = p_sfpu::LREG6;
+    if constexpr (R < N) {
+        // The stores advance the RWC and lag the loads by two vectors.
+        TTI_SFPLOADMACRO((0 << 2) | y(R), InstrModLoadStore::DEFAULT, ADDR_MOD_7, R < 2 ? 2 * R : 4);
+    }
+    if constexpr (R >= 2 && R - 2 < N) {
+        TTI_SFPSTORE(y(R - 2), InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+    } else if constexpr (R < N) {
+        TTI_SFPNOP;
+    }
+    if constexpr (R < N) {
+        TTI_SFPLOADI(y(R), sfpi::SFPLOADI_MOD0_LOWER, 0x8000);
+        TTI_SFPMAD(x, y(R), p_sfpu::LCONST_neg1, e(R), 0);
+    }
+    if constexpr (R >= 1 && R - 1 < N) {
+        TTI_SFPIADD(0, e(R - 1), y(R - 1), sfpi::SFPIADD_MOD1_CC_NONE);
+    }
+    if constexpr (R < N) {
+        TTI_SFPSHFT((-16) & 0xFFF, e(R), e(R), 5);
+    }
+}
+
+template <int N, int... R>
+sfpi_inline void _recip_8b_steps_(std::integer_sequence<int, R...>) {
+    (_recip_8b_step_<R, N>(), ...);
+}
+
+// BF16 reciprocal using a Newton correction on the BF16 LSB.
+template <int ITERATIONS>
+inline void _calculate_reciprocal_fast_8b_3c_() {
 #ifdef DISABLE_SFPLOADMACRO
     TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, 0x8000);
 
 #pragma GCC unroll 8
-    for (int d = 0; d < iterations; d++) {
+    for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
         TTI_SFPMAD(p_sfpu::LCONST_0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
         TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPARECIP_MOD1_RECIP);
@@ -86,47 +121,20 @@ inline void _calculate_reciprocal_fast_8b_3c_(const int iterations) {
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
     }
 #else
-    // Two vectors in flight, a in LREG0 and LREG1, b in LREG2 and LREG3, interleaved so that no instruction reads
-    // the result of the one issued just before it.
-    constexpr int ya = p_sfpu::LREG0;
-    constexpr int xa = p_sfpu::LREG1;
-    constexpr int yb = p_sfpu::LREG2;
-    constexpr int xb = p_sfpu::LREG3;
-
     // Macro template 0 uses SFPMAD_MOD1_INDIRECT_VD, so LREG7 selects where the copy of the loaded value lands.
     TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, p_sfpu::LREG6);
 
     // Pseudocode for the BF16 correction of one vector:
     //
     // y = load()
-    // x = load()
+    // x = y
     // y = arecip(y)
     // y[15:0] = 0x8000
     // e = x * y - 1
     // t = e >> 16
     // y += t          # integer add, not FP32 add
     // store(y)
-#pragma GCC unroll 8
-    for (int d = 0; d < iterations; d += 2) {
-        TTI_SFPLOADMACRO((0 << 2) | ya, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
-        // arecip(a) and the copy execute at this issue; the load of x_a takes the third write port.
-        TTI_SFPLOAD(xa, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
-        TTI_SFPLOADMACRO((0 << 2) | yb, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 2);
-        TTI_SFPLOAD(xb, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 2);
-        // Keep the patch and correction in LReg space; macro store/reload
-        // scheduling can read a just-written Dst block too soon on Blackhole.
-        TTI_SFPLOADI(ya, sfpi::SFPLOADI_MOD0_LOWER, 0x8000);
-        TTI_SFPLOADI(yb, sfpi::SFPLOADI_MOD0_LOWER, 0x8000);
-        TTI_SFPMAD(xa, ya, p_sfpu::LCONST_neg1, xa, 0);
-        TTI_SFPMAD(xb, yb, p_sfpu::LCONST_neg1, xb, 0);
-        TTI_SFPSHFT((-16) & 0xFFF, xa, xa, 5);
-        TTI_SFPSHFT((-16) & 0xFFF, xb, xb, 5);
-        TTI_SFPIADD(0, xa, ya, sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPIADD(0, xb, yb, sfpi::SFPIADD_MOD1_CC_NONE);
-        // ADDR_MOD_6 advances DEST by one vector per store.
-        TTI_SFPSTORE(ya, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
-        TTI_SFPSTORE(yb, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
-    }
+    _recip_8b_steps_<ITERATIONS>(std::make_integer_sequence<int, ITERATIONS + 2>{});
 
     TTI_SFPNOP;
 #endif
@@ -368,7 +376,7 @@ inline void calculate_reciprocal() {
     } else if constexpr (is_fp32_dest_acc_en) {
         _calculate_reciprocal_fast_24b_5c_(ITERATIONS);
     } else {
-        _calculate_reciprocal_fast_8b_3c_(ITERATIONS);
+        _calculate_reciprocal_fast_8b_3c_<ITERATIONS>();
     }
 }
 
