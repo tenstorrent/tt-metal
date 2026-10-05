@@ -68,8 +68,10 @@ void kernel_main() {
     // Deal cores to the ACTIVE rows of this step (cur_pos != -1) instead of to the padded batch
     // (tenstorrent/tt-metal#59300). Row, head and rank then come from the cur_pos vector.
     constexpr bool active_row_alloc = get_compile_time_arg_val(36) == 1;
+    // Upper bound on the cores one (row, head) group takes in active-row mode.
+    constexpr uint32_t max_cores_per_head = get_compile_time_arg_val(37);
 
-    constexpr auto q_args = TensorAccessorArgs<37>();
+    constexpr auto q_args = TensorAccessorArgs<38>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -180,8 +182,8 @@ void kernel_main() {
                         active_rows[active_count++] = b;
                     }
                 }
-                const auto assignment =
-                    assign_core_to_active_row<num_cores, num_kv_heads>(active_rows, active_count, core_index);
+                const auto assignment = assign_core_to_active_row<num_cores, num_kv_heads, max_cores_per_head>(
+                    active_rows, active_count, core_index);
                 if (assignment.idle) {
                     return;
                 }

@@ -217,6 +217,29 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t num_output_cores = B;
     const uint32_t num_active_cores = num_cores_per_head * num_kv_heads * B / num_heads_per_core;
 
+    // Active-row allocation deals a FIXED pool of cores to the active rows on device, so the pool
+    // must not depend on the padded batch: the same active rows then get the same split (and the
+    // same reduction order) in every graph. The pool is the whole grid, trimmed to a multiple of
+    // num_kv_heads and capped where a single active row would exceed 2^MAX_TREE_REDUCTION_ROUNDS
+    // cores per head; max_cores_per_head_batch keeps its meaning as the per-(row, head) ceiling
+    // and is applied by the kernel. The per-padded-row split above only shapes the static
+    // tables, which the active-row kernels ignore.
+    uint32_t num_launch_cores = num_active_cores;
+    uint32_t max_runtime_cores_per_head = num_cores_per_head;
+    if (active_row_alloc) {
+        const uint32_t max_pool = num_kv_heads << MAX_TREE_REDUCTION_ROUNDS;
+        num_launch_cores = std::min(num_cores_available, max_pool) / num_kv_heads * num_kv_heads;
+        TT_FATAL(
+            num_launch_cores >= B * num_kv_heads,
+            "active_row_allocation: a padded batch of {} rows x {} kv heads needs at least {} cores, but the "
+            "grid offers {} ({} usable); every active row must own at least one core per head",
+            B,
+            num_kv_heads,
+            B * num_kv_heads,
+            num_cores_available,
+            num_launch_cores);
+        max_runtime_cores_per_head = std::min(num_launch_cores / num_kv_heads, max_cores_per_head);
+    }
 
     // ========== Compute Kernel Config ==========
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -248,6 +271,16 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // ========== Tree Reduction Setup ==========
     // For n cores, need ceil(log2(n)) rounds
     const uint32_t num_tree_reduction_rounds = num_cores_per_head > 1 ? 32 - __builtin_clz(num_cores_per_head - 1) : 0;
+    // Active-row groups can be as large as max_runtime_cores_per_head (one active row), so the
+    // staging CB and the arg sizing use this bound rather than the static round count.
+    const uint32_t max_runtime_tree_rounds =
+        max_runtime_cores_per_head > 1 ? 32 - __builtin_clz(max_runtime_cores_per_head - 1) : 0;
+    TT_FATAL(
+        max_runtime_tree_rounds <= MAX_TREE_REDUCTION_ROUNDS,
+        "Tree reduction max {} rounds ({} cores/head), got {} cores/head for one active row",
+        MAX_TREE_REDUCTION_ROUNDS,
+        1 << MAX_TREE_REDUCTION_ROUNDS,
+        max_runtime_cores_per_head);
     TT_FATAL(
         num_tree_reduction_rounds <= MAX_TREE_REDUCTION_ROUNDS,
         "Tree reduction max {} rounds ({} cores/head), got {} cores/head",
@@ -307,8 +340,8 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // - Neither: simple linear order with linear indexing
     std::vector<CoreCoord> core_group;
     std::vector<CoreCoord> core_group_idle;
-    core_group.reserve(num_active_cores);
-    core_group_idle.reserve(num_cores_available - num_active_cores);
+    core_group.reserve(num_launch_cores);
+    core_group_idle.reserve(num_cores_available - num_launch_cores);
 
     if (on_subcoregrid) {
         TT_FATAL(is_q_sharded || is_output_sharded, "Subcoregrids require sharded Q or output");
@@ -317,7 +350,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         for (uint32_t i = 0; i < num_cores_available; ++i) {
             bool is_reducer = (i % num_cores_per_batch == 0) && (reducer_idx < num_output_cores);
             CoreCoord core = is_reducer ? cores_vec[reducer_idx++] : cores_vec[worker_idx++];
-            (i < num_active_cores ? core_group : core_group_idle).push_back(core);
+            (i < num_launch_cores ? core_group : core_group_idle).push_back(core);
         }
     } else if ((is_q_sharded || is_output_sharded) && !use_col_major_group_indexing) {
         // Q/output sharded without row major group assignment: reorder cores so reducers are at batch boundaries
@@ -332,13 +365,13 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
                 core = {worker_idx % grid_size.x, worker_idx / grid_size.x};
                 worker_idx++;
             }
-            (i < num_active_cores ? core_group : core_group_idle).push_back(core);
+            (i < num_launch_cores ? core_group : core_group_idle).push_back(core);
         }
     } else {
         // Q in DRAM, no sharding: simple linear assignment
         for (uint32_t i = 0; i < num_cores_available; ++i) {
             CoreCoord core = {i % grid_size.x, i / grid_size.x};
-            (i < num_active_cores ? core_group : core_group_idle).push_back(core);
+            (i < num_launch_cores ? core_group : core_group_idle).push_back(core);
         }
     }
 
@@ -386,12 +419,12 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         output_count++;
     }
 
-    // All active cores (for tree reduction lookups)
+    // All launched cores (for tree reduction lookups; the active-row writer indexes the whole pool)
     std::vector<uint32_t> reduction_group_core_xs;
     std::vector<uint32_t> reduction_group_core_ys;
-    reduction_group_core_xs.reserve(num_active_cores);
-    reduction_group_core_ys.reserve(num_active_cores);
-    for (uint32_t i = 0; i < num_active_cores; ++i) {
+    reduction_group_core_xs.reserve(num_launch_cores);
+    reduction_group_core_ys.reserve(num_launch_cores);
+    for (uint32_t i = 0; i < num_launch_cores; ++i) {
         auto physical = device->worker_core_from_logical_core(core_group[i]);
         reduction_group_core_xs.push_back(physical.x);
         reduction_group_core_ys.push_back(physical.y);
@@ -470,8 +503,12 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // the pre-tree-reduction flat gather. Legacy sizing is kept verbatim off the spec path;
     // in spec mode each block is T times larger and the over-provisioning alone would blow
     // L1 (110 tiles/block * 63 blocks = 14 MB at T=11, 64 cores/head).
-    const uint32_t intermed_output_blocks =
-        spec_multi_pos ? std::min(num_cores_per_head - 1, num_tree_reduction_rounds) : (num_cores_per_head - 1);
+    // Active-row mode: a group of up to max_runtime_cores_per_head ranks writes one block per
+    // runtime round, so the CB is sized for the deepest tree any occupancy can produce.
+    const uint32_t intermed_output_blocks = active_row_alloc ? std::max(num_cores_per_head - 1, max_runtime_tree_rounds)
+                                            : spec_multi_pos
+                                                ? std::min(num_cores_per_head - 1, num_tree_reduction_rounds)
+                                                : (num_cores_per_head - 1);
     const uint32_t intermed_output_tiles = (out_tiles + 2 * PNHt) * intermed_output_blocks;
 
     // ========== Data Formats ==========
@@ -545,9 +582,10 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         tt::LogOp, "Heads: kv={}, q={}, q_parallel_factor={}", num_kv_heads, num_q_heads, q_heads_parallel_factor);
     log_debug(
         tt::LogOp,
-        "Cores: available={}, active={}, per_batch={}, per_head={}, reducers={}, outputs={}",
+        "Cores: available={}, static active={}, launched={}, per_batch={}, per_head={}, reducers={}, outputs={}",
         num_cores_available,
         num_active_cores,
+        num_launch_cores,
         num_cores_per_batch,
         num_cores_per_head,
         num_reducer_cores,
@@ -578,8 +616,8 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     }
 
     // Print reduction group core coordinates
-    log_debug(tt::LogOp, "Reduction group cores ({}):", num_active_cores);
-    for (uint32_t i = 0; i < num_active_cores; ++i) {
+    log_debug(tt::LogOp, "Reduction group cores ({}):", num_launch_cores);
+    for (uint32_t i = 0; i < num_launch_cores; ++i) {
         log_debug(
             tt::LogOp, "  group[{}]: physical=({}, {})", i, reduction_group_core_xs[i], reduction_group_core_ys[i]);
     }
@@ -699,8 +737,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         &out_tile,
         is_output_sharded ? out_buffer : nullptr);
 
-    if (spec_multi_pos) {
-        // Every Q-shaped CB scales with PNHt == T here, so an otherwise legal (T,
+    if (spec_multi_pos || active_row_alloc) {
+        // Every Q-shaped CB scales with PNHt == T in spec mode, and the reduction staging CB
+        // scales with the deepest runtime tree in active-row mode, so an otherwise legal (T,
         // max_cores_per_head_batch) pair can exceed L1. Fail with the numbers and the two
         // knobs that fix it, instead of the generic "circular buffers grow to N B" error
         // raised later during program compile.
@@ -712,27 +751,30 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
         log_debug(
             tt::LogOp,
-            "spec_multi_pos: Tg={}, B={}, Sk_chunk_t_cb={}, cores/head={}, active cores={}, tree rounds={}, "
-            "intermed blocks={}, CB total={} B of {} B",
+            "L1 budget: Tg={}, B={}, Sk_chunk_t_cb={}, cores/head={} (runtime max {}), launched cores={}, "
+            "tree rounds={} (runtime max {}), intermed blocks={}, CB total={} B of {} B",
             spec_multi_pos_tiles,
             B,
             Sk_chunk_t_cb_size,
             num_cores_per_head,
-            num_active_cores,
+            max_runtime_cores_per_head,
+            num_launch_cores,
             num_tree_reduction_rounds,
+            max_runtime_tree_rounds,
             intermed_output_blocks,
             total_cb_bytes,
             l1_budget);
         TT_FATAL(
             total_cb_bytes <= l1_budget,
-            "spec_multi_pos_tiles={}: circular buffers need {} B per core but only {} B of L1 are available "
-            "(Sk_chunk_t={}, cores_per_head={}, intermed_blocks={}). Reduce spec_multi_pos_tiles or "
-            "program_config.max_cores_per_head_batch.",
+            "spec_multi_pos_tiles={}, active_row_allocation={}: circular buffers need {} B per core but only "
+            "{} B of L1 are available (Sk_chunk_t={}, cores_per_head={}, intermed_blocks={}). Reduce "
+            "spec_multi_pos_tiles or program_config.max_cores_per_head_batch.",
             spec_multi_pos_tiles,
+            active_row_alloc,
             total_cb_bytes,
             l1_budget,
             Sk_chunk_t_cb_size,
-            num_cores_per_head,
+            max_runtime_cores_per_head,
             intermed_output_blocks);
     }
 
@@ -768,7 +810,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         DHt,
         vDHt,
         Sk_chunk_t,
-        num_active_cores,
+        num_launch_cores,
         static_cast<uint32_t>(is_q_sharded),
         cur_pos_stick_size,
         static_cast<uint32_t>(is_paged_attention),
@@ -799,6 +841,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         capacity_t,
         spec_multi_pos_tiles,
         static_cast<uint32_t>(active_row_alloc),
+        max_runtime_cores_per_head,
     };
     tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
@@ -821,7 +864,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         Sk_chunk_t,
         packed_identity_scalar,
         num_cores_per_batch,
-        num_active_cores,
+        num_launch_cores,
         reducer_semaphore_id,
         output_semaphore_id,
         static_cast<uint32_t>(is_output_sharded),
@@ -840,6 +883,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         spec_multi_pos_tiles,
         static_cast<uint32_t>(active_row_alloc),
         B,
+        max_runtime_cores_per_head,
     };
     tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
 
@@ -874,8 +918,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         spec_multi_pos_tiles,
         static_cast<uint32_t>(active_row_alloc),
         B,
-        num_active_cores,
+        num_launch_cores,
         num_kv_heads,
+        max_runtime_cores_per_head,
     };
 
     // ========== Compute Defines ==========
@@ -948,7 +993,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     Buffer* attention_sink_buffer = use_attention_sink ? attention_sink.value().buffer() : nullptr;
 
     // ========== Runtime Arguments ==========
-    for (uint32_t i = 0; i < num_active_cores; ++i) {
+    for (uint32_t i = 0; i < num_launch_cores; ++i) {
         CoreCoord core = core_group[i];
         bool do_k_mcast = false;
         uint32_t mcast_x = 0, mcast_y0 = 0, mcast_y1 = 0, num_dests = 0;
@@ -1065,12 +1110,14 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         for (uint32_t children : tree_params.children_per_round) {
             writer_rt_args.push_back(children);
         }
+        // The active-row writer takes its group from the all-core table appended below; the static
+        // group coordinates are then unused, and cores past the static layout would index past it.
         for (uint32_t c = 0; c < num_cores_per_head; ++c) {
-            writer_rt_args.push_back(reduction_group_core_xs[reduction_group_base_idx + c]);
+            writer_rt_args.push_back(active_row_alloc ? 0u : reduction_group_core_xs[reduction_group_base_idx + c]);
         }
         // Then add the y coordinates for all cores in this reduction group
         for (uint32_t c = 0; c < num_cores_per_head; ++c) {
-            writer_rt_args.push_back(reduction_group_core_ys[reduction_group_base_idx + c]);
+            writer_rt_args.push_back(active_row_alloc ? 0u : reduction_group_core_ys[reduction_group_base_idx + c]);
         }
         writer_rt_args.append(reduce_core_physical_xs);
         writer_rt_args.append(reduce_core_physical_ys);
@@ -1101,7 +1148,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         writer_desc.emplace_runtime_args(core, writer_rt_args);
         compute_desc.emplace_runtime_args(core, compute_rt_args);
     }
-    if (num_active_cores < num_cores_available) {
+    if (num_launch_cores < num_cores_available) {
         log_debug(tt::LogOp, "idle cores {}", core_group_idle.size());
         // Set the rest of the cores to idle
         for (auto core : core_group_idle) {
@@ -1117,7 +1164,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             // + reducer coords + output coords
             KernelDescriptor::CoreRuntimeArgs writer_rt_args(
                 6 + 3 + MAX_TREE_REDUCTION_ROUNDS + (2 * num_cores_per_head) + 1 +
-                    (active_row_alloc ? 2 * num_active_cores : 0),
+                    (active_row_alloc ? 2 * num_launch_cores : 0),
                 0);
 
             // Compute runtime args - 65 indicates idle core

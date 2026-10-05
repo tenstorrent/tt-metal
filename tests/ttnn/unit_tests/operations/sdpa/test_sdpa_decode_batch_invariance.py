@@ -208,3 +208,99 @@ def test_wide_graph_with_few_active_rows_uses_the_idle_cores(device):
         f"4 active rows take {wide_s * 1e3:.2f} ms in the 32-row graph vs {narrow_s * 1e3:.2f} ms in the "
         f"4-row graph: the idle rows' cores are not used"
     )
+
+
+@pytest.mark.timeout(600)
+def test_cached_wide_graph_follows_changing_occupancy(device):
+    """One cached B=32 program, called repeatedly with a different active count AND different
+    active row indices each time: the core roles are derived from ``cur_pos`` at runtime, so no
+    binding from the previous occupancy may leak into the next call. Each result is checked
+    bitwise against a fresh run of just those rows, and against the static kernel."""
+    nh, nkv, d, s, block_size, k_chunk = 8, 1, 128, 4096, 128, 128
+    grid_size = (8, 8)
+    grid = device.compute_with_storage_grid_size()
+    if grid_size[0] > grid.x or grid_size[1] > grid.y:
+        pytest.skip(f"needs an {grid_size} grid, device has {grid.x}x{grid.y}")
+    wide_batch = 32
+
+    paged_k, paged_v, page_table = _paged_cache(wide_batch, nkv, s, d, block_size)
+    tt_K = ttnn.as_tensor(paged_k, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    tt_V = ttnn.as_tensor(paged_v, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    torch.manual_seed(11)
+    Q = fa_rand(1, wide_batch, nh, d)
+    positions = [s - 1 - 53 * i for i in range(wide_batch)]
+
+    # Occupancies in an order that shrinks, grows, moves and fills the active set.
+    occupancies = [
+        [0, 1, 2, 3],
+        [5, 17, 30],
+        list(range(wide_batch)),
+        [2],
+        [31, 0],
+        list(range(8)),
+        [1, 9, 13, 20, 27],
+    ]
+    entries_before = None
+    for rows in occupancies:
+        cur_pos = [positions[b] if b in rows else -1 for b in range(wide_batch)]
+        wide = _decode(device, tt_K, tt_V, Q, page_table, cur_pos, grid_size, k_chunk, nh, d)
+        if entries_before is None:
+            entries_before = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries_before, "the wide graph must stay a cache hit"
+
+        narrow = _decode(
+            device,
+            tt_K,
+            tt_V,
+            Q[:, rows],
+            page_table[rows],
+            [positions[b] for b in rows],
+            grid_size,
+            k_chunk,
+            nh,
+            d,
+        )
+        wide_rows, narrow_rows = wide[:, rows], narrow[:, : len(rows)]
+        max_abs = (narrow_rows.float() - wide_rows.float()).abs().max().item()
+        assert torch.equal(narrow_rows, wide_rows), (
+            f"rows {rows} differ between the cached {wide_batch}-row graph and a fresh {len(rows)}-row run "
+            f"(max |diff| {max_abs:.3e}); a binding from the previous occupancy leaked"
+        )
+        static = _decode(
+            device,
+            tt_K,
+            tt_V,
+            Q[:, rows],
+            page_table[rows],
+            [positions[b] for b in rows],
+            grid_size,
+            k_chunk,
+            nh,
+            d,
+            active_rows=False,
+        )
+        diff = (static[:, : len(rows)].float() - wide_rows.float()).abs().max().item()
+        ref_scale = static.float().abs().max().item()
+        assert diff <= 2e-2 * max(
+            ref_scale, 1e-3
+        ), f"rows {rows}: active-row result deviates from the static kernel (max |diff| {diff:.3e})"
+
+
+def test_active_rows_reject_a_pool_smaller_than_the_padded_batch(device, expect_error):
+    """Every padded row must be able to own one core per kv head, else an occupancy of all rows
+    would leave rows unserved and their output unwritten. The op must refuse, not run."""
+    nh, nkv, d, s, block_size, k_chunk = 8, 2, 128, 1024, 128, 128
+    grid_size = (8, 8)
+    grid = device.compute_with_storage_grid_size()
+    if grid_size[0] > grid.x or grid_size[1] > grid.y:
+        pytest.skip(f"needs an {grid_size} grid, device has {grid.x}x{grid.y}")
+    b = 40  # 40 rows x 2 kv heads = 80 > 64 cores, while 40 rows alone fit the grid
+
+    paged_k, paged_v, page_table = _paged_cache(b, nkv, s, d, block_size)
+    tt_K = ttnn.as_tensor(paged_k, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    tt_V = ttnn.as_tensor(paged_v, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    Q = fa_rand(1, b, nh, d)
+    cur_pos = [s - 1] * b
+    with expect_error(RuntimeError, "active_row_allocation"):
+        _decode(device, tt_K, tt_V, Q, page_table, cur_pos, grid_size, k_chunk, nh, d)

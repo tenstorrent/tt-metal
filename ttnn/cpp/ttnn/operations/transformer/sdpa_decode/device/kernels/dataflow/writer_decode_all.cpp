@@ -12,8 +12,6 @@
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
 
-#define MAX_TREE_REDUCTION_ROUNDS 6
-
 void kernel_main() {
     Noc noc;
 
@@ -51,8 +49,9 @@ void kernel_main() {
     // from the all-core table appended to the runtime args.
     constexpr bool active_row_alloc = get_compile_time_arg_val(23) == 1;
     constexpr uint32_t B = get_compile_time_arg_val(24);
+    constexpr uint32_t max_cores_per_head = get_compile_time_arg_val(25);
 
-    constexpr auto out_args = TensorAccessorArgs<25>();
+    constexpr auto out_args = TensorAccessorArgs<26>();
 
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
@@ -92,6 +91,7 @@ void kernel_main() {
     // Semaphore encoding: each round uses a 4-bit field (nibble) in the semaphore value
     // Round 0: bits 0-3, Round 1: bits 4-7, Round 2: bits 8-11, etc.
     // step_semaphore_inc[r] = 1 << (r * 4) is the value to add to increment round r's counter
+    static_assert(MAX_TREE_REDUCTION_ROUNDS <= 6, "step_semaphore tables hold 6 rounds");
     constexpr uint32_t step_semaphore_inc[6] = {1, 16, 256, 4096, 65536, 1048576};
     // step_semaphore_shift[r] = r * 4 is the bit position to read round r's counter
     constexpr uint32_t step_semaphore_shift[6] = {0, 4, 8, 12, 16, 20};
@@ -160,8 +160,8 @@ void kernel_main() {
                 // parsed further down; both table sizes are compile-time constants.
                 const uint32_t core_index =
                     get_arg_val<uint32_t>(arg_idx + 2 * num_reducer_cores + 2 * num_output_cores);
-                const auto assignment =
-                    assign_core_to_active_row<num_cores, num_kv_heads>(active_rows, active_count, core_index);
+                const auto assignment = assign_core_to_active_row<num_cores, num_kv_heads, max_cores_per_head>(
+                    active_rows, active_count, core_index);
                 if (assignment.idle) {
                     cb_index.pop_front(1);
                     return;
@@ -170,9 +170,9 @@ void kernel_main() {
                 cur_head_group = assignment.head;
                 core_num_in_reduce = assignment.rank;
                 cores_in_group = assignment.group_size;
-                const auto tree = device_tree_reduction_params(assignment.rank, assignment.group_size);
+                const auto tree = get_tree_reduction_params(assignment.rank, assignment.group_size);
                 is_tree_root = tree.is_root;
-                parent_core_in_group = tree.parent;
+                parent_core_in_group = tree.parent_core_in_group;
                 send_at_round = tree.send_at_round;
                 for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
                     children_per_round[r] = tree.children_per_round[r];

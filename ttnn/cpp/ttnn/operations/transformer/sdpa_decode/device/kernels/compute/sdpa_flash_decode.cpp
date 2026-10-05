@@ -11,7 +11,6 @@
 
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
-#define MAX_TREE_REDUCTION_ROUNDS 6
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -85,6 +84,7 @@ void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(29);
     constexpr uint32_t num_cores = get_compile_time_arg_val(30);
     constexpr uint32_t num_kv_heads = get_compile_time_arg_val(31);
+    constexpr uint32_t max_cores_per_head = get_compile_time_arg_val(32);
     constexpr bool spec_multi_pos = spec_multi_pos_T > 0;
 
     // get_workload_for_core assigns at most one chunk per participating core when
@@ -196,8 +196,8 @@ void kernel_main() {
                         active_rows[active_count++] = b;
                     }
                 }
-                const auto assignment =
-                    assign_core_to_active_row<num_cores, num_kv_heads>(active_rows, active_count, core_index);
+                const auto assignment = assign_core_to_active_row<num_cores, num_kv_heads, max_cores_per_head>(
+                    active_rows, active_count, core_index);
                 if (assignment.idle) {
                     CircularBuffer(cb_cur_pos).pop_front(1);
                     return;
@@ -207,9 +207,9 @@ void kernel_main() {
                 cores_in_group = assignment.group_size;
                 do_reduce = assignment.rank == 0;
                 apply_mask_at_last_chunk = do_reduce && is_causal;
-                const auto tree = device_tree_reduction_params(assignment.rank, assignment.group_size);
+                const auto tree = get_tree_reduction_params(assignment.rank, assignment.group_size);
                 is_tree_root = tree.is_root;
-                parent_core_in_group = tree.parent;
+                parent_core_in_group = tree.parent_core_in_group;
                 has_parent = parent_core_in_group != UINT32_MAX;
                 num_tree_rounds = tree.num_rounds;
                 for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
