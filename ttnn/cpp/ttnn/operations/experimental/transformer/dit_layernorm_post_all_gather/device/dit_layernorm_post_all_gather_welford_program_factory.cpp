@@ -170,6 +170,7 @@ ProgramDescriptor PostAllGatherWelfordProgramFactory::create_descriptor(
     reader_compile_time_args.push_back((std::uint32_t)gamma_batch_stride_tiles);
     reader_compile_time_args.push_back((std::uint32_t)beta_batch_stride_tiles);
     reader_compile_time_args.push_back((std::uint32_t)Ht);
+    reader_compile_time_args.push_back((std::uint32_t)a.padded_shape()[-3]);
 
     TensorAccessorArgs(a_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(stats_buffer).append_to(reader_compile_time_args);

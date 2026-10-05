@@ -13,7 +13,7 @@ using namespace tt::constants;
 
 namespace ttnn::experimental::prim {
 void PreAllGatherDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
 
     TT_FATAL(!input.is_sharded(), "DIT layernorm pre-all-gather does not support sharded inputs.");
@@ -26,6 +26,11 @@ void PreAllGatherDeviceOperation::validate_on_program_cache_miss(
         "Input data format not supported.");
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands must be on device.");
     TT_FATAL(input.buffer() != nullptr, "Operands must be allocated on device.");
+    const auto output_dtype = args.dtype.value_or(input.dtype());
+    TT_FATAL(
+        output_dtype == DataType::BFLOAT16 || output_dtype == DataType::FLOAT32,
+        "DIT layernorm pre-all-gather stats dtype must be BFLOAT16 or FLOAT32, got {}",
+        output_dtype);
 }
 
 PreAllGatherDeviceOperation::spec_return_value_t PreAllGatherDeviceOperation::compute_output_specs(

@@ -692,6 +692,39 @@ def _run_rotary_embedding_llama_direct_cos_padding_tail_case(device, q_seq_len, 
         assert torch.equal(tail, torch.zeros_like(tail))
 
 
+@pytest.mark.parametrize("batch, n_heads, q_seq_len, rope_seq_len", ((129, 2, 128, 96),))
+def test_rotary_embedding_llama_short_cos_sin_multi_batch(device, batch, n_heads, q_seq_len, rope_seq_len):
+    """Cos/sin shorter than the input with several batches per core must not run past the end of the cos/sin buffer."""
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if compute_grid_size.x * compute_grid_size.y != 64:
+        pytest.skip("Configurations are chosen for a 64-core grid")
+
+    torch.manual_seed(0)
+    head_dim = 128
+    q = torch.randn((batch, n_heads, q_seq_len, head_dim), dtype=torch.float32)
+    cos, sin = compute_gather_cos_sin(dhead=head_dim, end=2 * rope_seq_len, position_ids=torch.arange(rope_seq_len))
+    trans_mat = get_rot_transformation_mat(dhead=head_dim)
+
+    tensor_kwargs = {"dtype": ttnn.bfloat16, "layout": ttnn.TILE_LAYOUT, "device": device}
+    out = ttnn.to_torch(
+        ttnn.experimental.rotary_embedding_llama(
+            ttnn.from_torch(q, **tensor_kwargs),
+            ttnn.from_torch(cos, **tensor_kwargs),
+            ttnn.from_torch(sin, **tensor_kwargs),
+            ttnn.from_torch(trans_mat, **tensor_kwargs),
+            is_decode_mode=False,
+        )
+    ).float()
+
+    q_rot = q[:, :, :rope_seq_len].bfloat16().float()
+    rotated = (q_rot.reshape(*q_rot.shape[:-1], -1, ttnn.TILE_SIZE) @ trans_mat.float()).reshape(q_rot.shape)
+    expected = q_rot * cos.bfloat16().float() + rotated * sin.bfloat16().float()
+
+    passing, output_pcc = comp_pcc(expected, out[:, :, :rope_seq_len], 0.9997)
+    logger.info(f"PCC: {output_pcc}")
+    assert passing, output_pcc
+
+
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @pytest.mark.parametrize(
     "q_seq_len, rope_seq_len",
