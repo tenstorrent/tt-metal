@@ -28,15 +28,15 @@ Host callback — a zone arrives as one record, whole, when it closes. The publi
 register a callable taking the `Batch` of the record types you want:
 
 ```cpp
-auto h = RegisterCallback("zone-sink", [](const Batch<RecordType::Zones>& b) {
-    for (const Zone& z : b.zones()) {
+Callback zones = RegisterCallback([](const Batch<RecordType::Zones>& batch) {
+    for (const Zone& zone : batch.zones()) {
         fmt::print("{}: {} ns on chip {} core ({},{}) {} (op {})\n",
-            z.site().name,               // "compute"
-            z.duration().count(), z.core().chip_id, z.core().logical.x, z.core().logical.y,
-            static_cast<int>(z.core().risc), z.runtime_id());
+            zone.site().name,  // "compute"
+            zone.duration().count(), zone.core().chip_id, zone.core().logical.x, zone.core().logical.y,
+            enchantum::to_string(zone.core().processor), zone.runtime_id());
     }
-});
-// later: UnregisterCallback(h);
+}, "zone-sink");
+// destroying `zones`, or zones.reset(), unregisters the callback
 ```
 
 ![zone scopes](docs/zone_gifs/zone_scopes.gif)
@@ -61,13 +61,13 @@ for (uint32_t it = 0; it < N_ITERS; it++) {
 Host callback — a `TimestampedData` record arrives assembled, its payload as a span of uint64 words:
 
 ```cpp
-auto h = RegisterCallback("data-sink", [](const Batch<RecordType::TimestampedData>& b) {
-    for (const TimestampedData& d : b.timestamped_data()) {
+Callback data = RegisterCallback([](const Batch<RecordType::TimestampedData>& batch) {
+    for (const TimestampedData& record : batch.timestamped_data()) {
         fmt::print("{} @ {}: value={}\n",
-            d.site().name,                                   // "BYTES-MOVED"
-            d.time().time_since_epoch().count(), d.payload()[0]);
+            record.site().name,  // "BYTES-MOVED"
+            record.time().time_since_epoch().count(), record.payload()[0]);
     }
-});
+}, "data-sink");
 ```
 
 ![timestamped data](docs/zone_gifs/timestamped_data.gif)
@@ -89,13 +89,13 @@ for (uint32_t it = 0; it < N_ITERS; it++) {
 Host callback — an `Event` is a name and a time, nothing else:
 
 ```cpp
-auto h = RegisterCallback("event-sink", [](const Batch<RecordType::Events>& b) {
-    for (const Event& e : b.events()) {
+Callback events = RegisterCallback([](const Batch<RecordType::Events>& batch) {
+    for (const Event& event : batch.events()) {
         fmt::print("{} @ {} on core ({},{})\n",
-            e.site().name, e.time().time_since_epoch().count(), // "LOOP-START" @ host time
-            e.core().logical.x, e.core().logical.y);
+            event.site().name, event.time().time_since_epoch().count(),  // "LOOP-START" @ host time
+            event.core().logical.x, event.core().logical.y);
     }
-});
+}, "event-sink");
 ```
 
 ![device event](docs/zone_gifs/device_flag.gif)
