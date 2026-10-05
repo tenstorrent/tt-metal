@@ -258,13 +258,13 @@ def test_cached_wide_graph_follows_changing_occupancy(device):
         list(range(8)),
         [1, 9, 13, 20, 27],
     ]
-    entries_before = None
-    for rows in occupancies:
+    for i, rows in enumerate(occupancies):
         cur_pos = [positions[b] if b in rows else -1 for b in range(wide_batch)]
+        # The narrow reference runs below each compile their own program (a new B each time),
+        # so the cache-hit check brackets the wide call alone.
+        entries_before = device.num_program_cache_entries()
         wide = _decode(device, tt_K, tt_V, Q, page_table, cur_pos, grid_size, k_chunk, nh, d)
-        if entries_before is None:
-            entries_before = device.num_program_cache_entries()
-        else:
+        if i > 0:
             assert device.num_program_cache_entries() == entries_before, "the wide graph must stay a cache hit"
 
         narrow = _decode(
