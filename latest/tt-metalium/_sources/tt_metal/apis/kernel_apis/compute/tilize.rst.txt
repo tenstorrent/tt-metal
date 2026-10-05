@@ -7,3 +7,4 @@ tilize
 .. doxygenfunction:: tilize_block(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0)
 .. doxygenfunction:: unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block, uint32_t tile_idx_b)
 .. doxygenfunction:: tilize_uninit(uint32_t icb, uint32_t ocb)
+.. doxygenfunction:: tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb)
