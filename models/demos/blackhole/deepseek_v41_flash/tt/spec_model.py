@@ -27,7 +27,7 @@ import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM, PAD_HEADS
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_block import CONFIG_PATH
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_weights import _Shards
-from models.demos.blackhole.deepseek_v41_flash.tt.mtp import BLOCK, DSparkDrafter, load_mtp_stage
+from models.demos.blackhole.deepseek_v41_flash.tt.mtp import BLOCK, ChunkedDrafter, DSparkDrafter, load_mtp_stage
 from models.demos.blackhole.deepseek_v41_flash.tt.paged_attention import DSV41PagedStepState
 from models.demos.blackhole.deepseek_v41_flash.tt.spec_decoder import SpecDecoder
 from models.demos.blackhole.deepseek_v41_flash.tt.spec_paged import (
@@ -139,9 +139,14 @@ class SpecRunner:
         )
         sh = _Shards()
         stage_w = [load_mtp_stage(i, sh) for i in range(3)]
-        self.drafter = DSparkDrafter(
-            self.md, model.mc, model.ccl, stage_w, emb.weight, model.head, users_per_row=U, n=n, max_pos=self.max_pos
+        Uc = (
+            U if BLOCK * U <= 32 else 4
+        )  # the drafter's token rows (5 per user) must stay <= 32 per mesh row: chunks of 4 users share weights
+        assert U % Uc == 0, f"users per mesh row {U}: the chunked drafter needs a multiple of {Uc}"
+        base = DSparkDrafter(
+            self.md, model.mc, model.ccl, stage_w, emb.weight, model.head, users_per_row=Uc, n=n, max_pos=self.max_pos
         )
+        self.drafter = base if Uc == U else ChunkedDrafter(base, U // Uc)
         del stage_w
         self.dec = SpecDecoder(
             self.md, layers, emb, model.head, self.drafter, model.dec.engram, step_states=groups, n=n
@@ -261,6 +266,7 @@ class SpecRunner:
         base = base.clone()
         X = X.clone()
         gen = [[int(X[b, 0])] for b in range(B)]
+        self.m_hist = [[] for _ in range(B)]  # accepted drafts per round per user
         self.gaps = [
             [] for _ in range(B)
         ]  # gaps[b][i-1] = top1-top2 logit gap of the argmax that produced generated token i (near-tie evidence)
@@ -291,6 +297,7 @@ class SpecRunner:
                 self.gaps[b] += [float(x) for x in gp[b, : len(toks)]]
                 emitted.append(len(toks))
                 ms.append(mb)
+                self.m_hist[b].append(mb)
                 base[b] += mb + 1
                 X[b, 0] = a[b, mb]
                 X[b, 1 : 1 + k] = d[b, :k]

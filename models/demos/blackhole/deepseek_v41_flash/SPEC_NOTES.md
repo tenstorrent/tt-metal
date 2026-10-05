@@ -183,3 +183,54 @@ Other env: `DSV41_SPEC=k` (1..5 drafts), `DSV41_SPEC_FULL_REPLAY=1` (seed by rep
 
 ## Supported batch sizes
 Verified only B=16 (4 users/mesh row, T = 4*(k+1) rows per mesh row: k=3 -> 16). Expected to work but NOT run: B=32 (U=8: T=32 for k=3, the MoE tail falls back to the stock path at T>=32; mHC T=8/16/24/32 fast or padded, T=12/20 padded by the mixes fix), B=4 (U=1: T = n = 2..6), B=64+ (T>32 exceeds the router/mHC <=32 rows per call: unsupported). B=4 at ISL 2k/4k needs the indexer (on automatically) and ring 288; 4k needs `max_ctx` >= 4k+64 for the drafter tables (max_pos follows model.max_ctx). Not verified at ISL 4k (acceptance, DRAM).
+# Spec decode: B=32 / B=64 grid cells, per-user exactness reporting, ragged support — FINAL spec diff (against main db68dc7e754)
+
+`/mnt/tt-data/ssinghal/wt/h44s/changes.diff`: `git apply --check` OK; 4 files, +112/-12 (the 12 removed lines are the old drafter call block in spec_decoder.py / old drafter construction in spec_model.py / one demo line, replaced; nothing of the DONEFLAGS / GSM8K-offset / b4 / b128 scenarios is touched).
+* `tt/mtp.py`: `DSparkDrafter.write_main_full / draft_full` and `ChunkedDrafter`: the drafter's token rows are 5 per user and mHC / router take <= 32 rows per mesh row, so for U > 6 users per mesh row the users are split in chunks of 4 that SHARE all weights and MoE blocks (own rings only). Needed for B=32 (2 chunks) and B=64 (4 chunks).
+* `tt/spec_decoder.py`: the drafter is called through `write_main_full` / `draft_full` (single code path for plain / chunked drafter).
+* `tt/spec_model.py`: builds the chunked drafter when 5*U > 32; `m_hist` (accepted drafts per round per user), `gaps` (top1-top2 logit gap of every emitted token), fix of the missing `m_hist` initialisation that crashed two full runs after the spec pass.
+* `demo/text_demo.py`: per-user exactness table (first-token match, first divergence, plain / spec top1-top2 gap, accepted drafts per user), "SUSPECTED REAL DIVERGENCES" line (plain gap > 0.1 at the first divergence), `DSV41_SPEC_PRINT` (default 2: how many users' spec text is printed; set 128 for scoring), scenarios `gsm8k_b32`, `isl2k_b32_ragged`, `isl2k_b16_ragged`, `isl2k_b16_ragged_u4` (+ `DSV41_RAGGED=1` truncates user u's prompt to 50..100 %, `=2` uniform control), session sets `DSV41_RAGGED` per scenario id suffix, `STREAMDUMP` token lines for ragged scenarios. Also `/mnt/tt-data/ssinghal/wt/h44s/score_pair.py <log> <scenario>` (paired GSM8K scoring plain vs spec from a session log).
+Per-user ragged support itself (per-user replay start / forced accepts in `SpecRunner.seed`, per-user `set_force`) was already in main; this adds its test scenarios.
+
+## Results (4 mesh rows, one model build per batch size; plain decode of the same run is the baseline; k = drafts verified)
+| B (U/row) | k | scenario | accepted/round (CPU ref GSM8K k=3 2.30, k=1 0.90) | round ms | spec tok/s/user | plain ms/tok = tok/s/user | ratio | exact vs plain (64+ tokens at 8k, 40-64 GSM8K) |
+|---|---|---|---|---|---|---|---|---|
+| 32 (8) | 3 | isl8k_b32 (ISL 7443) | 1.032 (P(m>=j) .61/.26/.16) | 123.8 | 16.4 | 52.8 = 18.9 | 0.87x | 32/32 identical, first token 32/32 |
+| 32 (8) | 3 | gsm8k_b32 (ISL<=111) | 2.364 (.90/.78/.68) | 136.4 | 24.6 | 65.9 = 15.2 | 1.62x | 9/32 identical, 23 diverge (max plain gap 0.563, 1 user > 0.5) |
+| 32 (8) | 3 | isl2k_b32_ragged (858..1602 tok) | 1.108 (.64/.33/.13) | 141.5 | 14.9 | 67.8 = 14.8 | 1.01x | 18/32 identical; 14 diverge, several at token 1-2 with plain gap 2.3-3.8 (see below) |
+| 64 (16) | 1 | isl8k_b64 (ISL 7443) | 0.595 | 147.1 | 10.8 | 70.8 = 14.1 | 0.77x | 64/64 identical |
+| 64 (16) | 1 | gsm8k_b64 (ISL<=130) | 0.910 | 166.3 | 11.5 | 90.0 = 11.1 | 1.03x | 15/64 identical, 49 diverge (max plain gap 0.476) |
+First token spec==plain: 100 % in every cell. Per-position acceptance on GSM8K B=32 (0.90/0.78/0.68) and B=64 k=1 (0.91) match the CPU reference (0.905/0.796/0.693).
+Earlier cells (B=16, k=3): GSM8K 1.89-1.92x, ISL 1627 1.29x (identical streams, 16/16).
+
+## Task-level accuracy (GSM8K gold, same prompts, same run; score_pair.py)
+* B=32: 32 questions, plain 31 correct, spec 31 correct, paired: both 31, plain-only 0, spec-only 0, both wrong 1.
+* B=64: 64 questions, plain 62, spec 64; both 62, plain-only 0, spec-only 2, both wrong 0.
+Spec never lost a question the plain decode got right (small samples; differences are the near-tie divergences).
+
+## Across-user correctness
+The exactness table (all U rows; each mesh row; per-user positions and accept counts differ) is in the logs (`SPEC per-user table`): no user has a first-token mismatch; every GSM8K divergence has plain top1-top2 gap <= 0.56 (B=32 max 0.563, B=64 max 0.476) = bf16/bfp8 batch-shape near-ties; at ISL 8k all users (32 and 64) are identical to plain for 64 tokens.
+NOT explained: (a) the earlier user-3 position-244 case (gap 2.13, teacher-forced reproducible) — not re-run; (b) RAGGED prompt lengths at ISL 0.9-1.6k: 14/32 users diverge, several at generated token 1-2 with plain gap 2.3-3.8 (users 4, 10, 14: lengths 958/1098/1193), i.e. NOT near-ties; uniform-length batches (all users the same S) at the same ISL are exact (isl8k b32/b64 identical, ISL 1627 b16 identical). Whether the ragged PLAIN decode or the ragged SPEC path is wrong is unknown (the plain output of user 4 degenerates into a repeated line while the spec output is coherent, which hints the plain ragged path, whose full-model use was never validated upstream, but this is unproven). A control run (spec16_ragged: B=16 ragged vs the same prompt uniform, STREAMDUMP lines) was building when the freeze came; read its log if it finished.
+
+## Why spec is not a win at long ISL / large B (my reading, partly unproven)
+* Acceptance at ISL 1.6k-8k is 0.6-1.5 accepted/round vs 2.3 on GSM8K. The prompts are public-domain book text; their continuations are far less predictable to the drafter than math reasoning (the GSM8K match at B=32/64 equals the CPU reference, so the drafter / verify path is right on in-distribution text). Seeding quality is a second suspect: the stage-2 run that replayed the WHOLE 2048-token prompt through the drafter (spec7_isl2k_k3b) got 2.05 accepted/round on the same kind of document, while tail seeding (last 128 tokens) at ISL 1627 got 1.52 and the tail-replay emulation had d3-d5 differing from the full replay (draft tokens equal for 40 % of entries). That points at the drafter seeing only 128 positions of context in its window ring being enough in principle (the DSpark window is 128) but seeded from a verify replay whose numerics differ; it is NOT proven: different prompts and lengths. The clean A/B (DSV41_SPEC_FULL_REPLAY=1 on isl2k_b16, same prompt) was not run before the freeze.
+* Speed: per-round cost grows faster than 1 + k. Plain B=32 52.8-65.9 ms; spec round 124-141 ms at k=3 = T=32 verify rows per mesh row (verify ~ 2x a plain step) + 2 drafter chunks (~9 ms each) + host. With acceptance >= ~2.3 it wins (1.6x), below ~1.2 it loses. B=64 k=1: T=32 verify (~75-90 ms) + 4 drafter chunks (~36 ms) + host: breakeven needs ~0.9 accepted/round, GSM8K gives 1.03x.
+
+## Verified / not verified
+Verified (device, 40 layers, real traced prefill -> hand-off -> drafter tail seeding -> spec on the shared pool): B=16 (k=3), B=32 (k=3), B=64 (k=1) as in the table; chunked drafter (2 / 4 chunks); per-user force with ragged GSM8K prompt lengths (gsm8k_b* lengths 30..111, B=32/64: first tokens all equal, text correct).
+Not verified: B=4, B=8 (U=1, 2: T = n..., drafter single chunk, expected to work; not run); B=128 (see below); ISL > 8k; k>3 at B=32; exactness over > 64 generated tokens at 8k; ragged long prompts (open bug above); fp8 pool with spec; memory at ISL 8k B=64 with the spec runner (fits: run completed, runner build +111 MiB/bank).
+
+## Commands for the grid driver (demo = plain pass then spec pass on the same prompts; one model build; spec runner is built after the prefills)
+```
+common env : DSV41_MEMLOG=0 DSV41_TRACE_REGION=1900000000 DSV41_SPEC_PRINT=2   (DSV41_SPEC_PRINT=128 only for GSM8K scoring)
+B=4,8,16 : DSV41_SPEC=3  pytest -x -q -s models/demos/blackhole/deepseek_v41_flash/demo/text_demo.py -k <scenario>        # e.g. prefill_128_b4, gsm8k_b16, isl2k_b16, isl8k_b16
+B=32     : DSV41_SPEC=3  ... -k isl8k_b32 | gsm8k_b32 | isl2k_b32_ragged
+B=64     : DSV41_SPEC=1  ... -k isl8k_b64 | gsm8k_b64
+B=128    : not supported (below)
+```
+`DSV41_SPEC=k` also sets `DSV41_RING_ROWS=288` (needed by the tail seeding; 160 is enough only with `DSV41_SPEC_FULL_REPLAY=1`). Sessions (`-k session DSV41_SESSION=a,b,c`) share one build; run the scenario with the largest ISL first (the spec runner stays resident for later prefills). Spec needs `U*(1+k) <= 32` rows per mesh row (B=32: k<=3, B=64: k=1, B=16: k<=7 but the drafter supports k<=5, B=8: k<=5 ...).
+
+## Cells I expect to be impossible (not assumed verified; the integration agent will try)
+* B=128 (U=32): verify rows U*(1+k) >= 64 per mesh row > 32: mHC ProjPlan / mixes / expand / collapse, router_select, moe_tail and the paged_kv_step latent write (rows <= 32) all assert; the mHC agent says T > 32 will not be supported soon. A split of the verify into two <= 32-row passes was not built. Estimate: 2 verify passes (each ~ the B=64 spec verify, 75-90 ms) + 8 drafter chunks (~70 ms) + host > 220 ms for ~1.9 tokens vs plain B=128 83 ms/token => ~0.6x: would not beat plain even if built.
+* B=64 with k >= 2 (T = 48+ rows), B=32 with k >= 4 (T >= 40): same row limit.
+* B=4/8 at ISL >= 64k: untested (drafter tables and ring sizing follow `max_ctx`, DRAM not measured).

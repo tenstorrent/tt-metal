@@ -213,15 +213,11 @@ class SpecDecoder(SpecVerifier):
             ttnn.concat(taps or [self._tap(x)] * 3, dim=3), ttnn.bfloat16
         )  # [1,1,T,15360]; partial-layer debug runs have no tap layers
         dr = self.drafter
-        dr.write_main(hidden, dr.state.build_verify(self.pos))
-        tok_rows = ttnn.concat(
-            [ttnn.typecast(ttnn.to_layout(t_next, rm), ttnn.uint32), self.noise], dim=0
-        )  # [5U,1] block-index-major
-        f_i32 = ttnn.typecast(ttnn.to_layout(f_next, rm), ttnn.int32)
-        f_rows = ttnn.reshape(ttnn.concat([ttnn.reshape(f_i32, [U, 1])] * 5, dim=0), [5 * U])
-        d = dr.draft(tok_rows, f_rows)
+        dr.write_main_full(hidden, self.pos)
+        t_u32 = ttnn.typecast(ttnn.to_layout(t_next, rm), ttnn.uint32)  # [U,1]
+        f_i32 = ttnn.reshape(ttnn.typecast(ttnn.to_layout(f_next, rm), ttnn.int32), [U, 1])
+        d, drafts = dr.draft_full(t_u32, f_i32)  # drafts [5U,1] uint32 block-index-major
         self.draft_out = d
-        drafts = ttnn.concat(d["tokens"], dim=0)  # [5U,1] uint32
         m_u32 = ttnn.typecast(ttnn.to_layout(mcount, rm), ttnn.uint32)  # [U,1]
         self.pack = ttnn.concat(
             [ttnn.reshape(a, [1, T]), ttnn.reshape(m_u32, [1, U]), ttnn.reshape(drafts, [1, 5 * U])], dim=1
