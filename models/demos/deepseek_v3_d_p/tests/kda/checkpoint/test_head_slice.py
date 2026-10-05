@@ -12,6 +12,10 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_3_flash_config import glm_5_3_
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
+from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
+    GLM_5_3_FLASH_FIRST_KDA_LAYER,
+    load_kda_layer_state_dict,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.head_slice import (
     galaxy_chip_head_slice_config,
     kda_head_slice_config,
@@ -203,3 +207,13 @@ def test_kimi_k3_layer_slice_is_tp_rank_partial(kimi_k3_checkpoint_dir: Path) ->
     _assert_slice_is_rank_oracle(
         case.hidden.float(), weights, case.config, state, _TP, (0, _TP - 1), atol=1e-4, rtol=1e-4
     )
+
+
+def test_glm_5_3_flash_layer_slice_is_tp_rank_partial(glm_5_3_flash_checkpoint_dir: Path) -> None:
+    """Real GLM-5.3-Flash layer 0 (local only): the LB-B quarter slice (16 heads) is the TP4 rank oracle."""
+    config = glm_5_3_flash_kda_config()
+    state_dict = load_kda_layer_state_dict(glm_5_3_flash_checkpoint_dir, GLM_5_3_FLASH_FIRST_KDA_LAYER, config)
+    weights = {name: tensor.float() for name, tensor in state_dict.items()}
+    hidden = torch.randn(1, 32, config.hidden_size, generator=torch.Generator().manual_seed(1607))
+    state = _nonzero_state(config, seed=8)
+    _assert_slice_is_rank_oracle(hidden, weights, config, state, _TP, (0, _TP - 1), atol=1e-4, rtol=1e-4)

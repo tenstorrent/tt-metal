@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Indexed safetensor loading for one Kimi Delta Attention layer."""
+"""Indexed safetensor loading for one Kimi Delta Attention layer (Kimi K3, GLM-5.3-Flash)."""
 
 from __future__ import annotations
 
@@ -38,28 +38,33 @@ def kda_state_dict_sha256(state_dict: Mapping[str, torch.Tensor]) -> str:
 # dequantized export -- the only one that loads end to end -- could not be read at all (#54837).
 KIMI_K3_WRAPPED_ROOT = "language_model.model."
 KIMI_K3_BARE_ROOT = "model."
+# GLM-5.3-Flash (glm5_next, a multimodal wrapper) roots its text-tower keys here. Layer 0 is a KDA
+# layer (kda_layers is 0-indexed) and all its KDA weights are in model-00002-of-00062.safetensors.
+GLM_5_3_FLASH_ROOT = "model.language_model."
+GLM_5_3_FLASH_FIRST_KDA_LAYER = 0
+GLM_5_3_FLASH_LAYER_0_SHA256 = "e68d2148bbe3cb6e62671f4f6e4101fae33d9e8831be295b5b42cc2dd220b177"
 
 
 def kda_layer_prefix(layer_idx: int, model_root: str = KIMI_K3_WRAPPED_ROOT) -> str:
-    """Return Kimi-K3's Hugging Face prefix for one KDA layer."""
+    """Return the Hugging Face prefix for one KDA layer under ``model_root``."""
     if layer_idx < 0:
         raise ValueError(f"layer_idx must be nonnegative, got {layer_idx}")
     return f"{model_root}layers.{layer_idx}.self_attn."
 
 
 def resolve_model_root(checkpoint_dir: Path) -> str:
-    """Which of the two key roots this checkpoint uses, read off its index rather than guessed.
+    """Which known key root this checkpoint uses, read off its index rather than guessed.
 
     Checked against `layers.` rather than `embed_tokens.weight` so a partial index holding only the
-    layers a test needs still resolves. `language_model.model.` is tried first because `model.` is a
-    suffix of it and would otherwise match the wrapped keys too.
+    layers a test needs still resolves. `language_model.model.` is tried before `model.` because
+    `model.` is a suffix of it; `model.language_model.layers.` cannot match `model.layers.`.
     """
     index_path = Path(checkpoint_dir) / "model.safetensors.index.json"
     if not index_path.is_file():
         raise FileNotFoundError(f"missing safetensor index: {index_path}")
     with index_path.open(encoding="utf-8") as index_file:
         weight_map = json.load(index_file).get("weight_map", {})
-    for root in (KIMI_K3_WRAPPED_ROOT, KIMI_K3_BARE_ROOT):
+    for root in (KIMI_K3_WRAPPED_ROOT, GLM_5_3_FLASH_ROOT, KIMI_K3_BARE_ROOT):
         if any(name.startswith(f"{root}layers.") for name in weight_map):
             return root
     return KIMI_K3_WRAPPED_ROOT
