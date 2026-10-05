@@ -1010,29 +1010,27 @@ def test_enrolled_ops_is_sorted_and_stable():
 
 
 #: Enrolled ops with no step budget anywhere: the 3-segment LUT pair, two binaries
-#: whose per-format tolerances moved into the table, five transcendentals whose *best*
-#: cell is already past its output's usable ceiling (6 bf16, 51 fp16, 25 Bfp8_b) -- the
-#: measurements are on their rows, not repeated here to drift -- and Expm1Cw, which
-#: returns -1 where expm1 overflows (x past ~88.7) on every cell, so no cell has a lane
-#: count a step budget can describe. Recorded, not fixed; tracked: Erfc #51137, Digamma
-#: #51128, Softplus #51866 (input clamps, under #52178), Lgamma #55356 and Polygamma
-#: #52278.
+#: whose per-format tolerances moved into the table, and three transcendentals whose
+#: *best* cell is still past its output's usable ceiling (6 bf16, 51 fp16, 25 Bfp8_b)
+#: once the near-zero floor the emitter grants (up to 1e-3) is applied -- the
+#: measurements are on their rows, not repeated here to drift. Softplus answers 0 below
+#: x = -5, a 0.0065 cut-off a 1e-3 floor cannot cover; Digamma and Lgamma are wrong for
+#: negative and small positive x. Recorded, not fixed; tracked: Digamma #51128, Softplus
+#: #51866 (input clamps, under #52178) and Lgamma #55356.
 #:
-#: Sign, Heaviside, GeluTanh, Tanhshrink, Xielu, I1 and SfpuElwmul are not here: per
-#: variant, some of their cells are inside the ceiling, and the rest fall
-#: through to tolerance.
+#: Erfc, Polygamma and Expm1Cw left this set with the claim applied to the ranking, the
+#: Dest-capacity rule and the emitted floor: each has cells inside the ceiling now and
+#: the rest fall through to tolerance, like Sign, Heaviside, GeluTanh, Tanhshrink,
+#: Xielu, I1 and SfpuElwmul.
 ONLY_EVER_TOLERANCE = frozenset(
     {
         MathOperation.SigmoidAppx,
         MathOperation.GeluAppx,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
-        MathOperation.Erfc,
-        MathOperation.Polygamma,
         MathOperation.Softplus,
         MathOperation.Lgamma,
         MathOperation.Digamma,
-        MathOperation.Expm1Cw,
     }
 )
 
