@@ -146,7 +146,7 @@ inline void abs_exp_park_coefficients()
 }
 
 template <std::uint32_t NumDegree, std::uint32_t DenDegree, typename Config, typename Exp, typename Reciprocal>
-inline __attribute__((always_inline)) vFloat abs_residual_correction(vFloat x, Exp exp, Reciprocal reciprocal)
+inline __attribute__((always_inline)) vFloat abs_residual_correction(vFloat x, Exp exp, [[maybe_unused]] Reciprocal reciprocal)
 {
     vFloat t;
     vFloat coordinate       = setsgn(x, 0);

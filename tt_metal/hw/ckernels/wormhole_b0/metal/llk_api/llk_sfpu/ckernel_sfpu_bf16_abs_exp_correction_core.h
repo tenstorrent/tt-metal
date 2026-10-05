@@ -115,7 +115,8 @@ template <typename Config>
 inline void abs_exp_park_coefficients() {}
 
 template <uint32_t NumDegree, uint32_t DenDegree, typename Config, typename Exp, typename Reciprocal>
-inline __attribute__((always_inline)) vFloat abs_residual_correction(vFloat x, Exp exp, Reciprocal reciprocal) {
+inline __attribute__((always_inline)) vFloat
+abs_residual_correction(vFloat x, Exp exp, [[maybe_unused]] Reciprocal reciprocal) {
     vFloat t;
     vFloat coordinate = setsgn(x, 0);
     vFloat coordinate_bound = __builtin_bit_cast(float, Config::kBoundBits);
