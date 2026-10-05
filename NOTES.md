@@ -21,8 +21,7 @@ Launch, from g15blx02 in this worktree, once device work is allowed:
 Result: /var/tmp/fasth3/t133/driver.log on blx03 (T133_CMP lines: traced/eager delta, A vs B identical=).
 Expect identical=True. Cleanup after: worktree remove ~/fasth3/t133a, ~/fasth3/t133b, ~/fasth3/t133drv, t133-setup.*
 
-## Resume (run 548 handed off waiting)
-Build + CPU tests run detached (tmp/t133/build_and_test.sh, log tmp/t133/driver.log); tmp/t133/DONE appears at the end.
-Next: check tmp/t133/build.log for BUILD_EXIT=0 and the tail of tmp/t133/ltx_cpu.log (t48 baseline: 189 passed,
-392 skipped, 0 failed). Then delete build_Release and .cpmcache in this worktree (A/B builds its own trees on blx03),
-push the branch (ttp push --own --detach), and write result.json (done).
+## Off-device result (2026-10-05)
+Release build: BUILD_EXIT=0. LTX CPU tests (models/tt_dit/tests/models/ltx/): 207 passed, 393 skipped, 0 failed
+(t48 c4409b1fa24 added tests since the 189-pass baseline). build_Release and .cpmcache removed.
+Remaining: the device A/B above, once device work is allowed.
