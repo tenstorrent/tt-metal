@@ -17,6 +17,7 @@ namespace ttnn::operations::unary_backward {
 enum class UnaryBackwardOpType : uint8_t {
     SIGMOID_BW,
     TANH_BW,
+    RECIPROCAL_BW,
 };
 
 }  // namespace ttnn::operations::unary_backward
