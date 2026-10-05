@@ -88,16 +88,17 @@ effect (up to ~1.7×, Wormhole B0; see [`report.md`](split_reader/report.md)) �
 the knob, not the point.
 
 ## ⭐⭐ T2 — [`bank_stagger`](bank_stagger/README.md)
-**Concept:** DRAM bank contention — rotate each core's read and write **issue order** so the grid's
+**Concept:** DRAM bank contention — rotate each core's block and read **issue order** so the grid's
 requests at any moment land on different banks instead of all on one.
-**Situation:** at each read step every core hits the same DRAM bank. Two splits cause it:
-**width blocking** (cores read the same rows at different width offsets; any arch) and **height
-blocking** on Blackhole (each core's rows start at `32·k`, always bank 0 with 8 banks).
-**Measured win:** the read switch is **1.06–1.08× faster** at 1024 B reads (1.0–1.4 µs per launch)
-and 1.04× at 128 B, in both cases (Blackhole, 110 cores, one block per core). The win is at launch
-start, so it matters for short ops with few blocks per core.
-**Gist:** issue row `(i + core % 32) % 32` instead of `i`. Each half is a compile-time switch
-(`stagger_reads`, `stagger_writes`), so flip it per call to check whether it pays on your shape.
+**Situation:** every core walks its data in the same order and the data lines up on the banks.
+(1) **Width-sharded DRAM source**, one shard per bank: a column block is one bank, so the whole grid
+sits on one bank per block. (2) **Width blocking** of an interleaved source: cores read the same rows.
+(3) **Height blocking** on Blackhole: each core's rows start at `32·k`, always bank 0 with 8 banks.
+**Measured win (Blackhole, 110 cores):** case 1, rotating the **block order** (`core % n_w`):
+**1.31×** at 256 B reads and 1.16× at 1024 B with 8 blocks per core, saving 24–55 µs and growing
+with the work. Cases 2–3, rotating the **row order** (`core % 32`): 1.04–1.07×, a fixed 0.3–1.2 µs.
+**Gist:** start each core's walk at a different index and wrap. Each lever is a compile-time switch
+(`stagger_blocks`, `stagger_reads`), so flip it per call to check whether it pays on your shape.
 
 ## ⭐⭐ T2 — [`matmul_output_subblock`](matmul_output_subblock/README.md)
 **Concept:** matmul output-subblock shape → SRC-register operand reuse (via the `matmul_block` helper).

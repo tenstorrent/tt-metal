@@ -4,7 +4,7 @@
 """CLI: measure the bank-de-clustered issue order on YOUR shapes.
 
     python -m ttnn.operations.examples.bank_stagger [--cases 32x8192x4,32x16384x8]
-                                                     [--variant all|none,read,write,both]
+                                                     [--variant all|none,read,blocks,write,combined]
                                                      [--kernel-iters K] [--trials N] [--report PATH]
 
 Each case is HxWxCHUNK: a bf16 ROW_MAJOR [H, W] tensor tilized with CHUNK tile-columns
@@ -28,12 +28,12 @@ def main():
     ap.add_argument(
         "--cases",
         default="auto",
-        help="comma list of HxWxCHUNK, or auto (default): width blocking at 128 B and 1024 B reads, and height blocking, sized to the grid.",
+        help="comma list of HxWxCHUNK (interleaved) or HxWxCHUNKws (width-sharded, one shard per DRAM bank), or auto (default): cases sized to the grid.",
     )
     ap.add_argument(
         "--variant",
         default="all",
-        help="all, or a comma list of none,read,write,both. Default all.",
+        help="all, or a comma list of none,read,blocks,write,combined. Default all.",
     )
     ap.add_argument("--kernel-iters", type=int, default=1, help="in-kernel repeat. 1 = per-launch latency. Default 1.")
     ap.add_argument("--trials", type=int, default=5, help="trials per variant (median reported). Default 5.")

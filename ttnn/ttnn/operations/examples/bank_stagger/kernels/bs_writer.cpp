@@ -8,10 +8,13 @@
 // chunk_wt tiles are consecutive pages, so with every core writing them in
 // ascending order the cores only ever START on a few banks.
 //
-// `stagger_writes` (compile-time) is the ONLY difference between variants. On, the
+// `stagger_writes` (compile-time): on, the
 // chunk_wt writes are issued starting at tile `col_rot` and wrapping; off, they go
 // in order and `col_rot` is not read. Each tile still goes to its own page from its
 // own L1 slot -- only the issue order moves.
+//
+// `stagger_blocks` (compile-time): walk the units starting at `blk_rot`, the same
+// order the reader filled the CB in.
 
 #include "api/dataflow/dataflow_api.h"
 
@@ -21,7 +24,8 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t kernel_iters = get_compile_time_arg_val(2);
     constexpr bool stagger_writes = get_compile_time_arg_val(3) != 0;
-    constexpr auto out_args = TensorAccessorArgs<4>();
+    constexpr bool stagger_blocks = get_compile_time_arg_val(4) != 0;
+    constexpr auto out_args = TensorAccessorArgs<5>();
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t unit_start = get_arg_val<uint32_t>(1);
@@ -29,11 +33,17 @@ void kernel_main() {
     const uint32_t n_w = get_arg_val<uint32_t>(3);      // chunks per tile-row
     const uint32_t wt = get_arg_val<uint32_t>(4);       // tiles per tile-row
     const uint32_t col_rot = get_arg_val<uint32_t>(5);  // used only when stagger_writes
+    const uint32_t blk_rot = get_arg_val<uint32_t>(6);  // used only when stagger_blocks, < unit_count
 
     const auto out_acc = TensorAccessor(out_args, dst_addr, tile_bytes);
 
     for (uint32_t it = 0; it < kernel_iters; ++it) {
-        for (uint32_t u = unit_start; u < unit_start + unit_count; ++u) {
+        for (uint32_t j = 0; j < unit_count; ++j) {
+            uint32_t off = j;
+            if constexpr (stagger_blocks) {
+                off = (j + blk_rot) < unit_count ? (j + blk_rot) : (j + blk_rot - unit_count);
+            }
+            const uint32_t u = unit_start + off;
             const uint32_t base_page = (u / n_w) * wt + (u % n_w) * chunk_wt;
 
             cb_wait_front(cb_out, chunk_wt);
