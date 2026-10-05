@@ -528,9 +528,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             for (auto* buf : {dram.in, dram.counts, dram.region, dram.expert_offsets, dram.expert_table}) {
                 tt::tt_metal::TensorAccessorArgs(buf).append_to(kernel.compile_time_args);
             }
+            // NOC_1 routes -Y first, so a read's data climbs the DRAM column to this row and then runs along
+            // it: it never enters the routed expert's rows, which NOC_0's +X/+Y return path would cross.
             kernel.config = tt::tt_metal::DataMovementConfigDescriptor{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = tt::tt_metal::NOC::NOC_0,
+                .noc = tt::tt_metal::NOC::NOC_1,
             };
             cmbf2d::UntilizerRtArgManager(dram).setup_rt_args(kernel, groups[g][j].logical);
             add_combine_defines(kernel);
