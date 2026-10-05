@@ -278,34 +278,33 @@ TEST(MetalEnv, SystemMeshSameEnv) {
     EXPECT_EQ(&mesh1, &mesh2);
 }
 
-// The MetalEnv constructor are user settings.
-// If fabric not enabled by the user, but it turns out we need dispatch on fabric, then the
-// env needs to be reconfigured to enable fabric.
-TEST(MetalEnv, ReconfigureFabricForDispatch) {
+// If the user left fabric disabled but dispatch to a remote device needs it, the runtime enables FABRIC_1D
+// without replacing a system mesh that was already handed out.
+TEST(MetalEnv, DispatchFabricKeepsSystemMesh) {
     MetalEnv env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2)});
-
-    // MetalEnv cannot be reconfigured after init so use the internal accessor
     MetalEnvImpl& accessor = MetalEnvAccessor(env).impl();
 
     EXPECT_EQ(accessor.get_fabric_config(), tt_fabric::FabricConfig::DISABLED);
 
+    // Register this env's context before the control plane is built. Building it first leaves
+    // MetalContext::instance() with nothing to find, and it opens the physical cluster.
+    auto& mesh_before = env.get_system_mesh();
     auto& cp_before = accessor.get_control_plane();
     EXPECT_EQ(cp_before.get_fabric_config(), tt_fabric::FabricConfig::DISABLED);
-
-    auto& mesh_before = env.get_system_mesh();
     EXPECT_GT(mesh_before.shape().mesh_size(), 0);
-    const auto* cp_ptr_before = &cp_before;
 
-    accessor.set_fabric_config(
-        tt_fabric::FabricConfig::FABRIC_1D, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+    accessor.enable_fabric_for_dispatch();
 
     EXPECT_EQ(accessor.get_fabric_config(), tt_fabric::FabricConfig::FABRIC_1D);
+    // The request the user made (nothing) is unchanged; only the runtime fabric config moved.
+    EXPECT_EQ(env.get_fabric_config().fabric_config, tt_fabric::FabricConfig::DISABLED);
 
     auto& cp_after = accessor.get_control_plane();
     EXPECT_EQ(cp_after.get_fabric_config(), tt_fabric::FabricConfig::FABRIC_1D);
-    EXPECT_NE(cp_ptr_before, &cp_after);
+    EXPECT_NE(&cp_before, &cp_after);
 
     auto& mesh_after = env.get_system_mesh();
+    EXPECT_EQ(&mesh_before, &mesh_after);
     EXPECT_GT(mesh_after.shape().mesh_size(), 0);
 }
 

@@ -82,6 +82,11 @@ public:
         tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED,
         tt_fabric::FabricManagerMode fabric_manager = tt_fabric::FabricManagerMode::DEFAULT,
         tt_fabric::FabricRouterConfig router_config = tt_fabric::FabricRouterConfig{});
+
+    // Enables FABRIC_1D for dispatch when the user left fabric disabled. Rebuilds the control plane when one
+    // already exists, but keeps a published system mesh: DISABLED and FABRIC_1D describe the same mesh. Fatals if
+    // the rebuilt mesh would differ.
+    void enable_fabric_for_dispatch();
     void initialize_fabric_config();
     void initialize_fabric_tensix_datamover_config();
     void teardown_fabric_config();

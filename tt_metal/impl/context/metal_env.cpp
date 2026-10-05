@@ -243,6 +243,54 @@ void MetalEnvImpl::configure_fabric(const FabricConfigDescriptor& fabric) {
     fabric_router_config_ = fabric.router_config;
 }
 
+namespace {
+
+// DISABLED and FABRIC_1D both map to a mesh fabric type, so turning fabric on for dispatch must not move devices.
+void check_dispatch_fabric_preserves_system_mesh(
+    const distributed::SystemMesh& kept, const distributed::SystemMesh& rebuilt) {
+    TT_FATAL(
+        kept.shape() == rebuilt.shape() && kept.local_shape() == rebuilt.local_shape(),
+        "Enabling fabric for dispatch changed the system mesh shape from {} (local {}) to {} (local {})",
+        kept.shape(),
+        kept.local_shape(),
+        rebuilt.shape(),
+        rebuilt.local_shape());
+    const auto kept_devices = kept.get_mapped_devices(std::nullopt);
+    const auto rebuilt_devices = rebuilt.get_mapped_devices(std::nullopt);
+    TT_FATAL(
+        kept_devices.device_ids == rebuilt_devices.device_ids &&
+            kept_devices.fabric_node_ids == rebuilt_devices.fabric_node_ids,
+        "Enabling fabric for dispatch changed the system mesh device mapping");
+}
+
+}  // namespace
+
+void MetalEnvImpl::enable_fabric_for_dispatch() {
+    TT_FATAL(
+        this->fabric_config_ == tt_fabric::FabricConfig::DISABLED,
+        "enable_fabric_for_dispatch() requires fabric to be disabled; fabric is {}",
+        enchantum::to_string(this->fabric_config_));
+
+    this->fabric_config_ = tt_fabric::FabricConfig::FABRIC_1D;
+    this->fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+    this->num_fabric_active_routing_planes_ = 1;
+    this->force_reinit_ = true;
+
+    {
+        std::lock_guard<std::mutex> lock(control_plane_mutex_);
+        if (control_plane_) {
+            this->initialize_control_plane_impl();
+            if (system_mesh_) {
+                // SystemMesh copies what it needs from the control plane, so the published one stays valid across
+                // the rebuild. The temporary mesh is only a check that the copy would have been the same.
+                auto rebuilt = std::unique_ptr<distributed::SystemMesh>(new distributed::SystemMesh(*control_plane_));
+                check_dispatch_fabric_preserves_system_mesh(*system_mesh_, *rebuilt);
+            }
+        }
+    }
+    this->initialize_fabric_config();
+}
+
 void MetalEnvImpl::freeze_fabric() {
     // Already frozen: the release store that published it synchronizes the fabric fields with this acquire load.
     if (fabric_frozen_.load(std::memory_order_acquire)) {

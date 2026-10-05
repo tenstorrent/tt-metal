@@ -275,24 +275,21 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
     if (any_remote_devices && !is_mock) {
         auto fabric_config = ctx_.get_fabric_config();
         if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
+            // Keeps an already-published system mesh. set_fabric_config would drop it.
+            env_impl_.enable_fabric_for_dispatch();
             fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D;
-            // TODO: This is using an internal API.
-            // Externally, we should decide how/where to have SetFabricConfig on the correct MetalEnv
-            ctx_.set_fabric_config(
-                fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-            // Update the fabric config in the descriptor
-            MetalEnvAccessor(descriptor_->env()).impl().fabric_config_ = fabric_config;
-            // Call initialize again because previously it was a no-op
-            ctx_.initialize_fabric_config();
             log_info(
                 tt::LogMetal,
                 "Enabling {} only for dispatch. If your workload requires fabric, please set the fabric config "
                 "accordingly.",
                 fabric_config);
         } else {
-            // Use the same mode
-            ctx_.set_fabric_config(
-                fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
+            // configure_fabric normalizes an unset plane count to every available plane, so a configured fabric
+            // already has at least one. Re-applying the config here with num_routing_planes=1 would, when the user
+            // asked for exactly one plane, reset the tensix/UDM/router settings and invalidate the system mesh.
+            TT_FATAL(
+                env_impl_.get_num_fabric_active_routing_planes() > 0,
+                "Fabric is enabled for dispatch but no routing planes are active");
         }
         MetalEnvAccessor(descriptor_->env()).impl().fabric_reliability_mode_ =
             tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
