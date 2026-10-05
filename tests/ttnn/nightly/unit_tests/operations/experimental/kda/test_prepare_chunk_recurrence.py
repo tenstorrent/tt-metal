@@ -175,6 +175,18 @@ def _reshape_flat(tensor: torch.Tensor, num_heads: int, num_chunks: int, dim: in
     )
 
 
+def _causal_decayed_products(left: torch.Tensor, right: torch.Tensor, cumulative_g: torch.Tensor) -> torch.Tensor:
+    """tril(sum_k left[i,k] * right[j,k] * exp(G[i,k] - G[j,k])) in FP64, masking G_i - G_j before exp.
+
+    The difference form is finite at any decay; a separable exp(G_i) * exp(-G_j) form overflows
+    even FP64 once the per-chunk cumulative decay exceeds ~700. Inputs are [chunks, C, K].
+    """
+    difference = cumulative_g[:, :, None, :] - cumulative_g[:, None, :, :]
+    causal = torch.ones(CHUNK_SIZE, CHUNK_SIZE, dtype=torch.bool).tril()[None, :, :, None]
+    decay = torch.exp(difference.masked_fill(~causal, float("-inf")))
+    return torch.einsum("nik,njk,nijk->nij", left, right.double(), decay)
+
+
 def _oracle(
     inputs: tuple[torch.Tensor, ...],
     num_heads: int,
@@ -199,23 +211,16 @@ def _oracle(
     q_decay = q * decay
     k_dec_t = (k * torch.exp(final_g.unsqueeze(2) - cumulative_g)).transpose(-1, -2)
     final_decay = torch.exp(final_g).unsqueeze(-1)
-    k_fp64 = k.double()
     cumulative_g_fp64 = cumulative_g.double()
-    anchor_g = cumulative_g_fp64[:, :, -1:].mul(0.5)
-    akk = torch.matmul(
-        beta.double() * k_fp64 * torch.exp(cumulative_g_fp64 - anchor_g),
-        (k_fp64 * torch.exp(anchor_g - cumulative_g_fp64)).transpose(-1, -2),
+    akk = torch.stack(
+        [
+            _causal_decayed_products(beta[h].double() * k[h].double(), k[h], cumulative_g_fp64[h])
+            for h in range(num_heads)
+        ]
     )
-    # The unused upper triangle can exceed FP32 range for real gates near -5.
-    # Mask in FP64 before converting the causal reference to the output dtype.
-    intra = (
-        torch.matmul(
-            q.double() * torch.exp(cumulative_g_fp64 - anchor_g),
-            (k_fp64 * torch.exp(anchor_g - cumulative_g_fp64)).transpose(-1, -2),
-        )
-        .tril()
-        .float()
-    )
+    intra = torch.stack(
+        [_causal_decayed_products(q[h].double(), k[h], cumulative_g_fp64[h]) for h in range(num_heads)]
+    ).float()
     identity = torch.eye(CHUNK_SIZE, dtype=torch.float64).reshape(1, 1, CHUNK_SIZE, CHUNK_SIZE)
     t_inv = torch.linalg.inv(identity + torch.tril(akk, diagonal=-1)).float()
     outputs = (v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv)
@@ -430,6 +435,83 @@ def test_prepare_chunk_recurrence_t_inv_is_stable_for_correlated_keys(device: tt
         context="correlated keys",
     )
     for output in reference:
+        ttnn.deallocate(output)
+
+
+def _strong_decay_inputs(chunk_log_decay: float) -> tuple[torch.Tensor, ...]:
+    """GDN-style scalar decay broadcast over K, constant per token, summing to -chunk_log_decay per chunk.
+
+    Every per-token value used below (|G_last| / 32) is exact in BF16, so the device and the
+    oracle see the same cumulative decay and the case ID names the realized |G_last|.
+    """
+    num_heads, num_chunks, key_dim, value_dim = 2, 2, 128, 128
+    q, k, v, g, beta = _host_inputs(num_heads, num_chunks, key_dim, value_dim, seed=2207)
+    per_token = torch.tensor(-chunk_log_decay / CHUNK_SIZE).to(torch.bfloat16)
+    assert float(per_token) * CHUNK_SIZE == -chunk_log_decay, "per-token decay must be exact in BF16"
+    g = torch.full_like(g, float(per_token))
+    return q, k, v, g, beta
+
+
+# Peak-error gates for the outputs that the anchored factors corrupt first: single entries
+# (diagonal of intra, last token of k_dec_t) go wrong while aggregate PCC stays above 0.999.
+# Clean device runs at |G_last| <= 144 give intra 7.2e-5 and k_dec_t (BF16) 1.24e-3 max abs error.
+_STRONG_DECAY_PEAK_ERROR = {"intra": 2.5e-4, "k_dec_t": 3.0e-3}
+_ANCHORED_RANGE_XFAIL = pytest.mark.xfail(
+    strict=True,
+    reason="KDA prep anchors exp(G - G_last/2) and exp(G_last/2 - G); beyond |G_last| ~ 150 per chunk "
+    "these factors leave the exponent range and intra/k_dec_t entries are silently wrong (finite)",
+)
+
+
+# GDN scalar decay on the KDA prep. The prep factors exp(G_i - G_j) into anchored separable terms
+# and masks after the matmul; FP32 emulation (tt-work U2, check 3b) gives non-finite values above
+# |G_last| ~ 100, while the device stays finite and accurate through 144 and is wrong from 160.
+# Real Qwen GDN gates exceed this: 3008 (94 per token) matches the input-independent
+# full-forgetting heads of Qwen3.6-35B-A3B layer 0 (~91.6 per token).
+@pytest.mark.parametrize(
+    "chunk_log_decay",
+    [
+        pytest.param(16.0, id="mild-g16"),
+        pytest.param(90.0, id="strong-g90"),
+        pytest.param(110.0, id="strong-g110"),
+        pytest.param(144.0, id="strong-g144"),
+        pytest.param(160.0, id="strong-g160", marks=_ANCHORED_RANGE_XFAIL),
+        pytest.param(176.0, id="strong-g176", marks=_ANCHORED_RANGE_XFAIL),
+        pytest.param(200.0, id="strong-g200", marks=_ANCHORED_RANGE_XFAIL),
+        pytest.param(3008.0, id="qwen-g3008", marks=_ANCHORED_RANGE_XFAIL),
+    ],
+)
+def test_prepare_chunk_recurrence_strong_scalar_decay(device: ttnn.Device, chunk_log_decay: float) -> None:
+    host_inputs = _strong_decay_inputs(chunk_log_decay)
+    num_heads = host_inputs[-1].shape[0]
+    output_bf16_mask = _PRODUCTION_OUTPUT_BF16_MASK
+    expected = _oracle(host_inputs, num_heads, output_bf16_mask)
+    assert all(torch.isfinite(output).all() for output in expected), "oracle must stay finite at any decay"
+    outputs = _run(
+        _device_inputs(host_inputs, device),
+        num_heads,
+        output_bf16_mask=output_bf16_mask,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=_production_compute_config(device),
+    )
+    actual = tuple(ttnn.to_torch(output) for output in outputs)
+    non_finite = {name: int((~torch.isfinite(output.float())).sum()) for name, output in zip(OUTPUT_NAMES, actual)}
+    logger.info(f"|G_last|={chunk_log_decay}: non-finite output entries {non_finite}")
+    for name, expected_output, actual_output in zip(OUTPUT_NAMES, expected, actual):
+        error = (expected_output.float() - actual_output.float()).abs()
+        scale = float(expected_output.float().abs().max())
+        wrong = torch.nonzero(error > 0.05 * max(scale, 1e-30))
+        positions = sorted({tuple(index[-2:].tolist()) for index in wrong})
+        logger.info(
+            f"|G_last|={chunk_log_decay} {name}: max_abs_err={float(error.max()):.3e} (|expected|max={scale:.3e}); "
+            f"{len(wrong)} entries off by >5% of |expected|max at (row, col) {positions[:12]}"
+        )
+    _assert_outputs_accurate(expected, actual, context=f"|G_last|={chunk_log_decay}")
+    for name, threshold in _STRONG_DECAY_PEAK_ERROR.items():
+        index = OUTPUT_NAMES.index(name)
+        max_abs = float((expected[index].float() - actual[index].float()).abs().max())
+        assert max_abs <= threshold, f"|G_last|={chunk_log_decay} {name} max abs error {max_abs:.3e} > {threshold:.1e}"
+    for output in outputs:
         ttnn.deallocate(output)
 
 
