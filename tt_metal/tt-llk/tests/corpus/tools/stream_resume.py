@@ -11,7 +11,7 @@ from pathlib import Path
 import sys
 
 
-SCHEMA = 3
+SCHEMA = 4
 
 
 def sha256_file(path: Path) -> str:
@@ -44,6 +44,7 @@ def cache_record(
     compiler_options: str | None = None,
     golden: str | None = None,
     runner_temp: str | None = None,
+    staged_variant: str | None = None,
 ) -> dict:
     idmap = Path(args.idmap).resolve() if args.idmap else None
     farm = Path(args.farm).resolve()
@@ -76,6 +77,7 @@ def cache_record(
             os.environ.get("TT_LLK_EXTRA_COMPILER_OPTIONS", "")
             if compiler_options is None else compiler_options
         ),
+        "staged_variant": staged_variant,
         "start": start,
         "count": count,
         "leg": leg,

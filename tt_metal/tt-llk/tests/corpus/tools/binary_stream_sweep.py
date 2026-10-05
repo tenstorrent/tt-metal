@@ -120,7 +120,7 @@ def validate_corr(corr, args, leg, count):
 
 def run_band_leg(
     args, node, start, count, out_sha_file, log_file, leg=None,
-    compiler_options="", golden="", runner_temp=None,
+    compiler_options="", golden="", runner_temp=None, staged_variant=None,
 ):
     """One pytest invocation: stream joint [start,start+count) for one leg.
 
@@ -133,6 +133,7 @@ def run_band_leg(
         Path(__file__), args, node, start, count, leg or "",
         compiler_options=compiler_options, golden=golden,
         runner_temp=runner_temp,
+        staged_variant=staged_variant,
     )
     if stream_resume.require_matching_cache(out_sha_file, metadata, cache_record):
         txt = out_sha_file.read_text()
@@ -146,6 +147,7 @@ def run_band_leg(
             validate_corr(corr, args, leg, count)
         return m.group(1), 0.0, 0, corr
     env = dict(os.environ)
+    env.pop("TT_LLK_STAGED_VARIANT_ID", None)
     env.update(
         CHIP_ARCH="blackhole",
         SHORT_ARCH="bh",
@@ -158,6 +160,8 @@ def run_band_leg(
         SFPU_STREAM_BINARY=f"{start},{count},{out_sha_file}",
         TT_LLK_EXTRA_COMPILER_OPTIONS=compiler_options,
     )
+    if staged_variant:
+        env["TT_LLK_STAGED_VARIANT_ID"] = staged_variant
     if golden and leg:
         # Host-side torch.pow TRUE-MATH tolerance leg rides along. Per-class max
         # ULP is used for candidate<=hand admission; no absolute budget is claimed.
@@ -224,6 +228,8 @@ def _identity_gate(args, out):
         ((row[1], row[2]), (row[3], row[4]), (row[5], row[6]))
         if args.tri_mode else ((row[1], row[2]), (row[3], row[4]))
     )
+    if args.tri_mode:
+        args.staged_variants = tuple(variant for variant, _ in pairs)
 
     roots = (
         (
@@ -307,6 +313,8 @@ def main():
         if not all((args.selected_runner_temp, args.baseline_sem_runner_temp,
                     args.baseline_hand_runner_temp)):
             ap.error("tri-arm mode requires three arm-specific runner temps")
+        if not args.idmap:
+            ap.error("tri-arm mode requires an identity map")
         if args.sem_node is not None or args.hand_node is not None:
             ap.error("do not mix legacy --sem/--hand-node with tri-arm nodes")
     elif args.sem_node is None or args.hand_node is None:
@@ -346,18 +354,21 @@ def main():
                 out / "bands" / f"b{k:04d}-selected.log",
                 leg="selected", compiler_options=args.selected_flags,
                 runner_temp=args.selected_runner_temp,
+                staged_variant=args.staged_variants[0],
             )
             sem_sha, sem_dt, _, sem_corr = run_band_leg(
                 args, args.baseline_sem_node, s, c, sem_f,
                 out / "bands" / f"b{k:04d}-sem.log", leg="sem",
                 compiler_options=args.baseline_flags, golden=args.golden,
                 runner_temp=args.baseline_sem_runner_temp,
+                staged_variant=args.staged_variants[1],
             )
             hand_sha, hand_dt, _, hand_corr = run_band_leg(
                 args, args.baseline_hand_node, s, c, hand_f,
                 out / "bands" / f"b{k:04d}-hand.log", leg="hand",
                 compiler_options=args.baseline_flags, golden=args.golden,
                 runner_temp=args.baseline_hand_runner_temp,
+                staged_variant=args.staged_variants[2],
             )
             compiler_eq = selected_sha == sem_sha
             compiler_equal &= compiler_eq

@@ -48,12 +48,15 @@ def test_resume_provenance() -> None:
         selected_record = stream_resume.cache_record(
             script, args, "sem-node", 0, 16, "selected",
             compiler_options="-mselected", golden="",
+            runner_temp=str(root / "selected-host-path"), staged_variant="c" * 64,
         )
         baseline_record = stream_resume.cache_record(
             script, args, "sem-node", 0, 16, "sem",
             compiler_options="-mbaseline", golden="op",
         )
         assert selected_record["compiler_options"] == "-mselected"
+        assert selected_record["staged_variant"] == "c" * 64
+        assert selected_record["runner_temp"].endswith("selected-host-path")
         assert baseline_record["compiler_options"] == "-mbaseline"
         assert selected_record != baseline_record
         output = root / "band.txt"

@@ -204,10 +204,11 @@ def run_shard(
         import hashlib
         src = "sfpu_binary_test.cpp" if sweep == "binary" else "eltwise_unary_sfpu_test.cpp"
         tri_build = farm.farm_root / "build/tri-arms/myop"
+        collision_variant = "c" * 64
         for arm, variant, body in (
-            ("a", "COLLIDE", b"selected-same-variant\n"),
-            ("b", "COLLIDE", b"baseline-same-variant\n"),
-            ("c", "CCC", b"baseline-hand\n"),
+            ("a", collision_variant, b"selected-same-variant\n"),
+            ("b", collision_variant, b"baseline-same-variant\n"),
+            ("c", "d" * 64, b"baseline-hand\n"),
         ):
             elf = tri_build / arm / "tt-llk-build/sources" / src / variant / "elf/math.elf"
             elf.parent.mkdir(parents=True)
@@ -217,8 +218,9 @@ def run_shard(
             return hashlib.sha256(path.read_bytes()).hexdigest()
         identity = work / "tri-idmap.tsv"
         identity.write_text(
-            f"myop\tCOLLIDE\t{digest('a', 'COLLIDE')}\t"
-            f"COLLIDE\t{digest('b', 'COLLIDE')}\tCCC\t{digest('c', 'CCC')}\n"
+            f"myop\t{collision_variant}\t{digest('a', collision_variant)}\t"
+            f"{collision_variant}\t{digest('b', collision_variant)}\t"
+            f"{'d' * 64}\t{digest('c', 'd' * 64)}\n"
         )
         e["TRI_PROFILES"] = str(profiles)
         e["TRI_IDMAP"] = str(identity)
@@ -388,7 +390,7 @@ def test_tri_arm_deployment_gate(tmp: Path) -> None:
         assert call["selected_runner_temp"] != call["baseline_sem_runner_temp"]
         assert call["baseline_sem_runner_temp"] != call["baseline_hand_runner_temp"]
     identity = (tmp / "tri-pass" / "tri-idmap.tsv").read_text().strip().split("\t")
-    assert identity[1] == identity[3] == "COLLIDE"
+    assert identity[1] == identity[3] == "c" * 64
     assert identity[2] != identity[4], "same variant name lost distinct A/B text"
 
     rc, last, _, out = run_shard(

@@ -152,6 +152,16 @@ ELF. Each slice copies the three arm roots separately and passes a distinct
 runner temp to each compile-consumer invocation; the resume record binds that
 root together with its exact flag string and identity map.
 
+Producer and consumer hosts may also recompute different variant names because
+the legacy variant hash includes environment/path-dependent configuration.
+After the arm-root `.text` identity gate succeeds, the streamer passes that
+arm's exact producer variant as `TT_LLK_STAGED_VARIANT_ID` to the harness.
+`helpers/staged_variant.py` accepts this override only in
+`--compile-consumer` mode and only as a 64-digit lowercase hash. There is no
+directory scan or fallback: the variant comes from the op's seven-column
+identity-map row, the build root is already scoped to that op and arm, and both
+are recorded in resume provenance.
+
 With `GOLDEN=1` (the default), `<op>-VERDICT.txt` independently records
 `BIT-EXACT` or `DIVERGENT`; `<op>-NUMERIC-ADMISSION.{json,tsv}` records oracle
 availability, semantic and hand absolute status, global per-class ULP status,

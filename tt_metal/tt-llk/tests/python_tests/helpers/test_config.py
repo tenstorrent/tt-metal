@@ -60,6 +60,7 @@ from .golden_generators import (
     dummy_golden_generator,
     get_golden_proxied,
 )
+from .staged_variant import require_complete_staged_variant, resolve_staged_variant
 from .llk_params import (
     BriscCmd,
     DestAccumulation,
@@ -1662,6 +1663,17 @@ class TestConfig:
         if self._prepared:
             return
         self.generate_variant_hash()
+        explicit_variant = os.getenv("TT_LLK_STAGED_VARIANT_ID")
+        self.variant_id = resolve_staged_variant(
+            self.variant_id,
+            explicit_variant,
+            compile_consumer=TestConfig.BUILD_MODE == BuildMode.CONSUME,
+        )
+        if explicit_variant is not None:
+            elf_dir = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
+            require_complete_staged_variant(
+                elf_dir, TestConfig.KERNEL_COMPONENTS, self.variant_id
+            )
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
             self.build_elfs()
         self._prepared = True
