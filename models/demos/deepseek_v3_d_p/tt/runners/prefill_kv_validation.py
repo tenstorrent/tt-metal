@@ -77,7 +77,10 @@ def _load_sharded_rows(layer_dir: Path, key: str, start: int, total_len: int) ->
         rows.append(t[max(start - first, 0) : min(end - first, t.shape[0])])
     if not rows:
         raise FileNotFoundError(f"{layer_dir} holds no shard covering rows [{start},{end})")
-    return torch.cat(rows, dim=0).to(torch.float32)
+    out = torch.cat(rows, dim=0).to(torch.float32)
+    if out.shape[0] != total_len:
+        raise FileNotFoundError(f"{layer_dir} shards cover only {out.shape[0]} of rows [{start},{end})")
+    return out
 
 
 def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int, start: int = 0) -> "torch.Tensor":

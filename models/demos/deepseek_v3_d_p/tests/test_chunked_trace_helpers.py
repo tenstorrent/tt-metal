@@ -114,3 +114,9 @@ def test_sharded_offset_read_past_the_end_raises(tmp_path, expect_error):
     trace = _write_windowed_trace(tmp_path, capture_rows=(0, 256))
     with expect_error(FileNotFoundError, "no shard covering rows"):
         _load_golden_kv_post(trace, 0, 32, start=1024)
+
+
+def test_sharded_read_partly_past_the_end_raises(tmp_path, expect_error):
+    trace = _write_windowed_trace(tmp_path, capture_rows=(0, 256))
+    with expect_error(FileNotFoundError, "cover only 56 of rows"):
+        _load_golden_kv_post(trace, 0, 64, start=200)

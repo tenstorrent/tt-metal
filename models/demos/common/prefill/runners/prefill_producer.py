@@ -1015,7 +1015,7 @@ def _resolve_pcc_window(trace_dir, real_len: int, tokens_per_block: int) -> tupl
 
     gold_start, gold_end = load_trace_golden_span(trace_dir)
     if not gold_start:
-        return 0, 0, real_len, golden_offset
+        return 0, 0, min(gold_end, real_len), golden_offset
     if os.environ.get("PREFILL_PCC_GOLDEN_LEN"):
         raise ValueError(
             f"PREFILL_PCC_GOLDEN_LEN caps the compare at a length, but {trace_dir} is a windowed "
