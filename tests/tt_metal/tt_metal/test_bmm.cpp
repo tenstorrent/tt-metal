@@ -232,17 +232,8 @@ bool validate_bmm_result(
     return packed_uint32_t_vector_comparison(result_vec, gold, comparison_function, argfail);
 }
 
-void run_bmm_single_node(distributed::MeshDevice& mesh_device, const BmmParams& p) {
-    auto tensors = create_bmm_tensors(mesh_device, p);
-    const std::uint32_t bytesA = p.single_tile_size * p.Mt * p.Kt * p.B_total;
-    const std::uint32_t bytesB = p.single_tile_size * p.Kt * p.Nt * p.B_total;
-
-    const experimental::NodeCoord node{0, 0};
-    const bool use_implicit_sync = (mesh_device.arch() == ARCH::QUASAR);
-    auto spec = build_bmm_program_spec(p, tensors, node, use_implicit_sync);
-    auto workload = experimental::MakeMeshWorkloadFromSpec(mesh_device, spec);
-    Program& program = workload.get_programs().begin()->second;
-
+void set_bmm_run_args(
+    Program& program, const BmmParams& p, const BmmTensors& tensors, const experimental::NodeCoord& node) {
     constexpr std::uint32_t do_bcast = 0;
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -271,22 +262,49 @@ void run_bmm_single_node(distributed::MeshDevice& mesh_device, const BmmParams& 
         {DST_T, experimental::TensorArgument{tensors.dst}},
     };
     experimental::SetProgramRunArgs(program, params);
+}
 
-    auto& cq = mesh_device.mesh_command_queue();
-    auto src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
-    auto src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
-    auto src0_host = HostTensor::from_vector(src0_vec, tensors.src0.tensor_spec());
-    auto src1_host = HostTensor::from_vector(src1_vec, tensors.src1.tensor_spec());
-    cq.enqueue_write_tensor(src0_host, tensors.src0);
-    cq.enqueue_write_tensor(src1_host, tensors.src1);
+struct BmmInputs {
+    std::vector<std::uint32_t> src0;
+    std::vector<std::uint32_t> src1;
+};
 
-    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+BmmInputs write_bmm_inputs(distributed::MeshCommandQueue& cq, const BmmParams& p, BmmTensors& tensors) {
+    const std::uint32_t bytesA = p.single_tile_size * p.Mt * p.Kt * p.B_total;
+    const std::uint32_t bytesB = p.single_tile_size * p.Kt * p.Nt * p.B_total;
+    BmmInputs inputs{
+        .src0 = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234),
+        .src1 = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f),
+    };
+    cq.enqueue_write_tensor(HostTensor::from_vector(inputs.src0, tensors.src0.tensor_spec()), tensors.src0);
+    cq.enqueue_write_tensor(HostTensor::from_vector(inputs.src1, tensors.src1.tensor_spec()), tensors.src1);
+    return inputs;
+}
 
+void check_bmm_output(
+    distributed::MeshCommandQueue& cq, const BmmParams& p, const BmmTensors& tensors, const BmmInputs& inputs) {
     auto result_vec = cq.enqueue_read_tensor(tensors.dst).to_vector<std::uint32_t>();
 
     int argfail = -1;
-    bool pass = validate_bmm_result(p, src0_vec, src1_vec, result_vec, &argfail);
+    bool pass = validate_bmm_result(p, inputs.src0, inputs.src1, result_vec, &argfail);
     EXPECT_TRUE(pass) << "Failure position=" << argfail;
+}
+
+void run_bmm_single_node(distributed::MeshDevice& mesh_device, const BmmParams& p) {
+    auto tensors = create_bmm_tensors(mesh_device, p);
+
+    const experimental::NodeCoord node{0, 0};
+    const bool use_implicit_sync = (mesh_device.arch() == ARCH::QUASAR);
+    auto spec = build_bmm_program_spec(p, tensors, node, use_implicit_sync);
+    auto workload = experimental::MakeMeshWorkloadFromSpec(mesh_device, spec);
+    set_bmm_run_args(workload.get_programs().begin()->second, p, tensors, node);
+
+    auto& cq = mesh_device.mesh_command_queue();
+    const BmmInputs inputs = write_bmm_inputs(cq, p, tensors);
+
+    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+
+    check_bmm_output(cq, p, tensors, inputs);
 }
 }  // namespace
 
