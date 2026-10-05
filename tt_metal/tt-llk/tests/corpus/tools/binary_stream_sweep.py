@@ -66,6 +66,28 @@ def validate_corr(corr, args, leg, count):
             f"expected op={args.golden},leg={leg}; "
             f"got op={corr.get('op')},leg={corr.get('leg')}"
         )
+    status = corr.get("status")
+    if status is not None:
+        if status != "UNCHECKED":
+            raise RuntimeError(f"invalid golden sidecar status: {status!r}")
+        allowed = {"op", "leg", "status", "joints", "reason"}
+        if set(corr) != allowed:
+            raise RuntimeError(
+                "invalid unchecked golden sidecar fields: "
+                f"missing={sorted(allowed - set(corr))}, "
+                f"extra={sorted(set(corr) - allowed)}"
+            )
+        try:
+            joints = int(corr["joints"])
+        except ValueError as error:
+            raise RuntimeError("invalid unchecked golden sidecar joints") from error
+        if joints != count:
+            raise RuntimeError(
+                f"golden sidecar coverage mismatch: joints={joints}, expected={count}"
+            )
+        if not corr["reason"].strip():
+            raise RuntimeError("invalid unchecked golden sidecar: empty reason")
+        return
     try:
         joints = int(corr["joints"])
         n_out = int(corr["n_out_of_tol"])
@@ -104,8 +126,6 @@ def validate_corr(corr, args, leg, count):
             "invalid golden sidecar within_contract: "
             f"within_contract={within!r}, n_out_of_tol={n_out}"
         )
-    if "status" in corr:
-        raise RuntimeError(f"golden sidecar is not checked: status={corr['status']}")
     if joints != count:
         raise RuntimeError(
             f"golden sidecar coverage mismatch: joints={joints}, expected={count}"

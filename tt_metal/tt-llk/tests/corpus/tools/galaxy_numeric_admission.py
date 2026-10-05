@@ -68,6 +68,25 @@ def _band(row: dict[str, str], path: Path, op: str, leg: str) -> dict[str, Any]:
     count = _as_count(row, count_key, path)
     if count == 0:
         raise ValueError(f"{path}: empty correctness population")
+    status = row.get("status")
+    if status is not None:
+        if status != "UNCHECKED":
+            raise ValueError(f"{path}: invalid correctness status {status!r}")
+        allowed = {"op", "leg", "status", count_key, "reason"}
+        if set(row) != allowed:
+            raise ValueError(
+                f"{path}: invalid unchecked fields; "
+                f"missing={sorted(allowed - set(row))}, "
+                f"extra={sorted(set(row) - allowed)}"
+            )
+        reason = row["reason"].strip()
+        if not reason:
+            raise ValueError(f"{path}: unchecked record has empty reason")
+        return {
+            "count": count,
+            "checked": False,
+            "reason": reason,
+        }
     n_out = _as_count(row, "n_out_of_tol", path)
     if n_out > count:
         raise ValueError(f"{path}: n_out_of_tol exceeds population")
@@ -83,9 +102,6 @@ def _band(row: dict[str, str], path: Path, op: str, leg: str) -> dict[str, Any]:
     within = row.get("within_contract")
     if within not in ("True", "False") or (within == "True") != (n_out == 0):
         raise ValueError(f"{path}: inconsistent within_contract")
-    if "status" in row:
-        raise ValueError(f"{path}: unchecked correctness record")
-
     graded_present = "n_graded" in row or "n_out_graded" in row
     n_graded = n_out_graded = 0
     if graded_present:
@@ -97,6 +113,7 @@ def _band(row: dict[str, str], path: Path, op: str, leg: str) -> dict[str, Any]:
             raise ValueError(f"{path}: invalid graded-contract counts")
     return {
         "count": count,
+        "checked": True,
         "n_out": n_out,
         "classes": classes,
         "graded_present": graded_present,
@@ -167,8 +184,8 @@ def aggregate(root: Path, op: str) -> dict[str, Any]:
         }
 
     legs = {
-        "sem": {"patterns": 0, "n_out": 0, "n_graded": 0, "n_out_graded": 0, "graded": None, "classes": {}},
-        "hand": {"patterns": 0, "n_out": 0, "n_graded": 0, "n_out_graded": 0, "graded": None, "classes": {}},
+        "sem": {"patterns": 0, "n_out": 0, "n_graded": 0, "n_out_graded": 0, "graded": None, "classes": {}, "checked": None, "reasons": set()},
+        "hand": {"patterns": 0, "n_out": 0, "n_graded": 0, "n_out_graded": 0, "graded": None, "classes": {}, "checked": None, "reasons": set()},
     }
     try:
         for key in sorted(sem_by_key):
@@ -178,6 +195,21 @@ def aggregate(root: Path, op: str) -> dict[str, Any]:
                 pair[leg] = _band(parse_corr(path), path, op, leg)
             if pair["sem"]["count"] != pair["hand"]["count"]:
                 raise ValueError(f"{key}: semantic/hand population mismatch")
+            if pair["sem"]["checked"] != pair["hand"]["checked"]:
+                raise ValueError(f"{key}: semantic/hand oracle-status mismatch")
+            if not pair["sem"]["checked"]:
+                if pair["sem"]["reason"] != pair["hand"]["reason"]:
+                    raise ValueError(f"{key}: semantic/hand unchecked reason mismatch")
+                for leg in ("sem", "hand"):
+                    acc = legs[leg]
+                    if acc["checked"] is True:
+                        raise ValueError(f"{key}: mixed checked/unchecked sidecars")
+                    acc["checked"] = False
+                    acc["patterns"] += pair[leg]["count"]
+                    acc["reasons"].add(pair[leg]["reason"])
+                continue
+            if legs["sem"]["checked"] is False or legs["hand"]["checked"] is False:
+                raise ValueError(f"{key}: mixed checked/unchecked sidecars")
             if pair["sem"]["graded_present"] != pair["hand"]["graded_present"]:
                 raise ValueError(f"{key}: semantic/hand graded schema mismatch")
             if pair["sem"]["n_graded"] != pair["hand"]["n_graded"]:
@@ -192,6 +224,7 @@ def aggregate(root: Path, op: str) -> dict[str, Any]:
             for leg in ("sem", "hand"):
                 band = pair[leg]
                 acc = legs[leg]
+                acc["checked"] = True
                 acc["patterns"] += band["count"]
                 acc["n_out"] += band["n_out"]
                 acc["n_graded"] += band["n_graded"]
@@ -224,6 +257,34 @@ def aggregate(root: Path, op: str) -> dict[str, Any]:
         and legs["sem"]["patterns"] == covered
         and legs["hand"]["patterns"] == covered
     )
+    if legs["sem"]["checked"] is False:
+        if complete:
+            return {
+                "op": op,
+                "equivalence": equiv,
+                "oracle": "UNAVAILABLE",
+                "bands": len(sem_by_key),
+                "patterns": legs["sem"]["patterns"],
+                "semantic_absolute": "NOT_RUN",
+                "hand_absolute": "NOT_RUN",
+                "ulp_nonregression": "NOT_RUN",
+                "numeric_admission": "NO_ORACLE",
+                "reason": "oracle-unavailable:" + "|".join(sorted(legs["sem"]["reasons"])),
+                "admitted": False,
+            }
+        return {
+            "op": op,
+            "equivalence": equiv,
+            "oracle": "UNAVAILABLE",
+            "bands": len(sem_by_key),
+            "patterns": legs["sem"]["patterns"],
+            "semantic_absolute": "NOT_RUN",
+            "hand_absolute": "NOT_RUN",
+            "ulp_nonregression": "NOT_RUN",
+            "numeric_admission": "INCOMPLETE",
+            "reason": "unchecked-oracle-with-incomplete-full-space-coverage",
+            "admitted": False,
+        }
     sem_in = (
         legs["sem"]["n_out_graded"] == 0
         if legs["sem"]["graded"] and legs["sem"]["n_graded"] > 0

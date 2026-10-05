@@ -193,6 +193,11 @@ def test_correctness_sidecar_identity_and_class_data() -> None:
         "class_ulp": "in_domain_finite_normal:16:2",
     }
     fp32.validate_corr(good, args, "sem", 16)
+    unchecked = {
+        "op": "exp", "leg": "sem", "status": "UNCHECKED",
+        "patterns": "16", "reason": "no registered oracle",
+    }
+    fp32.validate_corr(unchecked, args, "sem", 16)
     for changed, message in (
         (dict(good, op="other"), "identity mismatch"),
         (dict(good, patterns="15"), "coverage mismatch"),
@@ -212,13 +217,24 @@ def test_correctness_sidecar_identity_and_class_data() -> None:
         (dict(good, max_bf16_ulp="1"), "max/class mismatch"),
         (dict(good, class_ulp="bogus:16:2"), "class vocabulary"),
         (dict(good, within_contract="False"), "invalid golden sidecar within_contract"),
-        (dict(good, status="UNCHECKED"), "not checked"),
     ):
         try:
             fp32.validate_corr(changed, args, "sem", 16)
             raise AssertionError(f"bad sidecar accepted: {changed}")
         except RuntimeError as error:
             assert message in str(error)
+    for changed in (
+        dict(unchecked, status="SKIPPED"),
+        {key: value for key, value in unchecked.items() if key != "reason"},
+        dict(unchecked, reason="   "),
+        dict(unchecked, patterns="15"),
+        dict(unchecked, n_out_of_tol="0"),
+    ):
+        try:
+            fp32.validate_corr(changed, args, "sem", 16)
+            raise AssertionError(f"bad unchecked sidecar accepted: {changed}")
+        except RuntimeError:
+            pass
 
     binary_args = SimpleNamespace(golden="binarypow")
     binary_good = {
@@ -231,6 +247,11 @@ def test_correctness_sidecar_identity_and_class_data() -> None:
         "class_ulp": "pos_normal_base_normal_exp:15:4|base_nan:1:0",
     }
     binary.validate_corr(binary_good, binary_args, "hand", 16)
+    binary_unchecked = {
+        "op": "binarypow", "leg": "hand", "status": "UNCHECKED",
+        "joints": "16", "reason": "no registered oracle",
+    }
+    binary.validate_corr(binary_unchecked, binary_args, "hand", 16)
     for changed in (
         {key: value for key, value in binary_good.items() if key != "n_out_of_tol"},
         dict(binary_good, n_out_of_tol="-1"),
@@ -242,6 +263,18 @@ def test_correctness_sidecar_identity_and_class_data() -> None:
         try:
             binary.validate_corr(changed, binary_args, "hand", 16)
             raise AssertionError(f"bad binary sidecar accepted: {changed}")
+        except RuntimeError:
+            pass
+    for changed in (
+        dict(binary_unchecked, status="SKIPPED"),
+        {key: value for key, value in binary_unchecked.items() if key != "reason"},
+        dict(binary_unchecked, reason=""),
+        dict(binary_unchecked, joints="15"),
+        dict(binary_unchecked, class_ulp="base_nan:16:0"),
+    ):
+        try:
+            binary.validate_corr(changed, binary_args, "hand", 16)
+            raise AssertionError(f"bad unchecked binary sidecar accepted: {changed}")
         except RuntimeError:
             pass
 

@@ -27,6 +27,13 @@ def corr(op: str, leg: str, count: int, out: int, classes: str, *, graded=None) 
     return ",".join(fields) + "\n"
 
 
+def unchecked(op: str, leg: str, count: int, reason="no registered oracle") -> str:
+    return (
+        f"SFPU_CORRECTNESS,op={op},leg={leg},status=UNCHECKED,"
+        f"patterns={count},reason={reason}\n"
+    )
+
+
 def make_root(tmp: Path, op="op", verdict="DIVERGENT", covered=20) -> Path:
     root = tmp / op
     root.mkdir()
@@ -105,6 +112,26 @@ def test_graded_contract_and_completeness(tmp: Path) -> None:
     assert got["numeric_admission"] == "INCOMPLETE", got
 
 
+def test_unchecked_oracle_is_not_operational_failure(tmp: Path) -> None:
+    root = make_root(tmp, op="unchecked", covered=20)
+    band(root, 0, "b0", unchecked("unchecked", "sem", 20),
+         unchecked("unchecked", "hand", 20))
+    got = admission.aggregate(root, "unchecked")
+    assert got["oracle"] == "UNAVAILABLE", got
+    assert got["numeric_admission"] == "NO_ORACLE", got
+    assert got["patterns"] == 20, got
+
+    malformed = make_root(tmp, op="bad-unchecked", covered=20)
+    band(
+        malformed, 0, "b0",
+        unchecked("bad-unchecked", "sem", 20).rstrip("\n") + ",class_ulp=x:20:0\n",
+        unchecked("bad-unchecked", "hand", 20),
+    )
+    got = admission.aggregate(malformed, "bad-unchecked")
+    assert got["oracle"] == "INVALID", got
+    assert got["numeric_admission"] == "INCOMPLETE", got
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
@@ -112,6 +139,7 @@ def main() -> int:
         test_better_semantic_arm_admitted(tmp)
         test_semantic_failure_and_missing_oracle(tmp)
         test_graded_contract_and_completeness(tmp)
+        test_unchecked_oracle_is_not_operational_failure(tmp)
     print("PASS galaxy numeric admission (global maxima, uplift, refusal, coverage)")
     return 0
 

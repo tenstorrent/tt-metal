@@ -68,6 +68,28 @@ def validate_corr(corr, args, leg, count):
             f"expected op={args.golden},leg={leg}; "
             f"got op={corr.get('op')},leg={corr.get('leg')}"
         )
+    status = corr.get("status")
+    if status is not None:
+        if status != "UNCHECKED":
+            raise RuntimeError(f"invalid golden sidecar status: {status!r}")
+        allowed = {"op", "leg", "status", "patterns", "reason"}
+        if set(corr) != allowed:
+            raise RuntimeError(
+                "invalid unchecked golden sidecar fields: "
+                f"missing={sorted(allowed - set(corr))}, "
+                f"extra={sorted(set(corr) - allowed)}"
+            )
+        try:
+            patterns = int(corr["patterns"])
+        except ValueError as error:
+            raise RuntimeError("invalid unchecked golden sidecar patterns") from error
+        if patterns != count:
+            raise RuntimeError(
+                f"golden sidecar coverage mismatch: patterns={patterns}, expected={count}"
+            )
+        if not corr["reason"].strip():
+            raise RuntimeError("invalid unchecked golden sidecar: empty reason")
+        return
     try:
         patterns = int(corr["patterns"])
         n_out = int(corr["n_out_of_tol"])
@@ -109,8 +131,6 @@ def validate_corr(corr, args, leg, count):
             "invalid golden sidecar within_contract: "
             f"within_contract={within!r}, n_out_of_tol={n_out}"
         )
-    if "status" in corr:
-        raise RuntimeError(f"golden sidecar is not checked: status={corr['status']}")
     if "max_ulp_true_sech2" in corr:
         try:
             true_max = float(corr["max_ulp_true_sech2"])
