@@ -37,7 +37,7 @@ void kernel_main() {
     uint32_t phases_done = 0;
     uint32_t result = kComplete;
     for (uint32_t phase = 0; phase < num_phases; phase++) {
-        overlay::FdsDispatch::fds_go(/*ad_enable=*/false, group_id);
+        overlay::FdsDispatch::fds_go(group_id);
 
         uint32_t done_count = 0;
         if (!fds_kernel::wait_group_count(group_id, done_threshold, poll_iterations, done_count)) {

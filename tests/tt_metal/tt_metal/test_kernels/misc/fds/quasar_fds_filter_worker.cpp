@@ -47,14 +47,14 @@ void kernel_main() {
 
     // Ask for the session go to be dropped, and let the hardware capture of its zero prove the
     // wire is clear before the filter is raised.
-    overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenLaneKnown);
+    overlay::FdsNeo::fds_done(kTokenLaneKnown);
     if (!fds_kernel::wait_de_status(go_inst, 0, poll_iterations)) {
         result = kTimeoutGoClear;
     }
 
     if (result == kComplete) {
         overlay::FdsNeo::fds_config_filter_length(long_filter);
-        overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenArmed);
+        overlay::FdsNeo::fds_done(kTokenArmed);
 
         // The engine fires a train of brief pulses early in this window, each far shorter than
         // the long threshold, so the lane must stay clear.
@@ -65,7 +65,7 @@ void kernel_main() {
     }
 
     if (result == kComplete) {
-        overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenPulseChecked);
+        overlay::FdsNeo::fds_done(kTokenPulseChecked);
         if (!fds_kernel::wait_de_status(go_inst, kPayloadGo, poll_iterations)) {
             result = kTimeoutHeldCapture;
         }
@@ -74,11 +74,11 @@ void kernel_main() {
     if (result == kComplete) {
         overlay::FdsNeo::fds_clear_de_status(go_inst);
         overlay::FdsNeo::fds_config_filter_length(floor_filter);
-        overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenRearmed);
+        overlay::FdsNeo::fds_done(kTokenRearmed);
         if (!fds_kernel::wait_de_status(go_inst, kPayloadGo, poll_iterations)) {
             result = kTimeoutFloorCapture;
         } else {
-            overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenDone);
+            overlay::FdsNeo::fds_done(kTokenDone);
         }
     }
 

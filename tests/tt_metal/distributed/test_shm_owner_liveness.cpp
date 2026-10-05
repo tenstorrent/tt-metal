@@ -28,11 +28,11 @@
 #include "gmock/gmock.h"
 
 #include <internal/service/inter_process_counter_channel.hpp>
-#include "tt_metal/distributed/d2h_stream_service_descriptor.hpp"
-#include "tt_metal/distributed/h2d_stream_service_descriptor.hpp"
-#include "tt_metal/distributed/hd_socket_descriptor.hpp"
+#include <tt-metalium/experimental/sockets/d2h_stream_service_descriptor.hpp>
+#include <tt-metalium/experimental/sockets/h2d_stream_service_descriptor.hpp>
+#include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
 #include "tt_metal/distributed/inter_process_counter_layout.hpp"
-#include "tt_metal/distributed/shm_resource_tracker.hpp"
+#include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -223,8 +223,7 @@ TEST(ShmOwnerLiveness, SocketDescriptorFromDeadOwnerIsNotPublished) {
 TEST(ShmOwnerLiveness, SocketDescriptorFromReusedPidIsNotPublished) {
     ScopedFile file{unique_descriptor_path("socket")};
     // Our own pid, but a start time that is not ours: the owner died and its pid came back.
-    socket_descriptor_owned_by(getpid(), ShmResourceTracker::process_start_time(getpid()) + 1)
-        .write_to_file(file.path);
+    socket_descriptor_owned_by(getpid(), ShmResourceTracker::process_start_time(getpid()) + 1).write_to_file(file.path);
 
     expect_throws_containing(
         [&] { HDSocketDescriptor::wait_and_read(file.path, "h2d", 50); },
@@ -237,8 +236,7 @@ TEST(ShmOwnerLiveness, SocketDescriptorRepublishedByLiveOwnerIsPickedUp) {
 
     std::thread successor([&] {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        socket_descriptor_owned_by(getpid(), ShmResourceTracker::process_start_time(getpid()))
-            .write_to_file(file.path);
+        socket_descriptor_owned_by(getpid(), ShmResourceTracker::process_start_time(getpid())).write_to_file(file.path);
     });
     const auto desc = HDSocketDescriptor::wait_and_read(file.path, "h2d", 5000);
     successor.join();
@@ -256,8 +254,7 @@ TEST(ShmOwnerLiveness, SocketDescriptorRemovedWhileWaitingIsNotAnError) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         std::remove(file.path.c_str());
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        socket_descriptor_owned_by(getpid(), ShmResourceTracker::process_start_time(getpid()))
-            .write_to_file(file.path);
+        socket_descriptor_owned_by(getpid(), ShmResourceTracker::process_start_time(getpid())).write_to_file(file.path);
     });
     const auto desc = HDSocketDescriptor::wait_and_read(file.path, "h2d", 5000);
     successor.join();

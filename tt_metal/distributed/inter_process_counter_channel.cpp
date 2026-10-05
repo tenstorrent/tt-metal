@@ -5,7 +5,7 @@
 #include <internal/service/inter_process_counter_channel.hpp>
 
 #include "inter_process_counter_layout.hpp"
-#include "shm_resource_tracker.hpp"
+#include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
 
 #include <tt-logger/tt-logger.hpp>
 

@@ -50,12 +50,12 @@ case "${MODEL}" in
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}';"
     ;;
-  glm52)
-    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm52_prefill_runner_kv}"
-    MANIFEST="${MANIFEST_DIR}/glm52.json"
+  glm53)
+    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm53_prefill_runner_kv}"
+    MANIFEST="${MANIFEST_DIR}/glm53.json"
     RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
-        export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k;"
+        export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k;"
     ;;
   kimi_k3)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_prefill_runner_kv}"
@@ -63,11 +63,16 @@ case "${MODEL}" in
     # 93 layers do not fit one galaxy -- MLA's static CBs become unplaceable past ~36 layers on a
     # rank (#54876) and a 48-layer single rank OOMs at 2 users. 24 fits, ends on an MLA layer, and
     # is the deepest depth the golden's decoder-output stream covers, so sc1 is a real accuracy gate
-    # rather than a smaller copy of sc4. The context is the same on both: K3's whole window is the
-    # golden's 11 chunks, so there is nothing to shrink.
+    # rather than a smaller copy of sc4. sc1 keeps the default 256k context, so its perf probes are
+    # the 5k..250k ones GLM-5.3 reports and sc4's 1M request adds 510k and 1M on top. Not a
+    # baseline for sc4 -- 24 layers against 93 -- which is why the summary job reports sc4 alone.
     SC1_NUM_LAYERS=24
-    SC1_MAX_SEQ_LEN=56320
-    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized;"
+    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized;"
+    # PREFILL_TRACE_DIR is the one K3 path still on NFS, deliberately. The sc4 93-layer leg's KV PCC
+    # collapsed to ~0 past layer ~24 on run 36717057668 with the Weka trace (it reads 0.900..0.994 on
+    # run 36524165128), and the two candidates -- the Weka golden copy and the Weka TTNN cache -- give
+    # the same symptom. This is pinned here as the one-variable test; do not move it until sc4 has
+    # produced a clean run, which the bh_sc4 pool has been failing to do in multihost setup.
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/k3_vllm_code_debug_1M;"
     ;;
@@ -146,14 +151,25 @@ cleanup() {
     if [ "$(find "${TIMING_DIR}" -name '*.csv' 2>/dev/null | wc -l)" -ge 2 ]; then
       GANTT_DIR="${PREFILL_SUMMARIES}/plots"
       mkdir -p "${GANTT_DIR}"
-      python3 -c "import matplotlib" 2>/dev/null \
-        || timeout 90 uv pip install --quiet matplotlib 2>/dev/null \
-        || timeout 90 python3 -m pip install --quiet matplotlib 2>/dev/null \
-        || echo "matplotlib install failed (gantt skipped, non-fatal)"
-      python3 "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/scripts/plot_pipeline_trace.py" \
+      GANTT_PY=python3
+      GANTT_TMP=""
+      if ! python3 -c "import matplotlib" 2>/dev/null; then
+        GANTT_TMP=$(mktemp -d)
+        if UV_CACHE_DIR="${GANTT_TMP}/uvcache" timeout 120 uv venv --quiet "${GANTT_TMP}/venv" \
+           && UV_CACHE_DIR="${GANTT_TMP}/uvcache" timeout 180 uv pip install --quiet \
+                --python "${GANTT_TMP}/venv/bin/python" matplotlib; then
+          GANTT_PY="${GANTT_TMP}/venv/bin/python"
+        else
+          echo "matplotlib install failed (gantt skipped, non-fatal)"
+        fi
+      fi
+      "${GANTT_PY}" "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/scripts/plot_pipeline_trace.py" \
         --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
         -o "${GANTT_DIR}/${MODEL}_pipeline_gantt.png" \
         || echo "gantt render failed (non-fatal)"
+      if [ -n "${GANTT_TMP}" ]; then
+        rm -rf "${GANTT_TMP}"
+      fi
     fi
   fi
   rm -rf "${MR_DIR}"

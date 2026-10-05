@@ -12,8 +12,8 @@
 // producer for this backend is tools/profiler/kernel_profiler_streaming.hpp, selected by -DPROFILE_STREAMING.
 //
 // Consumers: the SPSC producer (kernel_profiler_streaming.hpp), the DRISC relay kernel
-// (tools/profiler/kernels/streaming_profiler_relay.cpp) and the host receiver
-// (impl/streaming_profiler/streaming_profiler_receiver.cpp, spsc_marker_decode.hpp).
+// (impl/streaming_profiler/kernels/drisc_relay.cpp) and the host receiver
+// (impl/streaming_profiler/receiver.cpp, spsc_marker_decode.hpp).
 
 #include <cstdint>
 
