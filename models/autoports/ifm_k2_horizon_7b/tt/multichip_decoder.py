@@ -36,6 +36,9 @@ class MultichipDecoder(OptimizedDecoder):
     # outputs are bitwise identical to Q128. K blocks and the 256-block bound still come from
     # prefill_q_chunk/prefill_k_chunk.
     stock_prefill_q_chunk = 64
+    # Every prefill chunk uses the accurate kernel: with the cheap exponential it beats stock SDPA at
+    # every start (61440: 30.7 vs 38.7 ms), at ~0.22% vs 3.5-4.2% error. False restores stock <= 64K.
+    accurate_prefill_everywhere = True
     # 8192-token prefill chunks: Q chunks are handed out in heavy/light pairs, so a 4096-token chunk
     # (256 Q64 pairs) leaves the busiest core 3 pairs (384 rows vs an ideal 298). 8192 gives 5 pairs per
     # 8192 tokens (320 per 4096). Rows are independent, so the output is bit-identical to 4096 chunks.
@@ -670,7 +673,11 @@ class MultichipDecoder(OptimizedDecoder):
             if physical >= self.prefill_k_chunk and start_pos % self.prefill_k_chunk == 0
             else sdpa_chunk
         )
-        if self.policy.fast_prefill and start_pos + physical <= fast_k_chunk * 256:
+        if (
+            not self.accurate_prefill_everywhere
+            and self.policy.fast_prefill
+            and start_pos + physical <= fast_k_chunk * 256
+        ):
             # Bound the stock numerator recurrence to 256 K blocks. Real-weight
             # controls cover K32/K128/K256 at 8192/32768/65536 tokens respectively.
             attention = ttnn.transformer.chunked_scaled_dot_product_attention(
@@ -693,7 +700,8 @@ class MultichipDecoder(OptimizedDecoder):
             if physical % q_chunk or start_pos % q_chunk:
                 q_chunk = 32
             k_chunk = self.accurate_prefill_max_k_chunk
-            while start_pos % k_chunk:
+            # Do not stream a K block much larger than the whole causal extent (short prompts).
+            while k_chunk > 32 and (start_pos % k_chunk or k_chunk >= 2 * (start_pos + physical)):
                 k_chunk //= 2
             attention = self._attention(
                 q,
