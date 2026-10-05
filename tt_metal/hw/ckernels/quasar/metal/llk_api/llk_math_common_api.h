@@ -166,6 +166,8 @@ inline void llk_math_pack_sync_init() {
     if constexpr (UnpackToDestEn) {
         constexpr std::uint32_t N = (DST_SYNC_MODE == DstSync::SyncFull) ? 1 : 2;
         _llk_sync_init_(semaphore::UNPACK_MATH, N, 0);
+        // DEST occupancy: unpack posts, pack gets; the unpacker's only gate, see llk_unpack_wait_for_dest_available.
+        _llk_sync_init_(semaphore::UNPACK_PACK, N, 0);
     }
 }
 

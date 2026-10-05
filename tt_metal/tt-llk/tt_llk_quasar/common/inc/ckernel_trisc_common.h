@@ -327,12 +327,17 @@ struct semaphore
     // Packer only listens on MATH_PACK, so something has to translate the unpack completion into a
     // pack-visible event. Math being the forwarder is also what makes future fused ops cheap:
     // SFPU/FPU work slots in between the UNPACK_MATH get and the MATH_PACK post.
+    // UNPACK_MATH and MATH_PACK are data-ready signals only. What keeps the unpacker from overwriting a DEST bank
+    // the packer still reads is UNPACK_PACK: unpack posts it per section written, pack gets it per section
+    // released, and unpack stalls on its max (= number of DEST banks). Two separate counters cannot express that sum.
     //
     // Keep pairwise naming with producer_consumer direction:
     // - MATH_PACK = math->pack
     // - UNPACK_MATH = unpack->math
+    // - UNPACK_PACK = unpack->pack
     // - PACK_UNPACK = pack->unpack
     constexpr static std::uint32_t MATH_PACK   = 1; // math <-> pack sync on dest register
+    constexpr static std::uint32_t UNPACK_PACK = 3; // unpack -> pack: DEST sections unpacked and not yet released by pack
     constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
     constexpr static std::uint32_t PACK_UNPACK = 7; // pack <-> unpack sync on L1 memory
 
