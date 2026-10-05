@@ -229,3 +229,30 @@ def test_recorder_wrap_transform_append(tmp_path, monkeypatch):
     assert rec.tensors["text.layer0"].shape == (6, 2)
     assert torch.equal(rec.tensors["text.layer0"], torch.full((6, 2), 2.0))
     assert rec.seconds["text.layer0"] >= 0
+
+
+def test_bf16_precision_everywhere():
+    import ttnn
+    from models.tt_transformers.tt.model_config import TensorGroup
+
+    from models.experimental.ops.quasar.qwen3_vl.tt.quasar_config import bf16_decoders_precision
+
+    p = bf16_decoders_precision(2, "Qwen3-VL-4B-Instruct")
+    for d in range(2):
+        for g in TensorGroup:
+            assert p.get_tensor_dtype(d, g) == ttnn.bfloat16, g
+    conf = p.decoder_optimizations[0]
+    assert all(v.value == "hifi4" for v in conf.op_fidelity_settings.values())
+
+
+def test_model_args_classes_selection():
+    from models.experimental.ops.quasar.qwen3_vl.tt.model_config import VisionModelArgs
+    from models.experimental.ops.quasar.qwen3_vl.tt.quasar_config import (
+        QuasarModelArgs,
+        QuasarVisionModelArgs,
+        model_args_classes,
+    )
+    from models.tt_transformers.tt.model_config import ModelArgs
+
+    assert model_args_classes(force=True) == (QuasarModelArgs, QuasarVisionModelArgs)
+    assert issubclass(QuasarVisionModelArgs, VisionModelArgs) and issubclass(QuasarModelArgs, ModelArgs)

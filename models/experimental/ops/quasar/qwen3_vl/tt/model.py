@@ -196,7 +196,7 @@ class DropInVisionTransformer(torch.nn.Module):
         self,
         reference_model,
         model_args: VisionModelArgs,
-        dtype=ttnn.bfloat8_b,
+        dtype=None,
         debug=False,
     ):
         """
@@ -209,6 +209,7 @@ class DropInVisionTransformer(torch.nn.Module):
             mesh_device (ttnn.MeshDevice): The mesh device used by the TT model.
         """
         super().__init__()
+        dtype = dtype if dtype is not None else model_args.vision_weight_dtype
         self.reference_model = reference_model
         self.model_args = model_args
         self.debug = debug

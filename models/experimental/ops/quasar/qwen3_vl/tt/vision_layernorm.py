@@ -91,7 +91,9 @@ class LayerNorm(LightweightModule):
                 bias=self.bias,
                 program_config=self.sharded_program_config,
                 memory_config=self.sharded_output_config,
-                compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
+                compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                    self.device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4
+                ),
             )
             if out_sharded:
                 return x
@@ -105,7 +107,8 @@ class LayerNorm(LightweightModule):
                 weight=self.weight,
                 bias=self.bias,
                 epsilon=self.eps,
-                compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                    self.device.arch(),
                     math_fidelity=ttnn.MathFidelity.HiFi4,
                     math_approx_mode=False,
                     fp32_dest_acc_en=False,
