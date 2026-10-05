@@ -189,7 +189,9 @@ def test_static_allocation_is_the_documented_counterexample(device):
 @pytest.mark.timeout(600)
 def test_wide_graph_with_few_active_rows_uses_the_idle_cores(device):
     """Four deep active rows inside a 32-row graph should not take much longer than the
-    same four rows in a 4-row graph: idle rows do no work, so their cores should help."""
+    same four rows in a 4-row graph: idle rows do no work, so their cores should help.
+    Only the op is timed; the inputs are uploaded once per shape, since uploading a 32-row
+    Q, page table and cur_pos every call costs more host time than the kernel itself."""
     nh, nkv, d, s, block_size, k_chunk = 8, 1, 128, 8192, 128, 128
     grid_size = (8, 8)
     grid = device.compute_with_storage_grid_size()
@@ -206,14 +208,52 @@ def test_wide_graph_with_few_active_rows_uses_the_idle_cores(device):
     )
     Q = fa_rand(1, wide_batch, nh, d)
     cur_pos = [s - 1] * active_rows + [-1] * (wide_batch - active_rows)
+    padded_heads = nearest_pow_2(nearest_n(nh, n=32))
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        q_chunk_size=padded_heads,
+        k_chunk_size=k_chunk,
+        exp_approx_mode=False,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
 
     def timed(rows):
-        q, pt, pos = Q[:, :rows], page_table[:rows], cur_pos[:rows]
-        _decode(device, tt_K, tt_V, q, pt, pos, grid_size, k_chunk, nh, d)  # compile
+        tt_Q = ttnn.as_tensor(
+            Q[:, :rows],
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_pt = ttnn.Tensor(page_table[:rows], ttnn.int32).to(device, ttnn.DRAM_MEMORY_CONFIG)
+        tt_pos = ttnn.Tensor(torch.tensor(cur_pos[:rows], dtype=torch.int32), ttnn.int32).to(
+            device, ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        def run():
+            return ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                tt_Q,
+                tt_K,
+                tt_V,
+                tt_pt,
+                cur_pos_tensor=tt_pos,
+                scale=d**-0.5,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                active_row_allocation=True,
+            )
+
+        run()  # compile
         ttnn.synchronize_device(device)
         t0 = time.perf_counter()
         for _ in range(iters):
-            _decode(device, tt_K, tt_V, q, pt, pos, grid_size, k_chunk, nh, d)
+            run()
         ttnn.synchronize_device(device)
         return (time.perf_counter() - t0) / iters
 
@@ -326,3 +366,58 @@ def test_active_rows_reject_a_pool_smaller_than_the_padded_batch(device, expect_
     cur_pos = [s - 1] * b
     with expect_error(RuntimeError, "active_row_allocation"):
         _decode(device, tt_K, tt_V, Q, page_table, cur_pos, grid_size, k_chunk, nh, d)
+
+
+@pytest.mark.timeout(600)
+def test_full_grid_single_kv_head_wide_batch(device):
+    """One kv head per device on the whole compute grid (the Galaxy serving shape of gemma-4-31B):
+    the static layout at B=32 uses more cores than a 64-core pool, which on the first Galaxy boot
+    indexed past the launched core list. The pool is the whole grid, so the static tables fit,
+    and the active rows still match their narrow graph bitwise."""
+    nh, nkv, d, s, block_size, k_chunk = 8, 1, 128, 4096, 64, 64
+    grid = device.compute_with_storage_grid_size()
+    grid_size = (grid.x, grid.y)
+    if grid.x * grid.y <= 64:
+        pytest.skip(f"needs more than 64 cores to exceed the old pool cap, device has {grid.x}x{grid.y}")
+    active_rows, wide_batch = 5, 32
+
+    paged_k, paged_v, page_table = _paged_cache(wide_batch, nkv, s, d, block_size)
+    tt_K = ttnn.as_tensor(
+        paged_k, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_V = ttnn.as_tensor(
+        paged_v, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    torch.manual_seed(5)
+    Q = fa_rand(1, wide_batch, nh, d)
+    cur_pos = [s - 1 - 61 * i for i in range(active_rows)] + [-1] * (wide_batch - active_rows)
+
+    wide = _decode(device, tt_K, tt_V, Q, page_table, cur_pos, grid_size, k_chunk, nh, d)
+    narrow = _decode(
+        device,
+        tt_K,
+        tt_V,
+        Q[:, :active_rows],
+        page_table[:active_rows],
+        cur_pos[:active_rows],
+        grid_size,
+        k_chunk,
+        nh,
+        d,
+    )
+    assert torch.equal(narrow[:, :active_rows], wide[:, :active_rows]), "full-grid rows differ between graphs"
+    static = _decode(
+        device,
+        tt_K,
+        tt_V,
+        Q[:, :active_rows],
+        page_table[:active_rows],
+        cur_pos[:active_rows],
+        grid_size,
+        k_chunk,
+        nh,
+        d,
+        active_rows=False,
+    )
+    diff = (static[:, :active_rows].float() - wide[:, :active_rows].float()).abs().max().item()
+    assert diff <= 2e-2 * max(static.float().abs().max().item(), 1e-3), f"deviates from the static kernel ({diff:.3e})"

@@ -204,31 +204,17 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t max_cores_per_head =
         program_config.has_value() ? program_config->max_cores_per_head_batch : num_cores_available;
     TT_FATAL(max_cores_per_head > 0, "max_cores_per_head_batch must be > 0");
-    const uint32_t max_num_cores_for_compute = max_cores_per_head * B * num_kv_heads;
-    const uint32_t num_cores_per_batch_uncapped = std::min(num_cores_available, max_num_cores_for_compute) / B;
-    const uint32_t num_cores_per_head = std::max(1u, num_cores_per_batch_uncapped / num_kv_heads);
-    uint32_t num_heads_per_core =
-        std::max(1u, static_cast<uint32_t>(std::ceil(static_cast<float>(num_kv_heads) / num_cores_per_batch_uncapped)));
-    while (num_kv_heads % num_heads_per_core != 0) {
-        num_heads_per_core++;
-    }
-    const uint32_t num_cores_per_batch = num_cores_per_head * num_kv_heads / num_heads_per_core;
-    const uint32_t num_reducer_cores = num_kv_heads * B / num_heads_per_core;
-    const uint32_t num_output_cores = B;
-    const uint32_t num_active_cores = num_cores_per_head * num_kv_heads * B / num_heads_per_core;
-
     // Active-row allocation deals a FIXED pool of cores to the active rows on device, so the pool
     // must not depend on the padded batch: the same active rows then get the same split (and the
-    // same reduction order) in every graph. The pool is the whole grid, trimmed to a multiple of
-    // num_kv_heads and capped where a single active row would exceed 2^MAX_TREE_REDUCTION_ROUNDS
-    // cores per head; max_cores_per_head_batch keeps its meaning as the per-(row, head) ceiling
-    // and is applied by the kernel. The per-padded-row split above only shapes the static
-    // tables, which the active-row kernels ignore.
-    uint32_t num_launch_cores = num_active_cores;
-    uint32_t max_runtime_cores_per_head = num_cores_per_head;
+    // same reduction order) in every graph. The pool is the whole grid trimmed to a multiple of
+    // num_kv_heads; max_cores_per_head_batch keeps its meaning as the per-(row, head) ceiling and
+    // is applied by the kernel, which also bounds the runtime tree depth. The static per-padded-row
+    // layout below is then computed over the pool (never past it: its tables index the launched
+    // cores) and only shapes tables the active-row kernels ignore.
+    uint32_t num_launch_cores = 0;
+    uint32_t max_runtime_cores_per_head = 0;
     if (active_row_alloc) {
-        const uint32_t max_pool = num_kv_heads << MAX_TREE_REDUCTION_ROUNDS;
-        num_launch_cores = std::min(num_cores_available, max_pool) / num_kv_heads * num_kv_heads;
+        num_launch_cores = num_cores_available / num_kv_heads * num_kv_heads;
         TT_FATAL(
             num_launch_cores >= B * num_kv_heads,
             "active_row_allocation: a padded batch of {} rows x {} kv heads needs at least {} cores, but the "
@@ -240,6 +226,29 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             num_launch_cores);
         max_runtime_cores_per_head = std::min(num_launch_cores / num_kv_heads, max_cores_per_head);
     }
+    const uint32_t static_cores_available = active_row_alloc ? num_launch_cores : num_cores_available;
+    const uint32_t max_num_cores_for_compute = max_cores_per_head * B * num_kv_heads;
+    const uint32_t num_cores_per_batch_uncapped = std::min(static_cores_available, max_num_cores_for_compute) / B;
+    const uint32_t num_cores_per_head = std::max(1u, num_cores_per_batch_uncapped / num_kv_heads);
+    uint32_t num_heads_per_core =
+        std::max(1u, static_cast<uint32_t>(std::ceil(static_cast<float>(num_kv_heads) / num_cores_per_batch_uncapped)));
+    while (num_kv_heads % num_heads_per_core != 0) {
+        num_heads_per_core++;
+    }
+    const uint32_t num_cores_per_batch = num_cores_per_head * num_kv_heads / num_heads_per_core;
+    const uint32_t num_reducer_cores = num_kv_heads * B / num_heads_per_core;
+    const uint32_t num_output_cores = B;
+    const uint32_t num_active_cores = num_cores_per_head * num_kv_heads * B / num_heads_per_core;
+
+    if (!active_row_alloc) {
+        num_launch_cores = num_active_cores;
+        max_runtime_cores_per_head = num_cores_per_head;
+    }
+    TT_FATAL(
+        num_active_cores <= num_launch_cores,
+        "static layout ({} cores) exceeds the launched pool ({} cores)",
+        num_active_cores,
+        num_launch_cores);
 
     // ========== Compute Kernel Config ==========
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
