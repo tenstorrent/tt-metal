@@ -555,9 +555,9 @@ def mxfp_local_step(
     which makes zero and the smallest nonzero subnormal look many steps apart
     when MX has them adjacent.
 
-    Shared by :func:`_mxfp_block_aware_compare`, which decides pass/fail, and by
-    the failure report that ranks datums by step, so the two cannot disagree
-    about how far apart two values are.
+    Used by :func:`_mxfp_block_aware_compare`, which decides pass/fail, and
+    public so a failure report can rank datums by the same step and never
+    disagree with the verdict about how far apart two values are.
     """
     n = magnitude.numel()
     safe = magnitude > 0
@@ -949,18 +949,6 @@ def passed_test(
             # appends to the persistent test_errors.log that CI uploads.
             logger.opt(lazy=True).debug("ULP budget exceeded — {}", _ulp_summary)
 
-    if output_data_format.is_mx_format():
-        # Every MX low-bit format is judged by its lattice-aware compare
-        # (MxFp* via _mxfp_block_aware_compare on the E2M1/E5M2/E4M3 float
-        # lattices), which accepts disagreements up to a few lattice steps. At
-        # power-of-2 block-max boundaries the golden (fp32 amax) and HW (lower-
-        # precision amax) can pick block exponents one spec-legal step apart
-        # (OCP MX: scale = largest pow2 <= amax) — The per-element lattice
-        # check is the principled correctness criterion here, so trust its
-        # verdict rather than re-gating on PCC (sign flips and gross multi-step
-        # jumps still fail the lattice-aware check).
-        return bool(is_within_tolerance)
-
     if print_errors and not _RECORD_TEST_ORDER:
         try:
             if not is_within_tolerance:
@@ -1038,6 +1026,19 @@ def passed_test(
                     res_tensor[idx],
                     golden_tensor[idx],
                 )
+
+    # After the failure report, so MX failures print their tiles too.
+    if output_data_format.is_mx_format():
+        # Every MX low-bit format is judged by its lattice-aware compare
+        # (MxFp* via _mxfp_block_aware_compare on the E2M1/E5M2/E4M3 float
+        # lattices), which accepts disagreements up to a few lattice steps. At
+        # power-of-2 block-max boundaries the golden (fp32 amax) and HW (lower-
+        # precision amax) can pick block exponents one spec-legal step apart
+        # (OCP MX: scale = largest pow2 <= amax) — The per-element lattice
+        # check is the principled correctness criterion here, so trust its
+        # verdict rather than re-gating on PCC (sign flips and gross multi-step
+        # jumps still fail the lattice-aware check).
+        return bool(is_within_tolerance)
 
     if max_ulp is not None:
         # The empty-tensor refusal is up before the verdict, so nothing to re-check here.
