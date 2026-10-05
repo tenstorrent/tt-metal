@@ -46,7 +46,7 @@ reports at the end.
 
 | part | value | from |
 |---|---|---|
-| `TT_OBSERVABILITY_EVENT_TU_TAG` | `0` | the JIT compile command: `-DTT_OBSERVABILITY_EVENT_TU_TAG=0` (this is the only TU in the link) |
+| `TT_PROFILER_TU_ID` | `0` | the JIT compile command: `-DTT_PROFILER_TU_ID=0` (this is the only TU in the link) |
 | `__COUNTER__` | `1` | the second zone site in the TU. Counter `0` went to `STACK-OVERFLOW`, declared at namespace scope in `kernel_profiler_streaming.hpp` |
 
 Label: **`__tt_observability_event_0_1`**.
