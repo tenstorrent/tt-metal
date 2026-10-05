@@ -1575,8 +1575,8 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
             dst_index,
             vector_mode,
-            0x3f800000u /* alpha_p = 1.0f */,
-            0x3f800000u /* alpha_n = 1.0f */);
+            0x3f4ccccdu /* alpha_p = 0.800000011920929f */,
+            0x3f4ccccdu /* alpha_n = 0.800000011920929f */);
     }
     else if constexpr (OPERATION == SfpuType::hardshrink)
     {

@@ -3457,9 +3457,11 @@ class UnarySFPUGolden:
     _UNARY_COMP_THRESHOLD = UNARY_COMP_THRESHOLD
     _UNARY_MAX_MIN_VALUE = UNARY_MAX_MIN_VALUE
     _POLYGAMMA_ORDER = 1
-    _XIELU_ALPHA_P = 1.0
-    _XIELU_ALPHA_N = 1.0
+    _XIELU_ALPHA_P = 0.800000011920929
+    _XIELU_ALPHA_N = 0.800000011920929
     _XIELU_BETA = 0.5
+    # eps of calculate_xielu, the FP32 nearest to -1e-6.
+    _XIELU_EPS = struct.unpack("<f", struct.pack("<f", -1e-6))[0]
     _HARDSHRINK_LAMBDA = HARDSHRINK_LAMBDA
     _SOFTPLUS_BETA = SOFTPLUS_BETA
     _SOFTPLUS_THRESHOLD = SOFTPLUS_THRESHOLD
@@ -3531,11 +3533,14 @@ class UnarySFPUGolden:
         return self._torch_unary(x, lambda t: torch.polygamma(self._POLYGAMMA_ORDER, t))
 
     def _xielu(self, x):
-        # Mirrors calculate_xielu: beta = 0.5, alpha_p/alpha_n learnable params.
+        # Mirrors calculate_xielu and Hugging Face's XIELUActivation: beta = 0.5, alpha_p/alpha_n
+        # learnable params, and expm1 of min(x, eps), so the negative branch holds at expm1(eps) on (eps, 0].
         beta_mul_x = self._XIELU_BETA * x
         if x > 0.0:
             return self._XIELU_ALPHA_P * x * x + beta_mul_x
-        return self._XIELU_ALPHA_N * (math.expm1(x) - x) + beta_mul_x
+        return (
+            self._XIELU_ALPHA_N * (math.expm1(min(x, self._XIELU_EPS)) - x) + beta_mul_x
+        )
 
     def _hardshrink(self, x):
         # hardshrink(x) = x when |x| > lambda, else 0. NaN propagates rather than falling into
