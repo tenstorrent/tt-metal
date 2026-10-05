@@ -102,3 +102,36 @@ def test_a_complete_reuse_dest_block_folds_every_tile():
     )
     assert out[0].unique().tolist() == [1 + 1 + 10 + 100]
     assert out[1].unique().tolist() == [2 + 2 + 20 + 200]
+
+
+# ---------------------------------------------------------------------------
+# Golden.run input geometry
+
+
+def _eltwise_add(*operands, **kwargs):
+    golden = QuasarEltwiseBinaryGolden(MathOperation.Elwadd, MathFidelity.LoFi)
+    return golden.run(
+        list(operands), DataFormat.Float16_b, DataFormat.Float16_b, **kwargs
+    )
+
+
+@pytest.mark.parametrize("blocked", [False, True], ids=["one_tile", "blocked"])
+@pytest.mark.parametrize("extra", [1, TILE // 2], ids=["one_datum", "half_tile"])
+def test_a_trailing_partial_tile_is_refused_on_both_paths(blocked, extra):
+    tiles = 2 if blocked else 1
+    x = torch.ones(tiles * TILE + extra)
+    with pytest.raises(ValueError, match="whole number"):
+        _eltwise_add(x, x, num_tiles_per_output=tiles)
+
+
+@pytest.mark.parametrize("blocked", [False, True], ids=["one_tile", "blocked"])
+def test_operands_of_different_sizes_are_refused(blocked):
+    tiles = 2 if blocked else 1
+    with pytest.raises(ValueError, match="differ in size"):
+        _eltwise_add(torch.ones(2 * TILE), torch.ones(TILE), num_tiles_per_output=tiles)
+
+
+def test_whole_tiles_still_run_on_both_paths():
+    a, b = torch.full((2 * TILE,), 1.0), torch.full((2 * TILE,), 2.0)
+    assert _eltwise_add(a[:TILE], b[:TILE]).float().unique().tolist() == [3.0]
+    assert _eltwise_add(a, b, num_tiles_per_output=2).float().unique().tolist() == [6.0]
