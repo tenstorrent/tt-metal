@@ -45,8 +45,14 @@ _MOE_G_ENV = os.environ.get(
 # DSV41MoEBlock.warmup; prefill now has DSV41PrefillMoE.warmup, DSV41_PREFILL_MOE_WARM=0 disables). Verified with the warmup: U = 1, 4, 8, 16 (U = 8: 40 layers ISL 128 / 1k); other U use the same code path.
 
 
+UNGROUPED_USERS = (
+    8,
+)  # users per mesh row that stay on the T=32 path: the grouped (T=256) program + column split intermittently HANGS in the traced chunk replay at 8 users/row
+# (full-model demo/gate runs, MoEComputeDeviceOperation never finishes; U=1/2/4/16/32 and the same cell with DSV41_MOE_G=1 are fine). Explicit DSV41_MOE_G=8 overrides.
+
+
 def moe_g_for(users_per_row):
-    return int(_MOE_G_ENV) if _MOE_G_ENV != "auto" else 8
+    return int(_MOE_G_ENV) if _MOE_G_ENV != "auto" else (1 if users_per_row in UNGROUPED_USERS else 8)
 
 
 COLSPLIT_MODE = os.environ.get(
