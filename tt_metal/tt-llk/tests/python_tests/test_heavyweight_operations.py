@@ -135,3 +135,81 @@ def test_whole_tiles_still_run_on_both_paths():
     a, b = torch.full((2 * TILE,), 1.0), torch.full((2 * TILE,), 2.0)
     assert _eltwise_add(a[:TILE], b[:TILE]).float().unique().tolist() == [3.0]
     assert _eltwise_add(a, b, num_tiles_per_output=2).float().unique().tolist() == [6.0]
+
+
+# ---------------------------------------------------------------------------
+# Golden.run_l1 inputs
+
+
+def _config(golden, operands, tiles_per_output=1):
+    _, cfg = golden._make_config(
+        DataFormat.Float16_b,
+        DataFormat.Float16_b,
+        operands=operands,
+        geometry=dict(num_faces=4, face_r_dim=16),
+        tiles_per_output=tiles_per_output,
+        dest_format=None,
+        dest_acc=False,
+        pack_effects={},
+    )
+    return cfg
+
+
+def _l1(golden, value):
+    return golden.blocks.pack_to_l1(
+        torch.full((TILE,), float(value)), DataFormat.Float16_b
+    )
+
+
+def _unpacked(golden, l1):
+    return (
+        golden.blocks.unpack_from_l1(l1, DataFormat.Float16_b).float().unique().tolist()
+    )
+
+
+def test_run_l1_takes_a_sequence_for_a_single_tile_chain():
+    golden = QuasarEltwiseBinaryGolden(MathOperation.Elwadd, MathFidelity.LoFi)
+    out = golden.run_l1([_l1(golden, 1), _l1(golden, 2)], _config(golden, 2))
+    assert _unpacked(golden, out) == [3.0]
+
+
+def test_run_l1_takes_named_tile_slots_for_a_folding_chain():
+    golden = QuasarEltwiseBinaryGolden(MathOperation.Elwadd, MathFidelity.LoFi)
+    buffers = {
+        golden.source(0, 0): _l1(golden, 1),
+        golden.source(1, 0): _l1(golden, 2),
+        golden.source(0, 1): _l1(golden, 10),
+        golden.source(1, 1): _l1(golden, 20),
+    }
+    out = golden.run_l1(buffers, _config(golden, 2, tiles_per_output=2))
+    assert _unpacked(golden, out) == [33.0]
+
+
+def test_run_l1_takes_the_reuse_dest_seed_by_name():
+    golden = QuasarEltwiseBinaryReuseDestGolden(
+        MathOperation.Elwadd, MathFidelity.LoFi, EltwiseBinaryReuseDestType.DEST_TO_SRCA
+    )
+    # DEST_TO_SRCA feeds A back from Dest, so the chain reads only the seed and B.
+    buffers = {
+        golden.SEED: _l1(golden, 1),
+        golden.source(1, 0): _l1(golden, 2),
+        golden.source(1, 1): _l1(golden, 20),
+    }
+    out = golden.run_l1(buffers, _config(golden, 2, tiles_per_output=2))
+    # Dest = seed + B0, then Dest += B1: 1 + 2 + 20.
+    assert _unpacked(golden, out) == [23.0]
+
+
+def test_run_l1_names_the_inputs_a_sequence_cannot_supply():
+    golden = QuasarEltwiseBinaryGolden(MathOperation.Elwadd, MathFidelity.LoFi)
+    with pytest.raises(ValueError, match="missing.*in0_t1"):
+        golden.run_l1(
+            [_l1(golden, 1), _l1(golden, 2)], _config(golden, 2, tiles_per_output=2)
+        )
+
+
+def test_run_l1_refuses_a_buffer_the_chain_never_reads():
+    golden = QuasarEltwiseBinaryGolden(MathOperation.Elwadd, MathFidelity.LoFi)
+    buffers = [_l1(golden, 1), _l1(golden, 2), _l1(golden, 3)]
+    with pytest.raises(ValueError, match="never reads.*in2"):
+        golden.run_l1(buffers, _config(golden, 2))
