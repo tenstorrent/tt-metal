@@ -21,6 +21,7 @@ class _Dev:
 
 
 def _model(monkeypatch, copies):
+    monkeypatch.setenv("GEMMA4_SHARE_PAGE_TABLES", "1")  # sharing is opt-in
     m = Gemma4Model.__new__(Gemma4Model)
     m.mesh_config = None
     monkeypatch.setattr(m, "_page_table_torch_to_ttnn", lambda pt, layer_idx=None: _Dev(list(pt.shape)), raising=False)

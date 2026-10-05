@@ -457,6 +457,10 @@ class ChunkedPrefillPageTableGuardMixin:
         zero-pad (clobbering earlier chunks' KV).
         """
         block_size = get_block_size(kv_cache)
+        # Groups can end up with different effective block sizes (e.g. 31B at TP=4: sliding 64,
+        # full 128). Tables trimmed with the smallest one stay wide enough for every layer; the
+        # paged ops only require ``seq_len <= cols * block_size``.
+        sizes = []
         for i, layer in enumerate(getattr(self.model[0], "layers", [])):
             attn = getattr(layer, "self_attn", None)
             cfg = getattr(attn, "config", None)
@@ -470,8 +474,10 @@ class ChunkedPrefillPageTableGuardMixin:
                 tp = int(getattr(getattr(attn, "mesh_config", None), "tp", 1) or 1)
                 weights = getattr(attn, "weights", None)
                 kv_local = 1 if getattr(weights, "kv_replicated", False) else max(1, int(cfg.num_key_value_heads) // tp)
-                return effective_block_size(cache, int(cfg.head_dim), kv_local)
-        return block_size
+                sizes.append(int(effective_block_size(cache, int(cfg.head_dim), kv_local)))
+            else:
+                sizes.append(int(cache.shape[2]))
+        return min(sizes) if sizes else block_size
 
     def _paged_prefill_block_size(self, kv_cache):
         # Base Generator hook: chunked-prefill page-table padding/slicing uses this so

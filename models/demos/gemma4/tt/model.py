@@ -1731,8 +1731,12 @@ class Gemma4Model:
             # Layers handed the same host table (one per kv-cache group) share one
             # device buffer: an update then costs one H2D per group, not per layer.
             # Lane-sharded layouts depend on the layer, so they keep per-layer buffers.
+            # Opt-in (GEMMA4_SHARE_PAGE_TABLES=1): warmup broadcasts one legacy table to
+            # every layer, so the first real per-group tables diverge and the rebuild
+            # lands under live decode traces (garbage on 12B/31B QB2, 2026-10-05).
             share = not (self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
             share = share and getattr(self, "mesh_config_share_page_tables", True)
+            share = share and os.environ.get("GEMMA4_SHARE_PAGE_TABLES", "0") == "1"
             by_host_id: dict = {}
             for i, pt in enumerate(page_tables_per_layer):
                 if pt is None:
