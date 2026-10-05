@@ -8,6 +8,7 @@ import pytest
 
 from models.experimental.ops.quasar.qwen3_vl.tests.e2e.config import HF_MODEL_ID, RunConfig, parse_grid
 from models.experimental.ops.quasar.qwen3_vl.tests.e2e.presets import PRESETS, build_inputs
+from models.experimental.ops.quasar.qwen3_vl.tt.quasar_config import truncate_hf_config, vision_padded_seq_len
 
 
 def _opts(**over):
@@ -75,3 +76,25 @@ def test_preset_token_counts(name, grid, image_tokens, seq):
 def test_preset_kv_capacity_covers_seq():
     for p in PRESETS.values():
         assert p.kv_blocks * p.block_size >= p.max_seq_len
+
+
+@pytest.mark.parametrize("n, want", [(1, 128), (216, 256), (256, 256), (2048, 2048), (2049, 4096), (11008, 12288)])
+def test_vision_padded_seq_len(n, want):
+    assert vision_padded_seq_len(n) == want
+
+
+def test_truncate_hf_config_same_for_tt_and_hf():
+    from transformers import AutoConfig
+
+    a = truncate_hf_config(AutoConfig.from_pretrained(HF_MODEL_ID), 2, 2, 0)
+    b = truncate_hf_config(AutoConfig.from_pretrained(HF_MODEL_ID), 2, 2, 0)
+    assert a.vision_config.depth == b.vision_config.depth == 2
+    assert a.text_config.num_hidden_layers == 2
+    assert a.vision_config.deepstack_visual_indexes == b.vision_config.deepstack_visual_indexes == [0]
+
+
+def test_truncate_hf_config_keeps_real_taps():
+    from transformers import AutoConfig
+
+    c = truncate_hf_config(AutoConfig.from_pretrained(HF_MODEL_ID), 2, 2, None)
+    assert c.vision_config.deepstack_visual_indexes == [5, 11, 17]

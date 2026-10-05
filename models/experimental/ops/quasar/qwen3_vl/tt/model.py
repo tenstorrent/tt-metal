@@ -11,6 +11,7 @@ from models.common.utility_functions import comp_pcc
 from models.experimental.ops.quasar.qwen3_vl.reference.functional import qwen3_vision_transformer_preprocess
 from models.experimental.ops.quasar.qwen3_vl.tt.model_config import VisionModelArgs
 from models.experimental.ops.quasar.qwen3_vl.tt.patch_merger import PatchMerger
+from models.experimental.ops.quasar.qwen3_vl.tt.quasar_config import vision_padded_seq_len
 from models.experimental.ops.quasar.qwen3_vl.tt.rope import RotarySetup
 from models.experimental.ops.quasar.qwen3_vl.tt.vision_block import VisionBlock
 from models.tt_transformers.tt.common import Mode, get_rot_transformation_mat
@@ -266,8 +267,8 @@ class DropInVisionTransformer(torch.nn.Module):
             # 1. Calculate total unpadded sequence length
             grid_thw = grid_thw.unsqueeze(0)
             unpadded_seq_len = (grid_thw[:, 1] * grid_thw[:, 2]).sum().item()
-            # Calculate padded sequence length (divisible by 2048) required by models/tt_transformers/tt/attention.py::forward_prefill
-            seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
+            # Pad to what vision_attention accepts (see vision_padded_seq_len)
+            seq_len = vision_padded_seq_len(unpadded_seq_len)
 
             # 2. Use preprocessing function from reference/functional to get indices and embeddings
             cu_seqlens, position_embeddings = qwen3_vision_transformer_preprocess(
@@ -392,8 +393,8 @@ class DropInVisionTransformer(torch.nn.Module):
         # For single user, we process all their images together
         # Calculate total unpadded sequence length across all images for this user
         unpadded_seq_len = (grid_thw[:, 1] * grid_thw[:, 2]).sum().item()
-        # Calculate padded sequence length (divisible by 2048)
-        seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
+        # Pad to what vision_attention accepts (see vision_padded_seq_len)
+        seq_len = vision_padded_seq_len(unpadded_seq_len)
 
         # Use preprocessing function from reference/functional to get indices and embeddings
         cu_seqlens, position_embeddings = qwen3_vision_transformer_preprocess(
