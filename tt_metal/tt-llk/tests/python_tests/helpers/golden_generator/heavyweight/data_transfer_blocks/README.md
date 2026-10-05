@@ -55,7 +55,7 @@ families, and the family — not the L1 format — is what the FPU reads.**
 |---|---|
 | `l1_to_srcA(l1_bytes, l1_format, src_format=None, **geometry)` | **Abstract.** The T0 unpack. Each architecture implements it, in practice by delegating to `_l1_to_src`. |
 | `l1_to_srcB(...)` | Delegates to `l1_to_srcA` — SrcA and SrcB share the datum layout. |
-| `l1_to_srcS(...)` | Delegates too, with `use_srcs=True` defaulted into the geometry: SrcS uses a per-slice L1 layout, so the buffer must have been *packed* that way. The values decode the same. |
+| `l1_to_srcS(l1_bytes, l1_format, src_format=None, *, dest_acc=False, **geometry)` | Not a delegate: SrcS has its own format rules (`srcs_format`). Float32 keeps full fp32 here, where SrcA truncates it to Tf32, and with `dest_acc` every float but Float16/Float16_b widens to Float32. `use_srcs=True` is defaulted into the geometry: SrcS uses a per-slice L1 layout, so the buffer must have been *packed* that way. |
 | `l1_to_dest(l1_bytes, l1_format, dest_format, **geometry)` | Straight into Dest, bypassing the src registers — so the value keeps **more** mantissa than the same buffer read through `l1_to_srcA`. How a feedback loop starts. |
 | `src_to_dest(values, dest_format, current=None)` | Where a math result lands. |
 | `dest_to_srcA(dest_values, dest_format, src_format)` | The feedback path. Lossy; see the table below. |
