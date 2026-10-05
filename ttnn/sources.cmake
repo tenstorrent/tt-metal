@@ -29,6 +29,7 @@ set(TTNN_CORE_SRCS
     core/graph/graph_processor.cpp
     core/graph/graph_trace_utils.cpp
     core/graph/levelized_graph.cpp
+    core/prefetcher_pipe.cpp
     core/reports.cpp
     core/tensor/flatbuffer/tensor_file_layout.cpp
     core/tensor/flatbuffer/tensor_flatbuffer.cpp
@@ -159,10 +160,12 @@ set(TTNN_CORE_JIT_API_HEADERS
     cpp/ttnn/kernel/compute/bmm_tilize_untilize.cpp
     cpp/ttnn/kernel/compute/dest_format_helpers.hpp
     cpp/ttnn/kernel/compute/eltwise_copy.cpp
+    cpp/ttnn/kernel/compute/eltwise_copy_metal2.cpp
     cpp/ttnn/kernel/compute/moreh_common.hpp
     cpp/ttnn/kernel/compute/tilize.cpp
     cpp/ttnn/kernel/compute/tilize_metal2.cpp
     cpp/ttnn/kernel/compute/transpose_wh.cpp
+    cpp/ttnn/kernel/compute/transpose_wh_metal2.cpp
     cpp/ttnn/kernel/dataflow/cb_fill_helpers.hpp
     cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp
     cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp
@@ -170,7 +173,7 @@ set(TTNN_CORE_JIT_API_HEADERS
     cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp
     cpp/ttnn/kernel/dataflow/moreh_common.hpp
     cpp/ttnn/kernel/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp
-    cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp
+    cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks_metal2.cpp
     cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp
     cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id_metal2.cpp
     cpp/ttnn/kernel/kernel_common_utils.hpp
@@ -224,6 +227,7 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/metal_v2_artifacts.hpp
     api/ttnn/operation.hpp
     api/ttnn/operation_concepts.hpp
+    api/ttnn/prefetcher_pipe.hpp
     api/ttnn/reports.hpp
     api/ttnn/tensor/host_buffer/functions.hpp
     api/ttnn/tensor/layout/alignment.hpp

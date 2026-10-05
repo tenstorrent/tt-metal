@@ -30,6 +30,37 @@ ttnn::Shape unsqueeze_shape_to_nd(const ttnn::Shape& shape, uint32_t n);
 
 ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, uint32_t n);
 
+// True when a MemoryConfig is genuinely ND-sharded: ND_SHARDED, or an nd_shard_spec with no 2D
+// shard_spec. Reshape stages these through an interleaved intermediate rather than the 2D paths.
+bool is_nd_sharded_memory_config(const tt::tt_metal::MemoryConfig& mem_config);
+
+// True when two configs describe the same physical layout, ignoring how they were built.
+// MemoryConfig::operator== is provenance-sensitive: on mixed creation paths it compares both the 2D
+// shard_spec and the nd_shard_spec, so a tensor whose ND spec normalized to 2D (both specs
+// populated) never compares equal to an explicit 2D-sharded config with the same resolved
+// shard_spec, and a no-op gate keyed on operator== reshards into a byte-identical layout. Only that
+// mixed 2D case is relaxed; a genuinely ND config is still compared by operator== alone.
+bool is_functionally_same_memory_config(
+    const tt::tt_metal::MemoryConfig& config_a, const tt::tt_metal::MemoryConfig& config_b);
+
+// Drop a normalized config's nd_shard_spec, keeping the equivalent 2D shard_spec. A config built
+// from an NdShardSpec that TensorSpec normalized to 2D keeps both specs, and buffer creation always
+// prefers the nd spec, so a shape-changing op must drop the one sized for the old shape or
+// allocation aborts on its rank. Only fires when both specs are present; the allocation flags are
+// carried over by hand because the 3-arg MemoryConfig ctor does not.
+tt::tt_metal::MemoryConfig drop_normalized_nd_shard_spec(const tt::tt_metal::MemoryConfig& mem_config);
+
+// Re-derive an ND shard spec for a reshaped output when the ND config was inherited from the input.
+// The input's per-core shard was sized for the input shape, so reusing it over-pads a differently
+// shaped output; instead keep the grid/orientation/strategy and split the output into the same
+// number of shards per dim, adapting rank via squeeze/unsqueeze if the reshape changes rank. Tiled
+// inner dims are tile-aligned and clamped to the padded dim.
+tt::tt_metal::MemoryConfig derive_nd_shard_spec_for_reshaped_output(
+    const tt::tt_metal::MemoryConfig& src_cfg,
+    const ttnn::Shape& src_padded_shape,
+    const ttnn::Shape& out_padded_shape,
+    bool is_tiled);
+
 // Estimate NOC transfer cycles for a batch of transactions.
 // Returns {bw_cycles, latency_cycles} — BW is the steady-state transfer time,
 // latency is the per-transaction pipeline startup cost. Callers can model

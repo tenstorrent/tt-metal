@@ -6,6 +6,8 @@
 #include "context/metal_context.hpp"
 #include "dispatch/dispatch_engine_cores.hpp"
 #include "host_api/temp_quasar_api.hpp"
+#include "impl/program/program_impl.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
@@ -76,12 +78,13 @@ constexpr uint32_t kPollIterations = 70000;
 // not fail, it passes without testing.
 constexpr uint32_t kSilenceIterations = 8000;
 
-std::vector<CoreCoord> all_dispatch_engine_cores(IDevice* dev) {
+std::vector<CoreCoord> all_dispatch_engine_cores(distributed::MeshDevice& mesh_device) {
+    const auto device_id = mesh_device.get_device_ids()[0];
     return detail::get_quasar_soc_dispatch_engine_logical_cores(
-        MetalContext::instance().get_cluster().get_soc_desc(dev->id()));
+        MetalContext::instance().get_cluster().get_soc_desc(device_id));
 }
 
-std::string fds_tests_skip_reason(IDevice* dev) {
+std::string fds_tests_skip_reason(const distributed::MeshDevice& mesh_device) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         return "This test can only be run under the simulator or emulator. "
                "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
@@ -92,7 +95,7 @@ std::string fds_tests_skip_reason(IDevice* dev) {
     if (MetalContext::instance().rtoptions().get_use_quasar_tensix_dispatch_cores()) {
         return "This test requires dispatch engines. Unset TT_METAL_TENSIX_DISPATCH_CORES.";
     }
-    if (detail::sd_cq_kernel_tests_should_skip(dev)) {
+    if (detail::sd_cq_kernel_tests_should_skip(mesh_device)) {
         return "No dispatch engines detected.";
     }
     return {};
@@ -133,10 +136,15 @@ struct HandshakeResult {
 };
 
 std::vector<uint32_t> read_status(
-    IDevice* dev, const CoreCoord& core, uint32_t addr, uint32_t num_words, CoreType core_type) {
-    const CoreCoord virtual_core = dev->virtual_core_from_logical_core(core, core_type);
+    distributed::MeshDevice& mesh_device,
+    const CoreCoord& core,
+    uint32_t addr,
+    uint32_t num_words,
+    CoreType core_type) {
+    const auto device_id = mesh_device.get_device_ids()[0];
+    const CoreCoord virtual_core = mesh_device.virtual_core_from_logical_core(core, core_type);
     return MetalContext::instance().get_cluster().read_core(
-        dev->id(), virtual_core, addr, num_words * sizeof(uint32_t));
+        device_id, virtual_core, addr, num_words * sizeof(uint32_t));
 }
 
 struct CoreStatus {
@@ -172,7 +180,7 @@ struct FdsProgram {
 // status blocks cleared before launch and read back after. One data movement core per node: a node
 // has a single FDS register block shared by all of its data movement cores, so two cores on one
 // node would overwrite each other's configuration and consume each other's status.
-FdsProgramResult run_fds_program(IDevice* dev, FdsProgram spec) {
+FdsProgramResult run_fds_program(distributed::MeshDevice& mesh_device, FdsProgram spec) {
     const Hal& hal = MetalContext::instance().hal();
     const uint32_t dispatch_l1 =
         hal.get_dev_addr(HalProgrammableCoreType::DISPATCH, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -184,7 +192,7 @@ FdsProgramResult run_fds_program(IDevice* dev, FdsProgram spec) {
 
     Program program = CreateProgram();
     for (const CoreCoord& core : spec.dispatch_cores) {
-        detail::WriteToDeviceL1(dev, core, dispatch_l1, cleared_dispatch, CoreType::DISPATCH);
+        slow_dispatch::WriteToL1(mesh_device, core, dispatch_l1, cleared_dispatch, CoreType::DISPATCH);
         detail::CreateDispatchEngineKernel(
             program,
             spec.dispatch_kernel,
@@ -197,7 +205,7 @@ FdsProgramResult run_fds_program(IDevice* dev, FdsProgram spec) {
     for (WorkerGroup& group : spec.worker_groups) {
         group.args["l1_address"] = worker_l1;
         for (const CoreCoord& core : corerange_to_cores(group.cores)) {
-            detail::WriteToDeviceL1(dev, core, worker_l1, cleared_worker, CoreType::WORKER);
+            slow_dispatch::WriteToL1(mesh_device, core, worker_l1, cleared_worker, CoreType::WORKER);
             worker_cores.push_back(core);
         }
         experimental::quasar::CreateKernel(
@@ -208,17 +216,18 @@ FdsProgramResult run_fds_program(IDevice* dev, FdsProgram spec) {
                 .num_threads_per_cluster = 1, .named_compile_args = group.args});
     }
 
-    detail::LaunchProgram(dev, program);
-    MetalContext::instance().get_cluster().l1_barrier(dev->id());
+    LaunchProgram(mesh_device, std::move(program));
+    const auto device_id = mesh_device.get_device_ids()[0];
+    MetalContext::instance().get_cluster().l1_barrier(device_id);
 
     FdsProgramResult result;
     for (const CoreCoord& core : spec.dispatch_cores) {
         result.dispatch.push_back(
-            CoreStatus{core, read_status(dev, core, dispatch_l1, spec.num_dispatch_slots, CoreType::DISPATCH)});
+            CoreStatus{core, read_status(mesh_device, core, dispatch_l1, spec.num_dispatch_slots, CoreType::DISPATCH)});
     }
     for (const CoreCoord& core : worker_cores) {
         result.workers.push_back(
-            CoreStatus{core, read_status(dev, core, worker_l1, spec.num_worker_slots, CoreType::WORKER)});
+            CoreStatus{core, read_status(mesh_device, core, worker_l1, spec.num_worker_slots, CoreType::WORKER)});
     }
     return result;
 }
@@ -228,7 +237,10 @@ FdsProgramResult run_fds_program(IDevice* dev, FdsProgram spec) {
 // its own group's go and answers. Every other group named by worker_sets is configured on the
 // dispatch side but never signalled, so its done count is evidence about leakage between groups.
 HandshakeResult run_handshake(
-    IDevice* dev, const CoreCoord& dispatch_core, const std::vector<WorkerSet>& worker_sets, uint32_t signalled_group) {
+    distributed::MeshDevice& mesh_device,
+    const CoreCoord& dispatch_core,
+    const std::vector<WorkerSet>& worker_sets,
+    uint32_t signalled_group) {
     // Only the signalled group's workers can answer, so only they count towards the wait; every
     // worker, whatever its group, signals ready and so gates the go.
     uint32_t done_threshold = 0;
@@ -251,7 +263,7 @@ HandshakeResult run_handshake(
     }
 
     const FdsProgramResult program_result = run_fds_program(
-        dev,
+        mesh_device,
         FdsProgram{
             .dispatch_cores = {dispatch_core},
             .dispatch_kernel = fds_kernel_path("quasar_dispatch_engine_signal.cpp"),
@@ -320,18 +332,15 @@ protected:
         if (IsSkipped()) {
             return;
         }
-        device_ = devices_[0]->get_devices()[0];
-        if (const std::string reason = fds_tests_skip_reason(device_); !reason.empty()) {
+        if (const std::string reason = fds_tests_skip_reason(this->device()); !reason.empty()) {
             GTEST_SKIP() << reason;
         }
     }
 
-    CoreRangeSet full_worker_grid() const {
-        const CoreCoord worker_grid = device_->compute_with_storage_grid_size();
+    CoreRangeSet full_worker_grid() {
+        const CoreCoord worker_grid = this->device().compute_with_storage_grid_size();
         return CoreRangeSet(CoreRange({0, 0}, {worker_grid.x - 1, worker_grid.y - 1}));
     }
-
-    IDevice* device_ = nullptr;
 };
 
 // Drives the Quasar FDS sideband end to end between each dispatch engine and one worker: the
@@ -344,10 +353,10 @@ protected:
 // so two engines signalling the same group at once would produce one done with nothing to say which
 // engine's go released it.
 TEST_F(QuasarFdsFixture, DispatchEngineSingleWorker) {
-    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(device_)) {
+    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(this->device())) {
         SCOPED_TRACE("dispatch engine " + dispatch_core.str());
         const HandshakeResult result =
-            run_handshake(device_, dispatch_core, {WorkerSet{.cores = kSingleWorkerCore}}, kGroupId);
+            run_handshake(this->device(), dispatch_core, {WorkerSet{.cores = kSingleWorkerCore}}, kGroupId);
         log_handshake(result);
 
         if (!result.dispatch_ran()) {
@@ -378,10 +387,10 @@ TEST_F(QuasarFdsFixture, DispatchEngineAllWorkers) {
         GTEST_SKIP() << "Test requires at least two worker nodes";
     }
 
-    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(device_)) {
+    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(this->device())) {
         SCOPED_TRACE("dispatch engine " + dispatch_core.str());
         const HandshakeResult result =
-            run_handshake(device_, dispatch_core, {WorkerSet{.cores = worker_cores}}, kGroupId);
+            run_handshake(this->device(), dispatch_core, {WorkerSet{.cores = worker_cores}}, kGroupId);
         log_handshake(result);
 
         if (!result.dispatch_ran()) {
@@ -443,9 +452,9 @@ TEST_F(QuasarFdsFixture, DispatchEngineGroupIsolation) {
 
     // The group filter belongs to each engine's own configuration, so isolation has to hold from
     // whichever engine sends the go, not only from the first one.
-    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(device_)) {
+    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(this->device())) {
         SCOPED_TRACE("dispatch engine " + dispatch_core.str());
-        const HandshakeResult result = run_handshake(device_, dispatch_core, worker_sets, kGroupId);
+        const HandshakeResult result = run_handshake(this->device(), dispatch_core, worker_sets, kGroupId);
         log_handshake(result);
 
         if (!result.dispatch_ran()) {
@@ -490,10 +499,10 @@ TEST_F(QuasarFdsFixture, DispatchEngineConsecutivePhases) {
 
     const CoreRangeSet workers = full_worker_grid();
 
-    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(device_)) {
+    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(this->device())) {
         SCOPED_TRACE("dispatch engine " + dispatch_core.str());
         const FdsProgramResult result = run_fds_program(
-            device_,
+            this->device(),
             FdsProgram{
                 .dispatch_cores = {dispatch_core},
                 .dispatch_kernel = fds_kernel_path("quasar_fds_phases_dispatch.cpp"),
@@ -535,10 +544,10 @@ TEST_F(QuasarFdsFixture, DispatchEngineCaptureIsChangeTriggered) {
     constexpr uint32_t kSlotObservedValue = 1;
     constexpr uint32_t kNumWorkerSlots = 2;
 
-    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(device_)) {
+    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(this->device())) {
         SCOPED_TRACE("dispatch engine " + dispatch_core.str());
         const FdsProgramResult result = run_fds_program(
-            device_,
+            this->device(),
             FdsProgram{
                 .dispatch_cores = {dispatch_core},
                 .dispatch_kernel = fds_kernel_path("quasar_fds_capture_dispatch.cpp"),
@@ -575,10 +584,10 @@ TEST_F(QuasarFdsFixture, DispatchEngineCountIsDerived) {
 
     const CoreRangeSet workers = full_worker_grid();
 
-    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(device_)) {
+    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(this->device())) {
         SCOPED_TRACE("dispatch engine " + dispatch_core.str());
         const FdsProgramResult result = run_fds_program(
-            device_,
+            this->device(),
             FdsProgram{
                 .dispatch_cores = {dispatch_core},
                 .dispatch_kernel = fds_kernel_path("quasar_fds_derived_count_dispatch.cpp"),
@@ -617,7 +626,7 @@ TEST_F(QuasarFdsFixture, DispatchEngineCountIsDerived) {
 // register; it cannot prove full independence, since one engine's go mirrored onto every lane
 // would pass just the same.
 TEST_F(QuasarFdsFixture, DispatchEngineConcurrentEngines) {
-    const std::vector<CoreCoord> engines = all_dispatch_engine_cores(device_);
+    const std::vector<CoreCoord> engines = all_dispatch_engine_cores(this->device());
     if (engines.size() < 2) {
         GTEST_SKIP() << "Test requires at least two dispatch engines";
     }
@@ -628,7 +637,7 @@ TEST_F(QuasarFdsFixture, DispatchEngineConcurrentEngines) {
     constexpr uint32_t kDonesPerEngine = 1;
 
     const FdsProgramResult result = run_fds_program(
-        device_,
+        this->device(),
         FdsProgram{
             .dispatch_cores = engines,
             .dispatch_kernel = fds_kernel_path("quasar_dispatch_engine_signal.cpp"),
@@ -674,10 +683,10 @@ TEST_F(QuasarFdsFixture, DispatchEngineDeglitchFilter) {
     constexpr uint32_t kSlotObservedValue = 1;
     constexpr uint32_t kNumWorkerSlots = 2;
 
-    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(device_)) {
+    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(this->device())) {
         SCOPED_TRACE("dispatch engine " + dispatch_core.str());
         const FdsProgramResult result = run_fds_program(
-            device_,
+            this->device(),
             FdsProgram{
                 .dispatch_cores = {dispatch_core},
                 .dispatch_kernel = fds_kernel_path("quasar_fds_filter_dispatch.cpp"),
@@ -723,10 +732,10 @@ TEST_F(QuasarFdsFixture, DispatchEngineAutoDispatchDone) {
     // done that really travelled through the queue. The kernels' static_assert against the ready
     // tokens bounds the range.
     uint32_t group_id = kGroupId;
-    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(device_)) {
+    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(this->device())) {
         SCOPED_TRACE("dispatch engine " + dispatch_core.str() + " group " + std::to_string(group_id));
         const FdsProgramResult result = run_fds_program(
-            device_,
+            this->device(),
             FdsProgram{
                 .dispatch_cores = {dispatch_core},
                 .dispatch_kernel = fds_kernel_path("quasar_fds_auto_done_dispatch.cpp"),
@@ -773,10 +782,10 @@ TEST_F(QuasarFdsFixture, DispatchEngineAutoDispatchPacing) {
     constexpr uint32_t kBurstValueBase = 2;
     constexpr uint32_t kNumDispatchSlots = 2;
 
-    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(device_)) {
+    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(this->device())) {
         SCOPED_TRACE("dispatch engine " + dispatch_core.str());
         const FdsProgramResult result = run_fds_program(
-            device_,
+            this->device(),
             FdsProgram{
                 .dispatch_cores = {dispatch_core},
                 .dispatch_kernel = fds_kernel_path("quasar_fds_auto_pacing_dispatch.cpp"),
@@ -823,10 +832,10 @@ TEST_F(QuasarFdsFixture, DispatchEngineAutoDispatchOutboxMismatch) {
     constexpr uint32_t kSlotObservedValue = 1;
     constexpr uint32_t kNumWorkerSlots = 2;
 
-    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(device_)) {
+    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(this->device())) {
         SCOPED_TRACE("dispatch engine " + dispatch_core.str());
         const FdsProgramResult result = run_fds_program(
-            device_,
+            this->device(),
             FdsProgram{
                 .dispatch_cores = {dispatch_core},
                 .dispatch_kernel = fds_kernel_path("quasar_fds_outbox_mismatch_dispatch.cpp"),
@@ -864,10 +873,10 @@ TEST_F(QuasarFdsFixture, DispatchEngineInterruptOnDoneThreshold) {
     const CoreRangeSet workers = full_worker_grid();
 
     uint32_t group_id = kGroupId;
-    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(device_)) {
+    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(this->device())) {
         SCOPED_TRACE("dispatch engine " + dispatch_core.str() + " group " + std::to_string(group_id));
         const FdsProgramResult result = run_fds_program(
-            device_,
+            this->device(),
             FdsProgram{
                 .dispatch_cores = {dispatch_core},
                 .dispatch_kernel = fds_kernel_path("quasar_fds_interrupt_dispatch.cpp"),
@@ -919,10 +928,10 @@ TEST_F(QuasarFdsFixture, DispatchEngineInterruptIsEquality) {
         GTEST_SKIP() << "Test requires at least two worker nodes";
     }
 
-    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(device_)) {
+    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(this->device())) {
         SCOPED_TRACE("dispatch engine " + dispatch_core.str());
         const FdsProgramResult result = run_fds_program(
-            device_,
+            this->device(),
             FdsProgram{
                 .dispatch_cores = {dispatch_core},
                 .dispatch_kernel = fds_kernel_path("quasar_fds_interrupt_equality_dispatch.cpp"),
@@ -967,10 +976,10 @@ TEST_F(QuasarFdsFixture, DispatchEngineInterruptCompleteWithoutClearRePends) {
     constexpr uint32_t kSlotInterruptCount = 1;
     constexpr uint32_t kNumDispatchSlots = 2;
 
-    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(device_)) {
+    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(this->device())) {
         SCOPED_TRACE("dispatch engine " + dispatch_core.str());
         const FdsProgramResult result = run_fds_program(
-            device_,
+            this->device(),
             FdsProgram{
                 .dispatch_cores = {dispatch_core},
                 .dispatch_kernel = fds_kernel_path("quasar_fds_interrupt_repend_dispatch.cpp"),
@@ -1006,10 +1015,10 @@ TEST_F(QuasarFdsFixture, DispatchEngineInterruptResetStateStorm) {
     constexpr uint32_t kSlotInterruptCount = 1;
     constexpr uint32_t kNumDispatchSlots = 2;
 
-    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(device_)) {
+    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(this->device())) {
         SCOPED_TRACE("dispatch engine " + dispatch_core.str());
         const FdsProgramResult result = run_fds_program(
-            device_,
+            this->device(),
             FdsProgram{
                 .dispatch_cores = {dispatch_core},
                 .dispatch_kernel = fds_kernel_path("quasar_fds_interrupt_storm_dispatch.cpp"),
@@ -1039,10 +1048,10 @@ TEST_F(QuasarFdsFixture, WorkerInterruptOnGo) {
     constexpr uint32_t kSlotGoLane = 3;
     constexpr uint32_t kNumWorkerSlots = 4;
 
-    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(device_)) {
+    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(this->device())) {
         SCOPED_TRACE("dispatch engine " + dispatch_core.str());
         const FdsProgramResult result = run_fds_program(
-            device_,
+            this->device(),
             FdsProgram{
                 .dispatch_cores = {dispatch_core},
                 .dispatch_kernel = fds_kernel_path("quasar_dispatch_engine_signal.cpp"),
@@ -1086,10 +1095,10 @@ TEST_F(QuasarFdsFixture, DispatchEngineInterruptEnableIsPerGroup) {
 
     const CoreRangeSet workers = full_worker_grid();
 
-    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(device_)) {
+    for (const CoreCoord& dispatch_core : all_dispatch_engine_cores(this->device())) {
         SCOPED_TRACE("dispatch engine " + dispatch_core.str());
         const FdsProgramResult result = run_fds_program(
-            device_,
+            this->device(),
             FdsProgram{
                 .dispatch_cores = {dispatch_core},
                 .dispatch_kernel = fds_kernel_path("quasar_fds_interrupt_group_mask_dispatch.cpp"),

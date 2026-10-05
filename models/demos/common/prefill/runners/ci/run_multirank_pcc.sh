@@ -8,20 +8,28 @@ CONFIG="${2:-sc4}"
 
 : "${TT_METAL_HOME:?TT_METAL_HOME must be set}"
 : "${PREFILL_SUMMARIES:?PREFILL_SUMMARIES must be set by the blaze impl (shared /ci scratch for the KV table)}"
-export PYTHONPATH="${TT_METAL_HOME}"
+export PYTHONPATH="${TT_METAL_HOME}${PYTHONPATH:+:${PYTHONPATH}}"
+printf -v CHILD_PYTHONPATH '%q' "${PYTHONPATH}"
 MANIFEST_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests"
 MGD_DIR="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/ci"
 
+manifest_env() {
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["env"][sys.argv[2]])' "${MANIFEST}" "$1"
+}
+
+MGD="${MGD_DIR}/${CONFIG}_mgd.textproto"
+
 CHUNK_SIZE=5120
-GOLDEN_LEN=56320
 WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
 RUNNER_ENV=""
 PRODUCER_ENV=""
+PRODUCER_USERS="${PREFILL_PRODUCER_NUM_USERS:-1}"
+TCP_INTERFACE="${PREFILL_TCP_INTERFACE:-ens5f0np0}"
 # sc1 runs a single galaxy, so both of these exist to shrink the sc4 model down to what one fits.
-# Defaults keep every model that does fit unchanged: full 256k context, full manifest depth.
-SC1_MAX_SEQ_LEN=256000
+SC1_MAX_SEQ_LEN=""
 SC1_NUM_LAYERS=""
+SC1_NUM_USERS=1
 
 case "${CONFIG}" in
   sc1|sc4) ;;
@@ -32,17 +40,22 @@ case "${CONFIG}" in
 esac
 
 case "${MODEL}" in
+  llama31)
+    source "${TT_METAL_HOME}/models/demos/llama_3p1_8b_d_p/scripts/ci/runner_config.sh"
+    ;;
   kimi27)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
-    PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}';"
-    ;;
-  glm52)
-    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm52_prefill_runner_kv}"
-    MANIFEST="${MANIFEST_DIR}/glm52.json"
-    RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
-        export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k;"
+        export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/deepseek-ai/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-256000-last5120;"
+    ;;
+  glm53)
+    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm53_prefill_runner_kv}"
+    MANIFEST="${MANIFEST_DIR}/glm53.json"
+    RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
+    PCC_THRESHOLD=0.83
+    PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
+        export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
     ;;
   kimi_k3)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_prefill_runner_kv}"
@@ -50,11 +63,16 @@ case "${MODEL}" in
     # 93 layers do not fit one galaxy -- MLA's static CBs become unplaceable past ~36 layers on a
     # rank (#54876) and a 48-layer single rank OOMs at 2 users. 24 fits, ends on an MLA layer, and
     # is the deepest depth the golden's decoder-output stream covers, so sc1 is a real accuracy gate
-    # rather than a smaller copy of sc4. The context is the same on both: K3's whole window is the
-    # golden's 11 chunks, so there is nothing to shrink.
+    # rather than a smaller copy of sc4. sc1 keeps the default 256k context, so its perf probes are
+    # the 5k..250k ones GLM-5.3 reports and sc4's 1M request adds 510k and 1M on top. Not a
+    # baseline for sc4 -- 24 layers against 93 -- which is why the summary job reports sc4 alone.
     SC1_NUM_LAYERS=24
-    SC1_MAX_SEQ_LEN=56320
-    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized;"
+    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized;"
+    # PREFILL_TRACE_DIR is the one K3 path still on NFS, deliberately. The sc4 93-layer leg's KV PCC
+    # collapsed to ~0 past layer ~24 on run 36717057668 with the Weka trace (it reads 0.900..0.994 on
+    # run 36524165128), and the two candidates -- the Weka golden copy and the Weka TTNN cache -- give
+    # the same symptom. This is pinned here as the one-variable test; do not move it until sc4 has
+    # produced a clean run, which the bh_sc4 pool has been failing to do in multihost setup.
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/k3_vllm_code_debug_1M;"
     ;;
@@ -64,21 +82,18 @@ case "${MODEL}" in
     ;;
 esac
 
-MGD="${MGD_DIR}/${CONFIG}_mgd.textproto"
 [ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${CONFIG} at ${MGD}" >&2; exit 2; }
 
-manifest_env() {
-  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["env"][sys.argv[2]])' "${MANIFEST}" "$1"
-}
 MAX_SEQ_LEN=$(manifest_env PREFILL_MAX_SEQ_LEN)
 NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
 
 RUNNER_OVERRIDES=""
 SC4_MAX_SEQ_LEN=${MAX_SEQ_LEN}
+SC1_MAX_SEQ_LEN=${SC1_MAX_SEQ_LEN:-${MAX_SEQ_LEN}}
 NUM_LAYERS_ENV=""
 if [ "${CONFIG}" = sc1 ]; then
   MAX_SEQ_LEN=${SC1_MAX_SEQ_LEN}
-  NUM_USERS=1
+  NUM_USERS=${SC1_NUM_USERS}
   RUNNER_OVERRIDES="export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; export PREFILL_NUM_USERS=${NUM_USERS};"
   # Exported to BOTH runner and producer, and only when the model asked for it: the manifest's depth
   # is applied with setdefault, so an explicit export is what shrinks it.
@@ -94,7 +109,8 @@ REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
 
 SC1_CHUNKS=$((SC1_MAX_SEQ_LEN / CHUNK_SIZE))
 SC4_CHUNKS=$((SC4_MAX_SEQ_LEN / CHUNK_SIZE))
-PROBE_CHUNKS="0,$((50000 / CHUNK_SIZE)),$((SC1_CHUNKS / 2 - 1)),$((SC1_CHUNKS - 1)),$((SC4_CHUNKS / 2 - 1)),$((SC4_CHUNKS - 1))"
+PROBE_CHUNKS="${PROBE_CHUNKS:-0,$((50000 / CHUNK_SIZE)),$((SC1_CHUNKS / 2 - 1)),$((SC1_CHUNKS - 1)),$((SC4_CHUNKS / 2 - 1)),$((SC4_CHUNKS - 1))}"
+
 
 mkdir -p "${PIPELINE_DIR}"
 TTRUN_DIR="${TTRUN_DIR:-/etc/ttop}"
@@ -136,14 +152,25 @@ cleanup() {
     if [ "$(find "${TIMING_DIR}" -name '*.csv' 2>/dev/null | wc -l)" -ge 2 ]; then
       GANTT_DIR="${PREFILL_SUMMARIES}/plots"
       mkdir -p "${GANTT_DIR}"
-      python3 -c "import matplotlib" 2>/dev/null \
-        || timeout 90 uv pip install --quiet matplotlib 2>/dev/null \
-        || timeout 90 python3 -m pip install --quiet matplotlib 2>/dev/null \
-        || echo "matplotlib install failed (gantt skipped, non-fatal)"
-      python3 "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/scripts/plot_pipeline_trace.py" \
+      GANTT_PY=python3
+      GANTT_TMP=""
+      if ! python3 -c "import matplotlib" 2>/dev/null; then
+        GANTT_TMP=$(mktemp -d)
+        if UV_CACHE_DIR="${GANTT_TMP}/uvcache" timeout 120 uv venv --quiet "${GANTT_TMP}/venv" \
+           && UV_CACHE_DIR="${GANTT_TMP}/uvcache" timeout 180 uv pip install --quiet \
+                --python "${GANTT_TMP}/venv/bin/python" matplotlib; then
+          GANTT_PY="${GANTT_TMP}/venv/bin/python"
+        else
+          echo "matplotlib install failed (gantt skipped, non-fatal)"
+        fi
+      fi
+      "${GANTT_PY}" "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/scripts/plot_pipeline_trace.py" \
         --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
         -o "${GANTT_DIR}/${MODEL}_pipeline_gantt.png" \
         || echo "gantt render failed (non-fatal)"
+      if [ -n "${GANTT_TMP}" ]; then
+        rm -rf "${GANTT_TMP}"
+      fi
     fi
   fi
   rm -rf "${MR_DIR}"
@@ -154,12 +181,13 @@ cd "${TTRUN_CWD}"
 python3 "${TTRUN_PY}" \
   --skip-executable-check \
   --force-rediscovery \
-  --tcp-interface ens5f0np0 \
+  --tcp-interface "${TCP_INTERFACE}" \
   --mesh-graph-descriptor "${MGD}" \
   --hosts "${RESOLVED_HOSTS}" \
   --mpi-args "--bind-to none --tag-output --allow-run-as-root --wdir ${TT_METAL_HOME} --output-filename ${RANKLOGS}/runner -x PATH -x LD_LIBRARY_PATH" \
   bash -lc "cd '${TT_METAL_HOME}'; \
-    export PYTHONPATH='${TT_METAL_HOME}'; \
+    export PYTHONPATH=${CHILD_PYTHONPATH}; \
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MANIFEST='${MANIFEST}'; \
     export PREFILL_SYNC_PER_CHUNK=1; \
@@ -201,16 +229,16 @@ set +e
 "${MPIRUN}" \
   --host "${HOSTS}" --map-by slot --bind-to none --tag-output --allow-run-as-root \
   --output-filename "${RANKLOGS}/producer" \
-  --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0 \
+  --mca btl self,tcp --mca btl_tcp_if_include "${TCP_INTERFACE}" \
   -x PATH -x LD_LIBRARY_PATH \
   bash -lc "cd '${TT_METAL_HOME}'; \
-    export PYTHONPATH='${TT_METAL_HOME}'; \
+    export PYTHONPATH=${CHILD_PYTHONPATH}; \
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
-    export PREFILL_NUM_USERS=1; \
+    export PREFILL_NUM_USERS=${PRODUCER_USERS}; \
     export PREFILL_PRODUCER_CHUNKS=${REAL_CHUNKS}; \
     export PREFILL_PRODUCER_WARMUP_CHUNKS=${WARMUP_CHUNKS}; \
-    export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     export PREFILL_PCC_SUMMARY_DIR='${PCC_DIR}'; \
     export PREFILL_PRODUCER_CHECK_PCC=1; \
@@ -230,7 +258,7 @@ fi
 
 EXPECTED_RANKS=$(printf '%s' "${HOSTS}" | tr ',' '\n' | grep -c .)
 PCC_GATE_RC=0
-python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" <<'PY' || PCC_GATE_RC=$?
+python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${PRODUCER_USERS}" <<'PY' || PCC_GATE_RC=$?
 import glob, json, os, sys
 
 pcc_dir, expected = sys.argv[1], int(sys.argv[2])
@@ -247,9 +275,10 @@ for f in files:
         print(f"PCC GATE FAIL: {name} unreadable: {e}", file=sys.stderr)
         bad += 1
         continue
-    status = "ok" if v.get("ok") else "FAIL"
+    valid = bool(v.get("ok")) and v.get("slots_checked") == int(sys.argv[3])
+    status = "ok" if valid else "FAIL"
     print(f"  {name}: {status} min_pcc={v.get('min_pcc')} threshold={v.get('threshold')} per_cache={v.get('per_cache')}")
-    if not v.get("ok"):
+    if not valid:
         bad += 1
 if bad:
     print(f"PCC GATE FAIL: {bad}/{len(files)} rank(s) below threshold or unvalidated", file=sys.stderr)

@@ -202,7 +202,7 @@ void kernel_main() {
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
                 ckl::BinaryFpu<ckl::BinaryFpuOp::Add, ckl::input(cb_var), ckl::input(cb_eps)>{},
-                ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
+                ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
                 ckl::PackTile<ckl::output(cb_stats_reduced)>{});
         }
     }

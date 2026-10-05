@@ -800,6 +800,8 @@ def calculate_edgecase_dest_indices(
     1. The lowest possible dest index is always 0.
     2. When DestSync.Half:  max_dst_tiles=8 (if dest is 16bit) or max_dst_tiles=4 (if dest is 32bit)
     3. When DestSync.Full:  max_dst_tiles=16 (if dest is 16bit) or max_dst_tiles=8 (if dest is 32bit)
+    4. A result that does not fit in dest is processed one full section at a time, which
+       leaves no room for an offset, so 0 is the only index.
 
     Args:
         dest_acc: Dest 16/32 bit mode, has to match is_fp32_dest_acc_en from C++
@@ -812,17 +814,9 @@ def calculate_edgecase_dest_indices(
 
     combinations = []
 
-    capacity_divisor = 2 if dest_acc else 1
-
     for dest_sync in dest_sync_modes:
-        base_tile_limit = DEST_SYNC_TILE_LIMITS[dest_sync]
-        max_tiles = base_tile_limit // capacity_divisor
-        max_index = max_tiles - result_tiles
-
-        if max_index < 0:
-            raise ValueError(
-                f"Too many result tiles ({result_tiles}) for destination capacity ({max_tiles}) with {dest_sync.name}"
-            )
+        # get_max_dst_index clamps dest_index to 0 when result_tiles > dest capacity
+        max_index = get_max_dst_index(dest_sync, dest_acc, result_tiles)
 
         # Add both combinations: lowest possible index = 0 and at max possible index
         # If max_index = 0 add only (dest_sync, 0) to avoid duplicates
@@ -869,6 +863,51 @@ def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shap
         [row * num_tile_rows, column * num_tile_cols]
         for row in range(1, max_tiles_in_dest + 1)
         for column in range(1, (max_tiles_in_dest // row) + 1)
+    ]
+
+
+def generate_reduced_input_dimensions(
+    dest_acc, dest_sync=DestSync.Half, tile_shape=None
+):
+    """Minimal set of input dimensions that cover every distinct dest layout.
+    Returns shapes: a single tile, a full-width row, a full-height column,
+    a balanced grid, an odd tile number example (max_tiles_in_dest - 1), and a multi-section
+    matrix that overflows dest and forces bank switching (three sections:
+    bank 0 → 1 → 0).
+
+    Args:
+        dest_acc: Dest 16/32 bit mode
+        dest_sync: DestSync mode. Defaults to DestSync.Half
+        tile_shape: Tile shape the dimensions are expressed in. Defaults to 32x32.
+
+    Returns:
+        List of representative input dimensions
+    """
+
+    # Three sections walk bank 0 -> bank 1 -> bank 0 under DestSync.Half, so the
+    # wrap back to the first bank is covered and not just the initial switch.
+    num_dest_sections = 3
+
+    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
+    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+
+    if tile_shape is None:
+        tile_shape = construct_tile_shape()
+
+    num_tile_rows = tile_shape.total_row_dim()
+    num_tile_cols = tile_shape.total_col_dim()
+
+    tile_counts = [
+        (1, 1),
+        (1, max_tiles_in_dest),
+        (max_tiles_in_dest, 1),
+        (2, max_tiles_in_dest // 2),
+        (max_tiles_in_dest - 1, 1),
+        (num_dest_sections * max_tiles_in_dest, 1),
+    ]
+
+    return [
+        [rows * num_tile_rows, columns * num_tile_cols] for rows, columns in tile_counts
     ]
 
 

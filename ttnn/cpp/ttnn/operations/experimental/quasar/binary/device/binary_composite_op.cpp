@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cmath>
+#include <limits>
 #include <type_traits>
 #include <utility>
 #include "ttnn/operations/experimental/quasar/binary/binary.hpp"
@@ -470,16 +472,48 @@ Tensor remainder(
 Tensor remainder(
     const Tensor& input,
     unary::ScalarVariant scalar,
-    const std::optional<const DataType>& /*output_dtype*/,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
-    float scalar_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, scalar);
-    return ttnn::unary_remainder(input, scalar_f, output_mem_config, output_tensor, sub_core_grids);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    // binary_ng packs the scalar with a static_cast to the INT32 input dtype, which is exact only for a finite
+    // integer in range. 2^31 is written as a float because INT32_MAX is not representable as one.
+    if (input.dtype() == DataType::INT32 && std::holds_alternative<float>(scalar)) {
+        const float value = std::get<float>(scalar);
+        TT_FATAL(
+            std::isfinite(value) && std::trunc(value) == value && value >= -2147483648.0f && value < 2147483648.0f,
+            "remainder: INT32 input needs a finite integral scalar within the INT32 range, got {}",
+            value);
+    }
+    if (input.dtype() == DataType::INT32 && std::holds_alternative<uint32_t>(scalar)) {
+        TT_FATAL(
+            std::get<uint32_t>(scalar) <= static_cast<uint32_t>(std::numeric_limits<int32_t>::max()),
+            "remainder: INT32 input needs a finite integral scalar within the INT32 range, got {}",
+            std::get<uint32_t>(scalar));
+    }
+    // The unary SFPU fast path takes none of these arguments and does not support INT32.
+    if (input.dtype() != DataType::INT32 && !output_dtype.has_value() && !sub_device_id.has_value() &&
+        post_activations.empty() && lhs_activations.empty() && rhs_activations.empty()) {
+        float scalar_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, scalar);
+        return ttnn::unary_remainder(input, scalar_f, output_mem_config, output_tensor, sub_core_grids);
+    }
+    return ttnn::operations::experimental::quasar::binary::detail::invoke_binary_ng(
+        input,
+        scalar,
+        binary::BinaryOpType::REMAINDER,
+        output_dtype,
+        output_mem_config,
+        output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        std::nullopt,
+        sub_core_grids,
+        sub_device_id);
 }
 
 // FMOD result = input − (other * trunc(input/other))
@@ -550,33 +584,37 @@ Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::option
  *   by running reshape.
  */
 Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(
+        input_a.logical_shape().rank() >= 1 && input_b.logical_shape().rank() >= 1,
+        "outer: inputs must be at least 1D, but got shapes {} and {}",
+        input_a.logical_shape(),
+        input_b.logical_shape());
     const ttnn::Shape& s_a = input_a.logical_shape();
     const ttnn::Shape& s_b = input_b.logical_shape();
-    auto num_ones = [](const ttnn::Shape& s) -> uint32_t {
-        uint32_t num1s = 0;
-        for (uint32_t idx = 0; idx < 4; idx++) {
-            num1s += (uint32_t)(s[idx] == 1);
+    // Inputs of any rank are vectors as long as at most one dimension differs from 1.
+    auto is_vector = [](const ttnn::Shape& s) {
+        uint32_t non_ones = 0;
+        for (int idx = 0; idx < static_cast<int>(s.rank()); idx++) {
+            non_ones += static_cast<uint32_t>(s[idx] != 1);
         }
-        return num1s;
+        return non_ones <= 1;
     };
+    TT_FATAL(is_vector(s_a), "outer: all but one dimension of input_a must be 1, got shape {}", s_a);
+    TT_FATAL(is_vector(s_b), "outer: all but one dimension of input_b must be 1, got shape {}", s_b);
 
-    // check if 3 dimensions are 1
-    TT_FATAL((num_ones(s_a) >= 3), "3 dimensions are required to be 1 for use with outer product");
-    TT_FATAL((num_ones(s_b) >= 3), "3 dimensions are required to be 1 for use with outer product");
-
-    const bool skip_reshape_a = (s_a[0] == 1 && s_a[1] == 1 && s_a[2] >= 1 && s_a[3] == 1);
-    const bool skip_reshape_b = (s_b[0] == 1 && s_b[1] == 1 && s_b[2] == 1 && s_b[3] >= 1);
+    const bool skip_reshape_a = s_a.rank() == 4 && s_a[0] == 1 && s_a[1] == 1 && s_a[3] == 1;
+    const bool skip_reshape_b = s_b.rank() == 4 && s_b[0] == 1 && s_b[1] == 1 && s_b[2] == 1;
 
     Tensor a_slim = input_a;
     Tensor b_slim = input_b;
 
     if (!skip_reshape_a) {
-        uint32_t a_volume = s_a[0] * s_a[1] * s_a[2] * s_a[3];
+        const auto a_volume = static_cast<uint32_t>(input_a.logical_volume());
         a_slim = ttnn::operations::experimental::quasar::reshape(
             input_a, ttnn::Shape{std::array<uint32_t, 4>{1, 1, a_volume, 1}});
     }
     if (!skip_reshape_b) {
-        uint32_t b_volume = s_b[0] * s_b[1] * s_b[2] * s_b[3];
+        const auto b_volume = static_cast<uint32_t>(input_b.logical_volume());
         b_slim = ttnn::operations::experimental::quasar::reshape(
             input_b, ttnn::Shape{std::array<uint32_t, 4>{1, 1, 1, b_volume}});
     }
@@ -600,12 +638,12 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
 
 Tensor polyval(
     const Tensor& input_a, const std::vector<float>& coeffs, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(!coeffs.empty() && "coeffs should be 1 or more coefficients");
+    TT_FATAL(!coeffs.empty(), "polyval requires at least one coefficient");
     if (coeffs.size() == 1) {
         return ttnn::full_like(input_a, coeffs[0], std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     }
     Tensor result = q::multiply(input_a, coeffs[0], std::nullopt, output_mem_config);
-    for (int idx = 1; idx < coeffs.size() - 1; idx++) {
+    for (size_t idx = 1; idx < coeffs.size() - 1; idx++) {
         result = q::add(result, coeffs[idx], std::nullopt, output_mem_config);
         result = q::multiply(input_a, result, std::nullopt, output_mem_config);
     }
@@ -782,7 +820,8 @@ Tensor bias_gelu(
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<bool>& fast_and_approximate_mode) {
     return ttnn::operations::experimental::quasar::binary::detail::invoke_binary_ng(
         input_tensor_a_arg,
         input_tensor_b_arg,
@@ -793,7 +832,7 @@ Tensor bias_gelu(
         post_activations,
         lhs_activations,
         rhs_activations,
-        /*fast_and_approximate_mode=*/std::nullopt,
+        fast_and_approximate_mode.value_or(false),
         sub_core_grids,
         sub_device_id);
 }
@@ -808,7 +847,8 @@ Tensor bias_gelu(
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
     ttsl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<bool>& fast_and_approximate_mode) {
     // Resolve sub_device_id to sub_core_grids so both add and gelu use the same core restriction
     auto resolved_sub_core_grids = sub_core_grids;
     if (sub_device_id.has_value()) {
@@ -828,7 +868,7 @@ Tensor bias_gelu(
             {},
             {},
             resolved_sub_core_grids),
-        true,
+        fast_and_approximate_mode.value_or(false),
         memory_config,
         optional_output_tensor,
         resolved_sub_core_grids);

@@ -28,6 +28,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include "impl/kernels/kernel.hpp"
+#include "impl/metal2_host_api/llk_metadata.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
@@ -868,12 +869,16 @@ void ValidateNodeBounds(const ProgramSpec& spec, MetalContext& metal_ctx) {
     }
 }
 
-// Whether a Gen2 DM kernel opts out of implicit sync for a particular DFB.
+// Whether a DM kernel opts out of implicit sync for a particular DFB.
 // Two routes lead to the same opt-out:
 //   - disable_dfb_implicit_sync_for_all: the per-kernel hammer, covering every DFB the kernel binds.
 //   - disable_dfb_implicit_sync_for: an explicit per-DFB list.
-// Precondition: the caller has already established this is a DM kernel with a gen2_config.
-bool DmKernelDisablesImplicitSync(const DataMovementGen2Config& gen2_config, const DFBSpecName& dfb_name) {
+// If config_2xx is not engaged, implicit sync stays at its default (on for every bound DFB).
+bool DmKernelDisablesImplicitSync(const DataMovementHardwareConfig& dm_config, const DFBSpecName& dfb_name) {
+    if (!dm_config.config_2xx.has_value()) {
+        return false;
+    }
+    const auto& gen2_config = *dm_config.config_2xx;
     if (gen2_config.disable_dfb_implicit_sync_for_all) {
         return true;
     }
@@ -909,7 +914,11 @@ bool DmKernelDisablesImplicitSync(const DataMovementGen2Config& gen2_config, con
 //     and, when P > 1, divide the ring's entry count.
 // Rules per relay DFB:
 //  5. Not also borrowed_from. Every relayed pipe shares ring_size / entry_size; the DFB's
-//     entry_size equals it and entry_size * num_entries == ring_size (the DFB is exactly the ring).
+//     entry_size divides that entry_size (the relay may page one pipe entry as several pages, e.g.
+//     a K-block as tiles, or one entry per consumer; only with a single-threaded producer) and
+//     entry_size * num_entries is the pipe's
+//     whole entries: ring_size rounded down to a multiple of the pipe's entry_size (the DFB is
+//     exactly the ring the pipe uses; the pipe skips any trailing gap at the wrap).
 //  6. The relayed pipes' receiver sets are pairwise disjoint and their union equals the DFB's
 //     node set; every PRODUCER kernel binds exactly the relayed pipe set under one accessor (so
 //     it is those pipes' receiver kernel and can drive the protocol the relay depends on).
@@ -1131,26 +1140,46 @@ void ValidatePrefetcherPipeSpec(const ProgramSpec& spec, const CollectedSpecData
         }
 
         TT_FATAL(
-            dfb.entry_size == first->entry_size,
-            "DFB '{}' entry_size {} differs from relayed PrefetcherPipeParameter '{}' entry_size {}",
+            dfb.entry_size != 0 && first->entry_size % dfb.entry_size == 0,
+            "DFB '{}' entry_size {} must divide relayed PrefetcherPipeParameter '{}' entry_size {}: a relay DFB "
+            "pages each pipe entry as a whole number of its own entries",
             dfb.unique_id,
             dfb.entry_size,
             first->unique_id,
             first->entry_size);
+        if (dfb.entry_size != first->entry_size) {
+            // Credit lanes stripe whole pipe entries over the relay's producer threads; a relay paged
+            // finer than the pipe is only implemented for one producer thread.
+            for (const auto& rec : collected.dfb_endpoints.at(dfb.unique_id).producers) {
+                TT_FATAL(
+                    rec.kernel->num_threads == 1,
+                    "DFB '{}' pages relayed PrefetcherPipeParameter '{}' entry_size {} as entries of {} bytes, which "
+                    "needs a single-threaded relay producer, but kernel '{}' has {} threads",
+                    dfb.unique_id,
+                    first->unique_id,
+                    first->entry_size,
+                    dfb.entry_size,
+                    rec.kernel->unique_id,
+                    rec.kernel->num_threads);
+            }
+        }
+        const uint32_t usable_ring_size = first->ring_size - first->ring_size % first->entry_size;
         TT_FATAL(
-            static_cast<uint64_t>(dfb.entry_size) * dfb.num_entries == first->ring_size,
-            "DFB '{}' (entry_size {} * num_entries {} = {} bytes) must exactly cover relayed "
-            "PrefetcherPipeParameter '{}' ring_size {}",
+            static_cast<uint64_t>(dfb.entry_size) * dfb.num_entries == usable_ring_size,
+            "DFB '{}' (entry_size {} * num_entries {} = {} bytes) must exactly cover the {} bytes of whole entries in "
+            "relayed PrefetcherPipeParameter '{}' (ring_size {}, entry_size {})",
             dfb.unique_id,
             dfb.entry_size,
             dfb.num_entries,
             static_cast<uint64_t>(dfb.entry_size) * dfb.num_entries,
+            usable_ring_size,
             first->unique_id,
-            first->ring_size);
+            first->ring_size,
+            first->entry_size);
 
         const NodeRangeSet& dfb_nodes = collected.dfb_node_set.at(dfb.unique_id);
         TT_FATAL(
-            dfb_nodes == relayed_receivers,
+            same_node_set(dfb_nodes, relayed_receivers),
             "DFB '{}' relays PrefetcherPipe(s) whose receiver nodes do not match the DFB's node set (union of its "
             "bound kernels' WorkUnitSpec nodes). The relay must live on exactly the receiver nodes.",
             dfb.unique_id);
@@ -1184,6 +1213,35 @@ void ValidatePrefetcherPipeSpec(const ProgramSpec& spec, const CollectedSpecData
                 first->unique_id);
         }
     }
+}
+
+std::optional<LLKMetadata> LLKMetadataFromDfb(const DataflowBufferSpec& spec) {
+    if (!spec.data_format_metadata.has_value()) {
+        TT_FATAL(
+            !spec.tile_format_metadata.has_value(),
+            "DFB '{}' need to have a configured data_format_metadata for it's tile_format_metadata to be respected",
+            spec.unique_id);
+        return std::nullopt;
+    }
+    const Tile tile = spec.tile_format_metadata.value_or(Tile{});
+    return LLKMetadata{.format = *spec.data_format_metadata, .tile = tile};
+}
+
+std::optional<LLKMetadata> LLKMetadataFromScratchpad(const ScratchpadSpec& spec) {
+    if (!spec.data_format_metadata.has_value()) {
+        TT_FATAL(
+            !spec.tile_format_metadata.has_value(),
+            "Scratchpad '{}' need to have a configured data_format_metadata for it's tile_format_metadata to be "
+            "respected",
+            spec.unique_id);
+        return std::nullopt;
+    }
+    const Tile tile = spec.tile_format_metadata.value_or(Tile{});
+    return LLKMetadata{.format = *spec.data_format_metadata, .tile = tile};
+}
+
+LLKMetadata LLKMetadataFromTensorSpec(const TensorSpec& spec) {
+    return LLKMetadata{.format = datatype_to_dataformat_converter(spec.data_type()), .tile = spec.tile()};
 }
 
 // ValidateProgramSpec: Semantic validation
@@ -1291,57 +1349,30 @@ void ValidateProgramSpec(
         }
     }
 
-    // Validate hardware configs: a kernel's config generation must match the target platform. There
-    // is no implicit cross-generation substitution — supplying the wrong alternative results in direct error.
-    for (const auto& kernel : spec.kernels) {
-        if (kernel.is_data_movement_kernel()) {
+    // On Gen1, a DM kernel must supply config_1xx: processor and NOC have no
+    // default. Architecture still comes from the device, not from which optional is set.
+    // Gen1 has exactly two DM processors: RISCV_0 (BRISC) and RISCV_1 (NCRISC).
+    // RISCV_2..RISCV_7 exist only on Gen2/Quasar. Reject them here, mirroring the legacy
+    // CreateDataMovementKernel "DM0 or DM1 only" guard.
+    if (is_gen1_arch(hal)) {
+        for (const auto& kernel : spec.kernels) {
+            if (!kernel.is_data_movement_kernel()) {
+                continue;
+            }
             const auto& data_movement_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
-
-            if (is_gen1_arch(hal)) {
-                TT_FATAL(
-                    std::holds_alternative<DataMovementGen1Config>(data_movement_config),
-                    "KernelSpec '{}' targets Gen1 (WH/BH) but its DataMovementHardwareConfig holds a "
-                    "DataMovementGen2Config. Supply a Gen1 config (e.g. "
-                    "CreateReaderGen1DataMovementConfig()/CreateWriterGen1DataMovementConfig()).",
-                    kernel.unique_id);
-
-                // Gen1 has exactly two DM processors: RISCV_0 (BRISC) and RISCV_1 (NCRISC).
-                // RISCV_2..RISCV_7 exist only on Gen2/Quasar. Reject them here, mirroring the legacy
-                // CreateDataMovementKernel "DM0 or DM1 only" guard. Resolving is safe now: the check
-                // above guarantees a role hint or an explicit Gen1 config is present.
-                const DataMovementProcessor processor =
-                    std::get<DataMovementGen1Config>(data_movement_config).processor;
-                TT_FATAL(
-                    processor == DataMovementProcessor::RISCV_0 || processor == DataMovementProcessor::RISCV_1,
-                    "KernelSpec '{}' targets Gen1 (WH/BH) but requests DM processor RISCV_{}. Gen1 has only "
-                    "RISCV_0 and RISCV_1; RISCV_2..RISCV_7 exist only on Gen2/Quasar.",
-                    kernel.unique_id,
-                    static_cast<int>(processor));
-            } else if (is_gen2_arch(hal)) {
-                TT_FATAL(
-                    std::holds_alternative<DataMovementGen2Config>(data_movement_config),
-                    "KernelSpec '{}' targets Gen2 (Quasar) but its DataMovementHardwareConfig holds a "
-                    "DataMovementGen1Config. Supply a Gen2 config (DataMovementGen2Config{{}}).",
-                    kernel.unique_id);
-            }
-        }
-
-        if (kernel.is_compute_kernel()) {
-            const auto& compute_config = std::get<ComputeHardwareConfig>(kernel.hw_config);
-
-            if (is_gen1_arch(hal)) {
-                TT_FATAL(
-                    std::holds_alternative<ComputeGen1Config>(compute_config),
-                    "KernelSpec '{}' targets Gen1 (WH/BH) but its ComputeHardwareConfig holds a "
-                    "ComputeGen2Config. Supply a Gen1 config (ComputeGen1Config).",
-                    kernel.unique_id);
-            } else if (is_gen2_arch(hal)) {
-                TT_FATAL(
-                    std::holds_alternative<ComputeGen2Config>(compute_config),
-                    "KernelSpec '{}' targets Gen2 (Quasar) but its ComputeHardwareConfig holds a "
-                    "ComputeGen1Config. Supply a Gen2 config (ComputeGen2Config).",
-                    kernel.unique_id);
-            }
+            TT_FATAL(
+                data_movement_config.config_1xx.has_value(),
+                "KernelSpec '{}' is a data-movement kernel on Gen1 but has no config_1xx processor/NOC. "
+                "Those settings are required to build a Gen1 data-movement kernel. Supply a DataMovement1XXConfig "
+                "(e.g. CreateReaderDataMovementConfig()/CreateWriterDataMovementConfig()).",
+                kernel.unique_id);
+            const DataMovementProcessor processor = data_movement_config.config_1xx->processor;
+            TT_FATAL(
+                processor == DataMovementProcessor::RISCV_0 || processor == DataMovementProcessor::RISCV_1,
+                "KernelSpec '{}' targets Gen1 (WH/BH) but requests DM processor RISCV_{}. Gen1 has only "
+                "RISCV_0 and RISCV_1; RISCV_2..RISCV_7 exist only on Gen2/Quasar.",
+                kernel.unique_id,
+                static_cast<int>(processor));
         }
     }
 
@@ -1373,7 +1404,11 @@ void ValidateProgramSpec(
             if (!kernel.is_data_movement_kernel()) {
                 continue;
             }
-            const auto& gen1 = std::get<DataMovementGen1Config>(std::get<DataMovementHardwareConfig>(kernel.hw_config));
+            const auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
+            if (!dm_config.config_1xx.has_value()) {
+                continue;
+            }
+            const auto& gen1 = *dm_config.config_1xx;
             const NodeRangeSet& nodes = collected.kernel_node_set.at(kernel.unique_id);
             for (const auto& range : nodes.ranges()) {
                 for (const auto& node : range) {
@@ -1469,11 +1504,9 @@ void ValidateProgramSpec(
             continue;
         }
         const auto& compute_config = std::get<ComputeHardwareConfig>(kernel.hw_config);
-        const auto& unpack_modes =
-            std::visit([](const auto& config) -> const auto& { return config.unpack_modes; }, compute_config);
-        const bool enable_32_bit_dest =
-            std::visit([](const auto& config) { return config.enable_32_bit_dest; }, compute_config);
-        const bool is_gen2 = std::holds_alternative<ComputeGen2Config>(compute_config);
+        const auto& unpack_modes = compute_config.unpack_modes;
+        const bool enable_32_bit_dest = compute_config.enable_32_bit_dest;
+        const bool is_gen2 = is_gen2_arch(hal);
 
         // Index the kernel's DFB bindings: which it binds at all, and which it CONSUMES. A self-loop
         // DFB appears as two separate bindings (one PRODUCER, one CONSUMER — there is no BOTH endpoint
@@ -1577,23 +1610,79 @@ void ValidateProgramSpec(
         }
     }
 
-    // Compute kernels cannot have any semaphore bindings.
-    // (There's no use case for ever wanting this, so best just forbid it.)
+    // Blackhole supports local semaphore bindings on UNPACK and PACK (SemScope::COMPUTE_ATOMIC).
+    // Wormhole has no compute implementation and Quasar compute remains out of scope.
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(
-            !kernel.is_compute_kernel() || kernel.semaphore_bindings.empty(),
+            !kernel.is_compute_kernel() || kernel.semaphore_bindings.empty() || hal.get_arch() == tt::ARCH::BLACKHOLE,
             "KernelSpec '{}' has semaphore bindings. "
-            "Semaphore bindings are not supported for compute kernels.",
+            "Semaphore bindings on compute kernels are supported only on Blackhole.",
             kernel.unique_id);
+    }
+
+    // A compute semaphore is an UNPACK <-> PACK mechanism (the Tensix hardware semaphore, driven by
+    // Tensix instructions a DM core cannot issue) and may not be shared with a DM kernel. Reject it
+    // here rather than resolve a scope that cannot serve both.
+    {
+        std::unordered_set<std::string_view> sem_has_compute;
+        std::unordered_set<std::string_view> sem_has_dm;
+        for (const auto& kernel : spec.kernels) {
+            for (const auto& binding : kernel.semaphore_bindings) {
+                (kernel.is_compute_kernel() ? sem_has_compute : sem_has_dm).insert(*binding.semaphore_spec_name);
+            }
+        }
+        for (const auto& name : sem_has_compute) {
+            TT_FATAL(
+                !sem_has_dm.contains(name),
+                "SemaphoreSpec '{}' is bound by both a compute kernel and a data-movement kernel. "
+                "Compute semaphores synchronize UNPACK and PACK with each other and cannot be shared "
+                "with a DM kernel; use separate semaphores for the compute and data-movement handoffs.",
+                name);
+        }
+        // Every compute semaphore maps onto the single free Tensix hardware semaphore (index 3), so two in
+        // one program would alias the same hardware state.
+        TT_FATAL(
+            sem_has_compute.size() <= 1,
+            "{} semaphores are bound by compute kernels; a program may bind at most one compute semaphore "
+            "(Blackhole has a single free Tensix hardware semaphore).",
+            sem_has_compute.size());
+        // The compute semaphore lives in the Tensix Sync Unit, which the host cannot write; it is seeded
+        // to 0 by compute_kernel_hw_startup() on the device, so no other initial value can be honored.
+        // Its capacity (max_value) is a 4-bit hardware field and has no meaning for a DM semaphore.
+        for (const auto& sem : spec.semaphores) {
+            const bool compute_bound = sem_has_compute.contains(std::string_view{*sem.unique_id});
+            const uint32_t init_value = sem.advanced_options.initial_value;
+            const uint32_t max_value = sem.advanced_options.max_value;
+            TT_FATAL(
+                !compute_bound || init_value == 0,
+                "SemaphoreSpec '{}' is bound by a compute kernel but has initial_value={}. Compute "
+                "semaphores always start at 0 (seeded by compute_kernel_hw_startup on the device).",
+                sem.unique_id,
+                init_value);
+            TT_FATAL(
+                !compute_bound || max_value <= 15,
+                "SemaphoreSpec '{}' has max_value={}; a compute semaphore's capacity is at most 15 (4-bit "
+                "Tensix hardware semaphore).",
+                sem.unique_id,
+                max_value);
+            TT_FATAL(
+                compute_bound || max_value == 0,
+                "SemaphoreSpec '{}' has max_value={} but is not bound by a compute kernel; max_value is the "
+                "capacity of a compute semaphore and has no effect on a data-movement semaphore.",
+                sem.unique_id,
+                max_value);
+        }
     }
 
     // Validate DM kernel disable_dfb_implicit_sync_for entries.
     //
     // Implicit sync is a Gen2-only, DM-only mechanism (ISR-based credit posting from NoC
     // transaction completion). A DM kernel can opt out per-DFB by listing the DFB's name in
-    // its Gen2Config::disable_dfb_implicit_sync_for vector, or opt out of all the DFBs it binds at
-    // once via Gen2Config::disable_dfb_implicit_sync_for_all. Either way the opt-out applies to the
-    // side(s) of the DFB this kernel binds (producer, consumer, or both for a self-loop).
+    // config_2xx->disable_dfb_implicit_sync_for, or opt out of all the DFBs it binds at
+    // once via config_2xx->disable_dfb_implicit_sync_for_all. If config_2xx is not
+    // engaged, implicit sync stays at its default (on for every bound DFB). Either way the
+    // opt-out applies to the side(s) of the DFB this kernel binds (producer, consumer, or
+    // both for a self-loop).
     //
     // Per-kernel rule: every listed name references a DFB the kernel binds (typo guard).
     //
@@ -1608,14 +1697,14 @@ void ValidateProgramSpec(
                 continue;
             }
             const auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
-            if (!std::holds_alternative<DataMovementGen2Config>(dm_config)) {
+            if (!dm_config.config_2xx.has_value()) {
                 continue;
             }
             std::unordered_set<DFBSpecName> bound_dfbs;
             for (const auto& binding : kernel.dfb_bindings) {
                 bound_dfbs.insert(binding.dfb_spec_name);
             }
-            for (const auto& dfb_name : std::get<DataMovementGen2Config>(dm_config).disable_dfb_implicit_sync_for) {
+            for (const auto& dfb_name : dm_config.config_2xx->disable_dfb_implicit_sync_for) {
                 TT_FATAL(
                     bound_dfbs.contains(dfb_name),
                     "Kernel '{}' disable_dfb_implicit_sync_for entry references DFB '{}', which the kernel does not "
@@ -1640,12 +1729,11 @@ void ValidateProgramSpec(
                         continue;
                     }
                     const auto& dm_config = std::get<DataMovementHardwareConfig>(ep.kernel->hw_config);
-                    if (!std::holds_alternative<DataMovementGen2Config>(dm_config)) {
-                        // Gen1-only DM kernel — can't physically participate in Gen2 implicit sync; abstains.
+                    if (!is_gen2_arch(hal)) {
+                        // Gen1 device — can't physically participate in Gen2 implicit sync; abstains.
                         continue;
                     }
-                    const bool disables =
-                        DmKernelDisablesImplicitSync(std::get<DataMovementGen2Config>(dm_config), dfb_name);
+                    const bool disables = DmKernelDisablesImplicitSync(dm_config, dfb_name);
                     if (canonical == nullptr) {
                         canonical = ep.kernel;
                         canonical_disables = disables;
@@ -1674,8 +1762,8 @@ void ValidateProgramSpec(
     // indexes the packed config by device slot up to dfb::NUM_DFBS. Tile-counter exhaustion on
     // Gen2 is still checked later at enqueue.
     {
-        const uint32_t max_slots_per_core = hal.has_tile_counter_registers() ? static_cast<uint32_t>(::dfb::NUM_DFBS)
-                                                                             : hal.get_arch_num_circular_buffers();
+        const uint32_t max_slots_per_core =
+            hal.has_tile_counter_registers() ? static_cast<uint32_t>(::dfb::NUM_DFBS) : hal.get_num_dataflow_buffers();
 
         std::unordered_map<NodeCoord, uint32_t> dfbs_per_node;
         for (const auto& dfb : spec.dataflow_buffers) {
@@ -2200,6 +2288,23 @@ void ValidateProgramSpec(
         }
     }
 
+    for (const auto& scratchpad : spec.scratchpads) {
+        const bool has_format = scratchpad.data_format_metadata.has_value();
+        const bool has_tile = scratchpad.tile_format_metadata.has_value();
+        TT_FATAL(
+            has_format || !has_tile,
+            "ScratchpadSpec '{}' has tile_format_metadata but no data_format_metadata",
+            scratchpad.unique_id);
+        if (has_format) {
+            TT_FATAL(
+                tt::is_data_format_supported(scratchpad.data_format_metadata.value(), arch),
+                "ScratchpadSpec '{}' has data format '{}' which is not supported on architecture {}",
+                scratchpad.unique_id,
+                scratchpad.data_format_metadata.value(),
+                arch);
+        }
+    }
+
     //////////////////////////////////
     // Validate SemaphoreSpecs
     //////////////////////////////////
@@ -2706,7 +2811,13 @@ KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
     for (const KernelSpec& kernel : spec.kernels) {
         if (kernel.is_data_movement_kernel()) {
             const auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
-            const auto gen1 = std::get<DataMovementGen1Config>(dm_config);
+            TT_FATAL(
+                dm_config.config_1xx.has_value(),
+                "KernelSpec '{}' is a data-movement kernel on Gen1 but has no config_1xx processor/NOC. "
+                "Those settings are required to build a Gen1 data-movement kernel. Supply a DataMovement1XXConfig "
+                "(e.g. CreateReaderDataMovementConfig()/CreateWriterDataMovementConfig()).",
+                kernel.unique_id);
+            const auto& gen1 = *dm_config.config_1xx;
             result[&kernel] = static_cast<uint16_t>(1u << static_cast<uint8_t>(gen1.processor));
         } else {
             result[&kernel] = static_cast<uint16_t>(1u << GEN1_COMPUTE_RISC_BIT);
@@ -2746,6 +2857,10 @@ struct ResolvedTensorParameter {
     // For now, since there are only two mutually exclusive possibilities, it's sufficient to
     // distinguish them with a boolean.
     bool runtime_field_is_page_size = false;
+
+    // Compile-time LLK metadata derived from the TensorParameter's spec, baked onto the binding token.
+    // Always present: a tensor has a dtype and a tile.
+    LLKMetadata llk_metadata;
 };
 
 // Resolve a TensorParameter's static layout into a CTA payload + an extra CRTA word
@@ -2825,7 +2940,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
         aligned_page_size,
         std::numeric_limits<uint32_t>::max());
 
-    ResolvedTensorParameter result;
+    ResolvedTensorParameter result{.llk_metadata = LLKMetadataFromTensorSpec(spec)};
     std::vector<uint32_t>& cta_payload = result.cta_payload;
 
     // Common header (always emitted, sharded or not):
@@ -2870,7 +2985,13 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     const size_t n_banks = bank_coords.size();
 
     cta_payload.push_back(static_cast<uint32_t>(rank));
-    cta_payload.push_back(static_cast<uint32_t>(n_banks));
+    TT_FATAL(
+        n_banks < tensor_accessor::ShardContiguousBit,
+        "TensorParameter '{}' has too many banks ({}) to pack the shard-contiguous flag",
+        tensor_parameter.unique_id,
+        n_banks);
+    cta_payload.push_back(tensor_accessor::pack_num_banks(
+        static_cast<uint32_t>(n_banks), bds.shard_distribution_strategy() == ShardDistributionStrategy::CONTIGUOUS_1D));
 
     if (!dyn_shape) {
         for (size_t i = 0; i < rank; ++i) {
@@ -2956,6 +3077,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
         handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
         handle.num_runtime_field_crta_words = resolved.extra_crta_words;
         handle.runtime_field_is_page_size = resolved.runtime_field_is_page_size;
+        handle.llk_metadata = resolved.llk_metadata;
 
         out.cta_words.insert(out.cta_words.end(), binding_ctas.begin(), binding_ctas.end());
         cta_word_offset += static_cast<uint32_t>(binding_ctas.size());
@@ -2999,6 +3121,7 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
         handle.accessor_name = binding.accessor_name;
         handle.size_bytes = scratchpad_spec->size_per_node;
         handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
+        handle.llk_metadata = LLKMetadataFromScratchpad(*scratchpad_spec);
         // handle.allocated_address stays 0 until allocate_scratchpads runs.
         out.handles.push_back(std::move(handle));
         crta_word_index += 1;  // one address word per scratchpad binding
@@ -3018,7 +3141,8 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const KernelSpec& kernel_spec,
     const DFBNameToSlotMap& dfb_name_to_slot,
     const std::unordered_map<DFBSpecName, bool>& dfb_name_to_is_relay,
-    const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id) {
+    const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id,
+    const std::unordered_map<DFBSpecName, const DataflowBufferSpec*>& dfb_by_name) {
     tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
@@ -3029,14 +3153,14 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
             kernel_spec.unique_id,
             dfb_binding.dfb_spec_name,
             slot);
-        const bool is_relay = dfb_name_to_is_relay.at(dfb_binding.dfb_spec_name);
-        const uint8_t prefetcher_pipe_id = dfb_name_to_prefetcher_pipe_id.at(dfb_binding.dfb_spec_name);
-        out.emplace(
-            dfb_binding.accessor_name,
-            tt::tt_metal::DataflowBufferBindingHandle{
-                .logical_dfb_id = static_cast<uint16_t>(slot),
-                .is_relay = is_relay,
-                .prefetcher_pipe_id = prefetcher_pipe_id});
+        tt::tt_metal::DataflowBufferBindingHandle handle;
+        handle.logical_dfb_id = static_cast<uint16_t>(slot);
+        handle.is_relay = dfb_name_to_is_relay.at(dfb_binding.dfb_spec_name);
+        handle.prefetcher_pipe_id = dfb_name_to_prefetcher_pipe_id.at(dfb_binding.dfb_spec_name);
+        if (!handle.is_relay) {
+            handle.llk_metadata = LLKMetadataFromDfb(*dfb_by_name.at(dfb_binding.dfb_spec_name));
+        }
+        out.emplace(dfb_binding.accessor_name, handle);
     }
     return out;
 }
@@ -3142,10 +3266,8 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
             }
             any_dm = true;
             const auto& dm_config = std::get<DataMovementHardwareConfig>(ep.kernel->hw_config);
-            if (!std::holds_alternative<DataMovementGen2Config>(dm_config)) {
-                continue;
-            }
-            if (DmKernelDisablesImplicitSync(std::get<DataMovementGen2Config>(dm_config), dfb_spec->unique_id)) {
+            // config_2xx is unused on Gen1; implicit sync stays at the current default.
+            if (DmKernelDisablesImplicitSync(dm_config, dfb_spec->unique_id)) {
                 disabled = true;
             }
         }
@@ -3164,7 +3286,6 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .enable_consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers),
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
         .tile = dfb_spec->tile_format_metadata,
-        .unpack_face_geometry = dfb_spec->unpack_face_geometry_metadata,
         .tensix_scope = tensix_scope,
         // DFB borrowed memory mode is declared at program creation time.
         // The actual backing memory L1 address is attached at runtime: from the borrowed
@@ -3215,7 +3336,13 @@ std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOpti
 DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
     TT_FATAL(kernel_spec.is_data_movement_kernel(), "Expected a DM kernel");
     const auto& dm_config = std::get<DataMovementHardwareConfig>(kernel_spec.hw_config);
-    const auto gen1 = std::get<DataMovementGen1Config>(dm_config);
+    TT_FATAL(
+        dm_config.config_1xx.has_value(),
+        "KernelSpec '{}' is a data-movement kernel on Gen1 but has no config_1xx processor/NOC. "
+        "Those settings are required to build a Gen1 data-movement kernel. Supply a DataMovement1XXConfig "
+        "(e.g. CreateReaderDataMovementConfig()/CreateWriterDataMovementConfig()).",
+        kernel_spec.unique_id);
+    const auto& gen1 = *dm_config.config_1xx;
 
     return DataMovementConfig{
         .processor = gen1.processor,
@@ -3239,33 +3366,35 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
 //     index cb_id, where cb_id is the slot used by set_dfb_data_fmt_and_tile
 //     in buf_dataformat_arr (aka, dfb->id).
 //   - The unpack_mode for a DFB "d" needs to be at unpack_modes[d->id]
-//   - The vector must be at least max_cbs long, or the consumer gets angry
-//     (it iterates buf_formats up to max_cbs).
+//   - The vector must be at least max_dfbs long, or the consumer gets angry
+//     (it iterates buf_formats up to max_dfbs).
 //   - This is true on WH, BH, and Quasar. (Yes, Quasar too.)
 //
-// What is the max CBs / DFBs?
-//   - WH/BH: Hardcoded as max_cbs. Different number on WH vs. BH.
+// What is the max DFB slot count?
+//   - WH/BH: Hardcoded as max_dfbs. Different number on WH vs. BH.
 //   - Quasar has a variable cap, based on tile-counter registers.
 //     In actual practice, we'll run out LONG before we get the HAL-reported
 //     limit of 64.
 // ----------------------------------------------------------------------------
 
 std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
-    const ComputeUnpackModes& user_modes, const DFBNameToSlotMap& dfb_name_to_slot, const Hal& hal) {
-    const uint32_t max_cbs = hal.get_arch_num_circular_buffers();
-    std::vector<UnpackToDestMode> unpack_modes(max_cbs, UnpackToDestMode::Default);
+    const ComputeHardwareConfig::ComputeUnpackModes& user_modes,
+    const DFBNameToSlotMap& dfb_name_to_slot,
+    const Hal& hal) {
+    const uint32_t max_dfbs = hal.get_num_dataflow_buffers();
+    std::vector<UnpackToDestMode> unpack_modes(max_dfbs, UnpackToDestMode::Default);
     for (const auto& [dfb_name, mode] : user_modes) {
         // Indexed by device slot: this vector is consumed by the HLK alongside the CB-indexed data
         // formats, which set_dfb_data_fmt_and_tile also keys by slot.
         uint32_t dfb_slot = dfb_name_to_slot.at(dfb_name);
         // This TT_FATAL is unreachable, provided that validation wasn't skipped.
         TT_FATAL(
-            dfb_slot < max_cbs,
+            dfb_slot < max_dfbs,
             "Internal Error: DFB '{}' has device slot {} which exceeds the JIT data-format "
             "slot count ({}); compute kernels cannot reference DFBs past this limit",
             dfb_name,
             dfb_slot,
-            max_cbs);
+            max_dfbs);
         // Public UnpackMode -> internal UnpackToDestMode. UnpackToDest keeps full FP32 by
         // unpacking straight to Dest; UnpackToSrc is the SrcA/B path (the internal "Default").
         unpack_modes[dfb_slot] =
@@ -3283,22 +3412,22 @@ ComputeConfig MakeGen1ComputeConfig(
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
 
-    TT_FATAL(
-        std::holds_alternative<ComputeGen1Config>(compute_config),
-        "Trying to construct a Gen1 compute config but the kernel's ComputeHardwareConfig does not hold a "
-        "ComputeGen1Config, generation mismatch, please provide the correctly typed hardware config.");
-    const auto& gen1 = std::get<ComputeGen1Config>(compute_config);
-
     std::vector<UnpackToDestMode> unpack_dst_modes =
-        BuildUnpackToDestModeVector(gen1.unpack_modes, dfb_name_to_slot, hal);
+        BuildUnpackToDestModeVector(compute_config.unpack_modes, dfb_name_to_slot, hal);
+
+    // bfp_pack_precision_mode is TT-1.x.x-only. If config_1xx is not engaged, use the
+    // historical default (Approximate).
+    const Precision bfp_pack_precision_mode = compute_config.config_1xx.has_value()
+                                                  ? compute_config.config_1xx->bfp_pack_precision_mode
+                                                  : Precision::Approximate;
 
     return ComputeConfig{
-        .math_fidelity = gen1.fpu_math_fidelity,
-        .fp32_dest_acc_en = gen1.enable_32_bit_dest,
-        .dst_full_sync_en = !gen1.double_buffer_dest,
+        .math_fidelity = compute_config.fpu_math_fidelity,
+        .fp32_dest_acc_en = compute_config.enable_32_bit_dest,
+        .dst_full_sync_en = !compute_config.double_buffer_dest,
         .unpack_to_dest_mode = unpack_dst_modes,
-        .bfp8_pack_precise = (gen1.bfp_pack_precision_mode == Precision::Precise),
-        .math_approx_mode = (gen1.sfpu_precision_mode == Precision::Approximate),
+        .bfp8_pack_precise = (bfp_pack_precision_mode == Precision::Precise),
+        .math_approx_mode = (compute_config.sfpu_precision_mode == Precision::Approximate),
         .compile_args = {},  // only named_compile_args is used
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
@@ -3333,22 +3462,17 @@ experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
     const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot, const Hal& hal) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
-    TT_FATAL(
-        std::holds_alternative<ComputeGen2Config>(compute_config),
-        "Trying to construct a Gen2 compute config but the kernel's ComputeHardwareConfig does not hold a "
-        "ComputeGen2Config, generation mismatch, please provide the correctly typed hardware config.");
-    const auto& gen2 = std::get<ComputeGen2Config>(compute_config);
 
     std::vector<UnpackToDestMode> unpack_dst_modes =
-        BuildUnpackToDestModeVector(gen2.unpack_modes, dfb_name_to_slot, hal);
+        BuildUnpackToDestModeVector(compute_config.unpack_modes, dfb_name_to_slot, hal);
 
     return experimental::quasar::QuasarComputeConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
-        .math_fidelity = gen2.fpu_math_fidelity,
-        .fp32_dest_acc_en = gen2.enable_32_bit_dest,
-        .dst_full_sync_en = !gen2.double_buffer_dest,
+        .math_fidelity = compute_config.fpu_math_fidelity,
+        .fp32_dest_acc_en = compute_config.enable_32_bit_dest,
+        .dst_full_sync_en = !compute_config.double_buffer_dest,
         .unpack_to_dest_mode = unpack_dst_modes,
-        .math_approx_mode = (gen2.sfpu_precision_mode == Precision::Approximate),
+        .math_approx_mode = (compute_config.sfpu_precision_mode == Precision::Approximate),
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
@@ -3727,9 +3851,10 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         semaphore_name_to_id[semaphore_name] = sem_id;
     }
 
-    // Pick each semaphore's access mechanism.
+    // Pick each semaphore's access mechanism. Resolve against this program's context Hal (the mesh
+    // device's), not the default context, so a non-default-context device resolves its own arch.
     const sem_solver::SemaphoreNameToScopeMap semaphore_name_to_scope =
-        sem_solver::ResolveSemaphoreScopes(spec, semaphore_binders);
+        sem_solver::ResolveSemaphoreScopes(spec, semaphore_binders, hal);
 
     // Create Kernels (arch-specific)
     for (const KernelSpec& kernel_spec : spec.kernels) {
@@ -3738,7 +3863,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 
         // Make the local accessor name -> DFB device slot map for this kernel
         const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles = MakeDataflowBufferBindingHandles(
-            kernel_spec, dfb_name_to_slot, dfb_name_to_is_relay, dfb_name_to_prefetcher_pipe_id);
+            kernel_spec, dfb_name_to_slot, dfb_name_to_is_relay, dfb_name_to_prefetcher_pipe_id, collected.dfb_by_name);
         const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
             MakeSemaphoreBindingHandles(kernel_spec, semaphore_binders, semaphore_name_to_id, semaphore_name_to_scope);
 
@@ -3841,6 +3966,25 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
             } else {
                 auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_slot, hal);
                 config.compile_args = std::move(compile_args);
+                // Bake the compute semaphore's capacity into the kernel (Semaphore::wait_not_full and the
+                // SEMINITs read COMPUTE_SEMAPHORE_MAX). At most one compute semaphore per program
+                // (ValidateProgramSpec), so at most one define.
+                for (const auto& binding : kernel_spec.semaphore_bindings) {
+                    if (semaphore_name_to_scope.at(binding.semaphore_spec_name) != SemScope::COMPUTE_ATOMIC) {
+                        continue;
+                    }
+                    const auto sem =
+                        std::find_if(spec.semaphores.begin(), spec.semaphores.end(), [&](const SemaphoreSpec& s) {
+                            return s.unique_id == binding.semaphore_spec_name;
+                        });
+                    // The host option is the source of truth: always bake the resolved capacity, overriding
+                    // any user-supplied COMPUTE_SEMAPHORE_MAX define. max_value 0 means the default (the 4-bit
+                    // hardware ceiling, 15), which is what the kernel assumes when the define is absent.
+                    const uint32_t capacity = (sem != spec.semaphores.end() && sem->advanced_options.max_value != 0)
+                                                  ? sem->advanced_options.max_value
+                                                  : 15u;
+                    config.defines["COMPUTE_SEMAPHORE_MAX"] = std::to_string(capacity);
+                }
                 kernel = std::make_shared<ComputeKernel>(
                     program_impl->get_context_id(),
                     kernel_src,

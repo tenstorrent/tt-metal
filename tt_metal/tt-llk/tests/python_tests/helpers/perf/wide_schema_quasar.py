@@ -77,6 +77,10 @@ DB_SCHEMA = [
     Column("full_ct_dim", "int64", True, "configuration"),
     Column("full_rt_dim", "int64", True, "configuration"),
     Column("implied_math_format", "string", True, "configuration"),
+    Column("in0_face_c_dim", "int64", True, "configuration"),
+    Column("in0_face_r_dim", "int64", True, "configuration"),
+    Column("in1_face_c_dim", "int64", True, "configuration"),
+    Column("in1_face_r_dim", "int64", True, "configuration"),
     Column("input_format", "string", True, "configuration"),
     Column("input_num_blocks", "int64", True, "configuration"),
     Column("input_num_tiles_in_block", "int64", True, "configuration"),
@@ -119,8 +123,11 @@ DB_SCHEMA = [
     Column("arch", "string", False, "provenance", origin="ci"),
     Column("run_id", "string", False, "provenance", origin="ci"),
     Column("timestamp", "string", False, "provenance", origin="ci"),
-    Column("pipeline", "string", False, "provenance", origin="ci"),  # PR | nightly
-    Column("pr_number", "string", True, "provenance", origin="ci"),  # NULL for nightly
+    # PR | nightly | baseline
+    Column("pipeline", "string", False, "provenance", origin="ci"),
+    Column(
+        "pr_number", "string", True, "provenance", origin="ci"
+    ),  # NULL for nightly and baseline runs
 ]
 
 OUTPUT_SCHEMA = [c for c in DB_SCHEMA if c.origin == "test"]
