@@ -11,16 +11,13 @@ import pytest
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
+from models.demos.deepseek_v3_d_p.tests.kda.cases import build_kda_case, make_kda_device_case, registered_kda_case
+from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import cpu_references
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     assert_matches_reference,
     check_kimi_k3_accuracy,
     collect_mesh_accuracy_and_determinism_results,
-    make_kimi_k3_device_case,
-    make_kimi_k3_test_case,
-    make_synthetic_kimi_k3_test_case,
     mla_row_permutation,
     to_sp_input,
 )
@@ -30,26 +27,31 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import mak
 pytestmark = [run_for_blackhole(), pytest.mark.timeout(900)]
 
 _SEQUENCE = 5120
+_LB_A_SEQUENCE = 1280
 _PCC_THRESHOLD = 0.9995
 
 
 @pytest.mark.parametrize(
-    "mesh_device,tensor_parallel_axis,device_params",
+    "mesh_device,tensor_parallel_axis,device_params,sequence",
     [
         pytest.param(
             (2, 4),
             1,
             fabric_1d_device_params(),
+            _SEQUENCE,
             id="SP2xTP4-fabric-1d",
         ),
-        pytest.param((2, 4), 0, fabric_1d_device_params(), id="SP4xTP2-fabric-1d"),
+        pytest.param((2, 4), 0, fabric_1d_device_params(), _SEQUENCE, id="SP4xTP2-fabric-1d"),
         pytest.param(
             (8, 4),
             1,
             torus_xy_device_params(),
+            _SEQUENCE,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),
+        # LoudBox LB-A: Galaxy per-chip shapes (640 tokens per SP rank, heads/4 per chip) with TP4 collectives.
+        pytest.param((2, 4), 1, fabric_1d_device_params(), _LB_A_SEQUENCE, id="LB-A-T1280-fabric-1d"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -58,22 +60,19 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
     device_params: dict,
+    sequence: int,
     start_kind: str,
 ) -> None:
     """Gate K3 dimensions against Torch and compare three device runs bit-for-bit."""
     mesh_shape = tuple(mesh_device.shape)
     sequence_parallel_axis = 1 - tensor_parallel_axis
     layout = f"SP{mesh_shape[sequence_parallel_axis]}xTP{mesh_shape[tensor_parallel_axis]}"
-    case = make_synthetic_kimi_k3_test_case(sequence=_SEQUENCE)
-    golden_output, golden_state, reference_seconds = load_or_compute_cpu_reference(case)
-    layer, hidden_tt = make_kimi_k3_device_case(
-        mesh_device,
-        case,
-        tensor_parallel_axis=tensor_parallel_axis,
-        cache_weights=False,
-    )
+    case = build_kda_case(registered_kda_case("synthetic", mesh_shape, tensor_parallel_axis, sequence))
+    (reference,) = cpu_references(case)
+    golden_output, golden_state, reference_seconds = reference.output, reference.state, reference.seconds
+    layer, hidden_tt = make_kda_device_case(mesh_device, case)
 
-    local_rows = _SEQUENCE // mesh_shape[sequence_parallel_axis]
+    local_rows = sequence // mesh_shape[sequence_parallel_axis]
     actual_start = {"baseline": 0, "split-rank0": 32, "boundary-rank1": local_rows, "split-rank1": local_rows + 32}[
         start_kind
     ]
@@ -101,7 +100,7 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
             sp_axis=sequence_parallel_axis,
             tp_axis=tensor_parallel_axis,
             config=case.config,
-            label=f"Synthetic Kimi-K3 T5120 {layout} start={actual_start}",
+            label=f"Synthetic Kimi-K3 T{sequence} {layout} start={actual_start}",
             state_linf_threshold=None,
             pcc_threshold=_PCC_THRESHOLD,
         )
@@ -113,7 +112,7 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
             + json.dumps(
                 {
                     "layout": layout,
-                    "sequence": _SEQUENCE,
+                    "sequence": sequence,
                     "weights": "deterministic synthetic",
                     "reference": "independent pure-Torch FP32 CPU reference",
                     "cpu_reference_seconds": reference_seconds,
@@ -139,6 +138,7 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
         pytest.param((1, 8), 1, fabric_1d_device_params(), 128, id="SP1xTP8"),
         pytest.param((2, 4), 1, fabric_1d_device_params(), 128, id="SP2xTP4"),
         pytest.param((2, 4), 0, fabric_1d_device_params(), 128, id="SP4xTP2"),
+        pytest.param((2, 4), 1, fabric_1d_device_params(), _LB_A_SEQUENCE, id="LB-A-T1280"),
         pytest.param(
             (8, 4),
             1,
@@ -156,19 +156,17 @@ def test_kimi_k3_layer_1_real_weights_accuracy(
     kimi_k3_checkpoint_dir: Path,
     sequence: int,
 ) -> None:
-    case = make_kimi_k3_test_case(kimi_k3_checkpoint_dir, sequence=sequence)
-    golden_output, golden_state = kda_forward_reference(case.hidden, case.state_dict, case.config)
+    case = build_kda_case(
+        registered_kda_case("real", tuple(mesh_device.shape), tensor_parallel_axis, sequence), kimi_k3_checkpoint_dir
+    )
+    (reference,) = cpu_references(case)
+    golden_output, golden_state = reference.output, reference.state
     sequence_parallel_axis = 1 - tensor_parallel_axis
     local_chunks = case.hidden.shape[1] // tuple(mesh_device.shape)[sequence_parallel_axis] // ttnn.TILE_SIZE
     # Existing eight-device layouts retain their shortest common tile-aligned T=128; the
     # Galaxy case uses T=512 so SP8 has two local chunks. Keep production K3 tuning
     # except for this local grouping constraint.
-    layer, hidden_tt = make_kimi_k3_device_case(
-        mesh_device,
-        case,
-        tensor_parallel_axis=tensor_parallel_axis,
-        summary_group_chunks=local_chunks,
-    )
+    layer, hidden_tt = make_kda_device_case(mesh_device, case, summary_group_chunks=local_chunks)
     state = layer.allocate_state(batch_size=1)
     with ttnn.manage_config("throw_exception_on_fallback", True):
         output, state = layer.forward(hidden_tt, state, make_actual_start(layer.device))
@@ -178,7 +176,7 @@ def test_kimi_k3_layer_1_real_weights_accuracy(
     layout = f"SP{mesh_shape[sequence_parallel_axis]}xTP{mesh_shape[tensor_parallel_axis]}"
     check_kimi_k3_accuracy(
         f"Kimi-K3 layer 1 {layout}",
-        case,
+        case.config,
         golden_output,
         golden_state,
         state,

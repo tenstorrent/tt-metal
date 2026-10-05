@@ -4,43 +4,18 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
-from pathlib import Path
 
 import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config, kimi_k3_model_config
-from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
-    KIMI_K3_FIRST_KDA_LAYER,
-    KIMI_K3_HF_REVISION,
-    KIMI_K3_LAYER_1_SHA256,
-    kda_state_dict_sha256,
-    load_kda_layer_state_dict,
-)
-from models.demos.deepseek_v3_d_p.tt.kda.config import (
-    KDAProgramConfig,
-    KDARecurrenceProgramConfig,
-    kimi_k3_program_config,
-)
+from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
-from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate
-
-
-@dataclass(frozen=True)
-class KimiK3TestCase:
-    config: KDAConfig
-    state_dict: dict[str, torch.Tensor]
-    hidden: torch.Tensor
-    weights_identity: str
 
 
 def _mesh_coordinate(sp_rank: int, tp_rank: int, sp_axis: int) -> tuple[int, int]:
@@ -186,7 +161,7 @@ def compare_cpu_device(
 
 def check_kimi_k3_accuracy(
     name: str,
-    case: KimiK3TestCase,
+    config: KDAConfig,
     golden_output: torch.Tensor,
     golden_state: KDAReferenceState,
     state: KdaState,
@@ -213,7 +188,7 @@ def check_kimi_k3_accuracy(
     golden_convolution = torch.cat(
         (golden_state.q_convolution, golden_state.k_convolution, golden_state.v_convolution), dim=-1
     ).to(torch.bfloat16)
-    local_width = case.config.num_heads // tp_size * case.config.head_k_dim
+    local_width = config.num_heads // tp_size * config.head_k_dim
     output_pcc, failures = compare_cpu_device(
         f"{name} output", golden_output, actual_output, pcc_threshold=pcc_threshold
     )
@@ -248,123 +223,6 @@ def check_kimi_k3_accuracy(
         failures.extend(convolution_failures)
     assert not failures, "\n".join(failures)
     return pcc
-
-
-def make_kimi_k3_test_case(checkpoint_dir: Path, *, sequence: int) -> KimiK3TestCase:
-    """Load the pinned Kimi-K3 layer and deterministic input used by correctness and perf."""
-    config = kimi_k3_kda_config()
-    downloaded_config = json.loads((checkpoint_dir / "config.json").read_text(encoding="utf-8"))
-    assert downloaded_config == kimi_k3_model_config(), "checkpoint config.json differs from the pinned in-tree copy"
-    state_dict = load_kda_layer_state_dict(checkpoint_dir, KIMI_K3_FIRST_KDA_LAYER, config)
-    checkpoint_identity = kda_state_dict_sha256(state_dict)
-    assert checkpoint_identity == KIMI_K3_LAYER_1_SHA256, (
-        f"Kimi-K3 layer {KIMI_K3_FIRST_KDA_LAYER} weights do not match pinned revision "
-        f"{KIMI_K3_HF_REVISION}: {checkpoint_identity}"
-    )
-    hidden = torch.randn(
-        1,
-        sequence,
-        config.hidden_size,
-        generator=torch.Generator().manual_seed(1607),
-        dtype=torch.bfloat16,
-    )
-    return KimiK3TestCase(
-        config=config,
-        state_dict=state_dict,
-        hidden=hidden,
-        weights_identity=checkpoint_identity,
-    )
-
-
-def make_synthetic_kimi_k3_test_case(*, sequence: int) -> KimiK3TestCase:
-    """Build deterministic production-dimension Kimi-K3 inputs without a checkpoint."""
-    config = kimi_k3_kda_config()
-    state_dict = random_weights(config)
-    hidden = torch.randn(
-        1,
-        sequence,
-        config.hidden_size,
-        generator=torch.Generator().manual_seed(1607),
-        dtype=torch.bfloat16,
-    )
-    return KimiK3TestCase(
-        config=config,
-        state_dict=state_dict,
-        hidden=hidden,
-        weights_identity=kda_state_dict_sha256(state_dict),
-    )
-
-
-def make_kimi_k3_device_case(
-    mesh_device: ttnn.MeshDevice,
-    case: KimiK3TestCase,
-    *,
-    tensor_parallel_axis: int = 1,
-    summary_group_chunks: int | None = None,
-    program_config: KDAProgramConfig | None = None,
-    weights: KDAWeights | None = None,
-    cache_weights: bool = True,
-) -> tuple[ttKDA, ttnn.Tensor]:
-    """Construct a production-dimension Kimi-K3 layer and sequence-parallel input."""
-    sequence_parallel_axis = 1 - tensor_parallel_axis
-    tensor_cache_path = (
-        kimi_k3_tensor_cache_path(case.weights_identity, mesh_device, tensor_parallel_axis) if cache_weights else None
-    )
-    mesh_dims: list[int | None] = [None, None]
-    mesh_dims[sequence_parallel_axis] = 1
-    hidden = ttnn.from_torch(
-        case.hidden,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device,
-            dims=tuple(mesh_dims),
-            mesh_shape=tuple(mesh_device.shape),
-        ),
-    )
-    selected_program_config = program_config or kimi_k3_program_config(
-        active_seq_len_local=case.hidden.shape[1] // tuple(mesh_device.shape)[sequence_parallel_axis],
-        # Match production: ring the TP axis wherever the opened fabric wraps it (Galaxy torus).
-        tp_ccl_topology=(
-            ttnn.Topology.Ring
-            if tuple(mesh_device.shape)[sequence_parallel_axis] == 1
-            else per_axis_topology()[tensor_parallel_axis]
-        ),
-    )
-    if summary_group_chunks is not None:
-        selected_program_config = replace(
-            selected_program_config,
-            recurrence=replace(selected_program_config.recurrence, summary_group_chunks=summary_group_chunks),
-        )
-    layer = ttKDA(
-        mesh_device,
-        case.config,
-        case.state_dict if weights is None else None,
-        weight_cache_path=tensor_cache_path,
-        layer_idx=KIMI_K3_FIRST_KDA_LAYER,
-        weights=weights,
-        tt_ccl=TT_CCL(mesh_device),
-        sp_axis=sequence_parallel_axis,
-        tp_axis=tensor_parallel_axis,
-        program_config=selected_program_config,
-        active_seq_len=case.hidden.shape[1],
-    )
-    return layer, hidden
-
-
-def kimi_k3_tensor_cache_path(
-    weights_identity: str,
-    mesh_device: ttnn.MeshDevice,
-    tensor_parallel_axis: int,
-) -> Path:
-    """Select TTNN model-cache storage for one weight content identity and mesh placement."""
-    mesh_shape = tuple(mesh_device.shape)
-    if len(weights_identity) != 64 or any(character not in "0123456789abcdef" for character in weights_identity):
-        raise ValueError("weights_identity must be a lowercase SHA-256 hex digest")
-    layout = f"mesh{mesh_shape[0]}x{mesh_shape[1]}_tpaxis{tensor_parallel_axis}"
-    return Path(ttnn.CONFIG.model_cache_path) / "kimi_k3" / weights_identity / layout
 
 
 def make_small_kda_test_config(
