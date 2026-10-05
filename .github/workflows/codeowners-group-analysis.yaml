@@ -52,6 +52,12 @@ jobs:
        (github.event.action == 'opened' ||
         (github.event.changes.body != null && !contains(github.event.changes.body.from, '[x] Ping pending code owners'))))
     runs-on: ubuntu-slim
+    # Checkbox pings for the same PR are handled one at a time, so the cooldown
+    # check below always sees the previous ping. Comment triggers have no
+    # pull_request in the payload and keep a unique group (no queuing).
+    concurrency:
+      group: codeowners-checkbox-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: false
     outputs:
       should-run: ${{ steps.parse.outputs.should-run || steps.parse-description.outputs.should-run }}
       branch: ${{ steps.parse.outputs.branch || steps.parse-description.outputs.branch }}
@@ -257,6 +263,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
           SENDER: ${{ github.event.sender.login }}
+          PING_COOLDOWN_SECONDS: 60
         run: |
           echo "PR number: $PR_NUMBER"
           echo "Checkbox ticked by: $SENDER"
@@ -269,6 +276,36 @@ jobs:
 
           if [ "$MEMBERSHIP_HTTP_CODE" = "204" ] || [ "$MEMBERSHIP_HTTP_CODE" = "302" ]; then
             echo "✅ User $SENDER is a member of tenstorrent organization"
+
+            # Cooldown, so tapping the box repeatedly doesn't spam owners. Each
+            # accepted ping leaves a 🚀 reaction from the bot on the PR description;
+            # its created_at is the time of the last ping.
+            REACTIONS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/reactions"
+            BOT_LOGIN=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                             -H "Accept: application/vnd.github.v3+json" \
+                             "https://api.github.com/user" | jq -r '.login')
+            LAST_PING=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                             -H "Accept: application/vnd.github.v3+json" \
+                             "$REACTIONS_API?content=rocket&per_page=100" \
+                        | jq -c --arg bot "$BOT_LOGIN" '[.[] | select(.user.login == $bot)] | last // empty')
+            if [ -n "$LAST_PING" ]; then
+              LAST_PING_AGE=$(( $(date +%s) - $(date -d "$(echo "$LAST_PING" | jq -r '.created_at')" +%s) ))
+              if [ "$LAST_PING_AGE" -lt "$PING_COOLDOWN_SECONDS" ]; then
+                echo "::notice::Code owners were pinged ${LAST_PING_AGE}s ago (cooldown ${PING_COOLDOWN_SECONDS}s); skipping."
+                echo "should-run=false" >> $GITHUB_OUTPUT
+                exit 0
+              fi
+              # A user can hold only one reaction of each type, so re-stamp it.
+              curl -s -X DELETE -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                   -H "Accept: application/vnd.github.v3+json" \
+                   "$REACTIONS_API/$(echo "$LAST_PING" | jq -r '.id')"
+            fi
+            curl -s -X POST -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+                 -H "Accept: application/vnd.github.v3+json" \
+                 -H "Content-Type: application/json" \
+                 -d '{"content": "rocket"}' \
+                 "$REACTIONS_API" > /dev/null
+
             {
               echo "should-run=true"
               echo "pr-number=$PR_NUMBER"
