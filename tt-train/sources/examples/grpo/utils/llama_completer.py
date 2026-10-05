@@ -23,9 +23,8 @@ from transformers import AutoTokenizer
 from ttml.trainers.grpo_trainer import GRPOCompleter
 from ttml.common.sampling import positions_to_tensor
 
-from ttml.trainers.rollout.device_utils import deallocate_tensors, async_read_to_host
-from ttml.trainers.rollout.llama_composite_kv import LlamaCompositeKV
-from ttml.trainers.rollout.ttml_rollout_sampler import load_checkpoint
+from ttml.trainers.grpo_trainer.llama_composite_kv import LlamaCompositeKV
+from ttml.trainers.grpo_trainer.ttml_rollout_sampler import async_read_to_host, deallocate_tensors, load_checkpoint
 
 TILE_SIZE = 32
 SAMPLE_SEED = 42
