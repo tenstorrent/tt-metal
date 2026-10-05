@@ -33,7 +33,11 @@ struct RingJointWriterPolicy {
 
     template <uint32_t Sq_chunk_t, uint32_t vDHt, typename Accessor>
     static FORCE_INLINE void transfer_state(Noc& noc, const Accessor& backing) {
+#ifdef SDPA_RING_STREAM_STATE
+        stream_recipe_state<Sq_chunk_t, 17, 18, vDHt>(noc, backing);
+#else
         transfer_recipe_state<kFp32State, Sq_chunk_t, 17, 18, vDHt>(noc, backing);
+#endif
     }
 };
 
