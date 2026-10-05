@@ -456,7 +456,14 @@ inline void _llk_math_matmul_uninit_no_mop_()
 
 // PHASES overrides the number of fidelity phases replayed (high-fidelity replay image only): a HiFi2 image
 // replayed once is a LoFi matmul, so one recorded image serves matmuls of both fidelities.
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, int PHASES = get_math_num_fidelity_phases(math_fidelity)>
+// INNER_HALF replays only the first half of a full-tile high-fidelity image: its first 8 MVMULs cover every
+// output face with inner indices 0-15, so a matmul whose in0 columns 16-31 (in1 rows 16-31) are zero needs
+// no more (the counters are reset after the replay either way).
+template <
+    MathFidelity math_fidelity,
+    int THROTTLE_LEVEL = 0,
+    int PHASES = get_math_num_fidelity_phases(math_fidelity),
+    bool INNER_HALF = false>
 inline void _llk_math_matmul_no_mop_(
     std::uint32_t dst_index,
     const std::uint32_t ct_dim         = 1,
@@ -609,9 +616,10 @@ inline void _llk_math_matmul_no_mop_(
                 if constexpr (high_fidelity)
                 {
                     // Replay PHASES (default num_fidelity_phases) times
+                    const std::uint32_t phase_len = (INNER_HALF && replay_buf_len == 16) ? 8 : replay_buf_len;
                     for (std::uint32_t phase = 0; phase < static_cast<std::uint32_t>(PHASES); phase++)
                     {
-                        lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+                        lltt::replay(ckernel::math::replay_buf_offset, phase_len);
                     }
                     // Final clear after all fidelity phases
                     if (reuse_a)
