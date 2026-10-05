@@ -6,8 +6,12 @@
 
 namespace ckernel {
 
-// The SFPU triangle solve is not implemented on Quasar: the MATH-side entry rejects a call at compile time, so the
-// UNPACK side of its MATH -> UNPACK handshake has nothing to wait for.
+// The SFPU triangle solve is not implemented on Quasar.
+
+/**
+ * @brief No-op: the MATH-side entry rejects triangle_solve_tile at compile time on this architecture, so there is no
+ * release to wait for.
+ */
 inline void llk_unpack_triangle_solve_wait_l_released() {}
 
 }  // namespace ckernel

@@ -60,8 +60,8 @@ ALWI void triangle_solve_tile(
     // UNPACK resolves the tile's L1 address and mailboxes it to MATH and PACK.
     const uint32_t l1_base = get_tile_address(cb_l, l_tile_idx);
     MATH((llk_math_triangle_solve_sfpu_tile<L_FORMAT, L_NEGATED>(l1_base, idst_in, idst_out)));
-    // MATH reads L from L1 itself, which nothing orders against UNPACK's later cb_pop_front of cb_l: the MATH entry
-    // releases the tile when its reads are done and UNPACK waits for that release before returning.
+    // MATH loads L from L1 itself; UNPACK pops cb_l after this call. Problem: the pop can precede MATH's last load.
+    // Solution: the MATH entry posts a release when its loads have returned; UNPACK consumes it before returning.
     UNPACK((llk_unpack_triangle_solve_wait_l_released()));
 }
 
