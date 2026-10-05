@@ -591,7 +591,7 @@ def test_all_gather_matmul_async(
     ],
     indirect=["device_params"],
 )
-def test_all_gather_matmul_legacy_in1_reader_drains_noc_atomics(mesh_device, all_gather_topology):
+def test_all_gather_matmul_classic_in1_reader_drains_noc_atomics(mesh_device, all_gather_topology):
     run_all_gather_impl(
         mesh_device,
         mesh_device.get_num_devices(),
@@ -634,7 +634,7 @@ def test_all_gather_matmul_legacy_in1_reader_drains_noc_atomics(mesh_device, all
     ],
     indirect=["device_params"],
 )
-def test_all_gather_matmul_legacy_block_sharded_reader_drains_noc_atomics(mesh_device, all_gather_topology):
+def test_all_gather_matmul_classic_block_sharded_reader_drains_noc_atomics(mesh_device, all_gather_topology):
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
     all_gather_memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,

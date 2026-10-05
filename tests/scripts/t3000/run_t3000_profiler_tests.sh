@@ -106,6 +106,16 @@ run_process_ops_logs_test() {
     pytest tests/ttnn/tracy/test_process_ops_logs.py --noconftest
 }
 
+run_noc_atomic_operation_tests() {
+    TT_METAL_NOC_DEBUG_DUMP=1 pytest -xv \
+        tests/nightly/t3000/ccl/test_all_to_all_async_generic.py::test_generic_all_to_all_drains_noc_atomics \
+        tests/nightly/t3000/ccl/test_broadcast_op.py::test_broadcast_drains_noc_atomics \
+        tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_classic_in1_reader_drains_noc_atomics \
+        tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_classic_block_sharded_reader_drains_noc_atomics \
+        tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_ring_reader_drains_noc_atomics \
+        tests/nightly/t3000/ccl/test_strided_all_gather_minimal_matmul_async.py::test_fused_strided_all_gather_drains_noc_atomics_with_signal_aggregator_off
+}
+
 # Umbrella that runs every individual test in sequence. Kept for callers that
 # don't pass a function name (CI invokes individual functions via the matrix).
 run_profiling_test() {
@@ -116,6 +126,7 @@ run_profiling_test() {
     run_perf_op_report_test
     run_process_ops_logs_test
     run_tracy_wasm_gui_http_integration
+    run_noc_atomic_operation_tests
 }
 
 main() {

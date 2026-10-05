@@ -73,3 +73,12 @@
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
   budget_type: profiler
+
+- name: T3000 NoC atomic operation tests
+  cmd: bash tests/scripts/t3000/run_t3000_profiler_tests.sh run_noc_atomic_operation_tests
+  skus:
+    wh_llmbox:
+      timeout: 25
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn
+  budget_type: profiler

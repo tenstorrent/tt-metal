@@ -29,6 +29,16 @@
   budget_type: unit
   category: misc
 
+- name: Blackhole multicast all-gather NoC atomic barrier test
+  cmd: 'TT_METAL_NOC_DEBUG_DUMP=1 pytest -xv tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_gather_nightly.py::test_multicast_all_gather_drains_noc_atomics'
+  skus:
+    bh_p300:
+      timeout: 15
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn
+  budget_type: unit
+  category: misc
+
 - name: ttnn nightly conv tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode" --timeout=600'
   ai_summary:

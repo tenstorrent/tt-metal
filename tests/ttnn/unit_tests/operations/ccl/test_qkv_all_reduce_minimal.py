@@ -436,7 +436,7 @@ def test_all_reduce_qkv_heads_fuse(
 )
 def test_all_reduce_create_qkv_heads_drains_noc_atomics(mesh_device):
     if mesh_device.get_num_devices() != 32:
-        pytest.skip("This test requires a 32-device Galaxy system")
+        pytest.skip("This test requires a 32-device legacy TG system")
 
     run_all_reduce_qkv_heads_fuse_perf_impl(
         mesh_device,

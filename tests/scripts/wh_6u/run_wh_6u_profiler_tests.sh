@@ -21,11 +21,19 @@ run_realtime_profiler_cross_reference_tg_test() {
     TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_realtime_profiler.py::test_cross_reference_tg --timeout 2400
 }
 
+run_noc_atomic_operation_tests() {
+    TT_METAL_NOC_DEBUG_DUMP=1 pytest -xv \
+        tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_rms_all_gather_two_link_path_drains_noc_atomics \
+        tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_all_gather_concat_drains_noc_atomics \
+        tests/ttnn/unit_tests/operations/ccl/test_new_all_reduce.py::test_intermediate_buffer_all_reduce_drains_noc_atomics
+}
+
 # Umbrella that runs every individual test in sequence. Kept for callers that
 # don't pass a function name (CI invokes individual functions via the matrix).
 run_profiling_test() {
     run_device_profiler_test
     run_realtime_profiler_cross_reference_tg_test
+    run_noc_atomic_operation_tests
 }
 
 main() {
