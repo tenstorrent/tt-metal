@@ -845,7 +845,7 @@ def main() -> None:
 
     kv_table = producer._read_kv_chunk_table(timeout_s)
     completion_channel = connect_layer_completion_channel(timeout_s)
-    completion_drain = BackgroundCompletionDrain(completion_channel)
+    completion_drain = BackgroundCompletionDrain(completion_channel, num_layers=producer.NUM_LAYERS)
 
     driver.attach()
 

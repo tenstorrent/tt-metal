@@ -1569,7 +1569,7 @@ def main() -> None:
         )
 
     ack_layers = _ack_layers_per_chunk(kv_table)
-    completion_drain = BackgroundCompletionDrain(completion_channel)
+    completion_drain = BackgroundCompletionDrain(completion_channel, num_layers=ack_layers)
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 

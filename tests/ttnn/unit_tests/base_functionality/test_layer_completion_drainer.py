@@ -204,25 +204,23 @@ class BoundedRing:
 
 def test_background_drain_v1_counts_acks(monkeypatch):
     monkeypatch.setenv("PREFILL_LAYER_COMPLETION_PROTOCOL", "1")
-    drain = BackgroundCompletionDrain(FakeCounterChannel(3 * NUM_LAYERS))
+    drain = BackgroundCompletionDrain(FakeCounterChannel(3 * NUM_LAYERS), num_layers=NUM_LAYERS)
     assert drain.wait(3 * NUM_LAYERS, timeout_s=5) == 3 * NUM_LAYERS
     drain.close()
 
 
 def test_background_drain_v2_ring(monkeypatch):
     monkeypatch.setenv("PREFILL_LAYER_COMPLETION_PROTOCOL", "2")
-    monkeypatch.setenv("PREFILL_NUM_LAYERS", str(NUM_LAYERS))
     ring = FakeRing(per_layer(0, layers=[0, 1]) + per_layer(1, slot_id=1) + per_layer(0, layers=[2, 3]))
-    drain = BackgroundCompletionDrain(ring)
+    drain = BackgroundCompletionDrain(ring, num_layers=NUM_LAYERS)
     assert drain.wait(2 * NUM_LAYERS, timeout_s=5) == 2 * NUM_LAYERS
     drain.close()
 
 
 def test_background_drain_keeps_bounded_ring_moving(monkeypatch):
     monkeypatch.setenv("PREFILL_LAYER_COMPLETION_PROTOCOL", "2")
-    monkeypatch.setenv("PREFILL_NUM_LAYERS", str(NUM_LAYERS))
     ring = BoundedRing(capacity=2)
-    drain = BackgroundCompletionDrain(ring)
+    drain = BackgroundCompletionDrain(ring, num_layers=NUM_LAYERS)
     num_requests = 50
     for request_id in range(num_requests):
         for m in per_layer(request_id):
@@ -236,9 +234,8 @@ def test_background_drain_keeps_bounded_ring_moving(monkeypatch):
 
 def test_background_drain_cumulative_across_waits(monkeypatch):
     monkeypatch.setenv("PREFILL_LAYER_COMPLETION_PROTOCOL", "2")
-    monkeypatch.setenv("PREFILL_NUM_LAYERS", str(NUM_LAYERS))
     ring = BoundedRing(capacity=64)
-    drain = BackgroundCompletionDrain(ring)
+    drain = BackgroundCompletionDrain(ring, num_layers=NUM_LAYERS)
     for m in per_layer(0):
         ring.try_push(m)
     assert drain.wait(NUM_LAYERS, timeout_s=5) == NUM_LAYERS
@@ -250,8 +247,7 @@ def test_background_drain_cumulative_across_waits(monkeypatch):
 
 def test_background_drain_surfaces_drainer_error(monkeypatch):
     monkeypatch.setenv("PREFILL_LAYER_COMPLETION_PROTOCOL", "2")
-    monkeypatch.setenv("PREFILL_NUM_LAYERS", str(NUM_LAYERS))
-    drain = BackgroundCompletionDrain(FakeRing([msg(0, 0, 3), msg(0, 2, 4)]))
+    drain = BackgroundCompletionDrain(FakeRing([msg(0, 0, 3), msg(0, 2, 4)]), num_layers=NUM_LAYERS)
     with pytest.raises(ValueError, match="overlaps"):  # allow-pytest.raises: host-only, no device error
         drain.wait(NUM_LAYERS, timeout_s=5)
     drain.close()
@@ -259,6 +255,6 @@ def test_background_drain_surfaces_drainer_error(monkeypatch):
 
 def test_background_drain_none_channel_is_noop(monkeypatch):
     monkeypatch.setenv("PREFILL_LAYER_COMPLETION_PROTOCOL", "2")
-    drain = BackgroundCompletionDrain(None)
+    drain = BackgroundCompletionDrain(None, num_layers=NUM_LAYERS)
     assert drain.wait(NUM_LAYERS, timeout_s=1) == 0
     drain.close()

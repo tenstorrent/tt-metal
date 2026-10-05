@@ -212,12 +212,11 @@ def connect_layer_completion_channel(timeout_s: int):
 
 
 class BackgroundCompletionDrain:
-    def __init__(self, channel, poll_idle_s: float = 0.001):
+    def __init__(self, channel, *, num_layers: int, poll_idle_s: float = 0.001):
         self._channel = channel
         self._poll_idle_s = poll_idle_s
         self._drainer = None
         if channel is not None and current_protocol() == 2:
-            num_layers = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
             self._drainer = LayerCompletionDrainer(channel, num_layers=num_layers)
         self._acks = 0
         self._error = None
