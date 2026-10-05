@@ -10,7 +10,8 @@
 // the low-level LLKs, because a tt-llk test cannot include tt_metal/hw/inc/api/compute.
 // The three threads mirror the compute API exactly:
 //
-//   UNPACK  llk_unpack_AB_custom_mm_init<transpose>   -> _llk_unpack_AB_custom_mm_init_
+//   UNPACK  llk_unpack_AB_custom_mm_init<transpose, false /* clear_src */>
+//                                                      -> _llk_unpack_AB_custom_mm_init_
 //           llk_unpack_AB_sdpa_custom_mm<read_transposed>
 //                                                      -> _llk_unpack_AB_sdpa_custom_mm_
 //   MATH    llk_math_sdpa_custom_mm_init<transpose>    -> _llk_math_sdpa_custom_mm_init_
@@ -109,7 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // init: unpB_face_r_dim = in0 row count (M), unpA_dst_format selects the profiling
     // heuristic (post1) in the MOP config.
-    _llk_unpack_AB_custom_mm_init_<MM_TRANSPOSE>(params.in0_face_r_dim, formats.unpack_A_dst, CT_DIM);
+    _llk_unpack_AB_custom_mm_init_<MM_TRANSPOSE, false /* clear_src */>(params.in0_face_r_dim, formats.unpack_A_dst, CT_DIM);
 
     // Run: base_address_a = in1 (SrcA), base_address_b = in0 (SrcB).
     // The re-entry variant appends a mask to in1 and uses it only on the first pass.
@@ -193,8 +194,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, true);
 
-    _llk_pack_init_<PackMode::Default, false /*zero_output*/, false /*skip_addrmod_config*/, true /*skip_packer_strides*/>(
-        formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /*num_tiles*/, false /*skip_bh_tilize_workaround*/);
+    _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
+        formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
 
     // sdpa_custom_mm_block_init_pack_short(): Z-stride = FACE_C_DIM * 8 * 2,
     // W-stride = (TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2. Both are spelled here exactly

@@ -15,16 +15,21 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
+// The loops must fully unroll: dst_reg[] takes a constant index. -O3 unrolls them on its own; at -O2
+// (the metal JIT's level) the SFPI compiler hits an internal error on the loop-variable index.
 template <bool APPROXIMATION_MODE>
 inline void calculate_sum_int_col() {
+#pragma GCC unroll 2
     for (size_t i = 0; i < 2; ++i) {
         vInt a = dst_reg[i];
 
+#pragma GCC unroll 3
         for (size_t j = 2; j < 8; j += 2) {
             vInt b = dst_reg[i + j];
             a += b;
         }
 
+#pragma GCC unroll 4
         for (size_t j = 16; j < 24; j += 2) {
             vInt b = dst_reg[i + j];
             a += b;
@@ -36,10 +41,12 @@ inline void calculate_sum_int_col() {
 
 template <bool APPROXIMATION_MODE>
 inline void calculate_sum_int_row() {
+#pragma GCC unroll 4
     for (size_t i = 0; i < 8; i += 2) {
         vInt a = dst_reg[i];
 
         int arr[] = {1, 8, 9};
+#pragma GCC unroll 3
         for (size_t j = 0; j < sizeof(arr) / sizeof(arr[0]); ++j) {
             vInt b = dst_reg[i + arr[j]];
             a += b;

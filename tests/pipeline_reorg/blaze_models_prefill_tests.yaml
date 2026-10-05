@@ -471,7 +471,7 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K3-2.8T) prefill transformer L12/L24, chunked L5/L24 and traced L24 vs golden trace"
+- name: "(Kimi-K3-2.8T) prefill transformer L24, chunked L24 and traced L24 vs golden trace"
   # Three legs folded into one. None is short, but each paid its own ~5.5 min "Setup multihost job"
   # and all three carry identical environments -- same checkpoint, same TTNN cache, same mesh
   # descriptor -- so three allocations bought nothing. Measured test-step times on run 36717057668:
@@ -506,7 +506,7 @@
       export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
       timeout -k 2m 70m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py -k "L12 or L24" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py -k "L24" -vvv --tb=short
       '
     )
 
@@ -520,7 +520,7 @@
       export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
       timeout -k 2m 90m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_chunked_prefill.py -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_chunked_prefill.py -k "L24" -vvv --tb=short
       '
     )
 
@@ -538,9 +538,9 @@
       '
     )
 
-    echo "===== [1/3] (Kimi-K3-2.8T) prefill transformer accuracy L12, L24 vs golden trace ====="
+    echo "===== [1/3] (Kimi-K3-2.8T) prefill transformer accuracy L24 vs golden trace ====="
     k3_transformer_depth || exit $?
-    echo "===== [2/3] (Kimi-K3-2.8T) chunked prefill accuracy L5, L24 55k@5k vs golden trace ====="
+    echo "===== [2/3] (Kimi-K3-2.8T) chunked prefill accuracy L24 55k@5k vs golden trace ====="
     k3_chunked_prefill || exit $?
     echo "===== [3/3] (Kimi-K3-2.8T) traced chunked prefill accuracy L24 55k@5k vs golden trace ====="
     k3_transformer_traced || exit $?
@@ -916,6 +916,33 @@
       tier: 1
       release_ready: false
   owner_id: U02LLCK5MML # Sasha Vuckovic
+  team: models
+  sp_config: sc1
+
+# Gemma4 layer perf: global chunks 0/1/15/31 and sliding chunks 0/1 at 256k@8k.
+- name: "(Gemma4-31B-it) D_P layer perf 256k@8k"
+  fabric_profile: 1d
+  cmd: |
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export HF_MODEL=google/gemma-4-31B-it
+    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      uv pip install tt-perf-report
+      # A node id, not -k: tracy re-joins the -m argument into one shell command.
+      python3 -m tracy -p -r -v -o generated/profiler --check-exit-code --op-support-count 20000 \
+        -m "pytest models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_perf_chunk_n[blackhole-chunkci-both-sz8192-ctx_256k-8x4] -vv --tb=short --timeout=7200"
+      python3 models/demos/gemma4_d_p/scripts/layer_perf_report.py --profiler-dir generated/profiler
+    '
+  test_type: gemma4_d_p_layer_perf
+  test_group: gemma4_d_p_layer_perf
+  budget_type: demo
+  skus:
+    bh_sc1_high_power:
+      timeout: 60
+  owner_id: U078RU2KP9Q # Muhammad Asif Manzoor
   team: models
   sp_config: sc1
 
@@ -1417,10 +1444,9 @@
 
 # 4-galaxy (SC4) disaggregated prefill: a 4-rank background runner opens the mesh, loads Kimi-2.7,
 # warmup-compiles, and publishes the merged KV chunk table to shared NFS; a device-less producer then
-# reads it back and PCCs it against the golden KV cache. The request runs to 250k so the per-chunk
-# timings cover depth, but only the 55k the golden trace spans is PCC'd -- the tail is timed, not
-# checked. A throwaway warmup request precedes the measured one, so first-chunk compile is not timed.
-- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC4"
+# reads it back and PCCs it against the golden KV cache.
+# A throwaway warmup request precedes the measured one, so first-chunk compile is not timed.
+- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 256k tail@5k + perf 256k@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1433,7 +1459,7 @@
   test_tags: [kimi_k2_7, runner, kv_cache]
   test_group: disagg_prefill
   skus:
-    bh_sc4_high_power:
+    bh_sc4:
       # Mesh bringup, weight load and the staggered device teardown dominate the step; the chunk loop
       # is a couple of minutes of it. Budget covers those plus the up-to-120s producer connect.
       # Must match the shield/demo budget.
@@ -1451,7 +1477,7 @@
 # its 21 `full` layers), and the pipeline split is layer-aware (18/20/20/20, snapped to `full` starts).
 # Both caches are PCC'd: the producer gates on min(config 0, config 1), so this is the only leg that
 # covers the merged multi-cache KV chunk table and the per-stage index-cache numbering.
-- name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 55k@5k + perf 1M@5k, SC4"
+- name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 1M tail@5k + perf 1M@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1464,7 +1490,7 @@
   test_tags: [glm_5_3, runner, kv_cache]
   test_group: disagg_prefill
   skus:
-    bh_sc4_high_power:
+    bh_sc4:
       # 1M at 28 users reaches a PCC verdict in ~16.5 min -- 215 chunks at ~2.3s each, since the
       # lightning indexer scores the whole prefix and so grows with depth, plus a 143M-entry KV chunk
       # table for rank 0 to merge and serialize -- and then spends ~7 min unwinding the mesh.
@@ -1531,7 +1557,7 @@
 
 
 
-- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC1"
+- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 256k tail@5k + perf 256k@5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1552,7 +1578,7 @@
   sp_config: sc1
 
 
-- name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC1"
+- name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 1M tail@5k + perf 1M@5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1637,10 +1663,13 @@
 # so PREFILL_PP_LAYER_COUNTS is deliberately not pinned here.
 # Fabric comes from the manifest and the descriptor from run_multirank_pcc.sh, so this leg carries
 # no fabric_profile -- same as the Kimi-K2.7 and GLM-5.3 disagg legs beside it.
+# Traced, and the request runs to 1M like GLM-5.3's: only the 55k the golden spans is PCC'd, the
+# tail is timed. Its throughput lands on the run page through the "(Kimi-K3-2.8T) disaggregated
+# prefill SC4 perf" summary job.
 # Own test_type per rung, unlike the Kimi-K2.7 and GLM-5.3 pairs that share prefill_runner_kv_pcc:
 # four galaxies is the scarcest resource in the pool, so this leg has to be dispatchable without
 # also claiming a single-galaxy one. The `runner` and `kv_cache` tags still select both rungs.
-- name: "(Kimi-K3-2.8T) disaggregated prefill KV accuracy 55k@5k, SC4"
+- name: "(Kimi-K3-2.8T) disaggregated prefill KV accuracy 55k@5k + perf 1M@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1653,7 +1682,7 @@
   test_tags: [kimi_k3, runner, kv_cache]
   test_group: disagg_prefill
   skus:
-    bh_sc4_high_power:
+    bh_sc4:
       # Weight load dominates and it is NFS-bandwidth-bound, not compute-bound: the TTNN cache is
       # 1.5 TB of tensorbins on the models share and all four ranks stream their slice of it at once,
       # so the phase runs at roughly line rate and its cost swings with whatever else is on the mount.
@@ -1662,8 +1691,8 @@
       # After that comes the producer connect, 11 chunks of 5120, the KV read-back and a ~7 min mesh
       # unwind. 45 min cut this off mid-bringup and 70 min cut it off six minutes after bringup.
       # 100 was still too tight: run 34831600450 was killed at 106 min with the leg live. Doubled,
-      # matching the 2x pass #56135 applied to the rest of this pipeline. shield/demo bh_sc4_high_power
-      # is a SUM over the team's legs on that SKU, not a per-leg cap: 40 (Kimi-K2.7) + 60 (GLM-5.3) + 200.
+      # matching the 2x pass #56135 applied to the rest of this pipeline. shield/demo bh_sc4
+      # is a SUM over the team's legs on that SKU, not a per-leg cap: 40 (Kimi-K2.7) + 60 (GLM-5.3) + 60 (DFlash) + 200.
       timeout: 200
       tier: 1
       release_ready: false
@@ -1676,7 +1705,9 @@
 # Single-galaxy rung of the same launcher. 93 layers do not fit one galaxy, so the sc1 arm overrides
 # the manifest depth to 24 -- which ends on an MLA layer and is the deepest depth the golden's
 # decoder-output stream covers, making this a real accuracy gate rather than a smaller copy of sc4.
-- name: "(Kimi-K3-2.8T) disaggregated prefill KV accuracy 55k@5k, SC1"
+# Traced like sc4, and timed to 250k like the other sc1 legs; 24 layers are no baseline for 93, so
+# its numbers stay in this job's log and out of the sc4 summary.
+- name: "(Kimi-K3-2.8T) disaggregated prefill L24 KV accuracy 55k@5k + perf 250k@5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
