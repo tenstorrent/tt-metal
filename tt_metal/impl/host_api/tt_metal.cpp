@@ -1088,18 +1088,17 @@ void UpdateDynamicCircularBufferAddressAndTotalSize(
 }
 
 uint32_t CreateSemaphore(
-    Program& program, const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec, uint32_t initial_value) {
+    Program& program, const std::variant<CoreRange, CoreRangeSet>& core_spec, uint32_t initial_value) {
     return CreateSemaphore(program, core_spec, initial_value, CoreType::WORKER);
 }
 
 uint32_t CreateSemaphore(
     Program& program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const std::variant<CoreRange, CoreRangeSet>& core_spec,
     uint32_t initial_value,
     CoreType core_type) {
     CoreRangeSet crs = std::visit(
         ttsl::overloaded{
-            [](const CoreCoord& c) { return CoreRangeSet(c); },
             [](const CoreRange& c) { return CoreRangeSet(c); },
             [](const CoreRangeSet& c) {
                 // Merge ranges to reduce the number of multicasts needed to initialize semaphores.
