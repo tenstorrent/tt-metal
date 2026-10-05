@@ -100,7 +100,16 @@ def test_active_rows_match_bitwise_across_padded_batches(device, active_rows, wi
     cur_pos = [s - 1 - 37 * i for i in range(active_rows)] + [-1] * (wide_batch - active_rows)
 
     narrow = _decode(
-        device, tt_K, tt_V, Q[:, :active_rows], page_table[:active_rows], cur_pos[:active_rows], grid_size, k_chunk, nh, d
+        device,
+        tt_K,
+        tt_V,
+        Q[:, :active_rows],
+        page_table[:active_rows],
+        cur_pos[:active_rows],
+        grid_size,
+        k_chunk,
+        nh,
+        d,
     )
     wide = _decode(device, tt_K, tt_V, Q, page_table, cur_pos, grid_size, k_chunk, nh, d)
 
@@ -115,12 +124,23 @@ def test_active_rows_match_bitwise_across_padded_batches(device, active_rows, wi
     # The result must also be the attention itself (not merely self-consistent): compare the wide
     # run's active rows with the static-mode narrow run, which the existing PCC tests cover.
     static_narrow = _decode(
-        device, tt_K, tt_V, Q[:, :active_rows], page_table[:active_rows], cur_pos[:active_rows], grid_size, k_chunk,
-        nh, d, active_rows=False,
+        device,
+        tt_K,
+        tt_V,
+        Q[:, :active_rows],
+        page_table[:active_rows],
+        cur_pos[:active_rows],
+        grid_size,
+        k_chunk,
+        nh,
+        d,
+        active_rows=False,
     )
     diff = (static_narrow[:, :active_rows].float() - wide_rows.float()).abs().max().item()
     ref_scale = static_narrow.float().abs().max().item()
-    assert diff <= 2e-2 * max(ref_scale, 1e-3), f"active-row result deviates from the static kernel (max |diff| {diff:.3e})"
+    assert diff <= 2e-2 * max(
+        ref_scale, 1e-3
+    ), f"active-row result deviates from the static kernel (max |diff| {diff:.3e})"
 
 
 def test_static_allocation_is_the_documented_counterexample(device):
@@ -139,8 +159,17 @@ def test_static_allocation_is_the_documented_counterexample(device):
     Q = fa_rand(1, wide_batch, nh, d)
     cur_pos = [s - 1 - 37 * i for i in range(active_rows)] + [-1] * (wide_batch - active_rows)
     narrow = _decode(
-        device, tt_K, tt_V, Q[:, :active_rows], page_table[:active_rows], cur_pos[:active_rows], grid_size, k_chunk,
-        nh, d, active_rows=False,
+        device,
+        tt_K,
+        tt_V,
+        Q[:, :active_rows],
+        page_table[:active_rows],
+        cur_pos[:active_rows],
+        grid_size,
+        k_chunk,
+        nh,
+        d,
+        active_rows=False,
     )
     wide = _decode(device, tt_K, tt_V, Q, page_table, cur_pos, grid_size, k_chunk, nh, d, active_rows=False)
     if torch.equal(narrow[:, :active_rows], wide[:, :active_rows]):
