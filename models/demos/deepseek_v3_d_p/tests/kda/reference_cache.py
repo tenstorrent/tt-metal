@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -15,7 +14,6 @@ from typing import Any
 import torch
 from loguru import logger
 
-import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tests.kda.cases import (
@@ -24,9 +22,11 @@ from models.demos.deepseek_v3_d_p.tests.kda.cases import (
     compute_on_cache_miss,
     prepared_cache_miss,
 )
+from models.demos.deepseek_v3_d_p.utils.oracle_cache import oracle_cache_root, publish_once
 
 # Covers the stored reference: kda_forward_reference (models/demos/deepseek_v3_d_p/reference/kda) and the
-# payload layout below. Bump when either changes the stored tensors.
+# payload layout below. Bump when either changes the stored tensors; the cache is shared by every worktree
+# (utils/oracle_cache.py), so an unmerged branch bumps to a value no other branch uses.
 _CPU_REFERENCE_CACHE_VERSION = 5
 
 
@@ -68,7 +68,7 @@ def cpu_reference_cache_path(
     }
     fingerprint.update(json.dumps(payload, sort_keys=True).encode())
     return (
-        Path(ttnn.CONFIG.model_cache_path)
+        oracle_cache_root()
         / weights.model
         / weights.identity
         / "cpu_reference"
@@ -117,30 +117,26 @@ def _load_or_compute_chunk(
     cache_path = cpu_reference_cache_path(case.weights, hidden, initial_state)
     label = f"KDA {case.spec.name} chunk {chunk} T={hidden.shape[1]}"
     start = time.perf_counter()
-    if cache_path.exists():
-        payload = torch.load(cache_path, map_location="cpu", weights_only=True)
-        output, state = _validate_cached_reference(case.config, hidden.shape[1], payload)
-        elapsed = time.perf_counter() - start
-        logger.info(f"{label} CPU reference cache hit: {cache_path} ({elapsed:.3f} s)")
-        return KDAChunkReference(output, state, elapsed, cache_hit=True)
-    if not compute_missing:
+    if not compute_missing and not cache_path.is_file():
         raise prepared_cache_miss(case.spec.name, f"CPU reference (chunk {chunk})", cache_path)
 
-    output, state = kda_forward_reference(hidden, case.weights.load_state_dict(), case.config, initial_state)
-    tensors = {"output": output, **_state_tensors(state)}
-    tensors = {name: tensor.detach().clone() for name, tensor in tensors.items()}
-    payload = {**tensors, "digests": {name: _tensor_sha256(tensor) for name, tensor in tensors.items()}}
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = cache_path.with_suffix(f".{os.getpid()}.tmp")
-    try:
-        torch.save(payload, temporary_path)
-        temporary_path.replace(cache_path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
+    def produce() -> dict[str, Any]:
+        output, state = kda_forward_reference(hidden, case.weights.load_state_dict(), case.config, initial_state)
+        tensors = {
+            name: tensor.detach().clone() for name, tensor in {"output": output, **_state_tensors(state)}.items()
+        }
+        return {**tensors, "digests": {name: _tensor_sha256(tensor) for name, tensor in tensors.items()}}
+
+    payload, produced = publish_once(
+        cache_path, produce, torch.save, lambda path: torch.load(path, map_location="cpu", weights_only=True)
+    )
+    output, state = _validate_cached_reference(case.config, hidden.shape[1], payload)
     elapsed = time.perf_counter() - start
-    logger.info(f"{label} CPU reference cache miss, computed in {elapsed:.3f} s: {cache_path}")
-    state = KDAReferenceState(**{name: tensors[name] for name in _state_tensors(state)})
-    return KDAChunkReference(tensors["output"], state, elapsed, cache_hit=False)
+    if produced:
+        logger.info(f"{label} CPU reference cache miss, computed in {elapsed:.3f} s: {cache_path}")
+    else:
+        logger.info(f"{label} CPU reference cache hit: {cache_path} ({elapsed:.3f} s)")
+    return KDAChunkReference(output, state, elapsed, cache_hit=not produced)
 
 
 def _chained_references(case: KDATestCase, compute_missing: bool) -> tuple[KDAChunkReference, ...]:

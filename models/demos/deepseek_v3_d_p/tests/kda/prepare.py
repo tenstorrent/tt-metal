@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """CPU-only preparation of KDA weight caches and CPU references; opens no device.
 
-Run from the tt-metal checkout root, in the same checkout (and ttnn model cache) as the device tests:
+Run from the tt-metal checkout root, in the same checkout as the device tests. Weight caches go to the checkout's
+ttnn model cache; CPU references and text inputs go to the CPU oracle cache shared by every worktree
+(``TT_LINEAR_LAYERS_SHARED_CACHE``, models/demos/deepseek_v3_d_p/utils/oracle_cache.py):
 
     python -m models.demos.deepseek_v3_d_p.tests.kda.prepare --case kimi_k3-synthetic-mesh2x4-tpaxis1-T1280
     python -m models.demos.deepseek_v3_d_p.tests.kda.prepare --all --weights synthetic
@@ -37,6 +39,7 @@ import time  # noqa: E402
 
 from loguru import logger  # noqa: E402
 
+import ttnn  # noqa: E402
 from models.demos.deepseek_v3_d_p.tests.kda.cases import (  # noqa: E402
     KDA_CASES,
     KDA_MODELS,
@@ -47,6 +50,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.cases import (  # noqa: E402
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import prepare_cpu_references  # noqa: E402
 from models.demos.deepseek_v3_d_p.tests.kda.text_input import chunk_decay_extremes  # noqa: E402
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights  # noqa: E402
+from models.demos.deepseek_v3_d_p.utils.oracle_cache import oracle_cache_root  # noqa: E402
 
 
 def _device_handles() -> list[str]:
@@ -127,6 +131,7 @@ def main() -> None:
     if missing:
         raise SystemExit(f"real-weight cases need {sorted(missing)}")
     logger.info(f"KDA prepare: mock cluster {os.environ['TT_METAL_MOCK_CLUSTER_DESC_PATH']}")
+    logger.info(f"KDA prepare: CPU oracle cache {oracle_cache_root()}, weight cache {ttnn.CONFIG.model_cache_path}")
     for index, spec in enumerate(specs, start=1):
         logger.info(f"KDA prepare [{index}/{len(specs)}] {spec.name} start")
         checkpoint = checkpoints[spec.model]
