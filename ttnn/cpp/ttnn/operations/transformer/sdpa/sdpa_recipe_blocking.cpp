@@ -66,7 +66,8 @@ struct BlockCostModel {
 BlockCostModel block_cost_model(const PrecisionPolicy& policy) {
     switch (policy.selection.recipe) {
         case Recipe::A: return {1.000, 1.49, 5.99};
-        case Recipe::B: return {1.044, 2.65, 6.07};
+        // Fused STANDARD chunks (refit 2026-10-05, dense 10 x 8192^2 D128 on one Blackhole chip).
+        case Recipe::B: return {0.984, 2.20, 6.15};
         case Recipe::C: return {1.878, 3.58, 9.46};
         case Recipe::D: return {2.436, 3.14, 11.75};
         case Recipe::E:
