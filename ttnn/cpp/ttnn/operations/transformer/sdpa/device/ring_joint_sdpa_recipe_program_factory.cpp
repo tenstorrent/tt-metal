@@ -167,14 +167,13 @@ public:
     void append_defines(tt::tt_metal::KernelDescriptor::Defines& defines) const override {
         const auto& recipe_defines = program_.kernels.front().defines;
         defines.insert(defines.end(), recipe_defines.begin(), recipe_defines.end());
-        // STANDARD's fused chunks (after any L1 fallback in finalize_cbs) stream their ring checkpoints: compute
-        // overlaps the FP32 state save/restore of multi-Q workers with its chunks instead of waiting for it.
-        // LOW_PRECISION's ring kernels have no room for it in the kernel config buffer (Wan Q320: 71328 B).
+        // STANDARD's and LOW_PRECISION's fused chunks (after any L1 fallback in finalize_cbs) stream their ring
+        // checkpoints: compute overlaps the state save/restore of multi-Q workers with its chunks instead of waiting.
         const auto has = [&](const char* name) {
             return std::any_of(
                 recipe_defines.begin(), recipe_defines.end(), [&](const auto& d) { return d.first == name; });
         };
-        if (has("SDPA_RECIPE_FUSED") && !has("SDPA_RECIPE_FP32") && !has("SDPA_RECIPE_LOFI")) {
+        if (has("SDPA_RECIPE_FUSED") && !has("SDPA_RECIPE_FP32")) {
             defines.emplace_back("SDPA_RING_STREAM_STATE", "1");
         }
     }
