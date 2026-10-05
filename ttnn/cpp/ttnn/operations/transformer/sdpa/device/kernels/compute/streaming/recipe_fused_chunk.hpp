@@ -40,6 +40,62 @@
 #define SDPA_FUSED_CHUNK_ATTR __attribute__((noinline))
 #endif
 static bool fused_neg_unit_ready = false;
+#ifdef SDPA_RING_STREAM_STATE
+#include "../../recipe_state_layout.hpp"
+// Streamed ring checkpoints (recipe_ring.hpp, StateTransfer): a restored Q block's O rows land row by row while
+// its first fused chunk runs, and the last fused chunk of a saved block hands its O rows to the writer group by
+// group. kNoStreamSlot: no save in flight; restored rows >= every row end: no restore in flight.
+constexpr uint32_t kStreamRequestCb = 17;
+constexpr uint32_t kStreamAckCb = 18;
+constexpr uint32_t kNoStreamSlot = 0xffffffffu;
+static uint32_t recipe_stream_save_slot = kNoStreamSlot;
+static uint32_t recipe_stream_saved_rows = 0;
+static uint32_t recipe_stream_restored_rows = 0xffffffffu;
+// Out of line throughout: the ring kernels sit at the kernel config buffer limit.
+// UNPACK tells MATH and PACK it has passed a handshake (the threads leave it together).
+static __attribute__((noinline)) void recipe_stream_sync_threads() {
+    UNPACK({
+        mailbox_write(ckernel::ThreadId::MathThreadId, 1);
+        mailbox_write(ckernel::ThreadId::PackThreadId, 1);
+    })
+    MATH((void)mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    PACK((void)mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+}
+static __attribute__((noinline)) void recipe_stream_wait_rows_slow(uint32_t row_end) {
+    UNPACK({
+        for (uint32_t r = recipe_stream_restored_rows; r < row_end; ++r) {
+            llk_wait_tiles(kStreamAckCb, 1);
+            llk_pop_tiles(kStreamAckCb, 1);
+        }
+        mailbox_write(ckernel::ThreadId::PackThreadId, 1);
+    })
+    PACK((void)mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    recipe_stream_restored_rows = row_end;
+}
+// O rows [0, row_end) must have landed before any thread touches them (PACK accumulates PV onto them, UNPACK
+// reads them in a redo). Every thread runs this with the same counters, so the mailbox calls pair up.
+ALWI void recipe_stream_wait_rows(uint32_t row_end) {
+    if (recipe_stream_restored_rows < row_end) {
+        recipe_stream_wait_rows_slow(row_end);
+    }
+}
+// Hand O rows [saved, row_end) of the block being saved to the writer (the push lands after their packs).
+static __attribute__((noinline)) void recipe_stream_save_rows(uint32_t numerator_cb, uint32_t row_end) {
+    CircularBuffer request(kStreamRequestCb);
+    request.reserve_back(1);
+    PACK({
+        using Transfer = sdpa::streaming::StateTransfer;
+        auto* words = reinterpret_cast<volatile uint32_t*>(get_local_cb_interface(kStreamRequestCb).fifo_wr_ptr << 4);
+        words[Transfer::Operation] = Transfer::SaveRows;
+        words[Transfer::Slot] = recipe_stream_save_slot;
+        words[Transfer::Numerator] = numerator_cb;
+        words[Transfer::Row0] = recipe_stream_saved_rows;
+        words[Transfer::Rows] = row_end - recipe_stream_saved_rows;
+    })
+    request.push_back(1);
+    recipe_stream_saved_rows = row_end;
+}
+#endif
 template <
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
@@ -333,6 +389,11 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         SDPA_FUSED_LEAVE_QK();
         const uint32_t h = rows(g);
         const uint32_t row0 = H * g;
+#ifdef SDPA_RING_STREAM_STATE
+        if (plane == 0) {
+            recipe_stream_wait_rows(row0 + h);
+        }
+#endif
         if (!v_ready) {
             CircularBuffer(cb_v_in).wait_front(KT * vDHt);
             v_ready = true;
@@ -392,6 +453,12 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         const uint32_t h = rows(g);
         CircularBuffer(cur.sum).push_back(h);
         CircularBuffer(out_cb).push_back(h * vDHt * sdpa_out_stride);
+#ifdef SDPA_RING_STREAM_STATE
+        // The last chunk of a saved block: these O rows are final for this ring iteration.
+        if (recipe_stream_save_slot != kNoStreamSlot) {
+            recipe_stream_save_rows(out_cb, H * g + h);
+        }
+#endif
         if (is_last_iter) {
             normalize_row_streaming<false, vDHt, dst_size, cb_col_identity, cb_recip_scratch, cb_normalized_out>(
                 cur.sum, out_cb, h);
@@ -407,6 +474,9 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         SDPA_FUSED_LEAVE_QK();
         const uint32_t h = rows(g);
         const uint32_t row0 = H * g;
+#ifdef SDPA_RING_STREAM_STATE
+        recipe_stream_wait_rows(row0 + h);
+#endif
         const uint32_t gi = gindex(g);
         set_srca(cb_kt_in);
         recipe_mm_init(cb_q_in, cb_kt_in, true, sbw, h, DHt);

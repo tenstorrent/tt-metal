@@ -6,6 +6,7 @@
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_builder.hpp"
 #include "ttnn/operations/transformer/sdpa/sdpa_recipe.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -28,6 +29,7 @@ public:
     static constexpr uint32_t kCheckpointRequestCb = 17;
     static constexpr uint32_t kCheckpointAckCb = 18;
     static constexpr uint32_t kFirstDataflowCb = 19;
+    static constexpr uint32_t kCheckpointPageBytes = 64;
     static constexpr size_t kStateOutputIdx = 3;
 
     ring_joint_sdpa::KernelSources kernel_sources() const override {
@@ -100,12 +102,14 @@ public:
         tt::tt_metal::IDevice* device,
         uint32_t cb_q_in,
         uint32_t q_chunk_bytes) const override {
+        // 64 B pages: a request or ack is a few words, and streamed checkpoints keep up to a block's rows of them
+        // in flight (one per row group saved, one per O row restored).
         for (uint8_t index : {kCheckpointRequestCb, kCheckpointAckCb}) {
             desc.cbs.push_back(tt::tt_metal::CBDescriptor{
                 .total_size = 4096,
                 .core_ranges = grid_,
                 .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                    .buffer_index = index, .data_format = tt::DataFormat::UInt32, .page_size = 4096}}}});
+                    .buffer_index = index, .data_format = tt::DataFormat::UInt32, .page_size = kCheckpointPageBytes}}}});
         }
         // Every recipe and ring CB spans the whole worker grid; reject before program creation.
         auto cb_total = [&] {
@@ -163,6 +167,16 @@ public:
     void append_defines(tt::tt_metal::KernelDescriptor::Defines& defines) const override {
         const auto& recipe_defines = program_.kernels.front().defines;
         defines.insert(defines.end(), recipe_defines.begin(), recipe_defines.end());
+        // STANDARD's fused chunks (after any L1 fallback in finalize_cbs) stream their ring checkpoints: compute
+        // overlaps the FP32 state save/restore of multi-Q workers with its chunks instead of waiting for it.
+        // LOW_PRECISION's ring kernels have no room for it in the kernel config buffer (Wan Q320: 71328 B).
+        const auto has = [&](const char* name) {
+            return std::any_of(
+                recipe_defines.begin(), recipe_defines.end(), [&](const auto& d) { return d.first == name; });
+        };
+        if (has("SDPA_RECIPE_FUSED") && !has("SDPA_RECIPE_FP32") && !has("SDPA_RECIPE_LOFI")) {
+            defines.emplace_back("SDPA_RING_STREAM_STATE", "1");
+        }
     }
 
     std::optional<tt::tt_metal::KernelDescriptor::ConfigDescriptor> compute_config() const override {
