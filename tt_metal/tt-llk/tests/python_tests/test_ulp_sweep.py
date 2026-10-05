@@ -9,7 +9,6 @@ regeneration that quietly drops one weakens a gate with nothing to notice.
 """
 
 import math
-import os
 import re
 
 import pytest
@@ -37,6 +36,18 @@ from helpers.ulp_sweep import (
 #: mean to test rather than on a domain.
 _OP = MathOperation.Abs
 
+#: The ``(in, out, approx, dest)`` key of a cell whose coordinates the test is not about.
+_CELL = ("Float16", "Float16", "No", "No")
+
+
+def _record_full_grid(op, in_fmt, out_fmt, value):
+    """*value* on every ``approx`` x ``dest`` cell of ``in_fmt -> out_fmt``: the whole
+    grid the emitter refuses to write without."""
+    for approx in ("No", "Yes"):
+        for dest in ("No", "Yes"):
+            record(op, (in_fmt, out_fmt, approx, dest), value)
+
+
 #: One op block with a row of each kind write_table has to tell apart.
 _TABLE = """Gelu:  # header provenance, ungeneratable
   - {in: Float16, out: Float16, max_ulp: 7}  # superseded
@@ -56,10 +67,12 @@ def _refuses(match, kind=ValueError):
 @pytest.fixture(autouse=True)
 def _host_only_arch(monkeypatch):
     """``sweep_cells`` asks the chip which cells promote to a 32-bit Dest, and without
-    ``CHIP_ARCH`` that opens a device. These tests run on hosts without one."""
+    ``CHIP_ARCH`` that opens a device. These tests run on hosts without one, and judge
+    the Wormhole table whatever ``CHIP_ARCH`` the host sets: under ``quasar`` the
+    default-arch grid has cells a Wormhole emit never records."""
     import helpers.chip_architecture as chip
 
-    monkeypatch.setenv("CHIP_ARCH", os.environ.get("CHIP_ARCH", "wormhole"))
+    monkeypatch.setenv("CHIP_ARCH", "wormhole")
     monkeypatch.setattr(chip, "_cached_chip_architecture", None)
 
 
@@ -82,7 +95,7 @@ def test_only_the_cells_this_run_measured_are_replaced(table):
     """`MEASURED`, not the static SWEEP_FORMATS cross-product. A `-k` run, an interrupt
     or a driver skip must leave every cell it did not measure alone rather than render a
     whole op block from a partial session."""
-    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    record("Gelu", _CELL, 5)
     assert write_table(table, "today") == (1, [])
 
     rows = _rows(table)
@@ -114,7 +127,7 @@ def test_a_row_carrying_a_floor_is_kept_rather_than_regenerated(table):
         "  - {in: Float16, out: Float16, max_ulp: 2, near_zero_atol: 5.59e-07}  # floor\n",
         encoding="utf-8",
     )
-    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    record("Gelu", _CELL, 5)
     assert write_table(table, "today") == (0, ["Gelu"])
     assert "near_zero_atol: 5.59e-07}  # floor" in table.read_text()  # kept verbatim
 
@@ -143,9 +156,7 @@ def test_an_op_wide_declared_tolerance_is_not_shadowed_by_a_rendered_row(
     )
     table.write_text(f"{anchor}Gelu:\n  - {wildcard}\n", encoding="utf-8")
     before = table.read_text()
-    for approx in ("No", "Yes"):
-        for dest in ("No", "Yes"):
-            record("Gelu", ("Float16_b", "Float16_b", approx, dest), 100)
+    _record_full_grid("Gelu", "Float16_b", "Float16_b", 100)
     assert write_table(table, "today") == (0, ["Gelu"])
     assert table.read_text() == before
 
@@ -171,8 +182,8 @@ def test_a_measurement_with_nowhere_to_go_is_refused_after_writing_the_rest(tabl
     measures every sweepable op, and one unenrolled op must not throw the rest away."""
     from helpers.ulp_sweep import UnplacedMeasurements
 
-    record("Sqrt", ("Float16", "Float16", "No", "No"), 1)
-    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    record("Sqrt", _CELL, 1)
+    record("Gelu", _CELL, 5)
     with _refuses("no key line") as caught:
         write_table(table, "today")
     assert isinstance(caught.value, UnplacedMeasurements)
@@ -185,7 +196,7 @@ def test_a_cell_recorded_twice_keeps_the_worst_lane():
     `input_dimensions` are both multi-valued — so one cell is recorded several times.
     Last-write-wins is the polarity that hides error."""
     MEASURED.clear()
-    key = ("Float16", "Float16", "No", "No")
+    key = _CELL
     record("Gelu", key, 12)
     record("Gelu", key, 3)
     assert MEASURED["Gelu"][key] == 12
@@ -197,7 +208,7 @@ def test_an_incomplete_grid_is_refused_rather_than_collapsed(table):
     axis sees only singletons, both would be dropped, and one measurement would
     overwrite the other — with `_render` writing the survivor's own figure into the
     provenance comment, so the budget audit could not catch it either."""
-    record("Gelu", ("Float16", "Float16", "No", "No"), 4)
+    record("Gelu", _CELL, 4)
     record("Gelu", ("Float16", "Float16", "Yes", "Yes"), 9)
     with _refuses("do not form a full grid"):
         write_table(table, "today")
@@ -488,10 +499,10 @@ def test_xdist_workers_measurements_merge_worst_lane_first(table):
     """Under ``-n`` each worker fills its own ``MEASURED``; the controller merges the
     exports. A cell two workers both measured keeps the worse reading, as ``record``
     does within one process, and the merged table is what one process would write."""
-    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    record("Gelu", _CELL, 5)
     worker_a = export_measured()
     MEASURED.clear()
-    record("Gelu", ("Float16", "Float16", "No", "No"), 9)
+    record("Gelu", _CELL, 9)
     record("Gelu", ("Float16", "Float16", "Yes", "No"), 2)
     worker_b = export_measured()
     MEASURED.clear()
@@ -517,7 +528,7 @@ def test_an_unmeasurable_cell_survives_the_xdist_merge_in_either_order(
     must not rescue an overflow, and a string must never reach ``max()``."""
     from helpers.ulp_sweep import record_unmeasurable
 
-    key = ("Float16", "Float16", "No", "No")
+    key = _CELL
     record_unmeasurable("Gelu", key, "3 lane(s) non-finite against a finite golden")
     with_reason = export_measured()
     MEASURED.clear()
@@ -570,13 +581,43 @@ def test_emit_refuses_what_the_session_cannot_vouch_for(
     it. The interrupted case has every touched grid complete and nothing failed: pytest
     still calls the hook after a Ctrl-C, so only the exit status knows the run stopped
     early."""
-    for approx in ("No", "Yes"):
-        for dest in ("No", "Yes"):
-            record("Gelu", ("Float16", "Float16", approx, dest), 5)
+    _record_full_grid("Gelu", "Float16", "Float16", 5)
     before = table.read_text()
     with _refuses(refusal, RuntimeError):
         finish_emit(arch, failed, table, exitstatus=exitstatus)
     assert table.read_text() == before
+
+
+@pytest.mark.parametrize(
+    "exitstatus, expected",
+    [
+        (pytest.ExitCode.OK, pytest.ExitCode.TESTS_FAILED),
+        (pytest.ExitCode.TESTS_FAILED, pytest.ExitCode.TESTS_FAILED),
+        (pytest.ExitCode.INTERRUPTED, pytest.ExitCode.INTERRUPTED),
+        (pytest.ExitCode.INTERNAL_ERROR, pytest.ExitCode.INTERNAL_ERROR),
+        (17, 17),
+    ],
+    ids=["ok", "failed", "interrupted", "internal-error", "pytest-exit-returncode"],
+)
+def test_an_emit_refusal_fails_only_a_clean_session(monkeypatch, exitstatus, expected):
+    """A refused emit must end non-zero, but a session that already ended non-OK keeps
+    its own status: a Ctrl-C read as exit 1 is an ordinary test failure to a script."""
+    from types import SimpleNamespace
+
+    from helpers import llk_pytest_plugin, ulp_sweep
+
+    monkeypatch.setattr(ulp_sweep, "EMIT", True)
+    MEASURED.clear()  # refused for having measured nothing
+    session = SimpleNamespace(
+        config=SimpleNamespace(
+            option=SimpleNamespace(collectonly=False),
+            pluginmanager=SimpleNamespace(get_plugin=lambda name: None),
+        ),
+        testsfailed=0,
+        exitstatus=exitstatus,
+    )
+    llk_pytest_plugin._finish_ulp_emit(session)
+    assert session.exitstatus == expected
 
 
 @pytest.mark.parametrize(
@@ -616,6 +657,38 @@ def test_the_sweep_cells_are_the_ones_testconfig_builds_as_asked(arch, monkeypat
         (DataFormat.Float16_b, DataFormat.Float16),
         (DataFormat.Bfp8_b, DataFormat.Float16),
     }
+
+
+def test_no_step_budget_names_an_arch_sweep_cells_does_not_filter_for():
+    """`sweep_cells` applies only the Dest promotion off Wormhole, not Blackhole's or
+    Quasar's format support. A ULP row naming another `arch` would bind on that arch and
+    send those unsupported cells to the device: add the filters with the row."""
+    from helpers.sfpu_accuracy_budget import (
+        _SFPU_ACCURACY_BUDGET,
+        MEASURED_ARCH,
+        Metric,
+    )
+
+    elsewhere = [
+        (op.name, key)
+        for op, rows in _SFPU_ACCURACY_BUDGET.items()
+        for key, contract in rows.items()
+        if contract.metric is Metric.ULP and key.arch not in (None, MEASURED_ARCH)
+    ]
+    assert elsewhere == []
+
+
+def test_the_sweep_tile_count_holds_every_swept_value():
+    """The exhaustive claim rests on `SWEEP_TILE_COUNT`: a count too small for the
+    format's values keeps only the lowest-sorted of them, and nothing else notices."""
+    import test_unary_sfpu_ulp as sweep
+    from helpers.golden_generators import TILE_DIMENSIONS
+    from helpers.ulp_sweep import SWEEP_FORMATS, swept_value_count
+
+    lanes = sweep.SWEEP_TILE_COUNT * TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
+    assert sweep.SWEEP_DIMENSIONS[0] * sweep.SWEEP_DIMENSIONS[1] == lanes
+    for fmt in SWEEP_FORMATS:
+        assert swept_value_count(fmt) <= lanes, fmt.name
 
 
 @pytest.mark.parametrize(
@@ -672,9 +745,7 @@ def test_emit_sweeps_every_keyed_op_and_only_those(monkeypatch):
 
 
 def test_emit_writes_on_a_clean_wormhole_session(table):
-    for approx in ("No", "Yes"):
-        for dest in ("No", "Yes"):
-            record("Gelu", ("Float16", "Float16", approx, dest), 5)
+    _record_full_grid("Gelu", "Float16", "Float16", 5)
     message = finish_emit(
         ChipArchitecture.WORMHOLE, 0, table, exitstatus=pytest.ExitCode.OK
     )
@@ -803,7 +874,7 @@ def test_an_unmeasurable_cell_is_written_as_its_own_verdict(table):
     becomes a tolerance row that says why."""
     from helpers.ulp_sweep import record_unmeasurable
 
-    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    record("Gelu", _CELL, 5)
     record_unmeasurable(
         "Gelu", ("Float16", "Float16", "Yes", "No"), "no measurable lane"
     )
@@ -821,7 +892,7 @@ def test_an_unmeasurable_cell_is_written_as_its_own_verdict(table):
 def test_emit_refuses_a_partly_measured_grid(table):
     """`write_table` replaces every row of a touched (in, out); a run narrowed inside
     one would drop the rows of the cells it never reached."""
-    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    record("Gelu", _CELL, 5)
     before = table.read_text()
     with _refuses("Gelu Float16->Float16: 3 cell", RuntimeError):
         finish_emit(ChipArchitecture.WORMHOLE, 0, table)
@@ -841,8 +912,8 @@ def test_an_op_with_an_unregenerable_row_is_kept_while_the_rest_are_written(tmp_
         encoding="utf-8",
     )
     MEASURED.clear()
-    record("Erfinv", ("Float16", "Float16", "No", "No"), 5)
-    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    record("Erfinv", _CELL, 5)
+    record("Gelu", _CELL, 5)
     written, kept = write_table(path, "today")
     MEASURED.clear()
     text = path.read_text()
@@ -852,6 +923,6 @@ def test_an_op_with_an_unregenerable_row_is_kept_while_the_rest_are_written(tmp_
 
 
 def test_a_rewritten_block_keeps_one_blank_line_before_the_next(table):
-    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    record("Gelu", _CELL, 5)
     write_table(table, "today")
     assert "\n\n\n" not in table.read_text()

@@ -18,7 +18,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.sfpu_accuracy_budget import assert_against_contract
+from helpers.sfpu_accuracy_budget import assert_within_contract_tolerance
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
     Operand,
@@ -164,7 +164,7 @@ def _run_sfpu_ternary(
     # binary driver makes. No ternary op is enrolled yet, so every one of them resolves
     # to today's per-format tolerance -- enrolling one is then a table edit. The mode the
     # kernel compiled is passed: left unset, a row keyed `approx: "No"` would not match.
-    assert_against_contract(
+    assert_within_contract_tolerance(
         mathop, formats, dest_acc, golden_tensor, res_tensor, approx_mode=_APPROX_MODE
     )
 

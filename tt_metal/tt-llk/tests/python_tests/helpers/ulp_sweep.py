@@ -57,6 +57,13 @@ def sweep_cells(arch=None) -> List[Tuple[DataFormat, DataFormat, object, object]
 
     A host check of the Wormhole table passes ``MEASURED_ARCH``, so its verdict does not
     depend on which ``CHIP_ARCH`` the host happens to set.
+
+    The grid is Wormhole's. On another arch only the Dest promotion is applied, not that
+    arch's own format support: Blackhole's functional drivers skip ``Float16`` with
+    ``dest_acc=No``, and Quasar has no ``Bfp8_b``. That is inert while every cell off
+    Wormhole resolves to tolerance and skips, which holds because no ULP row names
+    another ``arch``; test_ulp_sweep.py pins that, so the first such row has to bring
+    those filters with it.
     """
     from helpers.chip_architecture import get_chip_architecture
     from helpers.data_format_inference import effective_dest_acc
@@ -362,7 +369,10 @@ def _known_lanes() -> Dict:
             MathOperation.Gelu: (
                 KnownNonfiniteLanes(**top_of_fp16, approx=ApproximationMode.No),
             ),
-            MathOperation.Silu: (KnownNonfiniteLanes(**top_of_fp16),),
+            # Silu answers 65408 itself; #58607 lists only the three lanes above it.
+            MathOperation.Silu: (
+                KnownNonfiniteLanes(**{**top_of_fp16, "low": 65440.0}),
+            ),
             MathOperation.Square: (
                 KnownNonfiniteLanes(
                     **{

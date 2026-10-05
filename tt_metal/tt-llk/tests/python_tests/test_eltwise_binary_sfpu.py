@@ -39,7 +39,7 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
-from helpers.sfpu_accuracy_budget import assert_against_contract
+from helpers.sfpu_accuracy_budget import assert_within_contract_tolerance
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
     _SFPU_BINARY_OPS,
@@ -605,7 +605,7 @@ def sfpu_binary(
         golden_tensor = torch.where(unspecified, golden_tensor.abs(), golden_tensor)
         res_tensor = torch.where(unspecified, res_tensor.abs(), res_tensor)
 
-    assert_against_contract(
+    assert_within_contract_tolerance(
         mathop,
         formats,
         dest_acc,
@@ -1608,7 +1608,7 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop):
     ), "Result tensor and golden tensor are not of the same length"
 
     # Without this a row for SfpuAddTopRow would be inert.
-    assert_against_contract(
+    assert_within_contract_tolerance(
         mathop,
         formats,
         dest_acc,
@@ -1787,4 +1787,6 @@ def test_eltwise_binary_sfpu_bcast(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
     # approx_mode unset: this kernel compiles no APPROX_MODE.
-    assert_against_contract(mathop, formats, dest_acc, golden_tensor, res_tensor)
+    assert_within_contract_tolerance(
+        mathop, formats, dest_acc, golden_tensor, res_tensor
+    )

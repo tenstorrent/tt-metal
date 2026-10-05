@@ -657,7 +657,8 @@ def passed_test(
     budget charges for block quantization the format is entitled to. See
     ``_ULP_PROXY_DTYPES`` in :mod:`helpers.ulp`.
 
-    ``max_ulp=None`` is bit-for-bit the previous behaviour.
+    ``max_ulp=None`` gives the previous verdict bit for bit; under ``--ulp-report`` it
+    also measures and logs the comparison's ULP at INFO, without reading it back.
     """
 
     if tile_shape is None:

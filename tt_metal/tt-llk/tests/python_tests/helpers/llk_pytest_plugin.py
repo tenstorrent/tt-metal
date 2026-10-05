@@ -1052,7 +1052,11 @@ def _finish_ulp_emit(session):
         )
     except (RuntimeError, ValueError) as exc:
         message = f"--ulp-emit: {exc}"
-        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+        # Escalate only a clean session: a refusal *because* the run was interrupted, hit
+        # an internal error or called pytest.exit(returncode=N) keeps that status, which a
+        # calling script would otherwise read as an ordinary test failure.
+        if session.exitstatus == pytest.ExitCode.OK:
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
     _ulp_emit_line(session, message)
 
 

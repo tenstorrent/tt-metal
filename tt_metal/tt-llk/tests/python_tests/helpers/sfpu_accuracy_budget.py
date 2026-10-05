@@ -438,7 +438,7 @@ def accuracy_contract(
     return resolve_contract(tolerance_rows, query, label=op.name)
 
 
-def assert_against_contract(
+def assert_within_contract_tolerance(
     op: MathOperation,
     formats: InputOutputFormat,
     dest_acc: DestAccumulation,
@@ -447,7 +447,8 @@ def assert_against_contract(
     *,
     approx_mode: Optional[ApproximationMode] = None,
 ) -> None:
-    """Resolve *op*'s declared contract for the variant that ran, and gate on it.
+    """Resolve *op*'s declared contract for the variant that ran, and gate on its
+    tolerance arm only: a resolved step budget is not enforced here (see below).
 
     The binary and ternary drivers' shared last line, so that the resolution and the
     caveat below are written once. The numbers live beside the op in the registry, and
