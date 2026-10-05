@@ -128,9 +128,10 @@ ttnn.attach_golden_function(
 )
 
 
-def _golden_function_rdiv_bw(grad_tensor, input_tensor, scalar, *args, rounding_mode=None, **kwargs):
+def _golden_function_rdiv_bw(grad_tensor, input_tensor, scalar, rounding_mode=None, *args, **kwargs):
     import torch
 
+    # rounding_mode is accepted positionally as well as by keyword, as the public overload allows both.
     if rounding_mode is not None:
         # TTNN defines the trunc and floor reverse-division gradients as zero, since rounding is piecewise constant.
         return [torch.zeros_like(grad_tensor)]
