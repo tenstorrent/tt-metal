@@ -80,6 +80,27 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
         "test_name_aliases": {"perf_face_compressed_mm": "perf_face_compressed_mm"},
     },
+    "perf_sdpa_weighted_reduce": {
+        "version": 1,
+        "columns": [
+            "block_unpack",
+            "chunks_per_section",
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "loop_factor",
+            "marker",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_sdpa_weighted_reduce": "perf_sdpa_weighted_reduce"},
+    },
     "perf_custom_mm": {
         "version": 1,
         "columns": [
