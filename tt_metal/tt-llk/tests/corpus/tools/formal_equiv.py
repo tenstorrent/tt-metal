@@ -2849,7 +2849,16 @@ def main():
             "hand_adoptions": len(ex2.adoptions),
             "status": "VALIDATED",
         }
-    except (ValidationError, ScopeRefusal) as e:
+    except ScopeRefusal as e:
+        # Reaching an instruction outside this model says nothing about the
+        # fidelity of the trace.  Route the row to another engine instead of
+        # reporting a failed concrete replay.
+        result["validation"] = {"status": "UNSUPPORTED", "error": str(e)}
+        result["verdict"] = "SCOPE-REFUSED"
+        result["refusal"] = str(e)
+        _emit(args, result, t_start)
+        return 1
+    except ValidationError as e:
         result["validation"] = {"status": "SEMANTICS-UNVALIDATED", "error": str(e)}
         result["verdict"] = "SEMANTICS-UNVALIDATED"
         _emit(args, result, t_start)

@@ -57,7 +57,9 @@ class FormalCampaignTests(unittest.TestCase):
 
     def test_formal_statuses_do_not_call_divergence_an_operational_failure(self):
         self.assertEqual(campaign.RESULT_STATUS["DIVERGENT"], "DIVERGENT")
+        self.assertEqual(campaign.RESULT_STATUS["SCOPE-REFUSED"], "UNSUPPORTED")
         self.assertNotIn("DIVERGENT", campaign.OPERATIONAL_FAILURES)
+        self.assertNotIn("UNSUPPORTED", campaign.OPERATIONAL_FAILURES)
         self.assertEqual(
             campaign.RESULT_STATUS["SEMANTICS-UNVALIDATED"],
             "TRACE_VALIDATION_FAILED",
