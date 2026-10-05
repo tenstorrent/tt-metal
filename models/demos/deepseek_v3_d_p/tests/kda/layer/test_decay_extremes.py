@@ -79,8 +79,10 @@ _MEASURED_FAILURES = {
     "0.99939, key row 65 error/RMS 0.271 (0.9875 / 0.93 before g1b.7); suspected BF16 gate projection (large A)",
     "glm-strong-h50-51-T1280x1": "GLM layer 0, strong decay |G_last|~150 (fractional gates): final state norm ratio "
     "0.951 (control 0.987), key row error/RMS 0.35; KDA strong-end prep fix not done (tt_metal_tracker-g1b.7)",
-    "k3-control-h48-49-T1280x1": "tt_metal_tracker-g1b.4.11: output PCC 0.99943 < 0.9995, token error/RMS 0.116 from "
-    "strongly decaying rows; long-memory contraction fixed by g1b.7 (row norm ratio 0.914 -> 0.976)",
+    "k3-control-h48-49-T1280x1": "tt_metal_tracker-g1b.4.11: output PCC 0.99943 < 0.9995, token error/RMS 0.116. Cause "
+    "(device stage substitution): BF16 decay_rank (f_a x) amplified by K3 f_b (cond 1.2e5) because the crafted input "
+    "drives |f_a x| to RMS 72 (real text ~1), outside any real layer input (RMS <= 0.27); with an exact gate the case "
+    "passes (0.99990 / 0.064). Decision on re-crafting vs FP32 rank: tt_metal_tracker-g1b.4.17",
     # Real text (tt_metal_tracker-g1b.7.2).
     "k3-text-h28-29-T1280x4": "tt_metal_tracker-g1b.4.13: K3 layers.1 head 28 early-token output error/RMS 0.106 "
     "(call 0, token 113; own 13.5%) unchanged by g1b.7; state PCC 0.99993 and norm ratio 0.989 pass",
