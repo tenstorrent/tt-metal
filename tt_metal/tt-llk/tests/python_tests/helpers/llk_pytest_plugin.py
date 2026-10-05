@@ -52,14 +52,12 @@ import pandas as pd
 # and skip --compile-producer (it only compiles ELFs and never talks to a device). xdist workers
 # inherit env vars but not the controller's argv, so trust the env var when PYTEST_XDIST_WORKER
 # is set.
-_SIMULATOR_PATH = os.environ.get("TT_METAL_SIMULATOR") or os.environ.get(
-    "TT_UMD_SIMULATOR_PATH"
-)
-_IS_XDIST_WORKER = "PYTEST_XDIST_WORKER" in os.environ
-_SHOULD_RUN_SIMULATOR = _IS_XDIST_WORKER or (
-    "--run-simulator" in sys.argv and "--compile-producer" not in sys.argv
-)
-if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so"):
+from helpers.target_config import TestTargetConfig as _TestTargetConfig
+
+_TARGET = _TestTargetConfig()
+_SIMULATOR_PATH = _TARGET.simulator_path
+
+if _TARGET.runs_in_process:
     from ttexalens import tt_exalens_init as _tt_exalens_init
 
     _tt_exalens_init.init_ttexalens(simulation_directory=_SIMULATOR_PATH)
@@ -497,13 +495,15 @@ def pytest_configure(config):
                     returncode=1,
                 )
 
-            if _SIMULATOR_PATH.endswith(".so"):
-                # ttsim: already initialized at module import above; runs in-process, no server.
-                # --reset-simulator-per-test restarts the ExalensServer, which ttsim doesn't use,
+            if TestConfig.TEST_TARGET.runs_in_process:
+                # ttsim and Versim: already initialized at module import above; both run
+                # in-process, with no server.
+                # --reset-simulator-per-test restarts the ExalensServer, which neither uses,
                 # so it would be a silent no-op. Fail fast to avoid confusing false-green runs.
                 if TestConfig.TEST_TARGET.reset_simulator_per_test:
                     pytest.exit(
-                        "ERROR: --reset-simulator-per-test is not supported with ttsim. "
+                        f"ERROR: --reset-simulator-per-test is not supported with "
+                        f"{TestConfig.TEST_TARGET.backend}. "
                         "Re-run without it.",
                         returncode=1,
                     )
@@ -521,10 +521,9 @@ def pytest_configure(config):
             tt_exalens_init.init_ttexalens()
             TestConfig.resolve_worker_tensix_location()
 
-        is_ttsim = _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
         # WH/BH only: ttsim or silicon. Quasar is skipped inside the helper
         # because ttexalens has no Tensix register description yet.
-        if is_ttsim or not TestConfig.TEST_TARGET.run_simulator:
+        if TestConfig.TEST_TARGET.models_tensix_dump_gprs:
             override_gprs_used_by_tensix_dump()
 
 
