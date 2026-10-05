@@ -37,9 +37,8 @@ inline void llk_unpack_AB_init(
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 
-    // Neither LLK below takes a TensorShape, so neither scales its L1 tile index by the face count
-    // (a tiny tile is registered as one HW tile per face, so they would move only a fraction of the
-    // tile and step L1 by a single face). Full-tile only until they are converted (tt-metal #47597).
+    // Keep the Metal binary pipeline full-tile until its tiny-tile paths have integration coverage
+    // (tt-metal #47597). The broadcast LLK still indexes L1 in whole tiles.
     LLK_ASSERT(
         get_operand_tensor_shape(operandA_id).total_num_faces() == ckernel::MAX_NUM_FACES,
         "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
@@ -54,6 +53,7 @@ inline void llk_unpack_AB_init(
         _llk_unpack_binary_operands_init_(
             ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
             ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
+            get_operand_tensor_shape(operandA_id),
             1);
     } else {
         _llk_unpack_binary_broadcast_operands_init_<BType>(
@@ -110,7 +110,7 @@ inline void llk_unpack_AB(
 
     WAYPOINT("UABW");
     if constexpr (BType == BroadcastType::NONE) {
-        _llk_unpack_binary_operands_(l1_tile_idx_a, l1_tile_idx_b);
+        _llk_unpack_binary_operands_(l1_tile_idx_a, l1_tile_idx_b, get_operand_tensor_shape(operandA_id));
     } else {
         _llk_unpack_binary_broadcast_operands_(l1_tile_idx_a, l1_tile_idx_b);
     }

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include "ckernel_sfpu_bf16_sfpi_isa.h"
 
 // Include inside namespace sfpi, like the evaluator helpers consuming this.
 // SFPI deleted vec_min_max; retain its former in-place implementation exactly.
