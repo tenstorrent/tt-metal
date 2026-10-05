@@ -357,7 +357,9 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
  *
  * Tile i goes to the destination tile dst_index + i * dst_stride (a stride of 0 accumulates the block into one tile).
  * When @ref reduce_block_holds_scaler holds, the scaler stays in SrcA for a chunk of @ref REDUCE_BLOCK_MAX_TILES tiles:
- * each tile releases only SrcB and the chunk releases SrcA once. Every other case runs @ref _llk_math_reduce_ per tile.
+ * each tile releases only SrcB and the chunk releases SrcA once. A REDUCE_SCALAR block with stride 0 pools every tile
+ * into the scratch row and transposes it once, at the last tile, so SUM and AVG round in a different order than per
+ * tile calls. Every other case runs @ref _llk_math_reduce_ per tile.
  *
  * @tparam type: Pooling op, values = <SUM/AVG/MAX>
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
@@ -410,6 +412,21 @@ inline void _llk_math_reduce_block_(
                 TTI_CLEARDVALID(p_setrwc::CLR_A, 0);
                 num_tiles -= chunk;
             }
+            return;
+        }
+    }
+
+    if constexpr (dim == ReduceDim::REDUCE_SCALAR)
+    {
+        if (num_tiles > 1 && dst_stride == 0)
+        {
+            // Every tile but the last only pools its faces into the scratch row; the last tile's call transposes it once
+            math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+            for (std::uint32_t pooled = 0; pooled < (num_tiles - 1) * tensor_shape.total_num_faces(); pooled++)
+            {
+                reduce_pool_op<type, is_high_fidelity(math_fidelity), p_setrwc::CLR_AB, 4>();
+            }
+            _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en>(dst_index, tensor_shape);
             return;
         }
     }

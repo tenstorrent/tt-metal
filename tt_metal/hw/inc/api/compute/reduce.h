@@ -175,6 +175,8 @@ ALWI void reduce_tile(
  * NOTE: On Blackhole the block is one LLK call per thread (one unpack context per chunk of tiles); the other
  * architectures loop over `reduce_tile`. Tracked under the Compute API Split effort (tt-metal#35739) and
  * tt-metal#47478.
+ * NOTE: On Blackhole a `REDUCE_SCALAR` block with `idst_stride` 0 sums the tiles column by column and collapses the
+ * columns once, at the last tile, so SUM and AVG round in a different order than the same tiles through `reduce_tile`.
  * NOTE: Before the next operation is initialized, the `reduce_uninit` function must be called to reset the packer
  * state to default.
  *
