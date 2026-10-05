@@ -17,6 +17,7 @@ import pytest
 
 from ..chip_architecture import ChipArchitecture
 from ..counters import read_counters
+from ..device_io import write_words_to_device
 from ..device import BootMode
 from ..format_config import FormatConfig
 from ..llk_params import DestAccumulation, L1Accumulation, PerfRunType
@@ -1031,6 +1032,7 @@ class PerfConfig(TestConfig):
             for templates, runtimes, run_type in self.warmup_configs:
                 self._select_run_type(templates, runtimes, run_type)
                 self.write_runtimes_to_L1()
+                write_words_to_device(TestConfig.TENSIX_LOCATION, 0x16AFE0, [int(os.environ.get('REPRO_RT', '0'))])  # experiment
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
 
@@ -1056,6 +1058,7 @@ class PerfConfig(TestConfig):
             variant_counter_results = []
             for run_index in range(run_count):
                 self.write_runtimes_to_L1()
+                write_words_to_device(TestConfig.TENSIX_LOCATION, 0x16AFE0, [int(os.environ.get('REPRO_RT', '0'))])  # experiment
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
                 # Counter config is written by BRISC from built-in array (local L1 write).
