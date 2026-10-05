@@ -126,7 +126,6 @@ inline void llk_math_wait_for_dest_available() {
     if constexpr (UnpackToDestEn) {
         _llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(
             semaphore::UNPACK_MATH);
-        _llk_sync_get_(semaphore::UNPACK_MATH);
     }
 }
 
@@ -144,6 +143,10 @@ inline void llk_math_dest_section_done() {
     // Always post MATH_PACK, the math thread is in the chain for every op, including the
     // no-real-work unpack-to-dest forwarder.
     _llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
+    if constexpr (UnpackToDestEn) {
+        // Release unpacked section only MATH_PACK counts it, see llk_math_wait_for_dest_available (#58892).
+        _llk_sync_get_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::UNPACK_MATH);
+    }
     if constexpr (DST_SYNC_MODE == DstSync::SyncHalf && !UnpackToDestEn) {
         _llk_sync_advance_dest_section_<ckernel::TRISC_ID, EN_32BIT_DEST, p_stall::WAIT_SFPU, p_stall::MATH>();
     }

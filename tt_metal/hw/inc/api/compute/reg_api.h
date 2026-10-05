@@ -30,6 +30,7 @@ namespace ckernel {
  */
 [[deprecated("Use tile_regs_acquire() instead")]]
 ALWI void acquire_dst() {
+    UNPACK((llk_unpack_wait_for_dest_available()));
     MATH((llk_math_wait_for_dest_available()));
 
     PACK((llk_packer_wait_for_math_done()));
@@ -43,6 +44,9 @@ ALWI void acquire_dst() {
  * This is a blocking function, i.e. this function will wait until the lock is acquired.
  */
 ALWI void tile_regs_acquire() {
+    // The UNPACK step is a no-op unless the unpacker writes DEST itself (Quasar unpack-to-dest). There it opens the
+    // unpack thread's DEST section, so every copy_tile / copy_block between acquire and commit lands in one section.
+    UNPACK((llk_unpack_wait_for_dest_available()));
     MATH((llk_math_wait_for_dest_available()));
 }
 
@@ -71,6 +75,7 @@ ALWI void tile_regs_wait() {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated("Use tile_regs_release() instead")]]
 ALWI void release_dst() {
+    UNPACK((llk_unpack_dest_section_done<is_fp32_dest_acc_en>()));
     MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
     PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
 }
@@ -81,7 +86,11 @@ ALWI void release_dst() {
  * Release lock on DST register by MATH thread. The lock had to be previously acquired with tile_regs_acquire.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void tile_regs_commit() { MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>())); }
+ALWI void tile_regs_commit() {
+    // UNPACK step: no-op unless the unpacker writes DEST itself; there it closes the unpack thread's DEST section.
+    UNPACK((llk_unpack_dest_section_done<is_fp32_dest_acc_en>()));
+    MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
+}
 
 /**
  * Release lock on DST register by PACK thread. The lock had to be previously acquired with tile_regs_wait.

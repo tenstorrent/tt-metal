@@ -111,9 +111,10 @@ inline void llk_unpack_A_init(
  * @brief Unpacks a single operand for unary and unary-broadcast paths.
  *
  * For the non-broadcast path the UNP_DEST routing decision is made solely from the `unpack_to_dest` template
- * parameter (no format inspection): when true this calls `_llk_unpack_unary_operand_to_dest_tile_`, which carries
- * the UNPACK_MATH / MATH_PACK semaphore handshake and the SyncHalf bank flip; otherwise `_llk_unpack_unary_operand_`
- * on UNP_A.
+ * parameter (no format inspection): when true this calls `_llk_unpack_unary_operand_to_dest_tile_`, a sync-free
+ * placer; the UNPACK_MATH / MATH_PACK section handshake and the SyncHalf bank flip live in
+ * `llk_unpack_wait_for_dest_available` / `llk_unpack_dest_section_done` (tile_regs_acquire / tile_regs_commit), so
+ * every call between the two lands in the same DEST section. Otherwise `_llk_unpack_unary_operand_` on UNP_A.
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
@@ -140,10 +141,8 @@ inline void llk_unpack_A(
         local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx + tile_index;
     if constexpr (BType == BroadcastType::NONE) {
         if constexpr (unpack_to_dest) {
-            // EN_32BIT_DEST sizes the SyncHalf bank flip. It must agree with the pack side
-            // (llk_pack_dest_section_done) or unpack and pack address different DEST halves; both derive it from
-            // DST_ACCUM_MODE.
-            _llk_unpack_unary_operand_to_dest_tile_<DST_SYNC_MODE, DST_ACCUM_MODE>(l1_tile_idx, dst_tile_index);
+            // Sync-free: section handshake is in llk_unpack_wait_for_dest_available / llk_unpack_dest_section_done.
+            _llk_unpack_unary_operand_to_dest_tile_(l1_tile_idx, dst_tile_index);
         } else {
             const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
             _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(l1_tile_idx, tensor_shape);
@@ -158,8 +157,8 @@ inline void llk_unpack_A(
 /**
  * @brief Unpacks a contiguous block of tiles for unary and unary-broadcast paths.
  *
- * On the unpack-to-dest path the block is one DEST bank section: the tiles land at DEST tiles [0, ntiles) under a
- * single UNPACK_MATH / MATH_PACK handshake. The other paths unpack tile by tile.
+ * On the unpack-to-dest path the tiles land at DEST tiles [start_dst_tile_index, start_dst_tile_index + ntiles) of
+ * the current section with no handshake of their own, see llk_unpack_A. The other paths unpack tile by tile.
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
@@ -169,6 +168,8 @@ inline void llk_unpack_A(
  * @param operand: The logical dataflow buffer id
  * @param start_tile_index: The starting tile index within the input buffer
  * @param ntiles: The number of consecutive tiles to unpack
+ * @param start_dst_tile_index: DEST tile index of the first tile; consecutive tiles land at consecutive indices.
+ * Unpack-to-dest path only, ignored otherwise.
  */
 // TODO: AM; Optimize block calls by using ntiles per unpack, issue #40798
 template <
@@ -177,16 +178,17 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A_block(
-    const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles) {
+    const std::uint32_t operand,
+    const std::uint32_t start_tile_index,
+    const std::uint32_t ntiles,
+    const std::uint32_t start_dst_tile_index = 0) {
     LLK_TDMA_GUARD_NOTE_TDMA(operand);  // TEN-4746: real unpack (UNPACR) disarms this dfb
     const std::uint32_t operand_id = get_operand_id(operand);
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
     const std::uint32_t rd_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx;
     if constexpr (BType == BroadcastType::NONE && unpack_to_dest) {
         WAYPOINT("UPAW");
-        // EN_32BIT_DEST must match the pack side, see llk_unpack_A.
-        _llk_unpack_unary_operand_to_dest_block_<DST_SYNC_MODE, DST_ACCUM_MODE>(
-            rd_entry_idx + start_tile_index, ntiles);
+        _llk_unpack_unary_operand_to_dest_block_(rd_entry_idx + start_tile_index, start_dst_tile_index, ntiles);
         WAYPOINT("UPAD");
     } else {
         [[maybe_unused]] const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
