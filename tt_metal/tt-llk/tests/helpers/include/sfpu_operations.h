@@ -592,7 +592,7 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::hardsigmoid)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(hardsigmoid_init<APPROX_MODE>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(hardsigmoid_init<APPROX_MODE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::log || OPERATION == SfpuType::log_with_base)
     {
@@ -964,7 +964,12 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     else if constexpr (OPERATION == SfpuType::hardsigmoid)
     {
         SFPU_UNARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_activation, (APPROX_MODE, ckernel::ActivationType::Hardsigmoid, ITERATIONS), dst_index, vector_mode);
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_activation,
+            (APPROX_MODE, ckernel::ActivationType::Hardsigmoid, ITERATIONS, DST_ACCUM_MODE),
+            dst_index,
+            vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::log)
     {

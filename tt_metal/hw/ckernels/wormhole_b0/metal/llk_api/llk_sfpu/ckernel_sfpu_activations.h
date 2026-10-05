@@ -30,8 +30,20 @@ inline void apply_activation(sfpi::vFloat& v) {
     ActivationImpl<APPROXIMATION_MODE, ACTIVATION_TYPE>::apply(v);
 }
 
-template <bool APPROXIMATION_MODE, ActivationType ACTIVATION_TYPE, int ITERATIONS>
+bool bf16_dest_hardsigmoid();
+template <int ITERATIONS>
+void calculate_hardsigmoid_bf16();
+// Whether BF16 DEST runs the generated hardsigmoid kernel as one call over the whole tile.
+inline constexpr bool hardsigmoid_bf16_whole_tile = true;
+
+template <bool APPROXIMATION_MODE, ActivationType ACTIVATION_TYPE, int ITERATIONS, bool is_fp32_dest_acc_en = true>
 inline void calculate_activation() {
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
+        if (bf16_dest_hardsigmoid()) {
+            calculate_hardsigmoid_bf16<ITERATIONS>();
+            return;
+        }
+    }
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
@@ -41,12 +53,19 @@ inline void calculate_activation() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+void init_hardsigmoid_bf16();
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void hardsigmoid_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // For hardsigmoid slope is 1/6, FP32 IEEE 754 representation.
     sfpi::vConstFloatPrgm0 = 0.1666666716337204f;
     sfpi::vConstFloatPrgm1 = 0.5f;
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+        init_hardsigmoid_bf16();
+    }
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_hardsigmoid_bf16.h"
