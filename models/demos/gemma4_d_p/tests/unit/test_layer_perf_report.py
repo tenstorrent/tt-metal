@@ -32,16 +32,16 @@ def _write_cell_csv(path, rows):
             writer.writerow(row)
 
 
-def _cell(layer_type, chunk_idx, layer_idx, measured_ms):
+def _cell(layer_type, chunk_idx, layer_idx, measured_ms, chunk_size=8192):
     start, stop = (
-        f"gemma4-layer-{layer_type}-chunk{chunk_idx}-start",
-        f"gemma4-layer-{layer_type}-chunk{chunk_idx}-stop",
+        f"gemma4-layer-{layer_type}-sz{chunk_size}-chunk{chunk_idx}-start",
+        f"gemma4-layer-{layer_type}-sz{chunk_size}-chunk{chunk_idx}-stop",
     )
     return {
         "chunk_idx": chunk_idx,
         "layer_type": layer_type,
         "layer_idx": layer_idx,
-        "chunk_start": chunk_idx * 8192,
+        "chunk_start": chunk_idx * chunk_size,
         "measured_ms": measured_ms,
         "start_signpost": start,
         "stop_signpost": stop,
@@ -66,7 +66,7 @@ def test_summarize_ignores_non_device_rows(tmp_path):
     _write_cell_csv(
         path,
         [
-            ("gemma4-layer-global-chunk0-start (signpost)", "", "", ""),
+            ("gemma4-layer-global-sz8192-chunk0-start (signpost)", "", "", ""),
             ("MatmulDeviceOperation", "300.0", "5.0", "11"),
             ("RingJointSDPADeviceOperation", "500.0", "10.0", "12"),
             ("MatmulDeviceOperation", "200.0", "1000000.0", "10"),
@@ -111,8 +111,8 @@ def test_report_rejects_unsafe_signposts(tmp_path, monkeypatch, expect_error):
     with expect_error(ValueError, "invalid start signpost"):
         lpr.run_tt_perf_report(
             tmp_path / "ops.csv",
-            "gemma4-layer-global-chunk0-start; touch /tmp/pwned",
-            "gemma4-layer-global-chunk0-stop",
+            "gemma4-layer-global-sz8192-chunk0-start; touch /tmp/pwned",
+            "gemma4-layer-global-sz8192-chunk0-stop",
             tmp_path / "out.csv",
         )
     assert not called
@@ -150,19 +150,19 @@ def test_main_reports_all_cells(tmp_path, monkeypatch):
     md = (root / "perf" / lpr.SUMMARY_NAME).read_text()
     assert "| Layer | Chunk 0 | Chunk 31 |" in md
     assert "| local (layer 0) | **1.50**<br>span 1.50<br>host 4.00 | – |" in md
-    assert "```text\nPerformance Report for gemma4-layer-global-chunk31-start\nStacked report\n```" in md
+    assert "```text\nPerformance Report for gemma4-layer-global-sz8192-chunk31-start\nStacked report\n```" in md
 
 
 def test_cell_ops_csv_drops_gap_before_each_devices_first_replayed_op(tmp_path):
     fieldnames = ["OP CODE", "OP TYPE", "DEVICE ID", "GLOBAL CALL COUNT", "OP TO OP LATENCY [ns]"]
     rows = [
         {"OP CODE": "before", "OP TYPE": "tt_dnn_device", "DEVICE ID": "0", "GLOBAL CALL COUNT": "1"},
-        {"OP CODE": "gemma4-layer-global-chunk0-start", "OP TYPE": "signpost"},
+        {"OP CODE": "gemma4-layer-global-sz8192-chunk0-start", "OP TYPE": "signpost"},
         {"OP CODE": "matmul", "OP TYPE": "tt_dnn_device", "DEVICE ID": "0", "GLOBAL CALL COUNT": "12"},
         {"OP CODE": "embedding", "OP TYPE": "tt_dnn_device", "DEVICE ID": "0", "GLOBAL CALL COUNT": "10"},
         {"OP CODE": "embedding", "OP TYPE": "tt_dnn_device", "DEVICE ID": "1", "GLOBAL CALL COUNT": "10"},
         {"OP CODE": "matmul", "OP TYPE": "tt_dnn_device", "DEVICE ID": "1", "GLOBAL CALL COUNT": "12"},
-        {"OP CODE": "gemma4-layer-global-chunk0-stop", "OP TYPE": "signpost"},
+        {"OP CODE": "gemma4-layer-global-sz8192-chunk0-stop", "OP TYPE": "signpost"},
         {"OP CODE": "after", "OP TYPE": "tt_dnn_device", "DEVICE ID": "0", "GLOBAL CALL COUNT": "20"},
     ]
     for r in rows:
@@ -170,7 +170,7 @@ def test_cell_ops_csv_drops_gap_before_each_devices_first_replayed_op(tmp_path):
             r["OP TO OP LATENCY [ns]"] = "1000000" if r["OP CODE"] == "embedding" else "500"
     path = tmp_path / "cell_ops.csv"
     assert lpr.write_cell_ops_csv(
-        fieldnames, rows, "gemma4-layer-global-chunk0-start", "gemma4-layer-global-chunk0-stop", path
+        fieldnames, rows, "gemma4-layer-global-sz8192-chunk0-start", "gemma4-layer-global-sz8192-chunk0-stop", path
     )
 
     _, sliced = lpr.read_ops_csv(path)
@@ -254,3 +254,27 @@ def test_main_rejects_ops_csv_older_than_manifest(tmp_path, monkeypatch):
     monkeypatch.setattr(lpr, "run_tt_perf_report", lambda *_: pytest.fail("reported a stale ops CSV"))
     assert lpr.main(["--profiler-dir", str(tmp_path / "profiler")]) == 1
     assert not (tmp_path / "perf").exists()
+
+
+def test_main_keeps_chunk_sizes_apart_in_one_ops_csv(tmp_path, monkeypatch):
+    monkeypatch.setenv("PREFILL_SUMMARIES", str(tmp_path))
+    monkeypatch.delenv("OMPI_COMM_WORLD_RANK", raising=False)
+    small, large = _cell("global", 0, 5, 1.0, chunk_size=2048), _cell("global", 0, 5, 4.0, chunk_size=8192)
+    lpr.write_manifest("sz2048", [small], context_len=262144, chunk_size=2048, mesh_shape=(8, 4))
+    lpr.write_manifest("sz8192", [large], context_len=262144, chunk_size=8192, mesh_shape=(8, 4))
+    _write_ops_csv(tmp_path / "profiler", [small, large])
+
+    sliced = []
+
+    def fake_report(ops_csv, start, stop, out_csv):
+        sliced.append((start, stop))
+        _write_cell_csv(out_csv, [("MatmulDeviceOperation", "1500.0", "100.0")])
+        return True
+
+    monkeypatch.setattr(lpr, "run_tt_perf_report", fake_report)
+    assert lpr.main(["--profiler-dir", str(tmp_path / "profiler")]) == 0
+    assert sliced == [
+        (small["start_signpost"], small["stop_signpost"]),
+        (large["start_signpost"], large["stop_signpost"]),
+    ]
+    assert small["start_signpost"] != large["start_signpost"]

@@ -31,17 +31,17 @@ pytest models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_per
 pytest models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_perf_chunk_n[blackhole-chunkall-local-sz8192-ctx_256k-8x4] -sv
 ```
 
-Both tests support chunk sizes 4096, 8192, 16384, and 32768. A CP-local chunk must cover the 1024-token sliding window, so 4096 skips on 8×4. Layer tests compile and capture once per layer type, initialize the ring caches with random values, and measure each selected chunk once.
+Both tests take chunk sizes 2048, 4096, 8192, 16384, and 32768; a chunk must split into whole 32-token tiles per CP rank. Layer tests compile and capture once per layer type, initialize the ring caches with random values, and measure each selected chunk once.
 
 ### Layer perf in CI
 
-The **Blaze Models Prefill tests** workflow runs the `gemma4_d_p_layer_perf` stage with Tracy on a 14kW Galaxy. Dispatch it with `test-type=gemma4_d_p_layer_perf`; the regular nightly callers exclude this group. It measures `chunk_idx=ci`, which covers the cells in `LAYER_PERF_CI_CELLS`: the global layer at chunks 0, 1, 15, and 31, and the sliding layer at chunks 0 and 1, all at 256k@8k on 8×4. The job summary shows device-kernel time, span, and host time for each cell, plus each cell's full `tt-perf-report` output: the op table, advice, and stacked summary. The gap before each device's first replayed op is idle time before the replay, so it is left out of span and of `tt-perf-report`'s totals. The `layer-perf-*` artifact holds the raw `ops_perf_results_*.csv` and, for each cell, the slice of it that was reported (`*_ops.csv`) with `tt-perf-report`'s CSV, text output, stacked CSV/PNG, and log.
+The **Blaze Models Prefill tests** workflow runs the `gemma4_d_p_layer_perf` stage with Tracy on a 14kW Galaxy. Dispatch it with `test-type=gemma4_d_p_layer_perf`; the regular nightly callers exclude this group. It measures `chunk_idx=ci`, which covers the cells in `LAYER_PERF_CI_CELLS`: for 2048, 4096, and 8192 chunks at 256k context on 8×4, the first, second, middle, and last global chunk (0/1/63/127, 0/1/31/63, and 0/1/15/31) and sliding chunks 0 and 1. All three chunk sizes run in one Tracy session, so each signpost names its chunk size. The job summary shows device-kernel time, span, and host time for each cell, plus each cell's full `tt-perf-report` output: the op table, advice, and stacked summary. The gap before each device's first replayed op is idle time before the replay, so it is left out of span and of `tt-perf-report`'s totals. The `layer-perf-*` artifact holds the raw `ops_perf_results_*.csv` and, for each cell, the slice of it that was reported (`*_ops.csv`) with `tt-perf-report`'s CSV, text output, stacked CSV/PNG, and log.
 
 To reproduce it locally:
 
 ```bash
 python -m tracy -p -r -v -o generated/profiler --op-support-count 20000 \
-  -m "pytest models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_perf_chunk_n[blackhole-chunkci-both-sz8192-ctx_256k-8x4]"
+  -m "pytest models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_perf_chunk_n[blackhole-chunkci-both-sz2048-ctx_256k-8x4] models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_perf_chunk_n[blackhole-chunkci-both-sz4096-ctx_256k-8x4] models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_perf_chunk_n[blackhole-chunkci-both-sz8192-ctx_256k-8x4]"
 pip install tt-perf-report
 python models/demos/gemma4_d_p/scripts/layer_perf_report.py --profiler-dir generated/profiler
 ```
@@ -49,8 +49,8 @@ python models/demos/gemma4_d_p/scripts/layer_perf_report.py --profiler-dir gener
 The test writes a manifest of its cells to `$PREFILL_SUMMARIES/layer_perf`, which defaults to `/tmp/prefill_summaries_$USER`. The report script slices the ops CSV by each cell's signpost pair and writes `$PREFILL_SUMMARIES/perf/gemma4_d_p_layer_perf.md`. It only parses files. To slice one cell of a downloaded artifact by hand:
 
 ```bash
-tt-perf-report --start-signpost gemma4-layer-global-chunk15-start \
-               --end-signpost gemma4-layer-global-chunk15-stop ops_perf_results_<ts>.csv
+tt-perf-report --start-signpost gemma4-layer-global-sz8192-chunk15-start \
+               --end-signpost gemma4-layer-global-sz8192-chunk15-stop ops_perf_results_<ts>.csv
 ```
 
 Global layers use tied QK projection; sliding layers use QKV. Weight caches are separated by dtype and mesh geometry. A valid completion marker permits cache-only loading; otherwise weights are loaded from the checkpoint. Set `GEMMA4_PREFILL_LOAD_FULL_WEIGHTS=1` to force checkpoint loading. Offline text input also needs the demo's cached corpus.

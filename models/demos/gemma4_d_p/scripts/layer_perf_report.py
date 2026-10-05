@@ -19,7 +19,7 @@ from pathlib import Path
 
 MANIFEST_DIR = "layer_perf"
 SUMMARY_NAME = "gemma4_d_p_layer_perf.md"
-SIGNPOST_PATTERN = re.compile(r"^gemma4-layer-(global|local)-chunk([0-9]+)-(start|stop)$")
+SIGNPOST_PATTERN = re.compile(r"^gemma4-layer-(global|local)-sz([0-9]+)-chunk([0-9]+)-(start|stop)$")
 GAP_COLUMNS = ("OP TO OP LATENCY [ns]", "OP TO OP LATENCY BR/NRISC START [ns]")
 # GitHub caps a job step summary at 1 MiB.
 SUMMARY_TEXT_LIMIT = 900_000
@@ -105,7 +105,7 @@ def _validate_signpost(signpost, expected_edge):
     if not isinstance(signpost, str):
         raise ValueError(f"signpost must be a string: {signpost!r}")
     match = SIGNPOST_PATTERN.fullmatch(signpost)
-    if match is None or match.group(3) != expected_edge:
+    if match is None or match.group(4) != expected_edge:
         raise ValueError(f"invalid {expected_edge} signpost: {signpost!r}")
     return signpost
 
