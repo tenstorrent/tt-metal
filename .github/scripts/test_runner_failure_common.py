@@ -1,3 +1,5 @@
+import io
+from pathlib import Path
 import subprocess
 
 import pytest
@@ -5,6 +7,7 @@ import pytest
 from runner_failure_common import (
     RecentJob,
     fetch_github_job_log,
+    extract_fabric_missing_links,
     job_from_dict,
     matching_job_metadata_signature_labels,
     matching_signature_labels,
@@ -12,6 +15,7 @@ from runner_failure_common import (
     result_to_dict,
     scan_job,
     scan_result_from_dict,
+    scan_log_file,
 )
 
 
@@ -85,12 +89,79 @@ def test_mgd_topology_signature() -> None:
     assert matching_signature_labels(log_text) == ["Fabric link down (MGD topology)"]
 
 
-def test_job_log_fetch_allows_escape_sequences(monkeypatch) -> None:
+def test_file_scan_matches_signatures_and_links_across_chunks(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("runner_failure_common.LOG_SCAN_CHUNK_SIZE", 128)
+    log_text = (
+        "x" * 123 + "\x1b[36;1mRequested mesh is too big and is not rotatable: MeshShape([8, 4]) "
+        "and SystemMesh MeshShape([32, 1])\x1b[0m\n"
+        "Graph specified in MGD could not fit in the discovered physical topology\n"
+        "target graph edge from node (M0, D26) to (M0, D27) requires 2 channels, "
+        "but physical edge from 26 to 27 only has 0 channels\n"
+        "Failed to allocate TLB window.\n"
+        "Timed out waiting for ETH heartbeat\n"
+    )
+    path = tmp_path / "log.txt"
+    path.write_text(log_text)
+
+    labels, links = scan_log_file(path)
+
+    assert labels == matching_signature_labels(log_text)
+    assert links == extract_fabric_missing_links(log_text) == "m0,d26>m0,d27"
+
+
+@pytest.mark.parametrize("hard_failure", [False, True])
+def test_file_scan_preserves_disk_recovery_across_chunks(tmp_path, hard_failure) -> None:
+    log_text = "Disk usage is 98%\n" + ("No space left on device\n" if hard_failure else "")
+    log_text += "noise\n" * 100000 + "Disk usage is 30%\n"
+    path = tmp_path / "log.txt"
+    path.write_text(log_text)
+
+    labels, _links = scan_log_file(path)
+
+    assert ("Out of disk" in labels) is hard_failure
+
+
+def test_file_scan_uses_bounded_reads_even_for_long_lines(monkeypatch) -> None:
+    class BoundedReader(io.StringIO):
+        def read(self, size=-1):
+            assert 0 < size <= 256 * 1024
+            return super().read(size)
+
+    reader = BoundedReader("x" * (2 * 1024 * 1024) + "Failed to allocate TLB window.")
+    monkeypatch.setattr(Path, "open", lambda *_args, **_kwargs: reader)
+
+    assert scan_log_file(Path("unused")) == (["TLB error"], "")
+
+
+@pytest.mark.parametrize("timeout", [False, True])
+def test_scan_job_removes_temporary_logs(monkeypatch, timeout) -> None:
+    paths = []
+
+    def fake_run(command, **kwargs):
+        paths.append(Path(kwargs["stdout"].name))
+        kwargs["stdout"].write(b"Failed to allocate TLB window.")
+        if timeout:
+            raise subprocess.TimeoutExpired(command, 120)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr("runner_failure_common.subprocess.run", fake_run)
+    job = job_from_dict({"job_id": "1", "status": "completed", "conclusion": "success"})
+
+    result = scan_job(job, 120)
+
+    assert result.log_checked is not timeout
+    assert result.signature_labels == (() if timeout else ("TLB error",))
+    assert paths and not paths[0].parent.exists()
+
+
+def test_job_log_fetch_allows_escape_sequences(monkeypatch, tmp_path) -> None:
     captured_command: list[str] = []
 
-    def fake_run(command, **_kwargs):
+    def fake_run(command, **kwargs):
         captured_command.extend(command)
-        return subprocess.CompletedProcess(command, 0, stdout="\x1b[36;1mlog\x1b[0m", stderr="")
+        assert "capture_output" not in kwargs
+        kwargs["stdout"].write(b"\x1b[36;1mlog\x1b[0m")
+        return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr("runner_failure_common.subprocess.run", fake_run)
     job = RecentJob(
@@ -111,7 +182,7 @@ def test_job_log_fetch_allows_escape_sequences(monkeypatch) -> None:
         setup_runner_conclusion="",
     )
 
-    result = fetch_github_job_log(job, timeout=120)
+    result = fetch_github_job_log(job, timeout=120, log_path=tmp_path / "job.log")
 
     assert captured_command == [
         "gh",
@@ -119,7 +190,7 @@ def test_job_log_fetch_allows_escape_sequences(monkeypatch) -> None:
         "--allow-escape-sequences",
         "repos/tenstorrent/tt-metal/actions/jobs/105436322615/logs",
     ]
-    assert result.log_text == "\x1b[36;1mlog\x1b[0m"
+    assert result.log_path.read_text() == "\x1b[36;1mlog\x1b[0m"
 
 
 def test_active_job_logs_are_deferred_without_downloading(monkeypatch) -> None:
@@ -145,8 +216,9 @@ def test_active_job_logs_are_deferred_without_downloading(monkeypatch) -> None:
     ],
 )
 def test_log_404_is_unavailable_only_with_runner_disconnect_evidence(monkeypatch, annotation, unavailable) -> None:
-    def failed_download(command, **_kwargs):
-        return subprocess.CompletedProcess(command, 1, stdout="", stderr="gh: HTTP 404")
+    def failed_download(command, **kwargs):
+        kwargs["stderr"].write(b"gh: HTTP 404")
+        return subprocess.CompletedProcess(command, 1)
 
     def metadata(endpoint, **_kwargs):
         if endpoint == "repos/tenstorrent/tt-metal/actions/jobs/1":
@@ -170,9 +242,10 @@ def test_log_404_is_unavailable_only_with_runner_disconnect_evidence(monkeypatch
     assert scan_result_from_dict(result_to_dict(result)) == result
 
 
-def test_log_404_counts_as_failure_when_metadata_lookup_fails(monkeypatch) -> None:
-    def failed_download(command, **_kwargs):
-        return subprocess.CompletedProcess(command, 1, stdout="", stderr="gh: HTTP 404")
+def test_log_404_counts_as_failure_when_metadata_lookup_fails(monkeypatch, tmp_path) -> None:
+    def failed_download(command, **kwargs):
+        kwargs["stderr"].write(b"gh: HTTP 404")
+        return subprocess.CompletedProcess(command, 1)
 
     def failed_metadata(*_args, **_kwargs):
         raise RuntimeError("gh api failed: HTTP 403")
@@ -181,7 +254,7 @@ def test_log_404_counts_as_failure_when_metadata_lookup_fails(monkeypatch) -> No
     monkeypatch.setattr("runner_failure_common.gh_api_json", failed_metadata)
     job = job_from_dict({"owner_repo": "tenstorrent/tt-metal", "job_id": "1", "status": "completed"})
 
-    result = fetch_github_job_log(job, timeout=120)
+    result = fetch_github_job_log(job, timeout=120, log_path=tmp_path / "job.log")
 
     assert not result.unavailable
     assert result.status == "gh api failed: gh: HTTP 404"
