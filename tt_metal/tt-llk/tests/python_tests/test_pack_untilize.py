@@ -91,11 +91,12 @@ def test_pack_untilize(
         [32, 512],
         [32, 64],
         [32, 192],
+        [32, 320],
         [64, 128],
         [32, 2176],
     ],
     block_ct_dim=lambda input_dimensions: [
-        {32: 1, 96: 0, 256: 0, 512: 0, 64: 1, 192: 3, 128: 2, 2176: 4}[
+        {32: 1, 96: 0, 256: 0, 512: 0, 64: 1, 192: 3, 320: 5, 128: 2, 2176: 4}[
             input_dimensions[1]
         ]
     ],
@@ -106,14 +107,14 @@ def test_pack_untilize_rows(
     input_dimensions,
     block_ct_dim,
 ):
+    if dest_acc == DestAccumulation.Yes and block_ct_dim > 4:
+        pytest.skip("A 32-bit DEST half holds four tiles")
     if (
         formats.output_format == DataFormat.Fp8_e4m3
-        and block_ct_dim % 2
+        and block_ct_dim == 1
         and block_ct_dim * 32 < input_dimensions[1]
     ):
-        pytest.skip(
-            "Fp8_e4m3 block rows of an odd tile count clobber the next 32 bytes, #59140"
-        )
+        pytest.skip("An 8-bit block row of one tile clobbers the next 32 bytes, #59140")
     _check_pack_untilize(
         formats, dest_acc, input_dimensions, DestSync.Half, 0, block_ct_dim or None
     )

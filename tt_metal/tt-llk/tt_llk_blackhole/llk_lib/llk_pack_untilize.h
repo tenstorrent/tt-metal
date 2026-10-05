@@ -47,6 +47,27 @@ inline void _llk_pack_untilize_configure_addrmod_()
         .set(ADDR_MOD_2);
 }
 
+/**
+ * @brief ADDR_MOD slots of the first-tile-stream row form: ADDR_MOD_3 (the row's first PACR) also steps the channel 1
+ * Z counter, which moves the rest of the row one tile row into L1; the row-closing ADDR_MOD_1 clears it again.
+ */
+inline void _llk_pack_untilize_configure_first_tile_stream_addrmod_()
+{
+    addr_mod_pack_t {
+        .y_src = {.incr = 1, .clr = 0},
+        .y_dst = {.incr = 1, .clr = 0},
+        .z_src = {.incr = 0, .clr = 1},
+        .z_dst = {.incr = 0, .clr = 1},
+    }
+        .set(ADDR_MOD_1);
+
+    addr_mod_pack_t {
+        .z_src = {.incr = 1, .clr = 0},
+        .z_dst = {.incr = 1, .clr = 0},
+    }
+        .set(ADDR_MOD_3);
+}
+
 /*
 block_ct_dim represents the number of input tiles in a block.
 dense is used with num_faces == 2 and even block_ct_dim, where two 16x32 (or smaller) tiles are packed in a single 32x32 tile region in dest.
@@ -63,6 +84,8 @@ dense is used with num_faces == 2 and even block_ct_dim, where two 16x32 (or sma
  * @tparam narrow_row: True when faces occupy only the first column of the tile (single packer interface).
  * @tparam dense: True to pack two tiles into one 32x32 dest region using all interfaces; requires num_faces == 2 and even block_ct_dim.
  * @tparam pace: True to issue a filler before every PACR and around every row.
+ * @tparam first_tile_stream: True to write the first tile of every row as its own L1 stream (Last), so that the
+ *         64-datum flush of an 8-bit output lands on the next tile, which the rest of the row then rewrites.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param row_ends_stream: True to close every row with Last (rows not contiguous in L1, or 32-bit Dest reads).
@@ -70,12 +93,13 @@ dense is used with num_faces == 2 and even block_ct_dim, where two 16x32 (or sma
  *        the channel 1 Y stride field cannot hold.
  * @note @ref _llk_pack_untilize_configure_addrmod_ must have programmed the ADDR_MOD slots.
  */
-template <std::uint32_t block_ct_dim, bool narrow_row = false, bool dense = false, bool pace = false>
+template <std::uint32_t block_ct_dim, bool narrow_row = false, bool dense = false, bool pace = false, bool first_tile_stream = false>
 inline void _llk_pack_untilize_mop_config_(
     const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const bool row_ends_stream = true, const bool l1_row_step_by_cfg = false)
 {
     static_assert(!dense || (block_ct_dim % 2 == 0), "block_ct_dim must be even when dense");
     static_assert(!dense || (!narrow_row), "narrow_row must be false when dense");
+    static_assert(!first_tile_stream || (!pace && !dense && block_ct_dim > 1), "first_tile_stream needs a plain row of two or more tiles");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(!dense || (num_faces == 2), "num_faces must be 2 when dense");
     /*
@@ -172,6 +196,22 @@ inline void _llk_pack_untilize_mop_config_(
         {
             tmp.set_start_op(TT_OP_DMANOP);
         }
+        if constexpr (first_tile_stream)
+        {
+            tmp.set_start_op(TT_OP_PACR(
+                p_pacr::CFG_CTXT_0,
+                p_pacr::NO_ROW_PAD_ZERO,
+                p_pacr::DST_ACCESS_STRIDED_MODE,
+                ADDR_MOD_3,
+                p_pacr::ADDR_CNT_CTXT_0,
+                0,
+                PACK_INTF_SEL,
+                0,
+                0,
+                p_pacr::NO_CTXT_CTRL,
+                0,
+                1));
+        }
 
         tmp.program();
     };
@@ -182,7 +222,7 @@ inline void _llk_pack_untilize_mop_config_(
     }
     else
     {
-        ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, pacr_op);
+        ckernel::ckernel_template tmp(MOP_OUTER_LOOP, first_tile_stream ? MOP_INNER_LOOP - 1 : MOP_INNER_LOOP, pacr_op);
         program_mop(tmp);
     }
 }
@@ -240,12 +280,16 @@ inline void _llk_pack_untilize_init_(
     // A full-width block is one L1 stream per face pair; 32-bit reads still close every row to leave Dest
     // cycles to an unpacker writing the other half.
     constexpr bool l1_rows_contiguous = (full_ct_dim == block_ct_dim);
-    const bool row_ends_stream        = !l1_rows_contiguous || (datum_size_in_bytes(pack_src_format) == 4);
+    // An 8-bit output reaches L1 in 64-datum units: a flush pads a shorter stream with zeros up to the unit.
+    const bool eight_bit_out   = IS_8BIT_FORMAT(pack_dst_format);
+    const bool row_ends_stream = !l1_rows_contiguous || ((datum_size_in_bytes(pack_src_format) == 4) && !eight_bit_out);
+    constexpr bool odd_block_form = !l1_rows_contiguous && (block_ct_dim % 2 == 1) && (block_ct_dim > 1) && !narrow_row && !dense;
+    const bool first_tile_stream  = odd_block_form && eight_bit_out;
     // The channel 1 Y stride field is 16 bits, and the packer keeps the channel 1 offset only within 256 KiB.
     const std::uint32_t rows_per_call = face_r_dim * ((num_faces > 2) ? 2 : 1);
     // 32-bit rows of three tiles are paced, and in the block form step L1 by CFGSHIFTMASK: packed back to back they
     // cost an unpacker writing Dest more L1 cycles than they save.
-    const bool pace = (datum_size_in_bytes(pack_src_format) == 4) && (block_ct_dim == 3);
+    const bool pace = (datum_size_in_bytes(pack_src_format) == 4) && (block_ct_dim == 3) && !eight_bit_out;
     const bool l1_row_step_by_cfg =
         row_ends_stream &&
         ((pace && !l1_rows_contiguous) || (output_addr_offset > (PCK0_ADDR_CTRL_XY_REG_1_Ystride_MASK >> PCK0_ADDR_CTRL_XY_REG_1_Ystride_SHAMT)) ||
@@ -253,7 +297,17 @@ inline void _llk_pack_untilize_init_(
 
     _llk_pack_untilize_configure_addrmod_();
 
-    if constexpr (block_ct_dim == 3)
+    if (first_tile_stream)
+    {
+        if constexpr (odd_block_form)
+        {
+            _llk_pack_untilize_configure_first_tile_stream_addrmod_();
+            _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense, false, true>(face_r_dim, num_faces, row_ends_stream, l1_row_step_by_cfg);
+            // Channel 1 Z offset of the rest of the row: one tile row of the output
+            cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(SCALE_DATUM_SIZE(pack_dst_format, TILE_C_DIM));
+        }
+    }
+    else if constexpr (block_ct_dim == 3)
     {
         if (pace)
         {
