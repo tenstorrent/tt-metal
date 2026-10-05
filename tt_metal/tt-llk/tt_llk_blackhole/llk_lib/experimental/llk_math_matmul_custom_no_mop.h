@@ -454,7 +454,9 @@ inline void _llk_math_matmul_uninit_no_mop_()
     // No state to restore - all states are transient or default
 }
 
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
+// PHASES overrides the number of fidelity phases replayed (high-fidelity replay image only): a HiFi2 image
+// replayed once is a LoFi matmul, so one recorded image serves matmuls of both fidelities.
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, int PHASES = get_math_num_fidelity_phases(math_fidelity)>
 inline void _llk_math_matmul_no_mop_(
     std::uint32_t dst_index,
     const std::uint32_t ct_dim         = 1,
@@ -606,8 +608,8 @@ inline void _llk_math_matmul_no_mop_(
                 // Non-throttled execution - use replay
                 if constexpr (high_fidelity)
                 {
-                    // Replay num_fidelity_phases times
-                    for (std::uint32_t phase = 0; phase < num_fidelity_phases; phase++)
+                    // Replay PHASES (default num_fidelity_phases) times
+                    for (std::uint32_t phase = 0; phase < static_cast<std::uint32_t>(PHASES); phase++)
                     {
                         lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
                     }

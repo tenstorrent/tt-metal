@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// LOW_PRECISION's fused K chunk (sdpa_fused_chunk). Included by recipe_streaming.hpp after the helpers it uses
+// STANDARD's and LOW_PRECISION's fused K chunk (sdpa_fused_chunk). Included by recipe_streaming.hpp after the helpers it uses
 // (reduce_c_row_group, sub_exp_block_bcast_cols, normalize_row_streaming, blocked_matmul_and_pack) and before
 // sdpa_inner_loop_step, which dispatches to it.
 //
@@ -20,7 +20,7 @@
 
 #ifdef SDPA_RECIPE_FUSED_ACTIVE
 /**
- * Fused LOW_PRECISION K chunk (every chunk after a Q chunk's first). The reference max m_ref is already
+ * Fused STANDARD / LOW_PRECISION K chunk (every chunk after a Q chunk's first). The reference max m_ref is already
  * known, so the row max is not needed before the exp:
  *   - QK accumulates s - m_ref straight into DEST through one extra inner step, [Q | M] x [K^T ; -e0]
  *     (M: the reference-max tile, m_ref in column 0; -e0 in K's format). The pack thread takes the fast exp
@@ -168,8 +168,11 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
             in0_index++;
             in1_index += KT;
         }
-        // - m_ref: M (row r's m in column 0) x (-e0 transposed: -1 in row 0).
-        matmul_block_no_mop(prev.max, neg_unit_cb, row0, 0, 0, true, sbw, h, 1);
+        // - m_ref: M (row r's m in column 0) x (-e0 transposed: -1 in row 0). Both operands are exact in one
+        // fidelity phase (m_ref has 7 significant bits for srcB, -1 has one for srcA), so a HiFi build replays
+        // its image once here.
+        UNPACK((llk_unpack_AB_matmul(prev.max, neg_unit_cb, row0, 0, sbw, h, 1)));
+        MATH((llk_math_matmul_no_mop<MATH_FIDELITY, MM_THROTTLE, 1>(prev.max, neg_unit_cb, 0, sbw, h)));
         tile_regs_commit();
         tile_regs_wait();
 #if defined(SDPA_RECIPE_K_PRIMARY_ROWS) || defined(SDPA_RECIPE_RING)
