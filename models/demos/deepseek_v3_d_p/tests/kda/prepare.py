@@ -10,9 +10,9 @@ Run from the tt-metal checkout root, in the same checkout (and ttnn model cache)
 
 Case names come from ``tests/kda/cases.py::KDA_CASES``; a device test that misses a cache names the command
 for its case. Real-weight cases need ``KIMI_K3_CKPT``. Device tests then run load-only (the default
-``KDA_CACHE_MISS=fail``) with ``TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0`` (tt_metal_tracker-g1b.1.4), e.g.
+``KDA_CACHE_MISS=fail``), e.g.
 
-    TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 scripts/run_safe_pytest.sh <exact test ids> -vv
+    scripts/run_safe_pytest.sh <exact test ids> -vv
 
 Host tilization initializes the TT-Metal runtime, so this command runs it against a mock cluster
 (``TT_METAL_MOCK_CLUSTER_DESC_PATH``, defaulting to the LoudBox 8xP150 descriptor) and verifies on exit that
