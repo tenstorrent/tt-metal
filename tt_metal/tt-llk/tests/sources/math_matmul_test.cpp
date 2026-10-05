@@ -194,10 +194,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // Same code for every value: one L1 load at the runtime spin iteration read in INIT (0 = none).
                 volatile std::uint32_t* repro_l1 = &llk_profiler::buffer[llk_profiler::TRISC_ID][llk_profiler::BUFFER_LENGTH - 1];
                 std::uint32_t repro_n, repro_v;
-                std::uint32_t repro_k = repro_rt_at == 0 ? 0xFFFFFFFFu : 20000 - repro_rt_at;
+                // 3,000 iterations outlast the pack loop of 256 tiles (about 9,000 cycles); 20,000 only cost simulation time.
+                constexpr std::uint32_t repro_k_loop = 3000;
+                std::uint32_t repro_k = repro_rt_at == 0 ? 0xFFFFFFFFu : repro_k_loop - repro_rt_at;
                 asm volatile(
                     ".option push\n\t.option norvc\n\t"
-                    "li %0, 20000\n"
+                    "li %0, 3000\n"
                     "1:\n\tnop\n\tbne %0, %2, 2f\n\tlw %1, 0(%3)\n"
                     "2:\n\taddi %0, %0, -1\n\tbnez %0, 1b\n\t.option pop"
                     : "=&r"(repro_n), "=&r"(repro_v)
