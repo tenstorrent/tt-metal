@@ -62,6 +62,10 @@ class VisionModelArgs(ModelArgs):
 
         assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
 
+        # Weight dtypes for the vision tower; QuasarVisionModelArgs overrides both to bf16.
+        self.vision_weight_dtype = ttnn.bfloat8_b
+        self.vision_mlp_fc1_dtype = ttnn.bfloat4_b if self.optimizations.bfp4_mlp else ttnn.bfloat8_b
+
     def prepare_residual_tensor_prefill(self, x_bsh):
         """
         Prepare inputs for prefill mode.
