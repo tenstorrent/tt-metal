@@ -609,6 +609,20 @@ TEST(MatmulAutoConfig, SingleKBlockReuseSlices) {
     EXPECT_EQ(chosen->blocking.per_core_M, 4u);
 }
 
+// Reuse's slice estimate: 48 small batch matrices (8x8x2 tiles) take whole-matrix slices (one block per core) over
+// the 4-row slices that fill the grid; the per-block cost outweighs the extra cores (Wormhole sweep: 8% faster).
+// Large blocks keep the slice that fills the grid (gpt2-style 48 x 32x32x2).
+TEST(MatmulAutoConfig, ReuseSliceEstimate) {
+    const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
+    const auto small = choose(make_matmul(48, 48, 256, 256, 64), hw);
+    ASSERT_TRUE(small.has_value());
+    EXPECT_EQ(static_cast<int>(small->family), static_cast<int>(Family::Reuse));
+    EXPECT_EQ(small->blocking.per_core_M, 8u);
+    const auto large = choose(make_matmul(48, 48, 1024, 1024, 64), hw);
+    ASSERT_TRUE(large.has_value());
+    EXPECT_EQ(large->blocking.per_core_M, 16u);
+}
+
 // Batched B with K one tile: 2D's blocks are one tile wide (roofline fallback), and the roofline scores it only
 // 1.2x better than Reuse while it loops the 2 batches serially. Reuse stays (WH: 41 us vs 2D's 64 us).
 TEST(MatmulAutoConfig, OneTileTwoDKeepsReuseForBatchedB) {

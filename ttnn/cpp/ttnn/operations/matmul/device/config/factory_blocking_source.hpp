@@ -125,6 +125,16 @@ public:
         // Wormhole (i29716_dit wants large 2D blocks at K 1, and large bf16 blocks over deeper K at equal work),
         // on for Blackhole (BH probe of g_4096; equal-work 2D ties go 5-8% faster deeper on BH bf16 shapes).
         bool k_depth_over_block_size = false;
+        // Reuse's slice estimate (see FactoryBlockingSource::reuse_blocking): the fixed cost of each block
+        // (cycles), the rate a core writes its block's output at (bytes per cycle; the last block's write doesn't
+        // overlap compute), and how much faster another slice must be estimated than the one that fills the grid.
+        // Basis: Reuse slice sweeps of 49 batched cases on Wormhole and Blackhole (generated/matmul_oob/rslice;
+        // every per_core_M timed): the fixed cost alone is ~10 us per block (2 x 4096x32x256: 1/2/4 blocks per core
+        // 41/51/64 us). These values change no case for the worse on either machine; c 16k-32k, 2-3 B/cycle and a
+        // margin of 1.1-1.25 behave the same.
+        double reuse_block_cycles = 32000;
+        double reuse_write_bytes_per_cycle = 3;
+        double reuse_switch_margin = 1.25;
     };
     struct Params {
         Limits limits;

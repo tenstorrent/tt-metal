@@ -5,6 +5,7 @@
 #include "ttnn/operations/matmul/device/config/factory_blocking_source.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <tuple>
 #include <utility>
@@ -595,7 +596,10 @@ std::vector<Candidate> FactoryBlockingSource::candidates(const MatmulDesc& p, co
 }
 
 // Reuse (batched B): per_core_N = Nt and per_core_M is the tallest slice of a batch matrix that still gives
-// every core a block (all of Mt when the batch alone fills the grid) and fits L1. Block-float B with A tiles under
+// every core a block (all of Mt when the batch alone fills the grid) and fits L1, unless another slice is estimated
+// clearly faster: blocks per core times a fixed cost per block (each block re-reads its B and synchronises), plus
+// the roofline, plus one block's output write (the last block's write doesn't overlap compute). Tiny blocks then
+// take fewer, taller slices; large ones several per core. Block-float B with A tiles under
 // 16 rows needs a single K block: every slice then loads all of its batch's B at once, so the slice height is the
 // one with the lowest roofline estimate instead. A bias of a whole [M, N] block fuses only into blocks of whole
 // batch matrices.
@@ -619,16 +623,43 @@ std::optional<Blocking> FactoryBlockingSource::reuse_blocking(const MatmulDesc& 
         }
         return best;
     }
+    std::optional<Blocking> filled;
     for (uint32_t per_core_M : divisors_desc(p.Mt)) {
         const bool fills_grid = p.batch_a * (p.Mt / per_core_M) >= cores;
         if (!fills_grid && per_core_M > 1) {
             continue;
         }
         if (auto b = blocking_->block(p, hw, Family::Reuse, {per_core_M, p.Nt, true}, rules)) {
-            return b;
+            filled = b;
+            break;
         }
     }
-    return std::nullopt;
+    // The slice that fills the grid unless the estimate below says another is clearly faster (full-size A tiles:
+    // the estimate's constants were fitted on them)
+    if (!filled || p.in0_tile_h != TILE_DIM) {
+        return filled;
+    }
+    const auto tuned = HeuristicBlocking::Params::for_arch(hw.arch).tuned;
+    const double c_block = tuned.reuse_block_cycles, write_bw = tuned.reuse_write_bytes_per_cycle;
+    const double margin = tuned.reuse_switch_margin;
+    auto estimate = [&](const Blocking& b) {
+        const double blocks_per_core = std::ceil(std::ceil(double(p.batch_a) * p.Mt / b.per_core_M) / cores);
+        const double tail = double(b.per_core_M) * p.Nt * out_tile_bytes(p, p.out_format) / write_bw;
+        return blocks_per_core * c_block + roofline(p, hw, Family::Reuse, b, true).cycles() + tail;
+    };
+    std::optional<Blocking> best = filled;
+    double best_est = estimate(*filled);
+    const double filled_est = best_est;
+    for (uint32_t per_core_M : divisors_desc(p.Mt)) {
+        if (auto b = blocking_->block(p, hw, Family::Reuse, {per_core_M, p.Nt, true}, rules)) {
+            const double e = estimate(*b);
+            if (e < best_est) {
+                best = b;
+                best_est = e;
+            }
+        }
+    }
+    return best_est * margin < filled_est ? best : filled;
 }
 
 // A sharded operand or output fixes the family, grid and per-core sizes; returns that layout's candidate, or
