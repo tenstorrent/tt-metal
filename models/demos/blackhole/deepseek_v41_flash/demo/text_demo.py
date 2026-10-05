@@ -594,11 +594,18 @@ def test_dsv41_demo_session(mesh_device, device_params):
     modes = [
         m for m in os.environ.get("DSV41_PF_ASYNC_LIST", "").split(",") if m
     ]  # per-scenario DSV41_PF_ASYNC (A/B in one process)
+    rowtok = [
+        m for m in os.environ.get("DSV41_ROWTOK_LIST", "").split(",") if m
+    ]  # per-scenario DSV41_PREFILL_ROW_TOKENS (chunk-size sweep in one process)
     for si, s in enumerate(chosen):
         prompts, bs, rep, msl, mgt, pp, sp, dtr, ptr, pch, wu, ins, eos = s.values
         if modes:
             os.environ["DSV41_PF_ASYNC"] = modes[si % len(modes)]
-        logger.info(f"=== session scenario {s.id} (DSV41_PF_ASYNC={os.environ.get('DSV41_PF_ASYNC')}) ===")
+        if rowtok:
+            os.environ["DSV41_PREFILL_ROW_TOKENS"] = rowtok[si % len(rowtok)]
+        logger.info(
+            f"=== session scenario {s.id} (DSV41_PF_ASYNC={os.environ.get('DSV41_PF_ASYNC')}, ROW_TOKENS={os.environ.get('DSV41_PREFILL_ROW_TOKENS')}) ==="
+        )
         os.environ["DSV41_RAGGED"] = "1" if s.id.endswith("_ragged") else "2" if s.id.endswith("_ragged_u4") else "0"
         _run_demo(
             mesh_device,
