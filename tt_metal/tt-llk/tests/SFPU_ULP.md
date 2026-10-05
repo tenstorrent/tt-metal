@@ -3,12 +3,13 @@
 Every SFPU op declares how closely its output must match its golden, in
 `python_tests/helpers/sfpu_accuracy_budget.yaml`. For most ops that declaration is a
 tolerance. For the ops enrolled here it is a **step budget**: "every element is within
-N representable values of the reference". A unary op's budget comes from the exhaustive
-sweep, which checks it against *every distinct finite value of a 16-bit input format* --
-`±inf` and NaN are never fed, and `-0.0` is the same value as `+0.0` -- or, for
+N representable values of the reference". Most unary budgets come from the exhaustive
+sweep, which checks an op against *every distinct finite value of a 16-bit input format*
+-- `±inf` and NaN are never fed, and `-0.0` is the same value as `+0.0` -- or, for
 `Float32`, a stride of 65,279 of them across the whole range (`ulp_sweep.is_exhaustive`
-tells the two apart). (The hand-built isinf/isnan sweep, which gates its predicates'
-rows, feeds them on purpose.)
+tells the two apart). The exceptions are the `Signbit`, isinf/isnan and threshold-family
+rows, measured on their functional drivers' hand-built stimuli (`MEASURED_ON_SWEEP`, after
+the format table below). The isinf/isnan sweep feeds `±inf` and NaN on purpose.
 
 This document is how you add an op to that second group.
 

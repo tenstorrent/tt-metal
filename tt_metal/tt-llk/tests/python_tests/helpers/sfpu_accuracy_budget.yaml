@@ -1959,9 +1959,9 @@ Heaviside:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided 
   - {in: Float16_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
   - {in: Float16_b, out: Float32, max_ulp: 0}  # max 0 ULP
   - {in: Float32, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized
-  - {in: Float32, out: Float16, max_ulp: 1}  # max 0 ULP
-  - {in: Float32, out: Float16_b, max_ulp: 1}  # max 0 ULP
-  - {in: Float32, out: Float32, max_ulp: 1}  # max 0 ULP
+  - {in: Float32, out: Float16, max_ulp: 0}  # max 0 ULP
+  - {in: Float32, out: Float16_b, max_ulp: 0}  # max 0 ULP
+  - {in: Float32, out: Float32, max_ulp: 0}  # max 0 ULP
   - {metric: tolerance}       # exact except -0.0; max 1048576001 ULP Float32, 16001 Float16_b, 2026-09-18
 
 
@@ -3738,12 +3738,14 @@ SigmoidAppx:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + stride
   - *coarse_lut_tolerance
 
 
-# Sign and Heaviside gate at 0 steps on every 16-bit input below (1 on the strided
-# Float32 input, where a finite sample cannot assert exactness). The in-tree WH kernels
+# Sign and Heaviside gate at 0 steps on every input below, the strided Float32 one
+# included: they are exact by construction, so the emitter keeps a strided 0 rather than
+# flooring it (EXACT_BY_CONSTRUCTION_OPS). The in-tree WH kernels
 # branch on `abs(v) == 0`, so -0.0 is answered as zero (fixed in #55306), and a
-# recurrence is a regression, not specified behaviour. Their block-float inputs read one
-# lane off, like Signbit's: the -0.0 lane, which the golden's own block quantization
-# turns non-zero. The op-wide tolerance row answers only what the sweep does not drive.
+# recurrence is a regression, not specified behaviour. Their block-float inputs measure 0
+# like Signbit's: the one -0.0 lane the golden's own block quantization turns non-zero is
+# masked by `flushed_inputs`. The op-wide tolerance row answers only what the sweep does
+# not drive.
 Sign:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-05, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, max_ulp: 0}  # max 0 ULP
@@ -3762,9 +3764,9 @@ Sign:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float
   - {in: Float16_b, out: Float16_b, max_ulp: 0}  # max 0 ULP
   - {in: Float16_b, out: Float32, max_ulp: 0}  # max 0 ULP
   - {in: Float32, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized
-  - {in: Float32, out: Float16, max_ulp: 1}  # max 0 ULP
-  - {in: Float32, out: Float16_b, max_ulp: 1}  # max 0 ULP
-  - {in: Float32, out: Float32, max_ulp: 1}  # max 0 ULP
+  - {in: Float32, out: Float16, max_ulp: 0}  # max 0 ULP
+  - {in: Float32, out: Float16_b, max_ulp: 0}  # max 0 ULP
+  - {in: Float32, out: Float32, max_ulp: 0}  # max 0 ULP
   - {metric: tolerance}       # exact except -0.0; max 1056964609 ULP Float32, 16129 Float16_b, 2026-09-18
 Signbit:  # 0 ULP, 16 variants / 65536 lanes, 2026-09-18; measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-05, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized
@@ -4514,8 +4516,8 @@ Threshold:  # 0 ULP, 116 variants / 2.10M lanes, 2026-09-18; measured by: exhaus
   - {in: Float32, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP
   - {out: Float32, max_ulp: 0}  # 0 ULP, 116 variants / 2.10M lanes, 2026-09-18
-  - {out: Float16_b, max_ulp: 0}  # 0 ULP, 116 variants / 2.10M lanes, 2026-09-18
-  - {out: Float16, max_ulp: 0}  # 0 ULP, 116 variants / 2.10M lanes, 2026-09-18
+  - {out: Float16_b, metric: tolerance}  # 0 ULP, 116 variants / 2.10M lanes, 2026-09-18, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so that run measured only the constant 10.0, not the pack rounding of a passed-through x (Identity reads 1 step on these keys)
+  - {out: Float16, metric: tolerance}  # 0 ULP, 116 variants / 2.10M lanes, 2026-09-18, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so that run measured only the constant 10.0, not the pack rounding of a passed-through x (Identity reads 1 step on these keys)
 
 
 Trunc:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-05, except where a row says otherwise

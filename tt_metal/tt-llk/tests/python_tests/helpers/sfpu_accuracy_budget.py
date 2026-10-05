@@ -82,6 +82,8 @@ EXACT_BY_CONSTRUCTION_OPS = frozenset(
         MathOperation.Isposinf,
         MathOperation.LogicalNot,
         MathOperation.Signbit,
+        MathOperation.Sign,
+        MathOperation.Heaviside,
         MathOperation.EqualZero,
         MathOperation.NotEqualZero,
         MathOperation.LessThanZero,
