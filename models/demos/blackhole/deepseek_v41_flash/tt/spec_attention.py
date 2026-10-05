@@ -62,7 +62,7 @@ class _PagedMixin:
         T = 10, 12, 20, ... fail with 'bad optional access'): pad the token rows to a multiple of 8 first (the padded rows are ignored).
         """
         T = self.T
-        if T <= 8 or T % 8 == 0:
+        if T <= 8 or T % 8 == 0 or T > 32:
             return super()._finish(o, st)
         Tp = -(-T // 8) * 8
         o = self._rope_heads(o, st["Ch"], st["nSh"], memory_config=ttnn.DRAM_MEMORY_CONFIG)

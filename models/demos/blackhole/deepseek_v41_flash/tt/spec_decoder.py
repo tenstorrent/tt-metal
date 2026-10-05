@@ -149,28 +149,63 @@ class SpecDecoder(SpecVerifier):
         m = ttnn.mean(x, dim=2, keepdim=True)  # [T,1,1,D] fp32 mean over the 4 streams
         return ttnn.reshape(m, [1, 1, x.shape[0], x.shape[3]])
 
+    def _chunk_sizes(self, T):
+        """Row chunks (<= 32 rows: the mHC kernels / router / shared expert limit); only with DSV41_SPEC_ROWS=1 and T > 32."""
+        if T <= 32 or os.environ.get("DSV41_SPEC_ROWS") != "1":
+            return None
+        assert T % 32 == 0, f"T={T} rows per mesh row: row-chunked verify needs a multiple of 32"
+        return [32] * (T // 32)
+
+    def _forward_chunked(self, T, tokens, sizes):
+        """Verify body for T > 32 rows: streams as a list of 32-row chunks (see DSV41Layer.forward_chunks)."""
+        offs = [32 * i for i in range(len(sizes))]
+        xs, pres, taps = [], [], []
+        for o in offs:
+            x, pre = self.embedding.forward(ttnn.slice(tokens, [o, 0], [o + 32, 1]))
+            xs.append(x)
+            pres.append(ttnn.slice(self.embedding.pre, [o, 0, 0, 0], [o + 32, 1, 1, 4]))
+        for lid, layer, st in self.layers:
+            if lid in self.engram:
+                xs = [
+                    self.engram[lid].forward_v2(
+                        xs[c], ttnn.slice(self.rows[lid], [0, 0, o, 0], [1, 1, o + 32, self.rows[lid].shape[3]])
+                    )
+                    for c, o in enumerate(offs)
+                ]
+            if lid in TAP_LAYERS:
+                taps.append(ttnn.concat([self._tap(x) for x in xs], dim=2))
+            xs, pres = layer.forward_chunks(xs, pres, self._states[st])
+        logits = ttnn.concat([self.head.forward(xs[c], pres[c]) for c in range(len(xs))], dim=2)
+        return logits, taps, xs
+
     def forward(self):
         U, n = self.U, self.n
         T = U * n
         tokens = ttnn.typecast(ttnn.slice(self.ctrl, [0, 0], [T, 1]), ttnn.uint32)
         self.pos = ttnn.reshape(ttnn.slice(self.ctrl, [0, 1], [T, 2]), [T])
         self._engram_rows(T)
-        x, pre = self.embedding.forward(tokens)
         states = {k: ss.build(self.pos) for k, ss in self.step_states.items()}
         taps = []
-        dbg = os.environ.get("DSV41_DEBUG_LAYERS") == "1" and not getattr(self, "_dbg_done", False)
-        for lid, layer, st in self.layers:
-            if lid in self.engram:
-                x = self._engram_fwd(lid, x)
+        sizes = self._chunk_sizes(T)
+        if sizes is not None:
+            self._states = states
+            logits, taps, xs = self._forward_chunked(T, tokens, sizes)
+            x = None
+        else:
+            x, pre = self.embedding.forward(tokens)
+            dbg = os.environ.get("DSV41_DEBUG_LAYERS") == "1" and not getattr(self, "_dbg_done", False)
+            for lid, layer, st in self.layers:
+                if lid in self.engram:
+                    x = self._engram_fwd(lid, x)
+                    if dbg:
+                        self._dbg(f"engram {lid}", x)
+                if lid in TAP_LAYERS:
+                    taps.append(self._tap(x))
+                x, pre = layer.forward(x, pre, states[st], profile=getattr(self, "profile", None))
                 if dbg:
-                    self._dbg(f"engram {lid}", x)
-            if lid in TAP_LAYERS:
-                taps.append(self._tap(x))
-            x, pre = layer.forward(x, pre, states[st], profile=getattr(self, "profile", None))
-            if dbg:
-                self._dbg(f"layer {lid}", x)
-        self._dbg_done = True
-        logits = self.head.forward(x, pre)
+                    self._dbg(f"layer {lid}", x)
+            self._dbg_done = True
+            logits = self.head.forward(x, pre)
         a = self.head.sample_global(logits, self.mesh_config, self.ccl)  # [T,1] uint32 RM: argmax of every row
         # top-2 logits of every row (per column shard, all-gathered): near-tie evidence for exactness analysis, read only on request
         t2 = ttnn.topk(logits, k=2, dim=-1, largest=True, sorted=True)[0]  # [1,1,T,2] fp32 per column shard
@@ -210,7 +245,10 @@ class SpecDecoder(SpecVerifier):
         oh3 = ttnn.reshape(ttnn.to_layout(onehot, rm), [U, n, 1])
         self.commit(oh3)
         hidden = ttnn.typecast(
-            ttnn.concat(taps or [self._tap(x)] * 3, dim=3), ttnn.bfloat16
+            ttnn.concat(
+                taps or [(self._tap(x) if x is not None else ttnn.concat([self._tap(c) for c in xs], dim=2))] * 3, dim=3
+            ),
+            ttnn.bfloat16,
         )  # [1,1,T,15360]; partial-layer debug runs have no tap layers
         dr = self.drafter
         dr.write_main_full(hidden, self.pos)

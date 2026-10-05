@@ -227,12 +227,41 @@ def paged_kv_step(
     md = pool.device()
     rows = int(pos.shape[-1])
     maxp = int(page_table.shape[-1])
+    if (
+        rows > 64
+    ):  # spec verify with > 64 rows (DSV41_SPEC_ROWS): one core per row, 64 rows per call (users of the half shift ring_base / page table)
+        assert kv_mode == 0 and rows % 64 == 0 and 64 % nq == 0
+        outs = []
+        for r0 in range(0, rows, 64):
+            u0 = r0 // nq
+            outs.append(
+                paged_kv_step(
+                    pool,
+                    ttnn.slice(kv, [0, r0, 0, 0], [1, r0 + 64, kv.shape[2], kv.shape[3]]),
+                    None if lat is None else ttnn.slice(lat, [0, 0, r0, 0], [1, 1, r0 + 64, lat.shape[3]]),
+                    ttnn.slice(pos, [r0], [r0 + 64]),
+                    ttnn.slice(page_table, [u0, 0], [u0 + 64 // nq, maxp]),
+                    None if ids is None else ttnn.slice(ids, [r0, 0, 0, 0], [r0 + 64, 1, 1, ids.shape[3]]),
+                    ring_base=ring_base + u0 * ring_rows,
+                    layer_key=layer_key,
+                    ratio=ratio,
+                    src_off=src_off,
+                    topk_out=topk_out,
+                    ring_rows=ring_rows,
+                    kv_mode=kv_mode,
+                    nq=nq,
+                    window=window,
+                    ratio_page_tokens=ratio_page_tokens,
+                    write_kv=write_kv,
+                )
+            )
+        return ttnn.concat(outs, dim=2)
     assert kv.dtype == ttnn.bfloat16 and kv.layout == ttnn.TILE_LAYOUT
     assert pool.dtype in (ttnn.bfloat16, ttnn.fp8_e4m3)
     assert pos.dtype == ttnn.int32 and page_table.dtype == ttnn.int32
     has_lat = lat is not None
     if has_lat:
-        assert lat.dtype == ttnn.bfloat16 and lat.layout == ttnn.TILE_LAYOUT and rows <= 32
+        assert lat.dtype == ttnn.bfloat16 and lat.layout == ttnn.TILE_LAYOUT and rows <= 128
     ids_t = ids if ids is not None else pos
     lat_t = lat if has_lat else kv
     out = ttnn.allocate_tensor_on_device(

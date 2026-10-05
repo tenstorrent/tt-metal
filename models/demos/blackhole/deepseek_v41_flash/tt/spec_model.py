@@ -40,15 +40,38 @@ from models.demos.blackhole.deepseek_v41_flash.tt.spec_paged import (
 def _ucfg(T):
     return ttnn.create_sharded_memory_config(
         shape=(PAD_HEADS, HEAD_DIM),
-        core_grid=ttnn.num_cores_to_corerangeset(T, ttnn.CoreCoord(8, 8), row_wise=True),
+        core_grid=ttnn.num_cores_to_corerangeset(min(T, 64), ttnn.CoreCoord(8, 8), row_wise=True),
         strategy=ttnn.ShardStrategy.HEIGHT,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
 
 
+class _MoEBig:
+    """DSV41_SPEC_ROWS=1, Tn > 32 rows per mesh row: the grouped moe_compute front-end of the prefill (G = Tn/32 chunks of 32 rows per call, router per 32-row slice)
+    over the SAME expert weights, with the DSV41MoEBlock.forward signature."""
+
+    def __init__(self, moe, Tn, buffers):
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import DSV41PrefillMoE
+
+        assert Tn % 32 == 0
+        self.pm = DSV41PrefillMoE(moe, T=32, buffers=buffers, g=Tn // 32)
+        self.decode = self.pm.decode
+        self.mesh_device = moe.mesh_device
+
+    def warmup(self):
+        self.pm.warmup()
+
+    def forward(self, h, h_tok, forced_routing=None):
+        assert forced_routing is None
+        return self.pm.forward(h, h_tok)
+
+
 def _moe_view(moe, Tn, buffers):
     """DSV41MoEBlock over the SAME expert weights / gate with batch_per_device = Tn (own config + scratch buffers)."""
+    if Tn > 32 and os.environ.get("DSV41_SPEC_ROWS") == "1":
+        mb = _MoEBig(moe, Tn, buffers)
+        return mb, mb.decode.buffers
     from models.common.modules.moe.tt_moe_decode import _TTMoEDecodeBuffers
     from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
 
