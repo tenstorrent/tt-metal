@@ -74,8 +74,8 @@ and the Versim run. TILE_LOOP cycles for 256 tiles; the CSV files are in `repro_
 | 0 | 0xf1d4 | 9,070 | 9,070 | 11,674 | 11,664 |
 | 1 | 0xf1dc | 9,317 | 9,313 | 11,669 | 11,418 |
 | 2 | 0xf1e0 | 9,064 | 9,070 | 11,664 | 11,653 |
-| 3 | 0xf1e4 | 9,071 | 9,070 | 11,668 | running |
-| 4 | 0xf1e8 | 9,316 | 9,317 | 11,658 | running |
+| 3 | 0xf1e4 | 9,071 | 9,070 | 11,668 | 11,664 |
+| 4 | 0xf1e8 | 9,316 | 9,317 | 11,658 | 11,655 |
 
 ### Experiment 1: one L1 load at runtime spin iteration K, one ELF (commit 81f48070eda)
 
@@ -85,9 +85,16 @@ and the Versim run. TILE_LOOP cycles for 256 tiles; the CSV files are in `repro_
 | 100 | 9,323 | 9,323 |
 | 125 | 9,320 | 9,320 |
 | 150 | 9,317 | 9,317 |
-| 175 | 9,314 | running |
-| 200 | 9,070 | running |
-| 225 | 9,309 | running |
-| 250 to 350 | 9,306 to 9,294 | running |
-| 375 | 9,070 | running |
-| 400 | 9,289 | running |
+| 175 | 9,314 | 9,314 |
+| 200 | 9,070 | 9,070 |
+| 225 | 9,309 | 9,309 |
+| 250 | 9,306 | 9,306 |
+| 275 | 9,303 | 9,303 |
+| 300 | 9,300 | 9,300 |
+| 325 | 9,297 | 9,297 |
+| 350 | 9,294 | 9,294 |
+| 375 | 9,070 | 9,070 |
+| 400 | 9,289 | 9,289 |
+
+All 14 values match to the cycle. The same three ELF files are fast with no load, slow with a load at most
+moments (+1 cycle for each tile still to be packed), and fast again when the load lands at K = 200 or 375.
