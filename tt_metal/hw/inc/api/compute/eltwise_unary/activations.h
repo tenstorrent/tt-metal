@@ -70,14 +70,24 @@ ALWI void hardsigmoid_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(hardsigmoid, sf
 */
 // clang-format on
 ALWI void softsign_tile(uint32_t idst) {
+    MATH(if constexpr (ckernel::sfpu::softsign_bf16_whole_tile && !DST_ACCUM_MODE && !APPROX) {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softsign, (APPROX, 32, DST_ACCUM_MODE), idst, VectorMode::None);
+        return;
+    });
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softsign, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_softsign,
+        (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE),
+        idst,
+        VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softsign_tile_init() { MATH(SFPU_UNARY_INIT_FN(softsign, sfpu::init_softsign, (APPROX))); }
+ALWI void softsign_tile_init() { MATH(SFPU_UNARY_INIT_FN(softsign, sfpu::init_softsign, (APPROX, DST_ACCUM_MODE))); }
 
 // clang-format off
 /**
