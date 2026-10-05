@@ -389,8 +389,13 @@ def main():
                 args.worktree, args.arch, px, vk, args.timeout, junit_path
             )
             e["verify_result"] = result
-            e["verified"] = result == FAIL
-            tag = "CONFIRMED" if e["verified"] else "not reproduced (noise)"
+            e["verified"] = None if result == ENVERR else result == FAIL
+            if e["verified"] is None:
+                tag = "inconclusive (verify run errored, kept for review)"
+            elif e["verified"]:
+                tag = "CONFIRMED"
+            else:
+                tag = "not reproduced (noise)"
             if e["verified"] and e.get("subsumed_by_depth1"):
                 tag += f" but subsumed by depth-1 member(s) {e['subsumed_by_depth1']}"
             print(
@@ -417,6 +422,7 @@ def main():
         json.dump(escapes, f, indent=2)
 
     verified_escapes = [e for e in escapes if e.get("verified")]
+    inconclusive = [e for e in escapes if e.get("verified") is None]
     print(f"\n========== PAIR SWEEP RESULT ==========", file=sys.stderr)
     print(f"trials -> {args.out}", file=sys.stderr)
     print(f"all candidate escapes: {candidates_path}", file=sys.stderr)
@@ -427,13 +433,14 @@ def main():
         )
         report_escapes = escapes
     else:
-        noise = len(escapes) - len(verified_escapes)
+        report_escapes = verified_escapes + inconclusive
+        noise = len(escapes) - len(report_escapes)
         print(
             f"ESCAPES (verified): {len(verified_escapes)} "
-            f"({noise} candidate(s) did not reproduce and are excluded)",
+            f"({noise} candidate(s) did not reproduce and are excluded, "
+            f"{len(inconclusive)} inconclusive and kept for review)",
             file=sys.stderr,
         )
-        report_escapes = verified_escapes
     for e in report_escapes:
         print(
             f"  {e['polluter']} -> {e['victim']}: {e['verdict']} (baseline {e['victim_baseline']})"

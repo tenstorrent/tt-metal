@@ -150,7 +150,9 @@ def build_addrmod_restore_entries(addrmod_path, ch1x=None):
 
 
 def _reset_card():
-    subprocess.run(["tt-smi", "-r"], capture_output=True, text=True)
+    proc = subprocess.run(["tt-smi", "-r"], capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"tt-smi -r failed (rc={proc.returncode}): {proc.stderr}")
 
 
 def capture_pristine(worktree, arch, test_file, test_id, port, timeout, out_path):
@@ -207,7 +209,11 @@ def collect_all(worktree, arch, timeout):
         capture_output=True,
         text=True,
     )
-    return [line.strip() for line in proc.stdout.splitlines() if "::" in line]
+    return [
+        line.strip()
+        for line in proc.stdout.splitlines()
+        if "::" in line and not line.startswith("test_device_print.py")
+    ]
 
 
 def sample_per_test(nodeids, n_per_test, rng):

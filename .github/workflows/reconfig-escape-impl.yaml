@@ -100,7 +100,6 @@ jobs:
       - name: Run the sweep
         id: sweep
         shell: bash
-        working-directory: ${{ env.LLK_PATH }}
         run: |
           set -euo pipefail
           status=0

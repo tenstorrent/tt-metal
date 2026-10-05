@@ -7,7 +7,7 @@
   coverage: false
   cmd: |
     set -euo pipefail
-    cd tests/python_tests/reconfig_escape
+    cd tt_metal/tt-llk/tests/python_tests/reconfig_escape
     ./ci.sh --arch blackhole --splits 4 --group 1 --report-dir reports/blackhole-1
   skus:
     bh_p150b_civ2:
@@ -21,7 +21,7 @@
   coverage: false
   cmd: |
     set -euo pipefail
-    cd tests/python_tests/reconfig_escape
+    cd tt_metal/tt-llk/tests/python_tests/reconfig_escape
     ./ci.sh --arch blackhole --splits 4 --group 2 --report-dir reports/blackhole-2
   skus:
     bh_p150b_civ2:
@@ -35,7 +35,7 @@
   coverage: false
   cmd: |
     set -euo pipefail
-    cd tests/python_tests/reconfig_escape
+    cd tt_metal/tt-llk/tests/python_tests/reconfig_escape
     ./ci.sh --arch blackhole --splits 4 --group 3 --report-dir reports/blackhole-3
   skus:
     bh_p150b_civ2:
@@ -49,7 +49,7 @@
   coverage: false
   cmd: |
     set -euo pipefail
-    cd tests/python_tests/reconfig_escape
+    cd tt_metal/tt-llk/tests/python_tests/reconfig_escape
     ./ci.sh --arch blackhole --splits 4 --group 4 --report-dir reports/blackhole-4
   skus:
     bh_p150b_civ2:
