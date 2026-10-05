@@ -5,9 +5,11 @@
 #include "scatter_codegen_supported.hpp"
 
 #include <cstdint>
+#include <utility>
 
 #include <tt-metalium/constants.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/small_vector.hpp>
 
 #include "scatter_codegen_program_factory.hpp"
 
@@ -173,6 +175,76 @@ bool supported_by_codegen(
         bf16_reduce);
 }
 
+ttnn::Shape codegen_working_shape(const ttnn::Shape& logical_shape, int32_t dim) {
+    ttsl::SmallVector<uint32_t> dims(logical_shape.cbegin(), logical_shape.cend());
+    const int32_t rank = static_cast<int32_t>(dims.size());
+    if (rank > 0 && dim >= -rank && dim < rank) {
+        const int32_t axis = dim < 0 ? dim + rank : dim;
+        std::swap(dims[axis], dims[rank - 1]);
+    }
+    // unsqueeze_to_4D: leading unit dims up to rank 4; a higher rank is kept as it is (#56876).
+    while (dims.size() < 4) {
+        dims.insert(dims.begin(), 1u);
+    }
+    return ttnn::Shape(dims);
+}
+
+namespace {
+
+// See prefers_row_major_strategy(): the tile-row threshold, the longest stick the detour's untilize
+// may materialize, and the NOC transaction boundary the untilized stick must already sit on.
+constexpr uint32_t kRowMajorRerouteMaxHt = 32;
+constexpr uint32_t kRowMajorRerouteMaxStickElems = 32768;
+constexpr uint32_t kRowMajorRerouteNocAlign = 32;
+
+}  // namespace
+
+bool prefers_row_major_strategy(
+    const Tensor& input_tensor,
+    const Tensor& index_tensor,
+    const Tensor& src_tensor,
+    const ttnn::Shape& working_input,
+    const ttnn::Shape& working_index) {
+    if (input_tensor.layout() != Layout::TILE) {
+        return false;
+    }
+    // The tile-row count of the working shape as the TILE factories see it: every leading dim times
+    // the pre-last dim padded to the tile height. Same quantity as compute_scatter_tile_geometry()'s
+    // Ht on the transposed tensor, derived from the shape so it needs no transposed tensor to exist.
+    const uint32_t tile_h = input_tensor.tensor_spec().tile().get_height();
+    const int32_t rank = static_cast<int32_t>(working_input.rank());
+    uint64_t Ht = (working_input[rank - 2] + tile_h - 1) / tile_h;
+    for (int32_t i = 0; i < rank - 2; ++i) {
+        Ht *= working_input[i];
+    }
+    if (Ht > kRowMajorRerouteMaxHt) {
+        return false;
+    }
+    const uint32_t stick_elems = working_input[-1];
+    const uint32_t index_w = working_index[-1];
+    if (stick_elems > kRowMajorRerouteMaxStickElems || index_w > kRowMajorRerouteMaxStickElems) {
+        return false;
+    }
+    // Checked against the RAW (unaligned) byte width, not the device-aligned page: the untilized
+    // stick is exactly this many bytes wide on the wire, and a width that isn't already NOC-aligned
+    // makes the detour's transport unsafe regardless of how the destination buffer pads it.
+    const uint64_t raw_input_page_bytes = static_cast<uint64_t>(stick_elems) * input_tensor.element_size();
+    const uint64_t raw_index_page_bytes = static_cast<uint64_t>(index_w) * index_tensor.element_size();
+    if (raw_input_page_bytes % kRowMajorRerouteNocAlign != 0 || raw_index_page_bytes % kRowMajorRerouteNocAlign != 0) {
+        return false;
+    }
+    // Only take the detour when the destination RM plan can actually fit L1 once untilized -- the
+    // TILE dispatch's own footprint is a small, fixed number of tile pages regardless of row width,
+    // so it remains the safe fallback whenever the untilized sticks would not fit.
+    const uint64_t input_page_bytes = ttnn::prim::scatter_rm_stick_page_bytes(input_tensor, stick_elems);
+    return ttnn::prim::scatter_rm_min_plan_fits_l1(
+        ttnn::prim::scatter_static_l1(input_tensor),
+        input_page_bytes,
+        index_tensor.element_size(),
+        src_tensor.element_size(),
+        /*bf16_reduce=*/false);
+}
+
 bool is_demoted(const Tensor& input_tensor, int32_t dim, const Tensor& index_tensor, const Tensor& src_tensor) {
     // A unit logical row in TILE layout is padded to 32 rows, so input, index, src and output all
     // carry 32x their logical volume through every transpose in the pre/post sandwich and through
@@ -185,27 +257,16 @@ bool is_demoted(const Tensor& input_tensor, int32_t dim, const Tensor& index_ten
     // the scatter axis (the scatter axis is transposed to last, so this is always the pre-last axis
     // of the post-transpose shape) -- so a 1 here forces the same 1 on index/src without checking
     // them separately.
+    // A call the row-major detour serves never reaches the TILE factories, so it pays none of this:
+    // its unit row is untilized to one logical stick before any kernel runs. The detour's own gate
+    // decides that (prefers_row_major_strategy), on the same working shapes the dispatch scatters.
     if (input_tensor.dtype() == DataType::BFLOAT16 && input_tensor.layout() == Layout::TILE) {
-        const auto& input_shape = input_tensor.logical_shape();
-        const auto rank = static_cast<int32_t>(input_shape.rank());
-        if (rank == 1) {
+        const ttnn::Shape working_input = codegen_working_shape(input_tensor.logical_shape(), dim);
+        const ttnn::Shape working_index = codegen_working_shape(index_tensor.logical_shape(), dim);
+        if (working_input[-2] == 1 &&
+            !prefers_row_major_strategy(input_tensor, index_tensor, src_tensor, working_input, working_index)) {
             return true;
         }
-        if (dim >= -rank && dim < rank) {
-            const int32_t axis = dim < 0 ? dim + rank : dim;
-            // normalized_shape = input_shape with axis `dim` swapped to the last position (the same
-            // transpose-to-last the pre/post sandwich applies before any kernel runs). That swap only
-            // ever touches positions `axis` and `rank - 1`, so normalized_shape[-2] (position
-            // rank - 2) is input_shape[rank - 1] when the scatter axis IS rank - 2 (the swap lands
-            // the old last dim there), and input_shape[rank - 2] unchanged otherwise (including when
-            // the scatter axis is already rank - 1, i.e. the transpose is a no-op).
-            const uint32_t normalized_second_to_last =
-                (axis == rank - 2) ? input_shape[rank - 1] : input_shape[rank - 2];
-            if (normalized_second_to_last == 1) {
-                return true;
-            }
-        }
-        // else: out-of-range dim is not this predicate's concern, let native's own error fire.
     }
 
     // Ungeneralized (ambiguous mechanism) demotion: measured below native on-device for exactly this
