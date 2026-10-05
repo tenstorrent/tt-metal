@@ -23,6 +23,10 @@ namespace tt::tt_fabric {
 
 class FabricContext;
 
+namespace manifest {
+struct Router;
+}  // namespace manifest
+
 // ============ Router Location ============
 
 /**
@@ -161,6 +165,12 @@ public:
      * router must return its layout, since the peer's compile time args read it.
      */
     virtual std::optional<RouterChannelLayout> get_channel_layout() const { return std::nullopt; }
+
+    /**
+     * Collect this router's manifest facts before the builder is destroyed.
+     * Call only after create_kernel(), when connection wiring and per-RISC compile-time arguments are final.
+     */
+    virtual manifest::Router collect_manifest_router(const ChipRoutingFacts& chip_facts) const = 0;
 
 protected:
     // Protected constructor - only derived classes can construct

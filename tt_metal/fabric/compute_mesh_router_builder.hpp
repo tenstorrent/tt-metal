@@ -72,6 +72,8 @@ public:
 
     std::optional<RouterChannelLayout> get_channel_layout() const override;
 
+    manifest::Router collect_manifest_router(const ChipRoutingFacts& chip_facts) const override;
+
     // ============ Compute-Mesh Specific Methods ============
 
     /**

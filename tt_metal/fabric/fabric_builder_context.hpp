@@ -11,6 +11,7 @@
 #include "tt_metal/fabric/builder/router_channel_layouts.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include <vector>
 #include <memory>
 #include <array>
@@ -165,6 +166,11 @@ public:
     void set_fabric_master_router_chan(ChipId chip_id, chan_id_t chan_id);
     chan_id_t get_fabric_master_router_chan(ChipId chip_id) const;
 
+    // ============ Fabric Manifest ============
+    void publish_manifest_chip(ChipId chip_id, manifest::Chip chip);
+    bool has_manifest_chip(ChipId chip_id) const;
+    const manifest::Chip& get_manifest_chip(ChipId chip_id) const;
+
     // ============ Router Address Info ============
     std::vector<size_t> get_fabric_router_addresses_to_clear() const;
     std::pair<uint32_t, uint32_t> get_fabric_router_sync_address_and_status() const;
@@ -257,6 +263,7 @@ private:
     static constexpr uint32_t UNINITIALIZED_ROUTERS = std::numeric_limits<uint32_t>::max();
     std::vector<chan_id_t> master_router_chans_;
     std::vector<uint32_t> num_initialized_routers_;
+    std::vector<std::optional<manifest::Chip>> manifest_chips_;
 
     RouterChannelLayouts router_channel_layouts_;
 
