@@ -35,7 +35,7 @@ class MistralSmall4Config:
 
     # Core dimensions
     EMB_SIZE = 4096  # hidden_size
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
+    FABRIC_PAYLOAD_SIZE = EMB_SIZE * 2 + 64  # max fabric packet payload: one bf16 hidden row + 64 B
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension (also the shared expert's)
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension; unused - NUM_DENSE_LAYERS is 0
 
