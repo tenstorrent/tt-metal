@@ -136,6 +136,8 @@ def gdn_config(model: str) -> GDNConfig:
         head_v_dim=tc["linear_value_head_dim"],
         conv_kernel_size=tc["linear_conv_kernel_dim"],
         norm_eps=tc["rms_norm_eps"],
+        # transformers qwen3_5 / qwen3_5_moe hard-wire the silu gate (config output_gate_type is swish or unset).
+        output_gate_activation="silu",
     )
 
 

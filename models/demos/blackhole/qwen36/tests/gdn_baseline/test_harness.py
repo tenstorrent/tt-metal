@@ -21,6 +21,7 @@ TINY = GDNConfig(
     head_v_dim=16,
     conv_kernel_size=4,
     norm_eps=1e-6,
+    output_gate_activation="silu",
 )
 
 

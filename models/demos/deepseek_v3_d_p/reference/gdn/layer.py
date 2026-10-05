@@ -7,7 +7,8 @@ GDN-on-KDA tests both import it. Math follows transformers ``Qwen3_5GatedDeltaNe
 fused ``in_proj_qkv`` -> depthwise causal conv (kernel 4, no bias) + SiLU -> q | k | v; ``beta = sigmoid(b)``;
 ``g = -exp(A_log) * softplus(a + dt_bias)`` per V head; q/k L2-normalized (eps 1e-6), q scaled by ``K^-0.5``,
 V head ``j`` reads K head ``j // (Nv / Nk)``; token-by-token delta rule with an FP32 ``[Nv, K, V]`` state;
-gated RMSNorm (raw weight, norm before gate, ``silu(z)``); ``out_proj``. Everything is computed in FP32 from the
+gated RMSNorm (raw weight, norm before gate, ``silu(z)``, or ``sigmoid(z)`` for ``output_gate_activation`` sigmoid as
+transformers ``qwen4_exp``); ``out_proj``. Everything is computed in FP32 from the
 stored (bf16) weights, without the intermediate bf16 roundings of the HF module. The recurrence is the naive
 per-token form, not the chunked algorithm under test.
 
@@ -103,7 +104,8 @@ def gdn_forward_reference(
     o, recurrent = delta_rule_recurrence(q, k, v, g, beta, state.recurrent)
 
     normed = o * torch.rsqrt(o.pow(2).mean(-1, keepdim=True) + config.norm_eps) * w["norm.weight"]
-    gated = (normed * F.silu(z.reshape(T, Nv, Dv))).reshape(T, Nv * Dv)
+    activation = F.silu if config.output_gate_activation == "silu" else torch.sigmoid
+    gated = (normed * activation(z.reshape(T, Nv, Dv))).reshape(T, Nv * Dv)
     out = gated @ w["out_proj.weight"].T
     new_conv = padded[-(kc - 1) :].clone()
     return out, GDNReferenceState(conv=new_conv, recurrent=recurrent)

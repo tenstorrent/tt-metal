@@ -7,6 +7,10 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+# Activation of the output gate z in the gated RMSNorm, ``w * rmsnorm(o) * act(z)``. Model configs spell silu as
+# ``swish`` or leave it unset; ``from_model_config`` resolves those aliases, so only canonical names reach here.
+GDN_OUTPUT_GATE_ACTIVATIONS = ("silu", "sigmoid")
+
 
 @dataclass(frozen=True)
 class GDNConfig:
@@ -14,6 +18,8 @@ class GDNConfig:
 
     q and k carry ``num_key_heads`` heads; v, z, the decay ``g``, ``beta``, the recurrent state and the output norm
     carry ``num_value_heads``. V head ``j`` reads K head ``j // group`` (transformers ``repeat_interleave`` order).
+    ``output_gate_activation`` is ``silu`` (transformers ``qwen3_5`` / ``qwen3_5_moe``) or ``sigmoid`` (``qwen4_exp``
+    with ``output_gate_type: sigmoid``, the KDA gate).
     """
 
     hidden_size: int
@@ -23,6 +29,7 @@ class GDNConfig:
     head_v_dim: int
     conv_kernel_size: int
     norm_eps: float
+    output_gate_activation: str
 
     def __post_init__(self) -> None:
         positive = {
@@ -44,6 +51,10 @@ class GDNConfig:
             raise ValueError(f"GDN currently requires conv_kernel_size=4, got {self.conv_kernel_size}")
         if not math.isfinite(self.norm_eps) or self.norm_eps <= 0:
             raise ValueError(f"norm_eps must be finite and positive, got {self.norm_eps}")
+        if self.output_gate_activation not in GDN_OUTPUT_GATE_ACTIVATIONS:
+            raise ValueError(
+                f"output_gate_activation must be one of {GDN_OUTPUT_GATE_ACTIVATIONS}, got {self.output_gate_activation!r}"
+            )
 
     @property
     def group(self) -> int:

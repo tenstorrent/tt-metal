@@ -36,6 +36,13 @@ def test_rejects_unsupported_numerical_policy(expect_error) -> None:
             GDNConfig(**(asdict(TINY) | {"norm_eps": norm_eps}))
 
 
+@pytest.mark.parametrize("activation", ["swish", "gelu", None])
+def test_rejects_noncanonical_output_gate_activation(activation, expect_error) -> None:
+    """Aliases (swish) are resolved by the model-config boundary; the config takes only canonical names."""
+    with expect_error(ValueError, "output_gate_activation"):
+        GDNConfig(**(asdict(TINY) | {"output_gate_activation": activation}))
+
+
 def test_reference_package_does_not_import_ttnn() -> None:
     import models.demos.deepseek_v3_d_p.reference.gdn.config as config_module
     import models.demos.deepseek_v3_d_p.reference.gdn.layer as layer_module
