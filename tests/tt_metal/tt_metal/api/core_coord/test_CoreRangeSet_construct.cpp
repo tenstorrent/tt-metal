@@ -20,9 +20,9 @@ TEST_F(CoreCoordFixture, CPU_TestCoreRangeSetValidConstruct) {
 }
 
 TEST_F(CoreCoordFixture, CPU_TestCoreRangeSetImplicitConstructFromCoreCoord) {
-    ::CoreCoord coord{3, 4};
-    ::CoreRangeSet from_coord = coord;
-    EXPECT_EQ(from_coord, ::CoreRangeSet(::CoreRange(coord)));
+    tt::tt_metal::CoreCoord coord{3, 4};
+    tt::tt_metal::CoreRangeSet from_coord = coord;
+    EXPECT_EQ(from_coord, tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(coord)));
     EXPECT_EQ(from_coord.ranges().size(), 1);
     EXPECT_TRUE(from_coord.contains(coord));
 }
