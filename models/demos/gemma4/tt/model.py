@@ -228,6 +228,9 @@ class Gemma4Model:
     # the previous token ("TheThe user user...").
     # Overridden in ``__init__`` from ``hidden_size_per_layer_input``.
     _tt_vllm_always_refresh_decode_trace_inputs = True
+    # PLI is the safe class-level default. ``__init__`` enables feedback only
+    # for variants whose token input has the rank-4 sampling output layout.
+    _tt_supports_decode_token_feedback = False
     # Sampling writes a tile-aligned [1,1,1,32] token vector; decode embeds only
     # the active batch. Non-PLI prepare_decode pads tokens to this width so the
     # sampled ids can be written straight back into the trace input buffer.
@@ -296,6 +299,7 @@ class Gemma4Model:
             "yes",
         )
         self._tt_vllm_always_refresh_decode_trace_inputs = bool(self.hidden_size_per_layer_input) or force_refresh
+        self._tt_supports_decode_token_feedback = not self._tt_vllm_always_refresh_decode_trace_inputs
         n_layers = num_layers or hf_config.num_hidden_layers
 
         # Per-module dtype resolution. ``precision`` (Gemma4Precision) holds
@@ -2375,7 +2379,8 @@ class Gemma4Model:
             torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
         else:
             torch_out = ttnn.to_torch(tt_out)
-        return torch_out[:, :, :B, : self.vocab_size].view(B, S, -1)
+        # B is the serving limit; a bucketed decode can return fewer rows.
+        return torch_out[:, :, :B, : self.vocab_size].reshape(-1, S, self.vocab_size)
 
 
 def _apply_gemma4_single_untilize_override(tt_sampling) -> None:

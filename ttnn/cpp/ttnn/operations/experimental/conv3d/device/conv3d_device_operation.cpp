@@ -29,6 +29,12 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
     const std::array<uint32_t, 3>& stride,
     const std::array<uint32_t, 3>& kernel_size,
     const std::array<uint32_t, 3>& dilation) {
+    TT_FATAL(
+        stride[0] > 0 && stride[1] > 0 && stride[2] > 0,
+        "stride must be greater than 0, got ({}, {}, {})",
+        stride[0],
+        stride[1],
+        stride[2]);
     uint32_t T_out = ((T_in + 2 * padding[0] - (dilation[0] * (kernel_size[0] - 1)) - 1) / stride[0]) + 1;
     uint32_t H_out = ((H_in + 2 * padding[1] - (dilation[1] * (kernel_size[1] - 1)) - 1) / stride[1]) + 1;
     uint32_t W_out = ((W_in + 2 * padding[2] - (dilation[2] * (kernel_size[2] - 1)) - 1) / stride[2]) + 1;
@@ -95,6 +101,7 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
             bias_tensor.logical_shape().size());
     }
 
+    TT_FATAL(args.groups > 0, "groups must be greater than 0");
     TT_FATAL(
         input_tensor_a.logical_shape()[4] % args.groups == 0,
         "Input channels must be divisible by groups. Got input channels {} and groups {}",

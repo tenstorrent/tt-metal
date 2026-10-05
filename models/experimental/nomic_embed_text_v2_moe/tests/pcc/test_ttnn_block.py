@@ -119,7 +119,7 @@ def test_block_with_ragged_padding(device, config, tt_config, state_dict, layer,
     x_tt = to_device(to_block_layout(x), device)
 
     rot_mats = rotary_tables(device, config, seqlen)
-    attn_mask = additive_attention_mask(mask, device)
+    attn_mask = additive_attention_mask(mask, device, mask_dtype=tt_config.attention_mask_dtype)
     ref_mask = build_extended_attention_mask(mask, torch.float32)
 
     out = tt_block(x_tt, rot_mats, attn_mask)
