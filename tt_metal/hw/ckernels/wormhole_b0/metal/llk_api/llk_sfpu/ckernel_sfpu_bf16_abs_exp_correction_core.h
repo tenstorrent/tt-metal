@@ -112,148 +112,26 @@ inline vFloat correction_exp_leaf(vFloat x, Mult MULT, float bias, const float* 
 }
 
 template <typename Config>
-inline void abs_exp_park_coefficients() {
-    if constexpr (Config::kCorrectionStore) {
-        if constexpr ((__builtin_bit_cast(uint32_t, Config::kNumerator[0]) & 0xffffu) != 0u) {
-            dst_reg[64].mode<DataLayout::F32>() = vFloat(Config::kNumerator[0]);
-        }
-        if constexpr ((__builtin_bit_cast(uint32_t, Config::kNumerator[1]) & 0xffffu) != 0u) {
-            dst_reg[65].mode<DataLayout::F32>() = vFloat(Config::kNumerator[1]);
-        }
-        if constexpr ((__builtin_bit_cast(uint32_t, Config::kNumerator[2]) & 0xffffu) != 0u) {
-            dst_reg[66].mode<DataLayout::F32>() = vFloat(Config::kNumerator[2]);
-        }
-        if constexpr ((__builtin_bit_cast(uint32_t, Config::kNumerator[3]) & 0xffffu) != 0u) {
-            dst_reg[67].mode<DataLayout::F32>() = vFloat(Config::kNumerator[3]);
-        }
-    }
-    if constexpr (Config::kSquareStore) {
-        dst_reg[64].mode<DataLayout::F32>() = vFloat(Config::kMultiplier);
-#pragma GCC unroll 3
-        for (int k = 1; k <= 3; ++k) {
-            dst_reg[64 + k].mode<DataLayout::F32>() = vFloat(Config::kExpCoefficients[k] * correction_exp_scale(k));
-        }
-        dst_reg[68].mode<DataLayout::F32>() = vFloat(Config::kNumerator[0]);
-        dst_reg[69].mode<DataLayout::F32>() = vFloat(Config::kNumerator[1]);
-        dst_reg[70].mode<DataLayout::F32>() = vFloat(Config::kDenominator[0]);
-        dst_reg[71].mode<DataLayout::F32>() = vFloat(Config::kDenominator[2]);
-    }
-}
-
-template <typename Config, uint32_t INDEX>
-inline auto correction_coefficient() {
-    constexpr uint32_t bits = __builtin_bit_cast(uint32_t, Config::kNumerator[INDEX]);
-    if constexpr ((bits & 0xffffu) != 0u) {
-        return vFloat(dst_reg[64u + INDEX].mode<DataLayout::F32>());
-    } else {
-        return Config::kNumerator[INDEX];
-    }
-}
+inline void abs_exp_park_coefficients() {}
 
 template <uint32_t NumDegree, uint32_t DenDegree, typename Config, typename Exp, typename Reciprocal>
 inline __attribute__((always_inline)) vFloat abs_residual_correction(vFloat x, Exp exp, Reciprocal reciprocal) {
     vFloat t;
-    if constexpr (Config::kHasBound) {
-        vFloat coordinate = setsgn(x, 0);
-        vFloat coordinate_bound = __builtin_bit_cast(float, Config::kBoundBits);
-        ordered_min_max(coordinate, coordinate_bound);
-        t = exp(coordinate);
-    } else {
-        t = exp(x);
-    }
+    vFloat coordinate = setsgn(x, 0);
+    vFloat coordinate_bound = __builtin_bit_cast(float, Config::kBoundBits);
+    ordered_min_max(coordinate, coordinate_bound);
+    t = exp(coordinate);
     vFloat quotient;
-    if constexpr (Config::kPolynomial) {
-        if constexpr (Config::kCorrectionStore) {
-            static_assert(NumDegree == 3u);
-            quotient = correction_coefficient<Config, 3>();
-            quotient = quotient * t + correction_coefficient<Config, 2>();
-            quotient = quotient * t + correction_coefficient<Config, 1>();
-            quotient = quotient * t + correction_coefficient<Config, 0>();
-        } else {
-            quotient = Config::kNumerator[NumDegree];
+    quotient = Config::kNumerator[NumDegree];
 #pragma GCC unroll 8
-            for (int k = (int)NumDegree - 1; k >= 0; k--) {
-                quotient = quotient * t + Config::kNumerator[k];
-            }
-        }
-    } else {
-        vFloat num = Config::kNumerator[NumDegree];
-#pragma GCC unroll 8
-        for (int k = (int)NumDegree - 1; k >= 0; k--) {
-            num = num * t + Config::kNumerator[k];
-        }
-        vFloat den = Config::kDenominator[DenDegree];
-#pragma GCC unroll 8
-        for (int k = (int)DenDegree - 1; k >= 0; k--) {
-            den = den * t + Config::kDenominator[k];
-        }
-        quotient = num * reciprocal(den);
+    for (int k = (int)NumDegree - 1; k >= 0; k--) {
+        quotient = quotient * t + Config::kNumerator[k];
     }
     vFloat residual = t * quotient;
     vFloat zero = 0.0f;
     vFloat affine = x;
-    if constexpr (Config::kPositivePart) {
-        ordered_min_max(zero, affine);
-        return affine + residual;
-    } else {
-        ordered_min_max(affine, zero);
-        return affine - residual;
-    }
-}
-
-template <uint32_t NumDegree, uint32_t DenDegree, typename Config, typename Exp, typename Reciprocal>
-inline __attribute__((always_inline)) vFloat abs_square_correction(vFloat x, Exp exp, Reciprocal reciprocal) {
-    vFloat coordinate = setsgn(x, 0);
-    if constexpr (Config::kHasBound) {
-        vFloat coordinate_bound = __builtin_bit_cast(float, Config::kBoundBits);
-        ordered_min_max(coordinate, coordinate_bound);
-    }
-    vFloat negative_square = -(coordinate * coordinate);
-    vFloat decay = exp(negative_square);
-    vFloat quotient;
-    if constexpr (Config::kPolynomial) {
-        quotient = Config::kNumerator[NumDegree];
-#pragma GCC unroll 8
-        for (int k = (int)NumDegree - 1; k >= 0; k--) {
-            quotient = quotient * coordinate + Config::kNumerator[k];
-        }
-    } else {
-        vFloat num;
-        vFloat den;
-        if constexpr (Config::kSquareStore) {
-            static_assert(NumDegree == 1 && DenDegree == 2);
-            num = dst_reg[69].mode<DataLayout::F32>();
-            den = dst_reg[71].mode<DataLayout::F32>();
-        } else {
-            num = Config::kNumerator[NumDegree];
-            den = Config::kDenominator[DenDegree];
-        }
-#pragma GCC unroll 8
-        for (int k = (int)NumDegree - 1; k >= 0; k--) {
-            if constexpr (Config::kSquareStore) {
-                num = num * coordinate + vFloat(dst_reg[68 + k].mode<DataLayout::F32>());
-            } else {
-                num = num * coordinate + Config::kNumerator[k];
-            }
-        }
-#pragma GCC unroll 8
-        for (int k = (int)DenDegree - 1; k >= 0; k--) {
-            if constexpr (Config::kSquareStore) {
-                if (k == 0) {
-                    den = den * coordinate + vFloat(dst_reg[70].mode<DataLayout::F32>());
-                } else {
-                    den = den * coordinate + Config::kDenominator[k];
-                }
-            } else {
-                den = den * coordinate + Config::kDenominator[k];
-            }
-        }
-        quotient = num * reciprocal(den);
-    }
-    vFloat result = decay * quotient;
-    v_if(x < 0.0f) { result = 2.0f - result; }
-    v_endif;
-    return result;
+    ordered_min_max(zero, affine);
+    return affine + residual;
 }
 
 }  // namespace sfpi

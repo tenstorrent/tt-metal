@@ -18,16 +18,7 @@ struct SoftplusBf16Config {
     static constexpr uint32_t kExpDegree = 2;
     static constexpr float kMultiplier = __builtin_bit_cast(float, 0xbfb8aa3bu);
     static constexpr uint32_t kBoundBits = 0x42af0000u;
-    static constexpr bool kHasBound = true;
-    static constexpr bool kPolynomial = true;
-    static constexpr bool kSquareDecay = false;
     static constexpr bool kResidualFold = true;
-    static constexpr bool kSkipInputAbs = true;
-    static constexpr bool kSquareStore = false;
-    static constexpr bool kCorrectionStore = false;
-    static constexpr bool kPositivePart = true;
-    static constexpr bool kRawNanClass = false;
-    static constexpr uint32_t kDomainActionCount = 0;
 };
 }  // namespace ckernel::sfpu
 #include "ckernel_sfpu_bf16_abs_exp_correction.h"

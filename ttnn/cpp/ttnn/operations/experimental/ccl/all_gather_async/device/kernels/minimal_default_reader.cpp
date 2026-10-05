@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -46,10 +47,10 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     uint32_t arg_idx = 0;
-    address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
-    address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
-    size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    address_t input_tensor_address = get_common_arg_val<address_t>(ttnn::ccl::AllGatherCommonArgs::input);
+    address_t output_tensor_address = get_common_arg_val<address_t>(ttnn::ccl::AllGatherCommonArgs::output);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 0 is forward, 1 is backward
+    size_t out_ready_sem = get_common_arg_val<uint32_t>(ttnn::ccl::AllGatherCommonArgs::semaphore_0 + direction);
     const auto input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
     const auto input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
     const auto start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
