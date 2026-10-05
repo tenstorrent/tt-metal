@@ -763,14 +763,15 @@ targets:
             team: models
           # batch-32 ci-eval-32 DRAM-prefetcher run (single repeat batch) on bh_quietbox_2.
           # Specific entry so it wins over the catch-all for this config without disturbing
-          # the b4/b1 runs above. Seeded from the prefetcher run once the job could pass (#47820).
+          # the b4/b1 runs above. Reseeded after removing dummy host-logprob copies:
+          # run 36987762999, job 110780206653 measured 71.1432 t/s/u and 2276.5818 t/s.
           - batch_size: 32
             seq_len: 712
             status: active
             perf:
               prefill_time_to_first_token: 28
-              decode_t/s/u: 57
-              decode_t/s: 1824
+              decode_t/s/u: 71.1
+              decode_t/s: 2275.2
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
