@@ -107,7 +107,7 @@ public:
         uint32_t q_chunk_size) const override {
         if (cb_bytes > usable_l1) {
             // Fused chunks' CBs first: without them every K chunk runs on the reduce path.
-            cb_bytes -= exp_recipes::recipe_drop_fused(desc.cbs, defines);
+            cb_bytes -= exp_recipes::recipe_drop_fused(desc.cbs, defines, q_chunk_size / tt::constants::TILE_HEIGHT);
         }
         TT_FATAL(
             cb_bytes <= usable_l1,
