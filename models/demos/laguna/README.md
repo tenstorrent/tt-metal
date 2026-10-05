@@ -7,6 +7,19 @@ This guide runs [`poolside/Laguna-S-2.1`](https://huggingface.co/poolside/Laguna
 active per token, 1,048,576-token context) as an OpenAI-compatible vLLM server on four Blackhole ASICs: a
 TT-QuietBox 2 (two internal P300c cards, two ASICs each) or four P150 cards.
 
+The checkpoint is bf16 (235 GB), which does not fit the QuietBox 2's ~127 GB of usable device memory. At the first
+start the server converts the weights once (cached under `~/.cache/ttnn/laguna_s_2_1`):
+
+| Weights | Share of parameters | Stored as | Size |
+|---|---:|---|---:|
+| Routed experts | 97% | `bfloat4_b` (4-bit, 16 values share one 8-bit exponent) | 63.9 GB |
+| Attention, shared expert, layer 0, LM head | 3% | `bfloat8_b` (8-bit) | 3.9 GB |
+| Router, embedding, norms | <1% | bf16 | 0.7 GB |
+| KV cache | - | `bfloat8_b` | - |
+
+The bring-up's precision sweep (`doc/datatype_sweep/selected_precision_config.json`, run on Laguna-XS) kept the
+lowest precision that passes the accuracy bars below; 4-bit attention or LM head did not.
+
 ## Set up
 
 ```bash
@@ -40,6 +53,13 @@ Optional features: put the variables in front of the start command. Experimental
 | Prefix caching (experimental) | `TT_LAGUNA_PREFIX_CACHE=1` | 1 request at a time |
 | Concurrent requests | `TT_LAGUNA_HYBRID_KV=0 LAGUNA_MAX_NUM_SEQS=8` | up to 8 requests, 131,072-token context |
 
+Context per request by batch size (hybrid KV; all requests share one pool of about 1.3M tokens, sized from the
+memory left after weights with a 10% safety margin; only the 12 full-attention layers grow with context):
+
+| Concurrent requests | 1 | 2 | 4 | 8 | 16 | 32 |
+|---|---:|---:|---:|---:|---:|---:|
+| Context per request if all equal | 1,048,576 (model limit) | 653K | 326K | 162K | 80K | 39K |
+
 Check it:
 
 ```bash
@@ -54,15 +74,33 @@ Stop it with `"$MODEL_DIR/serve_vllm.sh" stop`. This also resets every Tenstorre
 
 ## Performance
 
-Measured 2026-10-03 with `demo/perf_demo.py` (default server, batch 1, 512 output tokens, one random prompt per length).
+### Speed of light and targets (batch 1, normal decode)
+
+Speed of light from the roofline formulas of [All About Transformer Inference](https://jax-ml.github.io/scaling-book/inference/)
+with Laguna-S's tensor shapes and storage formats and the QuietBox 2's 2.05 TB/s DRAM bandwidth and 2.88 PFLOP/s
+(`models/demos/laguna/.venv/bin/python models/demos/laguna/demo/roofline.py` prints the full calculation). Decode reads the 8.14B active weights
+(6.5 GB) plus the KV cache every token; prefill is the larger of reading the weights and the FLOPs. The target is
+50% of the speed of light, the usual mark for MoE models (80% for dense).
+
+| Input tokens | Decode SoL (tok/s/user) | Decode target | Decode measured | TTFT SoL | TTFT target | TTFT measured |
+|---:|---:|---:|---:|---:|---:|---:|
+| 128 | 316 | 158 | 18.3 | 33 ms | 66 ms | 0.23 s |
+| 1,024 | 314 | 157 | 18.1 | 33 ms | 66 ms | 2.42 s |
+| 2,048 | 312 | 156 | 18.1 | 33 ms | 66 ms | 2.81 s |
+| 4,096 | 310 | 155 | 18.0 | 33 ms | 66 ms | 9.47 s |
+| 8,192 | 305 | 152 | 18.0 | 52 ms | 103 ms | 19.9 s |
+
+### Measured
+
+Measured 2026-10-05 with `demo/perf_demo.py` (default server, batch 1, 512 output tokens, one random prompt per length).
 
 | Input tokens | TTFT, normal | Decode tok/s, normal | TTFT, DFlash | Decode tok/s, DFlash | DFlash speedup |
 |---:|---:|---:|---:|---:|---:|
-| 128 | 0.23 s | 18.3 | 0.36 s | 28.1 | 1.5x |
-| 1,024 | 2.40 s | 18.1 | 2.54 s | 40.7 | 2.2x |
-| 2,048 | 2.81 s | 18.0 | 2.95 s | 25.3 | 1.4x |
-| 4,096 | 9.45 s | 18.0 | 9.61 s | 45.9 | 2.6x |
-| 8,192 | 19.9 s | 18.0 | 20.0 s | 31.1 | 1.7x |
+| 128 | 0.23 s | 18.3 | 0.37 s | 28.0 | 1.5x |
+| 1,024 | 2.42 s | 18.1 | 2.57 s | 40.5 | 2.2x |
+| 2,048 | 2.81 s | 18.1 | 2.99 s | 25.0 | 1.4x |
+| 4,096 | 9.47 s | 18.0 | 9.61 s | 45.4 | 2.5x |
+| 8,192 | 19.9 s | 18.0 | 20.0 s | 30.1 | 1.7x |
 
 ### Run the perf demo
 
