@@ -214,6 +214,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/xlogy.h
     inc/api/lock.h
     inc/api/dataflow/noc.h
+    inc/api/dataflow/buf_rw_note.h
     inc/api/dataflow/endpoints.h
     inc/api/dataflow/circular_buffer.h
     inc/api/dataflow/cross_node_dfb.h
@@ -275,9 +276,11 @@ set(HW_JIT_API_HEADERS
     inc/internal/ethernet/tt_eth_ss_regs.h
     inc/internal/ethernet/tunneling.h
     inc/internal/tensor/array_wrapper.h
+    inc/internal/tensor/binding_id.h
     inc/internal/tensor/const.h
     inc/internal/tensor/dspec.h
     inc/internal/tensor/helpers.h
+    inc/internal/tensor/transfer_noc_addr.h
     inc/internal/tt-1xx/cache.h
     inc/internal/tt-1xx/blackhole/c_tensix_core.h
     inc/internal/tt-1xx/blackhole/cfg_defines.h
@@ -360,6 +363,18 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/tt-2.0.1/meta/registers/tt_cluster_plic_reg.h
     inc/internal/tt-2xx/tt-2.0.1/meta/registers/tt_overlay_llk_tile_counters_reg.h
     inc/internal/tt-2xx/tt-2.0.1/meta/registers/tt_rocc_accel_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/fds_registers/tt_fds_dispatch_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/fds_registers/tt_fds_tensixneo_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/registers/overlay_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/registers/memory_port_cacheable_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/registers/memory_port_noncacheable_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_cache_controller_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_cluster_clint_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_cluster_ctrl_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_cluster_ctrl_t6_l1_csr_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_cluster_plic_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_overlay_llk_tile_counters_reg.h
+    inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_rocc_accel_reg.h
     inc/internal/tt-2xx/quasar/overlay/overlay_addresses.h
     inc/internal/tt-2xx/quasar/stream_interface.h
     inc/internal/tt-2xx/quasar/stream_io_map.h
