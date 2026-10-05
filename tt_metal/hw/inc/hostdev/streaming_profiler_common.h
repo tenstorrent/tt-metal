@@ -100,6 +100,26 @@ static constexpr std::uint32_t kRelayDoneMask = 0xFFFF0000u;
 // the stop word, the heartbeat behind done) travel in one host write.
 static constexpr std::uint32_t kRelayCtrlWordStride = 64;
 
+// The host writes this to a resident core's stop word. The core then finishes its queued work and exits.
+constexpr std::uint32_t kResidentStopQuiesce = 1;
+constexpr std::uint32_t kResidentDoneWord = 0xD09E0000u;
+// The control block at each resident core's ctrl address. The resident cores are the relays, the wall-clock core and
+// the check core. The DRISC relay increments heartbeat every sweep, and the other cores increment it until the host
+// writes go. Each core writes done when it finishes. The host writes stop, and on the eth cores also go.
+struct ResidentCtrl {
+    std::uint32_t done;
+    std::uint32_t heartbeat;
+    std::uint32_t go;
+    // Only the wall-clock and check cores use these. tail and head are the cursors of the ring of clock sync records
+    // that the core fills and the eth relay drains, and dropped counts the records the core dropped on a full ring.
+    struct {
+        std::uint32_t tail;
+        std::uint32_t head;
+        std::uint32_t dropped;
+    } sync;
+    std::uint32_t stop;
+};
+
 // STICKY_META (SPSC/drainer backend, legacy / synthetic bench path only): an 8B context packet whose high
 // word carries (core_x, core_y, risc) + this type and whose low word is a 32-bit host-side ID. The host
 // forward-fills that identity onto the following timing markers. Its type sits in the same bits as a
@@ -230,5 +250,100 @@ constexpr std::uint32_t spsc_span_frame_words(std::uint32_t payload_words) {
     const std::uint32_t n = SPSC_SPAN_PREFIX_WORDS + payload_words;
     return (n + SPSC_SPAN_PAGE_WORDS - 1u) & ~(SPSC_SPAN_PAGE_WORDS - 1u);
 }
+
+// ---- Clock sync: records and the sample ring ------------------------------------------------------------------------
+
+constexpr std::uint32_t kEthRefclkHz = 50'000'000u;
+static_assert(1'000'000'000u % kEthRefclkHz == 0);
+constexpr std::uint32_t kNsPerRefclkTick = 1'000'000'000u / kEthRefclkHz;
+// The refclk register shows a new count once every this many ticks.
+constexpr std::uint32_t kRefclkTicksPerUpdate = 4;
+
+enum class SyncKind : std::uint8_t { WallClock, Link, Check };
+// Which stamps a link record averages. In each round, forward frames go from the transmitter to the receiver and return
+// frames come back. The receiver records the forward frames' egress and ingress stamps, and the transmitter records the
+// return frames'.
+enum class SyncRole : std::uint8_t { ForwardEgress, ForwardIngress, ReturnEgress, ReturnIngress };
+
+struct SyncMeta {
+    std::uint8_t count : 2;  // point count, in WallClock and Check records
+    std::uint8_t dense : 1;  // in Check records, set when the record holds every refclk update around an AICLK change
+    SyncRole role : 2;       // in Link records
+    SyncKind kind : 2;
+    std::uint8_t pad : 1;
+};
+static_assert(sizeof(SyncMeta) == 1);
+
+constexpr std::uint32_t kSyncWallClockPoints = 3;
+static_assert(kSyncWallClockPoints < 4, "SyncMeta::count holds a record's point count in 2 bits");
+// The clock sync keeps wall clocks in eighths of a tick, as fixed-point counts with this many fraction bits.
+constexpr std::uint32_t kWallEighthBits = 3;
+// A clock point pairs a refclk count with the wall clock at the same moment. It stores only the low word of each. The
+// host can widen them back exactly, since a point's refclk is within 2^31 ticks (43 s) of its chip's previous point and
+// its wall clock within 2^31 eighths of its record's first point.
+struct SyncWallClockPoint {
+    std::uint32_t refclk_lo;
+    std::uint32_t wall_eighths_lo;
+};
+struct SyncWallClockRecord {
+    SyncMeta meta;
+    // Each point's wall ticks per refclk tick, in eighths, or 0 for a check reading or for an average of samples taken
+    // while AICLK was changing. Blackhole's AICLK moves in 6.25 MHz PLL steps, an eighth of the 50 MHz refclk, so the
+    // wall clock gains a whole number of eighths of a tick per refclk tick.
+    std::uint8_t wall_per_refclk_eighths[kSyncWallClockPoints];
+    std::uint32_t first_wall_eighths_hi;
+    SyncWallClockPoint points[kSyncWallClockPoints];
+};
+
+// One port's stamps of one role in one round, kept as a sum. Their average is first_ns + sum_from_first_ns / count.
+struct SyncLinkRecord {
+    SyncMeta meta;
+    std::uint32_t round;
+    std::uint64_t first_ns;  // the first stamp in ns of PTP time, which is the refclk count times 20 ns
+    std::uint64_t sum_from_first_ns;
+    std::uint32_t count;
+    std::uint32_t pad;
+};
+
+struct SyncHeader {
+    SyncMeta meta;
+};
+// One record of a sync frame. A sync frame is the SPSC prefix followed by its records, and the kind in header.meta says
+// which member each record is.
+union SyncRecord {
+    SyncHeader header;
+    SyncWallClockRecord wall_clock;
+    SyncLinkRecord link;
+};
+static_assert(sizeof(SyncRecord) == 32 && alignof(SyncRecord) == 8);
+constexpr std::uint32_t kSyncRecordWords = sizeof(SyncRecord) / sizeof(std::uint32_t);
+
+constexpr std::uint32_t kSyncRingRecords = 512;
+constexpr std::uint32_t kSyncFrameRecords = 32;
+
+// The wall-clock core is the idle eth core on each chip that measures the chip's wall clock against its refclk. On it,
+// the sampler on ERISC0 fills the SyncSampleRing and the model on ERISC1 empties it. The model publishes how far it has
+// read as the ring's head, and the sampler rereads the head only once its tail is a full ring ahead of the head it last
+// read. To stop the sampler, the model publishes its position plus kSyncHeadStop, so the sampler's next reload sees the
+// head ahead of its tail and returns. Stopping therefore adds no check to the sampling loop.
+constexpr std::uint32_t kSyncSampleRingSamples = 32768;
+constexpr std::uint32_t kSyncHeadStop = 1u << 31;
+// A sample taken at a refclk update. It holds the refclk's new low word and the wall clock's low word at that moment,
+// in eighths.
+struct SyncSample {
+    std::uint32_t refclk, wall_eighths;
+};
+struct SyncSampleRing {
+    std::uint32_t tail;
+    std::uint32_t done;
+    // The full wall clock (in eighths), read once before the first sample. The model rebuilds each sample's full wall
+    // clock from it and the sample's low word.
+    std::uint64_t wall_eighths;
+    std::uint32_t head;
+    alignas(64) SyncSample samples[kSyncSampleRingSamples];
+};
+
+static_assert(
+    (kSyncRingRecords & (kSyncRingRecords - 1)) == 0 && (kSyncSampleRingSamples & (kSyncSampleRingSamples - 1)) == 0);
 
 }  // namespace kernel_profiler
