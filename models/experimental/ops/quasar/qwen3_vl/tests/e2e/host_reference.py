@@ -42,14 +42,19 @@ def run_reference(model, inputs, decode_steps):
 
         return hook
 
+    flat = lambda t: t.reshape(-1, t.shape[-1])
     for i, blk in enumerate(visual.blocks):
-        hooks.append(blk.register_forward_hook(keep(f"vision.block{i}", lambda t: t.reshape(-1, t.shape[-1]))))
+        hooks.append(blk.register_forward_hook(keep(f"vision.block{i}", flat)))
+        hooks.append(blk.attn.register_forward_hook(keep(f"vision.block{i}.attn", flat)))
+        hooks.append(blk.mlp.register_forward_hook(keep(f"vision.block{i}.mlp", flat)))
     taps = [i for i in visual.deepstack_visual_indexes if i < len(visual.blocks)]
     for j, _ in enumerate(taps):
         hooks.append(visual.deepstack_merger_list[j].register_forward_hook(keep(f"vision.deepstack{j}")))
     hooks.append(visual.merger.register_forward_hook(keep("vision.merger")))
     for i, layer in enumerate(lm.layers):
-        hooks.append(layer.register_forward_hook(keep(f"text.layer{i}", lambda t: t.reshape(-1, t.shape[-1]))))
+        hooks.append(layer.register_forward_hook(keep(f"text.layer{i}", flat)))
+        hooks.append(layer.self_attn.register_forward_hook(keep(f"text.layer{i}.attn", flat)))
+        hooks.append(layer.mlp.register_forward_hook(keep(f"text.layer{i}.mlp", flat)))
     hooks.append(lm.norm.register_forward_hook(keep("text.norm", lambda t: t.reshape(-1, t.shape[-1])[-1])))
     try:
         out = model(**inputs)

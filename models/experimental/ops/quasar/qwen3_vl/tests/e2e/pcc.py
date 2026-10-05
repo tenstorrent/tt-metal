@@ -22,10 +22,13 @@ _ORDER = [
 ]
 
 
+_SUB = {"attn": 0, "mlp": 1, "": 2}  # a block's sublayers sort before the block output
+
+
 def _stage_sort_key(stage):
-    m = re.search(r"(\d+)$", stage)
-    prefix = stage[: m.start()] if m else stage
-    return (_ORDER.index(prefix) if prefix in _ORDER else len(_ORDER), int(m.group(1)) if m else 0)
+    m = re.fullmatch(r"([a-z.]+?)(\d+)(?:\.(\w+))?", stage)
+    prefix, idx, sub = (m.group(1), m.group(2), m.group(3) or "") if m else (stage, None, "")
+    return (_ORDER.index(prefix) if prefix in _ORDER else len(_ORDER), int(idx or 0), _SUB.get(sub, len(_SUB)))
 
 
 def pcc(a, b):

@@ -58,4 +58,7 @@ class RunConfig:
     def cache_key(self, grid) -> str:
         ds = "real" if self.deepstack_at is None else f"at{self.deepstack_at}"
         policy = "qcfg_bf16" if self.quasar_config else "native"
-        return f"{policy}_g{grid[0]}x{grid[1]}_v{self.vision_layers}_t{self.text_layers}_ds{ds}"
+        from models.experimental.ops.quasar.qwen3_vl.tt import quasar_config
+
+        layout = f"_w{quasar_config.WEIGHT_LAYOUT_VERSION}" if self.quasar_config else ""
+        return f"{policy}{layout}_g{grid[0]}x{grid[1]}_v{self.vision_layers}_t{self.text_layers}_ds{ds}"

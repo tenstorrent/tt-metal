@@ -142,7 +142,10 @@ def test_reference_tiny_stage_shapes():
         "text.logits.prefill",
         "text.logits.decode0",
         "text.logits.decode1",
+    } | {f"vision.block{i}.{s}" for i in (0, 1) for s in ("attn", "mlp")} | {
+        f"text.layer{i}.{s}" for i in (0, 1) for s in ("attn", "mlp")
     }
+    assert g.tensors["vision.block0.attn"].shape == (256, 1024) and g.tensors["text.layer1.mlp"].shape == (78, 2560)
 
 
 def test_pcc_identical_and_constant():
@@ -372,3 +375,155 @@ def test_fp32_dest_acc_requested_reads_env(monkeypatch):
     assert not fp32_dest_acc_requested()
     monkeypatch.setenv("QWEN_QSR_FP32_DEST_ACC", "1")
     assert fp32_dest_acc_requested()
+
+
+def _bounded_args(x, y):
+    import ttnn
+
+    from models.experimental.ops.quasar.qwen3_vl.tt.quasar_config import _QuasarArgsMixin
+
+    a = _QuasarArgsMixin.__new__(_QuasarArgsMixin)
+    a.max_grid_size = ttnn.CoreGrid(x=x, y=y)
+    return a
+
+
+@pytest.mark.parametrize("x, y", [(2, 1), (8, 4), (8, 8)])
+def test_grid_helpers_stay_inside_device_grid(x, y):
+    a = _bounded_args(x, y)
+    for n in (80, 304, 192, 7):  # dim, hidden, qkv tiles, and a prime
+        rows, cols = a.find_grid(n)
+        assert rows <= y and cols <= x and n % (rows * cols) == 0
+        gx, gy = a.find_prefill_grid(n, n)  # consumers read it as (x, y)
+        assert gx <= x and gy <= y
+    rows, cols = a.find_grid_k_n(80, 304)
+    assert rows <= y and cols <= x and 80 % (rows * cols) == 0 and 304 % (rows * cols) == 0
+
+
+def test_grid_helpers_match_base_on_full_wh_grid(monkeypatch):
+    from models.tt_transformers.tt import model_config as mc
+    from models.tt_transformers.tt.model_config import ModelArgs
+
+    monkeypatch.setattr(mc, "is_wormhole_b0", lambda *a, **k: True)  # base find_grid picks WH's 8x8 bounds
+
+    a = _bounded_args(8, 8)
+    for n in (80, 304, 192):
+        assert a.find_grid(n) == ModelArgs.find_grid(a, n)
+        assert a.find_prefill_grid(n, n) == ModelArgs.find_prefill_grid(a, n, n)
+    assert a.find_grid_k_n(80, 304) == ModelArgs.find_grid_k_n(a, 80, 304)
+
+
+def test_find_prefill_grid_is_x_then_y():
+    a = _bounded_args(2, 1)
+    assert a.find_prefill_grid(4, 80) == (2, 1)  # x divides the column tiles, y the row tiles
+
+
+def test_fit_matmul_config_rescales_per_core_work():
+    import ttnn
+
+    from models.experimental.ops.quasar.qwen3_vl.tt.quasar_config import fit_matmul_config
+
+    c = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=2,
+        per_core_M=4,
+        per_core_N=24,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+    f = fit_matmul_config(c, 2, 1)
+    g = f.compute_with_storage_grid_size
+    assert (g.x, g.y) == (2, 1)
+    assert f.per_core_M == 4 * 8 and f.per_core_N == 24 * 4  # same total M x N work spread over fewer cores
+    assert f.fuse_batch and f.in0_block_w == 1
+    assert fit_matmul_config(c, 8, 8) is c  # fits already: untouched
+
+    m = ttnn.MinimalMatmulConfig(
+        M_block_size=8, K_block_size=8, N_block_size=8, compute_with_storage_grid_size=ttnn.CoreCoord(8, 8)
+    )
+    fm = fit_matmul_config(m, 2, 1)
+    assert (fm.compute_with_storage_grid_size.x, fm.compute_with_storage_grid_size.y) == (2, 1)
+    assert (fm.M_block_size, fm.K_block_size, fm.N_block_size) == (8, 8, 8)
+    assert fit_matmul_config(None, 2, 1) is None
+
+
+def test_fit_matmul_config_uses_real_tile_counts():
+    import ttnn
+
+    from models.experimental.ops.quasar.qwen3_vl.tt.quasar_config import fit_matmul_config
+
+    c = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=24,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+    f = fit_matmul_config(c, 2, 1, m_tiles=4, n_tiles=192)  # seq 128 x qkv 6144
+    assert (f.per_core_M, f.per_core_N) == (4, 96)
+
+
+def test_fit_matmul_config_minimizes_l1_when_shrinking():
+    import ttnn
+
+    from models.experimental.ops.quasar.qwen3_vl.tt.quasar_config import fit_matmul_config
+
+    c = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=8,
+        out_subblock_h=1,
+        out_subblock_w=4,
+        per_core_M=1,
+        per_core_N=10,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+    assert fit_matmul_config(c, 2, 1, m_tiles=4, n_tiles=80).in0_block_w == 1  # fewer cores: smallest K block
+
+
+def test_cache_key_tracks_weight_layout_version(monkeypatch):
+    from models.experimental.ops.quasar.qwen3_vl.tt import quasar_config as qc
+
+    cfg = RunConfig.from_options(_opts(**{"--qwen-quasar-config": True}))
+    a = cfg.cache_key((8, 8))
+    monkeypatch.setattr(qc, "WEIGHT_LAYOUT_VERSION", qc.WEIGHT_LAYOUT_VERSION + 1)
+    assert cfg.cache_key((8, 8)) != a  # cached tensors keep their memory config, so a layout change needs a new key
+
+
+def test_stage_order_puts_sublayers_after_their_block():
+    stages = ["text.layer0", "vision.block1", "vision.block0.mlp", "vision.block0", "vision.block0.attn"]
+    assert sorted(stages, key=P._stage_sort_key) == [
+        "vision.block0.attn",
+        "vision.block0.mlp",
+        "vision.block0",
+        "vision.block1",
+        "text.layer0",
+    ]
+
+
+def test_fit_matmul_config_force_rebuilds_a_config_that_already_fits():
+    import ttnn
+
+    from models.experimental.ops.quasar.qwen3_vl.tt.quasar_config import fit_matmul_config
+
+    c = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(2, 1),
+        in0_block_w=8,
+        out_subblock_h=1,
+        out_subblock_w=4,
+        per_core_M=4,
+        per_core_N=40,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+    assert fit_matmul_config(c, 2, 1) is c
+    f = fit_matmul_config(c, 2, 1, m_tiles=4, n_tiles=80, force=True)
+    assert f.in0_block_w == 1 and (f.per_core_M, f.per_core_N) == (4, 40)
