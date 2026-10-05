@@ -4,23 +4,27 @@
 
 // The owner side of InterProcessCounterChannel registers its segment with
 // ShmResourceTracker, so the segment leaves /dev/shm together with its owner
-// (exit or SIGTERM) and a copy left by a killed predecessor is reaped by the
-// tracker's stale scan instead of blocking re-creation. No device needed.
+// (exit or SIGTERM), and a copy left by a killed predecessor is reaped when
+// the owner is constructed, while a live owner's segment is never taken over.
+// No device needed.
 //
-// The tracker's signal path and stale scan are driven directly rather than
-// through a child process: this binary opens the devices at startup, so a
-// re-executed child (gtest death tests) would redo device initialisation.
+// The tracker's signal path is driven directly rather than through a child
+// process: this binary opens the devices at startup, so a re-executed child
+// (gtest death tests) would redo device initialisation.
 
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #include <cerrno>
+#include <csignal>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 
 #include <fmt/format.h>
@@ -55,9 +59,12 @@ bool tracking_segment_exists(const std::string& shm_name) {
     return true;
 }
 
-// A pid that was alive a moment ago and is now gone.
+// A pid that was alive a moment ago and is now gone. Returns -1 if fork fails.
 pid_t tracking_reaped_child_pid() {
     const pid_t pid = fork();
+    if (pid < 0) {
+        return -1;
+    }
     if (pid == 0) {
         _exit(0);
     }
@@ -66,13 +73,46 @@ pid_t tracking_reaped_child_pid() {
     return pid;
 }
 
-// What a killed owner leaves behind: the segment itself plus a manifest naming it.
-void tracking_plant_dead_owner_segment(const std::string& shm_name, pid_t dead_owner) {
+// A process that stays alive for the duration of a test: a live owner whose
+// segment must not be taken over.
+class TrackingLiveChild {
+public:
+    TrackingLiveChild() : parent_(getpid()), pid_(fork()) {
+        if (pid_ == 0) {
+            // Die with the test process, and do not run the tracker's
+            // inherited SIGINT/SIGTERM handler on the parent's resources.
+            prctl(PR_SET_PDEATHSIG, SIGKILL);
+            if (getppid() != parent_) {
+                _exit(0);
+            }
+            signal(SIGINT, SIG_DFL);
+            signal(SIGTERM, SIG_DFL);
+            for (;;) {
+                pause();
+            }
+        }
+    }
+    ~TrackingLiveChild() {
+        if (pid_ > 0) {
+            kill(pid_, SIGKILL);
+            int status = 0;
+            waitpid(pid_, &status, 0);
+        }
+    }
+    pid_t pid() const { return pid_; }
+
+private:
+    pid_t parent_;
+    pid_t pid_;
+};
+
+// What an owner leaves behind: the segment itself plus a manifest naming it.
+void tracking_plant_owner_segment(const std::string& shm_name, pid_t owner) {
     const int fd = ::shm_open(shm_name.c_str(), O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
     ASSERT_NE(fd, -1) << std::strerror(errno);
     ASSERT_EQ(::ftruncate(fd, sizeof(InterProcessCounterSegment)), 0);
     ::close(fd);
-    const std::string path = tracking_manifest_path(dead_owner);
+    const std::string path = tracking_manifest_path(owner);
     const std::string tmp_path = path + ".planting";
     {
         std::ofstream manifest(tmp_path, std::ios::trunc);
@@ -111,24 +151,40 @@ TEST(CounterChannelTracking, OwnerSegmentIsUnlinkedBySignalCleanup) {
     owner.shutdown();
 }
 
-TEST(CounterChannelTracking, SegmentOfKilledPredecessorIsReapedBeforeCreate) {
+TEST(CounterChannelTracking, SegmentOfKilledPredecessorIsReapedOnConstruction) {
     const std::string name = fmt::format("/tt_test_ctr_stale_{}", getpid());
     const pid_t predecessor = tracking_reaped_child_pid();
     ASSERT_GT(predecessor, 0) << "fork failed: " << std::strerror(errno);
-    tracking_plant_dead_owner_segment(name, predecessor);
+    tracking_plant_owner_segment(name, predecessor);
     ASSERT_TRUE(tracking_segment_exists(name));
 
-    // In a fresh process the owner constructor triggers this scan by touching
-    // the tracker before its O_EXCL open; here the tracker already exists, so
-    // the scan is run explicitly. Without it construction fails with EEXIST.
-    ShmResourceTracker::cleanup_stale_resources();
-    EXPECT_FALSE(tracking_segment_exists(name)) << "planted segment of a dead owner was not reaped";
-    EXPECT_FALSE(std::ifstream(tracking_manifest_path(predecessor)).good()) << "stale manifest was not reaped";
-
+    // No explicit scan: the constructor finds the name taken, runs the stale
+    // scan and retries, so the planted copy and its manifest are gone and the
+    // new segment is ours.
     InterProcessCounterChannel owner(name);
+    EXPECT_FALSE(std::ifstream(tracking_manifest_path(predecessor)).good()) << "stale manifest was not reaped";
     EXPECT_TRUE(tracking_segment_exists(name));
+    EXPECT_TRUE(tracking_manifest_names(getpid(), name));
+
     owner.shutdown();
     EXPECT_FALSE(tracking_segment_exists(name));
+}
+
+TEST(CounterChannelTracking, SegmentOfLiveOwnerIsNotTakenOver) {
+    TrackingLiveChild live_owner;
+    ASSERT_GT(live_owner.pid(), 0) << "fork failed: " << std::strerror(errno);
+    const std::string name = fmt::format("/tt_test_ctr_live_{}", getpid());
+    tracking_plant_owner_segment(name, live_owner.pid());
+
+    // The stale scan leaves a live owner's manifest alone, so the retry fails
+    // with EEXIST exactly like the first attempt.
+    EXPECT_THROW(InterProcessCounterChannel owner(name), std::runtime_error);
+    EXPECT_TRUE(tracking_segment_exists(name)) << "a live owner's segment was removed";
+    EXPECT_TRUE(std::ifstream(tracking_manifest_path(live_owner.pid())).good())
+        << "a live owner's manifest was removed";
+
+    ::shm_unlink(name.c_str());
+    std::remove(tracking_manifest_path(live_owner.pid()).c_str());
 }
 
 }  // namespace

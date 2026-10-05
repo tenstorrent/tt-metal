@@ -56,17 +56,16 @@ public:
     // sizeof(InterProcessCounterSegment), mmap.
     //
     // The segment is registered with ShmResourceTracker, so it is
-    // unlinked when the owner exits or receives SIGINT/SIGTERM, and it
-    // is listed in the process's manifest so a copy left by an owner
-    // that was killed outright is removed by the tracker's one-time
-    // stale scan in the next process (run at its first tracker use,
-    // which this constructor guarantees happens before the name is
-    // created).
+    // unlinked when the owner exits or receives SIGINT/SIGTERM. If the
+    // name is already taken when constructing, the tracker's stale scan
+    // runs and the exclusive open is retried, which removes a copy left
+    // by an owner that was killed outright (it is listed in that owner's
+    // manifest) without touching a live owner's segment.
     //
     // Throws std::runtime_error if a segment with this shm_name still
-    // exists (the scan already ran earlier in this process, or the
-    // previous owner's pid is in use again). The owner is then
-    // responsible for unlinking it before constructing here.
+    // exists after that (a live owner, or the previous owner's pid in use
+    // again). The owner is then responsible for unlinking it before
+    // constructing here.
     //
     // shm_name must be a POSIX-shm-valid string: leading '/' and no
     // other slashes.
