@@ -17,6 +17,19 @@ on. They are illustrative of the *effect*, not CI bounds.
 
 ---
 
+## ⭐ T1 — [`bank_placement`](bank_placement/README.md)
+**Concept:** which core serves which DRAM bank — pairing each core with the bank its traffic goes to.
+**Situation:** each core's DRAM traffic all lands in one bank (a DRAM-sharded tensor, or an interleaved
+read with stride = bank count, since page `p` is in bank `p % num_banks`), and you are choosing the
+core list.
+**Measured win:** with the same 12 cores, pairing each with its **near** bank instead of a far one is
+**1.6× faster at 2 KB pages and 2.3× at 8 KB** (WH B0, DRAM→DRAM copy, one core per bank). The device's
+bank-near set beats a plain row-major line by only **1.01–1.09×**, and when every core walks all banks it
+is **0.60–0.66×** of row-major (six of its cores share one grid column).
+**Gist:** with a home bank per core, take `ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, noc)`
+and give bank `b`'s work to entry `b` — never a far pairing. Without one (contiguous interleaved runs,
+32-row blocks that touch every bank), keep a row-major line; the bank-near cores are worse there.
+
 ## ⭐⭐ T2 — [`noc_placement`](noc_placement/README.md)
 **Concept:** two knobs for interleaved-DRAM NoC contention — core **placement** (column/row/diagonal)
 and **NoC selection** (which NoC a read/write stream uses) — as a switchable placement × NoC × op matrix.
