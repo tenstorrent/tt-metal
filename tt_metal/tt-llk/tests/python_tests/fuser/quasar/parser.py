@@ -138,7 +138,12 @@ UNPACKER_MAP = {
             IN0_REQUIRED,
             IN1_REQUIRED,
             NO_TRANSPOSE,
-            require_src_a_tiles((32, 32), (16, 16)),
+            require_src_a_tiles((32, 32), (16, 16), (32, 16), (16, 32), (1, 32)),
+            reject(
+                lambda s, a, b: a.tile_shape.tile_dims not in ((32, 32), (16, 16))
+                and s.broadcast_type != BroadcastType.None_,
+                "Quasar binary broadcast requires 32x32 or 16x16 tiles",
+            ),
             reject(
                 lambda s, a, b: a.tile_shape.tile_dims != (32, 32)
                 and s.broadcast_type in (BroadcastType.Row, BroadcastType.Column),
