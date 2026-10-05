@@ -38,8 +38,7 @@ inline uint32_t ring_extent(const CombineFabric2dParams& args) {
 // One token's row of the embedding. Read off the tensor rather than taken as a parameter — and off its
 // SHAPE, not its page: a ROW_MAJOR dispatched buffer pages by exactly one token, a TILE one does not.
 inline uint32_t token_size_bytes(const CombineFabric2dInputs& tensor_args) {
-    return static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]) *
-           tensor_args.dispatched_buffer.element_size();
+    return static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]) * sizeof(uint16_t);
 }
 
 inline bool dispatched_is_tiled(const CombineFabric2dInputs& tensor_args) {
@@ -53,6 +52,9 @@ inline uint32_t tiles_per_token_row(const CombineFabric2dInputs& tensor_args) {
 }
 
 inline uint32_t tile_size_bytes(const CombineFabric2dInputs& tensor_args) {
+    if (dispatched_is_tiled(tensor_args)) {
+        return static_cast<uint32_t>(tensor_args.dispatched_buffer.buffer()->aligned_page_size());
+    }
     return static_cast<uint32_t>(tensor_args.dispatched_buffer.tensor_spec().tile().get_tile_hw()) *
            tensor_args.dispatched_buffer.element_size();
 }
@@ -60,6 +62,10 @@ inline uint32_t tile_size_bytes(const CombineFabric2dInputs& tensor_args) {
 // Tiles the untilize takes per pack call, and so the width of the input window: as wide as it can be, and a
 // divisor of the row so the blocks tile it exactly. Eight is what llk_pack_untilize asserts as its ceiling
 // off the dense path; a whole tile-row would not fit L1 on top of the output ring anyway, at 458 kB.
+// The page of the untilizers' one-word batch count, which the compute kernel reads as a UInt32 tile: a
+// bfloat16 tile's worth, independent of the dispatched buffer's format.
+constexpr uint32_t BATCH_COUNT_PAGE_BYTES = 32 * 32 * sizeof(uint16_t);
+
 constexpr uint32_t UNTILIZE_MAX_BLOCK_TILES = 8;
 
 inline uint32_t untilize_block_tiles(const CombineFabric2dInputs& tensor_args) {
@@ -97,7 +103,9 @@ struct L1Layout {
     // cores above, and the base is where the framework puts its first circular buffer.
     // Zero where there are no untilizer cores, which is where there is nothing to untilize.
     uint32_t unt_ring = 0;     // the batch ring, which IS cb_out
-    uint32_t unt_control = 0;  // its own copy of the control tables, past every circular buffer
+    uint32_t unt_control = 0;
+    // Overlapped only: the collector's per-step count array, at the base of a core that holds nothing else.
+    uint32_t collector_counts = 0;  // its own copy of the control tables, past every circular buffer
 };
 
 struct DramBuffers {
@@ -121,6 +129,8 @@ struct KernelPlan {
     uint32_t ring_freed_slot = 0;
     uint32_t fwd_arrived_addr = 0;
     uint32_t final_arrived_addr = 0;
+    // Overlapped only: this ring's first row of global_expert_idx_table.
+    uint32_t expert_table_page_base = 0;
 };
 
 // The other end of one untilizer handshake: the core to address, and the counter that core's peer owns there.
@@ -139,6 +149,9 @@ struct ReaderUntilizers {
 // The per-core values an untilizer needs that are not read off the arguments.
 struct UntilizerPlan {
     uint32_t my_expert_base = 0;
+    // Overlapped only: where the routed expert's id table starts, and the readiness count it publishes.
+    uint32_t expert_table_page_base = 0;
+    uint32_t ready_sem = 0;
     uint32_t my_index = 0;   // position in the group
     uint32_t num_peers = 0;  // cores in the group
     uint32_t walks_down = 0;
@@ -166,6 +179,13 @@ constexpr uint32_t BATCH = NUM_L1_SLOTS / 2;
 // keep. The host sizes the control region with these; the reader indexes the pads with them.
 constexpr uint32_t META_PREFETCH = 64;
 constexpr uint32_t META_PAD_STRIDE = 64;
+
+// Overlapped only: control-table rows are 64-byte aligned because a DRAM read needs an aligned L1
+// destination, and the id table follows the offsets a whole row at a time.
+constexpr uint32_t align_control(uint32_t bytes) { return (bytes + 63u) & ~63u; }
+constexpr uint32_t expert_table_row_stride(uint32_t experts_per_chip) {
+    return align_control(experts_per_chip * static_cast<uint32_t>(sizeof(uint32_t)));
+}
 
 // Rows one untilize produces, which is one tile-row of the dispatched buffer. The least it can produce,
 // whatever the tokens wanted, so it is the unit a group of untilizers hands over.
