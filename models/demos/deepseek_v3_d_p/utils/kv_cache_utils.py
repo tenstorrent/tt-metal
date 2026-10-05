@@ -181,16 +181,20 @@ class MlaKvCache:
             intermediates["tt_kvpe"] = ttnn.clone(packed)
         return packed
 
+    def prepare_scaled_fp8_inputs(
+        self, latent: ttnn.Tensor, rope: ttnn.Tensor, *, keep_rope_tiled: bool = False
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """Quantize latent directly and expose cache fields, optionally retaining tiled RoPE."""
+        latent_fp8, scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+            latent, round_scale_to_power_of_two=True
+        )
+        rope_rm = rope if keep_rope_tiled else ttnn.to_layout(rope, ttnn.ROW_MAJOR_LAYOUT)
+        return latent_fp8, scales, rope_rm
+
     def _pack_scaled_fp8(
         self, latent: ttnn.Tensor, rope: ttnn.Tensor, *, intermediates: dict[str, ttnn.Tensor] | None
     ) -> ttnn.Tensor:
-        latent_rm = ttnn.to_layout(latent, ttnn.ROW_MAJOR_LAYOUT)
-        latent_fp8, scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
-            latent_rm, round_scale_to_power_of_two=True
-        )
-        if latent_rm is not latent:
-            ttnn.deallocate(latent_rm)
-        rope_rm = ttnn.to_layout(rope, ttnn.ROW_MAJOR_LAYOUT)
+        latent_fp8, scales, rope_rm = self.prepare_scaled_fp8_inputs(latent, rope)
         packed = ttnn.experimental.deepseek_prefill.pack_scaled_fp8_kv_cache(latent_fp8, scales, rope_rm)
         if intermediates is not None:
             reconstructed = ttnn.experimental.deepseek_prefill.per_token_cast_back(
