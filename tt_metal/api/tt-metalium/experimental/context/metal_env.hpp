@@ -97,7 +97,7 @@ public:
 
     /// @return The fabric configuration requested via configure_fabric. Disabled by default. This is the requested
     /// configuration: the runtime may still enable fabric for dispatch on remote devices without changing it.
-    const FabricConfigDescriptor& get_fabric_config() const;
+    const FabricConfigDescriptor& get_fabric_config_descriptor() const;
 
     /// @return Architecture of this environment.
     tt::ARCH get_arch() const;

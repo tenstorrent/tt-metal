@@ -49,7 +49,7 @@ public:
 
     // Requested fabric configuration (configure_fabric). Distinct from get_fabric_config(), which is the runtime
     // value and may differ after the dispatch fallback enables fabric.
-    const FabricConfigDescriptor& fabric_config_descriptor() const { return fabric_desc_; }
+    const FabricConfigDescriptor& get_fabric_config_descriptor() const { return fabric_desc_; }
     void configure_fabric(const FabricConfigDescriptor& fabric);
 
     bool check_use_count_zero() const;

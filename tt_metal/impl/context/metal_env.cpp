@@ -694,7 +694,9 @@ const MetalEnvDescriptor& MetalEnv::get_descriptor() const { return impl_->get_d
 
 void MetalEnv::configure_fabric(const FabricConfigDescriptor& fabric) { impl_->configure_fabric(fabric); }
 
-const FabricConfigDescriptor& MetalEnv::get_fabric_config() const { return impl_->fabric_config_descriptor(); }
+const FabricConfigDescriptor& MetalEnv::get_fabric_config_descriptor() const {
+    return impl_->get_fabric_config_descriptor();
+}
 
 tt::ARCH MetalEnv::get_arch() const { return impl_->get_cluster().arch(); }
 std::string MetalEnv::get_arch_name() const { return tt::get_string_lowercase(get_arch()); }
