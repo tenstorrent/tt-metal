@@ -1506,8 +1506,9 @@ _BF16_STOCK_SPECIALS = {
     MathOperation.Rsqrt: {
         ChipArchitecture.BLACKHOLE: (
             "neg_subnormal",
-            "neg_zero",
-        )
+            "pos_subnormal",
+        ),
+        ChipArchitecture.WORMHOLE: ("pos_subnormal",),
     },
 }
 
