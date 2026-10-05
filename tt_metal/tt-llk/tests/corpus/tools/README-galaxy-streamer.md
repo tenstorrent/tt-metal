@@ -68,7 +68,8 @@ Stage the tree (with the hook) + the prebuilt shared ELF build to `/data`, write
 that lack a verdict one-per-line to `remaining.txt`, then submit ONE array:
 
     export OPS_LIST=.../remaining.txt \
-           OPS_TSV=... IDMAP=... FLAGS_TSV=... BUILD=... VENV=... LLK_HOME=... PYDIR=... OUT=... \
+           GALAXY_SHARD=1 SWEEP=fp32 OPS_TSV=... IDMAP=... FLAGS_TSV=... \
+           FARM_ROOT=... VENV=... OUT=... NPAR=32 BAND_BITS=23 \
            SFPU_WAIT_TIMEOUT=600
     sbatch --array=1-$(wc -l < remaining.txt) --requeue --export=ALL -J run_op \
            -p <glx-partitions> --time=720 run_op_array.sh
