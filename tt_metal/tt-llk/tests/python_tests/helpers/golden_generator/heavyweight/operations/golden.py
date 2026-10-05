@@ -20,7 +20,7 @@ architecture and call it with tensors.
 """
 
 from dataclasses import dataclass, field, fields
-from typing import Callable, Dict, List, Optional, Sequence, Union
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import torch
 from helpers.format_config import DataFormat
@@ -343,6 +343,52 @@ class Golden:
     # Running
     # ------------------------------------------------------------------
 
+    def _make_config(
+        self,
+        in_formats: Union[DataFormat, Sequence[DataFormat]],
+        out_format: DataFormat,
+        *,
+        operands: int,
+        geometry: Dict,
+        tiles_per_output: int,
+        dest_format: Optional[DataFormat],
+        dest_acc: Union[bool, DestAccumulation],
+        pack_effects: Dict,
+    ) -> Tuple[List[DataFormat], OpConfig]:
+        """Normalise one run's arguments into an :class:`OpConfig`.
+
+        Shared so the Dest-format default is decided in exactly one place. It
+        is the argument most easily got wrong -- it depends on the *input*
+        format and on `dest_acc`, not on the output -- and an op with its own
+        copy of this would drift the moment that rule changes.
+
+        Returns the expanded `in_formats` alongside the config, since a single
+        format given for several operands has to be broadcast before use.
+        """
+        if isinstance(in_formats, DataFormat):
+            in_formats = [in_formats] * operands
+        in_formats = list(in_formats)
+        cfg = OpConfig(
+            in_formats=in_formats,
+            out_format=out_format,
+            dest_format=self.blocks.resolve_dest_format(
+                dest_format, in_formats[0], dest_acc
+            ),
+            geometry=geometry,
+            tiles_per_output=tiles_per_output,
+            **check_pack_effects(pack_effects),
+        )
+        self.last_dest_format = cfg.dest_format
+        return in_formats, cfg
+
+    def _tile_to_l1(
+        self, values: torch.Tensor, index: int, fmt: DataFormat, geometry: Dict
+    ) -> List[int]:
+        """Tile `index` of `values`, packed the way the harness writes L1."""
+        per_tile = datums_per_tile(**geometry)
+        chunk = values.reshape(-1)[index * per_tile : (index + 1) * per_tile]
+        return self.blocks.pack_to_l1(chunk, fmt, **geometry)
+
     def run(
         self,
         stimuli: Union[torch.Tensor, Sequence[torch.Tensor]],
@@ -367,19 +413,16 @@ class Golden:
         """
         if isinstance(stimuli, torch.Tensor):
             stimuli = [stimuli]
-        if isinstance(in_formats, DataFormat):
-            in_formats = [in_formats] * len(stimuli)
         geometry = dict(num_faces=num_faces, face_r_dim=face_r_dim)
-
-        cfg = OpConfig(
-            in_formats=list(in_formats),
-            out_format=out_format,
-            dest_format=self.blocks.resolve_dest_format(
-                dest_format, in_formats[0], dest_acc
-            ),
+        in_formats, cfg = self._make_config(
+            in_formats,
+            out_format,
+            operands=len(stimuli),
             geometry=geometry,
             tiles_per_output=num_tiles_per_output,
-            **check_pack_effects(pack_effects),
+            dest_format=dest_format,
+            dest_acc=dest_acc,
+            pack_effects=pack_effects,
         )
         if num_tiles_per_output > 1:
             return self._run_blocked(stimuli, in_formats, cfg, trace)
@@ -451,11 +494,8 @@ class Golden:
             for tile in range(depth):
                 index = block * depth + tile
                 for operand, (values, fmt) in enumerate(zip(stimuli, in_formats)):
-                    chunk = values.reshape(-1)[
-                        index * per_tile : (index + 1) * per_tile
-                    ]
-                    regs[self.source(operand, tile)] = self.blocks.pack_to_l1(
-                        chunk, fmt, **cfg.geometry
+                    regs[self.source(operand, tile)] = self._tile_to_l1(
+                        values, index, fmt, cfg.geometry
                     )
             packed_blocks.extend(chain.run(regs, result="out", trace=trace))
         return self.blocks.unpack_from_l1(packed_blocks, cfg.out_format, **cfg.geometry)

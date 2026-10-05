@@ -854,27 +854,10 @@ def _mxint_block_scale_and_quantize(
     # Element-level NaN -> 0 (no NaN representation in MxInt).
     blocks = np.where(np.isnan(blocks_raw), 0.0, blocks_raw)
 
-    # Block scale: shared_exp = floor(log2(amax)) over finite values. MxInt
-    # post-scaling values land in [1, 2), so elem_exp_max_unbiased = 0.
-    finite_blocks = np.where(np.isfinite(blocks_raw), blocks_raw, 0.0)
-    max_abs_values = np.max(np.abs(finite_blocks), axis=1)
-    # np.where evaluates both branches eagerly; silence log2(0) warnings for all-zero blocks.
-    with np.errstate(divide="ignore"):
-        max_abs_exp = np.where(
-            max_abs_values == 0, 0, np.floor(np.log2(max_abs_values))
-        )
-    shared_exp_adj = np.where(max_abs_exp >= -E8M0_BIAS, max_abs_exp, -E8M0_BIAS)
-    scales_e8m0_array = shared_exp_adj.astype(np.int32) + E8M0_BIAS
-
-    # Special-case block scales (mirror MxFp encoding).
-    all_nan_blocks = np.all(np.isnan(blocks_raw), axis=1)
-    inf_or_zero_or_nan = np.isinf(blocks_raw) | np.isnan(blocks_raw) | (blocks_raw == 0)
-    all_inf_or_zero = np.all(inf_or_zero_or_nan, axis=1)
-    has_inf = np.any(np.isinf(blocks_raw), axis=1)
-    scales_e8m0_array = np.where(all_nan_blocks, E8M0_NAN_CODE, scales_e8m0_array)
-    scales_e8m0_array = np.where(
-        all_inf_or_zero & has_inf, E8M0_INF_CODE, scales_e8m0_array
-    )
+    # Block scale: the same derivation every MX format uses, including the
+    # special 0xFF/0xFE blocks. MxInt post-scaling values land in [1, 2), so
+    # elem_exp_max_unbiased is 0.
+    scales_e8m0_array = _mx_shared_exponents(blocks_raw, elem_exp_max_unbiased=0)
 
     scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
 

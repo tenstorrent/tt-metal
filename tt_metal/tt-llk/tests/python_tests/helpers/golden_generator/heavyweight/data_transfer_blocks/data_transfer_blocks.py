@@ -49,12 +49,24 @@ from .pack_effects import (
     is_deterministic,
 )
 
+#: Explicit mantissa bits an IEEE float32 holds, the width every mask below is
+#: cut from.
+FP32_MANTISSA_BITS = 23
+
 #: Explicit mantissa bits a src-register datum holds. The datum is 19 bits:
 #: 1 sign + 8 exponent + 10 mantissa, whatever format is stored in it.
 SRC_MANT_BITS = 10
 
 #: Mantissa bits dropped converting Float32 (23 explicit bits) into a src datum.
-FP32_TO_SRC_MANT_TRUNC = 23 - SRC_MANT_BITS
+FP32_TO_SRC_MANT_TRUNC = FP32_MANTISSA_BITS - SRC_MANT_BITS
+
+#: Explicit mantissa bits a bf16 datum holds, and so what survives a Float16_b
+#: Dest on the way back to a src register.
+BF16_MANT_BITS = 7
+
+#: Symmetric magnitude an INT8-shaped src datum reaches: 7 magnitude bits plus
+#: a sign, so -128 has no representation on this path.
+INT8_MAX_MAGNITUDE = 127
 
 #: Formats the unpacker can land in a src register.
 #:
@@ -89,6 +101,18 @@ DEST_STORAGE_FORMATS = frozenset(
 DEST_32_BIT_FORMATS = frozenset({DataFormat.Float32, DataFormat.Int32})
 
 L1Buffer = Union[Sequence[int], bytes]
+
+
+def truncate_mantissa(values: torch.Tensor, keep_bits: int) -> torch.Tensor:
+    """Keep the top `keep_bits` explicit mantissa bits, zeroing the rest.
+
+    Truncation, not rounding: every narrowing on the register paths drops the
+    low bits rather than folding them in, so this is the one primitive behind
+    all of them -- the unpacker's 10-bit src datum, a Float16_b Dest's 7 bits
+    on the way back, and the high half of a fidelity phase.
+    """
+    raw = values.to(torch.float32).contiguous().view(torch.int32)
+    return (raw & ~((1 << (FP32_MANTISSA_BITS - keep_bits)) - 1)).view(torch.float32)
 
 
 def as_dest_acc(dest_acc: Union[bool, DestAccumulation]) -> bool:
@@ -256,13 +280,16 @@ class DataTransferBlocks(ABC):
             return values
         if dest_format is DataFormat.Float16_b:
             # 7 explicit mantissa bits survive; the low 3 arrive as zeros.
-            raw = values.to(torch.float32).contiguous().view(torch.int32)
-            return (raw & ~((1 << (23 - 7)) - 1)).view(torch.float32)
+            return truncate_mantissa(values, BF16_MANT_BITS)
         if dest_format is DataFormat.Float16:
             return values.to(torch.float16).to(torch.float32)
         if dest_format is DataFormat.Int32:
             # Only 7 magnitude bits plus a sign reach the src register.
-            return values.to(torch.float32).clamp(-127, 127).trunc()
+            return (
+                values.to(torch.float32)
+                .clamp(-INT8_MAX_MAGNITUDE, INT8_MAX_MAGNITUDE)
+                .trunc()
+            )
         if dest_format in (DataFormat.Float32, DataFormat.Tf32):
             if src_format is DataFormat.Float16:
                 return DataTransferBlocks._to_src_storage(values, DataFormat.Float16)
@@ -697,5 +724,4 @@ class DataTransferBlocks(ABC):
     @staticmethod
     def _truncate_src_mantissa(values: torch.Tensor) -> torch.Tensor:
         """Keep the top 10 mantissa bits, truncating as the unpacker does."""
-        raw = values.to(torch.float32).contiguous().view(torch.int32)
-        return (raw & ~((1 << FP32_TO_SRC_MANT_TRUNC) - 1)).view(torch.float32)
+        return truncate_mantissa(values, SRC_MANT_BITS)

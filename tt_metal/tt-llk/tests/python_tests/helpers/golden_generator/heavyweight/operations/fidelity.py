@@ -22,6 +22,8 @@ import torch
 from helpers.format_config import DataFormat
 from helpers.llk_params import MathFidelity, format_dict
 
+from ..data_transfer_blocks.data_transfer_blocks import truncate_mantissa
+
 #: Phases each MathFidelity runs. The FPU decomposes a multiply into partial
 #: products (AH_BH, AL_BH, AH_BL, AL_BL) accumulated across passes, and
 #: fidelity chooses how many of them to run.
@@ -39,9 +41,6 @@ PHASE_OPERAND_HALVES = (
     ("hi", "lo"),  # AH_BL
     ("lo", "lo"),  # AL_BL — the least significant
 )
-
-#: Explicit mantissa bits a float32 datum carries.
-FP32_MANTISSA_BITS = 23
 
 
 def warn_unmodelled_split(op_name: str, golden_name: str) -> None:
@@ -84,8 +83,7 @@ def split_mantissa(
     implicit position cleared for the low half, which reassembles to exactly
     this remainder.
     """
-    raw = values.to(torch.float32).contiguous().view(torch.int32)
-    high = (raw & ~((1 << (FP32_MANTISSA_BITS - keep_bits)) - 1)).view(torch.float32)
+    high = truncate_mantissa(values, keep_bits)
     return high, values.to(torch.float32) - high
 
 

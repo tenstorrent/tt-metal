@@ -18,7 +18,7 @@ from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
 from ..data_transfer_blocks.l1_codec import datums_per_tile
 from .chain import Chain, Registers, StageRecord
 from .eltwise import EltwiseBinaryGolden
-from .golden import OpConfig, check_pack_effects, check_source_layout
+from .golden import OpConfig, check_source_layout
 
 
 class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
@@ -134,47 +134,49 @@ class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
         cannot.
         """
         src_a, src_b = stimuli
-        if isinstance(in_formats, DataFormat):
-            in_formats = [in_formats] * 2
         geometry = dict(num_faces=num_faces, face_r_dim=face_r_dim)
         per_tile = datums_per_tile(**geometry)
-
-        cfg = OpConfig(
-            in_formats=list(in_formats),
-            out_format=out_format,
-            dest_format=self.blocks.resolve_dest_format(
-                dest_format, in_formats[0], dest_acc
-            ),
+        in_formats, cfg = self._make_config(
+            in_formats,
+            out_format,
+            operands=2,
             geometry=geometry,
             tiles_per_output=inner_dim,
-            **check_pack_effects(pack_effects),
+            dest_format=dest_format,
+            dest_acc=dest_acc,
+            pack_effects=pack_effects,
         )
         chain = self.build_chain(cfg)
         self.last_chain = chain
-        self.last_dest_format = cfg.dest_format
 
         flat_a, flat_b = src_a.reshape(-1), src_b.reshape(-1)
         check_source_layout(flat_a.numel() // per_tile, geometry)
         tile_count_out = flat_a.numel() // (per_tile * inner_dim)
         input_tiles_in_block = inner_dim * output_tiles_in_block
 
-        def tile_bytes(values: torch.Tensor, index: int, fmt: DataFormat):
-            chunk = values[index * per_tile : (index + 1) * per_tile]
-            return self.blocks.pack_to_l1(chunk, fmt, **geometry)
-
         packed: List[int] = []
         for out_tile in range(tile_count_out):
             block = out_tile // output_tiles_in_block
             in_block = out_tile % output_tiles_in_block
-            regs = Registers(**{self.SEED: tile_bytes(flat_a, out_tile, in_formats[0])})
+            regs = Registers(
+                **{
+                    self.SEED: self._tile_to_l1(
+                        flat_a, out_tile, in_formats[0], geometry
+                    )
+                }
+            )
             for tile in range(inner_dim):
                 index = (
                     block * input_tiles_in_block
                     + tile * output_tiles_in_block
                     + in_block
                 )
-                regs[self.source(0, tile)] = tile_bytes(flat_a, index, in_formats[0])
-                regs[self.source(1, tile)] = tile_bytes(flat_b, index, in_formats[1])
+                regs[self.source(0, tile)] = self._tile_to_l1(
+                    flat_a, index, in_formats[0], geometry
+                )
+                regs[self.source(1, tile)] = self._tile_to_l1(
+                    flat_b, index, in_formats[1], geometry
+                )
             finished = chain.run(regs, trace=trace)
             packed.extend(finished["out"])
             if dest_out is not None:

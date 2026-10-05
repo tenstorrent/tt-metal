@@ -17,7 +17,6 @@ from .fidelity import (
     min_normal_exponent,
     operand_halves,
     resolve_non_finite,
-    split_mantissa,
     warn_unmodelled_split,
 )
 from .golden import Golden, OpConfig
@@ -102,10 +101,6 @@ class EltwiseBinaryGolden(Golden):
         return chain
 
     # ------------------------------------------------------------------
-
-    #: Kept as a class member because the fidelity split is documented per
-    #: operation; the implementation is shared with matmul.
-    split_mantissa = staticmethod(split_mantissa)
 
     def partial_product(
         self, regs: Registers, *, phase: int, dest_format: Optional[DataFormat] = None
