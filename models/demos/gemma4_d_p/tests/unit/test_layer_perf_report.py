@@ -278,3 +278,20 @@ def test_main_keeps_chunk_sizes_apart_in_one_ops_csv(tmp_path, monkeypatch):
         (large["start_signpost"], large["stop_signpost"]),
     ]
     assert small["start_signpost"] != large["start_signpost"]
+
+
+@pytest.mark.parametrize(
+    "n_chunks, global_idxs, local_idxs",
+    [
+        (128, (0, 1, 63, 127), (0, 1)),
+        (64, (0, 1, 31, 63), (0, 1)),
+        (32, (0, 1, 15, 31), (0, 1)),
+        (3, (0, 1, 2), (0, 1)),
+        (2, (0, 1), (0, 1)),
+        (1, (0,), (0,)),
+    ],
+)
+def test_ci_cells_are_first_second_middle_last(n_chunks, global_idxs, local_idxs):
+    from models.demos.gemma4_d_p.demo.text_demo_prefill import layer_perf_ci_cells
+
+    assert layer_perf_ci_cells(n_chunks) == {"global": global_idxs, "local": local_idxs}
