@@ -40,7 +40,6 @@ from loguru import logger
 import ttnn
 from models.demos.blackhole.qwen36.tests.gdn_baseline import cases as gc
 from models.demos.blackhole.qwen36.tests.gdn_baseline.accuracy import measure, per_head_rel_rmse
-from models.demos.blackhole.qwen36.tests.gdn_baseline.reference import per_device_conv_columns
 from models.demos.blackhole.qwen36.tests.test_factory import shard_to_device, tp_composer
 from models.demos.blackhole.qwen36.tt.gdn.tp import TPGatedDeltaNet, load_gdn_weights_tp
 from models.demos.blackhole.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE, Qwen36ModelArgs
@@ -155,7 +154,7 @@ def _accuracy(case: gc.GdnCase, reference: list[dict], device: list[dict], label
     for c, (ref, dev) in enumerate(zip(reference, device)):
         tensors.append(measure(ref["output"], dev["output"], f"{label}.chunk{c}.output"))
         tensors.append(measure(ref["recurrent"], dev["recurrent"], f"{label}.chunk{c}.recurrent_state"))
-        ref_conv = per_device_conv_columns(ref["conv"], shape, tp)
+        ref_conv = gc.per_device_conv_columns(ref["conv"], shape, tp)
         tensors.append(measure(ref_conv, dev["conv"], f"{label}.chunk{c}.conv_state"))
     tensors.append(
         measure(

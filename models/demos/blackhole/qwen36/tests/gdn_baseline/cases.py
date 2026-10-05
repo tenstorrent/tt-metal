@@ -24,16 +24,11 @@ from types import SimpleNamespace
 
 import torch
 
-from models.demos.blackhole.qwen36.tests.gdn_baseline.reference import (
-    PREFIX,
-    WEIGHT_NAMES,
-    GdnShape,
-    gdn_layer_reference,
-)
+from models.demos.deepseek_v3_d_p.reference.gdn.layer import PREFIX, WEIGHT_NAMES, GdnShape, gdn_layer_reference
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[6]
 
-# Covers: reference.py math, the input builders below (randn seeds, text slicing, layer-0 input norm), the
+# Covers: reference/gdn/layer.py math, the input builders below (randn seeds, text slicing, layer-0 input norm), the
 # synthetic weight generator and the stored fields. Bump with any change to what a cache entry holds.
 REFERENCE_CACHE_VERSION = 1
 
@@ -290,3 +285,14 @@ def load_case(case: GdnCase, state_dict: dict[str, torch.Tensor]) -> dict:
     if entry["identity"] != identity:
         raise AssertionError(f"{path}: stored identity differs from the requested one")
     return entry
+
+
+def per_device_conv_columns(conv: torch.Tensor, shape: GdnShape, tp: int) -> torch.Tensor:
+    """Reorder conv-state columns from HF order [q | k | v] to the TP order [q_0 k_0 v_0 | q_1 k_1 v_1 | ...]
+    that ``tp_common.prepare_gdn_qkv`` gives the device (each rank's K heads with its contiguous V heads)."""
+    qs, ks, vs = conv.split([shape.key_dim, shape.key_dim, shape.value_dim], dim=-1)
+    parts = []
+    for rank in range(tp):
+        for t, width in ((qs, shape.key_dim // tp), (ks, shape.key_dim // tp), (vs, shape.value_dim // tp)):
+            parts.append(t[..., rank * width : (rank + 1) * width])
+    return torch.cat(parts, dim=-1)

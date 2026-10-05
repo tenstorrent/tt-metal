@@ -42,7 +42,7 @@ from concurrent.futures import ThreadPoolExecutor  # noqa: E402
 import torch  # noqa: E402
 
 from models.demos.blackhole.qwen36.tests.gdn_baseline import cases as gc  # noqa: E402
-from models.demos.blackhole.qwen36.tests.gdn_baseline.reference import PREFIX, WEIGHT_NAMES  # noqa: E402
+from models.demos.deepseek_v3_d_p.reference.gdn.layer import PREFIX, WEIGHT_NAMES  # noqa: E402
 
 
 def log(message: str) -> None:

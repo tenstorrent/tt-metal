@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Independent FP32 CPU reference of one Qwen3.5 / 3.6 / 3.8 Gated DeltaNet layer (prefill, streaming state).
 
-Pure torch, no ttnn. Math follows transformers ``Qwen3_5GatedDeltaNet`` (qwen3_5 and qwen3_5_moe share it):
+Pure torch, no ttnn. This is the one GDN oracle: the GDN baseline harness (``qwen36/tests/gdn_baseline``) and the
+GDN-on-KDA tests both import it. Math follows transformers ``Qwen3_5GatedDeltaNet`` (qwen3_5 and qwen3_5_moe share it):
 fused ``in_proj_qkv`` -> depthwise causal conv (kernel 4, no bias) + SiLU -> q | k | v; ``beta = sigmoid(b)``;
 ``g = -exp(A_log) * softplus(a + dt_bias)`` per V head; q/k L2-normalized (eps 1e-6), q scaled by ``K^-0.5``,
 V head ``j`` reads K head ``j // (Nv / Nk)``; token-by-token delta rule with an FP32 ``[Nv, K, V]`` state;
@@ -144,14 +145,3 @@ def gdn_layer_reference(
     out = gated @ w["out_proj.weight"].T
     new_conv = padded[-(kc - 1) :].clone()
     return out, GdnState(conv=new_conv, recurrent=recurrent)
-
-
-def per_device_conv_columns(conv: torch.Tensor, shape: GdnShape, tp: int) -> torch.Tensor:
-    """Reorder conv-state columns from HF order [q | k | v] to the TP order [q_0 k_0 v_0 | q_1 k_1 v_1 | ...]
-    that ``tp_common.prepare_gdn_qkv`` gives the device (each rank's K heads with its contiguous V heads)."""
-    qs, ks, vs = conv.split([shape.key_dim, shape.key_dim, shape.value_dim], dim=-1)
-    parts = []
-    for rank in range(tp):
-        for t, width in ((qs, shape.key_dim // tp), (ks, shape.key_dim // tp), (vs, shape.value_dim // tp)):
-            parts.append(t[..., rank * width : (rank + 1) * width])
-    return torch.cat(parts, dim=-1)
