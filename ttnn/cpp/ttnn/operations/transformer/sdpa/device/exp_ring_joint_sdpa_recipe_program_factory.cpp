@@ -99,7 +99,16 @@ public:
         return true;
     }
 
-    void check_l1(uint64_t cb_bytes, uint64_t usable_l1, uint32_t q_chunk_size) const override {
+    uint64_t check_l1(
+        tt::tt_metal::ProgramDescriptor& desc,
+        std::map<std::string, std::string>& defines,
+        uint64_t cb_bytes,
+        uint64_t usable_l1,
+        uint32_t q_chunk_size) const override {
+        if (cb_bytes > usable_l1) {
+            // Fused chunks' CBs first: without them every K chunk runs on the reduce path.
+            cb_bytes -= exp_recipes::recipe_drop_fused(desc.cbs, defines);
+        }
         TT_FATAL(
             cb_bytes <= usable_l1,
             "Named exp ring SDPA recipe needs {} B of L1 per core at Q{}/K{} but only {} B are usable; use a "
@@ -108,6 +117,7 @@ public:
             q_chunk_size,
             k_chunk_tiles_ * tt::constants::TILE_HEIGHT,
             usable_l1);
+        return cb_bytes;
     }
 
     std::optional<tt::tt_metal::KernelDescriptor::ConfigDescriptor> compute_config() const override {
