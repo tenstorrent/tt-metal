@@ -568,7 +568,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_combine_fabric2d.py -vvv --tb=short -k "torus-xy-8x4"
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 13
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
   budget_type: e2e
