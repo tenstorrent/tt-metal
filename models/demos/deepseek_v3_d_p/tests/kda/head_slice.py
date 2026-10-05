@@ -39,6 +39,17 @@ def kda_head_slice_config(config: KDAConfig, num_heads: int) -> KDAConfig:
     return replace(config, num_heads=num_heads)
 
 
+# LoudBox LB-B (8x1, SP8xTP1) runs on each chip the heads one chip owns on Galaxy (TP4).
+GALAXY_TENSOR_PARALLEL_SIZE = 4
+
+
+def galaxy_chip_head_slice_config(config: KDAConfig) -> KDAConfig:
+    """Return the LB-B per-chip config: one Galaxy TP rank's share of ``config``'s heads."""
+    if config.num_heads % GALAXY_TENSOR_PARALLEL_SIZE:
+        raise ValueError(f"num_heads {config.num_heads} is not divisible by Galaxy TP{GALAXY_TENSOR_PARALLEL_SIZE}")
+    return kda_head_slice_config(config, config.num_heads // GALAXY_TENSOR_PARALLEL_SIZE)
+
+
 def slice_kda_heads(
     state_dict: Mapping[str, torch.Tensor],
     config: KDAConfig,

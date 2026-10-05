@@ -60,15 +60,46 @@ class KDAConfig:
 
     @classmethod
     def from_model_config(cls, model_config: Mapping[str, Any]) -> "KDAConfig":
-        """Build from a Kimi Linear Hugging Face configuration mapping."""
+        """Build from a Hugging Face configuration mapping of a supported KDA model.
+
+        The text configuration (``text_config`` when present) selects the interpretation by its
+        ``model_type``: ``kimi_linear`` (Kimi Linear, Kimi K3) or ``glm5_next_text``
+        (GLM-5.3-Flash). Every ``linear_attn_config`` key must be modeled by that interpretation
+        or be a layer-schedule key; any other key is rejected rather than silently ignored.
+        """
+        if "text_config" in model_config:
+            model_config = model_config["text_config"]
+            if not isinstance(model_config, Mapping):
+                raise TypeError("text_config must be a mapping")
+        model_type = model_config.get("model_type")
+        if model_type not in _MODEL_TYPE_LINEAR_ATTN_KEYS:
+            raise ValueError(
+                f"unsupported KDA model_type {model_type!r}; expected one of {sorted(_MODEL_TYPE_LINEAR_ATTN_KEYS)}"
+            )
         try:
-            if "text_config" in model_config:
-                model_config = model_config["text_config"]
-                if not isinstance(model_config, Mapping):
-                    raise TypeError("text_config must be a mapping")
             linear = model_config["linear_attn_config"]
             if not isinstance(linear, Mapping):
                 raise TypeError("linear_attn_config must be a mapping")
+            unmodeled = sorted(set(linear) - _MODEL_TYPE_LINEAR_ATTN_KEYS[model_type] - _LAYER_SCHEDULE_KEYS)
+            if unmodeled:
+                raise ValueError(f"{model_type} linear_attn_config has keys KDA does not model: {unmodeled}")
+            if model_type == "glm5_next_text":
+                # Glm5NextTextLinearAttention runs the short convolution with ACT2FN[hidden_act];
+                # the TT layer hardcodes SiLU, which is also the config class default.
+                hidden_act = model_config.get("hidden_act", "silu")
+                if hidden_act != "silu":
+                    raise ValueError(f"glm5_next_text KDA convolution requires hidden_act='silu', got {hidden_act!r}")
+                # Glm5NextTextConfig: an absent or null bound becomes -5.0 unless safe_gate is false.
+                gate_lower_bound = linear.get("gate_lower_bound", -5.0)
+                if gate_lower_bound is None and linear.get("safe_gate", True):
+                    gate_lower_bound = -5.0
+                # The GLM layer always uses the low-rank output gate.
+                use_full_rank_gate = False
+            else:
+                # KimiDeltaAttention hardcodes the SiLU convolution (hidden_act, "situ" for K3, is the
+                # MLP activation) and selects the softplus decay when the bound is absent or null.
+                gate_lower_bound = linear.get("gate_lower_bound")
+                use_full_rank_gate = bool(linear.get("use_full_rank_gate", False))
             head_dim = int(linear["head_dim"])
             return cls(
                 hidden_size=int(model_config["hidden_size"]),
@@ -77,10 +108,20 @@ class KDAConfig:
                 head_v_dim=head_dim,
                 conv_kernel_size=int(linear["short_conv_kernel_size"]),
                 norm_eps=float(model_config["rms_norm_eps"]),
-                use_full_rank_gate=bool(linear.get("use_full_rank_gate", False)),
-                gate_lower_bound=(
-                    float(linear["gate_lower_bound"]) if linear.get("gate_lower_bound") is not None else None
-                ),
+                use_full_rank_gate=use_full_rank_gate,
+                gate_lower_bound=float(gate_lower_bound) if gate_lower_bound is not None else None,
             )
         except KeyError as error:
-            raise ValueError(f"missing Kimi config field: {error.args[0]}") from error
+            raise ValueError(f"missing {model_type} config field: {error.args[0]}") from error
+
+
+# linear_attn_config keys each supported text model_type defines and KDAConfig models.
+_MODEL_TYPE_LINEAR_ATTN_KEYS = {
+    "kimi_linear": frozenset(
+        {"num_heads", "head_dim", "short_conv_kernel_size", "use_full_rank_gate", "gate_lower_bound"}
+    ),
+    "glm5_next_text": frozenset({"num_heads", "head_dim", "short_conv_kernel_size", "gate_lower_bound", "safe_gate"}),
+}
+# Which layers are KDA layers; consumed by the model's layer schedule, not by one KDA layer.
+# Kimi lists them 1-indexed, GLM-5.3-Flash 0-indexed.
+_LAYER_SCHEDULE_KEYS = frozenset({"kda_layers", "full_attn_layers"})

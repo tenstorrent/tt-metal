@@ -29,10 +29,14 @@ Note on quantization: the checkpoint is MXFP4 (``compressed-tensors``, 4-bit, gr
 included, is plain bf16. Only the MoE routed experts are quantized.
 """
 
+import json
 import types
+from pathlib import Path
 from typing import Any
 
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
+
+_KIMI_K3_CONFIG_PATH = Path(__file__).with_name("kimi_k3") / "config.json"
 
 
 class KimiK3Config:
@@ -233,27 +237,15 @@ def kimi_k3_hf_config(max_seq: int = 8192):
 
 
 def kimi_k3_model_config() -> dict[str, Any]:
-    """The HF JSON-shaped fields `KDAConfig` consumes, built from the pinned Kimi-K3 constants.
+    """The pinned Kimi-K3 Hugging Face configuration mapping, read from ``kimi_k3/config.json``.
 
-    Kimi-K3's own config.json cannot be loaded here: its `model_type` is `kimi_linear` and the
-    checkpoint's remote code raises ImportError without `fla-core`. So the KDA half of the config is
-    assembled from the constants above rather than parsed.
+    The file is ``moonshotai/Kimi-K3`` ``config.json`` at revision
+    ``9f62e4e9fffbd0a83ddd60e1c209d828994b3569`` (content-identical; the copy adds a final newline).
+    It is parsed as JSON: transformers cannot load it (``kimi_linear`` remote code needs ``fla-core``).
     """
-    return {
-        "hidden_size": KimiK3Config.EMB_SIZE,
-        "num_hidden_layers": KimiK3Config.NUM_LAYERS,
-        "num_attention_heads": KimiK3Config.NUM_ATTENTION_HEADS,
-        "rms_norm_eps": KimiK3Config.RMS_NORM_EPS,
-        "linear_attn_config": {
-            "num_heads": KimiK3Config.KDA_NUM_HEADS,
-            "head_dim": KimiK3Config.KDA_HEAD_DIM,
-            "short_conv_kernel_size": KimiK3Config.KDA_SHORT_CONV_KERNEL_SIZE,
-            "use_full_rank_gate": KimiK3Config.KDA_USE_FULL_RANK_GATE,
-            "gate_lower_bound": KimiK3Config.KDA_GATE_LOWER_BOUND,
-        },
-    }
+    return json.loads(_KIMI_K3_CONFIG_PATH.read_text(encoding="utf-8"))
 
 
 def kimi_k3_kda_config() -> KDAConfig:
-    """Build the TT KDA configuration from the pinned Kimi-K3 constants."""
+    """Build the TT KDA configuration from the pinned Kimi-K3 config.json."""
     return KDAConfig.from_model_config(kimi_k3_model_config())
