@@ -11,18 +11,19 @@
 #         pack loop; 0 = they end during it). Default 6000.
 #   LOOP  tiles packed (loop factor). Default 256.
 #   VCD=1 keep the Versim waveform (several GB; written to the run directory).
+#   INJ   15 (default): the K loop is compiled in for every K, so K=0 and K=100 run the same ELF.
 set -e
 mode=$1; shift
-K=0; NOPS=0; TAIL=6000; LOOP=256; VCD=0
+K=0; NOPS=0; TAIL=6000; LOOP=256; VCD=0; INJ=15
 for a in "$@"; do eval "$a"; done
 here=$(cd "$(dirname "$0")" && pwd)
-name=${mode}_k${K}_n${NOPS}_t${TAIL}_l${LOOP}
+name=${mode}_k${K}_n${NOPS}_t${TAIL}_l${LOOP}_i${INJ}
 out=${OUT_DIR:-/tmp/repro_phase}/$name
 mkdir -p "$out"
 cd "$here/python_tests"
 source ../.venv/bin/activate
 export CHIP_ARCH=wormhole LLK_HOME="$here/.." LLK_PERF_RUN_TYPES=PACK_ISOLATE
-export REPRO_RT=$K REPRO_PACK_NOPS=$NOPS REPRO_TAIL=$TAIL REPRO_LOOP_FACTOR=$LOOP REPRO_INJ=$([ "$K" = 0 ] && echo 0 || echo 15)
+export REPRO_RT=$K REPRO_PACK_NOPS=$NOPS REPRO_TAIL=$TAIL REPRO_LOOP_FACTOR=$LOOP REPRO_INJ=$INJ
 export RUNNER_TEMP="$out/build" NNG_SOCKET_NAME=$name
 sim=""
 if [ "$mode" = sim ]; then
