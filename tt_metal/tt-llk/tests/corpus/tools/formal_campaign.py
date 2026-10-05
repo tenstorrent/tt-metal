@@ -2,9 +2,12 @@
 """Run current-tuple SFPU translation validation.
 
 The campaign input is the LLK corpus, optionally paired with a tuning search
-JSON.  Each operation is compiled with its own selected flags.  Historical
-boards and recorded overlays are deliberately outside this runner: every
-verdict in the output is produced by this invocation.
+JSON.  Each operation is compiled in three arms: selected flags on the
+semantic source, frozen-baseline flags on that same source, and frozen-baseline
+flags on the handwritten source.  The first pair is the exact compiler gate;
+the second pair is the semantic-uplift gate.  Historical boards and recorded
+overlays are deliberately outside this runner: every verdict in the output is
+produced by this invocation.
 """
 
 from __future__ import annotations
@@ -48,6 +51,11 @@ OPERATIONAL_FAILURES = {
     "TRACE_CAPTURE_FAILED",
     "TRACE_VALIDATION_FAILED",
 }
+COMPILER_ADMITTED = {
+    "PROVEN_EQUIVALENT",
+    "NOT_APPLICABLE_IDENTICAL_CONFIGURATION",
+}
+SEMANTIC_ADMITTED = {"PROVEN_EQUIVALENT", "PROVEN_EQUIVALENT_ON_DOMAIN"}
 
 
 def sha256(path: Path) -> str:
@@ -125,6 +133,47 @@ def _selection_from_json(data: dict) -> dict[str, str]:
     return selected
 
 
+def _profiles_from_json(
+    data: dict, fallback_baseline: str | None = None
+) -> dict[str, dict[str, str]]:
+    """Return selected and frozen flags, rejecting a split baseline authority."""
+    selected = _selection_from_json(data)
+    settings = data.get("settings")
+    global_baseline = settings.get("baseline_flags") if isinstance(settings, dict) else None
+    profiles = {}
+    for op, selected_flags in selected.items():
+        record = data["operations"][op]
+        proposal = record.get("proposal") if isinstance(record, dict) else None
+        proposal_baseline = (
+            proposal.get("frozen_baseline_flags") if isinstance(proposal, dict) else None
+        )
+        if global_baseline is not None and proposal_baseline is not None:
+            if str(global_baseline) != str(proposal_baseline):
+                raise ValueError(f"selected operation {op} disagrees with the frozen baseline")
+        embedded_baseline = (
+            proposal_baseline if proposal_baseline is not None else global_baseline
+        )
+        if fallback_baseline is not None and embedded_baseline is not None:
+            if str(fallback_baseline) != str(embedded_baseline):
+                raise ValueError(
+                    f"selected operation {op} disagrees with --baseline-flags"
+                )
+        baseline = (
+            proposal_baseline
+            if proposal_baseline is not None
+            else global_baseline
+            if global_baseline is not None
+            else fallback_baseline
+        )
+        if baseline is None:
+            raise ValueError(f"selected operation {op} has no frozen baseline flags")
+        profiles[op] = {
+            "selected_flags": selected_flags,
+            "baseline_flags": str(baseline),
+        }
+    return profiles
+
+
 def load_selection(path: Path) -> dict[str, str]:
     if path.suffix == ".json":
         return _selection_from_json(json.loads(path.read_text()))
@@ -135,6 +184,33 @@ def load_selection(path: Path) -> dict[str, str]:
     if not selected:
         raise ValueError("selection TSV contains no operations")
     return selected
+
+
+def load_profiles(path: Path, fallback_baseline: str | None = None) -> dict[str, dict[str, str]]:
+    if path.suffix == ".json":
+        data = json.loads(path.read_text())
+        return _profiles_from_json(data, fallback_baseline)
+    rows = read_tsv(path)
+    if not rows or "flags" not in rows[0]:
+        raise ValueError(
+            "selection TSV needs op and flags columns; selected.tsv toggles alone are insufficient"
+        )
+    profiles = {}
+    for row in rows:
+        if not row.get("op"):
+            continue
+        baseline = row.get("baseline_flags") or fallback_baseline
+        if baseline is None:
+            raise ValueError(
+                "selection TSV needs baseline_flags or --baseline-flags for the compiler gate"
+            )
+        profiles[row["op"]] = {
+            "selected_flags": row["flags"],
+            "baseline_flags": baseline,
+        }
+    if not profiles:
+        raise ValueError("selection TSV contains no operations")
+    return profiles
 
 
 def load_domains(path: Path | None) -> dict[str, list[dict]]:
@@ -273,6 +349,8 @@ def run_leg(
 def invoke_prover(
     *,
     op: str,
+    trace_sem: Path,
+    trace_hand: Path,
     domain: list[dict] | None,
     python: Path,
     out: Path,
@@ -285,9 +363,9 @@ def invoke_prover(
         "--row",
         op,
         "--trace-sem",
-        str(out / "trace-sem.log"),
+        str(trace_sem),
         "--trace-hand",
-        str(out / "trace-hand.log"),
+        str(trace_hand),
         "--out",
         str(out),
         "--isa-json",
@@ -318,11 +396,85 @@ def admitted_status(all_inputs: str, domain: str | None) -> str:
     return all_inputs
 
 
+def prove_pair(
+    *,
+    row: str,
+    trace_sem: Path,
+    trace_hand: Path,
+    domain: list[dict] | None,
+    python: Path,
+    sim: Path,
+    out: Path,
+    timeout: int,
+) -> dict:
+    """Prove one ordered trace pair; domain fallback is explicitly opt-in."""
+    try:
+        verdict, run = invoke_prover(
+            op=row,
+            trace_sem=trace_sem,
+            trace_hand=trace_hand,
+            domain=None,
+            python=python,
+            out=out,
+            isa_json=sim.parent / "tensix_isa.json",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {"status": "TIMEOUT", "detail": f"prover exceeded {timeout + 120}s"}
+    if not isinstance(verdict, dict) or not verdict.get("verdict"):
+        detail = (run.stderr or run.stdout or "prover wrote no verdict")[-500:]
+        return {"status": "PROVER_FAILED", "detail": detail}
+    all_input_status = verdict_status(verdict)
+    result = {
+        "status": all_input_status,
+        "formal_verdict": verdict["verdict"],
+        "validation": verdict.get("validation"),
+        "details": verdict.get("details"),
+        "witness": (verdict.get("details") or {}).get("witness"),
+        "verdict_file": f"{out.name}/{row}-verdict.json",
+    }
+    if all_input_status != "DIVERGENT" or not domain:
+        return result
+    try:
+        domain_verdict, domain_run = invoke_prover(
+            op=f"{row}-domain",
+            trace_sem=trace_sem,
+            trace_hand=trace_hand,
+            domain=domain,
+            python=python,
+            out=out,
+            isa_json=sim.parent / "tensix_isa.json",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        result.update(status="TIMEOUT", domain_status="TIMEOUT")
+        return result
+    if not isinstance(domain_verdict, dict) or not domain_verdict.get("verdict"):
+        detail = (
+            domain_run.stderr or domain_run.stdout or "domain prover wrote no verdict"
+        )[-500:]
+        result.update(
+            status="PROVER_FAILED", domain_status="PROVER_FAILED", detail=detail
+        )
+        return result
+    domain_status = verdict_status(domain_verdict)
+    result.update(
+        status=admitted_status(all_input_status, domain_status),
+        domain_status=domain_status,
+        domain_formal_verdict=domain_verdict["verdict"],
+        domain_validation=domain_verdict.get("validation"),
+        domain_details=domain_verdict.get("details"),
+        domain_verdict_file=f"{out.name}/{row}-domain-verdict.json",
+    )
+    return result
+
+
 def run_case(
     *,
     op: str,
     case: dict[str, str] | None,
-    flags: str,
+    selected_flags: str,
+    baseline_flags: str,
     domain: list[dict] | None,
     tests: Path,
     python: Path,
@@ -331,108 +483,193 @@ def run_case(
     timeout: int,
 ) -> dict:
     started = time.monotonic()
-    result = {"op": op, "flags": flags, "domain": domain, "status": None}
+    result = {
+        "op": op,
+        # `flags` and the legacy semantic fields below remain for readers of
+        # schema v1. New readers must use the independently named gates.
+        "flags": selected_flags,
+        "selected_flags": selected_flags,
+        "baseline_flags": baseline_flags,
+        "domain": domain,
+        "status": None,
+    }
     if case is None:
-        result.update(status="NO_CASE", detail="operation is absent from the corpus")
+        result.update(
+            status="NO_CASE",
+            compiler_status="NO_CASE",
+            semantic_status="NO_CASE",
+            detail="operation is absent from the corpus",
+        )
         return result
     sem_node, hand_node = case_nodes(case)
     result.update(kind=case.get("kind"), semantic_node=sem_node, reference_node=hand_node)
     if not sem_node:
-        result.update(status="NO_CASE", detail="corpus row has no semantic correctness node")
-        return result
-    if not hand_node:
-        result.update(status="NO_REFERENCE", detail="corpus row has no handwritten correctness node")
-        return result
-    if sem_node == hand_node:
-        result.update(status="NO_REFERENCE", detail="semantic and reference nodes are identical")
+        result.update(
+            status="NO_CASE",
+            compiler_status="NO_CASE",
+            semantic_status="NO_CASE",
+            detail="corpus row has no semantic correctness node",
+        )
         return result
 
     out = root / op
     out.mkdir(parents=True)
     try:
-        sem = run_leg(
+        selected_sem = run_leg(
             op=op,
-            leg="sem",
+            leg="selected-sem",
             node=sem_node,
-            flags=flags,
+            flags=selected_flags,
             tests=tests,
             python=python,
             sim=sim,
             out=out,
             timeout=timeout,
         )
-        hand = run_leg(
-            op=op,
-            leg="hand",
-            node=hand_node,
-            flags=flags,
-            tests=tests,
-            python=python,
-            sim=sim,
-            out=out,
-            timeout=timeout,
-        )
-        result["legs"] = {"semantic": sem, "reference": hand}
     except subprocess.TimeoutExpired:
-        result.update(status="BUILD_FAILED", detail=f"pytest exceeded {timeout}s")
+        result.update(
+            status="BUILD_FAILED",
+            compiler_status="BUILD_FAILED",
+            semantic_status="NOT_RUN",
+            detail=f"selected semantic pytest exceeded {timeout}s",
+        )
         return result
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
-        result.update(status="BUILD_FAILED", detail=str(error))
+        result.update(
+            status="BUILD_FAILED",
+            compiler_status="BUILD_FAILED",
+            semantic_status="NOT_RUN",
+            detail=str(error),
+        )
         return result
 
-    try:
-        verdict, run = invoke_prover(
-            op=op,
-            domain=None,
-            python=python,
-            out=out,
-            isa_json=sim.parent / "tensix_isa.json",
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        result.update(status="TIMEOUT", detail=f"prover exceeded {timeout + 120}s")
-        return result
-    if not isinstance(verdict, dict) or not verdict.get("verdict"):
-        detail = (run.stderr or run.stdout or "prover wrote no verdict")[-500:]
-        result.update(status="PROVER_FAILED", detail=detail)
-        return result
-    all_input_status = verdict_status(verdict)
-    result.update(
-        status=all_input_status,
-        formal_verdict=verdict["verdict"],
-        validation=verdict.get("validation"),
-        details=verdict.get("details"),
-        witness=(verdict.get("details") or {}).get("witness"),
-        verdict_file=f"{op}/{op}-verdict.json",
-        wall_seconds=round(time.monotonic() - started, 3),
-    )
-    if all_input_status == "DIVERGENT" and domain:
+    if selected_flags == baseline_flags:
+        baseline_sem = selected_sem
+        baseline_sem_trace = out / "trace-selected-sem.log"
+        compiler = {
+            "status": "NOT_APPLICABLE_IDENTICAL_CONFIGURATION",
+            "detail": "selected and frozen compiler flags are identical",
+        }
+    else:
         try:
-            domain_verdict, domain_run = invoke_prover(
-                op=f"{op}-domain",
-                domain=domain,
+            baseline_sem = run_leg(
+                op=op,
+                leg="baseline-sem",
+                node=sem_node,
+                flags=baseline_flags,
+                tests=tests,
                 python=python,
+                sim=sim,
                 out=out,
-                isa_json=sim.parent / "tensix_isa.json",
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired:
-            result.update(status="TIMEOUT", domain_status="TIMEOUT")
+            result.update(
+                status="BUILD_FAILED",
+                compiler_status="BUILD_FAILED",
+                semantic_status="NOT_RUN",
+                detail=f"baseline semantic pytest exceeded {timeout}s",
+            )
             return result
-        if not isinstance(domain_verdict, dict) or not domain_verdict.get("verdict"):
-            detail = (domain_run.stderr or domain_run.stdout or "domain prover wrote no verdict")[-500:]
-            result.update(status="PROVER_FAILED", domain_status="PROVER_FAILED", detail=detail)
+        except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+            result.update(
+                status="BUILD_FAILED",
+                compiler_status="BUILD_FAILED",
+                semantic_status="NOT_RUN",
+                detail=str(error),
+            )
             return result
-        domain_status = verdict_status(domain_verdict)
-        result.update(
-            status=admitted_status(all_input_status, domain_status),
-            domain_status=domain_status,
-            domain_formal_verdict=domain_verdict["verdict"],
-            domain_validation=domain_verdict.get("validation"),
-            domain_details=domain_verdict.get("details"),
-            domain_verdict_file=f"{op}/{op}-domain-verdict.json",
-            wall_seconds=round(time.monotonic() - started, 3),
+        baseline_sem_trace = out / "trace-baseline-sem.log"
+        compiler = prove_pair(
+            row=f"{op}-compiler",
+            trace_sem=out / "trace-selected-sem.log",
+            trace_hand=out / "trace-baseline-sem.log",
+            domain=None,
+            python=python,
+            sim=sim,
+            out=out,
+            timeout=timeout,
         )
+    result["compiler"] = compiler
+    result["compiler_status"] = compiler["status"]
+    result["legs"] = {
+        "selected_semantic": selected_sem,
+        "baseline_semantic": baseline_sem,
+    }
+
+    if not hand_node or sem_node == hand_node:
+        semantic = {
+            "status": "NO_REFERENCE",
+            "detail": (
+                "corpus row has no handwritten correctness node"
+                if not hand_node
+                else "semantic and reference nodes are identical"
+            ),
+        }
+    else:
+        try:
+            baseline_hand = run_leg(
+                op=op,
+                leg="baseline-hand",
+                node=hand_node,
+                flags=baseline_flags,
+                tests=tests,
+                python=python,
+                sim=sim,
+                out=out,
+                timeout=timeout,
+            )
+            result["legs"]["baseline_handwritten"] = baseline_hand
+        except subprocess.TimeoutExpired:
+            semantic = {
+                "status": "BUILD_FAILED",
+                "detail": f"baseline handwritten pytest exceeded {timeout}s",
+            }
+        except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+            semantic = {"status": "BUILD_FAILED", "detail": str(error)}
+        else:
+            semantic = prove_pair(
+                row=f"{op}-semantic",
+                trace_sem=baseline_sem_trace,
+                trace_hand=out / "trace-baseline-hand.log",
+                domain=domain,
+                python=python,
+                sim=sim,
+                out=out,
+                timeout=timeout,
+            )
+    result["semantic"] = semantic
+    result["semantic_status"] = semantic["status"]
+    result["compiler_gate"] = (
+        "PASS" if compiler["status"] in COMPILER_ADMITTED else "FOLLOWUP_REQUIRED"
+    )
+    result["semantic_gate"] = (
+        "PASS" if semantic["status"] in SEMANTIC_ADMITTED else "FOLLOWUP_REQUIRED"
+    )
+    result["deployment_gate"] = (
+        "PASS"
+        if result["compiler_gate"] == result["semantic_gate"] == "PASS"
+        else "FOLLOWUP_REQUIRED"
+    )
+    # Schema-v1 compatibility: top-level proof fields describe the semantic
+    # comparison, exactly as they did before the compiler gate was separated.
+    result["status"] = semantic["status"]
+    for key in (
+        "formal_verdict",
+        "validation",
+        "details",
+        "witness",
+        "verdict_file",
+        "domain_status",
+        "domain_formal_verdict",
+        "domain_validation",
+        "domain_details",
+        "domain_verdict_file",
+        "detail",
+    ):
+        if key in semantic:
+            result[key] = semantic[key]
+    result["wall_seconds"] = round(time.monotonic() - started, 3)
     return result
 
 
@@ -506,28 +743,87 @@ def write_results(
     if completed > expected_total:
         raise ValueError("completed records exceed expected total")
     counts = Counter(record["status"] for record in records)
-    operational_failures = sum(counts[status] for status in OPERATIONAL_FAILURES)
-    admitted = counts["PROVEN_EQUIVALENT"] + counts["PROVEN_EQUIVALENT_ON_DOMAIN"]
+    compiler_counts = Counter(
+        record.get("compiler_status", record["status"]) for record in records
+    )
+    semantic_counts = Counter(
+        record.get("semantic_status", record["status"]) for record in records
+    )
+    operational_failures = sum(
+        1
+        for record in records
+        if record.get("compiler_status", record["status"]) in OPERATIONAL_FAILURES
+        or record.get("semantic_status", record["status"]) in OPERATIONAL_FAILURES
+    )
+    compiler_admitted = sum(compiler_counts[status] for status in COMPILER_ADMITTED)
+    semantic_admitted = sum(semantic_counts[status] for status in SEMANTIC_ADMITTED)
+    deployed = sum(
+        (
+            record.get("deployment_gate") == "PASS"
+            if "deployment_gate" in record
+            else record["status"] in SEMANTIC_ADMITTED
+        )
+        for record in records
+    )
     if completed < expected_total:
         campaign_status = "RUNNING"
     else:
         campaign_status = "INCOMPLETE" if operational_failures else "COMPLETE"
     summary = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": campaign_status,
         "selected": completed,
         "expected_total": expected_total,
         "counts": dict(sorted(counts.items())),
+        "compiler_counts": dict(sorted(compiler_counts.items())),
+        "semantic_counts": dict(sorted(semantic_counts.items())),
         "operational_failures": operational_failures,
-        "formal_admission": "ALL_PROVEN" if completed == expected_total and admitted == expected_total else "FOLLOWUP_REQUIRED",
-        "formally_admitted": admitted,
-        "followup_required": expected_total - admitted,
+        "compiler_admission": (
+            "ALL_PROVEN"
+            if completed == expected_total and compiler_admitted == expected_total
+            else "FOLLOWUP_REQUIRED"
+        ),
+        "compiler_admitted": compiler_admitted,
+        "semantic_admission": (
+            "ALL_PROVEN"
+            if completed == expected_total and semantic_admitted == expected_total
+            else "FOLLOWUP_REQUIRED"
+        ),
+        "semantic_admitted": semantic_admitted,
+        "deployment_admission": (
+            "ALL_PROVEN"
+            if completed == expected_total and deployed == expected_total
+            else "FOLLOWUP_REQUIRED"
+        ),
+        "deployment_admitted": deployed,
+        "deployment_followup_required": expected_total - deployed,
+        # Schema-v1 compatibility: formal admission is the semantic gate.
+        "formal_admission": (
+            "ALL_PROVEN"
+            if completed == expected_total and semantic_admitted == expected_total
+            else "FOLLOWUP_REQUIRED"
+        ),
+        "formally_admitted": semantic_admitted,
+        "followup_required": expected_total - semantic_admitted,
         "wall_seconds": round(time.monotonic() - started, 3),
         "metadata": metadata,
         "results": records,
     }
     (root / "formal-results.json").write_text(json.dumps(summary, indent=2) + "\n")
-    columns = ("op", "status", "formal_verdict", "wall_seconds", "flags", "detail")
+    columns = (
+        "op",
+        "status",
+        "compiler_status",
+        "semantic_status",
+        "compiler_gate",
+        "semantic_gate",
+        "deployment_gate",
+        "formal_verdict",
+        "wall_seconds",
+        "flags",
+        "baseline_flags",
+        "detail",
+    )
     with (root / "formal-results.tsv").open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=columns, delimiter="\t")
         writer.writeheader()
@@ -543,6 +839,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES)
     parser.add_argument("--selection", type=Path)
     parser.add_argument("--flags", default="")
+    parser.add_argument(
+        "--baseline-flags",
+        help="explicit frozen compiler profile; required for a selection file that "
+        "does not embed frozen_baseline_flags (uniform --flags defaults to itself)",
+    )
     parser.add_argument("--domains", type=Path, default=DEFAULT_DOMAINS)
     parser.add_argument("--ops", help="comma-separated operation globs")
     parser.add_argument("--sem-node", help="semantic pytest node for a single --ops row")
@@ -558,9 +859,13 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("jobs must be positive")
     try:
         cases = load_cases(args.cases.resolve())
-        selection = load_selection(args.selection.resolve()) if args.selection else None
+        profiles = (
+            load_profiles(args.selection.resolve(), args.baseline_flags)
+            if args.selection
+            else None
+        )
         domains = load_domains(args.domains.resolve() if args.domains else None)
-        ops = selected_ops(cases, selection, args.ops)
+        ops = selected_ops(cases, profiles, args.ops)
         if not ops:
             raise ValueError("no operations selected")
         invalid = [op for op in ops if not operation_slug(op)]
@@ -594,11 +899,19 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     def run_one(index: int, op: str) -> tuple[int, dict]:
-        flags = selection[op] if selection is not None else args.flags
+        if profiles is not None:
+            selected_flags = profiles[op]["selected_flags"]
+            baseline_flags = profiles[op]["baseline_flags"]
+        else:
+            selected_flags = args.flags
+            baseline_flags = (
+                args.baseline_flags if args.baseline_flags is not None else args.flags
+            )
         record = run_case(
             op=op,
             case=cases.get(op),
-            flags=flags,
+            selected_flags=selected_flags,
+            baseline_flags=baseline_flags,
             domain=domains.get(op),
             tests=tests,
             python=python,
@@ -646,7 +959,11 @@ def main(argv: list[str] | None = None) -> int:
                     len(ops),
                 )
     records = [records_by_index[i] for i in range(len(ops))]
-    return 2 if any(record["status"] in OPERATIONAL_FAILURES for record in records) else 0
+    return 2 if any(
+        record.get("compiler_status", record["status"]) in OPERATIONAL_FAILURES
+        or record.get("semantic_status", record["status"]) in OPERATIONAL_FAILURES
+        for record in records
+    ) else 0
 
 
 if __name__ == "__main__":

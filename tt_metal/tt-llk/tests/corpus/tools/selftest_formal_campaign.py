@@ -8,6 +8,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 import formal_campaign as campaign
 
@@ -34,6 +35,31 @@ class FormalCampaignTests(unittest.TestCase):
             }
         }
         self.assertEqual(campaign._selection_from_json(data), {"a": "-ma"})
+
+    def test_search_profiles_use_one_explicit_frozen_baseline(self):
+        data = {
+            "settings": {"baseline_flags": "-mbase"},
+            "operations": {
+                "a": {
+                    "proposal": {
+                        "frozen_baseline_flags": "-mbase",
+                        "selection": {"flags": "-ma"},
+                    }
+                }
+            },
+        }
+        self.assertEqual(
+            campaign._profiles_from_json(data),
+            {"a": {"selected_flags": "-ma", "baseline_flags": "-mbase"}},
+        )
+        data["operations"]["a"]["proposal"]["frozen_baseline_flags"] = "-mother"
+        with self.assertRaisesRegex(ValueError, "disagrees"):
+            campaign._profiles_from_json(data)
+
+    def test_selection_without_frozen_baseline_is_rejected(self):
+        data = {"operations": {"a": {"selection": {"flags": "-ma"}}}}
+        with self.assertRaisesRegex(ValueError, "no frozen baseline"):
+            campaign._profiles_from_json(data)
 
     def test_selected_tsv_without_flags_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -105,6 +131,95 @@ class FormalCampaignTests(unittest.TestCase):
             complete = json.loads((root / "formal-results.json").read_text())
             self.assertEqual(complete["status"], "COMPLETE")
             self.assertEqual(complete["selected"], complete["expected_total"])
+
+    @mock.patch.object(campaign, "prove_pair")
+    @mock.patch.object(campaign, "run_leg")
+    def test_compiler_gate_runs_without_a_handwritten_reference(self, run_leg, prove_pair):
+        run_leg.side_effect = lambda **kw: {"node": kw["node"], "leg": kw["leg"]}
+        prove_pair.return_value = {"status": "PROVEN_EQUIVALENT"}
+        with tempfile.TemporaryDirectory() as temporary:
+            result = campaign.run_case(
+                op="a",
+                case={"kind": "semantic", "sem_corr": "sem.py::test", "hand_corr": ""},
+                selected_flags="-mselected",
+                baseline_flags="-mbase",
+                domain=[{"which": "all"}],
+                tests=Path(temporary),
+                python=Path("python"),
+                sim=Path(temporary) / "libttsim.so",
+                root=Path(temporary),
+                timeout=1,
+            )
+        self.assertEqual(result["compiler_status"], "PROVEN_EQUIVALENT")
+        self.assertEqual(result["semantic_status"], "NO_REFERENCE")
+        self.assertEqual([call.kwargs["leg"] for call in run_leg.call_args_list],
+                         ["selected-sem", "baseline-sem"])
+        self.assertIsNone(prove_pair.call_args.kwargs["domain"])
+
+    @mock.patch.object(campaign, "prove_pair")
+    @mock.patch.object(campaign, "run_leg")
+    def test_tri_arm_keeps_compiler_and_semantic_domains_separate(self, run_leg, prove_pair):
+        run_leg.side_effect = lambda **kw: {"node": kw["node"], "leg": kw["leg"]}
+        prove_pair.side_effect = [
+            {"status": "PROVEN_EQUIVALENT"},
+            {"status": "PROVEN_EQUIVALENT_ON_DOMAIN"},
+        ]
+        domain = [{"which": "all", "int_min": 1, "int_max": 7}]
+        with tempfile.TemporaryDirectory() as temporary:
+            result = campaign.run_case(
+                op="a",
+                case={
+                    "kind": "full2x2",
+                    "sem_corr": "sem.py::test",
+                    "hand_corr": "hand.py::test",
+                },
+                selected_flags="-mselected",
+                baseline_flags="-mbase",
+                domain=domain,
+                tests=Path(temporary),
+                python=Path("python"),
+                sim=Path(temporary) / "libttsim.so",
+                root=Path(temporary),
+                timeout=1,
+            )
+        self.assertEqual(
+            [call.kwargs["leg"] for call in run_leg.call_args_list],
+            ["selected-sem", "baseline-sem", "baseline-hand"],
+        )
+        self.assertIsNone(prove_pair.call_args_list[0].kwargs["domain"])
+        self.assertEqual(prove_pair.call_args_list[1].kwargs["domain"], domain)
+        self.assertEqual(result["compiler_gate"], "PASS")
+        self.assertEqual(result["semantic_gate"], "PASS")
+        self.assertEqual(result["deployment_gate"], "PASS")
+
+    @mock.patch.object(campaign, "prove_pair")
+    @mock.patch.object(campaign, "run_leg")
+    def test_identical_selected_profile_reuses_semantic_arm(self, run_leg, prove_pair):
+        run_leg.side_effect = lambda **kw: {"node": kw["node"], "leg": kw["leg"]}
+        prove_pair.return_value = {"status": "PROVEN_EQUIVALENT"}
+        with tempfile.TemporaryDirectory() as temporary:
+            result = campaign.run_case(
+                op="a",
+                case={"kind": "full2x2", "sem_corr": "sem", "hand_corr": "hand"},
+                selected_flags="-msame",
+                baseline_flags="-msame",
+                domain=None,
+                tests=Path(temporary),
+                python=Path("python"),
+                sim=Path(temporary) / "libttsim.so",
+                root=Path(temporary),
+                timeout=1,
+            )
+        self.assertEqual(
+            result["compiler_status"], "NOT_APPLICABLE_IDENTICAL_CONFIGURATION"
+        )
+        self.assertEqual([call.kwargs["leg"] for call in run_leg.call_args_list],
+                         ["selected-sem", "baseline-hand"])
+        self.assertEqual(len(prove_pair.call_args_list), 1)
+        self.assertEqual(
+            prove_pair.call_args.kwargs["trace_sem"].name,
+            "trace-selected-sem.log",
+        )
 
 
 if __name__ == "__main__":
