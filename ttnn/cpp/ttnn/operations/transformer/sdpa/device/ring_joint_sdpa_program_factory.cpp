@@ -2670,7 +2670,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             rotated_handoff_sem_ids.push_back(sem_id);
         }
         // Report the selected schedule once per program compilation.
-        log_info(
+        log_debug(
             tt::LogOp,
             "Rotated Q split ACTIVE: base={} floats={} groups={}x{} groups_needed={} ring_size={} "
             "active_iters={} kv_pad_rotation={} unit_chunks={}",
@@ -2684,7 +2684,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             kv_pad_rotation_enabled,
             rotation_unit_chunks);
     } else if (kernel_chunked || use_head_chain) {
-        log_info(
+        log_debug(
             tt::LogOp,
             "Ring joint rotated Q split declined: base={} floats={} groups_needed={} of {} groups, "
             "balanced={} head_chain={} streaming={} attention_sink={} kv_chains={} groups=\"{}\"; "
