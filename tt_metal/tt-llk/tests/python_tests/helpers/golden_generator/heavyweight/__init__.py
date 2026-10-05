@@ -13,11 +13,12 @@ Two subpackages, each with a README:
 * :mod:`.operations` -- the pipelines, and the engine that runs them.
 * :mod:`.data_transfer_blocks` -- what each transfer does to a buffer.
 
-:mod:`.mismatch` sits alongside them and is for failures only. It answers the
-two questions a value dump cannot -- *how badly*, in lattice steps rather than
-absolute error, and *which stage*, by printing the golden's pre-pack Dest beside
-the packed result. ``passed_test`` already prints the failing tiles with the bad
-datums highlighted, so use the two together.
+:mod:`.mismatch` sits alongside them and is for failures only. It adds what a
+value dump lacks -- *how badly*, in lattice steps rather than absolute error,
+and the golden's pre-pack Dest beside the packed result, which narrows where to
+look though it cannot by itself say whether the device's math or its pack
+diverged. ``passed_test`` already prints the failing tiles with the bad datums
+highlighted, so use the two together.
 
 Writing a test touches only the first. Pick the golden for your architecture and
 hand it tensors::
