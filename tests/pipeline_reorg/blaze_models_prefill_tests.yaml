@@ -919,6 +919,33 @@
   team: models
   sp_config: sc1
 
+# Gemma4 layer perf: global chunks 0/1/15/31 and sliding chunks 0/1 at 256k@8k.
+- name: "(Gemma4-31B-it) D_P layer perf 256k@8k"
+  fabric_profile: 1d
+  cmd: |
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export HF_MODEL=google/gemma-4-31B-it
+    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      uv pip install tt-perf-report
+      # A node id, not -k: tracy re-joins the -m argument into one shell command.
+      python3 -m tracy -p -r -v -o generated/profiler --check-exit-code --op-support-count 20000 \
+        -m "pytest models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_perf_chunk_n[blackhole-chunkci-both-sz8192-ctx_256k-8x4] -vv --tb=short --timeout=7200"
+      python3 models/demos/gemma4_d_p/scripts/layer_perf_report.py --profiler-dir generated/profiler
+    '
+  test_type: gemma4_d_p_layer_perf
+  test_group: gemma4_d_p_layer_perf
+  budget_type: demo
+  skus:
+    bh_sc1_high_power:
+      timeout: 60
+  owner_id: U078RU2KP9Q # Muhammad Asif Manzoor
+  team: models
+  sp_config: sc1
+
 
 # ===== MiniMax-M3-428B =================================================================================
 
