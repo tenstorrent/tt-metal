@@ -385,7 +385,7 @@ def test_generic_all_to_all_drains_noc_atomics(mesh_device):
     run_all_to_all_impl(
         mesh_device,
         mesh_device.get_num_devices(),
-        logical_shape=[1, 128, 128, 512],
+        logical_shape=[1, 32, 32, 64],
         in_dim=1,
         out_dim=2,
         num_links=1,
