@@ -1175,7 +1175,10 @@ _SIGNAL_QUALITY_CHECKS = ("wer", "mos")
 _ROW_LENGTH_RATIO = 1.5  # a row may run at most this much longer than the golden's row ...
 _ROW_LENGTH_SLACK_FRAMES = 8  # ... plus this many frames, so a short row is not held to the ratio alone
 _ROW_WER_MARGIN = 0.20  # absolute word error rate, per row
-_ROW_MOS_MARGIN = 0.75  # per-row MOS, on the predictor's own scale
+# Per-row MOS, on the predictor's own scale. The per-clip predictor is noisy: on a validated TTS
+# baseline the per-row gap to the golden ran from -0.70 to +0.55 on clean, intelligible rows, so a
+# margin below ~1.0 trips on ordinary trajectory flips; about twice the largest such gap.
+_ROW_MOS_MARGIN = 1.25
 
 # Written ONCE and read by both the builder's checklist (_TT_ONLY_CONTRACT) and the G7 graduation
 # message (_signal_quality_gate), so the two cannot drift apart the way a copied sentence does.
