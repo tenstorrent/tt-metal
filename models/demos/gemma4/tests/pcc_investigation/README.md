@@ -7,6 +7,27 @@ The results so far are in [FINDINGS.md](FINDINGS.md); every number there comes f
 These are experiment scripts, not CI tests. Each one is run by hand: `python <script> [args]` from the repo root,
 with the repo's `python_env` unless noted.
 
+## Checking accuracy: use the accuracy gate
+
+The accuracy check for this model is the accuracy gate, `models/demos/gemma4/tests/test_optimizer_gemma4_pcc.py`
+(not a script in this folder). From the repo root, on the QB2:
+
+```
+HF_HUB_OFFLINE=1 HF_MODEL=~/benchmark-data/gemma-4-26B-A4B-it HF_MODEL_ID=google/gemma-4-26B-A4B-it MESH_DEVICE=P150x4 \
+  python_env/bin/python -m pytest models/demos/gemma4/tests/test_optimizer_gemma4_pcc.py::test_optimizer_gemma4_pcc -x -q -s
+```
+
+It prefills 128 tokens of the opening of the US Declaration of Independence, then runs 128 teacher-forced decode
+steps, and compares the logits at those 129 positions with Hugging Face **bf16** on the same tokens. It prints one
+line, `ACCURACY positions=129 top1_pct=... top5_pct=... mean_corr=... prefill_corr=...`, and checks top-1 / top-5 /
+mean PCC against the baseline pinned from the unmodified code (`generated/optimizer_accuracy_baseline_<model>.json`).
+Optimized code before the merge with main: mean PCC 0.9655, top-1 81.40%, top-5 95.35%.
+
+The scripts below measure other things, on other text and other positions, so their numbers are not comparable to the
+gate's. For example, `chip/tt_token_accuracy.py` (tt-metal's standard token-accuracy protocol) prefills 512 tokens of
+*A Tale of Two Cities* and scores decode positions 511-1010, and gives a lower mean PCC (0.9376 for the same optimized
+code) because the positions are later and the text is harder for this model.
+
 ## Where things live
 
 | What | Where | Override |
@@ -38,7 +59,7 @@ They keep every intermediate value of the decode path in fp32; the weights stay 
 ### `reference/`: Hugging Face reference runs (CPU)
 | Script | What it does |
 |---|---|
-| `generate_reference_hf_with_logits.py` | tt-metal's standard `generate_reference_hf.py` plus saving the full logits. Writes `gemma-4-26B-A4B-it.refpt` (book tokens with BOS, HF top-5) and `.refpt.logits.pt`. The model loads in **bf16**: this is the reference the accuracy gate uses. |
+| `generate_reference_hf_with_logits.py` | tt-metal's standard `generate_reference_hf.py` plus saving the full logits. Writes `gemma-4-26B-A4B-it.refpt` (book tokens with BOS, HF top-5) and `.refpt.logits.pt`. The model loads in **bf16**. This is the reference of `chip/tt_token_accuracy.py`; the accuracy gate builds its own HF bf16 reference on its own text. |
 | `hf_fp32.py`, `hf_fp32_eager.py` | Hugging Face entirely in fp32 (sdpa / eager attention) on the same 1023 tokens: the closest stand-in for exact arithmetic. |
 | `hf_eager_save.py` | Hugging Face bf16 with eager attention instead of sdpa (same math, different rounding order). |
 | `hf_per_layer_ref.py` | Hugging Face with fp32 arithmetic on 512 tokens. Saves, for every layer: its input, attention output, shared-MLP output, experts output, the router's 8 chosen experts and the layer output (`hf_per_layer_ref_512.pt`, used by the per-layer PCC scripts). |
