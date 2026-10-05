@@ -13,11 +13,11 @@ from that repository:
 python3 scripts/build-formal-instrument.py --out /tmp/formal-sim --jobs 16
 ```
 
-The staged directory contains `libttsim.so`, `soc_descriptor.yaml`, and
-`formal-instrument.json`. The manifest records the source commit, build command,
-target, observed artifact hashes, and trace schema. The formal runner validates
-the schema and records these identities; it does not require an obsolete binary
-hash.
+The staged directory contains `libttsim.so`, `soc_descriptor.yaml`, the exact
+`tensix_isa.json` used to decode instructions, and `formal-instrument.json`. The
+manifest records the source commit, build command, target, observed artifact
+hashes, and trace schema. The formal runner validates the schema and records
+these identities; it does not require an obsolete binary hash.
 
 ## Validate selected LLK knobs
 

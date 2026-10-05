@@ -2822,6 +2822,7 @@ def main():
     ap.add_argument("--isa-json", default=DEFAULT_ISA_JSON)
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
+    isa = Isa(args.isa_json)
 
     result = {"row": args.row}
     t_start = time.time()
@@ -2834,11 +2835,11 @@ def main():
     try:
         dst_c1 = Dst(Concrete)
         ex1, chk1 = run_trace(
-            recs_sem, Concrete, dst_c1, tile=args.tile, validate=True, tag="sem"
+            recs_sem, Concrete, dst_c1, tile=args.tile, validate=True, tag="sem", isa=isa
         )
         dst_c2 = Dst(Concrete)
         ex2, chk2 = run_trace(
-            recs_hand, Concrete, dst_c2, tile=args.tile, validate=True, tag="hand"
+            recs_hand, Concrete, dst_c2, tile=args.tile, validate=True, tag="hand", isa=isa
         )
         journal_sem, journal_hand = align_generations(ex1.adoptions, ex2.adoptions)
         result["validation"] = {
@@ -2887,6 +2888,7 @@ def main():
             validate=False,
             tag="sem",
             journal=journal_sem,
+            isa=isa,
             stop_at=stop_sem,
         )
         dst_hand = Dst(Symbolic, symbols)
@@ -2898,6 +2900,7 @@ def main():
             validate=False,
             tag="hand",
             journal=journal_hand,
+            isa=isa,
             stop_at=stop_hand,
         )
     except ScopeRefusal as e:

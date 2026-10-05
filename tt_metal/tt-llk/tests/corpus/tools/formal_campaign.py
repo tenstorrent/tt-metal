@@ -271,6 +271,7 @@ def invoke_prover(
     domain: list[dict] | None,
     python: Path,
     out: Path,
+    isa_json: Path,
     timeout: int,
 ) -> tuple[dict | None, subprocess.CompletedProcess]:
     command = [
@@ -284,6 +285,8 @@ def invoke_prover(
         str(out / "trace-hand.log"),
         "--out",
         str(out),
+        "--isa-json",
+        str(isa_json),
         "--timeout",
         str(timeout),
     ]
@@ -366,6 +369,7 @@ def run_case(
             domain=domain,
             python=python,
             out=out,
+            isa_json=sim.parent / "tensix_isa.json",
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
@@ -395,8 +399,11 @@ def preflight(tests: Path, python: Path, sim: Path) -> dict:
     if not sim.is_file():
         raise ValueError(f"simulator does not exist: {sim}")
     descriptor = sim.parent / "soc_descriptor.yaml"
+    isa_json = sim.parent / "tensix_isa.json"
     if not descriptor.is_file():
         raise ValueError(f"soc_descriptor.yaml is missing beside simulator: {descriptor}")
+    if not isa_json.is_file():
+        raise ValueError(f"tensix_isa.json is missing beside simulator: {isa_json}")
     strings = subprocess.run(
         ["strings", "-a", str(sim)], check=True, capture_output=True, text=True
     ).stdout
@@ -430,6 +437,7 @@ def preflight(tests: Path, python: Path, sim: Path) -> dict:
     return {
         "simulator": {"path": str(sim), "sha256": sha256(sim)},
         "descriptor": {"path": str(descriptor), "sha256": sha256(descriptor)},
+        "isa": {"path": str(isa_json), "sha256": sha256(isa_json)},
         "compiler": (
             {"path": str(cc1plus[0]), "sha256": sha256(cc1plus[0])}
             if len(cc1plus) == 1
