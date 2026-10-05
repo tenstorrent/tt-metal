@@ -12,7 +12,7 @@ The two checkpoints share this code. `HF_MODEL` picks one (default: Laguna-S-2.1
 
 | Model | Size | Hardware | Maximum context |
 |---|---|---|---:|
-| `poolside/Laguna-S-2.1` | 117.6B parameters, 8.45B active per token (about 235 GB in bf16) | p150x4/P300x2 only (all four ASICs) | 131,072 tokens |
+| `poolside/Laguna-S-2.1` | 117.6B parameters, 8.45B active per token (about 235 GB in bf16) | p150x4/P300x2 only (all four ASICs) | 1,048,576 tokens |
 | `poolside/Laguna-XS-2.1` | about 63 GB of bf16 weights | p150x2/P300 (recommended) or p150x4/P300x2 | 131,072 tokens |
 
 ## Choose the hardware profile
@@ -42,7 +42,7 @@ P150 cards or the full QuietBox 2. Start with one active request at a time.
 For a new checkout:
 
 ```bash
-git clone --branch agentic-research/hous/laguna-xs-2.1 --recurse-submodules \
+git clone --branch jerrywangTT/laguna-s --recurse-submodules \
   https://github.com/tenstorrent/tt-metal.git
 cd tt-metal
 ```
@@ -105,9 +105,10 @@ HF_MODEL=poolside/Laguna-S-2.1 "$MODEL_DIR/serve_vllm.sh" config
 HF_MODEL=poolside/Laguna-S-2.1 "$MODEL_DIR/serve_vllm.sh"
 ```
 
-This selects `p150x4` on ASICs `0,1,2,3` and serves 131,072 tokens of context to one request at a time,
-using hybrid KV (the 36 sliding-window layers keep only their 512-token window) and chunked prefill.
-`TT_LAGUNA_HYBRID_KV=0` falls back to a plain KV cache, which fits 32,768 tokens and up to 8 requests.
+This selects `p150x4` on ASICs `0,1,2,3` and serves 1,048,576 tokens of context to one request at a time,
+using hybrid KV (the 36 sliding-window layers keep only their 512-token window, so only the 12
+full-attention layers store every past token) and chunked prefill. `TT_LAGUNA_HYBRID_KV=0` falls back to a
+plain KV cache, which fits 131,072 tokens and up to 8 requests.
 
 Laguna-S-2.1 thinks before it answers by default; the reasoning is returned separately from the
 answer (`reasoning_content`). A client that wants plain answers can send
@@ -140,6 +141,19 @@ If your ASIC IDs differ, replace `0,1,2,3` with all four IDs reported by `tt-smi
 
 Do not run two servers at the same time.
 
+### Optional serving features (Laguna-S-2.1)
+
+Each feature is switched on with environment variables in front of the same start command. The features
+marked experimental also need `LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES=1`. `serve_vllm.sh config` with the same
+variables prints the resulting settings without opening the cards.
+
+| Feature | Variables | What it does | Measured on p150x4 | Limits |
+|---|---|---|---|---|
+| DFlash speculative decoding (experimental) | `TT_LAGUNA_DFLASH=1` | A 6-layer draft model ([`poolside/Laguna-S-2.1-DFlash`](https://huggingface.co/poolside/Laguna-S-2.1-DFlash)) guesses 15 tokens; Laguna checks all 16 in one pass and keeps the matching ones | 1.4-2.6x normal decode on random prompts of 128 to 128K tokens; 13.9-63 tok/s on real prompts (code fastest, free prose slowest) | One request at a time, greedy (temperature 0) requests only. Text can differ from normal decode where the top two tokens are nearly tied |
+| N-gram speculative decoding (experimental) | `TT_LAGUNA_SPEC_DECODE=1` | Guesses the next tokens by repeating earlier text, then checks them in one pass | 17.5-28.4 tok/s (normal decode: 18.5) | One request at a time, greedy |
+| Prefix caching (experimental) | `TT_LAGUNA_PREFIX_CACHE=1` | Reuses the computed context of a repeated prompt prefix, in 8,192-token steps | 95,604-token prompt sent again: TTFT 203 s -> 26 s | One request at a time |
+| More concurrent requests | `LAGUNA_MAX_NUM_SEQS=N` (hybrid KV, up to 32) or `TT_LAGUNA_HYBRID_KV=0` (up to 8, 131,072 tokens) | Serves N requests together; the 1M-token context pool is shared by all of them | 32 short requests at once: identical text to sending them one at a time, 169 tok/s total | With hybrid KV and more than one sequence, prompts long enough to fill an 8,192-token prefill step together can stop the server in this commit; uniform KV with up to 8 requests is the qualified multi-request setup |
+
 ### Wait for startup
 
 Follow the current log:
@@ -162,18 +176,25 @@ weights for the device (about 20 minutes, cached under `~/.cache/ttnn/laguna_s_2
 
 ### Laguna-S-2.1 on p150x4/P300x2
 
-Measured 2026-10-01 with the default launcher settings, output 512 tokens, one request at a time, cold.
-Details: `doc/vllm_integration/laguna_s_p150x4_qualification_20261001.md`.
+Measured 2026-10-03 with `demo/perf_demo.py`'s method: default server (hybrid KV, 1,048,576-token context),
+one random-token prompt per input length, 512 greedy output tokens, one request at a time.
 
-| Input tokens requested | Output tokens | Concurrency | Decode tok/s/user | Time to first token | End-to-end latency |
-|---:|---:|---:|---:|---:|---:|
-| 128 | 512 | 1 | 18.50 | 0.260 s | 27.9 s |
-| 1,024 | 512 | 1 | 18.40 | 2.400 s | 30.2 s |
-| 4,096 | 512 | 1 | 18.34 | 9.450 s | 37.3 s |
-| 16,384 | 512 | 1 | 18.19 | 33.512 s | 61.6 s |
-| 32,768 | 512 | 1 | 17.98 | 64.762 s | 93.2 s |
-| 65,536 | 512 | 1 | 17.60 | 142.108 s | 171.2 s |
-| 130,048 | 512 | 1 | 16.86 | 327.949 s | 358.2 s |
+| Input tokens requested | Input tokens received | TTFT, normal | Decode tok/s, normal | TTFT, DFlash | Decode tok/s, DFlash | DFlash speedup |
+|---:|---:|---:|---:|---:|---:|---:|
+| 128 | 82 | 0.23 s | 18.3 | 0.36 s | 28.1 | 1.5x |
+| 1,024 | 1,066 | 2.40 s | 18.1 | 2.54 s | 40.7 | 2.2x |
+| 2,048 | 1,939 | 2.81 s | 18.0 | 2.95 s | 25.3 | 1.4x |
+| 4,096 | 4,138 | 9.45 s | 18.0 | 9.61 s | 45.9 | 2.6x |
+| 8,192 | 8,234 | 19.9 s | 18.0 | 20.0 s | 31.1 | 1.7x |
+| 16,384 | 16,426 | 33.5 s | 17.9 | 33.7 s | 30.2 | 1.7x |
+| 32,768 | 32,810 | 64.8 s | 17.7 | 65.0 s | 36.8 | 2.1x |
+| 65,536 | 65,578 | 142 s | 17.3 | 142 s | 41.0 | 2.4x |
+| 131,072 | 131,114 | 355 s | 16.6 | 356 s | 22.5 | 1.4x |
+
+Normal decode loses speed slowly with context because the 12 full-attention layers read more stored tokens
+per step. DFlash's speedup changes from prompt to prompt because it depends on how many of the draft
+model's 15 guesses match; each length here is one prompt. Earlier measurements and the full bring-up record
+are in `doc/vllm_integration/laguna_s_p150x4_qualification_20261001.md`.
 
 ### Laguna-XS-2.1 on p150x2/P300
 
@@ -223,6 +244,49 @@ prompts in parentheses; three prompts triple the run time). Other options: `--mo
 The table, a JSON file with every request, and the server logs are saved under
 `generated/laguna_perf_demo/<UTC time>/`.
 
+## Accuracy (Laguna-S-2.1, p150x4)
+
+The reference is the original Hugging Face model run in fp32 on the CPU, one layer at a time
+(`tests/gen_streamed_reference.py`), over an AIME24 math prompt (235 tokens) plus a fixed 100-token answer.
+At each of the 100 answer positions Laguna on the chips predicts the next token, and its prediction is
+compared with the reference:
+
+| Check | top-1 | top-5 | top-100 |
+|---|---:|---:|---:|
+| Prefill (`tests/full_model_checks.py prefill_autoreg`) | 0.97 | 1.00 | 1.00 |
+| Teacher-forced decode, traced (`tests/full_model_checks.py teacher`) | 0.98 | 1.00 | 1.00 |
+| Decode, scored on the reference's logits (`tests/optimizer/test_optimizer_pcc.py`) | 0.99 | 1.00 | - |
+| DFlash's 16-token verify pass, same positions | 0.98 | 1.00 | - |
+
+top-1 is the fraction of positions where Laguna's highest-scoring token equals the reference's; top-5 and
+top-100 are the fractions where the reference's token is among Laguna's 5 or 100 highest. The pass bars are
+0.90 / 0.98 / 1.00. Each decoder layer alone matches the reference with PCC >= 0.995
+(`tests/test_multichip_decoder.py`, layers 0, 1 and 4). Over all 100,352 vocabulary scores the full model's
+logits correlate with the reference at a mean PCC of 0.97: the routed experts are stored as 4-bit `bfloat4_b`
+(the only precision at which the 117.6B parameters fit the QuietBox 2's memory) and attention, the LM head
+and the KV cache as 8-bit `bfloat8_b`, so the scores carry rounding error while the chosen tokens agree.
+
+## Test the model
+
+Run hardware tests with no server running. They use all four ASICs. From the repository root:
+
+```bash
+export REPO="$PWD" MODEL_DIR="$PWD/models/demos/laguna"
+export P4="LAGUNA_PROFILE=p150x4 TT_VISIBLE_DEVICES=0,1,2,3 LAGUNA_FABRIC_CONFIG=FABRIC_1D_RING TT_LAGUNA_CCL_TOPOLOGY=ring TT_LAGUNA_CCL_NUM_LINKS=2 TT_LAGUNA_DECODE_SDPA_PC=1"
+cd /tmp   # the tests run outside the source tree, with PYTHONPATH pointing at it ($REPO)
+```
+
+| What | Command | Time | Expected |
+|---|---|---|---|
+| Unit tests (CPU only, no cards) | `PYTHONPATH=$REPO:$MODEL_DIR/vllm_ext $MODEL_DIR/.venv/bin/python -m pytest -q $MODEL_DIR/tests/test_dflash_serving.py $MODEL_DIR/tests/test_dflash_tt.py $MODEL_DIR/tests/test_serve_vllm_config.py $MODEL_DIR/tests/test_generator_vllm_lifecycle.py $MODEL_DIR/tests/test_prefill_runtime.py $MODEL_DIR/tests/test_hybrid_kv_grouping.py $MODEL_DIR/tests/test_host_sampling.py $MODEL_DIR/vllm_ext/tests` | ~2 min | all pass |
+| Decoder layers vs Hugging Face | `env -u TT_METAL_HOME $P4 PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python -m pytest -q $MODEL_DIR/tests/test_multichip_decoder.py` | not timed | PCC >= 0.995 |
+| Full model, teacher-forced decode | `env -u TT_METAL_HOME $P4 PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/tests/full_model_checks.py teacher --profile p150x4 --enforce-memory-margin` | ~2 min | top-1 >= 0.90, top-5 >= 0.98, top-100 = 1.00; also prints TTFT and decode tok/s |
+| Full model, prefill + free-running generation | `env -u TT_METAL_HOME $P4 PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/tests/full_model_checks.py prefill_autoreg --profile p150x4 --max-seq-len 131072 --enforce-memory-margin --outdir /tmp/laguna-full-model` | not timed | same bars; the generated text is written to the output directory |
+| Serving performance | `python $REPO/models/demos/laguna/demo/perf_demo.py --quick` (see "Measure performance on your machine") | ~20 min | the performance table above |
+
+Times are with the weights already converted for the device. The first run of a hardware test converts
+them (about 20 minutes, cached under `~/.cache/ttnn/laguna_s_2_1`).
+
 ## Verify and use the model
 
 Check the health endpoint:
@@ -261,7 +325,7 @@ and point it at the running server:
 export POOLSIDE_STANDALONE_BASE_URL=http://localhost:8000/v1
 export POOLSIDE_API_KEY=EMPTY
 export POOLSIDE_STANDALONE_MODEL="poolside/Laguna-S-2.1"   # or poolside/Laguna-XS-2.1
-export POOLSIDE_STANDALONE_CONTEXT_LENGTH=131072
+export POOLSIDE_STANDALONE_CONTEXT_LENGTH=1048576   # 131072 for Laguna-XS-2.1
 
 cd /path/to/your/project
 pool
