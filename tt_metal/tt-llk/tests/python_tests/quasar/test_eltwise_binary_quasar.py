@@ -13,6 +13,7 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     ImpliedMathFormat,
+    MathFidelity,
     MathOperation,
     PerfRunType,
     format_dict,
@@ -24,6 +25,7 @@ from helpers.param_config import (
     parametrize,
     quasar_mx_smoke,
     runtime,
+    select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
@@ -32,6 +34,7 @@ from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     DEST_SYNC,
+    ENABLE_DIRECT_INDEXING,
     IMPLIED_MATH_FORMAT,
     INPUT_TILE_CNT,
     LOOP_FACTOR,
@@ -39,11 +42,14 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_FACES,
+    NUM_FACES_C_DIM,
+    NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
     OUTPUT_TILE_CNT,
     TEST_FACE_DIMS,
     generate_input_dim,
 )
+from helpers.tile_constants import is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
@@ -79,18 +85,111 @@ def get_num_tiles_per_accumulation(acc_to_dest: bool) -> int:
     return 2 if acc_to_dest else 1
 
 
-_TILE_SHAPE = construct_tile_shape()
+def runs_tile_shape_paths(
+    formats,
+    mathop,
+    math_fidelity,
+    dest_sync_dest_acc,
+    implied_math_format,
+    enable_direct_indexing,
+    *,
+    is_perf=False,
+):
+    """Whether a variant also runs on partial tiles and with direct indexing.
+
+    Full 32x32 tiles without direct indexing keep the complete matrix. The tile-shape and
+    direct-indexing paths depend on dest width, LoFi vs HiFi phases and accumulation, so a
+    representative slice of the matrix covers them.
+    """
+    if is_perf:
+        return (
+            formats.input_format == DataFormat.Float16_b
+            and mathop == MathOperation.Elwadd
+            and math_fidelity == MathFidelity.LoFi
+        )
+    if (
+        dest_sync_dest_acc[0] != DestSync.Half
+        or implied_math_format != ImpliedMathFormat.Yes
+    ):
+        return False
+    if math_fidelity == MathFidelity.HiFi4:
+        # Float16 is the only input format that keeps HiFi fidelities on Quasar.
+        return (
+            mathop == MathOperation.Elwmul
+            and formats.input_format == DataFormat.Float16
+        )
+    lofi_formats = (
+        (DataFormat.Float16_b,)
+        if enable_direct_indexing
+        else (DataFormat.Float16_b, DataFormat.Int8)
+    )
+    return math_fidelity == MathFidelity.LoFi and formats.input_format in lofi_formats
 
 
-def valid_acc_to_dest(input_dimensions) -> list:
+def eltwise_binary_direct_indexing(
+    formats,
+    mathop,
+    math_fidelity,
+    dest_sync_dest_acc,
+    implied_math_format,
+    *,
+    is_perf=False,
+):
+    if runs_tile_shape_paths(
+        formats,
+        mathop,
+        math_fidelity,
+        dest_sync_dest_acc,
+        implied_math_format,
+        True,
+        is_perf=is_perf,
+    ):
+        return [False, True]
+    return [False]
+
+
+def eltwise_binary_tile_dimensions(
+    formats,
+    mathop,
+    math_fidelity,
+    dest_sync_dest_acc,
+    implied_math_format,
+    enable_direct_indexing,
+    *,
+    is_perf=False,
+):
+    if not runs_tile_shape_paths(
+        formats,
+        mathop,
+        math_fidelity,
+        dest_sync_dest_acc,
+        implied_math_format,
+        enable_direct_indexing,
+        is_perf=is_perf,
+    ):
+        return [(32, 32)]
+    # Cover full, single-face, narrow, and sparse two-face tiles.
+    tile_sizes = [(32, 32), (16, 16), (32, 16), (1, 32)]
+    if is_perf:
+        tile_sizes = select_perf_tile_sizes(tile_sizes)
+    return [
+        dims
+        for dims in tile_sizes
+        if not is_mx_unsupported_tile_dims(
+            formats.input_format, formats.output_format, dims
+        )
+    ]
+
+
+def valid_acc_to_dest(input_dimensions, tile_dimensions) -> list:
     """Pick the acc_to_dest modes worth running for a given input size.
 
     acc_to_dest=True accumulates `get_num_tiles_per_accumulation(True)` result tiles into
     dest, so it only makes sense when the tile count is a non-zero multiple of that.
     """
-    total_tiles = (
-        input_dimensions[0] * input_dimensions[1]
-    ) // _TILE_SHAPE.total_tile_size()
+    total_tiles = (input_dimensions[0] * input_dimensions[1]) // construct_tile_shape(
+        tile_dimensions
+    ).total_tile_size()
 
     per_acc = get_num_tiles_per_accumulation(True)
     if total_tiles >= per_acc and total_tiles % per_acc == 0:
@@ -125,13 +224,33 @@ ELTWISE_FORMATS = (
     dest_sync_dest_acc=lambda formats: eltwise_binary_dest_sync_dest_acc(
         formats, is_perf=False
     ),
+    enable_direct_indexing=lambda formats, mathop, math_fidelity, dest_sync_dest_acc, implied_math_format: eltwise_binary_direct_indexing(
+        formats,
+        mathop,
+        math_fidelity,
+        dest_sync_dest_acc,
+        implied_math_format,
+        is_perf=False,
+    ),
+    tile_dimensions=runtime(
+        lambda formats, mathop, math_fidelity, dest_sync_dest_acc, implied_math_format, enable_direct_indexing: eltwise_binary_tile_dimensions(
+            formats,
+            mathop,
+            math_fidelity,
+            dest_sync_dest_acc,
+            implied_math_format,
+            enable_direct_indexing,
+            is_perf=False,
+        )
+    ),
     input_dimensions=runtime(
-        lambda dest_sync_dest_acc: generate_reduced_input_dimensions(
-            dest_sync_dest_acc[1], dest_sync_dest_acc[0]
+        lambda dest_sync_dest_acc, tile_dimensions: generate_reduced_input_dimensions(
+            dest_sync_dest_acc[1],
+            dest_sync_dest_acc[0],
+            construct_tile_shape(tile_dimensions),
         )
     ),
     acc_to_dest=valid_acc_to_dest,
-    num_faces=[4],
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
@@ -143,7 +262,8 @@ def test_eltwise_binary(
     dest_sync_dest_acc,
     input_dimensions,
     acc_to_dest,
-    num_faces,
+    tile_dimensions,
+    enable_direct_indexing,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -152,11 +272,17 @@ def test_eltwise_binary(
     perf_report=None,
 ):
     dest_sync_mode, dest_acc = dest_sync_dest_acc
+    tile_shape = construct_tile_shape(tile_dimensions)
+    num_faces = tile_shape.total_num_faces()
 
     num_tiles_per_accumulation = get_num_tiles_per_accumulation(acc_to_dest)
 
     num_blocks, input_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync_mode, dest_acc, formats, input_dimensions
+        dest_sync_mode,
+        dest_acc,
+        formats,
+        input_dimensions,
+        tile_dimensions=tile_dimensions,
     )
     output_tiles_in_block = input_tiles_in_block // num_tiles_per_accumulation
 
@@ -172,10 +298,11 @@ def test_eltwise_binary(
         spec_A=stimuli_spec,
         spec_B=stimuli_spec,
         output_format=formats.output_format,
+        tile_dimensions=tile_dimensions,
     )
 
     tile_cnt_res = src_A.numel() // (
-        _TILE_SHAPE.total_tile_size() * num_tiles_per_accumulation
+        tile_shape.total_tile_size() * num_tiles_per_accumulation
     )
 
     generate_golden = get_golden_generator(EltwiseBinaryGolden)
@@ -187,7 +314,7 @@ def test_eltwise_binary(
         math_fidelity,
         input_format=formats.input_format,
         acc_to_dest=acc_to_dest,
-        tile_shape=_TILE_SHAPE,
+        tile_shape=tile_shape,
         num_tiles_per_accumulation=num_tiles_per_accumulation,
     )
 
@@ -203,13 +330,18 @@ def test_eltwise_binary(
             IMPLIED_MATH_FORMAT(implied_math_format),
             DEST_SYNC(dest_sync_mode),
             ACC_TO_DEST(acc_to_dest),
+            ENABLE_DIRECT_INDEXING(enable_direct_indexing),
         ],
         "runtimes": [
-            generate_input_dim(input_dimensions, input_dimensions),
+            generate_input_dim(
+                input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
+            ),
             INPUT_TILE_CNT(tile_cnt_A),
             OUTPUT_TILE_CNT(tile_cnt_res),
-            NUM_FACES(num_faces),
-            TEST_FACE_DIMS(),
+            NUM_FACES(num_faces, num_faces, num_faces),
+            TEST_FACE_DIMS(tile_shape.face_r_dim),
+            NUM_FACES_R_DIM(tile_shape.num_faces_r_dim, tile_shape.num_faces_r_dim),
+            NUM_FACES_C_DIM(tile_shape.num_faces_c_dim, tile_shape.num_faces_c_dim),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(
                 input_tiles_in_block,
@@ -227,6 +359,9 @@ def test_eltwise_binary(
             tile_count_B=tile_cnt_A,
             tile_count_res=tile_cnt_res,
             num_faces=num_faces,
+            face_r_dim=tile_shape.face_r_dim,
+            tile_dimensions=tile_dimensions,
+            use_dense_tile_dimensions=True,
         ),
         "unpack_to_dest": (
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes

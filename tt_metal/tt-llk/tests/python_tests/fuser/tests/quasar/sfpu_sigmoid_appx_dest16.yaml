@@ -1,0 +1,38 @@
+# SigmoidAppx coverage extracted from sfpu_unary_float_dest16 for its coarse LUT accuracy budget.
+dest_acc: false
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Float16_b, Float16]
+    stimuli:
+      # Keep zero and LUT transition points separate from the random intervals.
+      include:
+        - [-4.0, -2.01]
+        - [-1.99, -1.01]
+        - [-0.99, -0.01]
+        - [0.01, 0.99]
+        - [1.01, 1.99]
+        - [2.01, 4.0]
+        - -8.0
+        - -2.0
+        - -1.0
+        - 0.0
+        - 1.0
+        - 2.0
+        - 8.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float16_b
+    atol: 0.13  # SigmoidAppx coarse LUT budget in helpers/sfpu_accuracy_budget.yaml.
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32]}
+      - type: "UnarySfpu"
+        operation: SigmoidAppx
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32]}
