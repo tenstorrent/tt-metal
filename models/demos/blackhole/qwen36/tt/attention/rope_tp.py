@@ -339,6 +339,57 @@ def apply_partial_rope_decode(x, cos_tt, sin_tt, n_heads, batch_size, rope_dim):
     return result
 
 
+def apply_partial_rope_decode_single(
+    x, cos_tt, sin_tt, rope_dim, memory_config=ttnn.L1_MEMORY_CONFIG, out_memory_config=None
+):
+    """Single-user (B == 1) decode partial-RoPE with NO transposes (lean decode path).
+
+    x: [1, 1, n_heads, HD] TILE interleaved; cos/sin: [1, 1, 1, rope_dim] TILE (HF split-halves
+    ``cat([freqs, freqs])`` -- what ``rot_mats_decode`` / ``unpack_rope`` hand the layer at B == 1).
+    Rotates the first ``rope_dim`` dims, passes the tail through. Consumes (deallocates) ``x``.
+    ``memory_config`` is used for the intermediates; ``out_memory_config`` (default: ``memory_config``) is the memory
+    config of the returned tensor (e.g. DRAM for a q that feeds paged SDPA decode, which rejects L1-interleaved q).
+
+    The heads sit on the row axis, so ``ttnn.experimental.rotary_embedding(..., token_index=0)`` (its decode
+    mode: the single cos/sin row ``token_index % 32`` is broadcast over every input row) rotates all heads
+    of the one user directly -- vs ``apply_partial_rope_decode``, which transposes the heads onto the
+    column axis and back to use per-row cos/sin. B > 1 needs per-user cos/sin (a different row per user),
+    which this mode cannot express, so callers keep ``apply_partial_rope_decode`` for B > 1.
+
+    Same rotation convention as ``rotary_embedding_hf``: both ops compute ``x*cos + rotate_half(x)*sin`` with
+    rotate_half = tile-granular half swap (first half of the tiles gets ``-1 * second half``), i.e. HF
+    ``cat(-x2, x1)``; at rope_dim == 64 the midpoint is exactly the tile boundary (x1 = dims 0-31).
+    The op returns the input's *padded* shape as its logical shape ([1,1,32,rope_dim]); the reshape restores
+    the logical heads (a pure view) so the concat with the pass-through slice lines up.
+    """
+    assert x.shape[1] == 1, "apply_partial_rope_decode_single is the B == 1 path"
+    n_heads, hd = x.shape[-2], x.shape[-1]
+    if list(cos_tt.shape) != [1, 1, 1, rope_dim]:
+        cos_tt = ttnn.reshape(cos_tt, (1, 1, 1, rope_dim))
+        sin_tt = ttnn.reshape(sin_tt, (1, 1, 1, rope_dim))
+    part = ttnn.slice(x, (0, 0, 0, 0), (1, 1, n_heads, rope_dim), memory_config=memory_config)
+    rotated = ttnn.reshape(
+        ttnn.experimental.rotary_embedding(part, cos_tt, sin_tt, token_index=0, memory_config=memory_config),
+        part.shape,
+        part.padded_shape,
+    )
+    ttnn.deallocate(part)
+    out_memory_config = out_memory_config or memory_config
+    if rope_dim == hd:
+        ttnn.deallocate(x)
+        if out_memory_config != memory_config:
+            moved = ttnn.to_memory_config(rotated, out_memory_config)
+            ttnn.deallocate(rotated)
+            return moved
+        return rotated
+    x_pass = ttnn.slice(x, (0, 0, 0, rope_dim), (1, 1, n_heads, hd), memory_config=memory_config)
+    ttnn.deallocate(x)
+    result = ttnn.concat([rotated, x_pass], dim=-1, memory_config=out_memory_config)
+    ttnn.deallocate(rotated)
+    ttnn.deallocate(x_pass)
+    return result
+
+
 def apply_partial_rope_prefill(x, cos_tt, sin_tt, n_heads, rope_dim):
     """x: [1, n_heads, seq_len, HD]; cos/sin: [1, 1, seq_len, rope_dim].
 

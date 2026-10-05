@@ -12,7 +12,11 @@ import torch
 
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
-from models.demos.blackhole.qwen36.tt.attention.rope_tp import apply_partial_rope_decode, apply_partial_rope_prefill
+from models.demos.blackhole.qwen36.tt.attention.rope_tp import (
+    apply_partial_rope_decode,
+    apply_partial_rope_decode_single,
+    apply_partial_rope_prefill,
+)
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
@@ -128,6 +132,7 @@ class TPAttention:
         self.tt_ccl = tt_ccl
         self.B = args.max_batch_size
         self._kv_shard_cfg_cache = {}  # active-width B -> KV-update height shard cfg (bucketed decode)
+        self._kv_key_cfg_cache = {}  # active-width B -> K-input height shard cfg for the fused K+V update (lean decode)
         self.NH = args.n_local_heads
         self.NKV = args.n_local_kv_heads
         self.HD = args.head_dim
@@ -159,8 +164,12 @@ class TPAttention:
         self.paged_v = v_cache
         self.use_paged = True
 
-    def _qkv(self, x):
-        """Q+gate/K/V projections → (qg, kp, vp). Fused path: one matmul, then slice."""
+    def _qkv(self, x, decode_qkv3_l1=False):
+        """Q+gate/K/V projections → (qg, kp, vp). Fused path: one matmul, then slice.
+
+        decode_qkv3_l1: lean decode only -- land the short-lived q|k|v block in L1 straight from the slice
+        (it feeds nlp_create_qkv_heads_decode, which must read L1; see _forward_decode_lean). The default
+        keeps the legacy DRAM qkv3 that _make_heads_decode copies to L1."""
         tw = self.tw
         if not self._fused_qkv:
             return (
@@ -193,8 +202,11 @@ class TPAttention:
         gate_dim = self.NH * self.HD
         sh = list(qkv.shape)
         # qkv3 short-lived (split by _make_heads then freed) -> L1 in PREFILL only; decode keeps DRAM
-        # (L1 qkv3 breaks the decode trace). gate lives across SDPA (post-concat) -> always DRAM.
-        _qkv3_mc = ttnn.L1_MEMORY_CONFIG if sh[2] > tpc.TILE_SIZE else ttnn.DRAM_MEMORY_CONFIG
+        # (L1 qkv3 breaks the decode trace -- presumably because _make_heads_decode's to_memory_config(L1->L1) is
+        # an alias that its deallocate then frees; the lean decode path slices into L1 itself and never takes
+        # that copy).
+        # gate lives across SDPA (post-concat) -> always DRAM.
+        _qkv3_mc = ttnn.L1_MEMORY_CONFIG if (sh[2] > tpc.TILE_SIZE or decode_qkv3_l1) else ttnn.DRAM_MEMORY_CONFIG
         qkv3 = ttnn.slice(qkv, (0, 0, 0, 0), (sh[0], sh[1], sh[2], qkv3_dim), memory_config=_qkv3_mc)
         gate = ttnn.slice(qkv, (0, 0, 0, qkv3_dim), (sh[0], sh[1], sh[2], qkv3_dim + gate_dim))
         ttnn.deallocate(qkv)
@@ -498,7 +510,50 @@ class TPAttention:
             self._kv_shard_cfg_cache[B] = cfg
         return cfg
 
-    def forward_decode(self, x, cur_pos_tt, cos_tt, sin_tt, page_table=None):
+    def _kv_key_shard_cfg(self, B):
+        """Height shard (one 32-row tile per user) for the K input of paged_fused_update_cache.
+
+        paged_fused_update_cache needs its two inputs on DISJOINT core sets of equal size. nlp_create_qkv_heads_decode
+        leaves V on cores [0, B) (row-wise from (0,0)); K goes to cores [B, 2B) of the same row-wise numbering,
+        e.g. core (1,0) at B=1 (the layout models/demos/qwen38_27b_qb2 `_full_decode` uses). Shard i <-> user i."""
+        cfg = self._kv_key_cfg_cache.get(B)
+        if cfg is None:
+            grid = self.mesh.compute_with_storage_grid_size()
+            cores = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(i % grid.x, i // grid.x), ttnn.CoreCoord(i % grid.x, i // grid.x))
+                    for i in range(B, 2 * B)
+                }
+            )
+            cfg = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(cores, [ttnn.TILE_SIZE, self.HD], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            self._kv_key_cfg_cache[B] = cfg
+        return cfg
+
+    def _decode_lean_eligible(self, B, use_paged):
+        """Per-call dispatch for the lean decode path (_forward_decode_lean).
+
+        QWEN36_ATTN_DECODE_LEAN: "1" (default) -> lean path; anything else (e.g. "0") -> the legacy path in
+        forward_decode, untouched. The lean path needs the paged KV cache (paged_fused_update_cache), the
+        fused [q|k|v|gate] weight (contiguous q|k|v block) and the nlp decode head split, and 2B cores for the
+        disjoint V/K shard grids. QWEN36_ATTN_DECODE_LEAN_MAX_B (default 32) caps the width it serves, e.g.
+        =1 to keep B > 1 on the legacy path. No persistent state differs between the paths (same caches, same
+        weights), so dispatching per call from x.shape is safe."""
+        if os.environ.get("QWEN36_ATTN_DECODE_LEAN", "1") != "1":
+            return False
+        if not (use_paged and self._fused_qkv and self._use_nlp_decode_heads):
+            return False
+        if B > int(os.environ.get("QWEN36_ATTN_DECODE_LEAN_MAX_B", "32")):
+            return False
+        grid = self.mesh.compute_with_storage_grid_size()
+        return 2 * B <= grid.x * grid.y
+
+    def forward_decode(self, x, cur_pos_tt, cos_tt, sin_tt, page_table=None, decode_ar=None):
+        """decode_ar: tp_common.DecodeResidualAllReduce (QWEN36_DECODE_ALLREDUCE=1) -> x is the replicated
+        residual-norm output and the wo partial is all-reduced (replicated RES40) instead of reduce-scattered."""
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         # Active decode width, taken from the input (x is [1,1,B,dim_frac]). Normally == self.B.
         # BUCKETED decode: a request feeds B<self.B users; every shape/reshape/rope/head-split and
@@ -507,6 +562,8 @@ class TPAttention:
         B = x.shape[-2]
         _L1 = ttnn.L1_MEMORY_CONFIG  # keep decode head-prep + attn output L1-resident
         use_paged = self.use_paged and page_table is not None
+        if self._decode_lean_eligible(B, use_paged):
+            return self._forward_decode_lean(x, cur_pos_tt, cos_tt, sin_tt, page_table, decode_ar)
         if not use_paged and self.k_caches is None:
             self.reset_state()
 
@@ -656,6 +713,114 @@ class TPAttention:
         wo_partial = self._wo_proj(gated_flat, tw["wo"])
         ttnn.deallocate(gated_flat)
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
+        if decode_ar is not None:
+            return decode_ar.all_reduce(wo_partial)
+        return tt_all_reduce(
+            wo_partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _forward_decode_lean(self, x, cur_pos_tt, cos_tt, sin_tt, page_table, decode_ar=None):
+        """Paged gated-attention decode with the leaner op sequence of models/demos/qwen38_27b_qb2 `_full_decode`.
+
+        Same math as the legacy forward_decode paged branch, fewer ops (B=1, one layer, attention-internal):
+          * q|k|v sliced straight into L1 for nlp_create_qkv_heads_decode (no DRAM qkv3 + to_memory_config copy);
+          * V stays height-sharded from the head split (no sharded_to_interleaved / pad / interleaved_to_sharded);
+          * q/k RMSNorm with the (1+w) weight fused into rms_norm (no `* (1+w)` multiplies);
+          * B == 1 partial-RoPE without transposes (apply_partial_rope_decode_single); B > 1 keeps
+            apply_partial_rope_decode (needs per-user cos/sin);
+          * ONE paged_fused_update_cache for K and V (K on cores [B, 2B), V on [0, B); no ttnn.pad);
+          * gate applied on the flat [1,B,NH*HD] SDPA output with sigmoid fused into the multiply (no gate-to-heads
+            reshape, no separate sigmoid, no nlp_concat_heads_decode chain).
+        The QKV matmul, SDPA program config, wo matmul and the all-reduce are unchanged.
+        """
+        tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
+        B = x.shape[-2]
+        _L1 = ttnn.L1_MEMORY_CONFIG
+
+        # q|k|v block (contiguous in the fused [q|k|v|gate] weight) in L1, gate (trailing block) in DRAM.
+        qkv3, gate, _ = self._qkv(x, decode_qkv3_l1=True)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+            qkv3, num_heads=NH, num_kv_heads=NKV, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+        )
+        ttnn.deallocate(qkv3)
+        # rms_norm / rope need interleaved q,k; v stays sharded on cores [0, B) for the fused cache update.
+        q = ttnn.sharded_to_interleaved(q, _L1)
+        k = ttnn.sharded_to_interleaved(k, _L1)
+
+        # QK norm with the HF-correct (1+w) weight fused (tw["q_norm"]/["k_norm"] already hold 1+w).
+        q = ttnn.rms_norm(q, epsilon=1e-6, weight=tw["q_norm"], memory_config=_L1)
+        k = ttnn.rms_norm(k, epsilon=1e-6, weight=tw["k_norm"], memory_config=_L1)
+
+        if B == 1:
+            # q -> DRAM: paged SDPA decode requires a DRAM-interleaved (or sharded) Q, as in qwen38's `_rope_decode`.
+            q = apply_partial_rope_decode_single(
+                q, cos_tt, sin_tt, self.rope_dim, memory_config=_L1, out_memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            k = apply_partial_rope_decode_single(k, cos_tt, sin_tt, self.rope_dim, memory_config=_L1)
+        else:
+            q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
+            k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
+
+        # One fused K+V paged update. Inputs may carry unpadded NKV rows: the op reads only row h (< NKV) of each
+        # user's 32-row tile. Casts to the cache dtype (bf16 / bf8) itself. Free K/V right after: SDPA below runs
+        # with no sharded L1 tensors alive on cores 0..2B-1.
+        k_sh = ttnn.to_memory_config(k, self._kv_key_shard_cfg(B))
+        ttnn.deallocate(k)
+        ttnn.experimental.paged_fused_update_cache(
+            self.paged_k, k_sh, self.paged_v, v, update_idxs_tensor=cur_pos_tt, page_table=page_table
+        )
+        ttnn.deallocate(k_sh)
+        ttnn.deallocate(v)
+
+        # Same SDPA-decode program config / full-grid choice as the legacy paged branch (see the comment there).
+        _sdpa_grid = self.mesh.compute_with_storage_grid_size()
+        sdpa_dec_cfg = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(_sdpa_grid.x, _sdpa_grid.y),
+            exp_approx_mode=False,
+            q_chunk_size=0,
+            k_chunk_size=0,
+        )
+        attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            q,
+            self.paged_k,
+            self.paged_v,
+            page_table_tensor=page_table,
+            cur_pos_tensor=cur_pos_tt,
+            scale=self.scale,
+            program_config=sdpa_dec_cfg,
+            memory_config=_L1,
+        )
+        ttnn.deallocate(q)
+
+        # Head-major flatten of the SDPA output [1,B,NH,HD] -> [1,B,NH*HD] (col h*HD+d = head h, dim d) is exactly
+        # the column order of the de-interleaved gate block (prepare_attn_qkv_deint: all_gate = head-major), so the
+        # sigmoid(gate) multiply runs on the flat tensors; gate [1,1,B,NH*HD] -> [1,B,NH*HD] is a pure view.
+        attn_flat = ttnn.reshape(attn_out, (1, B, NH * HD), memory_config=_L1)
+        ttnn.deallocate(attn_out)
+        gate_flat = ttnn.reshape(gate, (1, B, NH * HD))
+        if os.environ.get("QWEN36_ATTN_DECODE_LEAN_FUSED_SIGMOID", "1") == "1":
+            gated_flat = ttnn.multiply(
+                attn_flat,
+                gate_flat,
+                input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)],
+                memory_config=_L1,
+            )
+        else:  # debug fallback (e.g. to bisect a NaN): separate sigmoid + multiply, same flat layout
+            gated_flat = ttnn.multiply(attn_flat, ttnn.sigmoid(gate_flat, memory_config=_L1), memory_config=_L1)
+        ttnn.deallocate(attn_flat)
+        ttnn.deallocate(gate)  # gate_flat is a view of it
+
+        wo_partial = self._wo_proj(gated_flat, tw["wo"])
+        ttnn.deallocate(gated_flat)
+        wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
+        if decode_ar is not None:
+            return decode_ar.all_reduce(wo_partial)
         return tt_all_reduce(
             wo_partial,
             self.mesh,

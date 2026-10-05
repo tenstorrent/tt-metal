@@ -9,6 +9,7 @@ Reuses `recurrent_gated_delta_rule_decode_ttnn`; weights interleaved. GDN norm u
 import os
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
@@ -21,6 +22,42 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq i
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 from models.tt_transformers.tt.ccl import tt_all_reduce
+
+
+def gdn_fused_decode_enabled():
+    """QWEN36_GDN_FUSED_DECODE (default "1"): single-user (max batch 1) GDN decode through the fused kernels
+    (qkv_causal_conv1d_silu + chunk_gated_delta_rule + sigmoid_gated_rms_norm). "0" keeps the original
+    shift-register / recurrent_gated_delta_rule_decode_ttnn path byte-for-byte."""
+    return os.environ.get("QWEN36_GDN_FUSED_DECODE", "1") != "0"
+
+
+_fused_decode_logged = False
+
+
+def _log_fused_decode_once(msg):
+    """One info line per process (the layer is built 48x)."""
+    global _fused_decode_logged
+    if not _fused_decode_logged:
+        _fused_decode_logged = True
+        logger.info(msg)
+
+
+def _shard_small_fp32(torch_tensor, mesh, cache_path, dim=-1):
+    """tpc.shard_small without the bf16 round-trip: per-head fp32 tensor -> fp32 TILE sharded on `dim`."""
+    t = torch_tensor.float()
+    if t.dim() == 1:
+        t = t.unsqueeze(0).unsqueeze(0)
+    elif t.dim() == 2:
+        t = t.unsqueeze(0)
+    return ttnn.as_tensor(
+        t,
+        dtype=ttnn.float32,
+        device=mesh,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=dim),
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cache_file_name=cache_path,
+    )
 
 
 def _softplus_add(a, bias):
@@ -215,6 +252,20 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     # Conv taps (4), sharded per Q/K/V head grouping
     taps = tpc.prepare_conv_taps(conv1d_w, key_dim, nk, dk, nv, dv, args.gdn_conv_kernel_size, tp)
     tw["conv_taps"] = [tpc.shard_small(taps[j], mesh, c(f"tap{j}")) for j in range(args.gdn_conv_kernel_size)]
+    if gdn_fused_decode_enabled() and args.gdn_conv_kernel_size == 4:
+        # Fused single-user decode (QWEN36_GDN_FUSED_DECODE): the same constants the validated fused decoder
+        # uses. dt_bias / -exp(A_log) stay fp32 (tw["dt_bias"] / tw["neg_exp_A"] are bf16), and the
+        # sigmoid_gated_rms_norm op wants the norm weight as a rank-1 [Dv] bf16 TILE tensor (tw["norm_w"] is [1,1,Dv]).
+        tw["dt_bias_fp32"] = _shard_small_fp32(sd[P + "dt_bias"], mesh, c("dt_bias_fp32"))
+        tw["neg_exp_A_fp32"] = _shard_small_fp32(-torch.exp(sd[P + "A_log"].float()), mesh, c("neg_exp_A_fp32"))
+        tw["norm_w_1d"] = ttnn.from_torch(
+            sd[P + "norm.weight"].reshape(-1).to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
     return tw
 
 
@@ -288,6 +339,51 @@ class TPGatedDeltaNet:
         self._zero_conv_carry = None
         self._zero_rec = None
         self._pending = []  # per-user (rec, conv) states collected during batched per-user prefill
+        # Fused single-user decode (QWEN36_GDN_FUSED_DECODE, default on). Decided here, once, so the state format
+        # is fixed for the model's lifetime: only a max_batch_size == 1 model takes it (forward_decode re-checks
+        # self.B == 1 and the active width == 1); every other configuration runs the original decode path.
+        #   _conv_hist_rm: the fused decode's conv history, [1, K-1, qkv_dim_tp] ROW_MAJOR bf16, the three raw
+        #                  conv inputs preceding the next token, oldest first (the layout/order the kda conv op
+        #                  reads). Allocated once (reset_state / first write) and only ever updated IN PLACE
+        #                  (ttnn.copy), so the decode and prefill traces keep a fixed address. Decode maintains
+        #                  it INSTEAD of conv_states; every code path that writes conv_states for decode
+        #                  (prefill capture_state, assemble_batched_state, write_slot, forward_prefill_batched)
+        #                  also refreshes it. It is deliberately NOT part of the model's per-binding state swaps
+        #                  (model.py rebinds rec_state/conv_states/conv_carry on prefill scratch): with
+        #                  max_batch_size == 1 there is one user, so the latest prefill IS the decode state.
+        self._conv_hist_rm = None
+        self._fused_decode = self._fused_decode_supported(args, tw)
+
+    def _fused_decode_supported(self, args, tw):
+        """Whether this layer takes the fused single-user decode path (QWEN36_GDN_FUSED_DECODE). Logs one info line
+        per process stating the active path."""
+        reasons = []
+        if not gdn_fused_decode_enabled():
+            reasons.append("QWEN36_GDN_FUSED_DECODE=0")
+        else:
+            if args.max_batch_size != 1:
+                reasons.append(f"max_batch_size={args.max_batch_size} (fused decode is single-user)")
+            if self.K != 4:
+                reasons.append(f"conv kernel size {self.K} != 4 (the kda conv op is fixed at four taps)")
+            if self.Dk != self.Dv or self.Dv % tpc.TILE_SIZE or self.key_dim_tp % tpc.TILE_SIZE:
+                reasons.append(f"head dims Dk={self.Dk}/Dv={self.Dv} unsupported by the flat chunk_gated_delta_rule")
+            if os.environ.get("QWEN35_GDN_STATE_BF16") == "1" or os.environ.get("QWEN35_GDN_DECODE_BF16") == "1":
+                reasons.append("QWEN35_GDN_STATE_BF16/QWEN35_GDN_DECODE_BF16 request the bf16 recurrence")
+            if any(k not in tw for k in ("dt_bias_fp32", "neg_exp_A_fp32", "norm_w_1d")):
+                reasons.append("fused-decode weights missing from tw (built only when the flag is on at load time)")
+            if not hasattr(ttnn.experimental, "kda") or not hasattr(ttnn.experimental.kda, "sigmoid_gated_rms_norm"):
+                reasons.append("ttnn.experimental.kda.sigmoid_gated_rms_norm unavailable in this ttnn build")
+        if reasons:
+            _log_fused_decode_once(
+                "[GDN] decode path: ORIGINAL (shift-register conv + recurrent kernel): " + "; ".join(reasons)
+            )
+            return False
+        _log_fused_decode_once(
+            "[GDN] decode path: FUSED for max_batch_size == 1 (qkv_causal_conv1d_silu + chunk_gated_delta_rule + "
+            "sigmoid_gated_rms_norm; QWEN36_GDN_FUSED_DECODE=0 reverts). conv_states is not maintained during decode; "
+            "out-proj input is bf16."
+        )
+        return True
 
     def reset_state(self):
         def z(shape):
@@ -316,8 +412,15 @@ class TPGatedDeltaNet:
         self._zero_conv0 = z((1, self.B, self.qkv_dim_tp))
         self._zero_conv_carry = z((1, self.K - 1, self.qkv_dim_tp))
         self._zero_rec = z((self.B, self.Nv, self.Dk, self.Dv))
-        if self._gdn_kda_conv:
+        if self._gdn_kda_conv or self._fused_decode:
             self._ensure_kda_consts()
+        if self._fused_decode:
+            # Fused-decode conv history: allocated once, zeroed IN PLACE on every later reset (it may already be
+            # baked into a decode/prefill trace, and reset_state also runs for the B=1 prefill scratch).
+            _had_hist = self._conv_hist_rm is not None
+            self._ensure_conv_hist()
+            if _had_hist:
+                ttnn.copy(self._kda_zero_history, self._conv_hist_rm)
         # Chunk-outer batched-prefill conv left-context (allocated lazily by forward_prefill_batched).
         if getattr(self, "_batched_conv_carry", None) is not None:
             ttnn.deallocate(self._batched_conv_carry)
@@ -344,6 +447,8 @@ class TPGatedDeltaNet:
         ttnn.copy(self._zero_rec, self.rec_state)
         # Zero cross-chunk conv carry for new sequence
         ttnn.copy(self._zero_conv_carry, self.conv_carry)
+        if self._fused_decode and self._conv_hist_rm is not None:
+            ttnn.copy(self._kda_zero_history, self._conv_hist_rm)  # preallocated RM zeros (no allocation here)
 
     def _col_proj(self, x, weight, decode_progcfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG):
         """Column-parallel qkvz projection; DRAM-sharded decode matmul when enabled.
@@ -389,6 +494,75 @@ class TPGatedDeltaNet:
         history = conv_state if conv_state is not None else self._kda_zero_history
         kd, vd = self.key_dim_tp, self.value_dim_tp
         return kda_conv_prefill(qkv, T, history, self.tw["conv_taps"], (kd, kd, vd), self._kda_actual_start)
+
+    # ------------------------------------------------------------------ #
+    # Fused single-user decode: conv history (_conv_hist_rm) + its handoff from prefill.
+    # ------------------------------------------------------------------ #
+    def _ensure_conv_hist(self):
+        """The persistent [1, K-1, qkv_dim_tp] ROW_MAJOR bf16 conv history, allocated (zeros) on first use. Host
+        write: reset_state calls it before any trace capture; the lazy callers run eagerly."""
+        self._ensure_kda_consts()
+        if self._conv_hist_rm is None:
+            self._conv_hist_rm = ttnn.from_torch(
+                torch.zeros(1, self.K - 1, self.qkv_dim_tp, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return self._conv_hist_rm
+
+    def _hist_hook_active(self):
+        """Writers of the decode conv state refresh the fused history only on a single-user binding."""
+        return self._fused_decode and self.B == 1
+
+    def _write_conv_hist(self, last_inputs):
+        """Handoff prefill -> fused decode: copy the last K-1 conv inputs [1, K-1, C] TILE (oldest first, the
+        same tensor that seeds conv_states[1..K-1]) into the RM history, in place. Device-only (trace-safe once
+        the history exists)."""
+        hist = self._ensure_conv_hist()
+        rm = ttnn.to_layout(last_inputs, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.copy(rm, hist)
+        ttnn.deallocate(rm)
+
+    def _sync_conv_hist_from_states(self):
+        """Rebuild the RM history from conv_states[1..K-1] (each [1, 1, C] TILE; B == 1), for the writers that
+        produce conv_states but not a stacked [1, K-1, C] tensor (write_slot, batched prefill)."""
+        hist = self._ensure_conv_hist()
+        rows = [
+            ttnn.to_layout(self.conv_states[m], ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            for m in range(1, self.K)
+        ]
+        stacked = ttnn.concat(rows, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, K-1, C]
+        for r in rows:
+            ttnn.deallocate(r)
+        ttnn.copy(stacked, hist)
+        ttnn.deallocate(stacked)
+
+    def snapshot_fused_decode_state(self):
+        """Host copy of the fused-decode conv history (None when the fused path is off). conv_states is NOT the
+        decode conv state when the fused path is on, so a caller that snapshots/restores GDN state around a
+        throwaway decode run (demo trace capture) must also snapshot/restore this: pair with
+        restore_fused_decode_state. Mirrors the demos' rec_state/conv_states host snapshot."""
+        if not self._fused_decode or self._conv_hist_rm is None:
+            return None
+        return ttnn.to_torch(self._conv_hist_rm, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
+
+    def restore_fused_decode_state(self, snap):
+        """In-place restore (fixed address, trace-safe) of a snapshot_fused_decode_state result."""
+        if snap is None:
+            return
+        src = ttnn.from_torch(
+            snap,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.copy(src, self._conv_hist_rm)
+        ttnn.deallocate(src)
 
     def _row_proj(self, x, weight):
         """Row-parallel out projection: DRAM-sharded decode/prefill matmul (K=gdn_value_dim_tp),
@@ -628,6 +802,9 @@ class TPGatedDeltaNet:
                 for j in range(self.K - 1):
                     src = ttnn.reshape(ttnn.slice(conv_new_state, (0, j, 0), (1, j + 1, D)), (1, B, D))
                     ttnn.copy(src, self.conv_states[j + 1])
+                if self._hist_hook_active():
+                    # Fused single-user decode reads its conv history from the RM buffer, not conv_states.
+                    self._write_conv_hist(conv_new_state)
             ttnn.deallocate(conv_new_state)
         # Gated RMSNorm + SiLU(z); norm/flatten in L1, gated output in DRAM for out-proj
         _L1 = ttnn.L1_MEMORY_CONFIG
@@ -765,6 +942,9 @@ class TPGatedDeltaNet:
         else:
             self.rec_state = rec_batched
             self.conv_states = conv_states
+        if self._hist_hook_active() and len(conv_new_list) == 1:
+            # Fused single-user decode reads its conv history from the RM buffer, not conv_states.
+            self._write_conv_hist(conv_new_list[0])
         for t in rec_list:
             ttnn.deallocate(t)
         for t in conv_new_list:
@@ -881,6 +1061,9 @@ class TPGatedDeltaNet:
             if c_src is not c:
                 ttnn.deallocate(c)
             self._write_index(self.conv_states[m], c_src, slot, dim=1)
+        if self._hist_hook_active():
+            # Fused single-user decode reads its conv history from the RM buffer, not conv_states.
+            self._sync_conv_hist_from_states()
 
     def remap_slots(self, remap):
         """Reindex the batched decode state after a vLLM batch condense: slot i takes the state
@@ -1055,6 +1238,9 @@ class TPGatedDeltaNet:
                 ttnn.deallocate(new_conv[m])
         else:
             self.conv_states = new_conv
+        if B == 1 and self._hist_hook_active():
+            # Fused single-user decode reads its conv history from the RM buffer, not conv_states.
+            self._sync_conv_hist_from_states()
 
         # ---- output (gated RMSNorm + SiLU(z) gate + row-parallel out proj + all-reduce) ----
         out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6)
@@ -1077,7 +1263,10 @@ class TPGatedDeltaNet:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def forward_decode(self, x):
+    def forward_decode(self, x, decode_ar=None):
+        """decode_ar: tp_common.DecodeResidualAllReduce (QWEN36_DECODE_ALLREDUCE=1) -> x is the replicated
+        residual-norm output and the out-proj partial is all-reduced (replicated RES40, bf16 unless
+        QWEN36_DECODE_AR_GDN_FP32=1) instead of reduce-scattered."""
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         Bmax = self.B
         _L1 = ttnn.L1_MEMORY_CONFIG  # keep decode conv→recurrence→norm/gate chain L1-resident
@@ -1091,6 +1280,9 @@ class TPGatedDeltaNet:
         # preserved. Conv taps are per-channel (broadcast over batch), so the conv weighted-sum
         # works at any width. The B==Bmax path is byte-identical to before.
         B = x.shape[-2]
+        if self._fused_decode and Bmax == 1 and B == 1:
+            # QWEN36_GDN_FUSED_DECODE (default on), single-user: fused conv / chunk-delta-rule / gated-norm kernels.
+            return self._forward_decode_fused(x, decode_ar)
 
         qkv, z, a, b = self._project_qkvzab(x, B, out_mc=_L1)
 
@@ -1175,6 +1367,8 @@ class TPGatedDeltaNet:
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
+        if decode_ar is not None:
+            return decode_ar.all_reduce(partial, keep_fp32=True)  # partial is fp32 here
         out = tt_all_reduce(
             partial,
             self.mesh,
@@ -1185,3 +1379,137 @@ class TPGatedDeltaNet:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return out
+
+    def _forward_decode_fused(self, x, decode_ar=None):
+        """Single-user (max_batch_size == 1, active width 1) decode through the fused kernels (see
+        QWEN36_GDN_FUSED_DECODE). Same math as the original path, fewer ops:
+          * ttnn.experimental.kda.qkv_causal_conv1d_silu: 4-tap causal conv + SiLU + q/k/v split in one program,
+            history = the persistent RM buffer _conv_hist_rm (the last K-1 raw conv inputs, oldest first);
+          * ttnn.transformer.chunk_gated_delta_rule with chunk_size=32 over ONE live token padded to a 32-row tile:
+            beta and g are zero-padded, so the 31 padded steps are identity state updates (the qkv padding rows
+            only feed those identity steps), and it does the q/k L2-norm, GQA expansion and the fp32 state update;
+          * ttnn.experimental.kda.sigmoid_gated_rms_norm (= norm * w * sigmoid(z)) then * z -> norm * w * silu(z).
+        Differences from the original path (all follow the validated fused decoder, models/demos/qwen38_27b_qb2):
+        a and g stay fp32 (dt_bias / -exp(A_log) are fp32 copies), and the out-proj input is bf16 (the original
+        feeds fp32; the out-proj partial is therefore bf16 too). conv_states is not updated here -- only
+        _conv_hist_rm and rec_state are. conv input / q / k / v are DRAM; the padded z_p / g_p / beta_p are views of
+        their (L1) sources and stay in that memory space until their last consumer. No allocation of persistent
+        state: trace-safe.
+        """
+        from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import _FUSED_CHUNK_SIZE
+
+        tw, Nv = self.tw, self.Nv
+        _L1, _DRAM = ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
+        C, kd, vd = self.qkv_dim_tp, self.key_dim_tp, self.value_dim_tp
+        # The kernels run on one 32-row tile; row 0 is the live token. Zero rows: identity recurrence steps.
+        # NOTE: ttnn.pad of a [1,1,C] TILE tensor up to the 32-row tile height returns a VIEW of the SAME device
+        # buffer (the tile already holds the 32 rows; pad only zero-fills the implicit tile padding in place and
+        # ignores memory_config). So the padded tensors (z_p, g_p, beta_p, qkv_p) must NEVER be freed by
+        # deallocating their SOURCE (that frees the shared buffer under the live view -> later allocations
+        # overwrite it -> garbage): the source is left alone and exactly ONE handle (the padded one) is
+        # deallocated, after the padded tensor's last consumer.
+        pad_rows = [(0, 0), (0, _FUSED_CHUNK_SIZE - 1), (0, 0)]
+
+        qkv, z, a, b = self._project_qkvzab(x, 1, out_mc=_L1)
+
+        # ---- z (the out gate) and the gates, ahead of the kernels: DRAM, 32 rows, zero padded ----
+        if z.dtype != ttnn.bfloat16:  # sigmoid_gated_rms_norm's gate contract
+            z = ttnn.typecast(z, ttnn.bfloat16, memory_config=_L1)
+        z_p = ttnn.pad(z, pad_rows, value=0.0, memory_config=_DRAM)  # view of z; freed once, after the gate mul
+        # beta = sigmoid(b); g = -exp(A_log) * softplus(a + dt_bias), a/g in fp32
+        beta = ttnn.sigmoid(b, memory_config=_L1)
+        ttnn.deallocate(b)
+        a32 = ttnn.typecast(a, ttnn.float32, memory_config=_L1)
+        ttnn.deallocate(a)
+        a_dt = ttnn.add(a32, tw["dt_bias_fp32"], memory_config=_L1)
+        ttnn.deallocate(a32)
+        g = ttnn.mul(
+            tw["neg_exp_A_fp32"],
+            a_dt,
+            input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)],
+            memory_config=_L1,
+        )
+        ttnn.deallocate(a_dt)
+        g_p = ttnn.pad(g, pad_rows, value=0.0, memory_config=_DRAM)  # view of g; freed once, after the chunk op
+        beta_p = ttnn.pad(beta, pad_rows, value=0.0, memory_config=_DRAM)  # view of beta; freed once after chunk
+
+        # ---- causal conv1d + SiLU + q/k/v split: one program on the persistent RM history ----
+        hist = self._ensure_conv_hist()
+        qkv_p = ttnn.pad(qkv, pad_rows, value=0.0, memory_config=_DRAM)  # view of qkv
+        row_qkv = ttnn.to_layout(qkv_p, ttnn.ROW_MAJOR_LAYOUT, memory_config=_DRAM)  # new (RM, DRAM) buffer
+        ttnn.deallocate(qkv_p)  # last consumer of the tile view done: frees the shared qkv buffer, once
+        q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
+            row_qkv,
+            hist,
+            *tw["conv_taps"],
+            kd,
+            kd,
+            vd,
+            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=kda_channel_chunk_size(C, cap=256)),
+            actual_start=self._kda_actual_start,
+            # No sequence parallelism on the TP mesh: alias history (see kda_conv_prefill).
+            predecessor_carry=hist,
+            memory_config=_DRAM,
+        )
+        # History for the next token: [hist[1:], this token's raw conv input], updated in place (fixed address).
+        keep = ttnn.slice(hist, (0, 1, 0), (1, self.K - 1, C), memory_config=_DRAM)
+        cur = ttnn.slice(row_qkv, (0, 0, 0), (1, 1, C), memory_config=_DRAM)
+        ttnn.deallocate(row_qkv)
+        new_hist = ttnn.concat([keep, cur], dim=1, memory_config=_DRAM)
+        ttnn.deallocate(keep)
+        ttnn.deallocate(cur)
+        ttnn.copy(new_hist, hist)
+        ttnn.deallocate(new_hist)
+
+        # ---- gated delta rule: one op, fp32 state in place (decode/prefill traces keep rec_state's address) ----
+        # No program_config: gdn_program_config is a prefill-geometry knob; the op picks its own for this shape.
+        eye, tril, ones, masks = self._fused_const_tiles
+        o, new_rec = ttnn.transformer.chunk_gated_delta_rule(
+            q,
+            k,
+            v,
+            g_p,
+            beta_p,
+            scale=self.scale,
+            initial_state=self.rec_state,
+            output_final_state=True,
+            chunk_size=_FUSED_CHUNK_SIZE,
+            output_head_major=True,
+            eye=eye,
+            tril=tril,
+            ones=ones,
+            masks=masks,
+        )
+        for t in (q, k, v, g_p, beta_p):
+            ttnn.deallocate(t)
+        if self._stable_state:
+            ttnn.copy(new_rec, self.rec_state)
+            ttnn.deallocate(new_rec)
+        else:
+            self.rec_state = new_rec
+
+        # ---- gated RMSNorm (no +1) * silu(z) = (norm * w * sigmoid(z)) * z, bf16 into the out-proj ----
+        normed = ttnn.experimental.kda.sigmoid_gated_rms_norm(
+            o, z_p, tw["norm_w_1d"], Nv, epsilon=1e-6, output_dtype=ttnn.bfloat16
+        )
+        ttnn.deallocate(o)
+        gated = ttnn.mul(normed, z_p, memory_config=_DRAM)
+        ttnn.deallocate(normed)
+        ttnn.deallocate(z_p)
+        # Keep only the live row logically; the physical tile geometry is unchanged (a free view).
+        gated = ttnn.reshape(gated, ttnn.Shape([1, 1, vd]), gated.padded_shape)
+
+        partial = self._row_proj(gated, tw["out"])
+        ttnn.deallocate(gated)
+        partial = ttnn.reshape(partial, (1, 1, 1, partial.shape[-1]))
+        if decode_ar is not None:
+            return decode_ar.all_reduce(partial, keep_fp32=True)  # partial is bf16 here (fp32 cast only if asked)
+        return tt_all_reduce(
+            partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )

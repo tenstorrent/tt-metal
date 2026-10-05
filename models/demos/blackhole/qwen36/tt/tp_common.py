@@ -6,8 +6,10 @@ Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
 mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.
 """
 import math
+import os
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -598,6 +600,213 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
         compute_kernel_config=compute_cfg,
     )
     return ttnn.clone(rs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+# ---------------------------------------------------------------------------------------------
+# Decode-only replicated-residual path: ONE all_reduce_async per row-parallel output instead of
+# [DistributedNorm all-gather + reduce-scatter] (4 CCLs/layer -> 2).
+#
+#   QWEN36_DECODE_ALLREDUCE=1 (default)  decode residual is REPLICATED full-width ([1,1,B,dim]) in L1
+#                                        WIDTH_SHARDED on a 10x4 = 40-core grid (shard [32, dim/40]).
+#                                        Norms are local sharded rms_norms, residual adds stay in L1, each
+#                                        row-parallel output is resharded to that layout and summed with
+#                                        ttnn.experimental.all_reduce_async into a persistent L1 buffer.
+#                                        The embedding is all-gathered once at model entry.
+#   QWEN36_DECODE_ALLREDUCE=0            restores the previous behaviour: decode residual is hidden-fractured
+#                                        ([1,1,B,dim/tp], DRAM); every norm all-gathers, every
+#                                        row-parallel output reduce-scatters.
+#   QWEN36_DECODE_AR_GDN_FP32=0 (default) GDN out-proj partial (fp32 in A) is cast to bf16 before the
+#                                        all-reduce (as the qwen38 QB2 port does).
+#   QWEN36_DECODE_AR_GDN_FP32=1          GDN partial all-reduced in fp32 (fp32 persistent buffer,
+#                                        fp32 dest accumulation); the residual add then mixes bf16 + fp32
+#                                        exactly like the reduce-scatter path does today.
+#
+# Prefill never reads these flags: it keeps the fractured residual and produces only KV / GDN state,
+# so the residual format is private to each forward. Dispatch inside the layer / final norm is on
+# the tensor itself (last dim == dim -> replicated), so a fractured input always takes the old path.
+# ---------------------------------------------------------------------------------------------
+DECODE_AR_ENV = "QWEN36_DECODE_ALLREDUCE"
+DECODE_AR_GDN_FP32_ENV = "QWEN36_DECODE_AR_GDN_FP32"
+_DAR_GRID = (10, 4)  # RES40 core grid (x, y)
+_DAR_UNSET = object()
+
+
+class DecodeResidualAllReduce:
+    """Replicated 40-core L1 decode residual + its norm / all-reduce / entry-gather helpers.
+
+    One instance per TT_CCL (see get_decode_allreduce), shared by every layer and the model so the
+    persistent all-reduce buffer is allocated exactly once, at construction (never inside a trace).
+    """
+
+    def __init__(self, mesh_device, args, tt_ccl, gdn_fp32=False):
+        self.mesh = mesh_device
+        self.tt_ccl = tt_ccl
+        self.dim = args.dim
+        self.tp = list(mesh_device.shape)[1]
+        self.topology = args.ccl_topology()
+        # Same link count the fractured path's AG/RS use on this mesh (tt_ccl.get_num_links(axis)).
+        self.num_links = tt_ccl.get_num_links(1)
+        self.gdn_fp32 = gdn_fp32
+
+        ncores = _DAR_GRID[0] * _DAR_GRID[1]
+        grid = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_DAR_GRID[0] - 1, _DAR_GRID[1] - 1))}
+        )
+
+        def width_mem(width):
+            return ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(grid, [TILE_SIZE, width], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+
+        shard_w = self.dim // ncores
+        self.res_mem = width_mem(shard_w)  # RES40: [1,1,B<=32,dim] replicated residual
+        block_w = shard_w // TILE_SIZE
+        self.norm_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=_DAR_GRID,
+            subblock_w=min(4, block_w),
+            block_h=1,
+            block_w=block_w,
+            inplace=False,
+        )
+        # all_reduce_async stages every device's partial in this buffer: [32, dim*tp] over the same 40
+        # cores (shard [32, dim*tp/40]); it must contain the output grid and be tp x the output shard.
+        buf_mem = width_mem(self.dim * self.tp // ncores)
+
+        def alloc(dtype):
+            return ttnn.empty(
+                [1, 1, TILE_SIZE, self.dim * self.tp],
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=buf_mem,
+            )
+
+        self.buffer = alloc(ttnn.bfloat16)
+        self.buffer_fp32 = alloc(ttnn.float32) if gdn_fp32 else None
+
+    def enter(self, x):
+        """Model entry: hidden-fractured embedding [1,1,B,dim/tp] -> replicated [1,1,B,dim] in RES40."""
+        if x.shape[-2] > TILE_SIZE:
+            raise ValueError(f"QWEN36_DECODE_ALLREDUCE supports decode batch <= {TILE_SIZE}, got {x.shape[-2]}")
+        gathered = ttnn.experimental.all_gather_async(
+            x,
+            persistent_output_buffer=None,
+            dim=3,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+            num_links=self.num_links,
+            topology=self.topology,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
+        out = ttnn.to_memory_config(gathered, self.res_mem)
+        if out is not gathered:
+            ttnn.deallocate(gathered)
+        return out
+
+    def rms_norm(self, x, norm):
+        """Local sharded rms_norm on a RES40 input with the replicated full-width (1+w) gamma of the
+        framework `RMSNorm` `norm` (same eps / HiFi2 + fp32-acc kernel config as the fractured path)."""
+        return ttnn.rms_norm(
+            x,
+            epsilon=norm.eps,
+            weight=norm.weight,
+            program_config=self.norm_pc,
+            memory_config=self.res_mem,
+            compute_kernel_config=norm.compute_kernel_config_hifi2,
+        )
+
+    def final_norm(self, x, norm, output_memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        """Final norm before the LM head: local sharded norm, then the layout the LM head expects."""
+        normed = self.rms_norm(x, norm)
+        out = ttnn.to_memory_config(normed, output_memory_config)
+        if out is not normed:
+            ttnn.deallocate(normed)
+        return out
+
+    def add(self, a, b):
+        """Residual add; both operands (and the result) live in RES40."""
+        return ttnn.add(a, b, memory_config=self.res_mem)
+
+    def all_reduce(self, partial, keep_fp32=False):
+        """Sum the per-device row-parallel partial [1,1,B,dim] across the TP axis -> replicated RES40.
+
+        keep_fp32: the caller's partial is fp32 (GDN out-proj); honoured only when QWEN36_DECODE_AR_GDN_FP32=1,
+        otherwise it is cast to bf16 (the persistent buffer / CCL dtype) after the reshard to RES40.
+        """
+        use_fp32 = keep_fp32 and self.gdn_fp32
+        dtype = ttnn.float32 if use_fp32 else ttnn.bfloat16
+        shape = list(partial.shape)
+        if shape[0] != 1 or shape[1] != 1:
+            partial = ttnn.reshape(partial, (1, 1, shape[-4] * shape[-3] * shape[-2], shape[-1]))
+        packed = ttnn.to_memory_config(partial, self.res_mem)
+        if packed is not partial:
+            ttnn.deallocate(partial)
+        if packed.dtype != dtype:
+            cast = ttnn.typecast(packed, dtype)
+            ttnn.deallocate(packed)
+            packed = cast
+        extra = dict(fp32_dest_acc=True) if use_fp32 else {}
+        out = ttnn.experimental.all_reduce_async(
+            packed,
+            self.buffer_fp32 if use_fp32 else self.buffer,
+            cluster_axis=1,
+            mesh_device=self.mesh,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(1),
+            topology=self.topology,
+            num_links=self.num_links,
+            memory_config=self.res_mem,
+            **extra,
+        )
+        ttnn.deallocate(packed)
+        return out
+
+
+def get_decode_allreduce(args, tt_ccl):
+    """Shared DecodeResidualAllReduce for this TT_CCL (default on), or None when QWEN36_DECODE_ALLREDUCE=0 or the
+    configuration is unsupported (those keep the fractured-residual decode path unchanged).
+
+    Created on first call (layer / model construction) and cached on `tt_ccl`; every later caller gets the
+    same instance, so layers and the model always agree on the decode residual format.
+    """
+    if tt_ccl is None:
+        return None
+    cached = getattr(tt_ccl, "_qwen36_decode_ar", _DAR_UNSET)
+    if cached is not _DAR_UNSET:
+        return cached
+    inst = None
+    if os.environ.get(DECODE_AR_ENV, "1") == "1":
+        mesh = tt_ccl.mesh_device
+        shape = list(mesh.shape)
+        grid = mesh.compute_with_storage_grid_size()
+        ncores = _DAR_GRID[0] * _DAR_GRID[1]
+        reason = None
+        if len(shape) != 2 or shape[0] != 1 or shape[1] < 2 or shape[1] % 2:
+            reason = f"needs a (1, even N>=2) mesh, got {shape}"  # all_reduce_async: cluster_axis=1, even ring
+        elif args.dim % (ncores * TILE_SIZE):
+            reason = f"hidden dim {args.dim} is not tile-shardable over {ncores} cores"
+        elif getattr(args, "tile_padded_batch_rows", TILE_SIZE) != TILE_SIZE:
+            reason = f"max_batch_size {args.max_batch_size} > {TILE_SIZE} (RES40 shard height is one tile)"
+        elif getattr(args, "moe_num_experts", 0) > 0:
+            reason = "MoE layers' decode MLP still reduce-scatters into the fractured residual"
+        elif grid.x < _DAR_GRID[0] or grid.y < _DAR_GRID[1]:
+            reason = f"compute grid {grid.x}x{grid.y} is smaller than {_DAR_GRID[0]}x{_DAR_GRID[1]}"
+        if reason is not None:
+            logger.warning(f"{DECODE_AR_ENV}=1 ignored ({reason}); keeping the fractured-residual decode path")
+        else:
+            inst = DecodeResidualAllReduce(
+                mesh, args, tt_ccl, gdn_fp32=os.environ.get(DECODE_AR_GDN_FP32_ENV, "0") == "1"
+            )
+            logger.info(
+                f"{DECODE_AR_ENV}=1: decode uses the replicated 40-core L1 residual + all_reduce_async "
+                f"(gdn_fp32={inst.gdn_fp32}, num_links={inst.num_links}, topology={inst.topology})"
+            )
+    tt_ccl._qwen36_decode_ar = inst
+    return inst
 
 
 def sharded_decode_matmul(

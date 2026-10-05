@@ -309,7 +309,11 @@ def test_demo_text(
             return
         generated, perf = _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks)
         text = tokenizer.decode(generated, skip_special_tokens=True)
-        logger.info(f"[TP {model.num_devices}-dev] ttft={perf['ttft_s']:.2f}s decode={perf['decode_tok_s']:.2f} tok/s")
+        # decode_mode: set only by the device-resident loop (QWEN36_DECODE_DEVICE_LOOP); host-loop line unchanged.
+        mode = f" ({perf['decode_mode']})" if perf.get("decode_mode") else ""
+        logger.info(
+            f"[TP {model.num_devices}-dev] ttft={perf['ttft_s']:.2f}s decode={perf['decode_tok_s']:.2f} tok/s{mode}"
+        )
         logger.info(f"[TP] GENERATED: {text!r}")
         assert len(generated) == max_generated_tokens, f"{len(generated)} != {max_generated_tokens}"
         # assert len(set(generated)) > 1, f"degenerate generation: {generated}"
@@ -476,21 +480,34 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     # Identity page table for prompt + generation
     page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
 
-    # Capture chunk prefill trace (warmup; also warms masked-bucket programs)
-    CHUNK = 2048
-    t_cap = time.time()
-    signpost("compile_prefill")
-    profiler.start("compile_prefill")
-    model.capture_prefill_trace_chunked(model.mesh_device, page_table, chunk_size=CHUNK)
-    profiler.end("compile_prefill")
-    logger.info(f"[TP] prefill chunk-trace captured in {time.time() - t_cap:.1f}s")
-
     _temp = float(os.environ.get("QWEN35_TEMP", "0") or 0)
     _rep_pen = float(os.environ.get("QWEN35_REP_PENALTY", "1.0") or 1.0)
     _no_repeat = int(os.environ.get("QWEN35_NO_REPEAT_NGRAM", "0") or 0)
     _top_k = int(os.environ.get("QWEN35_TOP_K", "0") or 0)
     _top_p = float(os.environ.get("QWEN35_TOP_P", "1.0") or 1.0)
     generated = []
+
+    # Capture chunk prefill trace (warmup; also warms masked-bucket programs)
+    CHUNK = 2048
+    # Short prompt (< CHUNK) whose length is EXACTLY a masked bucket (e.g. the 128-token perf prompt, the
+    # 512-token accuracy prompt): prefill as ONE captured trace (QWEN36_PREFILL_BUCKET_TRACE, default on) that
+    # also picks the greedy first token on device, so TTFT is a trace replay + two tiny reads instead of an
+    # eager ~3.3k-op forward + full-logit readback. Sampling (temperature / penalties) needs the full logits ->
+    # keep the eager path. Other lengths (valid_len < bucket needs per-layer host masks) also keep it.
+    _short_bucket = model.short_prefill_trace_bucket(T, CHUNK)
+    _use_short_trace = _short_bucket is not None and _temp == 0 and _rep_pen == 1.0 and _no_repeat == 0
+    t_cap = time.time()
+    signpost("compile_prefill")
+    profiler.start("compile_prefill")
+    # A prompt < CHUNK never replays the 2048-chunk trace: skip parking it when the short trace replaces the
+    # eager path (its trace-region bytes go to the short trace); the masked-bucket programs are still warmed.
+    model.capture_prefill_trace_chunked(
+        model.mesh_device, page_table, chunk_size=CHUNK, capture_chunk_trace=not _use_short_trace
+    )
+    if _use_short_trace:
+        model.capture_prefill_trace_short(model.mesh_device, page_table, bucket=_short_bucket)
+    profiler.end("compile_prefill")
+    logger.info(f"[TP] prefill chunk-trace captured in {time.time() - t_cap:.1f}s")
 
     def _pick(vec):
         v = vec.float()
@@ -522,11 +539,16 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     t0 = time.time()
     signpost("inference_prefill")
     profiler.start("inference_prefill")
-    logits_dev = model.prefill_traced_chunked(token_ids[:, :T], page_table, actual_len=T)
-    ttnn.synchronize_device(model.device)
-    # Gather one mesh replica of replicated logits
-    lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
-    nxt = _pick(lt.reshape(-1, vocab)[0])
+    nxt = None
+    if _use_short_trace:
+        # Traced short prefill: the greedy first token comes back already argmax'd (per-shard idx + max).
+        nxt = model.prefill_short_traced(token_ids[:, :T], page_table, actual_len=T)
+    if nxt is None:
+        logits_dev = model.prefill_traced_chunked(token_ids[:, :T], page_table, actual_len=T)
+        ttnn.synchronize_device(model.device)
+        # Gather one mesh replica of replicated logits
+        lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
+        nxt = _pick(lt.reshape(-1, vocab)[0])
     generated.append(nxt)
     fed = int(token_acc.collect_predicted_tokens(nxt)) if token_acc else nxt
     profiler.end("inference_prefill")
@@ -558,44 +580,9 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     # On-device per-shard argmax+max for pure greedy (skips full-vocab gather/readback)
     _greedy = (not eager) and (not _ondev_sample) and _temp == 0 and _rep_pen == 1.0 and _no_repeat == 0
     model._ondev_argmax = _greedy
-    _per_shard = vocab // model.num_devices
-
-    # Multi-core max over vocab shard: reduce dim=-1 parallelizes over tile-ROWS (R/32 cores), so
-    # a tall/narrow grid (C=32 → R≈1952 → ~61 cores) beats the old 256×256 (8 tile-rows → 8 cores).
-    _MAXVAL_C = 32
-    _MAXVAL_R = (((_per_shard + _MAXVAL_C - 1) // _MAXVAL_C) + 31) // 32 * 32
-
-    def _maxval_dev(sharded_logits):
-        padded = ttnn.pad(
-            sharded_logits, [(0, 0), (0, 0), (0, 0), (0, _MAXVAL_R * _MAXVAL_C - _per_shard)], value=-1e30
-        )
-        grid = ttnn.reshape(padded, (1, 1, _MAXVAL_R, _MAXVAL_C))
-        part = ttnn.max(grid, dim=-1)
-        part_row = ttnn.reshape(part, (1, 1, 1, _MAXVAL_R))
-        val = ttnn.max(part_row, dim=-1)
-        ttnn.deallocate(padded)
-        ttnn.deallocate(grid)
-        ttnn.deallocate(part)
-        ttnn.deallocate(part_row)
-        return val
-
-    def _argmax_dev(sharded_logits):
-        # Per-device local argmax + max value (untilize for multi-core argmax path)
-        logits_rm = ttnn.to_layout(sharded_logits, ttnn.ROW_MAJOR_LAYOUT)
-        idx = ttnn.argmax(logits_rm, dim=-1, keepdim=False)
-        ttnn.deallocate(logits_rm)
-        return idx, _maxval_dev(sharded_logits)
-
-    _read_comp = ttnn.ConcatMeshToTensor(mesh, dim=0)
-
-    def _read_tok(idx_t, val_t):
-        # Winner device = argmax of per-shard max vals; global token = d * per_shard + local_idx[d].
-        # One mesh-composed D2H per tensor (2 total) vs one-per-shard (2*num_devices) — same
-        # device order for idx and val, so d maps to device d = vocab shard d.
-        idxs = ttnn.to_torch(idx_t, mesh_composer=_read_comp).reshape(-1)
-        vals = ttnn.to_torch(val_t, mesh_composer=_read_comp).reshape(-1)
-        d = int(torch.argmax(vals).item())
-        return d * _per_shard + int(idxs[d].item())
+    # Per-shard argmax + max and the host winner-pick live on the model (shared with the traced short prefill).
+    _argmax_dev = model.shard_argmax_max
+    _read_tok = model.read_shard_argmax_token
 
     def _update(token, position):
         # page_table is a constant identity table for the whole sequence; it was uploaded once into
@@ -619,6 +606,8 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
             (
                 ttnn.to_torch(dn.rec_state, mesh_composer=comp),
                 [ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states],
+                # Fused single-user decode keeps its conv history outside conv_states (None when the fused path is off).
+                dn.snapshot_fused_decode_state(),
             )
             for dn in _gdn
         ]
@@ -630,7 +619,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
             # Match target buffer dtype on restore
             return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=mapper)
 
-        for dn, (rec, convs) in zip(_gdn, snap):
+        for dn, (rec, convs, hist) in zip(_gdn, snap):
             r = _back(rec, dn.rec_state.dtype)
             ttnn.copy(r, dn.rec_state)
             ttnn.deallocate(r)
@@ -638,6 +627,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
                 cc = _back(c, dn.conv_states[j].dtype)
                 ttnn.copy(cc, dn.conv_states[j])
                 ttnn.deallocate(cc)
+            dn.restore_fused_decode_state(hist)  # no-op when hist is None (fused path off)
 
     # Persistent decode input buffers
     dev = model.prepare_inputs_decode(
@@ -652,6 +642,41 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
             dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3], on_device_logits=_ondev_sample
         )
         return out if _ondev_sample else out[0]
+
+    # Device-resident greedy decode loop (QWEN36_DECODE_DEVICE_LOOP, default 1; 0 = the host loop below, unchanged;
+    # 2 = strict: raise instead of falling back). One captured trace does the whole step -- RoPE lookup, LM head,
+    # global argmax, token feedback, position / RoPE-index increment, history append -- and the host only enqueues it
+    # (non-blocking) and reads the token history once at the end. Needs pure greedy decoding with the model's own tokens
+    # fed back: sampling, penalties, eager decode and teacher forcing (token_acc) keep the host loop.
+    if (
+        _greedy
+        and token_acc is None
+        and os.environ.get("QWEN36_DECODE_DEVICE_LOOP", "1") != "0"
+        and max_generated_tokens - len(generated) >= 2
+    ):
+        _dev_loop = _run_tp_decode_device_loop(
+            model,
+            mesh,
+            dev[3],
+            fed,
+            T,
+            max_generated_tokens - len(generated),
+            _snapshot_gdn,
+            _restore_gdn,
+            profiler,
+        )
+        if _dev_loop is not None:
+            _dl_tokens, _dl_info = _dev_loop
+            generated.extend(_dl_tokens)
+            profiler.end("run")
+            return generated, {
+                "ttft_s": ttft,
+                # Steady-state device-loop throughput (see _run_tp_decode_device_loop), not the host loop's metric.
+                "decode_tok_s": _dl_info["steady_tok_s"],
+                "decode_mode": "device-loop",
+                "device_loop": _dl_info,
+                "profiler": profiler,
+            }
 
     trace_id = None
     tt_logits = None
@@ -746,6 +771,109 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     return generated, {"ttft_s": ttft, "decode_tok_s": (1.0 / avg) if avg > 0 else 0.0, "profiler": profiler}
 
 
+def _run_tp_decode_device_loop(
+    model, mesh, page_table_dev, first_token, T, num_steps, snapshot_gdn, restore_gdn, profiler
+):
+    """Device-resident greedy decode of the single-user TP demo (QWEN36_DECODE_DEVICE_LOOP, see
+    Qwen36Model.device_decode_step for the in-trace step).
+
+    Capture: the loop's persistent buffers are allocated first, one eager step of the exact in-trace sequence compiles
+    every program (it also advances the GDN state, the loop state and writes KV position T / history row 0 -- the GDN
+    state is restored from the snapshot taken before it, the loop state is re-armed, the KV / history writes are
+    overwritten by the real first step), then the step is captured once. Run: ``num_steps`` back-to-back non-blocking
+    ``execute_trace`` calls (no per-token host work at all), ONE synchronize, ONE history read.
+
+    Timing: steady-state throughput = ``num_steps`` tokens / (time from just after the 1st enqueue, i.e. at the 2nd, to
+    the end of the final drain + history read), the convention of models/demos/qwen38_27b_qb2's demo. It is NOT
+    comparable step by step with the host loop's metric, which timed every step including a host update, a device
+    sync and a host readback; ``total_*`` additionally includes the first enqueue.
+
+    Returns (tokens, info) -- the ``num_steps`` tokens after ``first_token`` -- or None when the loop does not apply or
+    could not be built (the caller then runs the host loop; QWEN36_DECODE_DEVICE_LOOP=2 re-raises instead).
+    """
+    strict = os.environ.get("QWEN36_DECODE_DEVICE_LOOP", "1") == "2"
+    reason = model.device_decode_loop_unsupported_reason(T, num_steps)
+    if reason is not None:
+        logger.info(f"[TP device-loop] not used: {reason}")
+        return None
+
+    dl = trace_id = gdn_snap = None
+    capturing = False
+    signpost("compile_decode")
+    profiler.start("compile_decode")
+    try:
+        dl = model.setup_device_decode_loop(num_steps)
+        model.device_decode_loop_arm(dl, first_token, T)
+        gdn_snap = snapshot_gdn()
+        model.device_decode_step(dl, page_table_dev)  # eager: compile + warm the whole in-trace sequence
+        ttnn.synchronize_device(mesh)
+        trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
+        capturing = True
+        model.device_decode_step(dl, page_table_dev)
+        ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+        capturing = False
+        restore_gdn(gdn_snap)  # ttnn.copy: the trace-baked state buffers keep their addresses
+        model.device_decode_loop_arm(dl, first_token, T)  # token / position / RoPE index / cursor back to the start
+        ttnn.synchronize_device(mesh)  # the staging copies and the restore are done; capture is closed
+    except Exception as exc:  # noqa: BLE001 - any failure of the new path must not take the demo down (unless strict)
+        if capturing:
+            try:
+                ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+            except Exception:  # noqa: BLE001
+                pass
+        if trace_id is not None:
+            ttnn.release_trace(mesh, trace_id)
+        if gdn_snap is not None:
+            restore_gdn(gdn_snap)
+        if dl is not None:
+            dl.release()
+        profiler.end("compile_decode")
+        if strict:
+            raise
+        logger.warning(
+            f"[TP device-loop] build failed ({type(exc).__name__}: {exc}); falling back to the host decode loop "
+            f"(QWEN36_DECODE_DEVICE_LOOP=2 raises instead)"
+        )
+        return None
+    profiler.end("compile_decode")
+
+    signpost("inference_decode")
+    profiler.start("inference_decode")
+    t_begin = time.time()
+    ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=False)
+    t_second = time.time()  # steady-state window opens at the 2nd enqueue
+    for _ in range(num_steps - 1):
+        ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=False)
+    t_enqueued = time.time()
+    ttnn.synchronize_device(mesh)  # the one drain
+    tokens = model.read_device_decode_history(dl, num_steps)  # the one readback
+    t_end = time.time()
+    ttnn.release_trace(mesh, trace_id)
+    dl.release()
+    profiler.end("inference_decode")
+
+    steady_s = t_end - t_second
+    total_s = t_end - t_begin
+    info = {
+        "num_steps": num_steps,
+        "steady_s": steady_s,
+        "steady_tok_s": num_steps / steady_s if steady_s > 0 else 0.0,
+        "total_s": total_s,
+        "total_tok_s": num_steps / total_s if total_s > 0 else 0.0,
+        "enqueue_s": t_enqueued - t_begin,
+    }
+    logger.info(
+        f"[TP device-loop] {num_steps} decode steps, host only enqueued traces "
+        f"({info['enqueue_s'] * 1000:.1f} ms for all enqueues): steady-state {info['steady_tok_s']:.2f} tok/s "
+        f"({steady_s * 1000 / num_steps:.2f} ms/token; 2nd enqueue -> final drain + one history read = "
+        f"{steady_s:.3f}s), {info['total_tok_s']:.2f} tok/s incl. the 1st enqueue; the host loop's per-token metric "
+        f"also timed a per-step host update + sync + readback"
+    )
+    bad = [(i, t) for i, t in enumerate(tokens) if not 0 <= t < model.vocab_size]
+    assert not bad, f"device decode loop produced out-of-vocab token ids (step, id): {bad[:8]}"
+    return tokens, info
+
+
 def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens, batch):
     """Multi-device (TP) batched generation: B users decoded together.
 
@@ -822,6 +950,8 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
             (
                 ttnn.to_torch(dn.rec_state, mesh_composer=comp),
                 [ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states],
+                # Fused single-user decode keeps its conv history outside conv_states (None when the fused path is off).
+                dn.snapshot_fused_decode_state(),
             )
             for dn in _gdn
         ]
@@ -832,7 +962,7 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
         def _back(t, dtype):
             return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=mapper)
 
-        for dn, (rec, convs) in zip(_gdn, snap):
+        for dn, (rec, convs, hist) in zip(_gdn, snap):
             r = _back(rec, dn.rec_state.dtype)
             ttnn.copy(r, dn.rec_state)
             ttnn.deallocate(r)
@@ -840,6 +970,7 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
                 cc = _back(c, dn.conv_states[j].dtype)
                 ttnn.copy(cc, dn.conv_states[j])
                 ttnn.deallocate(cc)
+            dn.restore_fused_decode_state(hist)  # no-op when hist is None (fused path off)
 
     def _update(tokens_row, positions):
         # page_table is a constant per-user block mapping for the whole decode loop; it was

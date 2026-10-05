@@ -49,6 +49,12 @@ class Qwen36DecoderLayer:
             (not self.is_full_attention and getattr(args, "gdn_qkvz_weight_memcfg", None) is not None)
             or (self.is_full_attention and getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None)
         )
+        # QWEN36_DECODE_ALLREDUCE=1 (decode only): replicated 40-core L1 residual + one all_reduce_async per
+        # row-parallel output (see tp_common.DecodeResidualAllReduce). None when off/unsupported; the shared
+        # persistent buffer is allocated here, at construction, never inside a trace. Prefill never uses it.
+        from models.demos.blackhole.qwen36.tt import tp_common as _tpc
+
+        self._decode_ar = _tpc.get_decode_allreduce(args, tt_ccl) if self.num_devices > 1 else None
         self.attention_norm = self._make_norm(
             mesh_device,
             args,
@@ -182,6 +188,13 @@ class Qwen36DecoderLayer:
         # paths. Fail fast instead.
         assert mode in ("decode", "prefill"), f"mode must be 'decode' or 'prefill', got {mode!r}"
         _norm_mode = Mode.PREFILL if mode == "prefill" else Mode.DECODE
+        # Replicated-residual decode (QWEN36_DECODE_ALLREDUCE=1): dispatch on the tensor itself — a full-width
+        # input is the replicated RES40 residual; a fractured one (flag off, or a caller that bypassed the model
+        # entry) takes the unchanged fractured path below.
+        _dar = self._decode_ar
+        if _dar is not None and not (mode == "decode" and x.shape[-1] == self.args.dim):
+            _dar = None
+        _dar_kw = {"decode_ar": _dar} if _dar is not None else {}
         if self.num_devices > 1:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
             _attn_norm_config = self.args.get_norm_config("attn", _norm_mode)
@@ -201,7 +214,10 @@ class Qwen36DecoderLayer:
             _attn_norm_config = _ff_norm_config = (
                 {"output_mem_config": ttnn.L1_MEMORY_CONFIG} if mode == "decode" else None
             )
-        attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
+        if _dar is not None:
+            attn_input = _dar.rms_norm(x, self.attention_norm.norm)
+        else:
+            attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
 
         if self.num_devices > 1:
             # TP modules: input is the gathered (full-dim) norm output [1,1,B/S,dim];
@@ -224,7 +240,7 @@ class Qwen36DecoderLayer:
                         attn_output = self.attention.forward_prefill(attn_input, cos, sin)
                 else:
                     attn_output = self.attention.forward_decode(
-                        attn_input, position_tensor, cos, sin, page_table=page_table
+                        attn_input, position_tensor, cos, sin, page_table=page_table, **_dar_kw
                     )
             else:
                 # GDN carries its recurrent/conv state internally (capture_state on
@@ -241,7 +257,7 @@ class Qwen36DecoderLayer:
                             attn_input, chunk_size=chunk_size, valid_len=valid_len, capture_state=True
                         )
                 else:
-                    attn_output = self.attention.forward_decode(attn_input)
+                    attn_output = self.attention.forward_decode(attn_input, **_dar_kw)
         elif self.is_full_attention:
             attn_output = self.attention.forward(
                 attn_input,
@@ -260,15 +276,18 @@ class Qwen36DecoderLayer:
             )
         ttnn.deallocate(attn_input)
 
-        h = ttnn.add(x, attn_output)
+        h = _dar.add(x, attn_output) if _dar is not None else ttnn.add(x, attn_output)
         ttnn.deallocate(attn_output)
 
-        ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
+        if _dar is not None:
+            ff_input = _dar.rms_norm(h, self.ffn_norm.norm)
+        else:
+            ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
 
-        ff_output = self.feed_forward.forward(ff_input, mode=mode)
+        ff_output = self.feed_forward.forward(ff_input, mode=mode, **_dar_kw)
         ttnn.deallocate(ff_input)
 
-        output = ttnn.add(h, ff_output)
+        output = _dar.add(h, ff_output) if _dar is not None else ttnn.add(h, ff_output)
         ttnn.deallocate(h)
         ttnn.deallocate(ff_output)
 
