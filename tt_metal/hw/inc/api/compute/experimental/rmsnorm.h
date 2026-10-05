@@ -96,7 +96,8 @@ ALWI void rmsnorm_mul_bcast_scalar_reuse_tiles(
  *
  * One DST slot is reserved as a cross-chunk accumulator; the remaining
  * dst_capacity - 1 slots stage products. The caller must initialize
- * mul_reduce_scalar and add_binary, then acquire DST before calling.
+ * mul_reduce_scalar and the SFPU (fill or add_binary), then acquire DST
+ * before calling.
  *
  * ocb programs the packer's face_r_dim for the reduce mask. On return,
  * element 0 of DST[dst_capacity - 1] contains scaler * scaler * sum(A * B)
@@ -122,13 +123,15 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
     constexpr uint32_t accumulator = batch_size;
     constexpr uint32_t num_batches = (num_tiles + batch_size - 1) / batch_size;
     constexpr uint32_t last_batch_size = num_tiles - (num_batches - 1) * batch_size;
+    // Every batch's column sums accumulate in row 4 of the accumulator and the scalar reduce after the last batch
+    // writes row 0; this fill zeroes rows 0 to 7.
+    constexpr uint32_t sum_row = 4;
 
-    // Only element 0 of the accumulator is defined: the fill completes its first four rows, the add covers one vector.
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         _calculate_fill_,
-        (APPROX, 2 /*ITERATIONS*/),
+        (APPROX, 4 /*ITERATIONS*/),
         accumulator,
         VectorMode::RC_custom,
         0.0f));
@@ -137,10 +140,8 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
         const uint32_t input_start = batch * batch_size;
         const uint32_t count = batch + 1 < num_batches ? batch_size : last_batch_size;
 
-        // Each reduction consumes the UNPACK/MATH state. The caller provides
-        // the first initialization; subsequent chunks restore it here.
         if (batch > 0) {
-            mul_reduce_scalar_init(icb0, icb1);
+            MATH((llk_math_eltwise_mul_reduce_scalar_reinit<MATH_FIDELITY>()));
         }
         for (uint32_t j = 0; j < count; ++j) {
             // Products reuse DEST slots across chunks; preserve the running
@@ -162,34 +163,19 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
             VectorMode::RC_custom,
             scaler));
         MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0)));
-        MATH(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            is_fp32_dest_acc_en,
-            _calculate_fill_,
-            (APPROX, 2 /*ITERATIONS*/),
-            0 /*dst_index*/,
-            VectorMode::RC_custom,
-            0.0f));
 
         if (batch == 0) {
             PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_SCALAR, ckernel::PackMode::Default>(ocb)));
         }
-        MATH((llk_math_mul_reduce_column<MATH_FIDELITY>(0, icb0)));
+        MATH((llk_math_mul_reduce_column<MATH_FIDELITY, sum_row>(accumulator, icb0)));
         for (uint32_t j = 1; j < count; ++j) {
-            MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(j)));
-            MATH((llk_math_mul_reduce_column<MATH_FIDELITY>(0, icb0)));
+            MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA, true>(j)));
+            MATH((llk_math_mul_reduce_column<MATH_FIDELITY, sum_row>(accumulator, icb0)));
         }
-        MATH((llk_math_mul_reduce_scalar<MATH_FIDELITY>()));
+        if (batch + 1 == num_batches) {
+            MATH((llk_math_mul_reduce_scalar<MATH_FIDELITY, sum_row>()));
+        }
         MATH((llk_math_mul_reduce_scalar_clear_dvalid()));
-        MATH((SFPU_BINARY_CALL(
-            DST_SYNC_MODE,
-            is_fp32_dest_acc_en,
-            calculate_sfpu_binary,
-            (APPROX, ckernel::BinaryOp::ADD, 1 /*ITERATIONS*/, is_fp32_dest_acc_en, DstRoundingMode::Default),
-            accumulator,
-            0,
-            accumulator,
-            VectorMode::RC_custom)));
     }
 }
 

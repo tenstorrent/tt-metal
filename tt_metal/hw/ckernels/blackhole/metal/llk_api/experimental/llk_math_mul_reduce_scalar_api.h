@@ -49,18 +49,18 @@ inline void llk_math_mul_reduce_scalar_reduce_init() {
     _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, math_fidelity, enforce_fp32_accumulation>();
 }
 
-template <MathFidelity math_fidelity>
+template <MathFidelity math_fidelity, std::uint32_t dst_row = 0>
 inline void llk_math_mul_reduce_column(const std::uint32_t dst_index, const std::uint32_t icb0) {
     SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(icb0);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
-    _llk_math_mul_reduce_column_<math_fidelity>(dst_index, tensor_shape);
+    _llk_math_mul_reduce_column_<math_fidelity, dst_row>(dst_index, tensor_shape);
 }
 
-template <MathFidelity math_fidelity>
+template <MathFidelity math_fidelity, std::uint32_t src_row = 0>
 inline void llk_math_mul_reduce_scalar() {
     SAN_HOOK(unsupported());
-    _llk_math_mul_reduce_scalar_<math_fidelity>();
+    _llk_math_mul_reduce_scalar_<math_fidelity, src_row>();
 }
 
 inline void llk_math_mul_reduce_scalar_clear_dvalid() {
@@ -68,8 +68,15 @@ inline void llk_math_mul_reduce_scalar_clear_dvalid() {
     _llk_math_mul_reduce_scalar_clear_dvalid_();
 }
 
-template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE, bool from_dest_base = false>
 inline void llk_math_mul_reduce_scalar_move_dest_to_src(std::uint32_t idst = 0) {
     SAN_HOOK(unsupported());
-    _llk_math_mul_reduce_scalar_move_dest_to_src_<binary_reuse_dest>(idst);
+    _llk_math_mul_reduce_scalar_move_dest_to_src_<binary_reuse_dest, from_dest_base>(idst);
+}
+
+// Restores the multiply's address modifiers after a reduce phase; the multiply's MOP is not touched by the reduce.
+template <MathFidelity math_fidelity>
+inline void llk_math_eltwise_mul_reduce_scalar_reinit() {
+    SAN_HOOK(unsupported());
+    eltwise_binary_configure_addrmod<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, math_fidelity>();
 }

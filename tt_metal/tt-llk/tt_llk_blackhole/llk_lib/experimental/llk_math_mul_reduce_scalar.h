@@ -76,14 +76,15 @@ inline void execute_high_fidelity_gapool()
  * Moves data from destination registers to source A or B registers.
  *
  * @tparam binary_reuse_dest Direction: DEST_TO_SRCA or DEST_TO_SRCB
+ * @tparam from_dest_base: DEST_TO_SRCA re-anchors at the DEST buffer base for every idst, not only for idst 0
  * @param idst Destination tile index (0-7)
  */
-template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE, bool from_dest_base = false>
 inline void _llk_math_mul_reduce_scalar_move_dest_to_src_([[maybe_unused]] std::uint32_t idst = 0)
 {
     if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
     {
-        if (idst == 0)
+        if (from_dest_base || idst == 0)
         {
             TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base());
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -203,13 +204,15 @@ inline void _llk_math_mul_reduce_scalar_init_()
  * destination tile. Used in a loop to accumulate multiple input tiles.
  *
  * @tparam MATH_FIDELITY_DESC Math fidelity descriptor (0 = default, higher = more precision)
+ * @tparam dst_row: Row of the destination tile that receives the column sums (0 to 15)
  * @param dst_index Destination tile index to accumulate into (0-7)
  * @param tensor_shape Shape of the operand tile (4 faces for 32x32, 2 faces for a 16x32 tiny tile)
  */
-template <MathFidelity math_fidelity>
+template <MathFidelity math_fidelity, std::uint32_t dst_row = 0>
 inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    static_assert(dst_row < 16, "dst_row must lie in the first face");
 
     // A 32x16 narrow tile has fewer face-columns than face-rows; mirror generic llk_math_reduce.h.
     const bool is_narrow_tile         = tensor_shape.num_faces_c_dim < tensor_shape.num_faces_r_dim;
@@ -218,7 +221,7 @@ inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ck
     // dst[dst_index] may have just been zeroed through the SFPU; GAPOOL accumulates into it, so drain first.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, dst_row, 0, 0, p_setrwc::SET_D);
 
     for (std::uint32_t row_tile = 0; row_tile < num_row_tiles; row_tile++)
     {
@@ -236,11 +239,11 @@ inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ck
         {
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_A, 0, 0, 8, p_setrwc::SET_A);
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_A, 0, 0, 8, p_setrwc::SET_A);
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, dst_row, 0, 0, p_setrwc::SET_D);
         }
         else
         {
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_AD);
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, dst_row, 0, 0, p_setrwc::SET_AD);
         }
     }
 }
@@ -252,14 +255,20 @@ inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ck
  * first element of the output tile.
  *
  * @tparam MATH_FIDELITY_DESC Math fidelity descriptor (0 = default, higher = more precision)
+ * @tparam src_row: Row holding the column sums; when not 0, row 0 must already hold zeros and is not cleared
  */
-template <MathFidelity math_fidelity>
+template <MathFidelity math_fidelity, std::uint32_t src_row = 0>
 inline void _llk_math_mul_reduce_scalar_()
 {
+    static_assert(src_row < 16, "src_row must lie in the first face");
     math::srcb_bank_wait();
+    if constexpr (src_row != 0)
+    {
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    }
 
-    // Copy row 0 from dest to srcB (rows 16-31 as scratch) and transpose
-    TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+    // Copy the column sums from dest to srcB (rows 16-31 as scratch) and transpose
+    TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, src_row);
     TTI_GATESRCRST(0b1, 0b1);
     TTI_TRNSPSRCB;
     TTI_GATESRCRST(0b1, 0b1);
@@ -271,7 +280,10 @@ inline void _llk_math_mul_reduce_scalar_()
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
     TTI_GATESRCRST(0b1, 0b1);
 
-    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, 0);
+    if constexpr (src_row == 0)
+    {
+        TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, 0);
+    }
 
     execute_high_fidelity_gapool<math_fidelity>();
 }

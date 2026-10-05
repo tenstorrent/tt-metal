@@ -86,10 +86,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t base = 0; base < tile_cnt; base += batch_size)
                 {
                     const std::uint32_t count = (tile_cnt - base < batch_size) ? (tile_cnt - base) : batch_size;
-                    if (base > 0)
-                    {
-                        _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, ckernel::Transpose::None);
-                    }
                     for (std::uint32_t j = 0; j < count; ++j)
                     {
                         _llk_unpack_AB_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_A[base + j]), L1_ADDRESS(params.buffer_B[base + j]));
@@ -131,6 +127,8 @@ inline void _calculate_fill_x_(const float value)
 } // namespace ckernel::sfpu
 
 static constexpr float REDUCE_SCALER = 1.0f;
+// Row of the accumulator that collects the column sums; the scalar reduce writes its zeroed row 0.
+static constexpr std::uint32_t SUM_ROW = 4;
 
 inline void row_math(const std::uint32_t tile_cnt, const std::uint32_t batch_size, const ckernel::TensorShape& tensor_shape)
 {
@@ -139,13 +137,13 @@ inline void row_math(const std::uint32_t tile_cnt, const std::uint32_t batch_siz
     _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(tensor_shape, 0);
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::fill>();
     SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (false, BinaryOp::ADD));
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_x_<false, 2>, accumulator, VectorMode::RC_custom, 0.0f);
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_x_<false, 4>, accumulator, VectorMode::RC_custom, 0.0f);
     for (std::uint32_t base = 0; base < tile_cnt; base += batch_size)
     {
         const std::uint32_t count = (tile_cnt - base < batch_size) ? (tile_cnt - base) : batch_size;
         if (base > 0)
         {
-            _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(tensor_shape, 0);
+            eltwise_binary_configure_addrmod<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY>();
         }
         for (std::uint32_t j = 0; j < count; ++j)
         {
@@ -162,24 +160,17 @@ inline void row_math(const std::uint32_t tile_cnt, const std::uint32_t batch_siz
         _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0);
         _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_x_<false, 2>, 0, VectorMode::RC_custom, REDUCE_SCALER);
         _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0);
-        _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_x_<false, 2>, 0, VectorMode::RC_custom, 0.0f);
-        _llk_math_mul_reduce_column_<MATH_FIDELITY>(0, tensor_shape);
+        _llk_math_mul_reduce_column_<MATH_FIDELITY, SUM_ROW>(accumulator, tensor_shape);
         for (std::uint32_t j = 1; j < count; ++j)
         {
-            _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(j);
-            _llk_math_mul_reduce_column_<MATH_FIDELITY>(0, tensor_shape);
+            _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA, true>(j);
+            _llk_math_mul_reduce_column_<MATH_FIDELITY, SUM_ROW>(accumulator, tensor_shape);
         }
-        _llk_math_mul_reduce_scalar_<MATH_FIDELITY>();
+        if (base + count >= tile_cnt)
+        {
+            _llk_math_mul_reduce_scalar_<MATH_FIDELITY, SUM_ROW>();
+        }
         _llk_math_mul_reduce_scalar_clear_dvalid_();
-        SFPU_BINARY_CALL(
-            DST_SYNC,
-            is_fp32_dest_acc_en,
-            calculate_sfpu_binary,
-            (false, BinaryOp::ADD, 1, is_fp32_dest_acc_en),
-            accumulator,
-            0,
-            accumulator,
-            VectorMode::RC_custom);
     }
 }
 
