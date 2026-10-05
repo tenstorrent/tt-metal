@@ -54,9 +54,6 @@ def exp_ring_mesh():
 
 # heads, local rows, joint rows, logical_n (None = all rows), grid (SDPA columns + 1 MUX column, 4 rows), q_chunk.
 # Heads x Q segments over the 4 grid rows set the passes per row (1-3).
-# Recipes that pair Q tile rows and round an odd Q chunk up to the next even one (LOW_PRECISION computes odd
-# chunks as is).
-PAIRED_RECIPES = (ttnn.SDPAPrecision.STANDARD,)
 EXP_RING_CASES = {
     "q256_aligned": (4, 1024, 0, None, (5, 4), 256),
     "joint": (2, 1024, 512, None, (4, 4), 256),
@@ -122,8 +119,6 @@ def exp_ring_case(mesh, variant, case):
 @pytest.mark.parametrize("case", EXP_RING_CASES)
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_exp_ring_joint_sdpa_recipe(exp_ring_mesh, variant, case):
-    if case == "q224_two_pass" and VARIANTS[variant][0] in PAIRED_RECIPES:
-        pytest.skip("STANDARD rounds Q224 up to Q256: 4 Q chunks per head do not fill the case's 5 SDPA columns")
     mesh, semaphores = exp_ring_mesh
     inputs, joints, backing, logical_n, kwargs, expected, has_joint = exp_ring_case(mesh, variant, case)
     out = run_exp_ring(
