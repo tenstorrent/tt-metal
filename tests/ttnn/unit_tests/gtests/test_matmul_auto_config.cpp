@@ -609,6 +609,15 @@ TEST(MatmulAutoConfig, SingleKBlockReuseSlices) {
     EXPECT_EQ(chosen->blocking.per_core_M, 4u);
 }
 
+// Batched B with K one tile: 2D's blocks are one tile wide (roofline fallback), and the roofline scores it only
+// 1.2x better than Reuse while it loops the 2 batches serially. Reuse stays (WH: 41 us vs 2D's 64 us).
+TEST(MatmulAutoConfig, OneTileTwoDKeepsReuseForBatchedB) {
+    const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
+    const auto chosen = choose(make_matmul(2, 2, 4096, 32, 256), hw);
+    ASSERT_TRUE(chosen.has_value());
+    EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Reuse));
+}
+
 // A batch-1 A broadcast over B's batches (1D in1-mcast looping over the batch) reuses each core's A slice for every
 // batch, so A doesn't count toward the self-read K limit: deepseek kv_wm, 6400x512 @ 32 x 512x128 takes K 8, not 2
 TEST(MatmulAutoConfig, BroadcastAKDepth) {

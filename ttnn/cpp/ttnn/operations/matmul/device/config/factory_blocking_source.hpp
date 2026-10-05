@@ -162,7 +162,8 @@ public:
 //  - batched B: Reuse, unless the multicast layout looping over the batch (chosen as above) keeps
 //    one_d_core_advantage times as many cores busy, or Reuse would read one_d_core_advantage times as much input;
 //  - a 2D choice whose per-core blocks are one tile tall or wide: the lowest roofline estimate instead, among the
-//    candidates no other keeps one_d_core_advantage times as many cores busy as.
+//    candidates no other keeps one_d_core_advantage times as many cores busy as; with batched B, Reuse unless that
+//    estimate is one_d_core_advantage times better or takes fewer serial steps.
 class HeuristicFamily final : public FamilyPolicy {
 public:
     // Tuned: fitted to benchmark data (see HeuristicBlocking::Tuned)

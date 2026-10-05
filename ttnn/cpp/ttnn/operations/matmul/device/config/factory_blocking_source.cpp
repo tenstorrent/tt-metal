@@ -444,7 +444,9 @@ std::optional<Candidate> choose_family(
 // reuse the rules above count on isn't there: the roofline estimate picks the family instead (ties to the
 // earlier family: 2D, 1D in0, 1D in1, Reuse), among the candidates no other keeps one_d_core_advantage times as many
 // cores busy as. The roofline has no per-step latency, so on its own it can prefer a layout that loops serially over
-// many small steps on a few cores (2D over a batch) to one that does them at once on many (Reuse).
+// many small steps on a few cores (2D over a batch) to one that does them at once on many (Reuse). With batched B,
+// Reuse stays the default unless the roofline's choice is one_d_core_advantage times better or takes fewer serial
+// steps (output blocks times K blocks, per batch loop) on its busiest core.
 bool one_tile_2d(const Candidate& c) {
     return c.family == Family::Mcast2D && std::min(c.blocking.per_core_M, c.blocking.per_core_N) == 1;
 }
@@ -471,8 +473,28 @@ std::optional<Candidate> HeuristicFamily::choose(
             roofline(p, hw, c.family, c.blocking, c.fuse_batch).cycles(),
             static_cast<int>(c.family));
     };
-    return *std::min_element(
+    const auto best = std::min_element(
         all.begin(), all.end(), [&](const Candidate& x, const Candidate& y) { return key(x) < key(y); });
+    if (p.batch_b > 1 && best->family != Family::Reuse) {
+        auto steps = [&](const Candidate& c) {
+            const uint64_t k_blocks = div_up(p.Kt, c.blocking.in0_block_w);
+            if (c.family == Family::Reuse) {
+                return div_up(p.batch_a * p.Mt / c.blocking.per_core_M, hw.grid.x * hw.grid.y) * k_blocks;
+            }
+            const uint64_t loops = c.fuse_batch ? 1 : std::max(p.batch_a, p.batch_b);
+            return uint64_t{c.blocking.per_core_M / c.blocking.out_block_h} *
+                   (c.blocking.per_core_N / c.blocking.out_block_w) * k_blocks * loops;
+        };
+        const double best_cycles = roofline(p, hw, best->family, best->blocking, best->fuse_batch).cycles();
+        for (const auto& c : all) {
+            if (c.family == Family::Reuse && !std::get<0>(key(c)) && steps(c) <= steps(*best) &&
+                roofline(p, hw, c.family, c.blocking, c.fuse_batch).cycles() <
+                    params.tuned.one_d_core_advantage * best_cycles) {
+                return c;
+            }
+        }
+    }
+    return *best;
 }
 
 // ---- Source ----
