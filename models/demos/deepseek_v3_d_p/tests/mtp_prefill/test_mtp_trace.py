@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""GLM-5.2 MTP chunked prefill under a captured trace, bit-exact against eager.
+"""GLM-5.3 MTP chunked prefill under a captured trace, bit-exact against eager.
 
 Two modes, each comparing two KV cache sets after every chunk with ``torch.equal``:
 
@@ -104,7 +104,7 @@ def _assert_caches_equal(a, b, mesh_device, label: str) -> None:
 @pytest.mark.parametrize("mode", ["geometry", "traced"])
 @pytest.mark.parametrize("mtp_levels", (4, 7), ids=["mtp4", "mtp7"])
 @pytest.mark.parametrize("schedule", TRACE_SCHEDULES)
-@pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm52"])
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.parametrize("use_pretrained", [True], ids=["pretrained"], indirect=True)
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
@@ -141,10 +141,10 @@ def test_mtp_trace(
 
     effective_cache_path = weight_cache_path / f"{sp_factor}x{tp_factor}"
     experts_per_chip = variant.model_config.NUM_ROUTED_EXPERTS // (sp_factor * tp_factor)
-    mtp_cache_root = Path(os.getenv(MTP_CACHE_ENV) or weight_cache_path.parent.parent / "glm52_mtp_ttnn_cache")
+    mtp_cache_root = Path(os.getenv(MTP_CACHE_ENV) or weight_cache_path.parent.parent / "glm53_mtp_ttnn_cache")
     mtp_cache_path = mtp_cache_root / f"{variant.name}_bh_{ttnn.get_num_devices()}dev"
     mtp_cache_path = mtp_cache_path / f"{sp_factor}x{tp_factor}_L{NUM_LAYERS}"
-    mtp_cache_path = _mtp_cache_dir(mtp_cache_path, Path(ttnn.CONFIG.cache_path) / "glm52_mtp_ttnn_cache")
+    mtp_cache_path = _mtp_cache_dir(mtp_cache_path, Path(ttnn.CONFIG.cache_path) / "glm53_mtp_ttnn_cache")
     init_checker(mtp_cache_path)
     TtMTPPredictor.check_cache_complete(
         mtp_cache_path,
