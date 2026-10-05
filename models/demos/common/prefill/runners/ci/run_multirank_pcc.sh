@@ -31,6 +31,7 @@ MGD="${MGD_DIR}/${CONFIG}_mgd.textproto"
 CHUNK_SIZE=5120
 WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
+GOLDEN_LEN=56320
 # Off by default. Reads the runner-side probe in summarize_ci_run.py's perf JSON, not the producer's
 # log line, which times the push schedule and returns long before the model is done.
 EXPECTED_TPS="${PREFILL_EXPECTED_TPS:-}"
