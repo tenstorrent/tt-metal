@@ -23,6 +23,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
@@ -230,7 +231,7 @@ class TtMoe(LightweightModule):
         latent_use_norm: bool = True,
         rms_norm_eps: float = 1e-5,
         max_gate_seq_len_per_chip: Optional[int] = None,
-        overlap_routed_expert_with_combine: bool = False,
+        overlap_routed_expert_with_combine: Optional[bool] = None,
     ):
         """
         Initialize TtMoe module.
@@ -316,7 +317,7 @@ class TtMoe(LightweightModule):
                 agnostic, so this never invalidates one.
             overlap_routed_expert_with_combine: run the routed expert and combine_fabric2d as ONE program
                 (hybrid_routed_expert_moe in overlap mode), combine taking each expert as soon as it is
-                written. Blackhole only. Needs a fabric payload of a whole bf16 token plus combine_fabric2d's
+                written. Blackhole only, and defaulted to that: None means on wherever it is supported. Needs a fabric payload of a whole bf16 token plus combine_fabric2d's
                 routing tail (get_max_payload_size()), and a threshold that leaves the unified half some
                 experts. A threshold above zero keeps an L1 arena for the program's lifetime, so nothing
                 else may place static circular buffers while its program is cached.
@@ -526,6 +527,9 @@ class TtMoe(LightweightModule):
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
 
+        # Overlapping is the default wherever the op exists; only Blackhole has it.
+        if overlap_routed_expert_with_combine is None:
+            overlap_routed_expert_with_combine = is_blackhole()
         # combine_fabric2d relays other chips' tokens, so it needs every chip's slice of the table.
         self.overlap_routed_expert_with_combine = overlap_routed_expert_with_combine
         self.replicated_global_expert_idx_tt = None
