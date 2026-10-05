@@ -28,6 +28,11 @@ void ChainAffineTransformsOperation::validate_on_program_cache_miss(
         operation_name);
     kda_factory_detail::check_actual_start(in.transforms, in.actual_start, operation_name);
     kda_factory_detail::check_allocated_device_tensor(in.transforms, operation_name, "transforms");
+    TT_FATAL(
+        in.transforms.device()->arch() == tt::ARCH::BLACKHOLE,
+        "{} is only supported on Blackhole architecture, got {}",
+        operation_name,
+        in.transforms.device()->arch());
     kda_factory_detail::check_layout(in.transforms, tt::tt_metal::Layout::TILE, operation_name, "transforms");
     // BF16 b widens exactly through srcA; the kernel has no lossless path for FP32 transforms.
     kda_factory_detail::check_dtype(in.transforms, tt::tt_metal::DataType::BFLOAT16, operation_name, "transforms");

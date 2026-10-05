@@ -98,7 +98,8 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
             },
         .compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"BH", BH}},
         .runtime_arg_schema = {.runtime_arg_names = {"head"}},
-        .hw_config = ttnn::create_reader_datamovement_config(),
+        // The kernel manages every DFB credit explicitly, including the 4-byte actual_start read.
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // Matmul operands unpack to source registers; the product unpacks losslessly to DST for the FP32 SFPU add.
