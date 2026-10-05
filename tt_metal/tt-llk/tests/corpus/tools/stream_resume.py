@@ -11,7 +11,7 @@ from pathlib import Path
 import sys
 
 
-SCHEMA = 2
+SCHEMA = 3
 
 
 def sha256_file(path: Path) -> str:
@@ -33,7 +33,17 @@ def python_tree_sha256(root_text: str) -> str:
     return digest.hexdigest()
 
 
-def cache_record(script: Path, args, node: str, start: int, count: int, leg: str) -> dict:
+def cache_record(
+    script: Path,
+    args,
+    node: str,
+    start: int,
+    count: int,
+    leg: str,
+    *,
+    compiler_options: str | None = None,
+    golden: str | None = None,
+) -> dict:
     idmap = Path(args.idmap).resolve() if args.idmap else None
     farm = Path(args.farm).resolve()
     tools = script.resolve().parent
@@ -53,13 +63,22 @@ def cache_record(script: Path, args, node: str, start: int, count: int, leg: str
         "chip": str(args.chip),
         "op": args.op,
         "node": node,
-        "sem_node": args.sem_node,
-        "hand_node": args.hand_node,
-        "compiler_options": os.environ.get("TT_LLK_EXTRA_COMPILER_OPTIONS", ""),
+        "arm_nodes": {
+            key: getattr(args, key)
+            for key in (
+                "sem_node", "hand_node", "selected_sem_node",
+                "baseline_sem_node", "baseline_hand_node",
+            )
+            if getattr(args, key, None) is not None
+        },
+        "compiler_options": (
+            os.environ.get("TT_LLK_EXTRA_COMPILER_OPTIONS", "")
+            if compiler_options is None else compiler_options
+        ),
         "start": start,
         "count": count,
         "leg": leg,
-        "golden": args.golden,
+        "golden": args.golden if golden is None else golden,
         "tile_dim": getattr(args, "tile_dim", None),
         "band_bits": args.band_bits,
         "idmap_source": getattr(args, "idmap_source", None),

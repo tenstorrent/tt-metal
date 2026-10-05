@@ -120,8 +120,29 @@ semantic (B), and frozen handwritten (C). A/B is the compiler-correctness gate;
 B/C is the semantic/numeric gate. The planner refuses baseline disagreement and
 will not emit the old ambiguous two-arm roster.
 
-With `GOLDEN=1` (the default), the final status is the global numerical
-admission, not sem-vs-hand equality. `<op>-VERDICT.txt` independently records
+For a deployable tuned configuration, use the planner's tri-arm profile:
+
+- A: semantic C++ compiled with the selected per-op flags;
+- B: the same semantic C++ compiled with the frozen baseline flags;
+- C: handwritten production C++ compiled with those same baseline flags.
+
+A/B must be bit-exact over the full space. This is the compiler-correctness
+gate and has no ULP escape. B/C is the semantic-uplift comparison and is graded
+by the global oracle/ULP rule below. Produce and stage the three binaries alone
+with `build_identity_gate.sh`, then run:
+
+    TRI_PROFILES=<plan>/tri-profiles.tsv \
+    TRI_IDMAP=<identity>/TRI-IDENTITY-MAP.tsv \
+    OP=<op> SWEEP=fp32 FARM_ROOT=<staged-farm> VENV=<python> OUT=<evidence> \
+      bash galaxy_shard.sh
+
+`TRI_PROFILES` contains the exact selected and baseline flag strings.
+`TRI_IDMAP` binds A/B/C to their staged variant and `.text` hash. Resume
+records also contain the arm, node, exact flags, golden mode, and identity-map
+hash, so data cannot move between profiles. The tri producer refuses a
+non-empty `STAGE_BUILD`; callers must choose a fresh staging directory.
+
+With `GOLDEN=1` (the default), `<op>-VERDICT.txt` independently records
 `BIT-EXACT` or `DIVERGENT`; `<op>-NUMERIC-ADMISSION.{json,tsv}` records oracle
 availability, semantic and hand absolute status, global per-class ULP status,
 and the admission. A divergent row may pass only when the semantic absolute
@@ -129,6 +150,14 @@ oracle passes and candidate max ULP is no worse than hand for every class.
 Missing/partial oracle evidence and partial input-space coverage fail closed.
 The per-slice correctness verdicts are diagnostics only; their local ULP
 comparisons are never ANDed into a campaign claim.
+`<op>-COMPILER-VERDICT.txt` is the separately combined full-space A/B gate.
+`<op>-DEPLOYMENT-VERDICT.txt` is the machine-readable join: deployment passes
+only when A/B is full-space bit-exact and B/C numeric admission passes. B/C
+equivalence is reported but does not decide deployment.
+
+The legacy `OPS_TSV`/`IDMAP` two-arm interface remains a plain sem-vs-hand
+measurement. It does not emit a compiler or deployment verdict and must not be
+presented as validation of selected compiler knobs.
 
 ## Measured (BH silicon)
 ~2.5M patterns/s per chip ⇒ **~27.7 min/leg, ~55 min/op** full 2^32 on ONE chip (chunk size

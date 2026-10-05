@@ -70,6 +70,10 @@ but laneMO's separate-buffer binary ops can adopt it.
   must be no worse than hand in every populated input class. The hand arm's
   absolute status is reported but does not veto a better semantic kernel.
   Per-slice ULP comparisons are diagnostics, not composable admission gates.
+* **Selected compiler knobs use three arms** — A is selected-flags semantic,
+  B is baseline-flags semantic, and C is baseline-flags hand. A/B must be
+  bit-exact over the full joint space; B/C uses numerical admission. The final
+  `*-DEPLOYMENT-VERDICT.txt` cannot pass on numerical quality alone.
 
 ## Files
 

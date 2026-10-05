@@ -137,7 +137,10 @@ def validate_corr(corr, args, leg, count):
         )
 
 
-def run_band_leg(args, node, start, count, out_sha_file, log_file, leg=None):
+def run_band_leg(
+    args, node, start, count, out_sha_file, log_file, leg=None,
+    compiler_options="", golden="",
+):
     """One pytest invocation: stream [start,start+count) for one leg.
 
     Returns (sha, wall, runs, corr) where corr is the parsed 3-way sidecar dict (or None
@@ -146,7 +149,8 @@ def run_band_leg(args, node, start, count, out_sha_file, log_file, leg=None):
     corr_file = str(out_sha_file) + ".corr"
     metadata = Path(str(out_sha_file) + ".provenance.json")
     cache_record = stream_resume.cache_record(
-        Path(__file__), args, node, start, count, leg or ""
+        Path(__file__), args, node, start, count, leg or "",
+        compiler_options=compiler_options, golden=golden,
     )
     if stream_resume.require_matching_cache(out_sha_file, metadata, cache_record):
         txt = out_sha_file.read_text()
@@ -154,9 +158,9 @@ def run_band_leg(args, node, start, count, out_sha_file, log_file, leg=None):
         corr = parse_corr(corr_file)
         if not m:
             raise RuntimeError(f"provenance-matched cache has no output SHA: {out_sha_file}")
-        if args.golden and corr is None:
+        if golden and corr is None:
             raise RuntimeError(f"golden cache has no correctness sidecar: {corr_file}")
-        if args.golden:
+        if golden:
             validate_corr(corr, args, leg, count)
         sp = _SPACE_RE.search(txt)
         if sp:
@@ -174,11 +178,12 @@ def run_band_leg(args, node, start, count, out_sha_file, log_file, leg=None):
         # flock /tmp/tt-dev-n.lock lets N orchestrators run concurrently on N chips).
         TT_VISIBLE_DEVICES=str(args.chip),
         SFPU_STREAM=f"{start},{count},{out_sha_file}",
+        TT_LLK_EXTRA_COMPILER_OPTIONS=compiler_options,
     )
-    if args.golden and leg:
+    if golden and leg:
         # Host-side TRUE-MATH tolerance leg rides along.  Per-class max ULP is
         # used for candidate<=hand admission; no absolute ULP budget is claimed.
-        env["SFPU_GOLDEN"] = f"{args.golden},{leg}"
+        env["SFPU_GOLDEN"] = f"{golden},{leg}"
     inner = (
         # --compile-consumer: use the prebuilt ELFs in RUNNER_TEMP; never invoke the
         # toolchain (galaxy hosts have none). The ELFs must be compiled beforehand
@@ -214,9 +219,9 @@ def run_band_leg(args, node, start, count, out_sha_file, log_file, leg=None):
     if sp:
         _observed_space.add(int(sp.group(1)))
     corr = parse_corr(corr_file)
-    if args.golden and corr is None:
+    if golden and corr is None:
         raise RuntimeError(f"golden run produced no correctness sidecar: {corr_file}")
-    if args.golden:
+    if golden:
         validate_corr(corr, args, leg, count)
     stream_resume.write_cache_record(metadata, cache_record, out_sha_file)
     return m.group(1), dt, int(r.group(1)) if r else 0, corr
@@ -225,8 +230,13 @@ def run_band_leg(args, node, start, count, out_sha_file, log_file, leg=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--op", required=True)
-    ap.add_argument("--sem-node", required=True)
-    ap.add_argument("--hand-node", required=True)
+    ap.add_argument("--sem-node")
+    ap.add_argument("--hand-node")
+    ap.add_argument("--selected-sem-node")
+    ap.add_argument("--baseline-sem-node")
+    ap.add_argument("--baseline-hand-node")
+    ap.add_argument("--selected-flags")
+    ap.add_argument("--baseline-flags")
     ap.add_argument("--farm", required=True)
     ap.add_argument("--venv", required=True)
     ap.add_argument("--llk-home", required=True)
@@ -250,12 +260,26 @@ def main():
     )
     args = ap.parse_args()
 
+    tri_values = (args.selected_sem_node, args.baseline_sem_node, args.baseline_hand_node)
+    tri_mode = any(value is not None for value in tri_values)
+    if tri_mode:
+        if not all(value is not None for value in tri_values):
+            ap.error("tri-arm mode requires selected-, baseline-sem-, and baseline-hand-node")
+        if args.selected_flags is None or args.baseline_flags is None:
+            ap.error("tri-arm mode requires explicit selected and baseline flags")
+        if args.selected_sem_node != args.baseline_sem_node:
+            ap.error("A/B compiler gate requires the identical semantic node")
+        if args.sem_node is not None or args.hand_node is not None:
+            ap.error("do not mix legacy --sem/--hand-node with tri-arm nodes")
+    elif args.sem_node is None or args.hand_node is None:
+        ap.error("provide both legacy --sem-node/--hand-node or all three tri-arm nodes")
+    args.tri_mode = tri_mode
+
     out = Path(args.out).resolve()  # absolute: run_band_leg runs pytest with cwd=farm
     (out / "bands").mkdir(parents=True, exist_ok=True)
 
-    # OBJECT-IDENTITY GATE (optional but required for a bookable verdict): the two legs must
-    # be the certified pin-59 kernels. Verify each ELF's .text against the recorded map and
-    # sem != hand; refuse otherwise. .text is farm-path-dependent so the map is in-farm.
+    # OBJECT-IDENTITY GATE. Legacy rows contain two variant/hash pairs; tri-arm
+    # rows contain selected-sem, baseline-sem and baseline-hand pairs.
     if args.idmap:
         import subprocess as _sp
 
@@ -269,13 +293,17 @@ def main():
             if p and p[0] == args.op:
                 row = p
                 break
-        if not row or len(row) < 5:
+        expected_fields = 7 if tri_mode else 5
+        if not row or len(row) != expected_fields:
             (out / f"{args.op}-VERDICT.txt").write_text(
                 f"OP={args.op} VERDICT=REFUSED-IDENTITY(no-idmap-row)\n"
             )
             print(f"OP={args.op} REFUSED-IDENTITY no-idmap-row", flush=True)
             return 2
-        sv, ss, hv, hs = row[1], row[2], row[3], row[4]
+        pairs = (
+            ((row[1], row[2]), (row[3], row[4]), (row[5], row[6]))
+            if tri_mode else ((row[1], row[2]), (row[3], row[4]))
+        )
 
         def _text(v):
             return _sp.run(
@@ -288,9 +316,11 @@ def main():
                 text=True,
             ).stdout.strip()
 
-        sa, ha = _text(sv), _text(hv)
-        if sa != ss or ha != hs or sa == ha:
-            reason = "sem==hand" if sa == ha else "text-mismatch"
+        actual = [_text(variant) for variant, _ in pairs]
+        mismatch = any(got != expected for got, (_, expected) in zip(actual, pairs))
+        legacy_alias = not tri_mode and actual[0] == actual[1]
+        if mismatch or legacy_alias:
+            reason = "sem==hand" if legacy_alias else "text-mismatch"
             (out / f"{args.op}-VERDICT.txt").write_text(
                 f"OP={args.op} VERDICT=REFUSED-IDENTITY({reason})\n"
             )
@@ -306,54 +336,66 @@ def main():
     rows = []
     covered = 0
     t_all = time.time()
-    all_equal = True
-    witness_bands = []
+    compiler_equal = True
+    semantic_equal = True
+    compiler_witness = []
+    semantic_witness = []
     for k in range(n_bands):
         s = args.start_bit + k * band
         c = min(band, args.start_bit + args.total - s)
         sem_f = out / "bands" / f"b{k:04d}-sem.txt"
         hand_f = out / "bands" / f"b{k:04d}-hand.txt"
-        sem_sha, sem_dt, sem_runs, sem_corr = run_band_leg(
-            args,
-            args.sem_node,
-            s,
-            c,
-            sem_f,
-            out / "bands" / f"b{k:04d}-sem.log",
-            leg="sem",
-        )
-        hand_sha, hand_dt, hand_runs, hand_corr = run_band_leg(
-            args,
-            args.hand_node,
-            s,
-            c,
-            hand_f,
-            out / "bands" / f"b{k:04d}-hand.log",
-            leg="hand",
-        )
+        if tri_mode:
+            selected_f = out / "bands" / f"b{k:04d}-selected.txt"
+            selected_sha, selected_dt, _, _ = run_band_leg(
+                args, args.selected_sem_node, s, c, selected_f,
+                out / "bands" / f"b{k:04d}-selected.log",
+                leg="selected", compiler_options=args.selected_flags,
+            )
+            sem_sha, sem_dt, _, sem_corr = run_band_leg(
+                args, args.baseline_sem_node, s, c, sem_f,
+                out / "bands" / f"b{k:04d}-sem.log", leg="sem",
+                compiler_options=args.baseline_flags, golden=args.golden,
+            )
+            hand_sha, hand_dt, _, hand_corr = run_band_leg(
+                args, args.baseline_hand_node, s, c, hand_f,
+                out / "bands" / f"b{k:04d}-hand.log", leg="hand",
+                compiler_options=args.baseline_flags, golden=args.golden,
+            )
+            compiler_eq = selected_sha == sem_sha
+            compiler_equal &= compiler_eq
+            if not compiler_eq:
+                compiler_witness.append((k, s, c))
+        else:
+            selected_sha = selected_dt = None
+            sem_sha, sem_dt, _, sem_corr = run_band_leg(
+                args, args.sem_node, s, c, sem_f,
+                out / "bands" / f"b{k:04d}-sem.log", leg="sem",
+                compiler_options=os.environ.get("TT_LLK_EXTRA_COMPILER_OPTIONS", ""),
+                golden=args.golden,
+            )
+            hand_sha, hand_dt, _, hand_corr = run_band_leg(
+                args, args.hand_node, s, c, hand_f,
+                out / "bands" / f"b{k:04d}-hand.log", leg="hand",
+                compiler_options=os.environ.get("TT_LLK_EXTRA_COMPILER_OPTIONS", ""),
+                golden=args.golden,
+            )
         if args.golden:
             _fold_leg(corr_legs["sem"], sem_corr)
             _fold_leg(corr_legs["hand"], hand_corr)
         eq = sem_sha == hand_sha
-        all_equal &= eq
+        semantic_equal &= eq
         if not eq:
-            witness_bands.append((k, s, c))
+            semantic_witness.append((k, s, c))
         covered += c
-        rows.append(
-            (
-                k,
-                s,
-                c,
-                sem_sha,
-                hand_sha,
-                "EQ" if eq else "DIFF",
-                f"{sem_dt:.1f}",
-                f"{hand_dt:.1f}",
-            )
-        )
+        rows.append((k, s, c, selected_sha or "-", sem_sha, hand_sha,
+                     "-" if not tri_mode else ("EQ" if compiler_eq else "DIFF"),
+                     "EQ" if eq else "DIFF", f"{selected_dt:.1f}" if tri_mode else "-",
+                     f"{sem_dt:.1f}", f"{hand_dt:.1f}"))
         print(
             f"band {k+1}/{n_bands} [{s},{s+c}) sem={sem_sha[:12]} hand={hand_sha[:12]} "
-            f"{'EQ' if eq else 'DIFF'} ({sem_dt:.0f}+{hand_dt:.0f}s)",
+            f"bc={'EQ' if eq else 'DIFF'} ab="
+            f"{('-' if not tri_mode else ('EQ' if compiler_eq else 'DIFF'))} ",
             flush=True,
         )
         with open(ledger, "w") as fh:
@@ -361,7 +403,9 @@ def main():
                 f"# {args.op} stream sweep; tile_dim={args.tile_dim}; band_bits={args.band_bits}; chip={args.chip}\n"
             )
             fh.write(
-                "band\tstart\tcount\tsem_sha256\thand_sha256\tverdict\tsem_s\thand_s\n"
+                "band\tstart\tcount\tselected_sem_sha256\tbaseline_sem_sha256\t"
+                "baseline_hand_sha256\tcompiler_verdict\tsemantic_verdict\t"
+                "selected_s\tbaseline_sem_s\tbaseline_hand_s\n"
             )
             for row in rows:
                 fh.write("\t".join(str(x) for x in row) + "\n")
@@ -378,7 +422,7 @@ def main():
             f"legs disagree on the input space: {sorted(_observed_space)}"
         )
     space = next(iter(_observed_space), TWO32)
-    if not all_equal:
+    if not semantic_equal:
         verdict = "DIVERGENT"
     elif covered == space:
         verdict = "BIT-EXACT-ALL-INPUTS"
@@ -388,17 +432,35 @@ def main():
         f"OP={args.op} VERDICT={verdict} start={args.start_bit} "
         f"total={args.total} bands={n_bands} covered={covered} "
         f"input_space={space} (exhaustive={covered==space}) "
-        f"wall_s={wall:.1f} witness_bands={witness_bands}"
+        f"wall_s={wall:.1f} witness_bands={semantic_witness}"
     )
     print(summary, flush=True)
     (out / f"{args.op}-VERDICT.txt").write_text(summary + "\n")
+
+    if tri_mode:
+        if not compiler_equal:
+            compiler_verdict = "DIVERGENT"
+        elif covered == space:
+            compiler_verdict = "BIT-EXACT-ALL-INPUTS"
+        else:
+            compiler_verdict = "BIT-EXACT-PARTIAL-%d-OF-2^%d" % (
+                covered, space.bit_length() - 1
+            )
+        compiler_summary = (
+            f"OP={args.op} VERDICT={compiler_verdict} start={args.start_bit} "
+            f"total={args.total} bands={n_bands} covered={covered} "
+            f"input_space={space} (exhaustive={covered==space}) "
+            f"wall_s={wall:.1f} witness_bands={compiler_witness}"
+        )
+        print(f"COMPILER {compiler_summary}", flush=True)
+        (out / f"{args.op}-COMPILER-VERDICT.txt").write_text(compiler_summary + "\n")
 
     numeric_ok = True
     if args.golden:
         numeric_ok = write_correctness_ledger(
             out, args.op, verdict, corr_legs, covered, space
         )
-    return 0 if all_equal and numeric_ok else 1
+    return 0 if (compiler_equal if tri_mode else semantic_equal) and numeric_ok else 1
 
 
 def _new_leg():

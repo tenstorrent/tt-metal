@@ -52,7 +52,9 @@ import argparse, json, os, pathlib, sys
 ap = argparse.ArgumentParser()
 for a in ("--op", "--sem-node", "--hand-node", "--farm", "--venv", "--llk-home",
           "--runner-temp", "--band-bits", "--chip", "--out", "--start-bit",
-          "--total", "--idmap", "--idmap-source", "--golden", "--tile-dim"):
+          "--total", "--idmap", "--idmap-source", "--golden", "--tile-dim",
+          "--selected-sem-node", "--baseline-sem-node", "--baseline-hand-node",
+          "--selected-flags", "--baseline-flags"):
     ap.add_argument(a)
 ns = ap.parse_args()
 with open(os.environ["SHARD_RECORD"], "a") as fh:
@@ -66,6 +68,8 @@ if ns.chip in os.environ.get("DEAD_CHIPS", "").split(","):
 # A diverging slice writes its verdict and THEN exits non-zero, exactly as the
 # real streamers do (`return 0 if all_equal and numeric_ok else 1`).
 diverge = ns.chip in os.environ.get("DIVERGENT_CHIPS", "").split(",")
+compiler_diverge = ns.chip in os.environ.get("COMPILER_DIVERGENT_CHIPS", "").split(",")
+tri = ns.selected_sem_node is not None
 
 out = pathlib.Path(ns.out)
 out.mkdir(parents=True, exist_ok=True)
@@ -94,6 +98,18 @@ if diverge:
     "(full 2^32=%s) wall_s=0.0 witness_bands=%s\\n"
     % (ns.op, verdict, start, total, n_bands, covered, covered == (1 << 32), witness)
 )
+if tri:
+    compiler_verdict = (
+        "DIVERGENT" if compiler_diverge else
+        ("BIT-EXACT-ALL-INPUTS" if covered == (1 << 32)
+         else "BIT-EXACT-PARTIAL-%d-OF-2^32" % covered)
+    )
+    (out / (ns.op + "-COMPILER-VERDICT.txt")).write_text(
+        "OP=%s VERDICT=%s start=%d total=%d bands=%d covered=%d "
+        "witness_bands=%s\\n"
+        % (ns.op, compiler_verdict, start, total, n_bands, covered,
+           "[(0, %d, %d)]" % (start, total) if compiler_diverge else "[]")
+    )
 if ns.golden:
     (out / (ns.op + "-CORRECTNESS-VERDICT.txt")).write_text(
         "OP=%s LOCAL_SEM_ABSOLUTE=PASS LOCAL_HAND_ORACLE_COMPLETE=PASS "
@@ -109,7 +125,7 @@ if ns.golden:
             "max_bf16_ulp=0,within_contract=True,class_ulp=%s\\n"
             % (ns.op, leg, total, classes)
         )
-if diverge:
+if diverge or compiler_diverge:
     sys.exit(1)
 '''
 
@@ -131,7 +147,8 @@ class Farm:
         for name in ("binary_stream_sweep.py", "fp32_stream_sweep.py"):
             (tools / name).write_text(STUB_STREAMER)
         src = "sfpu_binary_test.cpp" if sweep == "binary" else "eltwise_unary_sfpu_test.cpp"
-        for variant, body in (("AAA", b"sem-text\n"), ("BBB", b"hand-text\n")):
+        for variant, body in (("AAA", b"selected-text\n"), ("BBB", b"baseline-sem-text\n"),
+                              ("CCC", b"baseline-hand-text\n")):
             d = root / "farm/build/tt-llk-build/sources" / src / variant / "elf"
             d.mkdir(parents=True)
             (d / "math.elf").write_bytes(body)
@@ -142,7 +159,8 @@ class Farm:
 
 
 def run_shard(
-    tmp: Path, tag: str, sweep: str = "binary", dead: str = "", diverge: str = "", **env
+    tmp: Path, tag: str, sweep: str = "binary", dead: str = "", diverge: str = "",
+    compiler_diverge: str = "", tri: bool = False, **env
 ):
     """Run the real galaxy_shard.sh; return (rc, last_line, [slice argv dicts])."""
     work = tmp / tag
@@ -153,6 +171,7 @@ def run_shard(
     record = work / "calls.jsonl"
     record.write_text("")
     flags_value = env.pop("FLAGS_VALUE", None)
+    tri_selected_flags = env.pop("TRI_SELECTED_FLAGS", "-selected")
     flags_tsv = work / "flags.tsv"
     if flags_value is not None:
         flags_tsv.write_text(f"myop\t{flags_value}\n")
@@ -161,6 +180,7 @@ def run_shard(
         SHARD_RECORD=str(record),
         DEAD_CHIPS=dead,
         DIVERGENT_CHIPS=diverge,
+        COMPILER_DIVERGENT_CHIPS=compiler_diverge,
         OP="myop",
         SWEEP=sweep,
         STAGGER="0",
@@ -172,6 +192,27 @@ def run_shard(
         VENV=str(farm.venv),
         OUT=str(out),
     )
+    if tri:
+        profiles = work / "tri-profiles.tsv"
+        profiles.write_text(
+            "op\tcategory\tfull_space\tstate\ta_selected_sem_node\tselected_flags\t"
+            "b_baseline_sem_node\tbaseline_flags\tc_baseline_hand_node\tc_baseline_flags\n"
+            "myop\tunary_32_exhaustive\t4294967296\tGAP\tsemantic-node\t"
+            f"{tri_selected_flags}\tsemantic-node\t-baseline\thand-node\t-baseline\n"
+        )
+        import hashlib
+        src = "sfpu_binary_test.cpp" if sweep == "binary" else "eltwise_unary_sfpu_test.cpp"
+        def digest(variant):
+            path = farm.farm_root.parent / "farm/build/tt-llk-build/sources" / src / variant / "elf/math.elf"
+            return hashlib.sha256(path.read_bytes()).hexdigest()
+        identity = work / "tri-idmap.tsv"
+        identity.write_text(
+            f"myop\tAAA\t{digest('AAA')}\tBBB\t{digest('BBB')}\tCCC\t{digest('CCC')}\n"
+        )
+        e["TRI_PROFILES"] = str(profiles)
+        e["TRI_IDMAP"] = str(identity)
+        e.pop("SEM", None); e.pop("HAND", None)
+        e.pop("SEM_VARIANT", None); e.pop("HAND_VARIANT", None)
     if flags_value is not None:
         e["FLAGS_TSV"] = str(flags_tsv)
     e.update({k: str(v) for k, v in env.items()})
@@ -318,6 +359,42 @@ def test_divergence_is_reported_as_divergence(tmp: Path) -> None:
     print("PASS a diverging slice reports DIVERGENT, not a dead chip")
 
 
+def test_tri_arm_deployment_gate(tmp: Path) -> None:
+    """A/B is strict even when B/C has a valid numerical admission."""
+    geometry = dict(NPAR=4, BAND_BITS=10, SPACE=1 << 12, FULL_SPACE=1 << 12)
+
+    rc, last, calls, out = run_shard(
+        tmp, "tri-pass", tri=True, TRI_SELECTED_FLAGS="", **geometry
+    )
+    assert rc == 0, last
+    deployment = (out / "myop-DEPLOYMENT-VERDICT.txt").read_text()
+    assert "VERDICT=PASS" in deployment, deployment
+    assert "compiler_gate=BIT-EXACT-ALL-INPUTS" in deployment, deployment
+    assert "numeric_admission=PASS" in deployment, deployment
+    assert {call["selected_flags"] for call in calls} == {""}
+    assert {call["baseline_flags"] for call in calls} == {"-baseline"}
+
+    rc, last, _, out = run_shard(
+        tmp, "tri-compiler-wrong", tri=True, compiler_diverge="1", **geometry
+    )
+    assert rc != 0, "A/B wrong-code was admitted"
+    numeric = (out / "myop-NUMERIC-ADMISSION.tsv").read_text()
+    assert "\tPASS\t" in numeric or "\tPASS\n" in numeric, numeric
+    deployment = (out / "myop-DEPLOYMENT-VERDICT.txt").read_text()
+    assert "VERDICT=FAIL" in deployment, deployment
+    assert "compiler_gate=DIVERGENT" in deployment, deployment
+    assert "numeric_admission=PASS" in deployment, deployment
+
+    rc, last, _, out = run_shard(
+        tmp, "tri-uplift", tri=True, diverge="0,2", **geometry
+    )
+    assert rc == 0, last
+    deployment = (out / "myop-DEPLOYMENT-VERDICT.txt").read_text()
+    assert "VERDICT=PASS" in deployment, deployment
+    assert "semantic_equivalence=DIVERGENT" in deployment, deployment
+    print("PASS tri-arm deployment requires strict A/B and independently admits B/C uplift")
+
+
 def test_degenerate_geometries_refuse(tmp: Path) -> None:
     """A geometry that cannot cover anything must refuse, never 'succeed'."""
     cases = [
@@ -444,6 +521,11 @@ def test_combiner_failed_chips_override_present_verdicts() -> None:
         assert "VERDICT=BIT-EXACT-PARTIAL-10-OF-2^32" in summary, summary
         summary, passed = galaxy_combine.combine(out, 2, 10, "op", True, False, {1})
         assert not passed and "invalid=[1]" in summary, summary
+        summary, passed = galaxy_combine.combine(
+            out, 2, 10, "op", False, False,
+            full_space=1 << 32, require_full_space=True,
+        )
+        assert not passed and "VERDICT=BIT-EXACT-PARTIAL" in summary, summary
     print("PASS combiner honours --failed-chips over a present verdict file")
 
 
@@ -458,6 +540,7 @@ def main() -> int:
         test_reduced_space_cannot_certify(root)
         test_per_op_compiler_flags_reach_every_slice(root)
         test_divergence_is_reported_as_divergence(root)
+        test_tri_arm_deployment_gate(root)
         test_degenerate_geometries_refuse(root)
         test_dead_slice_is_not_covered(root)
         test_stale_verdict_cannot_stand_in_for_a_dead_slice(root)

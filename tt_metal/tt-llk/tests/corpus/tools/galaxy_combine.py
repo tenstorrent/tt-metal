@@ -39,6 +39,8 @@ def combine(
     shard_failed: bool,
     failed_chips: "set[int] | None" = None,
     full_space: int = TWO32,
+    verdict_suffix: str = "-VERDICT.txt",
+    require_full_space: bool = False,
 ):
     covered = 0
     # A zero-sized slice is not a covered slice: with space==0 (or space<npar)
@@ -61,7 +63,7 @@ def combine(
         local_sem_ok = False
     for chip in range(npar):
         slice_dir = out / f"slice-{chip}"
-        verdict_path = slice_dir / f"{op}-VERDICT.txt"
+        verdict_path = slice_dir / f"{op}{verdict_suffix}"
         if not verdict_path.exists():
             invalid.add(chip)
             all_equal = False
@@ -134,7 +136,8 @@ def combine(
         f"numeric_gate={numeric_status} "
         "numeric_contract=LOCAL-SEM-ABSOLUTE-ONLY-GLOBAL-CLASS-ULP-DEFERRED"
     )
-    return summary, verdict.startswith("BIT-EXACT") and local_sem_ok
+    coverage_ok = not require_full_space or covered == full_space
+    return summary, verdict.startswith("BIT-EXACT") and local_sem_ok and coverage_ok
 
 
 def main() -> int:
@@ -150,6 +153,17 @@ def main() -> int:
         default="",
         help="comma-separated chip indices whose slice process exited non-zero; "
         "their ranges are marked invalid regardless of any verdict file present",
+    )
+    parser.add_argument(
+        "--require-full-space",
+        action="store_true",
+        help="return nonzero for a sound but partial bit-exact verdict",
+    )
+    parser.add_argument(
+        "--verdict-suffix",
+        default="-VERDICT.txt",
+        choices=("-VERDICT.txt", "-COMPILER-VERDICT.txt"),
+        help="slice verdict artifact to combine",
     )
     parser.add_argument(
         "--full-space",
@@ -170,6 +184,8 @@ def main() -> int:
         bool(args.shard_rc),
         failed_chips,
         args.full_space,
+        args.verdict_suffix,
+        args.require_full_space,
     )
     print(summary)
     return 0 if passed else 1

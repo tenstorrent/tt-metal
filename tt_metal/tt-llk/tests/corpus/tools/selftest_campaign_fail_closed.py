@@ -45,6 +45,17 @@ def test_resume_provenance() -> None:
             idmap_source="source.cpp",
         )
         record = stream_resume.cache_record(script, args, "sem-node", 0, 16, "sem")
+        selected_record = stream_resume.cache_record(
+            script, args, "sem-node", 0, 16, "selected",
+            compiler_options="-mselected", golden="",
+        )
+        baseline_record = stream_resume.cache_record(
+            script, args, "sem-node", 0, 16, "sem",
+            compiler_options="-mbaseline", golden="op",
+        )
+        assert selected_record["compiler_options"] == "-mselected"
+        assert baseline_record["compiler_options"] == "-mbaseline"
+        assert selected_record != baseline_record
         output = root / "band.txt"
         metadata = root / "band.txt.provenance.json"
         output.write_text("output_sha256=" + "a" * 64 + "\n")
