@@ -319,9 +319,8 @@ def test_a_pinned_declared_tolerance_on_an_unmeasured_cell_does_not_block_the_op
 
 
 def test_a_measurement_with_nowhere_to_go_is_refused_after_writing_the_rest(table):
-    """The emitter keeps a key line's name and header comment and only adds or replaces
-    its `measured by:` clause -- it never writes a key line -- so a new
-    op's block has to be hand-authored first. Dropping the measurement in silence is
+    """The emitter keeps a key line's name and header comment as they are -- it never
+    writes a key line -- so a new op's block has to be hand-authored first. Dropping the measurement in silence is
     what left 17 ops' sampled rows in place looking measured.
 
     Refused only *after* every op that has a key line is written: a whole-table emit
