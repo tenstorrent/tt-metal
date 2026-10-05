@@ -36,57 +36,30 @@ lower is better). `kernels_per_sec_max` is recorded alongside it.
 
 ## How CI runs it
 
-`compile_stress_ci.py` is the driver + regression gate, wired into the
-**(Runtime) Performance Tests** pipeline as `runtime_perf_jit_build`
-(`tests/pipeline_reorg/runtime_perf_tests.yaml`), on `wh_n300_civ2` and
-`bh_p150_perf`. CI config: `--num-kernels 300 --repetitions 3` (≈2–4 min/SKU;
-throughput is CPU-bound at roughly a few hundred kernels/min).
+The `jit_build` suite in [`tests/perf/suites.yaml`](../../../perf/suites.yaml) runs it
+through the generic runtime perf framework ([`tests/perf`](../../../perf/README.md)) as
+`runtime_perf_jit_build` on `wh_n300_civ2` and `bh_p150_perf`. Each of the 3
+repetitions launches the gtest in a fresh process with:
 
-For each of `--repetitions` runs it launches the gtest in a fresh process with:
-
-- a unique per-rep seed (`BASE_SEED + rep`) → every rep is a genuine **cold** compile,
-- an isolated `TT_METAL_CACHE` dir → no disk-cache carryover between reps,
+- a per-rep seed → every rep is a genuine **cold** compile,
+- an isolated `TT_METAL_CACHE` in a scratch dir → no disk-cache carryover between reps,
 - a fresh process → fresh in-memory `JitBuildCache`,
-- `TT_METAL_JIT_SERVER_ENABLE=0` → local compile path only,
+- `TT_METAL_JIT_SERVER_ENABLE=0` and `CCACHE_DISABLE=1` → local, uncached compile path only,
 - `TT_METAL_COMPILE_STRESS_MOCK=0` → real attached device, arch pinned to `$ARCH_NAME`.
 
-It then takes the **fastest** rep (min wall-clock rejects upward CPU-contention
-noise on shared runners) and compares it to a per-arch golden.
+The gtest writes `compile_ms` for case `compile/num_kernels:300` to `$TT_PERF_OUTPUT`;
+the framework takes the **fastest** rep (min wall-clock rejects upward CPU-contention
+noise on shared runners) and compares it to
+[`goldens/jit_build.json`](./goldens/jit_build.json). The job fails if compile time is
+more than 15% slower or 15% faster than the golden; a faster run means the golden
+should be updated with `python -m tests.perf update --from-run <run-id>`.
 
 Run it locally against a build:
 
 ```bash
-./tests/tt_metal/tt_metal/jit_build/compile_stress_ci.py \
-    --arch blackhole --num-kernels 300 --repetitions 3
+python -m pytest --noconftest -p tests.perf.plugin "tests/perf/test_suites.py::test_perf[jit_build]" \
+    --perf-environment=bh_p150_perf
 ```
 
-## Goldens and gating
-
-- [`compile_stress_golden.json`](./compile_stress_golden.json) — Wormhole (`wh_n300_civ2`)
-- [`compile_stress_blackhole_golden.json`](./compile_stress_blackhole_golden.json) — Blackhole (`bh_p150_perf`)
-
-A golden metric set to `null` stays in **record mode**: the value is printed but the
-job is **not** gated on it. A non-null metric is **gated** — the job fails if the
-measured value regresses beyond `tolerance_pct` (default 15%).
-
-Both goldens are **armed on `compile_ms_min`** (15% tolerance), set to the worst
-`compile_ms min` observed across two CI runs per SKU:
-
-| SKU | golden `compile_ms_min` | fails above (~min × 1.15) |
-| --- | --- | --- |
-| `wh_n300_civ2` (wormhole_b0) | 50700 ms | ~58.3 s |
-| `bh_p150_perf` (blackhole)   | 44800 ms | ~51.5 s |
-
-> Blackhole compile is bimodal (~18–20 s with a warm host ccache vs ~43–45 s cold).
-> The golden is anchored to the worst **cold** min so it never false-fails on either
-> regime; a tighter gate needs the ccache bimodality removed (follow-up).
-
-`kernels_per_sec_max` stays `null` on both — the time gate is sufficient and
-throughput is just its inverse.
-
-### Re-tuning the gate
-
-1. Read `compile_ms  min` off the passing CI runs for the SKU.
-2. Update `metrics.compile_ms_min` in the matching golden (use the worst stable
-   min so normal variance doesn't flake the gate).
-3. Adjust `tolerance_pct` if 15% is too tight/loose for observed CI variance.
+The goldens started from the worst cold-compile min observed in CI per SKU
+(50700 ms on Wormhole, 44800 ms on Blackhole).
