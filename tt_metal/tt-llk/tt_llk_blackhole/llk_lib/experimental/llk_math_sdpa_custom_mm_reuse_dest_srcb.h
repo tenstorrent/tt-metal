@@ -122,28 +122,19 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
     static_assert(input_granularity >= 1, "input_granularity must be >= 1");
     constexpr std::uint32_t SFPU_FPU = ckernel::semaphore::UNPACK_MATH_DONE;
     std::uint32_t dest_buffer_base   = get_dest_buffer_base();
-    // The 12-bit MOVD2B DEST row field is added to the DEST target offset: with the source at or above the accumulator
-    // the target is written once per call and the per-k-tile source row rides in the moves.
-    const bool fixed_target        = src_index >= dst_index;
+    // MOVD2B reads DEST row (row field + DEST target + RWC) modulo the 1024 rows, so with the target on the accumulator
+    // the per-k-tile source row rides in the moves wherever the source sits.
     const std::uint32_t src_offset = src_index - dst_index;
-    LLK_ASSERT(!fixed_target || src_offset + kt_dim * 16 <= 4096, "source rows must be addressable from the 12-bit MOVD2B DEST row field");
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD);
-    if (fixed_target)
-    {
-        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + dest_buffer_base);
-    }
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + dest_buffer_base);
     for (std::uint32_t i = 0; i < kt_dim; i++)
     {
-        if (!fixed_target)
-        {
-            TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, src_index + i * 8 * 2 + dest_buffer_base);
-        }
         math::reset_counters(p_setrwc::SET_ABD_F);
         if (i % input_granularity == 0)
         {
             t6_semaphore_wait_on_zero<p_stall::STALL_MATH>(SFPU_FPU);
         }
-        const std::uint32_t row = fixed_target ? src_offset + i * 8 * 2 : 0;
+        const std::uint32_t row = (src_offset + i * 8 * 2) & 0x3ff;
         TT_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 0, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, row + 0);
         TT_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 4, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, row + 4);
         TT_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 8, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, row + 8);
@@ -151,10 +142,6 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
         if (i % input_granularity == input_granularity - 1 || i == kt_dim - 1)
         {
             t6_semaphore_get<p_stall::MATH>(SFPU_FPU);
-        }
-        if (!fixed_target)
-        {
-            TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + dest_buffer_base);
         }
         if (signal_output && i == kt_dim - 1)
         {

@@ -139,25 +139,16 @@ inline void _llk_math_custom_mm_reuse_dest_srcb_(
         "custom_mm_reuse_dest_srcb: in0 tile height must be 1, 2, 4 or 8");
 
     const std::uint32_t dest_buffer_base = get_dest_buffer_base();
-    // Source at or above the accumulator: one DEST target write per call, the source row in the MOVD2B DEST row field.
-    const bool fixed_target        = src_index >= dst_index;
+    // MOVD2B reads DEST row (row field + DEST target + RWC) modulo the 1024 rows, so with the target on the accumulator
+    // the per-k-tile source row rides in the moves wherever the source sits.
     const std::uint32_t src_offset = src_index - dst_index;
-    LLK_ASSERT(
-        !fixed_target || src_offset + kt_dim * src_tile_stride <= 4096, "source rows must be addressable from the 12-bit MOVD2B DEST row field");
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD);
-    if (fixed_target)
-    {
-        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + dest_buffer_base);
-    }
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + dest_buffer_base);
 
     for (std::uint32_t i = 0; i < kt_dim; i++)
     {
-        if (!fixed_target)
-        {
-            TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, src_index + i * src_tile_stride + dest_buffer_base);
-        }
         math::reset_counters(p_setrwc::SET_ABD_F);
-        const std::uint32_t row = fixed_target ? src_offset + i * src_tile_stride : 0;
+        const std::uint32_t row = (src_offset + i * src_tile_stride) & 0x3ff;
 
         // DEST -> SrcB.  MVMULs 1/2 read SrcB rows 0..7 (K cols 0..15) and
         // MVMULs 3/4 read rows 8..15 (K cols 16..31), so source face0 lands at
@@ -183,10 +174,6 @@ inline void _llk_math_custom_mm_reuse_dest_srcb_(
             TT_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 8, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, row + 16);
         }
 
-        if (!fixed_target)
-        {
-            TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + dest_buffer_base);
-        }
         for (std::uint32_t j = 0; j < nt_dim; j++)
         {
             lltt::replay(CUSTOM_MM_REUSE_REPLAY_OFFSET, CUSTOM_MM_REUSE_REPLAY_LEN);
