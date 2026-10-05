@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import os
 
 import pytest
@@ -10,6 +11,7 @@ import torch
 from loguru import logger
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.ttnn.utils_for_testing import assert_no_unflushed_noc_atomics
 
 
 def create_fabric_router_config(max_payload_size):
@@ -91,6 +93,7 @@ def run_all_to_all_impl(
     reuse_inputs=False,
     cluster_axis=None,
     worker_core_range=None,
+    check_noc_atomics=False,
 ):
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
@@ -195,22 +198,30 @@ def run_all_to_all_impl(
     else:
         entries_before = mesh_device.num_program_cache_entries()
         seen_links = set()
-        for i in range(num_iters):
-            links = num_links[i] if isinstance(num_links, (list, tuple)) else num_links
-            tt_out_tensor = ttnn.experimental.all_to_all_async_generic(
-                input_tensor_mesh_list[i if not reuse_inputs else 0],
-                in_dim=in_dim,
-                out_dim=out_dim,
-                num_links=links,
-                memory_config=output_mem_config,
-                topology=topology,
-                subdevice_id=worker_sub_device_id,
-                cluster_axis=cluster_axis,
+        noc_check = (
+            assert_no_unflushed_noc_atomics(
+                mesh_device, min_atomic_events=1, sub_device_ids=sub_device_stall_group
             )
-            tt_out_tensor_list.append(tt_out_tensor)
-            if isinstance(num_links, (list, tuple)):
-                seen_links.add(links)
-                assert mesh_device.num_program_cache_entries() == entries_before + len(seen_links)
+            if check_noc_atomics
+            else contextlib.nullcontext()
+        )
+        with noc_check:
+            for i in range(num_iters):
+                links = num_links[i] if isinstance(num_links, (list, tuple)) else num_links
+                tt_out_tensor = ttnn.experimental.all_to_all_async_generic(
+                    input_tensor_mesh_list[i if not reuse_inputs else 0],
+                    in_dim=in_dim,
+                    out_dim=out_dim,
+                    num_links=links,
+                    memory_config=output_mem_config,
+                    topology=topology,
+                    subdevice_id=worker_sub_device_id,
+                    cluster_axis=cluster_axis,
+                )
+                tt_out_tensor_list.append(tt_out_tensor)
+                if isinstance(num_links, (list, tuple)):
+                    seen_links.add(links)
+                    assert mesh_device.num_program_cache_entries() == entries_before + len(seen_links)
 
         logger.info(f"Waiting for op")
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
@@ -363,8 +374,8 @@ def test_all_to_all(
 
 
 @pytest.mark.skipif(
-    os.getenv("TT_METAL_WATCHER") != "1",
-    reason="Set TT_METAL_WATCHER=1 to check kernel exit state",
+    os.getenv("TT_METAL_NOC_DEBUG_DUMP") != "1",
+    reason="Set TT_METAL_NOC_DEBUG_DUMP=1 to check NoC atomic barriers",
 )
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
@@ -372,7 +383,7 @@ def test_all_to_all(
     [{"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
-def test_generic_all_to_all_has_clean_kernel_exit(mesh_device):
+def test_generic_all_to_all_drains_noc_atomics(mesh_device):
     run_all_to_all_impl(
         mesh_device,
         mesh_device.get_num_devices(),
@@ -389,6 +400,8 @@ def test_generic_all_to_all_has_clean_kernel_exit(mesh_device):
         trace_mode=False,
         do_check=True,
         cluster_axis=1,
+        worker_core_range=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+        check_noc_atomics=True,
     )
 
 
