@@ -19,6 +19,7 @@ from ...layers.normalization import DistributedLayerNorm, RMSNorm
 from ...utils import cache
 from ...utils.padding import PaddingConfig
 from ...utils.substate import rename_substate
+from ...utils.tensor import from_torch
 
 if TYPE_CHECKING:
     from ...parallel.config import DiTParallelConfig
@@ -239,6 +240,38 @@ class QwenImageCheckpoint:
         # The torch pos embedding is reused on CPU at call time; keep the reference.
         self.pos_embed = torch_transformer.pos_embed
         self.patch_size: int = self._config.patch_size
+
+    def rope_tables(
+        self,
+        *,
+        latents_height: int,
+        latents_width: int,
+        prompt_sequence_length: int,
+        device: ttnn.MeshDevice,
+        sp_axis: int,
+    ) -> tuple[tuple[ttnn.Tensor, ttnn.Tensor], tuple[ttnn.Tensor, ttnn.Tensor]]:
+        """Compute the RoPE inputs of ``QwenImageTransformer.forward`` and upload them to ``device``.
+
+        Returns:
+            The ``spatial_rope`` and ``prompt_rope`` cos/sin pairs. The spatial ones are sharded
+            along ``sp_axis`` and the prompt ones are replicated.
+        """
+        p = self.patch_size
+        spatial_freqs, prompt_freqs = self.pos_embed(
+            video_fhw=(1, latents_height // p, latents_width // p),
+            device="cpu",
+            max_txt_seq_len=prompt_sequence_length,
+        )
+
+        spatial_rope = (
+            from_torch(spatial_freqs.real.repeat_interleave(2, dim=-1), device=device, mesh_axes=[sp_axis, None]),
+            from_torch(spatial_freqs.imag.repeat_interleave(2, dim=-1), device=device, mesh_axes=[sp_axis, None]),
+        )
+        prompt_rope = (
+            from_torch(prompt_freqs.real.repeat_interleave(2, dim=-1), device=device),
+            from_torch(prompt_freqs.imag.repeat_interleave(2, dim=-1), device=device),
+        )
+        return spatial_rope, prompt_rope
 
     def build(
         self,

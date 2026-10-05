@@ -129,9 +129,11 @@ def test_transformer(
         timestep = torch.full([batch_size], fill_value=500)
 
         # prepare ROPE
-        img_shapes = [[(1, latents_height // patch_size, latents_width // patch_size)]] * batch_size
-        txt_seq_lens = [prompt_seq_len] * batch_size
-        spatial_rope, prompt_rope = torch_model.pos_embed.forward(img_shapes, txt_seq_lens, "cpu")
+        spatial_rope, prompt_rope = torch_model.pos_embed.forward(
+            video_fhw=(1, latents_height // patch_size, latents_width // patch_size),
+            device="cpu",
+            max_txt_seq_len=prompt_seq_len,
+        )
 
         spatial_rope_cos = spatial_rope.real.repeat_interleave(2, dim=-1)
         spatial_rope_sin = spatial_rope.imag.repeat_interleave(2, dim=-1)
@@ -165,8 +167,7 @@ def test_transformer(
             encoder_hidden_states=prompt,
             encoder_hidden_states_mask=None,  # None marks that this value is never used
             timestep=timestep / 1000,
-            img_shapes=img_shapes,
-            txt_seq_lens=txt_seq_lens,
+            img_shapes=[[(1, latents_height // patch_size, latents_width // patch_size)]] * batch_size,
         ).sample
 
     tt_output_torch = tensor.to_torch(tt_output, mesh_axes=[None, sp_axis, None])

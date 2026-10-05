@@ -10,7 +10,7 @@ from loguru import logger
 
 import ttnn
 
-from ....parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
+from ....parallel.config import DiTParallelConfig, EncoderParallelConfig
 from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenImagePipelineConfig
 from ....utils.test import line_params_req_exact_devices
 
@@ -27,11 +27,11 @@ from ....utils.test import line_params_req_exact_devices
 )
 @pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 50)])
 @pytest.mark.parametrize(
-    "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
+    "mesh_device, cfg, sp, tp, encoder_tp, topology, num_links",
     [
-        [(2, 2), (2, 0), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 1],
-        [(2, 4), (2, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
-        [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
+        [(2, 2), (2, 0), (1, 0), (2, 1), (2, 1), ttnn.Topology.Linear, 1],
+        [(2, 4), (2, 0), (1, 0), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
+        [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
         "2x2sp1tp2",
@@ -64,7 +64,6 @@ def test_qwenimage_pipeline(
     sp: tuple[int, int],
     tp: tuple[int, int],
     encoder_tp: tuple[int, int],
-    vae_tp: tuple[int, int],
     topology: ttnn.Topology,
     num_links: int,
     no_prompt: bool,
@@ -83,7 +82,6 @@ def test_qwenimage_pipeline(
             mesh_shape=mesh_device.shape,
             dit_parallel_config=DiTParallelConfig.from_tuples(cfg=cfg, sp=sp, tp=tp),
             encoder_parallel_config=EncoderParallelConfig.from_tuple(encoder_tp),
-            vae_parallel_config=VAEParallelConfig.from_tuple(vae_tp),
             use_torch_text_encoder=use_torch_text_encoder,
             use_torch_vae_decoder=False,
             num_links=num_links,
