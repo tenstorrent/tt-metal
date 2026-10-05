@@ -278,8 +278,10 @@ def save_checkpoint(
     Every optimizer state tensor keyed by a parameter in `model_params` must gather to that parameter's shape,
     else `CheckpointShapeError` is raised and no file is written (the `.tmp` is removed): a mismatch means one
     side's topology label does not describe its data and the file would hold truncated state. State keyed by a
-    name that is not in `model_params` is written as-is, and one summary warning after the save counts such leaves
-    and names up to three; an optimizer saved without `model_params` cannot be cross-checked (warned once).
+    name that is not in `model_params` is written as-is, and one summary warning, issued before the file is
+    committed, counts such leaves and names up to three; an optimizer saved without `model_params` warns once for
+    the leaves `expected_shapes` does not cover (nothing else can cross-check them). Any failure, the final rename
+    included, removes the `.tmp`.
 
     `expected_shapes` maps parameter name -> full (gathered) shape and is held against the matching model params
     and optimizer leaves. It is the only check that also catches a parameter whose own label is wrong (both the
@@ -298,11 +300,15 @@ def save_checkpoint(
         manifest["optimizer"], optimizer_tensors = _walk(optimizer.get_state_dict())
         records.extend(("optimizer", *entry) for entry in optimizer_tensors)
         if model_params is None:
-            warnings.warn(
-                "checkpointing: saving an optimizer without model_params, so its state tensors cannot be checked "
-                "against their parameters' shapes (a mislabelled moment would be saved truncated)",
-                stacklevel=2,
-            )
+            # Leaves named in `expected_shapes` are still held to it; only the rest go unchecked.
+            uncovered = [name for _, name, _ in optimizer_tensors if name not in (expected_shapes or {})]
+            if uncovered:
+                warnings.warn(
+                    f"checkpointing: saving an optimizer without model_params, so {len(uncovered)} of its state "
+                    "tensors cannot be checked against their parameters' shapes (a mislabelled moment would be saved "
+                    "truncated)",
+                    stacklevel=2,
+                )
     if expected_shapes is not None and (unknown := set(expected_shapes) - {name for _, _, name, _ in records}):
         # Before any gather or file: a typo in expected_shapes must neither cost a full gather nor pass vacuously.
         raise ValueError(f"checkpointing: expected_shapes names tensors not in this checkpoint: {sorted(unknown)}")
@@ -322,18 +328,20 @@ def save_checkpoint(
                 ):
                     unchecked.append(_leaf_label((group, *sub_path), name))
                 pickle.dump(data, f)
+        if unchecked and model_params is not None:
+            # Before the rename: with warnings configured as errors this raises inside the transaction, so the
+            # previous checkpoint stays in place and the .tmp is removed, not a committed file plus an exception.
+            warnings.warn(
+                f"checkpointing: {len(unchecked)} optimizer state tensor(s) are keyed by names that are not parameters "
+                f"of the model being saved, so their gathered shapes could not be cross-checked; saved as-is: "
+                f"{', '.join(unchecked[:3])}{' ...' if len(unchecked) > 3 else ''}",
+                stacklevel=2,
+            )
+        os.replace(tmp_path, path)  # atomic; inside the try so a failed rename leaves no .tmp behind either
     except BaseException:
         with contextlib.suppress(OSError):
-            os.remove(tmp_path)  # a rejected or interrupted save leaves no half-written file behind
+            os.remove(tmp_path)  # a rejected, interrupted or uncommitted save leaves no half-written file behind
         raise
-    os.replace(tmp_path, path)
-    if unchecked and model_params is not None:
-        warnings.warn(
-            f"checkpointing: {len(unchecked)} optimizer state tensor(s) are keyed by names that are not parameters of "
-            f"the model being saved, so their gathered shapes could not be cross-checked; saved as-is: "
-            f"{', '.join(unchecked[:3])}{' ...' if len(unchecked) > 3 else ''}",
-            stacklevel=2,
-        )
 
 
 def _read_record0(f) -> dict:
