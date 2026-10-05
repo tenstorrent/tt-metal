@@ -54,7 +54,8 @@ for a in ("--op", "--sem-node", "--hand-node", "--farm", "--venv", "--llk-home",
           "--runner-temp", "--band-bits", "--chip", "--out", "--start-bit",
           "--total", "--idmap", "--idmap-source", "--golden", "--tile-dim",
           "--selected-sem-node", "--baseline-sem-node", "--baseline-hand-node",
-          "--selected-flags", "--baseline-flags"):
+          "--selected-flags", "--baseline-flags", "--selected-runner-temp",
+          "--baseline-sem-runner-temp", "--baseline-hand-runner-temp"):
     ap.add_argument(a)
 ns = ap.parse_args()
 with open(os.environ["SHARD_RECORD"], "a") as fh:
@@ -202,12 +203,22 @@ def run_shard(
         )
         import hashlib
         src = "sfpu_binary_test.cpp" if sweep == "binary" else "eltwise_unary_sfpu_test.cpp"
-        def digest(variant):
-            path = farm.farm_root.parent / "farm/build/tt-llk-build/sources" / src / variant / "elf/math.elf"
+        tri_build = farm.farm_root / "build/tri-arms/myop"
+        for arm, variant, body in (
+            ("a", "COLLIDE", b"selected-same-variant\n"),
+            ("b", "COLLIDE", b"baseline-same-variant\n"),
+            ("c", "CCC", b"baseline-hand\n"),
+        ):
+            elf = tri_build / arm / "tt-llk-build/sources" / src / variant / "elf/math.elf"
+            elf.parent.mkdir(parents=True)
+            elf.write_bytes(body)
+        def digest(arm, variant):
+            path = tri_build / arm / "tt-llk-build/sources" / src / variant / "elf/math.elf"
             return hashlib.sha256(path.read_bytes()).hexdigest()
         identity = work / "tri-idmap.tsv"
         identity.write_text(
-            f"myop\tAAA\t{digest('AAA')}\tBBB\t{digest('BBB')}\tCCC\t{digest('CCC')}\n"
+            f"myop\tCOLLIDE\t{digest('a', 'COLLIDE')}\t"
+            f"COLLIDE\t{digest('b', 'COLLIDE')}\tCCC\t{digest('c', 'CCC')}\n"
         )
         e["TRI_PROFILES"] = str(profiles)
         e["TRI_IDMAP"] = str(identity)
@@ -373,6 +384,12 @@ def test_tri_arm_deployment_gate(tmp: Path) -> None:
     assert "numeric_admission=PASS" in deployment, deployment
     assert {call["selected_flags"] for call in calls} == {""}
     assert {call["baseline_flags"] for call in calls} == {"-baseline"}
+    for call in calls:
+        assert call["selected_runner_temp"] != call["baseline_sem_runner_temp"]
+        assert call["baseline_sem_runner_temp"] != call["baseline_hand_runner_temp"]
+    identity = (tmp / "tri-pass" / "tri-idmap.tsv").read_text().strip().split("\t")
+    assert identity[1] == identity[3] == "COLLIDE"
+    assert identity[2] != identity[4], "same variant name lost distinct A/B text"
 
     rc, last, _, out = run_shard(
         tmp, "tri-compiler-wrong", tri=True, compiler_diverge="1", **geometry
@@ -392,7 +409,7 @@ def test_tri_arm_deployment_gate(tmp: Path) -> None:
     deployment = (out / "myop-DEPLOYMENT-VERDICT.txt").read_text()
     assert "VERDICT=PASS" in deployment, deployment
     assert "semantic_equivalence=DIVERGENT" in deployment, deployment
-    print("PASS tri-arm deployment requires strict A/B and independently admits B/C uplift")
+    print("PASS tri-arm deployment isolates colliding A/B variants and independently admits B/C uplift")
 
 
 def test_degenerate_geometries_refuse(tmp: Path) -> None:

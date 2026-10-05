@@ -15,16 +15,17 @@ text_of(){ "$OBJCOPY" -O binary --only-section=.text "$1" /dev/stdout 2>/dev/nul
 
 # Tri-arm producer. Compile each arm alone so A/B (same semantic node, different
 # compiler profiles) cannot be mislabeled by a compile-together invocation.
-# Merge the three keyed variants into one staged tt-llk-build and emit the map
-# consumed by galaxy_shard.sh/streamers.
+# Stage each arm in its own immutable build root. The harness variant key does
+# not include compiler flags, so A/B may legitimately have the same variant
+# directory name while containing different code.
 if [ -n "${TRI_PROFILES:-}" ]; then
   [ -f "$TRI_PROFILES" ] || { echo "FATAL: no TRI_PROFILES=$TRI_PROFILES" >&2; exit 2; }
-  STAGE_BUILD="${STAGE_BUILD:-$OUT/tt-llk-build}"
-  if [ -d "$STAGE_BUILD" ] && [ -n "$(find "$STAGE_BUILD" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
-    echo "FATAL: STAGE_BUILD must be empty: $STAGE_BUILD" >&2
+  STAGE_ROOT="${STAGE_ROOT:-$OUT/tri-arms}"
+  if [ -d "$STAGE_ROOT" ] && [ -n "$(find "$STAGE_ROOT" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+    echo "FATAL: STAGE_ROOT must be empty: $STAGE_ROOT" >&2
     exit 2
   fi
-  mkdir -p "$STAGE_BUILD"
+  mkdir -p "$STAGE_ROOT"
   TRI_MAP="${TRI_IDMAP_OUT:-$OUT/TRI-IDENTITY-MAP.tsv}"
   : > "$TRI_MAP"
   while IFS= read -r profile_row; do
@@ -63,7 +64,8 @@ if [ -n "${TRI_PROFILES:-}" ]; then
       hash=$(text_of "$elf")
       [ -n "$variant" ] && [ -n "$hash" ] || { rm -rf -- "$rt"; exit 1; }
       variants+=("$variant"); hashes+=("$hash")
-      cp -a "$rt/tt-llk-build/." "$STAGE_BUILD/"
+      mkdir -p "$STAGE_ROOT/$op/$arm"
+      cp -a "$rt/tt-llk-build" "$STAGE_ROOT/$op/$arm/"
       rm -rf -- "$rt"
     done
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$op" \
@@ -71,7 +73,7 @@ if [ -n "${TRI_PROFILES:-}" ]; then
       "${variants[2]}" "${hashes[2]}" >> "$TRI_MAP"
   done < "$TRI_PROFILES"
   echo "tri identity map -> $TRI_MAP"
-  echo "staged build -> $STAGE_BUILD"
+  echo "staged arm builds -> $STAGE_ROOT/<op>/{a,b,c}/tt-llk-build"
   exit 0
 fi
 

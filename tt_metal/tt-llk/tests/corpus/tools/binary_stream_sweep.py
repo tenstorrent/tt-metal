@@ -120,7 +120,7 @@ def validate_corr(corr, args, leg, count):
 
 def run_band_leg(
     args, node, start, count, out_sha_file, log_file, leg=None,
-    compiler_options="", golden="",
+    compiler_options="", golden="", runner_temp=None,
 ):
     """One pytest invocation: stream joint [start,start+count) for one leg.
 
@@ -132,6 +132,7 @@ def run_band_leg(
     cache_record = stream_resume.cache_record(
         Path(__file__), args, node, start, count, leg or "",
         compiler_options=compiler_options, golden=golden,
+        runner_temp=runner_temp,
     )
     if stream_resume.require_matching_cache(out_sha_file, metadata, cache_record):
         txt = out_sha_file.read_text()
@@ -149,7 +150,7 @@ def run_band_leg(
         CHIP_ARCH="blackhole",
         SHORT_ARCH="bh",
         LLK_HOME=args.llk_home,
-        RUNNER_TEMP=args.runner_temp,
+        RUNNER_TEMP=runner_temp or args.runner_temp,
         PYTHONUNBUFFERED="1",
         # Map --chip to the physical device (per-chip parallelism: TT_VISIBLE_DEVICES=n +
         # flock /tmp/tt-dev-n.lock lets N orchestrators run concurrently on N chips).
@@ -206,7 +207,6 @@ def _identity_gate(args, out):
     if not args.idmap:
         return True
     here = Path(__file__).resolve().parent
-    root = Path(args.runner_temp) / "tt-llk-build/sources" / args.idmap_source
     row = None
     for line in open(args.idmap):
         p = line.rstrip("\n").split("\t")
@@ -225,14 +225,24 @@ def _identity_gate(args, out):
         if args.tri_mode else ((row[1], row[2]), (row[3], row[4]))
     )
 
-    def _text(v):
+    roots = (
+        (
+            Path(args.selected_runner_temp) / "tt-llk-build/sources" / args.idmap_source,
+            Path(args.baseline_sem_runner_temp) / "tt-llk-build/sources" / args.idmap_source,
+            Path(args.baseline_hand_runner_temp) / "tt-llk-build/sources" / args.idmap_source,
+        )
+        if args.tri_mode else
+        (Path(args.runner_temp) / "tt-llk-build/sources" / args.idmap_source,) * 2
+    )
+
+    def _text(root, v):
         return subprocess.run(
             [args.venv, str(here / "elf_text_sha.py"), str(root / v / "elf/math.elf")],
             capture_output=True,
             text=True,
         ).stdout.strip()
 
-    actual = [_text(variant) for variant, _ in pairs]
+    actual = [_text(root, variant) for root, (variant, _) in zip(roots, pairs)]
     mismatch = any(got != expected for got, (_, expected) in zip(actual, pairs))
     legacy_alias = not args.tri_mode and actual[0] == actual[1]
     if mismatch or legacy_alias:
@@ -258,7 +268,10 @@ def main():
     ap.add_argument("--farm", required=True)
     ap.add_argument("--venv", required=True)
     ap.add_argument("--llk-home", required=True)
-    ap.add_argument("--runner-temp", required=True)
+    ap.add_argument("--runner-temp")
+    ap.add_argument("--selected-runner-temp")
+    ap.add_argument("--baseline-sem-runner-temp")
+    ap.add_argument("--baseline-hand-runner-temp")
     ap.add_argument("--band-bits", type=int, default=26)
     ap.add_argument("--chip", default="0")
     ap.add_argument("--timeout", type=int, default=3600)
@@ -291,10 +304,15 @@ def main():
             ap.error("tri-arm mode requires explicit selected and baseline flags")
         if args.selected_sem_node != args.baseline_sem_node:
             ap.error("A/B compiler gate requires the identical semantic node")
+        if not all((args.selected_runner_temp, args.baseline_sem_runner_temp,
+                    args.baseline_hand_runner_temp)):
+            ap.error("tri-arm mode requires three arm-specific runner temps")
         if args.sem_node is not None or args.hand_node is not None:
             ap.error("do not mix legacy --sem/--hand-node with tri-arm nodes")
     elif args.sem_node is None or args.hand_node is None:
         ap.error("provide both legacy --sem-node/--hand-node or all three tri-arm nodes")
+    elif args.runner_temp is None:
+        ap.error("legacy two-arm mode requires --runner-temp")
     args.tri_mode = tri_mode
 
     out = Path(args.out).resolve()  # absolute: run_band_leg runs pytest with cwd=farm
@@ -327,16 +345,19 @@ def main():
                 args, args.selected_sem_node, s, c, selected_f,
                 out / "bands" / f"b{k:04d}-selected.log",
                 leg="selected", compiler_options=args.selected_flags,
+                runner_temp=args.selected_runner_temp,
             )
             sem_sha, sem_dt, _, sem_corr = run_band_leg(
                 args, args.baseline_sem_node, s, c, sem_f,
                 out / "bands" / f"b{k:04d}-sem.log", leg="sem",
                 compiler_options=args.baseline_flags, golden=args.golden,
+                runner_temp=args.baseline_sem_runner_temp,
             )
             hand_sha, hand_dt, _, hand_corr = run_band_leg(
                 args, args.baseline_hand_node, s, c, hand_f,
                 out / "bands" / f"b{k:04d}-hand.log", leg="hand",
                 compiler_options=args.baseline_flags, golden=args.golden,
+                runner_temp=args.baseline_hand_runner_temp,
             )
             compiler_eq = selected_sha == sem_sha
             compiler_equal &= compiler_eq

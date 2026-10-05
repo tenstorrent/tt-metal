@@ -140,7 +140,17 @@ with `build_identity_gate.sh`, then run:
 `TRI_IDMAP` binds A/B/C to their staged variant and `.text` hash. Resume
 records also contain the arm, node, exact flags, golden mode, and identity-map
 hash, so data cannot move between profiles. The tri producer refuses a
-non-empty `STAGE_BUILD`; callers must choose a fresh staging directory.
+non-empty `STAGE_ROOT`; callers must choose a fresh staging directory. Its
+layout is `<STAGE_ROOT>/<op>/{a,b,c}/tt-llk-build`; point
+`TRI_BUILD_ROOT` at `STAGE_ROOT` when it is not the default
+`$FARM_ROOT/build/tri-arms`.
+
+The arm directories are required, not cosmetic. The harness variant key does
+not contain compiler flags, so A and B commonly have the same variant name.
+Putting them in one build tree makes the later compile overwrite the earlier
+ELF. Each slice copies the three arm roots separately and passes a distinct
+runner temp to each compile-consumer invocation; the resume record binds that
+root together with its exact flag string and identity map.
 
 With `GOLDEN=1` (the default), `<op>-VERDICT.txt` independently records
 `BIT-EXACT` or `DIVERGENT`; `<op>-NUMERIC-ADMISSION.{json,tsv}` records oracle

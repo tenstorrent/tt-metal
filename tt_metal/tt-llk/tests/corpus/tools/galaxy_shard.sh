@@ -52,6 +52,7 @@ FULL_SPACE="${FULL_SPACE:-4294967296}"
 PYDIR="$FARM_ROOT/tests/python_tests"
 TOOLS="$FARM_ROOT/tests/corpus/tools"
 BUILD="$FARM_ROOT/build"
+TRI_BUILD_ROOT="${TRI_BUILD_ROOT:-$BUILD/tri-arms}"
 LLK_HOME="$FARM_ROOT/tests"
 
 case "$SWEEP" in
@@ -203,9 +204,13 @@ _find_elf_anywhere() {
     | LC_ALL=C sort | head -1
 }
 if [ "$TRI_MODE" -eq 1 ]; then
-  OBJ_A=$(_find_elf "$A_VARIANT"); [ -n "$OBJ_A" ] || OBJ_A=$(_find_elf_anywhere "$A_VARIANT")
-  OBJ_B=$(_find_elf "$B_VARIANT"); [ -n "$OBJ_B" ] || OBJ_B=$(_find_elf_anywhere "$B_VARIANT")
-  OBJ_C=$(_find_elf "$C_VARIANT"); [ -n "$OBJ_C" ] || OBJ_C=$(_find_elf_anywhere "$C_VARIANT")
+  _find_tri_elf() {
+    find "$TRI_BUILD_ROOT/$OP/$1/tt-llk-build/sources/$IDMAP_SOURCE" \
+      -path "*${2}/elf/math.elf" 2>/dev/null | LC_ALL=C sort | head -1
+  }
+  OBJ_A=$(_find_tri_elf a "$A_VARIANT")
+  OBJ_B=$(_find_tri_elf b "$B_VARIANT")
+  OBJ_C=$(_find_tri_elf c "$C_VARIANT")
   sha_a=$("$VENV" "$TOOLS/elf_text_sha.py" "$OBJ_A" 2>/dev/null)
   sha_b=$("$VENV" "$TOOLS/elf_text_sha.py" "$OBJ_B" 2>/dev/null)
   sha_c=$("$VENV" "$TOOLS/elf_text_sha.py" "$OBJ_C" 2>/dev/null)
@@ -278,7 +283,18 @@ chips=()
 for k in $(seq 0 $((NPAR-1))); do
   RT="$RUN_ROOT/rt-$k"
   mkdir -p "$RT"
-  cp -a "$BUILD/tt-llk-build" "$RT/"
+  if [ "$TRI_MODE" -eq 1 ]; then
+    for arm in a b c; do
+      mkdir -p "$RT/$arm"
+      cp -a "$TRI_BUILD_ROOT/$OP/$arm/tt-llk-build" "$RT/$arm/"
+    done
+    runner_args=(--selected-runner-temp "$RT/a"
+                 --baseline-sem-runner-temp "$RT/b"
+                 --baseline-hand-runner-temp "$RT/c")
+  else
+    cp -a "$BUILD/tt-llk-build" "$RT/"
+    runner_args=(--runner-temp "$RT")
+  fi
   start=$(( k * SLICE ))
   sdir="$OUT/slice-$k"
   # A slice verdict left by an earlier run must never stand in for THIS run's
@@ -290,7 +306,7 @@ for k in $(seq 0 $((NPAR-1))); do
   ( SFPU_WAIT_TIMEOUT="${SFPU_WAIT_TIMEOUT:-600}" \
     "$VENV" "$STREAMER" \
       --op "$OP" "${arm_args[@]}" \
-      --farm "$PYDIR" --venv "$VENV" --llk-home "$LLK_HOME" --runner-temp "$RT" \
+      --farm "$PYDIR" --venv "$VENV" --llk-home "$LLK_HOME" "${runner_args[@]}" \
       --band-bits "$BAND_BITS" --chip "$k" --start-bit "$start" --total "$SLICE" \
       --out "$sdir" \
       ${idmap_args[@]+"${idmap_args[@]}"} \

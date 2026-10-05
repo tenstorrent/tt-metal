@@ -43,6 +43,7 @@ def cache_record(
     *,
     compiler_options: str | None = None,
     golden: str | None = None,
+    runner_temp: str | None = None,
 ) -> dict:
     idmap = Path(args.idmap).resolve() if args.idmap else None
     farm = Path(args.farm).resolve()
@@ -58,7 +59,7 @@ def cache_record(
         "python_version": sys.version,
         "pytest_python": str(venv),
         "pytest_python_sha256": sha256_file(venv),
-        "runner_temp": str(Path(args.runner_temp).resolve()),
+        "runner_temp": str(Path(runner_temp or args.runner_temp).resolve()),
         "llk_home": str(Path(args.llk_home).resolve()),
         "chip": str(args.chip),
         "op": args.op,
