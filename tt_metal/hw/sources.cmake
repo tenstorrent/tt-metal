@@ -401,4 +401,5 @@ set(HW_JIT_API_HEADERS
     toolchain/erisc-b0-app-sections.ld
     toolchain/erisc-b0-memory.ld
     toolchain/erisc-b0-kernel.ld
+    inc/api/compute/rsqrt_bw.h
 )
