@@ -174,3 +174,13 @@
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: syseng
   budget_type: integration
+
+- name: didt_mm_mcast_write_ack_failure
+  cmd: pytest tests/didt/test_mm_mcast_write_ack_failure.py::test_mm_mcast_write_ack_failure_scan
+  skus:
+    bh_p150b_civ2:
+      timeout: 5
+    bh_p300:
+      timeout: 5
+  team: syseng
+  budget_type: integration
