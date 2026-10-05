@@ -61,6 +61,9 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init(
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, ckernel::PackMode::Default>(out_cb_id)));
 }
 
+// load_replay = false reuses the unpack replay program of a sdpa_custom_mm_block_init_short with no other unpack init
+// since, whose reuse blocks this op runs.
+template <bool load_replay = true>
 ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -68,7 +71,7 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
     const std::uint32_t transpose = 0,
     std::uint32_t kt_dim = 1,
     std::uint32_t nt_dim = 1) {
-    UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init(in0_cb_id, in1_cb_id, transpose, nt_dim)));
+    UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init<load_replay>(in0_cb_id, in1_cb_id, transpose, nt_dim)));
     MATH((llk_math_sdpa_custom_mm_reuse_dest_srcb_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, kt_dim)));
 }
 

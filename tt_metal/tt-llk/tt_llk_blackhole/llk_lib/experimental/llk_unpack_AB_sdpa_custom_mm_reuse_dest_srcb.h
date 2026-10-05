@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "experimental/llk_unpack_AB_custom_mm.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -25,9 +26,9 @@ using namespace ckernel::unpacker;
 //   SCRATCH_SEC0 = block_increment (advance to next tile within a k-row)
 //   SCRATCH_SEC1 = inner_increment (jump from end of one k-row to start of next)
 //
-// The replay buffer is 30 instructions, containing 9 block_increment
+// The replay program is the custom_mm unpack program's reuse blocks (entries 5 to 31): 8 block_increment
 // reuse blocks followed by 1 inner_increment reuse block (3 insns each).
-// The MOP template selects sliding windows into this buffer to cover any
+// The MOP template selects sliding windows into them to cover any
 // nt_dim from 1 to 16. Each MOP iteration covers 2 k-rows (via B-mode or
 // halo-mode), and kt_dim/2 MOP iterations cover the full inner dimension.
 //
@@ -36,35 +37,25 @@ using namespace ckernel::unpacker;
 // - nt_dim: 1 to 16
 // - kt_dim: even number from 2 to 256 (inclusive)
 // - kernel_broadcast_a = 0, kernel_broadcast_b = 0
+template <bool load_replay = true>
 inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std::uint32_t nt_dim)
 {
-    // Replay buffer layout (30 instructions):
-    //   [0-26]:  9 reuse blocks with block_increment (3 insns each)
-    //   [27-29]: 1 final reuse block with inner_increment (3 insns)
+    // The replay program is the reuse blocks of the custom_mm unpack program, at the same entries (5 to 31):
+    //   [5-28]:  8 reuse blocks with block_increment (3 insns each)
+    //   [29-31]: 1 final reuse block with inner_increment (3 insns)
     //
     // Each reuse block: SrcA unpack + CFGSHIFTMASK + NOP (3 insns)
     // block_increment reuse: CFGSHIFTMASK selects SCRATCH_SEC0
     // inner_increment reuse (final): CFGSHIFTMASK selects SCRATCH_SEC1
     //
-    // This supports first_half up to 9 tiles and second_half up to 9 tiles = 18 max.
-    // Practical limit is 16 due to dst size.
+    // This supports first_half up to 8 tiles and second_half up to 8 tiles, so nt_dim up to 16.
+    LLK_ASSERT(nt_dim >= 1 && nt_dim <= 16, "sdpa_custom_mm_reuse_dest_srcb (unpack): nt_dim must be in [1, 16]");
 
-    constexpr std::uint32_t REPLAY_BUF_LEN = 30;
-    load_replay_buf(
-        0,
-        REPLAY_BUF_LEN,
-        []
-        {
-            for (std::uint32_t i = 0; i < 9; i++)
-            {
-                TTI_UNPACR_COMMON(SrcA, 0b00000000, 1);
-                TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
-                TTI_NOP;
-            }
-            TTI_UNPACR_COMMON(SrcA, 0b00000000, 1);
-            TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 1, THCON_SEC0_REG3_Base_address_ADDR32);
-            TTI_NOP;
-        });
+    constexpr std::uint32_t REPLAY_BUF_END = CUSTOM_MM_REUSE_BLOCKS_OFFSET + CUSTOM_MM_REUSE_BLOCKS_LEN;
+    if constexpr (load_replay)
+    {
+        load_replay_buf(CUSTOM_MM_REUSE_BLOCKS_OFFSET, CUSTOM_MM_REUSE_BLOCKS_LEN, [] { _llk_unpack_AB_custom_mm_reuse_blocks_insns(); });
+    }
 
     // Mop covers two k-rows per iteration, allowing up to 256 kt_dim with 128 MOP iterations.
     // zmask is always 0 (skip path never used), which is required for iterations beyond 32.
@@ -74,7 +65,7 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std:
     //   first_half_iterations = ceil(nt_dim/2)
     //   second_half_iterations = floor(nt_dim/2)
     //
-    // first_half window: starts at buffer beginning, covers first_half_iterations * 3 insns
+    // first_half window: starts at the first reuse block, covers first_half_iterations * 3 insns
     // second_half window: ends at buffer end (always includes inner_increment block),
     //   covers second_half_iterations * 3 insns
     //
@@ -84,13 +75,13 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std:
     const std::uint32_t first_half_iters  = (nt_dim + 1) >> 1;
     const std::uint32_t second_half_iters = nt_dim >> 1;
 
-    const std::uint32_t first_half  = lltt::replay_insn(0, first_half_iters * 3);
-    const std::uint32_t second_half = lltt::replay_insn(REPLAY_BUF_LEN - second_half_iters * 3, second_half_iters * 3);
+    const std::uint32_t first_half  = lltt::replay_insn(CUSTOM_MM_REUSE_BLOCKS_OFFSET, first_half_iters * 3);
+    const std::uint32_t second_half = lltt::replay_insn(REPLAY_BUF_END - second_half_iters * 3, second_half_iters * 3);
 
     // For nt_dim == 1: only inner_increment block is needed, use B-mode
     // block_increment == inner_increment when nt_dim == 1 so either block works,
     // but we use the inner_increment block (last 3 insns) for correctness
-    const std::uint32_t single_tile = lltt::replay_insn(REPLAY_BUF_LEN - 3, 3);
+    const std::uint32_t single_tile = lltt::replay_insn(REPLAY_BUF_END - 3, 3);
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
         nt_dim == 1,                            // B-mode when single tile per k-row
@@ -108,6 +99,9 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std:
     TTI_MOP_CFG(0);
 }
 
+// load_replay = false: the replay buffer still holds a custom_mm unpack program (the Q K^T init of the same SDPA chunk
+// recorded it), whose reuse blocks this MOP runs.
+template <bool load_replay = true>
 __attribute__((always_inline)) inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init_(
     const std::uint32_t nt_dim = 1, const std::uint32_t unpA_face_r_dim = FACE_R_DIM, const std::uint32_t unpA_num_faces = 4)
 {
@@ -116,7 +110,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_sdpa_custom_mm_reuse_d
     const std::uint32_t unpA_x_end = unpA_num_faces * unpA_face_r_dim * FACE_C_DIM - 1;
     TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
 
-    _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(nt_dim);
+    _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_<load_replay>(nt_dim);
 
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
