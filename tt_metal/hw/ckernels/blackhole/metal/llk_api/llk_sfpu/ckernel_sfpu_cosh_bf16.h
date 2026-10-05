@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include "ckernel_sfpu_bf16_sfpi_isa.h"
 #include <cstdint>
 namespace ckernel::sfpu {
 struct CoshBf16Config {
@@ -12,7 +13,6 @@ struct CoshBf16Config {
         0x3f800016u, 0x33b168acu, 0x27773d30u, 0x1ad514a6u, 0x0e5dc2acu};
     static constexpr uint32_t kMultiplierBits = 0x3fb8aa3bu;
     static constexpr uint32_t kComposeScaleBits = 0x3e800100u;
-    static constexpr uint32_t kOriginCubicBits = 0x00000000u;
 };
 }  // namespace ckernel::sfpu
 #include "ckernel_sfpu_bf16_hyperbolic_exp.h"

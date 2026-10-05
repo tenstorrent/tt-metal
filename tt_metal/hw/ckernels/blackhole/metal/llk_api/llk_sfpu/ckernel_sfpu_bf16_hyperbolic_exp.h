@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include "ckernel_sfpu_bf16_sfpi_isa.h"
 #include <cstdint>
 #include <limits>
 #include "ckernel.h"
@@ -18,26 +19,16 @@ inline void init_hyperbolic_exp() {
 template <typename Config, int Iterations = 32>
 inline void calculate_hyperbolic_exp() {
     static_assert(Iterations == 32 && Config::kDegree == 4);
-    static_assert(Config::kOdd ? Config::kOriginCubicBits == 0x3e2a0000u : Config::kBare);
+    static_assert(Config::kBare);
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    if constexpr (Config::kOdd) {
-        sfpi::hyperbolic_odd_load_macro_init();
-    }
     sfpi::hyperbolic_exp_pins<Config>();
     constexpr unsigned body_slots = Config::kOdd ? 29u : 32u;
-    TTI_REPLAY(0, body_slots, 1, 1);
+    ::ckernel::sfpu::bf16_sfpi::replay(0, body_slots, 1, 1);
     sfpi::hyperbolic_exp_core<ADDR_MOD_7>();
-    if constexpr (Config::kOdd) {
-        sfpi::hyperbolic_odd_suffix<ADDR_MOD_7, ADDR_MOD_6>();
-    } else {
-        sfpi::hyperbolic_even_store<ADDR_MOD_6>();
-    }
+    sfpi::hyperbolic_even_store<ADDR_MOD_6>();
 #pragma GCC unroll 32
     for (int row = 1; row < Iterations; ++row) {
-        TTI_REPLAY(0, body_slots, 0, 0);
-        if constexpr (Config::kOdd) {
-            sfpi::hyperbolic_odd_suffix<ADDR_MOD_7, ADDR_MOD_6>();
-        }
+        ::ckernel::sfpu::bf16_sfpi::replay(0, body_slots, 0, 0);
     }
     // The standard whole-tile LLK done restores D-RWC. Restore the borrowed
     // architectural constant here before returning to that owner.
