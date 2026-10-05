@@ -100,6 +100,26 @@ For per-LLK tuning, `FLAGS_TSV` is `op<TAB>exact compiler flag string`.
 load an ELF staged under the selected configuration. The identity map still
 checks the resulting semantic and handwritten `.text` independently.
 
+## Plan the remaining exhaustive campaign
+
+`exhaustive_campaign_plan.py` joins the current corpus, tuning search, and
+validation ledger without running hardware:
+
+```
+python3 exhaustive_campaign_plan.py \
+  --corpus ../sweep_2x2_ops.tsv \
+  --search <search.json> \
+  --validation <validation.json> \
+  --out <new-plan-directory>
+```
+
+The output separates unary BF16 (`2^16`), unary 32-bit (`2^32`), joint
+BF16-by-BF16 (`2^32`), class-stratified, and structural rows. Its executable
+rosters use the explicit tri-arm contract: selected semantic (A), frozen
+semantic (B), and frozen handwritten (C). A/B is the compiler-correctness gate;
+B/C is the semantic/numeric gate. The planner refuses baseline disagreement and
+will not emit the old ambiguous two-arm roster.
+
 With `GOLDEN=1` (the default), the final status is the global numerical
 admission, not sem-vs-hand equality. `<op>-VERDICT.txt` independently records
 `BIT-EXACT` or `DIVERGENT`; `<op>-NUMERIC-ADMISSION.{json,tsv}` records oracle
