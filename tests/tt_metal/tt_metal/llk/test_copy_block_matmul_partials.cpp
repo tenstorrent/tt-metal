@@ -341,8 +341,8 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeCopyBlockComputeBottleneck) {
 }
 
 // Same coverage as TensixComputeCopyBlockMultiple, but issues one copy_block call per ublock instead
-// of a loop of single-tile copy_block calls (pack_block is one call per ublock in both). The golden is an identity copy, so results must
-// match bit-for-bit.
+// of a loop of single-tile copy_block calls (pack_block is one call per ublock in both). The golden is an identity
+// copy, so results must match bit-for-bit.
 TEST_F(LLKMeshDeviceFixture, TensixComputeCopyPackBlockMultiple) {
     for (bool fp32_dest_acc_en : {true, false}) {
         for (bool dst_full_sync_en : {true, false}) {
