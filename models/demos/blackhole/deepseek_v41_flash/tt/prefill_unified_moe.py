@@ -65,7 +65,7 @@ class UnifiedMoEShared:
 
     def __init__(self, md, n_tokens, cf=None):
         self.md, self.N = md, n_tokens
-        self.cf = int(os.environ.get("DSV41_UNI_CF", "2")) if cf is None else cf
+        self.cf = int(os.environ.get("DSV41_UNI_CF", "4")) if cf is None else cf
         assert n_tokens % 64 == 0
         self.epc, self.meta_len, self.max_buf, self.max_per_expert = compute_constants(
             n_tokens, NUM_ROUTED, TOPK, ROWS * COLS, ROWS, self.cf
@@ -173,7 +173,11 @@ def build_expert_weights(md, layer_id, log=print, cache_only=False):
     return None if cache_only else (outs["gate"], outs["up"], outs["down"])
 
 
+CHECK_N = int(os.environ.get("DSV41_UNI_CHECK", "0"))
+
+
 class DSV41UnifiedMoE:
+    _calls = 0
     """Routed experts of one layer: ``forward(h)`` takes the router weights/indices of the whole chunk and the hidden states of the whole
     chunk (all tokens of the mesh row, replicated over the columns) and returns the per-column PARTIAL weighted sums [1,1,N,D] (tile, DRAM).
     """
@@ -203,6 +207,24 @@ class DSV41UnifiedMoE:
             use_l1_small_for_semaphores=sh.l1_small,
         )
         ttnn.deallocate(hist)
+        if (
+            CHECK_N and DSV41UnifiedMoE._calls < CHECK_N
+        ):  # DSV41_UNI_CHECK=<n>: eager-only capacity check of the first n calls (host read: never inside a trace capture)
+            DSV41UnifiedMoE._calls += 1
+            ttnn.synchronize_device(md)
+            devs = ttnn.get_device_tensors(counts)
+            load, cmax = 0, 0
+            for r in range(ROWS):
+                for c in range(COLS):
+                    cnt = ttnn.to_torch(devs[r * COLS + c]).reshape(-1)[:NUM_ROUTED].long()
+                    gids = [global_expert(r, c, l) for l in range(EPC)]
+                    chip = int(sum(-(-int(cnt[g]) // 32) * 32 for g in gids))
+                    load = max(load, chip)
+                    cmax = max(cmax, int(cnt[gids].max()))
+            print(
+                f"UNI_CHECK layer {self.layer_id} N={N}: max chip load {load} rows of {sh.max_buf} ({'OVERFLOW' if load > sh.max_buf else 'ok'}), max expert count {cmax} of {sh.max_per_expert}",
+                flush=True,
+            )
         if upto == 1:
             return offsets, counts, region_offsets
         idx3 = ttnn.reshape(indices, [1, N, TOPK])
@@ -232,18 +254,45 @@ class DSV41UnifiedMoE:
         if upto == 2:
             return disp, meta, counts, region_offsets
         disp2 = ttnn.reshape(disp, [sh.max_buf, x_rm.shape[2]])
-        out = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
-            disp2,
-            region_offsets,
-            counts,
-            sh.gidx,
-            self.gate_projs,
-            self.up_projs,
-            self.down_projs,
-            max_dispatched_tokens_per_expert=sh.max_per_expert,
-            compute_kernel_config=sh.ckc,
-            activation=ttnn.RoutedExpertActivation.ClampedSiluGlu,
-        )
+        if os.environ.get("DSV41_UNI_EXPERT", "unified") == "fused":
+            # moe_fused_swiglu: plain SiLU (no clamp, as the moe_compute path), output dtype selectable (bf16 default); precision experiment, see the notes
+            odt = {"bf16": ttnn.bfloat16, "bf8": ttnn.bfloat8_b}[os.environ.get("DSV41_UNI_FUSED_OUT", "bf16")]
+            out = ttnn.empty(
+                disp2.shape, dtype=odt, layout=ttnn.TILE_LAYOUT, device=md, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            fid = {"lofi": ttnn.MathFidelity.LoFi, "hifi2": ttnn.MathFidelity.HiFi2}[
+                os.environ.get("DSV41_UNI_FID", "lofi")
+            ]
+            ttnn.experimental.deepseek_prefill.moe_fused_swiglu(
+                disp2,
+                self.gate_projs,
+                self.up_projs,
+                self.down_projs,
+                counts,
+                sh.gidx,
+                input_m_tiles=sh.max_per_expert // ttnn.TILE_SIZE,
+                core_grid=ttnn.UNIFIED_ROUTED_EXPERT_CORE_GRID,
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=fid, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
+                ),
+                activation=ttnn.RoutedExpertActivation.Silu,
+                output=out,
+                expert_region_offsets=region_offsets,
+                read_x_at_offset=True,
+            )
+        else:
+            out = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
+                disp2,
+                region_offsets,
+                counts,
+                sh.gidx,
+                self.gate_projs,
+                self.up_projs,
+                self.down_projs,
+                max_dispatched_tokens_per_expert=sh.max_per_expert,
+                compute_kernel_config=sh.ckc,
+                activation=ttnn.RoutedExpertActivation.ClampedSiluGlu,
+            )
         ttnn.deallocate(disp)
         if upto == 3:
             return out, meta, counts, region_offsets
