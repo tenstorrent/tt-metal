@@ -86,6 +86,11 @@ ALWI void recipe_mm_init(uint32_t in0, uint32_t in1, bool transpose, uint32_t ct
 #endif
 }
 ALWI void recipe_mm_reinit(uint32_t in0, uint32_t in1, bool transpose, uint32_t ct, uint32_t rt, uint32_t kt) {
+#if defined(SDPA_RECIPE_LOFI) && defined(SDPA_RECIPE_RING)
+    // LOW_PRECISION's ring kernels always re-record: one matmul init in MATH fits them in the kernel config buffer,
+    // and their pack-bound chunks leave MATH the time.
+    recipe_mm_init(in0, in1, transpose, ct, rt, kt);
+#else
 #ifdef SDPA_RECIPE_LOFI
     if (ct < rt || !recipe_mm_reuse_a) {
         recipe_mm_init(in0, in1, transpose, ct, rt, kt);
@@ -93,6 +98,7 @@ ALWI void recipe_mm_reinit(uint32_t in0, uint32_t in1, bool transpose, uint32_t 
     }
 #endif
     mm_no_mop_reinit_short(in0, in1, transpose, ct, rt, kt);
+#endif
 }
 
 // Q chunks up to 1024 rows (32 tiles).
@@ -1034,7 +1040,12 @@ static __attribute__((noinline, noclone)) SDPA_RECIPE_COLD void normalize_row_st
 #else
             const uint32_t norm_sum_cb = cur_sum_cb;
 #endif
+#ifdef SDPA_RECIPE_LOFI
+            // The no-MOP matmul the chunks already use: LOW_PRECISION's ring kernels then carry no MOP matmul code.
+            recipe_mm_init(norm_sum_cb, col_identity_cb, false, N, 1, N);
+#else
             matmul_block_init(norm_sum_cb, col_identity_cb, 0, N, 1, N);
+#endif
             sdpa_maybe_reconfig_data_format<normalized_out_cb, col_identity_cb, normalized_out_cb, scratch_cb>();
             // Pack format follows scratch_cb for the reciprocal intermediate. The old/new form folds away
             // when scratch and normalized output formats match, and reconfigures after rows that packed output.
@@ -1045,7 +1056,11 @@ static __attribute__((noinline, noclone)) SDPA_RECIPE_COLD void normalize_row_st
 
             CircularBuffer(scratch_cb).reserve_back(1);
             tile_regs_acquire();
+#ifdef SDPA_RECIPE_LOFI
+            matmul_block_no_mop(norm_sum_cb, col_identity_cb, 0, 0, 0, false, N, 1, N);
+#else
             matmul_block(norm_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
+#endif
 
             recip_tile_init();
             MATH((recip_tile(0 /*dst_index*/, VectorMode::C)));
