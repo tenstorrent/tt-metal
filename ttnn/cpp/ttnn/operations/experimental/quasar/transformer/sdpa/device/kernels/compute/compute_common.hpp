@@ -24,6 +24,7 @@
 #include "api/compute/eltwise_unary/softplus.h"
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/comp.h"
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
@@ -356,6 +357,41 @@ void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
     // Requires Quasar pack-side drain
     dummy_pack(in_dfb);
     dfb_in.push_back(num_tiles);
+}
+
+// A row's running max stays at the mask fill (~-1e9, or -inf off Quasar) only when the row had no allowed
+// key in any processed K chunk; any allowed key puts it in the range of real scores, far above this.
+constexpr uint32_t unattended_row_max_threshold_fp32 = 0xCDEE6B28;  // -5e8
+
+/**
+ * max_dfb = (max_dfb > -5e8) ? 1 : 0, per element.
+ *
+ * Turns the final running max into a per-row "has an allowed key" factor. Windowed SDPA can leave a row
+ * with no allowed key (cu_window_seqlens ending before the sequence does); torch returns zeros for such a
+ * row, while the finite mask fill would otherwise give it a uniform average over the processed keys.
+ */
+void row_has_key_block_inplace(uint32_t max_dfb, uint32_t num_tiles) {
+    DataflowBuffer dfb_max(max_dfb);
+    reconfig_data_format_srca(max_dfb);
+    copy_init(max_dfb);
+    unary_gt_tile_init();
+    pack_reconfig_out(max_dfb);
+
+    dfb_max.wait_front(num_tiles);
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        tile_regs_acquire();
+        copy_tile(max_dfb, i, 0);
+        unary_gt_tile(0, unattended_row_max_threshold_fp32);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, max_dfb);
+        tile_regs_release();
+    }
+    dfb_max.pop_front(num_tiles);
+    dfb_max.reserve_back(num_tiles);
+    // Requires Quasar pack-side drain
+    dummy_pack(max_dfb);
+    dfb_max.push_back(num_tiles);
 }
 
 /**
@@ -2387,6 +2423,12 @@ void sdpa_inner_loop(
         } else {
             /* dfb_cur_sum = 1.0 / dfb_cur_sum */
             recip_block_inplace(alias_prev_sum, Sq_chunk_t);
+
+            if constexpr (use_windowed_narrowing) {
+                // Zero the output of rows with no allowed key: dfb_cur_sum *= (dfb_prev_max > -5e8)
+                row_has_key_block_inplace(alias_prev_max, Sq_chunk_t);
+                mul_tiles_bcast_cols_inplace(alias_prev_sum, alias_prev_max, Sq_chunk_t);
+            }
 
             /* dfb_out_accumulate_im *= dfb_cur_sum */
             pack_reconfig_out(dfb_out);

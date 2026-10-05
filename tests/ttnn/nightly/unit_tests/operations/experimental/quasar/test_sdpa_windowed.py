@@ -58,11 +58,19 @@ test_windowed_sdpa_smoke.pytestmark = _mainline.test_windowed_sdpa_smoke.pytestm
         (128, 128, 32, [0, 64, 128]),
         # The 64-row Q chunk straddles an unaligned boundary: rows 48-63 are masked across K chunk 0.
         (128, 64, 32, [0, 48, 128]),
-        # The windows stop at 96, so rows 96-127 have no allowed key in any K chunk. Their output is
-        # undefined and left unchecked; rows 0-95 must still match the reference.
+        # The windows stop at 96, so rows 96-127 have no allowed key in any K chunk. Like torch, the op
+        # must return zeros for them; rows 0-95 must still match the reference.
         (128, 128, 32, [0, 64, 96]),
+        # Rows 128-255 form a Q chunk that overlaps no window at all; it must come out zero too.
+        (256, 128, 32, [0, 64, 96]),
     ],
-    ids=["control_q32", "q128_k32_aligned", "q64_k32_straddle", "q128_k32_uncovered_tail"],
+    ids=[
+        "control_q32",
+        "q128_k32_aligned",
+        "q64_k32_straddle",
+        "q128_k32_uncovered_tail",
+        "q256_k32_window_free_q_chunk",
+    ],
 )
 def test_windowed_sdpa_full_chunk_masked(device, seq_len, q_chunk, k_chunk, cu_window_seqlens):
     """A row masked across an entire K chunk must not turn into NaN.
@@ -94,13 +102,15 @@ def test_windowed_sdpa_full_chunk_masked(device, seq_len, q_chunk, k_chunk, cu_w
         compute_kernel_config=_compute_kernel_config(),
         cu_window_seqlens=cu_tt,
     )
-    # Only rows inside some window have a defined output.
-    covered = cu_window_seqlens[-1]
-    out = ttnn.to_torch(out)[:, :, :covered, :].float()
+    out = ttnn.to_torch(out)[:, :, :seq_len, :].float()
 
     nan_rows = torch.isnan(out).any(dim=-1)[0, 0].nonzero().flatten().tolist()
     assert not nan_rows, f"NaN in rows {nan_rows}"
+    # Rows past the last window have no allowed key; torch returns zeros for them.
+    covered = cu_window_seqlens[-1]
+    nonzero_rows = (out[0, 0, covered:] != 0).any(dim=-1).nonzero().flatten().add(covered).tolist()
+    assert not nonzero_rows, f"rows with no allowed key are not zero: {nonzero_rows}"
     gt = torch.nn.functional.scaled_dot_product_attention(
         q.float(), k.float(), v.float(), attn_mask=windowed_mask(seq_len, cu_window_seqlens), scale=scale
-    )[:, :, :covered, :]
-    _check(gt, out)
+    )
+    _check(gt[:, :, :covered, :], out[:, :, :covered, :])

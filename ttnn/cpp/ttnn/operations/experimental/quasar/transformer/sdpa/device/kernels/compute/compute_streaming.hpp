@@ -720,7 +720,8 @@ template <
     uint32_t normalized_out_dfb,
     uint32_t scale_fp32 = 0,
     bool use_attention_sink = false,
-    uint32_t dfb_attention_sink = INVALID_DFB>
+    uint32_t dfb_attention_sink = INVALID_DFB,
+    bool zero_unattended_rows = false>
 static __attribute__((noinline, noclone)) void normalize_row_streaming(
     uint32_t cur_sum_dfb,
     uint32_t cur_out_dfb,
@@ -729,8 +730,12 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
     [[maybe_unused]] uint32_t sink_row_offset = 0) {
     // Attention sink: dfb_attention_sink holds one raw per-head scalar tile. Broadcast it for each
     // row, compute exp((sink - max)*scale), and fold it into the col-reduced denominator (DST[0]).
+    // Windowed: rows with no allowed key keep the mask fill as their max; zero their 1/sum (DST[0]) so the
+    // output is 0, as in torch (see row_has_key_block_inplace).
     if constexpr (use_attention_sink) {
         DataflowBuffer(dfb_attention_sink).wait_front(1);
+    }
+    if constexpr (use_attention_sink || zero_unattended_rows) {
         DataflowBuffer(cur_max_dfb_rt).wait_front(sink_row_offset + sbh);
     }
     configure_single_tile_pack(scratch_dfb);
@@ -773,6 +778,17 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             recip_tile_init();
             MATH((recip_tile_first_column_wh_idst0_direct()));
 #endif
+            if constexpr (zero_unattended_rows) {
+                // DST[1] = (max > -5e8) ? 1 : 0; DST[0] *= DST[1]. The matmul above reads col_identity on SrcA.
+                reconfig_data_format_srca(col_identity_dfb, cur_max_dfb_rt);
+                copy_tile_to_dst_init_short(cur_max_dfb_rt);
+                copy_tile(cur_max_dfb_rt, sink_row_offset + s, 1);
+                reconfig_data_format_srca(cur_max_dfb_rt, col_identity_dfb);
+                unary_gt_tile_init();
+                unary_gt_tile(1, unattended_row_max_threshold_fp32);
+                mul_binary_tile_init();
+                mul_binary_tile(0, 1, 0);
+            }
             tile_regs_commit();
 
             tile_regs_wait();
@@ -1274,7 +1290,8 @@ template <
     bool use_provided_mask = false,
     // Compile-time gate for q_base_tiles: only the head-serial ring passes read Q at an offset,
     // and every other caller keeps the original constant-zero index math (and codegen).
-    bool has_q_base_tiles = false>
+    bool has_q_base_tiles = false,
+    bool zero_unattended_rows = false>
 static void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
@@ -1706,8 +1723,9 @@ static void sdpa_inner_loop_step(
                 dfb_normalized_out,
                 scale_fp32,
                 use_attention_sink,
-                dfb_attention_sink>(cur.sum, out_dfb, sbh, cur.max, sink_row_offset);
-            if constexpr (use_attention_sink) {
+                dfb_attention_sink,
+                zero_unattended_rows>(cur.sum, out_dfb, sbh, cur.max, sink_row_offset);
+            if constexpr (use_attention_sink || zero_unattended_rows) {
                 sink_row_offset += sbh;
             }
             pushed++;
@@ -2117,7 +2135,9 @@ void sdpa_standard_v2(
                 sliding_window_size,
                 use_attention_sink,
                 dfb_attention_sink,
-                use_provided_mask>(
+                use_provided_mask,
+                false,  // has_q_base_tiles
+                use_windowed_narrowing>(
                 prev,
                 cur,
                 is_last,
