@@ -56,11 +56,10 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
     const tt::tt_metal::experimental::DFBSpecName to_remote_a_dfb_name{"to_remote_a"};
     const tt::tt_metal::experimental::DFBSpecName to_remote_b_dfb_name{"to_remote_b"};
     const tt::tt_metal::experimental::DFBSpecName from_remote_affine_dfb_name{"from_remote_affine"};
-    const tt::tt_metal::experimental::DFBSpecName initial_state_dfb_name{"initial_state"};
+    const tt::tt_metal::experimental::DFBSpecName state_dfb_name{"state"};
+    const tt::tt_metal::experimental::DFBSpecName state_exact_dfb_name{"state_exact"};
     const tt::tt_metal::experimental::DFBSpecName final_dfb_name{"final"};
     const tt::tt_metal::experimental::DFBSpecName tail_affine_dfb_name{"tail_affine"};
-    const tt::tt_metal::experimental::DFBSpecName tail_entry_states_dfb_name{"tail_entry_states"};
-    const tt::tt_metal::experimental::DFBSpecName reset_b_dfb_name{"reset_b"};
 
     const tt::tt_metal::experimental::SemaphoreSpecName ready_semaphore_name{"ready"};
     const tt::tt_metal::experimental::SemaphoreSpecName arrival_semaphore_name{"arrival"};
@@ -92,11 +91,12 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
         make_dfb(to_remote_a_dfb_name, key_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(to_remote_b_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(from_remote_affine_dfb_name, key_matrix_tiles + state_matrix_tiles, tt::DataFormat::Float32),
-        make_dfb(initial_state_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
+        make_dfb(state_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
+        // One carried-state block in two views: the matmul operand above and an FP32 (UnpackToDest) copy for the
+        // outer add. The reset worker uses them for its tail seed first, then every worker for the initial state.
+        make_dfb(state_exact_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(final_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(tail_affine_dfb_name, segmented_affine_tiles, summary_format),
-        make_dfb(tail_entry_states_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
-        make_dfb(reset_b_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
     };
     // Initial inputs/state and final output are one-shot transfers. TO_REMOTE stays single-slot because dataflow
     // releases the current block before the remote input that makes compute runnable.
@@ -137,11 +137,11 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
                     "from_remote_affine",
                     tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
-                    initial_state_dfb_name, "initial_state", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                    state_dfb_name, "state", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                tt::tt_metal::experimental::ProducerOf(state_exact_dfb_name, "state_exact"),
                 tt::tt_metal::experimental::DFBBinding{
                     final_dfb_name, "final", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::ProducerOf(tail_affine_dfb_name, "tail_affine"),
-                tt::tt_metal::experimental::ProducerOf(tail_entry_states_dfb_name, "tail_entry_states"),
             },
         .semaphore_bindings =
             {
@@ -168,15 +168,10 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
 
     auto compute_hardware_config = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
     auto& unpack_modes = compute_hardware_config.unpack_modes;
-    for (const auto& name :
-         {local_a_dfb_name,
-          local_b_dfb_name,
-          from_remote_affine_dfb_name,
-          initial_state_dfb_name,
-          tail_entry_states_dfb_name,
-          reset_b_dfb_name}) {
+    for (const auto& name : {local_a_dfb_name, local_b_dfb_name, from_remote_affine_dfb_name, state_dfb_name}) {
         unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
     }
+    unpack_modes[state_exact_dfb_name] = tt::tt_metal::UnpackMode::UnpackToDest;
     if (summary_format == tt::DataFormat::Float32) {
         unpack_modes[initial_a_dfb_name] = tt::tt_metal::UnpackMode::UnpackToSrc;
         unpack_modes[initial_b_dfb_name] = tt::tt_metal::UnpackMode::UnpackToSrc;
@@ -208,13 +203,11 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
                     "from_remote_affine",
                     tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
-                    initial_state_dfb_name, "initial_state", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                    state_dfb_name, "state", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
                     final_dfb_name, "final", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::ConsumerOf(tail_affine_dfb_name, "tail_affine"),
-                tt::tt_metal::experimental::ConsumerOf(tail_entry_states_dfb_name, "tail_entry_states"),
-                tt::tt_metal::experimental::ProducerOf(reset_b_dfb_name, "reset_b"),
-                tt::tt_metal::experimental::ConsumerOf(reset_b_dfb_name, "reset_b"),
+                tt::tt_metal::experimental::ConsumerOf(state_exact_dfb_name, "state_exact"),
             },
         .compile_time_args = {{"Kt", key_tiles}, {"Vt", value_tiles}, {"G", groups_per_head}},
         .runtime_arg_schema = {.runtime_arg_names = {"group"}},

@@ -426,7 +426,8 @@ def test_distributed_prefix_preserves_noncommuting_order_and_tp_lines(
         return ttnn.reshape(tensor, (1, 32, 32))
 
     entry, final = recurrence._distributed_prefix(
-        recurrence._AffineTransform(to_mesh(a, (0, 1)), to_mesh(b, (0, 1))),
+        # Transitions are carried in complement form, E = A - I.
+        recurrence._AffineTransform(to_mesh(a - torch.eye(32), (0, 1)), to_mesh(b, (0, 1))),
         to_mesh(initial, (None, 1)),
         sequence_parallel_axis=0,
         selections=ChronologicalSelections(

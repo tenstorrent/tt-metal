@@ -212,7 +212,7 @@ def _oracle(
     kd = beta * k * decay
     q_decay = q * decay
     k_dec_t = (k * torch.exp(final_g.unsqueeze(2) - cumulative_g)).transpose(-1, -2)
-    final_decay = torch.exp(final_g).unsqueeze(-1)
+    final_decay = torch.expm1(final_g).unsqueeze(-1)  # complement form: exp(G_last) - 1
     cumulative_g_fp64 = cumulative_g.double()
     akk = torch.stack(
         [
@@ -514,6 +514,47 @@ def test_prepare_chunk_recurrence_strong_scalar_decay(device: ttnn.Device, chunk
         index = OUTPUT_NAMES.index(name)
         max_abs = float((expected[index].float() - actual[index].float()).abs().max())
         assert max_abs <= threshold, f"|G_last|={chunk_log_decay} {name} max abs error {max_abs:.3e} > {threshold:.1e}"
+    for output in outputs:
+        ttnn.deallocate(output)
+
+
+# Weak decay (tt_metal_tracker-g1b.7, T3): per-chunk |G_last| from 1e-6 to 1. final_decay carries expm1(G_last), so a
+# long-memory channel's forgetting survives BF16 storage; exp(G_last) would round to exactly 1.0 below 2^-9.
+_WEAK_DECAY_CHUNK_LOG_DECAYS = (1e-6, 1e-4, 2.0**-10, 1e-2, 1.0)
+
+
+def test_prepare_chunk_recurrence_weak_final_decay(device: ttnn.Device) -> None:
+    num_heads, num_chunks, key_dim, value_dim = 1, 2, 128, 128
+    q, k, v, g, beta = _host_inputs(num_heads, num_chunks, key_dim, value_dim, seed=7301)
+    rows = key_dim // len(_WEAK_DECAY_CHUNK_LOG_DECAYS)
+    per_token = torch.zeros(key_dim)
+    for index, chunk_log_decay in enumerate(_WEAK_DECAY_CHUNK_LOG_DECAYS):
+        per_token[index * rows : (index + 1) * rows] = -chunk_log_decay / CHUNK_SIZE
+    g = per_token.expand_as(g).to(torch.bfloat16).float()
+    inputs = (q, k, v, g, beta)
+    outputs = _run(
+        _device_inputs(inputs, device),
+        num_heads,
+        output_bf16_mask=_PRODUCTION_OUTPUT_BF16_MASK,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=_production_compute_config(device),
+    )
+    actual = ttnn.to_torch(outputs[OUTPUT_NAMES.index("final_decay")]).double()[..., 0]  # [H, N, K]
+    g_last = _reshape_flat(g, num_heads, num_chunks, key_dim).double().sum(dim=2)  # [H, N, K], exact BF16 sums
+    expected = torch.expm1(g_last)
+    legacy = torch.exp(g_last).to(torch.bfloat16).double() - 1.0  # what an exp(G_last) BF16 output carries
+    failures = []
+    for index, chunk_log_decay in enumerate(_WEAK_DECAY_CHUNK_LOG_DECAYS):
+        channels = slice(index * rows, (index + 1) * rows)
+        reference = expected[..., channels]
+        error = float(((actual[..., channels] - reference).abs() / reference.abs()).max())
+        legacy_error = float(((legacy[..., channels] - reference).abs() / reference.abs()).max())
+        logger.info(f"|G_last|={chunk_log_decay:.1e}: final_decay rel error {error:.3e} (exp form: {legacy_error:.3e})")
+        if not error <= 2.0**-7:
+            failures.append(f"|G_last|={chunk_log_decay:.1e} rel error {error:.3e}")
+    assert not failures, "; ".join(failures)
+    # Negative control: the gate is sensitive to the exp form at the weak end.
+    assert float((legacy[..., :rows] - expected[..., :rows]).abs().max() / expected[..., :rows].abs().max()) > 0.5
     for output in outputs:
         ttnn.deallocate(output)
 
@@ -913,7 +954,7 @@ def test_prepare_chunk_recurrence_scratch_wrap(device: ttnn.Device, output_bf16_
     chunk = _t_inv_numerical_stress_inputs()
     inputs = tuple(x.repeat(1, chunks, 1) for x in chunk[:4]) + (chunk[4].repeat(1, chunks, 1, 1),)
     key_dim = chunk[3].shape[-1]
-    expected = torch.exp(chunk[3].sum(dim=1)).reshape(1, 1, key_dim, 1).repeat(1, chunks, 1, 1)
+    expected = torch.expm1(chunk[3].sum(dim=1)).reshape(1, 1, key_dim, 1).repeat(1, chunks, 1, 1)
     if output_bf16_mask & (1 << 5):
         expected = expected.to(torch.bfloat16).float()
     outputs = _run(

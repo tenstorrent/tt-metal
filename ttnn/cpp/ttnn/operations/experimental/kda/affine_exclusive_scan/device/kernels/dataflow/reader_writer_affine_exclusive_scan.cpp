@@ -30,6 +30,28 @@ FORCE_INLINE void issue_tensor_block_read(
     }
 }
 
+// Write E = -I (the complement form of the zero transition that resets the carry) into a [Kt, Kt] tile block of
+// either summary format. Requires the block to be zero-filled and the zero writes to be complete.
+template <uint32_t Kt>
+FORCE_INLINE void write_negative_identity(DataflowBuffer& buffer) {
+    const bool fp32 = buffer.get_entry_size() == tt::constants::TILE_HW * sizeof(uint32_t);
+    auto lock = buffer.scoped_write_lock(Kt * Kt);
+    for (uint32_t key = 0; key < Kt; ++key) {
+        const uint32_t tile = key * Kt + key;
+        for (uint32_t face = 0; face < 4; face += 3) {
+            for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; ++row) {
+                const uint32_t element = tile * tt::constants::TILE_HW + face * tt::constants::FACE_HW +
+                                         row * tt::constants::FACE_WIDTH + row;
+                if (fp32) {
+                    lock.get_ptr<volatile uint32_t>()[element] = __builtin_bit_cast(uint32_t, -1.0F);
+                } else {
+                    lock.get_ptr<volatile uint16_t>()[element] = 0xBF80;  // BF16 -1.0
+                }
+            }
+        }
+    }
+}
+
 template <uint32_t Kt, uint32_t Vt, typename AAccessor, typename BAccessor>
 FORCE_INLINE void issue_packed_affine_read(
     Noc& noc, const AAccessor& a_accessor, const BAccessor& b_accessor, DataflowBuffer& buffer, uint32_t worker_index) {
@@ -167,10 +189,12 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     DataflowBuffer to_remote_a(dfb::to_remote_a);
     DataflowBuffer to_remote_b(dfb::to_remote_b);
     DataflowBuffer from_remote_affine(dfb::from_remote_affine);
-    DataflowBuffer initial_state(dfb::initial_state);
+    // One state block in two views (matmul operand and FP32 UnpackToDest copy). The reset worker first carries
+    // its tail seed in them; every worker then carries the initial state for the final application.
+    DataflowBuffer state(dfb::state);
+    DataflowBuffer state_exact(dfb::state_exact);
     DataflowBuffer final(dfb::final);
     DataflowBuffer tail_affine(dfb::tail_affine);
-    DataflowBuffer tail_entry_states(dfb::tail_entry_states);
     Noc noc;
     Semaphore ready(sem::ready);
     Semaphore arrival(sem::arrival);
@@ -210,7 +234,6 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     if (!reset_worker) {
         initial_b.reserve_back(affine_b_tiles);
     }
-    initial_state.reserve_back(affine_b_tiles);
     if (reset_worker) {
         noc.async_write_zeros(initial_a, affine_a_tiles * initial_a.get_entry_size());
     } else if (group > reset_group) {
@@ -225,24 +248,26 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
             tail_affine.reserve_back(affine_a_tiles + affine_b_tiles);
             issue_packed_affine_read<Kt, Vt>(noc, tail_a_accessor, tail_b_accessor, tail_affine, worker_index);
         }
-        tail_entry_states.reserve_back(affine_b_tiles);
+        state.reserve_back(affine_b_tiles);
+        state_exact.reserve_back(affine_b_tiles);
         issue_tensor_block_read(
-            noc, tail_entry_states_accessor, tail_entry_states, (worker_index / G) * affine_b_tiles, affine_b_tiles);
+            noc, tail_entry_states_accessor, state, (worker_index / G) * affine_b_tiles, affine_b_tiles);
+        issue_tensor_block_read(
+            noc, tail_entry_states_accessor, state_exact, (worker_index / G) * affine_b_tiles, affine_b_tiles);
         noc.write_zeros_l1_barrier();
+        write_negative_identity<Kt>(initial_a);
     }
-    issue_tensor_block_read(
-        noc, initial_state_accessor, initial_state, (worker_index / G) * affine_b_tiles, affine_b_tiles);
     noc.async_read_barrier();
     initial_a.push_back(affine_a_tiles);
     if (!reset_worker) {
         initial_b.push_back(affine_b_tiles);
     }
-    initial_state.push_back(affine_b_tiles);
     if (reset_worker) {
         if (!aligned_reset) {
             tail_affine.push_back(affine_a_tiles + affine_b_tiles);
         }
-        tail_entry_states.push_back(affine_b_tiles);
+        state.push_back(affine_b_tiles);
+        state_exact.push_back(affine_b_tiles);
     }
 
     uint32_t completed_stages = 0;
@@ -305,6 +330,17 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
         ready.wait_min(expected_ready_events);
         from_remote_affine.push_back(affine_a_tiles + affine_b_tiles);
     }
+
+    // The initial state is needed only by the final application. On the reset worker this waits until compute has
+    // consumed the tail seed from the same buffers.
+    state.reserve_back(affine_b_tiles);
+    state_exact.reserve_back(affine_b_tiles);
+    issue_tensor_block_read(noc, initial_state_accessor, state, (worker_index / G) * affine_b_tiles, affine_b_tiles);
+    issue_tensor_block_read(
+        noc, initial_state_accessor, state_exact, (worker_index / G) * affine_b_tiles, affine_b_tiles);
+    noc.async_read_barrier();
+    state.push_back(affine_b_tiles);
+    state_exact.push_back(affine_b_tiles);
 
     final.wait_front(affine_b_tiles);
     for (uint32_t tile = 0; tile < affine_b_tiles; tile++) {

@@ -18,7 +18,11 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
 
             U_n     = t_inv_n @ (v_beta_n - kd_n @ S_n)
             Y_n     = q_decay_n @ S_n + intra_n @ U_n
-            S_{n+1} = final_decay_n * S_n + k_dec_t_n @ U_n
+            S_{n+1} = S_n + (final_decay_n * S_n + k_dec_t_n @ U_n)
+
+        ``final_decay`` is in complement form, ``expm1(G_last) = exp(G_last) - 1``, so
+        long-memory channels keep their forgetting; the running state is carried in
+        FP32 and requires ``fp32_dest_acc_en``.
 
         If the chronological head/tail split falls inside a group, the running
         state is replaced with ``tail_entry_states`` before the first tail chunk.
@@ -40,8 +44,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 ``[B*H*G, N, 32, 32]`` in FLOAT32.
             k_dec_t (ttnn.Tensor): Prepared transposed key term
                 ``[B*H*G, N, K, 32]``.
-            final_decay (ttnn.Tensor): End-of-chunk state decay
-                ``[B*H*G, N, K, 1]``.
+            final_decay (ttnn.Tensor): End-of-chunk state decay in complement form,
+                ``expm1(G_last) = exp(G_last) - 1``, ``[B*H*G, N, K, 1]``.
             t_inv (ttnn.Tensor): Triangular correction inverse
                 ``[B*H*G, N, 32, 32]`` in FLOAT32.
             group_entry_states (ttnn.Tensor): Initial recurrent state ``[B*H*G, K, V]``
@@ -114,7 +118,10 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         producing token outputs. Each defined head or tail pair describes its
         segment's state transition:
 
-            S_after = A @ S_before + B
+            S_after = S_before + A @ S_before + B
+
+        ``A`` is emitted in complement form (the transition minus the identity), which
+        keeps the near-identity transitions of long-memory channels precise in BF16.
 
         A group crossing the chronological wrap has both head and tail summaries,
         allowing other ranks' transitions to be applied between them. Groups wholly
@@ -124,7 +131,7 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         It derives the transform through two parallel recurrence evaluations:
 
             B = F(0)
-            A = F(I) - B
+            A = F(I) - B - I
 
         Optional ``actual_end`` is a replicated UINT32 row-major scalar, with
         the same lifetime as ``actual_start``. It defines a nonempty 32-aligned
@@ -140,8 +147,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 ``[B*H*G, N, 32, 32]`` in FLOAT32.
             k_dec_t (ttnn.Tensor): Prepared transposed key term
                 ``[B*H*G, N, K, 32]``.
-            final_decay (ttnn.Tensor): End-of-chunk state decay
-                ``[B*H*G, N, K, 1]``.
+            final_decay (ttnn.Tensor): End-of-chunk state decay in complement form,
+                ``expm1(G_last) = exp(G_last) - 1``, ``[B*H*G, N, K, 1]``.
             t_inv (ttnn.Tensor): Triangular correction inverse
                 ``[B*H*G, N, 32, 32]`` in FLOAT32.
 

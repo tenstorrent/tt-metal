@@ -43,7 +43,7 @@ def test_reset_replaces_large_carry_exactly(mesh_device):
     for tensor in host:
         tensor.zero_()
     host[2][:] = torch.eye(32)
-    host[5].fill_(1)
+    host[5].fill_(0)  # complement-form final_decay: no decay
     host[6][:] = torch.eye(32)
     inputs = device_protocol(host, mesh_device)
     seed = to_device(torch.full((1, 32, 32), float(2**26)), mesh_device)
@@ -69,6 +69,34 @@ def _assert_immutable(tensors: list[ttnn.Tensor], before: list[list[torch.Tensor
     for tensor, snapshots in zip(tensors, before, strict=True):
         for expected, actual in zip(snapshots, _shards(tensor), strict=True):
             assert_bit_identical(expected, actual, name="immutable SP input")
+
+
+def _sp_summary_prefix_oracle(host, head_seed, tail_seed, heads, groups, chunks, split):
+    """Expected summary parts, entries, outputs, final states and head/tail compositions for one split."""
+    expected_parts = segmented_summary_oracle(host, groups, chunks, split)
+    expected_entries, expected_output, expected_final, compositions = [], [], [], []
+    for head in range(heads):
+        state = head_seed[head : head + 1]
+        for group in range(groups):
+            folded = head * groups + group
+            group_start = group * chunks
+            protocol = tuple(t[folded : folded + 1] for t in host)
+            if group_start == split:
+                state = tail_seed[head : head + 1]
+            expected_entries.append(state)
+            inside = split - group_start
+            if 0 < inside < chunks:
+                head_output, _ = recurrent_oracle(tuple(t[:, :inside] for t in protocol), state)
+                tail_output, state = recurrent_oracle(
+                    tuple(t[:, inside:] for t in protocol), tail_seed[head : head + 1]
+                )
+                expected_output.append(torch.cat((head_output, tail_output), dim=1))
+                compositions.append((folded, *summary_oracle(protocol)))
+            else:
+                group_output, state = recurrent_oracle(protocol, state)
+                expected_output.append(group_output)
+            expected_final.append(state)
+    return expected_parts, expected_entries, expected_output, expected_final, compositions
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
@@ -141,6 +169,7 @@ def test_sp_summary_prefix_and_scan(mesh_device: ttnn.MeshDevice, axis: int, gro
         assert output.dtype == ttnn.bfloat16
         assert all(t.memory_config() == ttnn.DRAM_MEMORY_CONFIG for t in (entries, output, final))
         got_summaries = [_shards(t) for t in summaries]
+        oracles = {}
         for shard, (got_entries, got_output, got_final) in enumerate(
             zip(_shards(entries), _shards(output), _shards(final), strict=True)
         ):
@@ -151,41 +180,27 @@ def test_sp_summary_prefix_and_scan(mesh_device: ttnn.MeshDevice, axis: int, gro
                 if rank == first_rank and actual_start_value % local_rows
                 else groups * chunks
             )
-            expected_parts = segmented_summary_oracle(host, groups, chunks, split)
-            expected_entries, expected_output, expected_final = [], [], []
-            for head in range(heads):
-                state = head_seed[head : head + 1]
-                for group in range(groups):
-                    folded = head * groups + group
-                    group_start = group * chunks
-                    protocol = tuple(t[folded : folded + 1] for t in host)
-                    if group_start == split:
-                        state = tail_seed[head : head + 1]
-                    expected_entries.append(state)
-                    inside = split - group_start
-                    if 0 < inside < chunks:
-                        head_output, _ = recurrent_oracle(tuple(t[:, :inside] for t in protocol), state)
-                        tail_output, state = recurrent_oracle(
-                            tuple(t[:, inside:] for t in protocol), tail_seed[head : head + 1]
+            # Shards with the same split share one oracle (computed once per generation and split): the CPU
+            # oracle runs inside the device lock, so it must not be repeated per shard.
+            if split not in oracles:
+                oracles[split] = _sp_summary_prefix_oracle(host, head_seed, tail_seed, heads, groups, chunks, split)
+            expected_parts, expected_entries, expected_output, expected_final, compositions = oracles[split]
+            for folded in range(heads * groups):
+                group = folded % groups
+                group_start = group * chunks
+                for part in range(4):
+                    live = group_start < split if part < 2 else (group + 1) * chunks > split
+                    if live:
+                        assert_accurate(
+                            expected_parts[part][folded].bfloat16().float(),
+                            got_summaries[part][shard][folded].float(),
+                            name=f"SP summary rank={rank} group={group} part={part}",
                         )
-                        expected_output.append(torch.cat((head_output, tail_output), dim=1))
-                    else:
-                        group_output, state = recurrent_oracle(protocol, state)
-                        expected_output.append(group_output)
-                    expected_final.append(state)
-                    for part in range(4):
-                        live = group_start < split if part < 2 else (group + 1) * chunks > split
-                        if live:
-                            assert_accurate(
-                                expected_parts[part][folded].bfloat16().float(),
-                                got_summaries[part][shard][folded].float(),
-                                name=f"SP summary rank={rank} group={group} part={part}",
-                            )
-                    if 0 < inside < chunks:
-                        a, b, tail_a, tail_b = [parts[shard][folded].float() for parts in got_summaries]
-                        full_a, full_b = summary_oracle(protocol)
-                        assert_accurate(full_a[0], tail_a @ a, name="summary composition A")
-                        assert_accurate(full_b[0], tail_a @ b + tail_b, name="summary composition B")
+            for folded, full_a, full_b in compositions:
+                a, b, tail_a, tail_b = [parts[shard][folded].float() for parts in got_summaries]
+                # Complement form: tail after head is E = E_t + E_h + E_t E_h, B = B_h + E_t B_h + B_t.
+                assert_accurate(full_a[0], tail_a + a + tail_a @ a, name="summary composition A")
+                assert_accurate(full_b[0], b + tail_a @ b + tail_b, name="summary composition B")
             for expected, actual, name in (
                 (torch.cat(expected_entries), got_entries, "entries"),
                 (torch.cat(expected_output), got_output, "outputs"),
@@ -419,9 +434,11 @@ def test_sp_affine_rectangular_live_slots(mesh_device, axis, dtype):
                 expected.append(torch.stack(entries))
             dims = [None, None]
             dims[axis] = 0
+            # Transitions (parts 0 and 2) go to the op in complement form, E = A - I; poisoned slots stay NaN.
+            identity = torch.eye(key_dim)
             tensors = [
                 ttnn.from_torch(
-                    torch.cat([rank[part] for rank in ranks]),
+                    torch.cat([rank[part].float() - identity if part in (0, 2) else rank[part] for rank in ranks]),
                     device=mesh_device,
                     dtype=dtype,
                     layout=ttnn.TILE_LAYOUT,

@@ -38,6 +38,9 @@ void check_interleaved(const Tensor& tensor, std::string_view operation_name, st
 void check_actual_start(const Tensor& reference, const Tensor& actual_start, std::string_view operation_name);
 void check_output_interleaved(const tt::tt_metal::MemoryConfig& memory_config, std::string_view operation_name);
 void check_compute_config(const DeviceComputeKernelConfig& config, std::string_view operation_name);
+// Kernels that carry the recurrent state in FP32 through DST (UnpackToDest) need a 32-bit DST.
+void check_fp32_state_compute_config(
+    const DeviceComputeKernelConfig& config, tt::ARCH arch, std::string_view operation_name);
 
 struct KdaPrepWorkDist {
     std::vector<tt::tt_metal::CoreCoord> cores;

@@ -71,6 +71,7 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         check_output_interleaved(attrs.output_mem_config, operation_name);
     }
     check_compute_config(attrs.compute_kernel_config, operation_name);
+    check_fp32_state_compute_config(attrs.compute_kernel_config, in.v_beta.device()->arch(), operation_name);
     TT_FATAL(attrs.batch_heads > 0, "{}: batch_heads must be positive", operation_name);
     TT_FATAL(attrs.num_chunks > 0, "{}: num_chunks must be positive", operation_name);
     TT_FATAL(attrs.groups_per_head > 0, "{}: groups_per_head must be positive", operation_name);

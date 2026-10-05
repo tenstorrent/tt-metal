@@ -15,9 +15,10 @@ pytestmark = run_for_blackhole()
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("width", [32, 128])
 def test_padding_prefix_empty_and_partial_groups(mesh_device, width):
-    # Two heads, four 64-row groups each. Every active summary is (I, (g+1)I).
+    # Two heads, four 64-row groups each. Every active summary is (A, B) = (I, (g+1)I); the ops take the
+    # complement form E = A - I = 0.
     eye = torch.eye(width)
-    a = eye.repeat(8, 1, 1).bfloat16()
+    a = torch.zeros(8, width, width).bfloat16()
     b = torch.stack([(g + 1) * eye for _ in range(2) for g in range(4)]).bfloat16()
     initial = torch.stack([10 * eye, 20 * eye])
 
@@ -65,7 +66,7 @@ def test_padding_prefix_empty_and_partial_groups(mesh_device, width):
                 active = counts[device_index // 4]
                 # 0, 1, 1+2, 1+2+3, 1+2+3+4; no model formula copied here.
                 total = (0, 1, 3, 6, 10)[active]
-                torch.testing.assert_close(shards[0][device_index], eye.repeat(2, 1, 1), rtol=0, atol=0)
+                torch.testing.assert_close(shards[0][device_index], torch.zeros(2, width, width), rtol=0, atol=0)
                 torch.testing.assert_close(shards[1][device_index], (total * eye).repeat(2, 1, 1), rtol=0, atol=0)
                 for head in range(2):
                     for group in range(active):

@@ -6,6 +6,8 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
@@ -32,99 +34,90 @@ struct MatmulSubblock {
     static_assert(rows * columns <= dst_tiles);
 };
 
-// Apply a packed affine pair to a state: out = affine_a * state + affine_b. Unlike matmul_affine, this emits only
-// the transformed state; affine_b is loaded directly into DST so the matmul accumulates without an L1 partial.
-template <uint32_t Mt, uint32_t Kt, uint32_t Vt, uint32_t AffineRowStride = Kt + Vt>
-FORCE_INLINE void matmul_add_affine_b(DataflowBuffer& affine, DataflowBuffer& state, DataflowBuffer& out) {
-    constexpr uint32_t subblock_cols = MatmulSubblock<Mt, Vt>::columns;
-    constexpr uint32_t subblock_rows = MatmulSubblock<Mt, Vt>::rows;
+// Affine maps are carried in complement form, S -> S + E S + B with E = A - I. Long-memory channels have A within
+// a few BF16/TF32 ulps of I; their E keeps its relative precision where A cannot (tt_metal_tracker-g1b.7).
 
+// out = state + E state + B for a packed [E | B] pair. B is preloaded into DST, E state accumulates onto it, and the
+// state itself is added last from its FP32 (UnpackToDest) view: the state is the long-lived carry, so it never passes
+// through a source register.
+template <uint32_t Mt, uint32_t Kt, uint32_t Vt, uint32_t AffineRowStride = Kt + Vt>
+FORCE_INLINE void apply_complement_affine(
+    DataflowBuffer& affine, DataflowBuffer& state, DataflowBuffer& state_exact, DataflowBuffer& out) {
     const uint32_t affine_id = affine.get_id();
     const uint32_t state_id = state.get_id();
+    const uint32_t exact_id = state_exact.get_id();
     const uint32_t out_id = out.get_id();
     out.reserve_back(Mt * Vt);
-    reconfig_data_format(state_id, affine_id);
-    matmul_block_init(affine_id, state_id, false, subblock_cols, subblock_rows, Kt);
-    for (uint32_t m = 0; m < Mt; m += subblock_rows) {
-        for (uint32_t n = 0; n < Vt; n += subblock_cols) {
+    add_binary_tile_init();
+    for (uint32_t m = 0; m < Mt; ++m) {
+        for (uint32_t n = 0; n < Vt; ++n) {
             tile_regs_acquire();
-            reconfig_data_format_srca(state_id, affine_id);
+            reconfig_data_format_srca(affine_id);
             copy_init(affine_id);
-            for (uint32_t subblock_row = 0; subblock_row < subblock_rows; ++subblock_row) {
-                for (uint32_t subblock_col = 0; subblock_col < subblock_cols; ++subblock_col) {
-                    copy_tile(
-                        affine_id,
-                        (m + subblock_row) * AffineRowStride + Kt + n + subblock_col,
-                        subblock_row * subblock_cols + subblock_col);
-                }
-            }
-            reconfig_data_format_srca(affine_id, state_id);
-            matmul_block_init(affine_id, state_id, false, subblock_cols, subblock_rows, Kt);
+            copy_tile(affine_id, m * AffineRowStride + Kt + n, 0);
+            reconfig_data_format<SrcOrder::Reverse>(affine_id, state_id);
+            matmul_block_init(affine_id, state_id, false, 1, 1, Kt);
             for (uint32_t k = 0; k < Kt; ++k) {
-                matmul_block(
-                    affine_id,
-                    state_id,
-                    m * AffineRowStride + k,
-                    k * Vt + n,
-                    0,
-                    false,
-                    subblock_cols,
-                    subblock_rows,
-                    Kt);
+                matmul_block(affine_id, state_id, m * AffineRowStride + k, k * Vt + n, 0, false, 1, 1, Kt);
             }
+            reconfig_data_format_srca(exact_id);
+            copy_init(exact_id);
+            copy_tile(exact_id, m * Vt + n, 1);
+            add_binary_tile(0, 1, 0);
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t subblock_row = 0; subblock_row < subblock_rows; ++subblock_row) {
-                for (uint32_t subblock_col = 0; subblock_col < subblock_cols; ++subblock_col) {
-                    pack_tile(
-                        subblock_row * subblock_cols + subblock_col,
-                        out_id,
-                        (m + subblock_row) * Vt + n + subblock_col);
-                }
-            }
+            pack_tile(0, out_id, m * Vt + n);
             tile_regs_release();
         }
     }
     out.push_back(Mt * Vt);
 }
 
-// Compose packed affine pairs: out_a = a * affine_a and out_b = a * affine_b + local_b. The local B term is
-// preloaded into DST before matmul accumulation, then the packed A and B columns are emitted to separate buffers.
+// Compose packed complement pairs, local after remote:
+//   out_e = local_e + remote_e + local_e remote_e,   out_b = local_b + remote_b + local_e remote_b.
+// The sums are preloaded into DST and the product accumulates onto them; the packed E and B columns are emitted to
+// separate buffers.
 template <uint32_t Mt, uint32_t Kt, uint32_t At, uint32_t Vt>
-FORCE_INLINE void matmul_affine(
-    DataflowBuffer& a, DataflowBuffer& affine, DataflowBuffer& local_b, DataflowBuffer& out_a, DataflowBuffer& out_b) {
+FORCE_INLINE void compose_complement_affine(
+    DataflowBuffer& local_e,
+    DataflowBuffer& affine,
+    DataflowBuffer& local_b,
+    DataflowBuffer& out_e,
+    DataflowBuffer& out_b) {
     constexpr uint32_t Nt = At + Vt;
     constexpr uint32_t subblock_cols = MatmulSubblock<Mt, At, Vt>::columns;
     constexpr uint32_t subblock_rows = MatmulSubblock<Mt, At, Vt>::rows;
 
-    const uint32_t a_id = a.get_id();
+    const uint32_t local_e_id = local_e.get_id();
     const uint32_t affine_id = affine.get_id();
     const uint32_t local_b_id = local_b.get_id();
-    const uint32_t out_a_id = out_a.get_id();
+    const uint32_t out_e_id = out_e.get_id();
     const uint32_t out_b_id = out_b.get_id();
-    out_a.reserve_back(Mt * At);
+    out_e.reserve_back(Mt * At);
     out_b.reserve_back(Mt * Vt);
-    reconfig_data_format(affine_id, a_id);
-    matmul_block_init(a_id, affine_id, false, subblock_cols, subblock_rows, Kt);
     for (uint32_t m = 0; m < Mt; m += subblock_rows) {
         for (uint32_t n = 0; n < Nt; n += subblock_cols) {
+            const bool e_columns = n < At;
+            const uint32_t local_id = e_columns ? local_e_id : local_b_id;
+            const uint32_t local_width = e_columns ? At : Vt;
+            const uint32_t local_column = e_columns ? n : n - At;
             tile_regs_acquire();
-            if (n >= At) {
-                reconfig_data_format_srca(affine_id, local_b_id);
-                copy_init(local_b_id);
-                for (uint32_t subblock_row = 0; subblock_row < subblock_rows; ++subblock_row) {
-                    for (uint32_t subblock_col = 0; subblock_col < subblock_cols; ++subblock_col) {
-                        copy_tile(
-                            local_b_id,
-                            (m + subblock_row) * Vt + n - At + subblock_col,
-                            subblock_row * subblock_cols + subblock_col);
-                    }
+            reconfig_data_format(local_id, affine_id);
+            add_init(local_id, affine_id);
+            for (uint32_t subblock_row = 0; subblock_row < subblock_rows; ++subblock_row) {
+                for (uint32_t subblock_col = 0; subblock_col < subblock_cols; ++subblock_col) {
+                    add_tiles(
+                        local_id,
+                        affine_id,
+                        (m + subblock_row) * local_width + local_column + subblock_col,
+                        (m + subblock_row) * Nt + n + subblock_col,
+                        subblock_row * subblock_cols + subblock_col);
                 }
-                reconfig_data_format_srca(local_b_id, affine_id);
-                matmul_block_init(a_id, affine_id, false, subblock_cols, subblock_rows, Kt);
             }
+            reconfig_data_format<SrcOrder::Reverse>(local_e_id, affine_id);
+            matmul_block_init(local_e_id, affine_id, false, subblock_cols, subblock_rows, Kt);
             for (uint32_t k = 0; k < Kt; ++k) {
-                matmul_block(a_id, affine_id, m * Kt + k, k * Nt + n, 0, false, subblock_cols, subblock_rows, Kt);
+                matmul_block(local_e_id, affine_id, m * Kt + k, k * Nt + n, 0, false, subblock_cols, subblock_rows, Kt);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -133,7 +126,7 @@ FORCE_INLINE void matmul_affine(
                     const uint32_t column = n + subblock_col;
                     const uint32_t dst = subblock_row * subblock_cols + subblock_col;
                     if (column < At) {
-                        pack_tile(dst, out_a_id, (m + subblock_row) * At + column);
+                        pack_tile(dst, out_e_id, (m + subblock_row) * At + column);
                     } else {
                         pack_tile(dst, out_b_id, (m + subblock_row) * Vt + column - At);
                     }
@@ -142,7 +135,7 @@ FORCE_INLINE void matmul_affine(
             tile_regs_release();
         }
     }
-    out_a.push_back(Mt * At);
+    out_e.push_back(Mt * At);
     out_b.push_back(Mt * Vt);
 }
 
@@ -183,11 +176,10 @@ TT_KERNEL void compute(uint32_t group) {
     DataflowBuffer to_remote_a(dfb::to_remote_a);
     DataflowBuffer to_remote_b(dfb::to_remote_b);
     DataflowBuffer from_remote_affine(dfb::from_remote_affine);
-    DataflowBuffer initial_state(dfb::initial_state);
+    DataflowBuffer state(dfb::state);
+    DataflowBuffer state_exact(dfb::state_exact);
     DataflowBuffer final(dfb::final);
     DataflowBuffer tail_affine(dfb::tail_affine);
-    DataflowBuffer tail_entry_states(dfb::tail_entry_states);
-    DataflowBuffer reset_b(dfb::reset_b);
 
     kda_chronology::Topology topology{};
     {
@@ -205,22 +197,21 @@ TT_KERNEL void compute(uint32_t group) {
         initial_b.wait_front(affine_b_tiles);
     }
     if (reset_worker) {
+        // The reset worker's transition starts from its tail seed: (E, B) = (-I, seed) for a group-aligned split,
+        // else the tail summary applied to the seed. The state buffers hold the seed until it is consumed here.
         const bool aligned_reset = topology.split_in_group(G) == 0;
-        tail_entry_states.wait_front(affine_b_tiles);
+        state.wait_front(affine_b_tiles);
+        state_exact.wait_front(affine_b_tiles);
+        copy(initial_a, to_remote_a, affine_a_tiles);
         if (aligned_reset) {
-            copy(tail_entry_states, reset_b, affine_b_tiles);
+            copy(state_exact, to_remote_b, affine_b_tiles);
         } else {
             tail_affine.wait_front(affine_a_tiles + affine_b_tiles);
-            matmul_add_affine_b<Kt, Kt, Vt>(tail_affine, tail_entry_states, reset_b);
-        }
-        reset_b.wait_front(affine_b_tiles);
-        copy(initial_a, to_remote_a, affine_a_tiles);
-        copy(reset_b, to_remote_b, affine_b_tiles);
-        reset_b.pop_front(affine_b_tiles);
-        if (!aligned_reset) {
+            apply_complement_affine<Kt, Kt, Vt>(tail_affine, state, state_exact, to_remote_b);
             tail_affine.pop_front(affine_a_tiles + affine_b_tiles);
         }
-        tail_entry_states.pop_front(affine_b_tiles);
+        state.pop_front(affine_b_tiles);
+        state_exact.pop_front(affine_b_tiles);
     } else {
         copy(initial_a, to_remote_a, affine_a_tiles);
         copy(initial_b, to_remote_b, affine_b_tiles);
@@ -237,19 +228,21 @@ TT_KERNEL void compute(uint32_t group) {
         local_a.wait_front(affine_a_tiles);
         local_b.wait_front(affine_b_tiles);
         from_remote_affine.wait_front(affine_a_tiles + affine_b_tiles);
-        matmul_affine<Kt, Kt, Kt, Vt>(local_a, from_remote_affine, local_b, to_remote_a, to_remote_b);
+        compose_complement_affine<Kt, Kt, Kt, Vt>(local_a, from_remote_affine, local_b, to_remote_a, to_remote_b);
         local_a.pop_front(affine_a_tiles);
         local_b.pop_front(affine_b_tiles);
         from_remote_affine.pop_front(affine_a_tiles + affine_b_tiles);
     }
 
-    initial_state.wait_front(affine_b_tiles);
+    state.wait_front(affine_b_tiles);
+    state_exact.wait_front(affine_b_tiles);
     if (group == 0) {
-        copy(initial_state, final, affine_b_tiles);
+        copy(state_exact, final, affine_b_tiles);
     } else {
         from_remote_affine.wait_front(affine_a_tiles + affine_b_tiles);
-        matmul_add_affine_b<Kt, Kt, Vt>(from_remote_affine, initial_state, final);
+        apply_complement_affine<Kt, Kt, Vt>(from_remote_affine, state, state_exact, final);
         from_remote_affine.pop_front(affine_a_tiles + affine_b_tiles);
     }
-    initial_state.pop_front(affine_b_tiles);
+    state.pop_front(affine_b_tiles);
+    state_exact.pop_front(affine_b_tiles);
 }

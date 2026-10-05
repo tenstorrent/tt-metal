@@ -142,7 +142,8 @@ def _host_inputs(
             a[offset, 0, 1] += 0.25
             a[offset + 1, 1, 0] -= 0.20
             assert torch.max(torch.abs(a[offset + 1] @ a[offset] - a[offset] @ a[offset + 1])) > 0.01
-    return a, b
+    # The op takes and returns transitions in complement form, E = A - I.
+    return a - eye, b
 
 
 def _oracle(
@@ -154,15 +155,16 @@ def _oracle(
     key_dim, value_dim = a.shape[-1], b.shape[-1]
     a = a.reshape(batch_heads, groups_per_head, key_dim, key_dim).float()
     b = b.reshape(batch_heads, groups_per_head, key_dim, value_dim).float()
+    eye = torch.eye(key_dim)
     reduced_a = []
     reduced_b = []
     for head in range(batch_heads):
-        total_a = torch.eye(key_dim)
+        total_a = eye.clone()
         total_b = torch.zeros(key_dim, value_dim)
         for group in range(groups_per_head):
-            total_a = a[head, group] @ total_a
-            total_b = a[head, group] @ total_b + b[head, group]
-        reduced_a.append(total_a)
+            total_a = (eye + a[head, group]) @ total_a
+            total_b = total_b + a[head, group] @ total_b + b[head, group]
+        reduced_a.append(total_a - eye)
         reduced_b.append(total_b)
     return torch.stack(reduced_a), torch.stack(reduced_b)
 
@@ -228,12 +230,17 @@ def _composed_ttnn_baseline(
     total_a = a_groups[0]
     total_b = b_groups[0]
     for group in range(1, groups_per_head):
+        # Complement form: E <- E_g + E + E_g E and B <- B + E_g B + B_g.
         total_b = ttnn.add(
-            ttnn.matmul(a_groups[group], total_b, dtype=ttnn.float32),
-            b_groups[group],
+            total_b,
+            ttnn.add(ttnn.matmul(a_groups[group], total_b, dtype=ttnn.float32), b_groups[group], dtype=ttnn.float32),
             dtype=ttnn.float32,
         )
-        total_a = ttnn.matmul(a_groups[group], total_a, dtype=ttnn.float32)
+        total_a = ttnn.add(
+            ttnn.add(a_groups[group], total_a, dtype=ttnn.float32),
+            ttnn.matmul(a_groups[group], total_a, dtype=ttnn.float32),
+            dtype=ttnn.float32,
+        )
     return total_a, total_b
 
 

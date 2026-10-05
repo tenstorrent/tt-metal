@@ -51,6 +51,7 @@ def test_chronology_summaries_single_capture(
     for _ in range(2):
         for tensor in run():
             ttnn.deallocate(tensor)
+    oracles = {}
     trace = ttnn.begin_trace_capture(device, cq_id=0)
     outputs = run()
     ttnn.end_trace_capture(device, trace, cq_id=0)
@@ -71,7 +72,10 @@ def test_chronology_summaries_single_capture(
                     and (actual_start_value // rows) % tuple(mesh_device.shape)[axis] == rank
                 )
                 wrap = (rows - actual_start_value % rows) // 32 if split else rows // 32
-                expected = segmented_summary_oracle(host, groups, chunks_per_group, wrap)
+                # The CPU oracle runs inside the device lock: compute each distinct wrap once.
+                if wrap not in oracles:
+                    oracles[wrap] = segmented_summary_oracle(host, groups, chunks_per_group, wrap)
+                expected = oracles[wrap]
                 actual = [ttnn.to_torch(ttnn.get_device_tensors(t)[shard_index]).float() for t in outputs]
                 assert all(t.dtype == ttnn.bfloat16 for t in outputs)
                 for folded_head in range(2 * groups):

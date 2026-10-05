@@ -43,7 +43,7 @@ def _group_summary_memory_config(device: ttnn.Device, group_heads: int, key_dim:
 
 @dataclass(frozen=True)
 class _AffineTransform:
-    """State-space affine map ``state -> a @ state + b``."""
+    """State-space affine map in complement form, ``state -> state + a @ state + b`` (``a`` = A - I)."""
 
     a: ttnn.Tensor
     b: ttnn.Tensor
@@ -269,14 +269,19 @@ def _distributed_prefix(
         # Precision boundary: BF16 collective payload is restored for FP32 carry math.
         a_for_carry = ttnn.typecast(transported_a, KDA_RECURRENT_STATE_DTYPE, memory_config=working_memory)
         b_for_carry = ttnn.typecast(transported_b, KDA_RECURRENT_STATE_DTYPE, memory_config=working_memory)
-        carry = ttnn.matmul(
+        # Complement form: carry <- carry + (E carry + B), E = A - I. The outer FP32 add (SFPU) keeps the
+        # long-memory channels exact; the near-identity part never passes through the matmul.
+        # The increment temporaries live in DRAM so the L1 working set stays one new carry per step.
+        increment = ttnn.matmul(
             a_for_carry,
             carry,
-            memory_config=working_memory,
+            memory_config=output_memory,
             dtype=KDA_RECURRENT_STATE_DTYPE,
             compute_kernel_config=compute_config,
         )
-        carry = ttnn.add(carry, b_for_carry, memory_config=working_memory)
+        increment = ttnn.add(increment, b_for_carry, memory_config=output_memory)
+        carry = ttnn.add(carry, increment, memory_config=working_memory)
+        ttnn.deallocate(increment)
 
     chronological_entries = ttnn.concat(entry_states, dim=0, memory_config=working_memory)
     local_entries = selections.select_local_entry_state(chronological_entries, memory_config=working_memory)

@@ -95,6 +95,24 @@ FORCE_INLINE void seed_identity(DataflowBuffer& buffer, Noc& noc, uint32_t value
     buffer.push_back(tile_count);
 }
 
+// Two constant tiles: a 32x32 identity (the basis of the per-chunk decay diagonal and the I of the complement
+// summary) followed by a zero tile.
+FORCE_INLINE void seed_identity_and_zero_tiles(DataflowBuffer& buffer, Noc& noc) {
+    constexpr uint32_t one_fp32 = __builtin_bit_cast(uint32_t, 1.0F);
+    buffer.reserve_back(2);
+    noc.async_write_zeros(buffer, 2 * buffer.get_entry_size());
+    noc.write_zeros_l1_barrier();
+    {
+        auto lock = buffer.scoped_write_lock(1);
+        auto tile = lock.get_ptr<volatile uint32_t>();
+        for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; ++row) {
+            tile[row * tt::constants::FACE_WIDTH + row] = one_fp32;
+            tile[3 * tt::constants::FACE_HW + row * tt::constants::FACE_WIDTH + row] = one_fp32;
+        }
+    }
+    buffer.push_back(2);
+}
+
 template <
     uint32_t Ct,
     uint32_t Kt,
@@ -162,6 +180,8 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
     constexpr uint32_t key_value_tiles = Kt * Vt;
 
+    DataflowBuffer identity(dfb::identity);
+    seed_identity_and_zero_tiles(identity, noc);
     if constexpr (summary) {
         seed_zero<key_value_tiles>(state, noc);
         seed_identity<Kt, Vt>(summary_seed, noc, value_block);
@@ -175,10 +195,10 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
     for (uint32_t chunk = 0; chunk < valid_chunks; ++chunk) {
         const uint32_t head_chunk = head * num_chunks + chunk;
         // Publish the restart seed just in time, never before the loop. The state
-        // DFB holds one kv payload and compute frees it only via pop_front at the
-        // end of chunk 0, so hoisting this deadlocks; pushing it here reuses the
-        // same capacity as a queue and costs no extra L1. reset_chunk is >= 1
-        // whenever it is non-zero, so chunk 0 has always been consumed by now.
+        // DFB holds one kv payload and compute frees it only after seeding its ring
+        // and carry from it; pushing it here reuses the same capacity as a queue and
+        // costs no extra L1. reset_chunk is >= 1 whenever it is non-zero, so the
+        // initial seed has always been consumed by now.
         if constexpr (summary) {
             if (reset_chunk != 0 && chunk == reset_chunk) {
                 seed_zero<key_value_tiles>(state, noc);

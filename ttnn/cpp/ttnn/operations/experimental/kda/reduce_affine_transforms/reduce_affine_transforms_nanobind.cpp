@@ -20,7 +20,10 @@ void bind_reduce_affine_transforms(nb::module_& mod) {
 
         Each input pair represents one group of chunks for one batch-head:
 
-            F_g(S) = A_g @ S + B_g
+            F_g(S) = S + A_g @ S + B_g
+
+        ``A_g`` and the composed ``A`` are in complement form (the transition minus the
+        identity).
 
         The leading dimension is flattened batch-head-group order:
 
@@ -28,8 +31,8 @@ void bind_reduce_affine_transforms(nb::module_& mod) {
 
         Groups are composed in sequence order:
 
-            A_total = A_g @ A_total
-            B_total = A_g @ B_total + B_g
+            A_total = A_total + A_g + A_g @ A_total
+            B_total = B_total + A_g @ B_total + B_g
 
         On the rank containing both the chronological beginning and end of the
         sequence, only the head groups are composed. Other ranks compose all
@@ -73,7 +76,7 @@ void bind_reduce_affine_transforms(nb::module_& mod) {
                 ``A[B*H,K,K]`` and ``B[B*H,K,V]``, containing one composed
                 transition per batch-head:
 
-                    S_after = A @ S_before + B
+                    S_after = S_before + A @ S_before + B
 
         Note:
             ``K`` and ``V`` must be positive and tile-aligned, and each ``A_g``

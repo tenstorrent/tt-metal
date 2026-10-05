@@ -7,7 +7,7 @@
 // exp(G_i-G_j) inside each q/k dot as exp(G_i)*exp(-G_j):
 //   qd=q*exp(G), kl=k*exp(G), kr=k*exp(-G)
 //   Akk=strictly_lower((beta*kl)@kr^T), Aqk=tril(qd@kr^T)
-//   kd=beta*kl, k_dec_t=(kr*exp(G_last))^T, dl=exp(G_last).
+//   kd=beta*kl, k_dec_t=(kr*exp(G_last))^T, dl=expm1(G_last)=exp(G_last)-1 (complement-form decay).
 // T_inv uses a face-blocked polynomial inverse so large gate magnitudes remain stable.
 
 #include <cstdint>
@@ -17,6 +17,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/compute_kernel_api.h"  // expm1_tile
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -165,6 +166,35 @@ inline void exponential_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n)
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             copy_tile(in_id, block_start + tile, tile);
             exp_tile(tile);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            pack_tile(tile, o_id, block_start + tile);
+        }
+        tile_regs_release();
+    }
+    o.push_back(n);
+}
+
+// Complement-form decay: final_decay carries expm1(G_last) = exp(G_last) - 1 instead of exp(G_last). For
+// long-memory channels exp(G_last) lies within 2^-9 of 1, where BF16 rounds it to exactly 1.0 and the channel
+// stops forgetting; the small complement keeps its relative precision. recurrent_chunk_scan applies
+// S + (S * final_decay + update).
+inline void expm1_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
+    const uint32_t in_id = in.get_id();
+    const uint32_t o_id = o.get_id();
+
+    o.reserve_back(n);
+    reconfig_data_format_srca(in_id);  // unary: in_id->srcA
+    copy_init(in_id);
+    expm1_tile_init<false>();
+    for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
+        const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
+        tile_regs_acquire();
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            copy_tile(in_id, block_start + tile, tile);
+            expm1_tile<false>(tile);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -500,7 +530,7 @@ template <uint32_t Ct, uint32_t Kt>
 inline void prepare_final_decay_rows(DataflowBuffer& g_last, DataflowBuffer& final_decay_rows) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
 
-    exponential_tiles(g_last, final_decay_rows, chunk_key_tiles);  // exp(G_last)
+    expm1_tiles(g_last, final_decay_rows, chunk_key_tiles);  // expm1(G_last)
     final_decay_rows.wait_front(chunk_key_tiles);
     g_last.pop_front(chunk_key_tiles);
 }
@@ -594,7 +624,7 @@ inline void prepare_decay_outputs(
     DataflowBuffer& final_decay) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
 
-    // dl [K,1] is the transpose of any replicated exp(G_last) row.
+    // dl [K,1] is the transpose of any replicated expm1(G_last) row.
     transpose_tile_row_to_column(final_decay_rows, final_decay, Kt);
     final_decay_rows.pop_front(chunk_key_tiles);
 

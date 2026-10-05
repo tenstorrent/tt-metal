@@ -58,42 +58,25 @@ FORCE_INLINE void send_affine_pair(
     ready.up(noc, target_x, target_y, 1);
 }
 
-// Empty ranks contribute the affine identity (I, 0) to the distributed prefix.
+// Empty ranks contribute the affine identity to the distributed prefix: (E, B) = (0, 0) in complement form.
 // The unused remote buffer provides one FLOAT32 scratch tile; compute has exited.
 template <uint32_t Kt, uint32_t Vt, typename AAccessor, typename BAccessor>
 FORCE_INLINE void write_identity_transform(
     Noc& noc, DataflowBuffer& scratch, uint32_t head, const AAccessor& output_a, const BAccessor& output_b) {
     constexpr uint32_t a_tiles = Kt * Kt;
     constexpr uint32_t b_tiles = Kt * Vt;
-    constexpr uint32_t face_rows = tt::constants::FACE_HEIGHT;
-    constexpr uint32_t face_cols = tt::constants::FACE_WIDTH;
-    constexpr uint32_t faces_per_row = tt::constants::TILE_WIDTH / face_cols;
-    constexpr uint32_t bottom_right_face_offset = (faces_per_row + 1) * tt::constants::FACE_HW;
-    constexpr uint32_t fp32_one_bits = __builtin_bit_cast(uint32_t, 1.0f);
 
     scratch.reserve_back(1);
     const uint32_t tile_bytes = scratch.get_entry_size();
     noc.async_write_zeros(scratch, tile_bytes);
     noc.write_zeros_l1_barrier();
+    for (uint32_t tile = 0; tile < a_tiles; ++tile) {
+        noc.async_write(scratch, output_a, tile_bytes, {}, {.page_id = head * a_tiles + tile});
+    }
     for (uint32_t tile = 0; tile < b_tiles; ++tile) {
         noc.async_write(scratch, output_b, tile_bytes, {}, {.page_id = head * b_tiles + tile});
     }
-    // Finish the zero writes before reusing the tile for the identity matrix.
     noc.async_write_barrier();
-    auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch.get_write_ptr());
-    for (uint32_t row = 0; row < Kt; ++row) {
-        for (uint32_t col = 0; col < Kt; ++col) {
-            const uint32_t diagonal_bits = row == col ? fp32_one_bits : 0;
-            // A tile's diagonal lies in its top-left and bottom-right faces.
-            for (uint32_t r = 0; r < face_rows; ++r) {
-                const uint32_t diagonal_offset = r * face_cols + r;
-                words[diagonal_offset] = diagonal_bits;
-                words[bottom_right_face_offset + diagonal_offset] = diagonal_bits;
-            }
-            noc.async_write(scratch, output_a, tile_bytes, {}, {.page_id = head * a_tiles + row * Kt + col});
-            noc.async_write_barrier();
-        }
-    }
 }
 
 template <uint32_t G, typename ArrivalSem, typename ReleaseSem>

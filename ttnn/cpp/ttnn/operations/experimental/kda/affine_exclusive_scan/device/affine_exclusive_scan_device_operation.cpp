@@ -63,6 +63,8 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
     check_input_memory_layout(in.b, "b");
     kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
+    kda_factory_detail::check_fp32_state_compute_config(
+        attrs.compute_kernel_config, in.a.device()->arch(), operation_name);
 
     const auto& a_shape = in.a.logical_shape();
     const auto& b_shape = in.b.logical_shape();

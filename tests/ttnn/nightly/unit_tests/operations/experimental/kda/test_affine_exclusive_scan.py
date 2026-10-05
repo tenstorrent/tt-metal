@@ -150,7 +150,8 @@ def _host_inputs(
             a[offset, 0, 1] += 0.25
             a[offset + 1, 1, 0] -= 0.20
             assert torch.max(torch.abs(a[offset + 1] @ a[offset] - a[offset] @ a[offset + 1])) > 0.01
-    return a, b, initial_state
+    # The op takes transitions in complement form, E = A - I.
+    return a - eye, b, initial_state
 
 
 def _oracle(
@@ -168,7 +169,7 @@ def _oracle(
         carry = initial_state[head].float()
         for group in range(groups_per_head):
             entries.append(carry.clone())
-            carry = a[head, group] @ carry + b[head, group]
+            carry = carry + a[head, group] @ carry + b[head, group]
     return torch.stack(entries)
 
 
@@ -228,11 +229,12 @@ def _composed_ttnn_baseline(
     for group in range(groups_per_head):
         entries.append(carry)
         if group + 1 < groups_per_head:
-            carry = ttnn.add(
+            increment = ttnn.add(
                 ttnn.matmul(a_groups[group], carry, dtype=ttnn.float32),
                 b_groups[group],
                 dtype=ttnn.float32,
             )
+            carry = ttnn.add(carry, increment, dtype=ttnn.float32)
     group_major = ttnn.concat(entries, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     grouped = ttnn.reshape(group_major, [groups_per_head, batch_heads, key_dim, value_dim])
     head_major = ttnn.permute(grouped, (1, 0, 2, 3))

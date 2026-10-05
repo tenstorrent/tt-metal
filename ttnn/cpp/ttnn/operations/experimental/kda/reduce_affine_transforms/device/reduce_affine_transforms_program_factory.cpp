@@ -54,7 +54,6 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
     const tt::tt_metal::experimental::DFBSpecName send_b_dfb_name{"send_b"};
     const tt::tt_metal::experimental::DFBSpecName remote_a_dfb_name{"remote_a"};
     const tt::tt_metal::experimental::DFBSpecName remote_b_dfb_name{"remote_b"};
-    const tt::tt_metal::experimental::DFBSpecName scratch_dfb_name{"scratch"};
 
     const tt::tt_metal::experimental::SemaphoreSpecName ready_semaphore_name{"ready"};
     const tt::tt_metal::experimental::SemaphoreSpecName arrival_semaphore_name{"arrival"};
@@ -88,7 +87,6 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
         make_dfb(send_b_dfb_name, 2 * b_tiles, internal_format),
         make_dfb(remote_a_dfb_name, a_tiles, internal_format),
         make_dfb(remote_b_dfb_name, b_tiles, internal_format),
-        make_dfb(scratch_dfb_name, b_tiles, internal_format),
     };
     // The sender addresses a peer's inbound mailbox with its own local write pointer, which is only
     // valid while these buffers hold one phase-independent slot. Any additional depth lets sender and
@@ -143,8 +141,7 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
 
     auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
     auto& unpack_modes = compute_hw.unpack_modes;
-    for (const auto& name :
-         {stage_a_dfb_name, stage_b_dfb_name, remote_a_dfb_name, remote_b_dfb_name, scratch_dfb_name}) {
+    for (const auto& name : {stage_a_dfb_name, stage_b_dfb_name, remote_a_dfb_name, remote_b_dfb_name}) {
         unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
     }
     if (summary_format == tt::DataFormat::Float32) {
@@ -180,10 +177,6 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
                     remote_a_dfb_name, "remote_a", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
                     remote_b_dfb_name, "remote_b", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
-                tt::tt_metal::experimental::DFBBinding{
-                    scratch_dfb_name, "scratch", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
-                tt::tt_metal::experimental::DFBBinding{
-                    scratch_dfb_name, "scratch", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
             },
         .compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"G", G}},
         .runtime_arg_schema = {.runtime_arg_names = {"group"}},

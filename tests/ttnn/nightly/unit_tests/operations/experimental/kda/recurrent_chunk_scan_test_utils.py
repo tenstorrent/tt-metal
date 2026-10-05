@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable, Collection, Sequence
 
 import torch
@@ -15,6 +16,28 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
 )
 
 CHUNK_SIZE = 32
+
+
+def single_threaded_oracle(function):
+    """Run a small-matrix CPU oracle on one Torch thread.
+
+    These oracles run inside the device lock (tests call them after opening the device) and issue thousands of
+    tiny matmuls. On a shared, loaded host the default thread pool oversubscribes and slowed them about 1000x
+    (34 s vs 0.04 s for 16 segmented summaries); one thread gives the same values.
+    """
+
+    @functools.wraps(function)
+    def wrapper(*args, **kwargs):
+        threads = torch.get_num_threads()
+        torch.set_num_threads(1)
+        try:
+            return function(*args, **kwargs)
+        finally:
+            torch.set_num_threads(threads)
+
+    return wrapper
+
+
 PROTOCOL_NAMES = ("v_beta", "kd", "q_decay", "intra", "k_dec_t", "final_decay", "t_inv")
 BF16_ALLOWED = frozenset({"v_beta", "kd", "q_decay", "k_dec_t", "final_decay"})
 
@@ -39,7 +62,8 @@ def host_protocol(
     q_decay = 0.06 * torch.randn(*base, CHUNK_SIZE, key_dim, generator=generator)
     intra = torch.tril(0.025 * torch.randn(*base, CHUNK_SIZE, CHUNK_SIZE, generator=generator))
     k_dec_t = 0.025 * torch.randn(*base, key_dim, CHUNK_SIZE, generator=generator)
-    final_decay = 0.86 + 0.08 * torch.rand(*base, key_dim, 1, generator=generator)
+    # Complement form, expm1(G_last) = exp(G_last) - 1: a per-chunk decay in [0.86, 0.94].
+    final_decay = -0.14 + 0.08 * torch.rand(*base, key_dim, 1, generator=generator)
     strict_lower = torch.tril(0.015 * torch.randn(*base, CHUNK_SIZE, CHUNK_SIZE, generator=generator), diagonal=-1)
     identity = torch.eye(CHUNK_SIZE).reshape(1, 1, CHUNK_SIZE, CHUNK_SIZE)
     t_inv = torch.linalg.inv(identity + strict_lower)
@@ -55,15 +79,17 @@ def initial_state(batch_heads: int, key_dim: int, value_dim: int, *, seed: int =
     return (0.04 * torch.randn(batch_heads, key_dim, value_dim, generator=generator)).float()
 
 
+@single_threaded_oracle
 def _scan_state(protocol: Sequence[torch.Tensor], state: torch.Tensor) -> torch.Tensor:
     v_beta, kd, _, _, k_dec_t, final_decay, t_inv = (tensor.float() for tensor in protocol)
     state = state.float().clone()
     for chunk in range(v_beta.shape[1]):
         value_new = torch.matmul(t_inv[:, chunk], v_beta[:, chunk] - torch.matmul(kd[:, chunk], state))
-        state = state * final_decay[:, chunk] + torch.matmul(k_dec_t[:, chunk], value_new)
+        state = state + (state * final_decay[:, chunk] + torch.matmul(k_dec_t[:, chunk], value_new))
     return state
 
 
+@single_threaded_oracle
 def recurrent_oracle(protocol: Sequence[torch.Tensor], state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv = (tensor.float() for tensor in protocol)
     state = state.float().clone()
@@ -72,11 +98,13 @@ def recurrent_oracle(protocol: Sequence[torch.Tensor], state: torch.Tensor) -> t
         value_new = torch.matmul(t_inv[:, chunk], v_beta[:, chunk] - torch.matmul(kd[:, chunk], state))
         output = torch.matmul(q_decay[:, chunk], state) + torch.matmul(intra[:, chunk], value_new)
         chunks.append(output)
-        state = state * final_decay[:, chunk] + torch.matmul(k_dec_t[:, chunk], value_new)
+        state = state + (state * final_decay[:, chunk] + torch.matmul(k_dec_t[:, chunk], value_new))
     return torch.stack(chunks, dim=1).to(torch.bfloat16), state.float()
 
 
+@single_threaded_oracle
 def summary_oracle(protocol: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+    """Affine summary S -> S + E S + B of a chunk run, in complement form: (E = A - I, B)."""
     batch_heads, _, _, key_dim = protocol[1].shape
     value_dim = protocol[0].shape[-1]
     if key_dim != value_dim:
@@ -84,17 +112,18 @@ def summary_oracle(protocol: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torc
     zero = torch.zeros(batch_heads, key_dim, value_dim)
     identity = torch.eye(key_dim).expand(batch_heads, -1, -1).clone()
     affine_b = _scan_state(protocol, zero)
-    affine_a = _scan_state(protocol, identity) - affine_b
-    return affine_a.float(), affine_b.float()
+    affine_e = _scan_state(protocol, identity) - affine_b - identity
+    return affine_e.float(), affine_b.float()
 
 
+@single_threaded_oracle
 def segmented_summary_oracle(
     host_inputs: tuple[torch.Tensor, ...], groups_per_head: int, chunks_per_group: int, wrap_chunk: int
 ) -> tuple[torch.Tensor, ...]:
     folded_heads = host_inputs[0].shape[0]
     dim = host_inputs[1].shape[-1]
     expected_parts: list[list[torch.Tensor]] = [[], [], [], []]
-    identity_a = torch.eye(dim, dtype=torch.float32).unsqueeze(0)
+    identity_a = torch.zeros((1, dim, dim), dtype=torch.float32)  # complement form of the identity transform
     identity_b = torch.zeros((1, dim, dim), dtype=torch.float32)
     for folded_head in range(folded_heads):
         group = folded_head % groups_per_head
@@ -124,7 +153,7 @@ def assert_summary_reconstructs_state(
     batch_heads, key_dim, value_dim = affine_a.shape
     state = initial_state(batch_heads, key_dim, value_dim, seed=3141)
     expected = _scan_state(protocol, state)
-    reconstructed = torch.matmul(affine_a.float(), state) + affine_b.float()
+    reconstructed = state + torch.matmul(affine_a.float(), state) + affine_b.float()
     assert_accurate(expected, reconstructed, name="semantic affine reconstruction", pcc_threshold=0.9999)
 
 

@@ -116,6 +116,16 @@ void check_compute_config(const DeviceComputeKernelConfig& config, std::string_v
         operation_name);
 }
 
+void check_fp32_state_compute_config(
+    const DeviceComputeKernelConfig& config, tt::ARCH arch, std::string_view operation_name) {
+    const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(arch, config);
+    TT_FATAL(
+        fp32_dest_acc_en,
+        "{}: fp32_dest_acc_en=false is unsupported because the recurrent state is carried in FP32 through DST",
+        operation_name);
+}
+
 KdaPrepWorkDist distribute_prep(tt::tt_metal::CoreCoord grid, uint32_t total, uint32_t core_cap) {
     const uint32_t max_cores = std::min<uint32_t>(grid.x * grid.y, core_cap);
     const uint32_t count = std::min(total, max_cores);

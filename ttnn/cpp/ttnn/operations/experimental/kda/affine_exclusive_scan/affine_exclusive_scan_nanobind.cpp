@@ -18,7 +18,10 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
 
         Each input pair represents one group-level affine transition:
 
-            F_g(S) = A_g @ S + B_g
+            F_g(S) = S + A_g @ S + B_g
+
+        ``A_g`` is in complement form (the transition minus the identity). The carried
+        state is added in FP32, which requires ``fp32_dest_acc_en``.
 
         The leading dimension is flattened batch-head-group order:
 
@@ -29,7 +32,7 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
         groups:
 
             entry[0] = initial_state
-            entry[g] = A_{g-1} @ entry[g-1] + B_{g-1}
+            entry[g] = entry[g-1] + A_{g-1} @ entry[g-1] + B_{g-1}
 
         On the rank containing both the chronological beginning and end of the
         sequence, the tail restarts from ``tail_entry_states`` after the intervening

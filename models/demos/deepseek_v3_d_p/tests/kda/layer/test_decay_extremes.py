@@ -71,16 +71,16 @@ def _dump(case_name: str, name: str, tensor: torch.Tensor) -> None:
 _MEASURED_FAILURES = {
     "synthetic-strong-saturated-h0-1-T1280x1": "strong decay |G_last|=160 (g=-5): output token 31 of a chunk error/RMS "
     "9.6e-2 (control 3.3e-2); output PCC 0.99994",
-    "synthetic-weak-h0-1-T1280x8": "weak decay |G_last|~1.5e-3 < 2^-9 with beta~3e-4: no forgetting; output error/RMS "
-    "grows to 0.18 over 320 chunks, output norm ratio 1.12, state norm ratio 1.20, state PCC 0.9945; output PCC 0.99967",
-    "glm-weak-h10-11-T1280x8": "GLM layer 0, weak decay |G_last|~1.5e-3 with beta~3e-4: output error/RMS grows to 0.20, "
-    "output norm ratio 1.13, state norm ratio 1.11, state PCC 0.9975; output PCC 0.9998",
-    "k3-weak-h24-25-T1280x8": "K3 layer 1, weak decay |G_last| median 1e-3 with beta~3e-4: final state PCC 0.9875, key "
-    "row error/RMS 0.93; output within gates",
+    # The weak-decay contraction is fixed by the complement-form decay and FP32 state carry (tt_metal_tracker-g1b.7):
+    # synthetic-weak and glm-weak pass. K3's remaining error is upstream of the recurrence (inferred: its BF16
+    # gate projection, amplified by K3's large A in the sigmoid tail, gives the long-memory rows ~22% gate error).
+    "k3-weak-h24-25-T1280x8": "K3 layer 1, weak decay |G_last| ~1.6e-3 with beta~3e-4: final state PCC 0.99939, key "
+    "row 65 error/RMS 0.271 (was 0.9875 / 0.93 before g1b.7); output within gates; inferred cause BF16 gate logits",
     "glm-strong-h50-51-T1280x1": "GLM layer 0, strong decay |G_last|~150 (fractional gates): final state norm ratio "
     "0.951 (control 0.987), key row error/RMS 0.35; output within gates",
-    "k3-control-h48-49-T1280x1": "baseline, not a decay extreme: the ridge-limited K3 input leaves 19 long-memory "
-    "channels (|G_last| 0.01-1) whose state rows contract (norm ratio 0.914); output PCC 0.99924, state norm 0.937",
+    "k3-control-h48-49-T1280x1": "K3 baseline input: long-memory row contraction fixed by g1b.7 (norm ratio 0.914 -> "
+    "0.976); output PCC 0.99943 < 0.9995 and token error/RMS 0.116 remain, from strongly decaying rows (row error up "
+    "to 0.21, unchanged; inferred: the prep k_dec_t precision with fractional gates, g1b.7 T2)",
 }
 
 
