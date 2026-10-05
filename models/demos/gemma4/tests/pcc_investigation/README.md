@@ -78,6 +78,8 @@ All take `<model_dir> <gemma4|qwen3_moe|olmoe>`.
 | `moe_internals.py` | Residual stream size per layer, update-to-residual ratio, attention score sizes. |
 | `probe_layer_gain.py` | Runs one layer at a time on the clean input and on the input plus a 2⁻⁹ nudge (random direction, and the real direction the difference takes inside the model), routing frozen and free. Reports how much the relative difference grows at every point inside the layer. |
 | `massive_channels.py` | How much of the residual stream's size sits in its 4 largest channels, and how the next norm weights them. |
+| `freeze_components.py` | The 2⁻⁹ embedding nudge on the full model with the routing, the attention probabilities, or both frozen to the clean run (`FREEZE_SUBSETS=1`: attention frozen in only some layers). |
+| `attention_spread.py` | Spread of the attention scores under the attention distribution, entropy, largest probability, per layer. |
 
 ### `google/`: Google DeepMind's own JAX Gemma 4 (run with `~/venvs/gemma-jax`)
 | Script | What it does |

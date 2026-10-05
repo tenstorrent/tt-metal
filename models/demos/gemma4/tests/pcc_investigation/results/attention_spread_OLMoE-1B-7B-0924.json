@@ -1,0 +1,162 @@
+[
+ {
+  "layer": 0,
+  "sd_p": 0.635,
+  "entropy": 4.344,
+  "max_p": 0.155,
+  "scaling": 0.08839,
+  "q_rms": 0.756,
+  "k_rms": 0.863,
+  "head_dim": 128
+ },
+ {
+  "layer": 1,
+  "sd_p": 1.203,
+  "entropy": 4.217,
+  "max_p": 0.16,
+  "scaling": 0.08839,
+  "q_rms": 0.887,
+  "k_rms": 0.987,
+  "head_dim": 128
+ },
+ {
+  "layer": 2,
+  "sd_p": 1.796,
+  "entropy": 3.529,
+  "max_p": 0.256,
+  "scaling": 0.08839,
+  "q_rms": 1.068,
+  "k_rms": 1.143,
+  "head_dim": 128
+ },
+ {
+  "layer": 3,
+  "sd_p": 1.758,
+  "entropy": 3.397,
+  "max_p": 0.27,
+  "scaling": 0.08839,
+  "q_rms": 1.037,
+  "k_rms": 1.056,
+  "head_dim": 128
+ },
+ {
+  "layer": 4,
+  "sd_p": 1.751,
+  "entropy": 3.102,
+  "max_p": 0.298,
+  "scaling": 0.08839,
+  "q_rms": 1.081,
+  "k_rms": 1.145,
+  "head_dim": 128
+ },
+ {
+  "layer": 5,
+  "sd_p": 1.993,
+  "entropy": 2.931,
+  "max_p": 0.406,
+  "scaling": 0.08839,
+  "q_rms": 1.092,
+  "k_rms": 1.125,
+  "head_dim": 128
+ },
+ {
+  "layer": 6,
+  "sd_p": 1.844,
+  "entropy": 3.027,
+  "max_p": 0.381,
+  "scaling": 0.08839,
+  "q_rms": 1.124,
+  "k_rms": 1.145,
+  "head_dim": 128
+ },
+ {
+  "layer": 7,
+  "sd_p": 1.932,
+  "entropy": 2.524,
+  "max_p": 0.478,
+  "scaling": 0.08839,
+  "q_rms": 1.181,
+  "k_rms": 1.199,
+  "head_dim": 128
+ },
+ {
+  "layer": 8,
+  "sd_p": 1.932,
+  "entropy": 2.769,
+  "max_p": 0.425,
+  "scaling": 0.08839,
+  "q_rms": 1.195,
+  "k_rms": 1.239,
+  "head_dim": 128
+ },
+ {
+  "layer": 9,
+  "sd_p": 1.969,
+  "entropy": 2.446,
+  "max_p": 0.501,
+  "scaling": 0.08839,
+  "q_rms": 1.177,
+  "k_rms": 1.218,
+  "head_dim": 128
+ },
+ {
+  "layer": 10,
+  "sd_p": 2.025,
+  "entropy": 2.175,
+  "max_p": 0.552,
+  "scaling": 0.08839,
+  "q_rms": 1.193,
+  "k_rms": 1.167,
+  "head_dim": 128
+ },
+ {
+  "layer": 11,
+  "sd_p": 1.974,
+  "entropy": 1.854,
+  "max_p": 0.605,
+  "scaling": 0.08839,
+  "q_rms": 1.259,
+  "k_rms": 1.232,
+  "head_dim": 128
+ },
+ {
+  "layer": 12,
+  "sd_p": 1.904,
+  "entropy": 1.382,
+  "max_p": 0.725,
+  "scaling": 0.08839,
+  "q_rms": 1.222,
+  "k_rms": 1.177,
+  "head_dim": 128
+ },
+ {
+  "layer": 13,
+  "sd_p": 2.019,
+  "entropy": 1.447,
+  "max_p": 0.729,
+  "scaling": 0.08839,
+  "q_rms": 1.202,
+  "k_rms": 1.135,
+  "head_dim": 128
+ },
+ {
+  "layer": 14,
+  "sd_p": 1.932,
+  "entropy": 1.377,
+  "max_p": 0.743,
+  "scaling": 0.08839,
+  "q_rms": 1.163,
+  "k_rms": 1.108,
+  "head_dim": 128
+ },
+ {
+  "layer": 15,
+  "sd_p": 1.966,
+  "entropy": 2.044,
+  "max_p": 0.592,
+  "scaling": 0.08839,
+  "q_rms": 1.129,
+  "k_rms": 1.094,
+  "head_dim": 128
+ }
+]

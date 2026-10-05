@@ -1,0 +1,302 @@
+[
+ {
+  "layer": 0,
+  "sd_p": 1.363,
+  "entropy": 2.553,
+  "max_p": 0.413,
+  "scaling": 1.0,
+  "q_rms": 1.023,
+  "k_rms": 0.122,
+  "head_dim": 256
+ },
+ {
+  "layer": 1,
+  "sd_p": 1.578,
+  "entropy": 2.643,
+  "max_p": 0.376,
+  "scaling": 1.0,
+  "q_rms": 1.031,
+  "k_rms": 0.122,
+  "head_dim": 256
+ },
+ {
+  "layer": 2,
+  "sd_p": 1.647,
+  "entropy": 3.141,
+  "max_p": 0.296,
+  "scaling": 1.0,
+  "q_rms": 0.949,
+  "k_rms": 0.132,
+  "head_dim": 256
+ },
+ {
+  "layer": 3,
+  "sd_p": 1.745,
+  "entropy": 2.719,
+  "max_p": 0.379,
+  "scaling": 1.0,
+  "q_rms": 1.031,
+  "k_rms": 0.121,
+  "head_dim": 256
+ },
+ {
+  "layer": 4,
+  "sd_p": 1.607,
+  "entropy": 2.605,
+  "max_p": 0.375,
+  "scaling": 1.0,
+  "q_rms": 0.996,
+  "k_rms": 0.126,
+  "head_dim": 256
+ },
+ {
+  "layer": 5,
+  "sd_p": 1.728,
+  "entropy": 2.882,
+  "max_p": 0.349,
+  "scaling": 1.0,
+  "q_rms": 1.008,
+  "k_rms": 0.062,
+  "head_dim": 512
+ },
+ {
+  "layer": 6,
+  "sd_p": 1.713,
+  "entropy": 2.559,
+  "max_p": 0.397,
+  "scaling": 1.0,
+  "q_rms": 0.992,
+  "k_rms": 0.126,
+  "head_dim": 256
+ },
+ {
+  "layer": 7,
+  "sd_p": 1.68,
+  "entropy": 2.691,
+  "max_p": 0.375,
+  "scaling": 1.0,
+  "q_rms": 0.965,
+  "k_rms": 0.13,
+  "head_dim": 256
+ },
+ {
+  "layer": 8,
+  "sd_p": 1.684,
+  "entropy": 2.694,
+  "max_p": 0.37,
+  "scaling": 1.0,
+  "q_rms": 1.039,
+  "k_rms": 0.12,
+  "head_dim": 256
+ },
+ {
+  "layer": 9,
+  "sd_p": 1.597,
+  "entropy": 2.716,
+  "max_p": 0.336,
+  "scaling": 1.0,
+  "q_rms": 0.984,
+  "k_rms": 0.127,
+  "head_dim": 256
+ },
+ {
+  "layer": 10,
+  "sd_p": 1.566,
+  "entropy": 2.96,
+  "max_p": 0.276,
+  "scaling": 1.0,
+  "q_rms": 0.984,
+  "k_rms": 0.127,
+  "head_dim": 256
+ },
+ {
+  "layer": 11,
+  "sd_p": 1.749,
+  "entropy": 3.117,
+  "max_p": 0.298,
+  "scaling": 1.0,
+  "q_rms": 1.039,
+  "k_rms": 0.06,
+  "head_dim": 512
+ },
+ {
+  "layer": 12,
+  "sd_p": 1.56,
+  "entropy": 2.974,
+  "max_p": 0.295,
+  "scaling": 1.0,
+  "q_rms": 0.984,
+  "k_rms": 0.127,
+  "head_dim": 256
+ },
+ {
+  "layer": 13,
+  "sd_p": 1.558,
+  "entropy": 3.282,
+  "max_p": 0.23,
+  "scaling": 1.0,
+  "q_rms": 0.98,
+  "k_rms": 0.127,
+  "head_dim": 256
+ },
+ {
+  "layer": 14,
+  "sd_p": 1.548,
+  "entropy": 3.166,
+  "max_p": 0.235,
+  "scaling": 1.0,
+  "q_rms": 1.031,
+  "k_rms": 0.121,
+  "head_dim": 256
+ },
+ {
+  "layer": 15,
+  "sd_p": 1.563,
+  "entropy": 3.354,
+  "max_p": 0.22,
+  "scaling": 1.0,
+  "q_rms": 0.98,
+  "k_rms": 0.128,
+  "head_dim": 256
+ },
+ {
+  "layer": 16,
+  "sd_p": 1.645,
+  "entropy": 2.86,
+  "max_p": 0.299,
+  "scaling": 1.0,
+  "q_rms": 1.023,
+  "k_rms": 0.122,
+  "head_dim": 256
+ },
+ {
+  "layer": 17,
+  "sd_p": 1.727,
+  "entropy": 3.116,
+  "max_p": 0.291,
+  "scaling": 1.0,
+  "q_rms": 0.988,
+  "k_rms": 0.063,
+  "head_dim": 512
+ },
+ {
+  "layer": 18,
+  "sd_p": 1.601,
+  "entropy": 2.393,
+  "max_p": 0.361,
+  "scaling": 1.0,
+  "q_rms": 1.023,
+  "k_rms": 0.122,
+  "head_dim": 256
+ },
+ {
+  "layer": 19,
+  "sd_p": 1.654,
+  "entropy": 2.383,
+  "max_p": 0.378,
+  "scaling": 1.0,
+  "q_rms": 1.023,
+  "k_rms": 0.122,
+  "head_dim": 256
+ },
+ {
+  "layer": 20,
+  "sd_p": 1.624,
+  "entropy": 2.387,
+  "max_p": 0.36,
+  "scaling": 1.0,
+  "q_rms": 1.0,
+  "k_rms": 0.125,
+  "head_dim": 256
+ },
+ {
+  "layer": 21,
+  "sd_p": 1.674,
+  "entropy": 2.343,
+  "max_p": 0.392,
+  "scaling": 1.0,
+  "q_rms": 0.992,
+  "k_rms": 0.126,
+  "head_dim": 256
+ },
+ {
+  "layer": 22,
+  "sd_p": 1.613,
+  "entropy": 2.257,
+  "max_p": 0.38,
+  "scaling": 1.0,
+  "q_rms": 0.972,
+  "k_rms": 0.129,
+  "head_dim": 256
+ },
+ {
+  "layer": 23,
+  "sd_p": 1.763,
+  "entropy": 2.159,
+  "max_p": 0.465,
+  "scaling": 1.0,
+  "q_rms": 0.984,
+  "k_rms": 0.063,
+  "head_dim": 512
+ },
+ {
+  "layer": 24,
+  "sd_p": 1.674,
+  "entropy": 1.944,
+  "max_p": 0.487,
+  "scaling": 1.0,
+  "q_rms": 1.039,
+  "k_rms": 0.12,
+  "head_dim": 256
+ },
+ {
+  "layer": 25,
+  "sd_p": 1.555,
+  "entropy": 1.809,
+  "max_p": 0.469,
+  "scaling": 1.0,
+  "q_rms": 1.008,
+  "k_rms": 0.124,
+  "head_dim": 256
+ },
+ {
+  "layer": 26,
+  "sd_p": 1.734,
+  "entropy": 2.001,
+  "max_p": 0.463,
+  "scaling": 1.0,
+  "q_rms": 1.023,
+  "k_rms": 0.123,
+  "head_dim": 256
+ },
+ {
+  "layer": 27,
+  "sd_p": 1.659,
+  "entropy": 1.975,
+  "max_p": 0.45,
+  "scaling": 1.0,
+  "q_rms": 1.023,
+  "k_rms": 0.122,
+  "head_dim": 256
+ },
+ {
+  "layer": 28,
+  "sd_p": 1.803,
+  "entropy": 2.239,
+  "max_p": 0.415,
+  "scaling": 1.0,
+  "q_rms": 1.008,
+  "k_rms": 0.124,
+  "head_dim": 256
+ },
+ {
+  "layer": 29,
+  "sd_p": 1.854,
+  "entropy": 2.791,
+  "max_p": 0.418,
+  "scaling": 1.0,
+  "q_rms": 1.016,
+  "k_rms": 0.062,
+  "head_dim": 512
+ }
+]
