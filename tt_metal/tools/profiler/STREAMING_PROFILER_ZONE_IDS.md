@@ -9,6 +9,9 @@ section that is never loaded, and the host moves that section into a 16-bit id s
 image.** The device executes `lui`/`addi` of a constant, exactly as it would for any literal; which constant
 is decided by the linker (dense within an image) and then by the loader (dense across images).
 
+To see it happen to one real zone, step by step with the actual bytes, read
+[`STREAMING_PROFILER_ZONE_IDS_WALKTHROUGH.md`](STREAMING_PROFILER_ZONE_IDS_WALKTHROUGH.md).
+
 ```mermaid
 flowchart TB
   classDef build fill:#DBEAFE,stroke:#1D4ED8,stroke-width:2px,color:#0F172A
