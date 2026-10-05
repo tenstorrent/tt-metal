@@ -42,6 +42,16 @@ _Q_SHARDED_MEM_CACHE: dict = {}
 _ACTIVE_ROWS_LOGGED = False
 
 
+def _sdpa_max_cores_per_head_kwargs() -> dict:
+    """GEMMA4_SDPA_MAX_CORES_PER_HEAD=N pins the decode SDPA per-(row, head) core count. The op
+    splits its cores per padded row, so each decode graph (bucket) reduces a row in a different
+    order; pinning N to the widest graph's split (grid / (32 * kv heads per device)) makes every
+    graph reduce identically, at the cost of a lone row's attention speed at long context.
+    Unset (default) keeps the op's own cap (tenstorrent/tt-metal#59300)."""
+    v = os.environ.get("GEMMA4_SDPA_MAX_CORES_PER_HEAD", "")
+    return {"max_cores_per_head_batch": int(v)} if v else {}
+
+
 def sdpa_active_row_allocation() -> bool:
     """GEMMA4_SDPA_ACTIVE_ROWS=1 turns on active-row core allocation in the paged decode SDPA
     (tenstorrent/tt-metal#59300); default off. Logged once so a server log shows which mode ran."""
@@ -315,6 +325,7 @@ def decode_forward(
         q_chunk_size=32,
         k_chunk_size=64,
         exp_approx_mode=False,
+        **_sdpa_max_cores_per_head_kwargs(),
     )
 
     if page_table is not None:
