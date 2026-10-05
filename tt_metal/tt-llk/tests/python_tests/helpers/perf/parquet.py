@@ -152,14 +152,30 @@ def write_parquet(df, path, columns=DB_SCHEMA, compression="zstd"):
 
 
 def stamp_provenance(
-    df, *, test_name, commit_sha, arch, run_id, timestamp, pipeline, pr_number=None
+    df,
+    *,
+    test_name,
+    commit_sha,
+    arch,
+    run_id,
+    timestamp,
+    pipeline,
+    pr_number=None,
+    platform=None,
+    platform_version=None,
 ):
     """Add the run-context columns (added by CI, not produced by the test).
 
     ``test_name`` is per test; the rest identify the run. ``pipeline`` ("pr" or
     "nightly") is how PR and nightly rows share one schema but stay distinguishable.
+    ``platform`` / ``platform_version`` say what executed the run (emulator,
+    simulator, silicon, and its build). Only the Quasar table has them; on a
+    WH/BH run they are dropped by the schema alignment.
     """
     out = df.copy()
+    if platform is not None or platform_version is not None:
+        out["platform"] = platform
+        out["platform_version"] = platform_version
     out["test_name"] = test_name
     out["commit_sha"] = commit_sha
     out["arch"] = arch
@@ -181,7 +197,16 @@ def validate_batch(table):
 
 
 def build_run_batch(
-    test_frames, *, commit_sha, arch, run_id, timestamp, pipeline, pr_number=None
+    test_frames,
+    *,
+    commit_sha,
+    arch,
+    run_id,
+    timestamp,
+    pipeline,
+    pr_number=None,
+    platform=None,
+    platform_version=None,
 ):
     """Compact a run's per-test frames into one run-level table.
 
@@ -201,6 +226,8 @@ def build_run_batch(
             timestamp=timestamp,
             pipeline=pipeline,
             pr_number=pr_number,
+            platform=platform,
+            platform_version=platform_version,
         )
         for name, df in test_frames.items()
     ]

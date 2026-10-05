@@ -128,6 +128,11 @@ DB_SCHEMA = [
     Column(
         "pr_number", "string", True, "provenance", origin="ci"
     ),  # NULL for nightly and baseline runs
+    # What executed the run: emulator | simulator | silicon, and its build.
+    # Quasar numbers from different platforms must never share a trend. The
+    # warehouse keeps both on RUNS (optional there, so WH/BH need not send them).
+    Column("platform", "string", True, "provenance", origin="ci"),
+    Column("platform_version", "string", True, "provenance", origin="ci"),
 ]
 
 OUTPUT_SCHEMA = [c for c in DB_SCHEMA if c.origin == "test"]

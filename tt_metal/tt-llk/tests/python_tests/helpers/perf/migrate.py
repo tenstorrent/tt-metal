@@ -20,7 +20,8 @@ historical data lands in the exact same shared schema as live runs.
     leaves a half-written file that a later pass mistakes for complete.
 
 Provenance per run comes from an optional ``run_meta.json`` sidecar in the
-run_dir (``arch``/``commit_sha``/``timestamp``/``pipeline``/``pr_number``);
+run_dir (``arch``/``commit_sha``/``timestamp``/``pipeline``/``pr_number``/
+``platform``/``platform_version``);
 anything the sidecar omits (or sets null) falls back to the folder — ``arch``
 parsed from the run_dir name, ``run_id`` = the dir name — or a default.
 
@@ -65,6 +66,8 @@ class MigrationRun:
     pipeline: str
     csv_paths: tuple[Path, ...]
     pr_number: str | None = None
+    platform: str | None = None
+    platform_version: str | None = None
 
 
 def _read_meta(meta_file: Path) -> dict:
@@ -121,6 +124,8 @@ def migrate_runs(runs, out_dir, *, compression="zstd", overwrite=False):
                 timestamp=run.timestamp,
                 pipeline=run.pipeline,
                 pr_number=run.pr_number,
+                platform=run.platform,
+                platform_version=run.platform_version,
             )
             os.replace(tmp_path, out_path)  # atomic publish
         except Exception as exc:  # noqa: BLE001 — a dirty run must not abort the rest
@@ -149,7 +154,8 @@ def discover_runs(archive_root, *, pipeline="nightly"):
     Excludes ``.post.csv`` (post-processed twins) and ``.counters.csv`` (per-worker
     counter dumps) and zero-byte files. Provenance per run: a ``run_meta.json``
     sidecar in the run_dir supplies any of ``arch``/``commit_sha``/``timestamp``/
-    ``pipeline``/``pr_number``; whatever it omits falls back to the folder (arch
+    ``pipeline``/``pr_number``/``platform``/``platform_version``; whatever it
+    omits falls back to the folder (arch
     parsed from the run_dir name, run_id = the dir name) or a default.
     Deterministic: depends only on the tree.
     """
@@ -182,6 +188,8 @@ def discover_runs(archive_root, *, pipeline="nightly"):
                 timestamp=meta.get("timestamp") or _UNKNOWN,
                 pipeline=meta.get("pipeline") or pipeline,
                 pr_number=meta.get("pr_number"),
+                platform=meta.get("platform"),
+                platform_version=meta.get("platform_version"),
                 csv_paths=csvs,
             )
         )

@@ -71,7 +71,14 @@ def test_publish_writes_a_manual_quasar_file(tmp_path):
     run = tmp_path / "local-20261005T143012Z"
     _csv(run / "perf_pack_quasar", "perf_pack_quasar", _quasar_rows())
 
-    out, n = pm.publish(run, tmp_path / "out", "quasar", commit_sha="abc123")
+    out, n = pm.publish(
+        run,
+        tmp_path / "out",
+        "quasar",
+        commit_sha="abc123",
+        platform="emulator",
+        platform_version="zebu-2026.09",
+    )
 
     assert n == 1
     assert out.name == "llk_perf_manual-20261005-20261005T143012Z-quasar.parquet"
@@ -81,6 +88,8 @@ def test_publish_writes_a_manual_quasar_file(tmp_path):
     assert set(df["arch"]) == {"quasar"}
     assert set(df["commit_sha"]) == {"abc123"}
     assert df["pr_number"].isna().all()
+    assert set(df["platform"]) == {"emulator"}
+    assert set(df["platform_version"]) == {"zebu-2026.09"}
     # The Quasar-only metrics survive into the file the warehouse reads.
     assert "mean(SFPU_ISOLATE)" in df.columns
     assert "mean(L1_TO_L1[FPU])" in df.columns
@@ -90,8 +99,12 @@ def test_publish_twice_gives_the_same_run_id(tmp_path):
     # The loader replays by RUN_ID: a second publish must replace, not add.
     run = tmp_path / "local-20261005T143012Z"
     _csv(run / "perf_pack_quasar", "perf_pack_quasar", _quasar_rows())
-    first, _ = pm.publish(run, tmp_path / "a", "quasar", commit_sha="abc123")
-    second, _ = pm.publish(run, tmp_path / "b", "quasar", commit_sha="abc123")
+    first, _ = pm.publish(
+        run, tmp_path / "a", "quasar", commit_sha="abc123", platform="emulator"
+    )
+    second, _ = pm.publish(
+        run, tmp_path / "b", "quasar", commit_sha="abc123", platform="emulator"
+    )
     assert first.name == second.name
 
 
@@ -102,8 +115,19 @@ def test_publish_is_strict_about_unknown_columns(tmp_path):
     with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
         ValueError, match="not_a_schema_column"
     ):
-        pm.publish(run, tmp_path / "out", "quasar", commit_sha="abc123")
+        pm.publish(
+            run, tmp_path / "out", "quasar", commit_sha="abc123", platform="emulator"
+        )
     assert not list((tmp_path / "out").glob("*.parquet"))
+
+
+def test_publish_needs_a_known_platform(tmp_path):
+    run = tmp_path / "local-20261005T143012Z"
+    _csv(run / "perf_pack_quasar", "perf_pack_quasar", _quasar_rows())
+    with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
+        ValueError, match="platform"
+    ):
+        pm.publish(run, tmp_path / "out", "quasar", commit_sha="abc", platform="fpga")
 
 
 def test_publish_rejects_an_empty_run(tmp_path):
@@ -112,7 +136,9 @@ def test_publish_rejects_an_empty_run(tmp_path):
     with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
         ValueError, match="no CSVs"
     ):
-        pm.publish(run, tmp_path / "out", "quasar", commit_sha="abc123")
+        pm.publish(
+            run, tmp_path / "out", "quasar", commit_sha="abc123", platform="emulator"
+        )
 
 
 def _archive_run(root, name, meta):
@@ -129,11 +155,31 @@ def test_plan_backfill_names_runs_from_their_timestamp(tmp_path):
         "batch_2026_08_14",
         {"timestamp": "2026-08-14T09:00:00Z", "commit_sha": "c1"},
     )
-    (run,) = pm.plan_backfill(tmp_path, "quasar")
+    (run,) = pm.plan_backfill(tmp_path, "quasar", "emulator")
     assert run.run_id == "manual-20260814-20260814T090000Z-quasar"
     assert run.pipeline == "manual"
     assert run.arch == "quasar"  # neither the sidecar nor the name says
     assert run.commit_sha == "c1"
+    assert run.platform == "emulator"  # the sidecar does not say
+
+
+def test_plan_backfill_prefers_the_sidecar_platform(tmp_path):
+    meta = {
+        "timestamp": "2026-08-14T09:00:00Z",
+        "platform": "simulator",
+        "platform_version": "v7",
+    }
+    _archive_run(tmp_path, "batch_a", meta)
+    (run,) = pm.plan_backfill(tmp_path, "quasar", "emulator", "z1")
+    assert (run.platform, run.platform_version) == ("simulator", "v7")
+
+
+def test_plan_backfill_needs_a_platform(tmp_path):
+    _archive_run(tmp_path, "batch_a", {"timestamp": "2026-08-14T09:00:00Z"})
+    with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
+        ValueError, match="--platform"
+    ):
+        pm.plan_backfill(tmp_path, "quasar")
 
 
 def test_plan_backfill_needs_a_timestamp(tmp_path):
@@ -141,7 +187,7 @@ def test_plan_backfill_needs_a_timestamp(tmp_path):
     with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
         ValueError, match="no timestamp"
     ):
-        pm.plan_backfill(tmp_path, "quasar")
+        pm.plan_backfill(tmp_path, "quasar", "emulator")
 
 
 def test_plan_backfill_rejects_two_runs_with_one_timestamp(tmp_path):
@@ -151,7 +197,7 @@ def test_plan_backfill_rejects_two_runs_with_one_timestamp(tmp_path):
     with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
         ValueError, match="share a timestamp"
     ):
-        pm.plan_backfill(tmp_path, "quasar")
+        pm.plan_backfill(tmp_path, "quasar", "emulator")
 
 
 def test_backfill_cli_writes_one_file_per_run(tmp_path):
@@ -163,8 +209,10 @@ def test_backfill_cli_writes_one_file_per_run(tmp_path):
         archive, "batch_b", {"timestamp": "2026-08-21T09:00:00Z", "commit_sha": "c2"}
     )
 
+    out_dir = tmp_path / "out"
     rc = pm.main(
-        ["backfill", "--archive", str(archive), "--out-dir", str(tmp_path / "out")]
+        ["backfill", "--archive", str(archive), "--out-dir", str(out_dir)]
+        + ["--platform", "emulator"]
     )
 
     assert rc == 0
@@ -173,6 +221,8 @@ def test_backfill_cli_writes_one_file_per_run(tmp_path):
         "manual-20260814-20260814T090000Z-quasar.parquet",
         "manual-20260821-20260821T090000Z-quasar.parquet",
     ]
+    df = pq.read_table(out_dir / names[0]).to_pandas()
+    assert set(df["platform"]) == {"emulator"}
 
 
 def _git(cwd, *args):
