@@ -306,7 +306,6 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_isr.h
     inc/internal/tt-2xx/quasar/cache.h
-    inc/internal/tt-2xx/quasar/cfg_defines.h
     inc/internal/tt-2xx/quasar/core_config.h
     inc/internal/tt-2xx/quasar/dev_mem_map.h
     inc/internal/tt-2xx/quasar/device_print_mem.h
