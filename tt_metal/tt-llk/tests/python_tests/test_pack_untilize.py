@@ -32,6 +32,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     TILE_COUNT,
     TILE_DST_CT_OFFSET,
+    UNTILIZE_ROW_DATUMS,
     generate_input_dim,
 )
 from helpers.utils import passed_test
@@ -120,6 +121,35 @@ def test_pack_untilize_rows(
     )
 
 
+# narrow_row: every tile row keeps its first row_datums datums, as in the sharded row-major transpose whose output
+# width is not a multiple of 32.
+@skip_for_wormhole
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+            DataFormat.Float32,
+            DataFormat.Int32,
+            DataFormat.Bfp8_b,
+            DataFormat.Fp8_e4m3,
+        ]
+    ),
+    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    input_dimensions=[[32, 32], [64, 32], [32, 64], [32, 128]],
+    row_datums=[8, 16, 24],
+)
+def test_pack_untilize_narrow_row(
+    formats,
+    dest_acc,
+    input_dimensions,
+    row_datums,
+):
+    _check_pack_untilize(
+        formats, dest_acc, input_dimensions, DestSync.Half, 0, None, row_datums
+    )
+
+
 def _check_pack_untilize(
     formats,
     dest_acc,
@@ -127,6 +157,7 @@ def _check_pack_untilize(
     dest_sync,
     tile_dst_ct_offset,
     block_ct_dim=None,
+    row_datums=32,
 ):
     if TestConfig.WITH_COVERAGE and input_dimensions == [64, 512]:
         pytest.skip(
@@ -190,6 +221,10 @@ def _check_pack_untilize(
     generate_golden = get_golden_generator(UntilizeGolden)
 
     golden_tensor = generate_golden(src_A, formats.output_format, input_dimensions)
+    if row_datums < 32:
+        golden_tensor = golden_tensor.reshape(
+            input_dimensions[0], input_dimensions[1] // 32, 32
+        )[:, :, :row_datums].flatten()
 
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
@@ -218,6 +253,7 @@ def _check_pack_untilize(
             ),
             DEST_SYNC(dest_sync),
             TILE_DST_CT_OFFSET(tile_dst_ct_offset),
+            UNTILIZE_ROW_DATUMS(row_datums),
         ],
         runtimes=[TILE_COUNT(tile_cnt_A), NUM_FACES(4)],
         variant_stimuli=StimuliConfig(
@@ -236,6 +272,8 @@ def _check_pack_untilize(
     )
 
     res_from_L1 = configuration.run().result
+    if row_datums < 32:
+        res_from_L1 = res_from_L1[: len(golden_tensor)]
 
     assert len(res_from_L1) == len(
         golden_tensor

@@ -1872,6 +1872,18 @@ class TILE_DST_CT_OFFSET(TemplateParameter):
 
 
 @dataclass
+class UNTILIZE_ROW_DATUMS(TemplateParameter):
+    untilize_row_datums: int = 32
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr bool NARROW_ROW = {str(self.untilize_row_datums < 32).lower()};",
+            f"constexpr std::uint32_t ROW_NUM_DATUMS = {self.untilize_row_datums};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class CONFIGURE_TEST_RUN_IDX(RuntimeParameter):
     configure_test_run_idx: int = 0
 
