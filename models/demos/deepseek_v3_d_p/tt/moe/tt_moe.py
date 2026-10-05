@@ -530,6 +530,7 @@ class TtMoe(LightweightModule):
         # Overlapping is the default wherever the op exists; only Blackhole has it.
         if overlap_routed_expert_with_combine is None:
             overlap_routed_expert_with_combine = is_blackhole()
+        logger.info(f"TtMoe: routed expert overlapped with combine_fabric2d: {overlap_routed_expert_with_combine}")
         # combine_fabric2d relays tokens between the chips of one ring, so each chip needs its own dispatch
         # group's rows of the table -- one row per ring chip -- and no other group's. Combine runs on mesh axis
         # 0, so a group is a mesh column: shard the groups across columns and replicate down each one.
