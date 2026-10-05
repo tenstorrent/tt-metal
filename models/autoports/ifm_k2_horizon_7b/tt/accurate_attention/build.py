@@ -187,6 +187,28 @@ def prepare_kernel():
         "k2_normalize_output<Sq_chunk_t, vDHt>(alias_mm2_prev_out, alias_prev_sum, cb_out);",
         1,
     )
+    # Softmax exponential: the FP32 path runs a separate scale pass plus the full-FP32 guarded
+    # exponential. fast_exp.hpp fuses the scale and uses a clamped degree-4 base-2 polynomial
+    # (2.9e-6 relative), far below the TF32 truncation of P in the PV matmul.
+    common = replace_checked(
+        common,
+        "ALWI void sdpa_reduce_copy_tile_to_dst_init_short(",
+        '#include "fast_exp.hpp"\n\nALWI void sdpa_reduce_copy_tile_to_dst_init_short(',
+        1,
+    )
+    common = replace_checked(
+        common,
+        "                    binop_with_scalar_tile_init();\n"
+        "                    mul_unary_tile(j, scale_fp32);\n"
+        "                    exp_tile_init<false, 0x3F800000, InputClamping::ClampToNegative>();\n"
+        "                    exp_tile<false, false, InputClamping::ClampToNegative, iterations>(j, vector_mode_exp);\n",
+        "                    exp_tile_init<false, 0x3F800000, InputClamping::ClampToNegative>();\n"
+        "                    MATH((ckernel::sfpu::k2_exp_init()));\n"
+        "                    MATH((SFPU_UNARY_CALL(\n"
+        "                        DST_SYNC_MODE, DST_ACCUM_MODE, k2_exp_scaled, (iterations), j, vector_mode_exp,\n"
+        "                        k2_log2e_scale_bits(scale_fp32))));\n",
+        1,
+    )
     # The preceding PV operation now packs FP32. Correction factors stay BF16.
     common = replace_checked(
         common,
@@ -210,6 +232,7 @@ def prepare_kernel():
             + (HERE / "accurate_stats.hpp").read_text()
             + decode
             + (HERE / "accurate_decode.hpp").read_text()
+            + (HERE / "fast_exp.hpp").read_text()
         ).encode()
     ).hexdigest()[:16]
     folder = BUILD / fingerprint
@@ -220,6 +243,7 @@ def prepare_kernel():
     (folder / "writer_packed_gqa.cpp").write_text(writer)
     (folder / "sdpa_flash_decode.cpp").write_text(decode)
     (folder / "accurate_decode.hpp").write_text((HERE / "accurate_decode.hpp").read_text())
+    (folder / "fast_exp.hpp").write_text((HERE / "fast_exp.hpp").read_text())
     return folder
 
 
@@ -249,6 +273,7 @@ def build():
         CORE / "sdpa.cpp",
         HERE / "accurate_stats.hpp",
         HERE / "accurate_decode.hpp",
+        HERE / "fast_exp.hpp",
         DECODE / "compute/sdpa_flash_decode.cpp",
         HERE / "binding.cpp",
         HERE / "build.py",
@@ -268,6 +293,7 @@ def build():
             "writer_packed_gqa.cpp",
             "sdpa_flash_decode.cpp",
             "accurate_decode.hpp",
+            "fast_exp.hpp",
         )
     ]
     sources += generated
