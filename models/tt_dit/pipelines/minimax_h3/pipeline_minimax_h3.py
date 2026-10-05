@@ -2006,7 +2006,11 @@ class MiniMaxH3Pipeline:
         vae = self._vae if has_visual else None
         audio_encoder = self._prepare_audio_encoder() if has_audio else None
 
-        with self._track_cache_misses(on_event, "vae_encode"), self.encoder_ccl_manager.transient_ping_pong_buffers():
+        with (
+            self._track_cache_misses(on_event, "vae_encode"),
+            self.encoder_ccl_manager.transient_ping_pong_buffers(),
+            self._audio_ccl_transient(),
+        ):
             condition_rows, audio_condition_rows = encode_references(
                 prepared,
                 encode_clip=(lambda pixels: vae.encode_clip(pixels)) if has_visual else None,
@@ -2493,6 +2497,19 @@ class MiniMaxH3Pipeline:
         frames = sorted({get_num_frames(duration) for duration in MINIMAX_H3_DURATIONS_S})
         return [torch.zeros(2, channels, audio_latent_num_frames(num_frames)) for num_frames in frames]
 
+    def _audio_ccl_transient(self):
+        """Scope that frees the audio VAE's CCL ping-pong pairs on exit, on untraced non-persistent presets.
+
+        The batch-sharded audio decoder gathers through `audio_ccl_manager`, whose cache is keyed by shape
+        and never evicts: the 12-length decode warm alone left 842 small pairs (1.14 GB/device, ~95 MB/bank)
+        resident on the WH 4x8, outliving the decoder's own eviction and costing the DiT's top rung its
+        last 36 MB/bank. The reference audio encoder shares the manager and sees a fresh length per
+        request. Traced presets keep the pairs their captures replay.
+        """
+        if self.audio_ccl_manager is None or self.use_persistent_ccl_buffers or self.trace_audio:
+            return nullcontext()
+        return self.audio_ccl_manager.transient_ping_pong_buffers()
+
     def _warm_audio_decode(self) -> None:
         """Compile the audio decode at every served length, strictly before trace capture."""
         decoder = self._prepare_audio_decoder()
@@ -2507,7 +2524,8 @@ class MiniMaxH3Pipeline:
             file=sys.stderr,
             bar_format=_TQDM_BAR_FORMAT,
         ):
-            decoder(latents)
+            with self._audio_ccl_transient():
+                decoder(latents)
         self._host_log(f"audio decode warmed: +{self.mesh_device.num_program_cache_entries() - before} programs")
 
     def _capture_audio(self, trace_audio: bool) -> None:
@@ -3030,6 +3048,7 @@ class MiniMaxH3Pipeline:
         assert rows.shape[0] == expected, f"expected {expected} target audio rows to decode, got {rows.shape[0]}"
         latents = unpack_audio_tokens(rows, num_audio_latents)
         latents = self._denormalize(latents, self.audio_config["latents_mean"], self.audio_config["latents_std"])
-        waveform = audio_decoder(latents, traced=self.trace_audio)
+        with self._audio_ccl_transient():
+            waveform = audio_decoder(latents, traced=self.trace_audio)
         # The audio VAE is mono and took the two stereo channels as two batch items.
         return waveform.float().permute(1, 0, 2)
