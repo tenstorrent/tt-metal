@@ -13,6 +13,7 @@
 #include "optimizers/adamw.hpp"
 #include "optimizers/sgd.hpp"
 #include "test_utils/random_data.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 
 using namespace ttml;
 
@@ -29,10 +30,13 @@ public:
 
 namespace {
 
-// Fused optimizers update the parameter in place. A FULL view read before the step must show the
-// updated values afterwards.
-template <typename Optimizer, typename Config>
-void expect_full_view_tracks_fused_step(const Config& config) {
+struct Parameter {
+    autograd::TensorPtr theta;
+    ttnn::Tensor grad;
+};
+
+// A parameter stored as `dtype` (BFLOAT16 or FLOAT32) with fixed random values, and a bf16 gradient for one step.
+Parameter make_parameter(ttnn::DataType dtype) {
     const std::array<std::size_t, 4> shape = {1, 1, 32, 32};
     autograd::ctx().set_seed(123U);
     auto& gen = autograd::ctx().get_generator();
@@ -40,21 +44,32 @@ void expect_full_view_tracks_fused_step(const Config& config) {
     const xt::xarray<float> g0 = test_utils::make_uniform_xarray<float>(shape, 0.25F, 1.0F, gen());
 
     auto* device = &autograd::ctx().get_device();
-    auto theta = autograd::create_tensor(core::from_xtensor(w0, device), /* requires_grad */ true);
+    auto value = dtype == ttnn::DataType::FLOAT32 ? core::from_xtensor<float, ttnn::DataType::FLOAT32>(w0, device)
+                                                  : core::from_xtensor(w0, device);
+    return {autograd::create_tensor(value, /* requires_grad */ true), core::from_xtensor(g0, device)};
+}
+
+// Fused optimizers update a bf16 parameter in place. A FULL view read before the step must show the
+// updated values afterwards.
+template <typename Optimizer, typename Config>
+void expect_full_view_tracks_fused_step(const Config& config) {
+    auto [theta, grad] = make_parameter(ttnn::DataType::BFLOAT16);
     ASSERT_EQ(theta->get_value(autograd::PreferredPrecision::NATIVE).dtype(), ttnn::DataType::BFLOAT16);
 
-    const auto full_before = core::to_xtensor(theta->get_value(autograd::PreferredPrecision::FULL));
+    // Reading FULL before the step leaves a cached fp32 copy behind.
+    (void)theta->get_value(autograd::PreferredPrecision::FULL);
+    const auto native_before = core::to_xtensor(theta->get_value(autograd::PreferredPrecision::NATIVE));
 
-    theta->set_grad(core::from_xtensor(g0, device));
+    theta->set_grad(grad);
     Optimizer optimizer(serialization::NamedParameters{{"theta", theta}}, config);
     optimizer.step();
 
-    const auto half_after = core::to_xtensor(theta->get_value(autograd::PreferredPrecision::HALF));
-    ASSERT_FALSE(xt::allclose(half_after, full_before, 0.0, 0.0)) << "the step did not change the parameter";
+    const auto native_after = core::to_xtensor(theta->get_value(autograd::PreferredPrecision::NATIVE));
+    ASSERT_FALSE(native_after == native_before) << "the step did not change the stored bf16 value";
 
-    // Exact comparison: bf16 -> fp32 is lossless, so the FULL view must match bit for bit.
+    // bf16 -> fp32 is lossless, so the FULL view must equal the stored value exactly.
     const auto full_after = core::to_xtensor(theta->get_value(autograd::PreferredPrecision::FULL));
-    EXPECT_TRUE(xt::allclose(full_after, half_after, 0.0, 0.0)) << "FULL view is stale after an in-place step";
+    EXPECT_TRUE(full_after == native_after) << "the FULL view is stale after an in-place step";
 }
 
 }  // namespace
@@ -154,31 +169,25 @@ TEST_F(AutogradTensorTest, DISABLED_FullViewTracksFusedSGDStep) {
 // Disabled: for an fp32-native parameter the fused step updates only the bf16 copy, so the stored value never
 // moves — https://github.com/tenstorrent/tt-metal/issues/41657
 TEST_F(AutogradTensorTest, DISABLED_NativeValueTracksFusedAdamWStepOnFp32Parameter) {
-    const std::array<std::size_t, 4> shape = {1, 1, 32, 32};
-    autograd::ctx().set_seed(123U);
-    auto& gen = autograd::ctx().get_generator();
-    const xt::xarray<float> w0 = test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, gen());
-    const xt::xarray<float> g0 = test_utils::make_uniform_xarray<float>(shape, 0.25F, 1.0F, gen());
-
-    auto* device = &autograd::ctx().get_device();
-    auto theta = autograd::create_tensor(
-        core::from_xtensor<float, ttnn::DataType::FLOAT32>(w0, device), /* requires_grad */ true);
+    auto [theta, grad] = make_parameter(ttnn::DataType::FLOAT32);
     ASSERT_EQ(theta->get_value(autograd::PreferredPrecision::NATIVE).dtype(), ttnn::DataType::FLOAT32);
 
     // A forward pass reads the bf16 compute copy before any step.
-    const auto half_before = core::to_xtensor(theta->get_value(autograd::PreferredPrecision::HALF));
+    (void)theta->get_value(autograd::PreferredPrecision::HALF);
     const auto native_before = core::to_xtensor(theta->get_value(autograd::PreferredPrecision::NATIVE));
 
-    theta->set_grad(core::from_xtensor(g0, device));
+    theta->set_grad(grad);
     optimizers::AdamWConfig config;
     config.lr = 1e-2F;
     optimizers::AdamW optimizer(serialization::NamedParameters{{"theta", theta}}, config);
     optimizer.step();
 
-    const auto half_after = core::to_xtensor(theta->get_value(autograd::PreferredPrecision::HALF));
-    ASSERT_FALSE(xt::allclose(half_after, half_before, 0.0, 0.0)) << "the step did not change the parameter";
-
-    const auto native_after = core::to_xtensor(theta->get_value(autograd::PreferredPrecision::NATIVE));
-    EXPECT_FALSE(xt::allclose(native_after, native_before, 0.0, 0.0))
+    const auto& native = theta->get_value(autograd::PreferredPrecision::NATIVE);
+    ASSERT_FALSE(core::to_xtensor(native) == native_before)
         << "the stored fp32 value did not change after an in-place step";
+
+    // The bf16 compute copy must be exactly the cast of the stored value.
+    const auto expected_half = core::to_xtensor(ttnn::typecast(native, ttnn::DataType::BFLOAT16));
+    const auto half_after = core::to_xtensor(theta->get_value(autograd::PreferredPrecision::HALF));
+    EXPECT_TRUE(half_after == expected_half) << "the bf16 copy is stale after an in-place step";
 }
