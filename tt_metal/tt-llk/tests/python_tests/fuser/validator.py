@@ -40,6 +40,7 @@ from helpers.llk_params import (
     Transpose,
     UnpackToDest,
 )
+from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.tile_shape import TileShape, construct_tile_shape
 from pydantic import (
     BaseModel,
@@ -67,6 +68,10 @@ SFPU_TILE_SIZES = {
 }
 
 INDEX_SLOT_NAMES = frozenset({"in0", "in1", "dest", "out", "src0", "src1", "src2"})
+
+TOPK_DEST_TILES = 4
+TOPK_BLOCK_SIZE = [DEFAULT_TILE_R_DIM, TOPK_DEST_TILES * DEFAULT_TILE_C_DIM]
+TOPK_MAX_M_ITER = 9
 
 
 class IndexSlotSpec(BaseModel):
@@ -421,10 +426,12 @@ class TopKSfpuMathSchema(BaseModel):
     operation: MathOperation
     k: Literal[4, 8, 16, 32, 64] = 32
     descending: bool = True
-    m_iter: int = Field(default=0, ge=0, le=9)
+    m_iter: int = Field(default=0, ge=0, le=TOPK_MAX_M_ITER)
     skip_second: bool = False
     indexes: Optional[Union[str, IndexesSchema]] = None
-    block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 128]
+    block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = (
+        TOPK_BLOCK_SIZE
+    )
 
     @field_validator("operation", mode="before")
     @classmethod
@@ -442,9 +449,9 @@ class TopKSfpuMathSchema(BaseModel):
     @field_validator("block_size")
     @classmethod
     def validate_block_size(cls, value):
-        if value != [32, 128]:
+        if value != TOPK_BLOCK_SIZE:
             raise ValueError(
-                "TopKSfpu requires block_size [32, 128] (four contiguous tiles)"
+                f"TopKSfpu requires block_size {TOPK_BLOCK_SIZE} ({TOPK_DEST_TILES} contiguous tiles)"
             )
         return value
 
@@ -457,10 +464,10 @@ class TopKSfpuMathSchema(BaseModel):
                     raise ValueError(
                         "TopKSfpu requires every resolved dest origin to be 0"
                     )
-                missing = {0, 1, 2, 3} - written
+                missing = set(range(TOPK_DEST_TILES)) - written
                 if missing:
                     raise ValueError(
-                        "TopKSfpu requires dest tiles 0-3 to be initialized in each bank "
+                        f"TopKSfpu requires dest tiles 0-{TOPK_DEST_TILES - 1} to be initialized in each bank "
                         f"before execution; missing tiles: {sorted(missing)}"
                     )
             elif planned.role in ("math", "sfpu"):
@@ -793,9 +800,10 @@ class OperationSchemaBase(BaseModel):
 
     def to_l1_operation(self, operands, dest_acc=False):
         tile_shape = self._resolve_output_tile_shape(operands)
-        if any(
-            isinstance(s, TopKSfpuMathSchema) for s in list(self.math) + list(self.pack)
-        ):
+        all_schemas = list(self.math) + list(self.pack)
+        if any(isinstance(s, TopKSfpuMathSchema) for s in all_schemas):
+            if dest_acc:
+                raise ValueError("TopKSfpu requires dest_acc: false")
             if tile_shape.tile_dims != (32, 32):
                 raise ValueError("TopKSfpu requires full 32x32 tiles")
 
@@ -815,7 +823,6 @@ class OperationSchemaBase(BaseModel):
 
         # Each node may use its own block_size; the shared dest bank spans the
         # per-axis max. Nodes address dest tiles through their index_spec arrays.
-        all_schemas = list(self.math) + list(self.pack)
         node_dims = [node_block_dims(s) for s in all_schemas]
         bank_x = max(nx for nx, _ in node_dims)
         bank_y = max(ny for _, ny in node_dims)
@@ -845,9 +852,7 @@ class OperationSchemaBase(BaseModel):
             except ValueError as e:
                 raise ValueError(f"Math node {i + 1} ({node_type})\n    {e}") from None
 
-        for schema, node in zip(
-            list(self.math) + list(self.pack), math_ops + pack_nodes
-        ):
+        for schema, node in zip(all_schemas, math_ops + pack_nodes):
             node.block_tiles_x = schema.block_size[1] // tile_c
             node.block_tiles_y = schema.block_size[0] // tile_r
 
