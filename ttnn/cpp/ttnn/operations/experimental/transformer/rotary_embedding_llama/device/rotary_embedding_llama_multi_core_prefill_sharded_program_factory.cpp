@@ -118,8 +118,10 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
     // difference from legacy is that a partial-shard config legacy would have served from the fast L1
     // view now takes the (output-identical) reload path.
     const bool cos_sin_shard_full = cos_sin_sharded && cos.shard_spec()->grid.num_cores() == num_cores;
-    const bool cos_sin_sharded_reload =
-        cos_sin_sharded && (seq_per_core > 1 || !cos_sin_shard_full || seq_len_t > cos_seq_len_t);
+    // The fast path uses each core's own shard, which holds sequence tile core_idx. With the batch
+    // split across cores, later batches restart at tile 0, so core_idx != start_seq.
+    const bool cos_sin_sharded_reload = cos_sin_sharded && (seq_per_core > 1 || !cos_sin_shard_full ||
+                                                            batch_parallel_factor > 1 || seq_len_t > cos_seq_len_t);
     if (cos_sin_sharded) {
         num_cos_sin_tiles = cos_sin_sharded_reload ? num_input_tiles : head_dim_t;
     }

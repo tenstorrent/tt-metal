@@ -713,6 +713,41 @@ def test_rotary_embedding_llama_direct_cos_padding_tail(q_seq_len, rope_seq_len,
     _run_rotary_embedding_llama_direct_cos_padding_tail_case(device, q_seq_len, rope_seq_len, cos_sin_sharded)
 
 
+# Full-grid sharded cos/sin, one sequence tile per core: core k's own shard is sequence tile k.
+# With batch > 1 the cores of later batches restart at tile 0, so their own shard is the wrong row.
+@skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
+@pytest.mark.parametrize("batch", (2, 4))
+def test_rotary_embedding_llama_sharded_cos_sin_batch(batch, device):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if compute_grid_size.x < 8 or compute_grid_size.y < 8:
+        pytest.skip(f"Requires grid size of at least {(8, 8)} to run")
+
+    torch.manual_seed(0)
+    head_dim = 128
+    seq_len = 64
+    q = torch.randn((batch, 8, seq_len, head_dim), dtype=torch.float32)
+    cos, sin = compute_gather_cos_sin(dhead=head_dim, end=2 * seq_len, position_ids=torch.arange(seq_len))
+    trans_mat = get_rot_transformation_mat(dhead=head_dim)
+
+    tensor_kwargs = {"dtype": ttnn.bfloat16, "layout": ttnn.TILE_LAYOUT, "memory_config": ttnn.DRAM_MEMORY_CONFIG}
+    q_tt = ttnn.from_torch(q, device=device, **tensor_kwargs)
+    cos_tt = ttnn.from_torch(cos, device=device, **tensor_kwargs)
+    sin_tt = ttnn.from_torch(sin, device=device, **tensor_kwargs)
+    trans_mat_tt = ttnn.from_torch(trans_mat, device=device, **tensor_kwargs)
+    sharded_cos_tt, sharded_sin_tt = _shard_cos_sin(cos_tt, sin_tt, device, head_dim)
+
+    expected = ttnn.to_torch(
+        ttnn.experimental.rotary_embedding_llama(q_tt, cos_tt, sin_tt, trans_mat_tt, is_decode_mode=False)
+    )
+    actual = ttnn.to_torch(
+        ttnn.experimental.rotary_embedding_llama(
+            q_tt, sharded_cos_tt, sharded_sin_tt, trans_mat_tt, is_decode_mode=False
+        )
+    )
+
+    assert torch.equal(actual, expected)
+
+
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @pytest.mark.parametrize(
     "batch, seq_len",
