@@ -39,6 +39,16 @@ def _mesh_partition_and_free(tensor, dim):
     return partitioned
 
 
+def _free_unless_aliased(source, view):
+    """Free ``source`` unless ``view`` shares its buffer.
+
+    A full-range slice followed by ``ttnn.reshape`` returns a view of the source buffer on a single-device
+    mesh, so freeing the source would leave ``view`` reading released memory that later allocations reuse.
+    """
+    if view.buffer_address() != source.buffer_address():
+        ttnn.deallocate(source)
+
+
 def _concat_and_free(tensors, dim):
     """Concatenate ``tensors`` along ``dim`` and free the inputs.
 
@@ -337,12 +347,13 @@ class DropInVisionTransformer(torch.nn.Module):
             out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size
             # Output shape from TT is [1, B=1, S, H_out_padded], slice H and squeeze B, batch dims
             final_output = ttnn.reshape(tt_out[:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
-            ttnn.deallocate(tt_out)
+            _free_unless_aliased(tt_out, final_output)
             deepstack_visual_embeds_output = [
                 ttnn.reshape(deepstack_visual_embeds[i][:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
                 for i in range(len(deepstack_visual_embeds))
             ]
-            [ttnn.deallocate(deepstack_visual_embeds[i]) for i in range(len(deepstack_visual_embeds))]
+            for src, out in zip(deepstack_visual_embeds, deepstack_visual_embeds_output):
+                _free_unless_aliased(src, out)
 
             if self.debug:
                 logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
@@ -457,13 +468,14 @@ class DropInVisionTransformer(torch.nn.Module):
         # Postprocessing - extract relevant output and adjust shape
         out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size
         final_output = ttnn.reshape(tt_out[:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
-        ttnn.deallocate(tt_out)
+        _free_unless_aliased(tt_out, final_output)
 
         deepstack_visual_embeds_output = [
             ttnn.reshape(deepstack_visual_embeds[i][:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
             for i in range(len(deepstack_visual_embeds))
         ]
-        [ttnn.deallocate(deepstack_visual_embeds[i]) for i in range(len(deepstack_visual_embeds))]
+        for src, out in zip(deepstack_visual_embeds, deepstack_visual_embeds_output):
+            _free_unless_aliased(src, out)
 
         if self.debug:
             logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
