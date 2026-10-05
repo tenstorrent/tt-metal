@@ -22,8 +22,8 @@ import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
 from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens, rotated_chunk_positions
 from models.demos.common.prefill.runners.layer_completion_drainer import (
+    BackgroundCompletionDrain,
     connect_layer_completion_channel,
-    drain_layer_completions,
 )
 from models.demos.common.prefill.runners.migration import (
     is_per_host_storage,
@@ -1569,6 +1569,7 @@ def main() -> None:
         )
 
     ack_layers = _ack_layers_per_chunk(kv_table)
+    completion_drain = BackgroundCompletionDrain(completion_channel)
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
@@ -1589,8 +1590,7 @@ def main() -> None:
         for cidx in range(warmup_chunks):
             push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE, warmup_chunks * CHUNK_SIZE)
         service.barrier()
-        if completion_channel is not None:
-            drain_layer_completions(completion_channel, ack_layers * warmup_chunks)
+        completion_drain.wait(ack_layers * warmup_chunks)
         logger.info("[producer] warmup complete; starting the measured request")
 
     stats = run_schedule(cfg, push_fn=push_chunk)
@@ -1605,7 +1605,8 @@ def main() -> None:
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
 
-    drain_layer_completions(completion_channel, ack_layers * stats.total_pushes)
+    completion_drain.wait(ack_layers * (max(warmup_chunks, 0) + stats.total_pushes))
+    completion_drain.close()
 
     if world_size > 1:
         _mr_bcast_resident(mr_rank, stats.resident)

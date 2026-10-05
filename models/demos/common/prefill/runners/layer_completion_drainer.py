@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import threading
 import time
 from collections import deque, namedtuple
 
@@ -156,19 +157,21 @@ class LayerCompletionDrainer:
             raise RuntimeError(f"[drainer] finish() with side-queued (never-actionable) completions: {detail}")
         return self.total_layers
 
+    def coverage_snapshot(self) -> str:
+        return ", ".join(
+            f"req {rid}: {cov.layers_accounted}/{self._num_layers} layers"
+            + (f" (+{len(cov.side_queue)} blocked)" if cov.side_queue else "")
+            for rid, cov in sorted(self._requests.items())
+        )
+
     def drain_blocking(self, expected_total_layers: int, timeout_s: float = 600.0) -> int:
         deadline = time.perf_counter() + timeout_s
         while self.total_layers < expected_total_layers:
             if not self.step():
                 if time.perf_counter() > deadline:
-                    snapshot = ", ".join(
-                        f"req {rid}: {cov.layers_accounted}/{self._num_layers} layers"
-                        + (f" (+{len(cov.side_queue)} blocked)" if cov.side_queue else "")
-                        for rid, cov in sorted(self._requests.items())
-                    )
                     raise TimeoutError(
                         f"[drainer] timed out at {self.total_layers}/{expected_total_layers} layers "
-                        f"after {timeout_s}s; coverage: [{snapshot}]"
+                        f"after {timeout_s}s; coverage: [{self.coverage_snapshot()}]"
                     )
                 time.sleep(self._poll_idle_s)
         return self.finish()
@@ -208,44 +211,73 @@ def connect_layer_completion_channel(timeout_s: int):
     return _connect_layer_ack_channel(timeout_s)
 
 
-def _drain_layer_acks(ack_channel, expected: int, timeout_s: float = 600.0) -> int:
-    if ack_channel is None:
-        return 0
-    drained = 0
-    last_logged = -1
-    start = time.perf_counter()
-    while drained < expected:
-        drained += ack_channel.try_consume_all()
-        if drained != last_logged:
-            logger.info(f"[layer-completion] layer acks {drained}/{expected}")
-            last_logged = drained
-        if drained >= expected:
-            break
-        if time.perf_counter() - start > timeout_s:
-            logger.warning(f"[layer-completion] timed out at {drained}/{expected} acks after {timeout_s}s")
-            break
-        time.sleep(0.01)
-    logger.info(f"[layer-completion] drained {drained}/{expected} layer acks in {(time.perf_counter() - start):.2f}s")
-    return drained
+class BackgroundCompletionDrain:
+    def __init__(self, channel, poll_idle_s: float = 0.001):
+        self._channel = channel
+        self._poll_idle_s = poll_idle_s
+        self._drainer = None
+        if channel is not None and current_protocol() == 2:
+            num_layers = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
+            self._drainer = LayerCompletionDrainer(channel, num_layers=num_layers)
+        self._acks = 0
+        self._error = None
+        self._stop = threading.Event()
+        self._thread = None
+        if channel is not None:
+            self._thread = threading.Thread(target=self._run, name="layer-completion-drain", daemon=True)
+            self._thread.start()
 
+    @property
+    def total_layers(self) -> int:
+        return self._drainer.total_layers if self._drainer is not None else self._acks
 
-def _drain_layer_completion_ring(completion_ring, expected_layers: int, timeout_s: float = 600.0) -> int:
-    if completion_ring is None:
-        return 0
-    num_layers = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
-    drainer = LayerCompletionDrainer(completion_ring, num_layers=num_layers)
-    try:
-        drainer.drain_blocking(expected_layers, timeout_s=timeout_s)
-    except TimeoutError as e:
-        logger.warning(f"[layer-completion] {e}")
-    logger.info(
-        f"[layer-completion] v2 drain: {drainer.total_layers}/{expected_layers} layers across "
-        f"{len(drainer.requests)} request(s), {drainer.processed} messages"
-    )
-    return drainer.total_layers
+    def _poll(self) -> bool:
+        if self._drainer is not None:
+            return self._drainer.step()
+        n = self._channel.try_consume_all()
+        self._acks += n
+        return n > 0
 
+    def _run(self) -> None:
+        try:
+            while not self._stop.is_set():
+                if not self._poll():
+                    time.sleep(self._poll_idle_s)
+        except Exception as e:
+            self._error = e
 
-def drain_layer_completions(completion_channel, expected_layers: int, timeout_s: float = 600.0) -> int:
-    if current_protocol() == 2:
-        return _drain_layer_completion_ring(completion_channel, expected_layers, timeout_s)
-    return _drain_layer_acks(completion_channel, expected_layers, timeout_s)
+    def wait(self, expected_layers: int, timeout_s: float = 600.0) -> int:
+        if self._thread is None:
+            return 0
+        start = time.perf_counter()
+        while self.total_layers < expected_layers and self._error is None and self._thread.is_alive():
+            if time.perf_counter() - start > timeout_s:
+                detail = f"; coverage: [{self._drainer.coverage_snapshot()}]" if self._drainer is not None else ""
+                logger.warning(
+                    f"[layer-completion] timed out at {self.total_layers}/{expected_layers} layers "
+                    f"after {timeout_s}s{detail}"
+                )
+                break
+            time.sleep(0.01)
+        if self._error is not None:
+            raise self._error
+        if self._drainer is not None:
+            logger.info(
+                f"[layer-completion] v2 drain: {self._drainer.total_layers}/{expected_layers} layers across "
+                f"{len(self._drainer.requests)} request(s), {self._drainer.processed} messages"
+            )
+        else:
+            logger.info(
+                f"[layer-completion] drained {self._acks}/{expected_layers} layer acks in "
+                f"{(time.perf_counter() - start):.2f}s"
+            )
+        return self.total_layers
+
+    def close(self) -> None:
+        if self._thread is None:
+            return
+        self._stop.set()
+        self._thread.join()
+        self._thread = None
+        if self._drainer is not None:
+            self._drainer.finish()

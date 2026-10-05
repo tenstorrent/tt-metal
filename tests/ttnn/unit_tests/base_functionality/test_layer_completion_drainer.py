@@ -2,11 +2,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import threading
+import time
 from collections import deque
 
 import pytest
 
 from models.demos.common.prefill.runners.layer_completion_drainer import (
+    BackgroundCompletionDrain,
     Completion,
     LayerCompletionDrainer,
     current_protocol,
@@ -181,25 +184,81 @@ class FakeCounterChannel:
         return n
 
 
-def test_drain_layer_completions_dispatches_v1_count(monkeypatch):
-    import models.demos.common.prefill.runners.layer_completion_drainer as lcd
+class BoundedRing:
+    def __init__(self, capacity: int):
+        self._q = deque()
+        self._capacity = capacity
+        self._lock = threading.Lock()
 
+    def try_push(self, m) -> bool:
+        with self._lock:
+            if len(self._q) >= self._capacity:
+                return False
+            self._q.append(m)
+            return True
+
+    def try_pop(self):
+        with self._lock:
+            return self._q.popleft() if self._q else None
+
+
+def test_background_drain_v1_counts_acks(monkeypatch):
     monkeypatch.setenv("PREFILL_LAYER_COMPLETION_PROTOCOL", "1")
-    channel = FakeCounterChannel(3 * NUM_LAYERS)
-    assert lcd.drain_layer_completions(channel, 3 * NUM_LAYERS, timeout_s=5) == 3 * NUM_LAYERS
+    drain = BackgroundCompletionDrain(FakeCounterChannel(3 * NUM_LAYERS))
+    assert drain.wait(3 * NUM_LAYERS, timeout_s=5) == 3 * NUM_LAYERS
+    drain.close()
 
 
-def test_drain_layer_completions_dispatches_v2_ring(monkeypatch):
-    import models.demos.common.prefill.runners.layer_completion_drainer as lcd
-
+def test_background_drain_v2_ring(monkeypatch):
     monkeypatch.setenv("PREFILL_LAYER_COMPLETION_PROTOCOL", "2")
     monkeypatch.setenv("PREFILL_NUM_LAYERS", str(NUM_LAYERS))
     ring = FakeRing(per_layer(0, layers=[0, 1]) + per_layer(1, slot_id=1) + per_layer(0, layers=[2, 3]))
-    assert lcd.drain_layer_completions(ring, 2 * NUM_LAYERS, timeout_s=5) == 2 * NUM_LAYERS
+    drain = BackgroundCompletionDrain(ring)
+    assert drain.wait(2 * NUM_LAYERS, timeout_s=5) == 2 * NUM_LAYERS
+    drain.close()
 
 
-def test_drain_layer_completions_none_channel_is_noop(monkeypatch):
-    import models.demos.common.prefill.runners.layer_completion_drainer as lcd
-
+def test_background_drain_keeps_bounded_ring_moving(monkeypatch):
     monkeypatch.setenv("PREFILL_LAYER_COMPLETION_PROTOCOL", "2")
-    assert lcd.drain_layer_completions(None, NUM_LAYERS, timeout_s=1) == 0
+    monkeypatch.setenv("PREFILL_NUM_LAYERS", str(NUM_LAYERS))
+    ring = BoundedRing(capacity=2)
+    drain = BackgroundCompletionDrain(ring)
+    num_requests = 50
+    for request_id in range(num_requests):
+        for m in per_layer(request_id):
+            deadline = time.perf_counter() + 5
+            while not ring.try_push(m):
+                assert time.perf_counter() < deadline, "ring stayed full: nothing drained it"
+                time.sleep(0.001)
+    assert drain.wait(num_requests * NUM_LAYERS, timeout_s=5) == num_requests * NUM_LAYERS
+    drain.close()
+
+
+def test_background_drain_cumulative_across_waits(monkeypatch):
+    monkeypatch.setenv("PREFILL_LAYER_COMPLETION_PROTOCOL", "2")
+    monkeypatch.setenv("PREFILL_NUM_LAYERS", str(NUM_LAYERS))
+    ring = BoundedRing(capacity=64)
+    drain = BackgroundCompletionDrain(ring)
+    for m in per_layer(0):
+        ring.try_push(m)
+    assert drain.wait(NUM_LAYERS, timeout_s=5) == NUM_LAYERS
+    for m in per_layer(1, slot_id=1):
+        ring.try_push(m)
+    assert drain.wait(2 * NUM_LAYERS, timeout_s=5) == 2 * NUM_LAYERS
+    drain.close()
+
+
+def test_background_drain_surfaces_drainer_error(monkeypatch):
+    monkeypatch.setenv("PREFILL_LAYER_COMPLETION_PROTOCOL", "2")
+    monkeypatch.setenv("PREFILL_NUM_LAYERS", str(NUM_LAYERS))
+    drain = BackgroundCompletionDrain(FakeRing([msg(0, 0, 3), msg(0, 2, 4)]))
+    with pytest.raises(ValueError, match="overlaps"):  # allow-pytest.raises: host-only, no device error
+        drain.wait(NUM_LAYERS, timeout_s=5)
+    drain.close()
+
+
+def test_background_drain_none_channel_is_noop(monkeypatch):
+    monkeypatch.setenv("PREFILL_LAYER_COMPLETION_PROTOCOL", "2")
+    drain = BackgroundCompletionDrain(None)
+    assert drain.wait(NUM_LAYERS, timeout_s=1) == 0
+    drain.close()
