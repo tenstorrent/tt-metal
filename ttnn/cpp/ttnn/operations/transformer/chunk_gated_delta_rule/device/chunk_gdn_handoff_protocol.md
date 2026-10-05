@@ -232,4 +232,7 @@ on every chunk.
 | C1 | exact-NV credits (I1) | producer, credit poll | `ASSERT(credit <= NV)` on every poll: an over-credit reports instead of hanging |
 | C2 | every credit consumed | producer, teardown | all BH × NBUF credit words are zero after the barriers |
 | C3' | the producer's rings advance by exactly n per item | producer, before the sends of its k-th item | `get_read_ptr(cb) == base + (k mod NBUF) · n · tile_bytes` for the seven CBs |
-| C6 | stage of each core in a hang dump | both | `WAYPOINT`s `TXCB` (CB wait), `TXCR` (credit wait), `TXBR` (barrier), `TXVL` (flag), `DONE` on the producer |
+| C3 | slot-address agreement (§2.1) | receiver, at the push of chunk c | `get_write_ptr(cb) == base + (c mod NBUF) · n · tile_bytes` for the six shared CBs and `base + ((c · cvl) mod (cv · NBUF)) · tile_bytes` for v_beta: both rings advance exactly as the producer's formulas assume |
+| C4 | flag state before the reset (I2, I6) | receiver, in `issue(c)` | `valid[s] == VALID` for c ≥ NBUF (the consumed chunk c − NBUF left it so), `INVALID` for the first round |
+| C5 | end state | receiver, teardown | every chunk issued and consumed; each used slot's flag still VALID |
+| C6 | stage of each core in a hang dump | both | `WAYPOINT`s `TXCB` (CB wait), `TXCR` (credit wait), `TXBR` (barrier), `TXVL` (flag) on the producer; `RXRS` (reserve), `RXVL` (VALID wait) on the receiver; `DONE` at exit on both |

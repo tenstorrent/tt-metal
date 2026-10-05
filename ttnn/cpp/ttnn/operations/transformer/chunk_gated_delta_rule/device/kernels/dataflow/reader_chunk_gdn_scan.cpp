@@ -37,7 +37,17 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "api/debug/assert.h"
+#include "api/debug/waypoint.h"
 #include "chunk_gdn_handoff.hpp"
+
+// Runtime checks of the hand-off protocol's invariants (chunk_gdn_handoff_protocol.md, "Runtime checks"): compiled
+// only where the watcher's ASSERT is, so release kernels are unchanged.
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
+#define GDN_HANDOFF_WATCHER_CHECKS 1
+#else
+#define GDN_HANDOFF_WATCHER_CHECKS 0
+#endif
 
 #if defined(GDN_MCAST_SENDER) || defined(GDN_MCAST_RECEIVER) || defined(GDN_FUSED_RECEIVER)
 #include "api/core_local_mem.h"
@@ -383,6 +393,23 @@ void kernel_main() {
     // address on every core of the program — so this receiver can name head h's words on any
     // producer without being told an address. Word (h, slot) is at CREDIT_OFF + 4*(h*NBUF + slot).
     const uint32_t credit_base = CircularBuffer(CB_CREDIT).get_read_ptr() + CREDIT_OFF + 4 * h * NBUF;
+#if GDN_HANDOFF_WATCHER_CHECKS
+    // C3: the producer computes this core's slot addresses from the global chunk index (base + (c % NBUF) * n * tb,
+    // and the NV*NBUF-slot ring for v_beta); the write pointers must land exactly there at every push, i.e. this
+    // side reserves and pushes exactly n tiles per chunk into CBs of NBUF * n tiles. Bases captured before any push.
+    const uint32_t wbase_vbeta = CircularBuffer(cb_vbeta).get_write_ptr();
+    const uint32_t wbase_nkd = CircularBuffer(cb_nkd).get_write_ptr();
+    const uint32_t wbase_qdecay = CircularBuffer(cb_qdecay).get_write_ptr();
+    const uint32_t wbase_intra = CircularBuffer(cb_intra).get_write_ptr();
+    const uint32_t wbase_kdec_t = CircularBuffer(cb_kdec_t).get_write_ptr();
+    const uint32_t wbase_dl = CircularBuffer(cb_dl).get_write_ptr();
+    const uint32_t wbase_Tinv = CircularBuffer(cb_Tinv).get_write_ptr();
+    constexpr uint32_t VB_RING = Ct * Vt_full * NBUF;  // the producer-sized v_beta ring, in tiles
+    auto valid_word = [](uint32_t slot) {
+        invalidate_l1_cache();
+        return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_VALID + slot));
+    };
+#endif
 
     // Init barrier: dispatch re-initializes only Semaphore objects per launch, so the producers
     // zero their credit words themselves and then bump `init` here; crediting earlier could land
@@ -395,6 +422,7 @@ void kernel_main() {
     // condition the credit promises the producer. (The v_beta ring is NV*NBUF chunks deep for this
     // slice and therefore free a fortiori.)
     auto issue = [&](uint32_t c) {
+        WAYPOINT("RXRS");
         {
             DeviceZoneScopedN("rx_reserve");
             CircularBuffer(cb_vbeta).reserve_back(D * cv);
@@ -406,6 +434,11 @@ void kernel_main() {
             CircularBuffer(cb_Tinv).reserve_back(D * cc);
         }
         const uint32_t slot = c % NBUF;
+#if GDN_HANDOFF_WATCHER_CHECKS
+        // C4: the slot's flag is exactly where the protocol leaves it: VALID from the consumed chunk c - NBUF (I2), or
+        // the launch value INVALID for the first round. Anything else is a lost or early flag (I6).
+        ASSERT(valid_word(slot) == (c >= NBUF ? VALID : INVALID));
+#endif
         // Reset the slot's flag BEFORE crediting: a fast producer may set VALID immediately after
         // the credit lands, and a late reset would overwrite it (lost wakeup -> deadlock).
         Semaphore<>(SEM_VALID + slot).set(INVALID);
@@ -428,11 +461,24 @@ void kernel_main() {
         issue(next);
     }
     for (uint32_t c = 0; c < NC; c++) {
+        WAYPOINT("RXVL");
         {
             DeviceZoneScopedN("rx_wait_valid");
             Semaphore<>(SEM_VALID + (c % NBUF)).wait(VALID);
         }
 
+#if GDN_HANDOFF_WATCHER_CHECKS
+        {
+            const uint32_t slot = c % NBUF;
+            ASSERT(CircularBuffer(cb_vbeta).get_write_ptr() == wbase_vbeta + ((c * cv) % VB_RING) * tb);
+            ASSERT(CircularBuffer(cb_nkd).get_write_ptr() == wbase_nkd + slot * ck * tb);
+            ASSERT(CircularBuffer(cb_qdecay).get_write_ptr() == wbase_qdecay + slot * ck * tb);
+            ASSERT(CircularBuffer(cb_intra).get_write_ptr() == wbase_intra + slot * cc * tb);
+            ASSERT(CircularBuffer(cb_kdec_t).get_write_ptr() == wbase_kdec_t + slot * kc * tb);
+            ASSERT(CircularBuffer(cb_dl).get_write_ptr() == wbase_dl + slot * 1 * tb);
+            ASSERT(CircularBuffer(cb_Tinv).get_write_ptr() == wbase_Tinv + slot * cc * tb);
+        }
+#endif
         // The chunk's seven blocks are in our CBs; make them visible to compute.
         CircularBuffer(cb_vbeta).push_back(cv);
         CircularBuffer(cb_nkd).push_back(ck);
@@ -448,11 +494,19 @@ void kernel_main() {
         }
     }
 
+#if GDN_HANDOFF_WATCHER_CHECKS
+    // C5: every chunk was issued and consumed, and each used slot's flag still shows its last chunk's VALID.
+    ASSERT(next == NC);
+    for (uint32_t s = 0; s < std::min(NBUF, NC); s++) {
+        ASSERT(valid_word(s) == VALID);
+    }
+#endif
     for (uint32_t s = 0; s < NBUF; s++) {
         Semaphore<>(SEM_VALID + s).set(INVALID);  // local store: restore the initial values
     }
     // Drain the credit atomics: no non-posted inc may be in flight at kernel exit.
     noc.async_atomic_barrier();
+    WAYPOINT("DONE");
 
 #else
     for (uint32_t c = 0; c < NC; c++) {
