@@ -807,7 +807,10 @@ public:
             false,
             compute_grid_size,
             input_layout,
-            BufferType::DRAM));
+            // With a single slice the op takes the DRAM input as it is and conv_transpose2d_L1 shards it itself, with
+            // the channel alignment of an unsliced input. Only the output of padded_slice (two or more slices) has the
+            // alignment of a sliced input. The L1 estimate has to use the shard shape the op will use.
+            single_slice ? BufferType::L1 : BufferType::DRAM));
         return sliced_input_tensor_memory_config;
     }
 
