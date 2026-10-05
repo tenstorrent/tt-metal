@@ -65,6 +65,9 @@ class TextInputModel:
     # First corpus token of the window. Chosen so the model's strongest measured decay window lands on a
     # 32-token chunk boundary inside SP rank 1 (640 tokens per rank).
     window_start: int
+    # GLM (mHC): the layer input is the input_layernorm of the attention hyper-connection collapse of
+    # hc_mult copies of the embedding (the residual streams at layer 0).
+    hyper_connection_streams: bool = False
 
 
 TEXT_INPUT_MODELS = {
@@ -76,6 +79,15 @@ TEXT_INPUT_MODELS = {
         model_root="language_model.model.",
         tokenizer="tiktoken",
         window_start=8,
+    ),
+    # GLM layer 0 reaches per-chunk |G_last| 157.3 on the first 4096 en-prose tokens (g1b.4.10).
+    "glm_5_3_flash": TextInputModel(
+        repo="zai-org/GLM-5.3-Flash",
+        revision="eb9eb208eb0d988989d07a6a12d0fdeb5f52574a",
+        model_root="model.language_model.",
+        tokenizer="tokenizers",
+        window_start=0,
+        hyper_connection_streams=True,
     ),
 }
 
@@ -112,9 +124,19 @@ def build_text_input(model: str, layer_idx: int, tokens: int, checkpoint_dir: Pa
     if len(token_ids) != tokens:
         raise ValueError(f"corpus has {len(token_ids)} tokens after {spec.window_start}, need {tokens}")
     embeddings = _embedding_rows(spec, checkpoint_dir, token_ids)
-    norm_weight = _checkpoint_tensor(
-        spec, checkpoint_dir, f"{spec.model_root}layers.{layer_idx}.input_layernorm.weight"
-    )
+    layer_prefix = f"{spec.model_root}layers.{layer_idx}."
+    norm_weight = _checkpoint_tensor(spec, checkpoint_dir, f"{layer_prefix}input_layernorm.weight")
+    if spec.hyper_connection_streams:
+        if layer_idx != 0:
+            raise ValueError("hyper-connection text inputs are exact only for layer 0")
+        embeddings = _hyper_connection_collapse(
+            embeddings,
+            *(
+                _checkpoint_tensor(spec, checkpoint_dir, f"{layer_prefix}hc_attn_{name}")
+                for name in ("fn", "base", "scale")
+            ),
+            text_config,
+        )
     hidden = _rms_norm(embeddings, norm_weight, text_config["rms_norm_eps"]).unsqueeze(0).contiguous()
     path = text_input_cache_path(model, layer_idx, tokens)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -161,6 +183,19 @@ def _rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor
     """KimiRMSNorm / Glm5NextTextRMSNorm: fp32 normalize, cast to the input dtype, scale (bf16 result)."""
     xf = x.float()
     return weight * (xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + eps)).to(x.dtype)
+
+
+def _hyper_connection_collapse(
+    embeddings: torch.Tensor, fn: torch.Tensor, base: torch.Tensor, scale: torch.Tensor, text_config: dict
+) -> torch.Tensor:
+    """Glm5NextTextHyperConnection pre-mix collapse of hc_mult identical streams (transformers@26c0a7fd)."""
+    streams_count, eps = text_config["hc_mult"], text_config["rms_norm_eps"]
+    streams = embeddings.unsqueeze(1).expand(-1, streams_count, -1)
+    flat = streams.reshape(streams.shape[0], -1).float()
+    flat = flat * torch.rsqrt(flat.square().mean(-1, keepdim=True) + eps)
+    pre_logits = (flat @ fn.float().T)[:, :streams_count]
+    pre = torch.sigmoid(pre_logits * scale.float()[0] + base.float()[:streams_count]) + text_config["hc_eps"]
+    return (pre.unsqueeze(-1) * streams).sum(dim=1).to(embeddings.dtype)
 
 
 def _corpus_body() -> str:

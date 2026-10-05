@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 from dataclasses import replace
 from pathlib import Path
 
@@ -71,6 +72,7 @@ def test_registered_cases_are_unique_and_found_by_their_fields(expect_error) -> 
                 chunk_valid_tokens=spec.chunk_valid_tokens,
                 head_slice=spec.head_slice,
                 inputs=spec.inputs,
+                model=spec.model,
             )
             is spec
         )
@@ -80,19 +82,24 @@ def test_registered_cases_are_unique_and_found_by_their_fields(expect_error) -> 
 
 def test_loudbox_matrix_is_registered() -> None:
     expected = {
-        "LB-A": ((2, 4), None, {"single": (1280,), "chained3": (1280,) * 3, "ragged": (1280, 992)}),
-        "LB-B": ((8, 1), (0, 24), {"single": (5120,), "chained3": (5120,) * 3, "ragged": (5120, 3872)}),
+        "LB-A": ((2, 4), False, {"single": (1280,), "chained3": (1280,) * 3, "ragged": (1280, 992)}),
+        "LB-B": ((8, 1), True, {"single": (5120,), "chained3": (5120,) * 3, "ragged": (5120, 3872)}),
     }
-    for weights, inputs in (("synthetic", "randn"), ("real", "randn"), ("real", "text")):
-        for layout, (mesh_shape, head_slice, schedules) in expected.items():
+    heads = {"kimi_k3": 96, "glm_5_3_flash": 64}
+    for model, (weights, inputs) in itertools.product(
+        heads, (("synthetic", "randn"), ("real", "randn"), ("real", "text"))
+    ):
+        for layout, (mesh_shape, quarter, schedules) in expected.items():
             for schedule, valid_tokens in schedules.items():
-                spec = loudbox_kda_case(weights, layout, schedule, inputs)
-                assert (spec.mesh_shape, spec.head_slice, spec.chunk_valid_tokens) == (
+                spec = loudbox_kda_case(weights, layout, schedule, inputs, model)
+                head_slice = (0, heads[model] // 4) if quarter else None
+                assert (spec.model, spec.mesh_shape, spec.head_slice, spec.chunk_valid_tokens) == (
+                    model,
                     mesh_shape,
                     head_slice,
                     valid_tokens,
                 )
-                assert spec.weight_source().config.num_heads == (96 if head_slice is None else 24)
+                assert spec.weight_source().config.num_heads == heads[model] // (4 if quarter else 1)
 
 
 def test_case_spec_rejects_unpreparable_schedules(expect_error) -> None:

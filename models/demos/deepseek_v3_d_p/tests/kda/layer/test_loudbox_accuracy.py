@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""LoudBox accuracy of the Kimi-K3 KDA layer at the Galaxy per-chip shapes (LB-A and LB-B).
+"""LoudBox accuracy of the Kimi-K3 and GLM-5.3-Flash KDA layers at the Galaxy per-chip shapes (LB-A and LB-B).
 
 Every schedule runs through the production carry owner (``tt/kimi_k3/kda_state.py``) under one trace: the
 chunk's forward and the in-place commit of its carries are captured once at chunk 0's bounds and replayed for
@@ -29,6 +29,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.cases import (
+    KDA_MODELS,
     KDATestCase,
     build_kda_case,
     loudbox_kda_case,
@@ -60,12 +61,14 @@ def _params() -> list:
         pytest.param(
             _LAYOUTS[layout],
             fabric_1d_device_params(),
+            model,
             layout,
             weights,
             inputs,
             schedule,
-            id=f"{layout}-{weights}-{inputs}-{schedule}",
+            id=f"{model}-{layout}-{weights}-{inputs}-{schedule}",
         )
+        for model in KDA_MODELS
         for layout in _LAYOUTS
         for weights, inputs in _MATRIX
         for schedule in ("single", "chained3", "ragged")
@@ -138,11 +141,14 @@ def _run_schedule(
 
 
 @pytest.mark.parametrize(
-    "mesh_device,device_params,layout,weights,inputs,schedule", _params(), indirect=["mesh_device", "device_params"]
+    "mesh_device,device_params,model,layout,weights,inputs,schedule",
+    _params(),
+    indirect=["mesh_device", "device_params"],
 )
-def test_loudbox_kimi_k3_accuracy(
+def test_loudbox_kda_accuracy(
     mesh_device: ttnn.MeshDevice,
     device_params: dict,
+    model: str,
     layout: str,
     weights: str,
     inputs: str,
@@ -150,8 +156,8 @@ def test_loudbox_kimi_k3_accuracy(
     request: pytest.FixtureRequest,
     tmp_path: Path,
 ) -> None:
-    spec = loudbox_kda_case(weights, layout, schedule, inputs)
-    checkpoint_dir: Path | None = request.getfixturevalue("kimi_k3_checkpoint_dir") if weights == "real" else None
+    spec = loudbox_kda_case(weights, layout, schedule, inputs, model)
+    checkpoint_dir: Path | None = request.getfixturevalue(f"{model}_checkpoint_dir") if weights == "real" else None
     case = build_kda_case(spec, checkpoint_dir)
     references = cpu_references(case)
     layer, hidden_tt = make_kda_device_case(mesh_device, case)
@@ -239,6 +245,7 @@ def test_loudbox_kimi_k3_accuracy(
         + json.dumps(
             {
                 "case": spec.name,
+                "model": model,
                 "layout": layout,
                 "weights": weights,
                 "inputs": inputs,
