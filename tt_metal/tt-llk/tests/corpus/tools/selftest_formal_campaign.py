@@ -62,6 +62,11 @@ class FormalCampaignTests(unittest.TestCase):
             campaign.RESULT_STATUS["SEMANTICS-UNVALIDATED"],
             "TRACE_VALIDATION_FAILED",
         )
+        self.assertEqual(
+            campaign.admitted_status("DIVERGENT", "PROVEN_EQUIVALENT_ON_DOMAIN"),
+            "PROVEN_EQUIVALENT_ON_DOMAIN",
+        )
+        self.assertEqual(campaign.admitted_status("DIVERGENT", "DIVERGENT"), "DIVERGENT")
 
     def test_clean_environment_drops_caller_test_hooks(self):
         clean = campaign.clean_environment({"CHIP_ARCH": "blackhole"})

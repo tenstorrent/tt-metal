@@ -1,0 +1,14 @@
+{
+  "clamp-fresh": [
+    {
+      "bf16_deliverable": true
+    }
+  ],
+  "mulint32-fresh": [
+    {
+      "which": "all",
+      "int_min": 1,
+      "int_max": 40000
+    }
+  ]
+}

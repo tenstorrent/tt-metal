@@ -55,8 +55,12 @@ Documented input restrictions are explicit current-run inputs:
 }
 ```
 
-Pass that file with `--domains domains.json`. A recorded historical domain
-overlay never promotes a current result.
+The checked-in `formal_domains.json` supplies the reviewed contracts for
+`clamp-fresh` and `mulint32-fresh` by default; pass `--domains domains.json` to
+use another explicit contract set. The runner always proves the unrestricted
+claim first. If it diverges, it separately runs the domain query and preserves
+both verdicts. A recorded historical domain overlay never promotes a current
+result.
 
 ## Verdicts
 

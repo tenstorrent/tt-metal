@@ -28,6 +28,7 @@ import time
 HERE = Path(__file__).resolve().parent
 CORPUS = HERE.parent
 DEFAULT_CASES = CORPUS / "sweep_2x2_ops.tsv"
+DEFAULT_DOMAINS = HERE / "formal_domains.json"
 FORMAL_ENGINE = HERE / "formal_equiv.py"
 ELF_TEXT_SHA = HERE / "elf_text_sha.py"
 TRACE_SCHEMA = "SFPUJO I"
@@ -304,6 +305,18 @@ def invoke_prover(
     return verdict, run
 
 
+def verdict_status(verdict: dict) -> str:
+    return RESULT_STATUS.get(verdict.get("verdict"), "PROVER_FAILED")
+
+
+def admitted_status(all_inputs: str, domain: str | None) -> str:
+    if all_inputs == "PROVEN_EQUIVALENT":
+        return all_inputs
+    if all_inputs == "DIVERGENT" and domain == "PROVEN_EQUIVALENT_ON_DOMAIN":
+        return domain
+    return all_inputs
+
+
 def run_case(
     *,
     op: str,
@@ -369,7 +382,7 @@ def run_case(
     try:
         verdict, run = invoke_prover(
             op=op,
-            domain=domain,
+            domain=None,
             python=python,
             out=out,
             isa_json=sim.parent / "tensix_isa.json",
@@ -382,8 +395,9 @@ def run_case(
         detail = (run.stderr or run.stdout or "prover wrote no verdict")[-500:]
         result.update(status="PROVER_FAILED", detail=detail)
         return result
+    all_input_status = verdict_status(verdict)
     result.update(
-        status=RESULT_STATUS.get(verdict["verdict"], "PROVER_FAILED"),
+        status=all_input_status,
         formal_verdict=verdict["verdict"],
         validation=verdict.get("validation"),
         details=verdict.get("details"),
@@ -391,6 +405,33 @@ def run_case(
         verdict_file=f"{op}/{op}-verdict.json",
         wall_seconds=round(time.monotonic() - started, 3),
     )
+    if all_input_status == "DIVERGENT" and domain:
+        try:
+            domain_verdict, domain_run = invoke_prover(
+                op=f"{op}-domain",
+                domain=domain,
+                python=python,
+                out=out,
+                isa_json=sim.parent / "tensix_isa.json",
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            result.update(status="TIMEOUT", domain_status="TIMEOUT")
+            return result
+        if not isinstance(domain_verdict, dict) or not domain_verdict.get("verdict"):
+            detail = (domain_run.stderr or domain_run.stdout or "domain prover wrote no verdict")[-500:]
+            result.update(status="PROVER_FAILED", domain_status="PROVER_FAILED", detail=detail)
+            return result
+        domain_status = verdict_status(domain_verdict)
+        result.update(
+            status=admitted_status(all_input_status, domain_status),
+            domain_status=domain_status,
+            domain_formal_verdict=domain_verdict["verdict"],
+            domain_validation=domain_verdict.get("validation"),
+            domain_details=domain_verdict.get("details"),
+            domain_verdict_file=f"{op}/{op}-domain-verdict.json",
+            wall_seconds=round(time.monotonic() - started, 3),
+        )
     return result
 
 
@@ -456,12 +497,16 @@ def preflight(tests: Path, python: Path, sim: Path) -> dict:
 def write_results(root: Path, records: list[dict], metadata: dict, started: float) -> None:
     counts = Counter(record["status"] for record in records)
     operational_failures = sum(counts[status] for status in OPERATIONAL_FAILURES)
+    admitted = counts["PROVEN_EQUIVALENT"] + counts["PROVEN_EQUIVALENT_ON_DOMAIN"]
     summary = {
         "schema_version": 1,
         "status": "INCOMPLETE" if operational_failures else "COMPLETE",
         "selected": len(records),
         "counts": dict(sorted(counts.items())),
         "operational_failures": operational_failures,
+        "formal_admission": "ALL_PROVEN" if admitted == len(records) else "FOLLOWUP_REQUIRED",
+        "formally_admitted": admitted,
+        "followup_required": len(records) - admitted,
         "wall_seconds": round(time.monotonic() - started, 3),
         "metadata": metadata,
         "results": records,
@@ -483,7 +528,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES)
     parser.add_argument("--selection", type=Path)
     parser.add_argument("--flags", default="")
-    parser.add_argument("--domains", type=Path)
+    parser.add_argument("--domains", type=Path, default=DEFAULT_DOMAINS)
     parser.add_argument("--ops", help="comma-separated operation globs")
     parser.add_argument("--sem-node", help="semantic pytest node for a single --ops row")
     parser.add_argument("--hand-node", help="reference pytest node for a single --ops row")
