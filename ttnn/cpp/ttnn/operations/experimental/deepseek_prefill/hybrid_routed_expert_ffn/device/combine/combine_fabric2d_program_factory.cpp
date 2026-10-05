@@ -305,7 +305,8 @@ KernelPlan make_kernel_plan(
                                                                     num_dispatch_groups(args, tensor_args)
                                                               : 0u;
     plan.my_expert_base = my_group * experts_per_group + my_dg_index(args, coord) * args.experts_per_chip;
-    plan.expert_table_page_base = my_group * ring_extent(args);
+    // The table each chip holds is its own dispatch group's rows only, so the ring starts at page 0.
+    plan.expert_table_page_base = 0;
     return plan;
 }
 

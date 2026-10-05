@@ -530,17 +530,22 @@ class TtMoe(LightweightModule):
         # Overlapping is the default wherever the op exists; only Blackhole has it.
         if overlap_routed_expert_with_combine is None:
             overlap_routed_expert_with_combine = is_blackhole()
-        # combine_fabric2d relays other chips' tokens, so it needs every chip's slice of the table.
+        # combine_fabric2d relays tokens between the chips of one ring, so each chip needs its own dispatch
+        # group's rows of the table -- one row per ring chip -- and no other group's. Combine runs on mesh axis
+        # 0, so a group is a mesh column: shard the groups across columns and replicate down each one.
         self.overlap_routed_expert_with_combine = overlap_routed_expert_with_combine
         self.replicated_global_expert_idx_tt = None
         if overlap_routed_expert_with_combine:
+            assert (
+                tuple(mesh_device.shape)[1] == num_dispatch_groups
+            ), f"{num_dispatch_groups} dispatch groups on a {tuple(mesh_device.shape)} mesh: expected one per column"
             self.replicated_global_expert_idx_tt = ttnn.from_torch(
                 ExpertMapping.create_global_expert_idx_table(
                     experts_per_chip=experts_per_chip,
                     dispatch_group_size=dispatch_group_size,
                     num_dispatch_groups=num_dispatch_groups,
                 ),
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 0)),
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=mesh_device,
                 dtype=ttnn.uint32,

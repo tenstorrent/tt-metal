@@ -23,6 +23,21 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "combine_fabric2d_sender_ct_args.hpp"
 
+// Device-profiler build only: where the sender's time goes, summed over the run and reported once at the end,
+// since a zone per token would overflow the profiler buffer. Compiles to nothing otherwise.
+#if defined(PROFILE_KERNEL)
+#include "tools/profiler/kernel_profiler.hpp"
+namespace cmbf2d_prof {
+uint64_t wait_filled = 0;  // the reader has not published a slot
+uint64_t wait_edm = 0;     // no free fabric write slot: the router has not returned a credit
+}  // namespace cmbf2d_prof
+#define CMBF2D_PROF_NOW() get_timestamp()
+#define CMBF2D_PROF_ADD(counter, t0) (cmbf2d_prof::counter += get_timestamp() - (t0))
+#else
+#define CMBF2D_PROF_NOW() 0ull
+#define CMBF2D_PROF_ADD(counter, t0) ((void)(t0))
+#endif
+
 // Guard genuinely different BEHAVIOUR with CMBF2D_OVERLAPPED; anything that differs only in where a value
 // lives belongs behind an accessor on the compile-time arguments instead.
 
@@ -81,7 +96,9 @@ void bump_downstream(FabricSender& fabric, uint32_t sem_addr, uint32_t count) {
     // destination is DRAM, and the forwarding buffer is DRAM.
     hdr_bump->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
         get_noc_addr(ct.fwd_sem_noc_x, ct.fwd_sem_noc_y, sem_addr), /*val=*/count, /*flush=*/true});
+    [[maybe_unused]] const uint64_t prof_t0 = CMBF2D_PROF_NOW();
     fabric.wait_for_empty_write_slot();
+    CMBF2D_PROF_ADD(wait_edm, prof_t0);
     fabric.send_payload_flush_blocking_from_address((uint32_t)hdr_bump, sizeof(PACKET_HEADER_TYPE));
 }
 
@@ -101,7 +118,9 @@ uint64_t send_slot(
     // Header first, THEN wait for the slot: building it while the EDM may still be busy is free overlap, and
     // reversing the two costs ~8% of the bandwidth.
     hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{metadata->this_addr}, payload_bytes);
+    [[maybe_unused]] const uint64_t prof_t0 = CMBF2D_PROF_NOW();
     fabric.wait_for_empty_write_slot();
+    CMBF2D_PROF_ADD(wait_edm, prof_t0);
     fabric.send_payload_without_header_non_blocking_from_address(ct.ring_addr + slot * ct.slot_stride(), payload_bytes);
     // No flush per token: a slot's header is untouched until the ring wraps and the payload is flushed once
     // per batch below, which is what lets token N+1 issue while N is still draining. Payload and credit go
@@ -140,7 +159,9 @@ uint32_t pump_stream(FabricSender& fabric) {
     uint32_t fwd_since_bump = 0;
     uint32_t final_since_bump = 0;
     while (!end_of_stream) {
+        [[maybe_unused]] const uint64_t prof_t0 = CMBF2D_PROF_NOW();
         const uint32_t avail = wait_for_filled(sent);
+        CMBF2D_PROF_ADD(wait_filled, prof_t0);
         const uint32_t n = avail < ct.batch ? avail : ct.batch;
 
         uint32_t processed = 0;
@@ -207,10 +228,20 @@ void kernel_main() {
     auto& fabric = fabric_connections.get(0).sender;
 
     prebuild_routes();
-    const uint32_t sent = pump_stream(fabric);
+    uint32_t sent = 0;
+    {
+        DeviceZoneScopedN("CMBF2D_S_PUMP");
+        sent = pump_stream(fabric);
+    }
     if (sent > 0) {
+        DeviceZoneScopedN("CMBF2D_S_DRAIN");
         drain_fabric(fabric);
     }
+#if defined(PROFILE_KERNEL)
+    DeviceTimestampedData("CMBF2D_S_WAIT_FILLED", cmbf2d_prof::wait_filled);
+    DeviceTimestampedData("CMBF2D_S_WAIT_EDM", cmbf2d_prof::wait_edm);
+    DeviceTimestampedData("CMBF2D_S_TOKENS", sent);
+#endif
 
     noc_async_writes_flushed();
     fabric_connections.close();
