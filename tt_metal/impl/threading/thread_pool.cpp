@@ -261,7 +261,7 @@ public:
         completion_(completion) {
         // Set the priority for this process to 0 (niceness value in linux)
         thread_binding::set_process_priority(0);
-        worker = std::thread([this]() { run(); });
+        worker = std::thread([this]() { worker_loop(); });
 
         auto cpu_core_for_worker = thread_binding::get_cpu_core_for_physical_device(context_id, physical_device_id);
         thread_binding::set_worker_affinity(worker, cpu_core_for_worker);
@@ -289,7 +289,7 @@ public:
     std::exception_ptr take_exception() { return std::exchange(stored_exception_, nullptr); }
 
 private:
-    void run() {
+    void worker_loop() {
         while (true) {
             if (tasks_.empty()) {
                 if (shutdown_.load(std::memory_order_acquire)) {
