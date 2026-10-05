@@ -592,7 +592,6 @@ struct Reader {
         claimed--;  // hand the staging slot back; nothing was ever announced for it
     }
 
-#ifndef CMBF2D_OVERLAPPED
     // Tokens the upstream chip on this stream writes straight into OUR output over the whole launch. Every
     // one of them is a chunk whose destination is this chip, so it comes from origins 1 … extent/2 hops
     // upstream, sized by the same stream_chunk the host built the writers' assignments with and from the same
@@ -631,7 +630,6 @@ struct Reader {
         }
         noc_semaphore_inc(get_noc_addr(ct.final_sem_addr), 0u - expected);
     }
-#endif
 
     // End of stream. The sender cannot know the length up front, so it stops on this.
     void end_stream() {
@@ -674,11 +672,9 @@ void kernel_main() {
 #if TILE
     reader.untilized.reset_counters();
 #endif
-#ifndef CMBF2D_OVERLAPPED
     // After end_stream, so our own sender is already free to finish: the upstream sender we are waiting on
     // only needs its own reader to have ended, never ours, so this cannot close a cycle around the ring.
     reader.wait_for_final_writes();
-#endif
 
     // Subtract what this launch consumed instead of zeroing: the upstream chip may already be bumping for the
     // next launch, and zeroing would drop those bumps and hang it. The sender counts every forwarded page and
