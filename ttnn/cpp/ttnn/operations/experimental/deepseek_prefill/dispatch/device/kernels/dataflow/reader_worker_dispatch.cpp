@@ -493,4 +493,8 @@ void kernel_main() {
     sentinel_plan->entry_count = 0;
     sentinel_entries[0].flags = PLAN_FLAG_END;
     cb_push_back(cb_plan_id, 1);
+
+    // The final baton increment can still await its NoC acknowledgement even
+    // after consumers observe our sentinels. Drain it before this RISC exits.
+    noc.async_atomic_barrier();
 }
