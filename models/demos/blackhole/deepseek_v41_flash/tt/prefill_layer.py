@@ -18,6 +18,7 @@ from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, eff
 import ttnn
 from models.common.modules.moe.tt_moe_decode import TTMoEDecode, _TTMoEDecodeBuffers
 from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
+from models.demos.blackhole.deepseek_v41_flash.tt import pf_tune
 
 _PROF_EVERY = int(
     os.environ.get("DSV41_PROF_EVERY", "0")
@@ -232,11 +233,12 @@ def shared_big(sh, h):
     """Shared expert on M = G*32 tokens in one go (the tuned DSV41SharedExpertV2 configs are per_core_M = 1, i.e. 32 tokens, and re-read the
     35 MB of weights per call): same maths / dtypes (bfp8 weights, HiFi4 fp32 accumulate, bf16 gate/up, fp32 out), automatic matmul configs.
     h [1,1,M,D] bf16 -> [1,1,M,D] fp32."""
+    ckc = pf_tune.shared_ckc(sh, h.device())
     gu = ttnn.linear(
         h,
         sh.w01,
         dtype=sh.mid_dtype,
-        compute_kernel_config=sh.ckc,
+        compute_kernel_config=ckc,
         core_grid=ttnn.CoreGrid(y=8, x=8),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -254,7 +256,7 @@ def shared_big(sh, h):
         act,
         sh.w2,
         dtype=ttnn.float32,
-        compute_kernel_config=sh.ckc,
+        compute_kernel_config=ckc,
         core_grid=ttnn.CoreGrid(y=8, x=8),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )

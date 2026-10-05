@@ -25,6 +25,7 @@ import os
 import torch
 
 import ttnn
+from models.demos.blackhole.deepseek_v41_flash.tt import pf_tune
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM, LOCAL_HEADS, WINDOW
 from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d
 from models.demos.blackhole.deepseek_v41_flash.tt.indexer import DIM as IDIM
@@ -69,9 +70,23 @@ class PrefillKV:
         self.lat_cap, self.c_max = lat_cap, c_max
         self.LAT = ceil32(lat_cap)
         self.WIN = WINDOW + c_max
-        self.t = ttnn.zeros(
+        self.dt = (
+            ttnn.fp8_e4m3 if pf_tune.SP_FP8 else ttnn.bfloat16
+        )  # env DSV41_PFA_SP_FP8=1: fp8_e4m3 kv table (halves the sparse_sdpa gather bytes)
+        z = ttnn.zeros(
             [users, 1, self.LAT + self.WIN, HEAD_DIM], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=md
         )
+        self.t = (
+            z if self.dt == ttnn.bfloat16 else ttnn.typecast(z, self.dt)
+        )  # fp8_e4m3 cannot be created by ttnn.zeros
+        if self.t is not z:
+            ttnn.deallocate(z)
+        self.fmt = ttnn.transformer.SparseKVFormat.FP8_E4M3 if pf_tune.SP_FP8 else ttnn.transformer.SparseKVFormat.BF16
+
+    def rm(self, x):
+        """tile bf16 tensor -> row-major tensor in the table's dtype."""
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        return x if x.dtype == self.dt else ttnn.typecast(x, self.dt)
 
     def free(self):
         ttnn.deallocate(self.t)
@@ -80,7 +95,7 @@ class PrefillKV:
         """lat [U,1,Cc,512] tile bf16 (RoPE'd)."""
         Cc = lat.shape[2]
         ttnn.experimental.slice_write(
-            ttnn.to_layout(lat, ttnn.ROW_MAJOR_LAYOUT),
+            self.rm(lat),
             self.t,
             [0, 0, j0, 0],
             [self.U, 1, j0 + Cc, HEAD_DIM],
@@ -93,7 +108,7 @@ class PrefillKV:
         full = kv if halo is None else ttnn.concat([halo, kv], dim=2)
         base = self.LAT + (WINDOW if halo is None else 0)
         ttnn.experimental.slice_write(
-            ttnn.to_layout(full, ttnn.ROW_MAJOR_LAYOUT),
+            self.rm(full),
             self.t,
             [0, 0, base, 0],
             [self.U, 1, base + full.shape[2], HEAD_DIM],
@@ -184,7 +199,8 @@ class DSV41PrefillIndexer:
             k_chunk_size=int(os.environ.get("DSV41_PIDX_KC", "128")),
             head_group_size=int(os.environ.get("DSV41_PIDX_HG", "0")),
         )
-        self.ckc = dec.ckc
+        self.ckc = pf_tune.idx_ckc(dec)
+        self.ckc_rope = dec.ckc  # the pair-swap matmul of the RoPE stays exact
 
     @property
     def slab(self):
@@ -193,6 +209,8 @@ class DSV41PrefillIndexer:
     # ---- numerics shared with the decode indexer -----------------------------------------------------------------------------
     def _fp4(self, x):
         """fp4 (e2m1 / per-32 e8m0) quantise-dequantise of a bf16 tile tensor [..., 128]."""
+        if pf_tune.FP4 == "fast":
+            return pf_tune.fp4_fast(x)
         shp = list(x.shape)
         n = 1
         for s in shp[:-1]:
@@ -203,7 +221,7 @@ class DSV41PrefillIndexer:
 
     def _rope(self, x, tab):
         c, s = tab
-        return ttnn.addcmul(ttnn.multiply(x, c), ttnn.matmul(x, self.dec.P, compute_kernel_config=self.ckc), s)
+        return ttnn.addcmul(ttnn.multiply(x, c), ttnn.matmul(x, self.dec.P, compute_kernel_config=self.ckc_rope), s)
 
     # ---- keys --------------------------------------------------------------------------------------------------------------------
     def add_keys(self, pa, lat_pre, s0):
@@ -511,9 +529,9 @@ class DSV41PrefillSparse:
                 self.kvt.t,
                 idx,
                 HEAD_DIM,
-                kv_format=ttnn.transformer.SparseKVFormat.BF16,
+                kv_format=self.kvt.fmt,
                 scale=pa.a.scale,
-                k_chunk_size=128,
+                k_chunk_size=pf_tune.SP_KC,
                 compute_kernel_config=pa.ckc_sdpa,
                 attention_sink=self.sink,
                 cache_batch_idx=u,
@@ -673,11 +691,11 @@ class DSV41PrefillSparse:
             if (
                 L == Cc
             ):  # single-chunk prompt (S_pad == C): the FIFO is just this chunk (a zero-length slice breaks the concat)
-                new = ttnn.to_layout(lat, ttnn.ROW_MAJOR_LAYOUT)
+                new = self.kvt.rm(lat)
                 ttnn.experimental.slice_write(new, kt, [0, 0, 0, 0], [U, 1, L, HEAD_DIM], [1, 1, 1, 1])
             else:
                 body = ttnn.slice(kt, [0, 0, Cc, 0], [U, 1, L, HEAD_DIM])
-                new = ttnn.concat([body, ttnn.to_layout(lat, ttnn.ROW_MAJOR_LAYOUT)], dim=2)
+                new = ttnn.concat([body, self.kvt.rm(lat)], dim=2)
                 ttnn.experimental.slice_write(new, kt, [0, 0, 0, 0], [U, 1, L, HEAD_DIM], [1, 1, 1, 1])
                 ttnn.deallocate(body)
             ttnn.deallocate(new)
@@ -685,7 +703,7 @@ class DSV41PrefillSparse:
         if ix is not None and ix.key_owner is None:  # key FIFO
             tab = ctx.lat_tabs[r] if r > 1 else ctx.tabs[True]
             ix.add_keys_dyn(lat_pre, tab, Cc)
-        full = ttnn.to_layout(ttnn.concat([halo, kv], dim=2), ttnn.ROW_MAJOR_LAYOUT)
+        full = self.kvt.rm(ttnn.concat([halo, kv], dim=2))
         ttnn.experimental.slice_write(full, kt, [0, 0, L, 0], [U, 1, L + WINDOW + C, HEAD_DIM], [1, 1, 1, 1])
         ttnn.deallocate(full)
         if ix is not None:
@@ -705,9 +723,9 @@ class DSV41PrefillSparse:
                 kt,
                 idx,
                 HEAD_DIM,
-                kv_format=ttnn.transformer.SparseKVFormat.BF16,
+                kv_format=self.kvt.fmt,
                 scale=pa.a.scale,
-                k_chunk_size=128,
+                k_chunk_size=pf_tune.SP_KC,
                 compute_kernel_config=pa.ckc_sdpa,
                 attention_sink=self.sink,
                 cache_batch_idx=u,

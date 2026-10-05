@@ -597,12 +597,26 @@ def test_dsv41_demo_session(mesh_device, device_params):
     rowtok = [
         m for m in os.environ.get("DSV41_ROWTOK_LIST", "").split(",") if m
     ]  # per-scenario DSV41_PREFILL_ROW_TOKENS (chunk-size sweep in one process)
+    ab = os.environ.get(
+        "DSV41_PFA_AB"
+    )  # "flagsA|flagsB|...": prefill-tuning flags (tt/pf_tune.py, KEY=val joined by ",") of scenario i, cycling; "-" = baseline. Same build, same host: a paired A/B
     for si, s in enumerate(chosen):
         prompts, bs, rep, msl, mgt, pp, sp, dtr, ptr, pch, wu, ins, eos = s.values
         if modes:
             os.environ["DSV41_PF_ASYNC"] = modes[si % len(modes)]
         if rowtok:
             os.environ["DSV41_PREFILL_ROW_TOKENS"] = rowtok[si % len(rowtok)]
+        if ab:
+            spec = ab.split("|")[si % len(ab.split("|"))]
+            for k in [k for k in os.environ if k.startswith("DSV41_PFA_") and k != "DSV41_PFA_AB"]:
+                del os.environ[k]
+            for kv in spec.split(","):
+                if kv != "-":
+                    os.environ[kv.split("=", 1)[0]] = kv.split("=", 1)[1]
+            for _, (_, m, _) in cache.items():  # new capture of the chunk trace with the new flags
+                if getattr(m, "prefill_model", None) is not None:
+                    m.prefill_model.teardown_dyn()
+            logger.info(f"=== PFA_AB scenario {si} {s.id}: flags '{spec}' ===")
         logger.info(
             f"=== session scenario {s.id} (DSV41_PF_ASYNC={os.environ.get('DSV41_PF_ASYNC')}, ROW_TOKENS={os.environ.get('DSV41_PREFILL_ROW_TOKENS')}) ==="
         )
