@@ -11,7 +11,8 @@ The SFPU may read a subnormal operand as zero, so torch is evaluated both at the
 the operands with subnormals flushed, and an output may match either. The BF16 compute and pack
 path stores NaN as +inf and -0 as +0, so classes are compared as stored. Each output must have
 the reference's class and a pure ULP error, |reference - output| / ulp(rounded reference),
-below 1.
+below 1. Each case logs one ULP line: the largest pure ULP error against torch and the lanes of
+another class, for the output and for the composite's on the same operands.
 """
 
 import pytest
@@ -67,6 +68,14 @@ def _stored_classes(t):
     return classes
 
 
+def _versus_torch(g, x, output):
+    """The largest pure ULP error against torch over lanes of torch's stored class, and the number
+    of lanes of another class."""
+    ulp = torch.minimum(_pure_ulp(_reference(g, x, False), output), _pure_ulp(_reference(g, x, True), output))
+    mismatched = torch.isinf(ulp)
+    return (ulp[~mismatched].max().item() if (~mismatched).any() else 0.0), int(mismatched.sum())
+
+
 def _pure_ulp(reference, actual):
     """Pure ULP error, infinite where the stored class differs."""
     rounded = _round_to_bfloat16(reference).to(torch.float64)
@@ -90,7 +99,18 @@ def test_celu_bw_exhaustive_bfloat16(grad, device):
     tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     tt_g = ttnn.from_torch(g, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     actual = ttnn.to_torch(ttnn.celu_bw(tt_g, tt_x, alpha=alpha)[0]).to(torch.bfloat16)
+    # The composite on the same operands: a gradient in L1 beside an input in DRAM keeps it.
+    tt_g_l1 = ttnn.from_torch(
+        g, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    stock = ttnn.to_torch(ttnn.celu_bw(tt_g_l1, tt_x, alpha=alpha)[0]).to(torch.bfloat16)
 
+    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
+    (ours, ours_classes), (composite, composite_classes) = _versus_torch(g, x, actual), _versus_torch(g, x, stock)
+    print(
+        f"ULP celu_bw {board} ours={ours:.3f} stock={composite:.3f} "
+        f"ours_class_mismatches={ours_classes} stock_class_mismatches={composite_classes} grad={grad}"
+    )
     ulp = torch.minimum(_pure_ulp(_reference(g, x, False), actual), _pure_ulp(_reference(g, x, True), actual))
     worst = ulp.argmax()
     assert ulp.max().item() < 1.0, (
