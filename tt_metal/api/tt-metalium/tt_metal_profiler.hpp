@@ -25,6 +25,7 @@ namespace detail {
  * | device        | The device holding the program being profiled.    | IDevice*        |                           |
  * True     |
  * */
+[[deprecated("InitDeviceProfiler is an internal API and will be removed after 2026-11-06.")]]
 void InitDeviceProfiler(IDevice* device);
 
 /**
@@ -53,6 +54,7 @@ void ProfilerSync(ProfilerSyncState state);
  * | metadata      | Metadata to include in the profiler results           | ProfilerOptionalMetadata |                           | No       |
  * */
 // clang-format on
+[[deprecated("Use ReadMeshDeviceProfilerResults instead. This API will be removed after 2026-11-06.")]]
 void ReadDeviceProfilerResults(
     IDevice* device,
     ProfilerReadState = ProfilerReadState::NORMAL,
