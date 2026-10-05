@@ -4,9 +4,7 @@ This follows a single zone, `T1_Zone5` in the streaming-profiler demo's compute 
 name the host prints. Every value below is real: it was read off the JIT-built ELF and the loader's output on a
 Blackhole p100a (bh-17), running `test_streaming_profiler_zones --gx 1 --gy 1 --iters 2 --markers 1`. The mechanism
 is described in [`STREAMING_PROFILER_ZONE_IDS.md`](STREAMING_PROFILER_ZONE_IDS.md); this page only shows it
-happening.
-
-Byte dumps are little-endian: the word `0x06800005` appears in a hex dump as `05008006`.
+happening, and says where every number comes from.
 
 | step | stage | action | the id is |
 |---|---|---|---|
@@ -25,6 +23,28 @@ Byte dumps are little-endian: the word `0x06800005` appears in a hex dump as `05
 | 13 | run | the device packs the id into a marker | `47` |
 | 14 | decode | the host names the marker | `47` → `T1_Zone5` |
 
+## Before you start: the fixed numbers
+
+These are constants, chosen once in the source. Every other number on this page is derived from them or from
+the kernel.
+
+| value | name | defined in | what it is |
+|---|---|---|---|
+| `0x06600000` | `TT_ZONE_STR_VMA` | `tt_metal/hw/toolchain/main.ld` | address the linker gives `.tt_zone_str` (the strings) |
+| `0x06700000` | `TT_ZONE_META_VMA` | `tt_metal/hw/toolchain/main.ld` | address the linker gives `.tt_zone_meta` (the records) |
+| `0x06800000` | `TT_ZONE_IDS_VMA` | `tt_metal/hw/toolchain/main.ld` | address the linker gives `.tt_zone_ids` (the handles) |
+| `16` | `TT_ZONE_META_RECORD_BYTES` | `tt_metal/hw/inc/hostdev/profiler_zone_id.h` | bytes per record: four 4-byte fields |
+| `0xFFFF` | `TT_ZONE_STALL_ID` | `tt_metal/hw/inc/hostdev/profiler_zone_id.h` | reserved id; the space handed out is `0 … 0xFFFE` |
+
+The three addresses are **made up**. None of these sections is ever loaded onto the device, so their addresses
+do not refer to real memory; they only have to exist so the linker can compute pointers between the sections.
+They continue a pattern already in `main.ld` (DPRINT's string sections sit at `0x06400000` and `0x06500000`): 1 MB
+apart, well away from the device's real memory map. `0x06800000` has one extra requirement, explained in step 10.
+
+**Reading hex dumps.** RISC-V stores a 32-bit number lowest byte first ("little-endian"), and `readelf -x` prints
+bytes in file order. So the number `0x06800005` is stored as the bytes `05 00 80 06` and shows up in a dump as
+`05008006`. To read a dumped word as a number, reverse its byte pairs.
+
 ---
 
 ## 1. Source: the zone site
@@ -38,8 +58,8 @@ The TRISC1 (math) kernel opens a zone:
 }
 ```
 
-It sits at line 118 of `test_streaming_profiler_zones/kernels/zones_compute.cpp`; that line number is what the host
-reports at the end. It is the sixth of the kernel's ten zones, `T1_Zone0` … `T1_Zone9`.
+It sits at **line 118** of `test_streaming_profiler_zones/kernels/zones_compute.cpp`; the host reports that line at
+the end. It is the sixth of the kernel's ten zones, `T1_Zone0` … `T1_Zone9`.
 
 ## 2. Preprocess: the site gets a label name
 
@@ -67,31 +87,33 @@ the same text, only the register differs):
 __tt_zone_0_6:	.byte 0                         # the handle: exactly one byte
 .popsection
 .pushsection .tt_zone_str,"MS",@progbits,1
-8880:	.asciz "T1_Zone5"
-8881:	.asciz ".../test_streaming_profiler_zones/kernels/zones_compute.cpp"
+8880:	.asciz "T1_Zone5"                        # name string
+8881:	.asciz ".../kernels/zones_compute.cpp"   # file string
 .popsection
-.pushsection .tt_zone_meta,"M",@progbits,16
+.pushsection .tt_zone_meta,"M",@progbits,16      # 16 = bytes per record
 .balign 4
-.long __tt_zone_0_6                              # record: id
-.long 8880b                                      #         name
-.long 8881b                                      #         file
-.long 118                                        #         line
+.long __tt_zone_0_6                              # record field 1: id   (4 bytes)
+.long 8880b                                      # record field 2: name (4 bytes)
+.long 8881b                                      # record field 3: file (4 bytes)
+.long 118                                        # record field 4: line (4 bytes)
 .popsection
 .endif
 	lui s3, %hi(__tt_zone_0_6)
 	addi s3, s3, %lo(__tt_zone_0_6)
 ```
 
+- `.byte 0` puts one byte in `.tt_zone_ids`. Its value is irrelevant; its **address** will be the id.
+- Each `.long` is 4 bytes, so one record is **4 × 4 = 16 bytes** (`TT_ZONE_META_RECORD_BYTES`).
+- `118` is `__LINE__` from step 1.
+
 Nothing is a number yet: the id is "wherever `__tt_zone_0_6` ends up".
 
 ## 4. Link: the handle is placed
 
-`main.ld` puts `.tt_zone_ids` at `0x6800000` and lays the image's handles out back to back, one byte each, in link
-order:
+The linker gathers every `.tt_zone_ids` byte of this image into one section and puts it at `TT_ZONE_IDS_VMA`,
+**`0x06800000`**. The bytes are laid end to end, one per site, in link order:
 
 ```
-[ 6] .tt_zone_ids  PROGBITS  06800000  size 00000c   (no A flag)
-
 offset  address   label            site
   0     06800000  __tt_zone_0_1    T1_Zone0
   1     06800001  __tt_zone_0_2    T1_Zone1
@@ -102,74 +124,115 @@ offset  address   label            site
   6     06800006  __tt_zone_0_7    T1_Zone6
    …
   9     06800009  __tt_zone_0_10   T1_Zone9
- 10     0680000a  __tt_zone_0_11   TRISC-KERNEL
+ 10     0680000a  __tt_zone_0_11   TRISC-KERNEL (the whole-kernel zone opened by the wrapper `trisck.cc`)
  11     0680000b  __tt_zone_0_0    STACK-OVERFLOW
 ```
 
-`T1_Zone5` is at offset **k = 5**, so its link-time id is **`0x06800005`**.
+`T1_Zone5` is the byte at **offset 5**, so its address, and its link-time id, is
+`0x06800000 + 5 =` **`0x06800005`**. The section is 12 bytes long because the image has 12 sites (one byte each).
 
 ## 5. Link: the instructions are filled in
 
-The two relocations from step 3 are resolved to `0x06800005`: `hi20 = 0x06800`, `lo12 = 5`.
+A 32-bit value cannot fit in one RISC-V instruction, so the id is split across two:
+
+| instruction | carries | for `0x06800005` |
+|---|---|---|
+| `lui` | the upper 20 bits | `0x06800` |
+| `addi` | the lower 12 bits | `0x005` = 5 |
+
+`lui` puts its 20 bits at the top of the register and `addi` adds the low 12, giving back `0x06800005`.
+
+The linker writes them into the kernel's code:
 
 ```
-7c34:  06800a37   lui  s4, 0x6800
-7c38:  005a0a13   addi s4, s4, 5
+address  word      instruction
+7c34:    06800a37  lui  s4, 0x6800
+7c38:    005a0a13  addi s4, s4, 5
 ```
+
+- **`7c34` / `7c38`**: where the linker placed these two instructions. A kernel's code is linked right after its
+  RISC's firmware code (`.text __fw_export_text_end` in `main.ld`), which for TRISC1 ends at `0x7660`; this site
+  falls `0x5d4` bytes into the kernel.
+- **Reading the words**: in a `lui` word the immediate is the first 5 hex digits (`06800|a37`); in an `addi`
+  word it is the first 3 (`005|a0a13`). The rest encodes the register (`s4`) and the opcode, and never changes.
 
 ## 6. Link: the record is filled in
 
-Record 5 of `.tt_zone_meta` (16 bytes, at `0x06700000 + 5 × 16`):
+`.tt_zone_meta` sits at `TT_ZONE_META_VMA`, **`0x06700000`**. Records are 16 bytes each and in the same order as
+the handles, so `T1_Zone5`'s record, number 5, starts at `0x06700000 + 5 × 16 = 0x06700000 + 0x50 =`
+**`0x06700050`**. `readelf -x` prints it as:
 
 ```
 0x06700050:  05008006  a9006006  09006006  76000000
-               id         name       file      line
-             06800005   066000a9   06600009   118
 ```
 
-and the two string pointers land in `.tt_zone_str`:
+The address on the left is where the row starts. The four groups are the four 4-byte fields from step 3, in file
+byte order. Reversing each group gives the number:
 
-```
-066000a9  "T1_Zone5"
-06600009  ".../kernels/zones_compute.cpp"
-```
+| field | bytes in file | as a number | meaning |
+|---|---|---|---|
+| id | `05 00 80 06` | `0x06800005` | the handle's address from step 4 |
+| name | `a9 00 60 06` | `0x066000a9` | where `"T1_Zone5"` starts in `.tt_zone_str` |
+| file | `09 00 60 06` | `0x06600009` | where the file path starts in `.tt_zone_str` |
+| line | `76 00 00 00` | `0x76` = 118 | the line from step 1 |
+
+**Where `0x066000a9` comes from.** `.tt_zone_str` sits at `TT_ZONE_STR_VMA`, `0x06600000`, and is just the
+strings of all sites packed back to back, each ending in a `\0` byte, in the order the sites were emitted:
+
+| starts at | offset | string | its size (with `\0`) |
+|---|---|---|---|
+| `0x06600000` | 0 | `T1_Zone0` | 9 |
+| `0x06600009` | 9 | `/localdev/…/zones_compute.cpp` | 124 |
+| `0x06600085` | 133 | `T1_Zone1` | 9 |
+| `0x0660008e` | 142 | `T1_Zone2` | 9 |
+| `0x06600097` | 151 | `T1_Zone3` | 9 |
+| `0x066000a0` | 160 | `T1_Zone4` | 9 |
+| **`0x066000a9`** | **169** | **`T1_Zone5`** | 9 |
+
+`169` is not a size of anything in this zone. It is how many bytes of strings came **before** it:
+`9 + 124 + 4 × 9 = 169`. The long file path appears only once: the section is marked mergeable (`"MS"` in step 3),
+so the linker keeps one copy and every `T1_ZoneN` record's file field points at it, `0x06600009`.
+
+The host turns a pointer back into a string by subtracting the section's address: `0x066000a9 − 0x06600000 = 169`,
+then reads from byte 169 up to the next `\0`.
 
 ## 7. Link: the relocations are kept
 
-`-Wl,--emit-relocs` (on the link command) leaves the linker's work list in the ELF. The three entries that mention
-this handle:
+A relocation is the linker's note to itself: "the word at address X holds symbol S, encoded as type T". The link
+command has `-Wl,--emit-relocs`, which tells the linker to leave these notes in the ELF instead of discarding them.
+The three that mention this handle:
 
 ```
-.rela.text
-  00007c34  R_RISCV_HI20    __tt_zone_0_6 + 0      ← the lui
-  00007c38  R_RISCV_LO12_I  __tt_zone_0_6 + 0      ← the addi
-.rela.tt_zone_meta
-  06700050  R_RISCV_32      __tt_zone_0_6 + 0      ← the record's id word
+at address  type            symbol
+00007c34    R_RISCV_HI20    __tt_zone_0_6      ← the lui from step 5   (upper 20 bits)
+00007c38    R_RISCV_LO12_I  __tt_zone_0_6      ← the addi from step 5  (lower 12 bits)
+06700050    R_RISCV_32      __tt_zone_0_6      ← the record's id field from step 6 (all 32 bits)
 ```
 
-They sit among 20,751 relocations in this ELF (811 in `.rela.text`).
+These three lines are exactly the list of places the host will change in steps 10 and 11. They sit among 20,751
+relocations in this ELF (811 of them for `.text`).
 
 ## 8. Cache: nothing of it is loadable
 
-The ELF goes into the JIT cache as `kernels/zones_compute/13881033146769804318/trisc1/trisc1.elf`. Its loadable
-segments:
+The ELF goes into the JIT cache as `kernels/zones_compute/13881033146769804318/trisc1/trisc1.elf`. Only two of its
+segments are copied to the device:
 
 ```
 01  .text
 02  .data .bss
 ```
 
-No `.tt_zone_*` section is in a segment, so the device never receives a byte of them. The file on disk is never
+No `.tt_zone_*` section is in either, so the device never receives a byte of them. The file on disk is never
 modified again; every process rebases its own in-memory copy.
 
 ## 9. Load: the image gets a block
 
 When the program is launched, the host reads each kernel ELF (`ll_api::memory`) and gives it the next free block of
-the process's id space.
+the process's id space, starting from 0.
 
-**How many ids an image needs.** Every site emitted exactly one byte into `.tt_zone_ids` (step 3,
-`.byte 0`), so the section's size in bytes *is* the number of sites. The loader reads that size from the section
-header and needs nothing else. This image's section is 12 bytes, so it needs 12 ids.
+**How many ids an image needs.** Every site emitted exactly one byte into `.tt_zone_ids` (step 3), so the
+section's size in bytes is the number of sites. The loader reads that size from the section header. This image's
+section is 12 bytes, so it needs 12 ids.
 
 The images this run loaded, in load order. The two data-movement kernels have 15 sites, because `--markers 1`
 compiles three point markers into them (`_Event`, `_Data`, `_Iter`); the compute kernels have 12:
@@ -182,63 +245,83 @@ compiles three point markers into them (`_Event`, `_Data`, `_Iter`); the compute
 | **4th** | **`zones_compute/…/trisc1.elf`** | **12** | **`[42, 54)`** |
 | 5th | `zones_compute/…/trisc2.elf` | 12 | `[54, 66)` |
 
-`base = 15 + 15 + 12 = 42`. The id of `T1_Zone5` becomes **`base + k = 42 + 5 = 47`**. (Total: 66, the number the
-receiver reports at teardown: `zone ids: 66 of 65535 assigned`.)
+`base = 15 + 15 + 12 = 42`. Our zone was at offset 5 in step 4, so its id becomes **`42 + 5 = 47`**. The total,
+66, is what the receiver reports at teardown: `zone ids: 66 of 65535 assigned`.
 
 ## 10. Load: the instructions are rewritten
 
-`RebaseZoneIds(42)` takes the two `.rela.text` entries from step 7 and re-encodes `v = 47`:
-`hi20 = (47 + 0x800) >> 12 = 0`, `lo12 = 47`.
+The loader moves the section from `0x06800000` to `42`, so every handle's address shifts by the same amount and
+`0x06800005` becomes `47`. It visits the two `.text` relocations from step 7 and splits the new value the same way
+the linker did in step 5:
+
+| instruction | carries | for `47` (`0x0000002f`) |
+|---|---|---|
+| `lui` | upper 20 bits, rounded: `(47 + 0x800) >> 12` | `0` |
+| `addi` | lower 12 bits: `47 & 0xfff` | `0x02f` = 47 |
+
+(The `+ 0x800` is there because `addi` treats its 12 bits as signed; it only matters for values whose bit 11 is
+set, and 47 is not one of them.)
 
 ```
-            on disk                          in memory
+         on disk                           in memory
 7c34:  06800a37  lui  s4, 0x6800     →   00000a37  lui  s4, 0x0
 7c38:  005a0a13  addi s4, s4, 5      →   02fa0a13  addi s4, s4, 47
 ```
 
-Only these two words change. The `lui` now loads 0, because every id below 2048 fits in the `addi`'s 12 bits; it
-stays anyway, since the loader rewrites immediates in place and never removes an instruction.
+Only the immediate digits change (`06800 → 00000`, `005 → 02f`). The `lui` now loads 0, because every id below
+2048 fits in the `addi`'s 12 bits; it stays anyway, since the loader rewrites numbers in place and never removes an
+instruction.
+
+**Why `0x06800000` and not `0`.** If the section were linked below 4 KiB, the linker would see that the `lui`
+loads 0 and delete it, leaving a single `addi` whose 12 bits cap the value at 2047. The loader could then never
+give that site an id of 2048 or more. Placing the section at `0x06800000` keeps the `lui` in every site, so the
+loader can write any 16-bit id.
 
 ## 11. Load: the record is rewritten
 
-The `R_RISCV_32` entry from step 7 gets the same value:
+The third relocation from step 7 points at the record's id field, `0x06700050`. It gets the same value, 47
+(`0x0000002f`, stored as the bytes `2f 00 00 00`):
 
 ```
-0x06700050:  05008006 …   →   2f000000 …        (word0: 0x06800005 → 47)
+0x06700050:  05008006 …   →   2f000000 …
 ```
 
-The name, file and line words are untouched.
+The name, file and line fields are not touched.
 
 ## 12. Load: the name is registered
 
-The registry reads record 5, follows its two pointers into `.tt_zone_str`, and publishes:
+The registry reads record 5, turns its two pointers back into strings (subtract `0x06600000`, read up to `\0`, as in
+step 6), and publishes:
 
 ```
 sites[47] = { name "T1_Zone5", file ".../kernels/zones_compute.cpp", line 118 }
 ```
 
-This happens before the image's bytes are packed for the device, so the name exists before the zone can fire.
+This happens before the image's bytes are copied to the device, so the name exists before the zone can fire.
 
 ## 13. Run: the device packs the marker
 
-When the zone closes, the kernel builds word0 of the packet from the id in `s4` (TRISC1's text, unchanged since
-step 10):
+When the zone closes, the kernel builds the first word of the zone's packet from the id in `s4`. That word has a
+5-bit packet type on top (bits 31:27) and the id below it (bits 26:0):
 
 ```
-7c84:  slli s4, s4, 5          s4 = 47 << 5      ┐ together: keep the low 27 bits,
-7c88:  lui  a4, 0x18000        a4 = 3 << 27      │ packet type ZONE_S
+7c84:  slli s4, s4, 5          s4 = 47 << 5      ┐ shift left then right by 5:
+7c88:  lui  a4, 0x18000        a4 = 0x18000000   │ clears the top 5 bits, keeps the low 27
 7c8c:  srli s4, s4, 5          s4 = 47           ┘
 7c90:  or   s4, s4, a4         s4 = 0x1800002F
-7ca4:  sw   s4, -2048(a1)      word0 into the RISC's ring
+7ca4:  sw   s4, -2048(a1)      store word0 into this RISC's ring buffer
 ```
 
-word0 = **`0x1800002F`**: type 3 in bits 31:27, id 47 in bits 26:0. (A zone that needs the 3-word form ships type 2,
-`0x1000002F`; the id field is the same.)
+- **`0x18000`**: `lui` loads its immediate into the upper 20 bits, so `a4 = 0x18000 << 12 = 0x18000000`, which is
+  `3 << 27`: packet type 3 in bits 31:27. Type 3 is `ZONE_S`, the 2-word zone packet (`T_ZONE_S` in
+  `kernel_profiler_streaming.hpp`). A zone too long for it ships type 2 (`ZONE_ATOMIC`), giving `0x1000002F`; the
+  id part is the same.
+- **`0x1800002F`** = `0x18000000 | 47`: type 3 on top, id 47 (`0x2f`) at the bottom.
 
 ## 14. Decode: the host names it
 
-The relay carries the ring to the host. The decoder takes `word0 & 0x7FFFFFF = 47` and calls `site_of(47)`, one
-array load:
+The relay carries the ring buffer to the host. The decoder masks off the type to recover the id,
+`0x1800002F & 0x7FFFFFF = 47` (`0x7FFFFFF` is 27 one-bits), and calls `site_of(47)`, which is one array load:
 
 ```
 sites[47]  →  "T1_Zone5"  zones_compute.cpp:118
@@ -260,9 +343,10 @@ O=runtime/sfpi/compiler/bin/riscv-tt-elf-objdump
 E=<cache>/kernels/zones_compute/<hash>/trisc1/trisc1.elf   # as linked
 X=$E.xip.elf                                               # as loaded, written by the loader
 
-$R -s -W $E | grep __tt_zone_                              # step 4: handles
+$R -s -W $E | grep __tt_zone_                              # step 4: handles and their addresses
 $O -d --start-address=0x7c34 --stop-address=0x7c3c $E      # step 5
-$R -x .tt_zone_meta $E                                     # step 6 (record 5 at 0x06700050)
+$R -x .tt_zone_meta $E                                     # step 6: records (record 5 at 0x06700050)
+$R -p .tt_zone_str $E                                      # step 6: strings and their offsets
 $R -r -W $E | grep __tt_zone_0_6                           # step 7
 $R -l -W $E | grep -A3 "Segment Sections"                  # step 8
 $R -S -W $X | grep tt_zone_ids                             # step 9: section address = base, size = sites
