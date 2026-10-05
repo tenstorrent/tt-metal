@@ -108,6 +108,7 @@ run_process_ops_logs_test() {
 
 run_noc_atomic_operation_tests() {
     TT_METAL_NOC_DEBUG_DUMP=1 pytest -xv \
+        tests/nightly/t3000/ccl/test_all_to_all_async_generic.py::test_generic_all_to_all_drains_noc_atomics \
         tests/nightly/t3000/ccl/test_broadcast_op.py::test_broadcast_drains_noc_atomics \
         tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_classic_in1_reader_drains_noc_atomics \
         tests/nightly/t3000/ccl/test_minimal_all_gather_matmul_async.py::test_all_gather_matmul_classic_block_sharded_reader_drains_noc_atomics \
