@@ -2,8 +2,8 @@
  "accuracy_ok": true,
  "datatype_sweep": {
   "accuracy_ok": true,
-  "clip_bar_note": "The brief's bar -- e2e CLIP within 0.02 of the p300x2 bf16 clip at the same prompt/seed -- is NOT met as literally written: p150 bf8 at 1344x768 x124 scores 0.341777 against p300x2 bf16's 0.308699, 0.033 apart. That comparison is not informative at this resolution and the matrix is the evidence: CLIP's own spread between adjacent working points of ONE identical configuration is far larger than the bar (p150 1344x768 NFE4: 0.341777 at 124 frames vs 0.297044 at 73; p300x2 1344x768 NFE4: 0.308699 vs 0.183873). Different meshes sample different trajectories, so a cross-mesh CLIP delta measures the sample, not the fidelity. The dtype question was therefore settled on the SAME mesh at the SAME point (see rejected[]), where the bar does discriminate, plus stage 04's component PCC bars and 16/16 content checks on all 15 clips.",
-  "content_checks": "15 of 15 clips pass all 16 prove_h3 checks, 0 critical failures; every CLIP score is above the calibrated floor 0.144909 (lowest 0.183873)",
+  "clip_bar_note": "WITHDRAWN 2026-10-05 (06b). As written this note argued the brief's cross-mesh CLIP bar from p300x2 numbers (0.308699 and 0.183873) that were measured on BASE-model output -- the adapter was never on the weights that rendered them -- and it used 0.183873 as evidence of CLIP's natural spread when that clip IS the defect (the content-free coastline prompt, which the fixed build re-takes at 0.3690). Re-derived on the fixed build at a canvas-, frame- and prompt-matched pair, the bar is MET, not missed: p150 ctlB marching band at 1344x768 x124 scores 0.3366 against p300x2's 0.3239 for the same prompt and seed, 0.013 apart and inside the 0.02 bar. The surviving p150-only observation stands on its own: CLIP's spread between adjacent working points of ONE identical configuration is large (p150 1344x768 NFE4: 0.341777 at 124 frames vs 0.297044 at 73), so a cross-mesh CLIP delta is still a weak instrument. The dtype question was and is settled on the SAME mesh at the SAME point (see rejected[]), plus stage 04's component PCC bars.",
+  "content_checks": "STAGE-05 RECORD, and its p300x2 rows are base-model measurements: 15 of 15 clips passed all 16 prove_h3 checks with 0 critical failures, every CLIP above the calibrated floor 0.144909, lowest 0.183873. CAVEAT 2026-10-05 (06b): that 0.183873 is a p300x2 clip rendered without the Turbo adapter applied (the on-device bind did not survive the DiT page-in until 06b fixed it), so it is not a quality measurement of anything this profile serves, and it is exactly why a checker made of absolute floors passed it. The p300x2 record is re-taken in p300x2.clip / p300x2.quality.",
   "not_measured": [
    "compute-fidelity sweep (HiFi2 / HiFi4 / LoFi): the tt_dit MiniMax-H3 path takes fidelity from its matmul program configs and exposes no profile knob for it, so this needs a code change and is deferred with the fp32-tail-block work",
    "fp32 tail blocks on/off: bf16_blocks is wired and reachable as bf4_ff_keep_ends, but no accuracy pressure was found that needed it -- the chosen bf8 policy already carries stage 04's component PCC bars",
@@ -468,6 +468,7 @@
   {
    "audio_shift": 3.0,
    "clip": 0.30869928002357483,
+   "clip_is_base_model_output": "CAVEAT 2026-10-05 (06b): this row's `clip` was measured before the on-device LoRA bind was fixed, so the Turbo adapter was not applied to the weights that rendered it. Latency, peak DRAM and phases in this row are unaffected and stand. See p300x2.clip_note.",
    "content_checks_ok": true,
    "dit_quant_profile": null,
    "e2e_s": 75.5,
@@ -500,6 +501,7 @@
   {
    "audio_shift": 3.0,
    "clip": 0.1838732212781906,
+   "clip_is_base_model_output": "CAVEAT 2026-10-05 (06b): this row's `clip` was measured before the on-device LoRA bind was fixed, so the Turbo adapter was not applied to the weights that rendered it. Latency, peak DRAM and phases in this row are unaffected and stand. See p300x2.clip_note.",
    "content_checks_ok": true,
    "dit_quant_profile": null,
    "e2e_s": 48.4,
@@ -532,6 +534,7 @@
   {
    "audio_shift": 3.0,
    "clip": 0.2899853587150574,
+   "clip_is_base_model_output": "CAVEAT 2026-10-05 (06b): this row's `clip` was measured before the on-device LoRA bind was fixed, so the Turbo adapter was not applied to the weights that rendered it. Latency, peak DRAM and phases in this row are unaffected and stand. See p300x2.clip_note.",
    "content_checks_ok": true,
    "dit_quant_profile": null,
    "e2e_s": 42.2,
@@ -564,6 +567,7 @@
   {
    "audio_shift": 3.0,
    "clip": 0.3326699733734131,
+   "clip_is_base_model_output": "CAVEAT 2026-10-05 (06b): this row's `clip` was measured before the on-device LoRA bind was fixed, so the Turbo adapter was not applied to the weights that rendered it. Latency, peak DRAM and phases in this row are unaffected and stand. See p300x2.clip_note.",
    "content_checks_ok": true,
    "dit_quant_profile": null,
    "e2e_s": 31.8,
@@ -750,7 +754,7 @@
   "phases_s_source": "s06b_p300x2_fixed_p0_1344x768x124, the worst-of-five run `e2e_s` reports, so the two are one sample. wall - sum(phases) = 20.2 s here; see e2e_note for what lives in that gap. The per-prompt spread in `denoising` (36.1-42.4 s across the five) is the padded packed length changing with the prompt's token count, the same spread stage 06's controls show.",
   "quality": "RE-TAKEN 2026-10-05 (stage 06b) on the fixed build and now GOOD. The stage-06 defect was not a working-point problem at all: the on-device LoRA bind was inert across the DiT page-in this `coresident: False` preset performs before every denoise, so every clip ever recorded on this profile was BASE-model output. Fixed in tt_dit's shared LoRA layer (commit 'Keep a fuse-mode LoRA bound across a weight page-out'). Five prompts, seed 7, one build, warm, at this exact point: CLIP 0.3239 / 0.3589 / 0.3690 / 0.3218 / 0.3381, temporal motion 8.47 / 6.44 / 1.28 / 3.10 / 1.96. The motion collapse is gone (it was a 0.70-0.89 floor on 3 of 5), the content-free coastline clip is gone (CLIP 0.1867 -> 0.3690) and the dark blacksmith clip is back in p150's range (video mean 4.0 -> 11.1 against p150's 13.9). Cross-checked against stage 06's INDEPENDENT bf16 host-fuse control ctlF, a different code path to the same model, on its two prompts: coastline 0.3690/1.28/107.7 here against ctlF's 0.3647/1.239/108.5, blacksmith 0.3218/3.10/11.1 against 0.3227/2.529/10.4. artifacts/s06b/results.json.",
   "quality_fix_measured": "SUPERSEDED 2026-10-05 by the real fix; kept only so the stage-06 reading is not silently deleted. The one-axis bisect that produced it was sound as measurement and wrong as diagnosis: ctlE's bf8 arm recovered the output because setting a quant profile ALSO switches the adapter onto the host-fuse path (`_lora_fuses_on_host`), not because bf16 arithmetic was the problem. ctlF held the dtype at bf16, forced the host fuse, and recovered everything too -- which already exonerated the dtype inside stage 06. There is no accuracy reason to quantize this mesh. See artifacts/s06b/results.json.",
-  "quality_known_exception": "1 of the 5 clips fails exactly one critical prove_h3 check and it is NOT this profile's problem: 'a red fox trotting through fresh snow at dawn, crisp footsteps crunching' scores audio rms 0.0019 against prove_h3's absolute 0.002 floor. The SAME prompt and point run through the independent host-fuse path (MINIMAX_H3_FORCE_HOST_FUSE=1) gives 0.0018 and fails the same check, with CLIP 0.3598 against 0.3589 and motion 6.32 against 6.44 -- so the two adapter-application paths agree and the quiet audio is the prompt. It is also the quietest prompt of the five on p150 (rms 0.00500 at 73 frames, the lowest of its five), and this clip is 124 frames / 5.2 s of audio against p150's 73 / 3.0 s, so sparse footsteps spread over a longer clip land lower in RMS. Stage 07 owns the call: either prove_h3's audio floor is made duration-aware, or this prompt is expected to fail it on a 5 s clip. Nothing here says the model is wrong. artifacts/s06b/s06b_ctlH_fox_hostfuse.json.",
+  "quality_known_exception": "1 of the 5 clips fails exactly one critical prove_h3 check and it is NOT this profile's problem: 'a red fox trotting through fresh snow at dawn, crisp footsteps crunching' scores audio rms 0.0019 against prove_h3's absolute 0.002 floor. The SAME prompt and point run through the independent host-fuse path (MINIMAX_H3_FORCE_HOST_FUSE=1) gives 0.0018 and fails the same check, with CLIP 0.3598 against 0.3589 and motion 6.32 against 6.44 -- so the two adapter-application paths agree and the quiet audio is the prompt. It is also the quietest prompt of the five on p150 (rms 0.00500 at 73 frames, the lowest of its five), and this clip is 124 frames / 5.2 s of audio against p150's 73 / 3.0 s, so sparse footsteps spread over a longer clip land lower in RMS. Stage 07 owns the call: either prove_h3's audio floor is made duration-aware, or this prompt is expected to fail it on a 5 s clip. Nothing here says the model is wrong. artifacts/s06b/s06b_ctlH_fox_hostfuse.json.  UPDATED 2026-10-05 after a second review. A frame-count control was run (fox at 1344x768 x73 on this same profile: rms 0.00238, PASSES, with total audio energy essentially unchanged at 1.724e-05 against the 124-frame clip's 1.905e-05), so for THIS prompt the longer clip is the same audio diluted. Two things must not be over-read from that. First, it is a one-prompt result: on p150 the same 73 -> 124 change costs 16.6x of total audio energy on the marching-band prompt, so frame count is NOT generally energy-neutral and that effect is open (artifacts/s06b/results.json open_items). Second, the duration-MATCHED cross-mesh comparison (stage 06's ctlB, p150 at x124) shows no p300x2 audio deficit at all on the two prompts it covers -- p300x2 is louder on one and equal on the other -- so the p150/p300x2 gap on the fox clip is a one-prompt, one-length observation, not a profile property. The served profile ships with a known 1-in-5 failing content check on this prompt; stage 07 owns whether the floor or the prompt moves.",
   "quality_ok": true,
   "short_edge_max": 768,
   "steps": 5,
