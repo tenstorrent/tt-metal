@@ -180,6 +180,21 @@ void run_forced_session_with_traffic(MeshDevice* mesh) {
     experimental::DispatchContext::get().terminate_fast_dispatch(mesh);
 }
 
+// A refusal must leave the original Slow Dispatch queue usable: one DRAM page written and read back.
+void expect_slow_dispatch_dram_round_trip(MeshDevice* mesh, uint32_t salt) {
+    constexpr uint32_t page_size = 4096;
+    DeviceLocalBufferConfig dram{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+    ReplicatedBufferConfig dram_global{.size = page_size};
+    auto probe = MeshBuffer::create(dram_global, dram, mesh);
+    std::vector<uint32_t> src(page_size / sizeof(uint32_t));
+    std::iota(src.begin(), src.end(), salt);
+    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), probe, src);
+    Finish(mesh->mesh_command_queue());
+    std::vector<uint32_t> dst;
+    ReadShard(mesh->mesh_command_queue(), dst, probe, MeshCoordinate(0, 0));
+    EXPECT_EQ(dst, src) << "Slow Dispatch DRAM round trip failed after the refusal.";
+}
+
 void expect_resident_intact(MeshDevice* mesh, const PlantedResident& resident, const char* what) {
     for (const auto& coord : MeshCoordinateRange(mesh->shape())) {
         std::vector<uint32_t> dst;
@@ -1060,10 +1075,10 @@ TEST_F(DispatchContextFixture, UnitMeshSessionDoesNotThrowTrackerError) {
 // WHY:  MeshDevice::allocator_impl() is the default manager's allocator, so buffers under another manager
 //       are invisible to the preflight. The guard must refuse rather than check an incomplete ledger, and
 //       the refusal must leave slow dispatch usable.
-// HOW:  managers load only while the Fast Dispatch runtime flag is set. Loading one inside a real manual
-//       session and then terminating it hung on a Blackhole Galaxy (sweep fd_guard_run_20261002_162209),
-//       so the flag is set only around the load and the clear. With the Slow Dispatch queues in place a
-//       load sends nothing to the device (SDMeshCommandQueue::reset_worker_state is a no-op).
+// HOW:  managers load only while the Fast Dispatch runtime flag is set, and a load inside a manual session is
+//       refused (RefusesSubDeviceManagerLoadDuringManualSession). So the flag is set only around the load and
+//       the clear, outside any session. With the Slow Dispatch queues in place a load sends nothing to the
+//       device (SDMeshCommandQueue::reset_worker_state is a no-op).
 // EXPECT: refused with "non-default sub-device manager"; a DRAM write/read still works; once the manager is
 //         cleared, a session starts.
 TEST_F(DispatchContextFixture, RefusesWithNonDefaultSubDeviceManagerLoaded) {
@@ -1096,19 +1111,7 @@ TEST_F(DispatchContextFixture, RefusesWithNonDefaultSubDeviceManagerLoaded) {
     const std::string error = capture_default_fd_refusal(mesh.get());
     ASSERT_FALSE(error.empty()) << "Expected the loaded sub-device manager to block Fast Dispatch setup.";
     EXPECT_NE(error.find("non-default sub-device manager"), std::string::npos) << error;
-
-    // A refusal must leave the original Slow Dispatch queue usable.
-    constexpr uint32_t page_size = 4096;
-    DeviceLocalBufferConfig dram{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
-    ReplicatedBufferConfig dram_global{.size = page_size};
-    auto probe = MeshBuffer::create(dram_global, dram, mesh.get());
-    std::vector<uint32_t> src(page_size / sizeof(uint32_t));
-    std::iota(src.begin(), src.end(), 11);
-    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), probe, src);
-    Finish(mesh->mesh_command_queue());
-    std::vector<uint32_t> dst;
-    ReadShard(mesh->mesh_command_queue(), dst, probe, MeshCoordinate(0, 0));
-    EXPECT_EQ(dst, src);
+    expect_slow_dispatch_dram_round_trip(mesh.get(), /*salt=*/11);
 
     // The manager was the only reason for the refusal: with it cleared, a session starts.
     {
@@ -1116,6 +1119,87 @@ TEST_F(DispatchContextFixture, RefusesWithNonDefaultSubDeviceManagerLoaded) {
         mesh->clear_loaded_sub_device_manager();
     }
     mesh->remove_sub_device_manager(manager);
+    ASSERT_NO_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh.get()));
+    ASSERT_NO_THROW(experimental::DispatchContext::get().terminate_fast_dispatch(mesh.get()));
+}
+
+// WHAT: loading a non-default sub-device manager while a manual Fast Dispatch session is open.
+// WHY:  sub-device managers aren't supported with manual Fast Dispatch, and this is the path a caller can
+//       actually reach: loads need the Fast Dispatch flag, which only a session sets. Loading one inside a
+//       session and then terminating it hung on a Blackhole Galaxy (sweep fd_guard_run_20261002_162209), so
+//       the load itself must be refused, before it changes any dispatch state.
+// EXPECT: the load throws and the default manager stays active; the session still terminates; slow dispatch
+//         still works afterwards.
+TEST_F(DispatchContextFixture, RefusesSubDeviceManagerLoadDuringManualSession) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+
+    SubDevice sub_device(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
+    const SubDeviceManagerId manager = mesh->create_sub_device_manager({sub_device}, /*local_l1_size=*/0);
+
+    ASSERT_NO_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh.get()));
+    EXPECT_TRUE(experimental::DispatchContext::get().is_fast_dispatch_session_active());
+    std::string error;
+    try {
+        mesh->load_sub_device_manager(manager);
+    } catch (const std::runtime_error& exception) {
+        error = exception.what();
+    }
+    if (error.empty()) {
+        // Regression: the load went through. Put the default manager back before terminating, the best
+        // chance of not repeating the hang.
+        mesh->clear_loaded_sub_device_manager();
+    }
+    EXPECT_EQ(mesh->get_active_sub_device_manager_id(), mesh->get_default_sub_device_manager_id());
+    ASSERT_NO_THROW(experimental::DispatchContext::get().terminate_fast_dispatch(mesh.get()));
+    EXPECT_FALSE(experimental::DispatchContext::get().is_fast_dispatch_session_active());
+
+    ASSERT_FALSE(error.empty()) << "Expected the load to be refused inside a manual Fast Dispatch session.";
+    EXPECT_NE(error.find("not supported with manual Fast Dispatch"), std::string::npos) << error;
+    expect_slow_dispatch_dram_round_trip(mesh.get(), /*salt=*/23);
+    mesh->remove_sub_device_manager(manager);
+}
+
+// WHAT: a lockstep HEIGHT_SHARDED L1_SMALL buffer with one page on each of (12,0) and (12,1), on a mesh opened
+//       with an L1_SMALL region.
+// WHY:  the rule is "no allocations on claimed cores, at any address". L1_SMALL is its own region at the top
+//       of each bank with its own manager, so the L1 free list never sees it; the guard must still refuse it.
+// EXPECT: refused, naming both dispatch cores and the L1_SMALL kind; freeing it lets a later session start.
+TEST_F(DispatchContextFixture, RefusesL1SmallResidentOnDispatchCores) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    constexpr size_t l1_small_size = 32 * 1024;
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape), l1_small_size);
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+
+    constexpr uint32_t page_size = 4096;
+    DeviceLocalBufferConfig small_cfg{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1_SMALL,
+        .sharding_args = two_dispatch_core_sharding_args(page_size),
+        .bottom_up = true};
+    ReplicatedBufferConfig small_global{.size = 2 * page_size};
+    auto resident = MeshBuffer::create(small_global, small_cfg, mesh.get());
+
+    const std::string error = capture_default_fd_refusal(mesh.get());
+    ASSERT_FALSE(error.empty()) << "Expected an L1_SMALL resident to block Fast Dispatch setup.";
+    EXPECT_NE(error.find("core (12,0)"), std::string::npos) << error;
+    EXPECT_NE(error.find("core (12,1)"), std::string::npos) << error;
+    EXPECT_NE(error.find("L1_SMALL lockstep-sharded allocation"), std::string::npos) << error;
+
+    resident.reset();
     ASSERT_NO_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh.get()));
     ASSERT_NO_THROW(experimental::DispatchContext::get().terminate_fast_dispatch(mesh.get()));
 }

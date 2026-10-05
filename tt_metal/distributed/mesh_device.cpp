@@ -16,6 +16,7 @@
 #include <system_mesh.hpp>
 #include <maybe_remote.hpp>
 #include <tt_metal.hpp>
+#include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <algorithm>
@@ -1242,6 +1243,13 @@ void MeshDeviceImpl::remove_sub_device_manager(SubDeviceManagerId sub_device_man
 void MeshDeviceImpl::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
     auto lock = lock_api();
     validate_sub_device_manager_tracker();
+    // Sub-device managers aren't supported with manual Fast Dispatch: the session's L1 preflight can't see
+    // buffers under a non-default manager, and loading one inside a session left terminate_fast_dispatch
+    // hanging on a Blackhole Galaxy. Loads need the Fast Dispatch flag, which a session sets, so refuse here.
+    TT_FATAL(
+        !::tt::tt_metal::experimental::DispatchContext::get().is_fast_dispatch_session_active(),
+        "Sub-device managers are not supported with manual Fast Dispatch: a session opened with "
+        "DispatchContext::initialize_fast_dispatch is active.");
     sub_device_manager_tracker_->load_sub_device_manager(sub_device_manager_id);
 }
 void MeshDeviceImpl::clear_loaded_sub_device_manager() {

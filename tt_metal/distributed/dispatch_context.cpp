@@ -60,8 +60,10 @@ struct FdL1Conflict {
 // reserves its address range on every bank, but its bytes live only on its shard grid, so the
 // shared free list cannot answer this question and the buffer object has to.
 bool l1_buffer_touches_core(const Buffer& buffer, const CoreCoord& core) {
-    if (buffer.buffer_type() != BufferType::L1) {
-        return false;  // DRAM / TRACE are not L1; L1_SMALL is its own region at the top of the bank.
+    // L1_SMALL is its own region at the top of the bank, but it is still L1 on the claimed core, so it
+    // counts. DRAM / TRACE are not L1.
+    if (buffer.buffer_type() != BufferType::L1 && buffer.buffer_type() != BufferType::L1_SMALL) {
+        return false;
     }
     if (buffer.has_shard_spec()) {
         return buffer.shard_spec().grid().contains(core);
@@ -78,19 +80,20 @@ bool l1_buffer_touches_core(const Buffer& buffer, const CoreCoord& core) {
 }
 
 const char* l1_buffer_kind(const Buffer& buffer) {
+    const bool l1_small = buffer.buffer_type() == BufferType::L1_SMALL;
     if (per_core_allocation::is_per_core_allocation(buffer)) {
         return "per-core";
     }
     if (buffer.has_shard_spec()) {
-        return "lockstep-sharded";
+        return l1_small ? "L1_SMALL lockstep-sharded" : "lockstep-sharded";
     }
     if (buffer.buffer_distribution_spec().has_value()) {
-        return "lockstep-nd-sharded";
+        return l1_small ? "L1_SMALL lockstep-nd-sharded" : "lockstep-nd-sharded";
     }
-    return "interleaved";
+    return l1_small ? "L1_SMALL interleaved" : "interleaved";
 }
 
-// Append one conflict per L1 buffer, and per persistent-arena region, that `allocator` has placed on
+// Append one conflict per L1 or L1_SMALL buffer, and per persistent-arena region, that `allocator` has placed on
 // `core`, at any address. Buffers are attributed to cores by their shard grid, not by the free list, so
 // a lockstep tensor sharded elsewhere does not count even though it reserves the same address range on
 // this bank (the "lockstep false positive").
@@ -105,11 +108,14 @@ void collect_conflicts(
         return;
     }
 
-    // Fast path. Every allocated buffer's address is recorded in a free list (lockstep, or this bank's
-    // per-core list under HYBRID). An empty free list for this bank means no buffer can be on this core,
-    // and the walk below is skipped.
+    // Fast path. Every allocated L1 buffer's address is recorded in a free list (lockstep, or this bank's
+    // per-core list under HYBRID). An empty free list for this bank means no L1 buffer can be on this
+    // core. L1_SMALL has its own manager that this list doesn't see, so any L1_SMALL allocation on this
+    // allocator also forces the walk below.
     const uint32_t bank = allocator.get_bank_ids_from_logical_core(BufferType::L1, core).at(0);
-    if (allocator.get_lowest_occupied_l1_address(bank).has_value()) {
+    const bool any_l1_on_bank = allocator.get_lowest_occupied_l1_address(bank).has_value();
+    const bool any_l1_small = allocator.get_statistics(BufferType::L1_SMALL).total_allocated_bytes > 0;
+    if (any_l1_on_bank || any_l1_small) {
         // get_allocated_buffers() copies the set under the allocator mutex; the Buffer pointers are
         // dereferenced without it. A manual fast-dispatch session is entered from one host thread with
         // no concurrent allocation, which is the contract this preflight relies on.
@@ -158,6 +164,8 @@ DispatchContext& DispatchContext::get() {
     }
     return *dispatch_context_ptr_;
 }
+
+bool DispatchContext::is_fast_dispatch_session_active() const { return num_fd_inits_ > 0; }
 
 DispatchCoreAxis DispatchContext::get_dispatch_core_axis(distributed::MeshDevice* mesh_device) const {
     return MetalContext::instance(extract_context_id(mesh_device)).get_dispatch_core_config().get_dispatch_core_axis();
@@ -212,7 +220,8 @@ std::vector<FdL1Conflict> find_fd_l1_conflicts(
         }
         // MeshDevice::allocator_impl() is the default sub-device manager's allocator, so buffers under any
         // other manager would be invisible below. Sub-device managers aren't supported with manual fast
-        // dispatch, so refuse rather than walk an incomplete ledger.
+        // dispatch, so refuse rather than walk an incomplete ledger. Loads during a session are already
+        // refused (MeshDeviceImpl::load_sub_device_manager); this catches a manager loaded before one.
         for (distributed::MeshDevice* view : views_over_device) {
             if (view->get_active_sub_device_manager_id() != view->get_default_sub_device_manager_id()) {
                 TT_THROW(
