@@ -17,6 +17,7 @@ import os
 import torch
 
 import ttnn
+from models.demos.blackhole.deepseek_v41_flash.tt import pf_tune
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import (
     HEAD_DIM,
     LOCAL_HEADS,
@@ -56,14 +57,19 @@ def pad_len(S, mult=64):
 
 
 class DSV41PrefillAttention:
-    def __init__(self, attn, attn_sink: torch.Tensor, q_chunk=128, k_chunk=128):
+    def __init__(self, attn, attn_sink: torch.Tensor, q_chunk=None, k_chunk=None):
         """attn: built DSV41Attention / DSV41CompressedAttention (decode); attn_sink: [64] host tensor of the layer."""
         self.a = attn
         self.md = attn.mesh_device
         self.U = attn.T
         self.compressed = isinstance(attn, DSV41CompressedAttention)
         self.ratio = attn.ratio if self.compressed else 0
-        self.q_chunk, self.k_chunk = q_chunk, k_chunk
+        if pf_tune.ROPE_PE:
+            pf_tune.p64(attn.mesh_device)  # constant created outside any trace capture
+        self.q_chunk, self.k_chunk = q_chunk or pf_tune.QC, k_chunk or pf_tune.KC
+        self.lckc = pf_tune.lin_ckc(attn)  # dense projections (env DSV41_PFA_LIN_*; baseline = decode ckc)
+        self.cckc = pf_tune.lin_ckc(attn, "comp")
+        self.rckc = pf_tune.lin_ckc(attn, "rope")
         md = self.md
         rows, cols = attn.rows, attn.cols
         # sink for the prefill SDPA: [1, 8 local heads, 1, 1] per column, pre-divided by the softmax scale (the kernel multiplies by it)
@@ -82,7 +88,7 @@ class DSV41PrefillAttention:
         self.rs_tokens = False  # column-split mode (DSV41PrefillLayer.forward_cols): the attention output is reduce-scattered over tokens
         self.halo = None  # [U,1,128,512] kv rows (post RoPE) of the 128 positions before the next chunk (None before the first chunk)
         self.lat_all = None  # owner layers: [U,1,L,512] latents of every group closed so far (RoPE'd)
-        self.ckc_sdpa = attn.ckc_sdpa
+        self.ckc_sdpa = pf_tune.sdpa_ckc(attn)
         self.dyn = None  # DynCtx: traced-chunk mode (forward_dyn)
         self.lat_buf = None  # [U,1,Lmax,512] FIFO of latents (kv-source layers, traced-chunk mode)
         self.state_sink = None  # optional callable(self, kv, lat, cs, s0, C, h) called once per chunk; replaces the dense decode-cache write
@@ -136,17 +142,50 @@ class DSV41PrefillAttention:
             _MASKS[key] = self._up(torch.where((kp <= t) & (kp > t - WINDOW), 0.0, NEG).reshape(1, 1, C, WINDOW + C))
         return _MASKS[key]
 
+    def _lin(self, x, w):
+        return pf_tune.linear(x, w, self.lckc, self.md)
+
+    def _sdpa_cfg(self):
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.md.compute_with_storage_grid_size(),
+            q_chunk_size=self.q_chunk,
+            k_chunk_size=self.k_chunk,
+            exp_approx_mode=pf_tune.EXP_APPROX,
+        )
+
+    def _sdpa(self, qh, keys, **kw):
+        q8, k8 = pf_tune.to8(qh), pf_tune.to8(keys)
+        o = ttnn.transformer.scaled_dot_product_attention(
+            q8,
+            k8,
+            k8,
+            scale=self.a.scale,
+            attention_sink=self.sink,
+            compute_kernel_config=self.ckc_sdpa,
+            program_config=self._sdpa_cfg(),
+            **kw,
+        )
+        if q8 is not qh:
+            ttnn.deallocate(q8)
+        if k8 is not keys:
+            ttnn.deallocate(k8)
+        return o
+
     # ---- helpers ------------------------------------------------------------------------------------------
     def _rope(self, x, tabs):
         c, s, _ = tabs
+        if pf_tune.ROPE_PE:
+            return pf_tune.rope_pe(x, c, s, pf_tune.p64(self.md), self.rckc)
         return ttnn.add(
-            ttnn.multiply(x, c), ttnn.multiply(ttnn.matmul(x, self.a.Pf, compute_kernel_config=self.a.ckc), s)
+            ttnn.multiply(x, c), ttnn.multiply(ttnn.matmul(x, self.a.Pf, compute_kernel_config=self.rckc), s)
         )
 
     def _rope_inv(self, x, tabs):
         c, _, ns = tabs
+        if pf_tune.ROPE_PE:
+            return pf_tune.rope_pe(x, c, ns, pf_tune.p64(self.md), self.rckc)
         return ttnn.add(
-            ttnn.multiply(x, c), ttnn.multiply(ttnn.matmul(x, self.a.Pf, compute_kernel_config=self.a.ckc), ns)
+            ttnn.multiply(x, c), ttnn.multiply(ttnn.matmul(x, self.a.Pf, compute_kernel_config=self.rckc), ns)
         )
 
     def _compress(self, h, s0, C):
@@ -156,10 +195,12 @@ class DSV41PrefillAttention:
         Cc = C // r
         cs = None
         if r == 1:
-            lat = ttnn.rms_norm(ttnn.linear(h, a.c_wkv, compute_kernel_config=a.ckc), weight=a.c_norm, epsilon=a.eps)
+            lat = ttnn.rms_norm(
+                ttnn.linear(h, a.c_wkv, compute_kernel_config=self.cckc), weight=a.c_norm, epsilon=a.eps
+            )
         else:
             cs = ttnn.linear(
-                h, a.c_wcat, compute_kernel_config=a.ckc, dtype=ttnn.float32
+                h, a.c_wcat, compute_kernel_config=self.cckc, dtype=ttnn.float32
             )  # [1,1,R,1024] = [kv | score]
             pairs = ttnn.to_layout(
                 ttnn.reshape(ttnn.to_layout(cs, ttnn.ROW_MAJOR_LAYOUT), [1, 1, R // 2, 2 * 2 * HEAD_DIM]),
@@ -190,13 +231,13 @@ class DSV41PrefillAttention:
         if s0 == 0:
             self.begin()
         tabs = self.rope_tabs(s0, C)
-        y = ttnn.linear(h, a.wqkv, compute_kernel_config=a.ckc)  # [1,1,R,1792]
+        y = self._lin(h, a.wqkv)  # [1,1,R,1792]
         qr = ttnn.rms_norm(ttnn.slice(y, [0, 0, 0, 0], [1, 1, R, Q_LORA]), weight=a.q_norm, epsilon=a.eps)
         kvn = ttnn.rms_norm(
             ttnn.slice(y, [0, 0, 0, Q_LORA], [1, 1, R, Q_LORA + HEAD_DIM]), weight=a.kv_norm, epsilon=a.eps
         )
         ttnn.deallocate(y)
-        q = ttnn.linear(qr, a.wq_b, compute_kernel_config=a.ckc)  # [1,1,R,8*512]
+        q = self._lin(qr, a.wq_b)  # [1,1,R,8*512]
         sp = self.sparse
         keep_qr = (
             sp is not None and sp.indexer is not None and sp.active(s0, C)
@@ -237,21 +278,7 @@ class DSV41PrefillAttention:
                 kw = dict(is_causal=True, sliding_window_size=WINDOW)
             else:
                 kw = dict(is_causal=False, attn_mask=self.window_mask(C, s0))
-            o = ttnn.transformer.scaled_dot_product_attention(
-                qh,
-                keys,
-                keys,
-                scale=a.scale,
-                attention_sink=self.sink,
-                compute_kernel_config=self.ckc_sdpa,
-                program_config=ttnn.SDPAProgramConfig(
-                    compute_with_storage_grid_size=self.md.compute_with_storage_grid_size(),
-                    q_chunk_size=self.q_chunk,
-                    k_chunk_size=self.k_chunk,
-                    exp_approx_mode=False,
-                ),
-                **kw,
-            )
+            o = self._sdpa(qh, keys, **kw)
         if keep_qr:
             ttnn.deallocate(qr)
         if self.tap is None:
@@ -286,7 +313,7 @@ class DSV41PrefillAttention:
             ttnn.deallocate(o)
         zero = zeros(self.md, [U, 1, C, HEAD_DIM])  # decode wo_a has 512 zero rows in front
         c = ttnn.reshape(ttnn.concat([zero, c], dim=3), [1, 1, R, (LOCAL_HEADS + 1) * HEAD_DIM])
-        part = ttnn.linear(ttnn.linear(c, a.wo_a, compute_kernel_config=a.ckc), a.wo_b, compute_kernel_config=a.ckc)
+        part = self._lin(self._lin(c, a.wo_a), a.wo_b)
         if self.tap is not None:
             self.tap.update(c=c, part=ttnn.clone(part))
         return self._allreduce(part)
@@ -332,13 +359,13 @@ class DSV41PrefillAttention:
         C = R // U
         assert C == ctx.C
         tabs = ctx.tabs[self.compressed]
-        y = ttnn.linear(h, a.wqkv, compute_kernel_config=a.ckc)
+        y = self._lin(h, a.wqkv)
         qr = ttnn.rms_norm(ttnn.slice(y, [0, 0, 0, 0], [1, 1, R, Q_LORA]), weight=a.q_norm, epsilon=a.eps)
         kvn = ttnn.rms_norm(
             ttnn.slice(y, [0, 0, 0, Q_LORA], [1, 1, R, Q_LORA + HEAD_DIM]), weight=a.kv_norm, epsilon=a.eps
         )
         ttnn.deallocate(y)
-        q = ttnn.linear(qr, a.wq_b, compute_kernel_config=a.ckc)
+        q = self._lin(qr, a.wq_b)
         sp = self.sparse
         dyn_sp = sp is not None and sp.dyn_on
         if not (dyn_sp and sp.indexer is not None):
@@ -381,21 +408,7 @@ class DSV41PrefillAttention:
             ttnn.deallocate(keys)
             keys = full
         kw = dict(is_causal=False, attn_mask=ctx.masks[self.ratio] if self.compressed else ctx.win_mask)
-        o = ttnn.transformer.scaled_dot_product_attention(
-            qh,
-            keys,
-            keys,
-            scale=a.scale,
-            attention_sink=self.sink,
-            compute_kernel_config=self.ckc_sdpa,
-            program_config=ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=self.md.compute_with_storage_grid_size(),
-                q_chunk_size=self.q_chunk,
-                k_chunk_size=self.k_chunk,
-                exp_approx_mode=False,
-            ),
-            **kw,
-        )
+        o = self._sdpa(qh, keys, **kw)
         ttnn.deallocate(qh)
         ttnn.deallocate(keys)
         return self._finish_dyn(o, kv, lat, cs, h, tabs, a, U, C, R)
@@ -412,7 +425,7 @@ class DSV41PrefillAttention:
         ttnn.deallocate(o)
         zero = zeros(self.md, [U, 1, C, HEAD_DIM])
         c = ttnn.reshape(ttnn.concat([zero, c], dim=3), [1, 1, R, (LOCAL_HEADS + 1) * HEAD_DIM])
-        part = ttnn.linear(ttnn.linear(c, a.wo_a, compute_kernel_config=a.ckc), a.wo_b, compute_kernel_config=a.ckc)
+        part = self._lin(self._lin(c, a.wo_a), a.wo_b)
         return self._allreduce(part)
 
     def _compress_dyn(self, h, C):
