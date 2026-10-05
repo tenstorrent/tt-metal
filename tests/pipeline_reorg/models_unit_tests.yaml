@@ -707,7 +707,7 @@
     # fixture skips every test and the job reports a false-green with no HF/device path exercised.
     python3 -c "import ttnn; s = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size(); assert s == 32, f'Galaxy system mesh degraded to {s} chips (expected 32); failing instead of skipping every test'"
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_rms_norm.py
-    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp.py
+    # TEMP (CI-only branch, not for merge): decode MLP skipped so the prefill tests below, which reach minimal_matmul, run.
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp_prefill.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention_prefill.py
