@@ -1177,10 +1177,12 @@ std::optional<std::string> get_pack_relu_config(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     DataType input_dtype,
     DataType output_dtype,
-    bool fp32_dest_acc_en) {
-    // The packer compares BF16 bit patterns as it writes a 16-bit DEST tile out.
+    bool fp32_dest_acc_en,
+    bool sharded) {
+    // The packer compares BF16 bit patterns as it writes a 16-bit DEST tile out. Unsharded, the reader
+    // and writer bound the program and the SFPU pass hides under them, so the route gains nothing.
     if (op_chain.size() != 1 || input_dtype != DataType::BFLOAT16 || output_dtype != DataType::BFLOAT16 ||
-        fp32_dest_acc_en) {
+        fp32_dest_acc_en || !sharded) {
         return std::nullopt;
     }
     const auto& op = op_chain[0];

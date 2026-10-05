@@ -5,11 +5,11 @@
 """
 Exhaustive BF16 accuracy of the unary ops that run in the packer's ReLU stage.
 
-The reference is torch on the operand as BF16 DEST holds it, stored as a BF16 tile holds the
-result. The ops are exact, so every output must equal it bit for bit. Each op logs one ULP line:
-the largest ULP error against the reference and the outputs of another class, for the packer and
-for the SFPU kernel it replaces, run on the same input as a chain of the op and IDENTITY (see the
-device-perf test).
+The packer serves sharded tensors only, so the inputs are height-sharded. The reference is torch
+on the operand as BF16 DEST holds it, stored as a BF16 tile holds the result. The ops are exact,
+so every output must equal it bit for bit. Each op logs one ULP line: the largest ULP error
+against the reference and the outputs of another class, for the packer and for the SFPU kernel it
+replaces, run on the same input as a chain of the op and IDENTITY (see the device-perf test).
 """
 
 import pytest
@@ -19,6 +19,13 @@ import ttnn
 from tests.ttnn.utils_for_testing import generate_all_bfloat16_bitpatterns
 
 SMALLEST_NORMAL = 2.0**-126
+# The 256 x 256 input, one row of tiles per core.
+SHARDED = ttnn.create_sharded_memory_config(
+    shape=(32, 256),
+    core_grid=ttnn.CoreGrid(y=1, x=8),
+    strategy=ttnn.ShardStrategy.HEIGHT,
+    use_height_and_width_as_shard_shape=True,
+)
 
 CLASSES = {
     "pos_nan": lambda t: torch.isnan(t) & ~torch.signbit(t),
@@ -130,7 +137,7 @@ def test_pack_relu_exhaustive_bfloat16(op, device):
     expected = reference(_transport(x.clone(), x, operand))
     expected = _transport(expected, expected, result)
 
-    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=SHARDED)
     actual = ttnn.to_torch(run(tt_x))
     stock = ttnn.to_torch(OLD[op](tt_x))
 

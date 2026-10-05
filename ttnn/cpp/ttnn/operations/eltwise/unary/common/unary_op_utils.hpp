@@ -111,12 +111,14 @@ bool is_parametrized_type(T val) {
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines);
 
 // The packer ReLU configuration that computes a lone op as its tile is packed, as a
-// ckernel::ReluConfig expression, or none when the op runs on the SFPU.
+// ckernel::ReluConfig expression, or none when the op runs on the SFPU. `sharded`: the input and
+// the output are both sharded, so no tile crosses the NoC.
 std::optional<std::string> get_pack_relu_config(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     DataType input_dtype,
     DataType output_dtype,
-    bool fp32_dest_acc_en);
+    bool fp32_dest_acc_en,
+    bool sharded);
 
 // INP_FLOAT32 / INP_INT32 / INP_UINT32 / INP_FLOAT: the SFPU kernels select their algorithm on these. Exactly one
 // is set after the call; float32 wins over the bf16-class default when both operands of a fused op contribute.

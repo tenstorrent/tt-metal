@@ -405,8 +405,12 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
 
     const bool math_approx_mode = false;
     std::map<std::string, std::string> unary_defines;
-    if (const auto relu_config =
-            get_pack_relu_config(ops_chain, input.dtype(), output.dtype(), operation_attributes.fp32_dest_acc_en)) {
+    if (const auto relu_config = get_pack_relu_config(
+            ops_chain,
+            input.dtype(),
+            output.dtype(),
+            operation_attributes.fp32_dest_acc_en,
+            src_sharded && dst_sharded)) {
         // The packer applies the op as it writes each tile out, which leaves the SFPU no work.
         unary_defines["PACK_RELU_CONFIG"] = *relu_config;
     } else {
