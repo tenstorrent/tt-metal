@@ -207,8 +207,9 @@ add_compile_options(
     -fvisibility-inlines-hidden
     -Wall
     "$<$<CXX_COMPILER_ID:Clang>:-Wconditional-uninitialized>"
+    # Deprecated API uses must stay visible (the API stability policy relies on them) but not fatal.
+    -Wno-error=deprecated-declarations
     # The following list is not indicative of what we _desire_ only the status quo to build.
-    -Wno-deprecated-declarations
     "$<$<CXX_COMPILER_ID:Clang>:SHELL:-Xclang -fno-pch-timestamp>" # ccache-friendly PCH flag
     "$<$<CXX_COMPILER_ID:GNU>:-fpch-preprocess>" # ccache-friendly PCH flag
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-array-bounds>"
