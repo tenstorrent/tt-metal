@@ -10,13 +10,11 @@ memory layout. Correctness is checked with allclose against an fp32 golden of th
 indexing and edge-clipping errors that a statistical check would not.
 
 Compute threads (stage B): on Quasar the compute kernel runs on all four NEOs of a cluster by default
-(num_compute_threads auto = 4); the C slice's subblocks are dealt round-robin to the threads. Wormhole /
-Blackhole have one compute engine per core, so there every test runs with one thread and an explicit
-num_compute_threads > 1 is rejected; the thread-deal tests below are written so that on Quasar they cover
-uneven rounds (fewer subblocks than threads, rounds with idle threads) and on silicon they degrade to the
-one-thread parity check.
+(num_compute_threads auto = 4), and each C slice's subblocks are assigned round-robin to the threads.
+Wormhole / Blackhole have one compute engine per core, so there every test runs with one thread and the
+tests that set num_compute_threads > 1 are skipped.
 
-Run on Wormhole / Blackhole silicon:
+Run on Wormhole / Blackhole:
     pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py
 
 Run on the Quasar simulator (one config per process; a sim-side hang ignores pytest --timeout):
@@ -249,8 +247,9 @@ def test_edges_and_blocking(device, M, K, N, C_slice_M_tiles, C_slice_N_tiles, K
 
 
 def test_single_tile(device):
-    """The smallest problem: one tile, one core, 1x1 C slice; with one compute thread the auto subblock pads
-    it to 8 entries, all but one of which are stale and must be clipped."""
+    """The smallest problem: one tile, one core, 1x1 C slice. With one compute thread (the default on
+    Wormhole / Blackhole) the auto subblock pads the slice to 8 tiles, all but one of which are stale and must
+    be clipped; with four threads (the Quasar default) the auto subblock is 1x1 and nothing is padded."""
     M = K = N = TILE
     torch.manual_seed(2)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
@@ -672,13 +671,16 @@ def test_ragged_batched_spill_all_at_once(device):
 
 
 # ----------------------------------------------------------------------------------------------------
-# Compute threads (stage B): a C slice's subblocks are dealt round-robin to the NEOs of a cluster
+# Compute threads (stage B): a C slice's subblocks are assigned round-robin to the NEOs of a cluster
 # ----------------------------------------------------------------------------------------------------
 
-THREAD_DEALS = [
-    # name, C slice (M, N tiles), subblock (M, N tiles), K_tiles, K_chunk_tiles. With four threads the
-    # subblock count decides the rounds: fewer subblocks than threads, a last round with idle threads,
-    # full rounds, and subblock padding; the K-spill cases send the partials through C_partials.
+# Subblocks are numbered across N then down M. With T threads, round r is subblocks r*T .. r*T + T - 1, one
+# per thread, so a C slice of S subblocks takes ceil(S / T) rounds and in the last round the threads past
+# S mod T are idle. K_tiles = 2 fits in one auto K chunk, so only the two cases that set K_chunk_tiles below
+# K_tiles spill partials through C_partials.
+SUBBLOCK_SPLITS = [
+    # name, C slice (M, N tiles), subblock (M, N tiles), K_tiles, K_chunk_tiles. At four threads: fewer
+    # subblocks than threads, a last round with idle threads, full rounds, and a padded C slice.
     ("one_subblock", (2, 2), (2, 2), 2, 0),
     ("two_subblocks", (2, 4), (2, 2), 2, 0),
     ("three_subblocks", (3, 2), (1, 2), 2, 0),
@@ -691,8 +693,10 @@ THREAD_DEALS = [
 ]
 
 
-@pytest.mark.parametrize("name,C_slice,subblock,K_tiles,K_chunk_tiles", THREAD_DEALS, ids=[d[0] for d in THREAD_DEALS])
-def test_compute_thread_deal(device, name, C_slice, subblock, K_tiles, K_chunk_tiles):
+@pytest.mark.parametrize(
+    "name,C_slice,subblock,K_tiles,K_chunk_tiles", SUBBLOCK_SPLITS, ids=[d[0] for d in SUBBLOCK_SPLITS]
+)
+def test_subblocks_across_threads(device, name, C_slice, subblock, K_tiles, K_chunk_tiles):
     """Four C slices over two cores (two per core, so the per-core walk runs as well), with the auto thread
     count: four on Quasar, one elsewhere."""
     C_slice_M_tiles, C_slice_N_tiles = C_slice
@@ -713,8 +717,10 @@ def test_compute_thread_deal(device, name, C_slice, subblock, K_tiles, K_chunk_t
 
 @pytest.mark.parametrize("num_compute_threads", [1, 2, 4])
 def test_explicit_compute_threads(device, num_compute_threads):
-    """Three subblocks per C slice: one round with an idle thread at four threads, two rounds (the second
-    with an idle thread) at two. Ones as input so every C tile must equal K exactly."""
+    """M = 3, K = 3, N = 2 tiles on one core: one 3x2-tile C slice of three 1x2 subblocks, one K chunk.
+    One thread does all three subblocks in three rounds; with two threads, thread 0 does subblocks 0 and 2 and
+    thread 1 does subblock 1 and is idle in the second round; with four threads, threads 0-2 do one subblock
+    each in a single round and thread 3 is idle. Ones as input, so every element of C must equal K = 96."""
     _skip_unless_threads_supported(device, num_compute_threads)
     M, K, N = 3 * TILE, 3 * TILE, 2 * TILE
     a, b = torch.ones(1, 1, M, K, dtype=torch.bfloat16), torch.ones(1, 1, K, N, dtype=torch.bfloat16)
@@ -732,9 +738,11 @@ def test_explicit_compute_threads(device, num_compute_threads):
 
 @pytest.mark.parametrize("num_compute_threads", [1, 2, 4])
 def test_K_spill_over_several_C_slices_per_core(device, num_compute_threads):
-    """Two C slices on one core with two K chunks: C_partials and C_slice do not share L1, so the last K
-    chunk only lands in C if the packer is pointed at C_slice (on Quasar it keeps the C_partials base
-    otherwise). Ones as input so every C tile must equal K exactly."""
+    """M = 4, K = 4, N = 2 tiles on one core: two 2x2-tile C slices of two 1x2 subblocks each, two K chunks
+    of 2 tiles. With two C slices per core, C_partials does not share L1 with C_slice, so the last K chunk
+    lands in C only if the packer is re-pointed at C_slice (on Quasar it otherwise keeps the C_partials base).
+    One thread does both subblocks of a slice, two threads do one each, and with four, threads 2 and 3 are
+    idle. Ones as input, so every element of C must equal K = 128."""
     _skip_unless_threads_supported(device, num_compute_threads)
     M, K, N = 4 * TILE, 4 * TILE, 2 * TILE
     a, b = torch.ones(1, 1, M, K, dtype=torch.bfloat16), torch.ones(1, 1, K, N, dtype=torch.bfloat16)

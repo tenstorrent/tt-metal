@@ -655,7 +655,7 @@ void py_module(nb::module_& mod) {
         idle). Edge C slices are clipped on read and write, so any M / N works. Every operand is addressed
         through the tensor accessor, so interleaved, L1-sharded and DRAM-sharded inputs and outputs all take
         the same kernels. The 1D, 2D and DRAM-sharded strategies are particular choices of
-        (cores, C_slice_M_tiles, C_slice_N_tiles). Within a core the C slice's subblocks are dealt
+        (cores, C_slice_M_tiles, C_slice_N_tiles). Within a core the C slice's subblocks are assigned
         round-robin to the compute threads (Quasar NEOs), which share the resident A and B slices.
 
         Limits: no fused bias (applied as a separate add) or activation, no untilize, 32x32 tiles
@@ -716,7 +716,7 @@ void py_module(nb::module_& mod) {
         )doc")
         .def_rw("num_compute_threads", &MatmulUnifiedProgramConfig::num_compute_threads, R"doc(
             Compute threads per core (Quasar NEOs running the compute kernel): 1, 2 or 4. The C slice's
-            subblocks are dealt round-robin to the threads, which share the resident A and B slices.
+            subblocks are assigned round-robin to the threads, which share the resident A and B slices.
             0 = auto: 4 on Quasar, 1 elsewhere (Wormhole / Blackhole have one compute engine per core).
         )doc")
         .def("__repr__", [](const MatmulUnifiedProgramConfig& config) {

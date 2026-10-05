@@ -90,7 +90,7 @@ struct MatmulMultiCoreProgramConfig {
 // Placement-first config for the Quasar-native matmul (GH#41910): the caller names the clusters and
 // the C slice (in 32x32 tiles) each produces in one go; the factory assigns one batch's C slices to
 // `cores` as contiguous runs. Edge C slices are clipped on read/write, so any M / N works. Within a
-// cluster the C slice's subblocks are dealt round-robin to the compute threads (NEOs).
+// cluster the C slice's subblocks are assigned round-robin to the compute threads (NEOs).
 // Limits: one reader/writer per cluster, no bias/activation/untilize, 32x32 tiles only;
 // sharded output needs batch 1 and one C slice per core.
 struct MatmulUnifiedProgramConfig {

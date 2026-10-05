@@ -48,7 +48,7 @@ struct UnifiedMatmulPlan {
     uint32_t C_slice_M_padded_tiles = 0;
     uint32_t C_slice_N_padded_tiles = 0;
 
-    // Compute threads per core (NEOs). The C slice's subblocks, numbered across N then down M, are dealt
+    // Compute threads per core (NEOs). The C slice's subblocks, numbered across N then down M, are assigned
     // round-robin to the threads, which all see the whole A and B slices. A thread's share of the C slice
     // (ceil(subblocks / threads) subblocks, back to back) is C_entries_per_thread entries of C_slice and
     // C_partials, the credits it moves per K chunk: one entry with several threads (the thread's tile
@@ -99,7 +99,7 @@ namespace detail {
 // borrow preservation stay external): the C slice is rounded up to subblock multiples and the
 // overshoot is clipped on write. Ties prefer the least padding waste; 1x1 (no padding) if nothing
 // is accepted, and the caller's DFB sizing FATALs with the full breakdown. With several compute threads
-// the subblocks are dealt round-robin, so the least work on the busiest thread comes first.
+// the subblocks are assigned round-robin, so the least work on the busiest thread comes first.
 template <typename FitsSubblock>
 std::pair<uint32_t, uint32_t> maximize_subblock_size(
     uint32_t C_slice_M_tiles,
