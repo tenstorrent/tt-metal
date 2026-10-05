@@ -13,12 +13,20 @@
 // straight into its 32-bit DST, so the reference point reaches the SFPU
 // unrounded; every other tile here is bf16.
 // The row-major gather itself is msda_gather_rows.hpp, which the writer also
-// runs for its half of each block when the gather is split.
+// runs for rows [SPLIT_ROW, 32) of each block when the gather is split.
 //
-// The reader pushes point j+1's geometry tiles before it waits for point j's
-// corners. Without that lookahead the reader is idle through every geometry
-// solve and compute is idle through every gather. The CB depths in
-// fused_msda_program_factory.cpp are what make the lookahead legal.
+// The reader pushes point j+1's geometry tiles before it gathers point j.
+// Without that lookahead the reader is idle through every geometry solve and
+// compute is idle through every gather. Where the push sits depends on the
+// gather:
+//
+//   reader-only gather: push j+1; wait x0/y0(j); gather j.
+//   split gather:       wait x0/y0(j); post j to the writer; push j+1; gather
+//                       the reader's rows of j.
+//
+// The split order cannot deadlock: compute produces x0/y0(j) before it waits
+// for j+1's tiles and holds at most one point ahead, so the CB depths in
+// fused_msda_program_factory.cpp cover both orders.
 //
 // Tile face layout is documented in ../msda_tile_layout.hpp. bf16 tiles are
 // 2048 B; geom_x/geom_y are 4096 B when REF_FP32 is set.
@@ -473,14 +481,19 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
             }
         };
 
-        // One point of lookahead, matching the compute kernel's. Point 0 goes
-        // out before the loop so compute can start solving it while the reader
-        // is still preparing point 1.
+        // One point of lookahead, matching the compute kernel's (see the
+        // pipelining note at the top of this file). Iteration j pushes j+1, so
+        // point 0 goes out here.
         push_point_geometry(0);
 
         for (uint32_t j = 0; j < POINTS_PER_BLOCK; ++j) {
-            if (j + 1 < POINTS_PER_BLOCK) {
-                push_point_geometry(j + 1);
+            // Exactly one push of point j+1 per iteration: here without the
+            // split gather, after the post with it. SPLIT_GATHER implies
+            // RM_STAGING (static_assert above), so the second site always exists.
+            if constexpr (!SPLIT_GATHER) {
+                if (j + 1 < POINTS_PER_BLOCK) {
+                    push_point_geometry(j + 1);
+                }
             }
 
             const uint32_t l = j / NUM_POINTS;
@@ -508,6 +521,9 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
                 if constexpr (SPLIT_GATHER) {
                     fused_msda_gather::post_point(gather_mailbox_l1, pt);
                     gather_ready.set(++gather_seq);
+                    if (j + 1 < POINTS_PER_BLOCK) {
+                        push_point_geometry(j + 1);
+                    }
                     fused_msda_gather::gather_rows<ReaderGatherCfg>(
                         noc, value_acc, pt, 0, fused_msda_gather::SPLIT_ROW);
                     noc.async_read_barrier();

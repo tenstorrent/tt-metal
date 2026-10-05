@@ -119,9 +119,10 @@ AxisConstants axis_constants(uint32_t extent, bool align_corners, bool grid_spac
 }
 
 // CB depths for the geometry pipeline. Both the reader and the compute kernel
-// run one sampling point ahead of the work they are feeding, so the pipes
-// between them hold up to two points' worth; each depth below is that pipe's
-// floor plus any slack, as noted.
+// run at most one sampling point ahead of the work they are feeding (where the
+// reader's push sits depends on the split gather; see the pipelining note in
+// fused_msda_reader_common.hpp), so the pipes between them hold up to two
+// points' worth; each depth below is that pipe's floor plus any slack, as noted.
 //
 // kScalarCbPages is a hard deadlock floor: at the fourth corner_weight of point
 // j+1 the PACK thread holds 7 pages and reserves the 8th, and UNPACK cannot free
@@ -168,10 +169,11 @@ constexpr uint8_t gather_mailbox_cb = tt::CBIndex::c_18;
 // D fall back to the reader scattering sticks into tile faces.
 bool uses_rm_staging(const MSDAShapes& s) { return s.head_dim % kTileWidth == 0; }
 
-// Split gather: the writer RISC gathers half of every row-major block on its
-// own NoC (see msda_gather_rows.hpp), since one RISC's decode and read issue
-// bound the reader. Measured on Blackhole only, with value in L1 and in DRAM
-// (both faster); Wormhole keeps the reader-only gather until it is measured.
+// Split gather: the writer RISC gathers rows [SPLIT_ROW, 32) of every
+// row-major block on its own NoC (see msda_gather_rows.hpp), since one
+// RISC's decode and read issue bound the reader. Measured on Blackhole only,
+// with value in L1 and in DRAM (both faster than the reader-only gather);
+// Wormhole keeps the reader-only gather until it is measured.
 // The scatter path (D % 32 != 0) is always reader-only. Decided only here, by
 // the CB plan; create_descriptor reads the decision back from the plan.
 bool uses_split_gather(const MSDAShapes& s, tt::ARCH arch) { return uses_rm_staging(s) && arch == tt::ARCH::BLACKHOLE; }
