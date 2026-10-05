@@ -29,9 +29,10 @@ both one-shot and multi-chunk.
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import torch
 from loguru import logger
@@ -88,6 +89,10 @@ class TtPrefillRuntimeConfig:
     # max_seq_len slot; full-attention layers are unchanged. KV migration rejects the flag.
     # Default off => allocation byte-identical to the single packed cache.
     bounded_sliding_kv_cache: bool = False
+    # Explicit, opt-in DFlash checkpoint. The model/runtime never consults
+    # environment variables; adapters resolve deployment configuration.
+    dflash_checkpoint_path: Optional[Path] = None
+    dflash_weight_dtype: ttnn.DataType = ttnn.bfloat16
 
     @property
     def sp_factor(self) -> int:
@@ -123,6 +128,8 @@ class TtPrefillRuntime:
         self.kv_cache = None
         self._layer_completion_sink = None
         self._slot_chunk_size = {}  # slot_id -> chunk size its current sequence started with
+        self.dflash_config = None
+        self.dflash_accumulator = None
 
         self._build_model(state_dict)
         if config.owns_kv_cache:
@@ -162,6 +169,38 @@ class TtPrefillRuntime:
             expert_weight_dtype=self.config.expert_weight_dtype,
         )
         self.model_built = True
+        if self.config.dflash_checkpoint_path is not None:
+            self._build_dflash_accumulator()
+
+    def _build_dflash_accumulator(self) -> None:
+        from .dflash import DFlashPrefillConfig, TtDFlashFeatureAccumulator, load_dflash_fc_weight
+
+        # Publishing a complete handoff requires observing all five target
+        # layers. Transport of pipeline-rank partial sums belongs to P/D.
+        if self.config.first_layer_idx != 0 or self.config.num_layers != self.hf_config.num_hidden_layers:
+            raise ValueError(
+                "GPT-OSS DFlash prefill currently requires one runtime to own the full target "
+                f"(first_layer_idx=0, num_layers={self.hf_config.num_hidden_layers}); got "
+                f"first_layer_idx={self.config.first_layer_idx}, num_layers={self.config.num_layers}"
+            )
+        dflash_config = DFlashPrefillConfig.from_checkpoint(
+            self.config.dflash_checkpoint_path,
+            expected_hidden_size=self.hf_config.hidden_size,
+            expected_num_target_layers=self.hf_config.num_hidden_layers,
+        )
+        self.dflash_config = dflash_config
+        self.dflash_accumulator = TtDFlashFeatureAccumulator(
+            self.mesh_device,
+            dflash_config,
+            load_dflash_fc_weight(dflash_config),
+            sp_axis=self.config.sp_axis,
+            tp_axis=self.config.tp_axis,
+            dtype=self.config.dflash_weight_dtype,
+        )
+        logger.info(
+            f"Enabled GPT-OSS DFlash prefill features from {dflash_config.checkpoint_path}; "
+            f"target layers={dflash_config.target_layer_ids}, pre-norm width={dflash_config.hidden_size}"
+        )
 
     def _allocate_kv_cache(self) -> None:
         # ONE cache holding num_users * num_layers slots (user-major); each (user, layer) slot is
@@ -279,14 +318,18 @@ class TtPrefillRuntime:
                 f"{'2 cache-backed ring chunks' if ring else 'one all-gather fallback chunk'} of {chunk} tokens"
             )
             # prefill_chunk consumes (deallocates) its input tensor, so build a fresh input per call.
-            self.prefill_chunk(
+            warm_result = self.prefill_chunk(
                 self.make_chunk_input([0] * chunk, chunk),
                 kv_caches,
                 slot_id=0,
                 actual_start=0,
                 actual_end=chunk,
                 chunk_size=chunk,
+                dflash_handoff=self.dflash_accumulator is not None,
             )
+            if warm_result is not None:
+                # Compile warmup has no handoff consumer.
+                ttnn.deallocate(warm_result.reduced_hidden)
             if ring:
                 # actual_start>0 drives the ring cache-read; it reads the prefix we just wrote at [0, chunk).
                 self.prefill_chunk(
@@ -314,7 +357,9 @@ class TtPrefillRuntime:
         request_id: int = -1,  # accepted for the common-runner contract; single-request prefill ignores it
         d2h_service=None,  # accepted for the common-runner contract; this runtime uses host-callback LayerAcks
         record_dev=None,  # accepted for the common-runner contract; the D1H record path is unused here
-    ) -> Optional[ttnn.Tensor]:
+        dflash_handoff: bool = False,
+        dflash_sink=None,
+    ) -> Any:
         """Prefill ONE chunk into user ``slot_id``'s slice of the KV cache (self-owned or the engine's
         ``kv_caches``). Returns None (skip_lm_head) — the populated cache is the output.
 
@@ -371,17 +416,87 @@ class TtPrefillRuntime:
         else:
             on_layer_complete = None
 
+        wants_dflash = dflash_handoff or dflash_sink is not None
+        if wants_dflash and self.dflash_accumulator is None:
+            raise RuntimeError(
+                "DFlash handoff requested but no checkpoint was configured; "
+                "set TtPrefillRuntimeConfig.dflash_checkpoint_path"
+            )
+        if wants_dflash and not self.config.is_last_rank:
+            raise RuntimeError("DFlash handoff can only be published by the final prefill rank")
+
+        # SP maps each chunk to contiguous row blocks. Slice only the tile
+        # containing the final real token; after the TP logits matmul, select
+        # its owning SP row and exact row within that tile on host.
+        model_last_token = get_last_token
+        owner_row = final_in_tile = None
+        if wants_dflash:
+            relative_last = actual_end - actual_start - 1
+            seq_local = chunk_size // self.config.sp_factor
+            owner_row = relative_last // seq_local
+            local_last = relative_last % seq_local
+            model_last_token = (local_last // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            final_in_tile = local_last - model_last_token
+
+        enqueue_started = time.perf_counter()
         out = self.model.prefill_forward(
             x_embd,
             rot_mats_global=self.rope_indexed[chunk_size],  # per-size indexed rope (persistent; not deallocated)
             kv_cache=kv,
             cached_len=actual_start,
             user_id=slot_id,
-            get_last_token=get_last_token,
-            skip_lm_head=skip_lm_head,
+            get_last_token=model_last_token,
+            skip_lm_head=False if wants_dflash else skip_lm_head,
             indexed_rope=True,
             on_layer_complete=on_layer_complete,
+            dflash_accumulator=self.dflash_accumulator if wants_dflash else None,
         )
+        enqueue_ms = (time.perf_counter() - enqueue_started) * 1000.0
+        if wants_dflash:
+            from .dflash import DFlashFeatureLayout, DFlashPrefillResult
+
+            logits_tt, reduced_hidden = out
+            assert owner_row is not None and final_in_tile is not None
+            shards = ttnn.get_device_tensors(logits_tt)
+            mesh_cols = self.config.mesh_shape[1]
+
+            def shard_index(tp_coordinate: int) -> int:
+                coordinates = [0, 0]
+                coordinates[self.config.sp_axis] = owner_row
+                coordinates[self.config.tp_axis] = tp_coordinate
+                return coordinates[0] * mesh_cols + coordinates[1]
+
+            logits = torch.cat(
+                [ttnn.to_torch(shards[shard_index(tp_coordinate)]) for tp_coordinate in range(self.config.tp_factor)],
+                dim=-1,
+            )
+            logits = logits[..., final_in_tile, : self.model.vocab_size].reshape(-1).float()
+            y0 = int(torch.argmax(logits).item())
+            ttnn.deallocate(logits_tt)
+            timings = {
+                f"fc_layer_{layer_id}_enqueue": duration
+                for layer_id, duration in self.dflash_accumulator.fc_enqueue_ms.items()
+            }
+            timings["head_and_feature_enqueue"] = enqueue_ms
+            result = DFlashPrefillResult(
+                slot_id=slot_id,
+                actual_start=actual_start,
+                actual_end=actual_end,
+                chunk_size=chunk_size,
+                reduced_hidden=reduced_hidden,
+                layout=DFlashFeatureLayout(
+                    mesh_shape=self.config.mesh_shape,
+                    sp_axis=self.config.sp_axis,
+                    tp_axis=self.config.tp_axis,
+                ),
+                logits=logits,
+                y0=y0,
+                timings_ms=timings,
+            )
+            if dflash_sink is not None:
+                dflash_sink(result)
+                return None
+            return result
         if not self.config.is_last_rank:
             return out
         if skip_lm_head:

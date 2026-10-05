@@ -189,6 +189,7 @@ class Model:
         kv_cache=None,
         cached_len=0,
         indexed_rope=False,
+        dflash_accumulator=None,
     ):
         """Prefill forward through decoder layers + final projection.
 
@@ -196,6 +197,8 @@ class Model:
         per-layer KV migration / validation in the disaggregated prefill pipeline. Default None = no-op.
         cached_len: valid prefix already in the cache before this chunk (0 = first/only chunk).
         """
+        if dflash_accumulator is not None:
+            dflash_accumulator.reset()
         for i, decoder_layer in enumerate(self.layers):
             hidden_states = decoder_layer(
                 hidden_states,
@@ -206,9 +209,11 @@ class Model:
                 batch_size=batch_size,
                 cached_len=cached_len,
                 indexed_rope=indexed_rope,
+                dflash_accumulator=dflash_accumulator,
             )
             if on_layer_complete is not None:
                 on_layer_complete(i)
+        reduced_hidden = dflash_accumulator.export() if dflash_accumulator is not None else None
         logits = hidden_states
 
         if get_last_token != -1:
@@ -234,14 +239,14 @@ class Model:
             hidden_states = logits
 
         if skip_lm_head:
-            return hidden_states
+            return (hidden_states, reduced_hidden) if dflash_accumulator is not None else hidden_states
 
         # Final norm and lm_head
         hidden_states = self.norm(hidden_states)
         logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
         hidden_states.deallocate(True)
         self._prefill_sampling_active = False
-        return logits
+        return (logits, reduced_hidden) if dflash_accumulator is not None else logits
 
     def prefill_forward(
         self,
@@ -256,6 +261,7 @@ class Model:
         on_layer_complete=None,
         cached_len=0,
         indexed_rope=False,
+        dflash_accumulator=None,
     ):
         """Prefill forward pass. ``rot_mats_global`` is the whole-cache indexed rope (from the runtime)
         when ``indexed_rope`` is set."""
@@ -274,6 +280,7 @@ class Model:
             on_layer_complete=on_layer_complete,
             cached_len=cached_len,
             indexed_rope=indexed_rope,
+            dflash_accumulator=dflash_accumulator,
         )
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, trace_enabled=False, batch_size=1, user_id=0, **kwargs):
