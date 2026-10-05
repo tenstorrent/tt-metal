@@ -40,6 +40,9 @@ case "${CONFIG}" in
 esac
 
 case "${MODEL}" in
+  gptoss120b)
+    source "${TT_METAL_HOME}/models/demos/gpt_oss_d_p/scripts/ci/runner_config.sh"
+    ;;
   llama31)
     source "${TT_METAL_HOME}/models/demos/llama_3p1_8b_d_p/scripts/ci/runner_config.sh"
     ;;
@@ -253,7 +256,22 @@ PROD_RC=$?
 set -e
 
 if [ "${PROD_RC}" -eq 0 ]; then
-  wait "${RUNNER_PID}" || echo "runner exited non-zero after producer success (rc=$?)"
+  if [ "${REQUIRE_CLEAN_SHUTDOWN:-0}" = 1 ]; then
+    for _ in $(seq 1 "${RUNNER_SHUTDOWN_TIMEOUT_S:-120}"); do
+      kill -0 "${RUNNER_PID}" 2>/dev/null || break
+      sleep 1
+    done
+    if kill -0 "${RUNNER_PID}" 2>/dev/null; then
+      echo "runner did not drain its shutdown sentinel before the timeout" >&2
+      exit 1
+    fi
+  fi
+  RUNNER_RC=0
+  wait "${RUNNER_PID}" || RUNNER_RC=$?
+  if [ "${RUNNER_RC}" -ne 0 ]; then
+    echo "runner exited non-zero after producer success (rc=${RUNNER_RC})"
+    [ "${REQUIRE_CLEAN_SHUTDOWN:-0}" != 1 ] || exit "${RUNNER_RC}"
+  fi
 fi
 
 EXPECTED_RANKS=$(printf '%s' "${HOSTS}" | tr ',' '\n' | grep -c .)

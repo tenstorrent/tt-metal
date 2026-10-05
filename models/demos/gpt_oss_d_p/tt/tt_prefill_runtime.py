@@ -311,9 +311,10 @@ class TtPrefillRuntime:
         skip_lm_head: bool = True,
         get_last_token: int = -1,
         chunk_size: Optional[int] = None,  # variable chunk length: which supported size this chunk is
-        request_id: int = -1,  # accepted for the common-runner contract; single-request prefill ignores it
+        request_id: int = -1,  # identifies this chunk in the host layer-completion stream
         d2h_service=None,  # accepted for the common-runner contract; this runtime uses host-callback LayerAcks
         record_dev=None,  # accepted for the common-runner contract; the D1H record path is unused here
+        metadata_msg=None,  # raw socket metadata; eager execution uses the decoded scalar arguments
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE chunk into user ``slot_id``'s slice of the KV cache (self-owned or the engine's
         ``kv_caches``). Returns None (skip_lm_head) — the populated cache is the output.
@@ -325,6 +326,8 @@ class TtPrefillRuntime:
         On the first rank ``input_tensor`` is SP-sharded uint32 tokens (``make_chunk_input`` / H2D);
         they are embedded here. Non-first ranks receive activations over D2D already embedded.
         If a LayerAck channel is registered, the model bumps it once per layer via ``on_layer_complete``.
+        The runner already decodes ``metadata_msg`` into ``slot_id``, ``actual_start``, and
+        ``actual_end``. GPT-OSS does not trace or emit D2H acks, so the raw tensor is unused.
 
         Every SP chunk writes K/V. A chunked request, including actual_start == 0, then uses the
         cache-backed RingJointSDPA path; an equal-sized one-shot request uses the all-gather fallback.
@@ -366,6 +369,9 @@ class TtPrefillRuntime:
             sink = self._layer_completion_sink
 
             def on_layer_complete(layer_idx: int) -> None:
+                # Migration reads KV outside this command queue. Publish only after
+                # the enqueued writes are device-complete, as in DeepSeek's host ACK path.
+                ttnn.synchronize_device(self.mesh_device)
                 sink(self.config.first_layer_idx + layer_idx, request_id)
 
         else:

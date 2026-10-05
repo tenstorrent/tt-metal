@@ -752,6 +752,7 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
     from safetensors import safe_open
 
     from models.demos.gpt_oss_d_p.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    from models.demos.gpt_oss_d_p.tt.runners.acceptance import validate_kv_for_pcc
     from tests.ttnn.utils_for_testing import comp_pcc
 
     mc = ADAPTER.model_config
@@ -795,6 +796,8 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
             g_k = h.get_tensor(f"key_cache_layer_{layer}").float()[0, :, :real_len, :][..., perm]
             g_v = h.get_tensor(f"value_cache_layer_{layer}").float()[0, :, :real_len, :]
 
+        validate_kv_for_pcc(g_k, dev_k)
+        validate_kv_for_pcc(g_v, dev_v)
         pcc_k = float(comp_pcc(g_k, dev_k, 0.0)[1])
         pcc_v = float(comp_pcc(g_v, dev_v, 0.0)[1])
         mins["k"], mins["v"] = min(mins["k"], pcc_k), min(mins["v"], pcc_v)
@@ -1634,7 +1637,11 @@ def main() -> None:
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
 
-    _drain_layer_acks(ack_channel, ack_layers * stats.total_pushes)
+    received_acks = _drain_layer_acks(ack_channel, ack_layers * stats.total_pushes)
+    if cfg.verify and ADAPTER.name == "gpt_oss_d_p":
+        from models.demos.gpt_oss_d_p.tt.runners.acceptance import require_layer_acks
+
+        require_layer_acks(received_acks, ack_layers * stats.total_pushes)
 
     if world_size > 1:
         _mr_bcast_resident(mr_rank, stats.resident)

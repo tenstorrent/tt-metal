@@ -207,6 +207,13 @@ if os.environ.get("PREFILL_MODEL") == "llama_3p1_8b":
     SCENARIOS = {"llama31": prefill_runner_scenario()}
     validate_prefill_slot_traces(os.environ.get("PREFILL_PRODUCER_SLOT_TRACES", ""), SCENARIOS["llama31"])
 
+# GPT-OSS keeps its fixed 1K/all-36-layer acceptance settings in the model package.
+if os.environ.get("PREFILL_MODEL") in ("gpt_oss", "gpt_oss_d_p"):
+    from models.demos.gpt_oss_d_p.tt.runners.acceptance import prefill_runner_scenario, validate_prefill_slot_traces
+
+    SCENARIOS = {"gptoss120b_1k": prefill_runner_scenario()}
+    validate_prefill_slot_traces(os.environ.get("PREFILL_PRODUCER_SLOT_TRACES", ""), SCENARIOS["gptoss120b_1k"])
+
 # Opt-in prompt-driven scenario: instead of a recorded golden trace, generate the reference KV from a
 # user prompt on the host (device-less pre-step) and validate device KV against it. Enabled by pointing
 # PREFILL_PROMPT_FILE at a prompt JSON. The host reference forward uses chunked-SDPA MLA, so its memory
@@ -466,6 +473,12 @@ def _running_runner(tag: str, sc: dict, **extra):
         yield stream
     finally:
         died_rc = proc.poll()  # not None => the runner exited on its OWN, before our teardown signal
+        strict_shutdown = sc.get("require_clean_shutdown", False) and sys.exc_info()[0] is None
+        if strict_shutdown and died_rc is None:
+            try:
+                died_rc = proc.wait(timeout=120)
+            except subprocess.TimeoutExpired:
+                pass  # Keep cleanup below, then reject the forced exit.
         if died_rc is None:
             proc.send_signal(signal.SIGINT)  # graceful; SIGKILL is the hard fallback
             try:
@@ -477,6 +490,10 @@ def _running_runner(tag: str, sc: dict, **extra):
         if not _STREAM_LOGS:  # otherwise it was already streamed live, line by line
             _emit_log_group(f"runner log [{tag}]", log_path)
         _cleanup_ipc()
+        if strict_shutdown:
+            from models.demos.gpt_oss_d_p.tt.runners.acceptance import require_clean_runner_exit
+
+            require_clean_runner_exit(died_rc)
         # A runner that died mid-run is a broken run, not a passing one, and nothing else makes the test
         # red: the producer reads KV that is already in DRAM, PCCs it, and exits 0. Only a NONZERO
         # self-exit counts, since with PREFILL_SEND_SHUTDOWN=1 the runner is *meant* to drain and exit 0;

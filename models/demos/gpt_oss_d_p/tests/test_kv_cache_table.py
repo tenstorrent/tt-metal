@@ -315,3 +315,103 @@ def test_gpt_oss_kv_chunk_table_readback(mesh_device, num_users, num_layers, seq
         f"GPT-OSS KV table readback OK: {comparisons} chunks "
         f"(configs={table.num_configs()}, users={num_users}, layers={num_layers}, seq={seq_len})"
     )
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.skipif(not is_blackhole(), reason="GPT-OSS 1K acceptance requires a Blackhole Galaxy")
+@pytest.mark.timeout(1800)
+def test_gpt_oss_kv_chunk_table_1k_all_layers_two_slots(mesh_device, device_params, tmp_path):
+    """Every serialized 1K page matches a distinct fixture; filling slot1 preserves slot0."""
+    num_layers, num_users, seq_len, num_heads = 36, 2, 1024, 8
+    cache = allocate_kv_cache(
+        mesh_device,
+        num_layers=num_layers,
+        max_seq_len=seq_len,
+        sp_axis=SP_AXIS,
+        num_users=num_users,
+        head_dim=HEAD_DIM,
+    )
+    kwargs = dict(
+        mesh_device=mesh_device,
+        kv_cache=cache,
+        seq_len=seq_len,
+        num_layers=num_layers,
+        mesh_shape=(4, 8),
+        sp_axis=SP_AXIS,
+        num_users=num_users,
+        chunk_size=seq_len,
+        num_kv_heads=num_heads,
+        head_dim=HEAD_DIM,
+    )
+    path = tmp_path / "gptoss_1k_36layers_2slots.pb"
+    build_and_serialize_kv_chunk_table(**kwargs, path=str(path))
+    original = build_kv_chunk_address_table(**kwargs)
+    table = ttnn.experimental.disaggregation.import_from_protobuf_file(str(path))
+    assert table.num_configs() == 16
+    assert table.total_entries() == 36864
+    seen = set()
+    for config in range(16):
+        assert table.config(config).chunk_size_bytes == 2176
+        for slot in range(2):
+            for layer in range(36):
+                for position in range(0, 1024, 32):
+                    location = table.lookup(layer, position, slot, config)
+                    before = original.lookup(layer, position, slot, config)
+                    assert location.noc_addr == before.noc_addr
+                    assert location.size_bytes == before.size_bytes == 2176
+                    assert int(location.device_group_index) == int(before.device_group_index)
+                    address = (int(location.device_group_index), location.noc_addr)
+                    assert address not in seen, (config, slot, layer, position, address)
+                    seen.add(address)
+
+    def fixture(slot, layer, kind):
+        # Eighths within [-4,4) are exactly representable in BFP8_B. A unique RNG seed
+        # per slot/layer/K-or-V makes wrong table coordinates observable without PCC tolerance.
+        generator = torch.Generator().manual_seed(1000 * slot + 2 * layer + kind)
+        return torch.randint(-32, 32, (1, 8, 1024, 64), generator=generator).to(torch.bfloat16) / 8
+
+    def fill_slot(slot):
+        for layer in range(36):
+            tensors = [
+                ttnn.from_torch(
+                    fixture(slot, layer, kind),
+                    device=mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(4, 8), dims=[2, 1]),
+                )
+                for kind in (0, 1)
+            ]
+            write_kv_chunk(cache, *tensors, slot_idx=slot, layer_idx=layer, kv_actual=0, sp_axis=SP_AXIS)
+            for tensor in tensors:
+                tensor.deallocate(True)
+        ttnn.synchronize_device(mesh_device)
+
+    fill_slot(0)
+    slot0_bytes = {
+        (config, layer, position): bytes(table.read_device_chunk(layer, position, 0, config))
+        for config in range(16)
+        for layer in range(36)
+        for position in range(0, 1024, 32)
+    }
+    fill_slot(1)
+    comparisons = 0
+    for slot in range(2):
+        for layer in range(36):
+            expected = [fixture(slot, layer, kind) for kind in (0, 1)]
+            for config in range(16):
+                kind, head = divmod(config, 8)
+                for position in range(0, 1024, 32):
+                    raw = table.read_device_chunk(layer, position, slot, config)
+                    assert len(raw) == 2176
+                    if slot == 0:
+                        assert bytes(raw) == slot0_bytes[config, layer, position], (config, layer, position)
+                    tensor = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw, [1, 1, 32, 64])
+                    actual = ttnn.to_torch(tensor).to(torch.bfloat16)
+                    want = expected[kind][:, head : head + 1, position : position + 32]
+                    assert torch.equal(actual, want), (slot, layer, config, position)
+                    comparisons += 1
+    assert comparisons == 36864
+    logger.info("GPT-OSS 1K table gate: all 36864 pages exact; both slots, 36 layers, 16 configs; slot0 preserved")
