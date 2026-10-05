@@ -28,12 +28,15 @@ have been installed under `tests/sfpi`:
 python3 formal_campaign.py \
   --sim /tmp/formal-sim/libttsim.so \
   --selection /path/to/search.json \
+  --jobs 8 \
   --out /tmp/formal-results
 ```
 
 `search.json` is the full output of the LLK knob search, not the abbreviated
 `selected.tsv`: the formal campaign consumes the exact selected flag string for
-each operation. Use `--ops 'abs,mulint32-*'` for a subset.
+each operation. Use `--ops 'abs,mulint32-*'` for a subset. `--jobs` runs
+independent per-operation capture/proof tasks concurrently; output records are
+still written in canonical operation order.
 
 For a uniform compiler profile instead of a search result:
 

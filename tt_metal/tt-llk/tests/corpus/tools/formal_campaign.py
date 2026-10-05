@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+import concurrent.futures
 import csv
 import fnmatch
 import hashlib
@@ -533,11 +534,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sem-node", help="semantic pytest node for a single --ops row")
     parser.add_argument("--hand-node", help="reference pytest node for a single --ops row")
     parser.add_argument("--timeout", type=int, default=1800)
+    parser.add_argument("--jobs", type=int, default=1)
     args = parser.parse_args(argv)
     if args.out.exists():
         parser.error(f"output already exists: {args.out}")
     if args.timeout <= 0:
         parser.error("timeout must be positive")
+    if args.jobs <= 0:
+        parser.error("jobs must be positive")
     try:
         cases = load_cases(args.cases.resolve())
         selection = load_selection(args.selection.resolve()) if args.selection else None
@@ -575,9 +579,7 @@ def main(argv: list[str] | None = None) -> int:
             else None
         ),
     )
-    records = []
-    for index, op in enumerate(ops, 1):
-        print(f"[{index}/{len(ops)}] {op}", flush=True)
+    def run_one(index: int, op: str) -> tuple[int, dict]:
         flags = selection[op] if selection is not None else args.flags
         record = run_case(
             op=op,
@@ -590,9 +592,44 @@ def main(argv: list[str] | None = None) -> int:
             root=args.out,
             timeout=args.timeout,
         )
-        records.append(record)
-        print(f"  {record['status']}", flush=True)
-        write_results(args.out, records, metadata, started)
+        return index, record
+
+    records_by_index = {}
+    if args.jobs == 1:
+        for index, op in enumerate(ops):
+            print(f"[{index + 1}/{len(ops)}] {op}", flush=True)
+            _, record = run_one(index, op)
+            records_by_index[index] = record
+            print(f"  {record['status']}", flush=True)
+            write_results(
+                args.out,
+                [records_by_index[i] for i in sorted(records_by_index)],
+                metadata,
+                started,
+            )
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            futures = {
+                pool.submit(run_one, index, op): (index, op)
+                for index, op in enumerate(ops)
+            }
+            for completed, future in enumerate(
+                concurrent.futures.as_completed(futures), 1
+            ):
+                index, op = futures[future]
+                _, record = future.result()
+                records_by_index[index] = record
+                print(
+                    f"[{completed}/{len(ops)}] {op}: {record['status']}",
+                    flush=True,
+                )
+                write_results(
+                    args.out,
+                    [records_by_index[i] for i in sorted(records_by_index)],
+                    metadata,
+                    started,
+                )
+    records = [records_by_index[i] for i in range(len(ops))]
     return 2 if any(record["status"] in OPERATIONAL_FAILURES for record in records) else 0
 
 
