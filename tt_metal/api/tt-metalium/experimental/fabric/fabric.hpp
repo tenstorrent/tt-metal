@@ -77,6 +77,10 @@ enum class FabricApiType : uint8_t {
     Mesh = 1,
 };
 
+// Checks intra-mesh adjacency in the originating mesh's context without allocating Ethernet directions.
+bool are_intra_mesh_neighbors(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, const FabricNodeId& node_a, const FabricNodeId& node_b);
+
 std::vector<eth_chan_directions> get_neighbor_eth_directions(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
 

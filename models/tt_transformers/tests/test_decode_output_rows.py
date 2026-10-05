@@ -32,6 +32,8 @@ def make_model(model_class, tp, *, row_sharded=False):
         concat_host_output=lambda tensor, *args: tensor,
     )
     model.process_output_decode = MethodType(model_class.process_output_decode, model)
+    if model_class is GptOssModel:
+        model._decode_host_shard = GptOssModel._decode_host_shard
     return model
 
 
@@ -71,7 +73,7 @@ def test_pending_outputs_keep_their_own_rows(model_class, widths):
     for output, expected in zip(pending, logits):
         actual, log_probs = Generator.process_decode_output_host(generator, [(output, None)], is_tokens=False)
         torch.testing.assert_close(actual, expected[0, 0, :, :100].unsqueeze(1), rtol=0, atol=0)
-        torch.testing.assert_close(log_probs, torch.ones_like(actual), rtol=0, atol=0)
+        assert log_probs is None
 
 
 @pytest.mark.parametrize("row_sharded", [False, True])
