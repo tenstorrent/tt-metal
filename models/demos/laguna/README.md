@@ -192,6 +192,37 @@ so the table shows cold requests.
 | 65,536 | 512 | 1 | 18.95 | 2.79 | 156.630 s | 183.595 s |
 | 130,048 | 512 | 1 | 18.15 | 1.25 | 380.812 s | 408.967 s |
 
+### Measure performance on your machine
+
+`demo/perf_demo.py` measures time to first token (TTFT) and decode speed over a range of input lengths, with and
+without DFlash speculative decoding. For each mode it starts the server with `serve_vllm.sh`, sends random-token
+prompts one at a time (batch 1, greedy, 512 output tokens), stops the server, and prints a table. Start it with no
+server running:
+
+```bash
+cd /path/to/tt-metal
+python models/demos/laguna/demo/perf_demo.py --quick   # 128 .. 8,192 input tokens, both modes (about 20 minutes)
+python models/demos/laguna/demo/perf_demo.py           # 128 .. 131,072 input tokens, both modes (about 40 minutes)
+```
+
+| Column | Meaning |
+|---|---|
+| Input tokens (requested) | Random-prompt length asked for (128, then 1K .. 128K, as in tt-metal's `simple_text_demo.py`) |
+| Input tokens (actual) | Prompt length the server received. vLLM's random prompts are random token ids decoded to text and re-tokenized with the chat template, so they differ from the request, most at short lengths (128 requested gave 82-170) |
+| TTFT s | Seconds from sending a request to its first output token (the prefill time at batch 1) |
+| decode tok/s | Output tokens per second after the first token, per user |
+| DFlash speedup | DFlash decode tok/s divided by normal decode tok/s at the same input length |
+
+Each input length uses one random prompt by default, like the `seqlen-sweep` case of tt-metal's
+`simple_text_demo.py`; most of the full run's time is the 64K and 128K prefills. DFlash speed depends on how many
+draft tokens the model accepts, so it changes from prompt to prompt much more than normal decode does: for a
+steadier DFlash number pass `--prompts 3` (the table then shows the mean, with the minimum and maximum over the
+prompts in parentheses; three prompts triple the run time). Other options: `--modes normal` or `--modes dflash`,
+`--input-lens 128,4096`, `--output-tokens N`, and `--use-running-server` to measure a server you started yourself
+(one mode).
+The table, a JSON file with every request, and the server logs are saved under
+`generated/laguna_perf_demo/<UTC time>/`.
+
 ## Verify and use the model
 
 Check the health endpoint:
