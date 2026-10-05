@@ -21,7 +21,7 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
+from models.common.utility_functions import run_for_blackhole, run_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc, generate_all_bfloat16_bitpatterns
 
 SMALLEST_NORMAL = 2.0**-126
@@ -33,12 +33,6 @@ DECLARED = {
     "blackhole": [
         ("torch.isnan(x) & torch.signbit(x)", "-inf"),  # -NaN
         ("torch.isfinite(daz) & (daz >= 4.091529924525444e+36)", "inf"),  # finite x >= 4.09153e+36
-    ],
-    "wormhole_b0": [
-        ('x == float("-inf")', "-inf"),  # -inf
-        ("torch.isnan(x) & torch.signbit(x)", "-inf"),  # -NaN
-        ("torch.isfinite(daz) & (daz >= 4.091529924525444e+36)", "inf"),  # finite x >= 4.09153e+36
-        ("torch.isfinite(daz) & (daz <= -4.091529924525444e+36)", "-inf"),  # finite x <= -4.09153e+36
     ],
 }
 
@@ -93,7 +87,7 @@ def _versus_torch(x64, output):
     return (ulp[~mismatched].max().item() if (~mismatched).any() else 0.0), int(mismatched.sum())
 
 
-@run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
+@run_for_blackhole("the generated kernel runs on Blackhole only")
 def test_lgamma_exhaustive_bfloat16(device):
     x = generate_all_bfloat16_bitpatterns(torch.bfloat16)
     tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -146,7 +140,7 @@ def _on_device(x, device, **kwargs):
     return ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, **kwargs)
 
 
-@run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
+@run_for_blackhole("the generated kernel runs on Blackhole only")
 @pytest.mark.parametrize("placement", ["row_major", "height_sharded", "unaligned", "cached"])
 def test_lgamma_every_placement_matches_interleaved_tiles(device, placement):
     """The generated kernel computes each element alone, so placement must not change a result."""
@@ -169,7 +163,7 @@ def test_lgamma_every_placement_matches_interleaved_tiles(device, placement):
     assert torch.equal(actual, expected)
 
 
-@run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
+@run_for_blackhole("the generated kernel runs on Blackhole only")
 @pytest.mark.parametrize("call", ["float32", "bfloat16_to_float32"])
 def test_lgamma_keeps_its_own_path_elsewhere(device, call):
     """A call the generated kernel does not serve runs the op's existing path and matches its golden."""
@@ -189,3 +183,22 @@ def test_lgamma_keeps_its_own_path_elsewhere(device, call):
         actual = ttnn.lgamma(_on_device(x, device), **{call: 0.125})
         expected = golden(x.float(), **{call: 0.125})
     assert_with_pcc(expected, ttnn.to_torch(actual).float(), 0.999)
+
+
+@run_for_wormhole_b0("TT-NN's own path is kept on this board")
+def test_lgamma_keeps_its_own_path(device):
+    """Every BF16 input returns TT-NN's own path bit for bit, run as in the device-perf test."""
+    x = generate_all_bfloat16_bitpatterns(torch.bfloat16)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.lgamma(tt_x)).to(torch.bfloat16).view(torch.int16)
+    expected = (
+        ttnn.to_torch(
+            ttnn.unary_chain(
+                tt_x, [ttnn.UnaryWithParam(ttnn.UnaryOpType.LGAMMA), ttnn.UnaryWithParam(ttnn.UnaryOpType.IDENTITY)]
+            )
+        )
+        .to(torch.bfloat16)
+        .view(torch.int16)
+    )
+    differ = actual != expected
+    assert not differ.any(), f"{differ.sum().item()} inputs differ from TT-NN's own path; first x={x[differ][0].item()}"

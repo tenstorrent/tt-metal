@@ -1188,7 +1188,13 @@ std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
     const auto& op = op_chain[0];
     std::string op_name;
     switch (op.type()) {
-        case UnaryOpType::LGAMMA: op_name = "lgamma"; break;
+        case UnaryOpType::LGAMMA:
+            // The generated kernel is faster than the op's own path on Blackhole only.
+            if (arch != tt::ARCH::BLACKHOLE) {
+                return std::nullopt;
+            }
+            op_name = "lgamma";
+            break;
         default: return std::nullopt;
     }
     return std::map<std::string, std::string>{

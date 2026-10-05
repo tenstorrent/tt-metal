@@ -10,7 +10,7 @@
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #include "llk_math_eltwise_ternary_sfpu_macros.h"
-#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
+#if defined(ARCH_BLACKHOLE)
 #include "ckernel_sfpu_lgamma_bf16.h"
 #endif
 #endif
@@ -126,9 +126,9 @@ ALWI void lgamma_adjusted_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, u
  */
 ALWI void lgamma_adjusted_tile_init() { MATH(SFPU_TERNARY_INIT(lgamma)); }
 
-// Blackhole and Wormhole only: ckernel_sfpu_lgamma_bf16.h exists under those ckernel trees.
-// Quasar keeps the op's own kernel.
-#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
+// Blackhole only: ckernel_sfpu_lgamma_bf16.h exists under that ckernel tree.
+// Wormhole and Quasar keep the op's own kernel.
+#if defined(ARCH_BLACKHOLE)
 
 // clang-format off
 /**
@@ -154,6 +154,6 @@ ALWI void lgamma_tile(uint32_t idst) {
  */
 ALWI void lgamma_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
 
-#endif  // ARCH_BLACKHOLE || ARCH_WORMHOLE
+#endif  // ARCH_BLACKHOLE
 
 }  // namespace ckernel

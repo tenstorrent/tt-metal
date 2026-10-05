@@ -35,7 +35,7 @@ CASES = {
         lambda x: ttnn.unary_chain(
             x, [ttnn.UnaryWithParam(ttnn.UnaryOpType.LGAMMA), ttnn.UnaryWithParam(ttnn.UnaryOpType.IDENTITY)]
         ),
-        ("blackhole", "wormhole_b0"),
+        ("blackhole",),
     ),
 }
 
