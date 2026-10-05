@@ -65,8 +65,9 @@ jobs:
             // codeowners-group-analysis.yaml) in every PR: if the author deleted it
             // or the PR was opened without the template, add it back unticked,
             // just above CI Status. An existing box keeps its ticked state.
-            // Detect it the way the consumer reads it: a standalone task-list line
-            // outside fenced code blocks and HTML comments. A copy in a comment or
+            // Detect it the way the consumer reads it: a standalone top-level
+            // task-list line (at most 3 leading spaces; 4 is indented code) outside
+            // fenced code blocks and HTML comments. A copy in a comment or
             // code example, or a reworded line, does not count as present. Headings
             // are located the same way, so an example section is never rewritten.
             const visibleLines = (text) => {
@@ -100,7 +101,7 @@ jobs:
               }
               return out;
             };
-            const pingCheckboxRegex = /^\s*[-*] \[[ xX]\] Ping pending code owners\s*$/;
+            const pingCheckboxRegex = /^ {0,3}[-*] \[[ xX]\] Ping pending code owners\s*$/;
             const lines = visibleLines(body);
             if (!lines.some((l) => pingCheckboxRegex.test(l.text))) {
               const codeownersSection = [

@@ -271,9 +271,10 @@ jobs:
           echo "Checkbox ticked by: $SENDER"
 
           # The job-level `if` is a substring prefilter. Confirm the box is a real
-          # task-list line (not text in a comment or code block) that is ticked
-          # now and was not ticked before.
-          TICKED_LINE='^[[:space:]]*[-*] \[[xX]\] Ping pending code owners[[:space:]]*$'
+          # top-level task-list line (not text in a comment or code block) that is
+          # ticked now and was not ticked before. Four or more leading spaces make
+          # the line an indented code block, so at most three are allowed.
+          TICKED_LINE='^ {0,3}[-*] \[[xX]\] Ping pending code owners[[:space:]]*$'
           # Drop fenced code blocks and HTML comments before matching.
           markdown_text() {
             printf '%s\n' "$1" | tr -d '\r' | awk '
