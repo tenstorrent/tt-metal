@@ -701,8 +701,17 @@
  },
  "p300x2": {
   "audio_shift": 3.0,
-  "choice_reason": "chosen on latency and canvas; the quality fence this line used to carry is LIFTED -- see `quality`, re-taken 2026-10-05 on the build that fixed the on-device LoRA bind. Within budget. Stage 06 took the e2e from 75.5 s to 71.7 s here: the (1,4) preset has sp_axis 0 over a mesh of shape (1,4), so sp_factor is 1 and the ring-free windowed SDPA path applies on this mesh too -- but with 14 heads per device rather than p150's 56, and the chunk-size optimum moves with head count, so this mesh takes (512, 128) where p150 takes (384, 256). Measured at 14 heads at all three lengths this profile can serve: 19328 -11.8%, 22464 -4.2%, 37760 -4.8% against the 56-head pick. CLIP 0.3344 against stage 05's 0.3087 at the same point; the chunking changes flash attention's reduction order, so this is a different trajectory rather than the same clip measured again, and the delta is inside the point-to-point CLIP spread this file documents under datatype_sweep.clip_bar_note.",
-  "clip": 0.3344,
+  "choice_reason": "chosen on latency and canvas; the quality fence this line used to carry is LIFTED -- see `quality`, re-taken 2026-10-05 on the build that fixed the on-device LoRA bind. Within budget. Stage 06 took the e2e from 75.5 s to 71.7 s here: the (1,4) preset has sp_axis 0 over a mesh of shape (1,4), so sp_factor is 1 and the ring-free windowed SDPA path applies on this mesh too -- but with 14 heads per device rather than p150's 56, and the chunk-size optimum moves with head count, so this mesh takes (512, 128) where p150 takes (384, 256). Measured at 14 heads at all three lengths this profile can serve: 19328 -11.8%, 22464 -4.2%, 37760 -4.8% against the 56-head pick. The CLIP comparison that used to close this paragraph (0.3344 against stage 05's 0.3087) is WITHDRAWN 2026-10-05: both numbers were measured on base-model output, so the pair says nothing about the chunk rule or anything else. The chunk rule's evidence is the per-length device measurement quoted above, which is unaffected. See `clip` / `clip_note` for the re-taken quality numbers.",
+  "clip": 0.3423,
+  "clip_n_prompts": 5,
+  "clip_note": "RE-TAKEN 2026-10-05 (06b). The 0.3344 that stood here, and stage 05's 0.3087 it was compared with, were both BASE-model measurements -- the adapter was never on the weights that rendered them (artifacts/s06/results.json p300x2_quality_numbers_are_base_model). This is the mean over the five prompts in artifacts/s06/nfe/prompts.txt at seed 7, on the fixed build. No CLIP number measured on this profile before 2026-10-05 should be quoted.",
+  "clip_samples": [
+   0.3239,
+   0.3589,
+   0.369,
+   0.3218,
+   0.3381
+  ],
   "dit_dtype_policy": {
    "activation_dtype": null,
    "bf16_blocks": [],
@@ -733,11 +742,12 @@
   "num_frames": 124,
   "peak_dram_gib": 19.94,
   "phases_s": {
-   "audio": 0.606,
-   "denoising": 42.269,
-   "encoder": 0.006,
-   "vae": 11.177
+   "audio": 0.603,
+   "denoising": 42.362,
+   "encoder": 0.003,
+   "vae": 11.391
   },
+  "phases_s_source": "s06b_p300x2_fixed_p0_1344x768x124, the worst-of-five run `e2e_s` reports, so the two are one sample. wall - sum(phases) = 20.2 s here; see e2e_note for what lives in that gap. The per-prompt spread in `denoising` (36.1-42.4 s across the five) is the padded packed length changing with the prompt's token count, the same spread stage 06's controls show.",
   "quality": "RE-TAKEN 2026-10-05 (stage 06b) on the fixed build and now GOOD. The stage-06 defect was not a working-point problem at all: the on-device LoRA bind was inert across the DiT page-in this `coresident: False` preset performs before every denoise, so every clip ever recorded on this profile was BASE-model output. Fixed in tt_dit's shared LoRA layer (commit 'Keep a fuse-mode LoRA bound across a weight page-out'). Five prompts, seed 7, one build, warm, at this exact point: CLIP 0.3239 / 0.3589 / 0.3690 / 0.3218 / 0.3381, temporal motion 8.47 / 6.44 / 1.28 / 3.10 / 1.96. The motion collapse is gone (it was a 0.70-0.89 floor on 3 of 5), the content-free coastline clip is gone (CLIP 0.1867 -> 0.3690) and the dark blacksmith clip is back in p150's range (video mean 4.0 -> 11.1 against p150's 13.9). Cross-checked against stage 06's INDEPENDENT bf16 host-fuse control ctlF, a different code path to the same model, on its two prompts: coastline 0.3690/1.28/107.7 here against ctlF's 0.3647/1.239/108.5, blacksmith 0.3218/3.10/11.1 against 0.3227/2.529/10.4. artifacts/s06b/results.json.",
   "quality_fix_measured": "SUPERSEDED 2026-10-05 by the real fix; kept only so the stage-06 reading is not silently deleted. The one-axis bisect that produced it was sound as measurement and wrong as diagnosis: ctlE's bf8 arm recovered the output because setting a quant profile ALSO switches the adapter onto the host-fuse path (`_lora_fuses_on_host`), not because bf16 arithmetic was the problem. ctlF held the dtype at bf16, forced the host fuse, and recovered everything too -- which already exonerated the dtype inside stage 06. There is no accuracy reason to quantize this mesh. See artifacts/s06b/results.json.",
   "quality_known_exception": "1 of the 5 clips fails exactly one critical prove_h3 check and it is NOT this profile's problem: 'a red fox trotting through fresh snow at dawn, crisp footsteps crunching' scores audio rms 0.0019 against prove_h3's absolute 0.002 floor. The SAME prompt and point run through the independent host-fuse path (MINIMAX_H3_FORCE_HOST_FUSE=1) gives 0.0018 and fails the same check, with CLIP 0.3598 against 0.3589 and motion 6.32 against 6.44 -- so the two adapter-application paths agree and the quiet audio is the prompt. It is also the quietest prompt of the five on p150 (rms 0.00500 at 73 frames, the lowest of its five), and this clip is 124 frames / 5.2 s of audio against p150's 73 / 3.0 s, so sparse footsteps spread over a longer clip land lower in RMS. Stage 07 owns the call: either prove_h3's audio floor is made duration-aware, or this prompt is expected to fail it on a 5 s clip. Nothing here says the model is wrong. artifacts/s06b/s06b_ctlH_fox_hostfuse.json.",
