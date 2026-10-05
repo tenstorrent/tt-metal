@@ -79,6 +79,15 @@ Statuses have deliberately narrow meanings:
   the simulator snapshots, so no proof was admitted.
 - `NO_REFERENCE`: the corpus has no distinct handwritten leg.
 
+The top-level fields answer two different questions. `status: COMPLETE` means
+the requested rows ran without an operational failure; it does **not** mean
+that every row was proved. `formal_admission: ALL_PROVEN` means every requested
+row is either unrestricted-equivalent or equivalent on its declared domain.
+Otherwise `formal_admission` is `FOLLOWUP_REQUIRED`, with exact
+`formally_admitted` and `followup_required` counts. For a domain-admitted row,
+the JSON retains the unrestricted `DIVERGENT` verdict and witness alongside
+the separate domain verdict.
+
 The compatibility wrapper `formal_equiv_row.sh` invokes this same runner for one
 operation. There is no second capture or provenance implementation.
 
