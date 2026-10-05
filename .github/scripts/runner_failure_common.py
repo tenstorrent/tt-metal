@@ -22,7 +22,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled in load_config
     yaml = None
 
 
-SIGNATURE_VERSION = "runner-failure-signatures-2026-10-05-v1"
+SIGNATURE_VERSION = "runner-failure-signatures-2026-10-05-v2"
 UNKNOWN_RUNNER = "(unknown runner)"
 ACTIVE_JOB_STATUSES = {"queued", "in_progress", "waiting", "pending", "requested"}
 
@@ -127,11 +127,15 @@ ERROR_SIGNATURES = (
     ErrorSignature(
         key="FABRIC_LINK_DOWN_MGD_TOPOLOGY_FOUND",
         label="Fabric link down (MGD topology)",
+        pattern=r"Graph\s+specified\s+in\s+MGD\s+could\s+not\s+fit\s+in\s+the\s+discovered\s+physical\s+topology",
+        case_sensitive=False,
+    ),
+    ErrorSignature(
+        key="WRONG_MESH_SHAPE_FOUND",
+        label="Wrong mesh shape",
         pattern=(
-            r"(?:Graph\s+specified\s+in\s+MGD\s+could\s+not\s+fit\s+in\s+the\s+"
-            r"discovered\s+physical\s+topology|"
             r"Requested\s+mesh\s+is\s+too\s+big\s+and\s+is\s+not\s+rotatable:\s*"
-            r"MeshShape\(\[[^\]]+\]\)\s+and\s+SystemMesh\s+MeshShape\(\[[^\]]+\]\))"
+            r"MeshShape\(\[[^\]]+\]\)\s+and\s+SystemMesh\s+MeshShape\(\[[^\]]+\]\)"
         ),
         case_sensitive=False,
     ),
