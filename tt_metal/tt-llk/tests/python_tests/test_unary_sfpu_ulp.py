@@ -36,6 +36,7 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
+    DestAccumulation,
     DestSync,
     FastMode,
     format_dict,
@@ -76,13 +77,14 @@ from helpers.ulp_sweep import (
 )
 from helpers.utils import _record_ulp_measurement, passed_test
 
-#: `accuracy` is the marker every LLK workflow deselects; `nightly` is deselected only
-#: by the PR gate, so llk-e2e would still run it.
+#: `accuracy` is the marker every LLK workflow deselects; `nightly` would not do, since
+#: llk-e2e runs it.
 pytestmark = pytest.mark.accuracy
 
-#: 64 tiles x 1024 lanes = 65,536: every finite bf16 and fp16 value in one run, and the
-#: generator's own ceiling. A smaller count would silently keep only the lowest-sorted
-#: values, so test_ulp_sweep.py pins it against `swept_value_count`.
+#: 64 tiles x 1024 lanes = 65,536: every finite bf16 and fp16 value in one run, the
+#: Float32 stride's sample count, and the generator's own ceiling. A smaller count would
+#: silently keep only the lowest-sorted values, so test_ulp_sweep.py pins it against
+#: `swept_value_count`.
 SWEEP_TILE_COUNT = 64
 SWEEP_DIMENSIONS = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * SWEEP_TILE_COUNT]
 
@@ -147,8 +149,9 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
             tile_count_res=tile_cnt_A,
         ),
         dest_acc=dest_acc,
-        # Every swept input is 16-bit or a block float, so nothing unpacks to Dest.
-        unpack_to_dest=False,
+        unpack_to_dest=(
+            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        ),
     )
     # `sweep_cells` leaves out the cells TestConfig would promote to another Dest, so
     # every cell swept here must be built with the dest_acc it asks for; a cell built
@@ -254,12 +257,7 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
             f"{', '.join(entry.issue for entry in stale)} names disagrees with the "
             "golden any more; drop the entry so those lanes are gated again"
         )
-    # Subnormal outputs flushed on every format, fp16 included. The metric keeps fp16's
-    # subnormal band by default, but the golden keeps IEEE subnormals the pack path
-    # does not reproduce: an exact op read 512 steps on Float16_b->Float16 from that
-    # band alone. A difference below 6.1e-05 is the store's, not the op's. The gate
-    # below takes the same flag, so emit and gate rank identically.
-    distance = ulp_distance(golden, result, flush_subnormals=True)
+    distance = ulp_distance(golden, result, flush_subnormals=_FLUSH_SUBNORMALS)
     stats = ulp_stats(distance, mask)
     lanes = int(mask.sum())
     key = (in_fmt.name, out_fmt.name, approx_mode.name, dest_acc.name)

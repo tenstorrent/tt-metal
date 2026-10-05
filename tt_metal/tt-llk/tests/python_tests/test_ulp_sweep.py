@@ -181,9 +181,7 @@ def test_a_re_emit_credits_no_run_with_a_hand_written_note_or_an_arch_row(table)
         ("Float16_b", "sweep B, wormhole, 2026-09-24"),
     ):
         MEASURED.clear()
-        for approx in ("No", "Yes"):
-            for dest in ("No", "Yes"):
-                record("Gelu", (in_fmt, in_fmt, approx, dest), 1)
+        _record_full_grid("Gelu", in_fmt, in_fmt, 1)
         write_table(table, run)
     rows = _rows(table)
     assert any(r.endswith("# fp32 output, not swept") for r in rows)
@@ -973,11 +971,11 @@ def test_the_sweep_tile_count_holds_every_swept_value():
     format's values keeps only the lowest-sorted of them, and nothing else notices."""
     import test_unary_sfpu_ulp as sweep
     from helpers.golden_generators import TILE_DIMENSIONS
-    from helpers.ulp_sweep import SWEEP_FORMATS, swept_value_count
+    from helpers.ulp_sweep import SWEEP_INPUT_FORMATS, swept_value_count
 
     lanes = sweep.SWEEP_TILE_COUNT * TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
     assert sweep.SWEEP_DIMENSIONS[0] * sweep.SWEEP_DIMENSIONS[1] == lanes
-    for fmt in SWEEP_FORMATS:
+    for fmt in SWEEP_INPUT_FORMATS:
         assert swept_value_count(fmt) <= lanes, fmt.name
 
 
