@@ -7,6 +7,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <fstream>
 #include <latch>
 #include <random>
 #include <span>
@@ -16,6 +17,8 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+#include <unistd.h>
 
 #include <gtest/gtest.h>
 
@@ -855,6 +858,95 @@ TEST(BroadcastRing, ConcurrentLockedSlotIntegrity) {
         has_prev = true;
     }
     EXPECT_GT(received.size(), 0u);
+}
+
+TEST(BroadcastRing, ReadAtCopiesHeldPositions) {
+    // 2^19 eight-byte slots take 4 MiB, which is large enough for the ring to put them on 2 MB huge pages.
+    constexpr size_t kCapacity = size_t{1} << 19;
+    BroadcastRing<uint64_t> ring(kCapacity);
+    uint64_t value = 0;
+    EXPECT_FALSE(ring.read_at(0, value));
+
+    const uint64_t total = 5 * kCapacity + 3;
+    for (uint64_t i = 0; i < total; ++i) {
+        ring.writer().publish(i * 3);
+    }
+    EXPECT_EQ(ring.published(), total);
+    EXPECT_EQ(ring.oldest(), total - kCapacity);
+    EXPECT_FALSE(ring.read_at(ring.oldest() - 1, value));
+    EXPECT_FALSE(ring.read_at(total, value));
+    for (uint64_t i = ring.oldest(); i < total; ++i) {
+        ASSERT_TRUE(ring.read_at(i, value));
+        ASSERT_EQ(value, i * 3);
+    }
+}
+
+TEST(BroadcastRing, ConcurrentReadAtRacingOverwritesIsIntactOrRejected) {
+    constexpr size_t kCapacity = 256;
+    constexpr int kReaders = 4;
+    BroadcastRing<ProgramRealtimeRecord> ring(kCapacity);
+    std::atomic<bool> stop{false};
+    std::atomic<uint64_t> torn{0}, intact{0};
+    std::latch start{kReaders + 1};
+    std::vector<std::thread> readers;
+    readers.reserve(kReaders);
+    for (int reader = 0; reader < kReaders; ++reader) {
+        readers.emplace_back([&, reader] {
+            std::mt19937_64 rng(kBatchSeed + reader);
+            ProgramRealtimeRecord record{};
+            start.arrive_and_wait();
+            while (!stop.load(std::memory_order_relaxed)) {
+                const uint64_t oldest = ring.oldest(), published = ring.published();
+                if (published == oldest) {
+                    continue;
+                }
+                const uint64_t position = oldest + rng() % (published - oldest);
+                if (!ring.read_at(position, record)) {
+                    continue;
+                }
+                if (record.runtime_id == position + 1 && seq_record_ok(record)) {
+                    intact.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    torn.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+    start.arrive_and_wait();
+    constexpr uint32_t kTotalRecords = 1u << 21;
+    for (uint32_t seq = 0; seq < kTotalRecords; ++seq) {
+        ring.writer().publish(make_seq_record(seq));
+    }
+    stop.store(true, std::memory_order_relaxed);
+    for (auto& reader : readers) {
+        reader.join();
+    }
+    EXPECT_EQ(torn.load(), 0u);
+    EXPECT_GT(intact.load(), 0u);
+}
+
+int64_t resident_bytes() {
+    std::ifstream statm("/proc/self/statm");
+    int64_t size_pages = 0, resident = 0;
+    statm >> size_pages >> resident;
+    return resident * sysconf(_SC_PAGESIZE);
+}
+
+TEST(BroadcastRing, OnFirstWriteBacksOnlyWhatIsWritten) {
+    constexpr size_t kReservedBytes = size_t{1} << 30;
+    constexpr uint64_t kWritten = uint64_t{1} << 20;
+    // The 8 MiB written, a huge page of rounding and the test's own allocations fit well within this, and backing the
+    // whole 1 GiB reservation would not.
+    constexpr int64_t kResidentLimitBytes = int64_t{64} << 20;
+    const int64_t before = resident_bytes();
+    BroadcastRing<uint64_t, SlotBacking::OnFirstWrite> ring(kReservedBytes / sizeof(uint64_t));
+    for (uint64_t i = 0; i < kWritten; ++i) {
+        ring.writer().publish(i);
+    }
+    EXPECT_LT(resident_bytes() - before, kResidentLimitBytes);
+    uint64_t value = 0;
+    ASSERT_TRUE(ring.read_at(kWritten - 1, value));
+    EXPECT_EQ(value, kWritten - 1);
 }
 
 }  // namespace

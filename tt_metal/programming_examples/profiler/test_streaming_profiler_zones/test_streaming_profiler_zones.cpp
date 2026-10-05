@@ -18,7 +18,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <iterator>
 #include <map>
 #include <memory>
 #include <string>
@@ -67,18 +66,19 @@ int main(int argc, char** argv) {
         }
     }
 
-    // A counting subscriber: the capture is decoded and totalled even with no sink armed.
+    // A counting callback, so the capture is decoded and totalled even with no sink armed.
     struct Totals {
         std::atomic<uint64_t> zones{0}, points{0}, stalls{0};
     } totals;
     using experimental::streaming_profiler::Batch;
     using experimental::streaming_profiler::RecordType;
-    const auto sub =
-        experimental::streaming_profiler::RegisterCallback("zones-example", [&](const Batch<RecordType::All>& b) {
-            totals.zones += b.zones().size();
-            totals.points += b.events().size() + std::ranges::distance(b.timestamped_data());
-            totals.stalls += b.stall_count();
-        });
+    auto callback = experimental::streaming_profiler::RegisterCallback(
+        [&](const Batch<RecordType::All>& batch) {
+            totals.zones += batch.zones().size();
+            totals.points += batch.events().size() + std::ranges::distance(batch.timestamped_data());
+            totals.stalls += batch.stall_count();
+        },
+        "zones-example");
 
     int device_id = 0;
     // TT_METAL_STREAMING_PROFILER_FULL_MESH=RxC opens the whole mesh in one process: N devices, one profiler boot.
@@ -195,7 +195,7 @@ int main(int argc, char** argv) {
         }
     }
     mesh_device->close();
-    experimental::streaming_profiler::UnregisterCallback(sub);
+    callback.reset();
     printf(
         "[streaming profiler zones] subscriber saw %llu zones, %llu points, %llu stalls\n",
         (unsigned long long)totals.zones.load(),
