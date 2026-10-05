@@ -478,6 +478,18 @@ def test_a_stage_history_line_moves_only_on_kept_attempts():
     assert "v < runMin)) runMin = v" in body and 'bestLabel: "best kept"' in PAGE_HTML
 
 
+def test_a_stack_connects_its_readings_when_there_is_no_banked_best():
+    """A run that banks wins outside the attempt log has no "kept" attempt, so the best line has
+    nothing to follow. Each stack then connects its own readings so the view is a trajectory, not a
+    field of loose dots -- drawn dashed/dimmer so it is never mistaken for a banked best."""
+    from scripts.tt_hw_planner._optimize_dashboard_page import PAGE_HTML
+
+    i = PAGE_HTML.index("function historyChart(")
+    body = PAGE_HTML[i : PAGE_HTML.index("\nfunction ", i + 1)]
+    assert "<polyline points=" in body and "stroke-dasharray" in body
+    assert "readings (no banked best)" in PAGE_HTML
+
+
 def test_the_metric_says_what_it_covers_and_the_end_to_end_sits_beside_it():
     """A depth-limited per-op sum (5258 ms) beside full-pipeline stage times (24537 ms for one stage)
     read as a contradiction; the card now names the slice and shows the end-to-end number too."""

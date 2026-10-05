@@ -501,6 +501,16 @@ function historyChart(S, stage) {
   if (line.length > 1) {
     g += `<path d="${smoothPath(line)}" fill="none" stroke="#3b82f6" stroke-width="2" stroke-opacity="0.9"
       stroke-linecap="round"/>`;
+  } else {
+    // No banked "best" to follow -- this run gated its wins elsewhere, so no attempt is "kept" and
+    // the best line has nothing to track. Connect the readings themselves so each stack still shows
+    // its trajectory instead of loose dots. This is the path of what was tried, not a claim about
+    // the model's best state, so it is drawn dashed and dimmer than a real best line.
+    const read = [];
+    at.forEach((a, i) => { const v = yOf(ser.value(a)); if (v != null) read.push(X(i) + "," + Y(v)); });
+    if (read.length > 1)
+      g += `<polyline points="${read.join(" ")}" fill="none" stroke="#3b82f6" stroke-width="1.8"
+        stroke-opacity="0.5" stroke-dasharray="5 4" stroke-linecap="round"/>`;
   }
 
   at.forEach((a, i) => {
@@ -527,6 +537,7 @@ function historyChart(S, stage) {
   let legend = Object.keys(counts).map(k =>
     `<span><i style="background:${HIST_COLOR[k] || "#8494ad"}"></i>${esc(HIST_LEGEND[k] || k)} (${counts[k]})</span>`).join("");
   if (line.length > 1) legend += `<span><i style="background:#3b82f6"></i>${esc(ser.bestLabel)}</span>`;
+  else legend += `<span><i style="background:#3b82f6"></i>readings (no banked best)</span>`;
   if (goal != null) legend += `<span><i style="background:#f87171"></i>goal (${esc(m.name || "target")})</span>`;
 
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">${g}
