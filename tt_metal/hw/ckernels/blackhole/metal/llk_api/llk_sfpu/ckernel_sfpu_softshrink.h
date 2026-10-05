@@ -18,12 +18,18 @@ void calculate_softshrink_bf16();
 void init_softshrink_bf16();
 // Whether BF16 DEST runs the generated softshrink kernel as one call over the whole tile.
 inline constexpr bool softshrink_bf16_whole_tile = true;
+// Sets up the generated BF16 softshrink kernel for the instance it serves.
+template <bool bf16_kernel>
+inline void softshrink_bf16_tile_init() {
+    if constexpr (bf16_kernel) {
+        init_softshrink_bf16();
+    }
+}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en = true>
 inline void calculate_softshrink(uint32_t param0) {
     if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
         if (bf16_dest_softshrink() && param0 == 0x3f000000u) {
-            init_softshrink_bf16();
             calculate_softshrink_bf16<ITERATIONS>();
             return;
         }

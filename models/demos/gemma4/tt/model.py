@@ -2379,7 +2379,8 @@ class Gemma4Model:
             torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
         else:
             torch_out = ttnn.to_torch(tt_out)
-        return torch_out[:, :, :B, : self.vocab_size].view(B, S, -1)
+        # B is the serving limit; a bucketed decode can return fewer rows.
+        return torch_out[:, :, :B, : self.vocab_size].reshape(-1, S, self.vocab_size)
 
 
 def _apply_gemma4_single_untilize_override(tt_sampling) -> None:
