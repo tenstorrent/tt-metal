@@ -16,7 +16,8 @@ BADRE='[|] ERROR [|]|ESCALATE|RECOVER'
 gate_fail_since() { awk -v s="$1" -v ok="$OKRE" -v bad="$BADRE" 'substr($0,1,19) > s && ($0 ~ bad || (/HEALTH-GATE/ && $0 !~ ok))' $SL; }
 health() {
   systemctl is-active -q tt-device-broker || { log "health: broker inactive"; return 1; }
-  tt-device-mcp status 1 > /dev/null 2>&1 || { log "health: status failed"; return 1; }
+  st=$(tt-device-mcp status 1 2>&1) || { log "health: status failed"; return 1; }
+  echo "$st" | grep -qiE 'health-gate|fabric-check|recover|upgrade' && { log "health: broker gate/recovery running"; return 1; }
   last=$(grep -E "HEALTH-GATE|$OKRE|ESCALATE|RECOVER|[|] ERROR [|]" $SL | tail -1)
   if echo "$last" | grep -qE "$OKRE" && ! echo "$last" | grep -qE "$BADRE"; then return 0; fi
   log "health: last event not healthy: ${last:0:200}"; return 1
