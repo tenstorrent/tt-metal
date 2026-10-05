@@ -1,0 +1,12 @@
+# Runtime performance suites run by tests/perf/test_suites.py. Entries are data only; see tests/perf/README.md.
+#
+#   <suite>:
+#     binary: path from the repo root
+#     golden: path from the repo root
+#     kind: google_benchmark (default) | contract (writes $TT_PERF_OUTPUT, one process per repetition)
+#     args: [extra binary arguments]
+#     repetitions: N, or {environment: N}        (google_benchmark only)
+#     process_repetitions: N                     (contract only)
+#     env: {NAME: value}  values may use {rep}, {rep_dir}, {scratch} (deleted after the process) and {env[NAME]}
+#     env_unset: [NAME, ...]
+#     policy: {regression_pct: X, improvement_pct: Y, enforce: true, overrides: {case_regex: {regression_pct: Z}}}
