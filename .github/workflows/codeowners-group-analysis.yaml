@@ -367,7 +367,7 @@ jobs:
               echo "comment-author=$SENDER"
             } >> $GITHUB_OUTPUT
             echo "Command: ping owners (description checkbox)"
-          else
+          elif [ "$MEMBERSHIP_HTTP_CODE" = "404" ]; then
             echo "❌ User $SENDER is not a member of tenstorrent organization (HTTP $MEMBERSHIP_HTTP_CODE)"
             echo "should-run=false" >> $GITHUB_OUTPUT
 
@@ -383,6 +383,12 @@ jobs:
               "https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
 
             rm -f "$TEMP_JSON_FILE"
+          else
+            # Rate limit, auth or server error: not a verdict on membership, so
+            # fail visibly instead of telling a member they were denied.
+            echo "::error::Membership check for $SENDER failed (HTTP $MEMBERSHIP_HTTP_CODE); re-tick the box or use /codeowners ping."
+            echo "should-run=false" >> $GITHUB_OUTPUT
+            exit 1
           fi
 
   find-pr:
