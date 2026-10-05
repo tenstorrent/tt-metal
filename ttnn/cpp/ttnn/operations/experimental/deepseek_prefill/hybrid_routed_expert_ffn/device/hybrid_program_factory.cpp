@@ -1900,9 +1900,15 @@ void append_to_descriptor(
     // host-side-validated MAX_GLOBAL_EXPERTS limit.
     const uint32_t counts_num_entries = static_cast<uint32_t>(t.counts.logical_shape()[-1]);
     const uint32_t idx_num_entries = static_cast<uint32_t>(t.global_expert_idx_table.logical_shape()[-1]);
-    const uint32_t counts_scratch_bytes = std::max<uint32_t>(
+    uint32_t counts_scratch_bytes = std::max<uint32_t>(
         static_cast<uint32_t>(counts_buffer->aligned_page_size()),
         counts_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
+    // The start-chunk table lands past the counts, 64-byte aligned because it is read straight from DRAM.
+    const uint32_t far_ext_off = (counts_scratch_bytes + 63u) & ~63u;
+    if (op.far_chunk_table) {
+        counts_scratch_bytes =
+            far_ext_off + ((counts_num_entries * static_cast<uint32_t>(sizeof(uint32_t)) + 63u) & ~63u);
+    }
     const uint32_t idx_scratch_bytes = std::max<uint32_t>(
         static_cast<uint32_t>(idx_buffer->aligned_page_size()),
         idx_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
@@ -2057,6 +2063,9 @@ void append_to_descriptor(
     std::map<std::string, std::string> reader_defines{};
     // adaptive_chunk divides the host-sized max_chunk by this; see kGridY.
     reader_defines["UNIFIED_RE_GRID_Y"] = std::to_string(GRID_Y);
+    if (op.far_chunk_table) {
+        reader_defines["URE_FAR_EXT_OFF"] = std::to_string(far_ext_off);
+    }
     if (fuse_bias) {
         reader_ct_args.push_back(CB_GATE_BIAS);
         reader_ct_args.push_back(CB_UP_BIAS);
@@ -2150,7 +2159,11 @@ void append_to_descriptor(
         .source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = core_range_set,
         .compile_time_args = writer_ct_args,
-        .defines = {{"UNIFIED_RE_GRID_Y", std::to_string(GRID_Y)}},
+        .defines =
+            op.far_chunk_table
+                ? tt::tt_metal::KernelDescriptor::
+                      Defines{{"UNIFIED_RE_GRID_Y", std::to_string(GRID_Y)}, {"URE_FAR_EXT_OFF", std::to_string(far_ext_off)}}
+                : tt::tt_metal::KernelDescriptor::Defines{{"UNIFIED_RE_GRID_Y", std::to_string(GRID_Y)}},
         .config = tt::tt_metal::WriterConfigDescriptor{},
     };
 
@@ -2239,6 +2252,9 @@ void append_to_descriptor(
     // PACKER_L1_ACC controls cross-K-block accumulation via packer L1 RMW.
     std::map<std::string, std::string> compute_defines{};
     compute_defines["UNIFIED_RE_GRID_Y"] = std::to_string(GRID_Y);
+    if (op.far_chunk_table) {
+        compute_defines["URE_FAR_EXT_OFF"] = std::to_string(far_ext_off);
+    }
     compute_defines["PACKER_L1_ACC"] = "1";
     // Dst-accumulator mode -> compute kernel: the fused-binary-activation dst budget and
     // the SFPU fp32-dest template derive from this, staying in sync with
@@ -2996,6 +3012,7 @@ unified::UnifiedRoutedExpertFfnParams unified_attributes(const HybridRoutedExper
         .grid_x = kGridX,
         .grid_y = kGridY,
         .origin_y = kOriginY,
+        .far_chunk_table = op.overlap_combine,
     };
 }
 
