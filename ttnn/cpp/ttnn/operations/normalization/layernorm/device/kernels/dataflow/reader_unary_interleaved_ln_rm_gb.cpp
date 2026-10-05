@@ -7,6 +7,7 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
+#include "ttnn/operations/kernel_helper_functions/local_l1_copy.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "ttnn/operations/normalization/layernorm/device/kernels/layernorm_scaler_tiles.h"
 #include "api/dataflow/noc.h"
@@ -32,6 +33,10 @@ void kernel_main() {
 #endif
 #ifdef FUSE_PRE_ADD
     DataflowBuffer dfb_in1(dfb::inb);
+#endif
+#ifdef COMPACT_FP32_PRE_ADD
+    DataflowBuffer dfb_in0_fp32(dfb::in_fp32);
+    DataflowBuffer dfb_in1_fp32(dfb::inb_fp32);
 #endif
 #ifdef FUSE_GAMMA
     DataflowBuffer dfb_gamma(dfb::gamma);
@@ -130,6 +135,14 @@ void kernel_main() {
             }
             noc.async_read_barrier();
             dfb_in1.push_back(block.full_block_size());
+#ifdef COMPACT_FP32_PRE_ADD
+            // The aliases share input SRAM but maintain independent FIFO state. Publish the same
+            // tiles so compute can unpack both operands directly to FP32 DEST for the pre-add.
+            dfb_in0_fp32.reserve_back(block.full_block_size());
+            dfb_in0_fp32.push_back(block.full_block_size());
+            dfb_in1_fp32.reserve_back(block.full_block_size());
+            dfb_in1_fp32.push_back(block.full_block_size());
+#endif
 #else
             // Non-fused welford-fp32 alias: dfb_x_welford shares dfb_in0's memory but has its own
             // read/write pointers. After the data lands in dfb_in0, push dfb_x_welford by the same
@@ -149,7 +162,9 @@ void kernel_main() {
 #ifdef FUSE_GAMMA
                 {
                     dfb_gamma.reserve_back(static_cast<uint16_t>(block.full_block_size()));
-                    const UnicastEndpoint local_ep;
+#ifndef ARCH_QUASAR
+                    const UnicastEndpoint local_ep;  // Gen1 loopback source; Quasar copies with the RISC below
+#endif
                     uint32_t idx = 0;
                     for (auto r : block.local()) {
                         noc.async_read(
@@ -159,6 +174,14 @@ void kernel_main() {
                             {.page_id = block.start() + r},
                             {.offset_bytes = idx * gamma_tile_bytes});
                         noc.async_read_barrier();
+#ifdef ARCH_QUASAR
+                        // Relocate the second half-row into face 1 with a scalar copy: the bytes are already
+                        // resident from the barriered DRAM read above (see local_l1_copy).
+                        {
+                            const uint32_t base = dfb_gamma.get_write_ptr() + (idx * gamma_tile_bytes);
+                            local_l1_copy(base + gamma_face_bytes, base + gamma_half_row_bytes, gamma_half_row_bytes);
+                        }
+#else
                         noc.async_read(
                             local_ep,
                             dfb_gamma,
@@ -167,6 +190,7 @@ void kernel_main() {
                              .noc_y = my_y[noc.get_noc_id()],
                              .addr = dfb_gamma.get_write_ptr() + (idx * gamma_tile_bytes) + gamma_half_row_bytes},
                             {.offset_bytes = (idx * gamma_tile_bytes) + gamma_face_bytes});
+#endif
                         idx++;
                     }
                     noc.async_read_barrier();
@@ -177,7 +201,9 @@ void kernel_main() {
 #ifdef FUSE_BETA
                 {
                     dfb_beta.reserve_back(static_cast<uint16_t>(block.full_block_size()));
-                    const UnicastEndpoint local_ep;
+#ifndef ARCH_QUASAR
+                    const UnicastEndpoint local_ep;  // Gen1 loopback source; Quasar copies with the RISC below
+#endif
                     uint32_t idx = 0;
                     for (auto r : block.local()) {
                         noc.async_read(
@@ -187,6 +213,14 @@ void kernel_main() {
                             {.page_id = block.start() + r},
                             {.offset_bytes = idx * beta_tile_bytes});
                         noc.async_read_barrier();
+#ifdef ARCH_QUASAR
+                        // Relocate the second half-row into face 1 with a scalar copy: the bytes are already
+                        // resident from the barriered DRAM read above (see local_l1_copy).
+                        {
+                            const uint32_t base = dfb_beta.get_write_ptr() + (idx * beta_tile_bytes);
+                            local_l1_copy(base + beta_face_bytes, base + beta_half_row_bytes, beta_half_row_bytes);
+                        }
+#else
                         noc.async_read(
                             local_ep,
                             dfb_beta,
@@ -195,6 +229,7 @@ void kernel_main() {
                              .noc_y = my_y[noc.get_noc_id()],
                              .addr = dfb_beta.get_write_ptr() + (idx * beta_tile_bytes) + beta_half_row_bytes},
                             {.offset_bytes = (idx * beta_tile_bytes) + beta_face_bytes});
+#endif
                         idx++;
                     }
                     noc.async_read_barrier();

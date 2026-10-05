@@ -2,33 +2,25 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Tuple
+from typing import List
 
-import torch
 from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.unpack.reduce_block_max import unpack_reduce_block_max_golden
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopBlockRow, TileLoop
 
 
 class ReduceBlockMaxRuntimeUnpacker(Unpacker):
-    loop: TileLoop = LoopBlockRow()
+    granularity = InvocationGranularity.ROW
     per_block_init = True
+
+    golden_fn = staticmethod(unpack_reduce_block_max_golden)
 
     def get_headers(self) -> List[str]:
         return ["experimental/llk_unpack_AB_reduce_custom_runtime.h"]
-
-    def golden(
-        self,
-        tensor_a: torch.Tensor,
-        tensor_b: torch.Tensor,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        return tensor_a, tensor_b
 
     def perf_set_valid(
         self,
@@ -37,7 +29,7 @@ class ReduceBlockMaxRuntimeUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        ct_dim = block.block_tiles_x
+        ct_dim = block.block_cols
         return (
             f"_perf_unpack_loop_set_valid<false, true>(1);\n"
             f"_perf_unpack_loop_set_valid<true, false>({ct_dim});\n"
@@ -50,7 +42,7 @@ class ReduceBlockMaxRuntimeUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        ct_dim = block.block_tiles_x
+        ct_dim = block.block_cols
         return (
             f"_perf_math_loop_clear_valid<true, false>({ct_dim});\n"
             f"_perf_math_loop_clear_valid<false, true>(1);\n"
@@ -63,7 +55,7 @@ class ReduceBlockMaxRuntimeUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        ct_dim = block.block_tiles_x
+        ct_dim = block.block_cols
         dest_acc = config.dest_acc.cpp_enum_value
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         return f"_llk_unpack_AB_reduce_block_max_row_init_runtime_<{dest_acc}>({ct_dim}, /*respect_trigger=*/false, {tensor_shape});\n"
@@ -77,7 +69,7 @@ class ReduceBlockMaxRuntimeUnpacker(Unpacker):
     ) -> str:
         buffer_a = compute_unit.src_a.cpp_name
         buffer_b = compute_unit.src_b.cpp_name
-        return f"_llk_unpack_AB_reduce_block_max_row_runtime_(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{block.tile_id_global}]));\n"
+        return f"_llk_unpack_AB_reduce_block_max_row_runtime_(L1_ADDRESS({buffer_a}[{block.tile_id_src_a}]), L1_ADDRESS({buffer_b}[{block.tile_id_src_b}]));\n"
 
     def uninit(
         self,

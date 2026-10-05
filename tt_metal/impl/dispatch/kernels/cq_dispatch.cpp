@@ -135,6 +135,9 @@ constexpr uint32_t dispatch_s_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBOR
 constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 #if !defined(IS_CQ_DRAM_BACKED) || IS_CQ_DRAM_BACKED == 0
+#if defined(NOC_ATT_ENABLED)
+#error "ATT fast dispatch requires DRAM-backed command queues: no ATT window maps host memory"
+#endif
 constexpr uint64_t pcie_noc_xy =
     uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(PCIE_NOC_X), NOC_Y_PHYS_COORD(PCIE_NOC_Y)));
 #endif
@@ -309,7 +312,8 @@ void notify_host_of_completion_queue_write_pointer() {
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
     uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
 #endif
-    noc_async_write(static_cast<uint32_t>(dev_completion_q_wr_ptr), pcie_noc_xy | completion_queue_write_ptr_addr, 4);
+    noc_async_write_pcie(
+        static_cast<uint32_t>(dev_completion_q_wr_ptr), pcie_noc_xy | completion_queue_write_ptr_addr, 4);
 #else
     cq_noc_async_write_with_state<CQ_NOC_SnDL>(
         static_cast<uint32_t>(dev_completion_q_wr_ptr), completion_queue_write_ptr_addr, 4);
@@ -346,7 +350,9 @@ void process_write_host_h() {
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
     uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
 #endif
-    cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, pcie_noc_xy, 0);
+    // Programs NOC_CTRL, the destination coordinate and the PCIe routing bit in one go. The with_state issuers
+    // below leave MID alone, so it stays set for the whole command and is cleared once at the end.
+    cq_noc_async_write_init_state_pcie(pcie_noc_xy);
 #endif
     constexpr uint32_t max_batch_size = ~(dispatch_cb_page_size - 1);
     if (is_event) {
@@ -371,7 +377,7 @@ void process_write_host_h() {
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
                 uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
 #endif
-                noc_async_write(
+                noc_async_write_pcie(
                     static_cast<uint32_t>(data_ptr), pcie_noc_xy | completion_queue_write_addr, last_chunk_size);
 #else
                 cq_noc_async_write_with_state_any_len(
@@ -389,7 +395,7 @@ void process_write_host_h() {
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
             uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
 #endif
-            noc_async_write(static_cast<uint32_t>(data_ptr), pcie_noc_xy | completion_queue_write_addr, xfer_size);
+            noc_async_write_pcie(static_cast<uint32_t>(data_ptr), pcie_noc_xy | completion_queue_write_addr, xfer_size);
 #else
             cq_noc_async_write_with_state_any_len(
                 static_cast<uint32_t>(data_ptr), completion_queue_write_addr, xfer_size);
@@ -410,6 +416,9 @@ void process_write_host_h() {
         }
     }
     cmd_ptr = data_ptr;
+#if !defined(FABRIC_RELAY)
+    noc_async_write_clear_pcie_state(noc_index, NCRISC_WR_CMD_BUF);
+#endif
 }
 
 void process_exec_buf_end_h() {
@@ -570,7 +579,16 @@ void process_write_linear(uint32_t num_mcast_dests) {
         uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
         uint32_t xfer_size = length > available_data ? available_data : length;
 #endif
-        cq_noc_async_write_with_state_any_len(static_cast<uint32_t>(data_ptr), dst_addr, xfer_size, num_mcast_dests);
+        // This handler owns MID: wwrite_init_state programmed it from the same dst_addr, so reprogramming it
+        // per burst is what keeps a destination that crosses 4GB from writing into the previous window.
+        cq_noc_async_write_with_state_any_len<
+            /*write_last_packet=*/true,
+            /*update_counters=*/false,
+            CQ_NOC_WAIT,
+            NCRISC_WR_CMD_BUF,
+            /*flush_last_transfer=*/false,
+            CQ_NOC_SEND,
+            /*set_ret_mid=*/true>(static_cast<uint32_t>(data_ptr), dst_addr, xfer_size, num_mcast_dests, noc_index);
         // Increment counters based on the number of packets that were written
         uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE);
         noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
@@ -579,6 +597,10 @@ void process_write_linear(uint32_t num_mcast_dests) {
         data_ptr += xfer_size;
         dst_addr += xfer_size;
     }
+
+    // Clear the host address bits a pinned destination leaves in RET_ADDR_MID. On-chip writes sharing the
+    // command buffer do not program MID, so they would inherit them.
+    noc_async_write_clear_pcie_state(noc_index, NCRISC_WR_CMD_BUF);
 
     cmd_ptr = data_ptr;
 }
@@ -758,7 +780,12 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
         uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
         uint32_t num_dests = mcast ? ((CQDispatchWritePackedMulticastSubCmd*)sub_cmd_ptr)->num_mcast_dests : 1;
         sub_cmd_ptr++;
-        uint64_t dst = get_noc_addr_helper(dst_noc, dst_addr);
+        uint64_t dst;
+        if constexpr (mcast) {
+            dst = cq_mcast_noc_addr(dst_noc, dst_addr);
+        } else {
+            dst = get_noc_addr_helper(dst_noc, dst_addr);
+        }
         // Get a page if needed
         if (xfer_size > dispatch_cb_reader.available_bytes(data_ptr)) {
             // Check for block completion and issue orphan writes for this block
@@ -888,7 +915,7 @@ void process_write_packed_large(uint32_t* l1_cache) {
         // to determine linking
         if (init_state) {
             uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
-            cq_noc_async_write_init_state<CQ_NOC_sNdl, true, true>(0, get_noc_addr_helper(dst_noc, dst_addr));
+            cq_noc_async_write_init_state<CQ_NOC_sNdl, true, true>(0, cq_mcast_noc_addr(dst_noc, dst_addr));
             must_barrier = true;
         }
 
@@ -1153,6 +1180,11 @@ static void process_delay_cmd() {
 
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
+#if defined(ARCH_QUASAR) && defined(FDS_SIGNALLING)
+    // FDS go is issued by dispatch_s. A SEND_GO_SIGNAL here means the command was mis-routed to dispatch_d; abort
+    // rather than NOC-multicast a second go.
+    ASSERT(0);
+#endif
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
     uint32_t stream = load_aligned<uint32_t>(&cmd->mcast.wait_stream);
     // The go signal embedded in the command does not meet NOC alignment requirements, but cmd_ptr does
@@ -1173,7 +1205,7 @@ void process_go_signal_mcast_cmd() {
     if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
         uint64_t dst_noc_addr_multicast =
-            get_noc_addr_helper(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
+            cq_mcast_noc_addr(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
         uint32_t num_dests = num_worker_cores_to_mcast;
         // Ensure the offset with respect to L1_ALIGNMENT is the same for the source and destination.
         uint32_t storage_offset = multicast_go_offset % (L1_ALIGNMENT / sizeof(uint32_t));
@@ -1296,6 +1328,9 @@ re_run_command:
 #endif
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
     DeviceTimestampedData("process_cmd_d_dispatch", (uint32_t)cmd->base.cmd_id);
+    // No handler may inherit PCIe routing left open by the previous command.
+    ASSERT(noc_cmd_bufs_mid_clear(noc_index), DebugAssertNocMidNotClearedTripped);
+
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR:
             WAYPOINT("DWB");
@@ -1476,6 +1511,8 @@ re_run_command:
             ASSERT(0);
     }
 
+    // Every handler that opened PCIe routing must have closed it before the next command reuses the buffer.
+    ASSERT(noc_cmd_bufs_mid_clear(noc_index), DebugAssertNocMidNotClearedTripped);
     return done;
 }
 
@@ -1489,6 +1526,9 @@ static inline bool process_cmd_h(uintptr_t& cmd_ptr) {
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
 
     DeviceTimestampedData("process_cmd_h_dispatch", (uint32_t)cmd->base.cmd_id);
+    // No handler may inherit PCIe routing left open by the previous command.
+    ASSERT(noc_cmd_bufs_mid_clear(noc_index), DebugAssertNocMidNotClearedTripped);
+
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H:
             // DPRINT("dispatch_h write_linear_h\n");
@@ -1527,6 +1567,8 @@ static inline bool process_cmd_h(uintptr_t& cmd_ptr) {
             ASSERT(0);
     }
 
+    // Every handler that opened PCIe routing must have closed it before the next command reuses the buffer.
+    ASSERT(noc_cmd_bufs_mid_clear(noc_index), DebugAssertNocMidNotClearedTripped);
     return done;
 }
 
@@ -1584,6 +1626,9 @@ void publish_dispatch_d_noc_count(const NocCounterSnapshot& snapshot) {
 }
 
 void kernel_main() {
+#if defined(NOC_ATT_ENABLED)
+    noc_v3_cq_state_reset();
+#endif
     set_l1_data_cache<true>();
 #if defined(FABRIC_RELAY)
     DPRINT("dispatch_{}{}: start (fabric relay. 2d = {})\n", is_h_variant, is_d_variant, is_2d_fabric);

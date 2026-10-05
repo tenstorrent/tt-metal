@@ -92,9 +92,18 @@ Tensor untilize_with_unpadding(
         output_end = ttnn::Shape(std::move(output_end_vector));
     }
 
+    // The prim emits BFLOAT16 for a BFLOAT8_B input (UntilizeWithUnpaddingDeviceOperation::
+    // compute_output_specs), so size the output CB estimate and the pending output buffer by the output
+    // dtype, as ttnn::untilize does. Sized by the input dtype, the output CB estimate was a 1088 B tile
+    // against the row factory's 2048 B/tile output CB, and the reservation was 0 B: a BFLOAT8_B ROW_MAJOR
+    // TensorSpec cannot be constructed ("Only TILE layout is supported for BFLOAT8_B dtype"), which
+    // get_pending_l1_output_reservation waves through as nothing to reserve. Both made enough_space_height
+    // more permissive than the row factory it selects.
+    const DataType output_dtype = operations::data_movement::untilize_output_dtype(input_tensor.dtype());
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_dtype);
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    uint32_t output_single_tile_size = input_single_tile_size;
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
 
@@ -111,7 +120,7 @@ Tensor untilize_with_unpadding(
         input_tensor,
         ttnn::Shape(std::move(output_shape_vector)),
         memory_config.value_or(input_tensor.memory_config()),
-        input_tensor.dtype(),
+        output_dtype,
         Layout::ROW_MAJOR);
 
     bool enough_space_height = operations::data_movement::is_enough_space(

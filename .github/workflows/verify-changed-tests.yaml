@@ -3,8 +3,10 @@ name: "Verify changed tests"
 # Gate for tests/pipeline_reorg edits. A PR that touches a test entry cannot enter
 # the merge queue until that specific entry has run green
 #
-# All logic lives in .github/scripts/utils/verify_changed_tests.py. This file only
-# wires it up, plus the two policy lists below.
+# All logic lives in the tenstorrent/tt-metal/.github/actions/verify-changed-tests
+# action, pinned to @main so a PR branch always runs the current gate rather than
+# whatever copy (or lack of one) sits at its own head. This file only wires it up,
+# plus the two policy lists below.
 #
 # merge_group runs `scope` only. The hardware legs already ran on the PR head;
 # re-firing them in the queue would spend the same scarce hardware twice. The
@@ -45,6 +47,7 @@ env:
     bh_sc1
     bh_sc1_high_power
     bh_sc4
+    bh_sc4_high_power
     bh_sc16
 
   # Yamls the gate cannot dispatch, so edits to them go to their code owners for
@@ -62,6 +65,8 @@ env:
   #                                  from ttsim_lib, so no static cmd is complete.
   #   llk_ttnop_tests.yaml           runs only through its specialized manual/weekly
   #                                  workflow, which supplies TTNOP setup and recovery.
+  #   llk_perf_merge_gate_tests.yaml runs only through llk-perf-impl, which runs cmd
+  #                                  from tt_metal/tt-llk in the LLK CI image.
   #
   # This is not an exemption: the legs still block the PR until an owner approves.
   UNSUPPORTED_YAMLS: >-
@@ -70,6 +75,7 @@ env:
     single_card_profiler_tests.yaml
     llk_ttsim_weekly.yaml
     llk_ttnop_tests.yaml
+    llk_perf_merge_gate_tests.yaml
 
   # Yamls under tests/pipeline_reorg/ that legitimately hold no test matrix, so the
   # gate has nothing to prove for them. ttsim-skip-list.yaml is a per-arch mapping of
@@ -92,13 +98,27 @@ env:
   # its LoudBox perf legs call run_device_perf, which shells out to `python3 -m tracy`.
   # Without a profiler build the gate dispatches them and they fail on "Tracy tools
   # not found" -- a gate artefact, not a test failure. blackhole-e2e-tests.yaml itself
-  # builds with `tracy: true` for the same reason.
+  # builds with `tracy: true` for the same reason. models_device_perf_tests.yaml is the
+  # same case: every entry runs test_device_perf.py / run_device_profiler, i.e. tracy.
   TRACY_BUILD_YAMLS: >-
     galaxy_profiler_tests.yaml
     single_card_profiler_tests.yaml
     t3k_profiler_tests.yaml
+    fabric_sanity_tests.yaml
+    fabric_perf_tests.yaml
     runtime_perf_profiler_tests.yaml
     blackhole_e2e_tests.yaml
+    models_device_perf_tests.yaml
+  # Pipelines that run their legs under the watcher do it through setup-job's
+  # enable-watcher input, which also sets TT_METAL_WATCHER_DISABLE_ETH=1 (and NOINLINE,
+  # APPEND). A leg cmd that only exports TT_METAL_WATCHER=N relies on that: with the
+  # watcher on the ETH cores the fabric erisc router no longer fits its text region
+  # ("section .data LMA overlaps section .text LMA"), idle_erisc overflows on N300 and
+  # ACTIVE_ETH kernels exceed the kernel config buffer on QB2. The gate passes the same
+  # input for legs from these yamls; the list mirrors which *-impl.yaml files pass
+  # enable-watcher: true.
+  WATCHER_YAMLS: >-
+    models_unit_tests.yaml
 
 jobs:
   scope:
@@ -135,15 +155,17 @@ jobs:
 
       - name: Scope the changed tests, narrow the matrix, enforce owner review
         id: gate
+        # Pinned to @main: a PR branch runs the current gate, not whatever
+        # copy (or lack of one) happens to sit at its own head.
+        uses: tenstorrent/tt-metal/.github/actions/verify-changed-tests@main
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 .github/scripts/utils/verify_changed_tests.py \
-            --event "${{ github.event_name }}" \
-            --base "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}" \
-            --repo "${{ github.repository }}" \
-            --pr "${{ github.event.pull_request.number }}" \
-            --output scope.json
+        with:
+          event: ${{ github.event_name }}
+          base: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          repo: ${{ github.repository }}
+          pr: ${{ github.event.pull_request.number }}
+          output: scope.json
 
       - name: Summarise
         if: ${{ !cancelled() }}
@@ -171,8 +193,9 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      build-wheel: true
+      build-inplace-wheel: true
       tracy: false
+      skip-tt-train: ${{ !contains(needs.scope.outputs.matrix, 'tt-train') }}
 
   build-profiler:
     name: Build (profiler)
@@ -184,8 +207,9 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      build-wheel: true
+      build-inplace-wheel: true
       tracy: true
+      skip-tt-train: ${{ !contains(needs.scope.outputs.matrix, 'tt-train') }}
 
   fetch-ttsim:
     name: Fetch ttsim (${{ matrix.lib }})
@@ -267,6 +291,8 @@ jobs:
         PYTHONPATH: ${{ matrix.leg.gate_packages && '/usr/libexec/tt-metalium' || '/work' }}
         GTEST_TOTAL_SHARDS: ${{ matrix.leg.gtest_shard_total || 1 }}
         GTEST_SHARD_INDEX: ${{ matrix.leg.gtest_shard_index || 0 }}
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         HF_HUB_OFFLINE: ${{ (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '0' || '1' }}
         # The tracy paths the three profiler impls set. Empty on every other leg,
         # which the consuming scripts treat as unset (they test with -z).
@@ -282,10 +308,20 @@ jobs:
         - ${{ contains(join(matrix.leg.runs_on, ','), 'ubuntu-latest') && '/no_hugepages' || '/dev/hugepages-1G:/dev/hugepages-1G' }}
         # Weights cache, selected by the SKU's weights-cache-mode exactly as the
         # owning pipeline selects it.
-        - ${{ contains(join(matrix.leg.runs_on, ','), 'ubuntu-latest') && '/no_weights_cache' || (matrix.leg['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface:ro') || (matrix.leg['weights-cache-mode'] == 'yyz4-mnt-models' && '/mnt/models/huggingface:/mnt/MLPerf/huggingface:ro') || (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || '/mnt/MLPerf:/mnt/MLPerf:ro' }}
+        - ${{ contains(join(matrix.leg.runs_on, ','), 'ubuntu-latest') && '/no_weights_cache' || (matrix.leg['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface:rw') || (matrix.leg['weights-cache-mode'] == 'yyz4-mnt-models' && '/mnt/models/huggingface:/mnt/MLPerf/huggingface:rw') || (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || '/mnt/MLPerf:/mnt/MLPerf:rw' }}
+      # Mount the Tenstorrent device only for silicon runners. The CPU-only pools have
+      # no /dev/tenstorrent, so mounting it makes the job container fail to start. Every
+      # deviceless sku contains "cpu" (github_hosted_cpu, cpu_medium, cpu_medium_prio) and
+      # no silicon sku does, so a single substring check excludes them all.
+      # -e TT_GH_CI_INFRA forwards the runner host's CI-infra marker into the container,
+      # as the *-impl.yaml pipelines do: conftest.py's is_ci_v2_env is
+      # `"TT_GH_CI_INFRA" in os.environ`, and model_location_generator only downloads
+      # weights from the CIv2 large file cache when it is set. Without it a leg on an
+      # lfc / local-disk SKU falls back to the HF hub id and fails with
+      # LocalEntryNotFoundError against the per-runner cache.
       options: >-
          ${{ (startsWith(matrix.leg.sku, 'sim_') && '--label runner-mode=sim')
-             || (matrix.leg.sku != 'github_hosted_cpu' && '--device /dev/tenstorrent')
+             || (!contains(matrix.leg.sku, 'cpu') && '--device /dev/tenstorrent -e TT_GH_CI_INFRA')
              || '' }}
     defaults:
       run:
@@ -312,6 +348,7 @@ jobs:
             ${{ (matrix.leg.gate_profile == 'profiler' && needs.build-profiler.outputs.wheel-artifact-name)
              || needs.build-default.outputs.wheel-artifact-name
              || '' }}
+          enable-watcher: ${{ contains(env.WATCHER_YAMLS, format('{0}.yaml', matrix.leg.source_yaml)) && 'true' || 'false' }}
           auto-triage: false
 
       - name: ⬇️ Download packages artifact
@@ -337,6 +374,13 @@ jobs:
           shopt -s nullglob
           pkgs=(./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb)
           apt install -y "${pkgs[@]}"
+
+      - name: Set up tt-train
+        if: ${{ contains(matrix.leg.cmd, 'tt-train') && !matrix.leg.gate_packages }}
+        uses: ./docker-job/.github/actions/setup-tt-train
+        timeout-minutes: 10
+        with:
+          hf-token: ${{ secrets.HUGGINGFACE_TOKEN }}
 
       - name: ⬇️ Setup TTSim
         if: ${{ startsWith(matrix.leg.sku, 'sim_') }}

@@ -198,6 +198,10 @@ std::string get_default_root_path() {
     return "/tmp/tt-metal-cache/";
 }
 
+std::string get_cache_root(const llrt::RunTimeOptions& rtoptions) {
+    return rtoptions.is_cache_dir_specified() ? rtoptions.get_cache_dir() : get_default_root_path();
+}
+
 JitBuildEnv::JitBuildEnv() = default;
 
 void JitBuildEnv::init(
@@ -208,10 +212,10 @@ void JitBuildEnv::init(
     this->rtoptions_ = &rtoptions;
     // Paths
     this->root_ = rtoptions.get_root_dir();
-    this->out_root_ = rtoptions.is_cache_dir_specified() ? rtoptions.get_cache_dir() : get_default_root_path();
+    this->out_root_ = get_cache_root(rtoptions);
 
     this->arch_ = config.arch;
-    this->max_cbs_ = config.max_cbs;
+    this->max_dfbs_ = config.max_dfbs;
 
     // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
@@ -333,6 +337,14 @@ void JitBuildEnv::init(
             "TT_METAL_STREAMING_PROFILER is not supported on Quasar: the streaming profiler needs a DRISC "
             "drainer, which Quasar does not have. Use TT_METAL_DEVICE_PROFILER instead.");
         this->defines_ += "-DPROFILE_KERNEL=1 -DPROFILE_STREAMING=1 ";
+        if (rtoptions.get_streaming_profiler_sync_events_enabled()) {
+            // Enable synchronization-event instrumentation (tools/profiler/synchronization_event_profiler.hpp)
+            // Note: only enabled with streaming profiler.
+            this->defines_ += "-DPROFILE_SYNC_EVENTS=1 ";
+        }
+        if (rtoptions.get_streaming_profiler_inline_enabled()) {
+            this->defines_ += "-DPROFILE_INLINE_ENABLED=1 ";
+        }
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
         // force profiler on if noc events are being profiled
@@ -554,6 +566,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
             fmt::format_to(it, "-D{} ", define);
         }
         fmt::format_to(it, "-DDISPATCH_MESSAGE_ADDR={} ", build_config.dispatch_message_addr);
+        if (build_config.fds_signalling) {
+            fmt::format_to(it, "-DFDS_SIGNALLING=1 ");
+        }
     }
     if (this->is_fw_) {
         this->defines_ += "-DFW_BUILD ";

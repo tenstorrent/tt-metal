@@ -47,7 +47,7 @@ inline bool has_real_channel_trimming_capture_entry(
     if (!capture_overrides.has_value()) {
         return false;
     }
-    return capture_overrides->find(make_override_key(chip_id, eth_chan)) != capture_overrides->end();
+    return capture_overrides->contains(make_override_key(chip_id, eth_chan));
 }
 
 // Per-VC override specification for channel trimming.

@@ -21,8 +21,6 @@ namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
-#include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
-#include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 using namespace tt::tt_fabric::linear::experimental;
 #endif
 
@@ -32,7 +30,7 @@ struct QChunkInfo {
     uint32_t end_seq_tile;
 };
 
-// Compute output slice and stats tile range for one Q chunk.
+// Compute the output slice and sequence tile limit for one Q chunk.
 // is_joint_q distinguishes local-sequence Q chunks from joint-context Q chunks,
 // which write to different output tensors and have different causal extents.
 //
@@ -77,38 +75,32 @@ void kernel_main() {
     constexpr uint32_t DHt = get_compile_time_arg_val(2);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
-    constexpr uint32_t local_padded_N = get_compile_time_arg_val(5);
-    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(6);
-    constexpr uint32_t logical_n_ct = get_compile_time_arg_val(7);
-    constexpr uint32_t logical_nt_ct = get_compile_time_arg_val(8);
-    constexpr uint32_t Lt = get_compile_time_arg_val(9);
-    constexpr uint32_t L = get_compile_time_arg_val(10);
-    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(11);
-    constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(12);
-    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(13);
-    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(14);
-    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(15);
-    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(16);
-    constexpr uint32_t scale_val = get_compile_time_arg_val(17);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(18);
-    constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(19);
-    constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(20);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(22);
+    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(5);
+    constexpr uint32_t logical_n_ct = get_compile_time_arg_val(6);
+    constexpr uint32_t logical_nt_ct = get_compile_time_arg_val(7);
+    constexpr uint32_t Lt = get_compile_time_arg_val(8);
+    constexpr uint32_t L = get_compile_time_arg_val(9);
+    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(10);
+    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(11);
+    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(12);
+    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(13);
+    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(14);
+    constexpr uint32_t scale_val = get_compile_time_arg_val(15);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(16);
+    constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(17);
+    constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(18);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(19);
     // Trace-safe logical_n: when set, logical_n_ct above is only the worst-case placeholder.
-    constexpr bool has_logical_n_tensor = get_compile_time_arg_val(23) == 1;
+    constexpr bool has_logical_n_tensor = get_compile_time_arg_val(20) == 1;
 
     // Sits ahead of the output accessors so the offsets below (and the MUX/AG block chaining off
-    // stats_args_skip) keep deriving normally in both modes.
-    constexpr auto logical_n_args = TensorAccessorArgs<24>();
+    // joint_out_args) keep deriving normally in both modes.
+    constexpr auto logical_n_args = TensorAccessorArgs<21>();
     constexpr auto out_args = TensorAccessorArgs<logical_n_args.next_compile_time_args_offset()>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
-    // stats_args follows joint_out_args but is unused by the writer (stats are only
-    // needed for multi-Q accumulator save/restore which this kernel doesn't support).
-    // The MUX CT args start after stats_args.
-    constexpr auto stats_args_skip = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
 #ifdef USE_MUX
-    constexpr uint32_t mux_ct_base = stats_args_skip.next_compile_time_args_offset();
+    constexpr uint32_t mux_ct_base = joint_out_args.next_compile_time_args_offset();
     constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(mux_ct_base + 0);
     constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(mux_ct_base + 1);
     constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(mux_ct_base + 2);
@@ -126,7 +118,6 @@ void kernel_main() {
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_out_addr = get_arg_val<uint32_t>(argidx++);
-    argidx++;  // skip stats_addr (unused — stats only needed for multi-Q accumulator save)
     // Head-serial passes: this core owns flat Q chunks q_base + p * q_stride for p in [0, q_count).
     const uint32_t q_base = get_arg_val<uint32_t>(argidx++);
     const uint32_t q_stride = get_arg_val<uint32_t>(argidx++);
@@ -220,9 +211,6 @@ void kernel_main() {
         gathered_k_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
         gathered_v_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
         dedup_skip_forward = get_arg_val<uint32_t>(argidx++) == 1;
-
-        // OpSignaler constructor advances argidx past its RT args
-        OpSignaler(argidx);
 
         for (uint32_t h = 0; h < kNumScatterHdrs; ++h) {
             pkt_scatter_hdrs[h] = PacketHeaderPool::allocate_header();

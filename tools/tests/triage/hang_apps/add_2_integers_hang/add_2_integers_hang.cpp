@@ -9,6 +9,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
@@ -32,6 +33,7 @@ const experimental::TensorParamName OUT_T{"out_tensor"};
 const experimental::KernelSpecName READER{"reader"};
 const experimental::KernelSpecName WRITER{"writer"};
 const experimental::KernelSpecName COMPUTE{"compute"};
+const experimental::SemaphoreSpecName PROGRAM_SEM{"program_sem"};
 
 // A single BFloat16 tile in interleaved DRAM. HostTensor::from_vector / to_vector take and
 // return row-major data and handle the tilization against this spec, so the host code below
@@ -96,24 +98,12 @@ int main() {
         };
     };
 
-    // The kernels below carry both a Gen1 and a Gen2 hardware config so that the same program runs on Wormhole /
-    // Blackhole and on Quasar; the runtime selects the one matching the active architecture. Quasar has no
-    // per-processor data movement kernel assignment (it has 8 data movement cores per cluster, allocated by the
-    // implementation), which is why the Gen2 config carries no processor / NOC selection.
-    const bool is_quasar = mesh_device->arch() == ARCH::QUASAR;
-    experimental::DataMovementHardwareConfig reader_dm_config;
-    experimental::DataMovementHardwareConfig writer_dm_config;
-    experimental::ComputeHardwareConfig compute_hw_config;
-    if (is_quasar) {
-        reader_dm_config = experimental::DataMovementGen2Config{};
-        writer_dm_config = experimental::DataMovementGen2Config{};
-        compute_hw_config = experimental::ComputeGen2Config{.fpu_math_fidelity = MathFidelity::HiFi4};
-    } else {
-        // The conventional Gen1 placement: reader on RISCV_1, writer on RISCV_0.
-        reader_dm_config = experimental::CreateReaderGen1DataMovementConfig();
-        writer_dm_config = experimental::CreateWriterGen1DataMovementConfig();
-        compute_hw_config = experimental::ComputeGen1Config{.fpu_math_fidelity = MathFidelity::HiFi4};
-    }
+    // The same hardware configs serve Wormhole / Blackhole and Quasar: the runtime reads only the part matching the
+    // active architecture. The data movement configs pin the conventional Gen1 placement (reader on RISCV_1, writer
+    // on RISCV_0), which Quasar ignores -- it has 8 data movement cores per cluster, allocated by the implementation.
+    const experimental::DataMovementHardwareConfig reader_dm_config = experimental::CreateReaderDataMovementConfig();
+    const experimental::DataMovementHardwareConfig writer_dm_config = experimental::CreateWriterDataMovementConfig();
+    const experimental::ComputeHardwareConfig compute_hw_config{.fpu_math_fidelity = MathFidelity::HiFi4};
 
     // Describe the reader, writer and compute kernels. The sibling ttnn_add_integers_hang app runs
     // these same three kernel sources through its own TTNN program factory.
@@ -140,6 +130,7 @@ int main() {
         .unique_id = WRITER,
         .source = OVERRIDE_KERNEL_PREFIX "add_2_integers_hang/kernels/dataflow/writer_1_tile.cpp",
         .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "out")},
+        .semaphore_bindings = {{.semaphore_spec_name = PROGRAM_SEM, .accessor_name = "program_sem"}},
         .tensor_bindings = {{.tensor_parameter_name = OUT_T, .accessor_name = "out"}},
         .hw_config = writer_dm_config,
     };
@@ -158,10 +149,16 @@ int main() {
         .hw_config = compute_hw_config,
     };
 
+    // Read by dump_semaphores: the writer kernel bumps the program semaphore twice, nothing touches the global one.
+    // The program semaphore starts at zero, which is all Quasar allows; a non-zero initial value is also
+    // deprecated on every architecture. The global semaphore has no such limit, so it starts at 3.
+    auto global_semaphore = CreateGlobalSemaphore(*mesh_device, CoreRange(node), 3);
+
     experimental::ProgramSpec spec{
         .name = "add_2_integers_hang",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {make_dfb_spec(IN0_DFB), make_dfb_spec(IN1_DFB), make_dfb_spec(OUT_DFB)},
+        .semaphores = {{.unique_id = PROGRAM_SEM, .target_nodes = node}},
         .tensor_parameters =
             {{.unique_id = IN0_T, .spec = tile_spec},
              {.unique_id = IN1_T, .spec = tile_spec},

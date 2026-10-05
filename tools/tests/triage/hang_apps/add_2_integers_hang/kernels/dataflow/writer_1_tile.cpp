@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
+#include "api/semaphore.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -18,6 +19,13 @@ void kernel_main() {
 
     // Address of the output tensor, supplied as a ProgramRunArgs tensor argument.
     const auto out = TensorAccessor(tensor::out);
+
+    // dump_semaphores expects the program semaphore at its initial value plus these two increments. They
+    // have to come first: the compute kernel hangs before it produces a tile, so nothing after the wait
+    // below ever runs.
+    Semaphore program_sem(sem::program_sem);
+    program_sem.up(1);
+    program_sem.up(1);
 
     Noc noc;
 

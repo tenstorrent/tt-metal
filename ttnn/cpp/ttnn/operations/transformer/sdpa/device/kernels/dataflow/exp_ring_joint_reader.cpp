@@ -31,14 +31,13 @@ void kernel_main() {
     constexpr uint32_t Lt = get_compile_time_arg_val(9);
     constexpr uint32_t L = get_compile_time_arg_val(10);
     constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(11);
-    constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(12);
-    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(13);
-    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(14);
-    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(15);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(16);
-    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(17);
+    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(12);
+    constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(13);
+    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(14);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(15);
+    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(16);
 
-    constexpr auto q_args = TensorAccessorArgs<18>();
+    constexpr auto q_args = TensorAccessorArgs<17>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -65,12 +64,10 @@ void kernel_main() {
     const uint32_t is_chain_participant = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_injector = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_sink = get_arg_val<uint32_t>(argidx++);
-    argidx += 4;  // skip chain batch/head/chunk_start/count (unused)
     const uint32_t prev_physical_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t prev_physical_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t next_physical_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t next_physical_y = get_arg_val<uint32_t>(argidx++);
-    argidx++;  // skip next_core_q_chunks (unused)
     const uint32_t mcast_num_dests = get_arg_val<uint32_t>(argidx++);
     const uint32_t mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
 
@@ -93,8 +90,6 @@ void kernel_main() {
     const uint32_t dedup_role = get_arg_val<uint32_t>(argidx++);
     const uint32_t buddy_injector_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t buddy_injector_y = get_arg_val<uint32_t>(argidx++);
-
-    // After fused-op receiver consumed its runtime args, remaining RT args are S&F chain metadata
 
     // Compile-time semaphore ids and mcast flag are appended after all TensorAccessorArgs().
     // Semaphore<> wrapper resolves IDs to L1 addrs internally.

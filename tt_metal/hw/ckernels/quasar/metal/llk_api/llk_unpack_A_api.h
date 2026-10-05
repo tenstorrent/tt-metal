@@ -112,9 +112,7 @@ inline void llk_unpack_A_init(
                     ckernel::trisc::bfd_current<engine>(), tensor_shape, 1);
             }
         } else {
-            static_assert(
-                !(DST_ACCUM_MODE && !unpack_to_dest),
-                "32BIT_DEST is not supported for broadcast when unpack_to_dest is false");
+            static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
             // Unlike the unary path above, the broadcast LLK takes no TensorShape, so it does not scale
             // its L1 tile index by the face count. Full-tile only until it is converted (tt-metal #47597).
             LLK_ASSERT(
@@ -122,7 +120,7 @@ inline void llk_unpack_A_init(
                     tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
                 "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
             constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
-            _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, unpack_to_dest>(
+            _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, DST_ACCUM_MODE, unpack_to_dest>(
                 ckernel::trisc::bfd_current<engine>(), 1);
         }
     }
@@ -171,6 +169,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
                 l1_tile_idx, tensor_shape);
         }
     } else {
+        static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
         constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
         _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(l1_tile_idx);
     }
@@ -219,6 +218,7 @@ inline void llk_unpack_A_block(
                     rd_entry_idx + tile_index, tensor_shape);
             }
         } else {
+            static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
             constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
             _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(rd_entry_idx + tile_index);
         }
@@ -234,15 +234,14 @@ inline void llk_unpack_A_block(
  * whose data is not needed. Unlike the WH/BH version -- a debug-only SrcA flush with no ordering role --
  * this is a required Quasar primitive: the UNPACR_NOP is a real unpacker TDMA that orders the POP_TILES
  * after its WAIT_TILES on dfb_id (TEN-4746 / #48552). Because it reads nothing, PACKER_L1_ACC is
- * undisturbed. The STALLWAIT ensures SrcA is free before the clear, so it cannot clobber a SrcA bank
- * still owned by an in-flight op; SrcA is cleared only (the next op re-unpacks it).
+ * undisturbed. The NOP is a pure delay and leaves SrcA alone; nothing here clears it.
  *
  * @param dfb_id  The dataflow buffer whose WAIT/POP this orders. Disarms the TEN-4746 tile-counter guard
  *                that llk_wait_tiles armed for it (llk_pop_tiles asserts the buffer was disarmed).
  */
 inline void llk_unpack_dummy(const std::uint32_t dfb_id) {
     TTI_STALLWAIT(p_stall::STALL_UNPACK, 0, 0, p_stall::SRCA_CLR);
-    TTI_UNPACR_NOP(p_unpacr::UNP_A, 0, 0, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
+    TTI_UNPACR_NOP(p_unpacr::UNP_A, 0, 0, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_NOP);
     LLK_TDMA_GUARD_NOTE_TDMA(dfb_id);  // TEN-4746: UNPACR_NOP orders POP after WAIT -> disarm this dfb
 }
 

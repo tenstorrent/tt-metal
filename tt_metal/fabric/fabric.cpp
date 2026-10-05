@@ -56,6 +56,15 @@ bool is_TG_gateway_connection(
     return mmio_chip_id1 == mmio_chip_id2 && (mmio_chip_id1 == src_chip_id || mmio_chip_id2 == dst_chip_id);
 }
 
+bool is_neighbor_in_direction(
+    const tt::tt_fabric::ControlPlane& control_plane,
+    const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+    const tt::tt_fabric::FabricNodeId& dst_fabric_node_id,
+    tt::tt_fabric::RoutingDirection direction) {
+    const auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, direction);
+    return std::find(neighbors.begin(), neighbors.end(), dst_fabric_node_id.chip_id) != neighbors.end();
+}
+
 }  // namespace
 
 namespace tt::tt_fabric {
@@ -109,7 +118,6 @@ std::vector<FabricType> get_all_mgd_fabric_types() {
 #if defined(TT_METAL_USE_EMULE)
 // emule has no fabric router, so the device-L1 connection table is never populated. Record the
 // fwd/bwd-to-neighbor binding host-side for the teleport's 1D dst resolution. Defined in the emule runner.
-// See tt-emule docs/fabric-ccl-emulation.md.
 extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t neighbor);
 extern "C" int __emule_gchip_for_node(uint32_t mesh_id, uint32_t chip_id);
 #endif
@@ -303,14 +311,26 @@ void append_fabric_connection_rt_args(
     }
 }
 
+bool are_intra_mesh_neighbors(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, const FabricNodeId& node_a, const FabricNodeId& node_b) {
+    if (node_a.mesh_id != node_b.mesh_id) {
+        return false;
+    }
+    const auto& control_plane =
+        tt::tt_metal::MetalContext::instance(mesh_device.impl().get_context_id()).get_control_plane();
+    const auto& directions = FabricContext::routing_directions;
+    return std::any_of(directions.begin(), directions.end(), [&](const auto direction) {
+        return is_neighbor_in_direction(control_plane, node_a, node_b, direction);
+    });
+}
+
 std::vector<eth_chan_directions> get_neighbor_eth_directions(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     std::vector<eth_chan_directions> directions;
     directions.reserve(FabricContext::routing_directions.size());
     for (const auto& direction : FabricContext::routing_directions) {
-        auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, direction);
-        if (std::find(neighbors.begin(), neighbors.end(), dst_fabric_node_id.chip_id) != neighbors.end()) {
+        if (is_neighbor_in_direction(control_plane, src_fabric_node_id, dst_fabric_node_id, direction)) {
             directions.push_back(control_plane.routing_direction_to_eth_direction(direction));
         }
     }

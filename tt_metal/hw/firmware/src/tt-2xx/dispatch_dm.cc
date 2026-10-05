@@ -94,7 +94,6 @@ inline void wait_subordinates() {
 
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 thread_local uintptr_t g_dfb_config_base_addr __attribute__((used));
-overlay::RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
 volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS] __attribute__((used));
 
@@ -126,6 +125,8 @@ extern "C" uint32_t _start1() {
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
     device_setup();
+    // NoC command-buffer state is private to each DM and persists across kernel launches.
+    overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     if (hartid > 0) {
         signal_subordinate_completion();
     } else {
@@ -181,7 +182,6 @@ extern "C" uint32_t _start1() {
 
                 my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
                 my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
-                overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 
                 uint32_t tt_l1_ptr* dfb_l1_base =
                     (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
@@ -205,11 +205,6 @@ extern "C" uint32_t _start1() {
                 WAYPOINT("D");
 
                 wait_subordinates();
-
-                if (g_remapper_configurator.is_remapper_enabled()) {
-                    g_remapper_configurator.clear_all_pairs();
-                    g_remapper_configurator.disable_remapper();
-                }
 
                 uint32_t go_message_index = mailboxes->go_message_index;
                 mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
@@ -251,7 +246,6 @@ extern "C" uint32_t _start1() {
         setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
-        overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 
         WAYPOINT("R1");
         while (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) != RUN_SYNC_MSG_GO) {

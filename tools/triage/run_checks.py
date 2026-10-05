@@ -42,6 +42,7 @@ from triage import (
     recurse_field,
     run_script,
     log_warning_device,
+    log_warning_location,
     log_warning_risc,
     create_progress,
     log_check,
@@ -401,7 +402,13 @@ class RunChecks:
                 try:
                     for block_type in block_types_to_check:
                         for location in self.block_locations[device][block_type]:
-                            check_result = check(location)
+                            try:
+                                check_result = check(location)
+                            except TimeoutDeviceRegisterError:
+                                raise  # run_per_device_check marks the whole device broken
+                            except Exception as e:
+                                log_warning_location(location, f"Skipping: {e}")
+                                check_result = None
                             progress.advance(device_task)
                             # Use the common result collection helper
                             self._collect_results(

@@ -26,6 +26,7 @@ const TensorParamName OUT_T{"out_tensor"};
 const KernelSpecName READER{"reader"};
 const KernelSpecName WRITER{"writer"};
 const KernelSpecName COMPUTE{"compute"};
+const SemaphoreSpecName PROGRAM_SEM{"program_sem"};
 
 constexpr auto KERNEL_DIR = "tools/tests/triage/hang_apps/add_2_integers_hang/kernels/";
 
@@ -54,14 +55,8 @@ ttnn::device_operation::ProgramArtifacts AddIntegersHangOperation::SingleCore::c
 
     // Reuse the sibling add_2_integers_hang kernels. They carry the architecture-portable Metal 2.0
     // dataflow-buffer device API, so the same sources run on Wormhole / Blackhole and on Quasar; the
-    // hardware configs below select the generation matching the active architecture.
-    const tt::ARCH arch = tensor_args.input_tensor_a.device()->arch();
-    ComputeHardwareConfig compute_hw_config;
-    if (arch == tt::ARCH::QUASAR) {
-        compute_hw_config = ComputeGen2Config{.fpu_math_fidelity = MathFidelity::HiFi4};
-    } else {
-        compute_hw_config = ComputeGen1Config{.fpu_math_fidelity = MathFidelity::HiFi4};
-    }
+    // runtime reads only the part of each hardware config that matches the active architecture.
+    const ComputeHardwareConfig compute_hw_config{.fpu_math_fidelity = MathFidelity::HiFi4};
 
     KernelSpec reader_spec{
         .unique_id = READER,
@@ -70,15 +65,16 @@ ttnn::device_operation::ProgramArtifacts AddIntegersHangOperation::SingleCore::c
         .tensor_bindings =
             {{.tensor_parameter_name = IN0_T, .accessor_name = "in0"},
              {.tensor_parameter_name = IN1_T, .accessor_name = "in1"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = std::string(KERNEL_DIR) + "dataflow/writer_1_tile.cpp",
         .dfb_bindings = {ConsumerOf(OUT_DFB, "out")},
+        .semaphore_bindings = {{.semaphore_spec_name = PROGRAM_SEM, .accessor_name = "program_sem"}},
         .tensor_bindings = {{.tensor_parameter_name = OUT_T, .accessor_name = "out"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     KernelSpec compute_spec{
@@ -98,6 +94,8 @@ ttnn::device_operation::ProgramArtifacts AddIntegersHangOperation::SingleCore::c
             {make_dfb_spec(IN0_DFB, data_format),
              make_dfb_spec(IN1_DFB, data_format),
              make_dfb_spec(OUT_DFB, data_format_output)},
+        // Read by dump_semaphores, same as in add_2_integers_hang: the shared writer bumps it twice.
+        .semaphores = {{.unique_id = PROGRAM_SEM, .target_nodes = NodeCoord{0, 0}}},
         .tensor_parameters =
             {{.unique_id = IN0_T, .spec = src0.tensor_spec()},
              {.unique_id = IN1_T, .spec = src1.tensor_spec()},

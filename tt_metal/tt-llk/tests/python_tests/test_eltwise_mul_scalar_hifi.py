@@ -2,35 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Binary dest-reuse multiply, HiFi init path (experimental, Blackhole only).
+HiFi binary DEST-reuse multiply with the input tile's actual face geometry.
 
-Exercises the experimental ``eltwise_mul_scalar`` Compute API
-(``api/compute/experimental/eltwise_mul_scalar.h``), specifically the
-``deepseek_binary_dest_reuse_tiles<..., DEST_TO_SRCA>`` op:
+The driver follows deepseek_binary_dest_reuse_tiles: seed DEST with A_0 * B_0,
+then fold dest = dest * B_i through DEST_TO_SRCA. Initialization and execution
+use the same TensorShape, including partial faces. This replaces the obsolete
+DEFAULT_TENSOR_SHAPE reproducer that was skipped because it could hang.
 
-    dest[idst] = dest[idst] * cb[in_tile_index]
-
-i.e. the accumulator tile already in DEST is fed back as SrcA and the freshly
-unpacked cb tile is SrcB; the product overwrites DEST. Because zero annihilates
-a product, DEST is first seeded with a real value (a plain NONE-reuse ELWMUL
-A_0 * B_0), then remaining inner tiles fold in via DEST_TO_SRCA. This is the
-seed-then-fold shape of a ttnn silu(gate)*up MoE kernel.
-
-REVERTED / XFAIL — HiFi init path. ``deepseek_binary_dest_reuse_tiles_init``
-takes the GENERAL math init at HiFi (eltwise_mul_scalar.h:74-88), hard-coding
-``ckernel::DEFAULT_TENSOR_SHAPE`` (a full 32x32 tile) instead of the kernel's
-real tile shape. That mis-specialization HANGS the device on silicon (tt-blaze
-#1760, strategy §9). The C++ reproduces the reverted HiFi init verbatim under
-``HIFI_GENERAL_INIT`` and MUST COMPILE cleanly for Blackhole; runtime pass/fail
-is not checked in this harness (no BH card), and on real silicon it hangs — so
-this test is marked ``pytest.mark.xfail``.
-
-Every lane of every output tile is defined (a full tile is packed), so the
-golden validates all lanes at the format tolerance.
+The golden uses the shared fidelity-masked multiply reference. Every logical
+output lane is checked; repeated folds and multiple DEST sections exercise
+reinitialization with BF16 and FP32 destination storage.
 """
 
-import pytest
 import torch
+from conftest import blackhole_only
 from helpers.format_config import DataFormat
 from helpers.golden_generators import EltwiseBinaryGolden
 from helpers.llk_params import (
@@ -51,7 +36,6 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     MATH_FIDELITY,
-    MULSCALARHIFI_HIFI_INIT,
     NUM_BLOCKS,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
@@ -64,8 +48,7 @@ from helpers.utils import passed_test
 
 
 def _hifi_fidelity_for_format(formats):
-    """HiFi only (the reverted general-init path is HiFi-specific), respecting the
-    hardware fidelity/format rule: Float16_b -> HiFi2, Float32 -> HiFi3/HiFi4."""
+    """Match the existing elementwise tests' fidelity/format combinations."""
     if formats.input_format == DataFormat.Float32:
         return [MathFidelity.HiFi3, MathFidelity.HiFi4]
     return [MathFidelity.HiFi2]
@@ -211,23 +194,14 @@ def _compute_dest_reuse_golden(math_fidelity, formats, prepared):
     return golden_tensor
 
 
-@pytest.mark.skip(
-    reason=(
-        "REVERTED HiFi init HANGS the device on silicon (tt-blaze #1760, strategy §9): "
-        "deepseek_binary_dest_reuse_tiles_init takes the general math init at HiFi with a "
-        "hard-coded DEFAULT_TENSOR_SHAPE (eltwise_mul_scalar.h:74-88), mis-specializing the "
-        "tile shape. A device hang CANNOT be xfailed -- it wedges every subsequent test on "
-        "the Tensix (confirmed in run 32156210309) -- so this is skipped, not xfailed. "
-        "Un-skip once the HiFi init is fixed."
-    )
-)
+@blackhole_only
 @parametrize(
     formats=input_output_formats(
         [DataFormat.Float16_b, DataFormat.Float32],
         same=True,
     ),
     math_fidelity=lambda formats: _hifi_fidelity_for_format(formats),
-    tile_dimensions=[[32, 32], [16, 32], [8, 32]],
+    tile_dimensions=[[32, 32], [16, 32], [8, 32], [4, 32], [2, 32], [1, 32]],
     input_dimensions=[[512, 32]],
     output_dimensions=[[128, 32]],
 )
@@ -255,8 +229,6 @@ def test_eltwise_mul_scalar_hifi(
         templates=[
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(),
-            # Select the reverted HiFi general-init path (#define HIFI_GENERAL_INIT).
-            MULSCALARHIFI_HIFI_INIT(enabled=True),
         ],
         runtimes=[
             NUM_TILES_IN_BLOCK(

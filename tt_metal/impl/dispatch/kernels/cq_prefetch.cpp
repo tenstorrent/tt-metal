@@ -76,7 +76,6 @@ constexpr uint32_t pcie_size = PCIE_SIZE;
 constexpr uintptr_t prefetch_q_base = PREFETCH_Q_BASE;
 constexpr uint32_t prefetch_q_size = PREFETCH_Q_SIZE;
 constexpr uintptr_t prefetch_q_rd_ptr_addr = PREFETCH_Q_RD_PTR_ADDR;
-constexpr uintptr_t prefetch_q_pcie_rd_ptr_addr = PREFETCH_Q_PCIE_RD_PTR_ADDR;
 
 constexpr uintptr_t cmddat_q_base = CMDDAT_Q_BASE;
 constexpr uint32_t cmddat_q_size = CMDDAT_Q_SIZE;
@@ -182,6 +181,9 @@ constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X
 constexpr uint32_t dispatch_s_noc_xy =
     uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBORDINATE_NOC_X, DOWNSTREAM_SUBORDINATE_NOC_Y));
 #if !defined(IS_CQ_DRAM_BACKED) || IS_CQ_DRAM_BACKED == 0
+#if defined(NOC_ATT_ENABLED)
+#error "ATT fast dispatch requires DRAM-backed command queues: no ATT window maps host memory"
+#endif
 constexpr uint64_t pcie_noc_xy =
     uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(PCIE_NOC_X), NOC_Y_PHYS_COORD(PCIE_NOC_Y)));
 #endif
@@ -536,7 +538,13 @@ FORCE_INLINE uint32_t read_from_pcie(
         size);
 #endif
     noc_async_read_set_trid(trid);
-    noc_async_read(host_src_addr, dst_addr, size);
+#ifdef ARCH_BLACKHOLE
+    // PCIe routing stays programmed on read_cmd_buf for the whole run of reads, so only the address and
+    // length change here. The caller opens and closes the batch, see fetch_q_get_cmds.
+    noc_async_read_with_state(static_cast<uint32_t>(host_src_addr), dst_addr, size);
+#else
+    noc_async_read_pcie(host_src_addr, dst_addr, size);
+#endif
     // Avoid leaking this trid to unrelated reads.
     noc_async_read_set_trid(0U);
     pending_read_size = needed_bytes;
@@ -557,7 +565,6 @@ FORCE_INLINE uint32_t read_from_pcie(
     // so the value lands in L1 SRAM directly (otherwise it sits in DM0's L1 D$ and the host's
     // NOC poll reads stale). l1_uncached_addr/l1_cached_addr are identity on WH/BH.
     *uncached_l1_ptr<uint32_t>(prefetch_q_rd_ptr_addr) = l1_cached_addr(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
-    *uncached_l1_ptr<uint32_t>(prefetch_q_pcie_rd_ptr_addr) = pcie_read_ptr;
 
     ++prefetch_q_rd_ptr;
 
@@ -703,6 +710,12 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
         // Issue tagged reads (up to MAX_OUTSTANDING_READS) whenever host has work and there is capacity.
         // Stop once we encounter a stall_flag entry (do not prefetch beyond it).
         if (!has_pending_stall_after) {
+#ifdef ARCH_BLACKHOLE
+            // Nothing between issues here touches read_cmd_buf, so PCIe routing is programmed once on the
+            // first read and torn down once after the last one. Only Blackhole splits routing into MID, and
+            // idle_erisc has no room for the extra inlined helpers elsewhere.
+            bool pcie_state_set = false;
+#endif
             while ((fetch_size != 0U) &&
                    (inflight_count < tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS)) {
                 const uint32_t this_trid = PREFETCH_TRIDS[next_trid_idx];
@@ -723,6 +736,17 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                     cmd_ptr,
                     inflight_count,
                     stall_flag);
+#endif
+
+#ifdef ARCH_BLACKHOLE
+                if (!pcie_state_set) {
+#if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
+                    noc_async_read_set_pcie_state(get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0));
+#else
+                    noc_async_read_set_pcie_state(pcie_noc_xy);
+#endif
+                    pcie_state_set = true;
+                }
 #endif
 
                 total_size = read_from_pcie<preamble_size>(
@@ -780,6 +804,12 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
                 stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0U;
             }
+
+#ifdef ARCH_BLACKHOLE
+            if (pcie_state_set) {
+                noc_async_read_clear_pcie_state();
+            }
+#endif
         }
 
         // If no commands are ready, retire the oldest in-flight read to advance the committed fence.
@@ -1785,6 +1815,10 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
     DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
     noc_async_read_set_trid(0U);
 
+    // Clear the host address bits this relay leaves in TARG_ADDR_MID. On-chip reads sharing read_cmd_buf do
+    // not program MID, so they would inherit them.
+    noc_async_read_clear_pcie_state();
+
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
@@ -2355,6 +2389,10 @@ void process_relay_linear_packed_sub_cmds(uint32_t noc_xy_addr, uint32_t total_l
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
     DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
+
+    // Clear the host address bits these sub cmds leave in TARG_ADDR_MID. On-chip reads sharing read_cmd_buf
+    // do not program MID, so they would inherit them.
+    noc_async_read_clear_pcie_state();
 }
 
 template <bool cmddat_wrap_enable>
@@ -2428,6 +2466,9 @@ bool process_cmd(
 #endif
     volatile CQPrefetchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQPrefetchCmd tt_l1_ptr*>(cmd_ptr);
     bool done = false;
+
+    // No handler may inherit PCIe routing left open by the previous command.
+    ASSERT(noc_cmd_bufs_mid_clear(noc_index), DebugAssertNocMidNotClearedTripped);
 
     switch (cmd->base.cmd_id) {
         case CQ_PREFETCH_CMD_RELAY_LINEAR:
@@ -2572,6 +2613,8 @@ bool process_cmd(
             prefetch_telemetry_base)
             ->command_count = ++command_counter;
     }
+    // Every handler that opened PCIe routing must have closed it before the next command reuses the buffer.
+    ASSERT(noc_cmd_bufs_mid_clear(noc_index), DebugAssertNocMidNotClearedTripped);
     return done;
 }
 
@@ -2698,6 +2741,10 @@ uint32_t process_relay_linear_h_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data
     noc_async_read_set_trid(0U);
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
+    // Clear the host address bits this relay leaves in TARG_ADDR_MID. On-chip reads sharing read_cmd_buf do
+    // not program MID, so they would inherit them.
+    noc_async_read_clear_pcie_state();
+
     // RelayLinearH is a large command.
     return 2 * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
@@ -2800,6 +2847,10 @@ uint32_t process_relay_linear_packed_h_cmd(uintptr_t cmd_ptr, uint32_t& downstre
     uint32_t amt_to_write = amt_read;
     relay_linear_to_downstream<true>(downstream_data_ptr, scratch_write_start_addr, amt_to_write);
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
+
+    // Clear the host address bits these sub cmds leave in TARG_ADDR_MID. On-chip reads sharing read_cmd_buf
+    // do not program MID, so they would inherit them.
+    noc_async_read_clear_pcie_state();
 
     return stride + sizeof(CQPrefetchHToPrefetchDHeader);
 }
@@ -3157,6 +3208,9 @@ void kernel_main_hd() {
 }
 
 void kernel_main() {
+#if defined(NOC_ATT_ENABLED)
+    noc_v3_cq_state_reset();
+#endif
     set_l1_data_cache<true>();
 #if defined(FABRIC_RELAY)
     DPRINT("prefetcher_{}{}: start (fabric relay. 2d = {})\n", is_h_variant, is_d_variant, is_2d_fabric);

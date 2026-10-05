@@ -28,8 +28,7 @@ class Cluster;
 struct EthCoord;
 
 namespace umd {
-    class Cluster;
-    class ClusterDescriptor;
+class ClusterDescriptor;
 }
 
 namespace llrt {

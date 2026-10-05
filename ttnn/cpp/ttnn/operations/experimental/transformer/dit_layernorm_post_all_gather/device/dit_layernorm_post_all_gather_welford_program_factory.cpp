@@ -12,6 +12,7 @@
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/math.hpp"
+#include "ttnn/distributed/types.hpp"
 
 #include <optional>
 #include <string>
@@ -47,7 +48,7 @@ ProgramDescriptor PostAllGatherWelfordProgramFactory::create_descriptor(
 
     uint32_t num_tile_rows = NC * Ht;
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);

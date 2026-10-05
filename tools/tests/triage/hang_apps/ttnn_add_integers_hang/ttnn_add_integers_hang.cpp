@@ -18,6 +18,7 @@
 
 #include "add_integers_hang_op.hpp"
 #include "stop_simulation_on_termination.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
@@ -43,6 +44,10 @@ int main() {
 
     ttnn::Tensor a = ttnn::Tensor::from_vector<bfloat16>(a_data, spec, mesh_device.get());
     ttnn::Tensor b = ttnn::Tensor::from_vector<bfloat16>(b_data, spec, mesh_device.get());
+
+    // Read by dump_semaphores, same as in add_2_integers_hang.
+    auto global_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device.get(), ttnn::CoreRange({0, 0}, {0, 0}), 3);
 
     try {
         ttnn::Tensor result = triage_hang_apps::add_integers_hang(a, b);

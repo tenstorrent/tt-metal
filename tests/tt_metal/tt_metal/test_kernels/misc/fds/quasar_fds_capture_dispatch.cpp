@@ -34,7 +34,7 @@ void kernel_main() {
     // The held value. The worker will observe it, clear its input register, and verify the clear
     // sticks while this value stays on the wire.
     overlay::FdsDispatch::fds_clear_go();
-    overlay::FdsDispatch::fds_go(/*ad_enable=*/false, group_id);
+    overlay::FdsDispatch::fds_go(group_id);
 
     uint32_t result = kComplete;
     if (!fds_kernel::wait_group_count_nonzero(kTokenCleared, poll_iterations)) {
@@ -44,7 +44,7 @@ void kernel_main() {
     if (result == kComplete) {
         // Rewrite of the identical value: the register and the wire never change, so the worker
         // must see no second capture.
-        overlay::FdsDispatch::fds_go(/*ad_enable=*/false, group_id);
+        overlay::FdsDispatch::fds_go(group_id);
         if (!fds_kernel::wait_group_count_nonzero(kTokenChecked, poll_iterations)) {
             result = kTimeoutChecked;
         }
@@ -53,7 +53,7 @@ void kernel_main() {
     if (result == kComplete) {
         // A real change: through zero and back. Only this may recapture at the worker.
         overlay::FdsDispatch::fds_clear_go();
-        overlay::FdsDispatch::fds_go(/*ad_enable=*/false, group_id);
+        overlay::FdsDispatch::fds_go(group_id);
     }
 
     fds_kernel::finish(status, l1_address, kNumSlots, result);
