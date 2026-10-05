@@ -192,6 +192,11 @@ def test_optimizer_gemma4_perf(monkeypatch):
                     kv_cache=tt_kv_cache,
                     enable_trace=enable_trace,
                     sampling_params=sampling_params,
+                    # decode input update contract v1 (#51646), as demo/text_demo_v2.py passes it
+                    reload_inputs=True,
+                    reload_page_table=False,
+                    reload_sampling_params=False,
+                    reset_sampling_state=False,
                 )
                 return decode_out.long().view(1, 1)
 

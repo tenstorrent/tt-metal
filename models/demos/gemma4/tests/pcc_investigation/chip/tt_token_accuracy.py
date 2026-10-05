@@ -106,6 +106,10 @@ def main(label):
                     kv_cache=tt_kv_cache,
                     enable_trace=False,
                     sampling_params=None,
+                    reload_inputs=True,
+                    reload_page_table=False,
+                    reload_sampling_params=False,
+                    reset_sampling_state=False,
                 )
             )
             rows.append((pos, logits))

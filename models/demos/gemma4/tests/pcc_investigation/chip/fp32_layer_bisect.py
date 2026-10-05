@@ -29,7 +29,7 @@ try:
     pt = torch.arange(32, dtype=torch.int32).reshape(1, 32)
     out = []
     for pos in range(16):
-        o = gen.decode_forward(ids[pos].reshape(1, 1).long(), torch.tensor([pos], dtype=torch.int64), page_table=pt, kv_cache=kv, enable_trace=False, sampling_params=None)
+        o = gen.decode_forward(ids[pos].reshape(1, 1).long(), torch.tensor([pos], dtype=torch.int64), page_table=pt, kv_cache=kv, enable_trace=False, sampling_params=None, reload_inputs=True, reload_page_table=False, reload_sampling_params=False, reset_sampling_state=False)
         o = o[0] if isinstance(o, (tuple, list)) else o
         out.append(o.float().reshape(-1, o.shape[-1])[0, :262144])
     torch.save(torch.stack(out), D / f"bisect-{N}-{label}.pt"); print("BISECT saved", N, label)

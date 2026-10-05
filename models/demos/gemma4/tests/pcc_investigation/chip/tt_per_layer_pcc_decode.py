@@ -125,7 +125,8 @@ try:
         for pos in range(S):
             rec.clear(); MODE["pos"] = pos
             generator.decode_forward(ids[pos].reshape(1, 1).long(), torch.tensor([pos], dtype=torch.int64), page_table=page_table,
-                                     kv_cache=kv, enable_trace=False, sampling_params=None)
+                                     kv_cache=kv, enable_trace=False, sampling_params=None,
+                                     reload_inputs=True, reload_page_table=False, reload_sampling_params=False, reset_sampling_state=False)
             steps.append({k: dict(v) for k, v in rec.items()})
             if pos % 128 == 127:
                 print(f"{mode} position {pos} at {time.time()-t:.0f}s", flush=True)

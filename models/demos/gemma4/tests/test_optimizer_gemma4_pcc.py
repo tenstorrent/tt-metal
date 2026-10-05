@@ -273,6 +273,11 @@ def test_optimizer_gemma4_pcc(monkeypatch):
                     kv_cache=tt_kv_cache,
                     enable_trace=False,
                     sampling_params=None,
+                    # decode input update contract v1 (#51646): untraced decode rebuilds every input
+                    reload_inputs=True,
+                    reload_page_table=False,
+                    reload_sampling_params=False,
+                    reset_sampling_state=False,
                 )
             )
             decode_pccs.append(_pcc(step_logits, hf_logits[position]))
