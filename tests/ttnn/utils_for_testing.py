@@ -41,7 +41,8 @@ def assert_no_unflushed_noc_atomics(device, *, min_atomic_events=1, sub_device_i
     The check resets context-global debug state. The caller must own the context and must not run another mesh at the
     same time. It covers atomic increments recorded by the semaphore, remote-CB, and PrefetcherPipe APIs. It does not
     cover fabric packet atomics or Quasar compare-and-swap. It does not prove each internal kernel boundary in a
-    multi-kernel operation. Pass the active sub-device stall group in `sub_device_ids` when the operation uses one.
+    multi-kernel operation. Pass the active sub-device stall group in `sub_device_ids` when the operation uses one. Every
+    omitted sub-device must be idle and must not emit profiler events during the check.
     """
     def add_exception_note(error, note):
         if hasattr(error, "add_note"):
