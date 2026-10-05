@@ -41,12 +41,25 @@ struct ReferencePlusOffset {
     decltype(TensorAccessor(ref_args, 0u, 0u)) ref_acc;
     uint32_t off_arena_l1;
     uint32_t ref_arena_l1;
+    // First query row (b * Q + q_start) whose reference points the ref arena
+    // holds. It starts invalid on every launch, so the cache never outlives one
+    // program run and a new reference_points tensor is always re-read. Only
+    // stage() writes the ref arena, so a skipped stage leaves the previous
+    // block's rows intact.
+    uint32_t staged_ref_row = UINT32_MAX;
 
     void stage(Noc& noc, uint32_t b, uint32_t q_start, uint32_t head, uint32_t v_rows) {
         // Offsets share the (B, Q, H, L, P, 2) / packed layout with V1's
         // locations, so the same staging routine applies.
         fused_msda::stage_location_tensor(noc, off_acc, off_arena_l1, b, q_start, head, v_rows);
-        // reference_points is (B, Q, R, 2): one page per (b, q, r), head-invariant.
+        // reference_points is (B, Q, R, 2): one page per (b, q, r), head-invariant,
+        // so consecutive heads of one query block reuse the staged rows. v_rows
+        // is a function of q_start, so the first row identifies the block.
+        const uint32_t ref_row = b * Q + q_start;
+        if (ref_row == staged_ref_row) {
+            return;
+        }
+        staged_ref_row = ref_row;
         for (uint32_t r = 0; r < v_rows; ++r) {
             const uint32_t base = (b * Q + (q_start + r)) * NUM_REFS;
             for (uint32_t k = 0; k < NUM_REFS; ++k) {

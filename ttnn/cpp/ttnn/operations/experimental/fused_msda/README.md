@@ -195,9 +195,13 @@ total_output_tiles = B * H * ceil(Q / 32)
 ```
 
 Tiles are distributed with `split_work_to_cores` over
-`compute_with_storage_grid_size()`. Queries and heads are independent, and the
-whole `4 * L * P` reduction for a tile happens on the core that owns it — **no
-cross-core reduction**.
+`compute_with_storage_grid_size()`, each core taking a contiguous run of the
+tile list. The list is ordered `b`, then query block, then head, so a core's
+consecutive tiles mostly share one query block: `reference_points` is
+head-invariant, and the V2 reader stages it once per query block rather than
+once per tile. Queries and heads are independent, and the whole `4 * L * P`
+reduction for a tile happens on the core that owns it — **no cross-core
+reduction**.
 
 `Q % 32 != 0` is supported: the trailing tile of each `(b, h)` carries
 `v_rows = Q % 32` and the reader zeroes the attention lane of rows `>= v_rows`,
@@ -369,8 +373,9 @@ reader_msda_v2.cpp ─┘   (staging, gather, tile scatter)     (SFPU geometry, 
 
 **Reader** (both variants). Per output tile `(b, h, q_start, v_rows)`:
 
-1. stage attention weights and locations/offsets (+ reference points for V2)
-   for all `v_rows` rows into L1 arenas — one `noc.async_read` per page;
+1. stage attention weights and locations/offsets (+ reference points for V2,
+   unless the previous tile staged the same query block) for all `v_rows` rows
+   into L1 arenas — one `noc.async_read` per page;
 2. for each `(l, p)`: write the bf16 operands into column 0 of the geometry
    tiles and push them. No arithmetic — the reader moves bit patterns;
 3. take `x0`, `y0` back from the SFPU, decode them with integer shifts, and

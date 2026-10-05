@@ -357,7 +357,9 @@ inline void scatter_stick(uint32_t tile_l1, uint32_t r, uint32_t src_l1) {
 // raw sampling offset and is required only when FROM_OFFSETS — its call site is
 // a discarded statement otherwise, so a V1 source need not provide it. `stage`
 // issues NoC reads without barriering; this function barriers once for
-// everything the block needs.
+// everything the block needs. A source owns its arenas and may skip reads whose
+// data they already hold from the previous tile, so nothing here may write to
+// them.
 // ---------------------------------------------------------------------------
 template <typename ValueAccessor, typename AttnAccessor, typename LocSrc>
 inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn_acc, LocSrc& loc_src) {

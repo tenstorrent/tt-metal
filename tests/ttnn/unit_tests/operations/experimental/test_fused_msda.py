@@ -679,6 +679,102 @@ def test_fused_msda_v2_bevformer_pillar_shape(device):
     _assert_close(_msda_reference(value, loc, attn, spatial_shapes), out)
 
 
+def _v2_case(B, Q, H, L, P, D, R, spatial_shapes, seed=0):
+    torch.manual_seed(seed)
+    S = sum(h * w for h, w in spatial_shapes)
+    value = _bf16(torch.randn(B, S, H, D))
+    ref_pts = _bf16(torch.rand(B, Q, R, 2))
+    offsets = _bf16(torch.randn(B, Q, H, L, P, 2) * 2.0)
+    attn = _bf16(torch.softmax(torch.randn(B, Q, H, L * P), dim=-1).reshape(B, Q, H, L, P))
+    return value, ref_pts, offsets, attn
+
+
+@pytest.mark.parametrize("D", [32, 64])
+@pytest.mark.parametrize("reference_mode,R", [("level", 2), ("pillar", 2)])
+@pytest.mark.parametrize("Q", [17, 33])
+def test_fused_msda_v2_reference_points_reused_across_heads(device, Q, reference_mode, R, D):
+    """reference_points staged once per query block must be re-staged whenever the block changes.
+
+    Tiles are ordered batch, query block, head, and each core takes a contiguous
+    run, so the V2 reader keeps the head-invariant reference points of the
+    previous tile when (b, q_start) repeats. The shape is chosen so that every
+    core's run is at least two batches' worth of tiles long. Runs are not
+    aligned to batches, but such a run contains a whole batch and crosses a
+    batch boundary, so it reuses the points across heads and re-stages them
+    inside the run:
+      * Q = 17, one query block per batch: consecutive tiles across a batch
+        boundary share q_start = 0, so a cache that ignores the batch reuses
+        the wrong batch's points.
+      * Q = 33: the run crosses a query-block boundary, and goes from a full
+        block into a v_rows = 1 tail block.
+    """
+    spatial_shapes = [(8, 10), (4, 5)]
+    H, L, P = 3, 2, 4
+    grid = device.compute_with_storage_grid_size()
+    # Two batches' worth of tiles per core: tiles_per_batch cancels in
+    # floor(B * tiles_per_batch / cores).
+    B = 2 * grid.x * grid.y
+    tiles_per_batch = math.ceil(Q / 32) * H
+    min_tiles_per_core = (B * tiles_per_batch) // min(grid.x * grid.y, B * tiles_per_batch)
+    assert (
+        min_tiles_per_core >= 2 * tiles_per_batch
+    ), f"{min_tiles_per_core} tiles per core on a {grid.x}x{grid.y} grid is shorter than two batches"
+
+    value, ref_pts, offsets, attn = _v2_case(B, Q, H, L, P, D, R, spatial_shapes)
+    loc = _locations_from_offsets(ref_pts, offsets, spatial_shapes, reference_mode)
+
+    out = ttnn.to_torch(
+        ttnn.experimental.fused_msda_from_offsets(
+            _to_device(_pack_value(value), device),
+            _to_device(ref_pts, device),
+            _to_device(_pack_locations(offsets), device),
+            _to_device(_pack_weights(attn), device),
+            spatial_shapes,
+            reference_mode=reference_mode,
+        )
+    ).to(torch.float32)
+    _assert_close(_msda_reference(value, loc, attn, spatial_shapes), out)
+
+
+@pytest.mark.timeout(300)
+def test_fused_msda_v2_repeated_calls_hit_program_cache(device):
+    """A cached V2 program re-reads reference_points on every launch.
+
+    The reader skips re-staging reference points for consecutive tiles of one
+    query block; that state must not survive into the next launch. Alternating
+    two reference_points tensors on a shape where cores run several tiles
+    catches both a stale buffer binding and a cache that outlives the launch.
+    """
+    spatial_shapes = [(16, 20), (8, 10), (4, 5), (2, 3)]
+    B, Q, H, L, P, D, R = 2, 900, 8, 4, 4, 32, 4
+    value, ref_a, offsets, attn = _v2_case(B, Q, H, L, P, D, R, spatial_shapes, seed=1)
+    ref_b = _bf16(torch.rand_like(ref_a))
+
+    value_t = _to_device(_pack_value(value), device)
+    off_t = _to_device(_pack_locations(offsets), device)
+    attn_t = _to_device(_pack_weights(attn), device)
+    ref_a_t = _to_device(ref_a, device)
+    ref_b_t = _to_device(ref_b, device)
+
+    def run(ref_t):
+        return ttnn.to_torch(
+            ttnn.experimental.fused_msda_from_offsets(
+                value_t, ref_t, off_t, attn_t, spatial_shapes, reference_mode="level"
+            )
+        ).to(torch.float32)
+
+    entries_before = device.num_program_cache_entries()
+    first = {"a": run(ref_a_t), "b": run(ref_b_t)}
+    for key, ref in (("a", ref_a), ("b", ref_b)):
+        loc = _locations_from_offsets(ref, offsets, spatial_shapes, "level")
+        _assert_close(_msda_reference(value, loc, attn, spatial_shapes), first[key])
+    for i in range(10):
+        key = "a" if i % 2 == 0 else "b"
+        out = run(ref_a_t if key == "a" else ref_b_t)
+        torch.testing.assert_close(out, first[key], rtol=0, atol=0)
+    assert device.num_program_cache_entries() - entries_before == 1
+
+
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------

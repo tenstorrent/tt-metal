@@ -160,12 +160,16 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
     const uint32_t n_d_tiles = (s.head_dim + TILE_WIDTH - 1) / TILE_WIDTH;
 
     // ---- work units ----
+    // Heads innermost: each core takes a contiguous run of units, so most of
+    // its consecutive units share (b, q_start), and the V2 reader stages the
+    // head-invariant reference points once per query block in its run rather
+    // than once per unit.
     const uint32_t q_blocks = (s.num_queries + TILE_MAX_ROWS - 1) / TILE_MAX_ROWS;
     std::vector<TileAssignment> tiles;
     tiles.reserve(static_cast<size_t>(s.batch) * s.num_heads * q_blocks);
     for (uint32_t b = 0; b < s.batch; ++b) {
-        for (uint32_t h = 0; h < s.num_heads; ++h) {
-            for (uint32_t q_start = 0; q_start < s.num_queries; q_start += TILE_MAX_ROWS) {
+        for (uint32_t q_start = 0; q_start < s.num_queries; q_start += TILE_MAX_ROWS) {
+            for (uint32_t h = 0; h < s.num_heads; ++h) {
                 tiles.push_back({b, h, q_start, std::min(TILE_MAX_ROWS, s.num_queries - q_start)});
             }
         }
