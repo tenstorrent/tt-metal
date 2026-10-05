@@ -132,7 +132,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     const uint32_t out_subblock_w = std::min(matmul_N_t, dst_size);
     const auto arch = tt::tt_metal::hal::get_arch();
     const bool scale_subblock_h = arch == tt::ARCH::WORMHOLE_B0 && out_subblock_w == matmul_N_t;
-    const uint32_t out_subblock_h = scale_subblock_h ? largest_divisor_up_to(matmul_M_t, dst_size / out_subblock_w) : 1;
+    uint32_t out_subblock_h = scale_subblock_h ? largest_divisor_up_to(matmul_M_t, dst_size / out_subblock_w) : 1;
     const uint32_t output_write_bytes_per_transaction = C_out_block * dtype_bytes;
     const bool small_output_write_transactions =
         output_write_bytes_per_transaction <= tt::constants::TILE_WIDTH * dtype_bytes;
@@ -173,6 +173,62 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     uint32_t vol2col_rm_pages = (num_patches % tt::constants::TILE_HEIGHT == 0)
                                     ? std::min(num_patches, (uint32_t)tt::constants::TILE_HEIGHT)
                                     : std::min(num_patches, 2 * tt::constants::TILE_HEIGHT);
+    // fp32-exact output path: whenever the conv computes in fp32 with fp32 dest, the tail
+    // (bias add, untilize, and -- with multiple C_in blocks -- the partial reduction) reads its
+    // fp32 tiles back through UnpackToDestFp32 + SFPU instead of the TF32-rounding Src path.
+    bool use_fp32_exact = fp32_dest_acc_en && data_format == tt::DataFormat::Float32;
+    // Use fp32 partials whenever we have multiple C_in blocks and fp32 dest is enabled.
+    // This eliminates bf16 truncation between C_in block partial sums.
+    bool use_fp32_partials = fp32_dest_acc_en && C_in_num_blocks > 1;
+    auto partial_data_format = use_fp32_partials ? tt::DataFormat::Float32 : data_format;
+    auto partial_tile_size = tt::tile_size(partial_data_format);
+
+    // Circular buffers are placed from the allocator's L1 base (the first byte above the kernel-config
+    // ring buffer) up to the end of L1, which is the bound the program's static CB check uses. Same
+    // expression the layernorm_distributed factories use.
+    const auto* budget_device = input_tensor.device();
+    const uint32_t l1_usable_for_cbs = static_cast<uint32_t>(
+        budget_device->l1_size_per_core() -
+        budget_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
+
+    // Wormhole's sub_h scaling multiplies vol2col_tiled and, with the fp32 operand split, the x_hi/x_lo
+    // CBs by out_subblock_h. The H3 audio blockings were swept on Blackhole (sub_h = 1, 72 KB more L1),
+    // and the vocoder's conv_pre at sub_h = 2 overran Wormhole L1 by 11 KB. Shrink sub_h toward 1 until
+    // the static CBs fit; the prefetch shard below is budgeted from whatever is left.
+    const bool operand_split_for_budget = config.enable_fp32_operand_split;
+    auto static_cb_bytes_for = [&](uint32_t sub_h) -> uint32_t {
+        uint32_t bytes = vol2col_rm_pages * padded_patch_size_bytes +   // vol2col_rm
+                         sub_h * matmul_K_t * tile_size +               // vol2col_tiled
+                         matmul_K_t * matmul_N_t * tile_size +          // weight_tiled
+                         matmul_M_t * matmul_N_t * partial_tile_size +  // matmul_interm
+                         matmul_M_t * matmul_N_t * tile_size;           // matmul_result_rm
+        if (C_in_num_blocks > 1) {
+            bytes += matmul_M_t * matmul_N_t * partial_tile_size + tile_size;  // reduction + worker_ack
+            if (use_fp32_partials && use_fp32_exact) {
+                bytes += matmul_M_t * matmul_N_t * partial_tile_size;  // reduction_acc
+            }
+        }
+        if (use_bias) {
+            bytes += matmul_N_t * tile_size;
+        }
+        if (operand_split_for_budget) {
+            bytes += 2 * sub_h * matmul_K_t * tile_size + matmul_K_t * matmul_N_t * tile_size;  // x_hi, x_lo, weight_lo
+        }
+        return bytes;
+    };
+    constexpr uint32_t L1_STATIC_CB_MARGIN = 64 * 1024;  // dram-read scratch, pad-offset page, alignment slack
+    while (out_subblock_h > 1 && static_cb_bytes_for(out_subblock_h) + L1_STATIC_CB_MARGIN > l1_usable_for_cbs) {
+        const uint32_t shrunk = largest_divisor_up_to(matmul_M_t, out_subblock_h - 1);
+        log_debug(
+            tt::LogOp,
+            "conv3d: static CBs at out_subblock_h={} ({} B) do not fit {} B of L1; trying {}",
+            out_subblock_h,
+            static_cb_bytes_for(out_subblock_h),
+            l1_usable_for_cbs,
+            shrunk);
+        out_subblock_h = shrunk;
+    }
+
     uint32_t cb_vol2col_rm_id = next_cb_index++;
     desc.cbs.push_back(CBDescriptor{
         .total_size = vol2col_rm_pages * padded_patch_size_bytes,
@@ -205,16 +261,6 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
             .page_size = tile_size,
         }}},
     });
-
-    // fp32-exact output path: whenever the conv computes in fp32 with fp32 dest, the tail
-    // (bias add, untilize, and -- with multiple C_in blocks -- the partial reduction) reads its
-    // fp32 tiles back through UnpackToDestFp32 + SFPU instead of the TF32-rounding Src path.
-    bool use_fp32_exact = fp32_dest_acc_en && data_format == tt::DataFormat::Float32;
-    // Use fp32 partials whenever we have multiple C_in blocks and fp32 dest is enabled.
-    // This eliminates bf16 truncation between C_in block partial sums.
-    bool use_fp32_partials = fp32_dest_acc_en && C_in_num_blocks > 1;
-    auto partial_data_format = use_fp32_partials ? tt::DataFormat::Float32 : data_format;
-    auto partial_tile_size = tt::tile_size(partial_data_format);
 
     uint32_t cb_matmul_interm_tiled_id = next_cb_index++;
     desc.cbs.push_back(CBDescriptor{
@@ -407,12 +453,10 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
 
     // L1 pre-fetch buffer for kernels > 1x1x1 with no dilation.
     // Gathers the spatial receptive field from DRAM once per spatial block, then vol2col reads from L1.
-    // Budget: remaining L1 after other CBs and kernel code/stack, capped at 500 KB.
-    // hal::get_max_worker_l1_unreserved_size() gives total L1 for CBs + kernel code;
-    // subtract a conservative 200 KB reserve for kernel code/stack.
-    constexpr uint32_t L1_KERNEL_CODE_RESERVE = 200 * 1024;
+    // Budget: the span circular buffers are placed in, minus the other CBs, capped at 500 KB. The span's
+    // base is read from the allocator rather than approximated as hal::get_max_worker_l1_unreserved_size()
+    // minus a fixed 200 KB stand-in for the kernel-config ring buffer (69 KB on Wormhole).
     constexpr uint32_t L1_PREFETCH_HARD_CAP = 500 * 1024;
-    const uint32_t l1_usable_for_cbs = tt::tt_metal::hal::get_max_worker_l1_unreserved_size() - L1_KERNEL_CODE_RESERVE;
 
     uint32_t other_cbs_bytes = (padded_patch_size_bytes * vol2col_rm_pages) +   // vol2col_rm
                                (tile_size * out_subblock_h * matmul_K_t) +      // vol2col_tiled
@@ -431,6 +475,10 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     }
     if (use_bias) {
         other_cbs_bytes += tile_size * matmul_N_t;  // bias
+    }
+    if (cb_pad_offset_id != 32) {
+        other_cbs_bytes +=
+            tt::round_up(2u * static_cast<uint32_t>(sizeof(uint32_t)), dram_read_alignment);  // pad_offset
     }
     if (operand_split) {
         other_cbs_bytes += 2 * tile_size * out_subblock_h * matmul_K_t;
