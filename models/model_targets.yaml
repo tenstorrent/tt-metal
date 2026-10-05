@@ -6,6 +6,22 @@ description: Centralized perf/accuracy targets for models CI.
 # - TODO: explicit gap placeholder; excluded from normal target resolution and treated as missing/TODO by validator.
 # `prefill_time_to_first_token` values are in milliseconds (ms).
 targets:
+  qwen-image-2.1-p150:
+    skus:
+      bh_p150:
+        entries:
+          - batch_size: 1
+            status: active
+            perf: {}
+            accuracy:
+              # One text image vs independent CUDA bf16; one edit vs original P150 output.
+              # These numerical regression checks do not measure population image quality.
+              text_image_pcc: 1.0
+              text_image_pcc_tolerance: 0.03
+              edit_image_pcc: 1.0
+              edit_image_pcc_tolerance: 0.03
+            owner_id: U03HY7MK4BT
+            team: models
   gemma4-31b-qb2:
     skus:
       p300x2:
@@ -1638,6 +1654,50 @@ targets:
             perf: {}
             accuracy: {}
             owner_id: U0491KT8MNY # Mohamed Bahnas
+            team: models
+
+  qwen3-tts-1.7b:
+    aliases: ["Qwen3-TTS-12Hz-1.7B-Base", "Qwen/Qwen3-TTS-12Hz-1.7B-Base", "Qwen3-TTS-12Hz-1.7B-CustomVoice", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U09LNK7BT1Q # Andrija Cicovic
+            team: models
+      bh_p150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U09LNK7BT1Q # Andrija Cicovic
+            team: models
+
+  qwen3-tts-0.6b:
+    aliases: ["Qwen3-TTS-12Hz-0.6B-Base", "Qwen/Qwen3-TTS-12Hz-0.6B-Base", "Qwen3-TTS-12Hz-0.6B-CustomVoice", "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U09LNK7BT1Q # Andrija Cicovic
+            team: models
+      bh_p150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U09LNK7BT1Q # Andrija Cicovic
             team: models
 
   vit:

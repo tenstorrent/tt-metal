@@ -1341,13 +1341,9 @@ class Model:
             torch_out = self.concat_device_output(tt_out)
             if sample_rows is not None:
                 torch_out = torch_out[..., sample_rows, :]
-        torch_out = torch_out[:, 0, :, :]  # [1, 1, B, padded_vocab_size]
-        torch_out = torch_out.view(B, S, -1)
-        # Truncate to vocab_size — lm_head is padded to padded_vocab_size for
-        # on-device sampling (pow2 topk), but callers expect vocab_size width.
-        if torch_out.shape[-1] > self.vocab_size:
-            torch_out = torch_out[:, :, : self.vocab_size]
-        return torch_out
+        # Trim vocabulary padding after TP gather, preserving the returned rows.
+        # B is the serving limit; a bucketed decode can return fewer rows.
+        return torch_out[:, :, :B, : self.vocab_size].reshape(-1, S, self.vocab_size)
 
     @staticmethod
     def _decode_host_shard(tensor):

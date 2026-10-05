@@ -34,6 +34,7 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 .github/time_budgets/ @roseli-TT @tdowdallTT @dpopovTT
 # Agentic research CI: @uaydonat is the backup owner.
 .github/workflows/agentic-research-model-tests.yaml @tenstorrent/metalium-models-maintainers @tchedaTT @tenstorrent/metalium-developers-infra
+.github/workflows/eltwise-accuracy-report-command.yaml @ijankowskiTT @tenstorrent/metalium-developers-eltwise @tenstorrent/metalium-developers-infra
 .github/workflows/fabric-cpu-only-tests-impl.yaml @Riddy21 @tt-asaigal @aliuTT @cfjchu @p1-0tr @tenstorrent/metalium-developers-infra
 .github/workflows/galaxy-multi-user-isolation-tests-impl.yaml @sott0n @changh95
 tests/pipeline_reorg/galaxy_multi_user_isolation_tests.yaml @sott0n @changh95
@@ -567,6 +568,7 @@ models/datasets/llm_dataset_utils.py @mtairum @uaydonat
 
 models/demos @tenstorrent/metalium-models-maintainers @cglagovichTT
 models/demos/audio/qwen3_asr @yasuhiroitoTT @sott0n @uaydonat
+models/demos/audio/qwen3_tts @acicovicTT
 models/demos/bge_large_en @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat
 models/demos/blackhole/qwen36 @atupe-tt @tenstorrent/cse-developer-ttnn
 models/demos/common/prefill @tenstorrent/metalium-developers-ds-prefill @philei-tt
@@ -669,3 +671,5 @@ tech_reports/real_time_profiler/ @mo-tenstorrent @yusufbashiTT
 tt_metal/tt-llk/tests/python_tests/helpers/perf* @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tests/python_tests/**/perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tests/python_tests/**/test_perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
+
+/models/experimental/qwen_image_2_1/ @changh95 @uaydonat @mtairum

@@ -339,6 +339,7 @@ llk:
 models:
   agentic_research_tier3:
     bh_quietbox_2: 102
+    bh_p150: 30
   merge_gate:
     wh_galaxy_merge_gate: 5
   sanity:
@@ -363,9 +364,9 @@ models:
     bh_sc4: 160
   e2e_tier2:
     wh_llmbox_perf: 270
-    wh_n150: 45
+    wh_n150: 56
     wh_n300: 6
-    bh_p150: 26
+    bh_p150: 35
     bh_p300: 42
     bh_quietbox_2: 186
   e2e_tier3:
@@ -390,10 +391,10 @@ models:
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 191
-    wh_n150: 87
+    wh_n150: 122
     wh_n300: 30
     wh_galaxy_perf: 85
-    bh_p150: 20
+    bh_p150: 43
     bh_quietbox_2: 60
   unit_tier3:
     wh_llmbox: 90
