@@ -133,8 +133,22 @@ inline void _calculate_sqrt_internal_() {
     }
 }
 
+bool bf16_dest_sqrt();
+template <int ITERATIONS>
+void calculate_sqrt_bf16();
+void init_sqrt_bf16();
+// Whether BF16 DEST runs the generated sqrt kernel as one call over the whole tile.
+inline constexpr bool sqrt_bf16_whole_tile = true;
+
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool fp32_dest_acc_en, bool FAST_APPROX>
 inline void calculate_sqrt() {
+    if constexpr (!fp32_dest_acc_en && !FAST_APPROX && !APPROXIMATION_MODE && ITERATIONS == 32) {
+        if (bf16_dest_sqrt()) {
+            init_sqrt_bf16();
+            calculate_sqrt_bf16<ITERATIONS>();
+            return;
+        }
+    }
     _calculate_sqrt_internal_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, false, FAST_APPROX>();
 }
 
@@ -153,3 +167,5 @@ void sqrt_init() {
 
 }  // namespace sfpu
 }  // namespace ckernel
+
+#include "ckernel_sfpu_sqrt_bf16.h"

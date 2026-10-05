@@ -32,6 +32,16 @@ ALWI void sqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(sqrt, sfpu::sqrt_init, (APP
 // clang-format on
 template <bool FAST_APPROX = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sqrt_tile(uint32_t idst) {
+    MATH(if constexpr (ckernel::sfpu::sqrt_bf16_whole_tile && !is_fp32_dest_acc_en && !FAST_APPROX && !APPROX) {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_sqrt,
+            (APPROX, 32, is_fp32_dest_acc_en, FAST_APPROX),
+            idst,
+            VectorMode::None);
+        return;
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
