@@ -1186,8 +1186,8 @@ Threshold:  # 0 ULP, 116 variants / 2.10M lanes, 2026-09-18
   - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-30
   - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-30
   - {out: Float32, max_ulp: 0}
-  - {out: Float16_b, max_ulp: 0}
-  - {out: Float16, max_ulp: 0}
+  - {out: Float16_b, metric: tolerance}  # 0 ULP, 116 variants / 2.10M lanes, 2026-09-18, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so that run measured only the constant 10.0, not the pack rounding of a passed-through x (Identity reads 1 step on these keys)
+  - {out: Float16, metric: tolerance}  # 0 ULP, 116 variants / 2.10M lanes, 2026-09-18, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so that run measured only the constant 10.0, not the pack rounding of a passed-through x (Identity reads 1 step on these keys)
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "No", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so every block holds only the constant 10.0
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so every block holds only the constant 10.0
   - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so every block holds only the constant 10.0
@@ -1217,13 +1217,13 @@ Threshold:  # 0 ULP, 116 variants / 2.10M lanes, 2026-09-18
   - {in: Float32, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so every block holds only the constant 10.0 for every swept input
   - {in: Float32, out: Bfp8_b, approx: "Yes", dest: "Yes", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so every block holds only the constant 10.0 for every swept input
   - {in: Float32, out: Float16, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-  - {in: Float32, out: Float16, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "No", dest: "Yes", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so this measured only the constant 10.0, not the pack rounding of a passed-through x (Identity reads 1 step on this key)
   - {in: Float32, out: Float16, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-  - {in: Float32, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "Yes", dest: "Yes", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so this measured only the constant 10.0, not the pack rounding of a passed-through x (Identity reads 1 step on this key)
   - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so this measured only the constant 10.0, not the pack rounding of a passed-through x (Identity reads 1 step on this key)
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-  - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so this measured only the constant 10.0, not the pack rounding of a passed-through x (Identity reads 1 step on this key)
   - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
@@ -1398,8 +1398,8 @@ Frac:
 # tolerance: it answers the Float32 and unswept cells from the 2026-09-18 sample, whose
 # worst lane (~1.05e9 Float32 steps, one lane) predates that fix and has no recorded
 # input -- a -0.0 read as negative or a flushed subnormal both fit it. Re-measure before
-# enrolling it. Their Bfp8_b-input cells read one lane off, like Signbit's there: the
-# zero lane the golden's own block quantization turns non-zero.
+# enrolling it. Their Bfp8_b-input cells measure 0 like Signbit's there: the one zero
+# lane the golden's own block quantization turns non-zero is masked by `flushed_inputs`.
 Sign:
   - {in: Bfp8_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-30
   - {in: Bfp8_b, out: Float16, max_ulp: 0}  # max 0 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-30
@@ -1524,6 +1524,7 @@ SfpuElwEq:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
   - {in: Float32, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, dest: "No", metric: tolerance}  # not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs the {out: ...} wildcards there
 SfpuElwNe:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
   - {out: Float32, max_ulp: 0}
   - {out: Float16_b, max_ulp: 0}
@@ -1542,6 +1543,7 @@ SfpuElwNe:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
   - {in: Float32, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, dest: "No", metric: tolerance}  # not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs the {out: ...} wildcards there
 SfpuElwGt:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
   - {out: Float32, max_ulp: 0}
   - {out: Float16_b, max_ulp: 0}
@@ -1560,6 +1562,7 @@ SfpuElwGt:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
   - {in: Float32, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, dest: "No", metric: tolerance}  # not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs the {out: ...} wildcards there
 SfpuElwGe:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
   - {out: Float32, max_ulp: 0}
   - {out: Float16_b, max_ulp: 0}
@@ -1578,6 +1581,7 @@ SfpuElwGe:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
   - {in: Float32, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, dest: "No", metric: tolerance}  # not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs the {out: ...} wildcards there
 SfpuElwLt:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
   - {out: Float32, max_ulp: 0}
   - {out: Float16_b, max_ulp: 0}
@@ -1596,6 +1600,7 @@ SfpuElwLt:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
   - {in: Float32, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, dest: "No", metric: tolerance}  # not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs the {out: ...} wildcards there
 SfpuElwLe:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
   - {out: Float32, max_ulp: 0}
   - {out: Float16_b, max_ulp: 0}
@@ -1614,6 +1619,7 @@ SfpuElwLe:  # 0 ULP, 147k-246k lanes across the six, 2026-09-18
   - {in: Float32, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, dest: "No", metric: tolerance}  # not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs the {out: ...} wildcards there
 SfpuIsclose:
   - {out: Float32, max_ulp: 0}       # 0 ULP, 3 variants / 81920 lanes, 2026-09-18
   - {out: Float16_b, max_ulp: 0}     # 0 ULP, 3 variants / 81920 lanes, 2026-09-18
@@ -1623,6 +1629,7 @@ SfpuIsclose:
   - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, dest: "No", metric: tolerance}  # not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs the {out: ...} wildcards there
 SfpuMask:
   - {out: Float32, max_ulp: 0}       # 0 ULP, 3 variants / 6144 lanes, 2026-09-18
   - {out: Float16_b, max_ulp: 0}     # 0 ULP, 3 variants / 6144 lanes, 2026-09-18
@@ -1632,6 +1639,7 @@ SfpuMask:
   - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, dest: "No", metric: tolerance}  # not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs the {out: ...} wildcards there
 SfpuBinaryMax:
   - {out: Float32, max_ulp: 0}       # 0 ULP, 11 variants / 306k lanes, 2026-09-18
   - {out: Float16_b, max_ulp: 1}     # 1 ULP, 11 variants / 311k lanes, 2026-09-18
@@ -1644,6 +1652,7 @@ SfpuBinaryMin:
 SfpuAddTopRow:
   - {out: Float32, max_ulp: 0}       # 0 ULP, 1 variant / 2048 lanes -- the whole sweep, 2026-09-18
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, dest: "No", metric: tolerance}  # not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs the {out: ...} wildcards there
 # add/sub/rsub are single IEEE operations: one step on bf16 and fp16, and the Float32 65536
 # is the usual output-rounding figure. sub/rsub's fp16 cells read 140 steps when ranked
 # unflushed -- a near-cancelling a - b lands in the subnormal band the golden keeps and the

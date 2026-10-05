@@ -382,7 +382,7 @@ def _known_lanes() -> Dict:
         why="inf where the answer is x itself, in the top four fp16 values, on a 16-bit Dest",
     )
 
-    def store_saturates(float16_b, bfp8_b, **fields):
+    def store_saturates(float16_b: float, bfp8_b: Tuple[float, float], **fields):
         """#57215: the Float16 store saturates a value just past 65504 to 65504 rather
         than to an infinity, on a 32-bit Dest packed to Float16, where the golden's fp16
         rounding answers inf. One entry per input, because the inputs reaching that band
@@ -398,7 +398,7 @@ def _known_lanes() -> Dict:
                 **shared, inputs=(fmt,), low=bounds[0], high=bounds[1], **fields
             )
             for fmt, bounds in (
-                (DataFormat.Float16_b, float16_b),
+                (DataFormat.Float16_b, (float16_b, float16_b)),
                 (DataFormat.Bfp8_b, bfp8_b),
             )
         )
@@ -426,17 +426,20 @@ def _known_lanes() -> Dict:
                     }
                 ),
             ),
+            # Not in #58607's first table; recorded there since (issuecomment-5999436777):
+            # +-65440..65504, and 65408 answers finite as it does for Silu.
             MathOperation.Tanhshrink: (
                 KnownNonfiniteLanes(
                     **{
                         **top_of_fp16,
+                        "low": 65440.0,
                         "magnitude": True,
                         "why": "inf where the answer is x - tanh(x), in the top fp16 values, on a 16-bit Dest",
                     }
                 ),
                 # x - tanh(x) for |x| at 2**16 is just past fp16's range.
                 *store_saturates(
-                    float16_b=(65536.0, 65536.0),
+                    float16_b=2.0**16,
                     bfp8_b=(65024.0, 66048.0),
                     magnitude=True,
                     why="+-65504 where x - tanh(x) is just past fp16's range and the store saturates instead of overflowing",
@@ -444,17 +447,17 @@ def _known_lanes() -> Dict:
             ),
             # sqrt(x) for x at 2**32 is 2**16.
             MathOperation.SqrtCustom: store_saturates(
-                float16_b=(4294967296.0, 4294967296.0),
+                float16_b=2.0**32,
                 bfp8_b=(4.26e9, 4.33e9),
                 why="65504 where sqrt(x) is just past fp16's range and the store saturates instead of overflowing",
             ),
             # 1/x is 2**16 at |x| = 2**-16 and ~65793-66052 a step or two under it: past
             # fp16's range, which the store overflows to inf as the golden does. The
-            # approximate reciprocal falls a few percent short, into (65504, 2**16),
-            # where the store saturates instead -- hence approx=Yes; the exact kernel
-            # agrees with the golden on these lanes.
+            # approximate reciprocal falls a fraction of a percent short, into
+            # (65504, 2**16), where the store saturates instead -- hence approx=Yes; the
+            # exact kernel agrees with the golden on these lanes.
             MathOperation.Reciprocal: store_saturates(
-                float16_b=(1.52587890625e-05, 1.52587890625e-05),
+                float16_b=2.0**-16,
                 bfp8_b=(1.51e-5, 1.54e-5),
                 approx=ApproximationMode.Yes,
                 magnitude=True,

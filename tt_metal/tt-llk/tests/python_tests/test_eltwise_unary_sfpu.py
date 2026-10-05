@@ -1193,6 +1193,22 @@ _ISINF_ISNAN_BF16_DEST_UNSUPPORTED = [
 ]
 
 
+def isinf_isnan_skip_reason(formats, mathop, dest_acc):
+    """Why the isinf/isnan sweep skips this variant, or ``None``. The driver and the
+    exact-op guard in test_sfpu_accuracy_budget.py both ask it, so the guard's
+    exclusions cannot drift from the skip."""
+    if (
+        formats.input_format == DataFormat.Float16_b
+        and dest_acc == DestAccumulation.Yes
+        and mathop in _ISINF_ISNAN_BF16_DEST_UNSUPPORTED
+    ):
+        return (
+            "bf16->fp32 dest unpack delivers NaN and -inf as +inf, so this "
+            "predicate cannot be evaluated on this pipeline"
+        )
+    return None
+
+
 def _isinf_isnan_stimuli_spec():
     def dist(size, dtype, generator):
         # Finite ramp in [-5, 5] with regular +inf / -inf / nan injected so every
@@ -1226,15 +1242,9 @@ def test_eltwise_unary_sfpu_isinf_isnan(
     # bf16->fp32 dest unpack (non-32-bit input + dest_acc=Yes) delivers NaN and -inf as
     # +inf, which only the three predicates below can see; the rest are swept here.
     # See _ISINF_ISNAN_BF16_DEST_UNSUPPORTED.
-    if (
-        formats.input_format == DataFormat.Float16_b
-        and dest_acc == DestAccumulation.Yes
-        and mathop in _ISINF_ISNAN_BF16_DEST_UNSUPPORTED
-    ):
-        pytest.skip(
-            reason="bf16->fp32 dest unpack delivers NaN and -inf as +inf, so this "
-            "predicate cannot be evaluated on this pipeline"
-        )
+    reason = isinf_isnan_skip_reason(formats, mathop, dest_acc)
+    if reason:
+        pytest.skip(reason=reason)
 
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",

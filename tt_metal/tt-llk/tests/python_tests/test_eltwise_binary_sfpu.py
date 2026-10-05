@@ -75,10 +75,23 @@ from helpers.tilize_untilize import tilize
 # =============================================================================
 
 
-def _skip_fp32_no_dest_acc(formats, dest_acc):
-    """32-bit (Float32) inputs need a 32-bit dest, i.e. dest_acc=Yes."""
+def fp32_no_dest_acc_skip_reason(formats, dest_acc):
+    """Why a driver calling :func:`_skip_fp32_no_dest_acc` skips this variant, or
+    ``None``. The exact-op guard in test_sfpu_accuracy_budget.py asks it too, so its
+    exclusions cannot drift from the skip."""
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+        return (
+            "32-bit inputs need a 32-bit dest, i.e. dest_acc=Yes: the hardware cannot "
+            "unpack them into SrcA/SrcB"
+        )
+    return None
+
+
+def _skip_fp32_no_dest_acc(formats, dest_acc):
+    """32-bit inputs need a 32-bit dest, i.e. dest_acc=Yes."""
+    reason = fp32_no_dest_acc_skip_reason(formats, dest_acc)
+    if reason:
+        pytest.skip(reason)
 
 
 def _skip_bh_float16_no_dest_acc(formats, dest_acc):
@@ -1437,8 +1450,9 @@ assert _BINARY_EDGE_OPS, (
 
 # Driving the poles found nothing left to tolerate on Wormhole. The negative-zero class used
 # to carry a non-strict xfail for div, xlogy, fmod and remainder on the grounds that SFPMAD
-# flushes a zero result to positive zero; all 16 cells XPASS, and passed_test compares with
-# torch.isclose, which cannot see a zero's sign in the first place. The indeterminate forms
+# flushes a zero result to positive zero; all 16 cells XPASS, and neither arm of
+# passed_test can see the sign of a zero: torch.isclose compares them equal, and the ULP
+# arm's value-order index ranks both zeros the same. The indeterminate forms
 # are asserted too, now that the golden models the packer substituting an infinity for a NaN
 # the pipeline was too narrow to hold; what remains of them on Wormhole is that infinity's
 # sign, handled per lane by generated_nan_sign_is_asserted() rather than by an xfail.
@@ -1718,10 +1732,7 @@ def _run_sfpu_add_top_row(
 
 @parametrize(**ADD_TOP_ROW_SWEEP)
 def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop, **run_kwargs):
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip(
-            "32-bit integer formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
-        )
+    _skip_fp32_no_dest_acc(formats, dest_acc)
 
     _run_sfpu_add_top_row(formats, dest_acc, mathop, **run_kwargs)
 

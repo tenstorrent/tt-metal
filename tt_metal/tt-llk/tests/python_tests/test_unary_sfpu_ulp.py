@@ -44,7 +44,11 @@ from helpers.sfpu_accuracy_budget import (
     Metric,
     accuracy_contract,
 )
-from helpers.sfpu_domains import _UNARY_OPS_NOT_SWEPT, sfpu_unary_ops
+from helpers.sfpu_domains import (
+    _UNARY_OPS_NOT_SWEPT,
+    negative_zero_delivered,
+    sfpu_unary_ops,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -99,7 +103,9 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
         spec_A=sweep_spec(),
     )
     # The walk's one data zero is -0.0, and the unpack drops the sign: the kernel is
-    # handed +0.0. So the golden is computed on what the kernel receives, or every op
+    # handed +0.0 -- except on the unpack-to-dest path, which keeps it
+    # (`negative_zero_delivered`, the same rule the edge tests use rather than a second
+    # copy of it). So the golden is computed on what the kernel receives, or every op
     # whose answer depends on the sign of zero -- signbit's 1.0 against 0.0 is 16129
     # bf16 steps, rsqrt's -inf against +inf a non-finite failure -- reads one lane as
     # a whole-cell error that is the unpack's, not the op's. The dedicated signed-zero
@@ -112,6 +118,7 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
     golden_src = (
         src_A
         if stimuli_format != formats.input_format
+        or negative_zero_delivered(formats.input_format, dest_acc)
         else torch.where(src_A == 0, torch.zeros_like(src_A), src_A)
     )
     golden = get_golden_generator(UnarySFPUGolden)(
