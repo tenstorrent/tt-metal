@@ -20,7 +20,11 @@ OUT = "/mnt/tt-data/ssinghal/wt/h47i"
 DEMO = "models/demos/blackhole/deepseek_v41_flash/demo/text_demo.py"
 STATE = f"{OUT}/grid_state.json"
 BATCHES = [16, 4, 8, 32, 64, 128]  # priority order
-GROUPS = {"G1": ["gsm8k", "isl4k", "isl8k"], "G2": ["isl32k", "isl64k"], "G3a": ["isl128k"], "G3b": ["isl256k"]}
+GROUPS = {
+    "G1": ["gsm8k", "isl4k", "isl8k"],
+    "G2a": ["isl32k"],
+    "G2b": ["isl64k"],
+}  # user limited ISL to 64k (128k and 256k groups dropped)
 EXTRA = [(128, "S128", ["gsm8k"])]  # B=128 spec k=1 attempt, separate process
 ISL = {
     "gsm8k": 128,
@@ -32,7 +36,7 @@ ISL = {
     "isl256k": 250000,
 }
 SPEC_K = {
-    4: 3,
+    4: 0,  # spec k=3 at B=4 failed (AssertionError mhc_mixes2 T=5), see grid_b4_G1_specfail.log; plain re-run
     8: 3,
     16: 3,
     32: 3,
@@ -94,9 +98,12 @@ def scenarios(B, g):
 
 def env_for(B, g, spec=True):
     e = EXTRA_ENV
-    if B == 128 and g != "G1":
+    if (B == 128 and g != "G1") or (B == 64 and g.startswith("G2")):
         e += " DSV41_POOL_DTYPE=fp8"  # bf16 pool cannot hold 128 users at >= 32k (recorded in GRID.md)
     k = (1 if g == "S128" else SPEC_K[B]) if spec else 0
+    if g.startswith("G2"):
+        e += " DSV41_BUILD_SLOTS=10"  # user: run the long-ISL cells fully in parallel (cap raised from 5)
+        k = 0  # spec at >= 32k asserts 'spec verify needs the matmul indexer backend' (B=8/16/32 G2 first pass); plain re-run
     if k:
         e += f" DSV41_SPEC={k} {SPEC_ENV}"
     return e
@@ -104,7 +111,7 @@ def env_for(B, g, spec=True):
 
 def procs():
     out = []
-    order = {"G1": 0, "G2": 1, "G3a": 2, "G3b": 3}
+    order = {"G1": 0, "G2a": 1, "G2b": 2, "G3a": 3, "G3b": 4}
     for g in sorted(GROUPS, key=lambda x: order[x]):
         for B in BATCHES:
             out.append((B, g))
@@ -173,7 +180,7 @@ def host_idle(h):
             "-o",
             "ConnectTimeout=15",
             f"10.82.97.{h}",
-            "pgrep -fc 'python_env/bin/python3 .*(pytest|tt-triage)' ; pgrep -fc 'flock .*dsv4_dev.lock'; uptime | sed 's/.*average: //'",
+            "pgrep -fc '[p]ython_env/bin/python3 .*(pytest|tt-triage)' ; pgrep -fc '[f]lock .*dsv4_dev.lock'; uptime | sed 's/.*average: //'",
         ],
         capture_output=True,
         text=True,
@@ -309,18 +316,31 @@ def report():
                 status = "running"
             else:
                 status = "FAIL"
-            spec = (
-                "n/a (kernel limit: T=U*(1+k) rows)"
-                if not SPEC_K[B]
-                else (
-                    "spec: "
-                    + (
-                        f"k={c['spec_k']} acc {c['acc']}/round, round {c['rnd']} ms, {c['stpsu']} tok/s/user, ratio {float(c['stpsu']) / float(c['tpsu']):.2f}x, exact {c.get('exact', '?')}"
-                        if "spec_k" in c
-                        else "no result"
+            if "spec_k" in c:
+                spec = None
+            elif B == 4:
+                spec = "FAIL: AssertionError mhc_mixes2.py:32 (T=5 drafter rows at U=1, k=3); grid_b4_G1_specfail.log"
+            elif B == 128 and g == "S128":
+                spec = "FAIL: k=1 attempt asserts (T=U*(1+k)=64 rows/mesh row > 32)"
+            elif B == 128:
+                spec = "n/a (kernel limit: T=U*(1+k) rows)"
+            elif g.startswith("G2"):
+                spec = "FAIL at >=32k: 'spec verify needs the matmul indexer backend' (B=8/16/32 first pass, *_firstpass_fail.log); plain re-run"
+            else:
+                spec = None
+            if spec is None:
+                spec = (
+                    "n/a (kernel limit: T=U*(1+k) rows)"
+                    if not SPEC_K[B]
+                    else (
+                        "spec: "
+                        + (
+                            f"k={c['spec_k']} acc {c['acc']}/round, round {c['rnd']} ms, {c['stpsu']} tok/s/user, ratio {float(c['stpsu']) / float(c['tpsu']):.2f}x, exact {c.get('exact', '?')}"
+                            if "spec_k" in c
+                            else "no result"
+                        )
                     )
                 )
-            )
             rows.append(
                 (
                     B,
@@ -329,7 +349,7 @@ def report():
                     c,
                     spec,
                     os.path.basename(f),
-                    "fp8" if B == 128 and g in ("G2", "G3a", "G3b") else "bf16",
+                    "fp8" if B == 128 and g in ("G2a", "G2b", "G3a", "G3b") else "bf16",
                     layers,
                     env_for(B, g),
                 )
