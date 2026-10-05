@@ -345,13 +345,6 @@ void kernel_main() {
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
                     bool last_out = block == (num_blocks_inner_dim - 1);
-// Configure packer once for pack out without Bias
-#if not defined FUSE_BIAS and defined PACK_RELU
-                    if (last_out) {
-                        // if last block we pack the final result with relu enabled
-                        PACK((llk_pack_relu_config(ReluConfig::zero())));
-                    }
-#endif
 
                     if constexpr (in0_transpose_tile) {
                         reconfig_data_format_srca(in1_dfb_id, in0_transpose_dfb_id);
@@ -374,6 +367,14 @@ void kernel_main() {
                         pack_init(mm_partials_dfb_id);
 #endif
                     }
+
+// Enable packer ReLU only after the in0 transpose pack above, so it governs
+// matmul output packs only (not the transpose stage that packs in0_dfb).
+#if not defined FUSE_BIAS and defined PACK_RELU
+                    if (last_out) {
+                        PACK((llk_pack_relu_config(ReluConfig::zero())));
+                    }
+#endif
 
 #ifdef ARCH_QUASAR
                     // Quasar (§7): the accumulation blocks pack to mm_partials_dfb_id; the FINAL block packs to

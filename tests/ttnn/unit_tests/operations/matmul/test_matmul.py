@@ -2558,6 +2558,61 @@ def test_matmul_with_transpose_and_configs(device, b, s, m, k, n, transpose_a, t
     )
 
 
+# Regression for issue #58405: transpose_a=True + fused ReLU + no bias
+# packer ReLU must only cover the matmul output pack, not the in0 transpose stage.
+@pytest.mark.parametrize(
+    "program_config",
+    [
+        ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(1, 8),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=32,
+            per_core_N=2,
+            fuse_batch=True,
+            mcast_in0=True,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        ),
+        ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(2, 2),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            out_block_h=16,
+            out_block_w=8,
+            per_core_M=16,
+            per_core_N=8,
+            transpose_mcast=False,
+            fuse_batch=True,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        ),
+    ],
+)
+def test_matmul_transpose_a_fused_relu_no_bias(device, program_config):
+    torch.manual_seed(0)
+    m, k, n = 32, 1024, 512
+    torch_a = torch.randn((1, 1, m, k), dtype=torch.bfloat16)
+    torch_b = torch.randn((1, 1, k, n), dtype=torch.bfloat16)
+    torch_out = torch.relu(torch_a.transpose(-1, -2) @ torch_b)
+
+    a_t = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    b_t = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.matmul(a_t, b_t, transpose_a=True, program_config=program_config)
+    out = ttnn.to_torch(out)
+
+    assert out.shape == torch_out.shape
+    assert_numeric_metrics(
+        torch_out,
+        out,
+        atol=0.012 * k,
+        rtol=0.002 * k,
+        frobenius_threshold=0.001 * k,
+        pcc_threshold=0.99,
+        check_ulp=False,
+    )
+
+
 ##########################
 # MODEL SPECIFIC MATMULS #
 ##########################
