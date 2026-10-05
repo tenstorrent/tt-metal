@@ -39,6 +39,12 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
         group's entry. The chunk scan handles the reset inside the split group.
         Subsequent groups use ``tail_a`` and ``tail_b`` instead of the head summaries.
 
+        Optional ``actual_end`` is a replicated UINT32 row-major scalar, with
+        the same lifetime as ``actual_start``. It defines a nonempty 32-aligned
+        interval within physical capacity; omission uses the full capacity.
+        Bounds may change during trace replay. Padded group outputs are unspecified.
+        Bounds are caller preconditions and are not read back on the host.
+
         Args:
             a (ttnn.Tensor): Group multipliers ``[B*H*G, K, K]``. Must be a
                 TILE-layout FLOAT32 or BFLOAT16 device tensor.
@@ -93,7 +99,8 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
 
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("sequence_parallel_axis") = 0);
+        nb::arg("sequence_parallel_axis") = 0,
+        nb::arg("actual_end") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::affine_exclusive_scan::detail

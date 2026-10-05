@@ -22,7 +22,7 @@ using namespace ckernel::unpacker;
 // in1 tile shape: [32, 32]
 // rt_dim: 1
 // ct_dim: any integer from 1 to 16
-// kt_dim: even number from 2 to 256 (inclusive)
+// kt_dim: any integer from 1 to 256 (inclusive)
 // fidelity: LoFi only
 // throttle: not supported
 
@@ -99,8 +99,8 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
             TTI_NOP;
         });
 
-    // Mop is configured to always cover two iterations of the inner (kt) dim loop, allowing us to
-    // cover up to 256 kt_dim (max supported by this API) with max mop iterations (128)
+    // Mop is configured to cover pairs of inner (kt) iterations. An odd tail
+    // replays one recorded inner iteration directly.
     // To usefully issue up to 128 mop iterations we're limited to only using 0s in zmask
     // (not using SKIP_A/B instructions) since iterations beyond 32 always use 0s for zmask
     //
@@ -182,7 +182,22 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
     TTI_MOP_CFG(0);
 }
 
-template <bool transpose = false>
+/**
+ * @brief Configure the unpack thread for a custom_mm block matmul.
+ *
+ * Sets the unpacker X ends, records the MOP and replay buffer the execute runs, and resets the counters.
+ *
+ * @tparam transpose: Transpose the SrcA read, values = <true/false>
+ * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>. Only unpB_face_r_dim rows of each
+ *                    SrcB face are unpacked, so zeroing the rest saves FPU power.
+ * @param unpB_face_r_dim: Activation rows per face, 1, 2, 4 or 8. Sets unpacker 1's X end.
+ * @param unpA_dst_format: Unpack destination format of the weights (SrcA); Bfp4_b selects a tuned sequence.
+ * @param ct_dim: Output width in tiles, 1 to 16.
+ * @note Call this before @ref _llk_unpack_AB_custom_mm_, and again after any other op has run, in particular one
+ *       that writes SrcB: the execute does not reprogram the MOP, and the SrcB clear happens only here.
+ * @note On the math thread, pair with @ref _llk_math_custom_mm_init_.
+ */
+template <bool transpose = false, bool clear_src = true>
 inline void _llk_unpack_AB_custom_mm_init_(const std::uint32_t unpB_face_r_dim, const std::uint32_t unpA_dst_format, const std::uint32_t ct_dim = 1)
 {
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose ? 1 : 0);
@@ -201,6 +216,16 @@ inline void _llk_unpack_AB_custom_mm_init_(const std::uint32_t unpB_face_r_dim, 
 
     _llk_unpack_AB_custom_mm_mop_config_(ct_dim, post1);
 
+    if constexpr (clear_src)
+    {
+        // Clear SrcB as we only unpack into 1/8 FPU rows so zeroing them gives power savings
+        // This particular instruction clears both banks after waiting for both of them to be free
+        // It must run alone: a both-bank SrcB clear drops SrcA writes that unpacker 0 makes while it runs
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
+        TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK1);
+    }
+
     // Reset counters here since reset in the execute API is at the end
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
@@ -212,8 +237,8 @@ inline void _llk_unpack_AB_custom_mm_run_(
     const std::uint32_t address_b,
     const std::uint32_t block_increment,
     const std::uint32_t inner_increment,
-    const std::uint32_t kt_dim)
-{
+    const std::uint32_t kt_dim,
+    const std::uint32_t ct_dim) {
     // Program SrcB address once, its updated using counters for up to 256 kt_dim
     cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
     // Program SrcA address once, its updated using CFGSHIFTMASK
@@ -228,8 +253,29 @@ inline void _llk_unpack_AB_custom_mm_run_(
 
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
-    // We can issue mop only once for up to 256 kt_dim
-    TT_MOP(0, (kt_dim / 2) - 1, 0);
+    constexpr std::uint32_t mop_template_0 = 0;
+    constexpr std::uint32_t no_skip_zmask = 0;
+    constexpr std::uint32_t replay_buffer_size = 32;
+    constexpr std::uint32_t full_unpack_instruction_count = 5;
+    constexpr std::uint32_t reuse_instruction_count = 3;
+
+    const std::uint32_t kt_pairs = kt_dim / 2;
+    if (kt_pairs > 0) {
+        TT_MOP(mop_template_0, kt_pairs - 1, no_skip_zmask);
+    }
+    if (kt_dim % 2 != 0) {
+        const std::uint32_t first_half_tiles = (ct_dim + 1) / 2;
+        const std::uint32_t second_half_tiles = ct_dim / 2;
+        // Both tunings occupy five instructions for the full unpack. Post1's first instruction is a padding NOP,
+        // while post0's last instruction is a hazard NOP.
+        const std::uint32_t first_half_instruction_count =
+            full_unpack_instruction_count + (first_half_tiles - 1) * reuse_instruction_count;
+        lltt::replay(0, first_half_instruction_count);
+        if (second_half_tiles > 0) {
+            const std::uint32_t second_half_instruction_count = second_half_tiles * reuse_instruction_count;
+            TT_REPLAY(replay_buffer_size - second_half_instruction_count, second_half_instruction_count, 0, 0);
+        }
+    }
 
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 
@@ -242,7 +288,23 @@ inline void _llk_unpack_AB_custom_mm_run_(
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
 
-template <bool read_transposed = false, bool clear_src = true>
+/**
+ * @brief Unpack a kt_dim x ct_dim block of weight tiles into SrcA and the matching activation tiles into SrcB.
+ *
+ * @tparam read_transposed: Walk the weight tiles column by column (ct_dim tiles with a stride of kt_dim, then the
+ *                          next tile) instead of row by row, values = <true/false>
+ * @param base_address_a: L1 address of the weights (SrcA), in the 16-byte-word encoding of L1_ADDRESS().
+ * @param base_address_b: L1 address of the activations (SrcB), in the same encoding.
+ * @param tile_index_a: First weight tile to read.
+ * @param tile_index_b: First activation tile to read.
+ * @param tile_size_a: Weight tile size, in 16-byte words.
+ * @param tile_size_b: Activation tile size, in 16-byte words.
+ * @param kt_dim: Inner dimension in tiles, 1 to 256.
+ * @param ct_dim: Output width in tiles, 1 to 16.
+ * @note Call @ref _llk_unpack_AB_custom_mm_init_ first.
+ * @note On the math thread, pair with @ref _llk_math_custom_mm_.
+ */
+template <bool read_transposed = false>
 inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -251,7 +313,7 @@ inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t tile_size_a,
     const std::uint32_t tile_size_b,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1)
+    const std::uint32_t ct_dim)
 {
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
@@ -265,12 +327,5 @@ inline void _llk_unpack_AB_custom_mm_(
     wait_for_next_context(1);
     reset_config_context();
 
-    if constexpr (clear_src)
-    {
-        // Clear SrcB as we only unpack into 1/8 FPU rows so zeroing them gives power savings
-        // This particular instruction clears both banks after waiting for both of them to be free
-        TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
-    }
-
-    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim);
+    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
 }

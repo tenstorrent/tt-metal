@@ -24,20 +24,22 @@ def _t(x, dtype, device):
 @pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.uint32])
 @pytest.mark.parametrize("start", [1, 100000, 2**30])
 @pytest.mark.parametrize("diagonal", [0, 1, -1, 5, -7])
-@pytest.mark.parametrize("op, golden", [("tril", torch.tril), ("triu", torch.triu)])
-def test_integer_inputs_keep_their_dtype_and_their_value(device, dtype, start, diagonal, op, golden):
+@pytest.mark.parametrize("op", ["tril", "triu"])
+def test_integer_inputs_keep_their_dtype_and_their_value(device, dtype, start, diagonal, op):
     x = torch.arange(start, start + N, dtype=torch.int32).reshape(SHAPE)
     got = getattr(ttnn, op)(_t(x, dtype, device), diagonal=diagonal)
     assert got.dtype == dtype, f"{op} on {dtype} returned {got.dtype}"
+    golden = getattr(torch, op)
     assert torch.equal(ttnn.to_torch(got).to(torch.int64), golden(x, diagonal=diagonal).to(torch.int64))
 
 
 @pytest.mark.parametrize("dtype, torch_dtype", [(ttnn.bfloat16, torch.bfloat16), (ttnn.float32, torch.float32)])
 @pytest.mark.parametrize("diagonal", [0, 1, -1])
-@pytest.mark.parametrize("op, golden", [("tril", torch.tril), ("triu", torch.triu)])
-def test_float_inputs_are_unchanged(device, dtype, torch_dtype, diagonal, op, golden):
+@pytest.mark.parametrize("op", ["tril", "triu"])
+def test_float_inputs_are_unchanged(device, dtype, torch_dtype, diagonal, op):
     torch.manual_seed(0)
     x = (torch.rand(SHAPE) * 8 - 4).to(torch_dtype)
     got = ttnn.to_torch(getattr(ttnn, op)(_t(x, dtype, device), diagonal=diagonal))
     assert got.dtype == torch_dtype
+    golden = getattr(torch, op)
     assert torch.equal(got.float(), golden(x.float(), diagonal=diagonal))

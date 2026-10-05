@@ -1,6 +1,6 @@
-# MiniMax-M3 KV migration runbook — prefill loopback, decode loopback, prefill → decode
+# MiniMax-M3 KV migration runbook — prefill loopback, decode loopback, prefill → decode, KV Manager
 
-Copy-paste commands for the three M3 migration tests on the Blackhole galaxies. Paths are this
+Copy-paste commands for the four M3 migration tests on the Blackhole galaxies. Paths are this
 checkout's (`/data/philei/...`). The mechanism and config layering are explained elsewhere; this file
 only tells you what to type.
 
@@ -9,8 +9,14 @@ only tells you what to type.
 | 1 | prefill → prefill loopback (Gate 2 / P2) | 1 | `migration_driver` (terminal C) | `models/demos/common/prefill/docs/PREFILL_MIGRATION_TESTING.md` |
 | 2 | decode → decode loopback | 1 | `[kv-slice]` lines from every decoder rank | `tt-blaze/docs/DECODE_MIGRATION.md` |
 | 3 | prefill → decode, two galaxies (harness) | 2 | `pd_migration_complete` step | `tt-llm-engine/disaggregation/launch_harness/README.md` |
+| 4 | prefill → decode through the KV Manager (tt-d-gen, `kv_manager: "kvm"`) | 2 | request checks + the KVM log, then blaze's `[kv-golden]` | `tt-d-gen/kv_manager/scripts/fleet/kvm-fleet-launcher.md` |
 
-Do §1 and §2 before §3: the harness reports a failure on either side as one.
+Do §1 and §2 before §3 or §4: they prove each side's model runner and table on one galaxy, and the
+two-galaxy tests report a failure on either side as a single failure.
+
+Every migrating run needs a **bf8 prefill index cache** (`M3_INDEX_CACHE_BF16=0`). Decode stores index_k
+in bfp8, and the workers copy raw chunk bytes, so building a migration table rejects a bf16 index_k.
+The checked-in migration bindings already set it.
 
 ---
 
@@ -243,8 +249,11 @@ MIGRATE slot 0 -> 2 ... complete / MIGRATE slot 1 -> 3 ... complete
 [migration_driver] verify bytes PASSED: 2 pair(s), N chunk(s) byte-identical dst == src
 ```
 
-`verify bytes` is the default `--verify-migration dst-bytes`, across all 9 configs (`k_h0..3`,
-`v_h0..3`, `index_k`). For the golden-anchored destination check as well, append
+`verify bytes` is the default `--verify-migration dst-bytes`, across all 9 configs. The table names
+them `"00"`..`"08"`, matching blaze: `00`–`03` = K heads 0–3, `04`–`07` = V heads 0–3, `08` = index_k.
+index_k rows exist only on MSA layers, because blaze publishes it only there. The driver therefore logs
+`N chunk(s) not compared — their table rows are unpublished on both sides`; at 10240 tokens N is 1920
+(3 dense layers × 320 chunks × 2 pairs). For the golden-anchored destination check as well, append
 `--verify-migration both` (expect an extra `verify golden PASSED`). Exit code 0 means every check
 passed. `[spsc-trace] ... wait_complete` backtraces in C are queue instrumentation, not errors.
 
@@ -394,12 +403,22 @@ the prefill host: `tt-llm-engine`'s launch harness, scenario `pd_migration`, con
   (§0.5). The prefill steps get `prefill.tree` from the yaml.
 - Use Slurm hostnames and run the harness on the prefill node; the short `bh-glx-b*` aliases do not
   resolve everywhere.
-- Checks: CHECK 1 = prefill source vs golden (producer, over UMD); CHECK 2 = `[kv-src]` source vs
-  destination, not available for M3 (no source dump); CHECK 3 = `[kv-golden]` destination vs golden,
-  K/V only. `index_k` reports `SKIP` there: its `load_golden` is `None`, and `longbook_10240` carries
-  no `index_k` tensors anyway.
+- Checks:
+  - CHECK 1 = prefill source vs golden (producer, over UMD).
+  - CHECK 2 = `[kv-src]` source vs destination. Not available for M3: there is no source dump.
+  - CHECK 3 = `[kv-golden]` destination vs golden, K/V and, on the sparse layer, index_k.
+    `longbook_10240` carries index_k for the MSA layers.
+- The migration layer's own tt-metal must read the compressed (`STRIDED_ROWS`) tables that tt-metal
+  ≥ #57098 exports. At the engine's old pin (e49ac055d6) those rows import as empty: the sender logs
+  `no destination rows for config N ...; skipped` and migrates nothing. Two fixes:
+  - use tt-llm-engine#419 (tt-metal cc834df1b8);
+  - or set `KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES=2080374784` in the harness `prefill.env` and
+    `decode.flags.env`, which makes the exporters mirror the per-chunk entries.
+
+  With blaze ≥ #4502 every K/V config is compressible, so without either fix nothing migrates.
 - The decode driver's wait for the sentinel has no timeout.
-- Last passing run: 2026-09-08, b08u08 → b08u02, PCC 0.999 on every K/V head of layers 0 and 3.
+- Last passing run: 2026-09-29, b08u08 → b09u02, tt-blaze main + tt-llm-engine#419, no dual-write.
+  CHECK 3: K/V ≥ 0.999, index_k 0.99976.
 
 ### 3.2 Run
 
@@ -445,8 +464,8 @@ Logs: `/data/philei/disagg_runs/<timestamp>/<step>.log`, plus the generated
 [pd-migration] CHECK 1 (prefill src == golden), producer over UMD:   ... kv_cache_pcc_complete ...
 [pd-migration] CHECK 2 (prefill src == decode dst), transport fidelity:   (none)        <- expected for M3
 [pd-migration] CHECK 3 (decode dst == golden), KV correctness:
-  [kv-golden] mesh1/layer0 k_h0 slot0: PASS (pcc=0.99...)
-  [kv-golden] mesh2/layer3 index_k: SKIP (no host_tensor/load_golden hook)            <- expected, see 3.1
+  [kv-golden] mesh1/layer0 k_h0 slot0 layer0 head0 [0,10239): PASS pcc=0.999...
+  [kv-golden] mesh2/layer3 index_k slot0 layer3 head0 [0,10239): PASS pcc=0.999759
 [pd-migration] stage verdicts (4/4 stages reported): ...
 [pd-migration] PASS: all 4 decode stages validated
 ```
@@ -478,3 +497,363 @@ grep "gathered layer_id->mesh_id" /data/philei/disagg_runs/*/decode_driver.log
 - The prefill binding the yaml points at is the §1 one; the harness overrides its queue, endpoint,
   `PREFILL_NUM_USERS`, `PREFILL_MIGRATION_TABLE_PATH` and `PREFILL_MIGRATION_CLIENT_DIR` entries and
   writes the merged file to `<run_dir>/prefill_topology.yaml`.
+
+---
+
+## 4. Prefill → decode through the KV Manager (tt-d-gen, `kv_manager: "kvm"`)
+
+A served disaggregated deployment on two galaxies:
+
+- **Prefill galaxy:** the tt-metal M3 prefill runner (1 rank, SP=8 × TP=4, 60 layers) and a tt-d-gen
+  `tt_dynamo` prefill worker.
+- **Decode galaxy:** the tt-blaze M3 decode ring (4 stages: embed, dense layer 0, sparse layer 3,
+  lm-head; synthetic weights) and a `tt_dynamo` decode worker, plus the Dynamo frontend.
+- **KV transport:** one KV Manager (KVM) container per galaxy.
+
+Prompts of at least `min_disagg_tokens` (1024) are prefilled on the prefill galaxy, and their KV is
+moved to decode. Shorter prompts are prefilled on decode.
+
+How the KV gets there:
+- At startup each model runner writes its KV chunk address table (to shared storage) and its device map
+  (host-local).
+- Each KVM loads both tables and pairs prefill rows with decode rows by (layer, config name).
+- The workers submit migrations to the prefill-side KVM over ZMQ, and the two KVMs copy the chunks
+  device DRAM → host → TCP → host → device DRAM.
+
+Decode runs synthetic weights, so the generated text is noise. The check is that migrated KV lands
+intact: the request counters, the KVM's own verdict, and blaze's PCC of the migrated KV against a
+golden trace.
+
+### 4.1 Trees and builds (compute node, never the login node)
+
+```bash
+export PREFILL=<tt-metal checkout>          # M3 prefill runner
+export BLAZE=<tt-blaze checkout>            # M3 decode, with KV migration support
+export DGEN=<tt-d-gen checkout>             # has models/minimax-m3/dynamo.disagg.kvm.{prefill,decode}.json
+export CKPT=<MiniMax-M3 checkpoint dir>     # tokenizer + config; the frontend and workers read it
+```
+
+**a) prefill tt-metal:**
+
+```bash
+cd $PREFILL && ./build_metal.sh --build-type Release --enable-ccache && ./create_venv.sh
+```
+
+**b) tt-blaze.** The galaxy nodes have no `~/.local` python for a symlinked venv, so bundle the
+interpreter:
+
+```bash
+cd $BLAZE && git submodule update --init tt-metal && ./build_blaze.sh --development --enable-ccache
+cd $BLAZE/tt-metal && ./create_venv.sh --bundle-python
+```
+
+**c) tt-d-gen: the Dynamo adapter venv and the blaze-enabled engine module.** Home directories are
+node-local on the galaxies, so keep uv's interpreters and caches on shared storage: the venv then
+resolves on every node. `setup_router_env.sh` needs libzmq; without root, build zeromq 4.3.5 into a
+prefix and export `PKG_CONFIG_PATH=<prefix>/lib/pkgconfig LD_LIBRARY_PATH=<prefix>/lib`.
+
+```bash
+export UV_PYTHON_INSTALL_DIR=<shared dir>/uv-python UV_CACHE_DIR=<shared dir>/uv-cache
+cd $DGEN
+ln -sfn $BLAZE third_party/tt-blaze                  # the engine links against this blaze build
+./adapters/dynamo/setup_router_env.sh --with-test-deps
+. adapters/dynamo/.venv/bin/activate
+./build_dgen.sh --dynamo --blaze --skip-blaze-build --build-dir build-dynamo-blaze
+strings -a bindings/python/tt_engine/_tt_engine.abi3.so | grep -c "ENABLE_BLAZE=ON build"   # must print 0
+```
+
+A later `./build_dgen.sh --bindings` replaces the device module with a CPU build; the `strings` check
+catches that.
+
+**d) KVM image**, on a host with docker:
+
+```bash
+cd $DGEN && ./kv_manager/scripts/build_kv_manager_image.sh --image kv-manager:m3-local
+```
+
+`launch_kvm_fleet.sh up` ships a local image to the other fleet hosts itself: it runs a `kvm-registry`
+container and pulls over `ssh -R localhost:5001`. A GHCR image
+(`ghcr.io/tenstorrent/tt-d-gen/kv-manager:kvm-<sha>`) is pulled on every host instead, and needs
+`IMAGE_PULL_USER` / `IMAGE_PULL_TOKEN` with `read:packages`.
+
+### 4.2 Allocation and access
+
+```bash
+salloc -p bh_sc5_B2B9_D12 -N 2 --nodelist=<prefill-node>,<decode-node> --exclusive -t 06:00:00
+srun --jobid <JOBID> -w <node> --overlap --pty bash       # one terminal per process below
+```
+
+- `docker info` must work as your user on both nodes.
+- The fleet launcher reaches the other node over non-interactive ssh, so both nodes need a
+  passwordless key in `authorized_keys`, and the node you launch from needs it in `~/.ssh/config`
+  (`Host bh-glx-*` / `IdentityFile ...`). Home is node-local, so set this up on each node.
+- Every terminal that starts `tt-run`/PRRTE (the prefill runner, blaze) must detach from Slurm.
+  Otherwise the ranks fail to map (`PMIX_ERR_JOB_FAILED_TO_MAP`). It also needs the soft ulimits
+  raised to the hard ones:
+
+  ```bash
+  unset $(env | sed -n 's/^\(SLURM[^=]*\)=.*/\1/p'); export PRTE_MCA_ras="^slurm" PRTE_MCA_plm="^slurm"
+  for f in t u n s l; do ulimit -S$f "$(ulimit -H$f)"; done
+  ```
+
+Per run, on the node you drive from:
+
+```bash
+export PHOST=<prefill-node> DHOST=<decode-node> NIC=ens5f0np0
+export PIP=$(ssh $PHOST "ip -o -4 addr show $NIC | awk '{print \$4}' | cut -d/ -f1")
+export DIP=$(ssh $DHOST "ip -o -4 addr show $NIC | awk '{print \$4}' | cut -d/ -f1")
+export RUN=<shared run dir>                  # visible from both nodes
+export TABLES=$RUN/kvm_tables                # KV chunk tables: every KVM reads both
+mkdir -p $TABLES && chmod 777 $TABLES        # the KVM containers write here as another user
+```
+
+### 4.3 Configs
+
+**Worker configs.** Copy `$DGEN/models/minimax-m3/dynamo.disagg.kvm.{prefill,decode}.json` into
+`$RUN`, then fill in this run's addresses:
+
+```bash
+cd $DGEN && python3 - <<EOF
+import json
+p = json.load(open("models/minimax-m3/dynamo.disagg.kvm.prefill.json"))
+d = json.load(open("models/minimax-m3/dynamo.disagg.kvm.decode.json"))
+ep = "tcp://$PIP:9093"                               # the prefill-side KVM's ZMQ endpoint
+p["runtime"].update(kv_endpoint=ep, kv_bootstrap_host="$PIP"); p["runtime"]["kv_peers"][0]["host"] = "$DIP"
+d["runtime"]["kv_endpoint"] = ep;                               d["runtime"]["kv_peers"][0]["host"] = "$PIP"
+json.dump(p, open("$RUN/prefill.json", "w"), indent=2); json.dump(d, open("$RUN/decode.json", "w"), indent=2)
+EOF
+```
+
+- Only the prefill-side KVM binds ZMQ, so both workers' `kv_endpoint` point at it.
+- Both workloads have `"manage": false`: each worker only logs the launch command, and you start the
+  model runners yourself (4.4).
+
+**Prefill rank binding:** `$DGEN/engine/tools/manifests/minimax_m3/runner_1rank_kvm.yaml`. It already
+sets:
+
+| Setting | Why |
+|---|---|
+| `PREFILL_ENABLE_MIGRATION=1`, `PREFILL_MIGRATION_EXPORT_TO_FILE=1` | write the table and device map to files instead of handing them to a migration endpoint |
+| `PREFILL_MIGRATION_TABLE_PATH=${M3_KVM_TABLE_DIR}/m3_prefill_kv_chunk_table.pb` | expanded from the runner's environment |
+| `PREFILL_MIGRATION_DEVICE_MAP_PATH=/tmp/prefill_device_map.txt` | the device map holds host-local ASIC ids |
+| `M3_INDEX_CACHE_BF16=0` | decode stores index_k in bfp8 and the KVM copies raw bytes; the table builder rejects a bf16 index_k |
+| `PREFILL_NUM_USERS=3` | equals blaze `--n-slots`: two served slots plus blaze's teardown scratch slot |
+| `PREFILL_NUM_LAYERS=1` | equals the workers' `layers_per_chunk`/`kv_num_layers`; see below |
+
+**What must agree across the pair:**
+- The KVM pairs rows by config name. The prefill table names its 9 configs `"00"`..`"08"`, like
+  blaze's: `00`–`03` K heads, `04`–`07` V heads, `08` index_k.
+- Both sides publish index_k (`08`) on the MSA layers only. A row published by one side alone is
+  rejected: `layer=0 config=8 is covered by only one side`.
+- `layers_per_chunk`, `kv_num_layers` and `PREFILL_NUM_LAYERS` are 1. The engine migrates every acked
+  layer in `[0, layers_per_chunk)`, and this ring holds KV for layers 0 and 3 only.
+- `KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES=2080374784` is set on both model runners. It makes the table
+  exporters also write per-chunk entries, for readers that predate compressed (`STRIDED_ROWS`) tables.
+
+### 4.4 Bring-up
+
+Before every bring-up, on **both** nodes: clear your leftovers and reset the boards. A decode ring
+stopped mid-run leaves its Ethernet cores wedged.
+
+```bash
+pkill -u $USER -f '[r]un_pipeline_prefill|[p]refill_runner|[t]trun[.]py|[b]laze[.]models[.]cli|[t]t_dynamo[.]main|[d]ynamo[.]frontend|[p]rte|[p]run'
+find /dev/shm -maxdepth 1 -user $USER \( -name 'tt_h2d_*' -o -name 'tt_d2h_*' -o -name 'tt_prefill_layer_*' -o -name 'TT_UMD_LOCK.*' \) -delete
+rm -f /tmp/prefill_device_map.txt /tmp/decode_device_map.txt
+tt-smi -glx_reset && sleep 90         # tt-smi from any tt-metal python_env
+```
+
+**1. Decode model: blaze, on the decode node** (Slurm detach + ulimits, 4.2). Wait for
+`keeping sockets alive` or `waiting for migration DONE sentinel`, about 10 minutes.
+
+```bash
+cd $BLAZE/tests/testfiles             # the rank binding names its mesh graph descriptor relatively
+export TT_METAL_HOME=$BLAZE/tt-metal TT_METAL_RUNTIME_ROOT=$BLAZE/tt-metal PYTHONPATH=$BLAZE \
+       TT_METAL_SLOW_DISPATCH_MODE=1 OPENBLAS_NUM_THREADS=8 \
+       KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES=2080374784 TT_MIGRATION_EXPORT_TO_FILE=1
+PY=$BLAZE/tt-metal/python_env/bin/python3
+$PY $TT_METAL_HOME/ttnn/ttnn/distributed/ttrun.py --tcp-interface $NIC \
+  --rank-binding $BLAZE/tests/testfiles/blitz_decode_single_galaxy_4stage_rank_bindings.yaml \
+  --mpi-args "--host $DHOST:4 --map-by slot --oversubscribe --bind-to none --tag-output -x PATH -x LD_LIBRARY_PATH -x PYTHONPATH -x TT_METAL_HOME -x TT_METAL_RUNTIME_ROOT -x TT_METAL_SLOW_DISPATCH_MODE -x OPENBLAS_NUM_THREADS -x TT_MIGRATION_EXPORT_TO_FILE -x KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES" -- \
+  $PY -m blaze.models.cli --model MiniMaxAI/MiniMax-M3 --weights synthetic --tokenizer $CKPT \
+    --launch-only --n-slots 3 --io-socket-descriptor-prefix minimax_m3_decode \
+    --migration-table-path $TABLES/m3_decode_kv_table.pb --migration-device-map-path /tmp/decode_device_map.txt \
+    --migration-done-file $RUN/decode_done.sentinel \
+    --migration-validate-golden-pt $GOLDEN,$GOLDEN --migration-validate-positions 5056 \
+    --migration-validate-golden-pcc 0.88 \
+  2>&1 | tee $RUN/blaze.log
+```
+
+The last four flags arm the golden check. `$GOLDEN` is a golden trace directory of 5120 tokens
+(`longbook_5120`; its `metadata.json` holds the prompt's `token_ids`), listed once per served slot.
+At teardown blaze PCCs the KV of its layers (0 and 3) over `[0, 5056)` against the golden. The decode worker prefills
+the 64-token block that holds the last prompt token itself, so migration covers
+`floor((5120 - 1) / 64) * 64` positions. Drop the four flags to run without the check.
+
+Ready check: `ls /dev/shm/tt_h2d_minimax_m3_decode.bin`.
+
+**2. Prefill model: the runner, on the prefill node** (Slurm detach + ulimits). Wait for
+`entering request loop`, a few minutes with a warm weight cache.
+
+```bash
+cd $PREFILL
+export TT_METAL_HOME=$PREFILL M3_KVM_TABLE_DIR=$TABLES PP_TT_METAL_CACHE=/tmp/tt-metal-cache-$USER
+./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+  $DGEN/engine/tools/manifests/minimax_m3/runner_1rank_kvm.yaml $PHOST:1 $NIC 2>&1 | tee $RUN/runner.log
+```
+
+Ready check: `ls /dev/shm/tt_h2d_stream_service_m3_prefill.bin /dev/shm/tt_prefill_layer_acks_m3_prefill`.
+Both tables must now exist and be non-empty: `ls -la $TABLES`.
+
+**3. KVM fleet, from the prefill node.** Write `$RUN/fleet.conf`:
+
+```bash
+cat > $RUN/fleet.conf <<EOF
+IMAGE=kv-manager:m3-local
+TRANSPORT_KIND=zmq
+ZMQ_ENDPOINT=tcp://0.0.0.0:9093
+TRANSFER_PROTOCOL=tcp
+CONTROL_PORT=18650
+HEALTH_PORT=18081
+VISIBLE=$(seq -s, 0 31)
+PREFILL_TABLE=$TABLES/m3_prefill_kv_chunk_table.pb
+DECODE_TABLE=$TABLES/m3_decode_kv_table.pb
+PREFILL_DEVICE_MAP=/tmp/prefill_device_map.txt
+DECODE_DEVICE_MAP=/tmp/decode_device_map.txt
+TABLE_HOST_SOURCE=hostname
+ETCD_HOST=$PHOST
+ETCD_IMAGE=quay.io/coreos/etcd:v3.5.13
+LEADER_READY_SECS=15
+PREFILLS="
+$PHOST:prefill-0:$PIP
+"
+DECODES="
+$DHOST:decode-0:$DIP
+"
+EOF
+```
+
+`VISIBLE` gives each KVM all 32 chips of its galaxy. `ETCD_HOST` is the KVMs' own discovery etcd, on
+port 2379.
+
+Then plan, start and health-check it:
+
+```bash
+cd $DGEN
+./kv_manager/scripts/fleet/launch_kvm_fleet.sh --config $RUN/fleet.conf plan     # checks the tables and hosts
+./kv_manager/scripts/fleet/launch_kvm_fleet.sh --config $RUN/fleet.conf up
+./kv_manager/scripts/fleet/launch_kvm_fleet.sh --config $RUN/fleet.conf health   # both {"status":"healthy"}
+```
+
+**4. Dynamo frontend, on the decode node.** Its etcd listens on 12379, clear of the KVMs' 2379.
+
+```bash
+cd $DGEN && ETCD_HOST=$DIP ./adapters/dynamo/launch_frontend.sh --fresh --etcd-port 12379 --http-port 8000 --router-mode kv
+```
+
+**5. Decode worker, on the decode node:**
+
+```bash
+cd $DGEN
+ETCD_ENDPOINTS=http://$DIP:12379 PYTHONPATH=$DGEN/adapters/dynamo \
+TT_METAL_HOME=$BLAZE/tt-metal TT_METAL_RUNTIME_ROOT=$BLAZE/tt-metal DYN_SYSTEM_HOST=0.0.0.0 \
+DYN_SYSTEM_PORT=20020 DYN_HEALTH_CHECK_ENABLED=true TT_KVM_CONNECT_TIMEOUT_MS=1800000 \
+./adapters/dynamo/.venv/bin/python -m tt_dynamo.main --config $RUN/decode.json \
+  --model-path $CKPT --served-model-name MiniMaxAI/MiniMax-M3 \
+  --reasoning-parser minimax_m3 --tool-call-parser minimax_m3 \
+  --chat-template $DGEN/models/minimax-m3/chat_template.jinja 2>&1 | tee $RUN/decode_worker.log
+```
+
+**6. Prefill worker, on the prefill node.** Leave out the parsers and template, because prefill
+generates nothing. `--component prefill` is required; without it the frontend sees two copies of one
+model instead of a P/D pair.
+
+```bash
+cd $DGEN
+ETCD_ENDPOINTS=http://$DIP:12379 PYTHONPATH=$DGEN/adapters/dynamo \
+TT_METAL_HOME=$BLAZE/tt-metal TT_METAL_RUNTIME_ROOT=$BLAZE/tt-metal DYN_SYSTEM_HOST=0.0.0.0 \
+DYN_SYSTEM_PORT=20021 TT_KVM_CONNECT_TIMEOUT_MS=1800000 \
+./adapters/dynamo/.venv/bin/python -m tt_dynamo.main --config $RUN/prefill.json \
+  --model-path $CKPT --served-model-name MiniMaxAI/MiniMax-M3 --component prefill 2>&1 | tee $RUN/prefill_worker.log
+```
+
+The decode worker reports not-ready until the prefill worker's rendezvous port (19071) listens. That
+is expected.
+
+**7. Deployment checks:**
+
+```bash
+curl -s http://$DIP:20020/health; curl -s http://$PIP:20021/health            # both "status": "ready"
+curl -s http://$DIP:8000/v1/models                                            # exactly one model
+ssh $PHOST "ss -tnH state established '( sport = :19071 or dport = :19071 )' | wc -l"   # 2
+```
+
+If fewer than 2 rendezvous connections are established, one side did not resolve its peer and fell
+back to local prefill: nothing will migrate.
+
+### 4.5 Requests and verdict
+
+Each request is judged by the counters on the workers' metrics ports, read before and after the
+request:
+- `tt_engine_migrated_tokens_total` on decode (`:20020/metrics`);
+- `tt_engine_admitted_total` on prefill (`:20021/metrics`).
+
+```bash
+m() { curl -s http://$DIP:20020/metrics | grep -E '^tt_engine_migrated_tokens_total'; curl -s http://$PIP:20021/metrics | grep -E '^tt_engine_admitted_total'; }
+
+# a) the golden prompt (5120 tokens) must migrate: admitted +1, migrated grows by up to 5056
+m; python3 -c "import json;print(json.dumps({'model':'MiniMaxAI/MiniMax-M3','prompt':json.load(open('$GOLDEN/metadata.json'))['token_ids'],'max_tokens':8,'temperature':0}))" \
+  | curl -s http://$DIP:8000/v1/completions -H 'Content-Type: application/json' -d @- >/dev/null; m
+
+# b) a short prompt (< min_disagg_tokens) must stay on decode: both counters unchanged
+m; curl -s http://$DIP:8000/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"MiniMaxAI/MiniMax-M3","messages":[{"role":"user","content":"Reply with exactly: engine ok"}],"max_tokens":16}' >/dev/null; m
+```
+
+Send the golden prompt first. Slots are taken in admission order, so it lands in slot 0.
+
+**KVM verdict,** on the prefill node. The first command should print one line per migrated request;
+the second must print 0.
+
+```bash
+docker logs kvm-prefill-0 2>&1 | grep -a 'overall successful=true'
+docker logs kvm-prefill-0 2>&1 | grep -ac 'successful=false'
+```
+
+**Golden verdict.** Stop both workers (Ctrl-C), then release blaze into its check:
+
+```bash
+touch $RUN/decode_done.sentinel
+grep -aE '\[kv-golden\]|Pod pipeline complete' $RUN/blaze.log     # up to 30 min
+# [kv-golden] mesh1/layer0 k_h1 slot0 layer0 head0 [0,5056): PASS pcc=0.9999...
+```
+
+Every K/V head of **layer 0** in the golden request's slot must `PASS`. Two kinds of `FAIL` are
+expected:
+- **Layer 3 fails in every slot.** The workers migrate layers `[0, layers_per_chunk)`, which is just
+  layer 0; layer 3 is never migrated in this pair.
+- **Other slots fail at PCC ≈ 0.** blaze compares every served slot against the same golden, so a
+  slot that held a different prompt fails.
+
+### 4.6 Teardown
+
+In order:
+
+```bash
+# prefill node, then decode node: Ctrl-C the workers (the prefill worker needs a few seconds to clean its ack SHM)
+cd $DGEN && ./adapters/dynamo/launch_frontend.sh --stop                                 # decode node
+# Ctrl-C the prefill runner, then blaze (after its golden check if armed)
+cd $DGEN && ./kv_manager/scripts/fleet/launch_kvm_fleet.sh --config $RUN/fleet.conf down   # prefill node; keeps kvm-registry
+```
+
+Then run the 4.4 cleanup and reset on both nodes before the next bring-up.
+
+Ports in use:
+
+| Node | Ports |
+|---|---|
+| decode | 8000 frontend, 12379/12380 Dynamo etcd, 20020 decode worker status |
+| prefill | 20021 prefill worker status, 9093 KVM ZMQ, 18650 KVM control, 18081 KVM health, 2379 KVM etcd |
+| both | 19071 prefill↔decode rendezvous |
+
+`launch_frontend.sh --fresh` clears a stale etcd registration from an earlier run. A leftover
+`tt_dynamo.main` on either node keeps registering, so kill it before relaunching.

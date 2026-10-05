@@ -18,8 +18,9 @@ from PIL import Image
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
-from ....pipelines.minimax_h3.packing import align_num_frames, prepare_keyframe_image
+from ....pipelines.minimax_h3.packing import prepare_keyframe_image
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+from ....pipelines.minimax_h3.policy import align_num_frames
 from ..wan2_2.common import check_output_sanity
 from .common import GALAXY_MESHES, create_fractal_image
 from .common_av import (
@@ -43,14 +44,14 @@ NUM_FRAMES = 124
 NUM_INFERENCE_STEPS = 50
 SEED = 0
 
-PROMPT = CALIBRATED_FOX_PROMPT  # the tier-6 bars are calibrated against this exact prompt
+PROMPT = CALIBRATED_FOX_PROMPT
 
 # Ring collectives require FABRIC_1D_RING.
 MESHES = GALAXY_MESHES
 
-ANCHOR_PCC_FLOOR = 0.95  # measured 0.9943-0.9971 across the three anchor cases
-
-CLIP_THRESHOLD = 33.0  # t2va's bar; measured to transfer (36.63-37.30 vs t2va's 37.37)
+# calibrated 2026-08-04, fox prompt, seed 0
+ANCHOR_PCC_FLOOR = 0.95
+CLIP_THRESHOLD = 33.0
 
 
 def check_keyframe_anchor(frames, keyframe, *, index, stretch, width, height, pcc_floor=0.3):

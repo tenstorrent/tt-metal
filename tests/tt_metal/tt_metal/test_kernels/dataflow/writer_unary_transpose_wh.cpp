@@ -2,52 +2,48 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
-#include "api/dataflow/endpoints.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t dst_dram_bank_id = get_arg_val<uint32_t>(1);
-    // uint32_t unused = get_arg_val<uint32_t>(2);
-    // uint32_t num_tiles = get_arg_val<uint32_t>(3);
-    uint32_t N = get_arg_val<uint32_t>(4);
-    uint32_t Ht = get_arg_val<uint32_t>(5);
-    uint32_t Wt = get_arg_val<uint32_t>(6);
-    uint32_t HtWt = get_arg_val<uint32_t>(7);
-    uint32_t HtWtTileBytes = HtWt * 2048;  // TODO(AP): assumed 16-bits
-    uint32_t WtTileBytes = Wt * 2048;      // TODO(AP): assumed 16-bits
+    uint32_t N = get_arg(args::N);
+    uint32_t Ht = get_arg(args::Ht);
+    uint32_t Wt = get_arg(args::Wt);
+    uint32_t HtWt = get_arg(args::HtWt);
 
-    constexpr uint32_t cb_id_out0 = 16;
+    DataflowBuffer dfb_out(dfb::in);
 
-    // single-tile ublocks
-    uint32_t ublock_size_bytes = get_tile_size(cb_id_out0);
-    uint32_t ublock_size_tiles = 1;
-
-    uint32_t dst_addrN = dst_addr;
-
-    CircularBuffer cb(cb_id_out0);
     Noc noc;
 
-    // this writer will write a NWH tensor in NHW order
+    // ublocks size defined in tiles
+    constexpr uint32_t onetile = 1;
+    uint32_t tile_bytes = dfb_out.get_entry_size();
+
+    uint32_t i_tile_N = 0;  // first tile in current batch
+    uint32_t i_tile = 0;
+
+    const auto s = TensorAccessor(tensor::dst_tensor);
+
+    // this writer will write a NWH stream back to a NHW tensor (inverse of reader_unary_transpose_wh_8bank)
     for (uint32_t n = 0; n < N; n++) {
-        dst_addr = dst_addrN;
-        for (uint32_t w = 0; w<Wt; w++) {
-            for (uint32_t h = 0; h<Ht; h++) {
-                cb.wait_front(ublock_size_tiles);
-                noc.async_write(
-                    cb,
-                    AllocatorBank<AllocatorBankType::DRAM>{},
-                    ublock_size_bytes,
-                    {},
-                    {.bank_id = dst_dram_bank_id, .addr = dst_addr});
+        i_tile = i_tile_N;
+        for (uint32_t w = 0; w < Wt; w++) {
+            for (uint32_t h = 0; h < Ht; h++) {
+                dfb_out.wait_front(onetile);
+
+                noc.async_write(dfb_out, s, tile_bytes, {}, {.page_id = i_tile});
                 noc.async_write_barrier();
-                cb.pop_front(ublock_size_tiles);
-                dst_addr += WtTileBytes;  // stride in H
+
+                dfb_out.pop_front(onetile);
+                i_tile += Wt;  // stride in H
             }  // Ht
-            dst_addr -= HtWtTileBytes;      // go back to H=0
-            dst_addr += ublock_size_bytes;  // increment Wt
+            i_tile -= HtWt;  // go back to H=0
+            i_tile += 1;     // increment Wt
         }  // Wt
-        dst_addrN += HtWtTileBytes;
+        i_tile_N += HtWt;  // stride in batch/channel
     }  // N
 }

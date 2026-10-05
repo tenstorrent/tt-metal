@@ -28,6 +28,9 @@ void ReduceAffineTransformsOperation::validate_on_program_cache_miss(
         "{}: local_rows must contain a positive whole number of 32-token chunks per group",
         operation_name);
     kda_factory_detail::check_actual_start(in.a, in.actual_start, operation_name);
+    if (in.actual_end) {
+        kda_factory_detail::check_actual_start(in.actual_start, *in.actual_end, "reduce_affine_transforms");
+    }
     constexpr std::array accepted_summary_dtypes = {tt::tt_metal::DataType::FLOAT32, tt::tt_metal::DataType::BFLOAT16};
     kda_factory_detail::check_allocated_device_tensor(in.a, operation_name, "a");
     kda_factory_detail::check_layout(in.a, tt::tt_metal::Layout::TILE, operation_name, "a");
@@ -123,7 +126,8 @@ std::pair<ttnn::Tensor, ttnn::Tensor> reduce_affine_transforms(
     const ttnn::DeviceComputeKernelConfig& cfg,
     const Tensor& actual_start,
     uint32_t sequence_parallel_axis,
-    uint32_t local_rows) {
+    uint32_t local_rows,
+    const std::optional<Tensor>& actual_end) {
     // Cache-miss validation cannot protect attribute construction on cache hits. Keep these guards here because the
     // launcher divides by groups and indexes both shapes before dispatching validation.
     TT_FATAL(groups > 0, "reduce_affine_transforms: groups_per_head must be positive");
@@ -143,7 +147,7 @@ std::pair<ttnn::Tensor, ttnn::Tensor> reduce_affine_transforms(
             .local_rows = local_rows,
             .output_mem_config = mem,
             .compute_kernel_config = cfg},
-        ReduceAffineTransformsInputs{.a = a, .b = b, .actual_start = actual_start});
+        ReduceAffineTransformsInputs{.a = a, .b = b, .actual_start = actual_start, .actual_end = actual_end});
     return {outputs[0], outputs[1]};
 }
 }  // namespace ttnn::experimental::prim
