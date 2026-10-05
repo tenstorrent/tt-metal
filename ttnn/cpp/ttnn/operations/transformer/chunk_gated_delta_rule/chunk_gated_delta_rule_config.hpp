@@ -55,6 +55,10 @@ struct ChunkGdnFusedProgramConfig {
     // Share of every head's chunks the extras take, in [0, 1]; nullopt = the model's choice between the
     // balanced NX / P and 0.
     std::optional<float> pool_extra_share;
+    // Debug: compile the hand-off protocol's run-time checks that need protocol-visible state into the two
+    // dataflow kernels (sequence-valued VALID flags, a per-slot data canary); they report through the watcher's
+    // ASSERT, so run with TT_METAL_WATCHER. Costs one extra 4-byte write per receiver per chunk. Hashed.
+    bool handoff_checks = false;
 };
 
 using ChunkGdnProgramConfig =
