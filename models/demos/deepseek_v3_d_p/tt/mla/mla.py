@@ -20,7 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
 )
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
 from models.demos.deepseek_v3_d_p.tt.mla.utils import llama4_scale_host
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, resolve_per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat, MlaKvCacheGeometry
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
@@ -478,16 +478,9 @@ class ttMLA:
         # ring_joint_sdpa) runs on the SP axis (cluster_axis=sp_axis) and MUST use sp_ccl_topology.
         # Conflating them deadlocks the SDPA when the two axes differ: e.g. under FABRIC_2D_TORUS_X the
         # TP axis is Ring but the SP axis has no physical wrap, so a TP-Ring topology on the SP-axis
-        # SDPA waits forever on a missing wrap link. A scalar applies to both axes (preserves 1D-ring /
-        # non-torus behavior).
-        if isinstance(topology, tuple):
-            # The tuple is (dim0, dim1); unpacking as (sp, tp) is only correct when sp_axis=0/tp_axis=1.
-            # Guard it so a future sp_axis/tp_axis swap fails loudly here instead of silently cross-
-            # wiring Ring onto the wrong axis (a runtime deadlock). Mirrors the sparse-path assert below.
-            assert self.sp_axis == 0 and self.tp_axis == 1, "per-axis topology tuple assumes sp_axis=0, tp_axis=1"
-            self.sp_ccl_topology, self.tp_ccl_topology = topology  # (sp_axis_0, tp_axis_1)
-        else:
-            self.sp_ccl_topology = self.tp_ccl_topology = topology
+        # SDPA waits forever on a missing wrap link. See tt_ccl.resolve_per_axis_topology, which the V4
+        # attention blocks and compressors share with this.
+        self.sp_ccl_topology, self.tp_ccl_topology = resolve_per_axis_topology(topology, self.sp_axis, self.tp_axis)
 
         # Ring-attention persistent buffers. Chunked prefill (ring_mla) and the standard ring
         # joint SDPA use disjoint buffer sets, so allocate only the one the configured mode needs --
@@ -1281,11 +1274,11 @@ class ttMLA:
         return_kv_intermediates: bool,
         kvpe_cache: MlaKvCache,
         metadata: Optional[ttnn.Tensor] = None,
-    ) -> tuple[ttnn.Tensor, Optional[ttnn.Tensor], dict | None]:
+    ) -> tuple[ttnn.Tensor | tuple[ttnn.Tensor, ...], Optional[ttnn.Tensor], dict | None]:
         """Shared KV stem.
 
-        Returns tt_kvpe in the persistent cache representation. The returned value is both written to the
-        cache and consumed by attention without a decode/re-encode round trip.
+        Returns packed cache values, or separate fields for fused sparse BF16/scaled-FP8
+        cache writes. Sparse attention consumes the written cache; dense attention consumes packed values.
         """
         # NOTE: input is ideally L1 for chunked, but hidden states memory config is set outside the module
         kv_mm_kwargs = self._get_mm_kwargs("kv_a_proj_with_mqa", seq_len_local)
@@ -1350,6 +1343,16 @@ class ttMLA:
             kv_intermediates["tt_kv_nope"] = ttnn.clone(tt_kv_nope)
             kv_intermediates["tt_kv_rope"] = ttnn.clone(tt_kv_rope)
 
+        if self._has_indexer and not return_kv_intermediates:
+            # Keep separate fields alive until the cache writer packs them directly into storage.
+            if kvpe_cache.format == MlaKvCacheFormat.BF16_RM:
+                return (tt_kv_nope, tt_kv_rope), None, None
+            if kvpe_cache.format == MlaKvCacheFormat.SCALED_FP8:
+                fields = kvpe_cache.prepare_scaled_fp8_inputs(tt_kv_nope, tt_kv_rope, keep_rope_tiled=True)
+                ttnn.deallocate(tt_kv_nope)
+                if fields[2] is not tt_kv_rope:
+                    ttnn.deallocate(tt_kv_rope)
+                return fields, None, None
         tt_kvpe = kvpe_cache.pack(tt_kv_nope, tt_kv_rope, intermediates=kv_intermediates)
         ttnn.deallocate(tt_kv_rope)
         if self._has_indexer:
@@ -1386,7 +1389,7 @@ class ttMLA:
     def _update_kv_cache(
         self,
         cache: MlaKvCache,
-        values: ttnn.Tensor,
+        values: ttnn.Tensor | tuple[ttnn.Tensor, ...],
         *,
         cache_user_id: int,
         cache_layer_idx: int,
@@ -1403,6 +1406,12 @@ class ttMLA:
         # the combination is supported. The op still validates that the tensor is present.
         # Metadata (trace-safe) path: slot_idx (metadata[0]) + kv_actual_global (metadata[1]) read
         # on-device, each its own 1-element tensor. Scalar path passes host slot/kv_actual_global.
+        rope = scales = None
+        if isinstance(values, tuple):
+            if cache.format == MlaKvCacheFormat.SCALED_FP8:
+                values, scales, rope = values
+            else:
+                values, rope = values
         if metadata is not None:
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 cache.storage,
@@ -1414,6 +1423,8 @@ class ttMLA:
                 cluster_axis=self.sp_axis,
                 valid_global=metadata[2],  # actual_end tensor
                 tp_axis=tp_axis,
+                rope=rope,
+                scales=scales,
             )
         else:
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
@@ -1426,6 +1437,8 @@ class ttMLA:
                 cluster_axis=self.sp_axis,
                 valid_global=actual_end,
                 tp_axis=tp_axis,
+                rope=rope,
+                scales=scales,
             )
 
     def _output_gate(self, hidden_states: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
@@ -1826,7 +1839,8 @@ class ttMLA:
         seq_len_local,
     ):
         """Consume joined/finalized branch outputs on the restored default full-grid manager."""
-        ttnn.deallocate(tt_kvpe)
+        for value in tt_kvpe if isinstance(tt_kvpe, tuple) else (tt_kvpe,):
+            ttnn.deallocate(value)
 
         # Sparse attention runs over latent V; project to v_head_dim afterwards. The prefix is already
         # sliced to this slot (batch-1), so no cache_batch_idx.
@@ -2010,7 +2024,8 @@ class ttMLA:
             metadata=metadata,
             tp_axis=self.tp_shard_kv_axis,  # KV dedup: write only this chip's 1/tp window
         )
-        ttnn.deallocate(tt_kvpe)
+        for value in tt_kvpe if isinstance(tt_kvpe, tuple) else (tt_kvpe,):
+            ttnn.deallocate(value)
 
         ttnn.tracy_message("`TT_SIGNPOST: MLA_END`")
         return None

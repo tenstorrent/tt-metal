@@ -2932,7 +2932,8 @@ SatPlacementEnumerationSession::SatPlacementEnumerationSession(
     const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
     bool unique_shapes,
-    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) :
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank,
+    const std::set<tt::tt_metal::AsicID>& placement_asic_allowlist) :
     physical_system_descriptor_(&physical_system_descriptor), stats_(stats), unique_shapes_(unique_shapes) {
     using tt::tt_metal::experimental::tt_fabric::build_logical_multi_mesh_adjacency_graph;
 
@@ -2999,7 +3000,7 @@ SatPlacementEnumerationSession::SatPlacementEnumerationSession(
                                                                         : ConnectionValidationMode::STRICT);
     }
     relaxed_inter_mesh_policy_ = mesh_graph_descriptor.is_inter_mesh_policy_relaxed();
-    finish_init(asic_id_to_mesh_rank);
+    finish_init(asic_id_to_mesh_rank, placement_asic_allowlist);
 }
 
 SatPlacementEnumerationSession::SatPlacementEnumerationSession(
@@ -3008,7 +3009,8 @@ SatPlacementEnumerationSession::SatPlacementEnumerationSession(
     PlacementSolveStats* stats,
     const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
-    bool unique_shapes) :
+    bool unique_shapes,
+    const std::set<tt::tt_metal::AsicID>& placement_asic_allowlist) :
     physical_system_descriptor_(&physical_system_descriptor), stats_(stats), unique_shapes_(unique_shapes) {
     using tt::tt_metal::experimental::tt_fabric::build_logical_multi_mesh_adjacency_graph;
 
@@ -3037,11 +3039,12 @@ SatPlacementEnumerationSession::SatPlacementEnumerationSession(
         global_mesh_groupings_);
     fallbacks_in_ = true;
     relaxed_inter_mesh_policy_ = mesh_graph_descriptor.is_inter_mesh_policy_relaxed();
-    finish_init(asic_id_to_mesh_rank);
+    finish_init(asic_id_to_mesh_rank, placement_asic_allowlist);
 }
 
 void SatPlacementEnumerationSession::finish_init(
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+    const std::set<tt::tt_metal::AsicID>& placement_asic_allowlist) {
     if (stats_ != nullptr) {
         stats_->meshes_total = mesh_level_graph_.get_nodes().size();
         stats_->master_solve_attempted = true;
@@ -3056,23 +3059,35 @@ void SatPlacementEnumerationSession::finish_init(
         }
     }
 
+    // Rank-bound ASICs are each mesh's exact chips: a required seat footprint and the allowed set. The
+    // allowlist only narrows the allowed set (a mesh smaller than it still fits), so it never becomes a
+    // required footprint; with both present a mesh may use only rank-bound chips inside the allowlist.
     std::map<GlobalMeshId, std::set<AsicID>> allowed_asics_by_mesh;
     for (const auto& [mesh_id, unused_groupings] : global_mesh_groupings_) {
         (void)unused_groupings;
-        const auto asic_it = asic_id_to_mesh_rank.find(mesh_id);
-        if (asic_it == asic_id_to_mesh_rank.end() || asic_it->second.empty()) {
-            continue;
-        }
         std::set<AsicID> asics;
-        std::unordered_set<AsicID> extra_asics;
-        extra_asics.reserve(asic_it->second.size());
-        for (const auto& [asic_id, unused_rank] : asic_it->second) {
-            (void)unused_rank;
-            asics.insert(asic_id);
-            extra_asics.insert(asic_id);
+        const auto asic_it = asic_id_to_mesh_rank.find(mesh_id);
+        if (asic_it != asic_id_to_mesh_rank.end() && !asic_it->second.empty()) {
+            std::unordered_set<AsicID> extra_asics;
+            extra_asics.reserve(asic_it->second.size());
+            for (const auto& [asic_id, unused_rank] : asic_it->second) {
+                (void)unused_rank;
+                asics.insert(asic_id);
+                extra_asics.insert(asic_id);
+            }
+            extra_required_.emplace_back(mesh_id, std::move(extra_asics));
         }
-        extra_required_.emplace_back(mesh_id, std::move(extra_asics));
-        allowed_asics_by_mesh.emplace(mesh_id, std::move(asics));
+        if (!placement_asic_allowlist.empty()) {
+            if (asics.empty()) {
+                asics = placement_asic_allowlist;
+            } else {
+                std::erase_if(
+                    asics, [&](const AsicID& asic_id) { return !placement_asic_allowlist.contains(asic_id); });
+            }
+        }
+        if (!asics.empty()) {
+            allowed_asics_by_mesh.emplace(mesh_id, std::move(asics));
+        }
     }
     pools_ = std::make_unique<CandidatePoolMap>(create_sat_placement_pools(
         global_mesh_groupings_,

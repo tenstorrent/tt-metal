@@ -4838,6 +4838,9 @@ RING_JOINT_TRACE_REGION_SIZE = 32 * 1024 * 1024
         # origins change per replay.
         pytest.param("slab_rotated", 1, 1024, id="slab-rotated-four-hop"),
         pytest.param("rotated", 2, 128, id="rotated-two-halos"),
+        # Wrapping Q with a multi-hop halo: 384 has a partial farthest hop, 1024 four whole ones.
+        pytest.param("rotated", 2, 384, id="rotated-two-halos-two-hop-partial"),
+        pytest.param("rotated", 2, 1024, id="rotated-two-halos-four-hop"),
         pytest.param(
             "rotated",
             1,
@@ -5613,8 +5616,9 @@ def test_ring_joint_attention_create_perf_table(model_name):
 
 
 # === TEST 5: PERFORMANCE CHECK ===
-# Symmetric +/- band — catches both regressions and unexpected speedups.
-RING_JOINT_PERF_MARGIN = 0.01
+# Symmetric +/- band — catches both regressions and unexpected speedups. Default for every
+# perf check in this file; checks with a margin column can override it per config entry.
+DEFAULT_PERF_MARGIN = 0.01
 
 # Ring/TP geometry and per-device shapes are auto-selected by MeshConfig.detect():
 #   QuietBox -> 4-device ring (sp=4, tp=1);  Galaxy -> 8-device ring x 4 TP shards (sp=8, tp=4).
@@ -5622,7 +5626,7 @@ if MESH_CONFIG.is_galaxy:
     RING_JOINT_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
         # 8-device ring (Galaxy, sp=8 tp=4)
-        ("wan2_2_1xGLX", 288, 512, 8, 70.7, RING_JOINT_PERF_MARGIN),
+        ("wan2_2_1xGLX", 288, 512, 8, 70.7, DEFAULT_PERF_MARGIN),
         # mla_100k on Galaxy is noisier than the other cases: observed run-to-run util spans
         # ~64.8-67.8% (midpoint ~66.3%, ~+/-2.3%), well beyond the default +/-1% band. Widen to
         # +/-3% so the gate tracks regressions without flagging this case's normal variance.
@@ -5632,8 +5636,8 @@ else:
     RING_JOINT_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
         # 4-device ring (QuietBox, sp=4 tp=1)
-        ("wan2_2_1xGLX", 288, 512, 4, 68.5, RING_JOINT_PERF_MARGIN),
-        ("mla_100k", 160, 320, 4, 62.5, RING_JOINT_PERF_MARGIN),
+        ("wan2_2_1xGLX", 288, 512, 4, 68.5, DEFAULT_PERF_MARGIN),
+        ("mla_100k", 160, 320, 4, 62.5, DEFAULT_PERF_MARGIN),
     ]
 
 
@@ -6087,26 +6091,30 @@ def test_ring_joint_attention_multi_hop_block_cyclic_sliding_reuse(local, expect
     )
 
 
-# A multi-hop halo does not support block-cyclic Q that wraps a slab yet, so the op rejects a two-slot
-# halo buffer (provisioned for wrapping Q) instead of computing a wrong answer.
-def test_ring_joint_attention_multi_hop_rejects_wrapping_block_cyclic(expect_error):
+# Block-cyclic requests whose Q wraps a slab with a multi-hop halo, mixed with aligned ones on one program.
+@pytest.mark.parametrize("local", [256, 512], ids=["four_hop", "two_hop"])
+def test_ring_joint_attention_multi_hop_wrapping_block_cyclic_sliding_reuse(local, expect_error):
     mesh_config = gpt_oss_chunked_mesh_config()
-    local = 256
     chunk = local * mesh_config.sp_size
-    with expect_error(RuntimeError, "multi-hop halo does not support block-cyclic Q"):
-        run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
-            mesh_config,
-            batch_size=1,
-            expect_error=expect_error,
-            chunk_size_local=local,
-            sliding_window_size=1024,
-            local_q_heads=4,
-            local_kv_heads=2,
-            head_dim=256,
-            q_chunk_size=128,
-            requests=[(local - 32, chunk + local - 32)],
-            num_iterations=1,
-        )
+    run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
+        mesh_config,
+        batch_size=1,
+        expect_error=expect_error,
+        chunk_size_local=local,
+        sliding_window_size=1024,
+        local_q_heads=4,
+        local_kv_heads=2,
+        head_dim=256,
+        q_chunk_size=128,
+        requests=[
+            (local - 32, chunk + local - 32),
+            (0, chunk),
+            (chunk + 3 * local + 32, 2 * chunk + 3 * local + 32),
+            (chunk + 64, 2 * chunk + 64),
+            (2 * chunk - 32, 3 * chunk - 32),
+        ],
+        halo_slots=2,
+    )
 
 
 def test_ring_joint_attention_gpt_oss_chunked_sliding_indexed_kv_cache_accuracy():
@@ -6677,6 +6685,56 @@ def test_ring_joint_attention_rotated_q_sink_accuracy_and_cache_reuse(q_chunk_si
         )
     finally:
         close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("v_tiles", [16, 17], ids=["v512", "v544_tail"])
+def test_ring_mla_split_accumulation_cancellation(v_tiles):
+    """Cancellation across 256-row blocks, K640 and a final 32-row K tail.
+
+    Q reads only the non-V features, so opposite V blocks have matching logits.
+    Exactly representable K/V values keep BFP8 quantization from dominating cancellation.
+    V544 also exercises a full DST batch followed by one output-column tile.
+    """
+    d_v = v_tiles * 32
+    model = replace(
+        RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"],
+        nhq=8,
+        nhv=8,
+        d_q=576,
+        d_k=576,
+        d_v=d_v,
+        kv_dtype=ttnn.bfloat8_b,
+    )
+    chunk_size = 672 * MESH_CONFIG.sp_size
+    generator = torch.Generator().manual_seed(71)
+    q = torch.zeros(1, 8, chunk_size, 576)
+    q[..., d_v:] = torch.randn(1, 8, chunk_size, 576 - d_v, generator=generator) * 0.25
+    pattern = torch.randint(-16, 17, (1, 1, 256, 576), generator=generator).float() / 16
+    rows = torch.arange(chunk_size)
+    kv = pattern[:, :, rows % 256, :].clone()
+    signs = torch.where((rows // 256) % 2 == 0, 1.0, -1.0).view(1, 1, -1, 1)
+    kv[..., :d_v] = kv[..., :d_v] * signs + 0.03125
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, reserve_llk_kernel_config=False)
+    try:
+        with mock.patch(f"{__name__}.fa_rand", side_effect=[q, kv]):
+            duration_ns, _ = profile_ring_joint_runtime_duration_ns(
+                runtime.mesh_device,
+                lambda: run_ring_joint_sdpa_chunked(
+                    MESH_CONFIG,
+                    model,
+                    chunk_size=chunk_size,
+                    total_seq=chunk_size,
+                    qk_configs=[(32, 640)],
+                    use_ring_mla=True,
+                    rmse_threshold=0.01,
+                    runtime=runtime,
+                    reserve_llk_kernel_config=False,
+                ),
+            )
+        logger.info(f"Cancellation V{d_v}, K640 + K32 tail: {duration_ns / 1e6:.3f} ms")
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
 
 
 @pytest.mark.timeout(1200)
@@ -7255,17 +7313,22 @@ def test_ring_mla_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_si
 # Symmetric +/- band, same as the ring joint perf check.
 if MESH_CONFIG.is_galaxy:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
-        # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
+        # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
         # 8-device ring (Galaxy, sp=8 tp=4)
-        ("kimi50k", 32, 640, 8, 68.5),
-        ("kimi_k3", 32, 640, 8, 68.04),
+        # Three-run medians: 5.576 / 8.489 ms. kimi50k runs ~1.6% hotter on the CI host
+        # (71.77% vs a 70.49-70.85% local span), so center it on the span and widen to +/-1.5%.
+        ("kimi50k", 32, 640, 8, 71.2, 0.015),
+        ("kimi_k3", 32, 640, 8, 69.59, DEFAULT_PERF_MARGIN),
     ]
 else:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
-        # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
+        # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
         # 4-device ring (QuietBox, 100 SDPA cores)
-        ("kimi50k", 32, 640, 4, 66.05),
-        ("kimi_k3", 32, 640, 4, 67.07),
+        # Three-run median with compute optimizations and blocking K multicast: 2.726 ms.
+        ("kimi50k", 32, 640, 4, 69.54, DEFAULT_PERF_MARGIN),
+        # After the Blackhole NoC MID-address write skip (#56023): 4.567-4.591 ms (70.77-71.15% util)
+        # across QB and QB2 runs, so the earlier bimodal spread no longer needs a wider band.
+        ("kimi_k3", 32, 640, 4, 71.0, DEFAULT_PERF_MARGIN),
     ]
 
 
@@ -7285,7 +7348,7 @@ else:
 
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize(
-    "model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util",
+    "model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util, margin",
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS,
     ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}-ring{cfg[3]}" for cfg in RING_MLA_CHUNKED_PERF_CHECK_CONFIGS],
 )
@@ -7297,10 +7360,10 @@ else:
     MESH_CONFIG.is_galaxy and not is_high_power(),
     reason="galaxy perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
 )
-def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util):
+def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util, margin):
     """Measure ring_mla chunked-prefill math utilization for the kimi 50k+5k galaxy chunk (a 5k Q
     chunk against a 50k K/V prefix), simulated on the 4-device QuietBox, via realtime profiler and assert
-    within +/- RING_JOINT_PERF_MARGIN.
+    within +/- its margin.
 
     RING_JOINT_CHUNKED_CHUNK_ID isolates the final chunk so only its iteration is profiled;
     each chunk rebuilds its K/V cache from scratch, so it reproduces the full-sequence kernel.
@@ -7338,8 +7401,8 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
         MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
     )
 
-    lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
-    upper = expected_util * (1 + RING_JOINT_PERF_MARGIN)
+    lower = expected_util * (1 - margin)
+    upper = expected_util * (1 + margin)
 
     logger.info(
         f"ring_mla chunked 50k+5k perf check {config_id}: "
@@ -7350,7 +7413,7 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
 
     assert lower <= utilization <= upper, (
         f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
-        f"(expected {expected_util:.2f}%, margin +/- {RING_JOINT_PERF_MARGIN*100:.1f}%)"
+        f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
     )
 
 
@@ -7402,8 +7465,8 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_check(
         MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
     )
 
-    lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
-    upper = expected_util * (1 + RING_JOINT_PERF_MARGIN)
+    lower = expected_util * (1 - DEFAULT_PERF_MARGIN)
+    upper = expected_util * (1 + DEFAULT_PERF_MARGIN)
 
     logger.info(
         f"Minimax3 GQA chunked final-chunk perf check {config_id}: "
@@ -7414,7 +7477,7 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_check(
 
     assert lower <= utilization <= upper, (
         f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
-        f"(expected {expected_util:.2f}%, margin +/- {RING_JOINT_PERF_MARGIN*100:.1f}%)"
+        f"(expected {expected_util:.2f}%, margin +/- {DEFAULT_PERF_MARGIN*100:.1f}%)"
     )
 
 
@@ -7430,7 +7493,7 @@ def test_ring_joint_attention_minimax3_gqa_rotated_q_perf():
     if MESH_CONFIG.is_galaxy or MESH_CONFIG.sp_size != 4 or MESH_CONFIG.sdpa_cores != 100:
         pytest.skip("GQA rotated-Q performance threshold is calibrated for QuietBox ring-4 with 100 SDPA cores")
 
-    expected_util = 32.43
+    expected_util = 33.26
     model = MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS["minimax3_55k"]
     chunk_size = CHUNKED_PREFILL_CHUNK_SIZE
     perf_chunk = CHUNKED_PREFILL_N_CHUNKS - 1
@@ -7457,8 +7520,8 @@ def test_ring_joint_attention_minimax3_gqa_rotated_q_perf():
     utilization, _ = compute_chunked_prefill_perf_check_utilization(
         MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
     )
-    lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
-    upper = expected_util * (1 + RING_JOINT_PERF_MARGIN)
+    lower = expected_util * (1 - DEFAULT_PERF_MARGIN)
+    upper = expected_util * (1 + DEFAULT_PERF_MARGIN)
     logger.info(
         f"Minimax3 GQA rotated-Q perf q32-k512: "
         f"ring={MESH_CONFIG.sp_size}, sdpa_cores={MESH_CONFIG.sdpa_cores}, "
@@ -7469,7 +7532,7 @@ def test_ring_joint_attention_minimax3_gqa_rotated_q_perf():
 
     assert lower <= utilization <= upper, (
         f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
-        f"(expected {expected_util:.2f}%, margin +/- {RING_JOINT_PERF_MARGIN*100:.1f}%)"
+        f"(expected {expected_util:.2f}%, margin +/- {DEFAULT_PERF_MARGIN*100:.1f}%)"
     )
 
 

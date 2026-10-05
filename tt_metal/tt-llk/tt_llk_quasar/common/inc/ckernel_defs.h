@@ -78,6 +78,51 @@ enum class BinaryOp : std::uint8_t
     DEQUANT,
     ATAN2,
     COPY_DEST,
+    LOGSIGMOID,
+    ISCLOSE,
+    MASK,
+    MASK_POSINF,
+    INT_MASK,
+    FMOD,
+    REMAINDER,
+    POW,
+    BITWISE_AND,
+    BITWISE_OR,
+    BITWISE_XOR,
+    FMOD_INT32,
+    REMAINDER_INT32,
+    RSUB_INT32,
+    DIV_INT32,
+    DIV_INT32_FLOOR,
+    INT_SUM_ADD,
+    CLAMPED_SILU_GLU,
+    SITU_GLU,
+    REMAINDER_UINT32,
+    LGAMMA_STIRLING_FP32,
+    ADD_TOP_ROW,
+};
+
+enum class DataLayout
+{
+    TILE      = 0,
+    ROW_MAJOR = 1
+};
+
+enum class ActivationType
+{
+    Celu        = 0,
+    Elu         = 1,
+    Gelu        = 2,
+    Hardtanh    = 3,
+    Hardsigmoid = 4,
+};
+
+// Rounding applied to an SFPU float result (rdiv), as on Blackhole.
+enum class RoundingMode : std::uint8_t
+{
+    None  = 0,
+    Trunc = 1,
+    Floor = 2,
 };
 
 // For instructions that address lower/upper 16 bits of a register
