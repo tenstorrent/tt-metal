@@ -27,7 +27,10 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, PackerReluType, StochasticRounding
 from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES, MAX_TILE_ELEMENTS
 
-from ..data_transfer_blocks.data_transfer_blocks import DataTransferBlocks
+from ..data_transfer_blocks.data_transfer_blocks import (
+    DEST_32_BIT_FORMATS,
+    DataTransferBlocks,
+)
 from ..data_transfer_blocks.l1_codec import datums_per_tile
 from ..data_transfer_blocks.pack_effects import PackEdgeMask
 from .chain import Chain, Registers, StageRecord, Step
@@ -234,8 +237,20 @@ class Golden:
 
         `src_format` overrides the storage format the unpacker lands it in;
         ``None`` lets the architecture choose.
+
+        Not shared with :meth:`_l1_to_register`: SrcS's format and slice layout
+        depend on `dest_acc`, which the config carries as the width of
+        ``cfg.dest_format`` -- Dest is 32-bit exactly when accumulation is on.
         """
-        return self._l1_to_register(cfg, "srcS", source, into, index, src_format)
+        l1_format = cfg.in_formats[index]
+        dest_acc = cfg.dest_format in DEST_32_BIT_FORMATS
+
+        def run(regs: Registers) -> None:
+            regs[into] = self.blocks.l1_to_srcS(
+                regs[source], l1_format, src_format, dest_acc=dest_acc, **cfg.geometry
+            )
+
+        return Step(f"l1_to_srcS({source})", run, reads=(source,), writes=(into,))
 
     def l1_to_dest(
         self, cfg: OpConfig, source: str = "in0", into: str = "dest", index: int = 0
