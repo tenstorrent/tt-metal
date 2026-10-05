@@ -8,6 +8,12 @@ import zlib
 from .kv_layout import PrefillKVLayout
 
 
+def _stable_config_name(config_id: int, num_configs: int) -> str:
+    """Zero-padded decimal name so std::map lexicographic order matches numeric config_id."""
+    width = max(2, len(str(max(num_configs - 1, 0))))
+    return f"{config_id:0{width}d}"
+
+
 def build_kv_chunk_address_table(*, mesh_device, kv_cache, chunk_size):
     import ttnn
     from models.demos.common.prefill.runners.migration import get_num_dram_banks
@@ -50,8 +56,9 @@ def build_kv_chunk_address_table(*, mesh_device, kv_cache, chunk_size):
     base_addresses = tuple(int(t.buffer_address()) for t in (kv_cache.k, kv_cache.v))
     # Match the shared Blaze exporter and native KVM host identity.
     host_name = f"host-{zlib.crc32(socket.gethostname().encode()) & 0x7FFFFFFF:08x}"
-    # K heads precede V heads; zero-padded names preserve that order on the wire.
-    config_names = tuple(f"{config:02d}" for config in range(len(layout.config_names)))
+    # Config ids are positional: K heads occupy the first half, V heads the second.
+    num_configs = len(layout.config_names)
+    config_names = tuple(_stable_config_name(config, num_configs) for config in range(num_configs))
     configs = {}
     for name in config_names:
         cfg = api.KvChunkAddressTableConfig()
