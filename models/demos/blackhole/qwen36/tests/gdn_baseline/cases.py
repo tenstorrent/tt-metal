@@ -9,7 +9,8 @@ carried state; ``ragged`` runs one full chunk and then a partial last chunk of `
 Local files live under ``<checkout>/.weights/<org>--<name>/<revision>/`` (``GDN_BASELINE_WEIGHTS`` overrides the
 root): ``config.json`` and the tokenizer for every case; for real weights also ``layer0.safetensors`` (the first GDN
 layer's ``linear_attn.*`` tensors plus ``input_layernorm.weight``), ``embed_rows.safetensors`` (only the embedding
-rows the text needs) and ``manifest.json``. ``prepare.py`` fetches them and fills the reference cache; the device
+rows the text needs) and ``manifest.json``. ``prepare.py`` fetches them and fills the reference cache, which lives in
+the CPU oracle cache shared by every worktree (``models/demos/deepseek_v3_d_p/utils/oracle_cache.py``); the device
 tests only read and fail on a miss.
 """
 
@@ -34,7 +35,8 @@ from models.demos.blackhole.qwen36.tests.gdn_baseline.reference import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[6]
 
 # Covers: reference.py math, the input builders below (randn seeds, text slicing, layer-0 input norm), the
-# synthetic weight generator and the stored fields. Bump with any change to what a cache entry holds.
+# synthetic weight generator and the stored fields. Bump with any change to what a cache entry holds; the cache is
+# shared by every worktree, so an unmerged branch bumps to a value no other branch uses.
 REFERENCE_CACHE_VERSION = 1
 
 CHAINED_CHUNKS = 3
@@ -237,10 +239,10 @@ def build_inputs(case: GdnCase) -> torch.Tensor:
 # --------------------------------------------------------------------------------------------------------------
 # Reference cache
 # --------------------------------------------------------------------------------------------------------------
-def _model_cache_root() -> Path:
-    import ttnn
+def reference_cache_root() -> Path:
+    from models.demos.deepseek_v3_d_p.utils.oracle_cache import oracle_cache_root
 
-    return Path(ttnn.CONFIG.model_cache_path) / "gdn_baseline"
+    return oracle_cache_root() / "gdn_baseline"
 
 
 def case_identity(case: GdnCase, fingerprint: str) -> dict:
@@ -264,7 +266,7 @@ def case_identity(case: GdnCase, fingerprint: str) -> dict:
 
 def reference_cache_path(case: GdnCase, identity: dict) -> Path:
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:16]
-    return _model_cache_root() / f"{case.name}-{key}.pt"
+    return reference_cache_root() / f"{case.name}-{key}.pt"
 
 
 def compute_reference(case: GdnCase, state_dict: dict[str, torch.Tensor], x: torch.Tensor) -> dict:

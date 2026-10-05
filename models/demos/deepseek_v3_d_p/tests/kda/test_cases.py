@@ -32,14 +32,17 @@ from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import (
     prepare_cpu_references,
 )
 from models.demos.deepseek_v3_d_p.tests.kda.text_input import text_input_cache_path
+from models.demos.deepseek_v3_d_p.utils.oracle_cache import SHARED_ORACLE_CACHE_ENV
 
 _TOY_CONFIG = KDAConfig(hidden_size=64, num_heads=2, head_k_dim=32, head_v_dim=32, conv_kernel_size=4, norm_eps=1e-5)
 
 
 @pytest.fixture
-def model_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setattr(ttnn.CONFIG, "model_cache_path", tmp_path)
-    return tmp_path
+def oracle_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """An empty shared CPU oracle cache; the per-checkout model cache is a separate empty directory."""
+    monkeypatch.setattr(ttnn.CONFIG, "model_cache_path", tmp_path / "model_cache")
+    monkeypatch.setenv(SHARED_ORACLE_CACHE_ENV, str(tmp_path / "oracles"))
+    return tmp_path / "oracles"
 
 
 def _toy_source(**overrides) -> KDAWeightSource:
@@ -168,7 +171,7 @@ def _toy_chained_case(monkeypatch: pytest.MonkeyPatch) -> tuple[KDATestCase, dic
 
 
 def test_load_only_reference_miss_fails_fast_with_preparation_command(
-    model_cache: Path, monkeypatch: pytest.MonkeyPatch, expect_error
+    oracle_cache: Path, monkeypatch: pytest.MonkeyPatch, expect_error
 ) -> None:
     monkeypatch.delenv(kda_cases.CACHE_MISS_ENV, raising=False)
     case, _ = _toy_chained_case(monkeypatch)
@@ -177,11 +180,11 @@ def test_load_only_reference_miss_fails_fast_with_preparation_command(
     )
     with expect_error(KDAPreparedCacheMiss, f"--case {case.spec.name}") as error:
         cpu_references(case)
-    assert "CPU reference (chunk 0)" in str(error.value) and str(model_cache) in str(error.value)
-    assert not list(model_cache.rglob("*.pt"))
+    assert "CPU reference (chunk 0)" in str(error.value) and str(oracle_cache) in str(error.value)
+    assert not list(oracle_cache.rglob("*.pt"))
 
 
-def test_chained_references_carry_state_and_reuse_cache(model_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_chained_references_carry_state_and_reuse_cache(oracle_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(kda_cases.CACHE_MISS_ENV, raising=False)
     case, state_dict = _toy_chained_case(monkeypatch)
 
@@ -190,7 +193,7 @@ def test_chained_references_carry_state_and_reuse_cache(model_cache: Path, monke
 
     assert [reference.cache_hit for reference in cold] == [False, False]
     assert [reference.cache_hit for reference in warm] == [True, True]
-    assert len(list(model_cache.rglob("*.pt"))) == 2
+    assert len(list(oracle_cache.rglob("*.pt"))) == 2
     for cold_reference, warm_reference in zip(cold, warm, strict=True):
         assert torch.equal(cold_reference.output, warm_reference.output)
         assert torch.equal(cold_reference.state.recurrent, warm_reference.state.recurrent)
@@ -203,14 +206,14 @@ def test_chained_references_carry_state_and_reuse_cache(model_cache: Path, monke
 
 
 def test_load_only_text_input_miss_fails_fast_and_cached_input_is_used(
-    model_cache: Path, monkeypatch: pytest.MonkeyPatch, expect_error
+    oracle_cache: Path, monkeypatch: pytest.MonkeyPatch, expect_error
 ) -> None:
     monkeypatch.delenv(kda_cases.CACHE_MISS_ENV, raising=False)
     spec = loudbox_kda_case("real", "LB-A", "single", "text")
     monkeypatch.setattr(kda_cases, "build_text_input", lambda *args: pytest.fail("load-only must not build inputs"))
     with expect_error(KDAPreparedCacheMiss, f"--case {spec.name}") as error:
         build_kda_case(spec)
-    assert "text input" in str(error.value) and str(model_cache) in str(error.value)
+    assert "text input" in str(error.value) and str(oracle_cache) in str(error.value)
 
     # A prepared input (written as the preparation step writes it) is what the case uses.
     hidden = torch.randn(1, spec.chunk_tokens, 7168).bfloat16()

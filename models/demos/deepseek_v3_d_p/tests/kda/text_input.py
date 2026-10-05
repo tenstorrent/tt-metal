@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import struct
 import time
 from collections.abc import Callable
@@ -30,9 +29,11 @@ from loguru import logger
 from safetensors import safe_open
 
 import ttnn
+from models.demos.deepseek_v3_d_p.utils.oracle_cache import oracle_cache_root, publish_once
 
 # Covers the stored text input: corpus body extraction, tokenizer construction, the window, the embedding
-# lookup and the RMSNorm below. Bump when any of them changes the stored tensor.
+# lookup and the RMSNorm below. Bump when any of them changes the stored tensor; the cache is shared by every
+# worktree (utils/oracle_cache.py), so an unmerged branch bumps to a value no other branch uses.
 TEXT_INPUT_VERSION = 1
 
 # Project Gutenberg #1342, Pride and Prejudice (the en-prose corpus of tt-work kda_decay_range_k3_glm.py).
@@ -93,36 +94,65 @@ TEXT_INPUT_MODELS = {
 
 
 def text_input_cache_path(model: str, layer_idx: int, tokens: int) -> Path:
-    """Model-cache path of one model/layer/length text input (keyed by the producer's full identity)."""
+    """Shared oracle-cache path of one model/layer/length text input (keyed by the producer's full identity)."""
     spec = TEXT_INPUT_MODELS[model]
     name = (
         f"v{TEXT_INPUT_VERSION}-{spec.revision[:12]}-layer{layer_idx}-pg1342-{CORPUS_SHA256[:12]}"
         f"-start{spec.window_start}-tokens{tokens}.pt"
     )
-    return Path(ttnn.CONFIG.model_cache_path) / model / "text_input" / name
+    return oracle_cache_root() / model / "text_input" / name
 
 
 def load_text_input(model: str, layer_idx: int, tokens: int) -> torch.Tensor | None:
     """Return the cached ``[1, tokens, hidden]`` bf16 text input, or None when it was not prepared."""
     path = text_input_cache_path(model, layer_idx, tokens)
-    if not path.exists():
+    if not path.is_file():
         return None
-    payload = torch.load(path, map_location="cpu", weights_only=True)
-    hidden = payload["hidden"]
-    digest = hashlib.sha256(memoryview(hidden.contiguous().view(torch.uint8).numpy())).hexdigest()
-    assert digest == payload["sha256"], f"text input checksum mismatch: {path}"
+    hidden = _load_checked(path)["hidden"]
+    logger.info(f"text input {model} layer {layer_idx} T={tokens} cache hit: {path}")
     return hidden
+
+
+def _load_checked(path: Path) -> dict:
+    payload = torch.load(path, map_location="cpu", weights_only=True)
+    assert _sha256(payload["hidden"]) == payload["sha256"], f"text input checksum mismatch: {path}"
+    return payload
 
 
 def build_text_input(model: str, layer_idx: int, tokens: int, checkpoint_dir: Path) -> torch.Tensor:
     """Build, cache and return the text input (CPU preparation only: needs network for the tokenizer)."""
-    spec = TEXT_INPUT_MODELS[model]
+    path = text_input_cache_path(model, layer_idx, tokens)
     start = time.perf_counter()
-    config = json.loads((checkpoint_dir / "config.json").read_text(encoding="utf-8"))
-    text_config = config.get("text_config", config)
+
+    def produce() -> dict[str, torch.Tensor | str]:
+        token_ids = _token_ids(model, tokens)
+        hidden = _build_hidden(model, layer_idx, token_ids, checkpoint_dir)
+        return {"hidden": hidden, "sha256": _sha256(hidden), "token_ids": torch.tensor(token_ids)}
+
+    payload, produced = publish_once(path, produce, torch.save, _load_checked)
+    verb = "built" if produced else "published by another producer, loaded"
+    logger.info(
+        f"text input {model} layer {layer_idx} T={tokens} {verb} in {time.perf_counter() - start:.1f} s: {path}"
+    )
+    return payload["hidden"]
+
+
+def _sha256(hidden: torch.Tensor) -> str:
+    return hashlib.sha256(memoryview(hidden.contiguous().view(torch.uint8).numpy())).hexdigest()
+
+
+def _token_ids(model: str, tokens: int) -> list[int]:
+    spec = TEXT_INPUT_MODELS[model]
     token_ids = _encoder(spec)(_corpus_body())[spec.window_start : spec.window_start + tokens]
     if len(token_ids) != tokens:
         raise ValueError(f"corpus has {len(token_ids)} tokens after {spec.window_start}, need {tokens}")
+    return token_ids
+
+
+def _build_hidden(model: str, layer_idx: int, token_ids: list[int], checkpoint_dir: Path) -> torch.Tensor:
+    spec = TEXT_INPUT_MODELS[model]
+    config = json.loads((checkpoint_dir / "config.json").read_text(encoding="utf-8"))
+    text_config = config.get("text_config", config)
     embeddings = _embedding_rows(spec, checkpoint_dir, token_ids)
     layer_prefix = f"{spec.model_root}layers.{layer_idx}."
     norm_weight = _checkpoint_tensor(spec, checkpoint_dir, f"{layer_prefix}input_layernorm.weight")
@@ -137,18 +167,7 @@ def build_text_input(model: str, layer_idx: int, tokens: int, checkpoint_dir: Pa
             ),
             text_config,
         )
-    hidden = _rms_norm(embeddings, norm_weight, text_config["rms_norm_eps"]).unsqueeze(0).contiguous()
-    path = text_input_cache_path(model, layer_idx, tokens)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    digest = hashlib.sha256(memoryview(hidden.view(torch.uint8).numpy())).hexdigest()
-    temporary = path.with_suffix(f".{os.getpid()}.tmp")
-    try:
-        torch.save({"hidden": hidden, "sha256": digest, "token_ids": torch.tensor(token_ids)}, temporary)
-        temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
-    logger.info(f"text input {model} layer {layer_idx} T={tokens} built in {time.perf_counter() - start:.1f} s: {path}")
-    return hidden
+    return _rms_norm(embeddings, norm_weight, text_config["rms_norm_eps"]).unsqueeze(0).contiguous()
 
 
 def chunk_decay_extremes(hidden: torch.Tensor, weights: dict[str, torch.Tensor], config) -> dict[str, float]:
@@ -199,19 +218,26 @@ def _hyper_connection_collapse(
 
 
 def _corpus_body() -> str:
-    path = Path(ttnn.CONFIG.model_cache_path) / "text_corpus" / Path(CORPUS_URL).name
-    if not path.exists():
+    path = oracle_cache_root() / "text_corpus" / Path(CORPUS_URL).name
+
+    def download() -> bytes:
         from huggingface_hub import get_session
 
         response = get_session().get(CORPUS_URL, follow_redirects=True)
         response.raise_for_status()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(response.content)
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    if digest != CORPUS_SHA256:
-        raise ValueError(f"corpus {path} sha256 {digest} != pinned {CORPUS_SHA256}")
+        _check_corpus(response.content, CORPUS_URL)
+        return response.content
+
+    publish_once(path, download, lambda data, file: file.write_bytes(data), lambda file: None)
+    _check_corpus(path.read_bytes(), path)
     raw = path.read_text(encoding="utf-8")
     return raw[raw.index("\n", raw.index("*** START OF")) + 1 :]
+
+
+def _check_corpus(content: bytes, source: object) -> None:
+    digest = hashlib.sha256(content).hexdigest()
+    if digest != CORPUS_SHA256:
+        raise ValueError(f"corpus {source} sha256 {digest} != pinned {CORPUS_SHA256}")
 
 
 def _encoder(spec: TextInputModel) -> Callable[[str], list[int]]:

@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """CPU-only preparation for the GDN baseline device tests; opens no device.
 
-Run from the tt-metal checkout root with the checkout's python_env (and the same ttnn model cache as the tests):
+Run from the tt-metal checkout root with the checkout's python_env. References go to the CPU oracle cache shared by
+every worktree (``TT_LINEAR_LAYERS_SHARED_CACHE``, models/demos/deepseek_v3_d_p/utils/oracle_cache.py):
 
     python -m models.demos.blackhole.qwen36.tests.gdn_baseline.prepare --fetch-config qwen38_27b
     python -m models.demos.blackhole.qwen36.tests.gdn_baseline.prepare --fetch-weights qwen38_27b   # real, local only
@@ -13,7 +14,7 @@ Run from the tt-metal checkout root with the checkout's python_env (and the same
 ``--fetch-weights`` reads only the first GDN layer's tensors, ``input_layernorm.weight`` and the embedding rows of
 the text tokens, by HTTP range reads of the pinned safetensors shards (no full shard download), and writes a
 ``manifest.json`` with source shards, keys, shapes, dtypes and file hashes. Case preparation fills the CPU-reference
-cache (``cases.py``). Host tilization is never needed here, but ttnn is imported for the model cache path, so the
+cache (``cases.py``). Host tilization is never needed here, but ttnn may be imported for the cache root, so the
 process runs against a mock cluster (``TT_METAL_MOCK_CLUSTER_DESC_PATH``) and verifies on exit that it holds no
 device handle.
 """
@@ -43,6 +44,7 @@ import torch  # noqa: E402
 
 from models.demos.blackhole.qwen36.tests.gdn_baseline import cases as gc  # noqa: E402
 from models.demos.blackhole.qwen36.tests.gdn_baseline.reference import PREFIX, WEIGHT_NAMES  # noqa: E402
+from models.demos.deepseek_v3_d_p.utils.oracle_cache import publish_once  # noqa: E402
 
 
 def log(message: str) -> None:
@@ -235,11 +237,14 @@ def prepare_case(case: gc.GdnCase) -> None:
         log(f"{case.name}: reference cache hit {path}")
         return
     log(f"{case.name}: reference cache miss; computing (weights {time.perf_counter() - start:.1f} s)")
-    x = gc.build_inputs(case)
-    reference = gc.compute_reference(case, state_dict, x)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"identity": identity, "inputs": x, **reference}, path)
-    log(f"{case.name}: reference written in {time.perf_counter() - start:.1f} s -> {path}")
+
+    def produce() -> dict:
+        x = gc.build_inputs(case)
+        return {"identity": identity, "inputs": x, **gc.compute_reference(case, state_dict, x)}
+
+    _, produced = publish_once(path, produce, torch.save, lambda file: None)
+    verb = "written" if produced else "published by another producer"
+    log(f"{case.name}: reference {verb} in {time.perf_counter() - start:.1f} s -> {path}")
 
 
 def _device_handles() -> list[str]:
@@ -282,6 +287,8 @@ def main() -> None:
             for c in gc.CASES.values()
             if c.model == arguments.model and (arguments.weights is None or c.weights == arguments.weights)
         ]
+    if selected:
+        log(f"reference cache root {gc.reference_cache_root()}")
     for index, case in enumerate(selected, start=1):
         log(f"[{index}/{len(selected)}] {case.name} start")
         prepare_case(case)
