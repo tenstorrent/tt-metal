@@ -472,7 +472,8 @@ syseng:
     wh_n150_civ2: 34
     wh_n300_civ2: 36
     bh_p100: 20
-    bh_p150b_civ2: 20
+    bh_p150b_civ2: 25
+    bh_p300: 5
 
 gtm:
   e2e:

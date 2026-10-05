@@ -44,7 +44,11 @@ PER_CORE_M, PER_CORE_N = 10, 12  # output-tile block one core owns in the 3200x4
 IN0_BLOCK_W = 8  # must divide Kt = EMB_DIM/32 = 224
 MAX_GRID = (11, 10)  # cap co-active cores at 110; the device reports 12x10 but 120 is off-limits here
 
-MESH_DEVICE_PARAMS = [pytest.param((8, 4), id="galaxy")]
+MESH_DEVICE_PARAMS = [
+    pytest.param((1, 1), id="p150"),
+    pytest.param((1, 2), id="p300"),
+    pytest.param((8, 4), id="galaxy"),
+]
 
 
 def _shards(t):
