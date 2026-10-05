@@ -27,24 +27,21 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import tensor
 
 # Sampling settings and image size bounds of the upstream ``briaai/FIBO-VLM-prompt-to-JSON``
-# pipeline. The bounds make an image 196 to 784 tokens. Edit mode applies them too, though the
-# upstream ``briaai/FIBO-edit-prompt-to-JSON`` pipeline sets none, so that every image fits the
-# vision tower's padding; they do not affect the image the DiT gets.
+# pipeline, and those of ``briaai/FIBO-edit-prompt-to-JSON`` for edit mode, which first shrinks an
+# image to fit a 1024 x 1024 box. The bounds make an image 196 to 784 tokens, and 4 to 961 in edit
+# mode. They do not affect the image the DiT gets.
 _TOP_P = 0.9
 _TEMPERATURE = 0.2
-_EDIT_TEMPERATURE = 0.4  # from the upstream ``briaai/FIBO-edit-prompt-to-JSON`` pipeline
+_EDIT_TEMPERATURE = 0.4
 _TEXTURE_END = " End of texture answer."
 _MIN_PIXELS = 256 * 28 * 28
 _MAX_PIXELS = 1024 * 28 * 28
+_EDIT_MIN_PIXELS = 4 * 28 * 28
+_EDIT_MAX_PIXELS = 1280 * 28 * 28
+_EDIT_IMAGE_BOX = (1024, 1024)
 
 # The value of ``mm_token_type_ids`` that marks the image rows of a prompt.
 _IMAGE_TOKEN_TYPE = 1
-
-# The sides of the square images `warm_up` compiles the image path with. Every image is padded to
-# the patch limit, so the vision tower compiles the same programs for every image size, except that
-# its attention takes one of two programs: full SDPA for an image at the limit, and windowed SDPA,
-# which keeps image and padding apart, for any smaller one. Each side compiles one of them.
-_WARM_UP_IMAGE_SIDES = (math.isqrt(_MAX_PIXELS), math.isqrt(_MIN_PIXELS))
 
 
 # The fields of the generated JSON that FIBO takes, and the numeric scores it maps to levels.
@@ -119,11 +116,18 @@ class Vlm:
         self._edit = edit
         self._prompt_length = prompt_length
         self._cache_length = cache_length
+        min_pixels, max_pixels = (_EDIT_MIN_PIXELS, _EDIT_MAX_PIXELS) if edit else (_MIN_PIXELS, _MAX_PIXELS)
         self._processor = transformers.AutoProcessor.from_pretrained(
-            checkpoint_name, min_pixels=_MIN_PIXELS, max_pixels=_MAX_PIXELS
+            checkpoint_name, min_pixels=min_pixels, max_pixels=max_pixels
         )
         self._tokenizer = self._processor.tokenizer
-        self._max_patches = _MAX_PIXELS // self._processor.image_processor.patch_size**2
+
+        # Images are padded to the largest patch count, in whole tiles, so the vision tower runs the
+        # same programs for every size. Only attention differs: full for an image that fills the
+        # padding, windowed otherwise. `warm_up` runs the largest and the smallest image to cover both.
+        max_patches = max_pixels // self._processor.image_processor.patch_size**2
+        self._max_patches = -(-max_patches // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        self._warm_up_image_sides = (math.isqrt(max_pixels), math.isqrt(min_pixels))
 
         generation_config = transformers.GenerationConfig.from_pretrained(checkpoint_name)
         self._eos_tokens = generation_config.eos_token_id
@@ -201,7 +205,7 @@ class Vlm:
         An untraced call also compiles the image path.
         """
         if not traced:
-            for side in _WARM_UP_IMAGE_SIDES:
+            for side in self._warm_up_image_sides:
                 inputs = self._tokenize(None, Image.new("RGB", (side, side)))
                 self._generate(inputs, max_length=inputs.tokens.shape[1] + 2, traced=False)
 
@@ -214,6 +218,9 @@ class Vlm:
         The prompt is truncated to fit ``prompt_length``, as the text encoders truncate theirs.
         """
         prompt = prompt.strip() if prompt is not None else ""
+        if self._edit and image is not None:
+            image = image.copy()
+            image.thumbnail(_EDIT_IMAGE_BOX)
         inputs = self._chat_inputs(prompt, image)
 
         if inputs.tokens.shape[1] > self._prompt_length:

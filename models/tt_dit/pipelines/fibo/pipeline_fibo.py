@@ -24,10 +24,10 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.cfg import CFGCombiner, create_submeshes, submesh_shape
 from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from models.tt_dit.pipelines.fibo.text_encoder import TextEncoder
-from models.tt_dit.pipelines.fibo.vlm import Vlm
+from models.tt_dit.pipelines.fibo.vlm import Vlm, clean
 from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
-from models.tt_dit.solvers import EulerSolver
-from models.tt_dit.utils.mesh import reshape_device
+from models.tt_dit.solvers import EulerSolver, calculate_shift
+from models.tt_dit.utils.mesh import reshape_for_factor
 from models.tt_dit.utils.tensor import from_torch, from_torch_to_devices
 from models.tt_dit.utils.tracing import Tracer
 
@@ -35,13 +35,16 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from contextlib import AbstractContextManager
 
-    from models.tt_dit.parallel.config import ParallelFactor
-
 _VAE_SCALE_FACTOR = 16
 _DEFAULT_CHECKPOINT = "briaai/FIBO"
 _DEFAULT_VLM_CHECKPOINT = "briaai/FIBO-vlm"
-_VLM_PROMPT_LENGTH = 1024
+_VLM_PROMPT_LENGTH = 2048  # FIBO-edit-vlm takes images of up to 961 tokens
 _VLM_CACHE_LENGTH = 4096  # Prompt and generated JSON together
+
+# The default negative prompt for photographs, from Bria's ``get_default_negative_prompt``:
+# https://github.com/Bria-AI/FIBO/blob/5a7269009c04173aeb570e34aa0a5d45aa1e6bc1/generate.py#L35-L40
+_PHOTO_STYLE_MEDIA = ("photograph", "photography", "photo")
+_PHOTO_NEGATIVE_PROMPT = "{'style_medium':'digital illustration','artistic_style':'non-realistic'}"
 
 # Rules of thumb for the encoder parallelism below, from sweeping the text encoder over every
 # mesh shape from one to eight devices on a T3K:
@@ -349,10 +352,10 @@ class FiboPipeline(PipelineAPIMixin):
             )
 
     def _reshape_encoder(self) -> AbstractContextManager[None]:
-        return _reshape_for_tp(self._devices[0], self._encoder_tp)
+        return reshape_for_factor(self._devices[0], self._encoder_tp)
 
     def _reshape_vlm(self) -> AbstractContextManager[None]:
-        return _reshape_for_tp(self._devices[-1], self._vlm_tp)
+        return reshape_for_factor(self._devices[-1], self._vlm_tp)
 
     def __call__(
         self,
@@ -380,6 +383,10 @@ class FiboPipeline(PipelineAPIMixin):
         With ``edit``, ``prompts`` are editing instructions, which the VLM turns into FIBO Edit's
         prompts, or without ``use_vlm`` FIBO Edit's prompts themselves. ``images`` are then required:
         they are the images to edit, which both the VLM and the transformer take.
+
+        Without ``edit``, structured prompts are rated "very high" on both aesthetics scores, and
+        without ``negative_prompts``, photographs are steered away from illustration, both as Bria's
+        generate.py does.
         """
         prompt_count = len(prompts)
         edit = self._vae_encoder is not None
@@ -389,7 +396,6 @@ class FiboPipeline(PipelineAPIMixin):
         encoder_traced = encoder_traced if encoder_traced is not None else traced
         vlm_traced = vlm_traced if vlm_traced is not None else traced
         on_event = on_event if on_event is not None else null_callback
-        negative_prompts = negative_prompts if negative_prompts is not None else [""] * prompt_count
 
         assert num_images_per_prompt == 1, "generating multiple images is not supported"
         assert prompt_count == 1, "generating multiple images is not supported"
@@ -414,6 +420,12 @@ class FiboPipeline(PipelineAPIMixin):
         if edit and not all(_has_edit_instruction(prompt) for prompt in prompts):
             msg = "with edit, prompts must be JSON objects with an edit_instruction"
             raise ValueError(msg)
+
+        if not edit:
+            prompts = [_with_top_scores(p) for p in prompts]
+
+        if negative_prompts is None:
+            negative_prompts = [""] * prompt_count if edit else [_default_negative_prompt(p) for p in prompts]
 
         logger.info("encoding prompts...")
         on_event(SectionStart("encoder"))
@@ -442,7 +454,7 @@ class FiboPipeline(PipelineAPIMixin):
 
         logger.info("preparing timesteps...")
         sigmas = np.linspace(1.0, 1 / num_inference_steps, num_inference_steps)
-        mu = _calculate_shift(latents_sequence_length, self._scheduler)
+        mu = calculate_shift(latents_sequence_length, self._scheduler)
         self._scheduler.set_timesteps(sigmas=sigmas, mu=mu)
         sigmas = self._scheduler.sigmas.tolist()
         for solver in self._solvers:
@@ -660,15 +672,6 @@ class FiboPipeline(PipelineAPIMixin):
             ttnn.synchronize_device(d)
 
 
-def _reshape_for_tp(device: ttnn.MeshDevice, tp: ParallelFactor) -> AbstractContextManager[None]:
-    """Reshapes ``device`` to have ``tp.factor`` devices along ``tp.mesh_axis`` while active."""
-    shape = list(device.shape)
-    shape[tp.mesh_axis] = tp.factor
-    shape[1 - tp.mesh_axis] = device.shape.mesh_size() // tp.factor
-
-    return reshape_device(device, ttnn.MeshShape(*shape))
-
-
 def _has_edit_instruction(prompt: str) -> bool:
     try:
         record = json.loads(prompt)
@@ -677,13 +680,33 @@ def _has_edit_instruction(prompt: str) -> bool:
     return isinstance(record, dict) and "edit_instruction" in record
 
 
-def _calculate_shift(image_seq_len: int, scheduler: FlowMatchEulerDiscreteScheduler) -> float:
-    """Resolution-dependent mu used by FlowMatchEulerDiscreteScheduler's dynamic shifting."""
-    base_seq_len = scheduler.config.get("base_image_seq_len", 256)
-    max_seq_len = scheduler.config.get("max_image_seq_len", 4096)
-    base_shift = scheduler.config.get("base_shift", 0.5)
-    max_shift = scheduler.config.get("max_shift", 1.15)
+def _with_top_scores(prompt: str) -> str:
+    """Rates a structured prompt "very high" on both aesthetics scores, as Bria's generate.py does.
 
-    m = (max_shift - base_shift) / (max_seq_len - base_seq_len)
-    b = base_shift - m * base_seq_len
-    return image_seq_len * m + b
+    Like ``clean_json`` there, it also reduces the prompt to FIBO's fields with empty values
+    dropped. Text that is not a JSON object is returned as it is.
+    """
+    try:
+        record = json.loads(prompt)
+    except json.JSONDecodeError:
+        return prompt
+    if not isinstance(record, dict):
+        return prompt
+
+    caption = clean(json.dumps({**record, "pickascore": 1.0, "aesthetic_score": 10.0}))
+    return json.dumps(caption, separators=(",", ":")) if caption is not None else prompt
+
+
+def _default_negative_prompt(prompt: str) -> str:
+    """Picks the negative prompt for a structured prompt as Bria's generate.py does.
+
+    Photographs are steered away from illustration; anything else gets none.
+    """
+    try:
+        record = json.loads(prompt)
+    except json.JSONDecodeError:
+        return ""
+    style_medium = record.get("style_medium", "") if isinstance(record, dict) else ""
+    if str(style_medium).lower() in _PHOTO_STYLE_MEDIA:
+        return _PHOTO_NEGATIVE_PROMPT
+    return ""

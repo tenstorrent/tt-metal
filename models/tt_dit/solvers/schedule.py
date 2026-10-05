@@ -7,6 +7,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -76,3 +78,15 @@ class Schedule:
             timesteps=tuple(float(t) for t in scheduler.timesteps.tolist()),
             num_train_timesteps=scheduler.config.num_train_timesteps,
         )
+
+
+def calculate_shift(image_seq_len: int, scheduler: FlowMatchEulerDiscreteScheduler) -> float:
+    """Resolution-dependent mu used by FlowMatchEulerDiscreteScheduler's dynamic shifting."""
+    base_seq_len = scheduler.config.get("base_image_seq_len", 256)
+    max_seq_len = scheduler.config.get("max_image_seq_len", 4096)
+    base_shift = scheduler.config.get("base_shift", 0.5)
+    max_shift = scheduler.config.get("max_shift", 1.15)
+
+    m = (max_shift - base_shift) / (max_seq_len - base_seq_len)
+    b = base_shift - m * base_seq_len
+    return image_seq_len * m + b
