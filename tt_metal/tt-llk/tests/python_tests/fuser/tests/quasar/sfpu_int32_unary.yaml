@@ -1,6 +1,6 @@
 # Int32 unary SFPU kernels from the Blackhole SFPI port on the whole non-negative range: logical_not,
 # right shift by 3, bitwise and / or / xor with 0x70FF00F5, rsub from INT_MAX, remainder_uint32 (x mod
-# 1000), identity (the bit-exact vUInt copy). Points 0, 1, 7, 999-1001, 2**16 +- 1, 2**28 +- 1, 2**30,
+# 1000), identity (the bit-exact vUInt copy), abs_int32 and fill with 5. Points 0, 1, 7, 999-1001, 2**16 +- 1, 2**28 +- 1, 2**30,
 # INT_MAX; ranges near 0, mid-range and next to INT_MAX.
 # Int32 must be unpacked straight to Dest and needs a 32-bit Dest. The harness stores Int32 in L1
 # as sign-magnitude while these kernels compute in two's complement (tt-metal's Int32 encoding), so
@@ -47,9 +47,11 @@ operations:
   - math:
       - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: true, block_size: [32, 32]}
       - type: "UnarySfpu"
-        operation: [LogicalNotUnary, RightShift, UnaryBitwiseAnd, UnaryBitwiseOr, UnaryBitwiseXor, RsubScalarInt32, RemainderUint32, Identity]
+        operation: [LogicalNotUnary, RightShift, UnaryBitwiseAnd, UnaryBitwiseOr, UnaryBitwiseXor, RsubScalarInt32, RemainderUint32, Identity, AbsInt32, Fill]
         approximation_mode: false
         iterations: 32
+        # Fill's golden constant; the Quasar harness fills with 5 (sfpu_operations_quasar.h).
+        fill_const_value: 5.0
         block_size: [32, 32]
     pack:
       - {output: "sfpu_out", packer: "Packer", block_size: [32, 32]}
