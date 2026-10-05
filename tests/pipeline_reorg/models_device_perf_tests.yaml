@@ -214,3 +214,19 @@
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
   budget_type: device_perf
+
+# Device kernel time of generated eltwise programs against the paths they replace, one file
+# per op. Listing each here is what makes the changed-tests gate run a PR's new file on
+# hardware, with a Tracy build, before it merges.
+- name: "ttnn eltwise generated bf16 device perf"
+  cmd: >-
+    TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
+    tests/ttnn/perf_tests/operations/eltwise/test_log1p_bw_device_perf.py
+  skus:
+    wh_n300_civ2:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
+  team: ttnn
+  budget_type: device_perf
+  owner_id: U09LVP68R7F # Nachiket Kapre
