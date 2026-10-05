@@ -25,7 +25,7 @@ Quasar has the MX family and **no block float**; Wormhole/Blackhole the reverse.
 
 import warnings
 from abc import ABC
-from typing import ClassVar, FrozenSet, Optional, Sequence, Union
+from typing import ClassVar, FrozenSet, Mapping, Optional, Sequence, Union
 
 import torch
 from helpers.format_config import DataFormat
@@ -95,6 +95,12 @@ class DataTransferBlocks(ABC):
     #: this class abstract in practice. An instance that reached here with the
     #: empty set would reject every format, so :meth:`__init__` says so up
     #: front instead of failing one call later.
+    #: Legal ``L1 format -> src-register format`` pairs for this architecture's
+    #: unpacker. Empty means the architecture is not modelled at this level of
+    #: detail, and the weaker "is it a src storage format at all" check applies
+    #: instead; it is not a claim that everything is legal.
+    UNPACK_TO_SRC_FORMATS: ClassVar[Mapping[DataFormat, FrozenSet[DataFormat]]] = {}
+
     SUPPORTED_L1_FORMATS: ClassVar[FrozenSet[DataFormat]] = frozenset()
 
     def __init__(self) -> None:
@@ -549,12 +555,18 @@ class DataTransferBlocks(ABC):
     ) -> torch.Tensor:
         """Read L1, then apply src-register storage precision.
 
-        Any L1 format can be unpacked into any src storage format; `src_format`
+        Which src formats an L1 format can land in is per-architecture and
+        enforced -- see :meth:`_is_valid_src_format`. Within that, `src_format`
         defaults to the one the LLK would pick for `l1_format`.
         """
-        if src_format is None:
+        # Validate whichever format we end up with, defaulted or not. Checking
+        # only the explicit one would exempt exactly the common path, and the
+        # default is derived from the input rather than from what the unpacker
+        # can actually do -- which is how an Int32 input reached SrcA.
+        defaulted = src_format is None
+        if defaulted:
             src_format = self.src_format(l1_format)
-        elif not self._is_valid_src_format(
+        if not self._is_valid_src_format(
             l1_format, src_format, geometry.get("use_srcs", False)
         ):
             if src_format is DataFormat.Float32:
@@ -564,27 +576,54 @@ class DataTransferBlocks(ABC):
                     "l1_to_dest for the unpack-to-Dest path, or l1_to_srcS, "
                     "which are the two destinations that keep full fp32."
                 )
+            legal = sorted(
+                str(f) for f in self.UNPACK_TO_SRC_FORMATS.get(l1_format, frozenset())
+            )
+            if defaulted:
+                raise ValueError(
+                    f"{type(self).__name__} cannot unpack {l1_format} into "
+                    f"SrcA/SrcB"
+                    + (
+                        f"; the legal src formats for it are {legal}."
+                        if legal
+                        else " at all -- it reaches Dest or SrcS only. Use "
+                        "l1_to_dest, or l1_to_srcS with use_srcs=True."
+                    )
+                )
             raise ValueError(
-                f"{src_format} is not a src-register storage format. "
-                f"A src register can hold {sorted(str(f) for f in SRC_STORAGE_FORMATS)}"
-                f"{' or pass ' + str(l1_format) + ' through unconverted' if l1_format == src_format else ''}."
+                f"{type(self).__name__} cannot unpack {l1_format} as "
+                f"{src_format}. "
+                + (
+                    f"Legal src formats for {l1_format}: {legal}."
+                    if legal
+                    else f"A src register can hold "
+                    f"{sorted(str(f) for f in SRC_STORAGE_FORMATS)}."
+                )
             )
         values = self.unpack_from_l1(l1_bytes, l1_format, **geometry)
         return self._to_src_storage(values, src_format)
 
-    @staticmethod
     def _is_valid_src_format(
-        l1_format: DataFormat, src_format: DataFormat, use_srcs: bool = False
+        self, l1_format: DataFormat, src_format: DataFormat, use_srcs: bool = False
     ) -> bool:
-        """A src storage format, or the input format passed through unconverted.
+        """Whether this architecture's unpacker can land `l1_format` as `src_format`.
 
-        Float32 is the exception: the unpacker may land a Float32 source as
-        Float32 only when the destination is Dest or SrcS, never SrcA/SrcB, so
-        asking for it on the ordinary unpack path models a configuration the
-        hardware rejects.
+        The pair matters, not just the target. A src-register format being
+        real, and an L1 format being readable, does not make the conversion
+        between them something the unpacker can do -- Int32 reaches Dest and
+        SrcS but never SrcA/SrcB, and an integer input does not become a float
+        in a src register.
+
+        ``UNPACK_TO_SRC_FORMATS`` carries the legal pairs per architecture, and
+        an architecture that leaves it empty is simply unmodelled here and gets
+        the older, weaker check. ``use_srcs`` bypasses the pair table: SrcS is
+        a different destination with its own rules, including the Float32 that
+        SrcA/SrcB cannot hold.
         """
         if src_format is DataFormat.Float32 and not use_srcs:
             return False
+        if self.UNPACK_TO_SRC_FORMATS and not use_srcs:
+            return src_format in self.UNPACK_TO_SRC_FORMATS.get(l1_format, frozenset())
         return src_format in SRC_STORAGE_FORMATS or src_format == l1_format
 
     @staticmethod

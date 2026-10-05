@@ -65,9 +65,14 @@ families, and the family — not the L1 format — is what the FPU reads.**
 | `supports(l1_format)` · `supported_dest_formats` | What this architecture can read, and hold in Dest. |
 
 `src_format` on the unpack blocks overrides the storage format the unpacker
-lands the buffer in; `None` lets the architecture choose. Any L1 format can be
-unpacked into any src storage format, so the override is a real knob, not a
-hint.
+lands the buffer in; `None` lets the architecture choose. The override is a real
+knob, but not an unrestricted one: which src formats an L1 format can land in is
+a property of the unpacker, held per architecture in `UNPACK_TO_SRC_FORMATS` and
+checked on **both** the explicit and the defaulted path. `Int32` has no legal
+SrcA/SrcB target at all — it reaches Dest or SrcS only — and an integer input
+does not become a float in a src register. An architecture that leaves the table
+empty is unmodelled at this level and falls back to the weaker "is this a src
+storage format" check; that is not a claim that every pair is legal.
 
 ## Two src storage families, and a name that lies
 

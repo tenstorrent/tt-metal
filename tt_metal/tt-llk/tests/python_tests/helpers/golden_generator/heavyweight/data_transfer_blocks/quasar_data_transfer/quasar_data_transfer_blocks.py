@@ -3,7 +3,7 @@
 
 """Quasar L1 -> Src register data-transfer blocks."""
 
-from typing import ClassVar, FrozenSet
+from typing import ClassVar, FrozenSet, Mapping
 
 from helpers.format_config import DataFormat
 
@@ -20,6 +20,9 @@ _MX_FORMATS = frozenset(
         DataFormat.MxInt2,
     }
 )
+
+
+_TO_SRC_FLOAT = frozenset({DataFormat.Tf32, DataFormat.Float16, DataFormat.Float16_b})
 
 
 class QuasarDataTransferBlocks(DataTransferBlocks):
@@ -44,3 +47,25 @@ class QuasarDataTransferBlocks(DataTransferBlocks):
             DataFormat.UInt8,
         }
     )
+
+    #: Narrow floats and Tf32 are the src targets for every float-ish input;
+    #: integers stay in their own width. Int32 is deliberately absent: it
+    #: unpacks to Dest or SrcS only, never SrcA/SrcB.
+    #:
+    #: The same facts live in ``constraints._QUASAR_UNPACK_TO_SRCA_FORMATS``.
+    #: Kept separately so heavyweight does not depend on the old test-generation
+    #: constraints; they were equivalent for every format in
+    #: ``SUPPORTED_L1_FORMATS`` when this was written. MxFp4's 2x register
+    #: formats are omitted because this golden has no storage model for them,
+    #: so asking for one should fail rather than quietly produce a plain value.
+    UNPACK_TO_SRC_FORMATS: ClassVar[Mapping[DataFormat, FrozenSet[DataFormat]]] = {
+        **{f: _TO_SRC_FLOAT for f in _MX_FORMATS},
+        DataFormat.Float32: _TO_SRC_FLOAT,
+        DataFormat.Tf32: _TO_SRC_FLOAT,
+        DataFormat.Float16: _TO_SRC_FLOAT,
+        DataFormat.Float16_b: _TO_SRC_FLOAT,
+        DataFormat.Fp8_e4m3: _TO_SRC_FLOAT,
+        DataFormat.Int16: frozenset({DataFormat.Int16}),
+        DataFormat.Int8: frozenset({DataFormat.Int8}),
+        DataFormat.UInt8: frozenset({DataFormat.UInt8}),
+    }

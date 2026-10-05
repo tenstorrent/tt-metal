@@ -265,26 +265,7 @@ def _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces=4, face_r_dim=MAX_FACE_R_DI
         * np.exp2(block_exp_unbiased.astype(np.float64))[:, np.newaxis]
     )
 
-    # The gasket lands MXFP8 in an 8-bit-exponent register format (TF32/Float16_b)
-    # with no subnormals, so it forces Inf once the rebiased exponent reaches 255
-    # and zero once it drops to 0 (tt_unpacker_gasket_fmt_conv.sv). In unbiased
-    # terms that is >= 128 and <= -127.
-    finite_nonzero = np.isfinite(scaled_blocks) & (scaled_blocks != 0.0)
-    _, exponents = np.frexp(np.where(finite_nonzero, scaled_blocks, 1.0))
-    unbiased = exponents - 1  # value = mantissa * 2^exponent, mantissa in [0.5, 1)
-    scaled_blocks = np.where(
-        finite_nonzero & (unbiased >= 128),
-        np.copysign(np.inf, scaled_blocks),
-        scaled_blocks,
-    )
-    scaled_blocks = np.where(
-        finite_nonzero & (unbiased <= -127),
-        np.copysign(0.0, scaled_blocks),
-        scaled_blocks,
-    )
-    # E8M0 0xFF is the NaN scale: block_exp_all_ones forces every datum of the
-    # block to NaN, zeros included.
-    scaled_blocks[nan_blocks] = np.nan
+    scaled_blocks = _apply_gasket_range(scaled_blocks, nan_blocks)
 
     # Flatten and convert to bfloat16 tensor
     return torch.tensor(scaled_blocks.flatten(), dtype=torch.bfloat16)
@@ -460,31 +441,48 @@ def unpack_mxfp4(
     safe_exp = np.where(nan_blocks, 0, block_exp_unbiased).astype(np.float32)
     scaled_blocks = fp4_f32 * np.exp2(safe_exp)[:, None]
 
-    # Extract 2-bit exponent field from E2M1 format
-    unit_exp_field = (
-        ((nibbles_u8 >> 1) & 0x3)
-        .astype(np.int32)[: num_blocks * block_size]
-        .reshape(num_blocks, block_size)
-    )
-
-    # E2M1 unbiased exponent calculation (bias=1):
-    # - Normal values (exp_field != 0): unbiased = exp_field - 1
-    # - Subnormal values (exp_field == 0): unbiased = 0 (fixed at 1-bias)
-    unit_exp_unbiased = np.where(unit_exp_field == 0, 0, unit_exp_field - 1)
-    combined_unbiased = block_exp_unbiased[:, None] + unit_exp_unbiased
-
-    overflow_mask = (combined_unbiased >= 128) & ~nan_blocks[:, None]
-    underflow_mask = (combined_unbiased < -127) & ~nan_blocks[:, None]
-
-    if np.any(nan_blocks):
-        scaled_blocks[nan_blocks] = np.nan
-
-    scaled_blocks[overflow_mask] = np.where(
-        scaled_blocks[overflow_mask] >= 0.0, np.inf, -np.inf
-    )
-    scaled_blocks[underflow_mask] = 0.0
+    # Same range rule as MXFP8 -- the gasket treats both identically once the
+    # element is decoded, so the clamp is shared rather than recomputed from
+    # block_exp + element_exp, which misses subnormal elements.
+    scaled_blocks = _apply_gasket_range(scaled_blocks, nan_blocks)
 
     return torch.tensor(scaled_blocks.ravel(), dtype=torch.bfloat16)
+
+
+def _apply_gasket_range(scaled_blocks, nan_blocks):
+    """Clamp decoded MX values to what the gasket's register format can hold.
+
+    The gasket lands every MX format in an 8-bit-exponent register (TF32 /
+    Float16_b) that has no subnormals, so it forces Inf once the rebiased
+    exponent reaches 255 and zero once it drops to 0 -- in unbiased terms
+    ``>= 128`` and ``<= -127``. The rule is identical for MXFP8R, MXFP8P and
+    MXFP4; only the element decoding before it differs.
+
+    The exponent is taken from the decoded value itself rather than added up as
+    ``block_exp + element_exp``, because the hardware normalises a subnormal
+    element before rebiasing, subtracting its leading zeros. Summing the fields
+    instead puts a subnormal element one or more binades too high, so the flush
+    misses values that the device zeroes.
+
+    `nan_blocks` is applied last: a 0xFF block scale NaNs every datum of the
+    block, zeros included, and that outranks the range clamp.
+    """
+    finite_nonzero = np.isfinite(scaled_blocks) & (scaled_blocks != 0.0)
+    _, exponents = np.frexp(np.where(finite_nonzero, scaled_blocks, 1.0))
+    unbiased = exponents - 1  # value = mantissa * 2^exponent, mantissa in [0.5, 1)
+    scaled_blocks = np.where(
+        finite_nonzero & (unbiased >= 128),
+        np.copysign(np.inf, scaled_blocks),
+        scaled_blocks,
+    )
+    scaled_blocks = np.where(
+        finite_nonzero & (unbiased <= -127),
+        np.copysign(0.0, scaled_blocks),
+        scaled_blocks,
+    )
+    if np.any(nan_blocks):
+        scaled_blocks[nan_blocks] = np.nan
+    return scaled_blocks
 
 
 def _mxint_decode_blocks(scales_e8m0, int_blocks, elem_scale_divisor: float):
