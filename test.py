@@ -11,9 +11,9 @@ def eprint(*args, **kwargs):
 async def handle_post(request):
     name = request.match_info.get("name", "AAAAnonymous")
     data = await request.json()
-    eprint(data)
-    request.app[db_key].append(data)
-    eprint(request.app[db_key])
+    eprint(data, len(data), sep="\n")
+    request.app[db_key].extend(data)
+    # eprint(request.app[db_key])
 
     text = "Hello, " + name + "\n" + str(data) + "\n"
     return web.Response(text=text)
