@@ -115,6 +115,7 @@ def test_convert_to_chw_with_program_cache(device):
     assert device.num_program_cache_entries() == 4
 
 
+@pytest.mark.requires_grid_size((3, 1))
 @pytest.mark.parametrize("C", [8, 32])
 @pytest.mark.parametrize("HW, num_cores, shard_height", [(160, 2, 128), (288, 3, 128)])
 def test_convert_to_chw_shard_taller_than_balanced_split(device, C, HW, num_cores, shard_height):

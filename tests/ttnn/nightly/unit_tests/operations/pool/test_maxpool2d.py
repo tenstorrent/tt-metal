@@ -882,6 +882,7 @@ def test_run_max_pool_low_rank(rank, device):
     assert torch.equal(ttnn_output_torch, torch_output)
 
 
+@pytest.mark.requires_grid_size((2, 8))
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("input_hw, kernel, stride", [((6, 6), 3, 2), ((7, 7), 3, 3), ((11, 11), 3, 3)])
 def test_max_pool2d_return_indices_block_shard_empty_core_rows(device, input_hw, kernel, stride):
