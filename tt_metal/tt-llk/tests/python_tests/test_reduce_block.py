@@ -215,7 +215,7 @@ def test_reduce_block(
     is_reduce_to_one,
     tile_dimensions,
 ):
-    """Blocks of a DEST section into their own DEST tiles; reduce to one accumulates blocks of 3 tiles (128 tiles in one call for 1x32)."""
+    """Blocks of a DEST section into their own DEST tiles; reduce to one accumulates 16 tiles in calls of 9 and 7."""
     _run_reduce_block(
         formats,
         reduce_dim,
@@ -223,8 +223,12 @@ def test_reduce_block(
         math_fidelity,
         is_reduce_to_one,
         tile_dimensions,
-        [128, 32] if is_reduce_to_one else [256, 32],
-        lambda tile_cnt: tile_cnt if tile_cnt > 32 else 3,
+        (
+            [16 * tile_dimensions[0], tile_dimensions[1]]
+            if is_reduce_to_one
+            else [256, 32]
+        ),
+        lambda tile_cnt: 9,
     )
 
 
@@ -237,9 +241,10 @@ def test_reduce_block(
     ],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=[ReducePool.Max, ReducePool.Sum],
+    call_tiles=[40, 35],
 )
-def test_reduce_block_chunks(formats, reduce_dim, pool_type):
-    """40 full tiles accumulated by one block call: two unpack contexts (32 + 8 tiles)."""
+def test_reduce_block_chunks(formats, reduce_dim, pool_type, call_tiles):
+    """40 full tiles accumulated by block calls: one call of 40 (chunks of 32 and 8), or calls of 35 (32 and 3) and 5."""
     _run_reduce_block(
         formats,
         reduce_dim,
@@ -248,5 +253,5 @@ def test_reduce_block_chunks(formats, reduce_dim, pool_type):
         True,
         [32, 32],
         [32 * 40, 32],
-        lambda tile_cnt: tile_cnt,
+        lambda tile_cnt: call_tiles,
     )
