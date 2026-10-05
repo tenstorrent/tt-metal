@@ -222,7 +222,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     // The EMA output always lands in dst tile 1.
                     _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(EMA_OUTPUT_DST_INDEX, PERF_ADDRESS(PERF_OUTPUT, tile));
-                    _perf_pack_section_end();
                 }
             }
         }

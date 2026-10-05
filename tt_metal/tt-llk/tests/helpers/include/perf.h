@@ -46,15 +46,6 @@ enum class PerfRunType
     SFPU_ISOLATE
 };
 
-// Isolate pack loops skip _llk_pack_dest_section_done_, so they drain the packers here at the same points instead:
-// Wormhole packers that never go idle keep whichever of two speeds the code timing picked at the start.
-inline void _perf_pack_section_end()
-{
-#ifdef ARCH_WORMHOLE
-    TTI_STALLWAIT(ckernel::p_stall::STALL_THCON | ckernel::p_stall::STALL_PACK, ckernel::p_stall::PACK);
-#endif
-}
-
 // With the barrier, INIT and the code after the measured loop run out of line at the end of the kernel code (sections.ld)
 // on 512 B, so changes to them cannot move the loop; by value, so nothing the loop uses escapes, and noipa keeps them out.
 #if defined(LLK_DBG_BARRIER)

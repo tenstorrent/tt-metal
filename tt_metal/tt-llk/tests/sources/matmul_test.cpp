@@ -258,7 +258,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         "Block tile index exceeds maximum destination tiles for matmul");
                     _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index));
                 }
-                _perf_pack_section_end();
             }
         }
         else
