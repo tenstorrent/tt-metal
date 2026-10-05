@@ -86,7 +86,11 @@ class UnpackerAB(Unpacker):
                 f"({id_a}, {id_b}, 1);\n"
             )
 
-        return bfd_program + f"_llk_unpack_binary_operands_init_({id_a}, {id_b}, 1);\n"
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
+        return (
+            bfd_program
+            + f"_llk_unpack_binary_operands_init_({id_a}, {id_b}, {tensor_shape}, 1);\n"
+        )
 
     def unpack(
         self,
@@ -99,7 +103,8 @@ class UnpackerAB(Unpacker):
             tile_id_b = block.tile_id_src_b
             return f"_llk_unpack_binary_broadcast_operands_({block.tile_id_src_a}, {tile_id_b});\n"
 
-        return f"_llk_unpack_binary_operands_({block.tile_id_src_a}, {block.tile_id_src_b});\n"
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
+        return f"_llk_unpack_binary_operands_({block.tile_id_src_a}, {block.tile_id_src_b}, {tensor_shape});\n"
 
     def uninit(
         self,
