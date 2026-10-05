@@ -6,7 +6,10 @@ from typing import Optional, AsyncIterator, Iterator, Iterable, TextIO, TypeVar
 from argparse import ArgumentParser
 from dataclasses import dataclass
 from asyncio import StreamReader
+from queue import Queue, Empty
+from threading import Thread
 from enum import Enum, auto
+from time import sleep
 from sys import stdout
 import requests
 import asyncio
@@ -58,9 +61,6 @@ testasic = re.compile(f"({timeregex}).*Test \|   UBB: (.*), Chip: (.*), BDF: (.*
 
 print_logs = True
 missing_links: dict[str, dict] = {}
-
-http_post_url = "http://localhost:8080/"
-
 
 class TestCase(str, Enum):
     LINK_UP = "LinkUp"
@@ -431,7 +431,30 @@ async def parse_logs(inf: asyncio.StreamReader, logf: Optional[TextIO]) -> list[
     return await async_collect(parse_logs_stream(inf, logf))
 
 
-def publish_link(test, link: TestedLink, srcsn, dstsn, *args):
+failed_requests = 0
+def batch_worker(q: Queue, s: requests.Session, http_post_url: Optional[str]):
+    done = False
+    while not done:
+        batch = []
+        while not q.empty():
+            data = q.get_nowait()
+            if data == "DONE":
+                done = True
+                break
+            batch.append(data)
+
+        if batch and http_post_url:
+            try:
+                s.post(http_post_url, json=batch)
+            except Exception as e:
+                print(f"Batch request failed: {e}")
+                global failed_requests
+                failed_requests += 1
+        else:
+            sleep(0.1)
+
+
+def publish_link(test, link: TestedLink, srcsn, dstsn, q: Queue):
     payload = {
         "test": test,
         "src_chip": srcsn,
@@ -442,12 +465,11 @@ def publish_link(test, link: TestedLink, srcsn, dstsn, *args):
         "bw": link.bw,
         "errors": link.errors,
     }
-    requests.post(http_post_url, json=payload)
+    q.put(payload)
     print(json.dumps(payload, indent=4), link)
-    print(args)
 
 
-async def parse_evs(evs: AsyncIterator[Event]) -> AsyncIterator[TestRun]:
+async def parse_evs(evs: AsyncIterator[Event], q: Queue) -> AsyncIterator[TestRun]:
     test: str = ""
     sdev: str = ""
     sdevbdf: str = ""
@@ -560,7 +582,7 @@ async def parse_evs(evs: AsyncIterator[Event]) -> AsyncIterator[TestRun]:
                 errors,
             )
             links.append(tlink)
-            publish_link(test, tlink, serialnums[sdevbdf], serialnums[rdevbdf])
+            publish_link(test, tlink, serialnums[sdevbdf], serialnums[rdevbdf], q)
         elif e.typ == EventType.MISSINGLINKS:
             global missing_links
             missing_links[e.extra["id"]] = e.extra
@@ -828,11 +850,11 @@ async def parse_file(file: str, logf: Optional[TextIO]) -> list[Event]:
     return await parse_logs(sr, logf)
 
 
-async def process_logs(inf: asyncio.StreamReader, logf: Optional[TextIO]):
-    return await async_collect(parse_evs(parse_logs_stream(inf, logf)))
+async def process_logs(inf: asyncio.StreamReader, logf: Optional[TextIO], q: Queue):
+    return await async_collect(parse_evs(parse_logs_stream(inf, logf), q))
 
 
-async def main():
+async def main() -> None:
     parser = ArgumentParser()
     parser.add_argument("-t", type=str, help="Comma separated list of tests to run")
     parser.add_argument("-l", action="store_true", help="List all of the available tests")
@@ -843,6 +865,7 @@ async def main():
     parser.add_argument("-o", type=str, help="Output path for the json file")
     parser.add_argument("-f", type=str, help="File to use for logging")
     parser.add_argument("-c", type=str, help="Path to the MGD config file to use")
+    parser.add_argument("-d", type=str, help="Optional host to send the test data to")
     opts = parser.parse_args()
 
     logpath = opts.f if opts.f else None
@@ -850,6 +873,8 @@ async def main():
 
     tests = [TestCase.LINK_UP, TestCase.BANDWIDTH_BIDIR]
     exit_status = 0
+
+    http_post_url: Optional[str] = None
 
     if opts.l:
         print("Available tests:")
@@ -875,6 +900,10 @@ async def main():
     if logpath:
         print(f"Writing logs to '{logpath}'")
 
+    if opts.d:
+        http_post_url = opts.d
+        print("Sending data to:", http_post_url)
+
     if opts.i:
         evs = await parse_file(opts.i, logf)
     else:
@@ -894,7 +923,15 @@ async def main():
 
         proc = await asyncio.create_subprocess_exec(program, *args, stdout=asyncio.subprocess.PIPE, env=env)
 
-        exit_status, runs = await asyncio.gather(proc.wait(), process_logs(proc.stdout, logf))
+        if not proc.stdout:
+            print("Couldn't get the test's stdout") # TODO better logging
+            exit(1)
+
+        q: Queue = Queue()
+        s: requests.Session = requests.Session()
+        Thread(target=batch_worker, daemon=True, args=[q, s, http_post_url]).start()
+        exit_status, runs = await asyncio.gather(proc.wait(), process_logs(proc.stdout, logf, q))
+        q.put("DONE")
 
     # pprint.pp(evs)
     # runs = list(e async for e in parse_evs(evs))
