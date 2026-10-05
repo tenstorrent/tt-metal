@@ -1,0 +1,13 @@
+{
+  "env": {
+    "PREFILL_MODEL": "gpt_oss_d_p",
+    "PREFILL_NUM_LAYERS": "36",
+    "PREFILL_SP": "4",
+    "PREFILL_TP": "8",
+    "PREFILL_CHUNK_SIZE": "1024",
+    "PREFILL_MAX_SEQ_LEN": "1024",
+    "PREFILL_GATE_FALLBACK_MODE": "DEVICE_FP32",
+    "PREFILL_NUM_USERS": "2",
+    "GPT_OSS_BOUNDED_SLIDING_KV": "0"
+  }
+}
