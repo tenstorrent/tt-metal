@@ -204,10 +204,16 @@ set(TT_METAL_SOURCES
     impl/experimental/offline_compile/offline_kernel_compile.cpp
     impl/graph/graph_tracking.cpp
     impl/streaming_profiler/api.cpp
+    impl/streaming_profiler/decode.cpp
     impl/streaming_profiler/device_programs.cpp
     impl/streaming_profiler/ops_csv.cpp
     impl/streaming_profiler/receiver.cpp
     impl/streaming_profiler/service.cpp
+    impl/streaming_profiler/sync/check.cpp
+    impl/streaming_profiler/sync/clock_map.cpp
+    impl/streaming_profiler/sync/clock_solver.cpp
+    impl/streaming_profiler/sync/link_sync.cpp
+    impl/streaming_profiler/sync/tile_sync.cpp
     impl/streaming_profiler/tracy_consumer.cpp
     impl/streaming_profiler/zone_csv.cpp
     hal.cpp
@@ -257,6 +263,15 @@ set(JITAPI_FILES
     soc_descriptors/wormhole_b0_80_arch.yaml
     tools/profiler/cpp_device_analyses.json
     impl/streaming_profiler/kernels/drisc_relay.cpp
+    impl/streaming_profiler/kernels/eth_clock.hpp
+    impl/streaming_profiler/kernels/eth_clock_check.cpp
+    impl/streaming_profiler/kernels/eth_clock_model.cpp
+    impl/streaming_profiler/kernels/eth_clock_sampler.cpp
+    impl/streaming_profiler/kernels/eth_relay.cpp
+    impl/streaming_profiler/kernels/link_sync.cpp
+    impl/streaming_profiler/kernels/link_sync.hpp
+    impl/streaming_profiler/kernels/relay_common.hpp
+    impl/streaming_profiler/kernels/tile_sync.cpp
     impl/dispatch/kernels/cq_dispatch.cpp
     impl/dispatch/kernels/cq_dispatch_subordinate.cpp
     impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp

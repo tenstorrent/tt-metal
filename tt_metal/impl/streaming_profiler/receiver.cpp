@@ -9,22 +9,26 @@
 
 #include <algorithm>
 #include <array>
-#include <bit>
+#include <chrono>
+#include <iterator>
 #include <thread>
 #include <utility>
 #include <vector>
+#include <numeric>
 #include <sys/prctl.h>
-#include <pthread.h>
 #include <numa.h>
 
-#include <tracy/Tracy.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt_stl/tt_pause.hpp>
 
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
+#include <umd/device/cluster.hpp>
+#include <umd/device/io_window/io_window.hpp>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/io_window_config.hpp>
 
 #include "context/metal_context.hpp"
+#include "llrt/tt_cluster.hpp"
 #include "llrt/zone_meta.hpp"
 #include "impl/streaming_profiler/spsc_packet.h"
 
@@ -39,64 +43,95 @@ constexpr uint32_t kPageBytes = kPageWords * 4;
 // Idle probe period: credits are returned as soon as pages are walked, so a sleep only delays the frames that land
 // during it, never a credit the device is short of (the FIFO holds over a millisecond of egress).
 constexpr uint32_t kProbeSleepCapUs = 100;
+// The PCIe tile's SII register block in its own address space, and the timer inside it that counts from reset (tables 4
+// and 12 of the Blackhole PCIE_SS spec).
+constexpr uint64_t kSiiBase = 0xFFFFFFFFF0000000ull;
+constexpr uint32_t kCfrLo = 0xA8, kCfrHi = 0xAC;
 
 }  // namespace
 
-void set_os_thread_name(const std::string& n) {
-    char buf[16];
-    std::snprintf(buf, sizeof(buf), "%s", n.c_str());
-    pthread_setname_np(pthread_self(), buf);
+RootRefclkWindow::RootRefclkWindow(tt::Cluster& cluster, uint32_t chip_id) :
+    numa_node_(static_cast<int>(cluster.get_numa_node_for_device(chip_id))) {
+    const auto pcie =
+        cluster.get_driver()->get_soc_descriptor(chip_id).get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
+    // Reads are uncached under WC, and the fences in tsc_now() order them.
+    window_ = cluster.get_driver()->create_io_window(
+        chip_id,
+        pcie.front(),
+        kSiiBase,
+        tt::umd::HostIoWindowConfig{.mapping = tt::umd::HostMemoryCaching::WC, .size = kCfrHi + sizeof(uint32_t)});
+    // Reading LO holds HI until LO is read again, and nothing else reads this timer, so the pair is consistent.
+    const uint32_t lo = window_->read32(kCfrLo);
+    const uint32_t hi = window_->read32(kCfrHi);
+    bases_ = {.root_refclk = static_cast<int64_t>(kernel_profiler::join_words(hi, lo)), .tsc = tsc_now()};
 }
 
-Receiver::Receiver(std::unique_ptr<Devices> relays, std::vector<CapturedDevice> devices) :
-    relays_(std::move(relays)), devices_(std::move(devices)) {
-    for (uint32_t d = 0; d < devices_.size(); d++) {
-        auto& dev = devices_[d];
-        for (uint32_t sk = 0; sk < dev.sockets.size(); sk++) {
-            auto s = std::make_unique<Stream>();
-            s->sock = dev.sockets[sk].get();
-            s->dev = d;
-            s->sock_idx = sk;
-            s->fifo = s->sock->host_fifo();
-            TT_FATAL(
-                s->sock->get_fifo_curr_size() == s->fifo.size() && s->fifo.size() % kPageBytes == 0 &&
-                    std::has_single_bit(s->fifo.size()),
-                "streaming profiler: the host FIFO must be a power-of-two number of pages");
-            s->capacity = s->fifo.size() / kPageBytes;
-            s->marks = std::vector<std::atomic<uint64_t>>(s->fifo.size() / kMarkBytes);
-            for (auto& m : s->marks) {
-                m.store(UINT64_MAX, std::memory_order_relaxed);
-            }
-            streams_.push_back(std::move(s));
+RootRefclkWindow::~RootRefclkWindow() = default;
+
+RefclkBurst RootRefclkWindow::read_burst() {
+    // LO wraps every 86 s and bursts can be further apart, so HI is re-read each burst.
+    RefclkBurst reads;
+    uint32_t hi = 0, lo_last = 0;
+    for (uint32_t i = 0; i < kRefclkBurstReads; i++) {
+        const int64_t before = tsc_now();
+        const uint32_t lo = window_->read32(kCfrLo);
+        const int64_t after = tsc_now();
+        if (i == 0) {
+            hi = window_->read32(kCfrHi);
+        } else if (lo < lo_last) {
+            hi++;
         }
-        ctx_.devices.push_back(dev.ctx);
+        lo_last = lo;
+        reads[i] = {
+            .mid = std::midpoint(before, after), .rtt = after - before, .refclk = kernel_profiler::join_words(hi, lo)};
     }
-    for (const auto& st : streams_) {
-        streams_view_.push_back(
-            {st->fifo, &st->walked_bytes, st->dev, std::span<const std::atomic<uint64_t>>(st->marks)});
+    return reads;
+}
+
+Receiver::Receiver(tt::Cluster& cluster, std::unique_ptr<DevicePrograms> programs) :
+    programs_(std::move(programs)),
+    root_refclk_(cluster, programs_->capture_context().devices[CaptureContext::kRootDevice].chip_id),
+    clock_solver_(programs_->capture_context(), root_refclk_.bases()) {
+    std::vector<std::unique_ptr<Stream>> sync_streams;
+    for (const CapturedSocket& captured : programs_->sockets()) {
+        auto stream = std::make_unique<Stream>();
+        stream->captured = captured;
+        stream->fifo = captured.socket->host_fifo();
+        stream->capacity = stream->fifo.size() / kPageBytes;
+        stream->marks = std::vector<std::atomic<uint64_t>>(stream->fifo.size() / kMarkBytes);
+        for (auto& mark : stream->marks) {
+            mark.store(UINT64_MAX, std::memory_order_relaxed);
+        }
+        if (captured.sync_socket) {
+            sync_streams.push_back(std::move(stream));
+            continue;
+        }
+        streams_view_.push_back(ReceiverStream{
+            .fifo = stream->fifo,
+            .walked = &stream->walked_bytes,
+            .dev = captured.device_index,
+            .marks = stream->marks});
+        streams_.push_back(std::move(stream));
     }
+    // The sync streams go last, so a profiler stream's index in streams() is also its index in streams_.
+    std::ranges::move(sync_streams, std::back_inserter(streams_));
 }
 
 std::unique_ptr<Receiver> Receiver::create(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    auto relays = std::make_unique<Devices>();
-    std::vector<CapturedDevice> devices;
-    try {
-        devices = relays->boot(mesh_device);
-    } catch (const std::exception& e) {
-        log_warning(tt::LogMetal, "[streaming profiler] init failed ({}); disabled for this session.", e.what());
-        relays->quiesce({});
+    auto& mc = MetalContext::instance(mesh_device->impl().get_context_id());
+    auto programs = std::make_unique<DevicePrograms>();
+    if (!programs->boot(mesh_device)) {
         return nullptr;
     }
-    if (devices.empty()) {
-        return nullptr;
-    }
-    std::unique_ptr<Receiver> receiver(new Receiver(std::move(relays), std::move(devices)));
-    service().register_builtin_consumers(MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions());
-    service().attach_producer(*receiver);
-    for (uint32_t d = 0; d < receiver->devices_.size(); d++) {
+    // The first call sleeps while it measures the rate, so it is made here rather than on the sync thread.
+    static_cast<void>(ns_per_tsc_tick());
+    service().register_builtin_consumers(mc.rtoptions());
+    std::unique_ptr<Receiver> receiver(new Receiver(mc.get_cluster(), std::move(programs)));
+    service().attach_receiver(*receiver);
+    for (uint32_t d = 0; d < receiver->capture_context().devices.size(); d++) {
         std::vector<Stream*> owned;
         for (auto& s : receiver->streams_) {
-            if (s->dev == d) {
+            if (s->captured.device_index == d) {
                 owned.push_back(s.get());
             }
         }
@@ -104,19 +139,24 @@ std::unique_ptr<Receiver> Receiver::create(const std::shared_ptr<distributed::Me
             receiver->ingest_threads_.emplace_back(&Receiver::ingest_thread, receiver.get(), std::move(owned));
         }
     }
+    receiver->sync_thread_ = std::jthread([r = receiver.get()](const std::stop_token& stop) { r->sync_thread(stop); });
+    receiver->programs_->start();
     return receiver;
 }
 
 Receiver::~Receiver() {
-    relays_->quiesce([this](uint32_t device_index, uint32_t socket_index, RelayState state) {
+    programs_->quiesce([this](uint32_t device_index, uint32_t socket_index, RelayState state) {
         stream(device_index, socket_index).relay.store(state, std::memory_order_release);
     });
     for (auto& t : ingest_threads_) {
         t.join();
     }
-    service().detach_producer(*this);
-    for (uint32_t d = 0; d < devices_.size(); d++) {
-        relays_->verify_completeness(d);
+    sync_thread_.request_stop();
+    wake_sync_thread();
+    sync_thread_.join();
+    service().detach_receiver(*this);
+    for (uint32_t d = 0; d < capture_context().devices.size(); d++) {
+        programs_->verify_completeness(d);
     }
     log_report();
     const uint64_t foreign = llrt::ZoneMetaRegistry::instance().foreign_sections();
@@ -133,14 +173,7 @@ Receiver::~Receiver() {
 
 bool Receiver::poll(Stream& s) {
     // pages_available counts from the last ack, so it includes the pages already seen
-    const uint64_t arrived = s.acked + s.sock->pages_available();
-    TT_FATAL(
-        arrived >= s.arrived,
-        "streaming profiler: device {} socket {} bytes_sent went backwards ({} to {} pages)",
-        s.dev,
-        s.sock_idx,
-        s.arrived,
-        arrived);
+    const uint64_t arrived = s.acked + s.captured.socket->pages_available();
     if (arrived == s.arrived) {
         return false;
     }
@@ -165,12 +198,16 @@ bool Receiver::walk_frame(Stream& s) {
     const uint32_t* page = reinterpret_cast<const uint32_t*>(s.page(s.consumed));
     const uint32_t w0 = page[0];
     const uint32_t w1 = page[1];
+    const bool payload_fits =
+        s.captured.sync_socket
+            ? w1 != 0 && w1 % kp::kSyncRecordWords == 0 && w1 <= kp::kSyncFrameRecords * kp::kSyncRecordWords
+            : w1 >= kp::SPSC_SPAN_WIRE_CTRL_WORDS && w1 <= profiler::kSpscMaxPayloadWords;
     TT_FATAL(
-        pp_is_bulkspan(w0) && w1 >= kp::SPSC_SPAN_WIRE_CTRL_WORDS && w1 <= profiler::kSpscMaxPayloadWords,
+        pp_is_bulkspan(w0) && payload_fits,
         "streaming profiler: device {} socket {} page {} is not a frame header ({:#010x} {:#010x}); {} of {} pages "
         "landed",
-        s.dev,
-        s.sock_idx,
+        s.captured.device_index,
+        s.captured.socket_index,
         s.consumed,
         w0,
         w1,
@@ -197,86 +234,76 @@ bool Receiver::walk_frame(Stream& s) {
     // Credits go back as the walk earns them: a pass over eight sockets can run long once any of them is behind, and
     // credits held until its end would let the others fill meanwhile.
     if (s.consumed - s.acked >= kAckBatchPages) {
-        s.sock->pop(static_cast<uint32_t>(s.consumed - s.acked), true);
+        s.captured.socket->pop(static_cast<uint32_t>(s.consumed - s.acked), true);
         s.acked = s.consumed;
     }
-    return true;
-}
-
-bool Receiver::publish(Stream& s) {
-    const uint64_t walked = s.consumed * kPageBytes;
-    if (walked == s.walked_bytes.load(std::memory_order_relaxed)) {
-        return false;
-    }
-    s.walked_bytes.store(walked, std::memory_order_release);
     return true;
 }
 
 // Credits only ever follow the walk, and a drained relay reports done only when every byte it sent is credited, so
 // done means the walk has consumed every landed page.
 bool Receiver::settle(Stream& s) {
-    const bool published = publish(s);
+    if (const uint64_t walked = s.consumed * kPageBytes; walked != s.walked_bytes.load(std::memory_order_relaxed)) {
+        s.walked_bytes.store(walked, std::memory_order_release);
+    }
     const RelayState relay = s.relay.load(std::memory_order_acquire);
     if (relay == RelayState::Running) {
-        return published;
+        return false;
     }
     if (s.acked < s.consumed) {
-        s.sock->pop(static_cast<uint32_t>(s.consumed - s.acked), true);
+        s.captured.socket->pop(static_cast<uint32_t>(s.consumed - s.acked), true);
         s.acked = s.consumed;
     }
-    s.retired = relay == RelayState::Done;
-    return published;
+    return relay == RelayState::Done;
 }
 
 uint64_t Receiver::live_head(uint32_t stream) const {
     const Stream& s = *streams_[stream];
-    return widen_head(s.arrived_bytes.load(std::memory_order_acquire), s.sock->bytes_sent());
+    return widen_head(s.arrived_bytes.load(std::memory_order_acquire), s.captured.socket->bytes_sent());
 }
 
 void Receiver::ingest_thread(std::vector<Stream*> streams) {
     std::string name = "sp-ingest:";
     for (Stream* s : streams) {
-        name += std::to_string(s->dev) + "." + std::to_string(s->sock_idx) + ",";
+        name += std::to_string(s->captured.device_index) + "." + std::to_string(s->captured.socket_index) + ",";
     }
     name.pop_back();
-    tracy::SetThreadName(name.c_str());
-    set_os_thread_name(name);
+    set_thread_name(name);
     prctl(PR_SET_TIMERSLACK, 1000);  // default 50 us slack would round every probe sleep up to it
     // The sockets bind their FIFOs to the device's node; walked from the other node, the headers' dependent misses
     // run at half the rate and the FIFOs fill.
-    if (const int node = devices_[streams.front()->dev].numa_node; node >= 0 && numa_available() != -1) {
+    if (const int node = streams.front()->captured.numa_node; node >= 0 && numa_available() != -1) {
         numa_run_on_node(node);
     }
     IdleBackoff backoff(kProbeSleepCapUs, 0);
-    for (;;) {
+    // Frames published since the consumers, and since the sync thread, were last woken.
+    uint64_t unwoken = 0, unwoken_sync = 0;
+    while (true) {
         bool any = false;
-        bool all_retired = true;
         for (Stream* s : streams) {
-            if (s->retired) {
-                continue;
-            }
-            all_retired = false;
             any |= poll(*s);
-        }
-        if (all_retired) {
-            break;
         }
         for (bool progress = true; progress;) {
             progress = false;
             for (Stream* s : streams) {
-                if (!s->retired) {
-                    progress |= walk_frame(*s);
+                if (walk_frame(*s)) {
+                    progress = true;
+                    ++(s->captured.sync_socket ? unwoken_sync : unwoken);
                 }
             }
         }
-        bool published = false;
-        for (Stream* s : streams) {
-            if (!s->retired) {
-                published |= settle(*s);
-            }
-        }
-        if (published) {
+        std::erase_if(streams, [this](Stream* s) { return settle(*s); });
+        // A wake goes out once a batch of frames is ready, or once a pass finds nothing new so none are held back.
+        if (unwoken != 0 && (unwoken >= kBatchFrames || !any)) {
             service().wake_consumers();
+            unwoken = 0;
+        }
+        if (unwoken_sync != 0 && (unwoken_sync >= kBatchFrames || !any)) {
+            wake_sync_thread();
+            unwoken_sync = 0;
+        }
+        if (streams.empty()) {
+            break;
         }
         if (any) {
             backoff.reset();
@@ -286,64 +313,131 @@ void Receiver::ingest_thread(std::vector<Stream*> streams) {
     }
 }
 
+void Receiver::wake_sync_thread() {
+    sync_wake_.fetch_add(1, std::memory_order_release);
+    sync_wake_.notify_one();
+}
+
+void Receiver::sync_thread(const std::stop_token& stop) {
+    set_thread_name("sp-sync");
+    // Refclk reads from the other CPU socket take about 90 ns longer in one direction, which would shift a burst's
+    // midpoint by tens of ns.
+    if (const int node = root_refclk_.numa_node(); node >= 0 && numa_available() != -1) {
+        numa_run_on_node(node);
+    }
+    struct SyncStream {
+        uint32_t index = 0;
+        uint64_t cursor = 0, dropped = 0;
+    };
+    std::vector<SyncStream> sync_streams;
+    for (uint32_t index = 0; index < streams_.size(); index++) {
+        if (streams_[index]->captured.sync_socket) {
+            sync_streams.push_back({.index = index});
+        }
+    }
+    std::array<uint32_t, kBatchFrames> frame_words{};
+    const auto frames = std::make_unique_for_overwrite<std::byte[]>(kBatchBytes);
+    const auto take_batch = [&](SyncStream& sync) {
+        const Stream& s = *streams_[sync.index];
+        const Walked walked = walk_frames(
+            s.fifo,
+            sync.cursor,
+            s.walked_bytes.load(std::memory_order_acquire),
+            s.marks,
+            std::span<std::byte>(frames.get(), kBatchBytes),
+            frame_words,
+            [&] { return live_head(sync.index); });
+        if (walked.cursor == sync.cursor) {
+            return false;
+        }
+        sync.cursor = walked.cursor;
+        sync.dropped += walked.dropped;
+        const uint32_t dev = s.captured.device_index;
+        const CoreTable& core_of_xy = capture_context().devices[dev].core_of_xy;
+        const std::byte* frame_bytes = frames.get();
+        for (uint32_t i = 0; i < walked.frames; i++) {
+            const uint32_t* frame = reinterpret_cast<const uint32_t*>(frame_bytes);
+            const uint32_t record_count =
+                frame[kernel_profiler::SPSC_PREFIX_PAYLOAD_WORDS] / kernel_profiler::kSyncRecordWords;
+            const uint32_t core = core_of_xy.find(frame[kernel_profiler::SPSC_PREFIX_XY]);
+            const auto* records =
+                reinterpret_cast<const kernel_profiler::SyncRecord*>(frame + kernel_profiler::SPSC_SPAN_PREFIX_WORDS);
+            for (uint32_t r = 0; r < record_count; r++) {
+                clock_solver_.on_record(dev, core, records[r]);
+            }
+            frame_bytes += size_t{frame_words[i]} * sizeof(uint32_t);
+        }
+        if (clock_solver_.on_batch_end()) {
+            service().wake_consumers();
+        }
+        return true;
+    };
+    const auto refclk_burst = [&] {
+        const bool host_line = clock_solver_.on_refclk_burst(root_refclk_.read_burst());
+        service().steady().sample();
+        return host_line;
+    };
+    std::chrono::steady_clock::time_point next_burst{};
+    while (true) {
+        const uint32_t seen = sync_wake_.load(std::memory_order_acquire);
+        // The ingest threads have published every frame before the stop, so a pass after it that finds nothing has
+        // drained the streams.
+        const bool stopping = stop.stop_requested();
+        bool any = false;
+        for (SyncStream& sync : sync_streams) {
+            any |= take_batch(sync);
+        }
+        if (const auto now = std::chrono::steady_clock::now(); now >= next_burst) {
+            next_burst = now + kRefclkBurstPeriod;
+            refclk_burst();
+        }
+        if (any) {
+            continue;
+        }
+        if (stopping) {
+            break;
+        }
+        sync_wake_.wait(seen, std::memory_order_acquire);
+    }
+    // Bursts after the capture's last records extend the refclk-to-TSC map past them, until enough exist to fit it.
+    while (!refclk_burst()) {
+    }
+    clock_solver_.on_capture_end();
+    for (const SyncStream& sync : sync_streams) {
+        if (sync.dropped != 0) {
+            log_warning(
+                tt::LogMetal,
+                "[streaming profiler] the clock solver missed {} bytes of chip {}'s sync stream",
+                sync.dropped,
+                capture_context().devices[streams_[sync.index]->captured.device_index].chip_id);
+        }
+    }
+}
+
 Receiver::Stream& Receiver::stream(uint32_t device_index, uint32_t socket_index) {
     for (auto& s : streams_) {
-        if (s->dev == device_index && s->sock_idx == socket_index) {
+        if (s->captured.device_index == device_index && s->captured.socket_index == socket_index) {
             return *s;
         }
     }
     TT_THROW("streaming profiler: no stream for device {} socket {}", device_index, socket_index);
 }
 
-void Receiver::finish_stream(uint32_t stream, uint64_t dropped_bytes, const StreamStats& st) {
-    std::lock_guard<std::mutex> lk(stats_mu_);
-    Stream& s = *streams_[stream];
-    s.consumer_dropped = std::max(s.consumer_dropped, dropped_bytes);
-    StreamStats& c = s.consumer_stats;
-    c.records = std::max(c.records, st.records);
-    c.zones = std::max(c.zones, st.zones);
-    c.order_regressions = std::max(c.order_regressions, st.order_regressions);
-    c.epoch_fixes = std::max(c.epoch_fixes, st.epoch_fixes);
-}
-
 void Receiver::log_report() const {
-    uint64_t pages = 0, frames = 0, consumer_dropped = 0;
+    uint64_t pages = 0, frames = 0;
     std::string fill;
-    StreamStats t;
     for (const auto& s : streams_) {
         fill += fmt::format("{}{}%", fill.empty() ? "" : " ", s->fullest * 100 / s->capacity);
         pages += s->arrived;
         frames += s->frames;
-        consumer_dropped += s->consumer_dropped;
-        const StreamStats& c = s->consumer_stats;
-        t.records += c.records;
-        t.zones += c.zones;
-        t.order_regressions += c.order_regressions;
-        t.epoch_fixes += c.epoch_fixes;
     }
     log_info(
         tt::LogMetal,
-        "[streaming profiler] capture: {} frames, {:.1f} MB from {} device(s); the fullest consumer decoded {} zones, "
-        "{} records; FIFO high-water marks {}",
+        "[streaming profiler] capture: {} frames, {:.1f} MB from {} device(s); FIFO high-water marks {}",
         frames,
         pages * static_cast<double>(kPageBytes) / 1e6,
-        devices_.size(),
-        t.zones,
-        t.records,
+        capture_context().devices.size(),
         fill);
-    if (t.epoch_fixes != 0) {
-        log_info(
-            tt::LogMetal, "[streaming profiler] {} timestamps repaired for the wall-clock latch race", t.epoch_fixes);
-    }
-    if (consumer_dropped != 0) {
-        log_warning(
-            tt::LogMetal,
-            "[streaming profiler] {:.1f} MB of frames missed by the slowest consumer",
-            consumer_dropped / 1e6);
-    }
-    if (t.order_regressions != 0) {
-        log_warning(tt::LogMetal, "[streaming profiler] {} order regressions", t.order_regressions);
-    }
 }
 
 }  // namespace tt::tt_metal::streaming_profiler
