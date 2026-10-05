@@ -47,7 +47,6 @@ Tensor tilize_with_val_padding(
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
     const std::optional<tt::tt_metal::DataType>& output_dtype,
     bool use_multicore,
-    bool enough_space_width,
     bool enough_space_height,
     const std::optional<CoreRangeSet>& sub_core_grids);
 }  // namespace ttnn::prim::qsr
