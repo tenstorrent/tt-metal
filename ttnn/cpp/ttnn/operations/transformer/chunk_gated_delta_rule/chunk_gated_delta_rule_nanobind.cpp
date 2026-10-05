@@ -252,7 +252,10 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 then the pool size P (default: every core the receivers leave free, at most BH*NC);
                 row_local is ignored.
             pool_extra_share (float, optional): the share of every head's chunks the pool's extras take,
-                in [0, 1]; None = the model's choice between the balanced NX / P and 0.)doc")
+                in [0, 1]; None = the model's choice between the balanced NX / P and 0.
+            handoff_checks (bool): default False. Debug: compile the hand-off protocol's run-time
+                checks into the kernels (sequence-valued VALID flags, a per-slot data canary); they
+                report through the watcher's ASSERT, so run with TT_METAL_WATCHER set.)doc")
         .def(
             nb::init<
                 std::optional<uint32_t>,
@@ -262,7 +265,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 bool,
                 bool,
                 bool,
-                std::optional<float>>(),
+                std::optional<float>,
+                bool>(),
             nb::kw_only(),
             nb::arg("num_producers") = nb::none(),
             nb::arg("num_receivers") = nb::none(),
@@ -271,7 +275,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             nb::arg("unicast") = true,
             nb::arg("posted") = false,
             nb::arg("producer_pool") = false,
-            nb::arg("pool_extra_share") = nb::none())
+            nb::arg("pool_extra_share") = nb::none(),
+            nb::arg("handoff_checks") = false)
         .def_rw("num_producers", &ChunkGdnFusedProgramConfig::num_producers)
         .def_rw("num_receivers", &ChunkGdnFusedProgramConfig::num_receivers)
         .def_rw("row_local", &ChunkGdnFusedProgramConfig::row_local)
@@ -280,10 +285,11 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         .def_rw("posted", &ChunkGdnFusedProgramConfig::posted)
         .def_rw("producer_pool", &ChunkGdnFusedProgramConfig::producer_pool)
         .def_rw("pool_extra_share", &ChunkGdnFusedProgramConfig::pool_extra_share)
+        .def_rw("handoff_checks", &ChunkGdnFusedProgramConfig::handoff_checks)
         .def("__repr__", [](const ChunkGdnFusedProgramConfig& c) {
             return fmt::format(
                 "ChunkGdnFusedProgramConfig(num_producers={}, num_receivers={}, row_local={}, handoff_depth={}, "
-                "unicast={}, posted={}, producer_pool={}, pool_extra_share={})",
+                "unicast={}, posted={}, producer_pool={}, pool_extra_share={}, handoff_checks={})",
                 py_opt(c.num_producers),
                 py_opt(c.num_receivers),
                 py_opt(c.row_local),
@@ -291,7 +297,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 py_bool(c.unicast),
                 py_bool(c.posted),
                 py_bool(c.producer_pool),
-                py_opt(c.pool_extra_share));
+                py_opt(c.pool_extra_share),
+                py_bool(c.handoff_checks));
         });
 
     // Host-side geometry oracle: what the fused op will choose for (grid, BH, NC, Vt) when the program
