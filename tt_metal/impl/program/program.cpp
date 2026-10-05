@@ -829,6 +829,11 @@ const std::vector<std::pair<uint32_t, std::string>>& ProgramImpl::get_dfb_borrow
 }
 // ============================================================================
 
+std::vector<detail::KernelMeta> detail::collect_kernel_meta(
+    const Program& program, distributed::MeshDevice& mesh_device) {
+    return program.impl().collect_kernel_meta(&mesh_device);
+}
+
 std::vector<detail::KernelMeta> detail::collect_kernel_meta(const Program& program, IDevice* device) {
     return program.impl().collect_kernel_meta(device);
 }

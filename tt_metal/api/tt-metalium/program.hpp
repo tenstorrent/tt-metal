@@ -65,11 +65,19 @@ private:
 
 // Only Used in op_profiler, we might want to expose this via a tooling interface instead of through here.
 class IDevice;
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
 namespace detail {
 struct KernelMeta;
+// Collects the meta data of kernels in a program, and the metadata of the binaries within the kernel for mesh_device
+std::vector<detail::KernelMeta> collect_kernel_meta(const Program& program, distributed::MeshDevice& mesh_device);
 // Collects the meta data of kernels in a program, and the metadata of the binaries within the kernel if device is non-null
 // Note: device is nullable
-std::vector<detail::KernelMeta> collect_kernel_meta(Program const& program, IDevice* device);
+[[deprecated(
+    "Use the collect_kernel_meta overload taking distributed::MeshDevice& instead. This overload will be removed after "
+    "2026-11-06.")]]
+std::vector<detail::KernelMeta> collect_kernel_meta(const Program& program, IDevice* device);
 }; //namespace detail
 
 }  // namespace tt::tt_metal
