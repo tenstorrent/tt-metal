@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Model: `Qwen/Qwen3-VL-4B-Instruct` only (HF_MODEL); dims fixed: text hidden 2560, 36 layers, 32/8 heads, head_dim 128, intermediate 9728, vocab 151936; vision depth 24, hidden 1024, 16 heads, deepstack 5/11/17.
-- bf16 everywhere on the Quasar config: weights, activations, KV cache, `ccl_dtype`, `lm_head_dtype`; fidelity HiFi4. No bfloat8_b / bfloat4_b.
+- bf16 everywhere on the Quasar config: weights, activations, KV cache, `ccl_dtype`, `lm_head_dtype`; fidelity HiFi4 **without fp32 dest accumulation** (`HIFI4_FP16`, plus `strip_fp32_dest_acc` on every `compute_kernel_config_*`). No bfloat8_b / bfloat4_b.
 - Model shapes never change; only memory placement/layout may change, and only where the captured config does not fit the grid or is unsupported.
 - Non-Quasar behavior of the model copy is unchanged unless `--quasar-config` is passed.
 - Defaults: test V=2, T=2, K=1, deepstack at real taps; scripts V=2, T=2, K=1, `--deepstack-at 0`, `--size tiny`. Every default in scripts carries a ≤2-sentence comment; KV-blocks flag has a 1-line doc.
@@ -31,6 +31,22 @@
 3. Op hooks silently disabled because `enable_fast_runtime_mode` is on — expected: the test detects it and states in `pcc.md` that `progress.log` is unavailable; scripts always disable fast runtime mode.
 4. Grid mismatch between the WH/craq-sim override and the emulator — expected: `--qwen-expect-grid` makes the test fail at start if `compute_with_storage_grid_size()` differs.
 5. Deepstack remap applied to only one side — expected: TT and HF configs are both derived from one function; a unit test asserts identical indexes/depth.
+
+## Execution status and amendments (updated 2026-10-05, binding over the task text below)
+
+**Done:** Tasks 1-8 committed (ledger: `.superpowers/sdd/2026-10-05-qwen3-vl-quasar-e2e/progress.md`). First e2e PASS on ttsim WH 8x8, tiny, V=2 T=2 K=1, `--deepstack-at 0`: all 9 stages PCC >= 0.9993, ~9 min. Task 9 files written (scripts shellcheck-clean, README), smoke test pending.
+
+**Amendments for the remaining tasks:**
+1. **Gaps log is a primary deliverable** (user directive). Every op that works on WH/BH but fails on Quasar, every simulator issue, and every model-copy bug gets a row in `tests/e2e/QUASAR_GAPS.md` (error, repro, workaround, status) in the same commit as its workaround. Workarounds name their gap row. Isolate each Quasar failure with the `qwen3_vl_ops` graph test on craq-sim before working around it.
+2. **Emulator compute grid is 2x1** (two Tensix cores; `tt_metal/core_descriptors/quasar_simulation_2x3_arch.yaml`), not 2x3. "`--grid 2x3`" in scripts means "emulator-equivalent" and expects `2x1`. The override value is per target: ttsim WH/BH `"1,0"`, craq-sim `"3,2"` (end coordinate; logical start differs). `EMU_GRID=2x1` lives in `_common.sh`. Replace every `<GRID_OVERRIDE_2X3 ...>` / `<EMU_GRID ...>` placeholder below with these.
+3. **Precision policy:** `HIFI4_FP16` for all op groups and `strip_fp32_dest_acc` in `_QuasarArgsMixin._quasar_init` (fp32 dest-acc matmuls are undefined on ttsim WH: QUASAR_GAPS S1; suspected on Quasar: Q2). Do not re-enable fp32 dest acc without the user.
+4. **Already in the code, do not redo:** `op_overrides.py` exists with `Workaround`, `resolve`, `WORKAROUNDS=[host_cast_fp32_upload]` (#57780), `OverrideSession(mesh_device, host_ops, disable_wa)` installing workarounds and rejecting unknown `--disable-wa` names; the e2e test already installs the session. Task 11 only adds `HostFallback`, `FALLBACKS`, `CERTIFIED`, fallback selection/installation and `allow_uncertified`. `test_resolve_dotted_target` already exists.
+5. **Tests use the repo's `expect_error(ExcType, "message")` fixture**, never `pytest.raises` (pre-commit hook `prefer-expect-error`).
+6. **Scripts:** `_common.sh` owns the whole flag loop (`parse_args`); target scripts define `parse_target_flag "<flag>" "<value>"`. Check with `cd tests/e2e && shellcheck -o all -x -P SCRIPTDIR ./*.sh` (installed at `~/.local/bin/shellcheck`).
+7. **Model-copy changes already made:** `QuasarModelArgs.device_scatter=False` (host row-copy merge; `ttnn.scatter` not ported to Quasar, Q1); `vision_padded_seq_len` = multiple of 128 up to 1024 patches, of 2048 above; `vision_mlp` `.weight`/`.bias` cache names (M1); `_free_unless_aliased` in `DropInVisionTransformer` (M3).
+8. **Harness extras:** `--qwen-dump-stages` saves golden/TT tensors to `stages.pt`; `debug.deepstack_in*` is recorded (ignored by compare); `progress.log` lines include tensor kwargs.
+9. **Task 8 Step 5 (native bf8 config) is not runnable on ttsim WH** (S1). Native-config coverage comes from the user's hardware baseline (Task 13).
+10. Commit through `.superpowers/sdd/2026-10-05-qwen3-vl-quasar-e2e/commit.sh "<msg>" <paths>` (re-stages once after pre-commit reformatting). Dev runs on ttsim: `.superpowers/sdd/.../run_wh.sh <name> <wh|bh> <pytest args>`.
 
 ---
 
@@ -1622,7 +1638,9 @@ git commit -m "qwen3_vl quasar e2e: run scripts for WH/BH, craq-sim and emulator
 
 ---
 
-### Task 10: Grid-derived configs (2x3 on ttsim WH)
+### Task 10: Grid-derived configs (emulator 2x1 grid on ttsim WH)
+
+> Amended: the target grid is **2x1** (2 cores). `run_wh_bh.sh --grid 2x3` already sets `"1,0"` and `--qwen-expect-grid 2x1`. Expect more configs than the survey lists to need DRAM-interleaved fallbacks at 2 cores; every fallback away from a captured layout gets a one-line comment. Anything that fails on 2 cores but not because of a config we control goes into QUASAR_GAPS.md.
 
 **Files:**
 - Modify: `TT/quasar_config.py` (`_QuasarArgsMixin`), `TT/vision_attention.py:337-351`, `TT/model_config.py:54-61`, `TT/rope.py:60-63`
@@ -1738,6 +1756,8 @@ git commit -m "qwen3_vl quasar: derive program configs and shard grids from the 
 ---
 
 ### Task 11: Op-override registry, host fallbacks, DIAGNOSTIC
+
+> Amended: see amendment 4 — extend the existing `op_overrides.py`; keep `host_cast_fp32_upload`; replace `pytest.raises` in the tests below with `expect_error`; drop the duplicate `test_resolve_dotted_target`.
 
 **Files:**
 - Create: `E2E/op_overrides.py`
@@ -2248,7 +2268,9 @@ git commit -m "qwen3_vl quasar e2e: record WH/BH baselines"
 
 ---
 
-### Task 14: craq-sim bring-up (2x3, then 8x4)
+### Task 14: craq-sim bring-up (emulator 2x1 grid, then 8x4)
+
+> Amended: step 2's loop adds, for every failure, a QUASAR_GAPS.md row (Quasar gap / sim issue / model bug) in the same commit as its fix or workaround (amendment 1). Q2 and Q3 should be confirmed or cleared here with direct craq-sim repros.
 
 **Files:** model copy and `E2E/op_overrides.py` (`WORKAROUNDS`), as failures dictate.
 
@@ -2286,7 +2308,7 @@ Before the first 8x4 craq run, run the matching baseline `run_wh_bh.sh --ttsim w
 
 ---
 
-### Task 15: Emulator 2x3 tiny
+### Task 15: Emulator (emu-quasar-2x3, 2x1 compute grid) tiny
 
 - [ ] **Step 1: Ask the user** to confirm their reservation and `NNG_SOCKET_ADDR`, and that it is OK to start a (likely multi-hour) run.
 
