@@ -362,8 +362,8 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
     auto k_value = [](std::uint32_t round, std::uint32_t token, std::uint32_t dim) {
         // This exactly representable chunk bias changes the running maximum
         // for some query rows, exercising the previous-output correction too.
-        return static_cast<float>((round * 5 + token * 7 + dim * 3) % 17) / 16.0f +
-               static_cast<float>(token / (chunk_tiles * 32));
+        const auto chunk_index = token / (chunk_tiles * 32);
+        return static_cast<float>((round * 5 + token * 7 + dim * 3) % 17) / 16.0f + static_cast<float>(chunk_index);
     };
     auto v_value = [&](std::uint32_t round, std::uint32_t token, std::uint32_t dim) {
         return layout == 0 ? k_value(round, token, dim)
