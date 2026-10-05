@@ -2,48 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <bit>
-#include <functional>
-#include <limits>
-#include <numeric>
-#include <map>
-#include <set>
-#include <string_view>
 #include <unordered_map>
-#include <unordered_set>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/hal_types.hpp>  // HalMemType, for the borrowed-DFB per-bank sizing check
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_distribution_spec.hpp>
-#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/tt_align.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <hostdevcommon/tensor_accessor/arg_config.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt_stl/fmt.hpp>
-#include "impl/kernels/kernel.hpp"
-#include "impl/metal2_host_api/llk_metadata.hpp"
-#include "impl/program/program_impl.hpp"
-#include "impl/context/metal_context.hpp"
-#include "impl/dispatch/dispatch_core_manager.hpp"
-#include "impl/metal2_host_api/semaphore_scope.hpp"
+
 #include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_workload_impl.hpp"
-#include <core_descriptor.hpp>
-#include <llrt/tt_cluster.hpp>
-#include <variant>
-
-#include "impl/metal2_host_api/helpers.hpp"
+#include "impl/context/context_types.hpp"
+#include "impl/context/metal_context.hpp"
 #include "impl/metal2_host_api/metadata_collection/collect_metadata.hpp"
-#include "impl/metal2_host_api/program_spec_validation/validate_spec.hpp"
 #include "impl/metal2_host_api/program_construction/construct_program.hpp"
+#include "impl/metal2_host_api/program_spec_validation/validate_spec.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal::experimental {
 
