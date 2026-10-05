@@ -329,7 +329,7 @@ llk:
     wh_n150_civ2: 21600
     bh_p150b_civ2: 21600
   reconfig_escape:
-    bh_p150b_civ2: 1200
+    bh_p150b_civ2: 1920
   merge_gate:
     wh_n150_civ2: 300
     bh_p150b_civ2_viommu: 70
