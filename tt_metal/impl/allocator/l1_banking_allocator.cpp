@@ -221,10 +221,9 @@ AllocatorConfig L1BankingAllocator::generate_config(
     // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     const auto& logical_size = soc_desc.get_grid_size(CoreType::TENSIX);
     const auto& compute_size = tt::get_compute_grid_size(env, device_id, num_hw_cqs, dispatch_core_config);
-    // Under ATT a DRAM endpoint is only addressable within its window's local-address field, which
-    // can be smaller than the descriptor's DRAM view (quasar_aether_2x3: 64 MiB). Clamp the bank size
-    // to the selected map's window so top-down allocations (kernel binaries) never compose an
-    // out-of-window operand; see qa_att_windows.hpp for the per-map limits.
+    // Under ATT a DRAM endpoint is only addressable within its window's local-address field. Clamp
+    // the bank size to the selected map's window so top-down allocations (kernel binaries) never
+    // compose an out-of-window operand; see qa_att_windows.hpp for the per-map limits.
     uint64_t att_dram_view_size = soc_desc.dram_view_size;
     if (hal.get_arch() == tt::ARCH::QUASAR) {
         if (const auto att_map = env.get_rtoptions().get_noc_att_map(); att_map.has_value()) {

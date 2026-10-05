@@ -19,6 +19,7 @@ namespace quasar_aether_2x3_att_program {
 inline constexpr noc_att::MaskEntry MASKS[] = {
     {.slot = 0, .window = quasar_aether_2x3_att_config::LOCAL_WINDOW, .bar = 0},
     {.slot = 1, .window = quasar_aether_2x3_att_config::REMOTE_WINDOW, .bar = 0},
+    {.slot = 2, .window = quasar_aether_2x3_att_config::DRAM_WINDOW, .bar = 0},
 };
 
 inline constexpr noc_att::EndpointEntry ENDPOINTS[] = {
@@ -30,6 +31,8 @@ inline constexpr noc_att::EndpointEntry ENDPOINTS[] = {
     {.index = 4, .x = 1, .y = 0},  // selector 3: right DRAM
     {.index = 5, .x = 0, .y = 2},  // selector 4: dispatch in 2x3_DISPATCH RTL
     {.index = 6, .x = 1, .y = 2},  // selector 5: NOC2AXI in 2x3_DISPATCH RTL
+    {.index = 7, .x = 0, .y = 0},  // DRAM selector 0: left DRAM
+    {.index = 8, .x = 1, .y = 0},  // DRAM selector 1: right DRAM
 };
 
 inline constexpr noc_att::Program PROGRAM_IMAGE{

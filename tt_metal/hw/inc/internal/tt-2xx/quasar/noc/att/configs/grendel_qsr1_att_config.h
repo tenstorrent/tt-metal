@@ -139,10 +139,13 @@ constexpr std::uint8_t ATT_LOGICAL_DRAM_SELECTORS[] = {0, 1, 2, 3};
 // DRAM endpoint words by DRAM-window selector (boot rows 96..127): lane A (d2d0
 // ingress) at selectors 0..3, lane B (d2d1) at 16..19, the rest unprogrammed.
 // A host coordinate naming a DRAM tile resolves through these to the DRAM window.
+constexpr std::uint16_t UNPROGRAMMED = noc_att::UNPROGRAMMED_ENDPOINT_WORD;
 // clang-format off
 constexpr std::uint16_t ATT_DRAM_ENDPOINT_WORDS[] = {
-    0x246, 0x24a, 0x089, 0x085, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0x247, 0x24b, 0x088, 0x084, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0x246, 0x24a, 0x089, 0x085, UNPROGRAMMED, UNPROGRAMMED, UNPROGRAMMED, UNPROGRAMMED,
+    UNPROGRAMMED, UNPROGRAMMED, UNPROGRAMMED, UNPROGRAMMED, UNPROGRAMMED, UNPROGRAMMED, UNPROGRAMMED, UNPROGRAMMED,
+    0x247, 0x24b, 0x088, 0x084, UNPROGRAMMED, UNPROGRAMMED, UNPROGRAMMED, UNPROGRAMMED,
+    UNPROGRAMMED, UNPROGRAMMED, UNPROGRAMMED, UNPROGRAMMED, UNPROGRAMMED, UNPROGRAMMED, UNPROGRAMMED, UNPROGRAMMED,
 };
 // clang-format on
 

@@ -143,7 +143,7 @@ TEST(QuasarAttImageQsr1, ReplayContractHolds) {
 
 TEST(QuasarAttImageAether, MaskEntriesMatchTheConfigWindows) {
     const noc_att::Program& program = quasar_aether_2x3_att_program::PROGRAM_IMAGE;
-    ASSERT_EQ(program.mask_count, 2u);
+    ASSERT_EQ(program.mask_count, 3u);
 
     EXPECT_EQ(program.masks[0].slot, 0);
     EXPECT_EQ(
@@ -158,24 +158,43 @@ TEST(QuasarAttImageAether, MaskEntriesMatchTheConfigWindows) {
         noc_att::mask_entry_control_word(quasar_aether_2x3_att_config::REMOTE_WINDOW));
     EXPECT_EQ(program.masks[1].window.compare, quasar_aether_2x3_att_config::REMOTE_WINDOW.compare);
     EXPECT_EQ(program.masks[1].bar, 0u);
+
+    EXPECT_EQ(program.masks[2].slot, 2);
+    EXPECT_EQ(
+        noc_att::mask_entry_control_word(program.masks[2].window),
+        noc_att::mask_entry_control_word(quasar_aether_2x3_att_config::DRAM_WINDOW));
+    EXPECT_EQ(program.masks[2].window.compare, quasar_aether_2x3_att_config::DRAM_WINDOW.compare);
+    EXPECT_EQ(program.masks[2].bar, 0u);
 }
 
 TEST(QuasarAttImageAether, EndpointEntriesMatchTheConfigTable) {
     const noc_att::Program& program = quasar_aether_2x3_att_program::PROGRAM_IMAGE;
     const std::uint16_t remote_offset = quasar_aether_2x3_att_config::REMOTE_WINDOW.endpoint_table_offset;
+    const std::uint16_t dram_offset = quasar_aether_2x3_att_config::DRAM_WINDOW.endpoint_table_offset;
+    constexpr std::uint32_t remote_rows =
+        sizeof(quasar_aether_2x3_att_config::ATT_FULL_TILE_ENDPOINT_WORDS) / sizeof(std::uint16_t);
+    constexpr std::uint32_t dram_rows =
+        sizeof(quasar_aether_2x3_att_config::ATT_DRAM_ENDPOINT_WORDS) / sizeof(std::uint16_t);
 
-    ASSERT_EQ(
-        program.endpoint_count,
-        sizeof(quasar_aether_2x3_att_config::ATT_FULL_TILE_ENDPOINT_WORDS) / sizeof(std::uint16_t));
+    // The DRAM window's rows start after the remote window's.
+    ASSERT_GE(dram_offset, remote_offset + remote_rows);
+    ASSERT_EQ(program.endpoint_count, remote_rows + dram_rows);
     for (std::uint32_t i = 0; i < program.endpoint_count; ++i) {
         const noc_att::EndpointEntry& entry = program.endpoints[i];
-        ASSERT_GE(entry.index, remote_offset);
-        const std::uint32_t selector = entry.index - remote_offset;
         // Endpoint words encode (y << 6) | x.
-        EXPECT_EQ(
-            (std::uint32_t{entry.y} << 6) | entry.x,
-            quasar_aether_2x3_att_config::ATT_FULL_TILE_ENDPOINT_WORDS[selector])
-            << "remote selector " << selector;
+        const std::uint32_t word = (std::uint32_t{entry.y} << 6) | entry.x;
+        if (entry.index >= dram_offset) {
+            const std::uint32_t selector = entry.index - dram_offset;
+            ASSERT_LT(selector, dram_rows);
+            EXPECT_EQ(word, quasar_aether_2x3_att_config::ATT_DRAM_ENDPOINT_WORDS[selector])
+                << "DRAM selector " << selector;
+        } else {
+            ASSERT_GE(entry.index, remote_offset);
+            const std::uint32_t selector = entry.index - remote_offset;
+            ASSERT_LT(selector, remote_rows);
+            EXPECT_EQ(word, quasar_aether_2x3_att_config::ATT_FULL_TILE_ENDPOINT_WORDS[selector])
+                << "remote selector " << selector;
+        }
     }
 
     // Selector zero of the translating local window resolves through the per-initiator entry 0.

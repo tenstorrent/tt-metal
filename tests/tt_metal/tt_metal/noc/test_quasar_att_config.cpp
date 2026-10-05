@@ -207,6 +207,18 @@ TEST(QuasarAttAetherConfig, RemoteWindowMatchesSlot1Narrowed) {
     EXPECT_TRUE(w.translate_address);
 }
 
+TEST(QuasarAttAetherConfig, DramWindowMatchesSlot2) {
+    constexpr const Window& w = quasar_aether_2x3_att_config::DRAM_WINDOW;
+    EXPECT_EQ(w.compare, 0x2000000000ull);
+    EXPECT_EQ(w.mask_bits, 32);
+    EXPECT_EQ(w.endpoint_shift, 30);
+    EXPECT_EQ(w.endpoint_size, 2);
+    EXPECT_EQ(w.endpoint_table_offset, 7);
+    EXPECT_TRUE(w.translate_address);
+    static_assert(quasar_aether_2x3_att_config::DRAM_WINDOW.local_address_limit() == (1ull << 30));
+    static_assert(quasar_aether_2x3_att_config::DRAM_WINDOW.selector_limit() == 4);
+}
+
 TEST(QuasarAttAetherConfig, LocalWindowBaseIsTheQsr1Base) {
     static_assert(quasar_aether_2x3_att_config::LOCAL_WINDOW_BASE == 0x1800000000ull);
     static_assert(quasar_aether_2x3_att_config::LOCAL_WINDOW.make_address(0, 0x123456ull) == 0x1800123456ull);
@@ -222,8 +234,18 @@ TEST(QuasarAttAetherConfig, SelectorTablesMatchAetherUtils) {
     // aether_utils.h: workers (0,1),(1,1) at selectors 0,1; DRAM (0,0),(1,0) at 2,3.
     EXPECT_EQ(quasar_aether_2x3_att_config::ATT_WORKER_SELECTORS[0], 0);
     EXPECT_EQ(quasar_aether_2x3_att_config::ATT_WORKER_SELECTORS[1], 1);
-    EXPECT_EQ(quasar_aether_2x3_att_config::ATT_LOGICAL_DRAM_SELECTORS[0], 2);
-    EXPECT_EQ(quasar_aether_2x3_att_config::ATT_LOGICAL_DRAM_SELECTORS[1], 3);
+    EXPECT_EQ(quasar_aether_2x3_att_config::ATT_TILE_SELECTORS[0], 2);
+    EXPECT_EQ(quasar_aether_2x3_att_config::ATT_TILE_SELECTORS[1], 3);
+    // Logical DRAM banks go through the DRAM window: bank N is selector N there,
+    // and names the same tiles the full-tile table holds at selectors 2 and 3.
+    EXPECT_EQ(quasar_aether_2x3_att_config::ATT_LOGICAL_DRAM_SELECTORS[0], 0);
+    EXPECT_EQ(quasar_aether_2x3_att_config::ATT_LOGICAL_DRAM_SELECTORS[1], 1);
+    EXPECT_EQ(
+        quasar_aether_2x3_att_config::ATT_DRAM_ENDPOINT_WORDS[0],
+        quasar_aether_2x3_att_config::ATT_FULL_TILE_ENDPOINT_WORDS[2]);
+    EXPECT_EQ(
+        quasar_aether_2x3_att_config::ATT_DRAM_ENDPOINT_WORDS[1],
+        quasar_aether_2x3_att_config::ATT_FULL_TILE_ENDPOINT_WORDS[3]);
     // Endpoint words encode (y << 6) | x.
     EXPECT_EQ(quasar_aether_2x3_att_config::ATT_WORKER_ENDPOINT_WORDS[0], (1 << 6) | 0);
     EXPECT_EQ(quasar_aether_2x3_att_config::ATT_WORKER_ENDPOINT_WORDS[1], (1 << 6) | 1);
@@ -232,6 +254,10 @@ TEST(QuasarAttAetherConfig, SelectorTablesMatchAetherUtils) {
 TEST(QuasarAttAetherConfig, WindowsAreDisjoint) {
     EXPECT_TRUE(
         windows_disjoint(quasar_aether_2x3_att_config::LOCAL_WINDOW, quasar_aether_2x3_att_config::REMOTE_WINDOW));
+    EXPECT_TRUE(
+        windows_disjoint(quasar_aether_2x3_att_config::LOCAL_WINDOW, quasar_aether_2x3_att_config::DRAM_WINDOW));
+    EXPECT_TRUE(
+        windows_disjoint(quasar_aether_2x3_att_config::REMOTE_WINDOW, quasar_aether_2x3_att_config::DRAM_WINDOW));
 }
 
 }  // namespace

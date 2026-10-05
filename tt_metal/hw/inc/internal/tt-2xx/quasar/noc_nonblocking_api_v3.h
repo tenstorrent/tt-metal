@@ -155,7 +155,7 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
     // Emulator bring-up only: boot has not programmed the ATT tables, so
     // firmware replays the generated image once before any traffic.
     // Production boot/UMD owns this before DM startup.
-    noc_att::program_for_test(active_att_program::PROGRAM_IMAGE);
+    noc_att::program_for_test<active_att_program::PROGRAM_IMAGE>();
     ASSERT(noc_att::check_no_faults());
 #endif
 }

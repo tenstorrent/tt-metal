@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <utility>
 
 #include "internal/tt-2xx/quasar/noc/att/temporary_programming/att_program_types.h"
 #include "noc_parameters.h"
@@ -33,25 +35,6 @@ inline std::uint32_t read_register(std::uint32_t address) {
 
 inline void write_register(std::uint32_t address, std::uint32_t data) {
     *reinterpret_cast<volatile std::uint32_t*>(static_cast<uintptr_t>(address)) = data;
-}
-
-/// @brief Program one mask-table slot from a window + BAR.
-inline void program_mask_entry(const MaskEntry& entry) {
-    write_register(
-        mask_register_address(entry.slot, NOC_ADDRESS_TRANSLATION_TABLE_A_MASK_TABLE_ENTRY_REG_OFFSET),
-        mask_entry_control_word(entry.window));
-    write_register(
-        mask_register_address(entry.slot, NOC_ADDRESS_TRANSLATION_TABLE_A_MASK_TABLE_EP_LO_REG_OFFSET),
-        static_cast<std::uint32_t>(entry.window.compare));
-    write_register(
-        mask_register_address(entry.slot, NOC_ADDRESS_TRANSLATION_TABLE_A_MASK_TABLE_EP_HI_REG_OFFSET),
-        static_cast<std::uint32_t>(entry.window.compare >> 32));
-    write_register(
-        mask_register_address(entry.slot, NOC_ADDRESS_TRANSLATION_TABLE_A_MASK_TABLE_BAR_LO_REG_OFFSET),
-        static_cast<std::uint32_t>(entry.bar));
-    write_register(
-        mask_register_address(entry.slot, NOC_ADDRESS_TRANSLATION_TABLE_A_MASK_TABLE_BAR_HI_REG_OFFSET),
-        static_cast<std::uint32_t>(entry.bar >> 32));
 }
 
 /// @brief Park every mask-table slot on an unmatchable compare value.
@@ -103,28 +86,77 @@ inline void program_for_test(const ProgramImage& image) {
     asm volatile("fence iorw, iorw" ::: "memory");
 }
 
+namespace detail {
+
+// One mask-table slot of a compact Program, with every register value folded at compile time so
+// the table itself needs no storage in the firmware's local data memory.
+template <const Program& P, std::size_t I>
+inline void program_mask() {
+    constexpr std::uint32_t slot = P.masks[I].slot;
+    constexpr std::uint32_t control = mask_entry_control_word(P.masks[I].window);
+    constexpr std::uint64_t compare = P.masks[I].window.compare;
+    constexpr std::uint64_t bar = P.masks[I].bar;
+    write_register(mask_register_address(slot, NOC_ADDRESS_TRANSLATION_TABLE_A_MASK_TABLE_ENTRY_REG_OFFSET), control);
+    write_register(
+        mask_register_address(slot, NOC_ADDRESS_TRANSLATION_TABLE_A_MASK_TABLE_EP_LO_REG_OFFSET),
+        static_cast<std::uint32_t>(compare));
+    write_register(
+        mask_register_address(slot, NOC_ADDRESS_TRANSLATION_TABLE_A_MASK_TABLE_EP_HI_REG_OFFSET),
+        static_cast<std::uint32_t>(compare >> 32));
+    write_register(
+        mask_register_address(slot, NOC_ADDRESS_TRANSLATION_TABLE_A_MASK_TABLE_BAR_LO_REG_OFFSET),
+        static_cast<std::uint32_t>(bar));
+    write_register(
+        mask_register_address(slot, NOC_ADDRESS_TRANSLATION_TABLE_A_MASK_TABLE_BAR_HI_REG_OFFSET),
+        static_cast<std::uint32_t>(bar >> 32));
+}
+
+template <const Program& P, std::size_t... I>
+inline void program_masks(std::index_sequence<I...>) {
+    (program_mask<P, I>(), ...);
+}
+
+template <const Program& P, std::size_t I>
+inline void program_endpoint() {
+    constexpr std::uint32_t index = P.endpoints[I].index;
+    constexpr std::uint32_t x = P.endpoints[I].x;
+    constexpr std::uint32_t y = P.endpoints[I].y;
+    write_register(endpoint_register_address(index), NOC_XY_COORD(x, y));
+}
+
+template <const Program& P, std::size_t... I>
+inline void program_endpoints(std::index_sequence<I...>) {
+    (program_endpoint<P, I>(), ...);
+}
+
+}  // namespace detail
+
 /// @brief Program the tables from a compact Program description (simple
 /// emulation topologies); same disable/patch/enable contract as the raw form.
-inline void program_for_test(const Program& program) {
+/// The Program is a template argument so its entries become immediates.
+template <const Program& P>
+inline void program_for_test() {
     write_register(NOC_ADDRESS_TRANSLATION_TABLE_A_ENABLE_TABLES_REG_ADDR, 0);
     disable_all_mask_entries();
 
-    for (std::uint32_t i = 0; i < program.mask_count; ++i) {
-        program_mask_entry(program.masks[i]);
-    }
-    for (std::uint32_t i = 0; i < program.endpoint_count; ++i) {
-        const auto& endpoint = program.endpoints[i];
-        write_register(endpoint_register_address(endpoint.index), NOC_XY_COORD(endpoint.x, endpoint.y));
-    }
+    detail::program_masks<P>(std::make_index_sequence<P.mask_count>{});
+    detail::program_endpoints<P>(std::make_index_sequence<P.endpoint_count>{});
 
     const std::uint32_t node_id = read_register(NOC_NODE_ID);
     const std::uint32_t local_x = node_id & NOC_NODE_ID_MASK;
     const std::uint32_t local_y = (node_id >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-    write_register(endpoint_register_address(program.local_endpoint_index), NOC_XY_COORD(local_x, local_y));
+    constexpr std::uint32_t local_endpoint_index = P.local_endpoint_index;
+    write_register(endpoint_register_address(local_endpoint_index), NOC_XY_COORD(local_x, local_y));
 
     asm volatile("fence iorw, iorw" ::: "memory");
     write_register(NOC_ADDRESS_TRANSLATION_TABLE_A_ENABLE_TABLES_REG_ADDR, 1);
     asm volatile("fence iorw, iorw" ::: "memory");
+}
+
+/// @brief Raw-image overload selected when the active program is a ProgramImage.
+template <const ProgramImage& P>
+inline void program_for_test() {
+    program_for_test(P);
 }
 
 /// @brief True while translation is enabled and the ATT has recorded no match

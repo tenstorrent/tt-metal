@@ -92,6 +92,10 @@ struct Table {
     constexpr bool empty() const { return count == 0; }
 };
 
+/// @brief Entry in an endpoint-word table for a row the boot image leaves
+/// unprogrammed. No tile has this word: x and y are six bits each.
+inline constexpr std::uint16_t UNPROGRAMMED_ENDPOINT_WORD = 0xFFFF;
+
 /// @brief The window a map assigns to roles it does not support: its compare
 /// value cannot match any real device address (the same convention the
 /// bring-up replay uses to park unused mask-table slots), so every identity
@@ -305,14 +309,15 @@ constexpr ResolvedTile resolve_current(const MapData& map, std::uint32_t noc_x, 
             return {selector, noc_x, noc_y, true, WindowClass::Worker};
         }
     }
+    for (std::uint32_t selector = 0; selector < map.dram_endpoint_words.size(); ++selector) {
+        if (map.dram_endpoint_words[selector] != UNPROGRAMMED_ENDPOINT_WORD &&
+            map.dram_endpoint_words[selector] == endpoint) {
+            return {selector, noc_x, noc_y, true, WindowClass::Dram};
+        }
+    }
     for (std::uint32_t selector = 0; selector < map.full_tile_endpoint_words.size(); ++selector) {
         if (map.full_tile_endpoint_words[selector] == endpoint) {
             return {selector, noc_x, noc_y, true, WindowClass::FullTile};
-        }
-    }
-    for (std::uint32_t selector = 0; selector < map.dram_endpoint_words.size(); ++selector) {
-        if (map.dram_endpoint_words[selector] != 0 && map.dram_endpoint_words[selector] == endpoint) {
-            return {selector, noc_x, noc_y, true, WindowClass::Dram};
         }
     }
     return INVALID_TILE;
@@ -593,9 +598,10 @@ constexpr OperandTarget classify_operand(const MapData& map, NocAddress address)
                 break;
             }
         }
-        // Find the DRAM tile's endpoint word: in the DRAM table (0 = not programmed), or
+        // Find the DRAM tile's endpoint word: in the DRAM table (skipping unprogrammed rows), or
         // in the full-tile table on maps where DRAM shares that window.
-        bool known = selector < map.dram_endpoint_words.size() && map.dram_endpoint_words[selector] != 0;
+        bool known = selector < map.dram_endpoint_words.size() &&
+                     map.dram_endpoint_words[selector] != UNPROGRAMMED_ENDPOINT_WORD;
         std::uint32_t word = known ? map.dram_endpoint_words[selector] : 0;
         if (!known && bank != DRAM_BANK_UNKNOWN && !is_no_window(tile) && same_window(dram, tile) &&
             selector < map.full_tile_endpoint_words.size()) {

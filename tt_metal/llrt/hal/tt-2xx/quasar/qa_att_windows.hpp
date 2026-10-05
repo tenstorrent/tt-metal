@@ -50,8 +50,8 @@ constexpr const MapInfo* find_map(std::string_view name) {
 /// of the DRAM window's offset field. The allocator caps the DRAM bank size at
 /// this so top-down allocations (kernel binaries) stay reachable.
 ///
-/// - quasar_aether_2x3: 64 MiB, smaller than the DRAM the descriptor
-///   advertises, so the cap matters there.
+/// - quasar_aether_2x3: 1 GiB, the DRAM view the descriptor advertises, so the
+///   cap changes nothing there.
 /// - grendel_qsr1: 8 GiB, larger than the descriptor's DRAM view, so the cap
 ///   changes nothing there.
 constexpr std::uint64_t dram_window_local_address_limit(const MapInfo& info) {
@@ -59,8 +59,8 @@ constexpr std::uint64_t dram_window_local_address_limit(const MapInfo& info) {
 }
 
 static_assert(
-    dram_window_local_address_limit(*find_map("quasar_aether_2x3")) == (std::uint64_t{64} << 20),
-    "quasar_aether_2x3 DRAM window expected to carry 64 MiB of local address");
+    dram_window_local_address_limit(*find_map("quasar_aether_2x3")) == (std::uint64_t{1} << 30),
+    "quasar_aether_2x3 DRAM window expected to carry 1 GiB of local address");
 static_assert(
     dram_window_local_address_limit(*find_map("grendel_qsr1")) == (std::uint64_t{8} << 30),
     "grendel_qsr1 DRAM window expected to carry 8 GiB of local address");

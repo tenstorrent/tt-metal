@@ -46,6 +46,7 @@ constexpr std::uint8_t ATT_WORKER_SELECTORS[] = {0, 1};
 // image on the emulator - and the image test checks that consistency.
 constexpr std::uint16_t ATT_WORKER_ENDPOINT_WORDS[] = {0x40, 0x41};
 constexpr std::uint16_t ATT_FULL_TILE_ENDPOINT_WORDS[] = {0x40, 0x41, 0x00, 0x01, 0x80, 0x81};
+constexpr std::uint16_t ATT_DRAM_ENDPOINT_WORDS[] = {0x00, 0x01};
 
 // Array index uses tt-metal/UMD-visible y*2+x. Selectors 0..3 match
 // aether_utils.h; the top row holds the dispatch tile (0,2) and the PCIe tile.
@@ -58,9 +59,9 @@ constexpr std::uint8_t ATT_TILE_SELECTORS[] = {
     5,  // y=2: dispatch, PCIe
 };
 
-// Matches Aether::configure_aether_dram(GRID_2x3): bank 0 targets (0,0)
-// through selector 2 and bank 1 targets (1,0) through selector 3.
-constexpr std::uint8_t ATT_LOGICAL_DRAM_SELECTORS[] = {2, 3};
+// Logical DRAM bank N -> DRAM-window selector N: bank 0 is tile (0,0), bank 1
+// is tile (1,0), the tiles the full-tile table holds at selectors 2 and 3.
+constexpr std::uint8_t ATT_LOGICAL_DRAM_SELECTORS[] = {0, 1};
 
 // QSR1 slot-14 geometry scaled to this endpoint table: selector bits [31:26]
 // of the base fold to 0, so base | local selects entry 0 - the per-initiator
@@ -77,9 +78,8 @@ constexpr noc_att::Window LOCAL_WINDOW{
 
 // Narrowed from aether_utils' 10-bit selector / 2^36 span: six tiles need six
 // selectors, and the narrower window keeps it disjoint from the local window
-// at 0x18_0000_0000 (windows must not overlap - hardware would resolve the
-// overlap by first-match priority, which the software model deliberately does
-// not reproduce).
+// at 0x18_0000_0000 (windows must not overlap: the hardware combines every
+// matching slot, so an overlap applies a slot nobody programmed).
 constexpr noc_att::Window REMOTE_WINDOW{
     .compare = 0x1000000000ull,
     .mask_bits = 32,
@@ -88,6 +88,20 @@ constexpr noc_att::Window REMOTE_WINDOW{
     .endpoint_table_offset = 1,
     .translate_address = true,
 };  // mask-table slot 1, BAR/rebase 0
+
+// DRAM gets its own window: the remote window's 26-bit local field reaches only
+// 64 MiB of a 1 GiB bank. Two selectors over 1 GiB slots, disjoint from the
+// remote window at 0x10_0000_0000 and the local window at 0x18_0000_0000.
+constexpr noc_att::Window DRAM_WINDOW{
+    .compare = 0x2000000000ull,
+    .mask_bits = 32,
+    .endpoint_shift = 30,
+    .endpoint_size = 2,
+    .endpoint_table_offset = 7,
+    .translate_address = true,
+};  // mask-table slot 2, BAR/rebase 0
+static_assert(DRAM_WINDOW.local_address_limit() == (1ull << 30));
+static_assert((DRAM_WINDOW.compare & noc_att::low_mask(DRAM_WINDOW.mask_bits)) == 0);
 
 // Every operand for this initiator's own L1 is LOCAL_WINDOW_BASE | local_address.
 // The ATT enablement surfaces this value as the NOC_ATT_LOCAL_WINDOW_BASE macro
@@ -103,12 +117,12 @@ inline constexpr noc_att::MapData::DispatchEntry DISPATCH_ENTRIES[] = {
     {.x = 0, .y = 2, .selector = 4, .window = noc_att::WindowClass::FullTile},
 };
 
-// The declarative map: everything the shared resolver needs, as data. This
-// map has a single remote window, so the Worker/Dram/FullTile roles all point
-// at it and differ only in which selector table resolution consults. There is
-// no pass-through scratch aperture; Local has its own translating window.
+// The declarative map: everything the shared resolver needs, as data. The
+// Worker and FullTile roles share the remote window and differ only in which
+// selector table resolution consults; Dram has its own window. There is no
+// pass-through scratch aperture; Local has its own translating window.
 inline constexpr noc_att::MapData MAP{
-    .windows = {{noc_att::NO_WINDOW, REMOTE_WINDOW, REMOTE_WINDOW, REMOTE_WINDOW, LOCAL_WINDOW}},
+    .windows = {{noc_att::NO_WINDOW, REMOTE_WINDOW, DRAM_WINDOW, REMOTE_WINDOW, LOCAL_WINDOW}},
     .local_window_class = noc_att::WindowClass::Local,  // translating local window, entry 0 = self
     .worker_origin_x = ATT_WORKER_API_ORIGIN_X,
     .worker_origin_y = ATT_WORKER_API_ORIGIN_Y,
@@ -119,7 +133,7 @@ inline constexpr noc_att::MapData MAP{
     .node_id_offset_y = 0,
     .worker_endpoint_words = {ATT_WORKER_ENDPOINT_WORDS},
     .full_tile_endpoint_words = {ATT_FULL_TILE_ENDPOINT_WORDS},
-    .dram_endpoint_words = {},  // DRAM tiles are in the full-tile table on this map
+    .dram_endpoint_words = {ATT_DRAM_ENDPOINT_WORDS},
     .dram_selectors = {ATT_LOGICAL_DRAM_SELECTORS},
     .dispatch_entries = {DISPATCH_ENTRIES},
 };
