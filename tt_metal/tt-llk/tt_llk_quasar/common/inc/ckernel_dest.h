@@ -7,9 +7,10 @@
 #ifndef CKERNEL_DEST_H
 #define CKERNEL_DEST_H 1
 
+#include <cfg_defines.h>
+
 #include <cstdint>
 
-#include "cfg_defines.h"
 #include "ckernel.h"
 #include "ckernel_defs.h" // ThreadId (for configure_dest_access)
 #include "ckernel_vector.h"
