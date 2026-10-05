@@ -54,9 +54,6 @@ _REAL = "real"
 # CPU reference / weights inside the device run, for local iteration and for CI jobs without a preparation step.
 CACHE_MISS_ENV = "KDA_CACHE_MISS"
 PREPARE_COMMAND = "python -m models.demos.deepseek_v3_d_p.tests.kda.prepare"
-# Workaround for tt_metal_tracker-g1b.1.4: ttnn.load_tensor(device=mesh) spins on cached files whose shards exceed
-# the 32 MiB pinned-write threshold unless pinned host memory is disabled for the process.
-PINNED_MEMORY_LIMIT_ENV = "TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES"
 
 
 class KDAPreparedCacheMiss(FileNotFoundError):
@@ -329,7 +326,7 @@ def make_kda_device_case(
 ) -> tuple[ttKDA, ttnn.Tensor]:
     """Construct the case's production-dimension layer on its registered mesh and its first chunk's input.
 
-    Weights load from the prepared cache (with ``TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0``). On a miss the test
+    Weights load from the prepared cache. On a miss the test
     fails fast unless ``KDA_CACHE_MISS=compute``, which prepares the host weights in-process (real weights also
     write a missing cache).
     """
@@ -360,20 +357,13 @@ def make_kda_device_case(
         spec.mesh_shape,
         tensor_parallel_axis=tensor_parallel_axis,
     )
-    pinning_disabled = os.environ.get(PINNED_MEMORY_LIMIT_ENV) == "0"
-    if cache_complete and pinning_disabled:
+    if cache_complete:
         state_dict, weight_cache_path = None, cache_dir
         logger.info(f"KDA {spec.name}: weights load from prepared cache {cache_dir}")
     elif compute_on_cache_miss():
-        # Without the pinning workaround a cached load would spin (g1b.1.4), so compute mode prepares in-process.
-        logger.info(f"KDA {spec.name}: preparing host weights in the device run (cache complete={cache_complete})")
+        logger.info(f"KDA {spec.name}: preparing host weights in the device run")
         state_dict = case.weights.load_state_dict()
-        weight_cache_path = cache_dir if case.weights.kind == _REAL and not cache_complete else None
-    elif cache_complete:
-        raise RuntimeError(
-            f"loading cached KDA weights needs {PINNED_MEMORY_LIMIT_ENV}=0 in the device run "
-            "(ttnn.load_tensor spins on cached shards above 32 MiB, tt_metal_tracker-g1b.1.4)"
-        )
+        weight_cache_path = cache_dir if case.weights.kind == _REAL else None
     else:
         raise prepared_cache_miss(spec.name, "weight cache", cache_dir)
     layer = ttKDA(

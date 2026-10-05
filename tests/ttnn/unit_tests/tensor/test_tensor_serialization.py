@@ -74,7 +74,8 @@ def test_large_read_only_file_backed_tensor_upload(tmp_path, device):
     file_name = tmp_path / "large_read_only.tensorbin"
     ttnn.dump_tensor(str(file_name), host_tensor)
 
-    # load_tensor opens the file O_RDONLY and maps it PROT_READ | MAP_PRIVATE before uploading.
+    # load_tensor opens the file O_RDONLY and maps it PROT_READ | MAP_SHARED (MAP_PRIVATE where the
+    # filesystem refuses a shared mapping) before uploading.
     device_tensor = ttnn.load_tensor(str(file_name), device=device)
     result = ttnn.to_torch(device_tensor)
     assert torch.equal(result, torch_tensor)
