@@ -2,6 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import shutil
+from concurrent.futures import ThreadPoolExecutor
+from copy import copy
 from dataclasses import dataclass, field
 from functools import reduce
 from hashlib import sha256
@@ -9,6 +12,7 @@ from typing import List
 
 import pandas as pd
 import pytest
+from filelock import FileLock
 from helpers.chip_architecture import ChipArchitecture
 from helpers.device_io import read_words_from_device
 from helpers.llk_params import DestAccumulation, PerfRunType
@@ -16,11 +20,18 @@ from helpers.logger import logger
 from helpers.perf.core import PerfReport
 from helpers.perf.schema import LOOP_FACTOR_COLUMN, MARKER, TEST_NAME_COLUMN
 from helpers.profiler import Profiler, ProfilerData
-from helpers.test_config import BuildMode, ProfilerBuild, StimuliMode, TestConfig
+from helpers.test_config import (
+    BuildMode,
+    CoverageBuild,
+    ProfilerBuild,
+    StimuliMode,
+    TestConfig,
+)
 
 from .fpu_node import FpuNode
 from .l1_operation import L1Operation
 from .operand import OperandRegistry
+from .pipeline_plan import plan_pipeline
 from .sentinel import FuserSentinel
 from .sfpu_node import SfpuNode
 
@@ -79,6 +90,8 @@ class FuserConfig(TestConfig):
         self.pipeline = pipeline
         self.global_config = global_config
         self.operand_registry = operand_registry
+        self._kernel_sources = None
+        self._pipeline_plans = {}
 
         if self.global_config.architecture is None:
             self.global_config.architecture = self.CHIP_ARCH
@@ -91,8 +104,8 @@ class FuserConfig(TestConfig):
         ):
             return
         formats = set()
-        for op in self.pipeline:
-            config.sentinel.prepare_operation(config, op)
+        for op, blocks in zip(self.pipeline, self.get_pipeline_plans()):
+            config.sentinel.prepare_operation(config, op, blocks)
             output_format = op._get_pack_nodes()[0].output.data_format
             for node in op.math_nodes:
                 if isinstance(node, FpuNode) and node.src_a is not None:
@@ -122,6 +135,8 @@ class FuserConfig(TestConfig):
             "pipeline",
             "global_config",
             "operand_registry",
+            "_kernel_sources",
+            "_pipeline_plans",
             # Host-side determinism-check opt-out; does not affect the compiled kernel.
             "expected_nondeterministic",
         ]
@@ -134,17 +149,82 @@ class FuserConfig(TestConfig):
 
         self.variant_id = sha256(str(" | ".join(temp_str)).encode()).hexdigest()
 
+    def get_pipeline_plans(self):
+        dest_acc = self.global_config.dest_acc.value
+        if dest_acc not in self._pipeline_plans:
+            self._pipeline_plans[dest_acc] = [
+                plan_pipeline(op, dest_acc) for op in self.pipeline
+            ]
+        return self._pipeline_plans[dest_acc]
+
     def generate_and_build_test(self):
         from .kernel_generator import FusedKernelGenerator
 
         code_generator = FusedKernelGenerator(self)
-        code_generator.write_kernel(self.test_name)
+        self._kernel_sources = code_generator.write_kernel(self.test_name)
         self.build_elfs()
+
+    def _compile_kernel_part(self, name, compile_command, source):
+        if (
+            self.global_config.architecture != ChipArchitecture.QUASAR
+            or not self._kernel_sources
+            or not self.skip_build_header
+            or self.coverage_build == CoverageBuild.Yes
+            or "-save-temps=obj" in self.OPTIONS_ALL
+        ):
+            return super()._compile_kernel_part(name, compile_command, source)
+
+        variant_dir = self.ARTEFACTS_DIR / self.test_name / self.variant_id
+        # Fused kernels have no build.h; the variant include directory is unused.
+        options = [arg for arg in compile_command[:-2] if arg != f"-I{variant_dir}"]
+        kernel = self._kernel_sources[name]
+        source_include = self._kernel_source_include()
+        key = sha256(
+            repr((options, source.replace(source_include, kernel))).encode()
+        ).hexdigest()
+        # Compile-producer clears ARTEFACTS_DIR before starting its workers.
+        cache_dir = self.ARTEFACTS_DIR / "fused-kernels" / key
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cached_elf = cache_dir / "kernel.elf"
+        cached_meta = (
+            cache_dir / "kernel.meta.bin"
+            if self.profiler_build == ProfilerBuild.Yes
+            else None
+        )
+        done = cache_dir / ".build_complete"
+
+        with FileLock(cache_dir / "build.lock"):
+            if not done.exists():
+                kernel_path = cache_dir / "kernel.cpp"
+                kernel_path.write_text(kernel)
+                cached_source = source.replace(
+                    source_include, f'#include "{kernel_path}"\n'
+                )
+                super()._compile_kernel_part(
+                    name,
+                    [*options, "-o", str(cached_elf)],
+                    cached_source,
+                )
+                if cached_meta is not None:
+                    self._extract_profiler_metadata(cached_elf, cached_meta)
+                done.touch()
+
+        shutil.copyfile(cached_elf, compile_command[-1])
+        return cached_meta
+
+    def _prepare_perf_variant(self, run_type):
+        from .kernel_generator import FUSED_TESTS_DIR
+
+        self.global_config.perf_run_type = run_type
+        self.global_config.sentinel = FuserSentinel()
+        self.test_name = (
+            FUSED_TESTS_DIR / f"{self.global_config.test_name}_{run_type.name}.cpp"
+        )
+        self.generate_variant_hash()
+        self.operand_registry.allocate_l1_addresses()
 
     def run_perf_test(self, worker_id: str, run_count: int = 2):
         """Run performance tests for different isolation levels (L1, unpack, math, pack, congestion) and collect profiling data."""
-
-        from .kernel_generator import FUSED_TESTS_DIR
 
         if self.global_config.skip_for_perf:
             pytest.skip(f"'{self.global_config.test_name}' opts out of perf runs")
@@ -163,18 +243,29 @@ class FuserConfig(TestConfig):
         perf_report = PerfReport()
         all_results = []
 
+        if (
+            self.BUILD_MODE == BuildMode.PRODUCE
+            and self.CHIP_ARCH == ChipArchitecture.QUASAR
+        ):
+            from .kernel_generator import FusedKernelGenerator
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = []
+                for run_type in run_types:
+                    self._prepare_perf_variant(run_type)
+                    variant = copy(self)
+                    variant.global_config = copy(self.global_config)
+                    variant._kernel_sources = FusedKernelGenerator(self).write_kernel(
+                        self.test_name
+                    )
+                    futures.append(executor.submit(variant.build_elfs))
+                for future in futures:
+                    future.result()
+            return
+
         for run_type in run_types:
             runs = []
-            self.global_config.perf_run_type = run_type
-            self.global_config.sentinel = FuserSentinel()
-
-            self.test_name = (
-                FUSED_TESTS_DIR / f"{self.global_config.test_name}_{run_type.name}.cpp"
-            )
-
-            self.generate_variant_hash()
-
-            self.operand_registry.allocate_l1_addresses()
+            self._prepare_perf_variant(run_type)
 
             if self.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
                 self.generate_and_build_test()

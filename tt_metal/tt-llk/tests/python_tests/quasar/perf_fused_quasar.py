@@ -12,6 +12,7 @@ yaml_files += sorted((FUSER_CONFIG_DIR / "quasar").glob("*.yaml"))
 case_configs = collect_fuser_cases(yaml_files)
 
 
+# @skip_for_quasar
 @skip_for_blackhole
 @skip_for_wormhole
 @skip_for_coverage
