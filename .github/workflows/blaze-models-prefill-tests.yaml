@@ -12,8 +12,9 @@ on:
           Empty or "all" runs every stage. Groups: "module" runs every stage,
           "sdpa_perf" runs ring-joint SDPA and high-bandwidth all-gather,
           "disagg_prefill" runs the disaggregated-prefill runner+producer legs on SC1 and SC4.
-          Valid stages: dsa_mla_glm, gemma4_d_p, gemma4_prefill_kv_pcc, glm_chunked, glm_chunked_accuracy, glm_chunked_padded, glm_moe, glm_mtp, glm_prefill_block, gpt_oss_prefill_kv_pcc, gpt_oss_prefill_kv_pcc_1k, gpt_oss_varchunk_smoke, hca_chunked, hca_perf, high_bw_all_gather_perf, k3_chunked_prefill, k3_contracts, k3_kda, k3_kda_perf, k3_mla, k3_mla_perf, k3_mla_trace, k3_prefill_runner_24l, k3_prefill_runner_93l, k3_transformer_depth, k3_transformer_traced, kimi_chunked, kimi_chunked_padded, kimi_dflash, kimi_k3_moe, kimi_moe, kimi_moe_perf, kimi_rmsnorm, kv_cache_table, llama31_prefill_book_top5, llama31_prefill_components, llama31_prefill_runner, minimax_prefill_kv_pcc, minimax_prefill_perf, mistral4_chunked_padded, mistral4_mla, mistral4_mla_chunked, mistral4_moe, mistral4_prefill_block, mistral4_prefill_transformer, mla_chunked, moe_gate, prefill_block_determinism, prefill_runner, prefill_runner_kv_pcc, prefill_transformer_determinism, ring_joint_sdpa_perf, swa_mixed, swa_perf, v4_block_chunked.
-          Tags (each runs every matching stage): block, ccl, determinism, dflash, dsv4_flash, gate, gemma4_d_p, glm_5_3, hca, kda, kimi_k2_7, kimi_k3, kv_cache, llama31, minimax_m3, mistral4, mla, moe, mtp, runner, sdpa, swa, transformer.
+          "gemma4_d_p_layer_perf" needs a Tracy build and runs only when named; "all" and tags exclude it.
+          Valid stages: dsv4_prefill_perf_suite, dsv4_prefill_suite, gemma4_d_p, gemma4_d_p_layer_perf, gemma4_prefill_kv_pcc, glm_chunked_accuracy_suite, glm_chunked_perf_suite, glm_components_suite, gpt_oss_prefill_suite, high_bw_all_gather_perf, k3_accuracy_suite, k3_mla_perf, k3_prefill_runner_24l, k3_prefill_runner_93l, k3_transformer_suite, kimi_chunked_accuracy_suite, kimi_chunked_perf_suite, kimi_components_suite, kimi_k3_moe, kimi_moe_perf, kimi_rmsnorm, kv_cache_table, llama31_prefill_runner, llama31_prefill_suite, minimax_prefill_kv_pcc, minimax_prefill_perf, mistral4_prefill_suite, moe_gate, prefill_runner, prefill_runner_kv_pcc, ring_joint_sdpa_perf.
+          Tags (each runs every matching stage): block, ccl, determinism, dflash, dsa_mla_glm, dsv4_flash, gate, gemma4_d_p, glm_5_3, glm_chunked, glm_chunked_accuracy, glm_chunked_padded, glm_chunked_untraced_perf, glm_moe, glm_mtp, glm_prefill_block, gpt_oss_prefill_kv_pcc, gpt_oss_prefill_kv_pcc_1k, gpt_oss_varchunk_smoke, hca, hca_chunked, hca_perf, k3_chunked_prefill, k3_contracts, k3_kda, k3_kda_perf, k3_mla, k3_mla_trace, k3_transformer_depth, k3_transformer_traced, kda, kimi_chunked, kimi_chunked_padded, kimi_chunked_untraced_perf, kimi_dflash, kimi_k2_7, kimi_k3, kimi_moe, kv_cache, llama31, llama31_prefill_book_top5, llama31_prefill_components, minimax_m3, mistral4, mistral4_chunked_padded, mistral4_mla, mistral4_mla_chunked, mistral4_moe, mistral4_prefill_block, mistral4_prefill_transformer, mla, mla_chunked, moe, mtp, prefill_block_determinism, prefill_transformer_determinism, runner, sdpa, swa, swa_mixed, swa_perf, transformer, v4_block_chunked.
         required: false
         type: string
         default: "all"
@@ -86,6 +87,8 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-inplace-wheel: true
+      # Only the layer-perf stage needs a Tracy build.
+      tracy: ${{ contains(needs.validate-test-type.outputs.test-type, 'gemma4_d_p_layer_perf') }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
 
@@ -104,7 +107,7 @@ jobs:
       sp-config: sc1
       test-type: ${{ needs.validate-test-type.outputs.test-type }}
       # Keep the perf checks in a focused job so the long functional run remains unchanged.
-      exclude-test-group: sdpa_perf,disagg_prefill
+      exclude-test-group: sdpa_perf,disagg_prefill,gemma4_d_p_layer_perf
       resource-prefix: module
 
   Galaxy-Blaze-models-prefill-SDPA-Perf-tests:
@@ -126,6 +129,24 @@ jobs:
       include-test-group: sdpa_perf
       resource-prefix: sdpa-perf
 
+  Galaxy-Blaze-models-prefill-layer-perf:
+    needs: [validate-test-type, check-harbor, build-artifact]
+    if: ${{ contains(needs.validate-test-type.outputs.test-type, 'gemma4_d_p_layer_perf') }}
+    permissions:
+      id-token: write
+      contents: read
+    secrets: inherit
+    uses: ./.github/workflows/blaze-models-prefill-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: bh_sc1_high_power
+      sp-config: sc1
+      test-type: ${{ needs.validate-test-type.outputs.test-type }}
+      include-test-group: gemma4_d_p_layer_perf
+      resource-prefix: gemma4-layer-perf
+
   Galaxy-Blaze-models-prefill-sc4:
     needs: [validate-test-type, check-harbor, build-artifact]
     # 4-galaxy (SC4) disaggregated-prefill runner+producer KV-PCC leg. Its own impl
@@ -140,7 +161,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: bh_sc4
+      enabled-skus: bh_sc4,bh_sc4_high_power
       sp-config: sc4
       test-type: ${{ needs.validate-test-type.outputs.test-type }}
       resource-prefix: sc4
@@ -162,7 +183,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: bh_sc1
+      enabled-skus: bh_sc1,bh_sc1_high_power
       sp-config: sc1
       test-type: ${{ needs.validate-test-type.outputs.test-type }}
       include-test-group: disagg_prefill
@@ -186,6 +207,10 @@ jobs:
             title: "(Kimi-K2.7-1T) disaggregated prefill SC4 vs SC1 scaling"
           - model: glm53
             title: "(GLM-5.3-744B) disaggregated prefill SC4 vs SC1 scaling"
+          # sc4 alone: K3's sc1 leg runs 24 of 93 layers, so there is no sc1 baseline to scale from.
+          - model: kimi_k3
+            title: "(Kimi-K3-2.8T) disaggregated prefill SC4 perf"
+            sc4_only: true
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -211,7 +236,7 @@ jobs:
       - name: Report scaling
         run: |
           python3 models/demos/common/prefill/runners/ci/scaling_summary.py \
-            --metrics-dir perf_metrics --model "${{ matrix.model }}" \
+            --metrics-dir perf_metrics --model "${{ matrix.model }}" ${{ matrix.sc4_only && '--sc4-only' || '' }} \
             ${{ steps.gantt.outputs.url && format('--gantt-url {0}', steps.gantt.outputs.url) || '' }}
 
   ai-run-summary:
@@ -221,6 +246,7 @@ jobs:
     # into expected-jobs so legs that produced no ai_job_summary artifact are
     # reconciled as infra failures rather than silently dropped.
     needs: [Galaxy-Blaze-models-prefill, Galaxy-Blaze-models-prefill-SDPA-Perf-tests,
+      Galaxy-Blaze-models-prefill-layer-perf,
       Galaxy-Blaze-models-prefill-sc4, Galaxy-Blaze-models-prefill-sc1-runner]
     # Reports on a run that failed — the case the summary exists for — but not
     # on one that was cancelled: an aborted run has no outcome to summarize, and

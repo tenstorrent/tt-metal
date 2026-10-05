@@ -179,7 +179,7 @@ def _subject(ctx):
         if b
     ]
     return (
-        "(nightly)",
+        f"({_escape(ctx.get('trigger') or 'nightly')})",
         " · ".join(bits) or "scheduled run",
         ctx.get("run_types") or "?",
     )
@@ -227,13 +227,16 @@ def _acceptance_lines(status, ctx):
 def build_text(status, rows, ctx):
     """The Slack message for one verdict. Plain text; Slack renders the links."""
     subject, byline, where = _subject(ctx)
+    gate = _escape(ctx.get("gate_name") or "LLK perf gate")
+    note = [f":hourglass: {_escape(ctx['note'])}"] if ctx.get("note") else []
     run_link = f"<{ctx['run_url']}|gate run>" if ctx.get("run_url") else "gate run"
 
     if status == "skipped":
         return "\n".join(
             [
-                f":warning: *LLK perf gate SKIPPED* {subject}",
+                f":warning: *{gate} SKIPPED* {subject}",
                 byline,
+                *note,
                 "",
                 ctx.get("reason") or "The gate compared nothing.",
                 "*A green check here does not mean anything was checked.*",
@@ -245,8 +248,9 @@ def build_text(status, rows, ctx):
     if status == "clean":
         return "\n".join(
             [
-                f":white_check_mark: *LLK perf gate passed* {subject}",
+                f":white_check_mark: *{gate} passed* {subject}",
                 f"{byline}  ·  {where}",
+                *note,
                 "",
                 f"No point regressed. {run_link}",
                 *_acceptance_lines(status, ctx),
@@ -256,8 +260,9 @@ def build_text(status, rows, ctx):
     findings = _findings(rows)
     worst = findings[:_TOP_N]
     lines = [
-        f":rotating_light: *LLK perf gate: regression* {subject}",
+        f":rotating_light: *{gate}: regression* {subject}",
         f"{byline}  ·  {where}",
+        *note,
         "",
         f"*{len(rows)} point(s) regressed, in {len(findings)} finding(s).*",
     ]
@@ -320,6 +325,11 @@ def main(argv=None):
     ap.add_argument("--baseline-sha", default="")
     ap.add_argument("--commit", default="")
     ap.add_argument("--mode", default="")
+    ap.add_argument("--gate-name", default="LLK perf gate")
+    ap.add_argument(
+        "--trigger", default="nightly", help="what started a run with no PR"
+    )
+    ap.add_argument("--note", default="", help="one extra line, e.g. a stale baseline")
     ap.add_argument("--acceptance", help="the comparer's .acceptance.json, if any")
     ap.add_argument(
         "--approvers", help="regression_approvers.json: GitHub login -> Slack ID"
@@ -356,6 +366,9 @@ def main(argv=None):
         "run_url": a.run_url,
         "baseline_sha": a.baseline_sha,
         "reason": reason,
+        "gate_name": a.gate_name,
+        "trigger": a.trigger,
+        "note": a.note,
         "acceptance": _load_json(a.acceptance),
         "approvers": _load_json(a.approvers),
     }

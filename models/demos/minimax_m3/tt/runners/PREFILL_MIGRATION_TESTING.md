@@ -327,7 +327,7 @@ Configuration notes:
 | cache length | 10240 | `PREFILL_MAX_SEQ_LEN` | `model.max_seq_len` |
 | mesh | 8 × 4 | `PREFILL_SP` / `PREFILL_TP` | `transport.sp` / `.tp` |
 | H2D socket | `m3_prefill` | `PREFILL_H2D_SERVICE_ID` | `transport.h2d_service_id` |
-| index dtype | bf16 | `M3_INDEX_CACHE_BF16` | `env.M3_INDEX_CACHE_BF16` |
+| index dtype | bf8 | `M3_INDEX_CACHE_BF16` | `env.M3_INDEX_CACHE_BF16` |
 | KV table | `/tmp/m3_kv_chunk_table.pb` | `PREFILL_MIGRATION_TABLE_PATH` | `migration.table_path` |
 | sentinel | `/tmp/m3_migration_done.sentinel` | `MIGRATION_DONE_FILE` | `migration.done_file` |
 | queues | `/mig_ep1_*` | `PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE` | `migration.{cmd,table,resp}_queue` |

@@ -5,7 +5,7 @@
 
 import ttnn
 
-from models.demos.gemma4_d_p.tt.ccl import ccl_allreduce
+from models.demos.gemma4_d_p.tt.ccl import ccl_reduce_scatter_rows
 
 from .weights import load_attention_weights
 from .ring_prefill import init_global_ring_kv_cache, init_sliding_ring_kv_cache
@@ -306,6 +306,6 @@ class Gemma4Attention:
             tt_out, self.weights.o_proj, program_config=program_config, compute_kernel_config=compute_kernel_config
         )
         tt_out.deallocate(True)
-        tt_out = ccl_allreduce(projected, self.mesh_config, self.ccl_manager)
+        tt_out = ccl_reduce_scatter_rows(projected, self.mesh_config, self.ccl_manager)
 
         return tt_out
