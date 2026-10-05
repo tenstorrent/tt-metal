@@ -415,12 +415,15 @@ class TtPrefillTransformer(LightweightModule):
             layer.set_trace_controller(controller)
 
     def release_sub_device_managers(self):
-        """Remove every MoE-created overlap sub-device manager before closing the mesh device.
-        Ensures none is loaded first (clear is idempotent). Leaving managers registered at mesh close
+        """Remove every MoE-created overlap sub-device manager and free the MTP SP-rank tensor before closing the
+        mesh device. Ensures none is loaded first (clear is idempotent). Leaving managers registered at mesh close
         has been observed to segfault the teardown. Safe/idempotent — call once at end of a run."""
         self.mesh_device.clear_loaded_sub_device_manager()
         for layer in self.layers:
             layer.release_sub_device_managers()
+        if self._mtp_sp_rank is not None:
+            ttnn.deallocate(self._mtp_sp_rank)
+            self._mtp_sp_rank = None
 
     def _to_host(self, tt_tensor):
         """Bring SP+TP sharded tensor to host as [1, seq, emb] bfloat16."""
