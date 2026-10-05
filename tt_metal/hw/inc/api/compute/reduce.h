@@ -169,8 +169,8 @@ ALWI void reduce_tile(
  * result of tile i to DST register slot `start_idst + i * idst_stride` (the default stride 1 gives each tile its own
  * slot, a stride of 0 accumulates the whole block into `start_idst`). This is the uniform block entry point for the
  * reduce op group: it has `reduce_tile`'s semantics and requires the same initialization (`reduce_init`) to have been
- * called first. The scaling-factor tile (`itile_scaler`) is reused for every tile in the block. The DST register
- * buffer must be in acquired state via *acquire_dst* call.
+ * called first. The scaling-factor tile (`itile_scaler`) is reused for every tile in the block. The `ntiles` tiles must
+ * not wrap around the end of the CB. The DST register buffer must be in acquired state via *acquire_dst* call.
  *
  * NOTE: On Blackhole the block is one LLK call per thread (one unpack context per chunk of tiles); the other
  * architectures loop over `reduce_tile`. Tracked under the Compute API Split effort (tt-metal#35739) and
