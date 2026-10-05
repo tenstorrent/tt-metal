@@ -18,8 +18,8 @@ import ttml
 
 from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.modules import RunMode
-from ttml.trainers.rollout import RolloutBatch
-from ttml.trainers.rollout.ttml_rollout_sampler import TTMLRolloutSampler
+from ttml.trainers.grpo_trainer import RolloutBatch
+from ttml.trainers.grpo_trainer.ttml_rollout_sampler import TTMLRolloutSampler
 
 
 HF_LLAMA_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"  # not gated

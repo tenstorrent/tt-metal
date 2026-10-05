@@ -24,14 +24,39 @@ from ttml.models.qwen3.weights import load_weights_from_hf
 from huggingface_hub import snapshot_download
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-from .base import RolloutBatch, RolloutSampler
-from .device_utils import async_read_to_host, deallocate_tensors
+from .grpo_trainer import RolloutBatch, RolloutSampler
 from .llama_composite_kv import LlamaCompositeKV
 
 TILE_SIZE = 32
 
 # Chunked async d2h readback cadence for stop-token detection during decode.
 CHUNK = 32
+
+
+def deallocate_tensors(tensors: Any) -> None:
+    if tensors is None:
+        return
+    if not isinstance(tensors, (list, tuple)):
+        tensors = [tensors]
+    for t in tensors:
+        if t is None:
+            continue
+        if isinstance(t, ttml.autograd.Tensor):
+            ttnn.deallocate(t.get_value(), force=True)
+        elif isinstance(t, ttnn.Tensor):
+            ttnn.deallocate(t, force=True)
+
+
+def async_read_to_host(tensors: List[Any], mesh_device: Any) -> Tuple[List[Any], Any]:
+    """Issue non-blocking d2h reads for ``tensors`` on the single command queue.
+
+    Returns ``(host_tensors, event)``. The caller must call
+    ``event_synchronize(event)`` before consuming ``host_tensors``; deallocating
+    the source ``tensors`` before then races with the in-flight DMA.
+    """
+    hosts = [t.cpu(blocking=False) for t in tensors]
+    done = ttnn.record_event(mesh_device=mesh_device, cq_id=0)
+    return hosts, done
 
 
 def load_checkpoint(model: Any, checkpoint_path: str, dp_mapper: Any = None) -> None:

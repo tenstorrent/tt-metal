@@ -13,7 +13,7 @@ Speed strategy:
   * Tiny random-init Llama (1 layer, hidden=64, head_dim=32).
   * Skip the HuggingFace weight download by monkey-patching
     ``snapshot_download`` and ``load_from_safetensors`` in
-    ``ttml.trainers.rollout.ttml_rollout_sampler`` to no-ops; the model keeps its random init.
+    ``ttml.trainers.grpo_trainer.ttml_rollout_sampler`` to no-ops; the model keeps its random init.
   * ``max_completion_length=4`` so autoregressive generation is cheap.
   * Exactly one optimizer step (``gradient_accumulation_steps=1``,
     ``num_iterations=1``, ``prompts_to_train=2``). On this single device
@@ -48,7 +48,7 @@ from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.modules import RunMode
 from ttml.trainers import GRPOConfig, GRPOTrainer, TrainerCallback, get_grpo_config
 from ttml.trainers.grpo_trainer import layout_microbatch, place_old_nlog_probs
-from ttml.trainers.rollout.ttml_rollout_sampler import TTMLRolloutSampler
+from ttml.trainers.grpo_trainer.ttml_rollout_sampler import TTMLRolloutSampler
 
 
 # The ``LlamaGRPOCompleter`` reference implementation lives under the examples
@@ -185,7 +185,7 @@ def patch_llama_weight_loading(monkeypatch):
     The sampler module binds both names with ``from ... import``, so they must be
     patched on that module, not on ``huggingface_hub`` / ``ttml.models.llama``.
     """
-    from ttml.trainers.rollout import ttml_rollout_sampler
+    from ttml.trainers.grpo_trainer import ttml_rollout_sampler
 
     monkeypatch.setattr(ttml_rollout_sampler, "snapshot_download", lambda *args, **kwargs: "/tmp/unused")
     monkeypatch.setattr(ttml_rollout_sampler, "load_from_safetensors", lambda *args, **kwargs: None)
@@ -533,7 +533,7 @@ def test_validate_clip_grad_norm_rejects_sharded_params(monkeypatch, expect_erro
     ],
 )
 def test_build_lr_scheduler_trajectory(lr_scheduler_type, warmup_steps, total_steps, min_lr_rate, expected):
-    from ttml.trainers.grpo_trainer import _build_lr_scheduler
+    from ttml.trainers.grpo_trainer.grpo_trainer import _build_lr_scheduler
 
     base_lr = 0.1
     opt = ttml.optimizers.create_optimizer({"type": "AdamW", "lr": base_lr}, ttml.NamedParameters())
