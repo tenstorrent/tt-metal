@@ -68,7 +68,7 @@ Stage the tree (with the hook) + the prebuilt shared ELF build to `/data`, write
 that lack a verdict one-per-line to `remaining.txt`, then submit ONE array:
 
     export OPS_LIST=.../remaining.txt \
-           OPS_TSV=... IDMAP=... BUILD=... VENV=... LLK_HOME=... PYDIR=... OUT=... \
+           OPS_TSV=... IDMAP=... FLAGS_TSV=... BUILD=... VENV=... LLK_HOME=... PYDIR=... OUT=... \
            SFPU_WAIT_TIMEOUT=600
     sbatch --array=1-$(wc -l < remaining.txt) --requeue --export=ALL -J run_op \
            -p <glx-partitions> --time=720 run_op_array.sh
@@ -87,6 +87,12 @@ op⇥sem_node⇥hand_node; `idmap` from `build_identity_gate.sh`).
 > serialized and ignored a wide-open cluster. The array has neither problem — one task owns
 > one op and one node and frees it on exit, and the Slurm scheduler does the fan-out and
 > refill. Do not reintroduce claims / work-stealing / a supervisor loop.
+
+For per-LLK tuning, `FLAGS_TSV` is `op<TAB>exact compiler flag string`.
+`galaxy_shard.sh` exports the matching string before invoking
+`--compile-consumer`; without it pytest computes the stock build key and cannot
+load an ELF staged under the selected configuration. The identity map still
+checks the resulting semantic and handwritten `.text` independently.
 
 ## Measured (BH silicon)
 ~2.5M patterns/s per chip ⇒ **~27.7 min/leg, ~55 min/op** full 2^32 on ONE chip (chunk size

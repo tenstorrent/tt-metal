@@ -32,6 +32,8 @@
 #     OPS_TSV    op<TAB>sem_node<TAB>hand_node   (as run_op.sh uses)
 #     IDMAP      op<TAB>sem_variant<TAB>sem_sha<TAB>hand_variant<TAB>hand_sha
 #                also forwarded to each slice, so the per-slice gate still runs
+#     FLAGS_TSV  op<TAB>exact compiler flag string. Required when the staged
+#                variants were built with per-op tuning selections.
 #
 # Examples:
 #   OUT=$EV FARM_ROOT=$F VENV=$V bash galaxy_shard.sh            # binarypow
@@ -118,6 +120,20 @@ fi
   echo "FATAL: no sem/hand nodes for '$OP' — set SEM and HAND, or pass OPS_TSV" >&2; exit 2; }
 [ -n "$SEM_VARIANT" ] && [ -n "$HAND_VARIANT" ] || {
   echo "FATAL: no build variants for '$OP' — set SEM_VARIANT and HAND_VARIANT, or pass IDMAP" >&2; exit 2; }
+
+# `--compile-consumer` recomputes the build key before loading a staged ELF.
+# The producer's exact flags therefore select the binary; they are not merely
+# provenance. Resolve them once and let the streamer's environment carry them
+# to pytest on every slice.
+if [ -n "${FLAGS_TSV:-}" ]; then
+  [ -f "$FLAGS_TSV" ] || { echo "FATAL: FLAGS_TSV does not exist: $FLAGS_TSV" >&2; exit 2; }
+  _flag_rows=$(awk -F'\t' -v o="$OP" '$1==o{n++} END{print n+0}' "$FLAGS_TSV")
+  [ "$_flag_rows" -eq 1 ] || {
+    echo "FATAL: FLAGS_TSV needs exactly one row for '$OP', found $_flag_rows" >&2; exit 2; }
+  TT_LLK_EXTRA_COMPILER_OPTIONS=$(awk -F'\t' -v o="$OP" \
+    '$1==o{sub(/^[^\t]*\t/, ""); print; exit}' "$FLAGS_TSV")
+  export TT_LLK_EXTRA_COMPILER_OPTIONS
+fi
 
 mkdir -p "$OUT" || { echo "FATAL: cannot create OUT=$OUT" >&2; exit 2; }
 echo "HOST=$(hostname) OP=$OP SWEEP=$SWEEP NPAR=$NPAR BAND_BITS=$BAND_BITS SPACE=$SPACE $(date -u +%H:%M:%SZ)" \

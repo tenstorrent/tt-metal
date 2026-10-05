@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 from functools import lru_cache
+import os
 from pathlib import Path
 import sys
 
@@ -54,6 +55,7 @@ def cache_record(script: Path, args, node: str, start: int, count: int, leg: str
         "node": node,
         "sem_node": args.sem_node,
         "hand_node": args.hand_node,
+        "compiler_options": os.environ.get("TT_LLK_EXTRA_COMPILER_OPTIONS", ""),
         "start": start,
         "count": count,
         "leg": leg,

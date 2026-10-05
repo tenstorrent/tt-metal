@@ -56,7 +56,9 @@ for a in ("--op", "--sem-node", "--hand-node", "--farm", "--venv", "--llk-home",
     ap.add_argument(a)
 ns = ap.parse_args()
 with open(os.environ["SHARD_RECORD"], "a") as fh:
-    fh.write(json.dumps(vars(ns)) + "\\n")
+    record = vars(ns)
+    record["compiler_options"] = os.environ.get("TT_LLK_EXTRA_COMPILER_OPTIONS", "")
+    fh.write(json.dumps(record) + "\\n")
 
 if ns.chip in os.environ.get("DEAD_CHIPS", "").split(","):
     sys.exit(3)
@@ -137,6 +139,10 @@ def run_shard(
     out.mkdir()
     record = work / "calls.jsonl"
     record.write_text("")
+    flags_value = env.pop("FLAGS_VALUE", None)
+    flags_tsv = work / "flags.tsv"
+    if flags_value is not None:
+        flags_tsv.write_text(f"myop\t{flags_value}\n")
     e = dict(os.environ)
     e.update(
         SHARD_RECORD=str(record),
@@ -153,6 +159,8 @@ def run_shard(
         VENV=str(farm.venv),
         OUT=str(out),
     )
+    if flags_value is not None:
+        e["FLAGS_TSV"] = str(flags_tsv)
     e.update({k: str(v) for k, v in env.items()})
     run = subprocess.run(
         ["bash", str(SHARD)], env=e, capture_output=True, text=True, timeout=600
@@ -242,6 +250,22 @@ def test_reduced_space_cannot_certify(tmp: Path) -> None:
         # The comparison did pass, so rc stays 0; the LABEL carries the coverage.
         assert rc == 0, f"space={space}: rc={rc} :: {last}"
     print("PASS a reduced SPACE reports PARTIAL, never ALL-INPUTS")
+
+
+def test_per_op_compiler_flags_reach_every_slice(tmp: Path) -> None:
+    flags = "-mtt-tensix-optimize-foo -mno-tt-tensix-optimize-bar"
+    rc, last, calls, _ = run_shard(
+        tmp,
+        "per-op-flags",
+        NPAR=4,
+        BAND_BITS=10,
+        SPACE=1 << 12,
+        FLAGS_VALUE=flags,
+    )
+    assert rc == 0, last
+    assert len(calls) == 4
+    assert {call["compiler_options"] for call in calls} == {flags}
+    print("PASS exact per-op compiler flags reach every slice")
 
 
 def test_divergence_is_reported_as_divergence(tmp: Path) -> None:
@@ -410,6 +434,7 @@ def main() -> int:
         test_exact_partition(root)
         test_partition_matrix(root)
         test_reduced_space_cannot_certify(root)
+        test_per_op_compiler_flags_reach_every_slice(root)
         test_divergence_is_reported_as_divergence(root)
         test_degenerate_geometries_refuse(root)
         test_dead_slice_is_not_covered(root)
