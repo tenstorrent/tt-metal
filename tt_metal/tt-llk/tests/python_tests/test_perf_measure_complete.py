@@ -100,3 +100,18 @@ def test_main_falls_back_to_the_results_when_the_jobs_cannot_be_read(tmp_path, c
     )
     out = capsys.readouterr().out
     assert "complete=false" in out and "::warning::" in out
+
+
+def test_a_skipped_leg_is_incomplete():
+    """A leg that did not run measured nothing, so its arch is not complete."""
+    jobs = [
+        _job("LLK perf tests / llk_perf_wormhole group 1/5 [wh_n150_civ2]", "skipped")
+    ]
+    assert not measure_complete("success", jobs, "wormhole")[0]
+
+
+def test_main_prints_how_many_legs_it_found(tmp_path, capsys):
+    jobs = tmp_path / "jobs.jsonl"
+    jobs.write_text("".join(json.dumps(j) + "\n" for j in _NIGHT))
+    main(["--arch", "blackhole", "--jobs", str(jobs)])
+    assert "legs=5" in capsys.readouterr().out

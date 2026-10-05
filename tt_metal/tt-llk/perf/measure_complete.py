@@ -67,6 +67,7 @@ def main(argv=None):
             )
     complete, reason = measure_complete(a.results, jobs, a.arch)
     print(f"complete={'true' if complete else 'false'}")
+    print(f"legs={len(legs_of(jobs or [], a.arch))}")
     print(f"reason={reason}")
     return 0
 

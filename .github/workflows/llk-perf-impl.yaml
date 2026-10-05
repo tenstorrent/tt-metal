@@ -200,20 +200,68 @@ jobs:
           include_passed: true
           annotate_only: true
 
+  warehouse-arches:
+    name: "Choose the arches to upload"
+    needs: [llk-perf-exec]
+    if: ${{ always() && inputs.upload-to-warehouse }}
+    runs-on: ubuntu-slim
+    outputs:
+      any: ${{ steps.choose.outputs.any }}
+      drop: ${{ steps.choose.outputs.drop }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+          sparse-checkout: tt_metal/tt-llk/perf
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.10'
+      - name: A baseline uploads only the arches whose legs all passed
+        id: choose
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PIPELINE: ${{ inputs.pipeline }}
+          EXEC_RESULT: ${{ needs.llk-perf-exec.result }}
+        run: |
+          # A gate compares against a baseline, so a missing shard means those points
+          # are not compared. One arch's lost leg must not keep the other arch out.
+          if [ "$PIPELINE" != baseline ] && [ "$PIPELINE" != merge_baseline ]; then
+            echo "any=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
+              --jq '.jobs[] | {name, conclusion} | @json' > jobs.jsonl; then
+            echo "::warning::Could not list this run's jobs, so the baseline uploads only if every leg passed."
+            echo "any=$([ "$EXEC_RESULT" = success ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          KEEP=""
+          DROP=""
+          for ARCH in blackhole wormhole quasar; do
+            OUT=$(python3 tt_metal/tt-llk/perf/measure_complete.py --arch "$ARCH" --jobs jobs.jsonl)
+            if grep -qx 'legs=0' <<< "$OUT"; then
+              continue
+            elif grep -qx 'complete=true' <<< "$OUT"; then
+              KEEP="$KEEP $ARCH"
+            else
+              DROP="$DROP $ARCH"
+              echo "::warning::The ${ARCH} baseline is not uploaded: $(sed -n 's/^reason=//p' <<< "$OUT")"
+            fi
+          done
+          echo "Upload:${KEEP:- nothing}. Leave out:${DROP:- nothing}."
+          echo "drop=${DROP# }" >> "$GITHUB_OUTPUT"
+          echo "any=$([ -n "$KEEP" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
   upload-perf-data:
     name: "Upload perf data to the warehouse"
-    needs: [build-images, llk-perf-exec]
+    needs: [build-images, llk-perf-exec, warehouse-arches]
     # always(): a night that lost shards still produced the ones that finished,
     # and partial coverage is real data. Publishing it is safe because the
     # merged run_id carries no attempt, so re-running the failed shards and
     # re-uploading replays over the partial night instead of adding a second.
-    # A baseline is different: a gate compares against it, and a missing shard
-    # means those points are not compared. So a baseline or a merge baseline is
-    # uploaded only when every shard passed.
-    if: >-
-      ${{ always() && inputs.upload-to-warehouse
-          && ((inputs.pipeline != 'baseline' && inputs.pipeline != 'merge_baseline')
-              || needs.llk-perf-exec.result == 'success') }}
+    # A baseline is different, see warehouse-arches.
+    if: ${{ always() && inputs.upload-to-warehouse && needs.warehouse-arches.outputs.any == 'true' }}
     runs-on: ubuntu-latest
     # The merge lives in helpers.perf.core, whose imports reach the device
     # libraries, so it needs the LLK python env. The test image has it.
@@ -231,6 +279,15 @@ jobs:
         with:
           pattern: perf-data-*
           path: perf-data
+      - name: Leave out the arches whose baseline is not complete
+        if: needs.warehouse-arches.outputs.drop != ''
+        env:
+          DROP: ${{ needs.warehouse-arches.outputs.drop }}
+        run: |
+          for ARCH in $DROP; do
+            rm -rf perf-data/perf-data-"$ARCH"-*
+            echo "Left out the ${ARCH} perf data."
+          done
       - name: Merge the run's shards into one file per architecture
         working-directory: ${{ env.LLK_PATH }}/tests/python_tests
         env:
