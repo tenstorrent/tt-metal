@@ -610,8 +610,11 @@ def test_dsv41_demo_session(mesh_device, device_params):
             spec = ab.split("|")[si % len(ab.split("|"))]
             for k in [k for k in os.environ if k.startswith("DSV41_PFA_") and k != "DSV41_PFA_AB"]:
                 del os.environ[k]
+            os.environ["DSV41_PREFILL_OPT"] = (
+                "1" if "OPT" in spec.split(",") else "0"
+            )  # umbrella flag (tt/pf_tune.py): token OPT
             for kv in spec.split(","):
-                if kv != "-":
+                if kv not in ("-", "OPT"):
                     os.environ[kv.split("=", 1)[0]] = kv.split("=", 1)[1]
             for _, (_, m, _) in cache.items():  # new capture of the chunk trace with the new flags
                 if getattr(m, "prefill_model", None) is not None:
