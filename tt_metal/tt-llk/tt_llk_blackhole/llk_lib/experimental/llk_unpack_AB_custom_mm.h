@@ -191,8 +191,7 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
  * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>. Only unpB_face_r_dim rows of each
  *                    SrcB face are unpacked, so zeroing the rest saves FPU power.
  * @param unpB_face_r_dim: Activation rows per face, 1, 2, 4 or 8. Sets unpacker 1's X end.
- * @param unpA_dst_format: Unpack destination format of the weights (SrcA); Bfp4_b selects a tuned sequence. Bfp2_b
- *                        weights are not supported here (compressed_custom_mm takes Bfp2_b tiles).
+ * @param unpA_dst_format: Unpack destination format of the weights (SrcA); Bfp4_b selects a tuned sequence.
  * @param ct_dim: Output width in tiles, 1 to 16.
  * @note Call this before @ref _llk_unpack_AB_custom_mm_, and again after any other op has run, in particular one
  *       that writes SrcB: the execute does not reprogram the MOP, and the SrcB clear happens only here.
@@ -201,8 +200,6 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
 template <bool transpose = false, bool clear_src = true>
 inline void _llk_unpack_AB_custom_mm_init_(const std::uint32_t unpB_face_r_dim, const std::uint32_t unpA_dst_format, const std::uint32_t ct_dim = 1)
 {
-    LLK_ASSERT(unpA_dst_format != to_underlying(DataFormat::Bfp2_b), "custom_mm (unpack): Bfp2_b weights are not supported");
-
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose ? 1 : 0);
 
     // UnpA unpacks full tiles

@@ -123,10 +123,6 @@ def _run_custom_mm(M, kt, ct, formats, dest_acc, calls=CUSTOM_MM_CALLS()):
     in0_format = formats.input_format
     in1_format = formats.input_format_B
     out_format = formats.output_format
-    if in1_format == DataFormat.Bfp2_b:
-        raise ValueError(
-            "Bfp2_b weights are not supported on the plain custom_mm path; compressed_custom_mm takes Bfp2_b tiles"
-        )
     in0_packer = _PACKERS[in0_format]
     in1_packer = _PACKERS[in1_format]
 
@@ -387,13 +383,29 @@ BFP2_CASES = [
         ),
         id="M1-k2-ct2-bfp2",
     ),
+    pytest.param(
+        8,
+        16,
+        8,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp2_b
+        ),
+        id="M8-k16-ct8-bfp2",
+    ),
+    pytest.param(
+        4,
+        9,
+        3,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp2_b
+        ),
+        id="M4-k9-ct3-bfp2",
+    ),
 ]
 
 
+@blackhole_only
 @pytest.mark.parametrize("M,kt,ct,formats", BFP2_CASES)
-def test_custom_mm_rejects_bfp2_in1(formats, M, kt, ct):
-    """The driver refuses Bfp2_b weights on the plain path, as the unpack init asserts; no hardware needed."""
-    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
-        ValueError, match="Bfp2_b weights are not supported"
-    ):
-        _run_custom_mm(M, kt, ct, formats, DestAccumulation.No)
+def test_custom_mm_bfp2_in1(formats, M, kt, ct):
+    """Bfp2_b weights on the plain (uncompressed) custom_mm path."""
+    _run_custom_mm(M, kt, ct, formats, DestAccumulation.No)

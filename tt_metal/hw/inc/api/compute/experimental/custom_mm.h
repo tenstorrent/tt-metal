@@ -33,7 +33,6 @@ namespace ckernel {
  * kt_dim: any integer from 1 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
- * in1 format: not Bfp2_b (compressed_custom_mm takes Bfp2_b tiles)
  *
  * Return value: None
  *
@@ -88,7 +87,6 @@ ALWI void custom_mm_block_init(
  * kt_dim: any integer from 1 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
- * in1 format: not Bfp2_b (compressed_custom_mm takes Bfp2_b tiles)
  *
  * Return value: None
  *
@@ -132,7 +130,6 @@ ALWI void custom_mm_block_init_short(
  * kt_dim: any integer from 1 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
- * in1 format: not Bfp2_b (compressed_custom_mm takes Bfp2_b tiles)
  *
  * Return value: None
  *
@@ -178,7 +175,6 @@ ALWI void custom_mm_block(
  * kt_dim: any integer from 1 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
- * in1 format: not Bfp2_b (compressed_custom_mm takes Bfp2_b tiles)
  *
  * Return value: None
  *
@@ -220,7 +216,6 @@ ALWI void custom_mm_block_unpack(
  * kt_dim: any integer from 1 to 256 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
- * in1 format: not Bfp2_b (compressed_custom_mm takes Bfp2_b tiles)
  *
  * Return value: None
  *
