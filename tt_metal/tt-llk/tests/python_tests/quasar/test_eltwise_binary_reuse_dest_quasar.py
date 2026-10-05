@@ -243,8 +243,8 @@ def test_eltwise_binary_reuse_dest_quasar(
             output_tiles_in_block=output_tiles_in_block,
             num_faces=num_faces,
             face_r_dim=face_r_dim,
-            # Keep Dest as it stood before the pack, so a failure can say
-            # whether the math or the packer produced the disagreement.
+            # Keep the golden's Dest as it stood before the pack, to show the
+            # expected intermediate value beside a packed-output mismatch.
             dest_out=golden_dest,
         )
 
