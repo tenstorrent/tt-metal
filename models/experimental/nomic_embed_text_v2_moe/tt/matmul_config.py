@@ -351,6 +351,7 @@ def dense_linear(
 def router_program_config(
     tokens: int,
     k_tiles: int,
+    n_tiles: int,
     activation_dtype: ttnn.DataType,
     weight_dtype: ttnn.DataType,
     output_dtype: ttnn.DataType,
@@ -358,9 +359,9 @@ def router_program_config(
     cb_bytes: int,
     compute_kernel_config,
 ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None:
-    """(1, 1, T, 768) x (768, 8), bf16 into fp32 weights: the fewest tile rows per core.
+    """(1, 1, T, 768) x (768, 32 n_tiles), bf16 into fp32 weights: the fewest tile rows per core.
 
-    N is a single tile, so only M can be spread; at T = 4096 that is two rows each on 64 cores.
+    N is a tile or two, so only M can be spread; at T = 4096 that is two rows each on 64 cores.
     The router takes the whole batch in one call, so a core's rows grow with T: K runs in blocks
     of 8 tiles while the buffers fit, fewer above, and past that ttnn picks its own config (None).
     """
@@ -371,7 +372,7 @@ def router_program_config(
             d
             for d in _divisors(k_tiles)
             if d <= 8
-            and _multicast_footprint(per_core_m, 1, d, activation_dtype, weight_dtype, output_dtype) <= cb_bytes
+            and _multicast_footprint(per_core_m, n_tiles, d, activation_dtype, weight_dtype, output_dtype) <= cb_bytes
         ),
         default=None,
     )
@@ -380,12 +381,13 @@ def router_program_config(
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=k_block,
-        out_subblock_h=_largest_divisor_at_most(per_core_m, dest_tiles(compute_kernel_config)),
-        out_subblock_w=1,
+        # A subblock as wide as the core's N share: narrower ones must be one tile tall.
+        out_subblock_h=_largest_divisor_at_most(per_core_m, dest_tiles(compute_kernel_config) // n_tiles),
+        out_subblock_w=n_tiles,
         out_block_h=per_core_m,
-        out_block_w=1,
+        out_block_w=n_tiles,
         per_core_M=per_core_m,
-        per_core_N=1,
+        per_core_N=n_tiles,
         fuse_batch=False,
         mcast_in0=False,
     )
