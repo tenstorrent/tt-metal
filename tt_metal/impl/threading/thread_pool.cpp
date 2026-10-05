@@ -383,7 +383,6 @@ public:
         release();
     }
 
-    // Runs `call` unless another thread has claimed it.
     void run_if_unclaimed(size_t call) noexcept {
         if (claims_[call].claimed.exchange(true, std::memory_order_acq_rel)) {
             return;
