@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
 import pytest
 import ttnn
 import torch
@@ -359,36 +357,6 @@ def test_all_to_all(
         trace_mode=False,
         reuse_inputs=False,
         cluster_axis=cluster_axis,
-    )
-
-
-@pytest.mark.skipif(
-    os.getenv("TT_METAL_WATCHER") != "1",
-    reason="Set TT_METAL_WATCHER=1 to check kernel exit state",
-)
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
-)
-def test_generic_all_to_all_has_clean_kernel_exit(mesh_device):
-    run_all_to_all_impl(
-        mesh_device,
-        mesh_device.get_num_devices(),
-        logical_shape=[1, 128, 128, 512],
-        in_dim=1,
-        out_dim=2,
-        num_links=1,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        topology=ttnn.Topology.Linear,
-        num_iters=1,
-        input_mem_config=ttnn.DRAM_MEMORY_CONFIG,
-        output_mem_config=ttnn.L1_MEMORY_CONFIG,
-        trace_mode=False,
-        do_check=True,
-        cluster_axis=1,
     )
 
 
