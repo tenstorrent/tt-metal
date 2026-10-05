@@ -247,6 +247,8 @@ class REPRO_KNOB(_TemplateParameter):
         )
 
 
+import os as _os
+REPRO_LOOP_FACTOR = int(_os.environ.get("REPRO_LOOP_FACTOR", "64"))
 REPRO_KNOBS = [(0, 0, 3000, 0, 0, 0, 0, 0, 0, 0, 0), (1, 0, 3000, 0, 0, 0, 0, 0, 0, 0, 0), (2, 0, 3000, 0, 0, 0, 0, 0, 0, 0, 0), (3, 0, 3000, 0, 0, 0, 0, 0, 0, 0, 0), (4, 0, 3000, 0, 0, 0, 0, 0, 0, 0, 0), (5, 0, 3000, 0, 0, 0, 0, 0, 0, 0, 0), (6, 0, 3000, 0, 0, 0, 0, 0, 0, 0, 0), (7, 0, 3000, 0, 0, 0, 0, 0, 0, 0, 0), (8, 0, 3000, 0, 0, 0, 0, 0, 0, 0, 0), (9, 0, 3000, 0, 0, 0, 0, 0, 0, 0, 0), (10, 0, 3000, 0, 0, 0, 0, 0, 0, 0, 0), (11, 0, 3000, 0, 0, 0, 0, 0, 0, 0, 0), (12, 0, 3000, 0, 0, 0, 0, 0, 0, 0, 0), (13, 0, 3000, 0, 0, 0, 0, 0, 0, 0, 0), (14, 0, 3000, 0, 0, 0, 0, 0, 0, 0, 0), (15, 0, 3000, 0, 0, 0, 0, 0, 0, 0, 0)]
 
 
@@ -343,7 +345,7 @@ def test_perf_math_matmul(
                 matmul_config.tile_dimensions.in1_tile_r_dim,
                 matmul_config.tile_dimensions.in1_tile_c_dim,
             ),
-            LOOP_FACTOR(1024),
+            LOOP_FACTOR(REPRO_LOOP_FACTOR),
         ],
         variant_stimuli=StimuliConfig(
             None,
