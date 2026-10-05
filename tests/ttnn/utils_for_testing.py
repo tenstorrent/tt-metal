@@ -35,13 +35,13 @@ def _exclusive_noc_debug_check():
 
 
 @contextlib.contextmanager
-def assert_no_unflushed_noc_atomics(device, *, min_atomic_events=1):
+def assert_no_unflushed_noc_atomics(device, *, min_atomic_events=1, sub_device_ids=None):
     """Check one isolated operation for recorded non-posted NoC atomics at its end.
 
     The check resets context-global debug state. The caller must own the context and must not run another mesh at the
     same time. It covers atomic increments recorded by the semaphore, remote-CB, and PrefetcherPipe APIs. It does not
     cover fabric packet atomics or Quasar compare-and-swap. It does not prove each internal kernel boundary in a
-    multi-kernel operation.
+    multi-kernel operation. Pass the active sub-device stall group in `sub_device_ids` when the operation uses one.
     """
     def add_exception_note(error, note):
         if hasattr(error, "add_note"):
@@ -53,7 +53,10 @@ def assert_no_unflushed_noc_atomics(device, *, min_atomic_events=1):
         if ttnn.is_trace_capture_active(device):
             raise RuntimeError("NoC debug checks cannot run during trace capture")
 
-        ttnn.synchronize_device(device)
+        if sub_device_ids is None:
+            ttnn.synchronize_device(device)
+        else:
+            ttnn.synchronize_device(device, sub_device_ids=sub_device_ids)
         ttnn.ReadDeviceProfiler(device)
         initial_state = ttnn._ttnn.device._get_noc_debug_state(device)
         if not initial_state["enabled"]:
@@ -77,7 +80,10 @@ def assert_no_unflushed_noc_atomics(device, *, min_atomic_events=1):
         finally:
             debug_error = None
             try:
-                ttnn.synchronize_device(device)
+                if sub_device_ids is None:
+                    ttnn.synchronize_device(device)
+                else:
+                    ttnn.synchronize_device(device, sub_device_ids=sub_device_ids)
                 ttnn.ReadDeviceProfiler(device)
                 final_state = ttnn._ttnn.device._get_noc_debug_state(device)
                 if final_state["pending_events"] != 0:
