@@ -375,7 +375,7 @@ void kernel_main() {
     }
 
     // Both config buffers are read through a raw pointer throughout the kernel rather than
-    // through the buffer object, so they are waited once up front and released here. Each pop
+    // through the buffer object, so they are waited once up front and popped here. Each pop
     // carries the same conditions as its wait.
     if constexpr (config_in_dram) {
         if (reader_id != 0) {

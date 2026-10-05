@@ -509,9 +509,12 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
             pack_init(dfb_ex2pe_id);
 #endif
+            // The reduction result above was packed into dfb_ex2 by this kernel. The loop below
+            // reads dfb_ex2 back by tile index across the whole count, so wait for the whole
+            // count.
+            dfb_ex2.wait_front(static_cast<uint16_t>(num_tiles_per_allgather_worker));
             for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
                 // 1/[sqrt(Var + eps)],
-                dfb_ex2.wait_front(1);
                 dfb_ex2pe.reserve_back(1);
                 tile_regs_acquire();
                 add_init(dfb_ex2_id, dfb_eps);
@@ -525,10 +528,9 @@ void kernel_main() {
                 dfb_ex2pe.push_back(1);
                 tile_regs_release();
             }
-            // Pop what the rsqrt loop above waited. enable_sqrt is the complement of the receiver
-            // kernel's condition for popping dfb_ex2, which the receiver kernel waits as its
-            // first-stage reduce buffer on the cores that are not the second-stage reader, so
-            // exactly one of the two kernels releases it.
+            // Pop the count that the wait above claimed. enable_sqrt is the complement of the
+            // condition under which the receiver kernel waits and pops dfb_ex2 as its first-stage
+            // reduce buffer, so exactly one of the two kernels pops dfb_ex2.
             dfb_ex2.pop_front(static_cast<uint16_t>(num_tiles_per_allgather_worker));
         }
     }
