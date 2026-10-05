@@ -72,6 +72,8 @@ def d2d_worker_cores(mesh_device) -> ttnn.CoreRange:
 
 
 LAYER_ACK_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_LAYER_ACK_FIFO_BYTES", 4 * 1024))
+# One metadata-only D2H socket page: the ack record padded to the PCIe alignment.
+LAYER_ACK_RECORD_BYTES = 64
 
 SHUTDOWN_METADATA_WORD = -1
 WARMUP_METADATA_WORD = -2
@@ -120,10 +122,6 @@ if MTP_LEVELS:
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
 _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 * 1024)) if USE_TRACE else 0
 
-assert not (MTP_LEVELS and USE_TRACE), (
-    "PREFILL_MTP_LEVELS>0 is incompatible with PREFILL_USE_TRACE=1: the MTP levels are not "
-    "trace-captured. Run MTP with PREFILL_USE_TRACE=0."
-)
 assert not (MTP_LEVELS and DFLASH_ENABLED), "PREFILL_MTP_LEVELS>0 and PREFILL_DFLASH=1 are mutually exclusive"
 
 # DFlash runs traced, and only traced. The eager drafter path is no longer a supported configuration:
@@ -362,7 +360,8 @@ def _forward_shutdown(d2d_out, rank: int, d2d_rows: int, d2d_width: int, planes:
 def _forward_send_warmup(runtime, d2d_out, rank: int) -> None:
     """Compile the traced send before this rank's capture; the next rank drops the record."""
     get_inputs = getattr(runtime, "send_warmup_inputs", None)
-    inputs = get_inputs((WARMUP_METADATA_WORD,) * 3) if get_inputs is not None and not MTP_LEVELS else None
+    words = (WARMUP_METADATA_WORD,) * 3 + ((0,) if MTP_LEVELS else ())
+    inputs = get_inputs(words) if get_inputs is not None else None
     if inputs is None:
         return
     activation, md_tensor = inputs
@@ -802,10 +801,16 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     if getattr(runtime, "layer_ack_layers", None) is not None:
         num_ack_layers, ack_local_count = runtime.layer_ack_layers(num_ack_layers, ack_local_count)
     if use_d2h:
+        fifo_size_bytes = LAYER_ACK_FIFO_SIZE_BYTES
+        if runtime.config.use_trace:
+            # The capture's warm pass fires a whole chunk's acks before any host reader exists. Acks
+            # that arrive while the FIFO is full overrun the reader kernel's exact-count write-ack
+            # wait, which then never matches again, so the FIFO must hold all of them.
+            fifo_size_bytes = max(fifo_size_bytes, 1 << (ack_local_count * LAYER_ACK_RECORD_BYTES - 1).bit_length())
         d2h_service = ttnn.D2HStreamService(
             mesh_device,
             global_spec=None,
-            fifo_size_bytes=LAYER_ACK_FIFO_SIZE_BYTES,
+            fifo_size_bytes=fifo_size_bytes,
             worker_cores=SYNC_WORKER_CORES,
             metadata_size_bytes=(CHUNK_METADATA_SIZE_BYTES if rank == 0 else D2D_METADATA_SIZE_BYTES),
         )
