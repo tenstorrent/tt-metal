@@ -625,7 +625,7 @@ def stallwait_wait_operand(text: str) -> str:
 CFG_DEFINES_REL = {
     "wormhole": "tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h",
     "blackhole": "tt_metal/hw/inc/internal/tt-1xx/blackhole/cfg_defines.h",
-    "quasar": "tt_metal/tt-llk/tt_llk_quasar/common/inc/cfg_defines.h",
+    "quasar": "tt_metal/tt-llk/tt_llk_quasar/common/inc/cfg_defines_base.h",
 }
 
 # NAME -> integer literal (decimal OR hex), tolerating an integer-suffix

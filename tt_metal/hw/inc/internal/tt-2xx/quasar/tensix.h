@@ -296,7 +296,7 @@ end
 /////////////
 // Instruction macro definitions
 // Consult instruction documentation in tt_llk_quasar/instructions/assembly.yaml
-// Alternatively, see instruction macro definitions in tt_llk_quasar/common/inc/ckernel_ops.h
+// Alternatively, see instruction macro definitions in tt_llk_quasar/common/inc/ckernel_ops_base.h
 /////////////
 
 #define TENSIX_UNHALT_VAL \

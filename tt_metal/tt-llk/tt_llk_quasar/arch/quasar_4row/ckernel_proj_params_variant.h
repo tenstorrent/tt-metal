@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-// Quasar variant with a 4-row FPU. Start from the base Quasar parameters and override what differs.
-#include "../../common/inc/ckernel_proj_params.h"
+// Quasar variant with a 4-row FPU.
 
 #undef MATH_ROWS
 #define MATH_ROWS 0x00000004 // = 4 in decimal
