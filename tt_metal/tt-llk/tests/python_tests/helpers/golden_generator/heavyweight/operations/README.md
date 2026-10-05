@@ -229,7 +229,7 @@ read), `into` (slot written), `index` (which entry of `cfg.in_formats` applies).
 |---|---|---|
 | `l1_to_srcA(cfg, source="in0", into="srcA", index=0, src_format=None)` | `in0` → `srcA` | `src_format` overrides the storage format the unpacker lands it in; `None` lets the architecture choose. |
 | `l1_to_srcB(cfg, source="in1", into="srcB", index=1, src_format=None)` | `in1` → `srcB` | |
-| `l1_to_srcS(cfg, source="in0", into="srcS", index=0, src_format=None)` | `in0` → `srcS` | Buffer must have been packed with `use_srcs=True`. |
+| `l1_to_srcS(cfg, source="in0", into="srcS", index=0, src_format=None)` | `in0` → `srcS` | Buffer must have been packed with `use_srcs=True`. SrcS's own format rules apply, with `dest_acc` taken from the width of `cfg.dest_format`. |
 | `l1_to_dest(cfg, source="in0", into="dest", index=0)` | `in0` → `dest` | Seeds Dest from L1, bypassing the src registers, so it keeps more mantissa. |
 | `dest_to_srcA(cfg, source="dest", into="srcA", src_format=None)` | `dest` → `srcA` | Re-quantizes to a 19-bit datum. Conversion is driven by the **Dest** format. |
 | `dest_to_srcB(cfg, source="dest", into="srcB", src_format=None)` | `dest` → `srcB` | |
