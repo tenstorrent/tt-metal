@@ -15,8 +15,8 @@ Recipes are qualified on Blackhole only, so on other architectures ``resolve_pre
 
 Recipe blocking is op-selected: a recipe config
 carries only the caller's grid and leaves ``q_chunk_size``/``k_chunk_size`` at 0, and SDPA chooses the
-chunks (and, for exp ring, the grid width) from the shape, recipe, op, grid and L1. Exp ring joint SDPA
-recipes are D128 only.
+chunks (and, for exp ring, the grid width) from the shape, recipe, op, grid and L1. The tt_dit models use
+exp ring joint SDPA at D128 only (see exp_ring_supports).
 """
 
 from __future__ import annotations
@@ -84,7 +84,12 @@ def validate_recipe_args(
 
 
 def exp_ring_supports(head_dim: int) -> bool:
-    """Exp ring recipes are D128 only; other head dims must use ring joint SDPA."""
+    """Whether a model may route this head dim to exp ring joint SDPA.
+
+    FAST's legacy exp ring kernel is D128 (K512) only; the other recipes accept any recipe head dim, but the
+    models gate exp ring on D128 for every recipe (their exp ring callers are D128). Other head dims use ring
+    joint SDPA.
+    """
     return head_dim in EXP_RING_HEAD_DIMS
 
 
