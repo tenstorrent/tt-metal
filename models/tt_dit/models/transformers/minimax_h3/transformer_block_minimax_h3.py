@@ -144,9 +144,6 @@ class MiniMaxH3TransformerBlock(Module):
             packer_l1_acc=True,
         )
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
-        self._adaln_gather = os.environ.get("MINIMAX_H3_ADALN_GATHER", "matmul")
-        if self._adaln_gather not in ("matmul", "tilerow"):
-            raise ValueError(f"MINIMAX_H3_ADALN_GATHER={self._adaln_gather!r}: expected 'matmul' or 'tilerow'")
         self._fold_norm_weight = os.environ.get("MINIMAX_H3_FOLD_NORM_WEIGHT", "1") == "1"
         self._eye_tables: dict[int, ttnn.Tensor] = {}
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
@@ -250,9 +247,10 @@ class MiniMaxH3TransformerBlock(Module):
     def tilerow_tables(
         self, tile_map: ttnn.Tensor | None, expanded_indices: ttnn.Tensor | None, num_timesteps: int
     ) -> tuple[ttnn.Tensor, ttnn.Tensor] | None:
-        """`(tile_map, selector)` shared by every block of a forward under MINIMAX_H3_ADALN_GATHER=tilerow, else None;
-        `selector @ table` is the expanded table; its tile row `tile_map[r]` is tile row `r` of the gather."""
-        if self._adaln_gather != "tilerow" or tile_map is None or expanded_indices is None:
+        """`(tile_map, selector)` shared by every block of a forward when the caller built a tile-row map, else None
+        (the norms then take the per-token gather); `selector @ table` is the expanded table whose tile row
+        `tile_map[r]` is tile row `r` of the gather."""
+        if tile_map is None or expanded_indices is None:
             return None
         return tile_map, self._onehot(self._gather_indices(expanded_indices), num_timesteps * MODALITY_NUM)
 

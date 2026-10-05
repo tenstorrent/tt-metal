@@ -368,7 +368,8 @@ class MiniMaxH3Transformer3DModel(Module):
         rope_cos/rope_sin: [1, 1, S_padded_local, rotary_dim] float32, same order, replicated on TP
         logical_n: the true packed length `L + K + A + V` as a [1, 1, 1, 1] uint32 device tensor.
         pad_to: the padded packed length; keys the trace (one capture per `pad_to`).
-        adaln_tile_map / adaln_expanded_indices: `adaln_tilerow.tilerow_remap` tables, sharded on SP (tilerow gather).
+        adaln_tile_map / adaln_expanded_indices: `adaln_tilerow.tilerow_remap` tables, sharded on SP; the norms read
+            their modulation through the tile-row map. `None` (no map for this request) means the per-token gather.
 
         Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .], target rows only.
         """
@@ -474,11 +475,6 @@ class MiniMaxH3Transformer3DModel(Module):
         if tilerow is not None:
             ttnn.deallocate(tilerow[1])
         return hidden
-
-    @property
-    def adaln_tilerow(self) -> bool:
-        """Whether forward wants `adaln_tile_map` / `adaln_expanded_indices` (MINIMAX_H3_ADALN_GATHER=tilerow)."""
-        return self.transformer_blocks[0]._adaln_gather == "tilerow"
 
     def release_traces(self) -> None:
         """Release every captured `run_blocks` trace, across all `tracer_trace_key` buckets."""

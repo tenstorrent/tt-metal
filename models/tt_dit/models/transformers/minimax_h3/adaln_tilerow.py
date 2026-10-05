@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-side index tables for `MINIMAX_H3_ADALN_GATHER=tilerow`: the fused norm reads tile row `tile_map[r]` of a
+"""Host-side index tables for the adaLN tile-row gather: the fused norm reads tile row `tile_map[r]` of a
 small expanded table (one row per table row, then one per tile straddling a run boundary) for input tile row `r`;
 `onehot(expanded_indices) @ table` builds that table, so every tile the norm reads holds the per-token bits."""
 

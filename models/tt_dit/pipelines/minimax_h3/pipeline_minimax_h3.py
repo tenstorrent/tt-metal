@@ -1250,9 +1250,6 @@ class MiniMaxH3Pipeline:
             mesh_device=self.mesh_device,
             get_torch_state_dict=lambda: self._read_safetensors(self.transformer_subfolder),
         )
-        if os.environ.get("MINIMAX_H3_ADALN_GATHER") is None and is_blackhole():
-            for block in self._transformer.transformer_blocks:
-                block._adaln_gather = "tilerow"
         return self._transformer
 
     @property
@@ -2442,26 +2439,27 @@ class MiniMaxH3Pipeline:
 
         row_adaln = adaln_indices(layout.token_tags, row_slot)
         state.adaln.update(self._row_indices(row_adaln, rung), traced=traced)
+        # The norms read their modulation through a per-tile-row map built once per request; a request with more
+        # run-boundary tiles than the map has slots falls back to the per-token one-hot gather.
         tilerow_kwargs = {}
-        if transformer.adaln_tilerow:
-            padded_adaln = torch.cat([row_adaln, torch.zeros(rung - row_adaln.shape[0], dtype=row_adaln.dtype)])
-            try:
-                tile_map, expanded = tilerow_remap(
-                    padded_adaln,
-                    num_rows=len(slot_roles) * MINIMAX_H3_MODALITY_NUM,
-                    sp_factor=self.sp_factor,
-                    max_mixed_tiles=int(os.environ.get("MINIMAX_H3_ADALN_MIXED_TILES", DEFAULT_MAX_MIXED_TILES)),
-                )
-            except ValueError as err:
-                self._log(f"adaLN tile-row map not used for this request ({err}); per-token gather instead")
-                tile_map = None
-            if tile_map is not None:
-                state.adaln_tile_map.update(self._row_indices(tile_map, tile_map.shape[0]), traced=traced)
-                state.adaln_expanded.update(self._row_indices(expanded, expanded.shape[0]), traced=traced)
-                tilerow_kwargs = {
-                    "adaln_tile_map": state.adaln_tile_map.value,
-                    "adaln_expanded_indices": state.adaln_expanded.value,
-                }
+        padded_adaln = torch.cat([row_adaln, torch.zeros(rung - row_adaln.shape[0], dtype=row_adaln.dtype)])
+        try:
+            tile_map, expanded = tilerow_remap(
+                padded_adaln,
+                num_rows=len(slot_roles) * MINIMAX_H3_MODALITY_NUM,
+                sp_factor=self.sp_factor,
+                max_mixed_tiles=int(os.environ.get("MINIMAX_H3_ADALN_MIXED_TILES", DEFAULT_MAX_MIXED_TILES)),
+            )
+        except ValueError as err:
+            self._log(f"adaLN tile-row map not used for this request ({err}); per-token gather instead")
+            tile_map = None
+        if tile_map is not None:
+            state.adaln_tile_map.update(self._row_indices(tile_map, tile_map.shape[0]), traced=traced)
+            state.adaln_expanded.update(self._row_indices(expanded, expanded.shape[0]), traced=traced)
+            tilerow_kwargs = {
+                "adaln_tile_map": state.adaln_tile_map.value,
+                "adaln_expanded_indices": state.adaln_expanded.value,
+            }
         state.tsi.update(self._row_indices(row_slot, rung), traced=traced)
         state.assembly_idx.update(
             self._assembly_indices(condition_spec, caps, l_len, a_target, v_target, rung), traced=traced

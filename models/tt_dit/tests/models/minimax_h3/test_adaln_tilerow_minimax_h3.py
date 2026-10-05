@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only exactness check for MINIMAX_H3_ADALN_GATHER=tilerow (no device): reading tile row tile_map[r] of the
+"""Host-only exactness check for the adaLN tile-row gather (no device): reading tile row tile_map[r] of the
 expanded table, page by page as the fused norm's reader does, reproduces the per-token gather bit for bit."""
 
 import pytest
