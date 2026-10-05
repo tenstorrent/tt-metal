@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <limits>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -142,6 +144,18 @@ TEST(ThreadPoolTest, ParallelForException) {
     // The other calls still ran, and the pool is usable afterwards.
     EXPECT_EQ(runs.load(), device_ids.size());
     thread_pool->parallel_for(device_ids, [](size_t) {});
+}
+
+// An unknown device id throws before any call runs, and the pool stays usable.
+TEST(ThreadPoolTest, ParallelForUnknownDevice) {
+    auto thread_pool = create_pool_per_device();
+    std::atomic<uint32_t> runs = 0;
+    std::vector<uint32_t> unknown = {0, std::numeric_limits<uint32_t>::max()};
+    EXPECT_THROW(thread_pool->parallel_for(unknown, [&runs](size_t) { runs++; }), std::out_of_range);
+    EXPECT_EQ(runs.load(), 0u);
+    auto device_ids = one_call_per_device(1);
+    thread_pool->parallel_for(device_ids, [&runs](size_t) { runs++; });
+    EXPECT_EQ(runs.load(), device_ids.size());
 }
 
 TEST(ThreadPoolTest, ParallelForEmpty) {
