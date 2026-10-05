@@ -119,16 +119,19 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_exp2() {
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
-
-        if constexpr (is_fp32_dest_acc_en) {
+    if constexpr (is_fp32_dest_acc_en) {
+#pragma GCC unroll 2
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat v = sfpi::dst_reg[0];
             sfpi::dst_reg[0] = _sfpu_exp2_fp32_accurate_(v);
-        } else {
-            sfpi::dst_reg[0] = _sfpu_exp2_bf16_(v);
+            sfpi::dst_reg++;
         }
-
-        sfpi::dst_reg++;
+    } else {
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat v = sfpi::dst_reg[0];
+            sfpi::dst_reg[0] = _sfpu_exp2_bf16_(v);
+            sfpi::dst_reg++;
+        }
     }
 }
 
