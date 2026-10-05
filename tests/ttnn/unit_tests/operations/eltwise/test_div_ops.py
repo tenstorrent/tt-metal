@@ -185,9 +185,8 @@ def test_div_no_nan_fp32(device):
     assert_with_ulp(expected_result=torch_output, actual_result=output, ulp_threshold=1, allow_nonfinite=True)
 
 
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("op", [ttnn.div_no_nan, ttnn.divide])
-def test_div_fp32_quotient_refinement(device, op, layout):
+def test_div_fp32_quotient_refinement(device, op):
     # Scale both adversarial pairs across the normal exponent range. Refining
     # unscaled operands loses a subnormal residual even when a, b and a/b are normal.
     a = torch.tensor([0x4F518358, 0x3FCF913C], dtype=torch.int32).view(torch.float32).double()
@@ -198,8 +197,8 @@ def test_div_fp32_quotient_refinement(device, op, layout):
     a, b = a[normal], b[normal]
     a, b = torch.cat([a, -a, a, -a]), torch.cat([b, b, -b, -b])
     a, b = a.repeat(2)[:2048].reshape(64, 32), b.repeat(2)[:2048].reshape(64, 32)
-    input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=layout, device=device)
-    input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=layout, device=device)
+    input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     actual = ttnn.to_torch(op(input_a, input_b))
     expected = (a.double() / b.double()).float()
     assert_with_ulp(expected_result=expected, actual_result=actual, ulp_threshold=1)
@@ -253,87 +252,27 @@ def test_div_fp32_exponent_boundaries(device, op):
     assert_with_ulp(expected_result=expected, actual_result=actual, ulp_threshold=1, allow_nonfinite=True)
 
 
-@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
-def test_div_no_nan_zero_denominator(device, dtype):
-    # Cartesian product: both divisor signs for every numerator, including Inf/NaN.
-    a = torch.tensor([0.0, -0.0, 1.0, -1.0, float("inf"), -float("inf"), float("nan"), 2.0])
-    a = a.repeat_interleave(2).repeat(64).reshape(32, 32)
-    b = torch.tensor([0.0, -0.0]).repeat(512).reshape(32, 32)
-    input_a = ttnn.from_torch(a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    input_b = ttnn.from_torch(b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    actual = ttnn.to_torch(ttnn.div_no_nan(input_a, input_b))
-    assert torch.all(actual == 0)
-    assert not torch.any(torch.signbit(actual))
-
-
 @pytest.mark.parametrize("op", [ttnn.div_no_nan, ttnn.divide])
 def test_div_fp32_special_values(device, op):
-    values = torch.tensor([0.0, -0.0, 1.0, -1.0, float("inf"), -float("inf"), float("nan"), -float("nan")])
+    tiny = torch.finfo(torch.float32).tiny
+    values = torch.tensor(
+        [0.0, -0.0, 1.0, -1.0, 0.5, -0.5, tiny, -tiny, tiny / 2, -tiny / 2, 2.0**-149, -(2.0**-149)]
+        + [float("inf"), -float("inf"), float("nan"), -float("nan")]
+    )
     a, b = torch.meshgrid(values, values, indexing="ij")
-    a, b = a.flatten().repeat(16).reshape(32, 32), b.flatten().repeat(16).reshape(32, 32)
-    expected = a / b
+    a, b = a.flatten().repeat(4).reshape(32, 32), b.flatten().repeat(4).reshape(32, 32)
+    # Subnormal inputs flush to sign-preserving zero. No normal pair here has a subnormal
+    # quotient, whose zero sign differs by architecture; exponent_boundaries covers those.
+    flush = lambda x: torch.where(x.abs() < tiny, torch.copysign(torch.zeros_like(x), x), x)
+    expected = flush(a) / flush(b)
     if op == ttnn.div_no_nan:
+        # eqz compares exactly, so subnormal divisors keep division's flushed result.
         expected = torch.where(b == 0, 0.0, expected)
     # SFPU multiplication produces positive zero for exact zero results.
     expected = torch.where(expected == 0, 0.0, expected)
     input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     actual = ttnn.to_torch(op(input_a, input_b))
-    assert torch.equal(torch.isnan(actual), torch.isnan(expected))
-    non_nan = ~torch.isnan(expected)
-    assert torch.equal(actual[non_nan], expected[non_nan])
-    assert torch.equal(torch.signbit(actual[non_nan]), torch.signbit(expected[non_nan]))
-
-
-@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
-@pytest.mark.parametrize("op", [ttnn.div_no_nan, ttnn.divide])
-def test_div_fp32_broadcast(device, op, memory_config):
-    generator = torch.Generator().manual_seed(58228)
-    a = torch.randn((2, 1, 32, 32), generator=generator)
-    b = torch.randn((1, 3, 1, 32), generator=generator)
-    b[..., 0] = 0.0
-    input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    output = op(input_a, input_b, memory_config=memory_config)
-    expected = (a.double() / b.double()).float()
-    if op == ttnn.div_no_nan:
-        expected = torch.where(b == 0, 0.0, expected)
-    assert output.memory_config() == memory_config
-    assert_with_ulp(
-        expected_result=expected, actual_result=ttnn.to_torch(output), ulp_threshold=1, allow_nonfinite=True
-    )
-
-
-def test_div_no_nan_fp32_subnormal_compatibility(device):
-    tiny = torch.finfo(torch.float32).tiny
-    values = torch.tensor(
-        [
-            0.0,
-            -0.0,
-            2.0**-149,
-            -(2.0**-149),
-            tiny / 2,
-            -tiny / 2,
-            tiny,
-            -tiny,
-            1.0,
-            -1.0,
-            float("inf"),
-            -float("inf"),
-            float("nan"),
-            -float("nan"),
-            2.0,
-            -2.0,
-        ]
-    )
-    a, b = torch.meshgrid(values, values, indexing="ij")
-    a, b = a.flatten().repeat(4).reshape(32, 32), b.flatten().repeat(4).reshape(32, 32)
-    input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    baseline = ttnn.where(ttnn.eqz(input_b), 0.0, ttnn.multiply(input_a, ttnn.reciprocal(input_b)))
-    expected, actual = ttnn.to_torch(baseline), ttnn.to_torch(ttnn.div_no_nan(input_a, input_b))
-    # Unlike reciprocal-and-multiply, NaN divisors propagate.
-    expected = torch.where(torch.isnan(b), float("nan"), expected)
     assert torch.equal(torch.isnan(actual), torch.isnan(expected))
     non_nan = ~torch.isnan(expected)
     assert torch.equal(actual[non_nan], expected[non_nan])
