@@ -61,7 +61,7 @@ def test_cache_key_covers_semantic_config_and_placement(tmp_path: Path) -> None:
             case_path,
             "layer_0.kda",
             config,
-            object(),
+            (1, 1),
             tensor_parallel_axis=tensor_parallel_axis,
         )
         names[case] = _cache_artifact_names(case_path)
@@ -73,7 +73,7 @@ def test_cache_key_covers_semantic_config_and_placement(tmp_path: Path) -> None:
 
 def test_missing_cache_is_incomplete(tmp_path: Path) -> None:
     assert not KDAWeights.check_cache_complete(
-        tmp_path / "missing", "layer_0.kda", make_small_kda_test_config(), object()
+        tmp_path / "missing", "layer_0.kda", make_small_kda_test_config(), (1, 1)
     )
 
 
@@ -84,14 +84,14 @@ def test_weight_loader_rejects_empty_source_weights(expect_error) -> None:
 
 def test_cache_build_requires_source_weights(tmp_path: Path, expect_error) -> None:
     with expect_error(ValueError, "requires a state_dict"):
-        KDAWeights.build_ttnn_cache(None, tmp_path, "layer_0.kda", make_small_kda_test_config(), object())
+        KDAWeights.build_ttnn_cache(None, tmp_path, "layer_0.kda", make_small_kda_test_config(), (1, 1))
 
 
 @pytest.mark.use_module_device
 def test_cache_only_load_rejects_corrupt_tensor(device: ttnn.Device, tmp_path: Path, expect_error) -> None:
     config = make_small_kda_test_config()
     cache_prefix = "layer_0.kda"
-    KDAWeights.build_ttnn_cache(random_weights(config), tmp_path, cache_prefix, config, device)
+    KDAWeights.build_ttnn_cache(random_weights(config), tmp_path, cache_prefix, config, (1, 1))
     next(tmp_path.glob("*.tensorbin")).write_bytes(b"corrupt")
 
     with expect_error(RuntimeError, "too small"):
@@ -104,7 +104,7 @@ def test_cached_and_in_memory_layers_match(device: ttnn.Device, tmp_path: Path) 
     state_dict = random_weights(config)
     hidden = torch.randn(1, 32, config.hidden_size, generator=torch.Generator().manual_seed(151), dtype=torch.bfloat16)
     cache_prefix = "layer_0.kda"
-    KDAWeights.build_ttnn_cache(state_dict, tmp_path, cache_prefix, config, device)
+    KDAWeights.build_ttnn_cache(state_dict, tmp_path, cache_prefix, config, (1, 1))
 
     in_memory_layer = ttKDA(device, config, state_dict, active_seq_len=32)
     cached_layer = ttKDA(

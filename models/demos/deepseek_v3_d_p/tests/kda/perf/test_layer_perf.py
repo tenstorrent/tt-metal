@@ -13,25 +13,17 @@ from functools import partial
 from pathlib import Path
 
 import pytest
-import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric_1d_device_params,
     torus_xy_device_params,
     tp_axis_is_wrapped,
 )
-from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
-from models.demos.deepseek_v3_d_p.tests.kda.utils import (
-    KimiK3TestCase,
-    check_kimi_k3_accuracy,
-    deallocate_state,
-    make_kimi_k3_device_case,
-    make_kimi_k3_test_case,
-    make_synthetic_kimi_k3_test_case,
-)
+from models.demos.deepseek_v3_d_p.tests.kda.cases import build_kda_case, make_kda_device_case, registered_kda_case
+from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import cpu_references
+from models.demos.deepseek_v3_d_p.tests.kda.utils import check_kimi_k3_accuracy, deallocate_state
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
@@ -55,24 +47,6 @@ _PERF_REFERENCE_MS = {
     "SP4xTP2": 9.991,
 }
 _GALAXY_PERF_REFERENCE_MS = 3.690
-
-
-@pytest.fixture(scope="session")
-def kimi_k3_production_reference(
-    kimi_k3_checkpoint_dir: Path,
-) -> Callable[[], tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float]]:
-    """Return a lazy loader for the session-cached production-length CPU oracle."""
-    cached_reference: tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float] | None = None
-
-    def load() -> tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float]:
-        nonlocal cached_reference
-        if cached_reference is None:
-            case = make_kimi_k3_test_case(kimi_k3_checkpoint_dir, sequence=_SEQUENCE)
-            golden_output, golden_state, elapsed = load_or_compute_cpu_reference(case)
-            cached_reference = case, golden_output, golden_state, elapsed
-        return cached_reference
-
-    return load
 
 
 def _perf_reference_ms(layout: str) -> float:
@@ -193,7 +167,7 @@ def _trace_wall_samples_ms(
 def test_kimi_k3_layer_1_perf(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
-    kimi_k3_production_reference: Callable[[], tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float]],
+    kimi_k3_checkpoint_dir: Path,
 ) -> None:
     """Compare production geometry with an independent CPU oracle before timing it."""
     sequence = _SEQUENCE
@@ -202,12 +176,12 @@ def test_kimi_k3_layer_1_perf(
     layout = f"SP{mesh_shape[sequence_parallel_axis]}xTP{mesh_shape[tensor_parallel_axis]}"
     repetitions = _REPETITIONS
     reference_ms = _perf_reference_ms(layout)
-    case, golden_output, golden_state, cpu_reference_seconds = kimi_k3_production_reference()
-    layer, hidden_tt = make_kimi_k3_device_case(
-        mesh_device,
-        case,
-        tensor_parallel_axis=tensor_parallel_axis,
+    case = build_kda_case(
+        registered_kda_case("real", mesh_shape, tensor_parallel_axis, sequence), kimi_k3_checkpoint_dir
     )
+    (reference,) = cpu_references(case)
+    golden_output, golden_state, cpu_reference_seconds = reference.output, reference.state, reference.seconds
+    layer, hidden_tt = make_kda_device_case(mesh_device, case)
 
     initial_state = _allocate_state(layer)
     start = time.perf_counter()
@@ -218,7 +192,7 @@ def test_kimi_k3_layer_1_perf(
     try:
         pcc = check_kimi_k3_accuracy(
             f"Kimi-K3 layer 1 T={sequence} {layout}",
-            case,
+            case.config,
             golden_output,
             golden_state,
             state,
@@ -235,7 +209,7 @@ def test_kimi_k3_layer_1_perf(
     validate_trace_replay = partial(
         check_kimi_k3_accuracy,
         f"Kimi-K3 layer 1 T={case.hidden.shape[1]} {layout} trace replay",
-        case,
+        case.config,
         golden_output,
         golden_state,
         mesh_device=mesh_device,
@@ -308,13 +282,8 @@ def test_synthetic_kimi_k3_perf(
     sequence_parallel_axis = 1 - tensor_parallel_axis
     layout = f"SP{mesh_shape[sequence_parallel_axis]}xTP{mesh_shape[tensor_parallel_axis]}"
     reference_ms = _synthetic_perf_reference_ms(layout)
-    case = make_synthetic_kimi_k3_test_case(sequence=_SEQUENCE)
-    layer, hidden_tt = make_kimi_k3_device_case(
-        mesh_device,
-        case,
-        tensor_parallel_axis=tensor_parallel_axis,
-        cache_weights=False,
-    )
+    case = build_kda_case(registered_kda_case("synthetic", mesh_shape, tensor_parallel_axis, _SEQUENCE))
+    layer, hidden_tt = make_kda_device_case(mesh_device, case)
     samples_ms, _ = _trace_wall_samples_ms(mesh_device, layer, hidden_tt, _REPETITIONS)
     median_wall_ms = statistics.median(samples_ms)
     result = {

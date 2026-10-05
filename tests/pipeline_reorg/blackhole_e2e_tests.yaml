@@ -176,7 +176,7 @@
     exit_code=0
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/huggingface/hub/models--deepseek-ai--DeepSeek-R1-0528
     pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and ((fabric2d-mesh-4x2 or fabric2d-mesh-2x4 or fabric2d-2x4) or not (moe_gate_prefill2d or moe_routing_setup or ttnn_moe)) and not (ttnn_moe and kimi and perf) and not pad50 and (not hca or (flash and chunk5120-varying))" --timeout 1800 || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP2xTP4" -vvv --tb=short || exit_code=$?
+    KDA_CACHE_MISS=compute pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP2xTP4" -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "fabric2d-mesh-2x4-2link and layer0 and device" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
@@ -215,7 +215,7 @@
     # Dispatch/combine perf remains disabled pending issue #47287.
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py::test_deepseek_v3_moe_perf_loudbox -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_2x4" -vvv --tb=short || exit_code=$?
-    KDA_PERF_SKU=bh_loudbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP2xTP4" -vvv --tb=short || exit_code=$?
+    KDA_PERF_SKU=bh_loudbox KDA_CACHE_MISS=compute pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP2xTP4" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
     bh_loudbox:

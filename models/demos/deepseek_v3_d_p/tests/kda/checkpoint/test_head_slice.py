@@ -12,6 +12,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_3_flash_config import glm_5_3_
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
+from models.demos.deepseek_v3_d_p.tests.kda.cases import KDA_CASES
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
     GLM_5_3_FLASH_FIRST_KDA_LAYER,
     load_kda_layer_state_dict,
@@ -21,7 +22,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.head_slice import (
     kda_head_slice_config,
     slice_kda_heads,
 )
-from models.demos.deepseek_v3_d_p.tests.kda.utils import make_kimi_k3_test_case, random_weights
+from models.demos.deepseek_v3_d_p.tests.kda.utils import random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.weights import _prepare_kda_host_weights
 
 _TP = 4
@@ -201,12 +202,12 @@ def test_lb_b_chip_config_rejects_indivisible_heads(expect_error) -> None:
 
 def test_kimi_k3_layer_slice_is_tp_rank_partial(kimi_k3_checkpoint_dir: Path) -> None:
     """Real K3 layer 1 (local only): the LB-B quarter slice (24 heads) is the TP4 rank oracle for ranks 0 and 3."""
-    case = make_kimi_k3_test_case(kimi_k3_checkpoint_dir, sequence=32)
-    weights = {name: tensor.float() for name, tensor in case.state_dict.items()}
-    state = _nonzero_state(case.config, seed=7)
-    _assert_slice_is_rank_oracle(
-        case.hidden.float(), weights, case.config, state, _TP, (0, _TP - 1), atol=1e-4, rtol=1e-4
-    )
+    source = KDA_CASES["kimi_k3-real-mesh2x4-tpaxis1-T1280"].weight_source(kimi_k3_checkpoint_dir)
+    config = source.config
+    weights = {name: tensor.float() for name, tensor in source.load_state_dict().items()}
+    hidden = torch.randn(1, 32, config.hidden_size, generator=torch.Generator().manual_seed(1607))
+    state = _nonzero_state(config, seed=7)
+    _assert_slice_is_rank_oracle(hidden, weights, config, state, _TP, (0, _TP - 1), atol=1e-4, rtol=1e-4)
 
 
 def test_glm_5_3_flash_layer_slice_is_tp_rank_partial(glm_5_3_flash_checkpoint_dir: Path) -> None:
