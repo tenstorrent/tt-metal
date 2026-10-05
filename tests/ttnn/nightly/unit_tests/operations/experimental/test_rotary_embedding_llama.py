@@ -725,6 +725,23 @@ def test_rotary_embedding_llama_short_cos_sin_multi_batch(device, batch, n_heads
     assert passing, output_pcc
 
 
+@pytest.mark.parametrize("batch", (1, 129))
+def test_rotary_embedding_llama_empty_cos_sin(device, batch):
+    """An empty cos/sin cache rotates nothing, so the output is all zeros."""
+    head_dim = 128
+    tensor_kwargs = {"dtype": ttnn.bfloat16, "layout": ttnn.TILE_LAYOUT, "device": device}
+    empty = torch.zeros(1, 1, 0, head_dim)
+    out = ttnn.experimental.rotary_embedding_llama(
+        ttnn.from_torch(torch.randn(batch, 2, 128, head_dim), **tensor_kwargs),
+        ttnn.from_torch(empty, **tensor_kwargs),
+        ttnn.from_torch(empty, **tensor_kwargs),
+        ttnn.from_torch(get_rot_transformation_mat(dhead=head_dim), **tensor_kwargs),
+        is_decode_mode=False,
+    )
+    out = ttnn.to_torch(out)
+    assert torch.equal(out, torch.zeros_like(out))
+
+
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @pytest.mark.parametrize(
     "q_seq_len, rope_seq_len",
