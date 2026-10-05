@@ -9,7 +9,6 @@
 // No device needed.
 
 #include <fcntl.h>
-#include <signal.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
@@ -17,6 +16,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <csignal>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -60,14 +60,12 @@ bool manifest_test_has_line(const std::string& path, const std::string& wanted) 
 // unrelated process that was handed a dead owner's pid.
 class ManifestTestChild {
 public:
-    ManifestTestChild() {
-        const pid_t parent = getpid();
-        pid_ = fork();
+    ManifestTestChild() : parent_(getpid()), pid_(fork()) {
         if (pid_ == 0) {
             // Die with the test process, and do not run the tracker's
             // inherited SIGINT/SIGTERM handler on the parent's resources.
             prctl(PR_SET_PDEATHSIG, SIGKILL);
-            if (getppid() != parent) {
+            if (getppid() != parent_) {
                 _exit(0);
             }
             signal(SIGINT, SIG_DFL);
@@ -87,7 +85,8 @@ public:
     pid_t pid() const { return pid_; }
 
 private:
-    pid_t pid_ = -1;
+    pid_t parent_;
+    pid_t pid_;
 };
 
 // A pid that was alive a moment ago and is now gone.
