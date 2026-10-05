@@ -70,8 +70,7 @@ TEST(NOCDebugCounterWrap, ApparentJumpOverHalfTheCounterRangeIsFlagged) {
     EXPECT_TRUE(flags_missing_barrier(100, 4090));
 }
 
-TEST(NOCDebugAtomicTracking, BarrierOnlyDrainsIssuingProcessor) {
-    NOCDebugState state;
+NocSemaphoreIncEvent make_nonposted_atomic() {
     NocSemaphoreIncEvent atomic{};
     atomic.dst_addr = 0x40000;
     atomic.src_x = CORE_X;
@@ -81,6 +80,27 @@ TEST(NOCDebugAtomicTracking, BarrierOnlyDrainsIssuingProcessor) {
     atomic.posted = false;
     atomic.noc = 0;
     atomic.is_semaphore = true;
+    return atomic;
+}
+
+TEST(NOCDebugAtomicTracking, SameAddressAtomicsAreAttributedToEachProcessor) {
+    NOCDebugState state;
+    const auto atomic = make_nonposted_atomic();
+
+    state.push_event(CHIP_ID, /*timestamp=*/1, PROCESSOR_ID, atomic);
+    state.push_event(CHIP_ID, /*timestamp=*/2, OTHER_PROCESSOR_ID, atomic);
+    state.process_accumulated_events_all_chips();
+    state.finish_cores();
+
+    const tt_cxy_pair core{CHIP_ID, {static_cast<size_t>(CORE_X), static_cast<size_t>(CORE_Y)}};
+    EXPECT_TRUE(state.get_issues(core, PROCESSOR_ID).has_base_issue(NOCDebugIssueBaseType::UNFLUSHED_ATOMIC_AT_END));
+    EXPECT_TRUE(
+        state.get_issues(core, OTHER_PROCESSOR_ID).has_base_issue(NOCDebugIssueBaseType::UNFLUSHED_ATOMIC_AT_END));
+}
+
+TEST(NOCDebugAtomicTracking, OneBarrierDrainsSharedCoreNocAtomics) {
+    NOCDebugState state;
+    const auto atomic = make_nonposted_atomic();
 
     state.push_event(CHIP_ID, /*timestamp=*/1, PROCESSOR_ID, atomic);
     state.push_event(CHIP_ID, /*timestamp=*/2, OTHER_PROCESSOR_ID, atomic);
@@ -95,7 +115,7 @@ TEST(NOCDebugAtomicTracking, BarrierOnlyDrainsIssuingProcessor) {
     const tt_cxy_pair core{CHIP_ID, {static_cast<size_t>(CORE_X), static_cast<size_t>(CORE_Y)}};
     EXPECT_FALSE(
         state.get_issues(core, PROCESSOR_ID).has_base_issue(NOCDebugIssueBaseType::UNFLUSHED_ATOMIC_AT_END));
-    EXPECT_TRUE(
+    EXPECT_FALSE(
         state.get_issues(core, OTHER_PROCESSOR_ID).has_base_issue(NOCDebugIssueBaseType::UNFLUSHED_ATOMIC_AT_END));
 }
 

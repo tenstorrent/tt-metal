@@ -160,7 +160,9 @@
   budget_type: unit
 
 - name: runtime_noc_debugging
-  cmd: ./build/test/tt_metal/unit_tests_noc_debugging
+  cmd: |
+    ./build/test/tt_metal/unit_tests_noc_debugging
+    TT_METAL_NOC_DEBUG_DUMP=1 ./build/test/tt_metal/unit_tests_api --gtest_filter='PrefetcherPipeFixture.PrefetcherPipe_NoCDebugTracksCreditAtomics'
   skus:
     wh_n150_civ2:
       timeout: 5

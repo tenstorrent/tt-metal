@@ -5,6 +5,7 @@
 import contextlib
 import json
 import os
+import threading
 import time
 
 from loguru import logger
@@ -17,12 +18,30 @@ import torch
 import numpy as np
 
 
+_noc_debug_check_lock = threading.RLock()
+_noc_debug_check_thread_state = threading.local()
+
+
+@contextlib.contextmanager
+def _exclusive_noc_debug_check():
+    if getattr(_noc_debug_check_thread_state, "active", False):
+        raise RuntimeError("NoC debug checks cannot be nested")
+    with _noc_debug_check_lock:
+        _noc_debug_check_thread_state.active = True
+        try:
+            yield
+        finally:
+            _noc_debug_check_thread_state.active = False
+
+
 @contextlib.contextmanager
 def assert_no_unflushed_noc_atomics(device, *, min_atomic_events=1):
     """Check one isolated operation for recorded non-posted NoC atomics at its end.
 
     The check resets context-global debug state. The caller must own the context and must not run another mesh at the
-    same time. This check does not prove each internal kernel boundary in a multi-kernel operation.
+    same time. It covers atomic increments recorded by the semaphore, remote-CB, and PrefetcherPipe APIs. It does not
+    cover fabric packet atomics or Quasar compare-and-swap. It does not prove each internal kernel boundary in a
+    multi-kernel operation.
     """
     def add_exception_note(error, note):
         if hasattr(error, "add_note"):
@@ -30,59 +49,65 @@ def assert_no_unflushed_noc_atomics(device, *, min_atomic_events=1):
         else:
             error.args = (*error.args, note)
 
-    if ttnn.is_trace_capture_active(device):
-        raise RuntimeError("NoC debug checks cannot run during trace capture")
+    with _exclusive_noc_debug_check():
+        if ttnn.is_trace_capture_active(device):
+            raise RuntimeError("NoC debug checks cannot run during trace capture")
 
-    ttnn.synchronize_device(device)
-    ttnn.ReadDeviceProfiler(device)
-    initial_state = ttnn._ttnn.device._get_noc_debug_state(device)
-    if not initial_state["enabled"]:
-        raise RuntimeError("Set TT_METAL_NOC_DEBUG_DUMP=1 before the test process starts")
-    if not initial_state["collector_ready"]:
-        raise RuntimeError("The NoC debug profiler collector is not ready")
-    if initial_state["issues"]:
-        raise AssertionError(
-            f"The NoC debug state contains {initial_state['issues']} issue(s) before the target operation"
-        )
+        ttnn.synchronize_device(device)
+        ttnn.ReadDeviceProfiler(device)
+        initial_state = ttnn._ttnn.device._get_noc_debug_state(device)
+        if not initial_state["enabled"]:
+            raise RuntimeError("Set TT_METAL_NOC_DEBUG_DUMP=1 before the test process starts")
+        if not initial_state["collector_ready"]:
+            raise RuntimeError("The NoC debug profiler collector is not ready")
+        if initial_state["includes_dispatch_cores"]:
+            raise RuntimeError("NoC debug operation checks cannot include dispatch-core profiler events")
+        if initial_state["issues"]:
+            raise AssertionError(
+                f"The NoC debug state contains {initial_state['issues']} issue(s) before the target operation"
+            )
 
-    ttnn._ttnn.device._reset_noc_debug_state(device)
-    operation_error = None
-    try:
-        yield
-    except BaseException as error:
-        operation_error = error
-        raise
-    finally:
-        debug_error = None
+        ttnn._ttnn.device._reset_noc_debug_state(device)
+        operation_error = None
         try:
-            ttnn.synchronize_device(device)
-            ttnn.ReadDeviceProfiler(device)
-            final_state = ttnn._ttnn.device._get_noc_debug_state(device)
-            assert final_state["pending_events"] == 0, "NoC debug events remained after the profiler read"
-            assert final_state["observed_atomic_events"] >= min_atomic_events, (
-                "NoC debug did not record enough atomic events: "
-                f"expected at least {min_atomic_events}, got {final_state['observed_atomic_events']}"
-            )
-            assert final_state["unflushed_atomic_issues"] == 0, (
-                "NoC debug found "
-                f"{final_state['unflushed_atomic_issues']} unflushed non-posted atomic issue(s)"
-            )
+            yield
         except BaseException as error:
-            debug_error = error
+            operation_error = error
+            raise
         finally:
+            debug_error = None
             try:
-                ttnn._ttnn.device._reset_noc_debug_state(device)
+                ttnn.synchronize_device(device)
+                ttnn.ReadDeviceProfiler(device)
+                final_state = ttnn._ttnn.device._get_noc_debug_state(device)
+                if final_state["pending_events"] != 0:
+                    raise AssertionError("NoC debug events remained after the profiler read")
+                if final_state["observed_atomic_events"] < min_atomic_events:
+                    raise AssertionError(
+                        "NoC debug did not record enough atomic events: "
+                        f"expected at least {min_atomic_events}, got {final_state['observed_atomic_events']}"
+                    )
+                if final_state["unflushed_atomic_issues"] != 0:
+                    raise AssertionError(
+                        "NoC debug found "
+                        f"{final_state['unflushed_atomic_issues']} unflushed non-posted atomic issue(s)"
+                    )
             except BaseException as error:
-                if debug_error is None:
-                    debug_error = error
-                else:
-                    add_exception_note(debug_error, f"NoC debug state reset also failed: {error}")
+                debug_error = error
+            finally:
+                try:
+                    ttnn._ttnn.device._reset_noc_debug_state(device)
+                except BaseException as error:
+                    if debug_error is None:
+                        debug_error = error
+                    else:
+                        add_exception_note(debug_error, f"NoC debug state reset also failed: {error}")
 
-        if debug_error is not None:
-            if operation_error is not None:
-                add_exception_note(operation_error, f"NoC debug check also failed: {debug_error}")
-            else:
-                raise debug_error
+            if debug_error is not None:
+                if operation_error is not None:
+                    add_exception_note(operation_error, f"NoC debug check also failed: {debug_error}")
+                else:
+                    raise debug_error
 
 
 # Dictionaries for converting dtypes

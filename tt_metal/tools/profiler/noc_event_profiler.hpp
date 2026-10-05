@@ -240,6 +240,8 @@ FORCE_INLINE void recordNocAtomicIncrementWithAddr(
     if constexpr (noc_event_type == KernelProfilerNocEventMetadata::NocEventType::SEMAPHORE_INC_MULTICAST) {
         effective_posted = false;
     }
+#elif defined(ARCH_QUASAR) && defined(NOC_API_V1)
+    effective_posted = false;
 #endif
     if (effective_posted) {
         recordNocAtomicIncrementWithEffectiveMode<noc_event_type, true>(noc_addr, vc, noc);

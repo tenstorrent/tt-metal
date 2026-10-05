@@ -31,6 +31,7 @@ NocDebugStateSummary GetNocDebugStateSummary(distributed::MeshDevice& mesh_devic
     NocDebugStateSummary result{
         .enabled = context.rtoptions().get_experimental_noc_debug_dump_enabled(),
         .collector_ready = context.profiler_state_manager() != nullptr,
+        .includes_dispatch_cores = context.rtoptions().get_profiler_do_dispatch_cores(),
     };
     if (const auto& state = context.noc_debug_state()) {
         const auto summary = state->get_state_summary();
@@ -362,7 +363,9 @@ void NOCDebugState::handle_full_barrier_event(
     state.reads_not_flushed[noc_id].clear();
     state.posted_writes_pending[noc_id].clear();
     state.nonposted_writes_pending[noc_id].clear();
-    state.atomics_pending[processor_id][noc_id].clear();
+    for (auto& processor_atomics : state.atomics_pending) {
+        processor_atomics[noc_id].clear();
+    }
 }
 
 void NOCDebugState::handle_semaphore_inc_event(
@@ -388,8 +391,11 @@ void NOCDebugState::handle_atomic_barrier_event(
     update_latest_risc_timestamp(core, processor_id, timestamp);
 
     // An atomic barrier waits only for outstanding atomics (separate NIU counter from writes), so it clears the
-    // atomics pending set and leaves reads/writes untouched.
-    state.atomics_pending[processor_id][noc_id].clear();
+    // atomics pending sets and leaves reads/writes untouched. Dynamic NOC atomics share an acknowledgement count
+    // across the two data-movement processors. Dedicated NOC programs assign them different NOCs.
+    for (auto& processor_atomics : state.atomics_pending) {
+        processor_atomics[noc_id].clear();
+    }
 }
 
 void NOCDebugState::handle_scoped_lock_event(

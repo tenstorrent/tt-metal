@@ -12,6 +12,7 @@
 #include <map>
 #include <new>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -676,6 +677,7 @@ void device_module(nb::module_& m_device) {
             nb::dict result;
             result["enabled"] = summary.enabled;
             result["collector_ready"] = summary.collector_ready;
+            result["includes_dispatch_cores"] = summary.includes_dispatch_cores;
             result["issues"] = summary.issues;
             result["unflushed_atomic_issues"] = summary.unflushed_atomic_issues;
             result["observed_atomic_events"] = summary.observed_atomic_events;

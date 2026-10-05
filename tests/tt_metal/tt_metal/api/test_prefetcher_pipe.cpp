@@ -35,6 +35,7 @@
 #include <tt-metalium/sub_device.hpp>
 
 #include <tt-metalium/experimental/dispatch_context.hpp>
+#include <tt-metalium/experimental/noc_debugging.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -1242,7 +1243,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossProgramPersistence) {
     auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), 1024);
     const uint32_t ring_addr = pipe.buffer_address();
 
-    EXPECT_EQ(run_persistent_sender_push(mesh_device, pipe, 256, 4), 1u);
+    EXPECT_EQ(run_persistent_sender_push(mesh_device, pipe, 256, 1), 1u);
     EXPECT_EQ(pipe.buffer_address(), ring_addr);
     EXPECT_EQ(run_persistent_receiver_pop(mesh_device, pipe, 256, 4), 1u);
 }
@@ -1376,6 +1377,40 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_BasicPushPop_1to1) {
         1u);
 
     mesh_device->clear_loaded_sub_device_manager();
+}
+
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_NoCDebugTracksCreditAtomics) {
+#if !defined(TRACY_ENABLE)
+    GTEST_SKIP() << "NoC debug checks require a Tracy-enabled build";
+#endif
+    if (!is_fast_dispatch()) {
+        GTEST_SKIP() << "Sub device managers are unsupported with slow dispatch";
+    }
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+
+    auto mesh_device = devices_[0];
+    ReadMeshDeviceProfilerResults(*mesh_device);
+    const auto initial_state = experimental::GetNocDebugStateSummary(*mesh_device);
+    if (!initial_state.enabled) {
+        GTEST_SKIP() << "Set TT_METAL_NOC_DEBUG_DUMP=1 before the test process starts";
+    }
+    ASSERT_TRUE(initial_state.collector_ready);
+    experimental::ResetNocDebugState(*mesh_device);
+
+    const CoreCoord sender_core(0, 0);
+    const CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
+    auto pipe = make_pipe(mesh_device.get(), sender_core, receiver_cores, 1024);
+    EXPECT_EQ(run_persistent_sender_push(mesh_device, pipe, 256, 4), 1u);
+
+    ReadMeshDeviceProfilerResults(*mesh_device);
+    const auto final_state = experimental::GetNocDebugStateSummary(*mesh_device);
+    EXPECT_EQ(final_state.pending_events, 0u);
+    EXPECT_GT(final_state.observed_atomic_events, 0u);
+    EXPECT_EQ(final_state.issues, 0u);
+    EXPECT_EQ(final_state.unflushed_atomic_issues, 0u);
+    experimental::ResetNocDebugState(*mesh_device);
 }
 
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_WriteBroadcast_1to4) {
