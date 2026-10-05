@@ -31,6 +31,7 @@ if [ -n "${TRI_PROFILES:-}" ]; then
     field(){ printf '%s\n' "$profile_row" | awk -F'\t' -v n="$1" '{print $n}'; }
     op=$(field 1); a_node=$(field 5); a_flags=$(field 6)
     b_node=$(field 7); b_flags=$(field 8); c_node=$(field 9); c_flags=$(field 10)
+    c_flags=${c_flags%$'\r'}
     [ "$op" != op ] || continue
     [ -n "$op" ] || continue
     [ "$(printf '%s\n' "$profile_row" | awk -F'\t' '{print NF}')" -eq 10 ] || {

@@ -116,7 +116,7 @@ if [ -n "${TRI_PROFILES:-}" ] || [ -n "${TRI_IDMAP:-}" ]; then
   B_NODE=$(awk -F'\t' -v o="$OP" '$1==o{print $7; exit}' "$TRI_PROFILES")
   B_FLAGS=$(awk -F'\t' -v o="$OP" '$1==o{print $8; exit}' "$TRI_PROFILES")
   C_NODE=$(awk -F'\t' -v o="$OP" '$1==o{print $9; exit}' "$TRI_PROFILES")
-  C_FLAGS=$(awk -F'\t' -v o="$OP" '$1==o{print $10; exit}' "$TRI_PROFILES")
+  C_FLAGS=$(awk -F'\t' -v o="$OP" '$1==o{sub(/\r$/, "", $10); print $10; exit}' "$TRI_PROFILES")
   [ -n "$A_NODE" ] && [ -n "$B_NODE" ] && [ -n "$C_NODE" ] || {
     echo "FATAL: tri profile has an empty node for '$OP'" >&2; exit 2; }
   [ "$A_NODE" = "$B_NODE" ] || {

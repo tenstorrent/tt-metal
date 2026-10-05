@@ -186,7 +186,9 @@ def write_outputs(out: Path, rows: list[dict]) -> None:
         "state", "reason", "sem_node", "hand_node",
     ]
     with (out / "plan.tsv").open("w", newline="") as stream:
-        writer = csv.DictWriter(stream, fields, delimiter="\t", extrasaction="ignore")
+        writer = csv.DictWriter(
+            stream, fields, delimiter="\t", extrasaction="ignore", lineterminator="\n"
+        )
         writer.writeheader()
         writer.writerows(rows)
 
@@ -211,7 +213,7 @@ def write_outputs(out: Path, rows: list[dict]) -> None:
         # running selected-sem against selected-hand and calling that a compiler
         # correctness proof.
         with (out / f"tri-ops-{stem}.tsv").open("w", newline="") as stream:
-            writer = csv.writer(stream, delimiter="\t")
+            writer = csv.writer(stream, delimiter="\t", lineterminator="\n")
             writer.writerow(
                 ["op", "a_selected_sem_node", "b_baseline_sem_node", "c_baseline_hand_node"]
             )
@@ -237,7 +239,13 @@ def write_outputs(out: Path, rows: list[dict]) -> None:
         "c_baseline_hand_node", "c_baseline_flags",
     ]
     with (out / "tri-profiles.tsv").open("w", newline="") as stream:
-        writer = csv.DictWriter(stream, tri_fields, delimiter="\t", extrasaction="ignore")
+        writer = csv.DictWriter(
+            stream,
+            tri_fields,
+            delimiter="\t",
+            extrasaction="ignore",
+            lineterminator="\n",
+        )
         writer.writeheader()
         writer.writerows(feasible)
     class_rows = [row for row in rows if row["category"] in {"binary_nonexhaustive", "ternary_bf16_nonexhaustive"}]

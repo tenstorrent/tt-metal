@@ -66,6 +66,7 @@ def main():
         assert "-mselected-abs" in (out / "selected-flags.tsv").read_text()
         assert "-mbaseline" in (out / "baseline-flags.tsv").read_text()
         tri = (out / "tri-profiles.tsv").read_text()
+        assert "\r" not in tri
         assert "a_selected_sem_node" in tri
         assert "test_sfpu_unary.py::test_causal_lift_fresh_cpp[Abs]" in tri
         assert json.loads((out / "plan.json").read_text())["states"] == {
