@@ -47,6 +47,14 @@ public:
     distributed::SystemMesh& get_system_mesh();
     const MetalEnvDescriptor& get_descriptor() const;
 
+    // Requested fabric configuration (configure_fabric). Distinct from get_fabric_config(), which is the runtime
+    // value and may differ after the dispatch fallback enables fabric.
+    const FabricConfigDescriptor& fabric_config_descriptor() const { return fabric_desc_; }
+    void configure_fabric(const FabricConfigDescriptor& fabric);
+
+    // Marks the requested fabric configuration immutable. Called when the topology is first materialized.
+    void freeze_fabric();
+
     bool check_use_count_zero() const;
 
     void acquire();
@@ -61,6 +69,9 @@ public:
     tt_fabric::FabricManagerMode get_fabric_manager() const;
     uint8_t get_num_fabric_active_routing_planes() const;
 
+    // Internal reconfigure used by the legacy SetFabricConfig path. Ignores the configure_fabric freeze and may
+    // rebuild the control plane, which invalidates the system mesh. Prefer enable_fabric_for_dispatch when fabric
+    // must be turned on for dispatch without changing an already-published system mesh.
     // Returns true if updated
     bool set_fabric_config(
         tt_fabric::FabricConfig fabric_config,
@@ -140,6 +151,13 @@ private:
     std::optional<int> registered_context_id_ = std::nullopt;
 
     // --- Fabric config state ---
+    // What configure_fabric was asked for. fabric_config_ below is the runtime value.
+    FabricConfigDescriptor fabric_desc_ = {};
+    // Set once the topology is materialized (get_system_mesh, create_*, or the first core-descriptor lookup).
+    // configure_fabric throws afterwards. Guarded by control_plane_mutex_; the atomic lets freeze_fabric skip the
+    // lock once set.
+    std::atomic<bool> fabric_frozen_{false};
+
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     tt_fabric::FabricReliabilityMode fabric_reliability_mode_ =
         tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;

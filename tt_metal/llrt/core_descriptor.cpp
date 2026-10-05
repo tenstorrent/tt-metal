@@ -134,6 +134,9 @@ std::size_t MetalEnvImpl::CoreDescriptorCacheKeyHash::operator()(const CoreDescr
 
 const tt::core_descriptor_t& MetalEnvImpl::get_core_descriptor_config(
     ChipId device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
+    // The core descriptor (and, on Blackhole, the default dispatch axis) depends on fabric_tensix_config.
+    freeze_fabric();
+
     ARCH arch = get_cluster().arch();
     uint32_t harvesting_mask = get_cluster().get_harvesting_mask(device_id);
     std::bitset<32> mask_bitset(harvesting_mask);

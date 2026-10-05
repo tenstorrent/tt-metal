@@ -52,17 +52,8 @@ MetalEnvImpl::MetalEnvImpl(MetalEnvDescriptor descriptor) : descriptor_(std::mov
     initialize_base_objects();
     verify_fw_capabilities();
 
-    // Apply fabric config from descriptor
-    const auto& fc = descriptor_.fabric;
-    fabric_config_ = fc.fabric_config;
-    fabric_reliability_mode_ = fc.reliability_mode;
-    fabric_tensix_config_ = fc.fabric_tensix_config;
-    fabric_udm_mode_ = fc.fabric_udm_mode;
-    fabric_manager_ = fc.fabric_manager;
-    fabric_router_config_ = fc.router_config;
-    if (fc.num_routing_planes.has_value()) {
-        num_fabric_active_routing_planes_ = fc.num_routing_planes.value();
-    }
+    // Fabric stays disabled until configure_fabric(). It is not applied here: callers choose it from queries
+    // against this environment (architecture, device count), which are only available after construction.
 
     // Pick up any custom mesh graph descriptor from env/rtoptions
     if (rtoptions_->is_custom_fabric_mesh_graph_desc_path_specified()) {
@@ -217,10 +208,53 @@ tt_fabric::FabricManagerMode MetalEnvImpl::get_fabric_manager() const { return f
 
 uint8_t MetalEnvImpl::get_num_fabric_active_routing_planes() const { return num_fabric_active_routing_planes_; }
 
-// The fabric config is normally set once, from the FabricConfigDescriptor supplied at MetalEnv construction time.
-// However, for the legacy backward-compatibility path, the DeviceManager may call set_fabric_config a second time
-// to enable minimal fabric (FABRIC_1D) for dispatch when the user has not explicitly configured fabric.
-// See DeviceManager::initialize for that path.
+void MetalEnvImpl::configure_fabric(const FabricConfigDescriptor& fabric) {
+    std::lock_guard<std::mutex> lock(control_plane_mutex_);
+    TT_FATAL(
+        !fabric_frozen_.load(std::memory_order_relaxed),
+        "configure_fabric() is not allowed after the fabric topology has been materialized by get_system_mesh() or a "
+        "create_* call. Configure fabric before those calls.");
+
+    if (fabric.fabric_config == tt_fabric::FabricConfig::DISABLED) {
+        if (fabric.num_routing_planes.has_value()) {
+            log_warning(
+                tt::LogMetal,
+                "Got num_routing_planes while disabling fabric, ignoring it and disabling all active routing planes");
+        }
+        num_fabric_active_routing_planes_ = 0;
+    } else {
+        if (fabric.num_routing_planes.has_value()) {
+            TT_FATAL(
+                fabric.num_routing_planes.value() > 0,
+                "num_routing_planes must be greater than 0, got {}",
+                fabric.num_routing_planes.value());
+        }
+        // Unset means every available plane, matching set_fabric_config. Leaving this at 0 makes device open fatal
+        // in Cluster::configure_ethernet_cores_for_fabric_routers.
+        num_fabric_active_routing_planes_ = fabric.num_routing_planes.value_or(std::numeric_limits<uint8_t>::max());
+    }
+
+    fabric_desc_ = fabric;
+    fabric_config_ = fabric.fabric_config;
+    fabric_reliability_mode_ = fabric.reliability_mode;
+    fabric_tensix_config_ = fabric.fabric_tensix_config;
+    fabric_udm_mode_ = fabric.fabric_udm_mode;
+    fabric_manager_ = fabric.fabric_manager;
+    fabric_router_config_ = fabric.router_config;
+}
+
+void MetalEnvImpl::freeze_fabric() {
+    // Already frozen: the release store that published it synchronizes the fabric fields with this acquire load.
+    if (fabric_frozen_.load(std::memory_order_acquire)) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(control_plane_mutex_);
+    fabric_frozen_.store(true, std::memory_order_release);
+}
+
+// configure_fabric() is the public way to set fabric, and it refuses changes once the topology is materialized.
+// This entry point ignores that freeze: the legacy SetFabricConfig path reconfigures fabric while no devices are
+// open, and doing so rebuilds the control plane and drops the system mesh.
 bool MetalEnvImpl::set_fabric_config(
     tt_fabric::FabricConfig fabric_config,
     tt_fabric::FabricReliabilityMode reliability_mode,
@@ -406,6 +440,9 @@ void MetalEnvImpl::initialize_control_plane() {
 }
 
 void MetalEnvImpl::initialize_control_plane_impl() {
+    // Building the control plane reads the fabric configuration. Caller holds control_plane_mutex_.
+    fabric_frozen_.store(true, std::memory_order_release);
+
     if (custom_mesh_graph_desc_path_.has_value()) {
         log_debug(tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
         std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path_.value());
@@ -498,6 +535,7 @@ void MetalEnvImpl::construct_control_plane() {
 
 distributed::SystemMesh& MetalEnvImpl::get_system_mesh() {
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
+    fabric_frozen_.store(true, std::memory_order_release);
     if (!system_mesh_) {
         if (!control_plane_) {
             this->initialize_control_plane_impl();
@@ -617,6 +655,10 @@ MetalEnv::~MetalEnv() {
 
 const MetalEnvDescriptor& MetalEnv::get_descriptor() const { return impl_->get_descriptor(); }
 
+void MetalEnv::configure_fabric(const FabricConfigDescriptor& fabric) { impl_->configure_fabric(fabric); }
+
+const FabricConfigDescriptor& MetalEnv::get_fabric_config() const { return impl_->fabric_config_descriptor(); }
+
 tt::ARCH MetalEnv::get_arch() const { return impl_->get_cluster().arch(); }
 std::string MetalEnv::get_arch_name() const { return tt::get_string_lowercase(get_arch()); }
 uint32_t MetalEnv::get_num_pcie_devices() const { return impl_->get_cluster().number_of_pci_devices(); }
@@ -670,6 +712,8 @@ private:
 
 std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
     const distributed::MeshDeviceConfig& config, const CreateMeshDeviceOptions& options) {
+    // Topology is about to be built from the current fabric configuration.
+    impl_->freeze_fabric();
     // Associate a context ID for the mesh device's dependencies to easily access the MetalContext::instance(contextId)
     // TODO: Remove this and directly pass in the MetalEnv reference
     // If the control plane / system mesh was already accessed, the env owns a registered context; reuse it
@@ -697,6 +741,7 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
 
 std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh(
     ChipId device_id, const CreateMeshDeviceOptions& options) {
+    impl_->freeze_fabric();
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);
@@ -719,6 +764,7 @@ std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh(
 
 std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_meshes(
     ttsl::Span<const ChipId> device_ids, const CreateMeshDeviceOptions& options) {
+    impl_->freeze_fabric();
     const bool env_owns_context = impl_->has_registered_context();
     ContextId context_id =
         env_owns_context ? ContextId{impl_->ensure_context_registered(*this)} : MetalContext::create_instance(*this);

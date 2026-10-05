@@ -31,7 +31,7 @@ struct FabricConfigDescriptor {
     tt_fabric::FabricRouterConfig router_config = {};
 };
 
-// Configuration for a MetalEnv. The default targets the physical cluster with fabric disabled.
+// Configuration for a MetalEnv. The default targets the physical cluster.
 //
 // Set mock_cluster_desc_path to bind a mock cluster instead: a path, or a bare filename that is searched for in the
 // known cluster descriptor directories. nullopt is the physical cluster. An empty path is not a mock cluster.
@@ -39,11 +39,15 @@ struct FabricConfigDescriptor {
 // Only one MetalEnv for the physical cluster may exist at a time due to UMD limitations. There is no limit on the
 // number of mock clusters.
 //
-//     MetalEnv env({.mock_cluster_desc_path = "blackhole_P150.yaml",
-//                   .fabric = {.fabric_config = tt_fabric::FabricConfig::FABRIC_2D}});
+// Fabric is not part of this descriptor. It is often chosen from queries against the environment (architecture,
+// device count), so it is set afterwards with MetalEnv::configure_fabric, before the topology is materialized.
+//
+//     MetalEnv env({.mock_cluster_desc_path = "blackhole_P150.yaml"});
+//     if (env.get_num_available_devices() > 1) {
+//         env.configure_fabric({.fabric_config = tt_fabric::FabricConfig::FABRIC_2D});
+//     }
 struct MetalEnvDescriptor {
     std::optional<std::string> mock_cluster_desc_path = std::nullopt;
-    FabricConfigDescriptor fabric = {};
 
     bool is_mock_device() const { return mock_cluster_desc_path.has_value() && !mock_cluster_desc_path->empty(); }
 };
@@ -65,8 +69,9 @@ class MetalEnvImpl;
 // A MetalEnv provides an interface for the runtime environment to access a homogeneous cluster of Tenstorrent devices.
 // It exposes several query functions for the hardware capabilities and cluster configuration.
 //
-// The FabricConfigDescriptor in the MetalEnvDescriptor describes the topology of the devices — how they are
-// interconnected and how traffic is routed between them. From this topology the MetalEnv constructs the
+// Fabric configuration describes the topology of the devices — how they are interconnected and how traffic is
+// routed between them. Set it with configure_fabric() before the first get_system_mesh() or create_* call; those
+// calls materialize the topology and freeze the configuration. From this topology the MetalEnv constructs the
 // system mesh, which virtualizes and partitions the physical hardware for placement queries.
 //
 // Note, MetalEnv is a RAII object. As such, it must outlive every object that uses it (e.g. MeshDevice).
@@ -84,6 +89,15 @@ public:
 
     /// @return The descriptor used to construct this MetalEnv.
     const MetalEnvDescriptor& get_descriptor() const;
+
+    // Configure fabric for this environment. May be called repeatedly (last call wins) until the topology is
+    // materialized by get_system_mesh() or a create_* call; afterwards it throws. Never calling it leaves fabric
+    // disabled. num_routing_planes must be greater than 0 when set; leaving it unset uses every available plane.
+    void configure_fabric(const FabricConfigDescriptor& fabric);
+
+    /// @return The fabric configuration requested via configure_fabric. Disabled by default. This is the requested
+    /// configuration: the runtime may still enable fabric for dispatch on remote devices without changing it.
+    const FabricConfigDescriptor& get_fabric_config() const;
 
     /// @return Architecture of this environment.
     tt::ARCH get_arch() const;
