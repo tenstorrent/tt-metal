@@ -461,8 +461,9 @@ class K2Generator(Generator):
                         page_table[slot : slot + 1].int(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
                     )
                     parts = []
-                    for offset in range(0, length, 4096):
-                        end = min(offset + 4096, length)
+                    step = self.model.layers[0].chunk_size
+                    for offset in range(0, length, step):
+                        end = min(offset + step, length)
                         # Early chunks fill cache only. Terminal logits for them are not
                         # materialized unless the caller explicitly requests all logits.
                         logits = self.model.prefill_chunk(

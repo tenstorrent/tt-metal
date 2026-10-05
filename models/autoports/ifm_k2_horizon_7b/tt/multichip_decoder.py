@@ -36,6 +36,10 @@ class MultichipDecoder(OptimizedDecoder):
     # outputs are bitwise identical to Q128. K blocks and the 256-block bound still come from
     # prefill_q_chunk/prefill_k_chunk.
     stock_prefill_q_chunk = 64
+    # 8192-token prefill chunks: Q chunks are handed out in heavy/light pairs, so a 4096-token chunk
+    # (256 Q64 pairs) leaves the busiest core 3 pairs (384 rows vs an ideal 298). 8192 gives 5 pairs per
+    # 8192 tokens (320 per 4096). Rows are independent, so the output is bit-identical to 4096 chunks.
+    chunk_size = 8192
 
     @classmethod
     def from_state_dict(
