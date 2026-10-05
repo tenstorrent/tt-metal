@@ -91,6 +91,16 @@ struct SenderCtArgs {
         fwd_sem_noc_x(get_compile_time_arg_val(12)),
         fwd_sem_noc_y(get_compile_time_arg_val(13)),
         fwd_sem_addr(get_compile_time_arg_val(14)) {}
+
+    // Program semaphores, not hand-placed L1: the routed expert's arena occupies the region the standalone
+    // op puts these in. The framework re-initialises them at every launch, so nothing is reset here.
+    volatile tt_l1_ptr uint32_t* filled_ptr() const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(filled_sem));
+    }
+    volatile tt_l1_ptr uint32_t* freed_ptr() const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(freed_sem));
+    }
+    void reset_ring_counters() const {}
 #endif
 
     constexpr uint32_t slot_stride() const { return token_size_bytes + forwarding_metadata_size; }
