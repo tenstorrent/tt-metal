@@ -41,7 +41,7 @@ FPS = 24
 PROMPT = "a slow push-in through a quiet room as afternoon light moves across the floor"
 
 # Bars set below the minimum measured across the three ref2va cases; t2va's bars do NOT transfer.
-REF2VA_CLIP_THRESHOLD = 25.0  # min measured 29.05
+REF2VA_CLIP_THRESHOLD = 25.0
 REF2VA_VBENCH_THRESHOLDS = {
     "subject_consistency": 0.90,
     "background_consistency": 0.89,
@@ -57,7 +57,7 @@ _L1_SMALL = 16384
 # The shared shapes, but this suite runs a smaller L1_SMALL pool than they carry and reports it in
 # the measurement line, so the size is overridden rather than inherited.
 MESHES = [
-    pytest.param(shape, {**params, "l1_small_size": _L1_SMALL}, id=param.id)
+    pytest.param(shape, {**params, "l1_small_size": _L1_SMALL}, id=param.id, marks=param.marks)
     for param in GALAXY_MESHES
     for shape, params in [param.values]
 ]

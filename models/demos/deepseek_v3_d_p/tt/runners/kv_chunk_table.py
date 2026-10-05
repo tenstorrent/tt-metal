@@ -37,6 +37,20 @@ _TILE_DIM = 32  # bfp8 is tiled 32x32
 _BFP8_TILE_BYTES = 1088  # one 32x32 bfp8 tile: 1024 data + 64 exponent bytes
 
 
+def config_name(config_id: int, num_configs: int) -> str:
+    """Zero-padded positional config name, matching how blaze's ``kv_chunk_migration_helpers`` names
+    the decode table's configs (``width = max(2, len(str(n - 1)))``, at least two digits).
+
+    The KV manager pairs the two tables by config NAME to assign ids, so an unpadded name here makes
+    it reject the pair with "KV config '0': name-to-id mismatch across the loaded tables" and exit
+    fatally -- decode publishes "00"/"01" while this side published "0"/"1". Sorted names keep ids in
+    position order, which the assert below relies on. Same helper as
+    ``minimax_m3.tt.runners.kv_chunk_table.config_name`` and
+    ``gpt_oss_d_p.tt.runners.kv_chunk_table._stable_config_name``."""
+    width = max(2, len(str(max(num_configs - 1, 0))))
+    return f"{config_id:0{width}d}"
+
+
 def dflash_config_name(kind: str, head_idx: int) -> str:
     """Table config name for one global kv-head of the DFlash drafter's K or V context cache.
 
@@ -74,7 +88,7 @@ def _dram_chunk_size_bytes(cache) -> int:
 def _num_layers_from_cache(cache, num_users: int) -> int:
     """Layer count a KV cache holds, recovered from its folded batch dim. init_kvpe_cache lays caches
     out user-major with shape[0] = num_users * num_layers, so dividing the batch dim by num_users gives
-    this cache's layer count — all layers for the KVPE cache, full-layers-only for the GLM-5.2 index
+    this cache's layer count — all layers for the KVPE cache, full-layers-only for the GLM-5.3 index
     cache (which allocate_kv_cache sizes to num_full)."""
     return cache.shape[0] // num_users
 
@@ -230,7 +244,7 @@ def _build_and_serialize_merged_kv_chunk_table(
 ) -> str:
     """Build ONE KvChunkAddressTable over every cache this rank owns and serialize it to ``path``.
     ``caches`` is a tagged list of ``(kind, payload)``: ``("kvpe", tensor)`` / ``("index", tensor)`` for
-    the block-cyclic MLA caches, named "0" (KVPE), "1" (GLM-5.2 index); ``("dflash", (k_cache, v_cache))``
+    the block-cyclic MLA caches, named "0" (KVPE), "1" (GLM-5.3 index); ``("dflash", (k_cache, v_cache))``
     for the DFlash drafter (Kimi-only), which adds one config per (K|V, kv-head) via
     :func:`dflash_config_name`. Names must stay in sorted order (asserted) so the protobuf round-trip
     keeps KVPE at config id 0 and the index at 1 — see the naming note at the top of this module.
@@ -250,6 +264,9 @@ def _build_and_serialize_merged_kv_chunk_table(
     entries = []
     dflash_kv_heads = 0
     n_block_cyclic = 0
+    # Known up front so config_name() can pad to a stable width: the block-cyclic caches are the only
+    # positionally-named configs, and their count fixes the width for all of them.
+    n_block_cyclic_total = sum(1 for kind, _ in caches if kind in ("kvpe", "index"))
     index_config_name = None
     # Drafter-only, pipeline-parallel path: config name -> its all-gathered stage layout, and the
     # geometry that replaces the tensor a non-owning rank does not have. Empty on the single-stage path.
@@ -258,8 +275,8 @@ def _build_and_serialize_merged_kv_chunk_table(
     for kind, payload in caches:
         if kind in ("kvpe", "index"):  # block-cyclic MLA caches -> populate_kv_chunk_address_table_block_cyclic
             if kind == "index":
-                index_config_name = str(n_block_cyclic)
-            entries.append((str(n_block_cyclic), payload, None))
+                index_config_name = config_name(n_block_cyclic, n_block_cyclic_total)
+            entries.append((config_name(n_block_cyclic, n_block_cyclic_total), payload, None))
             n_block_cyclic += 1
         elif kind == "dflash_staged":
             # Pipeline-parallel drafter: rank 0 builds the table but owns no drafter tensor, so the
@@ -350,8 +367,8 @@ def _build_and_serialize_merged_kv_chunk_table(
                     "stages are out of config order."
                 )
             # Size the config to the GLOBAL layer total, summed over the gathered stages: the KVPE cache's
-            # every layer, and the index cache's full-indexer layers only (GLM-5.2 cross-layer reuse — the
-            # shared layers own no indexer slot; GLM-5.1 / dense have one per layer, so it equals num_layers).
+            # every layer, and the index cache's full-indexer layers only (GLM-5.3 cross-layer reuse — the
+            # shared layers own no indexer slot; dense has one per layer, so it equals num_layers).
             cfg.num_layers = merged_num_layers(stage_layout)
         cfg.max_sequence_length = seq_len
         cfg.num_slots = num_users
@@ -369,7 +386,7 @@ def _build_and_serialize_merged_kv_chunk_table(
     if index_config_name is not None and index_layer_ids is not None:
         index_dense_layers = configs[index_config_name].num_layers
         # Global layer total: under PP the `num_layers` arg is this rank's slice, config 0 spans every stage.
-        global_layers = configs["0"].num_layers
+        global_layers = configs[config_name(0, n_block_cyclic_total)].num_layers
         assert len(index_layer_ids) == index_dense_layers, (
             f"index_layer_ids has {len(index_layer_ids)} entries but the index config spans "
             f"{index_dense_layers} compacted layers; every dense row needs a global layer id"

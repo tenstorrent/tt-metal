@@ -148,9 +148,9 @@ int main(int argc, char* argv[]) {
     bool pass = true;
 
     try {
-        const char* sync_events_env = std::getenv("TT_METAL_DEVICE_PROFILER_SYNC_EVENTS");
+        const char* sync_events_env = std::getenv("TT_METAL_STREAMING_PROFILER_SYNC_EVENTS");
         if (!sync_events_env || std::string(sync_events_env) != "1") {
-            fmt::print(stderr, "WARNING: Run with TT_METAL_DEVICE_PROFILER_SYNC_EVENTS=1\n");
+            fmt::print(stderr, "WARNING: Run with TT_METAL_STREAMING_PROFILER_SYNC_EVENTS=1\n");
         }
 
         int device_id = 0;
@@ -180,12 +180,17 @@ int main(int argc, char* argv[]) {
             {0, 1, false, "CB wait", Risc::BRISC, Risc::NCRISC, false},
             {7, 8, false, "CB reserve", Risc::BRISC, Risc::NCRISC, false},
 
-            // Raw Semaphore APIs
+            // Raw Semaphore APIs. The noc 1 cases are produced from NCRISC; every other case is noc 0.
             {2, 3, false, "Raw: sem_set + sem_wait", Risc::BRISC, Risc::NCRISC, false},
             {4, 5, true, "Raw: sem_inc remote", Risc::BRISC, Risc::NCRISC, false},
             {2, 6, false, "Raw: sem_set + sem_wait_min", Risc::BRISC, Risc::NCRISC, false},
             {11, 12, true, "Raw: sem_inc_multicast", Risc::BRISC, Risc::NCRISC, false},
             {13, 14, true, "Raw: sem_set_multicast", Risc::BRISC, Risc::NCRISC, false},
+            {31, 5, true, "Raw: sem_set_remote", Risc::BRISC, Risc::NCRISC, false},
+            {33, 5, true, "Raw: sem_set_multicast_loopback_src", Risc::BRISC, Risc::NCRISC, false},
+            {4, 5, true, "Raw: sem_inc remote (noc 1)", Risc::NCRISC, Risc::BRISC, false},
+            {11, 12, true, "Raw: sem_inc_multicast (noc 1)", Risc::NCRISC, Risc::BRISC, false},
+            {13, 14, true, "Raw: sem_set_multicast (noc 1)", Risc::NCRISC, Risc::BRISC, false},
 
             // Semaphore class APIs (dataflow)
             {20, 21, false, "Class: set() + wait()", Risc::BRISC, Risc::NCRISC, false},

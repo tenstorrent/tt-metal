@@ -78,20 +78,20 @@ ttnn:
     sim_wh_n150: 40
     sim_bh_p150: 40
   sanity:
-    wh_n300_civ2: 580  # +5 each for core and both fused groups (45-minute per-group budget).
+    wh_n300_civ2: 580
     bh_p100: 545
     bh_p150b_civ2: 565
     bh_quietbox_2: 65
     bh_p300: 15
     wh_llmbox_civ2: 40
-    sim_wh_n150: 695  # +15 for trace allocation tracker simulator coverage
+    sim_wh_n150: 695
     sim_bh_p150: 680
   unit:
     wh_llmbox: 50
     wh_galaxy: 125
     bh_galaxy: 40
     bh_p100: 815
-    bh_p150b_civ2: 850
+    bh_p150b_civ2: 855
     wh_n150_civ2: 1040
     wh_n300_civ2: 1190
     bh_p150b_civ2_viommu: 125
@@ -152,7 +152,7 @@ ttnn:
 
 train:
   merge_gate:
-    bh_p150b_civ2: 45
+    bh_p150b_civ2: 60
   unit:
     bh_p100: 105
     bh_p150b_civ2: 90
@@ -193,23 +193,16 @@ shield:
     wh_n300_civ2: 10
     bh_p150: 60
   demo:
-    # Sums over the team's disaggregated-prefill legs on each SKU, not per-leg caps.
-    # bh_sc4: Kimi-K2.7 100 + GLM-5.2 60 + Kimi-K3 200. Kimi-K3 is 93 layers against the others'
-    # depths and its bringup is dominated by streaming a 1.5 TB TTNN cache off the models share on
-    # four ranks at once -- 42.6 and 65.9 min to all ranks serving on runs 34648535999 and
-    # 34659612357, and run 34831600450 was killed at 106 min under a 100 min cap.
-    # Kimi-K2.7 carries the DFlash drafter KV legs, 60 on bh_sc4 and 120 on bh_sc1 on top of the
-    # verifier entries. Both size a cold TTNN weight cache, which the SC1 leg pays in full.
-    # bh_sc1: Kimi-K2.7 190 + GLM-5.2 80 + Kimi-K3 60.
     bh_sc4: 360
-    bh_sc1: 330
+    bh_sc1: 120
+    bh_sc1_high_power: 210
 
 scaleout:
   merge_gate:
     cpu_medium: 10
     wh_n300_civ2: 10
   unit:
-    cpu_medium: 280
+    cpu_medium: 275
     wh_llmbox: 60
     wh_galaxy: 75
     wh_n300_civ2: 15
@@ -230,8 +223,11 @@ scaleout:
     wh_n300_civ2: 15
     bh_quietbox_2: 15
     bh_p300: 15
+    wh_n300_perf: 5
+    bh_p150_perf: 5
   perf:
-    wh_llmbox_perf: 140
+    wh_llmbox_perf: 185
+    bh_quietbox_2: 45
   e2e:
     wh_llmbox: 185
     wh_galaxy: 100
@@ -242,8 +238,6 @@ scaleout:
     bh_loudbox: 80
     bh_p300: 80
     bh_quietbox_2: 80
-  # Per-tier e2e budgets for DeepSeek supercluster tests now living in
-  # tests/pipeline_reorg/models_e2e_tests.yaml (consumed by models-e2e / release-demo).
   e2e_tier1:
     bh_sc1: 20
     bh_sc4: 90
@@ -343,9 +337,9 @@ llk:
     sim_quasar_xl: 180
 
 models:
-  # Agentic Research Model Tests: Saturday 07:00 UTC, independent of daily model tiers.
   agentic_research_tier3:
-    bh_quietbox_2: 12
+    bh_quietbox_2: 102
+    bh_p150: 30
   merge_gate:
     wh_galaxy_merge_gate: 5
   sanity:
@@ -370,9 +364,9 @@ models:
     bh_sc4: 160
   e2e_tier2:
     wh_llmbox_perf: 270
-    wh_n150: 45
+    wh_n150: 56
     wh_n300: 6
-    bh_p150: 26
+    bh_p150: 35
     bh_p300: 42
     bh_quietbox_2: 186
   e2e_tier3:
@@ -380,7 +374,8 @@ models:
     wh_galaxy_perf: 55
     wh_n150: 108
     wh_n300: 60
-    bh_p150: 33
+    bh_p150: 36
+    bh_p150b_civ2: 30  # VibeVoice-1.5B (PR #51447)
     bh_p300: 13
     bh_quietbox_2: 62
   unit_tier1:
@@ -389,17 +384,17 @@ models:
     wh_galaxy: 260
     wh_galaxy_perf: 65
     bh_p150: 20
-    bh_quietbox_2: 502  # +15 for test_decode_bucketing's own 1800 s budget (#55790)
+    bh_quietbox_2: 502
     bh_galaxy: 75
     bh_sc1: 370
     bh_sc4: 50
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 191
-    wh_n150: 87
+    wh_n150: 122
     wh_n300: 30
-    wh_galaxy_perf: 80
-    bh_p150: 20
+    wh_galaxy_perf: 85
+    bh_p150: 43
     bh_quietbox_2: 60
   unit_tier3:
     wh_llmbox: 90
@@ -407,22 +402,26 @@ models:
     wh_llmbox_perf: 58
     wh_n150: 75
     wh_n150_civ2: 12
-    wh_n300: 43  # +10 DiffusionDrive unit tests (#42995)
+    wh_n300: 43
     bh_p150: 30
+    bh_p150b_civ2: 8  # VibeVoice-1.5B (PR #51447)
     bh_p300: 30
     bh_quietbox_2: 25
   integration:
     wh_llmbox: 0
   device_perf:
-    wh_n150: 20
+    # Llama 3.1-8B device perf: the two profiled cases plus tracy post-processing need ~19 min on a slow
+    # N150 VM episode (vm-109 2026-10-01); 20 cut the leg off after both cases had passed.
+    wh_n150: 30
     wh_galaxy_perf: 70
     bh_p150: 20
     bh_p300: 20
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 1533
-    bh_sc1_high_power: 388
+    bh_sc1: 1750
+    bh_sc1_high_power: 448
+    bh_sc4: 60
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
@@ -430,26 +429,32 @@ models:
     wh_n300_perf: 200
     bh_p150: 250
     bh_p150_perf: 420
-    bh_p150b_civ2: 130
+    bh_p150b_civ2: 92
     bh_p150b_civ2_viommu: 50
     bh_loudbox: 1200
     bh_p300: 800
+  # Request-behavior additions reserve declared job timeouts, not measured usage.
+  # See tests/model_behavior/README.md#ci-runtime-accounting for each delta.
   sweep_tier1:
     wh_llmbox: 131
     wh_n150: 30
+    wh_n150_civ2: 45
     wh_galaxy: 40
-    wh_galaxy_perf: 55
+    wh_galaxy_perf: 205
     bh_p150: 30
+    bh_p150b_civ2: 45
+    bh_quietbox_2: 405
+    bh_galaxy: 90
   sweep_tier2:
     wh_n150: 30
-    wh_llmbox_perf: 60
-    bh_quietbox_2: 30
+    wh_llmbox_perf: 225
+    bh_quietbox_2: 75
     bh_p150: 30
   vllm:
     wh_galaxy_perf: 430
     bh_quietbox_2: 310
     wh_llmbox: 342
-    bh_loudbox: 245
+    bh_loudbox: 290
     bh_galaxy: 65
     wh_n150: 65
 umd:
@@ -465,8 +470,8 @@ syseng:
   integration:
     wh_n150_civ2: 34
     wh_n300_civ2: 36
-    bh_p100: 18
-    bh_p150b_civ2: 18
+    bh_p100: 20
+    bh_p150b_civ2: 20
 
 gtm:
   e2e:

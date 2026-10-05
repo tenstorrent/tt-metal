@@ -5,6 +5,7 @@ import pytest
 from helpers.constraints import (
     get_perf_math_operations,
     get_valid_dest_accumulation_modes,
+    get_valid_math_fidelities,
 )
 from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
@@ -16,7 +17,6 @@ from quasar.test_eltwise_binary_broadcast_quasar import (
     BROADCAST_TYPES,
     binary_broadcast_dest_sync_modes,
     binary_broadcast_implied_math_formats,
-    binary_broadcast_math_fidelities,
 )
 from quasar.test_eltwise_binary_broadcast_quasar import (
     test_eltwise_binary_broadcast_quasar as run_eltwise_binary_broadcast,
@@ -30,9 +30,7 @@ from quasar.test_eltwise_binary_broadcast_quasar import (
     dest_acc=get_valid_dest_accumulation_modes,
     mathop=get_perf_math_operations,
     broadcast_type=BROADCAST_TYPES,
-    math_fidelity=lambda formats, mathop: binary_broadcast_math_fidelities(
-        formats, mathop
-    ),
+    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     implied_math_format=lambda formats: binary_broadcast_implied_math_formats(
         formats, is_perf=True
     ),

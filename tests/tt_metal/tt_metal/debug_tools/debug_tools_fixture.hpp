@@ -59,7 +59,7 @@ protected:
 
         this->DetectDispatchMode();
         this->arch_ = tt::tt_metal::MetalContext::instance().get_cluster().arch();
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     void TearDown() override {
@@ -404,7 +404,7 @@ protected:
 
         this->DetectDispatchMode();
         this->arch_ = tt::tt_metal::MetalContext::instance().get_cluster().arch();
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     static void ReleaseSharedDevices() {
@@ -431,9 +431,15 @@ public:
     // Hardware config for a single-threaded data-movement kernel, portable across generations.
     static experimental::DataMovementHardwareConfig SingleThreadDmConfig(tt::ARCH arch) {
         if (arch == tt::ARCH::QUASAR) {
-            return experimental::DataMovementGen2Config{};
+            return experimental::DataMovementHardwareConfig{};
         }
-        return experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+        return experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::NOC_0,
+                },
+        };
     }
 
     // Compiles the kernel and returns the path to its ELF, so the caller can inspect the binary.

@@ -29,6 +29,15 @@
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/kernel_lib/untilize_helpers.hpp"
 
+// Code size: the tree-reduction / finalize move_block calls run once per head, not per K chunk.
+// Without noclone, GCC IPA-CP emits a separate constprop clone of move_block<true> (~0.3-1.7 KB per
+// TRISC each) for every distinct constant CB/tile-count combination. Routing those cold sites
+// through one non-cloneable out-of-line copy saves ~4-6 KB of kernel-config buffer under LLK
+// asserts. The per-K-chunk moves in the flash-attention loop keep calling move_block<true> directly.
+__attribute__((noinline, noclone)) void move_block_ool(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
+    move_block<true>(in_cb, out_cb, num_tiles);
+}
+
 void kernel_main() {
     // Compile time arguments
 
@@ -67,7 +76,17 @@ void kernel_main() {
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(25);
     constexpr uint32_t original_block_size = get_compile_time_arg_val(26);
     constexpr bool has_block_padding = original_block_size > 0 && original_block_size < 32;
+    // Speculative multi-position mode: Tg candidates per batch row (Sq_chunk_t == PNHt == Tg),
+    // each row-tile carrying its own causal bound from this row's group of Tg entries in the
+    // [B*Tg] cur_pos vector (group base = cur_batch*Tg). 0 = off.
+    constexpr uint32_t spec_multi_pos_T = get_compile_time_arg_val(27);
+    constexpr bool spec_multi_pos = spec_multi_pos_T > 0;
 
+    // get_workload_for_core assigns at most one chunk per participating core when
+    // the fixed non-causal chunk count does not exceed num_cores_per_head. Its
+    // local online-softmax correction is then unreachable; tree reduction still runs.
+    constexpr bool single_local_chunk = !is_causal && sliding_window_size == 0 && Sk_chunk_t > 0 &&
+                                        ((St + Sk_chunk_t - 1) / Sk_chunk_t <= num_cores_per_head);
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool untilize_output = tilize_q;
@@ -119,9 +138,14 @@ void kernel_main() {
     const bool has_parent = parent_core_in_group != UINT32_MAX;
 
     // Read children_per_round array
+    // get_tree_reduction_params() only ever assigns children in rounds [0, ceil(log2(N))), so the
+    // remaining slots are always UINT32_MAX; bound every round loop by the compile-time count.
+    constexpr uint32_t num_tree_rounds =
+        num_cores_per_head <= 1 ? 0 : 32 - __builtin_clz(num_cores_per_head - 1);  // ceil(log2(N))
+    static_assert(num_tree_rounds <= MAX_TREE_REDUCTION_ROUNDS);
     uint32_t children_per_round[MAX_TREE_REDUCTION_ROUNDS];
-    for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
-        children_per_round[r] = get_arg_val<uint32_t>(arg_idx++);
+    for (uint32_t r = 0; r < num_tree_rounds; ++r) {
+        children_per_round[r] = get_arg_val<uint32_t>(arg_idx + r);
     }
 
     // Idle core
@@ -135,14 +159,28 @@ void kernel_main() {
     constexpr uint32_t cur_pos_base = St * 32 - 1;
     uint32_t cur_pos = cur_pos_base;  // default to non-causal, which we do attention on the entire kv cache. In this
                                       // case we set cur_pos to the last position
+    // Spec mode: smallest of THIS batch row's Tg candidate bounds. Any chunk whose last
+    // covered position is past it needs the per-row-tile mask (see the mask predicate in the
+    // chunk loop).
+    uint32_t spec_pos_min = 0;
     if constexpr (is_causal) {
         // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
-        if (cur_pos_arg != UINT32_MAX) {
+        // Spec mode requires a cur_pos tensor, so the scalar arg is always UINT32_MAX there.
+        if (!spec_multi_pos && cur_pos_arg != UINT32_MAX) {
             cur_pos = cur_pos_arg;
         } else {
             // Read cur_pos from CB using mailbox-based synchronization (issue #27979).
             CircularBuffer(cb_cur_pos).wait_front(1);
-            cur_pos = read_tile_value(cb_cur_pos, 0, cur_batch / q_heads_parallel_factor);
+            if constexpr (spec_multi_pos) {
+                // cur_pos holds B*Tg bounds; this batch row owns the group starting at
+                // cur_batch*Tg. Within a group positions are ascending: entry 0 is the
+                // smallest bound (mask predicate), entry Tg-1 the largest (KV scan range).
+                const uint32_t spec_pos_base = cur_batch * spec_multi_pos_T;
+                spec_pos_min = read_tile_value(cb_cur_pos, 0, spec_pos_base);
+                cur_pos = read_tile_value(cb_cur_pos, 0, spec_pos_base + spec_multi_pos_T - 1);
+            } else {
+                cur_pos = read_tile_value(cb_cur_pos, 0, cur_batch / q_heads_parallel_factor);
+            }
             CircularBuffer(cb_cur_pos).pop_front(1);
         }
         if (cur_pos == UINT32_MAX) {
@@ -189,7 +227,7 @@ void kernel_main() {
     uint32_t active_children_per_round[MAX_TREE_REDUCTION_ROUNDS];
     uint32_t num_active_rounds = 0;
 
-    for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
+    for (uint32_t r = 0; r < num_tree_rounds; ++r) {
         uint32_t child_id = children_per_round[r];
         if (child_id != UINT32_MAX && child_id < k_num_chunks) {
             // This child has data
@@ -216,11 +254,10 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
         matmul_init(cb_q_in, cb_k_in);
-        // #49266: The Q tilize runs on SrcA; on galaxy Q is a half-tile (num_faces=2), and
-        // tilize_uninit correctly restores SrcA to Q's geometry. But the QK matmul reads operands
-        // REVERSED (SrcA <- in1 = cb_k_in, num_faces=4), and the per-k_chunk reconfig below is
-        // IGNORE (format-only). Reprogram SrcA/SrcB tile geometry ONCE here for the matmul
-        // operands (is_tile_dim_reconfig_en=true) so K is unpacked with the correct num_faces.
+        // #49266: the Q tilize runs on SrcA, and on galaxy Q is a half-tile (num_faces=2).
+        // tilize_uninit leaves SrcA at Q's geometry, but the QK matmul reads operands reversed
+        // (SrcA <- cb_k_in, num_faces=4) and the per-chunk reconfig below is format-only.
+        // Reprogram SrcA/SrcB geometry once here so K is unpacked with the right num_faces.
         // One-time, not per-chunk: nothing after this re-establishes Q's geometry on SrcA (K and V
         // are both full tiles), so the per-chunk reconfig can stay IGNORE. Without this, SrcA stays
         // at num_faces=2 and the matmul reads K wrong -> Top-1 0%. (Full-tile Q: this is a no-op
@@ -242,7 +279,13 @@ void kernel_main() {
 #ifdef DYNAMIC_CHUNK_SIZE
     const uint32_t qk_subblock_h_dynamic = 1;
     const uint32_t qk_subblock_w_dynamic = Sk_chunk_t_dynamic;  // Guaranteed < DST
-    const uint32_t qk_in0_num_subblocks_dynamic = 1;
+    // matmul_blocks() wants in0_num_subblocks == M / subblock_h; with subblock_h fixed at 1
+    // that is Sq_chunk_t, not a literal 1. The literal was correct for every configuration
+    // that reaches the dynamic-chunk path today (all of which have Sq_chunk_t == 1, so this
+    // is byte-for-byte identical for them), but it silently produced only the first row-tile
+    // of QK for Sq_chunk_t > 1 — which is exactly what spec multi-position mode needs
+    // (Sq_chunk_t == PNHt == T).
+    const uint32_t qk_in0_num_subblocks_dynamic = Sq_chunk_t;
     const uint32_t qk_in1_num_subblocks_dynamic = 1;
     const uint32_t out_in0_block_w_dynamic = Sk_chunk_t_dynamic;
     const uint32_t qk_chunk_tiles_dynamic = Sq_chunk_t * Sk_chunk_t_dynamic;
@@ -331,11 +374,32 @@ void kernel_main() {
             reconfig_data_format(cb_k_in, cb_q_in);
             pack_reconfig_data_format(cb_qk_im);
 
+            // Spec mode mask predicate, evaluated by EVERY core for EVERY chunk it owns: a
+            // chunk needs the per-row-tile mask iff its last covered position is past this
+            // batch row's smallest candidate bound. Since a group's Tg bounds span <= Tg-1
+            // consecutive positions and a chunk is >= 32 positions wide, at most two chunks in
+            // the group's scan qualify — but the reversed chunk distribution can put them on
+            // two different cores, so this cannot be reduced to "the reducer core's last
+            // chunk" the way the legacy single-bound mask is. The writer generates one mask
+            // block per chunk that satisfies the identical predicate, in the same ascending
+            // chunk order.
+            const bool spec_chunk_needs_mask =
+                spec_multi_pos && (k_chunk * k_chunk_size_dynamic + k_chunk_size_dynamic - 1) > spec_pos_min;
+
             // OPTIMIZATION: Add the attention mask directly on top of DST if chunk sizes are dynamic
 #ifdef DYNAMIC_CHUNK_SIZE
-                bool add_causal_mask_fusion = is_causal && k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk;
-                bool add_sliding_window_mask_fusion = k_chunk == window_start_chunk && window_start_unaligned > 0;
-                bool add_mask_fusion = add_causal_mask_fusion || use_attention_mask || add_sliding_window_mask_fusion;
+            // Spec mode never fuses the causal mask into the matmul: the fused path
+            // wait_front()s the mask without popping it, which can only serve one masked
+            // chunk. The non-fused add below pops, so several masked chunks can flow
+            // through the single-buffered mask CB. At <= 2 masked chunks per core per
+            // call the extra eltwise add is noise.
+            bool add_causal_mask_fusion =
+                !spec_multi_pos && is_causal && k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk;
+            // sliding_window_size is a compile-time arg; the guard lets GCC drop the window path
+            // (and, with it, the fused-mask matmul path in spec mode) when there is no window.
+            bool add_sliding_window_mask_fusion =
+                sliding_window_size > 0 && k_chunk == window_start_chunk && window_start_unaligned > 0;
+            bool add_mask_fusion = add_causal_mask_fusion || use_attention_mask || add_sliding_window_mask_fusion;
 #else
                 bool add_mask_fusion = false;
                 bool add_sliding_window_mask_fusion = false;
@@ -375,7 +439,14 @@ void kernel_main() {
                 }
 
                 if (!add_mask_fusion) {
-                    if constexpr (is_causal) {
+                    if constexpr (spec_multi_pos) {
+                        // One mask block per qualifying chunk, popped after use so the next
+                        // masked chunk's block can be produced into the same CB.
+                        if (spec_chunk_needs_mask) {
+                            reconfig_data_format(cb_qk_im, cb_mask_in);
+                            add_block_inplace<true>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
+                        }
+                    } else if constexpr (is_causal) {
                         // For decode, we only apply mask at the last chunk for causal mode
                         if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
                             reconfig_data_format(cb_qk_im, cb_mask_in);
@@ -389,7 +460,7 @@ void kernel_main() {
                     }
 
                     // Apply sliding window mask to the first chunk (only on the core that processes it)
-                    if (k_chunk == window_start_chunk && window_start_unaligned > 0) {
+                    if (sliding_window_size > 0 && k_chunk == window_start_chunk && window_start_unaligned > 0) {
                         reconfig_data_format(cb_qk_im, cb_sliding_window_mask_in);
                         add_block_inplace<false>(cb_qk_im, cb_sliding_window_mask_in, qk_chunk_tiles_dynamic);
                     }
@@ -462,7 +533,7 @@ void kernel_main() {
                 /* OUT_ACC += OUT_IM */
                 if (k_chunk == k_chunk_start) {
                     cb_out_mm = cb_out_im;
-                } else {
+                } else if constexpr (!single_local_chunk) {
                     // When there is more than 1 chunk, we perform Lazy Softmax
                     // Reconfig register DF
                     reconfig_data_format(cb_prev_max, cb_cur_max);
@@ -535,7 +606,7 @@ void kernel_main() {
 
                     // Combine child with existing local/accumulated data
                     // Move child's L to cb_prev_sum_2 for correction
-                    move_block<true>(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
+                    move_block_ool(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
                     // Fused Softmax Correction
                     // * Fused Correction is a fused operation that performs the following steps:
                     // * 1. CUR_MAX = max(PREV_MAX, WORKER_MAX)
@@ -556,7 +627,7 @@ void kernel_main() {
                         Sq_chunk_t);
 
                     // OUT_ACC_2 <- CHILD_OUT
-                    move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
+                    move_block_ool(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
 
                     // OUT_ACC *= EXP_MAX_DIFF (scale local accumulator)
                     // OUT_ACC_2 *= EXP_MAX_DIFF_2 (scale child's accumulator)
@@ -571,8 +642,8 @@ void kernel_main() {
                     // PREV_SUM <- CUR_SUM
                     CircularBuffer(cb_prev_max).pop_front(Sq_chunk_t);
                     CircularBuffer(cb_m_in).pop_front(Sq_chunk_t);
-                    move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
-                    move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+                    move_block_ool(cb_cur_max, cb_prev_max, Sq_chunk_t);
+                    move_block_ool(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 }
             }
         }
@@ -640,7 +711,7 @@ void kernel_main() {
                     compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
             } else {
                 // Move output to buffer for the writer
-                move_block<true>(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
+                move_block_ool(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
             }
 
         } else if (has_parent) {
@@ -651,11 +722,11 @@ void kernel_main() {
             //   - cb_prev_sum: L
             //   - cb_prev_max: M
             // Move O to output CB
-            move_block<true>(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
+            move_block_ool(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
             // Move M to output CB
-            move_block<true>(cb_prev_max, cb_out_m, Sq_chunk_t);
+            move_block_ool(cb_prev_max, cb_out_m, Sq_chunk_t);
             // Move L to output CB
-            move_block<true>(cb_prev_sum, cb_out_l, Sq_chunk_t);
+            move_block_ool(cb_prev_sum, cb_out_l, Sq_chunk_t);
         }
     }
 
