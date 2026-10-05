@@ -1023,7 +1023,7 @@ struct Transfer {
     // Keep track of what DFBs contributed to this transfer for the same purpose.
     std::vector<std::shared_ptr<experimental::dfb::detail::DataflowBufferImpl>> dfbs;
     // Logical core the DFB config was serialized for, so it can be re-serialized at trace capture.
-    std::optional<CoreCoord> dfb_logical_core;
+    CoreCoord dfb_logical_core;
     // RTAs must be updated from data every time update_program_dispatch_commmands is called.
     RuntimeArgsData* rta_data = nullptr;
     // If set, this transfer materializes one host-only CrossNode page into its
@@ -2302,10 +2302,11 @@ public:
                         reinterpret_cast<uint32_t*>(data_collection_location[j]));
                 }
                 if (!transfer.dfbs.empty()) {
-                    program_command_sequence.dataflow_buffers_on_core_ranges.push_back(std::move(transfer.dfbs));
-                    program_command_sequence.dfb_configs_payloads.push_back(data_collection_location[j]);
-                    program_command_sequence.dfb_config_sources.push_back(
-                        {transfer.dfb_logical_core.value(), static_cast<uint32_t>(transfer.data.size())});
+                    program_command_sequence.dfb_config_updates.push_back(
+                        {std::move(transfer.dfbs),
+                         transfer.dfb_logical_core,
+                         data_collection_location[j],
+                         static_cast<uint32_t>(transfer.data.size())});
                 }
                 if (transfer.cross_node_config.has_value()) {
                     const auto& [logical_core, remote_dfb_id] = *transfer.cross_node_config;
@@ -3094,22 +3095,18 @@ void update_program_dispatch_commands(
 
     update_circular_buffer_configs(cached_program_command_sequence);
 
-    {
-        uint32_t dfb_i = 0;
-        for (const auto& dfbs_on_core_range : cached_program_command_sequence.dataflow_buffers_on_core_ranges) {
-            uint8_t* dfb_config_payload = cached_program_command_sequence.dfb_configs_payloads[dfb_i];
-            if (!hal.has_tile_counter_registers()) {
-                // WH/BH: overwrite the 4 uint32 words for each DFB slot in-place.
-                for (const auto& dfb : dfbs_on_core_range) {
-                    uint32_t base_index = dfb->device_slot * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
-                    uint32_t* words = reinterpret_cast<uint32_t*>(dfb_config_payload) + base_index;
-                    words[0] = dfb->uniform_alloc_addr();
-                    words[1] = dfb->config.entry_size * dfb->config.num_entries;
-                    words[2] = dfb->config.num_entries;
-                    words[3] = dfb->config.entry_size;
-                }
+    if (!hal.has_tile_counter_registers()) {
+        // WH/BH: overwrite the 4 uint32 words for each DFB slot in-place.
+        for (const ProgramCommandSequence::DataflowBufferConfigUpdate& update :
+             cached_program_command_sequence.dfb_config_updates) {
+            for (const auto& dfb : update.dataflow_buffers) {
+                uint32_t base_index = dfb->device_slot * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
+                uint32_t* words = reinterpret_cast<uint32_t*>(update.dst) + base_index;
+                words[0] = dfb->uniform_alloc_addr();
+                words[1] = dfb->config.entry_size * dfb->config.num_entries;
+                words[2] = dfb->config.num_entries;
+                words[3] = dfb->config.entry_size;
             }
-            dfb_i++;
         }
     }
 
@@ -3307,20 +3304,12 @@ void update_traced_program_dispatch_commands(
         i++;
     }
     // Update DFB Configs
-    TT_ASSERT(
-        trace_node.dfb_configs_payloads.size() ==
-        cached_program_command_sequence.dataflow_buffers_on_core_ranges.size());
-    {
-        uint32_t dfb_i = 0;
-        for ([[maybe_unused]] const auto& dfbs_on_core_range :
-             cached_program_command_sequence.dataflow_buffers_on_core_ranges) {
-            uint8_t* dfb_config_payload = cached_program_command_sequence.dfb_configs_payloads[dfb_i];
-            std::memcpy(
-                dfb_config_payload,
-                trace_node.dfb_configs_payloads[dfb_i].data(),
-                trace_node.dfb_configs_payloads[dfb_i].size());
-            dfb_i++;
-        }
+    TT_ASSERT(trace_node.dfb_configs_payloads.size() == cached_program_command_sequence.dfb_config_updates.size());
+    for (size_t dfb_i = 0; dfb_i < trace_node.dfb_configs_payloads.size(); dfb_i++) {
+        std::memcpy(
+            cached_program_command_sequence.dfb_config_updates[dfb_i].dst,
+            trace_node.dfb_configs_payloads[dfb_i].data(),
+            trace_node.dfb_configs_payloads[dfb_i].size());
     }
     // Refresh the launch-time writes to the dedicated CrossNode config Buffers from the
     // capture-time snapshot (see create_trace_node), matching the non-trace path above.
@@ -3639,48 +3628,22 @@ TraceNode create_trace_node(
         cb_config_payload.resize(first_unused_index);
     }
 
+    const uint32_t dfb_size = program.get_program_config(index).dfb_size;
     std::vector<std::vector<uint8_t>> all_dfb_configs_payloads;
-    if (!hal.has_tile_counter_registers()) {
-        all_dfb_configs_payloads.reserve(cached_program_command_sequence.dataflow_buffers_on_core_ranges.size());
-        for (const auto& dfbs_on_core_range : cached_program_command_sequence.dataflow_buffers_on_core_ranges) {
-            std::vector<uint8_t> dfb_config_payload(
-                max_dfbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t), 0);
-            size_t first_unused_byte = 0;
-            for (const auto& dfb : dfbs_on_core_range) {
-                size_t base_index =
-                    static_cast<size_t>(dfb->device_slot) * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
-                size_t byte_offset = base_index * sizeof(uint32_t);
-                uint32_t* words = reinterpret_cast<uint32_t*>(dfb_config_payload.data()) + base_index;
-                words[0] = dfb->uniform_alloc_addr();
-                words[1] = dfb->config.entry_size * dfb->config.num_entries;
-                words[2] = dfb->config.num_entries;
-                words[3] = dfb->config.entry_size;
-                first_unused_byte = std::max(
-                    first_unused_byte, byte_offset + UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t));
-            }
-            dfb_config_payload.resize(first_unused_byte);
-            all_dfb_configs_payloads.push_back(std::move(dfb_config_payload));
-        }
-    } else {
-        all_dfb_configs_payloads.reserve(cached_program_command_sequence.dataflow_buffers_on_core_ranges.size());
-        for (size_t dfb_i = 0; dfb_i < cached_program_command_sequence.dataflow_buffers_on_core_ranges.size();
-             dfb_i++) {
-            const ProgramCommandSequence::DataflowBufferConfigSource& source =
-                cached_program_command_sequence.dfb_config_sources[dfb_i];
-            std::vector<uint8_t> dfb_config_payload(program.get_program_config(index).dfb_size, 0);
-            const size_t bytes_written = tt::tt_metal::experimental::dfb::detail::serialize_dfb_config_for_core(
-                source.logical_core,
-                cached_program_command_sequence.dataflow_buffers_on_core_ranges[dfb_i],
-                dfb_config_payload);
-            TT_FATAL(
-                bytes_written == source.size,
-                "DFB config for core {} serialized to {} bytes at trace capture, but the command holds {} bytes",
-                source.logical_core.str(),
-                bytes_written,
-                source.size);
-            dfb_config_payload.resize(bytes_written);
-            all_dfb_configs_payloads.push_back(std::move(dfb_config_payload));
-        }
+    all_dfb_configs_payloads.reserve(cached_program_command_sequence.dfb_config_updates.size());
+    for (const ProgramCommandSequence::DataflowBufferConfigUpdate& update :
+         cached_program_command_sequence.dfb_config_updates) {
+        std::vector<uint8_t> dfb_config_payload(dfb_size, 0);
+        const size_t bytes_written = tt::tt_metal::experimental::dfb::detail::serialize_dfb_config_for_core(
+            update.logical_core, update.dataflow_buffers, dfb_config_payload);
+        TT_FATAL(
+            bytes_written == update.size,
+            "DFB config for core {} serialized to {} bytes at trace capture, but the command holds {} bytes",
+            update.logical_core.str(),
+            bytes_written,
+            update.size);
+        dfb_config_payload.resize(bytes_written);
+        all_dfb_configs_payloads.push_back(std::move(dfb_config_payload));
     }
 
     // Snapshot the CrossNodeDFB host config pages so the traced launch replays the binding
