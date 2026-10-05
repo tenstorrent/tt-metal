@@ -37,7 +37,7 @@
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn
   budget_type: unit
-  category: misc
+  category: ccl
 
 - name: ttnn nightly conv tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode" --timeout=600'
