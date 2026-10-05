@@ -27,7 +27,7 @@
 // producers take their head's chunks round-robin, the extras take the share num/den of every head's
 // chunks chunk-major. Placements 0/1 are its NX = 0 case.
 //
-// Handshake: receiver (h, v) reserves its 7 slots for chunk c, resets slot (c % nbuf)'s VALID flag,
+// Handshake (specification: chunk_gdn_handoff_protocol.md in this directory): receiver (h, v) reserves its 7 slots for chunk c, resets slot (c % nbuf)'s VALID flag,
 // then atomically increments credit[h][c % nbuf] on the producer that owns chunk c. That producer sends
 // only at credit[h][c % nbuf] == NV, resets the word, writes, waits for the write ACKS (a flush proves
 // departure only), then sets VALID[c % nbuf] on the receivers. A receiver keeps nbuf-1 hand-offs in

@@ -9,6 +9,7 @@
 // Constants of the fused chunk_gdn producer -> receiver hand-off that host factories and device kernels must
 // agree on. Plain constexpr only: this header is compiled into the host library (both program factories) and
 // JIT-compiled into every GDN kernel, so a drift on either side fails to compile instead of hanging or corrupting.
+// Protocol specification: chunk_gdn_handoff_protocol.md, two directories up.
 namespace gdn_handoff {
 
 // The seven hand-off CBs: prep's OUTPUT index == scan's INPUT index (one physical CB per tensor on the
