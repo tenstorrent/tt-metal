@@ -5,7 +5,7 @@ One Wormhole kernel, two states. The pack thread packs one Float16 32x32 tile fr
 math do no work and spin until packing is over.
 
 **Experiment 1, same code.** The math RISC-V does one L1 load (`lw` from its own profiler buffer)
-at spin iteration `K` of a fixed 20,000-iteration loop. `K` is written by the host to L1
+at spin iteration `K` of a fixed 3,000-iteration loop. `K` is written by the host to L1
 `0x16AFE0` before the launch and read in INIT, so `unpack.elf`, `math.elf` and `pack.elf` are the
 same for every `K`. Silicon (bgd-lab-08, n150): `K` = 0, 225, 250, 400 give 9,071-9,072 cycles
 (fast); `K` = 100..200 and 275..375 give 9,293-9,325 (slow).
