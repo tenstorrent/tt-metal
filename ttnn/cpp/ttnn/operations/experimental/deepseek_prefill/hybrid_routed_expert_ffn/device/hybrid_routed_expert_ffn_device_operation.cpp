@@ -17,8 +17,24 @@ void validate_overlap(const HybridRoutedExpertFfnParams& op, const HybridRoutedE
         "hybrid routed expert overlapped with combine needs dispatched_metadata, expert_offsets, the replicated "
         "global_expert_idx_table and expert_region_offsets");
     TT_FATAL(
-        !t.l1_arena.has_value(),
-        "hybrid routed expert overlapped with combine owns its L1 arena; the caller must not pass one");
+        op.fwd_arrived.has_value() && op.final_arrived.has_value() && op.expert_go.has_value(),
+        "hybrid routed expert overlapped with combine needs the caller's fwd_arrived, final_arrived and expert_go "
+        "global semaphores, created once and passed on every call");
+    // Combine bakes these addresses into its compile-time arguments, so the hashed copies must be the live ones.
+    TT_FATAL(
+        op.fwd_arrived_addr == op.fwd_arrived->address() && op.final_arrived_addr == op.final_arrived->address() &&
+            op.expert_go_addr == op.expert_go->address(),
+        "hybrid routed expert overlapped with combine: the hashed semaphore addresses do not match the semaphores");
+    TT_FATAL(
+        t.l1_arena.has_value() == (op.hybrid_token_threshold > 0),
+        "hybrid routed expert overlapped with combine needs an L1 arena exactly when the fused pass runs "
+        "(threshold {}, arena {})",
+        op.hybrid_token_threshold,
+        t.l1_arena.has_value() ? "present" : "absent");
+    TT_FATAL(
+        op.l1_arena_addr == (t.l1_arena.has_value() ? t.l1_arena->buffer()->address() : 0),
+        "hybrid routed expert overlapped with combine: the hashed L1 arena address 0x{:x} is not the arena's",
+        op.l1_arena_addr);
     // Combine's untilizers read the routed expert's output as bfloat8_b tiles, as combine does back to back.
     TT_FATAL(
         t.output.layout() == tt::tt_metal::Layout::TILE && t.output.dtype() == tt::tt_metal::DataType::BFLOAT8_B,

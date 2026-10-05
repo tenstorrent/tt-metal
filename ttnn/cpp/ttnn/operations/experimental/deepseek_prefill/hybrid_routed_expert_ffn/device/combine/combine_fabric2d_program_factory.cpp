@@ -108,7 +108,9 @@ L1Layout compute_l1_layout(
     const tt::tt_metal::Buffer* arena) {
     const uint32_t base = l1_base(mesh, arena);
     if (arena != nullptr) {
-        sem_floor = std::min(sem_floor, base + static_cast<uint32_t>(arena->aligned_size_per_bank()));
+        // Over an arena the layout only has to stay inside it: the arena is an allocation of its own, so the
+        // allocator already keeps it clear of the global semaphores, wherever they sit relative to it.
+        sem_floor = base + static_cast<uint32_t>(arena->aligned_size_per_bank());
     }
     L1Layout l;
     l.collector_counts = base;

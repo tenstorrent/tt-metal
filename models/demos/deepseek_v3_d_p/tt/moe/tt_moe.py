@@ -318,9 +318,9 @@ class TtMoe(LightweightModule):
             overlap_routed_expert_with_combine: run the routed expert and combine_fabric2d as ONE program
                 (hybrid_routed_expert_moe in overlap mode), combine taking each expert as soon as it is
                 written. Blackhole only, and defaulted to that: None means on wherever it is supported. Needs a fabric payload of a whole bf16 token plus combine_fabric2d's
-                routing tail (get_max_payload_size()), and a threshold that leaves the unified half some
-                experts. A threshold above zero keeps an L1 arena for the program's lifetime, so nothing
-                else may place static circular buffers while its program is cached.
+                routing tail (the model's FABRIC_PAYLOAD_SIZE), and a threshold that leaves the unified half
+                some experts. Its three global semaphores live in the mesh's TT_CCL; everything else it
+                places in L1 is freed when the op returns.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -535,6 +535,10 @@ class TtMoe(LightweightModule):
         # group's rows of the table -- one row per ring chip -- and no other group's. Combine runs on mesh axis
         # 0, so a group is a mesh column: shard the groups across columns and replicate down each one.
         self.overlap_routed_expert_with_combine = overlap_routed_expert_with_combine
+        # Fetched here, not in forward: the first call creates them and synchronizes, which a trace cannot capture.
+        self.combine_overlap_semaphores = (
+            self.tt_ccl.get_combine_overlap_semaphores() if overlap_routed_expert_with_combine else None
+        )
         self.replicated_global_expert_idx_tt = None
         if overlap_routed_expert_with_combine:
             assert (
@@ -746,6 +750,7 @@ class TtMoe(LightweightModule):
             combine_num_links=self.row_num_links,
             num_experts_per_tok=self.num_experts_per_tok,
             seq_len_per_chip=self.seq_len_per_chip,
+            combine_semaphores=self.combine_overlap_semaphores,
         )
         ttnn.deallocate(all_expert_offsets)
         return combined_output

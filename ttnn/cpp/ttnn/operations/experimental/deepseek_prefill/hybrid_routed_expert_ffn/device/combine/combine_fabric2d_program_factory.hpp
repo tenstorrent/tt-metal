@@ -32,10 +32,10 @@ struct CombineFabric2dProgramFactory {
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
-// What a program sharing the chip with combine hands it instead of letting it allocate. The routed expert's L1
-// arena covers every worker core and must be allocated AFTER fwd_arrived and final_arrived, the only allocations
-// combine makes: the allocator reserves an address on every core at once, so an arena taken first leaves no room,
-// and combine's static circular buffers would clash with it wherever they sit.
+// What a program sharing the chip with combine hands it instead of letting it allocate. The overlapped routed
+// expert passes its caller's fwd_arrived and final_arrived, which outlive every launch, and its per-call L1 arena,
+// which covers every worker core: combine places its rings and control region inside that arena rather than at the
+// allocator base, where the arena would clash with combine's static circular buffers.
 struct CombineL1 {
     // Both or neither; null: combine allocates its own.
     const tt::tt_metal::GlobalSemaphore* fwd_arrived = nullptr;
