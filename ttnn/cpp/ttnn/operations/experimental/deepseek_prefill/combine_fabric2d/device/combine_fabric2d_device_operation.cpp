@@ -206,16 +206,15 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         table.dtype() == tt::tt_metal::DataType::INT32 || table.dtype() == tt::tt_metal::DataType::UINT32,
         "combine_fabric2d: global_expert_idx_table must be INT32 or UINT32, got {}",
         table.dtype());
+    // One dispatch group's rows: a chip only relays tokens between the chips of its own ring, so it needs its
+    // ring's slice of the table and no other group's.
     const auto& table_shape = table.logical_shape();
-    const uint32_t groups = num_routed_experts / experts_per_group;
     TT_FATAL(
-        table_shape.rank() == 3 && table_shape[0] == static_cast<int32_t>(groups) &&
-            table_shape[1] == static_cast<int32_t>(extent) &&
+        table_shape.rank() == 3 && table_shape[0] == 1 && table_shape[1] == static_cast<int32_t>(extent) &&
             table_shape[2] == static_cast<int32_t>(args.experts_per_chip),
-        "combine_fabric2d: global_expert_idx_table has shape {}, expected ({}, {}, {}) -- the full table, "
-        "replicated on every device, not the per-device slice the routed expert takes",
+        "combine_fabric2d: global_expert_idx_table has shape {}, expected (1, {}, {}) -- this dispatch group's "
+        "rows, replicated across its ring, not the per-device slice the routed expert takes",
         table_shape,
-        groups,
         extent,
         args.experts_per_chip);
 }
