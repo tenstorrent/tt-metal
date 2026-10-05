@@ -10,6 +10,8 @@ import torch
 from models.experimental.ops.quasar.qwen3_vl.tests.e2e import pcc as P
 from models.experimental.ops.quasar.qwen3_vl.tests.e2e.config import HF_MODEL_ID, RunConfig, parse_grid
 from models.experimental.ops.quasar.qwen3_vl.tests.e2e.presets import PRESETS, build_inputs
+from models.experimental.ops.quasar.qwen3_vl.tests.e2e.progress import ProgressLog
+from models.experimental.ops.quasar.qwen3_vl.tests.e2e.recorder import StageRecorder
 from models.experimental.ops.quasar.qwen3_vl.tt.quasar_config import truncate_hf_config, vision_padded_seq_len
 
 
@@ -189,3 +191,41 @@ def test_shipped_thresholds_cover_all_stages():
         "text.logits.decode2",
     ]:
         assert 0.9 < t(s) <= 1.0
+
+
+class _Op:
+    python_fully_qualified_name = "ttnn.fake"
+
+
+def test_progress_log_unfinished(tmp_path):
+    log = ProgressLog(tmp_path / "progress.log")
+    log.stage = "text.layer0"
+    log.pre(_Op(), (torch.zeros(2, 3),), {})
+    log.post(_Op(), (torch.zeros(2, 3),), {}, None)
+    log.pre(_Op(), (torch.zeros(4),), {})
+    assert log.last_unfinished().startswith("ttnn.fake")
+    text = (tmp_path / "progress.log").read_text()
+    assert "PRE ttnn.fake stage=text.layer0" in text and "POST ttnn.fake" in text
+
+
+def test_recorder_wrap_transform_append(tmp_path, monkeypatch):
+    class Mod:
+        def forward(self, x, mode="prefill"):
+            return x * 2
+
+    m = Mod()
+    rec = StageRecorder(ProgressLog(tmp_path / "p.log"), to_host=lambda t: t.float())
+    rec.wrap(
+        monkeypatch,
+        m,
+        "text.layer0",
+        lambda t: t[:3],
+        when=lambda a, k: k.get("mode", "prefill") == "prefill",
+        append_dim=0,
+    )
+    m.forward(torch.ones(4, 2))
+    m.forward(torch.ones(4, 2), mode="decode")
+    m.forward(torch.ones(4, 2))
+    assert rec.tensors["text.layer0"].shape == (6, 2)
+    assert torch.equal(rec.tensors["text.layer0"], torch.full((6, 2), 2.0))
+    assert rec.seconds["text.layer0"] >= 0
