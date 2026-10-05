@@ -14,6 +14,9 @@ inline void hardshrink_init() { math::_reset_counters_<p_setrwc::SET_ABD_F>(); }
 
 // Whether BF16 DEST runs the generated hardshrink kernel as one call over the whole tile.
 inline constexpr bool hardshrink_bf16_whole_tile = false;
+// The stock hardshrink kernel needs no BF16 setup.
+template <bool bf16_kernel>
+inline void hardshrink_bf16_tile_init() {}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en = true>
 inline void calculate_hardshrink(uint32_t param0) {

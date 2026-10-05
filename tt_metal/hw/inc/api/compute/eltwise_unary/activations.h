@@ -186,6 +186,9 @@ ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void hardshrink_tile_init() { MATH(SFPU_UNARY_INIT(hardshrink)); }
+ALWI void hardshrink_tile_init() {
+    MATH(SFPU_UNARY_INIT(hardshrink));
+    MATH(ckernel::sfpu::hardshrink_bf16_tile_init<!DST_ACCUM_MODE>());
+}
 
 }  // namespace ckernel
