@@ -156,6 +156,11 @@ class DataTransferBlocks(ABC):
 
     SUPPORTED_L1_FORMATS: ClassVar[FrozenSet[DataFormat]] = frozenset()
 
+    #: Edge-mask polarity: whether a set bit in an edge-mask register masks the
+    #: datum. False is Wormhole/Blackhole, where ``PCK_EDGE_OFFSET`` mask 0xFFFF
+    #: passes a row through and 0x0 clears it; Quasar overrides it.
+    EDGE_MASK_MASKED_WHEN_SET: ClassVar[bool] = False
+
     def __init__(self) -> None:
         if not self.SUPPORTED_L1_FORMATS:
             raise TypeError(
@@ -383,6 +388,7 @@ class DataTransferBlocks(ABC):
             relu_threshold=relu_threshold,
             dest_format=dest_format,
             edge_mask=edge_mask,
+            edge_mask_masked_when_set=self.EDGE_MASK_MASKED_WHEN_SET,
         )
         return self.pack_to_l1(values, l1_format, **geometry)
 

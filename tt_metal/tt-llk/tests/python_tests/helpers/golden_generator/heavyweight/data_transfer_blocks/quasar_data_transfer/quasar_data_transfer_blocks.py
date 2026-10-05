@@ -58,6 +58,13 @@ class QuasarDataTransferBlocks(DataTransferBlocks):
     #: ``SUPPORTED_L1_FORMATS`` when this was written. MxFp4's 2x register
     #: formats are omitted because this golden has no storage model for them,
     #: so asking for one should fail rather than quietly produce a plain value.
+    #: Quasar's packer inverts the edge-mask register before the gasket applies
+    #: it ("Flip polarity as Packer Gasket logic uses inverted polarity for
+    #: masking", ``tt_pack_row.sv``), so a set bit masks the datum: 0xFFFF masks
+    #: a whole row and 0x0000 passes it through, the opposite of Wormhole and
+    #: Blackhole. ``EDGE_MASK_ROW_DATUMS_*`` in ``cpack_common.h`` agree.
+    EDGE_MASK_MASKED_WHEN_SET: ClassVar[bool] = True
+
     UNPACK_TO_SRC_FORMATS: ClassVar[Mapping[DataFormat, FrozenSet[DataFormat]]] = {
         **{f: _TO_SRC_FLOAT for f in _MX_FORMATS},
         DataFormat.Float32: _TO_SRC_FLOAT,
