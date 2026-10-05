@@ -600,7 +600,7 @@ class ttMLA:
             )
         # GLM-5.3 indexer reuse: a "shared" layer is sparse but owns no indexer weights — it reuses the
         # most recent "full" layer's top-k indices, injected at forward, and binds a weight-less
-        # ReuseIndexer (never computes). Absent indexer_types (v3.1 / v3.2 / GLM-5.1) every layer is
+        # ReuseIndexer (never computes). Absent indexer_types (v3.1 / v3.2) every layer is
         # "full" -> current behavior, unchanged.
         self._indexer_reuse = indexer_layer_is_reused(config, layer_idx)
         requested_overlap_profile = sparse_mla_overlap_profile
@@ -778,7 +778,7 @@ class ttMLA:
         if cfg.get("num_heads") not in (None, self.num_heads):
             return False
         # Some of those configs are additionally q_lora_rank-specific: the 640 set's program_configs are
-        # dimensionally valid at Kimi's q_lora_rank (1536) but overflow the grid at GLM-5.1's (2048), even
+        # dimensionally valid at Kimi's q_lora_rank (1536) but overflow the grid at GLM-5.3's (2048), even
         # though both have 64 heads. When a config declares a q_lora_rank that doesn't match this model,
         # fall back so a same-heads/same-seq variant doesn't pick up an invalid program_config.
         if cfg.get("q_lora_rank") not in (None, self.q_lora_rank):
@@ -1281,11 +1281,11 @@ class ttMLA:
         return_kv_intermediates: bool,
         kvpe_cache: MlaKvCache,
         metadata: Optional[ttnn.Tensor] = None,
-    ) -> tuple[ttnn.Tensor, Optional[ttnn.Tensor], dict | None]:
+    ) -> tuple[ttnn.Tensor | tuple[ttnn.Tensor, ...], Optional[ttnn.Tensor], dict | None]:
         """Shared KV stem.
 
-        Returns tt_kvpe in the persistent cache representation. The returned value is both written to the
-        cache and consumed by attention without a decode/re-encode round trip.
+        Returns packed cache values, or separate fields for fused sparse BF16/scaled-FP8
+        cache writes. Sparse attention consumes the written cache; dense attention consumes packed values.
         """
         # NOTE: input is ideally L1 for chunked, but hidden states memory config is set outside the module
         kv_mm_kwargs = self._get_mm_kwargs("kv_a_proj_with_mqa", seq_len_local)
@@ -1350,6 +1350,16 @@ class ttMLA:
             kv_intermediates["tt_kv_nope"] = ttnn.clone(tt_kv_nope)
             kv_intermediates["tt_kv_rope"] = ttnn.clone(tt_kv_rope)
 
+        if self._has_indexer and not return_kv_intermediates:
+            # Keep separate fields alive until the cache writer packs them directly into storage.
+            if kvpe_cache.format == MlaKvCacheFormat.BF16_RM:
+                return (tt_kv_nope, tt_kv_rope), None, None
+            if kvpe_cache.format == MlaKvCacheFormat.SCALED_FP8:
+                fields = kvpe_cache.prepare_scaled_fp8_inputs(tt_kv_nope, tt_kv_rope, keep_rope_tiled=True)
+                ttnn.deallocate(tt_kv_nope)
+                if fields[2] is not tt_kv_rope:
+                    ttnn.deallocate(tt_kv_rope)
+                return fields, None, None
         tt_kvpe = kvpe_cache.pack(tt_kv_nope, tt_kv_rope, intermediates=kv_intermediates)
         ttnn.deallocate(tt_kv_rope)
         if self._has_indexer:
@@ -1386,7 +1396,7 @@ class ttMLA:
     def _update_kv_cache(
         self,
         cache: MlaKvCache,
-        values: ttnn.Tensor,
+        values: ttnn.Tensor | tuple[ttnn.Tensor, ...],
         *,
         cache_user_id: int,
         cache_layer_idx: int,
@@ -1403,6 +1413,12 @@ class ttMLA:
         # the combination is supported. The op still validates that the tensor is present.
         # Metadata (trace-safe) path: slot_idx (metadata[0]) + kv_actual_global (metadata[1]) read
         # on-device, each its own 1-element tensor. Scalar path passes host slot/kv_actual_global.
+        rope = scales = None
+        if isinstance(values, tuple):
+            if cache.format == MlaKvCacheFormat.SCALED_FP8:
+                values, scales, rope = values
+            else:
+                values, rope = values
         if metadata is not None:
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 cache.storage,
@@ -1414,6 +1430,8 @@ class ttMLA:
                 cluster_axis=self.sp_axis,
                 valid_global=metadata[2],  # actual_end tensor
                 tp_axis=tp_axis,
+                rope=rope,
+                scales=scales,
             )
         else:
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
@@ -1426,6 +1444,8 @@ class ttMLA:
                 cluster_axis=self.sp_axis,
                 valid_global=actual_end,
                 tp_axis=tp_axis,
+                rope=rope,
+                scales=scales,
             )
 
     def _output_gate(self, hidden_states: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
@@ -1826,7 +1846,8 @@ class ttMLA:
         seq_len_local,
     ):
         """Consume joined/finalized branch outputs on the restored default full-grid manager."""
-        ttnn.deallocate(tt_kvpe)
+        for value in tt_kvpe if isinstance(tt_kvpe, tuple) else (tt_kvpe,):
+            ttnn.deallocate(value)
 
         # Sparse attention runs over latent V; project to v_head_dim afterwards. The prefix is already
         # sliced to this slot (batch-1), so no cache_batch_idx.
@@ -2010,7 +2031,8 @@ class ttMLA:
             metadata=metadata,
             tp_axis=self.tp_shard_kv_axis,  # KV dedup: write only this chip's 1/tp window
         )
-        ttnn.deallocate(tt_kvpe)
+        for value in tt_kvpe if isinstance(tt_kvpe, tuple) else (tt_kvpe,):
+            ttnn.deallocate(value)
 
         ttnn.tracy_message("`TT_SIGNPOST: MLA_END`")
         return None
