@@ -20,7 +20,7 @@ architecture and call it with tensors.
 """
 
 from dataclasses import dataclass, field, fields
-from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import torch
 from helpers.format_config import DataFormat
@@ -550,10 +550,48 @@ class Golden:
         return self.blocks.unpack_from_l1(packed_blocks, cfg.out_format, **cfg.geometry)
 
     def run_l1(
-        self, l1_buffers: Sequence, cfg: OpConfig, *, trace=None
+        self,
+        l1_buffers: Union[Sequence, Mapping[str, Sequence[int]], Registers],
+        cfg: OpConfig,
+        *,
+        trace=None,
     ) -> Sequence[int]:
-        """Run on L1 buffers and return an L1 buffer, for chaining ops together."""
-        regs = Registers(**{f"in{i}": b for i, b in enumerate(l1_buffers)})
-        self.last_chain = self.build_chain(cfg)
+        """Run on L1 buffers and return an L1 buffer, for chaining ops together.
+
+        A sequence fills ``in0``, ``in1``, ... -- enough for a chain that reads
+        one tile per operand. A chain that folds tiles also reads ``in0_t1`` and
+        up, and reuse-dest reads its seed, which only names can supply: pass a
+        mapping or :class:`Registers` keyed by register name for those.
+
+        Either way the buffers are checked against what the chain reads before
+        anything runs, so a missing one is named up front rather than surfacing
+        as a KeyError mid-chain, and one the chain never reads is refused rather
+        than silently ignored.
+        """
+        if isinstance(l1_buffers, Registers):
+            regs = l1_buffers
+        elif isinstance(l1_buffers, Mapping):
+            regs = Registers(**l1_buffers)
+        else:
+            regs = Registers(**{f"in{i}": b for i, b in enumerate(l1_buffers)})
+        chain = self.build_chain(cfg)
+
+        # The chain's inputs: what a step reads before any earlier step wrote it.
+        inputs, written = [], set()
+        for step in chain:
+            inputs += [r for r in step.reads if r not in written and r not in inputs]
+            written.update(step.writes)
+        missing = [name for name in inputs if name not in regs]
+        unused = chain.unread(regs.names())
+        if missing or unused:
+            raise ValueError(
+                f"{type(self).__name__}'s chain reads {inputs}; "
+                + (f"missing {missing}" if missing else "")
+                + ("; " if missing and unused else "")
+                + (f"never reads {unused}" if unused else "")
+                + ". Pass the buffers as a mapping keyed by register name."
+            )
+
+        self.last_chain = chain
         self.last_dest_format = cfg.dest_format
-        return self.last_chain.run(regs, result="out", trace=trace)
+        return chain.run(regs, result="out", trace=trace)
