@@ -303,12 +303,20 @@ class LTXAttention(Module):
 
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
 
+        # LTX_SDPA_MM_LOFI=1 runs the SDPA QK^T and softmax @ V matmuls at LoFi; the rest of the kernel
+        # keeps sdpa_compute_kernel_config's fidelity. Only ring_joint SDPA reads matmul_math_fidelity:
+        # the local configs carry it without effect. Unset passes no kwarg, so every config is built
+        # exactly as without the knob. Read per instance so one process can build both arms of an A/B.
+        self.sdpa_mm_lofi = os.environ.get("LTX_SDPA_MM_LOFI", "0") in ("1", "true", "True")
+        sdpa_mm_kwargs = {"matmul_math_fidelity": ttnn.MathFidelity.LoFi} if self.sdpa_mm_lofi else {}
+
         full_grid = self.mesh_device.compute_with_storage_grid_size()
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=full_grid,
             q_chunk_size=256,
             k_chunk_size=256,
             exp_approx_mode=False,
+            **sdpa_mm_kwargs,
         )
 
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)
@@ -325,6 +333,7 @@ class LTXAttention(Module):
             q_chunk_size=ring_sdpa_chunk_size[0],
             k_chunk_size=ring_sdpa_chunk_size[1],
             exp_approx_mode=False,
+            **sdpa_mm_kwargs,
         )
         self._ring_pc_by_n = {
             n: ttnn.SDPAProgramConfig(
@@ -332,6 +341,7 @@ class LTXAttention(Module):
                 q_chunk_size=chunk[0],
                 k_chunk_size=chunk[1],
                 exp_approx_mode=False,
+                **sdpa_mm_kwargs,
             )
             for n, chunk in ring_chunks_by_n.items()
         }
@@ -341,6 +351,7 @@ class LTXAttention(Module):
                 q_chunk_size=chunk[0],
                 k_chunk_size=chunk[1],
                 exp_approx_mode=False,
+                **sdpa_mm_kwargs,
             )
             for (b, q, kv), chunk in self.sdpa_chunk_by_shape.items()
             if b == mesh_key[0]
@@ -354,6 +365,7 @@ class LTXAttention(Module):
             q_chunk_size=cross_ring_q_chunk,
             k_chunk_size=ring_sdpa_chunk_size[1],
             exp_approx_mode=False,
+            **sdpa_mm_kwargs,
         )
 
         # All SDPA (ring + cross) runs HiFi2, matching the Wan attention config.

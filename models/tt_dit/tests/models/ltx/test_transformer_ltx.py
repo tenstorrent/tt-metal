@@ -1888,6 +1888,47 @@ def test_ring_sdpa_defaults_reach_per_n_configs_when_env_unset(monkeypatch):
     assert attention._ring_pc_by_n.get(99999, attention.ring_sdpa_program_config) is attention.ring_sdpa_program_config
 
 
+@pytest.mark.parametrize(("env", "expected"), [(None, None), ("0", None), ("1", ttnn.MathFidelity.LoFi)])
+def test_sdpa_mm_lofi_env_reaches_every_sdpa_config(monkeypatch, env, expected):
+    if env is None:
+        monkeypatch.delenv("LTX_SDPA_MM_LOFI", raising=False)
+    else:
+        monkeypatch.setenv("LTX_SDPA_MM_LOFI", env)
+    monkeypatch.setattr(attention_ltx, "is_blackhole", lambda: True)
+    monkeypatch.setattr(attention_ltx, "DistributedRMSNorm", lambda **_kwargs: object())
+    monkeypatch.setattr(attention_ltx, "ColParallelLinear", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(attention_ltx, "bf16_tensor", lambda tensor, **_kwargs: tensor)
+    monkeypatch.setattr(ttnn, "init_device_compute_kernel_config", lambda *_args, **_kwargs: object())
+
+    mesh_device = SimpleNamespace(
+        compute_with_storage_grid_size=lambda: ttnn.CoreCoord(8, 8),
+        arch=lambda: ttnn.device.Arch.BLACKHOLE,
+    )
+    parallel_config = SimpleNamespace(
+        sequence_parallel=SimpleNamespace(factor=8, mesh_axis=0),
+        tensor_parallel=SimpleNamespace(factor=4, mesh_axis=1),
+    )
+
+    attention = attention_ltx.LTXAttention(
+        dim=128,
+        num_heads=8,
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+    )
+
+    configs = [
+        attention.sdpa_program_config,
+        attention.ring_sdpa_program_config,
+        attention.cross_ring_sdpa_program_config,
+        *attention._ring_pc_by_n.values(),
+        *attention._sdpa_pc_by_shape.values(),
+    ]
+    assert attention._ring_pc_by_n and attention._sdpa_pc_by_shape
+    assert [config.matmul_math_fidelity for config in configs] == [expected] * len(configs)
+    # The knob changes fidelity only: K split and segmented accumulation stay off.
+    assert all(config.max_k_splits == 1 and not config.segmented_accumulation for config in configs)
+
+
 @pytest.mark.parametrize("bad", ["abc,256", "128,", "128", "1,2,3"])
 def test_ring_sdpa_chunk_override_malformed_names_env_var(bad, expect_error):
     # Both the non-numeric parse and the wrong-arity check must name the env var, so a bad sweep
