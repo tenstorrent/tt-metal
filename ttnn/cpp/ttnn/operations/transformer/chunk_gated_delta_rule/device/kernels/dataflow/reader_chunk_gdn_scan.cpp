@@ -39,6 +39,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/debug/assert.h"
+#include "api/debug/ring_buffer.h"
 #include "api/debug/waypoint.h"
 #include "chunk_gdn_handoff.hpp"
 
@@ -476,9 +477,13 @@ void kernel_main() {
         // is credited only after it was reserved, i.e. after compute popped the chunk
         // that last used it — which the producer's VALID for that chunk preceded, which its reset of
         // this very word preceded. Hence the word counts exactly one chunk at a time for any map.
-        const uint32_t pw = producer_word(gdn_fused_owner(map, h, c));
+        const uint32_t owner = gdn_fused_owner(map, h, c);
+        const uint32_t pw = producer_word(owner);
         const uint64_t dst = get_noc_addr(pw & 0xFFu, pw >> 8, credit_base + 4 * slot, noc.get_noc_id());
         noc_semaphore_inc(dst, 1, noc.get_noc_id());
+#ifdef GDN_HANDOFF_CHECKS
+        WATCHER_RING_BUFFER_PUSH(gdn_handoff::handoff_trace_word(gdn_handoff::kRxIssued, c, slot, owner));
+#endif
     };
 
     uint32_t next = 0;
@@ -497,7 +502,26 @@ void kernel_main() {
         {
             DeviceZoneScopedN("rx_wait_valid");
 #ifdef GDN_HANDOFF_CHECKS
-            Semaphore<>(SEM_VALID + (c % NBUF)).wait(c + 1);  // C7: exactly this chunk's flag
+            // C7: exactly this chunk's flag; C9: a flag that never comes reports (chunk, slot, value seen) instead of
+            // hanging.
+            {
+                const uint32_t slot = c % NBUF;
+                volatile tt_l1_ptr uint32_t* flag =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_VALID + slot));
+                uint32_t polls = 0;
+                uint32_t seen;
+                do {
+                    invalidate_l1_cache();
+                    seen = *flag;
+                    if (seen != c + 1 && ++polls > gdn_handoff::kHandoffSpinLimit) {
+                        WATCHER_RING_BUFFER_PUSH(
+                            gdn_handoff::handoff_trace_word(gdn_handoff::kRxValidTimeout, c, slot, seen));
+                        ASSERT(false);
+                        polls = 0;
+                    }
+                } while (seen != c + 1);
+                WATCHER_RING_BUFFER_PUSH(gdn_handoff::handoff_trace_word(gdn_handoff::kRxValidSeen, c, slot, seen));
+            }
 #else
             Semaphore<>(SEM_VALID + (c % NBUF)).wait(VALID);
 #endif
