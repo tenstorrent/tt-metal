@@ -24,7 +24,6 @@ T = 32
 ER_RM = (
     os.environ.get("DSV41_ENGRAM_UPLOAD", "rm") == "rm"
 )  # Engram rows uploaded row-major and tilized on the device (="tile": old host tilize)
-PF_ASYNC = os.environ.get("DSV41_PF_ASYNC", "1") == "1"  # traced chunk replays enqueued without a per-chunk device sync
 HEAD_FUSED = (
     os.environ.get("DSV41_HEAD_FUSED", "1") == "1"
 )  # one head trace for all users, last-token rows picked on the device
@@ -637,13 +636,18 @@ class DSV41PrefillModel:
             ttnn.end_trace_capture(self.md, self.dyn_trace, cq_id=0)
             ttnn.synchronize_device(self.md)
             self.timing["compile_and_capture"] = time.perf_counter() - t0
-        fut = pool.submit(prep_rec, 0)
+        MODE = os.environ.get(
+            "DSV41_PF_ASYNC", "1"
+        )  # "1" async, "0" sync (host work still prepared in the worker), "legacy": the original loop
+        legacy = MODE == "legacy"
+        fut = pool.submit(prep if legacy else prep_rec, 0)
         t_run = time.perf_counter()
         # Asynchronous replay loop (DSV41_PF_ASYNC=1): the per-chunk uploads and the trace are enqueued on CQ 0 (in-order: a chunk's uploads only land
         # after the previous replay finished), so the host work of chunk i+1 (index tables, Engram rows, uploads) overlaps the replay of chunk i. The
         # host runs at most 1 replay ahead (event of replay ci-1 awaited before chunk ci's copies). Chunks whose post hooks read the replay's outputs
         # (ragged last-token head) synchronize as before. DSV41_PF_ASYNC=0 restores the per-chunk synchronize_device.
         events = []
+        PF_ASYNC = MODE == "1"  # traced chunk replays enqueued without a per-chunk device sync
         for ci in range(n):
             t0 = time.perf_counter()
             if PF_ASYNC and ci >= 1:
@@ -653,12 +657,18 @@ class DSV41PrefillModel:
             t_ev = time.perf_counter()
             ops = fut.result()
             if ci + 1 < n:
-                fut = pool.submit(prep_rec, ci + 1)
+                fut = pool.submit(prep if legacy else prep_rec, ci + 1)
             t_g = time.perf_counter()
-            replay(ops)
-            del ops
-            t_u = time.perf_counter()
-            t1 = t_u
+            if legacy:
+                self.upload_inputs(ops, bufs)
+                t_u = time.perf_counter()
+                self.begin_chunk(ci * C, C)
+                t1 = time.perf_counter()
+            else:
+                replay(ops)
+                del ops
+                t_u = time.perf_counter()
+                t1 = t_u
             ttnn.execute_trace(self.md, self.dyn_trace, cq_id=0, blocking=False)
             need = (not PF_ASYNC) or any(
                 getattr(hk, "needs_sync", lambda s0_, C_: True)(ci * C, C) for hk in self.post_replay_hooks
