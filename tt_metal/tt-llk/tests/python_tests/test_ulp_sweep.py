@@ -238,20 +238,23 @@ def test_a_row_for_another_architecture_survives_a_regeneration(table):
     assert any("arch: BLACKHOLE, max_ulp: 44" in row for row in _rows(table))
 
 
-def test_a_row_carrying_a_floor_is_kept_rather_than_regenerated(table):
-    """`_render` emits only `max_ulp` or `metric: tolerance`, so a `near_zero_atol`
-    floor cannot be put back — and it cannot ride along on a demotion either, since
-    `AccuracyContract` refuses the field outside the ULP metric. Emitting over it would
-    drop it silently; keeping it as well would give the cell two equally specific keys.
-    """
+def test_a_row_carrying_a_floor_is_regenerated_from_the_measurement(table):
+    """`near_zero_atol` is a field the emitter writes (`near_zero_floor`), so a block
+    with a floor row is no longer kept verbatim: a re-measurement replaces the row,
+    with a floor when the cell needs one and without when it does not. Keeping the
+    block was how Erfinv and Gelu stayed on a hand-set floor through every emit."""
     table.write_text(
         "Gelu:\n"
         "  - {in: Float16, out: Float16, max_ulp: 2, near_zero_atol: 5.59e-07}  # floor\n",
         encoding="utf-8",
     )
-    record("Gelu", _CELL, 5)
-    assert write_table(table, "today") == (0, ["Gelu"])
-    assert "near_zero_atol: 5.59e-07}  # floor" in table.read_text()  # kept verbatim
+    for approx in ("No", "Yes"):
+        for dest in ("No", "Yes"):
+            record("Gelu", ("Float16", "Float16", approx, dest), 5)
+    assert write_table(table, "today") == (1, [])
+    text = table.read_text()
+    assert "near_zero_atol" not in text
+    assert "{in: Float16, out: Float16, max_ulp: 6}" in text
 
 
 @pytest.mark.parametrize(
@@ -1123,7 +1126,7 @@ def test_emit_writes_on_a_clean_wormhole_session(table):
 def test_a_whole_table_emit_over_the_real_table_ends_green(tmp_path, monkeypatch):
     """Every op the emit sweeps, measured on every cell, written into a copy of the
     checked-in table. The ops whose blocks carry a hand-maintained row -- a
-    `near_zero_atol` floor, an op-wide `atol`/`rtol` anchor -- are kept verbatim by
+    op-wide `atol`/`rtol` anchors (GeluAppx, SigmoidAppx) -- are kept verbatim by
     design, so they are named in the summary rather than failing the run: as a refusal
     they turned every whole-table emit red, and threw the rest of its verdict away."""
     import shutil
@@ -1271,12 +1274,13 @@ def test_emit_refuses_a_partly_measured_grid(table):
 
 
 def test_an_op_with_an_unregenerable_row_is_kept_while_the_rest_are_written(tmp_path):
-    """A floor row the sweep covers cannot be re-derived from a measurement. Its op
-    keeps its block verbatim, every other op is written, and the caller is told."""
+    """An op-wide or pinned ``atol``/``rtol`` row the sweep covers cannot be re-derived
+    from a measurement. Its op keeps its block verbatim, every other op is written,
+    and the caller is told."""
     path = tmp_path / "budget.yaml"
     path.write_text(
         "Erfinv:\n"
-        "  - {in: Float16, out: Float16, max_ulp: 2, near_zero_atol: 1.0e-07}  # floor\n"
+        "  - {in: Float16, out: Float16, metric: tolerance, atol: 0.2}  # hand atol\n"
         "\n"
         "Gelu:\n"
         "  - {in: Float16, out: Float16, max_ulp: 7}  # superseded\n",
@@ -1289,7 +1293,7 @@ def test_an_op_with_an_unregenerable_row_is_kept_while_the_rest_are_written(tmp_
     MEASURED.clear()
     text = path.read_text()
     assert (written, kept) == (1, ["Erfinv"])
-    assert "near_zero_atol: 1.0e-07}  # floor" in text
+    assert "atol: 0.2}  # hand atol" in text
     assert "max_ulp: 7" not in text and "max_ulp: 6" in text
 
 
@@ -1297,3 +1301,166 @@ def test_a_rewritten_block_keeps_one_blank_line_before_the_next(table):
     record("Gelu", _CELL, 5)
     write_table(table, "today")
     assert "\n\n\n" not in table.read_text()
+
+
+def test_the_claim_excludes_the_poles_of_the_gamma_family():
+    """Digamma, Lgamma and Polygamma have a pole at every non-positive integer; the
+    claim leaves those lanes out (torch's trigamma answers a finite 4e15 at -6.0, the
+    kernel inf, and neither is a measurement). -0.0 is the pole at 0; -2.5 is not a
+    pole; an op without the lattice keeps every lane."""
+    from helpers.ulp_sweep import claimed_lanes
+
+    src = torch.tensor([-3.0, -2.5, -0.0, 0.0, 0.5, 2.0], dtype=torch.float32)
+    for op in (MathOperation.Digamma, MathOperation.Lgamma, MathOperation.Polygamma):
+        assert claimed_lanes(op, src, DataFormat.Float32).tolist() == [
+            False,
+            True,
+            False,
+            False,
+            True,
+            True,
+        ], op.name
+    assert claimed_lanes(MathOperation.Abs, src, DataFormat.Float32).all()
+
+
+def test_a_lane_the_dest_cannot_hold_is_neither_ranked_nor_a_failure():
+    """A Float16 input runs on an fp16 Dest. Under a Float32 output an answer past
+    65504 or below 6.1e-5 is the Dest's overflow or flush, not the op's; the golden's
+    finite 131008 substitute for an fp16 infinity is the overflow case in disguise.
+    Under a Float16 output the Dest is as wide as the output and nothing is excluded,
+    and a bf16 Dest has fp32's range."""
+    from helpers.ulp_sweep import dest_holds
+
+    golden = torch.tensor(
+        [70000.0, 131008.0, 1e-5, 0.0, 1.0, 65504.0], dtype=torch.float32
+    )
+    assert dest_holds(
+        golden, DataFormat.Float16, DataFormat.Float32, DestAccumulation.No
+    ).tolist() == [False, False, False, True, True, True]
+    assert dest_holds(
+        golden, DataFormat.Float16, DataFormat.Float16, DestAccumulation.No
+    ).all()
+    assert dest_holds(
+        golden, DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No
+    ).all()
+    assert dest_holds(golden, DataFormat.Float16).all()  # variant not named
+
+    src = torch.full((6,), 2.0, dtype=torch.float16)
+    result = golden.clone()
+    result[0], result[1], result[2] = 65536.0, 66048.0, 0.0
+    mask = measurable_mask(
+        src, golden, result, DataFormat.Float16, DataFormat.Float32, DestAccumulation.No
+    )
+    assert mask.tolist() == [False, False, False, True, True, True]
+    assert not nonfinite_failures(
+        MathOperation.Exp,
+        src,
+        golden,
+        result,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        dest_acc=DestAccumulation.No,
+    ).any()
+
+
+def test_the_near_zero_floor_is_derived_from_the_band_and_capped():
+    """A cell demoted only by near-zero lanes gets the floor that covers them -- the
+    band's largest absolute error with headroom, two figures -- and the budget of the
+    lanes outside it. A cell that fits gets none; one whose band error is past the cap
+    stays demoted; a lane outside the band (|golden| >= 1% of the cell's maximum) is
+    never rescued."""
+    from helpers.ulp_sweep import EMIT_MAX_NEAR_ZERO_ATOL, near_zero_floor
+
+    fmt = DataFormat.Float16_b
+    golden = torch.full((32,), 1.5, dtype=torch.bfloat16)
+    golden[30], golden[31] = 1e-6, 0.5
+    result = golden.clone()
+    result[1] = 1.5078125  # one bf16 step above 1.5
+    result[30] = 0.0  # the hardware flushed a 1e-6 answer: ~14,000 steps, 1e-6 absolute
+    mask = torch.ones(32, dtype=torch.bool)
+
+    def floor(res):
+        from helpers.ulp import ulp_distance
+
+        return near_zero_floor(
+            golden, res, ulp_distance(golden, res, flush_subnormals=True), mask, fmt
+        )
+
+    residual, atol = floor(result)
+    assert residual == 1
+    assert atol == pytest.approx(
+        1.1e-6, rel=1e-6
+    )  # 9.98e-7 (bf16's 1e-6) x 1.1, rounded up
+
+    fits = golden.clone()
+    fits[1] = 1.5078125
+    assert floor(fits) is None  # under the ceiling without a floor
+
+    past_cap = golden.clone()
+    past_cap[30] = 0.01  # 0.01 absolute, past EMIT_MAX_NEAR_ZERO_ATOL
+    assert 0.01 > EMIT_MAX_NEAR_ZERO_ATOL
+    assert floor(past_cap) is None
+
+    outside_band = golden.clone()
+    outside_band[31] = 0.0  # |golden| = 0.5 is not under 1% of 1.5
+    assert floor(outside_band) is None
+
+
+def test_a_floored_cell_is_written_with_its_floor_and_read_back(table):
+    """The row carries `max_ulp` for the lanes outside the floor and `near_zero_atol`
+    for the floor; the note leads with the residual, which is the figure the
+    provenance audit and the headroom report compare against, and records the
+    unfloored maximum. The loader accepts the row as a ULP contract with a floor."""
+    from helpers.sfpu_accuracy_budget import _load_table
+
+    for approx in ("No", "Yes"):
+        for dest in ("No", "Yes"):
+            record(
+                "Gelu", ("Float16", "Float16", approx, dest), 14337, floor=(2, 2.4e-7)
+            )
+    assert write_table(table, "today") == (1, [])
+    (row,) = [r for r in _rows(table) if r.startswith("- {in: Float16, out: Float16, ")]
+    assert row.startswith(
+        "- {in: Float16, out: Float16, max_ulp: 3, near_zero_atol: 2.40e-07}"
+    )
+    assert row.endswith(
+        "# max 2 ULP outside a 2.40e-07 near-zero floor (14337 steps over every lane)"
+    )
+    contracts = _load_table(table)[MathOperation.Gelu]
+    (contract,) = [
+        c for k, c in contracts.items() if k.input_format is DataFormat.Float16
+    ]
+    assert (contract.max_ulp, contract.near_zero_atol) == (3, 2.4e-7)
+
+
+def test_a_floor_that_still_leaves_the_cell_over_the_ceiling_demotes_and_says_so(table):
+    for approx in ("No", "Yes"):
+        for dest in ("No", "Yes"):
+            record(
+                "Gelu", ("Float16", "Float16", approx, dest), 14337, floor=(100, 1e-3)
+            )
+    write_table(table, "today")
+    (row,) = [r for r in _rows(table) if r.startswith("- {in: Float16, out: Float16, ")]
+    assert "metric: tolerance}" in row and "near_zero_atol" not in row
+    assert row.endswith(
+        "# max 14337 ULP, budget 15771 > ceiling 51; 100 ULP outside a 1.00e-03 near-zero floor"
+    )
+
+
+def test_floored_measurements_survive_the_xdist_merge():
+    """A worker exports a floored cell as a dict and the controller folds it back as
+    `Floored`; the worst lane still wins against a plain reading either way."""
+    from helpers.ulp_sweep import Floored
+
+    MEASURED.clear()
+    key = ("Float16", "Float16", "No", "No")
+    record("Gelu", key, 14337, floor=(2, 2.4e-7))
+    exported = export_measured()
+    MEASURED.clear()
+    merge_measured(exported)
+    assert MEASURED["Gelu"][key] == Floored(14337, 2, 2.4e-7)
+    record("Gelu", key, 5, floor=(1, 1e-7))  # a smaller reading does not replace it
+    assert MEASURED["Gelu"][key] == Floored(14337, 2, 2.4e-7)
+    record("Gelu", key, 20000)  # a larger one does, floor or not
+    assert MEASURED["Gelu"][key] == 20000
+    MEASURED.clear()

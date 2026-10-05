@@ -990,12 +990,18 @@ def test_the_floor_covers_every_lane_of_an_all_zero_golden():
     assert is_valid.tolist() == [True, True, False]
 
 
-def test_no_lane_is_reported_as_rescued_when_it_was_in_budget_anyway():
-    golden = _t([100.0, 1e-8], torch.float32)
-    _, _, rescued = ulp_elementwise_valid(
-        golden, golden.clone(), 4, near_zero_atol=1e-7
-    )
-    assert not bool(rescued.any())
+def test_every_floor_covered_lane_is_reported_covered_even_within_budget():
+    """The third return is the set of lanes the floor *judges*, not the ones it had to
+    save: a lane in the band and within atol is reported covered whether or not it was
+    also within the step budget. The emitter derives a floored row's budget from the
+    lanes outside the floor, so a reader that ranked a covered lane within budget would
+    read a step more than the row records -- 135 floored cells showed no headroom that
+    way. A lane outside the band is never covered, in budget or not."""
+    golden = _t([100.0, 1e-8, 50.0], torch.float32)
+    result = golden.clone()
+    result[2] = 50.00001  # outside the band, 2 steps
+    _, _, covered = ulp_elementwise_valid(golden, result, 4, near_zero_atol=1e-7)
+    assert covered.tolist() == [False, True, False]
 
 
 def test_the_near_zero_band_is_bounded_absolutely_as_well_as_relatively():
