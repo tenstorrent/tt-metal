@@ -4,6 +4,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
+import json
+from pathlib import Path
+
+import pytest
+
 from tracy.perf_counter_multipass import (
     PERF_COUNTER_L1_GROUPS,
     PERF_COUNTER_MAX_GROUPS_PER_PASS,
@@ -11,6 +17,7 @@ from tracy.perf_counter_multipass import (
     merge_perf_counter_device_logs,
     perf_counter_groups_to_bitfield,
     schedule_perf_counter_passes,
+    run_perf_counter_passes,
 )
 
 CSV_HEADER = (
@@ -70,71 +77,310 @@ def test_bitfield_matches_perf_counters_hpp_bits():
     assert perf_counter_groups_to_bitfield(["l1_5"]) == 1 << 9
 
 
-def test_merge_keeps_pass0_whole_and_appends_only_counter_rows(tmp_path):
-    pass0 = tmp_path / "pass_0.csv"
-    pass1 = tmp_path / "pass_1.csv"
-    merged = tmp_path / "merged.csv"
-    pass0.write_text(CSV_HEADER + row(0, 1, 1, "BRISC", 4096, 100, 0, 7) + row(0, 1, 1, "BRISC", " 9090 ", 110, 42, 7))
-    pass1.write_text(
-        CSV_HEADER
-        + row(0, 1, 1, "BRISC", 4096, 105, 0, 7)
-        + row(0, 1, 1, "BRISC", 9090, 115, 43, 7)
-        + row(0, 1, 1, "TRISC_0", 9090, 116, 44, 7)
-    )
-
-    merge_perf_counter_device_logs([pass0, pass1], merged)
-
-    lines = merged.read_text().splitlines()
-    assert lines[0] == CSV_HEADER.rstrip("\n")
-    assert lines[1:3] == [
-        row(0, 1, 1, "BRISC", 4096, 100, 0, 7).rstrip(),
-        row(0, 1, 1, "BRISC", " 9090 ", 110, 42, 7).rstrip(),
-    ]
-    # appended rows keep their data but take pass 0's timestamp for the same core and run host id, whatever the RISC
-    assert lines[3:] == [
-        row(0, 1, 1, "BRISC", 9090, 110, 43, 7).rstrip(),
-        row(0, 1, 1, "TRISC_0", 9090, 110, 44, 7).rstrip(),
-    ]
-    assert sum("4096" in line for line in lines) == 1
-    assert sum(line.startswith("PCIe") for line in lines) == 1
-
-
-def test_merge_anchors_each_trace_replay_on_its_own_pass0_row(tmp_path):
-    pass0 = tmp_path / "pass_0.csv"
-    pass1 = tmp_path / "pass_1.csv"
-    merged = tmp_path / "merged.csv"
-
-    def traced(ts, data, replay):
-        return ",".join(str(f) for f in (0, 1, 1, "BRISC", 9090, ts, data, 7, 3, replay)) + ",,,,,\n"
-
-    # two replays of one traced op share the run host id and differ in the trace id counter
-    pass0.write_text(CSV_HEADER + traced(110, 42, 0) + traced(210, 42, 1))
-    pass1.write_text(CSV_HEADER + traced(115, 43, 0) + traced(215, 43, 1) + traced(315, 43, 2))
-
-    merge_perf_counter_device_logs([pass0, pass1], merged)
-
-    lines = merged.read_text().splitlines()
-    # the third replay has no pass 0 row and is dropped
-    assert lines[3:] == [traced(110, 43, 0).rstrip(), traced(210, 43, 1).rstrip()]
-
-
-def test_merge_drops_counter_rows_with_no_pass0_anchor(tmp_path):
-    pass0 = tmp_path / "pass_0.csv"
-    pass1 = tmp_path / "pass_1.csv"
-    merged = tmp_path / "merged.csv"
-    pass0.write_text(CSV_HEADER + row(0, 1, 1, "BRISC", 9090, 110, 42, 7))
-    pass1.write_text(CSV_HEADER + row(0, 1, 1, "BRISC", 9090, 115, 43, 7) + row(0, 2, 2, "BRISC", 9090, 116, 44, 9))
-
-    merge_perf_counter_device_logs([pass0, pass1], merged)
-
-    lines = merged.read_text().splitlines()
-    assert lines[1:] == [
-        row(0, 1, 1, "BRISC", 9090, 110, 42, 7).rstrip(),
-        row(0, 1, 1, "BRISC", 9090, 110, 43, 7).rstrip(),
-    ]
-
-
 def test_arch_l1_groups():
     assert arch_l1_groups(True) == ["l1_0", "l1_1", "l1_2", "l1_3", "l1_4", "l1_5"]
     assert arch_l1_groups(False, is_quasar=True) == []
     assert arch_l1_groups(False) == ["l1_0", "l1_1"]
+
+
+FPU = ["FPU_COUNTER", "SFPU_COUNTER", "MATH_COUNTER"]
+PACK = [
+    "PACKER0_DEST_READ_REQ",
+    "PACKER_BUSY",
+    "DEST_READ_GRANTED_0",
+    "MATH_NOT_STALLED_DEST_WR_PORT",
+    "MATH_NOT_SCOREBOARD_STALLED",
+]
+IDENTITY = [0, 1, 1, "BRISC", 7, None, None]
+
+
+def counter_row(identity, counter, timestamp=110):
+    chip, x, y, risc, op, trace, replay = identity
+    metadata = json.dumps({"counter type": counter, "ref cnt": 100, "value": 42}).replace(",", ";")
+    fields = [
+        chip,
+        x,
+        y,
+        risc,
+        9090,
+        timestamp,
+        42,
+        op,
+        "" if trace is None else trace,
+        "" if replay is None else replay,
+        "",
+        "TS_DATA",
+        0,
+        "",
+        metadata,
+    ]
+    return ",".join(map(str, fields)) + "\n"
+
+
+def make_capture(tmp_path, identities=None):
+    identities = identities or [IDENTITY]
+    paths, manifests = [], []
+    for i, counters in enumerate((FPU, PACK)):
+        path = tmp_path / f"pass_{i}.csv"
+        path.write_text(
+            "ARCH: blackhole\n"
+            + CSV_HEADER
+            + "".join(
+                counter_row(key, counter, 110 + 100 * i + 1000 * n)
+                for n, key in enumerate(identities)
+                for counter in counters
+            )
+        )
+        paths.append(path)
+        manifests.append(
+            {
+                "schema_version": 1,
+                "arch": "blackhole",
+                "bitfield": [1, 2][i],
+                "device_log_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "executed_readouts": identities,
+            }
+        )
+    return paths, manifests
+
+
+def rebind(path, manifest):
+    # Synthetic independent execution evidence stays fixed when mutating CSV coverage.
+    manifest["device_log_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_valid_disjoint_groups_and_replay_anchors(tmp_path):
+    ids = [IDENTITY, [0, 1, 1, "BRISC", 8, 3, 0], [0, 1, 1, "BRISC", 8, 3, 1], [1, 2, 2, "BRISC", 9, None, None]]
+    paths, evidence = make_capture(tmp_path, ids)
+    original = [p.read_bytes() for p in paths]
+    out = tmp_path / "merged.csv"
+    merge_perf_counter_device_logs(paths, out, [1, 2], evidence)
+    lines = out.read_text().splitlines(keepends=True)
+    assert "".join(lines[:14]) == original[0].decode()
+    assert lines[14:] == [counter_row(key, c, 110 + 1000 * n) for n, key in enumerate(ids) for c in PACK]
+    assert [p.read_bytes() for p in paths] == original
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "extra_operation",
+        "missing_operation",
+        "missing_chip",
+        "missing_replay",
+        "no_counter_rows",
+        "missing_core",
+        "wrong_risc",
+        "missing_counter",
+        "duplicate",
+    ],
+)
+def test_incomplete_capture_rejected_without_publishing(tmp_path, fault):
+    ids = [
+        IDENTITY,
+        [0, 1, 1, "BRISC", 8, None, None],
+        [1, 1, 1, "BRISC", 7, None, None],
+        [0, 1, 1, "BRISC", 7, 3, 1],
+        [0, 2, 1, "BRISC", 7, None, None],
+    ]
+    paths, evidence = make_capture(tmp_path, ids)
+    lines = paths[1].read_text().splitlines(keepends=True)
+    if fault == "extra_operation":
+        lines.append(counter_row([0, 1, 1, "BRISC", 99, None, None], PACK[0]))
+    elif fault in ("missing_operation", "missing_chip", "missing_replay", "missing_core"):
+        index = {"missing_operation": 1, "missing_chip": 2, "missing_replay": 3, "missing_core": 4}[fault]
+        del lines[2 + index * 5 : 2 + (index + 1) * 5]
+    elif fault == "no_counter_rows":
+        lines = lines[:2]
+    elif fault == "wrong_risc":
+        lines[2] = lines[2].replace("BRISC", "TRISC_0")
+    elif fault == "missing_counter":
+        del lines[2]
+    else:
+        lines.append(lines[2])
+    paths[1].write_text("".join(lines))
+    rebind(paths[1], evidence[1])
+    out = tmp_path / "merged.csv"
+    out.write_text("previous result\n")
+    with pytest.raises(ValueError):  # allow-pytest.raises: CPU-only contracts
+        merge_perf_counter_device_logs(paths, out, [1, 2], evidence)
+    assert out.read_text() == "previous result\n"
+
+
+@pytest.mark.parametrize(
+    "case", ["extra_operation", "missing_operation", "missing_chip", "missing_replay", "no_counter_rows"]
+)
+def test_run43_original_fixtures_fail_closed(tmp_path, case):
+    # Same header and rows as run43/cpu_review.py; no independent execution evidence exists.
+    def record(op=1, chip=0, replay=0, timer=9090):
+        return f"{chip},0,0,BRISC,{timer},100,42,{op},0,{replay},counter,TS_DATA,1,kernel.cpp\n"
+
+    base, later = record(), record()
+    if case == "extra_operation":
+        later += record(op=2)
+    if case == "missing_operation":
+        base += record(op=2)
+    if case == "missing_chip":
+        base += record(chip=1)
+    if case == "missing_replay":
+        base, later = record(replay=1) + record(replay=2), record(replay=1)
+    if case == "no_counter_rows":
+        later = record(timer=123)
+    header = "ARCH: blackhole\nDEVICE ID,CORE X,CORE Y,RISC,TIMER ID,TIME[cycles since reset],STAT VALUE,RUN HOST ID,TRACE ID,TRACE ID COUNTER,ZONE NAME,ZONE PHASE,SOURCE LINE,SOURCE FILE\n"
+    logs = tmp_path / ".logs"
+    logs.mkdir()
+    calls = []
+
+    def workload(env):
+        (logs / "profile_log_device.csv").write_text(header + (base if not calls else later))
+        calls.append(env)
+
+    assert run_perf_counter_passes(workload, {}, [1, 32], tmp_path) is False
+    assert not (logs / "profile_log_device.csv").exists()
+    assert (logs / "perf_counter_passes/pass_0.csv").read_text() == header + base
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["absent", "stale_hash", "mask", "duplicate_identity", "different_execution", "empty", "arch", "malformed_counter"],
+)
+def test_unverifiable_evidence_fails_closed(tmp_path, fault):
+    paths, evidence = make_capture(tmp_path)
+    if fault == "absent":
+        evidence = None
+    elif fault == "stale_hash":
+        evidence[1]["device_log_sha256"] = "0" * 64
+    elif fault == "mask":
+        evidence[1]["bitfield"] = 1
+    elif fault == "duplicate_identity":
+        evidence[1]["executed_readouts"] = [IDENTITY, IDENTITY]
+    elif fault == "different_execution":
+        evidence[1]["executed_readouts"] = [[0, 1, 1, "BRISC", 99, None, None]]
+    elif fault == "empty":
+        evidence[1]["executed_readouts"] = []
+    elif fault == "arch":
+        evidence[1]["arch"] = "quasar"
+    else:
+        paths[1].write_text(paths[1].read_text().replace('"counter type"', '"unknown"'))
+        rebind(paths[1], evidence[1])
+    with pytest.raises(ValueError):  # allow-pytest.raises: CPU-only contracts
+        merge_perf_counter_device_logs(paths, tmp_path / "merged.csv", [1, 2], evidence)
+
+
+def test_runner_contract_preserves_raw_and_reports_success(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    paths, evidence = make_capture(source)
+    logs = tmp_path / ".logs"
+    logs.mkdir()
+    calls = []
+
+    def workload(env):
+        i = len(calls)
+        calls.append(env)
+        (logs / "profile_log_device.csv").write_bytes(paths[i].read_bytes())
+        Path(env["TT_METAL_PROFILER_EXECUTION_MANIFEST"]).write_text(json.dumps(evidence[i]))
+
+    assert run_perf_counter_passes(workload, {}, [1, 2], tmp_path) is True
+    result = json.loads((logs / "perf_counter_passes/merge_result.json").read_text())
+    assert result["complete"] is True
+    for i in range(2):
+        assert (logs / f"perf_counter_passes/pass_{i}.csv").read_bytes() == paths[i].read_bytes()
+    # Never overwrite raw evidence from a previous invocation.
+    assert run_perf_counter_passes(workload, {}, [1, 2], tmp_path) is False
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    "fault", ["correlated_missing_core", "wrong_counter", "unrequested_counter", "truncated", "raw_output"]
+)
+def test_common_loss_and_invalid_records_fail_closed(tmp_path, fault):
+    identities = [IDENTITY, [1, 1, 1, "BRISC", 7, None, None]]
+    paths, evidence = make_capture(tmp_path, identities)
+    output = tmp_path / "merged.csv"
+    if fault == "correlated_missing_core":
+        for path, manifest in zip(paths, evidence):
+            path.write_text(
+                "\n".join(line for line in path.read_text().splitlines() if not line.startswith("1,")) + "\n"
+            )
+            rebind(path, manifest)
+    elif fault == "wrong_counter":
+        paths[0].write_text(paths[0].read_text().replace("FPU_COUNTER", "FPU_COUNTER_BAD"))
+        rebind(paths[0], evidence[0])
+    elif fault == "unrequested_counter":
+        paths[0].write_text(paths[0].read_text() + counter_row(IDENTITY, PACK[0]))
+        rebind(paths[0], evidence[0])
+    elif fault == "truncated":
+        paths[0].write_text(paths[0].read_text().rstrip())
+        rebind(paths[0], evidence[0])
+    else:
+        output = paths[0]
+    before = [p.read_bytes() for p in paths]
+    with pytest.raises(ValueError):  # allow-pytest.raises: CPU-only contracts
+        merge_perf_counter_device_logs(paths, output, [1, 2], evidence)
+    assert [p.read_bytes() for p in paths] == before
+
+
+@pytest.mark.parametrize("failure", ["missing_log", "exception", "exit", "bad_manifest"])
+def test_runner_failures_preserve_raw_logs_and_result(tmp_path, failure):
+    logs = tmp_path / ".logs"
+    logs.mkdir()
+
+    def workload(env):
+        if failure != "missing_log":
+            (logs / "profile_log_device.csv").write_text("raw failed capture\n")
+        if failure == "exception":
+            raise RuntimeError("workload failed")
+        if failure == "exit":
+            raise SystemExit(4)
+        if failure == "bad_manifest":
+            Path(env["TT_METAL_PROFILER_EXECUTION_MANIFEST"]).write_text("{")
+
+    assert run_perf_counter_passes(workload, {}, [1, 2], tmp_path) is False
+    assert not (logs / "profile_log_device.csv").exists()
+    result = json.loads((logs / "perf_counter_passes/merge_result.json").read_text())
+    assert result["complete"] is False and result["error"]
+    if failure != "missing_log":
+        assert (logs / "perf_counter_passes/pass_0.csv").read_text() == "raw failed capture\n"
+
+
+def test_cli_exits_four_on_failed_merge():
+    # Execute the actual CLI dispatch block without importing native Tracy or launching processes.
+    import ast
+    import sys
+
+    root = Path(__file__).resolve().parents[3]
+    tree = ast.parse((root / "tools/tracy/__main__.py").read_text())
+    block = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.If) and ast.unparse(n.test) == "pass_bitfields and len(pass_bitfields) > 1"
+    )
+    with pytest.raises(SystemExit) as failure:  # allow-pytest.raises: CPU-only contracts
+        exec(
+            compile(ast.Module(body=[block], type_ignores=[]), "cli-dispatch", "exec"),
+            {
+                "pass_bitfields": [1, 2],
+                "run_perf_counter_passes": lambda *a: False,
+                "run_workload": None,
+                "envVars": {},
+                "outputFolder": None,
+                "sys": sys,
+            },
+        )
+    assert failure.value.code == 4
+
+
+@pytest.mark.parametrize("arch", ["blackhole", "wormhole_b0"])
+def test_native_semantics_cover_every_scheduled_group(arch):
+    from tracy.perf_counter_multipass import _expected_counter_types, resolve_perf_counter_groups
+    from tracy.perf_counter_sizing import COUNTERS_PER_GROUP
+
+    groups = resolve_perf_counter_groups(["all"], arch)
+    for scheduled in schedule_perf_counter_passes(groups):
+        assert len(_expected_counter_types(arch, scheduled)) == sum(COUNTERS_PER_GROUP[arch][g] for g in scheduled)
+    assert _expected_counter_types(arch, ["fpu"]) == set(FPU)
+    l1 = _expected_counter_types(arch, ["l1_0"])
+    assert ("L1_0_UNPACKER_1_ECC" in l1) == (arch == "blackhole")
+    assert ("L1_0_UNPACKER_1_ECC_PACK1" in l1) == (arch == "wormhole_b0")
+    assert "L1_0_UNIFIED_PACKER" not in l1  # retired enum slot is not emitted

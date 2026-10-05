@@ -5,7 +5,11 @@
 """Multi-pass perf counter capture: group tables, pass scheduling (one L1 bank per pass, the BRISC firmware
 fits three groups), per-pass workload replay and the device log merge. tracy/__main__.py only calls in here."""
 
+import hashlib
+import json
 import math
+import re
+import tempfile
 import os
 from pathlib import Path
 from shutil import copyfile
@@ -179,67 +183,230 @@ def _counter_row_fields(line):
     return None
 
 
-def _op_key(fields):
-    # device, core, run host id and the trace replay a traced op belongs to; every RISC of the core reads out the
-    # same op, so the RISC is not part of it
-    return tuple(
-        fields[c].strip()
-        for c in (0, 1, 2, PERF_COUNTER_RUN_HOST_ID_COL, PERF_COUNTER_TRACE_ID_COL, PERF_COUNTER_TRACE_ID_COUNTER_COL)
+def _readout_key(values):
+    """Canonical executed BRISC readout: chip, x, y, RISC, op, trace, replay.
+
+    Blank trace fields denote eager execution; never collapse them onto replay 0.
+    No counters are emitted by the other RISCs (perf_counters.hpp).
+    """
+    if not isinstance(values, (list, tuple)) or len(values) != 7:
+        raise ValueError("Readout identity must contain chip/core/RISC/op/trace/replay")
+    values = list(values)
+    for i in (0, 1, 2, 4, 5, 6):
+        value = values[i]
+        if i in (5, 6) and value in (None, ""):
+            values[i] = None
+        elif type(value) is int and value >= 0:
+            pass
+        elif isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
+            values[i] = int(value)
+        else:
+            raise ValueError(f"Invalid readout identity: {values}")
+    if values[3] != "BRISC" or (values[5] is None) != (values[6] is None):
+        raise ValueError(f"Invalid BRISC/trace identity: {values}")
+    return tuple(values)
+
+
+def _groups_for_mask(bitfield):
+    known = sum(1 << b for b in PERF_COUNTER_GROUP_BITS.values())
+    if type(bitfield) is not int or bitfield <= 0 or bitfield & ~known:
+        raise ValueError(f"Invalid counter pass mask: {bitfield}")
+    groups = [g for g, bit in PERF_COUNTER_GROUP_BITS.items() if bitfield & (1 << bit)]
+    if len(groups) > PERF_COUNTER_MAX_GROUPS_PER_PASS or len(set(groups) & PERF_COUNTER_L1_GROUPS) > 1:
+        raise ValueError(f"Uncaptureable counter pass mask: {bitfield}")
+    return groups
+
+
+def _expected_counter_types(arch, groups):
+    """Use the exact native readout arrays, including grant-side/retired IDs.
+
+    Missing or changed table syntax fails closed. Installed builds must retain
+    these source headers; source/native-build attestation belongs to the caller.
+    """
+    directories = {"blackhole": "blackhole", "wormhole_b0": "wormhole"}
+    if not isinstance(arch, str) or arch not in directories:
+        raise ValueError(f"Unsupported counter completeness architecture: {arch}")
+    resolve_perf_counter_groups(groups, arch)
+    header = Path(__file__).resolve().parents[2] / (
+        f"tt_metal/hw/inc/internal/tt-1xx/{directories[arch]}/hw_counters.h"
     )
+    text = re.sub(r"//[^\n]*|/\*.*?\*/", "", header.read_text(), flags=re.S)
+    counters = set()
+    for group in groups:
+        arrays = re.findall(
+            r"std::array<std::pair<PerfCounterType,\s*std::uint16_t>,\s*(\d+)>\s+"
+            + re.escape(group)
+            + r"_counters\s*=\s*\{(.*?)\};",
+            text,
+            re.S,
+        )
+        if len(arrays) != 1:
+            raise ValueError(f"Cannot establish counter semantics for {arch}/{group}")
+        count, body = arrays[0]
+        names = re.findall(r"PerfCounterType::(\w+)", body)
+        if not names or len(names) != int(count) or len(set(names)) != len(names) or counters.intersection(names):
+            raise ValueError(f"Ambiguous counter semantics for {arch}/{group}")
+        counters.update(names)
+    return counters
 
 
-def merge_perf_counter_device_logs(pass_csvs, out_csv):
-    """Merge per-pass device logs: pass 0 whole, later passes add their counter rows re-timestamped onto pass 0."""
-    base = Path(pass_csvs[0]).read_text().splitlines(keepends=True)
-    anchors = {}
-    for line in base:
-        fields = _counter_row_fields(line)
-        if fields:
-            anchors.setdefault(_op_key(fields), fields[PERF_COUNTER_TIMESTAMP_COL].strip())
+def _file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
-    merged, unanchored = list(base), 0
-    for extra in pass_csvs[1:]:
-        for line in Path(extra).read_text().splitlines(keepends=True):
-            fields = _counter_row_fields(line)
-            if not fields:
+
+def _validate_pass(path, bitfield, evidence):
+    if (
+        not isinstance(evidence, dict)
+        or type(evidence.get("schema_version")) is not int
+        or evidence["schema_version"] != 1
+    ):
+        raise ValueError("Missing/unsupported independent execution manifest (schema_version=1 required)")
+    if type(evidence.get("bitfield")) is not int or evidence["bitfield"] != bitfield:
+        raise ValueError("Execution manifest does not match the scheduled pass mask")
+    if evidence.get("device_log_sha256") != _file_sha256(path):
+        raise ValueError("Execution manifest does not match raw device log SHA256")
+    arch = evidence.get("arch")
+    counters = _expected_counter_types(arch, _groups_for_mask(bitfield))
+    records = evidence.get("executed_readouts")
+    if not isinstance(records, list) or not records:
+        raise ValueError("No independently established executed readouts")
+    expected = {_readout_key(record) for record in records}
+    if len(expected) != len(records):
+        raise ValueError("Duplicate execution identities are ambiguous")
+    observed, anchors = {}, {}
+    with Path(path).open() as stream:
+        if stream.readline().split(",", 1)[0].strip() != f"ARCH: {arch}":
+            raise ValueError("Device log architecture does not match execution evidence")
+        header = stream.readline().split(",")
+        if len(header) != 15 or header[4].strip() != "timer_id" or header[14].strip() != "meta data":
+            raise ValueError("Unsupported device log columns")
+        for line_number, line in enumerate(stream, 3):
+            fields = [field.strip() for field in line.split(",")]
+            if len(fields) != 15 or not line.endswith("\n"):
+                raise ValueError(f"Malformed device log row {line_number}")
+            if fields[PERF_COUNTER_TIMER_ID_COL] != PERF_COUNTER_MARKER_ID:
                 continue
-            anchor = anchors.get(_op_key(fields))
-            if anchor is None:
-                unanchored += 1
-                continue
-            fields[PERF_COUNTER_TIMESTAMP_COL] = anchor
-            merged.append(",".join(fields))
-    if unanchored:
-        logger.warning(f"Dropped {unanchored} perf-counter rows with no matching op in pass 0")
-    Path(out_csv).write_text("".join(merged))
+            key = _readout_key([fields[c] for c in (0, 1, 2, 3, 7, 8, 9)])
+            if key not in expected:
+                raise ValueError(f"Unmatched counter readout at row {line_number}: {key}")
+            if fields[11] != "TS_DATA" or not re.fullmatch(r"[0-9]+", fields[5]):
+                raise ValueError(f"Invalid counter marker at row {line_number}")
+            metadata = json.loads(fields[14].replace(";", ","))
+            if not isinstance(metadata, dict):
+                raise ValueError(f"Invalid counter metadata at row {line_number}")
+            counter = metadata.get("counter type")
+            if not isinstance(counter, str) or counter not in counters:
+                raise ValueError(f"Unexpected/missing counter type at row {line_number}: {counter}")
+            for field in ("value", "ref cnt"):
+                if type(metadata.get(field)) is not int or not 0 <= metadata[field] <= 0xFFFFFFFF:
+                    raise ValueError(f"Invalid {field} for {counter} at row {line_number}")
+            seen = observed.setdefault(key, set())
+            if counter in seen:
+                raise ValueError(f"Duplicate counter record at row {line_number}: {key}/{counter}")
+            seen.add(counter)
+            anchors.setdefault(key, fields[5])
+    for key in expected:
+        missing = counters - observed.get(key, set())
+        if missing:
+            raise ValueError(f"Missing required counters for {key}: {sorted(missing)}")
+    return arch, expected, anchors
+
+
+def merge_perf_counter_device_logs(pass_csvs, out_csv, pass_bitfields=None, execution_manifests=None):
+    """Validate every scheduled pass before publishing; raise ValueError on incomplete evidence.
+
+    Execution manifests must come from independent dispatch/replay evidence,
+    never from surviving counter rows. See perf_counter_multipass.md. A complete
+    result is relative to that execution scope, not a final-drain/loss attestation.
+    """
+    if not pass_csvs or not pass_bitfields or execution_manifests is None:
+        raise ValueError("Counter merge requires scheduled passes and independent execution manifests")
+    if len(pass_csvs) != len(pass_bitfields) or len(pass_csvs) != len(execution_manifests):
+        raise ValueError("Missing scheduled pass log or execution manifest")
+    if Path(out_csv).resolve() in {Path(p).resolve() for p in pass_csvs}:
+        raise ValueError("Merged output must not overwrite a raw pass log")
+    used_mask, reference, anchors = 0, None, None
+    for path, mask, evidence in zip(pass_csvs, pass_bitfields, execution_manifests):
+        _groups_for_mask(mask)
+        if used_mask & mask:
+            raise ValueError("Counter groups repeated across scheduled passes")
+        used_mask |= mask
+        arch, executed, pass_anchors = _validate_pass(path, mask, evidence)
+        if reference is None:
+            reference, anchors = (arch, executed), pass_anchors
+        elif reference != (arch, executed):
+            raise ValueError("Executed chip/core/RISC/op/trace/replay scope differs between passes")
+    # All required identities and group-specific records have passed. Raw snapshots
+    # stay untouched, and disjoint groups need not have equal row counts.
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=Path(out_csv).parent, delete=False) as output:
+            temporary = Path(output.name)
+            with Path(pass_csvs[0]).open() as base:
+                for line in base:
+                    output.write(line)
+            for path in pass_csvs[1:]:
+                with Path(path).open() as extra:
+                    for line in extra:
+                        fields = _counter_row_fields(line)
+                        if fields:
+                            key = _readout_key([fields[c].strip() for c in (0, 1, 2, 3, 7, 8, 9)])
+                            fields[PERF_COUNTER_TIMESTAMP_COL] = anchors[key]
+                            output.write(",".join(fields))
+        os.replace(temporary, out_csv)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def run_perf_counter_passes(run_workload, env, pass_bitfields, output_folder):
-    """Run the workload once per pass mask and merge the device logs; False if a pass left no log."""
+    """Capture raw logs plus execution sidecars; return False for unverifiable captures.
+
+    The workload adapter writes TT_METAL_PROFILER_EXECUTION_MANIFEST after its
+    final drain. CLI callers already translate False to exit 4 before reporting.
+    """
     logs_folder = generate_logs_folder(output_folder)
     device_log = logs_folder / PROFILER_DEVICE_SIDE_LOG
     pass_dir = logs_folder / "perf_counter_passes"
-    pass_dir.mkdir(parents=True, exist_ok=True)
-    pass_logs = []
-    for i, bitfield in enumerate(pass_bitfields):
-        logger.info(f"Perf-counter pass {i + 1}/{len(pass_bitfields)} (bitfield {bitfield})")
-        if device_log.is_file():
-            device_log.unlink()  # fresh per pass so each snapshot holds only that pass
-        pass_env = dict(env)
-        pass_env["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)
-        run_workload(pass_env)
-        if device_log.is_file():
-            snap = pass_dir / f"pass_{i}.csv"
-            copyfile(device_log, snap)
-            pass_logs.append(snap)
-        else:
-            logger.error(f"Device log missing after perf-counter pass {i + 1}: {device_log}")
-    if len(pass_logs) != len(pass_bitfields):
-        logger.error(
-            f"Only {len(pass_logs)}/{len(pass_bitfields)} perf-counter passes produced a device log; "
-            "not merging a partial capture"
-        )
+    try:
+        pass_dir.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        logger.error(f"Refusing to overwrite raw counter pass artifacts: {pass_dir}")
         return False
-    merge_perf_counter_device_logs(pass_logs, device_log)
-    logger.info(f"Merged {len(pass_logs)} perf-counter pass logs into {device_log}")
-    return True
+    pass_logs, manifests = [], []
+    result = {"schema_version": 1, "complete": False, "pass_bitfields": pass_bitfields, "raw_pass_logs": []}
+    try:
+        for i, bitfield in enumerate(pass_bitfields):
+            _groups_for_mask(bitfield)
+            logger.info(f"Perf-counter pass {i + 1}/{len(pass_bitfields)} (bitfield {bitfield})")
+            if device_log.is_file():
+                device_log.unlink()
+            evidence_path = pass_dir / f"pass_{i}.execution.json"
+            pass_env = dict(env)
+            pass_env["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)
+            pass_env["TT_METAL_PROFILER_EXECUTION_MANIFEST"] = str(evidence_path.resolve())
+            try:
+                run_workload(pass_env)
+            finally:
+                if device_log.is_file():
+                    snap = pass_dir / f"pass_{i}.csv"
+                    copyfile(device_log, snap)
+                    pass_logs.append(snap)
+                    result["raw_pass_logs"].append(str(snap.resolve()))
+            manifests.append(json.loads(evidence_path.read_text()) if evidence_path.is_file() else None)
+        merge_perf_counter_device_logs(pass_logs, device_log, pass_bitfields, manifests)
+        result["merged_log"] = {"path": str(device_log.resolve()), "sha256": _file_sha256(device_log)}
+        result["complete"] = True
+        logger.info(f"Merged {len(pass_logs)} verified perf-counter pass logs into {device_log}")
+    except (OSError, ValueError, RuntimeError, SystemExit) as error:
+        result["error"] = str(error)
+        logger.error(f"Incomplete perf-counter capture: {error}; raw logs retained in {pass_dir}")
+    finally:
+        if not result["complete"] and device_log.is_file():
+            device_log.unlink()  # never leave a last-pass log masquerading as the merged result
+        (pass_dir / "merge_result.json").write_text(json.dumps(result, indent=2) + "\n")
+    return result["complete"]
