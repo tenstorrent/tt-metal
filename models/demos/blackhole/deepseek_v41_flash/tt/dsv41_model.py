@@ -38,6 +38,24 @@ from models.demos.blackhole.deepseek_v41_flash.tt.paged_ops import PAGE_TOKENS, 
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import DSV41PrefillAttention, clear_chunk_caches
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_handoff import GenPrefillModel, PagedStateSink
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import DSV41PrefillLayer, DSV41PrefillMoE
+
+UNI_MOE = (
+    os.environ.get("DSV41_PREFILL_MOE", "") == "unified"
+)  # prefill routed experts via ttnn.experimental.deepseek_prefill (default off)
+
+
+def UNI_LAYERS(layer_ids):
+    """Layers that use the unified prefill MoE: DSV41_UNI_LAYERS="all" (default) or e.g. "2-11,20"."""
+    v = os.environ.get("DSV41_UNI_LAYERS", "all")
+    if v == "all":
+        return set(layer_ids)
+    out = set()
+    for part in v.split(","):
+        lo, _, hi = part.partition("-")
+        out |= set(range(int(lo), int(hi or lo) + 1))
+    return out & set(layer_ids)
+
+
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_model import T
 
 GATE_CUTOFFS = json.loads((Path(__file__).resolve().parents[1] / "configs" / "gate_cutoffs.json").read_text())
@@ -115,6 +133,12 @@ class Model:
             pmoe = DSV41PrefillMoE(layer.moe, T=T, buffers=None if first_pmoe is None else first_pmoe.decode.buffers)
             first_pmoe = first_pmoe or pmoe
             pls.append((L, DSV41PrefillLayer(layer, pa, pmoe, T=T)))
+            if UNI_MOE and L in UNI_LAYERS(
+                self.layer_ids
+            ):  # deepseek_prefill routed-expert pipeline (tt/prefill_unified_moe.py)
+                from models.demos.blackhole.deepseek_v41_flash.tt.prefill_unified_moe import DSV41UnifiedMoE
+
+                pls[-1][1].umoe = DSV41UnifiedMoE(mesh_device, L, log=log)
             key = getattr(attn, "ratio", 0)
             if key not in self.step_groups:
                 self.step_groups[key] = DSV41StepState_paged(attn, max_ctx + 64, self.use_indexer)

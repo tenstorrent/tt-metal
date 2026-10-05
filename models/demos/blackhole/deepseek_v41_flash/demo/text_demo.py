@@ -304,6 +304,19 @@ def _run_demo(
         prefilled_token, _ = generator.prefill_forward_text(input_tokens_prefill, **prefill_kw)
         profiler.end("inference_prefill", iteration=batch_idx)
         prefilled_token = prefilled_token.view(-1)
+        if (
+            os.environ.get("DSV41_PREFILL_ONLY") == "1"
+        ):  # prefill measurement (DSV41_UNI_NODECODE: no decode possible): TTFT + first tokens, no decode
+            prefill_t = profiler.get_duration("inference_prefill")
+            real_tokens = sum(decoding_pos[:batch_size])
+            logger.info(f"PREFILL_ONLY first tokens {prefilled_token[:batch_size].tolist()}")
+            logger.info(
+                f"TTFT (whole batch of {batch_size} users, ISL max {max(decoding_pos[:batch_size])}): {prefill_t * 1000:.0f} ms "
+                f"-> prefill {real_tokens / prefill_t:.0f} tok/s ({prefill_t / batch_size * 1000:.0f} ms/user amortised)"
+            )
+            if hasattr(generator.m, "prefill_model"):
+                logger.info(f"prefill timing {getattr(generator.m.prefill_model, 'timing', {})}")
+            return
         pre_spec = None
         if spec_k and os.environ.get("DSV41_SPEC_DIAG") == "1":
             # DIAG: row-0 logits of the first spec round (position S, token = first) vs ONE plain decode step on the same prefill state, tail replay vs full replay seeding
