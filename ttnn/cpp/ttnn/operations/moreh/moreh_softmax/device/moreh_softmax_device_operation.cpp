@@ -32,7 +32,7 @@ bool is_moreh_softmax_w_small_available(const Tensor& tensor, const DeviceComput
     int32_t cb_usage = 0;                   // bytes
     cb_usage += Wt * tile_size;             // input;
     cb_usage += 1 * mask_scaler_tile_size;  // mask;
-    cb_usage += 1 * mask_scaler_tile_size;  // scaler;
+    cb_usage += 2 * mask_scaler_tile_size;  // max and sum scalers;
 
     cb_usage += Wt * tile_size;  // output;
 
@@ -65,7 +65,7 @@ bool is_moreh_softmax_h_small_available(const Tensor& tensor, const DeviceComput
     int32_t cb_usage = 0;                   // bytes
     cb_usage += Ht * tile_size;             // input;
     cb_usage += 1 * mask_scaler_tile_size;  // mask;
-    cb_usage += 1 * mask_scaler_tile_size;  // scaler;
+    cb_usage += 2 * mask_scaler_tile_size;  // max and sum scalers;
 
     cb_usage += Ht * tile_size;  // output;
 
