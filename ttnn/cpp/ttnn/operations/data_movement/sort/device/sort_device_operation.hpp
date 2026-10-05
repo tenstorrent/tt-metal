@@ -41,5 +41,5 @@ ttnn::prim::SortDeviceOperation::tensor_return_value_t sort(
     bool stable,
     const MemoryConfig& output_memory_config,
     const std::vector<std::optional<Tensor>>& output_tensors,
-    bool sort_dim_padded);
+    bool sort_dim_padded = false);
 }  // namespace ttnn::prim
