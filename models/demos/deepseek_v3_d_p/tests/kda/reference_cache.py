@@ -18,7 +18,12 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-from models.demos.deepseek_v3_d_p.tests.kda.cases import KDATestCase, KDAWeightSource
+from models.demos.deepseek_v3_d_p.tests.kda.cases import (
+    KDATestCase,
+    KDAWeightSource,
+    compute_on_cache_miss,
+    prepared_cache_miss,
+)
 
 # Covers the stored reference: kda_forward_reference (models/demos/deepseek_v3_d_p/reference/kda) and the
 # payload layout below. Bump when either changes the stored tensors.
@@ -105,7 +110,9 @@ def _validate_cached_reference(
     )
 
 
-def _load_or_compute_chunk(case: KDATestCase, chunk: int, initial_state: KDAReferenceState | None) -> KDAChunkReference:
+def _load_or_compute_chunk(
+    case: KDATestCase, chunk: int, initial_state: KDAReferenceState | None, compute_missing: bool
+) -> KDAChunkReference:
     hidden = case.chunk_valid_hidden(chunk)
     cache_path = cpu_reference_cache_path(case.weights, hidden, initial_state)
     label = f"KDA {case.spec.name} chunk {chunk} T={hidden.shape[1]}"
@@ -116,6 +123,8 @@ def _load_or_compute_chunk(case: KDATestCase, chunk: int, initial_state: KDARefe
         elapsed = time.perf_counter() - start
         logger.info(f"{label} CPU reference cache hit: {cache_path} ({elapsed:.3f} s)")
         return KDAChunkReference(output, state, elapsed, cache_hit=True)
+    if not compute_missing:
+        raise prepared_cache_miss(case.spec.name, f"CPU reference (chunk {chunk})", cache_path)
 
     output, state = kda_forward_reference(hidden, case.weights.load_state_dict(), case.config, initial_state)
     tensors = {"output": output, **_state_tensors(state)}
@@ -134,12 +143,24 @@ def _load_or_compute_chunk(case: KDATestCase, chunk: int, initial_state: KDARefe
     return KDAChunkReference(tensors["output"], state, elapsed, cache_hit=False)
 
 
-def cpu_references(case: KDATestCase) -> tuple[KDAChunkReference, ...]:
-    """Reference output and state after every chained chunk; chunk i starts from chunk i-1's state."""
+def _chained_references(case: KDATestCase, compute_missing: bool) -> tuple[KDAChunkReference, ...]:
     references = []
     state = None
     for chunk in range(case.num_chunks):
-        reference = _load_or_compute_chunk(case, chunk, state)
+        reference = _load_or_compute_chunk(case, chunk, state, compute_missing)
         references.append(reference)
         state = reference.state
     return tuple(references)
+
+
+def cpu_references(case: KDATestCase) -> tuple[KDAChunkReference, ...]:
+    """Reference output and state after every chained chunk; chunk i starts from chunk i-1's state.
+
+    Loads prepared entries; a miss fails fast unless ``KDA_CACHE_MISS=compute``.
+    """
+    return _chained_references(case, compute_on_cache_miss())
+
+
+def prepare_cpu_references(case: KDATestCase) -> tuple[KDAChunkReference, ...]:
+    """Fill the reference cache for every chained chunk (the CPU preparation step)."""
+    return _chained_references(case, compute_missing=True)

@@ -27,26 +27,31 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import mak
 pytestmark = [run_for_blackhole(), pytest.mark.timeout(900)]
 
 _SEQUENCE = 5120
+_LB_A_SEQUENCE = 1280
 _PCC_THRESHOLD = 0.9995
 
 
 @pytest.mark.parametrize(
-    "mesh_device,tensor_parallel_axis,device_params",
+    "mesh_device,tensor_parallel_axis,device_params,sequence",
     [
         pytest.param(
             (2, 4),
             1,
             fabric_1d_device_params(),
+            _SEQUENCE,
             id="SP2xTP4-fabric-1d",
         ),
-        pytest.param((2, 4), 0, fabric_1d_device_params(), id="SP4xTP2-fabric-1d"),
+        pytest.param((2, 4), 0, fabric_1d_device_params(), _SEQUENCE, id="SP4xTP2-fabric-1d"),
         pytest.param(
             (8, 4),
             1,
             torus_xy_device_params(),
+            _SEQUENCE,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),
+        # LoudBox LB-A: Galaxy per-chip shapes (640 tokens per SP rank, heads/4 per chip) with TP4 collectives.
+        pytest.param((2, 4), 1, fabric_1d_device_params(), _LB_A_SEQUENCE, id="LB-A-T1280-fabric-1d"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -55,18 +60,19 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
     device_params: dict,
+    sequence: int,
     start_kind: str,
 ) -> None:
     """Gate K3 dimensions against Torch and compare three device runs bit-for-bit."""
     mesh_shape = tuple(mesh_device.shape)
     sequence_parallel_axis = 1 - tensor_parallel_axis
     layout = f"SP{mesh_shape[sequence_parallel_axis]}xTP{mesh_shape[tensor_parallel_axis]}"
-    case = build_kda_case(registered_kda_case("synthetic", mesh_shape, tensor_parallel_axis, _SEQUENCE))
+    case = build_kda_case(registered_kda_case("synthetic", mesh_shape, tensor_parallel_axis, sequence))
     (reference,) = cpu_references(case)
     golden_output, golden_state, reference_seconds = reference.output, reference.state, reference.seconds
-    layer, hidden_tt = make_kda_device_case(mesh_device, case, cache_weights=False)
+    layer, hidden_tt = make_kda_device_case(mesh_device, case)
 
-    local_rows = _SEQUENCE // mesh_shape[sequence_parallel_axis]
+    local_rows = sequence // mesh_shape[sequence_parallel_axis]
     actual_start = {"baseline": 0, "split-rank0": 32, "boundary-rank1": local_rows, "split-rank1": local_rows + 32}[
         start_kind
     ]
@@ -94,7 +100,7 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
             sp_axis=sequence_parallel_axis,
             tp_axis=tensor_parallel_axis,
             config=case.config,
-            label=f"Synthetic Kimi-K3 T5120 {layout} start={actual_start}",
+            label=f"Synthetic Kimi-K3 T{sequence} {layout} start={actual_start}",
             state_linf_threshold=None,
             pcc_threshold=_PCC_THRESHOLD,
         )
@@ -106,7 +112,7 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
             + json.dumps(
                 {
                     "layout": layout,
-                    "sequence": _SEQUENCE,
+                    "sequence": sequence,
                     "weights": "deterministic synthetic",
                     "reference": "independent pure-Torch FP32 CPU reference",
                     "cpu_reference_seconds": reference_seconds,
@@ -132,6 +138,7 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
         pytest.param((1, 8), 1, fabric_1d_device_params(), 128, id="SP1xTP8"),
         pytest.param((2, 4), 1, fabric_1d_device_params(), 128, id="SP2xTP4"),
         pytest.param((2, 4), 0, fabric_1d_device_params(), 128, id="SP4xTP2"),
+        pytest.param((2, 4), 1, fabric_1d_device_params(), _LB_A_SEQUENCE, id="LB-A-T1280"),
         pytest.param(
             (8, 4),
             1,

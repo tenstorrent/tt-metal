@@ -283,7 +283,7 @@ def test_synthetic_kimi_k3_perf(
     layout = f"SP{mesh_shape[sequence_parallel_axis]}xTP{mesh_shape[tensor_parallel_axis]}"
     reference_ms = _synthetic_perf_reference_ms(layout)
     case = build_kda_case(registered_kda_case("synthetic", mesh_shape, tensor_parallel_axis, _SEQUENCE))
-    layer, hidden_tt = make_kda_device_case(mesh_device, case, cache_weights=False)
+    layer, hidden_tt = make_kda_device_case(mesh_device, case)
     samples_ms, _ = _trace_wall_samples_ms(mesh_device, layer, hidden_tt, _REPETITIONS)
     median_wall_ms = statistics.median(samples_ms)
     result = {

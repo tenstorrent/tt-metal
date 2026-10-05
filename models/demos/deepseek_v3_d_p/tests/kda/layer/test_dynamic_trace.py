@@ -172,7 +172,7 @@ def test_production_local_trace(mesh_device, tp_axis, device_params, local_rows)
     config, hidden = case.config, case.hidden
     (reference,) = cpu_references(case)
     expected_output, expected_state = reference.output.bfloat16(), reference.state
-    layer, unused = make_kda_device_case(mesh_device, case, cache_weights=False)
+    layer, unused = make_kda_device_case(mesh_device, case)
     ttnn.deallocate(unused)
     for actual_start in (0, local_rows, 32, (sp - 1) * local_rows + 320):
         actual_start_tt = make_actual_start(mesh_device, actual_start)

@@ -16,13 +16,18 @@ from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tests.kda import cases as kda_cases
 from models.demos.deepseek_v3_d_p.tests.kda.cases import (
     KDA_CASES,
+    KDAPreparedCacheMiss,
     KDATestCase,
     KDAWeightSource,
     build_kda_case,
     kda_weight_cache_dir,
     registered_kda_case,
 )
-from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import cpu_reference_cache_path, cpu_references
+from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import (
+    cpu_reference_cache_path,
+    cpu_references,
+    prepare_cpu_references,
+)
 
 _TOY_CONFIG = KDAConfig(hidden_size=64, num_heads=2, head_k_dim=32, head_v_dim=32, conv_kernel_size=4, norm_eps=1e-5)
 
@@ -135,15 +140,33 @@ def test_reference_keys_distinguish_every_identity_field() -> None:
     assert cpu_reference_cache_path(_toy_source(), hidden.clone(), None) == keys["baseline"]
 
 
-def test_chained_references_carry_state_and_reuse_cache(model_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _toy_chained_case(monkeypatch: pytest.MonkeyPatch) -> tuple[KDATestCase, dict[str, torch.Tensor]]:
     spec = KDA_CASES["kimi_k3-synthetic-mesh2x4-tpaxis1-T1280-chunks2-last992"]
-    weights = _toy_source()
     state_dict = kda_cases.random_weights(_TOY_CONFIG)
     monkeypatch.setattr(KDAWeightSource, "load_state_dict", lambda self: state_dict)
-    case = KDATestCase(spec=spec, weights=weights, hidden=_toy_hidden(2 * spec.chunk_tokens))
+    return KDATestCase(spec=spec, weights=_toy_source(), hidden=_toy_hidden(2 * spec.chunk_tokens)), state_dict
 
-    cold = cpu_references(case)
-    warm = cpu_references(case)
+
+def test_load_only_reference_miss_fails_fast_with_preparation_command(
+    model_cache: Path, monkeypatch: pytest.MonkeyPatch, expect_error
+) -> None:
+    monkeypatch.delenv(kda_cases.CACHE_MISS_ENV, raising=False)
+    case, _ = _toy_chained_case(monkeypatch)
+    monkeypatch.setattr(
+        KDAWeightSource, "load_state_dict", lambda self: pytest.fail("load-only must not build weights")
+    )
+    with expect_error(KDAPreparedCacheMiss, f"--case {case.spec.name}") as error:
+        cpu_references(case)
+    assert "CPU reference (chunk 0)" in str(error.value) and str(model_cache) in str(error.value)
+    assert not list(model_cache.rglob("*.pt"))
+
+
+def test_chained_references_carry_state_and_reuse_cache(model_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(kda_cases.CACHE_MISS_ENV, raising=False)
+    case, state_dict = _toy_chained_case(monkeypatch)
+
+    cold = prepare_cpu_references(case)
+    warm = cpu_references(case)  # load-only
 
     assert [reference.cache_hit for reference in cold] == [False, False]
     assert [reference.cache_hit for reference in warm] == [True, True]

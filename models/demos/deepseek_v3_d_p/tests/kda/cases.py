@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import functools
 import json
+import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
@@ -29,6 +31,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
 from models.demos.deepseek_v3_d_p.tests.kda.utils import _kda_config_from_kimi_k3_constants, random_weights, to_sp_input
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, kimi_k3_program_config
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
+from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
 
@@ -40,6 +43,33 @@ HIDDEN_SEED = 1607
 
 _SYNTHETIC = "synthetic"
 _REAL = "real"
+
+# Device tests load prepared caches and fail fast on a miss ("fail", the default); "compute" builds a missing
+# CPU reference / weights inside the device run, for local iteration and for CI jobs without a preparation step.
+CACHE_MISS_ENV = "KDA_CACHE_MISS"
+PREPARE_COMMAND = "python -m models.demos.deepseek_v3_d_p.tests.kda.prepare"
+# Workaround for tt_metal_tracker-g1b.1.4: ttnn.load_tensor(device=mesh) spins on cached files whose shards exceed
+# the 32 MiB pinned-write threshold unless pinned host memory is disabled for the process.
+PINNED_MEMORY_LIMIT_ENV = "TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES"
+
+
+class KDAPreparedCacheMiss(FileNotFoundError):
+    """A device test needed a cache entry the CPU preparation step has not produced."""
+
+
+def compute_on_cache_miss() -> bool:
+    policy = os.environ.get(CACHE_MISS_ENV, "fail")
+    if policy not in ("fail", "compute"):
+        raise ValueError(f"{CACHE_MISS_ENV} must be 'fail' or 'compute', got {policy!r}")
+    return policy == "compute"
+
+
+def prepared_cache_miss(case_name: str, artifact: str, path: Path) -> KDAPreparedCacheMiss:
+    return KDAPreparedCacheMiss(
+        f"KDA prepared-cache miss for case {case_name}: {artifact} not found at {path}. "
+        f"Prepare it without a device: {PREPARE_COMMAND} --case {case_name} "
+        f"(real weights need KIMI_K3_CKPT), or set {CACHE_MISS_ENV}=compute to build it inside this device run."
+    )
 
 
 @dataclass(frozen=True)
@@ -287,9 +317,13 @@ def make_kda_device_case(
     *,
     summary_group_chunks: int | None = None,
     program_config: KDAProgramConfig | None = None,
-    cache_weights: bool = True,
 ) -> tuple[ttKDA, ttnn.Tensor]:
-    """Construct the case's production-dimension layer on its registered mesh and its first chunk's input."""
+    """Construct the case's production-dimension layer on its registered mesh and its first chunk's input.
+
+    Weights load from the prepared cache (with ``TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0``). On a miss the test
+    fails fast unless ``KDA_CACHE_MISS=compute``, which prepares the host weights in-process (real weights also
+    write a missing cache).
+    """
     spec = case.spec
     if tuple(mesh_device.shape) != spec.mesh_shape:
         raise ValueError(f"{spec.name} is registered for mesh {spec.mesh_shape}, got {tuple(mesh_device.shape)}")
@@ -309,13 +343,35 @@ def make_kda_device_case(
             selected_program_config,
             recurrence=replace(selected_program_config.recurrence, summary_group_chunks=summary_group_chunks),
         )
+    cache_dir = kda_weight_cache_dir(case.weights, spec.mesh_shape, tensor_parallel_axis)
+    cache_complete = KDAWeights.check_cache_complete(
+        cache_dir,
+        f"layer_{case.weights.layer_idx}.kda",
+        case.config,
+        spec.mesh_shape,
+        tensor_parallel_axis=tensor_parallel_axis,
+    )
+    pinning_disabled = os.environ.get(PINNED_MEMORY_LIMIT_ENV) == "0"
+    if cache_complete and pinning_disabled:
+        state_dict, weight_cache_path = None, cache_dir
+        logger.info(f"KDA {spec.name}: weights load from prepared cache {cache_dir}")
+    elif compute_on_cache_miss():
+        # Without the pinning workaround a cached load would spin (g1b.1.4), so compute mode prepares in-process.
+        logger.info(f"KDA {spec.name}: preparing host weights in the device run (cache complete={cache_complete})")
+        state_dict = case.weights.load_state_dict()
+        weight_cache_path = cache_dir if case.weights.kind == _REAL and not cache_complete else None
+    elif cache_complete:
+        raise RuntimeError(
+            f"loading cached KDA weights needs {PINNED_MEMORY_LIMIT_ENV}=0 in the device run "
+            "(ttnn.load_tensor spins on cached shards above 32 MiB, tt_metal_tracker-g1b.1.4)"
+        )
+    else:
+        raise prepared_cache_miss(spec.name, "weight cache", cache_dir)
     layer = ttKDA(
         mesh_device,
         case.config,
-        case.weights.load_state_dict(),
-        weight_cache_path=(
-            kda_weight_cache_dir(case.weights, spec.mesh_shape, tensor_parallel_axis) if cache_weights else None
-        ),
+        state_dict,
+        weight_cache_path=weight_cache_path,
         layer_idx=case.weights.layer_idx,
         tt_ccl=TT_CCL(mesh_device),
         sp_axis=sequence_parallel_axis,

@@ -85,18 +85,18 @@ class KDAWeights:
         cache_path: Path | None,
         cache_name_prefix: str,
         config: KDAConfig,
-        mesh_device: ttnn.Device | ttnn.MeshDevice,
+        mesh_shape: tuple[int, int],
         *,
         tensor_parallel_axis: int = 1,
     ) -> bool:
-        """Return whether every dtype/layout/placement-specific KDA tensorbin exists."""
+        """Return whether every dtype/layout/placement-specific KDA tensorbin exists for ``mesh_shape``."""
         if cache_path is None:
             return False
         cache_path = Path(cache_path)
         if not cache_path.is_dir():
             return False
         checker = FastCacheChecker(cache_path)
-        mesh_shape, _ = _parallel_geometry(mesh_device, tensor_parallel_axis)
+        mesh_shape = tuple(mesh_shape)
         for name in _cache_artifact_names(config):
             stem = _cache_stem(cache_name_prefix, name, config, mesh_shape, tensor_parallel_axis)
             pattern = f"{stem}_dtype_{ttnn.bfloat16.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
@@ -111,22 +111,24 @@ class KDAWeights:
         cache_path: Path,
         cache_name_prefix: str,
         config: KDAConfig,
-        mesh_device: ttnn.Device | ttnn.MeshDevice,
+        mesh_shape: tuple[int, int],
         *,
         tensor_parallel_axis: int = 1,
     ) -> None:
-        """Build all KDA tensorbins without copying weights to device memory."""
+        """Build all KDA tensorbins for a ``mesh_shape`` placement without a device.
+
+        Needs no open device: shards are built with a shape-only mesh mapper. Host tilization still initializes
+        the TT-Metal runtime, so a process that must not touch hardware sets ``TT_METAL_MOCK_CLUSTER_DESC_PATH``.
+        The files are byte-identical to those the device-mapper path writes (single-host meshes).
+        """
         if not state_dict:
             raise ValueError("building the KDA TTNN cache requires a state_dict")
-        mesh_shape, tensor_parallel_size = _validated_parallel_geometry(
-            mesh_device,
-            config,
-            tensor_parallel_axis,
-        )
+        mesh_shape = tuple(mesh_shape)
+        tensor_parallel_size = _validated_tensor_parallel_size(mesh_shape, config, tensor_parallel_axis)
         host_weights = _prepare_kda_host_weights(state_dict, config, tensor_parallel_size)
         _materialize_kda_weights(
             host_weights,
-            device=mesh_device,
+            device=None,
             config=config,
             tensor_cache_path=Path(cache_path),
             cache_name_prefix=cache_name_prefix,
@@ -157,17 +159,24 @@ class KDAWeights:
         )
 
 
+def _validated_tensor_parallel_size(mesh_shape: tuple[int, int], config: KDAConfig, tensor_parallel_axis: int) -> int:
+    if tensor_parallel_axis not in (0, 1):
+        raise ValueError(f"tensor_parallel_axis must be 0 or 1, got {tensor_parallel_axis}")
+    tensor_parallel_size = mesh_shape[tensor_parallel_axis]
+    if config.num_heads % tensor_parallel_size != 0:
+        raise ValueError(
+            f"num_heads {config.num_heads} must be divisible by tensor parallel size {tensor_parallel_size}"
+        )
+    return tensor_parallel_size
+
+
 def _validated_parallel_geometry(
     device: ttnn.Device | ttnn.MeshDevice,
     config: KDAConfig,
     tensor_parallel_axis: int,
 ) -> tuple[tuple[int, int], int]:
-    mesh_shape, tensor_parallel_size = _parallel_geometry(device, tensor_parallel_axis)
-    if config.num_heads % tensor_parallel_size != 0:
-        raise ValueError(
-            f"num_heads {config.num_heads} must be divisible by tensor parallel size {tensor_parallel_size}"
-        )
-    return mesh_shape, tensor_parallel_size
+    mesh_shape, _ = _parallel_geometry(device, tensor_parallel_axis)
+    return mesh_shape, _validated_tensor_parallel_size(mesh_shape, config, tensor_parallel_axis)
 
 
 def _group_projection_rows_by_tp_rank(
@@ -255,7 +264,7 @@ def _prepare_kda_host_weights(
 
 
 def _mesh_mapper(
-    device: ttnn.Device | ttnn.MeshDevice,
+    device: ttnn.Device | ttnn.MeshDevice | None,
     *,
     mesh_shape: tuple[int, int],
     tensor_parallel_size: int,
@@ -264,16 +273,19 @@ def _mesh_mapper(
 ) -> ttnn.CppTensorToMesh | None:
     if tensor_parallel_size == 1:
         return None
-    mesh_dims = [None, None]
-    mesh_dims[tensor_parallel_axis] = shard_dim
-    return ttnn.ShardTensor2dMesh(device, dims=tuple(mesh_dims), mesh_shape=mesh_shape)
+    placements = [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]
+    if shard_dim is not None:
+        placements[tensor_parallel_axis] = ttnn.PlacementShard(shard_dim)
+    mapper_config = ttnn.MeshMapperConfig(placements, ttnn.MeshShape(*mesh_shape))
+    # Without a device, the shape-only mapper builds every host shard (single-host meshes only).
+    return ttnn.create_mesh_mapper(device if device is not None else ttnn.MeshShape(*mesh_shape), mapper_config)
 
 
 def _materialize_kda_tensor(
     host_tensor: torch.Tensor | None,
     name: str,
     *,
-    device: ttnn.Device | ttnn.MeshDevice,
+    device: ttnn.Device | ttnn.MeshDevice | None,
     config: KDAConfig,
     tensor_cache_path: Path | None,
     cache_name_prefix: str,
@@ -313,7 +325,7 @@ def _materialize_kda_tensor(
 def _materialize_kda_weights(
     host_weights: _KDAHostWeights | None,
     *,
-    device: ttnn.Device | ttnn.MeshDevice,
+    device: ttnn.Device | ttnn.MeshDevice | None,
     config: KDAConfig,
     tensor_cache_path: Path | None,
     cache_name_prefix: str,
@@ -443,7 +455,7 @@ def load_kda_weights(
             cache_path,
             cache_name_prefix,
             config,
-            device,
+            mesh_shape,
             tensor_parallel_axis=tensor_parallel_axis,
         ):
             raise FileNotFoundError(f"incomplete KDA TTNN cache for {cache_name_prefix!r} at {cache_path!r}")
