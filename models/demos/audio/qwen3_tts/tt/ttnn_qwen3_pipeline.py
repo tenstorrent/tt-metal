@@ -629,6 +629,8 @@ class Qwen3TTSPipeline:
         if not self.generation.get("do_sample", True):
             masked = row.clone()
             masked[suppress] = -float("inf")
+            # A logits processor, applied whether or not the checkpoint samples.
+            masked = sampling.apply_repetition_penalty(masked, seen, penalty)
             return int(masked.argmax())
         return sampling.sample(
             row,
