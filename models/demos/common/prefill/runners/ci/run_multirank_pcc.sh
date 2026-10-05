@@ -28,8 +28,8 @@ PRODUCER_ENV=""
 PRODUCER_USERS="${PREFILL_PRODUCER_NUM_USERS:-1}"
 TCP_INTERFACE="${PREFILL_TCP_INTERFACE:-ens5f0np0}"
 # sc1 runs a single galaxy, so both of these exist to shrink the sc4 model down to what one fits.
-# Defaults keep every model that does fit unchanged: full 256k context, full manifest depth.
-SC1_MAX_SEQ_LEN=256000
+# Empty keeps every model that does fit unchanged: full manifest context, full manifest depth.
+SC1_MAX_SEQ_LEN=""
 SC1_NUM_LAYERS=""
 SC1_NUM_USERS=1
 
@@ -58,7 +58,6 @@ case "${MODEL}" in
     RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     GOLDEN_LEN=0
     PCC_THRESHOLD=0.83
-    SC1_MAX_SEQ_LEN=1044480
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
     ;;
@@ -71,7 +70,6 @@ case "${MODEL}" in
     # rather than a smaller copy of sc4. The context is the same on both: K3's whole window is the
     # golden's 11 chunks, so there is nothing to shrink.
     SC1_NUM_LAYERS=24
-    SC1_MAX_SEQ_LEN=56320
     RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized;"
     # PREFILL_TRACE_DIR is the one K3 path still on NFS, deliberately. The sc4 93-layer leg's KV PCC
     # collapsed to ~0 past layer ~24 on run 36717057668 with the Weka trace (it reads 0.900..0.994 on
@@ -98,6 +96,7 @@ NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
 
 RUNNER_OVERRIDES=""
 SC4_MAX_SEQ_LEN=${MAX_SEQ_LEN}
+SC1_MAX_SEQ_LEN=${SC1_MAX_SEQ_LEN:-${MAX_SEQ_LEN}}
 NUM_LAYERS_ENV=""
 if [ "${CONFIG}" = sc1 ]; then
   MAX_SEQ_LEN=${SC1_MAX_SEQ_LEN}
