@@ -61,9 +61,11 @@ def _decode(device, tt_K, tt_V, Q, page_table, cur_pos, grid_size, k_chunk_size,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
-    tt_Q = ttnn.as_tensor(Q, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_page_table = ttnn.Tensor(page_table, ttnn.int32).to(device)
-    tt_cur_pos = ttnn.Tensor(torch.tensor(cur_pos, dtype=torch.int32), ttnn.int32).to(device)
+    tt_Q = ttnn.as_tensor(
+        Q, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_page_table = ttnn.Tensor(page_table, ttnn.int32).to(device, ttnn.DRAM_MEMORY_CONFIG)
+    tt_cur_pos = ttnn.Tensor(torch.tensor(cur_pos, dtype=torch.int32), ttnn.int32).to(device, ttnn.DRAM_MEMORY_CONFIG)
     out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
         tt_Q,
         tt_K,
@@ -91,8 +93,12 @@ def test_active_rows_match_bitwise_across_padded_batches(device, active_rows, wi
         pytest.skip(f"needs an {grid_size} grid, device has {grid.x}x{grid.y}")
 
     paged_k, paged_v, page_table = _paged_cache(wide_batch, nkv, s, d, block_size)
-    tt_K = ttnn.as_tensor(paged_k, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-    tt_V = ttnn.as_tensor(paged_v, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    tt_K = ttnn.as_tensor(
+        paged_k, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_V = ttnn.as_tensor(
+        paged_v, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
 
     torch.manual_seed(7)
     Q = fa_rand(1, wide_batch, nh, d)
@@ -153,8 +159,12 @@ def test_static_allocation_is_the_documented_counterexample(device):
         pytest.skip(f"needs an {grid_size} grid, device has {grid.x}x{grid.y}")
     active_rows, wide_batch = 4, 32
     paged_k, paged_v, page_table = _paged_cache(wide_batch, nkv, s, d, block_size)
-    tt_K = ttnn.as_tensor(paged_k, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-    tt_V = ttnn.as_tensor(paged_v, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    tt_K = ttnn.as_tensor(
+        paged_k, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_V = ttnn.as_tensor(
+        paged_v, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
     torch.manual_seed(7)
     Q = fa_rand(1, wide_batch, nh, d)
     cur_pos = [s - 1 - 37 * i for i in range(active_rows)] + [-1] * (wide_batch - active_rows)
@@ -188,8 +198,12 @@ def test_wide_graph_with_few_active_rows_uses_the_idle_cores(device):
     active_rows, wide_batch, iters = 4, 32, 20
 
     paged_k, paged_v, page_table = _paged_cache(wide_batch, nkv, s, d, block_size)
-    tt_K = ttnn.as_tensor(paged_k, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-    tt_V = ttnn.as_tensor(paged_v, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    tt_K = ttnn.as_tensor(
+        paged_k, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_V = ttnn.as_tensor(
+        paged_v, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
     Q = fa_rand(1, wide_batch, nh, d)
     cur_pos = [s - 1] * active_rows + [-1] * (wide_batch - active_rows)
 
@@ -224,8 +238,12 @@ def test_cached_wide_graph_follows_changing_occupancy(device):
     wide_batch = 32
 
     paged_k, paged_v, page_table = _paged_cache(wide_batch, nkv, s, d, block_size)
-    tt_K = ttnn.as_tensor(paged_k, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-    tt_V = ttnn.as_tensor(paged_v, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    tt_K = ttnn.as_tensor(
+        paged_k, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_V = ttnn.as_tensor(
+        paged_v, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
     torch.manual_seed(11)
     Q = fa_rand(1, wide_batch, nh, d)
     positions = [s - 1 - 53 * i for i in range(wide_batch)]
@@ -298,8 +316,12 @@ def test_active_rows_reject_a_pool_smaller_than_the_padded_batch(device, expect_
     b = 40  # 40 rows x 2 kv heads = 80 > 64 cores, while 40 rows alone fit the grid
 
     paged_k, paged_v, page_table = _paged_cache(b, nkv, s, d, block_size)
-    tt_K = ttnn.as_tensor(paged_k, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-    tt_V = ttnn.as_tensor(paged_v, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    tt_K = ttnn.as_tensor(
+        paged_k, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_V = ttnn.as_tensor(
+        paged_v, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
     Q = fa_rand(1, b, nh, d)
     cur_pos = [s - 1] * b
     with expect_error(RuntimeError, "active_row_allocation"):
