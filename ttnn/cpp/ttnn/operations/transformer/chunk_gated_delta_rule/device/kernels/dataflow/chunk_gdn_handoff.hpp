@@ -51,6 +51,20 @@ constexpr uint32_t handoff_trace_word(uint32_t stage, uint32_t chunk, uint32_t s
 // Polls before a hand-off wait is declared dead (C9): ~0.2 s on the RISC, >1000x the longest legitimate wait.
 constexpr uint32_t kHandoffSpinLimit = 10000000;
 
+// Fault injection (ChunkGdnFusedProgramConfig::handoff_fault, handoff_checks builds only): one deliberate breach of
+// the protocol per value, so the fault test can prove the named check fires. The kernels see it as the
+// GDN_HANDOFF_FAULT define; release kernels never compile it.
+enum HandoffFault : uint32_t {
+    kFaultNone = 0,
+    kFaultDoubleCredit = 1,  // the receiver credits chunk 0 twice               -> C1/C2 on its owner, or C4/C9 on
+                             //                                                     the other receiver (early send)
+    kFaultWrongCanary = 2,   // the producer writes c + 1 as chunk c's canary    -> C8 on the receiver
+    kFaultShortPush = 3,     // the receiver pushes chunk 1's nkd one tile short -> C3 at the slot's next push
+    kFaultWrongOwner = 4,    // the receiver credits chunk 1 to producer 0       -> C9 on both sides
+    kFaultNoCredit = 5,      // the receiver never credits chunk 3               -> C9 on both sides
+    kFaultCount = 6,
+};
+
 // Protocol tag: the LAST compile-time arg of the fused writer and the fused receiver reader. Both kernels
 // static_assert on it, so an added, removed or reordered trailing compile-time arg on either side fails to compile.
 constexpr uint32_t kHandoffTagVersion = 1;

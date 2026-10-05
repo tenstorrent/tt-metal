@@ -334,7 +334,12 @@ void kernel_main() {
             // C8: the chunk index as the LAST data write of the item, into every receiver's canary word for this
             // slot; the receiver asserts it after VALID (a witness of data-before-flag, I4, and of the slot being
             // written only after its previous chunk was consumed, I5). Same transport as the data.
+#ifdef GDN_HANDOFF_FAULT
+            // Fault injection: the wrong chunk index as the canary (C8 on every receiver).
+            canary[slot] = (GDN_HANDOFF_FAULT == gdn_handoff::kFaultWrongCanary) ? c + 1 : c;
+#else
             canary[slot] = c;
+#endif
             const uint32_t canary_addr = reinterpret_cast<uint32_t>(canary + slot);
             for (uint32_t v = 0; v < NV; v++) {
                 if constexpr (POSTED) {

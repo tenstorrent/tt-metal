@@ -245,3 +245,20 @@ C1 to C6 need only the watcher. C7 and C8 change protocol-visible state (the fla
 receiver per chunk), so they are compiled in only with `ChunkGdnFusedProgramConfig(handoff_checks=True)`, a hashed
 field that is a define on the two hand-off kernels; they report through the watcher's `ASSERT`, so run them with the
 watcher enabled.
+
+**Fault injection.** `ChunkGdnFusedProgramConfig(handoff_checks=True, handoff_fault=n)` compiles one deliberate breach
+into the kernels (`gdn_handoff::HandoffFault`, the `GDN_HANDOFF_FAULT` define): 1 the receiver credits chunk 0 twice
+(C1 or C2 on the owner; or, when one receiver's doubled credit alone satisfies the owner, the early send reaches the
+other receiver before its reset: C4 there, or C9 after the reset erased the flag — the lost wakeup of I1), 2 the producer writes c + 1 as the canary (C8), 3 the receiver pushes chunk 1's nkd
+block one tile short (C3 at the slot's next push), 4 the receiver credits chunk 1 to producer 0 (C9 on both sides), 5
+the receiver never credits chunk 3 (C9). `test_chunk_gdn_handoff_faults.py` runs each fault in a child process under
+the watcher, asserts that the named check tripped on the expected RISC and waypoint, and resets the board between
+faults, since a tripped assert leaves the device stopped; it is opt-in (`GDN_HANDOFF_FAULT_TESTS=1`). A skipped
+INVALID reset is not a fault: with the sequence-valued flags of C7 the reset is redundant (the receiver waits for
+exactly c + 1), which is what makes the flag-only protocol of the extension points viable.
+
+**Host side.** The factory's build-time checks (NV divides Vt, dense receiver rectangles, the credit tile holds BH ×
+NBUF words, NBUF within the semaphore cap) are the only host checks. An owner-map audit is void while both sides derive
+the owner of chunk c as c mod NP (it becomes necessary when an item map replaces the formula), and a post-run read-back
+of the credit words and flags would need L1 addresses the test harness does not expose; C2 and C5 cover that end state
+in every watcher run.

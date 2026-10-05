@@ -14,8 +14,12 @@ import torch
 
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.unit_tests.operations.transformers.test_chunk_gdn_fused import (
+    _const_tiles,
+    _fused,
     _fused_vs_phased,
     _hw_only,
+    _make_inputs,
+    _run_op,
     _skip_unless_geometry_fits,
 )
 
@@ -48,3 +52,41 @@ def test_handoff_checks_config_field():
     f = ttnn.ChunkGdnFusedProgramConfig(handoff_checks=True)
     assert f.handoff_checks is True and "handoff_checks=True" in repr(f)
     assert ttnn.ChunkGdnFusedProgramConfig().handoff_checks is False
+
+
+@pytest.mark.parametrize("handoff_depth", [2, 3], ids=["d2", "d3"])
+@_hw_only
+def test_fused_handoff_checks_launch_stress(device, handoff_depth):
+    """200 back-to-back launches with the checks on, each bit-exact against the phased reference: a timing race in
+    the sequence flags or the canary shows as a mismatch, a tripped assert, or a C9 timeout under the watcher."""
+    _skip_unless_geometry_fits(device, 12, 2, 7, 8, placement=1)
+    (o_ph, fs_ph), (o_fu, fs_fu), delta, (tensors, const_tiles, s0) = _fused_vs_phased(
+        device, 4, 12, 8, 2, 7, 20261005, handoff_depth=handoff_depth, handoff_checks=True
+    )
+    assert delta == 1 and torch.equal(o_ph, o_fu) and torch.equal(fs_ph, fs_fu)
+    cfg = _fused(2, 7, handoff_depth=handoff_depth, handoff_checks=True)
+    for i in range(2, 201):
+        o_i, fs_i = _run_op(device, tensors, const_tiles, s0, cfg)
+        assert torch.equal(o_ph, o_i) and torch.equal(fs_ph, fs_i), f"launch {i} differs from the phased reference"
+
+
+def test_handoff_fault_config_field():
+    import ttnn
+
+    f = ttnn.ChunkGdnFusedProgramConfig(handoff_checks=True, handoff_fault=3)
+    assert f.handoff_fault == 3 and "handoff_fault=3" in repr(f)
+    assert ttnn.ChunkGdnFusedProgramConfig().handoff_fault == 0
+
+
+@pytest.mark.parametrize(
+    "fused_kwargs, message",
+    [
+        pytest.param(dict(handoff_fault=1), "handoff_fault requires handoff_checks", id="fault-without-checks"),
+        pytest.param(dict(handoff_checks=True, handoff_fault=6), "handoff_fault must be in", id="fault-out-of-range"),
+    ],
+)
+def test_handoff_fault_refused_on_host(device, fused_kwargs, message):
+    """A fault without the checks, or an unknown fault id, is refused before any program is built."""
+    _, tensors, s0 = _make_inputs(device, 1, 8 * 32, 4, 12, True, seed=20261005)
+    with pytest.raises(RuntimeError, match=message):
+        _run_op(device, tensors, _const_tiles(device), s0, _fused(2, 7, **fused_kwargs))

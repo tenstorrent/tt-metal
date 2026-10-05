@@ -49,6 +49,10 @@ struct ChunkGdnFusedProgramConfig {
     // dataflow kernels (sequence-valued VALID flags, a per-slot data canary); they report through the watcher's
     // ASSERT, so run with TT_METAL_WATCHER. Costs one extra 4-byte write per receiver per chunk. Hashed.
     bool handoff_checks = false;
+    // Debug, with handoff_checks: compile one deliberate protocol breach into the kernels (gdn_handoff::HandoffFault:
+    // 1 double credit, 2 wrong canary, 3 short push, 4 wrong owner, 5 no credit) so the fault test can prove the named
+    // check trips. 0 = none. Hashed.
+    uint32_t handoff_fault = 0;
 };
 
 using ChunkGdnProgramConfig =

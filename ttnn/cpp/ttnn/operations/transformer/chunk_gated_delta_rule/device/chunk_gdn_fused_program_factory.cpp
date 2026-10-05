@@ -351,6 +351,10 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     if (attrs.handoff_checks) {
         writer_defines.push_back({"GDN_HANDOFF_CHECKS", "1"});
         receiver_defines.push_back({"GDN_HANDOFF_CHECKS", "1"});
+        if (attrs.handoff_fault != 0) {  // test-only fault injection, gdn_handoff::HandoffFault
+            writer_defines.push_back({"GDN_HANDOFF_FAULT", std::to_string(attrs.handoff_fault)});
+            receiver_defines.push_back({"GDN_HANDOFF_FAULT", std::to_string(attrs.handoff_fault)});
+        }
     }
 
     KernelDescriptor fused_writer{

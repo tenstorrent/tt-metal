@@ -426,6 +426,29 @@ void kernel_main() {
     // an increment on a word about to be zeroed (a hang at credit == NV).
     init.wait(N_INIT);
 
+#if defined(GDN_HANDOFF_CHECKS) && defined(GDN_HANDOFF_FAULT)
+    // Fault injection (gdn_handoff::HandoffFault, handoff_checks test builds only): chunk c's credit with the
+    // configured breach, so the fault test can prove the named check fires.
+    auto credit_with_fault = [&](uint32_t c, uint32_t slot, uint32_t owner) {
+        constexpr uint32_t FAULT = GDN_HANDOFF_FAULT;
+        if (FAULT == gdn_handoff::kFaultNoCredit && c == 3) {
+            return;  // C9: the owner's credit wait and our VALID wait expire
+        }
+        if (FAULT == gdn_handoff::kFaultWrongOwner && c == 1) {
+            owner = 0;  // C9: producer 1 never sees chunk 1's credit; producer 0 gets a stray one
+        }
+        const uint64_t dst = get_noc_addr(
+            get_arg_val<uint32_t>(6 + 2 * owner),
+            get_arg_val<uint32_t>(7 + 2 * owner),
+            credit_base + 4 * slot,
+            noc.get_noc_id());
+        noc_semaphore_inc(dst, 1, noc.get_noc_id());
+        if (FAULT == gdn_handoff::kFaultDoubleCredit && c == 0) {
+            noc_semaphore_inc(dst, 1, noc.get_noc_id());  // C1 on the owner (or C2 at its exit)
+        }
+    };
+#endif
+
     // Issue the hand-off of chunk c: reserve, mark its slot INVALID, credit its owner.
     // reserve_back does not remember earlier unpushed reservations, so ask for D chunks' worth: that
     // holds iff compute has popped chunk c - NBUF, i.e. iff slot (c % NBUF) is free — exactly the
@@ -461,12 +484,16 @@ void kernel_main() {
         // that last used it — which the producer's VALID for that chunk preceded, which its reset of
         // this very word preceded. Hence the word counts exactly one chunk at a time for any NP.
         const uint32_t pi = c % NP;
+#if defined(GDN_HANDOFF_CHECKS) && defined(GDN_HANDOFF_FAULT)
+        credit_with_fault(c, slot, pi);
+#else
         const uint64_t dst = get_noc_addr(
             get_arg_val<uint32_t>(6 + 2 * pi),
             get_arg_val<uint32_t>(7 + 2 * pi),
             credit_base + 4 * slot,
             noc.get_noc_id());
         noc_semaphore_inc(dst, 1, noc.get_noc_id());
+#endif
 #ifdef GDN_HANDOFF_CHECKS
         WATCHER_RING_BUFFER_PUSH(gdn_handoff::handoff_trace_word(gdn_handoff::kRxIssued, c, slot, pi));
 #endif
@@ -531,7 +558,12 @@ void kernel_main() {
 #endif
         // The chunk's seven blocks are in our CBs; make them visible to compute.
         CircularBuffer(cb_vbeta).push_back(cv);
+#if defined(GDN_HANDOFF_CHECKS) && defined(GDN_HANDOFF_FAULT)
+        // Fault injection: chunk 1's nkd block one tile short (C3 trips at the slot's next push).
+        CircularBuffer(cb_nkd).push_back((GDN_HANDOFF_FAULT == gdn_handoff::kFaultShortPush && c == 1) ? ck - 1 : ck);
+#else
         CircularBuffer(cb_nkd).push_back(ck);
+#endif
         CircularBuffer(cb_qdecay).push_back(ck);
         CircularBuffer(cb_intra).push_back(cc);
         CircularBuffer(cb_kdec_t).push_back(kc);

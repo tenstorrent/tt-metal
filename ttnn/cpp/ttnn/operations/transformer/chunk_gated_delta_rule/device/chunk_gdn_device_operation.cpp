@@ -475,6 +475,15 @@ std::vector<Tensor> chunk_gdn(
         attrs.unicast = fused_cfg->unicast;
         attrs.posted = fused_cfg->posted;
         attrs.handoff_checks = fused_cfg->handoff_checks;
+        attrs.handoff_fault = fused_cfg->handoff_fault;
+        TT_FATAL(
+            attrs.handoff_fault < gdn_handoff::kFaultCount,
+            "chunk_gdn_fused: handoff_fault must be in [0, {}) (got {})",
+            gdn_handoff::kFaultCount,
+            attrs.handoff_fault);
+        TT_FATAL(
+            attrs.handoff_fault == 0 || attrs.handoff_checks,
+            "chunk_gdn_fused: handoff_fault requires handoff_checks=True");
         TT_FATAL(
             !attrs.posted || attrs.unicast,
             "chunk_gdn_fused: posted writes require the unicast transport (unicast=true)");
