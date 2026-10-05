@@ -391,6 +391,14 @@ def ar_decode_loop(
         {k: v / frame_breakdown_frames for k, v in frame_breakdown_sums.items()} if frame_breakdown_frames > 0 else {}
     )
 
+    # The 2CQ path launches the talker trace with blocking=False and leaves an
+    # event recorded on CQ0 (plus CQ1 write dependencies), and the EOS break skips
+    # the per-step sync entirely. Returning with that work still in flight wedges
+    # the next op issued on this device -- the speech decoder's conv1d deadlocks.
+    # Drain both queues before handing the device back to the caller.
+    if use_2cq:
+        ttnn.synchronize_device(device)
+
     if not all_codes:
         return None, frame_breakdown_avg_ms, t_first_decode_end, t_last_step_end
 

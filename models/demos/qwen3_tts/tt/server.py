@@ -2898,6 +2898,11 @@ def decode_audio_device(ref_codes: torch.Tensor, codes: torch.Tensor, device_dec
     Returns:
         Waveform tensor [1, 1, num_frames * SAMPLES_PER_FRAME] of the generated speech.
     """
+    # Defensive: the decoder shares its device with the talker, whose 2CQ traced
+    # decode can still have work in flight. Issuing conv1d on top of that
+    # deadlocks the chip, so drain the queues first regardless of caller.
+    ttnn.synchronize_device(device_decoder.device)
+
     ref_len = int(ref_codes.shape[0])
     codes_cat = torch.cat([ref_codes, codes], dim=0).clamp(max=2047)  # [total, 16]
     token_ids = codes_cat.T.unsqueeze(0).long()  # [1, 16, total]
