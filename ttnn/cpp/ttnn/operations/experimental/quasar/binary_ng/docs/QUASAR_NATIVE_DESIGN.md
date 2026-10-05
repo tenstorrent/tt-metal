@@ -441,15 +441,38 @@ Verified to reproduce the ladder: 1280 tiles admits, 64 rejects.
 
 ### 3.3 Tuning knobs
 
+Each numeric knob is an override for experiments. An unset knob takes **the rule's** value: the most threads
+and the largest batches the hardware allows, a policy for the same-shape, no-broadcast slice rather than a
+per-shape measurement. `resolve_native_config` is the one place that holds the rule, and the gate and the
+factory both call it:
+
 ```cpp
-struct NativeTuning {
-    bool     implicit_sync      = false;  // false = reserve/read/barrier/push (baseline-equivalent)
-    uint32_t entries_per_thread = 2;      // PER-THREAD ring depth (see below)
-    uint32_t reader_threads     = 1;      // R
-    uint32_t compute_threads    = 1;      // C ∈ {1,2,4}
-    uint32_t writer_threads     = 1;      // W, R + W <= 6
-};
+struct NativeKnob   { const char* name; std::optional<uint32_t> env; };  // env empty: the rule decides
+struct NativeTuning { bool enabled, implicit_sync;                       // implicit_sync: throws if set
+                      NativeKnob reader_threads, compute_threads, writer_threads,
+                                 entries_per_thread, dm_batch, tiles_per_cycle; };
+struct NativeMoves  { bool inputs, output; };                            // what moves over the NoC
+NativeConfig resolve_native_config(const NativeTuning&, NativeMoves);   // set knob, else the rule
 ```
+
+| value | the rule | notes |
+|---|---|---|
+| C, compute threads | 4 | must be 1, 2 or 4 |
+| R, reader threads | C when an input moves, else 1 | a borrowed program runs 1 whatever is set |
+| W, writer threads | min(C, 6 - R) when the output moves, else 1 | R + W <= 6; 4,4,2 takes all 6 DM cores |
+| entries_per_thread | 16 | per-thread ring depth, see below |
+| dm_batch | 8 | tiles per barrier in the reader and the writer |
+| tiles_per_cycle | 8 where R <= C and W <= C, else 1 | tiles per `tile_regs_acquire`; the DST holds 8 bf16 tiles |
+
+R and W follow the effective C, so an override of C alone keeps R, W <= C and keeps the STRIDED ratio. A
+compute thread beside more reader or writer threads owns several tile counters of that ring, and a batch
+reads or fills one counter, not the thread's own tiles: it hangs or reorders the output. So the rule batches
+the compute only where each compute thread owns one counter of each ring, and a set batch there is refused.
+Above ring stride 1 a compute batch packs wrong until the pack path applies the ring stride per tile; the
+factory runs it and logs a warning. Every message names each value's source, for example `dm_batch=8 (rule)`
+or `entries_per_thread=8 (TTNN_QSR_ENTRIES_PER_THREAD)`. On the NoC path the rule's three rings take 384 KiB
+of L1 per cluster (64 entries of 2 KiB each), against 12 KiB at the old 1,1,1 and depth 2; nothing yet shrinks
+them when L1 buffers leave less room.
 
 **Vocabulary, because conflating these two is what produced the stride-guard bug (§4.3).** There are two
 different sets of roles and they must never be mixed:
@@ -477,9 +500,10 @@ while thread counts vary. Full substrate detail in research §2.3.
 
 Env vars, one per knob: `TTNN_QSR_NATIVE` (master, default off), `TTNN_QSR_IMPLICIT_SYNC` (**throws** —
 inert, and re-enabling it needs the non-empty-thread guarantee that F1 removed, since a zero-work thread
-would skip `handle_final_credits`' barrier), `TTNN_QSR_ENTRIES_PER_THREAD`, `TTNN_QSR_READER_THREADS`,
-`TTNN_QSR_COMPUTE_THREADS`, `TTNN_QSR_WRITER_THREADS`. `select_program_factory` runs on **every** dispatch, so check arch and attributes
-before `std::getenv` and cache the parse in a trivially-destructible `static const`.
+would skip `handle_final_credits`' barrier), `TTNN_QSR_READER_THREADS`, `TTNN_QSR_COMPUTE_THREADS`,
+`TTNN_QSR_WRITER_THREADS`, `TTNN_QSR_ENTRIES_PER_THREAD`, `TTNN_QSR_DM_BATCH`, `TTNN_QSR_TILES_PER_CYCLE`;
+unset or empty means the rule. `select_program_factory` runs on **every** dispatch, so check arch and
+attributes before `std::getenv` and cache the parse in a trivially-destructible `static const`.
 
 **One process per configuration is a HARD rule, not a convenience.** On a cache hit the framework calls
 `select_program_factory` and then resolves the factory from the **cached index**, discarding the answer
@@ -1346,7 +1370,7 @@ conflate them.
 | 1.2 | F2 | **Rest of FPU op set** (subtract, multiply) | Gate widening. `multiply` is fidelity-dependent — copy the compute config verbatim or the §6.1 oracle breaks. |
 | 1.3 | F3 | **Sharded / borrowed operands — DONE 2026-09-22** | Borrowed all-or-nothing on the native path. The gate admits any borrowed shape, and the factory always runs the tuned compute count, puts the 1-3 tiles that do not divide into three owned tail rings of one entry per compute thread (interim, until the DFB supports a capacity per tile counter: tt-metal#57623), and runs one reader and one writer thread (the DFB host rule for a ring that IS the shard; a shard smaller than C goes through the rings whole); a multi-thread DM publishes one bulk push per tile counter, never one `push_back(S)` as the single-counter WH/BH reader does; the borrowed writer does no credit work, as on WH/BH. Measured `1,4,1` = `4,4,2` = 46.50 cyc/tile at `C=4`, compute batching 3.98x at stride 1, and `1,4,1` at N=8 11.69 with the output wrong until #56194 (status, week of 09-22). Zero NoC ⇒ isolates the compute levers. **Note:** 4-Tensix and `num_tiles_per_cycle > 1` are mutually exclusive (§4.3) — pick one per experiment, or implement `STRIDE_TILES` first. High model relevance (ResNet residual add, once the gate admits its fused RELU). |
 | 1.3a | F16 | **Borrowed L1-interleaved operands — DONE 2026-09-29** | Bank k of an L1-interleaved tensor holds pages k, k+N, ... back to back, and each worker core owns one bank, so three L1-interleaved operands are borrowed as shards are: host-only, on F3's kernels. Every core computes its `ceil(P/N)` slots, and a short bank computes a pad slot. **No tail rings** (dchen): a slice that `C` does not divide keeps the NoC path, where a tail would add about 800 cycles of latency at the same slope. Measured on one basis: the default `1,1,1` from 185.00 to 46.75 cyc/tile (3.96x throughput), `1,4,1` from 166.00 to 46.50, and the tuned `4,4,2` keeps its slope on 2 DM cores instead of 6 (status, week of 09-29). |
-| 1.4 | F4 | **Mixed layouts** | Falls out of F3; existing kernels already parameterize per operand. |
+| 1.4 | F4 | **Mixed layouts** | Two parts. **Part 1 DONE 2026-10-05**: the fast paths are the rule and the knobs are overrides (§3.3). Part 2: every same-shape layout mix runs native, each operand borrowed or over the NoC on its own (2a: production's borrow rule; 2b: per-operand borrow beyond it). Not a fall-out of F3: the NoC kernels have never read or written an L1-sharded page, and pad slots and the pairing of rings of different sizes need their own proofs. |
 | 1.5 | F5 | **fp32 + SFPU ops (divide)** | SFPU compute kernel, `enable_32_bit_dest`, `UnpackToDest` (free on Gen2, inert before here). int32 excluded pending the DFB-compute bug. **The §6.1 oracle expires here.** |
 | 1.6 | F7 | **Activations (lhs/rhs/post)** | Compute-side self-loop DFBs, credit-balanced by construction. **New cost:** since #52762 (our branch point) `binary_tiles_init` inside `process_tiles` does 2 × `llk_unpack_program_bfd` per tile, burning 2 of 16 unpack partition ids per tile (wraps every 8). Re-measure; do not carry phase-1 cycles/tile over. |
 | **2.0** | — | **Milestone 2 — reached once F7 lands** | The op is dtype-, layout-, memory- and activation-complete for whole-tile operands. Everything above is "the same op, wider"; everything below changes how a tile is *addressed*. |
