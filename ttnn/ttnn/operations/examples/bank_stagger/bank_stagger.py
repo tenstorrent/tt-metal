@@ -3,16 +3,19 @@
 
 """NoC-contention example: STAGGERING the per-core read/write order across DRAM banks.
 
-Interleaved DRAM puts page p in bank `p % num_banks`. If every core reads its 32 ROW_MAJOR
-rows in the same order and the cores' rows line up on the banks, each issue step puts the
-whole grid on ONE bank. Two work splits cause it:
-  1. width blocking : cores share the same 32 rows at different width offsets (any arch).
-  2. height blocking: each core owns rows 32*k..32*k+31; with 8 banks 32 % 8 == 0, so every
-                      core is on the same bank at each step (Blackhole only).
+If every core walks its data in the same order and the cores' data lines up on the DRAM
+banks, each step puts the whole grid on ONE bank. Three work splits cause it:
+  1. width blocking : interleaved source, cores share the same 32 rows at different width
+                      offsets, so each row step is one bank (any arch).
+  2. height blocking: interleaved source, each core owns rows 32*k..32*k+31; with 8 banks
+                      32 % 8 == 0, so each row step is one bank (Blackhole only).
+  3. width-sharded  : one shard per bank, so a column block IS a bank; every core walks its
+                      column blocks in the same order, so the grid sits on one bank per block.
 
-The fix rotates each core's issue order by a per-core offset. Each half is a compile-time
-switch in its kernel; off compiles the plain in-order loop:
-    stagger_reads  : reader issues row  (i + core % 32) % 32
+The fix rotates each core's issue order by a per-core offset. Each lever is a compile-time
+switch; off compiles the plain in-order loop:
+    stagger_reads  : reader issues row  (i + core % 32) % 32            (cases 1, 2)
+    stagger_blocks : reader+writer walk units (j + core % n_w) % count   (case 3)
     stagger_writes : writer issues tile (i + core % chunk_wt) % chunk_wt
 Same transactions, sizes, count and L1 addresses either way. See README.md.
 """
@@ -30,17 +33,19 @@ CB_DEPTH = 2  # blocks per CB; held constant across variants
 
 # Named switch combinations for the sweep; baseline first.
 VARIANTS = {
-    "none": dict(stagger_reads=False, stagger_writes=False),
-    "read": dict(stagger_reads=True, stagger_writes=False),
-    "write": dict(stagger_reads=False, stagger_writes=True),
-    "both": dict(stagger_reads=True, stagger_writes=True),
+    "none": dict(stagger_reads=False, stagger_blocks=False, stagger_writes=False),
+    "read": dict(stagger_reads=True, stagger_blocks=False, stagger_writes=False),
+    "blocks": dict(stagger_reads=False, stagger_blocks=True, stagger_writes=False),
+    "write": dict(stagger_reads=False, stagger_blocks=False, stagger_writes=True),
+    "combined": dict(stagger_reads=True, stagger_blocks=True, stagger_writes=True),
 }
 
 MAX_CHUNK_WT = 16
 
 
 def validate(input_tensor, chunk_wt):
-    """2D bf16 ROW_MAJOR interleaved; H a multiple of 32; W a multiple of 32*chunk_wt."""
+    """2D bf16 ROW_MAJOR DRAM, interleaved or width-sharded; H a multiple of 32; W a multiple of
+    32*chunk_wt; a width-sharded source's shard width a multiple of the chunk."""
     shape = list(input_tensor.shape)
     if len(shape) != 2:
         raise ValueError(f"bank_stagger example: rank must be 2, got {len(shape)}")
@@ -48,8 +53,12 @@ def validate(input_tensor, chunk_wt):
         raise ValueError("bank_stagger example: input must be ROW_MAJOR_LAYOUT")
     if input_tensor.dtype != ttnn.bfloat16:
         raise ValueError(f"bank_stagger example: dtype must be bfloat16, got {input_tensor.dtype}")
-    if input_tensor.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
-        raise ValueError("bank_stagger example: input must be interleaved")
+    mc = input_tensor.memory_config()
+    if mc.buffer_type != ttnn.BufferType.DRAM or mc.memory_layout not in (
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    ):
+        raise ValueError("bank_stagger example: input must be DRAM interleaved or DRAM width-sharded")
     if not 1 <= chunk_wt <= MAX_CHUNK_WT:
         raise ValueError(f"bank_stagger example: chunk_wt must be in [1, {MAX_CHUNK_WT}], got {chunk_wt}")
     h, w = shape
@@ -57,6 +66,8 @@ def validate(input_tensor, chunk_wt):
         raise ValueError(f"bank_stagger example: H must be a multiple of {TILE}, got {h}")
     if w % (TILE * chunk_wt):
         raise ValueError(f"bank_stagger example: W must be a multiple of {TILE * chunk_wt}, got {w}")
+    if input_tensor.buffer_aligned_page_size() % (chunk_wt * TILE * 2):
+        raise ValueError("bank_stagger example: a chunk must not straddle two source pages (shards)")
 
 
 def work_geometry(shape, chunk_wt, grid_cores):
@@ -90,13 +101,16 @@ def num_dram_banks(device):
     return ttnn.get_memory_view(device, ttnn.BufferType.DRAM).num_banks
 
 
-def create_program_descriptor(input_tensor, output_tensor, *, stagger_reads, stagger_writes, chunk_wt, kernel_iters=1):
+def create_program_descriptor(
+    input_tensor, output_tensor, *, stagger_reads, stagger_blocks, stagger_writes, chunk_wt, kernel_iters=1
+):
     device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
     h, w = list(input_tensor.shape)
     _, n_w, units, num_cores = work_geometry((h, w), chunk_wt, grid.x * grid.y)
 
-    page_bytes = input_tensor.buffer_aligned_page_size()  # one ROW_MAJOR row
+    page_bytes = input_tensor.buffer_aligned_page_size()  # one row, or one shard-row if width-sharded
+    pages_per_row = w * 2 // page_bytes
     chunk_row_bytes = chunk_wt * TILE * 2  # bf16 slice of one row
     tile_bytes = output_tensor.buffer_aligned_page_size()
 
@@ -111,18 +125,27 @@ def create_program_descriptor(input_tensor, output_tensor, *, stagger_reads, sta
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=tile_bytes)],
         )
 
-    reader_ct = [chunk_wt, page_bytes, chunk_row_bytes, kernel_iters, int(stagger_reads)]
+    reader_ct = [
+        chunk_wt,
+        page_bytes,
+        chunk_row_bytes,
+        kernel_iters,
+        int(stagger_reads),
+        int(stagger_blocks),
+        pages_per_row,
+    ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    writer_ct = [chunk_wt, tile_bytes, kernel_iters, int(stagger_writes)]
+    writer_ct = [chunk_wt, tile_bytes, kernel_iters, int(stagger_writes), int(stagger_blocks)]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     compute_ct = [chunk_wt, kernel_iters]
 
     reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     in_addr, out_addr = input_tensor.buffer_address(), output_tensor.buffer_address()
     for idx, (core, (start, count)) in enumerate(zip(cores, assignment)):
-        row_rot, col_rot = idx % TILE, idx % chunk_wt  # read only when the switch is on
-        reader_rt[core.x][core.y] = [in_addr, start, count, n_w, row_rot]
-        writer_rt[core.x][core.y] = [out_addr, start, count, n_w, w // TILE, col_rot]
+        # Offsets are read only when their switch is on.
+        row_rot, col_rot, blk_rot = idx % TILE, idx % chunk_wt, (idx % n_w) % count
+        reader_rt[core.x][core.y] = [in_addr, start, count, n_w, row_rot, blk_rot]
+        writer_rt[core.x][core.y] = [out_addr, start, count, n_w, w // TILE, col_rot, blk_rot]
         compute_rt[core.x][core.y] = [count]
 
     kernels = [
@@ -157,14 +180,17 @@ def bank_stagger(
     input_tensor: ttnn.Tensor,
     *,
     stagger_reads: bool = True,
-    stagger_writes: bool = True,
+    stagger_blocks: bool = True,
+    stagger_writes: bool = False,
     chunk_wt: int = 8,
     kernel_iters: int = 1,
 ) -> ttnn.Tensor:
-    """Tilize a ROW_MAJOR interleaved DRAM bf16 tensor into an interleaved DRAM tile tensor.
+    """Tilize a ROW_MAJOR DRAM bf16 tensor (interleaved or width-sharded) into an interleaved
+    DRAM tile tensor.
 
     Args:
-        stagger_reads: compile the reader with the rotated read order.
+        stagger_reads: compile the reader with the rotated row order inside a block.
+        stagger_blocks: compile reader and writer with the rotated block order.
         stagger_writes: compile the writer with the rotated write order.
             Output is identical for every switch setting.
         chunk_wt: tile-columns per work unit (sets the read size: chunk_wt * 64 B per row).
@@ -184,6 +210,7 @@ def bank_stagger(
         input_tensor,
         output_tensor,
         stagger_reads=stagger_reads,
+        stagger_blocks=stagger_blocks,
         stagger_writes=stagger_writes,
         chunk_wt=chunk_wt,
         kernel_iters=kernel_iters,
