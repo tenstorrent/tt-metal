@@ -598,9 +598,9 @@ def test_dsv41_demo_session(mesh_device, device_params):
     for s, mode in zip(chosen, modes):
         prompts, bs, rep, msl, mgt, pp, sp, dtr, ptr, pch, wu, ins, eos = s.values
         if mode:
-            os.environ["DSV41_PF_MHC"] = "packed" if set(mode) & set("PRE") else "0"
+            os.environ["DSV41_PF_MHC"] = "packed" if set(mode) & set("PREQ") else "0"
             os.environ["DSV41_PF_ROUTE_OWN"] = "1" if set(mode) & set("RE") else "0"
-            os.environ["DSV41_PF_ENGRAM_OWN"] = "1" if "E" in mode else "0"
+            os.environ["DSV41_PF_ENGRAM_OWN"] = "1" if set(mode) & set("EQ") else "0"
             for _, (_, m_, _) in cache.items():  # force a new prefill trace capture in the new mode
                 pm_ = getattr(m_, "prefill_model", None)
                 if pm_ is not None and getattr(pm_, "dyn", None) is not None:
