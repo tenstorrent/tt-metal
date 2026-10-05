@@ -653,7 +653,8 @@ void partition_mesh_coordinate_ranges(
         const auto intersection = *existing.intersection(partitioning_range);
         if (intersection != existing) {
             invalid_indices.push_back(i);
-            for (const auto& complement : subtract(existing, intersection).ranges()) {
+            const auto complement_set = subtract(existing, intersection);
+            for (const auto& complement : complement_set.ranges()) {
                 partitions.push_back(complement);
             }
             partitions.push_back(intersection);
