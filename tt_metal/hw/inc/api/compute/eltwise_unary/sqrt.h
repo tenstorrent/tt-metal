@@ -14,7 +14,10 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(sqrt, sfpu::sqrt_init, (APPROX))); }
+ALWI void sqrt_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(sqrt, sfpu::sqrt_init, (APPROX)));
+    MATH(ckernel::sfpu::sqrt_bf16_tile_init<!DST_ACCUM_MODE>());
+}
 
 // clang-format off
 /**
