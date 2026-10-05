@@ -425,12 +425,31 @@ class ttKDA:
             )
         return output
 
+    def selections(self, actual_start: ttnn.Tensor, actual_end: ttnn.Tensor | None = None) -> ChronologicalSelections:
+        """The chronological selection table for one call's bounds.
+
+        It depends only on the bounds and on the SP geometry, so layers that share both can share one table; see
+        ``forward``'s ``selections``.
+        """
+        return ChronologicalSelections(
+            ttnn.experimental.kda.chronological_selections(
+                actual_start,
+                self.sequence_parallel_axis,
+                self.active_seq_len_local,
+                self.config.num_heads,
+                self.config.head_k_dim,
+                self.config.head_v_dim,
+                actual_end=actual_end,
+            ),
+        )
+
     def forward(
         self,
         hidden_states: ttnn.Tensor,
         state: KdaState,
         actual_start: ttnn.Tensor,
         actual_end: ttnn.Tensor | None = None,
+        selections: ChronologicalSelections | None = None,
     ) -> tuple[ttnn.Tensor, KdaState]:
         """Run prefill KDA and return replacement logical carries.
 
@@ -452,22 +471,17 @@ class ttKDA:
         ``ttnn.copy`` destination or retained on this layer. The returned output
         is sequence-partitioned along SP and, when TP > 1, reduce-scattered on
         the hidden dimension; TP == 1 returns the full hidden dimension.
+
+        Optional ``selections`` is a table from ``selections()`` for these same
+        bounds, built by a layer with the same SP geometry; it is built here
+        when omitted.
         """
         self._validate_forward(hidden_states, state, actual_start)
         if actual_end is not None:
             self._validate_runtime_bound(actual_end, "actual_end")
         # All geometries use the same selection graph for full and padded calls.
-        selections = ChronologicalSelections(
-            ttnn.experimental.kda.chronological_selections(
-                actual_start,
-                self.sequence_parallel_axis,
-                self.active_seq_len_local,
-                self.config.num_heads,
-                self.config.head_k_dim,
-                self.config.head_v_dim,
-                actual_end=actual_end,
-            ),
-        )
+        if selections is None:
+            selections = self.selections(actual_start, actual_end)
         projected = self._project_inputs(hidden_states)
         qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         convolution_state = ttnn.to_layout(
