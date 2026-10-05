@@ -86,6 +86,8 @@ def _prepare_chunk_recurrence_ops(
     if any(output.shape != expected for output, expected in zip(outputs, expected_output_shapes, strict=True)):
         raise ValueError("chunk-recurrence preparation tensor shapes are inconsistent")
 
+    # Canonical work, independent of the C++ mirror. cumsum(g) is (C-1)*K additions and G_last is its last
+    # row; the kernel's prefix-mask and sum-broadcast matmuls are implementation cost, not matrix work here.
     instances = num_heads * num_chunks
     inverse_flops = CHUNK_SIZE * (CHUNK_SIZE - 1) * (CHUNK_SIZE + 1) // 3
     return (
