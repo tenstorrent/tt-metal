@@ -5,14 +5,9 @@
 #include <cstdint>
 namespace ckernel::sfpu {
 struct HardsigmoidBf16Config {
-    static constexpr uint32_t kRoute = 0x00000001u;
     static constexpr uint32_t kBodySlots = 0x0000000eu;
     static constexpr uint32_t kSlopeBits = 0x3e2aaaabu;
     static constexpr uint32_t kInterceptBits = 0x3f000000u;
-    static constexpr uint32_t kHasTerminal = 0x00000000u;
-    static constexpr uint32_t kTerminalEqual = 0x00000000u;
-    static constexpr uint32_t kTerminalNonzero = 0x00000000u;
-    static constexpr uint32_t kTerminalOutput = 0x00000000u;
 };
 }  // namespace ckernel::sfpu
 #include "ckernel_sfpu_bf16_clamped_affine.h"

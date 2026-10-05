@@ -592,7 +592,8 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::hardsigmoid)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(hardsigmoid_init<APPROX_MODE, is_fp32_dest_acc_en>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(hardsigmoid_init<APPROX_MODE>);
+        ckernel::sfpu::hardsigmoid_bf16_tile_init<!is_fp32_dest_acc_en>();
     }
     else if constexpr (OPERATION == SfpuType::log || OPERATION == SfpuType::log_with_base)
     {

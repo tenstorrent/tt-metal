@@ -107,6 +107,8 @@ it is classified differently on different systems.
 | ViT | WH N150, WH N300 |
 | Motif-Image-6B | WH LLMBox |
 | BGE-M3 | WH N150 |
+| Qwen3-TTS-1.7B | WH N150, BH P150 |
+| Qwen3-TTS-0.6B | WH N150, BH P150 |
 ## Tier 3 Models
 | Model | Systems |
 |-------|---------|
