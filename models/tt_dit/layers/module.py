@@ -19,7 +19,7 @@ from ..utils.progress import Watchdog as _Watchdog
 from ..utils.substate import pop_substate
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator, Mapping, MutableSequence, Sequence
+    from collections.abc import Callable, Iterable, Iterator, Mapping, MutableSequence, Sequence
     from typing import Any
 
     import torch
@@ -93,6 +93,7 @@ class Module(ABC):
         self._is_loaded = False
         self.coresident_exclusions = None  # modules that cannot be resident in memory at the same time as this module. They should be deallocated before this module is loaded.
         self._coresident_peers: list[Module] = []
+        self._eviction_hooks: list[Callable[[], None]] = []
 
     def named_children(self) -> Iterator[tuple[str, Module]]:
         yield from self._children.items()
@@ -281,7 +282,7 @@ class Module(ABC):
                 watchdog.__exit__()
 
     def deallocate_weights(self) -> None:
-        """Deallocate all parameter weights from device memory recursively."""
+        """Deallocate all parameter weights from device memory recursively, then run the eviction hooks."""
         for _, child in self.named_children():
             child.deallocate_weights()
 
@@ -289,6 +290,17 @@ class Module(ABC):
             parameter.deallocate()
 
         self._is_loaded = False
+        for hook in self._eviction_hooks:
+            hook()
+
+    def register_eviction_hook(self, hook: Callable[[], None]) -> None:
+        """Run `hook` whenever this module's weights are deallocated.
+
+        For device state that belongs with the module's residency but lives outside its parameters
+        and children -- an owner's per-geometry caches, for instance -- so that evicting the module
+        frees it too and it is rebuilt lazily on the next use.
+        """
+        self._eviction_hooks.append(hook)
 
     def is_loaded(self) -> bool:
         return self._is_loaded
