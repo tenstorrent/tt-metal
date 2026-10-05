@@ -61,10 +61,9 @@ inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t
     const std::uint32_t stride = local_dfb_interface.stride_size_tiles;
 
     // Compute how many l1_index units fit in one DFB entry
-    const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
     const std::uint32_t entry_size_16B = local_dfb_interface.entry_size;  // DFB entry size in 16B
-    const std::uint32_t tile_16B =                                        // one tile as addressed via the BFD, in 16B
-        SCALE_DATUM_SIZE(pack_dst_format[output_id], tensor_shape.total_tensor_size()) >> 4;
+    const std::uint32_t tile_16B =
+        pack_tile_size[output_id] >> cb_addr_shift;  // host tile size (incl. MX scales), in 16B
     LLK_ASSERT(entry_size_16B % tile_16B == 0, "DFB entry_size must be a whole number of tiles");
     const std::uint32_t l1_index_per_entry = entry_size_16B / tile_16B;  // l1_index steps per entry
 
