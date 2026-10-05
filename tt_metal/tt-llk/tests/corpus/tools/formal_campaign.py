@@ -109,6 +109,9 @@ def _selection_from_json(data: dict) -> dict[str, str]:
     selected = {}
     for op, record in operations.items():
         choice = record.get("selection") if isinstance(record, dict) else None
+        if choice is None and isinstance(record, dict):
+            proposal = record.get("proposal")
+            choice = proposal.get("selection") if isinstance(proposal, dict) else None
         if not isinstance(choice, dict):
             continue
         flags = choice.get("flags")

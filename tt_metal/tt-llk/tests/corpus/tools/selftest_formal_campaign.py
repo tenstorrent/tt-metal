@@ -25,6 +25,15 @@ class FormalCampaignTests(unittest.TestCase):
             {"a": "-ma -mno-b", "b": "-mc"},
         )
 
+    def test_search_result_proposals_use_exact_per_operation_flags(self):
+        data = {
+            "operations": {
+                "a": {"proposal": {"selection": {"flags": "-ma"}}},
+                "b": {"proposal": None},
+            }
+        }
+        self.assertEqual(campaign._selection_from_json(data), {"a": "-ma"})
+
     def test_selected_tsv_without_flags_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "selected.tsv"
