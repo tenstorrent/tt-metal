@@ -3,7 +3,8 @@
 
 set(TTNN_OP_MATMUL_SRCS
     matmul.cpp
-    device/config/factory_blocking_source.cpp
+    device/config/heuristic_generator.cpp
+    device/config/rule_ranker.cpp
     device/config/matmul_auto_config.cpp
     device/config/roofline_estimator.cpp
     device/matmul_desc.cpp

@@ -13,25 +13,19 @@
 
 #include "ttnn/operations/matmul/device/config/matmul_auto_config.hpp"
 
-// The candidate source built on the factories' blocking rules. For each family that can run the problem it
-// fixes the layout's per-core split (the grid the family covers, or a sharded tensor's shards), and three
-// policies make the remaining choices:
+// The heuristic generator: one candidate per family, cut by the factories' blocking rules. For each family that can
+// run the problem it fixes the layout's per-core split (the grid the family covers, or a sharded tensor's shards),
+// and two policies cut the rest:
 //  - BlockingPolicy: K depth (in0_block_w) and output blocks within the split, inside the L1 budget;
-//  - SubblockPolicy: the output subblock within a block;
-//  - FamilyPolicy: which family's candidate to propose.
-// The proposal is the chosen candidate. Sharded tensors constrain the choice rather than change the rules: a sharded A
-// fixes the family, grid and per-core sizes (width -> 1D in0-mcast, height -> 1D in1-mcast or Reuse for batched B,
-// block -> 2D), a sharded output (with interleaved inputs) fixes the family (and with a shard spec, the grid
-// and per-core sizes), and the policies choose what remains within the layout's BlockRules.
+//  - SubblockPolicy: the output subblock within a block.
+// Sharded tensors constrain the layout rather than change the rules: a sharded A fixes the family, grid and per-core
+// sizes (width -> 1D in0-mcast, height -> 1D in1-mcast or Reuse for batched B, block -> 2D), a sharded output (with
+// interleaved inputs) fixes the family (and with a shard spec, the grid and per-core sizes), and the policies choose
+// what remains within the layout's BlockRules. Choosing among the candidates is the ranker's job (rule_ranker.hpp).
 //
-// Two kinds of decision, judged differently:
-//  - which layout (family): rules on busy cores and input read, with HeuristicFamily::Tuned::one_d_core_advantage as
-//    the "clearly better" margin; where those rules don't apply (2D blocks one tile tall or wide) the roofline ranks
-//    the families. Different layouts' blocks don't carry the same fixed cost, so this comparison has no per-block term.
-//  - how to cut a layout (K depth, output blocks, Reuse slices): rules on K depth and block size, and for Reuse's
-//    slice height an estimate that adds a fixed cost per block and the last block's output write to the roofline
-//    (HeuristicBlocking::Tuned::reuse_*), switching from the slice that fills the grid at reuse_switch_margin.
-// Both were tried merged into one estimate and one margin, and each merge made cases slower on one architecture.
+// The cutting is rules on K depth and block size, and for Reuse's slice height an estimate that adds a fixed cost per
+// block and the last block's output write to the roofline (HeuristicBlocking::Tuned::reuse_*), switching from the
+// slice that fills the grid at reuse_switch_margin.
 namespace ttnn::operations::matmul::auto_config {
 
 // Extra conditions a layout puts on the blocking.
@@ -75,14 +69,6 @@ class SubblockPolicy {
 public:
     virtual ~SubblockPolicy() = default;
     virtual Blocking subblock(const MatmulDesc& matmul, Family family, Blocking blocking) const = 0;
-};
-
-// Chooses one of the families' candidates (at most one per family, in family order)
-class FamilyPolicy {
-public:
-    virtual ~FamilyPolicy() = default;
-    virtual std::optional<Candidate> choose(
-        const MatmulDesc& matmul, const HardwareDesc& hw, std::span<const Candidate> candidates) const = 0;
 };
 
 // Issue #57884's block-size heuristics with one K block depth rule:
@@ -134,7 +120,7 @@ public:
         // Wormhole (i29716_dit wants large 2D blocks at K 1, and large bf16 blocks over deeper K at equal work),
         // on for Blackhole (BH probe of g_4096; equal-work 2D ties go 5-8% faster deeper on BH bf16 shapes).
         bool k_depth_over_block_size = false;
-        // Reuse's slice estimate (see FactoryBlockingSource::reuse_blocking): the fixed cost of each block
+        // Reuse's slice estimate (see HeuristicGenerator::reuse_blocking): the fixed cost of each block
         // (cycles), the rate a core writes its block's output at (bytes per cycle; the last block's write doesn't
         // overlap compute), and how much faster another slice must be estimated than the one that fills the grid.
         // Basis: Reuse slice sweeps of 49 batched cases on Wormhole and Blackhole (generated/matmul_oob/rslice;
@@ -175,67 +161,30 @@ public:
     Blocking subblock(const MatmulDesc& matmul, Family family, Blocking blocking) const override;
 };
 
-// The family rules:
-//  - B not batched: 2D mcast, unless a 1D layout keeps at least one_d_core_advantage times as many cores busy
-//    (small M or small N), or 1D in0-mcast keeps as many cores busy with less input per core;
-//  - batched B: Reuse, unless the multicast layout looping over the batch (chosen as above) keeps
-//    one_d_core_advantage times as many cores busy, or Reuse would read one_d_core_advantage times as much input;
-//  - a 2D choice whose per-core blocks are one tile tall or wide: the lowest roofline estimate instead, among the
-//    candidates no other keeps one_d_core_advantage times as many cores busy as; with batched B, Reuse unless that
-//    estimate is one_d_core_advantage times better or takes fewer serial steps.
-class HeuristicFamily final : public FamilyPolicy {
-public:
-    // Tuned: fitted to benchmark data (see HeuristicBlocking::Tuned)
-    struct Tuned {
-        // Switching away from the default layout needs at least this many times as many cores busy: 1D over 2D
-        // (1D multicasts a whole operand to every core), and for batched B a batch-looping multicast layout over
-        // Reuse; where the roofline picks the family, a candidate with this many times fewer cores busy is out.
-        // Basis: the Wormhole family sweep; range 1.25 to 2 performs about the same.
-        double one_d_core_advantage = 1.5;
-    };
-    struct Params {
-        Tuned tuned;
-        // The values for an architecture (the same for every architecture today)
-        static Params for_arch(tt::ARCH arch);
-    };
-
-    // The values for each matmul's architecture
-    HeuristicFamily() = default;
-    // Fixed values, whatever the architecture
-    explicit HeuristicFamily(const Params& params) : params_(params) {}
-
-    std::optional<Candidate> choose(
-        const MatmulDesc& matmul, const HardwareDesc& hw, std::span<const Candidate> candidates) const override;
-
-private:
-    std::optional<Params> params_;
-};
-
-class FactoryBlockingSource final : public CandidateSource {
+// One candidate per family that can run the problem and fits L1, in the order Reuse, 2D, 1D in0, 1D in1. With a
+// batched A on a layout that splits only M (1D in1, or 2D with blocks one tile wide), the fused candidate is followed
+// by the same family looping over the batch, when one batch keeps as many cores busy: each core then gets one shorter
+// block per batch, whose output writes overlap the next one's compute. A sharded layout has one candidate.
+class HeuristicGenerator final : public Generator {
 public:
     // The heuristic policies
-    FactoryBlockingSource();
-    FactoryBlockingSource(
-        std::shared_ptr<const BlockingPolicy> blocking,
-        std::shared_ptr<const SubblockPolicy> subblock,
-        std::shared_ptr<const FamilyPolicy> family);
+    HeuristicGenerator();
+    HeuristicGenerator(std::shared_ptr<const BlockingPolicy> blocking, std::shared_ptr<const SubblockPolicy> subblock);
 
-    std::string_view name() const override { return "factory_blocking"; }
+    std::string_view name() const override { return "heuristic"; }
+    std::vector<Candidate> generate(const MatmulDesc& matmul, const HardwareDesc& hw) const override;
 
-    // The family policy's choice
-    std::vector<Candidate> propose(const MatmulDesc& matmul, const HardwareDesc& hw) const override;
-
-    // The blocked candidate of each family that can run the problem and fits L1, in family order
-    std::vector<Candidate> candidates(const MatmulDesc& matmul, const HardwareDesc& hw) const;
+    // The fused candidate of each family, without the batch-looping ones
+    std::vector<Candidate> one_per_family(const MatmulDesc& matmul, const HardwareDesc& hw) const;
 
 private:
     std::vector<Candidate> sharded_candidates(const MatmulDesc& matmul, const HardwareDesc& hw) const;
     std::optional<Blocking> reuse_blocking(const MatmulDesc& matmul, const HardwareDesc& hw) const;
-    void loop_over_batch_if_better(const MatmulDesc& matmul, const HardwareDesc& hw, Candidate& candidate) const;
+    std::optional<Candidate> looped_over_batch(
+        const MatmulDesc& matmul, const HardwareDesc& hw, const Candidate& fused) const;
 
     std::shared_ptr<const BlockingPolicy> blocking_;
     std::shared_ptr<const SubblockPolicy> subblock_;
-    std::shared_ptr<const FamilyPolicy> family_;
 };
 
 }  // namespace ttnn::operations::matmul::auto_config

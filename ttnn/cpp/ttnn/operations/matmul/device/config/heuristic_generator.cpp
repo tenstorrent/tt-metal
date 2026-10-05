@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/matmul/device/config/factory_blocking_source.hpp"
+#include "ttnn/operations/matmul/device/config/heuristic_generator.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -97,9 +97,9 @@ std::optional<Blocking> block_2d(
     auto deep_enough = [&](uint32_t k) { return rules.k_fixed != 0 || k >= min_k; };
     // Blocks are ranked by this key, highest first; the first block found wins ties
     struct Rank {
-        bool preferred;      // at the layout's preferred in0_block_w (each K block a whole shard column)
-        bool deep_enough;    // in0_block_w reaches the depth some architectures need before block size counts
-        uint64_t volume;     // in0_block_w * out_block_h * out_block_w: tiles of work per K block
+        bool preferred;    // at the layout's preferred in0_block_w (each K block a whole shard column)
+        bool deep_enough;  // in0_block_w reaches the depth some architectures need before block size counts
+        uint64_t volume;   // in0_block_w * out_block_h * out_block_w: tiles of work per K block
         // Minus the tiles a K block moves for that work: k * h of A and k * w of B, plus the output block's h * w
         // partials, packed after every K block, where that costs (costly_k_blocks, or always with
         // Tuned::k_depth_over_block_size). At equal work, a squarer block (and, where partials count, a deeper
@@ -365,23 +365,9 @@ Blocking HeuristicSubblock::subblock(const MatmulDesc& p, Family family, Blockin
     return b;
 }
 
-// ---- Family ----
+// ---- Candidates ----
 
 namespace {
-
-// Input tiles per K tile each core reads: its rows of A plus its columns of B
-uint32_t per_core_input_tiles(const Blocking& b) { return b.per_core_M + b.per_core_N; }
-
-// Input tiles read from memory in total. The mcast layouts read A once per output column block and B once
-// per output row block (each shared by multicast); Reuse reads A once and B once per M slice of a batch.
-uint64_t total_input_tiles(const MatmulDesc& p, Family family, const Blocking& b) {
-    const uint64_t a_tiles = static_cast<uint64_t>(p.batch_a) * p.Mt * p.Kt;
-    const uint64_t b_tiles = static_cast<uint64_t>(p.batch_b) * p.Kt * p.Nt;
-    if (family == Family::Reuse) {
-        return a_tiles + b_tiles * div_up(p.Mt, b.per_core_M);
-    }
-    return a_tiles * (b.per_core_N / b.out_block_w) + b_tiles * (b.per_core_M / b.out_block_h);
-}
 
 uint32_t cores_used(const MatmulDesc& p, const HardwareDesc& hw, Family family, const Blocking& b, bool fuse_batch) {
     if (family == Family::Reuse) {
@@ -391,161 +377,55 @@ uint32_t cores_used(const MatmulDesc& p, const HardwareDesc& hw, Family family, 
     return div_up(output_rows(p, fuse_batch), b.per_core_M) * div_up(p.Nt, b.per_core_N);
 }
 
-// Among the multicast layouts: 2D unless a 1D layout keeps clearly more cores busy (in0-mcast first when both
-// do), or 1D in0-mcast keeps as many cores busy with less input per core.
-const Candidate* choose_mcast(
-    double one_d_core_advantage, const Candidate* two_d, const Candidate* in0, const Candidate* in1) {
-    if (!two_d) {
-        return in0 ? in0 : in1;
-    }
-    const double threshold = one_d_core_advantage * two_d->cores;
-    if (in0 && in0->cores >= threshold && (!in1 || in0->cores >= in1->cores)) {
-        return in0;
-    }
-    if (in1 && in1->cores >= threshold) {
-        return in1;
-    }
-    if (in0 && in0->cores >= two_d->cores &&
-        per_core_input_tiles(in0->blocking) < per_core_input_tiles(two_d->blocking)) {
-        return in0;  // a taller, squarer per-core block reads less input
-    }
-    return two_d;
-}
-
-std::optional<Candidate> choose_family(
-    double one_d_core_advantage, const MatmulDesc& p, std::span<const Candidate> all) {
-    auto find = [&](Family family) -> const Candidate* {
-        for (const auto& c : all) {
-            if (c.family == family) {
-                return &c;
-            }
-        }
-        return nullptr;
-    };
-    const Candidate* mcast =
-        choose_mcast(one_d_core_advantage, find(Family::Mcast2D), find(Family::Mcast1DIn0), find(Family::Mcast1DIn1));
-    // Batched B: Reuse, whose cores work on their blocks independently, unless the multicast layout (which
-    // loops over the batch across the whole grid) keeps clearly more cores busy, or Reuse would read clearly
-    // more input (it re-reads a batch's B for every M slice it splits the batch matrix into).
-    if (const auto* reuse = find(Family::Reuse)) {
-        if (mcast && (mcast->cores >= one_d_core_advantage * reuse->cores ||
-                      total_input_tiles(p, Family::Reuse, reuse->blocking) >=
-                          one_d_core_advantage * total_input_tiles(p, mcast->family, mcast->blocking))) {
-            return *mcast;
-        }
-        return *reuse;
-    }
-    if (mcast) {
-        return *mcast;
-    }
-    return std::nullopt;
-}
-
-// A 2D layout whose per-core blocks are one tile tall or wide multicasts single tiles along that axis, so the
-// reuse the rules above count on isn't there: the roofline estimate picks the family instead (ties to the
-// earlier family: 2D, 1D in0, 1D in1, Reuse), among the candidates no other keeps one_d_core_advantage times as many
-// cores busy as. The roofline has no per-step latency, so on its own it can prefer a layout that loops serially over
-// many small steps on a few cores (2D over a batch) to one that does them at once on many (Reuse). With batched B,
-// Reuse stays the default unless the roofline's choice is one_d_core_advantage times better or takes fewer serial
-// steps (output blocks times K blocks, per batch loop) on its busiest core.
-bool one_tile_2d(const Candidate& c) {
-    return c.family == Family::Mcast2D && std::min(c.blocking.per_core_M, c.blocking.per_core_N) == 1;
-}
-
 }  // namespace
 
-HeuristicFamily::Params HeuristicFamily::Params::for_arch(tt::ARCH /*arch*/) { return {}; }
+HeuristicGenerator::HeuristicGenerator() :
+    HeuristicGenerator(std::make_shared<HeuristicBlocking>(), std::make_shared<HeuristicSubblock>()) {}
 
-std::optional<Candidate> HeuristicFamily::choose(
-    const MatmulDesc& p, const HardwareDesc& hw, std::span<const Candidate> all) const {
-    const Params params = params_.value_or(Params::for_arch(hw.arch));
-    auto chosen = choose_family(params.tuned.one_d_core_advantage, p, all);
-    if (!chosen || !one_tile_2d(*chosen)) {
-        return chosen;
-    }
-    uint32_t most_cores = 0;
-    for (const auto& c : all) {
-        most_cores = std::max(most_cores, c.cores);
-    }
-    auto key = [&](const Candidate& c) {
-        const bool clearly_fewer_cores = c.cores * params.tuned.one_d_core_advantage <= most_cores;
-        return std::make_tuple(
-            clearly_fewer_cores,
-            roofline(p, hw, c.family, c.blocking, c.fuse_batch).cycles(),
-            static_cast<int>(c.family));
-    };
-    const auto best = std::min_element(
-        all.begin(), all.end(), [&](const Candidate& x, const Candidate& y) { return key(x) < key(y); });
-    if (p.batch_b > 1 && best->family != Family::Reuse) {
-        auto steps = [&](const Candidate& c) {
-            const uint64_t k_blocks = div_up(p.Kt, c.blocking.in0_block_w);
-            if (c.family == Family::Reuse) {
-                return div_up(p.batch_a * p.Mt / c.blocking.per_core_M, hw.grid.x * hw.grid.y) * k_blocks;
-            }
-            const uint64_t loops = c.fuse_batch ? 1 : std::max(p.batch_a, p.batch_b);
-            return uint64_t{c.blocking.per_core_M / c.blocking.out_block_h} *
-                   (c.blocking.per_core_N / c.blocking.out_block_w) * k_blocks * loops;
-        };
-        const double best_cycles = roofline(p, hw, best->family, best->blocking, best->fuse_batch).cycles();
-        for (const auto& c : all) {
-            if (c.family == Family::Reuse && !std::get<0>(key(c)) && steps(c) <= steps(*best) &&
-                roofline(p, hw, c.family, c.blocking, c.fuse_batch).cycles() <
-                    params.tuned.one_d_core_advantage * best_cycles) {
-                return c;
-            }
-        }
-    }
-    return *best;
-}
-
-// ---- Source ----
-
-FactoryBlockingSource::FactoryBlockingSource() :
-    FactoryBlockingSource(
-        std::make_shared<HeuristicBlocking>(),
-        std::make_shared<HeuristicSubblock>(),
-        std::make_shared<HeuristicFamily>()) {}
-
-FactoryBlockingSource::FactoryBlockingSource(
-    std::shared_ptr<const BlockingPolicy> blocking,
-    std::shared_ptr<const SubblockPolicy> subblock,
-    std::shared_ptr<const FamilyPolicy> family) :
-    blocking_(std::move(blocking)), subblock_(std::move(subblock)), family_(std::move(family)) {}
+HeuristicGenerator::HeuristicGenerator(
+    std::shared_ptr<const BlockingPolicy> blocking, std::shared_ptr<const SubblockPolicy> subblock) :
+    blocking_(std::move(blocking)), subblock_(std::move(subblock)) {}
 
 // With a batched A fused into M, a layout that splits only M (1D in1, or 2D with blocks one tile wide) gives each
 // core one tall block, whose output is written after its last K step. Looping over the batch instead gives each core
-// one shorter block per batch, whose output writes overlap the next one's compute, provided one batch still keeps as
-// many cores busy. Decided after the family, which the estimate compares with the batch fused.
-void FactoryBlockingSource::loop_over_batch_if_better(const MatmulDesc& p, const HardwareDesc& hw, Candidate& c) const {
+// one shorter block per batch, whose output writes overlap the next one's compute: the looped candidate, when one
+// batch still keeps as many cores busy.
+std::optional<Candidate> HeuristicGenerator::looped_over_batch(
+    const MatmulDesc& p, const HardwareDesc& hw, const Candidate& fused) const {
     const bool splits_only_m =
-        c.family == Family::Mcast1DIn1 || (c.family == Family::Mcast2D && c.blocking.per_core_N == 1);
-    if (!sharded_layout(p) && splits_only_m && c.fuse_batch && p.batch_a > 1) {
-        const uint32_t rows = c.family == Family::Mcast2D ? hw.grid.y : hw.grid.x * hw.grid.y;
-        if (auto looped = blocking_->block(p, hw, c.family, {div_up(p.Mt, rows), c.blocking.per_core_N, false}, {})) {
-            // Only when one batch still keeps as many cores busy as the fused batches did
-            const uint32_t looped_cores = div_up(p.Mt, looped->per_core_M) * div_up(p.Nt, looped->per_core_N);
-            if (looped_cores >= c.cores) {
-                c.blocking = subblock_->subblock(p, c.family, *looped);
-                c.fuse_batch = false;
-                c.cores = looped_cores;
-            }
+        fused.family == Family::Mcast1DIn1 || (fused.family == Family::Mcast2D && fused.blocking.per_core_N == 1);
+    if (sharded_layout(p) || !splits_only_m || !fused.fuse_batch || p.batch_a <= 1) {
+        return std::nullopt;
+    }
+    const uint32_t rows = fused.family == Family::Mcast2D ? hw.grid.y : hw.grid.x * hw.grid.y;
+    const auto looped =
+        blocking_->block(p, hw, fused.family, {div_up(p.Mt, rows), fused.blocking.per_core_N, false}, {});
+    if (!looped) {
+        return std::nullopt;
+    }
+    const uint32_t looped_cores = div_up(p.Mt, looped->per_core_M) * div_up(p.Nt, looped->per_core_N);
+    if (looped_cores < fused.cores) {
+        return std::nullopt;
+    }
+    Candidate c = fused;
+    c.blocking = subblock_->subblock(p, c.family, *looped);
+    c.fuse_batch = false;
+    c.cores = looped_cores;
+    return c;
+}
+
+std::vector<Candidate> HeuristicGenerator::generate(const MatmulDesc& p, const HardwareDesc& hw) const {
+    std::vector<Candidate> result;
+    for (const auto& c : one_per_family(p, hw)) {
+        result.push_back(c);
+        if (auto looped = looped_over_batch(p, hw, c)) {
+            result.push_back(*looped);
         }
     }
+    return result;
 }
 
-std::vector<Candidate> FactoryBlockingSource::propose(const MatmulDesc& p, const HardwareDesc& hw) const {
-    const auto all = candidates(p, hw);
-    // A sharded layout fixes the family: its candidate is the only one
-    auto chosen = sharded_layout(p) ? (all.empty() ? std::nullopt : std::optional<Candidate>(all.front()))
-                                    : family_->choose(p, hw, all);
-    if (!chosen) {
-        return {};
-    }
-    loop_over_batch_if_better(p, hw, *chosen);
-    return {*chosen};
-}
-
-std::vector<Candidate> FactoryBlockingSource::candidates(const MatmulDesc& p, const HardwareDesc& hw) const {
+std::vector<Candidate> HeuristicGenerator::one_per_family(const MatmulDesc& p, const HardwareDesc& hw) const {
     if (sharded_layout(p)) {
         return sharded_candidates(p, hw);
     }
@@ -603,7 +483,7 @@ std::vector<Candidate> FactoryBlockingSource::candidates(const MatmulDesc& p, co
 // 16 rows needs a single K block: every slice then loads all of its batch's B at once, so the slice height is the
 // one with the lowest roofline estimate instead. A bias of a whole [M, N] block fuses only into blocks of whole
 // batch matrices.
-std::optional<Blocking> FactoryBlockingSource::reuse_blocking(const MatmulDesc& p, const HardwareDesc& hw) const {
+std::optional<Blocking> HeuristicGenerator::reuse_blocking(const MatmulDesc& p, const HardwareDesc& hw) const {
     const uint32_t cores = hw.grid.x * hw.grid.y;
     const BlockRules rules{.k_fixed = needs_single_k_reuse(p) ? p.Kt : 0};
     if (p.bias_rows > 1) {
@@ -657,7 +537,7 @@ std::optional<Blocking> FactoryBlockingSource::reuse_blocking(const MatmulDesc& 
 
 // A sharded operand or output fixes the family, grid and per-core sizes; returns that layout's candidate, or
 // nothing when the combination isn't supported or doesn't fit.
-std::vector<Candidate> FactoryBlockingSource::sharded_candidates(const MatmulDesc& p, const HardwareDesc& hw) const {
+std::vector<Candidate> HeuristicGenerator::sharded_candidates(const MatmulDesc& p, const HardwareDesc& hw) const {
     std::vector<Candidate> result;
     auto add = [&](Family family,
                    std::optional<Blocking> b,

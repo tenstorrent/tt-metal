@@ -27,14 +27,17 @@
 // precedence because it sets the program config before this is reached.
 //
 // The selection is a pure function of the matmul's specs (MatmulSpecs, and the MatmulDesc describing them) and a
-// HardwareDesc (grid, L1), so it can be exercised for any architecture without a device. A Selector combines
-//  - candidate sources (CandidateSource), which propose legal candidates: the factory blocking source
-//    (factory_blocking_source.hpp) derives them from each factory's blocking rules; and
-//  - estimators (Estimator), which rank the proposals: the roofline (roofline_estimator.hpp) by default.
-// select() ranks the proposals with the estimators and returns the best that passes check() (the device op's
-// validation, plus what the factories need beyond it). A measured registry would plug in as another source and
-// estimator. Problems it has no config for return nullopt with the reason; matmul reports them as an error (they are
-// inputs the factories can't run).
+// HardwareDesc (grid, L1), so it can be exercised for any architecture without a device. It has three stages:
+//  - generate: Generators produce candidates, each a complete config of one factory family. The heuristic
+//    generator (heuristic_generator.hpp) cuts one candidate per family by rules; an enumerating generator would
+//    produce every legal config.
+//  - rank: a Ranker orders the candidates, best first. The rule ranker (rule_ranker.hpp) applies the family rules;
+//    the estimate ranker (EstimateRanker) sorts by Estimators' cycle estimates (the roofline,
+//    roofline_estimator.hpp, or a measured model).
+//  - check: select() returns the first candidate in rank order that passes check() (the device op's validation, plus
+//    what the factories need beyond it), so an illegal config can't be chosen.
+// The default selector is the heuristic generator ranked by the rule ranker. Problems with no config return nullopt
+// with the reason; matmul reports them as an error (they are inputs the factories can't run).
 namespace ttnn::operations::matmul::auto_config {
 
 // Hardware facts the selector depends on. Tests can describe other architectures directly.
@@ -97,7 +100,7 @@ struct Estimate {
 };
 
 // Estimates a candidate's device time, or returns nullopt when it has no estimate for this problem. Estimators
-// rank candidates; they never create them, so they can't make an illegal choice.
+// only score candidates; they never create them, so they can't make an illegal choice.
 class Estimator {
 public:
     virtual ~Estimator() = default;
@@ -106,34 +109,49 @@ public:
         const MatmulDesc& matmul, const HardwareDesc& hw, const Candidate& candidate) const = 0;
 };
 
-// Proposes candidates for a matmul; select() keeps those that pass check(). A source proposes nothing for
-// matmuls it doesn't handle.
-class CandidateSource {
+// Produces candidates for a matmul, each a complete blocking of one family that fits L1. A generator produces
+// nothing for matmuls it doesn't handle.
+class Generator {
 public:
-    virtual ~CandidateSource() = default;
+    virtual ~Generator() = default;
     virtual std::string_view name() const = 0;
-    virtual std::vector<Candidate> propose(const MatmulDesc& matmul, const HardwareDesc& hw) const = 0;
+    virtual std::vector<Candidate> generate(const MatmulDesc& matmul, const HardwareDesc& hw) const = 0;
 };
 
-// Where candidates come from and how they are ranked
+// Orders candidates best first (pointers into `candidates`). It may leave out candidates it would never choose.
+class Ranker {
+public:
+    virtual ~Ranker() = default;
+    virtual std::string_view name() const = 0;
+    virtual std::vector<const Candidate*> rank(
+        const MatmulDesc& matmul, const HardwareDesc& hw, std::span<const Candidate> candidates) const = 0;
+};
+
+// Ranks by estimate: per candidate its most confident estimate (the earlier estimator on ties), then the lowest
+// cycles (the earlier candidate on ties). Candidates without an estimate come last, in their given order.
+class EstimateRanker final : public Ranker {
+public:
+    explicit EstimateRanker(std::vector<std::shared_ptr<const Estimator>> estimators) :
+        estimators_(std::move(estimators)) {}
+    std::string_view name() const override { return "estimate"; }
+    std::vector<const Candidate*> rank(
+        const MatmulDesc& matmul, const HardwareDesc& hw, std::span<const Candidate> candidates) const override;
+
+private:
+    std::vector<std::shared_ptr<const Estimator>> estimators_;
+};
+
+// Where candidates come from and how they are ranked. Without a ranker, candidates keep the generators' order.
 struct Selector {
-    std::vector<std::shared_ptr<const CandidateSource>> sources;
-    std::vector<std::shared_ptr<const Estimator>> estimators;
+    std::vector<std::shared_ptr<const Generator>> generators;
+    std::shared_ptr<const Ranker> ranker;
 };
 
-// The factory blocking source with the heuristic policies, ranked by the roofline estimate
+// The heuristic generator, ranked by the rule ranker
 const Selector& default_selector();
 
-// `options` best first by estimate: per option the most confident estimate (the earlier estimator on ties), then
-// the lowest cycles (the earlier option on ties). Options without an estimate come after those with one.
-std::vector<const Candidate*> rank_by_estimate(
-    const MatmulDesc& matmul,
-    const HardwareDesc& hw,
-    std::span<const Candidate> options,
-    std::span<const std::shared_ptr<const Estimator>> estimators);
-
-// The best of the sources' proposals (in source order) by estimate that passes check(); nullopt if none does.
-// Proposals are checked in rank order, so usually only the best one is. `matmul` describes `specs`.
+// The generators' candidates (in generator order), ranked, and the first that passes check(); nullopt if none
+// does. Candidates are checked in rank order, so usually only the first one is. `matmul` describes `specs`.
 std::optional<Candidate> select(
     const ttnn::prim::MatmulSpecs& specs,
     const MatmulDesc& matmul,

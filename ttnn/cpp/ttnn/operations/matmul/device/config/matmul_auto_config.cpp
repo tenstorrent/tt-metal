@@ -11,8 +11,9 @@
 
 #include "ttnn/operations/matmul/device/config/auto_config_common.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
-#include "ttnn/operations/matmul/device/config/factory_blocking_source.hpp"
+#include "ttnn/operations/matmul/device/config/heuristic_generator.hpp"
 #include "ttnn/operations/matmul/device/config/roofline_estimator.hpp"
+#include "ttnn/operations/matmul/device/config/rule_ranker.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -214,26 +215,23 @@ std::string check(
     return factory_limit_error(p, hw, config);
 }
 
-std::vector<const Candidate*> rank_by_estimate(
-    const MatmulDesc& p,
-    const HardwareDesc& hw,
-    std::span<const Candidate> options,
-    std::span<const std::shared_ptr<const Estimator>> estimators) {
+std::vector<const Candidate*> EstimateRanker::rank(
+    const MatmulDesc& p, const HardwareDesc& hw, std::span<const Candidate> candidates) const {
     struct Ranked {
         const Candidate* candidate;
         std::optional<Estimate> estimate;
     };
     std::vector<Ranked> ranked;
-    ranked.reserve(options.size());
-    for (const auto& option : options) {
+    ranked.reserve(candidates.size());
+    for (const auto& candidate : candidates) {
         std::optional<Estimate> chosen;
-        for (const auto& estimator : estimators) {
-            auto e = estimator->estimate(p, hw, option);
+        for (const auto& estimator : estimators_) {
+            auto e = estimator->estimate(p, hw, candidate);
             if (e && (!chosen || e->confidence > chosen->confidence)) {
                 chosen = e;
             }
         }
-        ranked.push_back({&option, chosen});
+        ranked.push_back({&candidate, chosen});
     }
     std::stable_sort(ranked.begin(), ranked.end(), [](const Ranked& x, const Ranked& y) {
         if (x.estimate.has_value() != y.estimate.has_value()) {
@@ -251,20 +249,28 @@ std::vector<const Candidate*> rank_by_estimate(
 
 const Selector& default_selector() {
     static const Selector selector{
-        .sources = {std::make_shared<FactoryBlockingSource>()},
-        .estimators = {std::make_shared<RooflineEstimator>()},
+        .generators = {std::make_shared<HeuristicGenerator>()},
+        .ranker = std::make_shared<RuleRanker>(),
     };
     return selector;
 }
 
 std::optional<Candidate> select(
     const ttnn::prim::MatmulSpecs& specs, const MatmulDesc& p, const HardwareDesc& hw, const Selector& selector) {
-    std::vector<Candidate> options;
-    for (const auto& source : selector.sources) {
-        auto proposed = source->propose(p, hw);
-        options.insert(options.end(), proposed.begin(), proposed.end());
+    std::vector<Candidate> candidates;
+    for (const auto& generator : selector.generators) {
+        auto generated = generator->generate(p, hw);
+        candidates.insert(candidates.end(), generated.begin(), generated.end());
     }
-    for (const Candidate* candidate : rank_by_estimate(p, hw, options, selector.estimators)) {
+    std::vector<const Candidate*> ranked;
+    if (selector.ranker) {
+        ranked = selector.ranker->rank(p, hw, candidates);
+    } else {
+        for (const auto& c : candidates) {
+            ranked.push_back(&c);
+        }
+    }
+    for (const Candidate* candidate : ranked) {
         if (check(specs, p, hw, to_program_config(p, *candidate)).empty()) {
             return *candidate;
         }

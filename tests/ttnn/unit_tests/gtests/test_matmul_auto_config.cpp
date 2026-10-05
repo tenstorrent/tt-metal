@@ -17,9 +17,10 @@
 
 #include <fmt/format.h>
 
-#include "ttnn/operations/matmul/device/config/factory_blocking_source.hpp"
+#include "ttnn/operations/matmul/device/config/heuristic_generator.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_auto_config.hpp"
 #include "ttnn/operations/matmul/device/config/roofline_estimator.hpp"
+#include "ttnn/operations/matmul/device/config/rule_ranker.hpp"
 #include "ttnn/operations/matmul/device/matmul_validation.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
@@ -31,15 +32,9 @@ using namespace ttnn::operations::matmul::auto_config;
 
 uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 
-// Each family's candidate, from the default source
+// Every candidate of the heuristic generator: each family's, and the batch-looping ones
 std::vector<Candidate> candidates(const MatmulDesc& p, const HardwareDesc& hw) {
-    return FactoryBlockingSource().candidates(p, hw);
-}
-
-// The default sources without estimators: the source's own choice
-const Selector& heuristics_only() {
-    static const Selector selector{.sources = default_selector().sources, .estimators = {}};
-    return selector;
+    return HeuristicGenerator().generate(p, hw);
 }
 
 struct Arch {
@@ -863,17 +858,23 @@ TEST(MatmulAutoConfig, CandidatesPassCheck) {
     }
 }
 
-// Estimators rank the sources' proposals: with several, the most confident estimate picks, and a less confident
-// one doesn't override it. Here a source proposes the heuristic choice and the same candidate at half its K depth.
-TEST(MatmulAutoConfig, EstimatorsRankProposals) {
-    struct HalfKToo final : CandidateSource {
+// The estimate ranker orders candidates by estimate: with several estimators, the most confident estimate picks, and
+// a less confident one doesn't override it. Here a generator produces the default choice and the same candidate at
+// half its K depth.
+TEST(MatmulAutoConfig, EstimateRankerRanksCandidates) {
+    struct HalfKToo final : Generator {
         std::string_view name() const override { return "half_k_too"; }
-        std::vector<Candidate> propose(const MatmulDesc& p, const HardwareDesc& hw) const override {
-            auto result = FactoryBlockingSource().propose(p, hw);
-            if (!result.empty() && result.front().blocking.in0_block_w % 2 == 0) {
-                auto half = result.front();
-                half.blocking.in0_block_w /= 2;
-                result.push_back(half);
+        std::vector<Candidate> generate(const MatmulDesc& p, const HardwareDesc& hw) const override {
+            const auto all = HeuristicGenerator().generate(p, hw);
+            const auto ranked = RuleRanker().rank(p, hw, all);
+            std::vector<Candidate> result;
+            if (!ranked.empty()) {
+                result.push_back(*ranked.front());
+                if (result.front().blocking.in0_block_w % 2 == 0) {
+                    auto half = result.front();
+                    half.blocking.in0_block_w /= 2;
+                    result.push_back(half);
+                }
             }
             return result;
         }
@@ -888,48 +889,49 @@ TEST(MatmulAutoConfig, EstimatorsRankProposals) {
     };
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
     const auto p = make_matmul(1, 1, 1024, 8192, 1024);
-    const auto seed = choose(p, hw, heuristics_only());
+    const auto seed = choose(p, hw);
     ASSERT_TRUE(seed.has_value());
     ASSERT_EQ(seed->blocking.in0_block_w % 2, 0u);
 
-    const auto source = std::make_shared<HalfKToo>();
+    const auto generator = std::make_shared<HalfKToo>();
     const auto roofline_estimator = std::make_shared<RooflineEstimator>();
-    // The roofline doesn't depend on K depth: ties keep the earlier proposal
-    const auto by_roofline = choose(p, hw, Selector{.sources = {source}, .estimators = {roofline_estimator}});
+    auto by = [&](std::vector<std::shared_ptr<const Estimator>> estimators) {
+        return choose(
+            p, hw, Selector{.generators = {generator}, .ranker = std::make_shared<EstimateRanker>(estimators)});
+    };
+    // The roofline doesn't depend on K depth: ties keep the earlier candidate
+    const auto by_roofline = by({roofline_estimator});
     ASSERT_TRUE(by_roofline.has_value());
     EXPECT_EQ(by_roofline->blocking.in0_block_w, seed->blocking.in0_block_w);
 
-    const auto refined = choose(
-        p, hw, Selector{.sources = {source}, .estimators = {roofline_estimator, std::make_shared<PreferShallow>(1.0)}});
+    const auto refined = by({roofline_estimator, std::make_shared<PreferShallow>(1.0)});
     ASSERT_TRUE(refined.has_value());
     EXPECT_EQ(refined->blocking.in0_block_w, seed->blocking.in0_block_w / 2);
-    const auto kept = choose(
-        p,
-        hw,
-        Selector{.sources = {source}, .estimators = {roofline_estimator, std::make_shared<PreferShallow>(-1.0)}});
+    const auto kept = by({roofline_estimator, std::make_shared<PreferShallow>(-1.0)});
     ASSERT_TRUE(kept.has_value());
     EXPECT_EQ(kept->blocking.in0_block_w, seed->blocking.in0_block_w);
 }
 
-// A source's policies can be replaced one at a time: here the family choice, the blocking rules unchanged
-TEST(MatmulAutoConfig, FamilyPolicyIsReplaceable) {
-    struct LastFamily final : FamilyPolicy {
-        std::optional<Candidate> choose(
+// The ranker can be replaced on its own: here one that takes the last candidate, the generator unchanged
+TEST(MatmulAutoConfig, RankerIsReplaceable) {
+    struct LastFirst final : Ranker {
+        std::string_view name() const override { return "last_first"; }
+        std::vector<const Candidate*> rank(
             const MatmulDesc&, const HardwareDesc&, std::span<const Candidate> all) const override {
-            return all.empty() ? std::nullopt : std::optional<Candidate>(all.back());
+            std::vector<const Candidate*> result;
+            for (auto it = all.rbegin(); it != all.rend(); ++it) {
+                result.push_back(&*it);
+            }
+            return result;
         }
     };
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
     const auto p = make_matmul(1, 1, 1024, 2048, 1024);
     const auto all = candidates(p, hw);
     ASSERT_GE(all.size(), 2u);
-    const Selector last_family{
-        .sources = {std::make_shared<FactoryBlockingSource>(
-            std::make_shared<HeuristicBlocking>(),
-            std::make_shared<HeuristicSubblock>(),
-            std::make_shared<LastFamily>())},
-        .estimators = {}};
-    const auto chosen = choose(p, hw, last_family);
+    const Selector last_first{
+        .generators = {std::make_shared<HeuristicGenerator>()}, .ranker = std::make_shared<LastFirst>()};
+    const auto chosen = choose(p, hw, last_first);
     ASSERT_TRUE(chosen.has_value());
     EXPECT_EQ(chosen->family, all.back().family);
     EXPECT_NE(choose(p, hw)->family, all.back().family);
