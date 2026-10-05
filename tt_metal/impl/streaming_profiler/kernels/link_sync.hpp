@@ -4,7 +4,7 @@
 
 // A clock sync port is the active eth core on one side of a link. Each round, a link's two ports exchange bursts of
 // stamped frames. The host fits a line to many rounds' stamps to get the offset and rate between the two chips'
-// refclks.
+// refclks. RouterPort lets a fabric router run a port from its main loop.
 
 #pragma once
 
@@ -357,5 +357,48 @@ private:
 
 template <kernel_profiler::LinkSyncRole Role>
 using Port = std::conditional_t<Role == kernel_profiler::LinkSyncRole::Transmitter, TransmitterPort, ReceiverPort>;
+
+// Runs a port inside a fabric router, one step() per main-loop iteration.
+template <kernel_profiler::LinkSyncRole Role>
+struct RouterPort {
+    static inline Port<Role> port;
+    __attribute__((noinline)) static bool port_due() {
+        if (port.l1 == nullptr) {
+            return true;
+        }
+        return !port.stopped && (port.due() || port.ctl() == kernel_profiler::LinkSyncCtl::Stop);
+    }
+    __attribute__((noinline, cold)) static void serve_port() {
+        if (port.l1 == nullptr) {
+            port.start();
+            return;
+        }
+        invalidate_l1_cache();
+        if (port.ctl() == kernel_profiler::LinkSyncCtl::Stop) {
+            port.stop();
+            return;
+        }
+        port.serve();
+    }
+    // The router checks port_due() only every 16th loop, to keep the clock sync's cost small. The sync check, which
+    // measures the clock sync's accuracy, runs rounds 10 times as often, and checking every 16th loop is then too slow
+    // for a round's bursts to finish in time, so with the sync check the router checks every loop.
+    static constexpr uint32_t kRouterStepLoops = kSyncCheck ? 1 : 16;
+    static_assert((kRouterStepLoops & (kRouterStepLoops - 1)) == 0);
+    static FORCE_INLINE void step(uint32_t iter) {
+        if ((iter & (kRouterStepLoops - 1)) == 0 && port_due()) {
+            serve_port();
+        }
+    }
+};
+
+struct NoPort {
+    static void step(uint32_t) {}
+};
+
+constexpr auto kRouterRole =
+    static_cast<kernel_profiler::LinkSyncRole>(get_named_compile_time_arg_val("LINK_SYNC_ROLE"));
+using RouterHook =
+    std::conditional_t<kRouterRole == kernel_profiler::LinkSyncRole::None, NoPort, RouterPort<kRouterRole>>;
 
 }  // namespace link_sync
