@@ -367,62 +367,6 @@ Tensor scatter_native(
         /*force_row_major=*/true);
 }
 
-// The TILE program factories split per-core work by tile ROW (one row's full index/src scan per
-// core), so a low tile-row count underfills the grid no matter how wide each row is -- e.g. Ht==2
-// leaves all but 2 cores idle regardless of core-grid size. Below this threshold, converting to
-// ROW_MAJOR and letting the RM factory split by STICK instead reaches far more cores; at or above
-// it, the TILE dispatch already fills the grid and the extra untilize/tilize round trip this
-// reroute pays would only add cost on top of an already-parallel dispatch.
-constexpr uint32_t kRowMajorRerouteMaxHt = 32;
-
-// Longest stick the reroute's untilize will materialize -- bounds how wide the one-shot RM
-// transport is allowed to get before the TILE dispatch (whose per-core footprint is a small, fixed
-// tile count regardless of row width) is the safer choice.
-constexpr uint32_t kRowMajorRerouteMaxStickElems = 32768;
-
-// The untilized RM stick becomes the reader/writer's per-page transfer size with no further
-// rounding, so it must already land on the hardware NOC transaction boundary.
-constexpr uint32_t kRowMajorRerouteNocAlign = 32;
-
-// Whether a TILE call should take the same untilize -> per-stick ROW_MAJOR scatter -> tilize detour
-// around prim::scatter_codegen that this file's own force_row_major branch takes around the native
-// prim, rather than dispatching the (correct, but at this row count far slower) TILE factory
-// directly. Reduction is never requested here: supported_by_codegen() already rejects any non-zero
-// reduction_mode on a TILE layout, so the RM plan this reroutes to never needs the FP32 accumulator
-// factory's extra residency.
-bool should_reroute_to_row_major(const Tensor& input_tensor, const Tensor& index_tensor, const Tensor& src_tensor) {
-    if (input_tensor.layout() != Layout::TILE) {
-        return false;
-    }
-    const auto geometry = ttnn::prim::compute_scatter_tile_geometry(input_tensor, index_tensor, src_tensor);
-    if (geometry.Ht > kRowMajorRerouteMaxHt) {
-        return false;
-    }
-    const uint32_t stick_elems = input_tensor.logical_shape()[-1];
-    const uint32_t index_w = index_tensor.logical_shape()[-1];
-    if (stick_elems > kRowMajorRerouteMaxStickElems || index_w > kRowMajorRerouteMaxStickElems) {
-        return false;
-    }
-    // Checked against the RAW (unaligned) byte width, not the device-aligned page: the untilized
-    // stick is exactly this many bytes wide on the wire, and a width that isn't already NOC-aligned
-    // makes the detour's transport unsafe regardless of how the destination buffer pads it.
-    const uint64_t raw_input_page_bytes = static_cast<uint64_t>(stick_elems) * input_tensor.element_size();
-    const uint64_t raw_index_page_bytes = static_cast<uint64_t>(index_w) * index_tensor.element_size();
-    if (raw_input_page_bytes % kRowMajorRerouteNocAlign != 0 || raw_index_page_bytes % kRowMajorRerouteNocAlign != 0) {
-        return false;
-    }
-    // Only take the detour when the destination RM plan can actually fit L1 once untilized -- the
-    // TILE dispatch's own footprint is a small, fixed number of tile pages regardless of row width,
-    // so it remains the safe fallback whenever the untilized sticks would not fit.
-    const uint64_t input_page_bytes = ttnn::prim::scatter_rm_stick_page_bytes(input_tensor, stick_elems);
-    return ttnn::prim::scatter_rm_min_plan_fits_l1(
-        ttnn::prim::scatter_static_l1(input_tensor),
-        input_page_bytes,
-        index_tensor.element_size(),
-        src_tensor.element_size(),
-        /*bf16_reduce=*/false);
-}
-
 // The generated implementation. Unlike scatter_native, this keeps the caller's own layout through the
 // transpose/4D-fold sandwich (the TILE and ROW_MAJOR program factories each address that layout
 // directly), so a TILE input never pays native's forced untilize -> scatter(ROW_MAJOR) -> tilize
@@ -474,8 +418,12 @@ Tensor scatter_codegen_dispatch(
         output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
     const uint32_t reduction_mode = scatter_reduction_mode(opt_reduction_string);
 
-    const bool rerouted_to_row_major =
-        should_reroute_to_row_major(transformed_input_tensor, transformed_index_tensor, transformed_source_tensor);
+    const bool rerouted_to_row_major = ttnn::operations::data_movement::scatter::prefers_row_major_strategy(
+        transformed_input_tensor,
+        transformed_index_tensor,
+        transformed_source_tensor,
+        transformed_input_tensor.logical_shape(),
+        transformed_index_tensor.logical_shape());
     if (rerouted_to_row_major) {
         transformed_input_tensor = ttnn::to_layout(transformed_input_tensor, Layout::ROW_MAJOR);
         transformed_index_tensor = ttnn::to_layout(transformed_index_tensor, Layout::ROW_MAJOR);
