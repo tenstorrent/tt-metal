@@ -5,8 +5,8 @@
 
 import ttnn
 from models.demos.gemma4_d_p.tt.attention.operations import prefill_short_lived_memcfg
-from models.demos.gemma4_d_p.tt.ccl import ccl_allreduce
-from models.demos.gemma4_d_p.tt.matmul_config import prefill_matmul_program_config
+from models.demos.gemma4_d_p.tt.ccl import ccl_reduce_scatter_rows
+from models.demos.gemma4_d_p.tt.matmul_config import prefill_1d_matmul_program_config, prefill_matmul_program_config
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
@@ -87,16 +87,14 @@ class MLP:
         config) for the core-grid path.
 
         With this blocking, accumulating in bf16 drifts long-context KV accuracy in the deep layers, so
-        the explicit path accumulates in fp32. That halves the output subblock, which only pays off for
-        short M: at a per-core M of 4 (chunk 8192 at CP8) the default config is as fast, so it is kept.
-        packer_l1_acc accumulates the K-block partials in L1, a little faster with no accuracy cost.
+        the explicit path accumulates in fp32. packer_l1_acc accumulates the K-block partials in L1.
         """
         grid = self.mesh_device.compute_with_storage_grid_size()
         n_tiles = weight.padded_shape[-1] // ttnn.TILE_SIZE
         grid_x = max(x for x in range(1, grid.x + 1) if n_tiles % x == 0)
-        program_config = prefill_matmul_program_config(
-            hidden_states, weight, grid_x, grid.y, fused_activation, fp32_dest_acc=True, max_per_core_m=2
-        )
+        program_config = prefill_1d_matmul_program_config(
+            hidden_states, weight, grid, fused_activation
+        ) or prefill_matmul_program_config(hidden_states, weight, grid_x, grid.y, fused_activation, fp32_dest_acc=True)
         if program_config is None:
             return None, self.compute_kernel_config
         compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -134,9 +132,8 @@ class MLP:
         hidden = ttnn.mul(gate, up, memory_config=act_mc)
         gate.deallocate(True)
         up.deallocate(True)
-        # Pack output to DRAM ahead of ccl_allreduce.
+        # Pack output to DRAM ahead of the reduce-scatter.
         output = self._project(hidden, self.down_proj, ttnn.DRAM_MEMORY_CONFIG)
         hidden.deallocate(True)
-        if self.mesh_config is not None and self.mesh_config.tp_degree > 1:
-            output = ccl_allreduce(output, self.mesh_config, self.ccl_manager)
+        output = ccl_reduce_scatter_rows(output, self.mesh_config, self.ccl_manager)
         return output
