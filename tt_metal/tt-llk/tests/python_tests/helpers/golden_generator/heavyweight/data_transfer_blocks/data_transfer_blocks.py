@@ -80,6 +80,10 @@ SRC_STORAGE_FORMATS = frozenset(
     {DataFormat.Float16, DataFormat.Float16_b, DataFormat.Tf32}
 )
 
+#: Formats the unpacker can land in SrcS: the src-register formats plus full
+#: Float32, which SrcA/SrcB cannot hold.
+SRCS_STORAGE_FORMATS = SRC_STORAGE_FORMATS | {DataFormat.Float32}
+
 #: Formats a Dest register can hold.
 #:
 #: Dest is 32-bit when accumulation is enabled and 16-bit otherwise — that is
@@ -195,16 +199,35 @@ class DataTransferBlocks(ABC):
         l1_bytes: L1Buffer,
         l1_format: DataFormat,
         src_format: Optional[DataFormat] = None,
+        *,
+        dest_acc: Union[bool, DestAccumulation] = False,
         **geometry,
     ) -> torch.Tensor:
         """Values visible in SrcS.
 
         SrcS uses a per-slice L1 layout rather than one flat block list, so the
-        buffer must have been packed with ``use_srcs=True``; the values it
-        decodes to are the same.
+        buffer must have been packed with ``use_srcs=True``. `dest_acc` picks the
+        32-bit slice layout as well as the storage format.
+
+        Not a delegate of :meth:`l1_to_srcA`: SrcS has its own format rules, and
+        under SrcA's a Float32 input would lose the 13 mantissa bits SrcS keeps.
+        See :meth:`srcs_format`.
         """
+        self._check_supported(l1_format)
+        dest_acc = as_dest_acc(dest_acc)
+        if src_format is None:
+            src_format = self.srcs_format(l1_format, dest_acc)
+        elif not self._is_valid_srcs_format(l1_format, src_format, dest_acc):
+            raise ValueError(
+                f"{type(self).__name__} cannot unpack {l1_format} into SrcS as "
+                f"{src_format} with dest_acc={dest_acc}. SrcS holds "
+                f"{sorted(str(f) for f in SRCS_STORAGE_FORMATS)} or the input "
+                f"format itself, and with dest_acc a Float16/Float16_b input "
+                f"stays as itself."
+            )
         geometry.setdefault("use_srcs", True)
-        return self.l1_to_srcA(l1_bytes, l1_format, src_format, **geometry)
+        values = self.unpack_from_l1(l1_bytes, l1_format, dest_acc=dest_acc, **geometry)
+        return self._to_src_storage(values, src_format)
 
     def l1_to_dest(
         self,
@@ -568,6 +591,50 @@ class DataTransferBlocks(ABC):
         self._check_supported(l1_format)
         return self._src_format(l1_format)
 
+    def srcs_format(
+        self, l1_format: DataFormat, dest_acc: Union[bool, DestAccumulation] = False
+    ) -> DataFormat:
+        """The storage format the unpacker lands `l1_format` in when the target is SrcS.
+
+        SrcS does not narrow Float32 to Tf32 the way SrcA/SrcB must, and with
+        accumulation on it widens instead:
+
+        * MX lands in Float16_b, as it does in SrcA.
+        * Float32 stays Float32, with or without `dest_acc`.
+        * With `dest_acc`, Float16 and Float16_b stay themselves -- the
+          unpacker cannot convert fp16 to a 32-bit SrcS datum -- and every
+          other float widens to Float32.
+        * Otherwise a format lands as it would in SrcA.
+
+        Integer formats pass through unchanged. Mirrors the SrcS branch of
+        ``infer_unpack_out`` in :mod:`helpers.data_format_inference`, which is
+        what the harness programs.
+        """
+        self._check_supported(l1_format)
+        dest_acc = as_dest_acc(dest_acc)
+        if l1_format.is_mx_format():
+            return DataFormat.Float16_b
+        if l1_format is DataFormat.Float32:
+            return DataFormat.Float32
+        if l1_format.is_integer():
+            return l1_format
+        if dest_acc:
+            if l1_format in (DataFormat.Float16, DataFormat.Float16_b):
+                return l1_format
+            return DataFormat.Float32
+        return self._src_format(l1_format)
+
+    @staticmethod
+    def _is_valid_srcs_format(
+        l1_format: DataFormat, src_format: DataFormat, dest_acc: bool
+    ) -> bool:
+        """Whether an explicit SrcS storage format is one the unpacker can produce."""
+        if src_format not in SRCS_STORAGE_FORMATS and src_format != l1_format:
+            return False
+        if dest_acc and l1_format in (DataFormat.Float16, DataFormat.Float16_b):
+            return src_format == l1_format
+        return True
+
     def _src_format(self, l1_format: DataFormat) -> DataFormat:
         """Architecture's L1 -> src-register format mapping.
 
@@ -622,9 +689,7 @@ class DataTransferBlocks(ABC):
         defaulted = src_format is None
         if defaulted:
             src_format = self.src_format(l1_format)
-        if not self._is_valid_src_format(
-            l1_format, src_format, geometry.get("use_srcs", False)
-        ):
+        if not self._is_valid_src_format(l1_format, src_format):
             if src_format is DataFormat.Float32:
                 raise ValueError(
                     "Float32 reaches a src register only as Tf32, Float16 or "
@@ -643,7 +708,7 @@ class DataTransferBlocks(ABC):
                         f"; the legal src formats for it are {legal}."
                         if legal
                         else " at all -- it reaches Dest or SrcS only. Use "
-                        "l1_to_dest, or l1_to_srcS with use_srcs=True."
+                        "l1_to_dest, or l1_to_srcS."
                     )
                 )
             raise ValueError(
@@ -660,7 +725,7 @@ class DataTransferBlocks(ABC):
         return self._to_src_storage(values, src_format)
 
     def _is_valid_src_format(
-        self, l1_format: DataFormat, src_format: DataFormat, use_srcs: bool = False
+        self, l1_format: DataFormat, src_format: DataFormat
     ) -> bool:
         """Whether this architecture's unpacker can land `l1_format` as `src_format`.
 
@@ -672,13 +737,13 @@ class DataTransferBlocks(ABC):
 
         ``UNPACK_TO_SRC_FORMATS`` carries the legal pairs per architecture, and
         an architecture that leaves it empty is simply unmodelled here and gets
-        the older, weaker check. ``use_srcs`` bypasses the pair table: SrcS is
-        a different destination with its own rules, including the Float32 that
-        SrcA/SrcB cannot hold.
+        the older, weaker check. SrcS is a different destination with its own
+        rules, including the Float32 that SrcA/SrcB cannot hold, and is checked
+        by :meth:`_is_valid_srcs_format` instead.
         """
-        if src_format is DataFormat.Float32 and not use_srcs:
+        if src_format is DataFormat.Float32:
             return False
-        if self.UNPACK_TO_SRC_FORMATS and not use_srcs:
+        if self.UNPACK_TO_SRC_FORMATS:
             return src_format in self.UNPACK_TO_SRC_FORMATS.get(l1_format, frozenset())
         return src_format in SRC_STORAGE_FORMATS or src_format == l1_format
 
@@ -698,9 +763,9 @@ class DataTransferBlocks(ABC):
         datum cannot hold fp32, and the unpacker's format table allows a
         Float32 source to land only in Tf32, Float16 or Float16_b when the
         destination is a src register -- all of which keep 10. Full fp32
-        survives only on the unpack-to-Dest path (and SrcS), which
-        :meth:`l1_to_dest` models; the ``Float32`` case below is reachable only
-        there. Integer formats pass through unchanged.
+        survives only on the unpack-to-Dest path, which :meth:`l1_to_dest`
+        models, and in SrcS; the ``Float32`` case below is reachable only from
+        :meth:`l1_to_srcS`. Integer formats pass through unchanged.
         """
         if src_format is DataFormat.Float16:
             # 1+5+10 is IEEE fp16 exactly. Truncate first so the cast only has
