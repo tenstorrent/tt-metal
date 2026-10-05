@@ -74,6 +74,7 @@ DEST_REUSE_MATH_OPS = [
     MathOperation.Elwmul,
 ]
 INT8_MATH_OPS = [MathOperation.Elwadd, MathOperation.Elwsub]
+# BH/WH covers Int8 -> Int8; Quasar separately exercises its Int8 -> Int32 path.
 INT8_FORMAT = InputOutputFormat(DataFormat.Int8, DataFormat.Int8)
 
 
@@ -190,12 +191,7 @@ def _accumulated_output_dimensions(
 
 
 def _get_valid_formats(dest_acc):
-    """
-    Filter formats based on dest accumulation:
-    - dest accumulation Yes keeps Float32 inputs, plus Int8 to Int8
-    - dest accumulation No drops exponent-B inputs that pack directly to Float16,
-      and Float16 -> Bfp4_b (packer reads dest as Float16_b)
-    """
+    """Valid pairs for this dest_acc, minus the ones the packer cannot do."""
     all_formats = input_output_formats(
         [
             DataFormat.Bfp4_b,
