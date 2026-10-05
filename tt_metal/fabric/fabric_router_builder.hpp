@@ -21,6 +21,10 @@ namespace tt::tt_fabric {
 
 class FabricContext;
 
+namespace manifest {
+struct Router;
+}  // namespace manifest
+
 // ============ Router Location ============
 
 /**
@@ -146,6 +150,12 @@ public:
      * @param ctx Cluster-wide coordination info (master router, channel mask, etc.)
      */
     virtual void create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) = 0;
+
+    /**
+     * Collect this router's manifest facts before the builder is destroyed.
+     * Call only after create_kernel(), when connection wiring and per-RISC compile-time arguments are final.
+     */
+    virtual manifest::Router collect_manifest_router(const ChipRoutingFacts& chip_facts) const = 0;
 
 protected:
     // Protected constructor - only derived classes can construct
