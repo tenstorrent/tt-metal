@@ -122,7 +122,7 @@ What matters in that expansion:
   seen in this assembly, so an inlined site has one id however many copies of its code exist.
 - **`__tt_zone_<tag>_<counter>`** -- the label is local to the object file (nothing outside it can see it).
   `<counter>` is `__COUNTER__`, unique within the translation unit; `<tag>` is the TU's index in its link
-  (`-DTT_ZONE_TU_TAG`, from `jit_build/build.cpp`), which keeps labels apart when LTO merges a link's TUs
+  (`-DTT_PROFILER_TU_ID`, from `jit_build/build.cpp`), which keeps labels apart when LTO merges a link's TUs
   into one assembly.
 - **Everything is assembler directives, not C++ objects.** A `static` with a section attribute inside a
   vague-linkage function (inline, template, class-template member) becomes COMDAT, which GCC refuses to put
@@ -266,7 +266,7 @@ out, and the only id without a record.
 | `tt_metal/hw/inc/hostdev/profiler_zone_id.h` | `TT_ZONE_DEFINE_ID`, the id-space constants, the link VMA |
 | `tt_metal/tools/profiler/kernel_profiler_streaming.hpp` | `profileScope<Site>` and the `DeviceZone*`/`DeviceRecordEvent`/`DeviceTimestampedData` macros |
 | `tt_metal/hw/toolchain/main.ld` | places the three sections, asserts the per-image budget |
-| `tt_metal/jit_build/build.cpp` | `-DTT_ZONE_TU_TAG=<index>` per TU; `--emit-relocs` for firmware under the streaming profiler |
+| `tt_metal/jit_build/build.cpp` | `-DTT_PROFILER_TU_ID=<index>` per TU; `--emit-relocs` for firmware under the streaming profiler |
 | `tt_metal/llrt/tt_elffile.{hpp,cpp}` | `ElfFile::RebaseZoneIds` |
 | `tt_metal/llrt/zone_meta.{hpp,cpp}` | `ZoneMetaRegistry`: block allocation, rebase, name harvesting, listener |
 | `tt_metal/llrt/tt_memory.cpp` | calls `ingest_elf` as each image loads |
