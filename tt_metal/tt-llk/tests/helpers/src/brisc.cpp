@@ -140,6 +140,21 @@ int main()
 
                 reset_state(counter);
                 commit_store(brisc_bread0, counter);
+#if !defined(TT_METAL_TTSIM)
+                // Wait off L1 until the TRISCs finish (#59196).
+                for (std::uint32_t slot = 0; slot < 3; ++slot)
+                {
+                    volatile std::uint32_t* signal = reinterpret_cast<volatile std::uint32_t*>(
+                        host_signal::NOC_OVERLAY_START_ADDR + slot * host_signal::NOC_STREAM_REG_SPACE_SIZE + host_signal::STREAM_SCRATCH_REG_INDEX * 4);
+                    while (*signal != ckernel::KERNEL_COMPLETE)
+                    {
+                        for (std::uint32_t i = 0; i < 10000; ++i)
+                        {
+                            asm volatile("nop");
+                        }
+                    }
+                }
+#endif
                 break;
 
             case BriscCommandState::RESET_TRISCS:
@@ -153,7 +168,7 @@ int main()
                 break;
         }
 
-#if defined(TT_METAL_TTSIM) // ttsim simulates every NOP and nothing there interferes, so it polls every microsecond
+#if defined(TT_METAL_TTSIM) || defined(LLK_SIMULATOR) // simulators run every NOP; poll every microsecond
         constexpr std::uint32_t poll_period_us = 1;
 #else
         constexpr std::uint32_t poll_period_us = 100;
