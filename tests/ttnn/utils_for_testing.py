@@ -42,7 +42,8 @@ def assert_no_unflushed_noc_atomics(device, *, min_atomic_events=1, sub_device_i
     same time. It covers atomic increments recorded by the semaphore, remote-CB, and PrefetcherPipe APIs. It does not
     cover fabric packet atomics or Quasar compare-and-swap. It does not prove each internal kernel boundary in a
     multi-kernel operation. Pass every loaded sub-device in `sub_device_ids` when the operation uses sub-devices. Every
-    listed sub-device must stop at each synchronization. Omitted or persistent active sub-devices are not supported.
+    listed sub-device must stop at each synchronization. The device's current stall group must match this list because
+    the profiler read uses that group. Omitted or persistent active sub-devices are not supported.
     """
     def add_exception_note(error, note):
         if hasattr(error, "add_note"):
