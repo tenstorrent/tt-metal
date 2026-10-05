@@ -119,6 +119,7 @@ ALWI void face_compressed_mm_block_init_short(
  * |--------------------|------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|-----------------------|
  * | ct_dim             | The width of the output matrix in tiles                                                        | uint32_t | 1 to 16 (compile-time)                           | False (default 1)     |
  * | finalize           | Whether to merge the split-accumulation partials (applied only when ct_dim == 1)               | bool     | true/false                                       | False (default true)  |
+ * | chained            | The next unpack call is another face_compressed_mm_block or _unpack (it waits for this one)    | bool     | true/false                                       | False (default false) |
  * | in0_cb_id          | The identifier of the input activation circular buffer (CB)                                    | uint32_t | 0 to 31                                          | True                  |
  * | in1_cb_id          | The identifier of the compressed-weight circular buffer (CB)                                   | uint32_t | 0 to 31                                          | True                  |
  * | base_address_meta  | The L1 address of the compressed-weight meta buffer                                            | uint32_t | Valid L1 address                                 | True                  |
@@ -126,14 +127,15 @@ ALWI void face_compressed_mm_block_init_short(
  * | kt_dim             | The inner dimension in tiles                                                                   | uint32_t | Must be an even number from 2 to 256 (inclusive) | True                  |
  */
 // clang-format on
-template <std::uint32_t ct_dim = 1, bool finalize = true>
+template <std::uint32_t ct_dim = 1, bool finalize = true, bool chained = false>
 ALWI void face_compressed_mm_block(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
     const std::uint32_t base_address_meta,
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim) {
-    UNPACK((llk_unpack_AB_face_compressed_mm<ct_dim, finalize>(in0_cb_id, in1_cb_id, base_address_meta, kt_dim)));
+    UNPACK((llk_unpack_AB_face_compressed_mm<ct_dim, finalize, chained>(
+        in0_cb_id, in1_cb_id, base_address_meta, kt_dim)));
     MATH((llk_math_face_compressed_mm<ct_dim, finalize>(in0_cb_id, in1_cb_id, base_address_meta, dst_index, kt_dim)));
 }
 
@@ -159,19 +161,21 @@ ALWI void face_compressed_mm_block(
  * |--------------------|------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|-----------------------|
  * | ct_dim             | The width of the output matrix in tiles                                                        | uint32_t | 1 to 16 (compile-time)                           | False (default 1)     |
  * | finalize           | Whether this unpack performs the split-accumulation finalize (ct_dim == 1)                     | bool     | true/false                                       | False (default true)  |
+ * | chained            | The next unpack call is another face_compressed_mm_block or _unpack (it waits for this one)    | bool     | true/false                                       | False (default false) |
  * | in0_cb_id          | The identifier of the input activation circular buffer (CB)                                    | uint32_t | 0 to 31                                          | True                  |
  * | in1_cb_id          | The identifier of the compressed-weight circular buffer (CB)                                   | uint32_t | 0 to 31                                          | True                  |
  * | base_address_meta  | The L1 address of the compressed-weight meta buffer                                            | uint32_t | Valid L1 address                                 | True                  |
  * | kt_dim             | The inner dimension in tiles                                                                   | uint32_t | Must be an even number from 2 to 256 (inclusive) | True                  |
  */
 // clang-format on
-template <std::uint32_t ct_dim = 1, bool finalize = true>
+template <std::uint32_t ct_dim = 1, bool finalize = true, bool chained = false>
 ALWI void face_compressed_mm_block_unpack(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
     const std::uint32_t base_address_meta,
     const std::uint32_t kt_dim) {
-    UNPACK((llk_unpack_AB_face_compressed_mm<ct_dim, finalize>(in0_cb_id, in1_cb_id, base_address_meta, kt_dim)));
+    UNPACK((llk_unpack_AB_face_compressed_mm<ct_dim, finalize, chained>(
+        in0_cb_id, in1_cb_id, base_address_meta, kt_dim)));
 }
 
 // clang-format off
