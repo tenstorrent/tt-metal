@@ -456,12 +456,14 @@ def unpack_mxfp4(
 
     nan_blocks = scales_u8 == E8M0_NAN_CODE
     block_exp_unbiased = scales_u8.astype(np.int32) - E8M0_BIAS
-    # exp2 overflows float32 at the 0xFF NaN scale (2^128), and the Inf then
-    # becomes a NaN by invalid-multiply rather than by the NaN-block rule
-    # below. Those rows are overwritten anyway, so exponentiate something
-    # harmless for them instead of raising two warnings on every call.
-    safe_exp = np.where(nan_blocks, 0, block_exp_unbiased).astype(np.float32)
-    scaled_blocks = fp4_f32 * np.exp2(safe_exp)[:, None]
+    # float64 keeps element * 2^block_exp exact across the whole E8M0 range,
+    # as in _unpack_mxfp8, so the range clamp below (not a float32 overflow)
+    # decides Inf. In float32 a 0xFE scale with a +-6 element, which the packer
+    # emits for Inf-only blocks, overflows; so does the 0xFF NaN scale (2^128).
+    scaled_blocks = (
+        fp4_f32.astype(np.float64)
+        * np.exp2(block_exp_unbiased.astype(np.float64))[:, np.newaxis]
+    )
 
     # Same range rule as MXFP8 -- the gasket treats both identically once the
     # element is decoded, so the clamp is shared rather than recomputed from
