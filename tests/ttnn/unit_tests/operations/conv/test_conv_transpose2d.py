@@ -579,8 +579,16 @@ def test_conv_transpose2d_with_groups(
 
 # l1_small_size is part of what the slicer sees: the L1 it can allocate from is the core's L1 minus the circular-buffer
 # base and this value. With 32768 on Blackhole the single-slice plan for lengths 384 and 396 needs about 13 KB per core
-# more than that pool, so the slicer has to choose two slices there.
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+# more than that pool, so the slicer has to choose two slices there. With 16384 the pool is 16 KB larger. The
+# single-slice plan then fits by 3 KB if the op frees its own 8 KB sharded copy of the input after the halo op, and
+# does not fit if it keeps that copy; the auto_slice_config case runs conv_transpose2d_L1 with the caller's config and
+# so checks the release.
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 32768}, {"l1_small_size": 16384}],
+    ids=["l1_small_32k", "l1_small_16k"],
+    indirect=True,
+)
 @pytest.mark.parametrize("auto_slice", [False, True], ids=["default_slicing", "auto_slice_config"])
 @pytest.mark.parametrize("input_width", [352, 384, 396, 416])
 def test_conv_transpose2d_1d_upsampler_dram_input(device, input_width, auto_slice):
