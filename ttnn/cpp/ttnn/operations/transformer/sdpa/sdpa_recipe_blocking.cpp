@@ -83,6 +83,7 @@ BlockCostModel block_cost_model(const PrecisionPolicy& policy) {
 // Build-flag facts of a geometry, read from the recipe program the factory would build.
 struct RecipeBuild {
     uint64_t cb_bytes = 0;
+    uint64_t fused_cb_bytes = 0;  // CBs 29-31 of fused chunks, which a factory drops when they do not fit
     uint32_t qk_width = 4;        // SDPA_RECIPE_QK_W
     uint32_t pv_width = 4;        // SDPA_RECIPE_PV_W
 };
@@ -153,6 +154,10 @@ RecipeBuild recipe_build(const PrecisionPolicy& policy, uint32_t q_tiles, uint32
     const CoreRangeSet core(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
     const auto program = recipe_compute_program(policy, core, 1, q_tiles, k_tiles, d_tiles);
     RecipeBuild build{.cb_bytes = cb_bytes(program)};
+    for (const auto& cb : program.cbs) {
+        const uint8_t index = cb.format_descriptors.front().buffer_index;
+        build.fused_cb_bytes += (index == 29 || index == 30 || index == 31) ? cb.total_size : 0;
+    }
     for (const auto& [name, value] : program.kernels.front().defines) {
         if (name == "SDPA_RECIPE_QK_W") {
             build.qk_width = std::stoul(value);
@@ -166,10 +171,6 @@ RecipeBuild recipe_build(const PrecisionPolicy& policy, uint32_t q_tiles, uint32
     }
     memo.emplace(key, build);
     return build;
-}
-
-uint64_t recipe_cb_bytes(const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, uint32_t d_tiles) {
-    return recipe_build(policy, q_tiles, k_tiles, d_tiles).cb_bytes;
 }
 
 // Ring joint (ring_joint_sdpa_program_factory.cpp) adds to the B-E recipe layout: the lightweight
@@ -349,11 +350,12 @@ RecipeL1Estimate recipe_l1_bytes(
     switch (op) {
         case RecipeOp::Dense:
         case RecipeOp::Joint: {
-            const uint64_t bytes = recipe_cb_bytes(policy, recipe_compute_q_tiles(policy, q_tiles), k_tiles, d_tiles);
-            // attn_mask CB: two row groups when they fit, one otherwise (sdpa_recipe.cpp).
+            const auto build = recipe_build(policy, recipe_compute_q_tiles(policy, q_tiles), k_tiles, d_tiles);
+            // attn_mask CB: two row groups when they fit, one otherwise (sdpa_recipe.cpp). The minimum layout
+            // also drops the fused chunks' CBs (check_recipe_l1_fit).
             const uint64_t mask_group =
                 uint64_t{recipe_mask_group_rows(policy, q_tiles)} * k_tiles * context.mask_page_bytes;
-            return {bytes + 2 * mask_group, bytes + mask_group};
+            return {build.cb_bytes + 2 * mask_group, build.cb_bytes - build.fused_cb_bytes + mask_group};
         }
         case RecipeOp::Ring: {
             if (fast) {
@@ -361,8 +363,10 @@ RecipeL1Estimate recipe_l1_bytes(
                     legacy_ring_fast_bytes(q_tiles, k_tiles, d_tiles, context.q_blocks_per_worker > 1 ? 2 : 1);
                 return {bytes, bytes};
             }
-            const uint64_t bytes = recipe_cb_bytes(policy, q_tiles, k_tiles, d_tiles) + kRingRecipeExtraBytes;
-            return {bytes, bytes - q_slot};  // the factory's single-slot Q fallback
+            const auto build = recipe_build(policy, q_tiles, k_tiles, d_tiles);
+            const uint64_t bytes = build.cb_bytes + kRingRecipeExtraBytes;
+            // The factory's fallbacks: drop the fused chunks' CBs, then single-slot Q.
+            return {bytes, bytes - build.fused_cb_bytes - q_slot};
         }
         case RecipeOp::ExpRing: {
             if (fast) {
@@ -372,8 +376,9 @@ RecipeL1Estimate recipe_l1_bytes(
             }
             // The exp-ring factory keeps the recipe layout with a single Q slot, plus the 64 B live-length
             // mailbox of a device-tensor logical_n (counted unconditionally).
-            const uint64_t bytes = recipe_cb_bytes(policy, q_tiles, k_tiles, d_tiles) - q_slot + 64;
-            return {bytes, bytes};
+            const auto build = recipe_build(policy, q_tiles, k_tiles, d_tiles);
+            const uint64_t bytes = build.cb_bytes - q_slot + 64;
+            return {bytes, bytes - build.fused_cb_bytes};  // the factory drops the fused chunks' CBs to fit
         }
     }
     TT_THROW("Unknown SDPA recipe op");
