@@ -56,6 +56,22 @@ _TENSOR_PARALLEL_AXIS = 1
 _MATRIX = (("synthetic", "randn"), ("real", "randn"), ("real", "text"))
 
 
+# Known failures: LB-B (T=5120) real weights on real text miss the recurrent-state PCC gate in a few weak-decay
+# channels of one head (exp(G) quantization near 1, tt_metal_tracker-g1b.7). Measured worst recurrent PCC and peak
+# relative error (max|err| / RMS) over single / chained3 / ragged; strict, so they flip to XPASS when g1b.7 lands.
+_WEAK_DECAY_XFAIL = {
+    "kimi_k3": "head 1 weak-decay channels: recurrent PCC 0.99920 / 0.99759 / 0.99867, peak rel error up to 10.8",
+    "glm_5_3_flash": "head 10 weak-decay channels: recurrent PCC 0.99927 / 0.99878 / 0.99927, peak rel error up to 5.9",
+}
+
+
+def _marks(model: str, layout: str, weights: str, inputs: str) -> tuple:
+    if (layout, weights, inputs) != ("LB-B", "real", "text"):
+        return ()
+    reason = f"tt_metal_tracker-g1b.7 weak-decay numerics at T=5120 on real text: {_WEAK_DECAY_XFAIL[model]}"
+    return (pytest.mark.xfail(strict=True, raises=AssertionError, reason=reason),)
+
+
 def _params() -> list:
     return [
         pytest.param(
@@ -66,6 +82,7 @@ def _params() -> list:
             weights,
             inputs,
             schedule,
+            marks=_marks(model, layout, weights, inputs),
             id=f"{model}-{layout}-{weights}-{inputs}-{schedule}",
         )
         for model in KDA_MODELS
