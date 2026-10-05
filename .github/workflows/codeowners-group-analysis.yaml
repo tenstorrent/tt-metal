@@ -261,7 +261,6 @@ jobs:
         if: github.event_name == 'pull_request_target'
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          BRANCH: ${{ github.event.pull_request.head.ref }}
           SENDER: ${{ github.event.sender.login }}
           EVENT_ACTION: ${{ github.event.action }}
           PR_BODY: ${{ github.event.pull_request.body }}
@@ -278,7 +277,14 @@ jobs:
           # Drop fenced code blocks and HTML comments before matching.
           markdown_text() {
             printf '%s\n' "$1" | tr -d '\r' | awk '
-              /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
+              # A fence closes only on the same character, at least as long, with
+              # nothing after it (CommonMark), so ~~~ inside a ``` block stays code.
+              match($0, /^[[:space:]]*(````*|~~~~*)/) {
+                m = substr($0, RSTART, RLENGTH); sub(/^[[:space:]]*/, "", m)
+                rest = substr($0, RSTART + RLENGTH)
+                if (!fence) { fence = 1; fch = substr(m, 1, 1); flen = length(m); next }
+                if (substr(m, 1, 1) == fch && length(m) >= flen && rest ~ /^[[:space:]]*$/) { fence = 0; next }
+              }
               fence { next }
               { line = $0
                 while (1) {
@@ -328,9 +334,11 @@ jobs:
                 exit 0
               fi
               # A user can hold only one reaction of each type, so re-stamp it.
-              curl -s -X DELETE -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+              DELETE_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+                   -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
                    -H "Accept: application/vnd.github.v3+json" \
-                   "$REACTIONS_API/$(echo "$LAST_PING" | jq -r '.id')"
+                   "$REACTIONS_API/$(echo "$LAST_PING" | jq -r '.id')")
+              echo "Old cooldown marker delete: HTTP $DELETE_HTTP_CODE"
             fi
             # Stamped before the ping, not after, so a tap seconds later is already
             # inside the cooldown. If the ping then fails, the cost is a 60s wait;
@@ -341,14 +349,15 @@ jobs:
                  -H "Content-Type: application/json" \
                  -d '{"content": "rocket"}' \
                  "$REACTIONS_API")
-            if [ "$REACTION_HTTP_CODE" != "201" ] && [ "$REACTION_HTTP_CODE" != "200" ]; then
-              echo "::warning::Could not record the cooldown marker (HTTP $REACTION_HTTP_CODE); pinging without a cooldown."
+            # Only 201 is a fresh marker. 200 means the old reaction still exists
+            # (its DELETE failed), so its created_at was not moved forward.
+            if [ "$REACTION_HTTP_CODE" != "201" ]; then
+              echo "::warning::Could not record a fresh cooldown marker (HTTP $REACTION_HTTP_CODE); this ping is not rate-limited."
             fi
 
             {
               echo "should-run=true"
               echo "pr-number=$PR_NUMBER"
-              echo "branch=$BRANCH"
               echo "create-new-comment=false"
               echo "ping-pending-owners=true"
               echo "send-slack-notification=true"
@@ -386,10 +395,16 @@ jobs:
     steps:
       - name: Find PR for branch
         id: find-pr
+        # Branch names are user-controlled (fork PRs included), so they reach the
+        # shell only through env, never through expression interpolation.
+        env:
+          DISPATCH_BRANCH: ${{ github.event.inputs.branch }}
+          PARSED_BRANCH: ${{ needs.parse-comment.outputs.branch }}
+          PARSED_PR_NUMBER: ${{ needs.parse-comment.outputs.pr-number }}
         run: |
           # Determine branch and PR based on trigger type
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            BRANCH="${{ github.event.inputs.branch }}"
+            BRANCH="$DISPATCH_BRANCH"
             echo "Manual trigger - Looking for PR associated with branch: $BRANCH"
 
             # Use GitHub API to find PR for the branch
@@ -416,9 +431,9 @@ jobs:
             fi
           else
             # Comment trigger - PR info is already available
-            PR_NUMBER="${{ needs.parse-comment.outputs.pr-number }}"
-            BRANCH="${{ needs.parse-comment.outputs.branch }}"
-            echo "Comment trigger - Using PR #$PR_NUMBER for branch $BRANCH"
+            PR_NUMBER="$PARSED_PR_NUMBER"
+            BRANCH="$PARSED_BRANCH"
+            echo "Comment/description trigger - Using PR #$PR_NUMBER for branch $BRANCH"
             echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
             echo "pr-exists=true" >> $GITHUB_OUTPUT
           fi
