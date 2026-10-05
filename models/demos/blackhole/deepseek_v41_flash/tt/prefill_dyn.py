@@ -15,6 +15,8 @@ Everything that differs from chunk to chunk lives in persistent device tensors o
     (``latent_mask``) from these two small tensors, so the captured program is identical for every chunk.
 """
 
+import time
+
 import torch
 
 import ttnn
@@ -107,8 +109,10 @@ class DynCtx:
         for r in self.ratios:
             up(self._host(((pos + 1) // r).float().reshape(1, 1, C, 1), ttnn.float32), self.lim[r])
             up(self._host(torch.full((1, 1, 1, 1), float(self.L[r] - (s0 + C) // r)), ttnn.float32), self.off[r])
+        t0 = time.perf_counter()
         for hk in self.upd_hooks:
             hk(self, s0)
+        self.t_hooks = getattr(self, "t_hooks", 0.0) + time.perf_counter() - t0
 
     def build_masks(self):
         """Inside the traced forward, once per chunk: the full additive masks [1,1,C,128+C+L] of every ratio."""
