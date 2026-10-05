@@ -60,8 +60,8 @@ void kernel_main() {
     const uint32_t device_idx = get_arg_val<uint32_t>(arg_idx++);
     const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const address_t done_sem = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t barrier_wait_value = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t line_hops = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t rect_e_hops = get_arg_val<uint32_t>(arg_idx++);
@@ -157,8 +157,7 @@ void kernel_main() {
     // contain valid data.
     if constexpr (do_init_barrier) {
         if constexpr (enable_fabric) {
-            uint64_t barrier_sem_noc_addr_in_pkt =
-                safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
+            uint64_t barrier_sem_noc_addr_in_pkt = safe_get_noc_addr(sem_noc0_x, sem_noc0_y, barrier_sem, 0);
             fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                 fabric_connection,
                 sem_route_id,
@@ -167,8 +166,7 @@ void kernel_main() {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), barrier_wait_value);
         // Subtract this launch's credits instead of resetting, so early ones for the next launch survive.
         noc_semaphore_inc(
-            safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem),
-            (uint32_t)(-(int32_t)barrier_wait_value));
+            safe_get_noc_addr(sem_noc0_x, sem_noc0_y, barrier_sem), (uint32_t)(-(int32_t)barrier_wait_value));
         noc.async_atomic_barrier();
     }
 
@@ -309,15 +307,14 @@ void kernel_main() {
     // Writer fires sem increment backward, and exits immediately.
     // Uses done_sem, not barrier_sem, so a next-launch startup credit cannot count here.
     if constexpr (enable_fabric) {
-        uint64_t done_sem_noc_addr_in_pkt = safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, done_sem, 0);
+        uint64_t done_sem_noc_addr_in_pkt = safe_get_noc_addr(sem_noc0_x, sem_noc0_y, done_sem, 0);
         fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
             fabric_connection,
             sem_route_id,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{done_sem_noc_addr_in_pkt, 0});
     }
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_sem), barrier_wait_value);
-    noc_semaphore_inc(
-        safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, done_sem), (uint32_t)(-(int32_t)barrier_wait_value));
+    noc_semaphore_inc(safe_get_noc_addr(sem_noc0_x, sem_noc0_y, done_sem), (uint32_t)(-(int32_t)barrier_wait_value));
     noc.async_atomic_barrier();
 
     if constexpr (enable_fabric) {
