@@ -5,6 +5,7 @@ import subprocess
 import pytest
 
 from runner_failure_common import (
+    LOG_SCAN_CHUNK_SIZE,
     RecentJob,
     fetch_github_job_log,
     extract_fabric_missing_links,
@@ -110,7 +111,8 @@ def test_file_scan_matches_signatures_and_links_across_chunks(monkeypatch, tmp_p
 
 
 @pytest.mark.parametrize("hard_failure", [False, True])
-def test_file_scan_preserves_disk_recovery_across_chunks(tmp_path, hard_failure) -> None:
+def test_file_scan_preserves_disk_recovery_across_chunks(monkeypatch, tmp_path, hard_failure) -> None:
+    monkeypatch.setattr("runner_failure_common.LOG_SCAN_CHUNK_SIZE", 256 * 1024)
     log_text = "Disk usage is 98%\n" + ("No space left on device\n" if hard_failure else "")
     log_text += "noise\n" * 100000 + "Disk usage is 30%\n"
     path = tmp_path / "log.txt"
@@ -124,10 +126,10 @@ def test_file_scan_preserves_disk_recovery_across_chunks(tmp_path, hard_failure)
 def test_file_scan_uses_bounded_reads_even_for_long_lines(monkeypatch) -> None:
     class BoundedReader(io.StringIO):
         def read(self, size=-1):
-            assert 0 < size <= 256 * 1024
+            assert size == LOG_SCAN_CHUNK_SIZE
             return super().read(size)
 
-    reader = BoundedReader("x" * (2 * 1024 * 1024) + "Failed to allocate TLB window.")
+    reader = BoundedReader("x" * (2 * LOG_SCAN_CHUNK_SIZE) + "Failed to allocate TLB window.")
     monkeypatch.setattr(Path, "open", lambda *_args, **_kwargs: reader)
 
     assert scan_log_file(Path("unused")) == (["TLB error"], "")

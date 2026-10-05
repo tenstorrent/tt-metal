@@ -26,7 +26,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled in load_config
 SIGNATURE_VERSION = "runner-failure-signatures-2026-10-05-v2"
 UNKNOWN_RUNNER = "(unknown runner)"
 ACTIVE_JOB_STATUSES = {"queued", "in_progress", "waiting", "pending", "requested"}
-LOG_SCAN_CHUNK_SIZE = 256 * 1024
+LOG_SCAN_CHUNK_SIZE = 4 * 1024 * 1024
 LOG_SCAN_OVERLAP = 16 * 1024
 
 OSC_SEQUENCE_RE = re.compile(r"\x1b\].*?\x1b\\")
