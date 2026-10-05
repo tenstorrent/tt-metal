@@ -13,6 +13,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/hal.hpp>
 #include "impl/context/metal_env_impl.hpp"
+#include "impl/metal2_host_api/helpers.hpp"
 #include "jit_build/jit_build_settings.hpp"
 
 // ============================================================================
@@ -35,8 +36,6 @@
 // different devices.
 
 namespace tt::tt_metal::experimental {
-
-NodeRangeSet to_node_range_set(const Nodes& nodes);
 
 namespace sem_solver {
 

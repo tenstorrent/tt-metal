@@ -67,6 +67,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/uint8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dataflow_buffer/dataflow_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/llk_metadata.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/metadata_collection/collect_metadata.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_run_args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/tensor_spec_relaxations.cpp
