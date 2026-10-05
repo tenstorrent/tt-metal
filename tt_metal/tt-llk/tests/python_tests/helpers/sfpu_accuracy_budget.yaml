@@ -54,7 +54,9 @@
 # Float16_b/Float16/Float32 output; a tolerance cell is measured, not gated. The unary
 # functional driver takes only the tolerance arm of a contract; the binary, ternary and
 # scalar drivers gate on the whole of it (every output with a step row, never Bfp8_b),
-# because their rows were measured over their own sweeps.
+# because their rows were measured over their own sweeps, and so do the hand-built unary
+# signbit, isinf/isnan and threshold sweeps (test_eltwise_unary_sfpu.py,
+# `gate_on_step_budget`), whose stimuli measured those predicates' rows.
 #
 # Every exhaustive row was measured with FAST_MODE(No) and CLAMP_NEGATIVE(True) compiled
 # in. The key has no axis for either, so a row holds for a kernel built that way: the
@@ -2044,8 +2046,10 @@ I1:  # tracked: #52174 (input clamped at 88.5); measured by: exhaustive Float16_
 
 
 # Keyed per format, not through a DEFAULT: Identity was never in BROAD_SWEEP_OPS, so it
-# has no sampled wildcard, and every row below is the sweep's. Its steps are the pack
-# path's, as for Abs and Neg.
+# has no sampled input-keyed row, and every row below is the sweep's but the
+# `out: Float32` / `out: Float16_b` wildcards at the end (sampled, 2026-09-16), which
+# answer only for cells no input-keyed row names. Its steps are the pack path's, as for
+# Abs and Neg.
 Identity:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-05, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized

@@ -455,31 +455,6 @@ def _known_lanes() -> Dict:
         high=65504.0,
         why="inf where the answer is x itself, in the top four fp16 values, on a 16-bit Dest",
     )
-    # The same top-of-fp16 window for an op that answers 65408 finite: #58607's lanes
-    # start one fp16 step above it, at 65440.
-    above_65408 = {**top_of_fp16, "low": 65440.0}
-
-    def store_saturates(at: float, **fields):
-        """#57215: the Float16 store saturates a value just past 65504 to 65504 rather
-        than to an infinity, on a 32-bit Dest packed to Float16, where the golden's fp16
-        rounding answers inf. Only at the one input *at* whose exact answer rounds past
-        fp16's range (2**16 for Reciprocal and SqrtCustom, 65535 for Tanhshrink, which
-        fp16 rounds to inf as it does anything from 65520). The bounds are on the input
-        as received, so on Bfp8_b they also name every bf16
-        value the block quantizer maps onto *at* -- the quantization preimage, not a
-        wider defect -- without spelling it out."""
-        return (
-            KnownNonfiniteLanes(
-                issue="#57215",
-                inputs=(DataFormat.Float16_b, DataFormat.Bfp8_b),
-                output=DataFormat.Float16,
-                dest=DestAccumulation.Yes,
-                low=at,
-                high=at,
-                **fields,
-            ),
-        )
-
     _KNOWN_NONFINITE_LANES.update(
         {
             MathOperation.Celu: (KnownNonfiniteLanes(**top_of_fp16),),

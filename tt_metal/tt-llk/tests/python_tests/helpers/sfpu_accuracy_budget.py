@@ -213,8 +213,9 @@ class AccuracyContract:
         wider than the few thousand values that driver samples warrant, and feeding it
         back would loosen its gate rather than tighten it. An op on the ULP metric
         therefore keeps today's per-format tolerance here. The binary, ternary and
-        scalar drivers take :meth:`passed_test_kwargs`: their rows were measured over
-        their own sweeps.
+        scalar drivers, and the unary signbit, isinf/isnan and threshold sweeps
+        (``gate_on_step_budget``), take :meth:`passed_test_kwargs` instead: their rows
+        were measured over their own stimuli.
         """
         if self.metric is Metric.ULP:
             return {}

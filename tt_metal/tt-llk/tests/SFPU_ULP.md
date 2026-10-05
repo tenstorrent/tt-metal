@@ -3,10 +3,12 @@
 Every SFPU op declares how closely its output must match its golden, in
 `python_tests/helpers/sfpu_accuracy_budget.yaml`. For most ops that declaration is a
 tolerance. For the ops enrolled here it is a **step budget**: "every element is within
-N representable values of the reference", checked against *every distinct finite value
-of a 16-bit input format* -- `±inf` and NaN are never fed, and `-0.0` is the same value
-as `+0.0` -- or, for `Float32`, a stride of 65,279 of them across the whole range
-(`ulp_sweep.is_exhaustive` tells the two apart).
+N representable values of the reference". A unary op's budget comes from the exhaustive
+sweep, which checks it against *every distinct finite value of a 16-bit input format* --
+`±inf` and NaN are never fed, and `-0.0` is the same value as `+0.0` -- or, for
+`Float32`, a stride of 65,279 of them across the whole range (`ulp_sweep.is_exhaustive`
+tells the two apart). (The hand-built isinf/isnan sweep, which gates its predicates'
+rows, feeds them on purpose.)
 
 This document is how you add an op to that second group.
 
@@ -68,8 +70,9 @@ every legal quantization of a `Bfp4_b` *output* as a 32-step error.
 Binary and ternary rows are measured over those drivers' own sweeps, and those drivers
 gate on the whole contract, `Float32` included. So do the unary signbit, isinf/isnan
 and threshold sweeps, whose hand-built stimuli are what the predicates' rows were
-measured on (`MEASURED_ON_SWEEP` in `test_sfpu_accuracy_budget.py`); those ops have no
-registered domain, so the exhaustive sweep never drives them.
+measured on (`MEASURED_ON_SWEEP` in `test_sfpu_accuracy_budget.py`). The isinf/isnan
+and threshold predicates have no registered domain, so those sweeps are their only gate;
+`Signbit`, `ReluMin` and `ReluMax` are driven by the exhaustive sweep as well.
 
 `Float32` has 2^32 values and one device run holds 2^16, so it cannot be enumerated. The
 sweep strides the format's total order instead. Every binade holds the same number of
