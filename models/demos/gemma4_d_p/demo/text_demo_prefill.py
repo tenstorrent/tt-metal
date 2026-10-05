@@ -3,11 +3,14 @@
 
 """Gemma4 long-context prefill on a Blackhole Galaxy."""
 
+import contextlib
 import functools
+import gc
 import hashlib
 import os
 import pathlib
 import time
+from unittest import mock
 
 import pytest
 import torch
@@ -179,30 +182,9 @@ def _build_prefill_model(mesh_config, hf_model_id, chunk_size, context_len=None)
 # ── Traced long-context chunked prefill (production shape) ────────────────────
 
 
-@torch.no_grad()
-@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
-@pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
-@pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"chunk{c}")
-@pytest.mark.parametrize("context_len", [32768, 65536, 131072, 262144], ids=lambda c: f"ctx_{c // 1024}k")
-def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token_source, reset_seeds, request):
-    """Measure all prefill chunks using one replayed ring-attention trace."""
-
-    mesh_config = _mesh_config(mesh_device)
-    cp = mesh_config.cp_degree
-    if cp <= 1:
-        pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
-    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len):
-        pytest.skip(geometry_error)
-
-    hf_model_id = _hf_model_id()
+def _measure_traced(mesh_device, mesh_config, model_args, model, hf_model_id, context_len, chunk_size, token_source):
+    """Compile, capture and replay one ring-attention trace over every chunk of ``context_len``."""
     n_chunks = context_len // chunk_size
-    model_args, model, kv_cache = _build_prefill_model(
-        mesh_config=mesh_config,
-        hf_model_id=hf_model_id,
-        chunk_size=chunk_size,
-        context_len=context_len,
-    )
-
     tokens_all = _get_prefill_tokens(hf_model_id, context_len, model_args.vocab_size, token_source)
 
     host_input_tokens = ttnn.from_torch(
@@ -343,6 +325,97 @@ def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token
     )
 
 
+@torch.no_grad()
+@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+@pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
+@pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"chunk{c}")
+@pytest.mark.parametrize("context_len", [32768, 65536, 131072, 262144], ids=lambda c: f"ctx_{c // 1024}k")
+def test_prefill_long_context_traced(mesh_device, context_len, chunk_size, token_source, reset_seeds, request):
+    """Measure all prefill chunks using one replayed ring-attention trace."""
+
+    mesh_config = _mesh_config(mesh_device)
+    cp = mesh_config.cp_degree
+    if cp <= 1:
+        pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
+    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len):
+        pytest.skip(geometry_error)
+
+    hf_model_id = _hf_model_id()
+    model_args, model, _kv_cache = _build_prefill_model(
+        mesh_config=mesh_config,
+        hf_model_id=hf_model_id,
+        chunk_size=chunk_size,
+        context_len=context_len,
+    )
+
+    _measure_traced(mesh_device, mesh_config, model_args, model, hf_model_id, context_len, chunk_size, token_source)
+
+
+@contextlib.contextmanager
+def _shared_device_weights():
+    """Write each cached weight to the device once per process, however many models are built.
+
+    Weights do not depend on the chunk size, and the model never writes to or frees them. Keyed by
+    cache file, dtype, layout and memory config.
+    """
+    real_as_tensor = ttnn.as_tensor
+    memo = {}
+
+    def as_tensor(tensor, dtype=None, **kwargs):
+        if kwargs.get("device") is None or kwargs.get("cache_file_name") is None:
+            return real_as_tensor(tensor, dtype, **kwargs)
+        key = (kwargs["cache_file_name"], str(dtype), str(kwargs.get("layout")), str(kwargs.get("memory_config")))
+        if key not in memo:
+            memo[key] = real_as_tensor(tensor, dtype, **kwargs)
+        return memo[key]
+
+    with mock.patch.object(ttnn, "as_tensor", as_tensor):
+        yield
+
+
+@torch.no_grad()
+@pytest.mark.timeout(3600)
+@parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+@pytest.mark.parametrize("token_source", ["text"], ids=lambda t: t)
+@pytest.mark.parametrize("context_len", [32768, 65536, 131072, 262144], ids=lambda c: f"ctx_{c // 1024}k")
+def test_prefill_chunk_sweep_traced(mesh_device, context_len, token_source, reset_seeds, request):
+    """``test_prefill_long_context_traced`` for each chunk in GEMMA4_SWEEP_CHUNK_SIZES, in one process.
+
+    The mesh is opened and the weights are written once; each chunk size builds its own model and
+    compiles and captures its own trace.
+    """
+    mesh_config = _mesh_config(mesh_device)
+    if mesh_config.cp_degree <= 1:
+        pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={mesh_config.cp_degree}")
+    hf_model_id = _hf_model_id()
+    sizes = os.environ.get("GEMMA4_SWEEP_CHUNK_SIZES", "2048,4096,8192")
+    chunk_sizes = [int(c) for c in sizes.split(",") if c.strip()]
+    measured = 0
+
+    with _shared_device_weights():
+        for chunk_size in chunk_sizes:
+            if geometry_error := prefill_chunk_geometry_error(chunk_size, mesh_config.cp_degree, context_len):
+                logger.warning(f"[sweep] skipping chunk {chunk_size}: {geometry_error}")
+                continue
+            logger.info(f"[sweep] ===== chunk_size={chunk_size} context_len={context_len} =====")
+            model_args, model, _kv_cache = _build_prefill_model(
+                mesh_config=mesh_config,
+                hf_model_id=hf_model_id,
+                chunk_size=chunk_size,
+                context_len=context_len,
+            )
+            _measure_traced(
+                mesh_device, mesh_config, model_args, model, hf_model_id, context_len, chunk_size, token_source
+            )
+            del model_args, model, _kv_cache
+            gc.collect()
+            # Cached programs hold op-allocated L1 semaphores that fragment L1 for the next model's circular buffers.
+            mesh_device.clear_program_cache()
+            measured += 1
+    if not measured:
+        pytest.skip(f"no chunk size in {sizes!r} is valid for context {context_len}")
+
+
 # ── Per-layer prefill timing ────────────────────────────────────────────────
 
 
@@ -449,7 +522,11 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         return chunk_start
 
     def _make_forward(lt):
-        """Build a layer forward with RoPE gathered inside the trace."""
+        """Build (prepare, forward) for one layer type.
+
+        prepare runs the once-per-chunk inputs of the model: the token embedding, the RoPE
+        lookups and their packing. forward runs the layer on them. They are traced separately so the measured trace
+        holds only the layer; in the model the prepare ops run once per chunk, not once per layer."""
         idx = layer_idxs[lt]
         layer = model.layers[idx]
         assert layer.self_attn.ring_kv_cache is not None, f"layer {idx} has no ring cache"
@@ -461,38 +538,46 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         cos_2d, sin_2d = model.rope_caches_2d[model_layer_type]
         pack_rope = pack_global_rope_device if lt == "global" else pack_sliding_rope_device
 
-        def forward(chunk_start):
+        def prepare():
             embeds = model.transform_and_embed_prefill_inputs_device(device_input_tokens)
             cos = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, cos_2d, layout=ttnn.TILE_LAYOUT))
             sin = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, sin_2d, layout=ttnn.TILE_LAYOUT))
             packed_rope = (*pack_rope(cos, sin), model._packed_global_rope_trans_mat)
+            return embeds, (cos, sin), packed_rope
+
+        def forward(inputs, chunk_start):
+            embeds, rope_mats, packed_rope = inputs
             return layer(
                 hidden_states=embeds,
-                rope_mats=(cos, sin),
+                rope_mats=rope_mats,
                 prefill_metadata=model.prefill_metadata,
                 chunk_start_idx=chunk_start,
                 packed_global_rope=packed_rope if lt == "global" else None,
                 packed_sliding_rope=packed_rope if lt == "local" else None,
             )
 
-        return forward
+        return prepare, forward
 
-    traces, outs = {}, {}
+    traces, prep_traces, outs = {}, {}, {}
     capture_at = chunk_idxs[0]
     for lt in layer_types:
-        fwd = _make_forward(lt)
+        prepare, fwd = _make_forward(lt)
         t0 = time.time()
-        compile_out = fwd(_stage(capture_at))
+        compile_out = fwd(prepare(), _stage(capture_at))
         ttnn.synchronize_device(mesh_device)
         compile_out.deallocate(True)
         compile_s = time.time() - t0
 
         t0 = time.time()
         cap_start = _stage(capture_at)
+        prep_tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        inputs = prepare()
+        ttnn.end_trace_capture(mesh_device, prep_tid, cq_id=0)
         tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        outs[lt] = fwd(cap_start)
+        outs[lt] = fwd(inputs, cap_start)
         ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
         ttnn.synchronize_device(mesh_device)
+        prep_traces[lt] = prep_tid
         traces[lt] = tid
         capture_s = time.time() - t0
         logger.info(
@@ -528,6 +613,8 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
                 sp_start, sp_stop = _perf_signposts(lt, idx)
 
                 chunk_start = _stage(idx)
+                ttnn.execute_trace(mesh_device, prep_traces[lt], cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh_device)
                 signpost(sp_start)
                 t_i = time.time()
                 ttnn.execute_trace(mesh_device, traces[lt], cq_id=0, blocking=False)
@@ -554,7 +641,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
 
         hidden = _cp_gather_torch(outs[layer_types[-1]], mesh_config)
     finally:
-        for tid in traces.values():
+        for tid in (*traces.values(), *prep_traces.values()):
             ttnn.release_trace(mesh_device, tid)
 
     assert torch.isfinite(hidden).all(), f"{layer_types[-1]} layer produced non-finite output"

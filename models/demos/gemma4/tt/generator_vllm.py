@@ -4763,12 +4763,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
         return False
 
     def _dflash_convert(self, host_groups, rows, is_tokens):
-        """Per-group host tensors to one torch tensor at this step's row count.
-
-        ``Generator.process_decode_output_host`` converts at ``max_batch_size``
-        rows, which reads a narrower host logits batch as ``max_batch_size``
-        rows of a truncated vocabulary.
-        """
+        """Convert each group's host output with this step's row limit."""
         groups = list(host_groups) if isinstance(host_groups, (list, tuple)) else [host_groups]
         per = max(1, int(rows) // max(1, len(groups)))
         parts = []
