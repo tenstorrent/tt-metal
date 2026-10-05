@@ -29,7 +29,7 @@ def _logits_vec(t, vocab):
 
 
 def _is_prefill(args, kwargs):
-    return str(kwargs.get("mode", "")).upper().endswith("PREFILL")
+    return any(str(v).upper().endswith("PREFILL") for v in (*args, *kwargs.values()) if not hasattr(v, "shape"))
 
 
 def run_tt(cfg, preset, inputs, hf_model, goldens, mesh_device, recorder, monkeypatch):
@@ -47,7 +47,10 @@ def run_tt(cfg, preset, inputs, hf_model, goldens, mesh_device, recorder, monkey
     visual = DropInVisionTransformer(get_hf_visual(hf_model), vargs)
     tv = visual.tt_model
     for i, blk in enumerate(tv.blocks):
-        recorder.wrap(monkeypatch, blk, f"vision.block{i}", lambda t: t.reshape(-1, t.shape[-1])[:n_patches])
+        rows = lambda t: t.reshape(-1, t.shape[-1])[:n_patches]
+        recorder.wrap(monkeypatch, blk, f"vision.block{i}", rows)
+        recorder.wrap(monkeypatch, blk.attention, f"vision.block{i}.attn", rows)
+        recorder.wrap(monkeypatch, blk.feed_forward, f"vision.block{i}.mlp", rows)
     taps = [i for i in tv.deepstack_visual_indices if i < len(tv.blocks)]
     for j, _ in enumerate(taps):
         recorder.wrap(
@@ -73,10 +76,11 @@ def run_tt(cfg, preset, inputs, hf_model, goldens, mesh_device, recorder, monkey
         paged_attention_config=paged,
     )
     kv_cache = [layer.attention.layer_past for layer in model.layers]
+    flat = lambda t: t.reshape(-1, t.shape[-1])
     for i, layer in enumerate(model.layers):
-        recorder.wrap(
-            monkeypatch, layer, f"text.layer{i}", lambda t: t.reshape(-1, t.shape[-1]), when=_is_prefill, append_dim=0
-        )
+        recorder.wrap(monkeypatch, layer, f"text.layer{i}", flat, when=_is_prefill, append_dim=0)
+        recorder.wrap(monkeypatch, layer.attention, f"text.layer{i}.attn", flat, when=_is_prefill, append_dim=0)
+        recorder.wrap(monkeypatch, layer.feed_forward, f"text.layer{i}.mlp", flat, when=_is_prefill, append_dim=0)
     row = (L - 1) % 32  # the prefill output norm sees only the 32-row tile holding the last real token
     recorder.wrap(monkeypatch, model.norm, "text.norm", lambda t: t.reshape(-1, t.shape[-1])[row], when=_is_prefill)
     args.use_qk_fused = False
@@ -116,9 +120,8 @@ def run_tt(cfg, preset, inputs, hf_model, goldens, mesh_device, recorder, monkey
         deepstack_visual_embeds=deepstack,
     )
     recorder.tensors["text.logits.prefill"] = _logits_vec(logits, vocab)
-    for i in range(len(model.layers)):  # prefill pads to a tile-friendly length; keep the real tokens only
-        if f"text.layer{i}" in recorder.tensors:
-            recorder.tensors[f"text.layer{i}"] = recorder.tensors[f"text.layer{i}"][:L]
+    for name in [k for k in recorder.tensors if k.startswith("text.layer")]:  # prefill pads; keep real tokens
+        recorder.tensors[name] = recorder.tensors[name][:L]
 
     gen.update_rope_deltas([rope_deltas.squeeze(0).item()])
     pos = torch.tensor([decoding_pos])
