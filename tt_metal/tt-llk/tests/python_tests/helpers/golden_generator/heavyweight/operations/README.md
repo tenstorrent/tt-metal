@@ -400,7 +400,9 @@ in Dest. The only difference is that the partial product is a *matrix* product.
 | `OPERAND_REGISTERS` | Which src register each stimulus lands in, in argument order. `("srcB", "srcA")` on every architecture. |
 | `models_fidelity` | True when `MANTISSA_SPLIT` is set. |
 | `_product(srcA, srcB)` | The one place operand order lives, so a subclass inverting it overrides neither `apply` nor `partial_product`. |
-| `TILE_DIM` | 32. |
+
+`TILE_DIM` (32) is a module constant in `matmul.py`, not a class member — it
+is the tile edge every op assumes, not something an architecture overrides.
 
 ### Accumulation: exact within a pass, rounded once at the Dest write
 
@@ -558,7 +560,6 @@ Custom, because the kernel walks a block at a time.
 # Architecture bindings
 
 A subclass exists to bind `blocks_class` and state the constants that differ.
-13–26 lines each.
 
 ```python
 class QuasarEltwiseBinaryGolden(EltwiseBinaryGolden):

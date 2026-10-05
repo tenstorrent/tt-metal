@@ -342,9 +342,8 @@ which is what `dest_to_l1` puts in its warning.
 ## What this package does not model
 
 - **Stochastic rounding** — see above.
-- **The RTL's gasket, transliterated.** The L1 → SrcA conversion is deliberately
-  *composed* out of `pack_to_l1` plus a dtype cast rather than reimplemented
-  bit-for-bit from `tt_unpacker_gasket_fmt_conv.sv`. That traded 1115 lines for
-  234 and agrees with silicon; a transliteration is recoverable from history if
-  it is ever needed.
+- **A bit-for-bit model of the unpacker's conversion hardware.** The L1 → SrcA
+  path is *composed* out of `pack_to_l1` plus the storage-precision rules,
+  which agrees with silicon on everything measured here. Where a conversion
+  rule is subtle it is written down as a rule, not reproduced as logic.
 - **Partial-face multi-tile layout** — see the sharp edge above.
