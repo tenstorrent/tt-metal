@@ -150,7 +150,8 @@ def pack_to_l1(
     The codecs in :mod:`helpers.pack` handle exactly one tile, so a multi-tile
     tensor is split and packed tile by tile, matching how ``unpack_res_tiles``
     reads it back. `tile_count` defaults to what the tensor holds at this
-    geometry.
+    geometry, which must be a whole number of tiles; pass it explicitly to pack
+    a prefix.
     """
     packer = PACKERS.get(l1_format)
     if packer is None:
@@ -162,14 +163,25 @@ def pack_to_l1(
 
     flat = tensor.reshape(-1)
     per_tile = datums_per_tile(num_faces, face_r_dim)
+    # A partial tile is refused rather than dropped or packed short: either way
+    # the bytes would describe a different stimulus than the one handed in.
     if tile_count is None:
-        tile_count = max(1, flat.numel() // per_tile)
+        tile_count, remainder = divmod(flat.numel(), per_tile)
+        if remainder:
+            raise ValueError(
+                f"tensor has {flat.numel()} datums, which is not a whole number "
+                f"of {per_tile}-datum tiles at num_faces={num_faces}, "
+                f"face_r_dim={face_r_dim}. Pass tile_count to pack a prefix."
+            )
+    elif tile_count * per_tile > flat.numel():
+        raise ValueError(
+            f"tile_count={tile_count} needs {tile_count * per_tile} datums, but "
+            f"the tensor has {flat.numel()}."
+        )
 
     packed: List[int] = []
     for tile in range(tile_count):
         chunk = flat[tile * per_tile : (tile + 1) * per_tile]
-        if chunk.numel() == 0:
-            break
         tile_bytes = _call_accepted(
             packer,
             chunk,
