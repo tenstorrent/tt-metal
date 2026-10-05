@@ -2261,15 +2261,20 @@ class MiniMaxH3Pipeline:
         self.trace_audio = False
         self._log_generation = False
         try:
-            # Diagnostic mode (MINIMAX_H3_WARMUP_SKIP_DECODE_WARM=1): go straight to the ladder walk.
-            # The decode warms only compile programs and cache a few MB of filter constants, so the
-            # DRAM picture at each rung is unchanged; the audio length warm has hung on this mesh.
+            # The ladder walk goes first: it is the only stage that can run out of DRAM (each rung's
+            # forced request binds the DiT's buffers and compiles its own decodes on the way), and on a
+            # memory-tight mesh an OOM should surface minutes after launch, not after the compile-only
+            # warms below have run for half an hour. Those only compile programs and cache a few MB of
+            # filter constants, so the DRAM picture at each rung is the same either way.
+            fitted = self._warm_denoise_buckets(prompt, generation_kwargs, overrides)
+            # Diagnostic mode (MINIMAX_H3_WARMUP_SKIP_DECODE_WARM=1): skip the decode length/canvas warms
+            # (the audio length warm has hung on this mesh).
             if not _skip_decode_warm():
                 if self.vae_output_type == "yuv420":
                     self._warm_vae_decode()
                 self._warm_audio_decode()
             self._warm_prompt_encoder()
-            fitted = self._warm_denoise_buckets(prompt, generation_kwargs, overrides)
+            # Every program is compiled by now; traces are captured last.
             self._capture_traces(prompt, fitted, overrides, trace_audio)
         finally:
             self.trace_audio = trace_audio
