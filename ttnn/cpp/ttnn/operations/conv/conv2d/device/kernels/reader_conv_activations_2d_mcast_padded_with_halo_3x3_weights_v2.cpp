@@ -217,7 +217,7 @@ void kernel_main() {
     uint32_t act_l1_read_addr = dfb_sharded_act_obj.get_read_ptr();
 
     if constexpr (!split_reader_cb_shared) {
-        experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
+        set_activation_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
     }
 
     constexpr uint32_t window_outer_offset = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
@@ -237,7 +237,7 @@ void kernel_main() {
                 uint32_t l1_write_addr_act = dfb_act_rm_obj.get_write_ptr();
                 if constexpr (split_reader_cb_shared) {
                     reserve_done_sem.set(VALID);
-                    experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
+                    set_activation_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
                 }
                 read_activation_data<
                     sliced_inner_dim,
