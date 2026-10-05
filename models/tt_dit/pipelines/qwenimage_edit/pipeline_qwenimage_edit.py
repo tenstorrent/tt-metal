@@ -45,6 +45,15 @@ from models.tt_dit.utils.tracing import Tracer
 
 _DEFAULT_CHECKPOINT = "Qwen/Qwen-Image-Edit"
 
+# Prompt-length bucketing for the denoise trace. The trace is keyed on the prompt token
+# length, which is ~1369 condition-image tokens plus the instruction, so nearly every new
+# instruction changes it and re-captures the trace (~5 s). With a bucket, the prompt
+# embeddings are zero-padded up to the next multiple of it (the base qwenimage pipeline
+# zero-pads to a fixed 512 the same way), so instructions within a bucket share one trace.
+# The padded tokens are attended to (the joint attention has no mask for a replicated
+# prompt), which perturbs the output slightly; None disables padding.
+_DEFAULT_PROMPT_BUCKET: int | None = None
+
 # WH Galaxy preset: all 32 chips on one image, cfg replicated, TP across heads, SP across tokens.
 #   axis 0 -> sequence parallel (4),  axis 1 -> tensor parallel (8)
 _PRESETS_WH: dict[tuple[int, ...], dict] = {
@@ -143,9 +152,22 @@ class _DenoiseBranch:
     """
 
     def __init__(
-        self, *, tt_model: QwenImageTransformer, device: ttnn.MeshDevice, sp_axis: int, tp_axis: int, trace: bool
+        self,
+        *,
+        tt_model: QwenImageTransformer,
+        device: ttnn.MeshDevice,
+        sp_axis: int,
+        tp_axis: int,
+        trace: bool,
+        use_2cq: bool = False,
     ) -> None:
         self._tt = tt_model
+        # Two command queues: CQ1 carries the per-step latent write and the output read-back,
+        # CQ0 the (traced) forward; events order them (write -> forward -> read). The mesh must
+        # be opened with num_command_queues=2.
+        self._use_2cq = use_2cq
+        self._op_event = None  # CQ0: last forward done
+        self._read_event = None  # CQ1: last read-back done
         self._device = device
         self._sp_axis = sp_axis
         self._tp_axis = tp_axis
@@ -241,18 +263,33 @@ class _DenoiseBranch:
     def launch(self, *, hidden_states: torch.Tensor, step: int) -> None:
         """Write step ``step``'s latents + modulation row and enqueue the forward (non-blocking when traced)."""
         assert self._inputs is not None, "prepare() first"
-        ttnn.copy_host_to_device_tensor(self.convert_hidden_states(hidden_states), self._inputs["spatial"])
+        if self._use_2cq:
+            # The previous forward must be done reading the latents before CQ1 overwrites them,
+            # and CQ0 must not start this forward before the write lands.
+            if self._op_event is not None:
+                ttnn.wait_for_event(1, self._op_event)
+            ttnn.copy_host_to_device_tensor(self.convert_hidden_states(hidden_states), self._inputs["spatial"], cq_id=1)
+            ttnn.wait_for_event(0, ttnn.record_event(self._device, 1))
+            # The previous read-back must be done before this forward overwrites the output.
+            if self._read_event is not None:
+                ttnn.wait_for_event(0, self._read_event)
+        else:
+            ttnn.copy_host_to_device_tensor(self.convert_hidden_states(hidden_states), self._inputs["spatial"])
         # Device-to-device; the sliced temporary is consumed before the trace replays.
         ttnn.copy(self._mod_table[:, step : step + 1, :], self._inputs["modulation"])
 
         if not self._trace:
             self._out = self._tt.forward(**self._inputs)
+            if self._use_2cq:
+                self._op_event = ttnn.record_event(self._device, 0)
             return
         if self._tracer is None:
             # The forward never writes its inputs in place, so the compile run can use them directly
             # instead of clones (the tile-padded modulation row alone is tens of MB).
             self._tracer = Tracer(self._tt.forward, device=self._device, prep_run=True, clone_prep_inputs=False)
-        self._out = self._tracer(**self._inputs, traced=True, tracer_blocking_execution=False)
+        self._out = self._tracer(**self._inputs, traced=True, tracer_cq_id=0, tracer_blocking_execution=False)
+        if self._use_2cq:
+            self._op_event = ttnn.record_event(self._device, 0)
 
     def convert_hidden_states(self, hidden_states: torch.Tensor) -> ttnn.Tensor:
         return self._host(hidden_states, mesh_axes=[None, self._sp_axis, None])
@@ -268,16 +305,24 @@ class _DenoiseBranch:
         num_shards = -(-num_tokens // shard_len)
         by_sp = {}
         coords = self._out.tensor_topology().mesh_coords()
+        if self._use_2cq:
+            ttnn.wait_for_event(1, self._op_event)  # read on CQ1 only after the forward is done
+        cq_id = 1 if self._use_2cq else None
         for coord, dev_tensor in zip(coords, ttnn.get_device_tensors(self._out), strict=True):
             sp_idx = coord[self._sp_axis]
             if sp_idx < num_shards and all(c == 0 for i, c in enumerate(coord) if i != self._sp_axis):
-                by_sp[sp_idx] = dev_tensor.cpu(blocking=False)
+                by_sp[sp_idx] = dev_tensor.cpu(blocking=False, cq_id=cq_id)
+        if self._use_2cq:
+            self._read_event = ttnn.record_event(self._device, 1)
         self._pending = ([by_sp[i] for i in range(num_shards)], num_tokens)
 
     def collect(self) -> torch.Tensor:
         shards, num_tokens = self._pending
         self._pending = None
-        ttnn.synchronize_device(self._device)
+        if self._use_2cq:
+            ttnn.event_synchronize(self._read_event)
+        else:
+            ttnn.synchronize_device(self._device)
         return torch.cat([ttnn.to_torch(t) for t in shards], dim=1)[:, :num_tokens]
 
 
@@ -314,6 +359,8 @@ class QwenImageEditPipeline:
         cfg_parallel: bool = True,
         device_vae: bool = True,
         device_vae_encode: bool = True,
+        prompt_bucket: int | None = _DEFAULT_PROMPT_BUCKET,
+        use_2cq: bool = False,
     ) -> QwenImageEditPipeline:
         config = QwenImageEditPipelineConfig.default(
             mesh_shape=mesh_device.shape,
@@ -326,6 +373,8 @@ class QwenImageEditPipeline:
             trace=trace,
             device_vae=device_vae,
             device_vae_encode=device_vae_encode,
+            prompt_bucket=prompt_bucket,
+            use_2cq=use_2cq,
         )
 
     def __init__(
@@ -336,8 +385,12 @@ class QwenImageEditPipeline:
         trace: bool = True,
         device_vae: bool = True,
         device_vae_encode: bool = True,
+        prompt_bucket: int | None = _DEFAULT_PROMPT_BUCKET,
+        use_2cq: bool = False,
     ) -> None:
         self._mesh_device = device
+        self.use_2cq = use_2cq
+        self.prompt_bucket = prompt_bucket
         self._config = config
         self._parallel_config = config.dit_parallel_config
         self._cfg_parallel = self._parallel_config.cfg_parallel.factor == 2
@@ -402,7 +455,9 @@ class QwenImageEditPipeline:
         models = tt_models if self._cfg_parallel else tt_models * 2
         devices = self._submeshes if self._cfg_parallel else (device, device)
         self._branches = [
-            _DenoiseBranch(tt_model=m, device=d, sp_axis=sp.mesh_axis, tp_axis=tp.mesh_axis, trace=trace)
+            _DenoiseBranch(
+                tt_model=m, device=d, sp_axis=sp.mesh_axis, tp_axis=tp.mesh_axis, trace=trace, use_2cq=use_2cq
+            )
             for m, d in zip(models, devices, strict=True)
         ]
         self.forward_times: list[float] = []  # one entry per denoise step
@@ -512,6 +567,10 @@ class QwenImageEditPipeline:
         do_true_cfg = true_cfg_scale > 1 and negative_prompt is not None
         if do_true_cfg:
             negative_prompt_embeds, _ = hf.encode_prompt(image=prompt_image, prompt=negative_prompt, device="cpu")
+        if self.prompt_bucket:
+            prompt_embeds = _pad_to_bucket(prompt_embeds, self.prompt_bucket)
+            if do_true_cfg:
+                negative_prompt_embeds = _pad_to_bucket(negative_prompt_embeds, self.prompt_bucket)
         timings["vl_encode"] = time.time() - t
 
         t = time.time()
@@ -607,6 +666,12 @@ class QwenImageEditPipeline:
         images = hf.image_processor.postprocess(decoded, output_type="pil")
         timings["vae_decode"] = time.time() - t
         return list(images), timings
+
+
+def _pad_to_bucket(embeds: torch.Tensor, bucket: int) -> torch.Tensor:
+    """Zero-pad [batch, seq, dim] prompt embeddings along seq up to the next multiple of ``bucket``."""
+    pad = -embeds.shape[1] % bucket
+    return torch.nn.functional.pad(embeds, (0, 0, 0, pad)) if pad else embeds
 
 
 def _model_name_for_cache(checkpoint_name: str) -> str:
