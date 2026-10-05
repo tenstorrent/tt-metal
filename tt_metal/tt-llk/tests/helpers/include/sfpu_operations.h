@@ -617,6 +617,7 @@ void call_unary_sfpu_operation_init()
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(rsqrt_init<APPROX_MODE>);
+        ckernel::sfpu::rsqrt_bf16_tile_init<!is_fp32_dest_acc_en>();
     }
     else if constexpr (OPERATION == SfpuType::sine)
     {

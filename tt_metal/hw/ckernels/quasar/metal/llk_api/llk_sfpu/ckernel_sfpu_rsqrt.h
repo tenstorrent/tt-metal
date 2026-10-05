@@ -92,6 +92,9 @@ inline void _init_rsqrt_() {
  */
 // Whether BF16 DEST runs the generated rsqrt kernel as one call over the whole tile.
 inline constexpr bool rsqrt_bf16_whole_tile = false;
+// The stock rsqrt kernel needs no BF16 setup.
+template <bool bf16_kernel>
+inline void rsqrt_bf16_tile_init() {}
 
 template <
     bool APPROXIMATION_MODE,

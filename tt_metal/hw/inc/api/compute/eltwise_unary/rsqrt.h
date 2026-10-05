@@ -18,7 +18,10 @@ enum class RsqrtMode { Default, Fast };
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (APPROX))); }
+ALWI void rsqrt_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (APPROX)));
+    MATH(ckernel::sfpu::rsqrt_bf16_tile_init<!DST_ACCUM_MODE>());
+}
 
 // clang-format off
 /**

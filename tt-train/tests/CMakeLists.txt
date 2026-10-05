@@ -83,6 +83,7 @@ set(SOURCES
     ops/multi_head_test.cpp
     ops/variable_matmul_test.cpp
     utils/memory_utils_test.cpp
+    utils/training_utils_test.cpp
     ops/mla_q_rope_op_test.cpp
     ops/gumbel_sample_op_test.cpp
 )

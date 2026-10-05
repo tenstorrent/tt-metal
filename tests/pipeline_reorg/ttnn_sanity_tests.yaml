@@ -353,3 +353,19 @@
   team: ttnn
   budget_type: sanity
   owner_id: U08T3JQEB36 # stevendae
+
+# Exhaustive BF16 accuracy of generated eltwise kernels: the cases each op's change adds to
+# the existing test files of that op. Those files run in their own groups too; listing the
+# cases here is what makes the changed-tests gate run them on hardware before the change merges.
+- name: "ttnn eltwise generated bf16 accuracy"
+  cmd: >-
+    pytest --timeout 300 -s -v
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_rsqrt_with_log_in_sfpu_chain
+  skus:
+    wh_n300_civ2:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+  team: ttnn
+  budget_type: sanity
+  owner_id: U09LVP68R7F # Nachiket Kapre
