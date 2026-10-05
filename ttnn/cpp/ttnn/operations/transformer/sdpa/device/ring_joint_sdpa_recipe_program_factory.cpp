@@ -135,7 +135,7 @@ public:
         if (cb_bytes > available) {
             // Then the fused chunks' CBs: without them every K chunk runs on the reduce path (slower than giving
             // up Q prefetch, so this goes last).
-            cb_bytes -= ring_recipes::recipe_drop_fused(desc.cbs, program_.kernels.front().defines);
+            cb_bytes -= ring_recipes::recipe_drop_fused(desc.cbs, program_.kernels.front().defines, Sq_chunk_t_);
             log_debug(tt::LogOp, "Named ring recipe: unfused chunks to fit L1");
         }
         TT_FATAL(
