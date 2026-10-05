@@ -321,7 +321,9 @@ def run_all_gather_impl(
         ttnn.apply_device_delay(mesh_device, delays)
 
         noc_check = (
-            assert_no_unflushed_noc_atomics(mesh_device, min_atomic_events=1)
+            assert_no_unflushed_noc_atomics(
+                mesh_device, min_atomic_events=1, sub_device_ids=sub_device_stall_group
+            )
             if check_noc_atomics
             else contextlib.nullcontext()
         )

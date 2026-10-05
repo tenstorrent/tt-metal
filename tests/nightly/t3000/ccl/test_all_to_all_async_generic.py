@@ -199,7 +199,9 @@ def run_all_to_all_impl(
         entries_before = mesh_device.num_program_cache_entries()
         seen_links = set()
         noc_check = (
-            assert_no_unflushed_noc_atomics(mesh_device, min_atomic_events=1)
+            assert_no_unflushed_noc_atomics(
+                mesh_device, min_atomic_events=1, sub_device_ids=sub_device_stall_group
+            )
             if check_noc_atomics
             else contextlib.nullcontext()
         )
