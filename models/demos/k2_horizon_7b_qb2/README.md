@@ -56,7 +56,6 @@ Model-local checks (all need the four chips and the pinned weights in the HF cac
 pytest models/demos/k2_horizon_7b_qb2/tests/test_functional_decoder.py \
        models/demos/k2_horizon_7b_qb2/tests/test_fused_decoder.py \
        models/demos/k2_horizon_7b_qb2/tests/test_optimized_decoder.py
-python -m models.demos.k2_horizon_7b_qb2.tests.run_datatype_candidate      # top-1/5/100 vs HF
 python -m models.demos.k2_horizon_7b_qb2.tests.check_accurate_prefill_attention   # vs FP64
 python -m models.demos.k2_horizon_7b_qb2.tests.check_accurate_flash_decode
 python -m models.demos.k2_horizon_7b_qb2.tests.run_multichip_long_context  # 524K stream vs HF
@@ -70,7 +69,9 @@ python -m models.demos.k2_horizon_7b_qb2.tests.benchmark_long_context      # TTF
 - Decode logits agree with HF at PCC 0.9998 on TP4, checked through position 524,288; the
   524,288-token streamed comparison of the attention layer against HF gives PCC 0.9989 at the
   last position and is unchanged below 64K.
-- Teacher-forced AIME fixture: 98/100 top-1 agreement with HF under the selected precision policy.
+- Teacher-forced AIME fixture: 98/100 top-1 agreement with HF under the selected precision policy
+  (bring-up pipeline gate; its runner depends on the pipeline's `readiness_check` package and is
+  not part of this directory).
 - tt-inference-server release runs on `bh-qb-ge` (GPQA Diamond and MMLU-Pro CI subsets, 30
   benchmark points to 512K, API conformance) pass acceptance; GPQA 60-62.5 and MMLU-Pro 64.3-66.7
   on the 40- and 42-question subsets, where most misses are reasoning traces that hit the 32K
