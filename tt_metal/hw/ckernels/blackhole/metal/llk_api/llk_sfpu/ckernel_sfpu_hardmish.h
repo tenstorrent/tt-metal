@@ -32,12 +32,18 @@ bool bf16_dest_hardmish();
 template <int ITERATIONS>
 void calculate_hardmish_bf16();
 void init_hardmish_bf16();
+// Sets up the generated BF16 hardmish kernel for the instance it serves.
+template <bool bf16_kernel>
+inline void hardmish_bf16_tile_init() {
+    if constexpr (bf16_kernel) {
+        init_hardmish_bf16();
+    }
+}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = true>
 inline void hardmish() {
     if constexpr (!is_fp32_dest_acc_en) {
         if (bf16_dest_hardmish()) {
-            init_hardmish_bf16();
             calculate_hardmish_bf16<ITERATIONS>();
             return;
         }

@@ -273,7 +273,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<SDPAProgramConfig>& program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<PagedCacheGeometryOverride> paged_cache_geometry) {
+    std::optional<PagedCacheGeometryOverride> paged_cache_geometry,
+    std::optional<uint32_t> sliding_window_size,
+    const std::optional<ttnn::Tensor>& attention_sink) {
     if (chunk_start_idx_tensor_opt.has_value()) {
         return ttnn::transformer::chunked_scaled_dot_product_attention(
             input_tensor_q,
@@ -285,7 +287,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
             memory_config,
             program_config,
             compute_kernel_config,
-            paged_cache_geometry);
+            paged_cache_geometry,
+            sliding_window_size,
+            attention_sink);
     }
     if (!chunk_start_idx_arg.has_value()) {
         throw std::runtime_error(
@@ -302,7 +306,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
         memory_config,
         program_config,
         compute_kernel_config,
-        paged_cache_geometry);
+        paged_cache_geometry,
+        sliding_window_size,
+        attention_sink);
 }
 
 }  // namespace
@@ -531,6 +537,10 @@ void bind_sdpa(nb::module_& mod) {
                 layer's view, pass this call's view with both `block_size` and `num_kv_heads`
                 set; Q drives head_dim and the per-block element count must be invariant.
                 Defaults to the cache's declared shape.
+            sliding_window_size (int, optional): Sliding window in absolute positions; each query
+                at absolute position p attends to keys in (p - window, p]. Defaults to `None`.
+            attention_sink (ttnn.Tensor, optional): Per-head learned sink logit [1 x nqh x 1 x 1],
+                as for `scaled_dot_product_attention`. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
@@ -552,7 +562,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("memory_config").noconvert() = nb::none(),
         nb::arg("program_config").noconvert() = nb::none(),
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
-        nb::arg("paged_cache_geometry").noconvert() = nb::none());
+        nb::arg("paged_cache_geometry").noconvert() = nb::none(),
+        nb::arg("sliding_window_size") = nb::none(),
+        nb::arg("attention_sink").noconvert() = nb::none());
 
     const auto* const joint_doc = R"doc(
         JointAttention operation that efficiently performs non-causal attention over two

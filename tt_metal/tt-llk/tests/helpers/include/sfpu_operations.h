@@ -697,6 +697,11 @@ void call_unary_sfpu_operation_init()
             _init_topk();
         }
     }
+    else if constexpr (OPERATION == SfpuType::hardmish)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION, is_fp32_dest_acc_en>();
+        ckernel::sfpu::hardmish_bf16_tile_init<!is_fp32_dest_acc_en>();
+    }
     else
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION, is_fp32_dest_acc_en>();

@@ -42,6 +42,9 @@ ALWI void hardmish_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void hardmish_tile_init() { MATH(SFPU_UNARY_INIT(hardmish)); }
+ALWI void hardmish_tile_init() {
+    MATH(SFPU_UNARY_INIT(hardmish));
+    MATH(ckernel::sfpu::hardmish_bf16_tile_init<!DST_ACCUM_MODE>());
+}
 
 }  // namespace ckernel
