@@ -376,7 +376,7 @@ public:
             for_each_child(position, [this](size_t child) { wake_subtree(child); });
             for (size_t call = 0; call < executor_of_call_.size(); call++) {
                 if (executor_of_call_[call] == executor) {
-                    run(call);
+                    run_if_unclaimed(call);
                 }
             }
         }
@@ -384,7 +384,7 @@ public:
     }
 
     // Runs `call` unless another thread has claimed it.
-    void run(size_t call) noexcept {
+    void run_if_unclaimed(size_t call) noexcept {
         if (claims_[call].claimed.exchange(true, std::memory_order_acq_rel)) {
             return;
         }
@@ -580,7 +580,7 @@ public:
         // The workers are woken first to last, so take calls from the back. The caller runs every call no worker
         // has claimed, so the job finishes even if some workers are never woken.
         for (size_t call = device_ids.size(); call-- > 0;) {
-            job->run(call);
+            job->run_if_unclaimed(call);
         }
         if (auto exception = job->finish()) {
             std::rethrow_exception(exception);
