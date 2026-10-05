@@ -30,6 +30,11 @@ logprobs, and other unsupported sampling options through its host sampler.
 Host and device sampling use different random streams, so seeded output is not
 guaranteed to stay identical when a request changes sampling mode.
 
+Explicit seeds are reduced modulo `2**31 - 131072 - 1` before adding the
+absolute token position. This accepts signed 64-bit request seeds and leaves
+room for device increments throughout the supported context. The resulting
+device seed cannot reach the reserved value that skips reseeding.
+
 ## Run
 
 Build tt-metal and activate its Python environment. Install the current vLLM TT
