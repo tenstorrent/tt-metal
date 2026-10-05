@@ -1194,21 +1194,22 @@ void add_compute_defines(m2::KernelSpec& kernel, const SpecConfig& c, bool is_al
     }
 }
 
-// Legacy carried a vector indexed by buffer index, defaulted everywhere except the Welford alias.
-// That one becomes UnpackToDest; the remaining Float32 buffers the kernel consumes get an explicit
-// UnpackToSrc, which is required once the 32-bit Dest register is enabled and which legacy supplied
-// silently.
-//
-// The choice of which buffers get which mode assumes a Gen1 target (Wormhole, Blackhole), where
-// unpacking straight to Dest costs performance unless it is the only way to keep 32 bits of
-// precision. That is why UnpackToDest appears only at the Welford alias and every other Float32
-// buffer is pinned to UnpackToSrc. Gen2 reverses the tradeoff: unpacking to Dest is free there and
-// is the preferred mode for anything the SFPU consumes, so these assignments stay legal but become
-// slower than they need to be. They want revisiting before this op targets Gen2.
+// Keep FP32 residuals and statistics out of TF32 SrcA: rounding a large mean
+// before either the cross-core merge or normalisation destroys its low bits.
+// Other Float32 consumers retain the FPU-compatible UnpackToSrc mode.
 void set_compute_unpack_modes(m2::KernelSpec& kernel, const m2::ProgramSpec& spec, const SpecConfig& c) {
-    auto& modes = m2::unpack_modes(std::get<m2::ComputeHardwareConfig>(kernel.hw_config));
+    auto& modes = std::get<m2::ComputeHardwareConfig>(kernel.hw_config).unpack_modes;
     if (c.welford_fp32_alias) {
         modes.emplace(X_WELFORD, UnpackMode::UnpackToDest);
+    }
+    if (c.welford_fp32_alias && !c.is_pre_all_gather && !c.is_post_all_gather) {
+        modes.emplace(EX_EXTERNAL, UnpackMode::UnpackToDest);
+        modes.emplace(EX_GLOBAL, UnpackMode::UnpackToDest);
+        modes.emplace(TRANSPOSE, UnpackMode::UnpackToDest);
+        if (c.has_b) {
+            modes.emplace(IN0, UnpackMode::UnpackToDest);
+            modes.emplace(IN1, UnpackMode::UnpackToDest);
+        }
     }
     if (!c.fp32_dest_acc_en) {
         return;
@@ -1237,10 +1238,27 @@ void add_kernel_and_work_unit_specs(
     const bool has_not_all_to_all_workers = workers.num_none_all_to_all_workers > 0;
     const bool has_inactive_cores = !core_ranges.inactive_cores.empty();
 
-    const m2::DataMovementHardwareConfig reader_hw = m2::DataMovementGen1Config{
-        .processor = DataMovementProcessor::RISCV_0, .noc = c.reader_noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
-    const m2::DataMovementHardwareConfig writer_hw = m2::DataMovementGen1Config{
-        .processor = DataMovementProcessor::RISCV_1, .noc = c.writer_noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
+    // Only config_1xx is set: it carries the WH/BH placement (explicit RISC-V core + the mcast-specific
+    // reader/writer NOCs) and is ignored on Quasar (Gen2), where the framework places the kernel and
+    // picks the NOC; config_2xx stays unset so every bound DFB keeps implicit sync ON. That is what the
+    // mcast reduction needs: the reader_sender's remote mcast write posts the receivers' input DFB via
+    // implicit-sync txn tracking (a receiver cannot explicitly push data it did not produce).
+    const m2::DataMovementHardwareConfig reader_hw = m2::DataMovementHardwareConfig{
+        .config_1xx =
+            m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = c.reader_noc,
+                .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
+            },
+    };
+    const m2::DataMovementHardwareConfig writer_hw = m2::DataMovementHardwareConfig{
+        .config_1xx =
+            m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = c.writer_noc,
+                .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
+            },
+    };
 
     // The reader's trailing coordinate block is one X coordinate per multicast column followed by one
     // Y coordinate per multicast row. Its length is a compile-time property of the kernel, but the

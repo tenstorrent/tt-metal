@@ -152,23 +152,28 @@ void validate_chunk_start(const operation_attributes_t& attrs, const tensor_args
         return;
     }
     const uint32_t T = t.k.logical_shape()[2];
+    const uint64_t query_capacity = static_cast<uint64_t>(T) * attrs.key_compression_ratio;
     TT_FATAL(
         attrs.chunk_start_idx % tt::constants::TILE_WIDTH == 0,
         "chunk_start_idx {} must be tile-aligned",
         attrs.chunk_start_idx);
     TT_FATAL(
-        attrs.chunk_start_idx < T,
-        "chunk_start_idx {} starts at or past T={} (the allocated k length): nothing would be scored",
+        attrs.chunk_start_idx < query_capacity,
+        "chunk_start_idx {} starts at or past query-token capacity {} (compressed T={}, ratio={}): "
+        "nothing would be scored",
         attrs.chunk_start_idx,
-        T);
+        query_capacity,
+        T,
+        attrs.key_compression_ratio);
     if (attrs.kv_len.has_value()) {
         const uint32_t kv_len = attrs.kv_len.value();
         TT_FATAL(
-            attrs.chunk_start_idx < kv_len,
-            "chunk_start_idx {} starts at or past kv_len={} (the valid key prefix): nothing would be scored. "
+            attrs.chunk_start_idx < static_cast<uint64_t>(kv_len) * attrs.key_compression_ratio,
+            "chunk_start_idx {} starts at or past kv_len={} compressed rows (ratio={}): nothing would be scored. "
             "The causal window may END past kv_len (pad query rows), but the chunk must BEGIN inside it",
             attrs.chunk_start_idx,
-            kv_len);
+            kv_len,
+            attrs.key_compression_ratio);
     }
 }
 // Block-cyclic layout (sp derived from block_cyclic_sp_axis, global chunk = sp*block_cyclic_chunk_local):
@@ -180,7 +185,7 @@ void validate_block_cyclic(const operation_attributes_t& attrs, const tensor_arg
         return;
     }
     const uint32_t sp = attrs.block_cyclic->sp;
-    const uint32_t chunk_local = attrs.block_cyclic->chunk_local;
+    const uint32_t chunk_local = attrs.block_cyclic->chunk_local;  // compressed K rows
     const uint32_t chunk_global = sp * chunk_local;
     const uint32_t T = t.k.logical_shape()[2];
     const uint32_t Sq = t.q.logical_shape()[2];
@@ -195,11 +200,12 @@ void validate_block_cyclic(const operation_attributes_t& attrs, const tensor_arg
         chunk_global,
         T);
     TT_FATAL(
-        Sq <= chunk_local,
-        "Sq ({}) must be <= block_cyclic_chunk_local ({}); a device's queries may cross at most one cache-slab "
+        Sq <= chunk_local * attrs.key_compression_ratio,
+        "Sq ({}) must be <= block_cyclic_chunk_local ({}) query rows; a device's queries may cross at most one "
+        "cache-slab "
         "boundary (one straddle). A coarser indexer SP (Sq > chunk_local) is not yet supported.",
         Sq,
-        chunk_local);
+        chunk_local * attrs.key_compression_ratio);
     // The split only refines the invP divisors, so the global chunk (and the T check above) is unchanged.
     TT_FATAL(attrs.key_stripe_split >= 1, "key_stripe_split must be >= 1 (got {})", attrs.key_stripe_split);
     TT_FATAL(
@@ -301,6 +307,11 @@ void validate_chunk_start_metadata(const operation_attributes_t& attrs, const te
         attrs.has_block_cyclic(),
         "indexer_score: chunk_start_idx_tensor requires the block-cyclic layout (block_cyclic_chunk_local), "
         "whose sp/chunk_local are what the kernel derives kv_len and the causal rotation from");
+    TT_FATAL(
+        attrs.key_compression_ratio == 1,
+        "indexer_score: chunk_start_idx_tensor / valid_end_tensor support key_compression_ratio 1 only (got {}); "
+        "the valid_end cap and the fused all-gather extent are still in token units",
+        attrs.key_compression_ratio);
 
     validate_scalar_metadata_tensor(*t.chunk_start_idx_tensor, t.q, "chunk_start_idx_tensor");
 }
@@ -409,6 +420,7 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
 
     return tt::tt_metal::operation::hash_operation<IndexerScoreDeviceOperation>(
         attrs.apply_relu,
+        attrs.key_compression_ratio,
         attrs.num_groups,
         attrs.block_size,
         attrs.synthesize_gate,  // gate read from DRAM vs filled in-kernel -> different reader binary
@@ -564,15 +576,24 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
                     ttnn::operations::ccl::common::has_row_major_mesh_coordinates(kl),
                 "indexer_score fused full-mesh mode requires row-major tensor coordinates");
             TT_FATAL(
-                ttnn::operations::ccl::common::tensor_dim_shard_factor(q, 2) == ring_size &&
-                    ttnn::operations::ccl::common::tensor_dim_shard_factor(w, 2) == ring_size &&
-                    ttnn::operations::ccl::common::tensor_dim_shard_factor(kl, 2) == ring_size,
-                "indexer_score fused full-mesh mode requires Q, weights, and K-local sequence sharding across "
-                "all {} devices",
-                ring_size);
-            TT_FATAL(
                 is_replicated_across_complete_mesh(k),
                 "indexer_score fused full-mesh mode requires complete-mesh replicated gathered K");
+            // Extents, not placements. A sharded activation can carry a shard dim naming the axis it was
+            // created on rather than the one its rows now sit on, which makes a placement-derived factor
+            // under-count; the distribution itself is the caller's contract, checked by coordinates above.
+            TT_FATAL(
+                kl.logical_shape()[2] * ring_size == k.logical_shape()[2],
+                "indexer_score fused full-mesh mode expects K-local to be 1/{} of the gathered K extent; got "
+                "{} and {}",
+                ring_size,
+                kl.logical_shape()[2],
+                k.logical_shape()[2]);
+            TT_FATAL(
+                q.logical_shape()[2] == w.logical_shape()[2],
+                "indexer_score fused full-mesh mode expects Q and weights to share a per-device sequence "
+                "extent; got {} and {}",
+                q.logical_shape()[2],
+                w.logical_shape()[2]);
             // Linear here is a full-mesh open path: same walk, no closing edge.
             TT_FATAL(
                 fused.topology == ttnn::ccl::Topology::Ring || fused.topology == ttnn::ccl::Topology::Linear,
@@ -629,6 +650,13 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     const uint32_t Sq = q_shape[2];
     const uint32_t D = q_shape[3];
     const uint32_t T = k_shape[2];
+    TT_FATAL(
+        attrs.key_compression_ratio == 1 || attrs.key_compression_ratio == 4,
+        "indexer_score key_compression_ratio must be 1 or 4 (got {})",
+        attrs.key_compression_ratio);
+    TT_FATAL(
+        attrs.apply_relu || attrs.key_compression_ratio == 1,
+        "indexer_score_msa supports key_compression_ratio=1 only");
     TT_FATAL(
         Sq % tt::constants::TILE_HEIGHT == 0 && T % tt::constants::TILE_WIDTH == 0 &&
             D % tt::constants::TILE_WIDTH == 0,
@@ -751,14 +779,18 @@ IndexerScoreDeviceOperation::create_op_performance_model(
     const uint32_t D = q_shape[3];
     const uint32_t Sqt = q_shape[2] / tt::constants::TILE_HEIGHT;
     const uint32_t Tt = k_shape[2] / tt::constants::TILE_WIDTH;
-    const uint32_t chunk_t = attrs.chunk_start_idx / tt::constants::TILE_WIDTH;
+    const uint32_t ratio = attrs.key_compression_ratio;
 
     // Causal-valid output tiles V = sum_rows min(kv_len_tiles, chunk_t + row + 1) (masked future excluded;
     // matches the test's sp7_valid_tiles()). kv_len caps per-row valid columns; nullopt == full Tt.
     const uint32_t kv_len_tiles = attrs.kv_len.has_value() ? attrs.kv_len.value() / tt::constants::TILE_WIDTH : Tt;
     uint64_t valid_tiles = 0;
     for (uint32_t s = 0; s < Sqt; ++s) {
-        valid_tiles += std::min<uint64_t>(kv_len_tiles, (uint64_t)chunk_t + s + 1);
+        const uint64_t query_end_exclusive =
+            static_cast<uint64_t>(attrs.chunk_start_idx) + (static_cast<uint64_t>(s) + 1) * tt::constants::TILE_HEIGHT;
+        const uint64_t valid_key_rows = query_end_exclusive / ratio;
+        const uint64_t touched_key_tiles = (valid_key_rows + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
+        valid_tiles += std::min<uint64_t>(kv_len_tiles, touched_key_tiles);
     }
 
     // Per valid 32x32 tile per head: (32*32) outputs x 2*D FLOPs; summed over heads/tiles/batch
@@ -803,6 +835,7 @@ IndexerScoreDeviceOperation::invoke(
     const Tensor& k,
     const Tensor& weights,
     uint32_t chunk_start_idx,
+    uint32_t key_compression_ratio,
     bool apply_relu,
     uint32_t num_groups,
     uint32_t block_size,
@@ -818,6 +851,7 @@ IndexerScoreDeviceOperation::invoke(
     return {
         operation_attributes_t{
             .chunk_start_idx = chunk_start_idx,
+            .key_compression_ratio = key_compression_ratio,
             .seq_shard_axes = std::move(seq_shard_axes),
             .apply_relu = apply_relu,
             .num_groups = num_groups,
@@ -864,6 +898,7 @@ ttnn::Tensor launch_indexer_score(
     const ttnn::Tensor& k,
     const ttnn::Tensor& weights,
     std::optional<uint32_t> chunk_start_idx,
+    uint32_t key_compression_ratio,
     bool apply_relu,
     uint32_t num_groups,
     uint32_t block_size,
@@ -899,6 +934,10 @@ ttnn::Tensor launch_indexer_score(
     using ttnn::operations::experimental::indexer_score::BlockCyclicLayout;
 
     const uint32_t Sq = q.logical_shape()[2];
+    TT_FATAL(
+        key_compression_ratio == 1 || key_compression_ratio == 4,
+        "indexer_score: key_compression_ratio must be 1 or 4 (got {})",
+        key_compression_ratio);
     const bool full_mesh = fused_ring.has_value() && fused_ring->full_mesh;
 
     // Block-cyclic (per-SP-shard) K layout -- interface matches ttnn.transformer.sparse_sdpa: the caller
@@ -949,16 +988,21 @@ ttnn::Tensor launch_indexer_score(
             *block_cyclic_sp_axis);
     }
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt;
-    uint32_t key_stripe_split = 1;  // >1 only for a TP-deduplicated (GLM-5.2) key cache; see below
+    uint32_t key_stripe_split = 1;  // >1 only for a TP-deduplicated (GLM-5.3) key cache; see below
     if (full_mesh && block_cyclic_chunk_local.has_value()) {
         const uint32_t sp = q.device()->get_view().shape().mesh_size();
-        const uint32_t chunk_local = *block_cyclic_chunk_local;
+        const uint32_t query_chunk_local = *block_cyclic_chunk_local;
         TT_FATAL(
-            chunk_local == Sq,
+            query_chunk_local == Sq,
             "indexer_score fused full-mesh block_cyclic_chunk_local ({}) must equal q_isl ({})",
-            chunk_local,
+            query_chunk_local,
             Sq);
-        block_cyclic = BlockCyclicLayout{.sp = sp, .chunk_local = chunk_local};
+        TT_FATAL(
+            query_chunk_local % key_compression_ratio == 0,
+            "indexer_score: block_cyclic_chunk_local ({}) must be divisible by key_compression_ratio ({})",
+            query_chunk_local,
+            key_compression_ratio);
+        block_cyclic = BlockCyclicLayout{.sp = sp, .chunk_local = query_chunk_local / key_compression_ratio};
     } else if (block_cyclic_sp_axis.has_value()) {
         const auto mesh_shape = q.device()->get_view().shape();
         const uint32_t sp_axis = *block_cyclic_sp_axis;
@@ -969,14 +1013,19 @@ ttnn::Tensor launch_indexer_score(
             mesh_shape.dims());
         const uint32_t sp = mesh_shape[sp_axis];
         const uint32_t tp = static_cast<uint32_t>(mesh_shape.mesh_size()) / sp;  // remaining (TP) device count
-        const uint32_t chunk_local = *block_cyclic_chunk_local;
+        const uint32_t query_chunk_local = *block_cyclic_chunk_local;
+        TT_FATAL(
+            query_chunk_local % key_compression_ratio == 0,
+            "indexer_score: block_cyclic_chunk_local ({}) must be divisible by key_compression_ratio ({})",
+            query_chunk_local,
+            key_compression_ratio);
         // chunk_local is one of exactly two legal values (the cross-check sparse_sdpa also applies): q's
         // per-chip seq length (seq sharded only on the SP axis) or tp*q_isl (seq also sliced across the TP
         // axis, post-reshard). Anything else is a producer bug.
         TT_FATAL(
-            chunk_local == Sq || chunk_local == Sq * tp,
+            query_chunk_local == Sq || query_chunk_local == Sq * tp,
             "indexer_score: block_cyclic_chunk_local ({}) must be q_isl ({}) or tp*q_isl ({})",
-            chunk_local,
+            query_chunk_local,
             Sq,
             Sq * tp);
         // Seq sharded across BOTH axes (chunk_local == tp*q_isl, tp > 1) needs the second axis's seq offset.
@@ -987,7 +1036,7 @@ ttnn::Tensor launch_indexer_score(
         //   (b) seq_shard_axes=[SP, TP] -> the EXACT block-cyclic geometry (mirroring rotated_chip_positions)
         //       adds the tp_rank*Sq sub-offset. Rotation-exact.
         // A lone SP axis (seq_shard_axes=[SP]) would miss the TP offset entirely -- reject that.
-        const bool both_axes = (chunk_local == Sq * tp && tp > 1);
+        const bool both_axes = (query_chunk_local == Sq * tp && tp > 1);
         TT_FATAL(
             !(both_axes && cluster_axis.has_value() && !seq_subshard_axis.has_value()),
             "indexer_score: block_cyclic_chunk_local == tp*q_isl (tp={} > 1) with seq_shard_axes=[SP] needs the "
@@ -1000,7 +1049,7 @@ ttnn::Tensor launch_indexer_score(
                 "indexer_score: seq_shard_axes TP axis needs the SP axis present (seq_shard_axes=[SP, TP]) and a "
                 "2D seq shard (block_cyclic_chunk_local == tp*q_isl); got has_sp_axis={}, chunk_local={}, Sq*tp={}",
                 cluster_axis.has_value(),
-                chunk_local,
+                query_chunk_local,
                 Sq * tp);
             TT_FATAL(
                 *seq_subshard_axis < mesh_shape.dims() && *seq_subshard_axis != *cluster_axis,
@@ -1013,10 +1062,10 @@ ttnn::Tensor launch_indexer_score(
         // KEYS tp-times finer, recorded separately as key_stripe_split (see operation_attributes_t).
         if (block_cyclic_cache_tp_sharded) {
             TT_FATAL(
-                chunk_local % (tp * tt::constants::TILE_WIDTH) == 0,
+                (query_chunk_local / key_compression_ratio) % (tp * tt::constants::TILE_WIDTH) == 0,
                 "indexer_score: block_cyclic_cache_tp_sharded needs block_cyclic_chunk_local ({}) divisible by tp ({}) "
                 "with a tile-aligned ({}) per-stripe chunk",
-                chunk_local,
+                query_chunk_local,
                 tp,
                 tt::constants::TILE_WIDTH);
             key_stripe_split = tp;
@@ -1024,7 +1073,7 @@ ttnn::Tensor launch_indexer_score(
         // sp == 1 unsplit is the identity permutation -> leave K contiguous. A tp-split cache still needs the
         // remap at sp == 1 (the gathered buffer is TP-stripe-major) and its geometry is unchanged there.
         if (sp > 1 || key_stripe_split > 1) {
-            block_cyclic = BlockCyclicLayout{.sp = sp, .chunk_local = chunk_local};
+            block_cyclic = BlockCyclicLayout{.sp = sp, .chunk_local = query_chunk_local / key_compression_ratio};
         }
     }
 
@@ -1042,14 +1091,16 @@ ttnn::Tensor launch_indexer_score(
     } else {
         const uint32_t T = k.logical_shape()[2];
         if (block_cyclic.has_value()) {
-            const uint32_t chunk = block_cyclic->sp * block_cyclic->chunk_local;
+            const uint32_t query_chunk = block_cyclic->sp * block_cyclic->chunk_local * key_compression_ratio;
             TT_FATAL(
-                T >= chunk,
-                "indexer_score: cannot deduce chunk_start_idx -- T={} < global chunk={}. Pass chunk_start_idx "
+                static_cast<uint64_t>(T) * key_compression_ratio >= query_chunk,
+                "indexer_score: cannot deduce chunk_start_idx -- compressed T={} (ratio {}) is shorter than "
+                "global query chunk={}. Pass chunk_start_idx "
                 "explicitly if K does not equal history + the gathered chunk.",
                 T,
-                chunk);
-            base = T - chunk;
+                key_compression_ratio,
+                query_chunk);
+            base = T * key_compression_ratio - query_chunk;
         } else {
             // seq_ring = max_rank + 1 (get_linearized_index returns coord-min; get_topological_dimension would
             // over-count on a nonzero-offset sub-mesh). A TP sub-shard is possible here only for SP=1, whose
@@ -1058,13 +1109,15 @@ ttnn::Tensor launch_indexer_score(
             const uint32_t seq_ring =
                 ttnn::operations::experimental::indexer_score::max_linearized_rank(q, seq_axis) + 1;
             TT_FATAL(
-                T >= seq_ring * Sq,
-                "indexer_score: cannot deduce chunk_start_idx -- T={} < seq_ring({})*Sq({}). Pass chunk_start_idx "
+                static_cast<uint64_t>(T) * key_compression_ratio >= seq_ring * Sq,
+                "indexer_score: cannot deduce chunk_start_idx -- compressed T={} (ratio {}) < "
+                "seq_ring({})*Sq({}) query tokens. Pass chunk_start_idx "
                 "explicitly if K does not equal history + the gathered query chunk.",
                 T,
+                key_compression_ratio,
                 seq_ring,
                 Sq);
-            base = T - seq_ring * Sq;
+            base = T * key_compression_ratio - seq_ring * Sq;
         }
     }
 
@@ -1084,6 +1137,7 @@ ttnn::Tensor launch_indexer_score(
         k,
         weights,
         base,
+        key_compression_ratio,
         apply_relu,
         num_groups,
         block_size,
@@ -1114,6 +1168,7 @@ ttnn::Tensor indexer_score_dsa(
     const ttnn::Tensor& k,
     const ttnn::Tensor& weights,
     std::optional<uint32_t> chunk_start_idx,
+    uint32_t key_compression_ratio,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
@@ -1128,6 +1183,7 @@ ttnn::Tensor indexer_score_dsa(
         k,
         weights,
         chunk_start_idx,
+        key_compression_ratio,
         /*apply_relu=*/true,
         /*num_groups=*/1,
         /*block_size=*/0,
@@ -1170,6 +1226,7 @@ ttnn::Tensor indexer_score_msa(
         k,
         /*weights=*/q,
         chunk_start_idx,
+        /*key_compression_ratio=*/1,
         /*apply_relu=*/false,
         num_groups,
         block_size,
@@ -1196,6 +1253,7 @@ ttnn::Tensor ring_indexer_score_dsa(
     uint32_t num_links,
     std::optional<tt::tt_metal::SubDeviceId> ag_sub_device_id,
     std::optional<uint32_t> chunk_start_idx,
+    uint32_t key_compression_ratio,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
@@ -1240,16 +1298,24 @@ ttnn::Tensor ring_indexer_score_dsa(
             "ring_indexer_score_dsa cluster_axis=None requires row-major mesh coordinates for Q, K, weights, and "
             "K-local");
         TT_FATAL(
-            ttnn::operations::ccl::common::tensor_dim_shard_factor(q, 2) == mesh_size &&
-                ttnn::operations::ccl::common::tensor_dim_shard_factor(weights, 2) == mesh_size &&
-                ttnn::operations::ccl::common::tensor_dim_shard_factor(k_local, 2) == mesh_size,
-            "ring_indexer_score_dsa cluster_axis=None requires Q, weights, and K-local sequence dim 2 to be "
-            "sharded across all {} mesh devices",
-            mesh_size);
-        TT_FATAL(
             ttnn::operations::experimental::indexer_score::is_replicated_across_complete_mesh(k),
             "ring_indexer_score_dsa cluster_axis=None requires the persistent gathered K buffer replicated "
             "across the complete mesh");
+        // Extents, not placements: see the matching check in the program factory. Row-major coordinates
+        // above pin the device ORDER the snake walks; these pin the per-device sequence EXTENT.
+        TT_FATAL(
+            k_local.logical_shape()[2] * mesh_size == k.logical_shape()[2],
+            "ring_indexer_score_dsa cluster_axis=None expects K-local to be 1/{} of the gathered K extent; "
+            "got {} and {}",
+            mesh_size,
+            k_local.logical_shape()[2],
+            k.logical_shape()[2]);
+        TT_FATAL(
+            q.logical_shape()[2] == weights.logical_shape()[2],
+            "ring_indexer_score_dsa cluster_axis=None expects Q and weights to share a per-device sequence "
+            "extent; got {} and {}",
+            q.logical_shape()[2],
+            weights.logical_shape()[2]);
         const auto fabric_config = tt::tt_fabric::GetFabricConfig();
         // A full mesh is gathered as one snake across both axes, which only a 2D fabric can route.
         TT_FATAL(
@@ -1290,6 +1356,7 @@ ttnn::Tensor ring_indexer_score_dsa(
         k,
         weights,
         chunk_start_idx,
+        key_compression_ratio,
         /*apply_relu=*/true,
         /*num_groups=*/1,
         /*block_size=*/0,

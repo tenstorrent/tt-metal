@@ -309,7 +309,7 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
                   "cache_start_id",
                   "input_start_id",
                   "batch_start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // ---- Writer ----
@@ -348,19 +348,19 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
                   "Wbytes",
                   "offset",
                   "batch_read_offset"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // ---- Compute (one KernelSpec per core group; per-group head count stays a CTA) ----
     const auto make_compute = [&](const KernelSpecName& id, std::uint32_t num_batched_heads_per_core_group) {
-        auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
+        auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
         // Metal 2.0 requires an explicit unpack_modes entry for a consumed Float32 DFB when
         // enable_32_bit_dest (== fp32_dest_acc_en) is set, where legacy silently defaulted. The legacy
         // op set no unpack_to_dest_mode at all (all Default), so mirror that as UnpackToSrc. The compute
         // kernel consumes cache (c_0), input (c_1) and interm1 (c_25); interm carries Float32 exactly
         // when fp32_dest_acc_en, cache/input only if their tensor dtype is FLOAT32.
         if (fp32_dest_acc_en) {
-            auto& um = unpack_modes(compute_hw);
+            auto& um = compute_hw.unpack_modes;
             if (cache_data_format == tt::DataFormat::Float32) {
                 um.emplace(CACHE_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
             }

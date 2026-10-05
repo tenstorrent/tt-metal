@@ -66,7 +66,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
     uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    tt::tt_metal::distributed::MeshDevice& device = a.mutable_device();
+    const tt::tt_metal::distributed::MeshDevice& device = a.device();
     TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config should have been provided");
 
     const auto& cshape = output.padded_shape();  // C=A*B, N1MK*11KN->N1MN
@@ -182,7 +182,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
                      "num_output_tiles",
                      "MtNt"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device.arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Writer kernel ----
@@ -204,7 +204,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
             {
                 .runtime_arg_names = {"num_pages", "start_id"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device.arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Compute kernel(s) — one KernelSpec per core group, preserving the per-group tile-count CTA ----
@@ -218,7 +218,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
     KernelSpec::CompilerOptions::Defines compute_defines(mm_kernel_defines);
 
     ComputeHardwareConfig compute_hw_config =
-        ttnn::to_compute_hardware_config(device.arch(), operation_attributes.compute_kernel_config.value());
+        ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config.value());
 
     // bmm compute kernel: B, Mt, Nt are just 3 for loops that act as 1 large loop,
     // so only set Nt for simplicity

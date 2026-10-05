@@ -7,8 +7,8 @@ On-silicon perf benchmark for the SFPU typecast op (issue #46751).
 Measures cycles/tile for the typecast variants whose SFPLOADMACRO fast path was
 re-introduced for Blackhole. The macro fast path in the calculate_typecast_*
 primitives is gated `#ifndef DISABLE_SFPLOADMACRO`; compiling with
-TT_METAL_DISABLE_SFPLOADMACRO=1 selects the plain-loop fallback (pre-fix
-baseline). Running this module twice -- once without the env (macro ON,
+TT_METAL_DISABLE_SFPLOADMACRO=1 selects the plain-loop fallback.
+Running this module twice -- once without the env (macro ON,
 optimized) and once with TT_METAL_DISABLE_SFPLOADMACRO=1 (macro OFF, baseline)
 -- gives a clean A/B on the same tree.
 
@@ -48,8 +48,8 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_WITHIN_FACE,
 )
 
-# The five (IN, OUT, dest_acc) typecast cases that exercise the SFPLOADMACRO path
-# re-introduced by issue #46751.
+# The (IN, OUT, dest_acc) typecast cases that exercise the SFPLOADMACRO path,
+# including the paths re-introduced by issue #46751.
 #
 # dest_acc is the production setting EXCEPT for the two rows marked below: their
 # macro fast path is gated !DST_ACCUM_MODE, but ttnn.typecast forces dest_acc=Yes
@@ -63,6 +63,8 @@ _TYPECAST_PERF_CASES = [
     (DataFormat.UInt16, DataFormat.Float32, DestAccumulation.No),
     # uint32_to_fp16b, macro mode-agnostic; UInt32 needs 32-bit Dest.
     (DataFormat.UInt32, DataFormat.Float16_b, DestAccumulation.Yes),
+    # Exact uint32 -> fp32 conversion with a three-cycle SFPLOADMACRO pipeline.
+    (DataFormat.UInt32, DataFormat.Float32, DestAccumulation.Yes),
     # uint16_to_uint32 -- NOT production-reachable (UInt32 out -> dest_acc=Yes).
     (DataFormat.UInt16, DataFormat.UInt32, DestAccumulation.No),
     # int32_to_uint16, macro mode-agnostic; Int32 needs 32-bit Dest.

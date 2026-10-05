@@ -131,7 +131,8 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         }
         // INT32 MIN/MAX/SUM is supported via the SFPU reduce path (format deduced from the input CB
         // in compute_kernel_lib::reduce). See common.hpp.
-        const bool is_int32_sfpu_reduce = use_sfpu_reduce_path(tensor_args.dtype(), operation_attributes.math_op);
+        const bool is_int32_sfpu_reduce = tensor_args.dtype() == DataType::INT32 &&
+                                          use_sfpu_reduce_path(tensor_args.dtype(), operation_attributes.math_op);
         TT_FATAL(
             tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
                 tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32 ||

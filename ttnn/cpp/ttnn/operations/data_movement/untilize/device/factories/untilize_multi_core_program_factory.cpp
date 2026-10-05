@@ -157,7 +157,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         .unique_id = READER,
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = SRC0, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     if (use_block_reader) {
         reader_spec.source = std::filesystem::path{READER_BLOCK_SRC};
@@ -211,7 +211,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
                   "num_unpadded_cols_per_input_block",
                   "width_wise_output_block_start_index",
                   "num_cols_already_processed_in_first_output_block"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Compute kernel(s) — full + cliff (cliff only for interleaved input).
@@ -220,7 +220,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         compute_defines.insert({"DST_ACCUM_MODE", "1"});
     }
     auto make_compute = [&](const KernelSpecName& id) {
-        ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+        ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
         if (fp32_dest_acc_en) {
             compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
         }

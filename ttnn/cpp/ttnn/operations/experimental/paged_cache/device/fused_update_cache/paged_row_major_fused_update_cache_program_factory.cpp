@@ -457,7 +457,7 @@ ttnn::device_operation::ProgramArtifacts PagedRowMajorFusedUpdateCacheProgramFac
                 },
             .runtime_arg_schema =
                 {.runtime_arg_names = {"has_work", "cache_start_id", "my_batch_idx", "wait_to_start"}},
-            .hw_config = create_reader_datamovement_config(device->arch()),
+            .hw_config = create_reader_datamovement_config(),
         });
 
         kernels.push_back(KernelSpec{
@@ -502,14 +502,14 @@ ttnn::device_operation::ProgramArtifacts PagedRowMajorFusedUpdateCacheProgramFac
                       "send_signal",
                       "send_core_x",
                       "send_core_y"}},
-            .hw_config = create_writer_datamovement_config(device->arch()),
+            .hw_config = create_writer_datamovement_config(),
         });
 
         // Legacy built a ComputeConfigDescriptor that set only fp32_dest_acc_en, leaving every other
         // knob at its default even when the caller's compute_kernel_config specified one.
-        // ComputeGen1Config's defaults coincide with those, so setting only enable_32_bit_dest
+        // ComputeHardwareConfig's defaults coincide with those, so setting only enable_32_bit_dest
         // reproduces it exactly.
-        ComputeGen1Config compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
+        ComputeHardwareConfig compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
         if (fp32_dest_acc_en) {
             // A 32-bit Dest requires an explicit unpack mode for every Float32 buffer the compute
             // kernel consumes. Legacy named none, which resolved to unpacking into SrcA/B. The input

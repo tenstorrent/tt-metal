@@ -96,12 +96,17 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
 
     constexpr uint32_t max_l1_budget_bytes = 1024 * 1024;  // 1MB budget for embedding output staging
+    // Count double buffering inside the budget. Applying it afterwards asks for twice the budget.
+    uint32_t buffering_size = 1;
+    if (!output_sharded && (num_blocks_per_core_group_1 > 1 || num_blocks_per_core_group_2 > 1)) {
+        buffering_size = 2;
+    }
     uint32_t chunk_size;
     uint32_t num_chunks;
     uint32_t last_chunk_size;
-    bool use_chunked = !output_sharded && rounded_weight_page_size > max_l1_budget_bytes;
+    bool use_chunked = !output_sharded && rounded_weight_page_size * buffering_size > max_l1_budget_bytes;
     if (use_chunked) {
-        chunk_size = (max_l1_budget_bytes / alignment) * alignment;
+        chunk_size = ((max_l1_budget_bytes / buffering_size) / alignment) * alignment;
         chunk_size = std::max(chunk_size, alignment);
         num_chunks = (rounded_weight_page_size + chunk_size - 1) / chunk_size;
         last_chunk_size = rounded_weight_page_size - (num_chunks - 1) * chunk_size;
@@ -115,7 +120,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     if (output_sharded) {
         out_dfb_total_size = output.buffer()->aligned_size_per_bank();
     } else {
-        uint32_t buffering_size = (num_blocks_per_core_group_1 > 1 || num_blocks_per_core_group_2 > 1) ? 2 : 1;
         out_dfb_total_size = buffering_size * chunk_size;
     }
 
@@ -321,7 +325,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
                 {"last_chunk_size", last_chunk_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     // Empty on non-Quasar; on Quasar carries the reader's index scratchpad.
@@ -357,7 +361,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
                         {"last_chunk_size", last_chunk_size},
                     },
                 .runtime_arg_schema = {.runtime_arg_names = {"num_sticks", "start_id"}},
-                .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+                .hw_config = ttnn::create_writer_datamovement_config(),
             });
         } else {
             spec.kernels.push_back(KernelSpec{
@@ -370,7 +374,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
                         TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "dst"},
                     },
                 .runtime_arg_schema = {.runtime_arg_names = {"stick_size", "num_sticks", "start_id"}},
-                .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+                .hw_config = ttnn::create_writer_datamovement_config(),
             });
         }
     }
