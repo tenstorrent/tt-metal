@@ -20,6 +20,7 @@
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_types.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/core_coord.hpp>
@@ -320,6 +321,19 @@ struct HybridRoutedExpertFfnParams {
     uint32_t num_experts_per_tok = 0;
     uint32_t seq_len_per_chip = 0;
 
+    // The overlap's counters: combine's per-stream receive counts and the routed expert's start signal. They
+    // must outlive every launch -- an upstream chip may bump one for the next launch before this chip starts it
+    // -- so the caller owns them and passes the same three every call.
+    std::optional<GlobalSemaphore> fwd_arrived;
+    std::optional<GlobalSemaphore> final_arrived;
+    std::optional<GlobalSemaphore> expert_go;
+    // Every address combine bakes into its compile-time arguments: the three semaphores and the per-call L1
+    // arena its layout is placed in. Hashed, so a cached program is only ever reused over the same layout.
+    uint32_t fwd_arrived_addr = 0;
+    uint32_t final_arrived_addr = 0;
+    uint32_t expert_go_addr = 0;
+    uint32_t l1_arena_addr = 0;
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -332,7 +346,11 @@ struct HybridRoutedExpertFfnParams {
         "combine_axis",
         "combine_num_links",
         "num_experts_per_tok",
-        "seq_len_per_chip");
+        "seq_len_per_chip",
+        "fwd_arrived_addr",
+        "final_arrived_addr",
+        "expert_go_addr",
+        "l1_arena_addr");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -347,7 +365,11 @@ struct HybridRoutedExpertFfnParams {
             combine_axis,
             combine_num_links,
             num_experts_per_tok,
-            seq_len_per_chip);
+            seq_len_per_chip,
+            fwd_arrived_addr,
+            final_arrived_addr,
+            expert_go_addr,
+            l1_arena_addr);
     }
 };
 
@@ -371,7 +393,8 @@ struct HybridRoutedExpertFfnInputs {
     // pass runs: the two halves' buffers sum to more L1 than a core has, and overlaying them -- safe
     // because the passes are ordered, never concurrent -- is what lets both keep the whole grid.
     // Owned by the caller because the program keeps a raw pointer to it that must stay valid
-    // across program-cache hits.
+    // across program-cache hits. Overlapped with combine, hybrid_routed_expert_moe allocates it per
+    // call over every worker core, since combine lays its own L1 over it too.
     std::optional<Tensor> l1_arena;
 
     // Combine's own inputs, present exactly when overlap_combine is set. `output` above is then the
