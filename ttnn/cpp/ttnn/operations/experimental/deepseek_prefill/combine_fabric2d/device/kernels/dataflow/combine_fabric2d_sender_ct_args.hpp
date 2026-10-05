@@ -24,8 +24,8 @@ struct SenderCtArgs {
     uint32_t pkt_hdr_drain_addr;
     uint32_t drain_sink_addr;
     uint32_t batch;
-    uint32_t filled_addr;
-    uint32_t freed_addr;
+    uint32_t filled_slot;
+    uint32_t freed_slot;
     uint32_t fwd_sem_noc_x;
     uint32_t fwd_sem_noc_y;
     uint32_t fwd_sem_addr;
@@ -51,8 +51,8 @@ struct SenderCtArgs {
         pkt_hdr_drain_addr(l1.pkt_hdr_drain),
         drain_sink_addr(l1.drain_sink),
         batch(BATCH),
-        filled_addr(plan.ring_filled_addr),
-        freed_addr(plan.ring_freed_addr),
+        filled_slot(plan.ring_filled_slot),
+        freed_slot(plan.ring_freed_slot),
         fwd_sem_noc_x(static_cast<uint32_t>(downstream.worker_virtual.x)),
         fwd_sem_noc_y(static_cast<uint32_t>(downstream.worker_virtual.y)),
         fwd_sem_addr(plan.fwd_arrived_addr),
@@ -70,8 +70,8 @@ struct SenderCtArgs {
             pkt_hdr_drain_addr,
             drain_sink_addr,
             batch,
-            filled_addr,
-            freed_addr,
+            filled_slot,
+            freed_slot,
             fwd_sem_noc_x,
             fwd_sem_noc_y,
             fwd_sem_addr,
@@ -89,8 +89,8 @@ struct SenderCtArgs {
         pkt_hdr_drain_addr(get_compile_time_arg_val(7)),
         drain_sink_addr(get_compile_time_arg_val(8)),
         batch(get_compile_time_arg_val(9)),
-        filled_addr(get_compile_time_arg_val(10)),
-        freed_addr(get_compile_time_arg_val(11)),
+        filled_slot(get_compile_time_arg_val(10)),
+        freed_slot(get_compile_time_arg_val(11)),
         fwd_sem_noc_x(get_compile_time_arg_val(12)),
         fwd_sem_noc_y(get_compile_time_arg_val(13)),
         fwd_sem_addr(get_compile_time_arg_val(14)),
@@ -100,10 +100,10 @@ struct SenderCtArgs {
     // must hand the next launch a zeroed pair. Safe only at the very end: the reader's last act was
     // publishing the CMD_END slot the sender has just drained, so nothing still reads or bumps them.
     volatile tt_l1_ptr uint32_t* filled_ptr() const {
-        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(filled_addr);
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(filled_slot);
     }
     volatile tt_l1_ptr uint32_t* freed_ptr() const {
-        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(freed_addr);
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(freed_slot);
     }
     void reset_ring_counters() const {
         noc_semaphore_set(filled_ptr(), 0);
