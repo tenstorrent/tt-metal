@@ -4,7 +4,7 @@
 
 #include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
 #include <tt-metalium/experimental/sockets/named_shm.hpp>
-#include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
+#include "shm_owner_liveness.hpp"
 #include "hd_socket_descriptor_generated.h"
 
 #include <tt_stl/assert.hpp>
@@ -36,7 +36,7 @@ void HDSocketDescriptor::populate_from_owner(
     shm_name = shm.name();
     shm_size = shm.size();
     // Both halves of the owner identity name the process that created the shm.
-    owner_start_time = ShmResourceTracker::process_start_time(ShmResourceTracker::pid_from_shm_name(shm_name));
+    owner_start_time = process_start_time(pid_from_shm_name(shm_name));
     data_offset = 0;
     fifo_size = fifo_size_arg;
     config_buffer_address = config_buffer_address_arg;
@@ -162,11 +162,11 @@ HDSocketDescriptor HDSocketDescriptor::read_from_file(const std::string& path) {
 }
 
 bool HDSocketDescriptor::owner_alive() const {
-    const pid_t owner_pid = ShmResourceTracker::pid_from_shm_name(shm_name);
+    const pid_t owner_pid = pid_from_shm_name(shm_name);
     if (owner_pid <= 0) {
         return true;
     }
-    return ShmResourceTracker::is_process_alive(owner_pid, owner_start_time);
+    return is_process_alive(owner_pid, owner_start_time);
 }
 
 HDSocketDescriptor HDSocketDescriptor::wait_and_read(

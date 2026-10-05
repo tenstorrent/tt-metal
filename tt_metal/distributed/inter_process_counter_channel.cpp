@@ -5,7 +5,7 @@
 #include <internal/service/inter_process_counter_channel.hpp>
 
 #include "inter_process_counter_layout.hpp"
-#include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
+#include "shm_owner_liveness.hpp"
 
 #include <tt-logger/tt-logger.hpp>
 
@@ -105,7 +105,7 @@ InterProcessCounterChannel::InterProcessCounterChannel(const std::string& shm_na
     // segment from one left behind by a crashed predecessor.
     const pid_t self = ::getpid();
     seg_->owner_pid = static_cast<uint32_t>(self);
-    seg_->owner_start_time = ShmResourceTracker::process_start_time(self);
+    seg_->owner_start_time = process_start_time(self);
 }
 
 // =============================================================================
@@ -156,8 +156,7 @@ std::unique_ptr<InterProcessCounterChannel> InterProcessCounterChannel::connect(
             }
             seg = static_cast<InterProcessCounterSegment*>(mapped);
             // owner_pid == 0: created by an owner predating the stamp; nothing to check.
-            if (seg->owner_pid == 0 ||
-                ShmResourceTracker::is_process_alive(static_cast<pid_t>(seg->owner_pid), seg->owner_start_time)) {
+            if (seg->owner_pid == 0 || is_process_alive(static_cast<pid_t>(seg->owner_pid), seg->owner_start_time)) {
                 break;
             }
             ::munmap(seg, sizeof(InterProcessCounterSegment));

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
+#include "shm_owner_liveness.hpp"
 
 #include <mutex>
 #include <tt-logger/tt-logger.hpp>
@@ -77,7 +78,7 @@ std::string ShmResourceTracker::manifest_path_for_pid(pid_t pid) {
     return fmt::format("/dev/shm/tt_socket_manifest_{}", pid);
 }
 
-pid_t ShmResourceTracker::pid_from_shm_name(const std::string& shm_name) {
+pid_t pid_from_shm_name(const std::string& shm_name) {
     // Expected format: [/]tt_{prefix}_{pid}_{random}_{counter} (NamedShm::make_unique_name).
     const std::string filename = (!shm_name.empty() && shm_name[0] == '/') ? shm_name.substr(1) : shm_name;
     if (!filename.starts_with("tt_")) {
@@ -105,7 +106,7 @@ bool ShmResourceTracker::is_pid_alive(pid_t pid) {
     return kill(pid, 0) == 0 || errno == EPERM;
 }
 
-uint64_t ShmResourceTracker::process_start_time(pid_t pid) {
+uint64_t process_start_time(pid_t pid) {
     if (pid <= 0) {
         return 0;
     }
@@ -135,8 +136,8 @@ uint64_t ShmResourceTracker::process_start_time(pid_t pid) {
     }
 }
 
-bool ShmResourceTracker::is_process_alive(pid_t pid, uint64_t start_time) {
-    if (!is_pid_alive(pid)) {
+bool is_process_alive(pid_t pid, uint64_t start_time) {
+    if (!ShmResourceTracker::is_pid_alive(pid)) {
         return false;
     }
     if (start_time == 0) {
