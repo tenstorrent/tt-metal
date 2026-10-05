@@ -14,6 +14,7 @@ draft rows' own K/V (non-causal inside the block). The ring holds ``main_kv`` of
 frontier are masked by the frontier-dependent mask and overwritten later).
 """
 
+import copy
 import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -665,3 +666,67 @@ class DSparkDrafter:
             ttnn.matmul(me_all, self.conf_m, compute_kernel_config=self.ckc),
         )
         return {"tokens": toks, "logits": lgs, "conf": conf}
+
+    # -- whole-batch entry points used by SpecDecoder (the chunked drafter implements the same two) ----------------------------
+    def write_main_full(self, hidden, pos):
+        self.write_main(hidden, self.state.build_verify(pos))
+
+    def draft_full(self, t_next, f_next):
+        """t_next [U,1] uint32 RM (the bonus token of every user), f_next [U,1] int32 RM (frontier position) -> (dict, drafts [5U,1] uint32 block-index-major)."""
+        U = self.U
+        if getattr(self, "_noise", None) is None:
+            self._noise = ttnn.from_torch(
+                torch.full((4 * U, 1), NOISE_ID, dtype=torch.int32),
+                device=self.md,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.md),
+            )
+        tok_rows = ttnn.concat([t_next, self._noise], dim=0)
+        f_rows = ttnn.reshape(ttnn.concat([f_next] * BLOCK, dim=0), [BLOCK * U])
+        d = self.draft(tok_rows, f_rows)
+        return d, ttnn.concat(d["tokens"], dim=0)
+
+
+class ChunkedDrafter:
+    """The drafter for more than 6 users per mesh row: the mHC / router kernels take at most 32 token rows, and a draft block has 5 rows per user, so the users are split
+    into chunks of ``Uc`` users. The chunks SHARE every weight and the MoE blocks (same shapes); each chunk has its own attention rings. ``base`` is a DSparkDrafter
+    built for Uc users per mesh row."""
+
+    def __init__(self, base, n_chunks):
+        self.base, self.G, self.n = base, n_chunks, base.n
+        self.Uc, self.U = base.U, base.U * n_chunks
+        self.md = base.md
+        self.subs = [base]
+        for _ in range(n_chunks - 1):
+            sub = copy.copy(base)
+            sub.attn, sub.layers = [], []
+            for a, layer in zip(base.attn, base.layers):
+                a2 = copy.copy(a)
+                a2.cache = a._up(torch.zeros(base.U, 1, L_D, HEAD_DIM))  # own ring, shared weights / page tables
+                l2 = copy.copy(layer)
+                l2.attention = a2
+                sub.attn.append(a2)
+                sub.layers.append(l2)
+            self.subs.append(sub)
+        self.attn = [a for sub in self.subs for a in sub.attn]
+
+    def write_main_full(self, hidden, pos):
+        Tc = self.Uc * self.n
+        for c, sub in enumerate(self.subs):
+            h = ttnn.slice(hidden, [0, 0, c * Tc, 0], [1, 1, (c + 1) * Tc, hidden.shape[3]])
+            p = ttnn.slice(pos, [c * Tc], [(c + 1) * Tc])
+            sub.write_main(h, sub.state.build_verify(p))
+
+    def draft_full(self, t_next, f_next):
+        Uc = self.Uc
+        outs = []
+        for c, sub in enumerate(self.subs):
+            t = ttnn.slice(t_next, [c * Uc, 0], [(c + 1) * Uc, 1])
+            f = ttnn.slice(f_next, [c * Uc, 0], [(c + 1) * Uc, 1])
+            outs.append(sub.draft_full(t, f))
+        drafts = ttnn.concat(
+            [ttnn.concat([o[0]["tokens"][i] for o in outs], dim=0) for i in range(BLOCK)], dim=0
+        )  # [5U,1] block-index-major over ALL users
+        return outs[-1][0], drafts

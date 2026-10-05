@@ -101,6 +101,10 @@ SCENARIOS = [
     _s(f"{LONG}/input_data_long_32k.json", 4, 65536, 64, "isl32k_b4"),
     _s(f"{LONG}/input_data_long_64k.json", 1, 70000, 64, "isl64k_b1"),
     _s(f"{LONG}/input_data_long_64k.json", 4, 70000, 64, "isl64k_b4"),
+    _s(GSM, 32, 512, 384, "gsm8k_b32", instruct=True, stop_at_eos=True),
+    _s(f"{LONG}/input_data_long_2k.json", 32, 4096, 64, "isl2k_b32_ragged"),
+    _s(f"{LONG}/input_data_long_2k.json", 16, 4096, 64, "isl2k_b16_ragged"),
+    _s(f"{LONG}/input_data_long_2k.json", 16, 4096, 64, "isl2k_b16_ragged_u4"),
     _s(f"{LONG}/input_data_long_4k.json", 64, 8192, 64, "isl4k_b64"),
     _s(f"{LONG}/input_data_long_8k.json", 32, 16384, 64, "isl8k_b32"),
     _s(f"{LONG}/input_data_long_8k.json", 64, 16384, 64, "isl8k_b64"),
@@ -117,6 +121,27 @@ SCENARIOS = [
     _s(f"{LONG}/input_data_long_8k.json", 128, 16384, 32, "isl8k_b128"),
     _s(f"{LONG}/input_data_long_64k.json", 128, 70000, 64, "isl64k_b128"),
     _s(f"{LONG}/input_data_long_32k.json", 16, 40000, 64, "isl32k_b16"),
+    _s(GSM, 4, 512, 384, "gsm8k_b4", instruct=True, stop_at_eos=True),
+    _s(GSM, 8, 512, 384, "gsm8k_b8", instruct=True, stop_at_eos=True),
+    _s(f"{LONG}/input_data_long_4k.json", 8, 8192, 64, "isl4k_b8"),
+    _s(f"{LONG}/input_data_long_8k.json", 8, 16384, 64, "isl8k_b8"),
+    _s(f"{LONG}/input_data_long_32k.json", 8, 40000, 64, "isl32k_b8"),
+    _s(f"{LONG}/input_data_long_64k.json", 8, 70000, 64, "isl64k_b8"),
+    _s(f"{PROMPTS}/input_data_long_128k_exact.json", 8, 135000, 64, "isl128k_b8"),
+    _s(f"{PROMPTS}/input_data_long_256k_exact.json", 8, 270000, 64, "isl256k_b8"),
+    _s(f"{PROMPTS}/input_data_long_128k_exact.json", 16, 135000, 64, "isl128k_b16"),
+    _s(f"{PROMPTS}/input_data_long_256k_exact.json", 16, 270000, 64, "isl256k_b16"),
+    _s(GSM, 32, 512, 384, "gsm8k_b32", instruct=True, stop_at_eos=True),
+    _s(f"{LONG}/input_data_long_32k.json", 32, 40000, 64, "isl32k_b32"),
+    _s(f"{PROMPTS}/input_data_long_128k_exact.json", 32, 135000, 64, "isl128k_b32"),
+    _s(f"{PROMPTS}/input_data_long_256k_exact.json", 32, 270000, 64, "isl256k_b32"),
+    _s(f"{LONG}/input_data_long_32k.json", 64, 40000, 64, "isl32k_b64"),
+    _s(f"{PROMPTS}/input_data_long_128k_exact.json", 64, 135000, 64, "isl128k_b64"),
+    _s(f"{PROMPTS}/input_data_long_256k_exact.json", 64, 270000, 64, "isl256k_b64"),
+    _s(GSM, 128, 512, 384, "gsm8k_b128", instruct=True, stop_at_eos=True),
+    _s(f"{LONG}/input_data_long_32k.json", 128, 40000, 64, "isl32k_b128"),
+    _s(f"{PROMPTS}/input_data_long_128k_exact.json", 128, 135000, 64, "isl128k_b128"),
+    _s(f"{PROMPTS}/input_data_long_256k_exact.json", 128, 270000, 64, "isl256k_b128"),
     _s(f"{LONG}/input_data_long_128k.json", 1, 135000, 64, "isl128k_b1"),
     _s(f"{LONG}/input_data_long_128k.json", 4, 135000, 64, "isl128k_b4"),
     _s(f"{LONG}/input_data_long_256k.json", 4, 270000, 64, "isl256k_b4"),
@@ -235,6 +260,17 @@ def _run_demo(
 
     for batch_idx, prompts_batch in enumerate(repeat_batch_prompts):
         logger.info(f"Processing batch {batch_idx}")
+        if (
+            os.environ.get("DSV41_RAGGED") == "2"
+        ):  # uniform control: every user gets user-4's ragged truncation (same length for all)
+            q_ = prompts_batch[4]
+            prompts_batch = [q_[: max(64, int(len(q_) * (0.5 + 0.5 * 4 / len(prompts_batch))))]] * len(prompts_batch)
+        if (
+            os.environ.get("DSV41_RAGGED") == "1"
+        ):  # ragged prompt lengths: user u keeps the first (50 + 50 u / B) % of its prompt text
+            prompts_batch = [
+                p[: max(64, int(len(p) * (0.5 + 0.5 * u / len(prompts_batch))))] for u, p in enumerate(prompts_batch)
+            ]
         profiler.start("preprocess_prefill_inputs", iteration=batch_idx)
         input_tokens_prefill, encoded_prompts, decoding_pos, prefill_lens = preprocess_inputs_prefill(
             prompts_batch,
@@ -405,8 +441,9 @@ def _run_demo(
                 t_sp = time.perf_counter() - t_sp
             else:
                 gen_sp, st, t_sp = pre_spec
-            ident, first_div, gaps_div = 0, [], []
+            ident, first_div, gaps_div, table, suspects = 0, [], [], [], []
             for u in range(batch_size):
+                pg = float("nan")
                 ps = [t for t in plain_gen[u]]
                 sp = [t for t in gen_sp[u] if t != eos][: len(ps)]
                 L_ = min(len(ps), len(sp))
@@ -418,6 +455,15 @@ def _run_demo(
                     gaps_div.append(
                         f"user {u} token {dv}: top1-top2 gap plain {pg:.3f} / spec {generator.spec.gaps[u][dv - 1]:.3f}"
                     )
+                    if pg > 0.1:
+                        suspects.append(f"user {u} (mesh row {u // generator.m.U}) token {dv} plain gap {pg:.3f}")
+                mh = getattr(generator.spec, "m_hist", [[]] * batch_size)[u]
+                table.append(
+                    f"  user {u:3d} row {u // generator.m.U} len {decoding_pos[u]:5d}: first token {'ok' if int(first2[u]) == int(prefilled_token[u]) else 'MISMATCH'}, "
+                    f"first divergence {dv:4d}, plain gap {pg if dv > 0 and len(plain_gaps[u]) >= dv else float('nan'):.3f}, "
+                    f"spec gap {generator.spec.gaps[u][dv - 1] if dv > 0 and len(generator.spec.gaps[u]) >= dv else float('nan'):.3f}, "
+                    f"rounds {len(mh)}, mean accepted {sum(mh) / max(len(mh), 1):.2f}, tokens {len(gen_sp[u])}"
+                )
             tok_s_plain = 1000.0 / plain_ms if plain_ms == plain_ms and plain_ms > 0 else float("nan")
             logger.info(
                 f"=== SPEC k={spec_k} (batch {batch_size}): {st['rounds']} rounds, {st['accepted_per_round']:.3f} accepted drafts/round "
@@ -430,6 +476,16 @@ def _run_demo(
                 f"{int((first2[:batch_size] == prefilled_token[:batch_size]).sum())}/{batch_size}; spec wall incl. seeding {t_sp:.1f} s"
             )
             logger.info("SPEC divergence near-tie evidence: " + "; ".join(gaps_div))
+            logger.info("SPEC per-user table:\n" + "\n".join(table))
+            if os.environ.get("DSV41_RAGGED") in ("1", "2"):
+                for u in range(batch_size):
+                    logger.info(
+                        f"STREAMDUMP user {u} len {decoding_pos[u]} plain {plain_gen[u][:48]} spec {gen_sp[u][:48]}"
+                    )
+            logger.info(
+                "SPEC SUSPECTED REAL DIVERGENCES (plain top1-top2 gap > 0.1 at the first divergence): "
+                + ("none" if not suspects else "; ".join(suspects))
+            )
             for i in range(min(batch_size, int(os.environ.get("DSV41_SPEC_PRINT", "2")))):
                 logger.info(f"==USER {i} - SPEC OUTPUT\n{tokenizer.decode(gen_sp[i]).strip()}\n")
             generator.spec.release()
@@ -538,6 +594,7 @@ def test_dsv41_demo_session(mesh_device, device_params):
     for s in chosen:
         prompts, bs, rep, msl, mgt, pp, sp, dtr, ptr, pch, wu, ins, eos = s.values
         logger.info(f"=== session scenario {s.id} ===")
+        os.environ["DSV41_RAGGED"] = "1" if s.id.endswith("_ragged") else "2" if s.id.endswith("_ragged_u4") else "0"
         _run_demo(
             mesh_device,
             prompts,
