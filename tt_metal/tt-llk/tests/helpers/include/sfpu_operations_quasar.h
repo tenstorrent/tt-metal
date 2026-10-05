@@ -507,10 +507,10 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
  * @tparam TYPECAST_IN_FORMAT Source format for the typecast op (default Float32).
  * @tparam TYPECAST_OUT_FORMAT Destination format for the typecast op (default Float16_b).
  * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
- * @param sfpu_format SFPU math format; only the comp family reads it (see
- *        @ref call_zero_comp_operation_quasar), float-only ops ignore it.
+ * @param sfpu_format SFPU math format used by format-dependent ops such as comp and fill.
  * @param first Whether this tile starts a fresh top-to-bottom accumulation chain; only cumsum
  *        reads it. Defaults to true so each tile is independent.
+ * @param fill_const_value Constant written by fill; other operations ignore it.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
  */
 template <
@@ -521,7 +521,11 @@ template <
     int ITERATIONS                 = SFPU_ITERATIONS,
     DataFormat TYPECAST_IN_FORMAT  = DataFormat::Float32,
     DataFormat TYPECAST_OUT_FORMAT = DataFormat::Float16_b>
-void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format = DataFormat::Float32, [[maybe_unused]] const bool first = true)
+void call_unary_sfpu_operation_quasar(
+    std::uint32_t dst_index,
+    DataFormat sfpu_format                        = DataFormat::Float32,
+    [[maybe_unused]] const bool first             = true,
+    [[maybe_unused]] const float fill_const_value = 5.0f)
 {
     constexpr std::uint32_t kReluThresholdBits = 0x40A00000u; // 5.0f
     if constexpr (OPERATION == SfpuType::abs)
@@ -534,8 +538,6 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     }
     else if constexpr (OPERATION == SfpuType::fill)
     {
-        // Fills with 5, the Blackhole harness's fill_const_value (and the golden's const_value): Int32
-        // through the INT32 store, every float format through the float fill.
         if (sfpu_format == DataFormat::Int32)
         {
             SFPU_UNARY_CALL(
@@ -545,11 +547,11 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
                 (APPROX, ckernel::InstrModLoadStore::INT32, ITERATIONS),
                 dst_index,
                 VectorMode::RC,
-                5u /* fill value */);
+                static_cast<std::uint32_t>(fill_const_value));
         }
         else
         {
-            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_fill_, (APPROX, ITERATIONS), dst_index, VectorMode::RC, 5.0f /* fill value */);
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_fill_, (APPROX, ITERATIONS), dst_index, VectorMode::RC, fill_const_value);
         }
     }
     else if constexpr (OPERATION == SfpuType::exponential)

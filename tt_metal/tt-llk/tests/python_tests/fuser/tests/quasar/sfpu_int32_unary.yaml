@@ -50,8 +50,8 @@ operations:
         operation: [LogicalNotUnary, RightShift, UnaryBitwiseAnd, UnaryBitwiseOr, UnaryBitwiseXor, RsubScalarInt32, RemainderUint32, Identity, AbsInt32, Fill]
         approximation_mode: false
         iterations: 32
-        # Fill's golden constant; the Quasar harness fills with 5 (sfpu_operations_quasar.h).
-        fill_const_value: 5.0
+        # Exercise forwarding a non-default fill constant to both kernel and golden.
+        fill_const_value: 7.0
         block_size: [32, 32]
     pack:
       - {output: "sfpu_out", packer: "Packer", block_size: [32, 32]}
