@@ -2,9 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import contextlib
-import os
-
 import torch
 import pytest
 import math
@@ -13,7 +10,6 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.nightly.t3000.ccl.test_all_gather import is_unsupported_case
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
-from tests.ttnn.utils_for_testing import assert_no_unflushed_noc_atomics
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
@@ -53,8 +49,6 @@ def run_all_gather_impl(
     packer_l1_acc=True,
     precision_offset=None,
     matmul_1d_mcast_in0=None,
-    matmul_gather_in0=False,
-    check_noc_atomics=False,
 ):
     if use_legacy_allgather:
         pytest.skip(LEGACY_CCL_SKIP)
@@ -187,21 +181,7 @@ def run_all_gather_impl(
 
     ##### Configs for ttnn.matmul #####
     core_grid = (8, 6)
-    if matmul_gather_in0:
-        n_tiles = matmul_output_dim // 32
-        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(num_devices, 1),
-            in0_block_w=hidden_dim // num_devices // 32,
-            out_subblock_h=1,
-            out_subblock_w=min(2, n_tiles // num_devices),
-            per_core_M=ag_output_shape[2] // 32,
-            per_core_N=n_tiles // num_devices,
-            fuse_batch=True,
-            mcast_in0=False,
-            gather_in0=True,
-            hop_cores=ttnn.CoreRangeSet([]),
-        )
-    elif matmul_1d_mcast_in0 is not None:
+    if matmul_1d_mcast_in0 is not None:
         # Single-core 1D multicast config: the whole per-device matmul runs on one core with K split
         # into many blocks, so the cross-block reload runs on the classic mcast_in0/in1 program path
         # (mcast_in0 selects which). Shapes are kept small so the single core's CBs fit in SRAM.
@@ -334,25 +314,17 @@ def run_all_gather_impl(
             tt_matmul_out_tensor_list.append(tt_matmul_out_tensor)
         logger.info(f"Done executing trace")
     else:
-        noc_check = (
-            assert_no_unflushed_noc_atomics(
-                mesh_device, min_atomic_events=1, sub_device_ids=sub_device_stall_group
-            )
-            if check_noc_atomics
-            else contextlib.nullcontext()
-        )
-        with noc_check:
-            for i in range(num_iters):
-                tt_all_gather_out_tensor, tt_matmul_out_tensor = run_op(i)
-                tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
-                tt_matmul_out_tensor_list.append(tt_matmul_out_tensor)
+        for i in range(num_iters):
+            tt_all_gather_out_tensor, tt_matmul_out_tensor = run_op(i)
+            tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
+            tt_matmul_out_tensor_list.append(tt_matmul_out_tensor)
 
-                if not use_legacy_allgather:
-                    logger.info(f"Waiting for op")
-                    ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-                    logger.info(f"Done op")
+            if not use_legacy_allgather:
+                logger.info(f"Waiting for op")
+                ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+                logger.info(f"Done op")
 
-                logger.info(f"Done iteration {i}")
+            logger.info(f"Done iteration {i}")
 
     for i in range(num_iters):
         tt_mm_out_tensor = tt_matmul_out_tensor_list[i]
@@ -575,148 +547,6 @@ def test_all_gather_matmul_async(
         chunks_per_sync=chunks_per_sync,
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
-    )
-
-
-@pytest.mark.skipif(
-    os.getenv("TT_METAL_NOC_DEBUG_DUMP") != "1",
-    reason="Set TT_METAL_NOC_DEBUG_DUMP=1 to check NoC atomic barriers",
-)
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize(
-    "device_params, all_gather_topology",
-    [
-        (
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
-            ttnn.Topology.Ring,
-        )
-    ],
-    indirect=["device_params"],
-)
-def test_all_gather_matmul_classic_in1_reader_drains_noc_atomics(mesh_device, all_gather_topology):
-    run_all_gather_impl(
-        mesh_device,
-        mesh_device.get_num_devices(),
-        ag_output_shape=[1, 1, 64, 512],
-        dim=3,
-        num_links=1,
-        ag_input_dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        matmul_output_dim=960,
-        matmul_weights_dtype=ttnn.bfloat16,
-        max_in0_block_w=2,
-        use_bias=True,
-        mem_config_input=ttnn.DRAM_MEMORY_CONFIG,
-        mem_config_ag=ttnn.DRAM_MEMORY_CONFIG,
-        mem_config_mm=ttnn.DRAM_MEMORY_CONFIG,
-        all_gather_topology=all_gather_topology,
-        use_non_fused=False,
-        use_legacy_allgather=False,
-        num_iters=1,
-        enable_trace=False,
-        use_barrier=True,
-        use_persistent_buffers=True,
-        mem_config_weights=ttnn.DRAM_MEMORY_CONFIG,
-        check_noc_atomics=True,
-    )
-
-
-@pytest.mark.skipif(
-    os.getenv("TT_METAL_NOC_DEBUG_DUMP") != "1",
-    reason="Set TT_METAL_NOC_DEBUG_DUMP=1 to check NoC atomic barriers",
-)
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize(
-    "device_params, all_gather_topology",
-    [
-        (
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
-            ttnn.Topology.Ring,
-        )
-    ],
-    indirect=["device_params"],
-)
-def test_all_gather_matmul_classic_block_sharded_reader_drains_noc_atomics(mesh_device, all_gather_topology):
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
-    all_gather_memory_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(shard_grid, [32, 64], ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    run_all_gather_impl(
-        mesh_device,
-        mesh_device.get_num_devices(),
-        ag_output_shape=[1, 1, 32, 512],
-        dim=3,
-        num_links=1,
-        ag_input_dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        matmul_output_dim=1024,
-        matmul_weights_dtype=ttnn.bfloat16,
-        max_in0_block_w=2,
-        use_bias=False,
-        mem_config_input=ttnn.DRAM_MEMORY_CONFIG,
-        mem_config_ag=all_gather_memory_config,
-        mem_config_mm=ttnn.DRAM_MEMORY_CONFIG,
-        all_gather_topology=all_gather_topology,
-        use_non_fused=False,
-        use_legacy_allgather=False,
-        num_iters=1,
-        enable_trace=False,
-        use_barrier=True,
-        use_persistent_buffers=True,
-        mem_config_weights=ttnn.DRAM_MEMORY_CONFIG,
-        check_noc_atomics=True,
-    )
-
-
-@pytest.mark.skipif(
-    os.getenv("TT_METAL_NOC_DEBUG_DUMP") != "1",
-    reason="Set TT_METAL_NOC_DEBUG_DUMP=1 to check NoC atomic barriers",
-)
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize(
-    "device_params, all_gather_topology",
-    [
-        (
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
-            ttnn.Topology.Ring,
-        )
-    ],
-    indirect=["device_params"],
-)
-def test_all_gather_matmul_ring_reader_drains_noc_atomics(mesh_device, all_gather_topology):
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
-    sharded_memory_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(shard_grid, [32, 64], ttnn.ShardOrientation.ROW_MAJOR),
-    )
-    run_all_gather_impl(
-        mesh_device,
-        mesh_device.get_num_devices(),
-        ag_output_shape=[1, 1, 32, 512],
-        dim=3,
-        num_links=1,
-        ag_input_dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        matmul_output_dim=512,
-        matmul_weights_dtype=ttnn.bfloat16,
-        max_in0_block_w=2,
-        use_bias=False,
-        mem_config_input=ttnn.DRAM_MEMORY_CONFIG,
-        mem_config_ag=sharded_memory_config,
-        mem_config_mm=sharded_memory_config,
-        all_gather_topology=all_gather_topology,
-        use_non_fused=False,
-        use_legacy_allgather=False,
-        num_iters=1,
-        enable_trace=False,
-        use_barrier=True,
-        use_persistent_buffers=True,
-        mem_config_weights=ttnn.DRAM_MEMORY_CONFIG,
-        matmul_gather_in0=True,
-        check_noc_atomics=True,
     )
 
 

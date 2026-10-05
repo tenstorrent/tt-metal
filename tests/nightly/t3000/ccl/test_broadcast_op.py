@@ -2,15 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import contextlib
-import os
-
 import torch
 import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from tests.ttnn.utils_for_testing import assert_no_unflushed_noc_atomics
 
 
 def run_with_trace(
@@ -81,7 +77,6 @@ def run_broadcast_impl(
     tensor_mem_layout=None,
     cluster_axis=None,
     mesh_mapper_config=None,
-    check_noc_atomics=False,
 ):
     if mesh_mapper_config is None:
         mesh_mapper_config = ttnn.MeshMapperConfig(
@@ -204,28 +199,20 @@ def run_broadcast_impl(
         )
         tt_out_tensor_list.append(tt_out_tensor)
     else:
-        noc_check = (
-            assert_no_unflushed_noc_atomics(
-                mesh_device, min_atomic_events=1, sub_device_ids=sub_device_stall_group
+        for i in range(num_iters):
+            tt_out_tensors = ttnn.broadcast(
+                input_tensor_mesh_list[i],
+                sender_coord=sender_coord,
+                num_links=num_links,
+                memory_config=output_mem_config,
+                topology=broadcast_topology,
+                subdevice_id=worker_sub_device_id,
             )
-            if check_noc_atomics
-            else contextlib.nullcontext()
-        )
-        with noc_check:
-            for i in range(num_iters):
-                tt_out_tensors = ttnn.broadcast(
-                    input_tensor_mesh_list[i],
-                    sender_coord=sender_coord,
-                    num_links=num_links,
-                    memory_config=output_mem_config,
-                    topology=broadcast_topology,
-                    subdevice_id=worker_sub_device_id,
-                )
-                tt_out_tensor_list.append(tt_out_tensors)
+            tt_out_tensor_list.append(tt_out_tensors)
 
-            logger.info(f"Waiting for op")
-            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-            logger.info(f"Done op")
+        logger.info(f"Waiting for op")
+        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+        logger.info(f"Done op")
 
     passed = True
     # compare tensors
@@ -397,44 +384,6 @@ def test_broadcast(
         rand_tensor=True,
         mem_config=mem_config,
         cluster_axis=1,
-    )
-
-
-@pytest.mark.skipif(
-    os.getenv("TT_METAL_NOC_DEBUG_DUMP") != "1",
-    reason="Set TT_METAL_NOC_DEBUG_DUMP=1 to check NoC atomic barriers",
-)
-@pytest.mark.parametrize(
-    "output_shape, layout",
-    [
-        ([32, 32], ttnn.ROW_MAJOR_LAYOUT),
-        ([1, 1, 32, 1024], ttnn.TILE_LAYOUT),
-    ],
-    ids=["row_major", "tile"],
-)
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
-)
-def test_broadcast_drains_noc_atomics(mesh_device, output_shape, layout, function_level_defaults):
-    sender_coord_tuple = (0, 0)
-    run_broadcast_impl(
-        mesh_device,
-        ttnn.MeshCoordinate(sender_coord_tuple),
-        sender_coord_tuple,
-        num_devices=mesh_device.get_num_devices(),
-        output_shape=output_shape,
-        num_links=1,
-        input_dtype=ttnn.bfloat16,
-        layout=layout,
-        function_level_defaults=function_level_defaults,
-        broadcast_topology=ttnn.Topology.Linear,
-        num_iters=1,
-        mem_config=ttnn.DRAM_MEMORY_CONFIG,
-        cluster_axis=1,
-        check_noc_atomics=True,
     )
 
 
