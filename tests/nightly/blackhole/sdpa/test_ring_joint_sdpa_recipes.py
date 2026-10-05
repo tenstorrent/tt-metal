@@ -115,6 +115,9 @@ RING_CASES = {
     "odd_q288_k512_d128": (1, 2, 2, 576, 1024, 128, 288, 512, None, None, (4, 2)),
     # A one-tile Q shard (LTX audio): one Q tile row against the recipe's 2-row output groups.
     "one_tile_q_shard": (1, 2, 2, 32, 64, 128, 32, 64, None, None, (4, 2)),
+    # Four Q chunks per core: the recurrent state is checkpointed between them on every ring iteration.
+    "multi_q_checkpoint": (1, 4, 4, 1024, 1024, 128, 256, 512, None, None, (2, 2)),
+    "multi_q_checkpoint_wide": (1, 10, 10, 2368, 2368, 128, 288, 384, None, None, (8, 4)),
 }
 
 
