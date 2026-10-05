@@ -64,6 +64,12 @@ but laneMO's separate-buffer binary ops can adopt it.
 * **Full-space attestation** — bands tile `[0, 2^32)` with `covered == 2^32`
   asserted; the verdict is `BIT-EXACT-ALL-INPUTS` only if every band's
   `sem_sha == hand_sha`, else `DIVERGENT` with the DIFF bands as witness bands.
+* **Numerical admission is independent of equivalence** — when the golden leg
+  is enabled, `galaxy_numeric_admission.py` aggregates every band and slice.
+  The semantic arm must pass its absolute oracle and its global maximum ULP
+  must be no worse than hand in every populated input class. The hand arm's
+  absolute status is reported but does not veto a better semantic kernel.
+  Per-slice ULP comparisons are diagnostics, not composable admission gates.
 
 ## Files
 
@@ -72,6 +78,7 @@ but laneMO's separate-buffer binary ops can adopt it.
 | `binary_stream_lib.py` | device-independent core: joint enumeration, interleaved-payload packing, coverage checksums, per-leg digest, band verdict (reuses laneMK `first_divergence` + `texthash_gate`) |
 | `binary_stream_sweep.py` | orchestrator: resume-safe band sweep, one band-leg per pytest invocation on a flocked chip, `.text` identity gate, coverage assert, VERDICT |
 | `selftest_binary_stream.py` | mandated device-independent selftest (enumeration, payload+full-cover, known-equal, divergent+witness, text-gate) |
+| `galaxy_numeric_admission.py` | global same-oracle, per-class ULP admission; emits JSON and TSV beside the independent equivalence verdict |
 | `SFPU_STREAM_BINARY` hook in `test_sfpu_binary.py::_lanemk_run_binary_stream` | the device leg (persistent session; per dispatch inject interleaved A, clear Res, run, read, fold SHA) |
 | `lanejn_raw_b` path in `helpers/stimuli_config.py` | reusable raw-B (separate-buffer) inject path, additive + inert |
 

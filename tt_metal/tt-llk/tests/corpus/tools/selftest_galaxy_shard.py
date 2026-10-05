@@ -96,8 +96,19 @@ if diverge:
 )
 if ns.golden:
     (out / (ns.op + "-CORRECTNESS-VERDICT.txt")).write_text(
-        "OP=%s NUMERIC_GATE=PASS ULP_ADMISSION=PASS\\n" % ns.op
+        "OP=%s LOCAL_SEM_ABSOLUTE=PASS LOCAL_HAND_ORACLE_COMPLETE=PASS "
+        "LOCAL_HAND_ABSOLUTE=PASS "
+        "LOCAL_ULP_COMPARISON=PASS CAMPAIGN_ADMISSION=DEFERRED_GLOBAL\\n" % ns.op
     )
+    bands = out / "bands"
+    bands.mkdir()
+    classes = "in_domain_finite_normal:%d:0" % total
+    for leg in ("sem", "hand"):
+        (bands / ("b%d-%s.txt.corr" % (start, leg))).write_text(
+            "SFPU_CORRECTNESS,op=%s,leg=%s,patterns=%d,n_out_of_tol=0,"
+            "max_bf16_ulp=0,within_contract=True,class_ulp=%s\\n"
+            % (ns.op, leg, total, classes)
+        )
 if diverge:
     sys.exit(1)
 '''
@@ -114,6 +125,8 @@ class Farm:
         tools.mkdir(parents=True)
         (root / "farm/tests/python_tests").mkdir(parents=True)
         shutil.copy(HERE / "galaxy_combine.py", tools / "galaxy_combine.py")
+        shutil.copy(HERE / "galaxy_numeric_admission.py", tools / "galaxy_numeric_admission.py")
+        shutil.copy(HERE / "ulp_admission.py", tools / "ulp_admission.py")
         (tools / "elf_text_sha.py").write_text(STUB_ELF_SHA)
         for name in ("binary_stream_sweep.py", "fp32_stream_sweep.py"):
             (tools / name).write_text(STUB_STREAMER)
@@ -217,7 +230,10 @@ def test_partition_matrix(tmp: Path) -> None:
         rc, last, calls, _ = run_shard(
             tmp, f"matrix-{i}", NPAR=npar, BAND_BITS=band_bits, SPACE=space
         )
-        assert rc == 0, f"space={space} npar={npar} bb={band_bits}: rc={rc} :: {last}"
+        if space == TWO32:
+            assert rc == 0, f"space={space} npar={npar} bb={band_bits}: rc={rc} :: {last}"
+        else:
+            assert rc != 0, "partial golden evidence was admitted as a campaign"
         assert_exact_cover(calls, space, npar)
         # Tiling the requested space must never be reported as exhausting 2^32.
         expect = (
@@ -247,8 +263,8 @@ def test_reduced_space_cannot_certify(tmp: Path) -> None:
             f"a {space}-input sweep certified itself as exhaustive :: {last}"
         )
         assert f"VERDICT=BIT-EXACT-PARTIAL-{space}-OF-2^32" in last, last
-        # The comparison did pass, so rc stays 0; the LABEL carries the coverage.
-        assert rc == 0, f"space={space}: rc={rc} :: {last}"
+        # A partial run is useful evidence but not a numerical admission.
+        assert rc != 0, f"partial space={space} was admitted :: {last}"
     print("PASS a reduced SPACE reports PARTIAL, never ALL-INPUTS")
 
 
@@ -260,6 +276,7 @@ def test_per_op_compiler_flags_reach_every_slice(tmp: Path) -> None:
         NPAR=4,
         BAND_BITS=10,
         SPACE=1 << 12,
+        FULL_SPACE=1 << 12,
         FLAGS_VALUE=flags,
     )
     assert rc == 0, last
@@ -287,8 +304,10 @@ def test_divergence_is_reported_as_divergence(tmp: Path) -> None:
         assert "VERDICT=DIVERGENT" in last, f"{tag}: divergence lost :: {last}"
         assert "invalid=[]" in last, f"{tag}: a diverging slice was called dead :: {last}"
         assert f"covered={TWO32}" in last, last
-        # Still not bit-exact, so the driver's own status is non-zero.
-        assert rc != 0, f"{tag}: a divergence exited 0 :: {last}"
+        # Semantic uplift may diverge from hand and still be admitted by the
+        # absolute oracle plus global per-class ULP rule.
+        assert rc == 0, f"{tag}: oracle-clean uplift was refused :: {last}"
+        assert "numeric_admission=PASS" in last, last
     # And a chip that really dies is still a dead chip, even alongside divergence.
     rc, last, calls, _ = run_shard(
         tmp, "div-and-dead", diverge="7", dead="9", NPAR=32, BAND_BITS=23, SPACE=TWO32
@@ -359,7 +378,8 @@ def test_stale_verdict_cannot_stand_in_for_a_dead_slice(tmp: Path) -> None:
         % (7 * slice_size, slice_size, slice_size)
     )
     (out / "slice-7/myop-CORRECTNESS-VERDICT.txt").write_text(
-        "OP=myop NUMERIC_GATE=PASS ULP_ADMISSION=PASS\n"
+        "OP=myop LOCAL_SEM_ABSOLUTE=PASS LOCAL_HAND_ORACLE_COMPLETE=PASS "
+        "CAMPAIGN_ADMISSION=DEFERRED_GLOBAL\n"
     )
     record = work / "calls.jsonl"
     record.write_text("")
@@ -395,7 +415,8 @@ def test_combiner_refuses_empty_space() -> None:
                 "witness_bands=[]\n"
             )
             (d / "op-CORRECTNESS-VERDICT.txt").write_text(
-                "OP=op NUMERIC_GATE=PASS ULP_ADMISSION=PASS\n"
+                "OP=op LOCAL_SEM_ABSOLUTE=PASS LOCAL_HAND_ORACLE_COMPLETE=PASS "
+                "CAMPAIGN_ADMISSION=DEFERRED_GLOBAL\n"
             )
         summary, passed = galaxy_combine.combine(out, 4, 0, "op", True, False)
         assert not passed, summary
@@ -415,7 +436,8 @@ def test_combiner_failed_chips_override_present_verdicts() -> None:
                 "witness_bands=[]\n" % (chip * 5)
             )
             (d / "op-CORRECTNESS-VERDICT.txt").write_text(
-                "OP=op NUMERIC_GATE=PASS ULP_ADMISSION=PASS\n"
+                "OP=op LOCAL_SEM_ABSOLUTE=PASS LOCAL_HAND_ORACLE_COMPLETE=PASS "
+                "CAMPAIGN_ADMISSION=DEFERRED_GLOBAL\n"
             )
         summary, passed = galaxy_combine.combine(out, 2, 10, "op", True, False)
         assert passed, summary

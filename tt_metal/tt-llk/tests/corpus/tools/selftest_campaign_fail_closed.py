@@ -89,7 +89,9 @@ def test_partial_tolerance_coverage_refuses() -> None:
             out, "fp", "BIT-EXACT-ALL-INPUTS", fp_legs, 10
         )
         text = (out / "fp-CORRECTNESS-VERDICT.txt").read_text()
-        assert "NUMERIC_GATE=FAIL" in text and "NOT-ABSOLUTE-ULP-CERTIFIED" in text
+        assert "LOCAL_SEM_ABSOLUTE=PASS" in text
+        assert "LOCAL_HAND_ORACLE_COMPLETE=FAIL" in text
+        assert "NOT-ABSOLUTE-ULP-CERTIFIED" in text
 
         binary_legs = {"sem": binary._new_leg(), "hand": binary._new_leg()}
         binary_legs["sem"].update(checked=True, joints=10)
@@ -153,14 +155,16 @@ def test_per_class_ulp_admission() -> None:
             out, "op", "DIVERGENT", legs, 102
         )
         verdict = (out / "op-CORRECTNESS-VERDICT.txt").read_text()
-        assert "NUMERIC_GATE=PASS" in verdict and "ULP_ADMISSION=PASS" in verdict
+        assert "LOCAL_SEM_ABSOLUTE=PASS" in verdict
+        assert "LOCAL_ULP_COMPARISON=PASS" in verdict
 
         legs["sem"]["class_ulp"] = regressed
-        assert not fp32.write_correctness_ledger(
+        assert fp32.write_correctness_ledger(
             out, "op", "DIVERGENT", legs, 102
         )
         verdict = (out / "op-CORRECTNESS-VERDICT.txt").read_text()
-        assert "NUMERIC_GATE=FAIL" in verdict and "ULP_ADMISSION=FAIL" in verdict
+        assert "LOCAL_SEM_ABSOLUTE=PASS" in verdict
+        assert "LOCAL_ULP_COMPARISON=FAIL" in verdict
 
 
 def test_correctness_sidecar_identity_and_class_data() -> None:
@@ -265,9 +269,9 @@ def _write_slice(
     )
     if numeric:
         (out / f"{op}-CORRECTNESS-VERDICT.txt").write_text(
-            f"OP={op} NUMERIC_GATE=PASS ULP_ADMISSION=PASS "
-            "CONTRACT=TOLERANCE-PLUS-SAME-ORACLE-ULP-NONREGRESSION-"
-            "NOT-ABSOLUTE-ULP-CERTIFIED\n"
+            f"OP={op} LOCAL_SEM_ABSOLUTE=PASS "
+            "LOCAL_HAND_ORACLE_COMPLETE=PASS "
+            "CAMPAIGN_ADMISSION=DEFERRED_GLOBAL\n"
         )
 
 
@@ -280,12 +284,16 @@ def test_galaxy_combiner_refuses_nonpass() -> None:
         assert passed
         (out / "slice-1/op-CORRECTNESS-VERDICT.txt").unlink()
         summary, passed = galaxy_combine.combine(out, 2, 10, "op", True, False)
-        assert not passed and "numeric_gate=FAIL" in summary
+        assert not passed and "numeric_gate=LOCAL_SEM_FAIL" in summary
         _write = out / "slice-1/op-CORRECTNESS-VERDICT.txt"
-        _write.write_text("OP=op NUMERIC_GATE=PASS\n")
+        _write.write_text(
+            "OP=op LOCAL_SEM_ABSOLUTE=PASSIVE LOCAL_HAND_ORACLE_COMPLETE=PASS\n"
+        )
         summary, passed = galaxy_combine.combine(out, 2, 10, "op", True, False)
-        assert not passed and "numeric_gate=FAIL" in summary
-        _write.write_text("OP=op NUMERIC_GATE=PASS ULP_ADMISSION=PASS\n")
+        assert not passed and "numeric_gate=LOCAL_SEM_FAIL" in summary
+        _write.write_text(
+            "OP=op LOCAL_SEM_ABSOLUTE=PASS LOCAL_HAND_ORACLE_COMPLETE=PASS\n"
+        )
         (out / "slice-1/op-VERDICT.txt").write_text(
             "OP=op VERDICT=DIVERGENT start=5 total=5 covered=5 witness_bands=[1]\n"
         )
@@ -318,13 +326,13 @@ def test_galaxy_combiner_refuses_nonpass() -> None:
         summary, passed = galaxy_combine.combine(out, 2, 10, "op", True, False)
         assert not passed and "VERDICT=INCOMPLETE" in summary
 
-        # Token parsing is exact: PASSIVE must not satisfy NUMERIC_GATE=PASS.
+        # Token parsing is exact: PASSIVE must not satisfy the local semantic gate.
         _write_slice(out, 1, "op", "BIT-EXACT-ALL-INPUTS")
         (out / "slice-1/op-CORRECTNESS-VERDICT.txt").write_text(
-            "OP=op NUMERIC_GATE=PASSIVE\n"
+            "OP=op LOCAL_SEM_ABSOLUTE=PASSIVE LOCAL_HAND_ORACLE_COMPLETE=PASS\n"
         )
         summary, passed = galaxy_combine.combine(out, 2, 10, "op", True, False)
-        assert not passed and "numeric_gate=FAIL" in summary
+        assert not passed and "numeric_gate=LOCAL_SEM_FAIL" in summary
 
         summary, passed = galaxy_combine.combine(out, 2, 10, "op", False, False)
         assert passed and "numeric_gate=NOT_REQUESTED" in summary

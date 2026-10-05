@@ -51,21 +51,21 @@ def combine(
     if expected_per_slice is not None and expected_per_slice < 1:
         expected_per_slice = None
     all_equal = True
-    numeric_ok = True
+    local_sem_ok = True
     witness = []
     # Chips the driver saw exit non-zero are invalid by identity, whatever
     # verdict file happens to be sitting in their slice dir.
     invalid = set(failed_chips or ())
     if invalid:
         all_equal = False
-        numeric_ok = False
+        local_sem_ok = False
     for chip in range(npar):
         slice_dir = out / f"slice-{chip}"
         verdict_path = slice_dir / f"{op}-VERDICT.txt"
         if not verdict_path.exists():
             invalid.add(chip)
             all_equal = False
-            numeric_ok = False
+            local_sem_ok = False
             continue
         verdict_text = verdict_path.read_text()
         tokens = verdict_tokens(verdict_text)
@@ -86,7 +86,7 @@ def combine(
         ):
             invalid.add(chip)
             all_equal = False
-            numeric_ok = False
+            local_sem_ok = False
         if not (tokens.get("VERDICT") or "").startswith("BIT-EXACT"):
             all_equal = False
             bands = re.search(r"witness_bands=(\[.*\])", verdict_text)
@@ -98,10 +98,10 @@ def combine(
             )
             if (
                 correctness_tokens.get("OP") != op
-                or correctness_tokens.get("NUMERIC_GATE") != "PASS"
-                or correctness_tokens.get("ULP_ADMISSION") != "PASS"
+                or correctness_tokens.get("LOCAL_SEM_ABSOLUTE") != "PASS"
+                or correctness_tokens.get("LOCAL_HAND_ORACLE_COMPLETE") != "PASS"
             ):
-                numeric_ok = False
+                local_sem_ok = False
     invalid_list = sorted(invalid)
     # Tiling the requested range is necessary but NOT sufficient: `covered ==
     # space` only says the slices partitioned the space this run asked for.  A
@@ -123,8 +123,8 @@ def combine(
         verdict = "DIVERGENT"
     else:
         verdict = "INCOMPLETE"
-    numeric_status = (
-        "NOT_REQUESTED" if not golden else ("PASS" if numeric_ok else "FAIL")
+    numeric_status = "NOT_REQUESTED" if not golden else (
+        "DEFERRED_GLOBAL" if local_sem_ok else "LOCAL_SEM_FAIL"
     )
     summary = (
         f"OP={op} VERDICT={verdict} slices={npar} covered={covered} "
@@ -132,10 +132,9 @@ def combine(
         f"full_space={full_space} (full {space_label(full_space)}="
         f"{covered == full_space}) invalid={invalid_list} witness={witness} "
         f"numeric_gate={numeric_status} "
-        "numeric_contract=TOLERANCE-PLUS-SAME-ORACLE-ULP-NONREGRESSION-"
-        "NOT-ABSOLUTE-ULP-CERTIFIED"
+        "numeric_contract=LOCAL-SEM-ABSOLUTE-ONLY-GLOBAL-CLASS-ULP-DEFERRED"
     )
-    return summary, verdict.startswith("BIT-EXACT") and numeric_ok
+    return summary, verdict.startswith("BIT-EXACT") and local_sem_ok
 
 
 def main() -> int:

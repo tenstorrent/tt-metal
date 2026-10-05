@@ -21,6 +21,11 @@ re-implementation.
   object-identity map (op → sem/hand variant + `.text` sha; asserts sem≠hand).
 - `fp32_stream_sweep.py` — single-op orchestrator (resume-safe bands, per-band SHA compare,
   coverage assert, witness-band flag). Good for one op on one chip (quietbox).
+- `galaxy_numeric_admission.py` — whole-campaign numerical admission. It folds
+  every matching sem/hand golden sidecar, requires the semantic arm to satisfy
+  the absolute oracle, and requires its global maximum ULP to be no worse than
+  hand in every populated input class. Hand absolute tolerance is report-only:
+  a valid semantic uplift may improve a production kernel that is out of contract.
 - `run_op.sh` / `run_op_array.sh` — the fan-out as it actually ships: one Slurm
   job per op (`run_op_array.sh` is the job-array shim; Slurm is the queue), node-local
   RUNNER_TEMP, resume-safe from cached band SHAs, and a dead job only affects its own op.
@@ -94,6 +99,16 @@ For per-LLK tuning, `FLAGS_TSV` is `op<TAB>exact compiler flag string`.
 `--compile-consumer`; without it pytest computes the stock build key and cannot
 load an ELF staged under the selected configuration. The identity map still
 checks the resulting semantic and handwritten `.text` independently.
+
+With `GOLDEN=1` (the default), the final status is the global numerical
+admission, not sem-vs-hand equality. `<op>-VERDICT.txt` independently records
+`BIT-EXACT` or `DIVERGENT`; `<op>-NUMERIC-ADMISSION.{json,tsv}` records oracle
+availability, semantic and hand absolute status, global per-class ULP status,
+and the admission. A divergent row may pass only when the semantic absolute
+oracle passes and candidate max ULP is no worse than hand for every class.
+Missing/partial oracle evidence and partial input-space coverage fail closed.
+The per-slice correctness verdicts are diagnostics only; their local ULP
+comparisons are never ANDed into a campaign claim.
 
 ## Measured (BH silicon)
 ~2.5M patterns/s per chip ⇒ **~27.7 min/leg, ~55 min/op** full 2^32 on ONE chip (chunk size

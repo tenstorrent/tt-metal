@@ -278,4 +278,19 @@ combine_args=("$OUT" "$NPAR" "$SPACE" "$OP" "${GOLDEN:-1}" "$shard_rc"
 [ -n "$failed_chips" ] && combine_args+=(--failed-chips "$failed_chips")
 "$VENV" "$TOOLS/galaxy_combine.py" "${combine_args[@]}" | tee "$OUT/$OP-VERDICT.txt"
 combine_rc=${PIPESTATUS[0]}
-[ "$shard_rc" -eq 0 ] && [ "$combine_rc" -eq 0 ]
+if [ "${GOLDEN:-1}" = 1 ]; then
+  # Equivalence remains in OP-VERDICT.txt.  Numeric semantic-uplift admission
+  # is independent: fold all sidecars across the complete population before
+  # comparing per-class maxima.  A divergent semantic/hand pair may pass this
+  # gate; missing/incomplete oracle evidence may not.
+  "$VENV" "$TOOLS/galaxy_numeric_admission.py" "$OUT" "$OP" \
+    --out-prefix "$OUT/$OP-NUMERIC-ADMISSION" \
+    > "$OUT/$OP-NUMERIC-ADMISSION.log"
+  numeric_rc=$?
+  numeric_status=$(awk -F'\t' 'NR==2 {print $7}' \
+    "$OUT/$OP-NUMERIC-ADMISSION.tsv")
+  echo "$(cat "$OUT/$OP-VERDICT.txt") numeric_admission=$numeric_status"
+  [ "$shard_rc" -eq 0 ] && [ "$numeric_rc" -eq 0 ]
+else
+  [ "$shard_rc" -eq 0 ] && [ "$combine_rc" -eq 0 ]
+fi

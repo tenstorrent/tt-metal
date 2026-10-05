@@ -491,10 +491,18 @@ def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered):
         f"hand_max_ulp={hand['max_ulp']:.0f} sem_out={sem['n_out']} hand_out={hand['n_out']}",
         flush=True,
     )
-    gate_ok = leg_in(sem) and leg_in(hand) and ulp_ok
+    # Only semantic absolute correctness is composable per slice.  Hand
+    # tolerance and candidate<=hand are diagnostics here; the whole-campaign
+    # per-class maxima are compared by galaxy_numeric_admission.py.
+    sem_absolute_ok = leg_complete(sem) and leg_in(sem)
+    hand_oracle_complete = leg_complete(hand)
+    gate_ok = sem_absolute_ok and hand_oracle_complete
     (out / f"{op}-CORRECTNESS-VERDICT.txt").write_text(
-        f"OP={op} NUMERIC_GATE={'PASS' if gate_ok else 'FAIL'} "
-        f"ULP_ADMISSION={'PASS' if ulp_ok else 'FAIL'} ULP_REASON={ulp_reason} "
+        f"OP={op} LOCAL_SEM_ABSOLUTE={'PASS' if sem_absolute_ok else 'FAIL'} "
+        f"LOCAL_HAND_ORACLE_COMPLETE={'PASS' if hand_oracle_complete else 'FAIL'} "
+        f"LOCAL_HAND_ABSOLUTE={'PASS' if leg_in(hand) else 'FAIL'} "
+        f"LOCAL_ULP_COMPARISON={'PASS' if ulp_ok else 'FAIL'} ULP_REASON={ulp_reason} "
+        "CAMPAIGN_ADMISSION=DEFERRED_GLOBAL "
         "CONTRACT=TOLERANCE-PLUS-SAME-ORACLE-ULP-NONREGRESSION-"
         "NOT-ABSOLUTE-ULP-CERTIFIED "
         f"sem_joints={sem['joints']} hand_joints={hand['joints']} covered={covered} "

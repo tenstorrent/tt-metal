@@ -667,10 +667,20 @@ def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered, space=T
         f"hand_out_in_claim={hand['n_out_in_claim']}",
         flush=True,
     )
-    gate_ok = leg_in(sem) and leg_in(hand) and ulp_ok
+    # This file is slice-local.  Hand tolerance and candidate<=hand are useful
+    # diagnostics, but neither can be composed by AND across slices: admission
+    # compares the global per-class maxima.  Only semantic absolute correctness
+    # is a valid local fail-closed predicate.  galaxy_numeric_admission.py folds
+    # every sidecar and makes the campaign decision.
+    sem_absolute_ok = leg_complete(sem) and leg_in(sem)
+    hand_oracle_complete = leg_complete(hand)
+    gate_ok = sem_absolute_ok and hand_oracle_complete
     (out / f"{op}-CORRECTNESS-VERDICT.txt").write_text(
-        f"OP={op} NUMERIC_GATE={'PASS' if gate_ok else 'FAIL'} "
-        f"ULP_ADMISSION={'PASS' if ulp_ok else 'FAIL'} ULP_REASON={ulp_reason} "
+        f"OP={op} LOCAL_SEM_ABSOLUTE={'PASS' if sem_absolute_ok else 'FAIL'} "
+        f"LOCAL_HAND_ORACLE_COMPLETE={'PASS' if hand_oracle_complete else 'FAIL'} "
+        f"LOCAL_HAND_ABSOLUTE={'PASS' if leg_in(hand) else 'FAIL'} "
+        f"LOCAL_ULP_COMPARISON={'PASS' if ulp_ok else 'FAIL'} ULP_REASON={ulp_reason} "
+        "CAMPAIGN_ADMISSION=DEFERRED_GLOBAL "
         "CONTRACT=TOLERANCE-PLUS-SAME-ORACLE-ULP-NONREGRESSION-"
         "NOT-ABSOLUTE-ULP-CERTIFIED "
         f"sem_patterns={sem['patterns']} hand_patterns={hand['patterns']} covered={covered} "
