@@ -26,19 +26,21 @@ NUM_POINTS = 4
 
 BEV_SHAPES = {"tiny": (50, 50), "base": (200, 200)}
 
-# Spread of the random weights on top of the upstream init, so the test sees trained-like
-# behaviour: sampling offsets off the init pattern, attention logits that make the softmaxes
-# neither uniform nor one-hot, and refinement steps of the reference points (the (x, y) and z
-# rows of the reg branches' last Linear). Each is the largest per-layer value of the
-# BEVFormer-base checkpoint's weight spread, rounded up. A wider spread is not a stricter
-# test: every layer then moves the points by pixels in a random direction, which amplifies any
-# input error layer over layer (the trained decoder's points settle instead), until even the
-# fp32 reference stops agreeing with itself on bfloat16-rounded inputs.
-SAMPLING_OFFSET_STD_PX = 0.65
-ATTENTION_LOGIT_STD = 0.5
-SELF_ATTENTION_LOGIT_STD = 1.7
-REG_XY_WEIGHT_STD = 0.022
-REG_Z_WEIGHT_STD = 0.062
+# Spread of the random weights on top of the upstream init, set to what the BEVFormer-base
+# checkpoint's decoder shows on random_bev_features (per layer: sampling offsets 1.0-1.7 px off
+# the init pattern, cross-attention logits of std 0.45-0.9, self-attention logits of std
+# 2.2-5), so the test sees trained-like sampling and softmaxes.
+SAMPLING_OFFSET_STD_PX = 1.3
+ATTENTION_LOGIT_STD = 0.7
+SELF_ATTENTION_LOGIT_STD = 3.0
+
+# Scale of the reg branches' last Linear over PyTorch's default init, whose outputs have std
+# ~0.08. The checkpoint's branches refine the reference points by ~0.01 in logit space per
+# layer, and emit the other box channels with std ~0.6. Larger refinements move every later
+# layer's sampling points further and amplify the decoder's error through them; near-constant
+# box channels make their PCC measure noise.
+REG_REFINEMENT_SCALE = 0.125
+REG_BOX_SCALE = 7.5
 
 # Correlation length of the random BEV features, in cells. The encoder's BEV features are
 # spatially smooth; white noise instead makes every sample position error an O(1) change in
@@ -112,16 +114,23 @@ def build_reference_decoder(seed=0):
     return model.eval().requires_grad_(False)
 
 
-def build_reg_branches(seed=1):
-    """BEVFormer's per-layer box regression head: ``Linear-ReLU-Linear-ReLU-Linear(code_size)``,
-    PyTorch's default init with the refinement rows rescaled to ``REG_*_WEIGHT_STD``."""
-    torch.manual_seed(seed)
-    branches = nn.ModuleList(reg_branch(EMBED_DIMS, CODE_SIZE) for _ in range(NUM_LAYERS))
+def init_reg_branches(branches):
+    """Scale each branch's last Linear to trained-like outputs: REG_REFINEMENT_SCALE on the
+    rows that refine the reference points (cx, cy, cz), REG_BOX_SCALE on the others."""
+    scale = torch.full((CODE_SIZE, 1), REG_BOX_SCALE)
+    scale[CODE_XY] = scale[CODE_Z] = REG_REFINEMENT_SCALE
     with torch.no_grad():
         for branch in branches:
-            last = branch[-1]
-            for rows, std in ((CODE_XY, REG_XY_WEIGHT_STD), (CODE_Z, REG_Z_WEIGHT_STD)):
-                last.weight[rows] *= std / last.weight[rows].std()
+            branch[-1].weight.mul_(scale)
+            branch[-1].bias.mul_(scale[:, 0])
+    return branches
+
+
+def build_reg_branches(seed=1):
+    """BEVFormer's per-layer box regression head, ``Linear-ReLU-Linear-ReLU-Linear(code_size)``,
+    with init_reg_branches' scale."""
+    torch.manual_seed(seed)
+    branches = init_reg_branches(nn.ModuleList(reg_branch(EMBED_DIMS, CODE_SIZE) for _ in range(NUM_LAYERS)))
     return branches.eval().requires_grad_(False)
 
 

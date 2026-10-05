@@ -164,14 +164,15 @@ pytest models/experimental/bevformer/tests/pcc/test_decoder.py
 Tests the detection head, and the coder on the head's outputs.
 
 **What it tests:**
-- The tiny grid, a traced run on new BEV features, and batch size 2
+- The tiny grid, a traced run on new BEV features, batch size 2, and the base 200x200 grid
 - PCC 0.99 on the class logits and, channel by channel, on the box predictions, over all layers
   and on the last one; a joint PCC would be carried by the metre-scale centers alone
 - That the coder, on the head's outputs, selects pairs within twice the score error of the reference
   head's top 300, with the reference's scores and boxes at those pairs
 
-The base grid is an expected failure: with the head's queries and reference points, some
-non-center box channels fall below PCC 0.99 there; the centers do not.
+The dummy decoder and reg-branch weights are scaled to the BEVFormer-base checkpoint's
+statistics (sampling offsets, attention logits, reference-point refinements, box channel spread);
+`tests/decoder_common.py` lists them.
 
 **Usage:**
 ```bash

@@ -20,20 +20,7 @@ CASES = [
     # (name, bev_shape, batch_size, traced)
     pytest.param("tiny", BEV_SHAPES["tiny"], 1, False, id="tiny"),
     pytest.param("tiny-traced", BEV_SHAPES["tiny"], 1, True, id="tiny-traced"),
-    pytest.param(
-        "base",
-        BEV_SHAPES["base"],
-        1,
-        False,
-        id="base",
-        marks=pytest.mark.xfail(
-            reason="on the 200x200 grid, with the head's queries and reference points, the decoder's "
-            "layer outputs carry enough error that some box channels computed from them fall below "
-            "PCC 0.99; the centers, the decoder's float32 refined points, do not",
-            raises=AssertionError,
-            strict=True,
-        ),
-    ),
+    pytest.param("base", BEV_SHAPES["base"], 1, False, id="base"),
     # bs=2, so a mix-up in the queries repeated over the batch shows.
     pytest.param("tiny-bs2", BEV_SHAPES["tiny"], 2, False, id="tiny-bs2"),
 ]
