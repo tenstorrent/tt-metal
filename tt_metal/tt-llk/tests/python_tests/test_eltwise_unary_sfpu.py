@@ -1083,16 +1083,11 @@ def test_eltwise_unary_sfpu_signbit(
 # Both int32 extremes, both signs and zero. INT_MIN is deliverable because the words go in
 # as two's complement; StimuliSpec would clamp it to INT_MIN + 1, so the input is built here.
 _SIGNBIT_INT32_VALUES = [-(2**31), -100, -5, -1, 0, 1, 5, 100, 2**31 - 1]
+UINT32_MASK = 0xFFFFFFFF
+MAX_REPORTED_MISMATCHES = 8
 
 
-@parametrize(
-    dest_acc=[DestAccumulation.Yes],
-    input_dimensions=[[64, 64]],
-)
-def test_eltwise_unary_sfpu_signbit_int32(
-    dest_acc: DestAccumulation,
-    input_dimensions: list[int],
-):
+def test_eltwise_unary_sfpu_signbit_int32():
     """signbit on Int32 returns bit 31 of every two's-complement input word as 0 or 1.
 
     The values repeat over every lane rather than heading each face, so neighbouring rows
@@ -1102,6 +1097,8 @@ def test_eltwise_unary_sfpu_signbit_int32(
     _skip_coverage_unsupported(MathOperation.Signbit)
 
     formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [64, 64]
     num_elements = input_dimensions[0] * input_dimensions[1]
     tile_cnt = num_elements // (TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1])
     values = torch.tensor(_SIGNBIT_INT32_VALUES, dtype=torch.int32)
@@ -1162,8 +1159,8 @@ def test_eltwise_unary_sfpu_signbit_int32(
     assert mismatch.numel() == 0, (
         f"{mismatch.numel()} of {golden.numel()} words differ from bit 31 of the input; first: "
         + ", ".join(
-            f"[{i}] in {int(src_A[i])} got {int(res_tensor[i]) & 0xFFFFFFFF:#x} want {int(golden[i])}"
-            for i in mismatch[:8].tolist()
+            f"[{i}] in {int(src_A[i])} got {int(res_tensor[i]) & UINT32_MASK:#x} want {int(golden[i])}"
+            for i in mismatch[:MAX_REPORTED_MISMATCHES].tolist()
         )
     )
 
