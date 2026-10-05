@@ -21,7 +21,7 @@
  * @param dest_dfb_index     Dataflow buffer id to store transposed tiles (destination buffer)
  * @param total_tiles       Number of tiles to process and transpose
  */
-template <bool strip_rank_tags = false>
+template <bool strip_rank_tags = false, bool narrow_to_uint16 = false>
 FORCE_INLINE void transpose_and_pack(
     const uint32_t input_dfb_index, const uint32_t dest_dfb_index, const uint32_t total_tiles) {
     DataflowBuffer input_dfb(static_cast<uint16_t>(input_dfb_index));
@@ -44,6 +44,9 @@ FORCE_INLINE void transpose_and_pack(
             // Rank-stamped values carry stale rank tags in their low 16 bits; clear them so the
             // following Float32->bf16 pack is exact instead of RNE-rounding on tag bits.
             ckernel::topk_strip_rank_tags(0);
+        }
+        if constexpr (narrow_to_uint16) {
+            ckernel::topk_finalize_uint16_indices(0);
         }
         tile_regs_commit();
 
@@ -151,6 +154,8 @@ void kernel_main() {
     constexpr bool rank_stamped = get_arg(args::rank_stamped) == 1;
     // The rank tag IS the stable tie-break; the network itself runs unstable in rank-stamped mode.
     constexpr bool network_stable = stable_sort && !rank_stamped;
+    // The index intermediates are 32-bit and the output uint16 (the rank-stamped engine for a uint16 index output).
+    constexpr bool narrow_indices_at_output = get_arg(args::narrow_indices_at_output) == 1;
 
     // Initialize kernel components
     compute_kernel_hw_startup(input_val_dfb_index, input_ind_dfb_index, output_val_dfb_index);
@@ -460,6 +465,6 @@ void kernel_main() {
         // Transpose and pack final results to output buffers
         // Convert sorted results from HW back to WH format for output
         transpose_and_pack<rank_stamped>(result_prep_val_dfb_index, output_val_dfb_index, output_tiles);
-        transpose_and_pack(result_prep_ind_dfb_index, output_ind_dfb_index, output_tiles);
+        transpose_and_pack<false, narrow_indices_at_output>(result_prep_ind_dfb_index, output_ind_dfb_index, output_tiles);
     }  // core_loop loop
 }
