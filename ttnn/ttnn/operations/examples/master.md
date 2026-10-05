@@ -87,6 +87,18 @@ role. The example shrinks the NoC transaction size only to *create* that bottlen
 effect (up to ~1.7×, Wormhole B0; see [`report.md`](split_reader/report.md)) — transaction size is
 the knob, not the point.
 
+## ⭐⭐ T2 — [`bank_stagger`](bank_stagger/README.md)
+**Concept:** DRAM bank contention — rotate each core's read and write **issue order** so the grid's
+requests at any moment land on different banks instead of all on one.
+**Situation:** at each read step every core hits the same DRAM bank. Two splits cause it:
+**width blocking** (cores read the same rows at different width offsets; any arch) and **height
+blocking** on Blackhole (each core's rows start at `32·k`, always bank 0 with 8 banks).
+**Measured win:** the read switch is **1.06–1.08× faster** at 1024 B reads (1.0–1.4 µs per launch)
+and 1.04× at 128 B, in both cases (Blackhole, 110 cores, one block per core). The win is at launch
+start, so it matters for short ops with few blocks per core.
+**Gist:** issue row `(i + core % 32) % 32` instead of `i`. Each half is a compile-time switch
+(`stagger_reads`, `stagger_writes`), so flip it per call to check whether it pays on your shape.
+
 ## ⭐⭐ T2 — [`matmul_output_subblock`](matmul_output_subblock/README.md)
 **Concept:** matmul output-subblock shape → SRC-register operand reuse (via the `matmul_block` helper).
 **Situation:** you wrote a tiled matmul that produces **one output tile per block-matmul** (a `1×1` subblock), so every output tile re-loads both its A and B operand into the SRC registers; you wonder whether a bigger output subblock is worth it.
