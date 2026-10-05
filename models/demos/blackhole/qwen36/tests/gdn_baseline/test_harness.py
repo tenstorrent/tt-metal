@@ -11,9 +11,17 @@ import torch
 
 from models.demos.blackhole.qwen36.tests.gdn_baseline.accuracy import measure
 from models.demos.blackhole.qwen36.tests.gdn_baseline.cases import per_device_conv_columns
-from models.demos.deepseek_v3_d_p.reference.gdn.layer import GdnShape
+from models.demos.deepseek_v3_d_p.reference.gdn.config import GDNConfig
 
-TINY = GdnShape(hidden=64, num_k_heads=2, num_v_heads=6, head_k_dim=16, head_v_dim=16, conv_kernel=4, eps=1e-6)
+TINY = GDNConfig(
+    hidden_size=64,
+    num_key_heads=2,
+    num_value_heads=6,
+    head_k_dim=16,
+    head_v_dim=16,
+    conv_kernel_size=4,
+    norm_eps=1e-6,
+)
 
 
 def test_conv_columns_match_tp_weight_grouping():
@@ -24,11 +32,11 @@ def test_conv_columns_match_tp_weight_grouping():
     rows = torch.arange(TINY.conv_dim, dtype=torch.float32)[:, None].expand(-1, 3)
     grouped = prepare_gdn_qkv(
         rows,
-        TINY.key_dim,
-        TINY.value_dim,
-        TINY.num_k_heads,
+        TINY.k_dim,
+        TINY.v_dim,
+        TINY.num_key_heads,
         TINY.head_k_dim,
-        TINY.num_v_heads,
+        TINY.num_value_heads,
         TINY.head_v_dim,
         tp,
     )

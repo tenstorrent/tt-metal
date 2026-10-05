@@ -149,12 +149,12 @@ def _eager_pass(mesh, args, gdn, chunks: _Chunks, case: gc.GdnCase) -> list[dict
 
 
 def _accuracy(case: gc.GdnCase, reference: list[dict], device: list[dict], label: str, tp: int) -> dict:
-    shape = gc.gdn_shape(case.model)
+    config = gc.gdn_config(case.model)
     tensors = []
     for c, (ref, dev) in enumerate(zip(reference, device)):
         tensors.append(measure(ref["output"], dev["output"], f"{label}.chunk{c}.output"))
         tensors.append(measure(ref["recurrent"], dev["recurrent"], f"{label}.chunk{c}.recurrent_state"))
-        ref_conv = gc.per_device_conv_columns(ref["conv"], shape, tp)
+        ref_conv = gc.per_device_conv_columns(ref["conv"], config, tp)
         tensors.append(measure(ref_conv, dev["conv"], f"{label}.chunk{c}.conv_state"))
     tensors.append(
         measure(

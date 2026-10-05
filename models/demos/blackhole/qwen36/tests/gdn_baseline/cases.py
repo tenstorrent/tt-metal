@@ -24,7 +24,9 @@ from types import SimpleNamespace
 
 import torch
 
-from models.demos.deepseek_v3_d_p.reference.gdn.layer import PREFIX, WEIGHT_NAMES, GdnShape, gdn_layer_reference
+from models.demos.deepseek_v3_d_p.reference.gdn.config import GDNConfig
+from models.demos.deepseek_v3_d_p.reference.gdn.layer import gdn_forward_reference
+from models.demos.deepseek_v3_d_p.reference.gdn.weights import GDN_WEIGHT_NAMES
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[6]
 
@@ -38,6 +40,9 @@ RANDN_SEED = 1234
 SYNTHETIC_WEIGHT_SEED = 0  # random_gdn_state_dict(seed=layer index 0), as test_gdn_tp's "random" variant
 POISON_SCALE = 8.0
 GDN_LAYER = 0  # first linear-attention layer of every target model
+PREFIX = (
+    "linear_attn."  # checkpoint module of the GDN weights; the qwen36 device loader keeps it, the reference does not
+)
 
 TEXT_URL = "https://www.gutenberg.org/cache/epub/1342/pg1342.txt"  # Pride and Prejudice, public domain
 
@@ -121,8 +126,17 @@ def text_config(model: str) -> dict:
     return config.get("text_config", config)
 
 
-def gdn_shape(model: str) -> GdnShape:
-    return GdnShape.from_text_config(text_config(model))
+def gdn_config(model: str) -> GDNConfig:
+    tc = text_config(model)
+    return GDNConfig(
+        hidden_size=tc["hidden_size"],
+        num_key_heads=tc["linear_num_key_heads"],
+        num_value_heads=tc["linear_num_value_heads"],
+        head_k_dim=tc["linear_key_head_dim"],
+        head_v_dim=tc["linear_value_head_dim"],
+        conv_kernel_size=tc["linear_conv_kernel_dim"],
+        norm_eps=tc["rms_norm_eps"],
+    )
 
 
 def _file_sha256(path: Path) -> str:
@@ -166,7 +180,7 @@ def load_layer_weights(model: str, weights: str) -> dict[str, torch.Tensor]:
 
 def weights_fingerprint(state_dict: dict[str, torch.Tensor]) -> str:
     digest = hashlib.sha256()
-    for name in WEIGHT_NAMES:
+    for name in GDN_WEIGHT_NAMES:
         tensor = state_dict[PREFIX + name].contiguous()
         digest.update(name.encode())
         digest.update(tensor.view(torch.uint8 if tensor.dtype != torch.bfloat16 else torch.int16).numpy().tobytes())
@@ -207,16 +221,16 @@ def _layer0_input(model: str, token_ids: list[int]) -> torch.Tensor:
 
 def build_inputs(case: GdnCase) -> torch.Tensor:
     """[chunks * tokens, hidden] bf16 layer input; ragged padding rows hold poison."""
-    shape = gdn_shape(case.model)
+    config = gdn_config(case.model)
     total = len(case.valid_lengths) * case.tokens
     valid_total = sum(case.valid_lengths)
     if case.inputs == "randn":
         generator = torch.Generator().manual_seed(RANDN_SEED)
-        x = torch.randn(total, shape.hidden, generator=generator).to(torch.bfloat16)
+        x = torch.randn(total, config.hidden_size, generator=generator).to(torch.bfloat16)
     else:
         ids = _text_token_ids(case.model, valid_total)
         valid = _layer0_input(case.model, ids)
-        x = torch.empty(total, shape.hidden, dtype=torch.bfloat16)
+        x = torch.empty(total, config.hidden_size, dtype=torch.bfloat16)
         offset = 0
         for c, n in enumerate(case.valid_lengths):
             x[c * case.tokens : c * case.tokens + n] = valid[offset : offset + n]
@@ -224,7 +238,7 @@ def build_inputs(case: GdnCase) -> torch.Tensor:
     for c, n in enumerate(case.valid_lengths):
         if n < case.tokens:
             generator = torch.Generator().manual_seed(RANDN_SEED + 1 + c)
-            pad = torch.randn(case.tokens - n, shape.hidden, generator=generator) * POISON_SCALE
+            pad = torch.randn(case.tokens - n, config.hidden_size, generator=generator) * POISON_SCALE
             x[c * case.tokens + n : (c + 1) * case.tokens] = pad.to(torch.bfloat16)
     return x
 
@@ -263,11 +277,12 @@ def reference_cache_path(case: GdnCase, identity: dict) -> Path:
 
 
 def compute_reference(case: GdnCase, state_dict: dict[str, torch.Tensor], x: torch.Tensor) -> dict:
-    shape = gdn_shape(case.model)
+    config = gdn_config(case.model)
+    weights = {name: state_dict[PREFIX + name] for name in GDN_WEIGHT_NAMES}
     state = None
     chunks = []
     for c, n in enumerate(case.valid_lengths):
-        out, state = gdn_layer_reference(state_dict, shape, x[c * case.tokens : c * case.tokens + n], state)
+        out, state = gdn_forward_reference(x[c * case.tokens : c * case.tokens + n], weights, config, state)
         chunks.append({"output": out, "recurrent": state.recurrent.clone(), "conv": state.conv.clone()})
     return {"chunks": chunks}
 
@@ -287,12 +302,12 @@ def load_case(case: GdnCase, state_dict: dict[str, torch.Tensor]) -> dict:
     return entry
 
 
-def per_device_conv_columns(conv: torch.Tensor, shape: GdnShape, tp: int) -> torch.Tensor:
+def per_device_conv_columns(conv: torch.Tensor, config: GDNConfig, tp: int) -> torch.Tensor:
     """Reorder conv-state columns from HF order [q | k | v] to the TP order [q_0 k_0 v_0 | q_1 k_1 v_1 | ...]
     that ``tp_common.prepare_gdn_qkv`` gives the device (each rank's K heads with its contiguous V heads)."""
-    qs, ks, vs = conv.split([shape.key_dim, shape.key_dim, shape.value_dim], dim=-1)
+    qs, ks, vs = conv.split([config.q_dim, config.k_dim, config.v_dim], dim=-1)
     parts = []
     for rank in range(tp):
-        for t, width in ((qs, shape.key_dim // tp), (ks, shape.key_dim // tp), (vs, shape.value_dim // tp)):
+        for t, width in ((qs, config.q_dim // tp), (ks, config.k_dim // tp), (vs, config.v_dim // tp)):
             parts.append(t[..., rank * width : (rank + 1) * width])
     return torch.cat(parts, dim=-1)

@@ -11,77 +11,34 @@ gated RMSNorm (raw weight, norm before gate, ``silu(z)``); ``out_proj``. Everyth
 stored (bf16) weights, without the intermediate bf16 roundings of the HF module. The recurrence is the naive
 per-token form, not the chunked algorithm under test.
 
-``GdnState`` carries what a following chunk needs: the last ``K - 1`` raw (pre-conv) qkv rows in HF channel
-order and the recurrent state. Running chunks one after another with the returned state equals one pass over
-their concatenation.
+Weights use the canonical layer-local schema of ``weights.py`` (checkpoint ``linear_attn.*`` names without the
+prefix). ``GDNReferenceState`` carries what a following chunk needs: the last ``K - 1`` raw (pre-conv) qkv rows in
+HF channel order and the recurrent state. Running chunks one after another with the returned state equals one pass
+over their concatenation.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
 
-PREFIX = "linear_attn."
-WEIGHT_NAMES = (
-    "in_proj_qkv.weight",
-    "in_proj_z.weight",
-    "in_proj_a.weight",
-    "in_proj_b.weight",
-    "out_proj.weight",
-    "conv1d.weight",
-    "A_log",
-    "dt_bias",
-    "norm.weight",
-)
-
-
-@dataclass(frozen=True)
-class GdnShape:
-    hidden: int
-    num_k_heads: int
-    num_v_heads: int
-    head_k_dim: int
-    head_v_dim: int
-    conv_kernel: int
-    eps: float
-
-    @classmethod
-    def from_text_config(cls, text_config: dict) -> "GdnShape":
-        return cls(
-            hidden=text_config["hidden_size"],
-            num_k_heads=text_config["linear_num_key_heads"],
-            num_v_heads=text_config["linear_num_value_heads"],
-            head_k_dim=text_config["linear_key_head_dim"],
-            head_v_dim=text_config["linear_value_head_dim"],
-            conv_kernel=text_config["linear_conv_kernel_dim"],
-            eps=text_config["rms_norm_eps"],
-        )
-
-    @property
-    def key_dim(self) -> int:
-        return self.num_k_heads * self.head_k_dim
-
-    @property
-    def value_dim(self) -> int:
-        return self.num_v_heads * self.head_v_dim
-
-    @property
-    def conv_dim(self) -> int:
-        return 2 * self.key_dim + self.value_dim
+from models.demos.deepseek_v3_d_p.reference.gdn.config import GDNConfig
+from models.demos.deepseek_v3_d_p.reference.gdn.weights import GDN_WEIGHT_NAMES, validate_gdn_weights
 
 
 @dataclass
-class GdnState:
+class GDNReferenceState:
     conv: torch.Tensor  # [K - 1, conv_dim] fp32, raw qkv rows preceding the next chunk (HF channel order)
     recurrent: torch.Tensor  # [Nv, K, V] fp32
 
     @classmethod
-    def zeros(cls, shape: GdnShape) -> "GdnState":
+    def zeros(cls, config: GDNConfig) -> "GDNReferenceState":
         return cls(
-            conv=torch.zeros(shape.conv_kernel - 1, shape.conv_dim),
-            recurrent=torch.zeros(shape.num_v_heads, shape.head_k_dim, shape.head_v_dim),
+            conv=torch.zeros(config.conv_kernel_size - 1, config.conv_dim),
+            recurrent=torch.zeros(config.num_value_heads, config.head_k_dim, config.head_v_dim),
         )
 
 
@@ -105,17 +62,23 @@ def delta_rule_recurrence(
     return out, s
 
 
-def gdn_layer_reference(
-    weights: dict[str, torch.Tensor], shape: GdnShape, x: torch.Tensor, state: GdnState | None = None
-) -> tuple[torch.Tensor, GdnState]:
-    """One chunk of the GDN layer. x [T, hidden] -> (out [T, hidden] fp32, state after the chunk)."""
+def gdn_forward_reference(
+    hidden_states: torch.Tensor,
+    weights: Mapping[str, torch.Tensor],
+    config: GDNConfig,
+    state: GDNReferenceState | None = None,
+) -> tuple[torch.Tensor, GDNReferenceState]:
+    """One chunk of the GDN layer. hidden_states [T, hidden] -> (out [T, hidden] fp32, state after the chunk)."""
+    if hidden_states.ndim != 2 or hidden_states.shape[-1] != config.hidden_size:
+        raise ValueError(f"hidden_states shape {tuple(hidden_states.shape)} must be [T, {config.hidden_size}]")
+    validate_gdn_weights(weights, config)
     if state is None:
-        state = GdnState.zeros(shape)
-    w = {name: weights[PREFIX + name].float() for name in WEIGHT_NAMES}
-    xf = x.float()
+        state = GDNReferenceState.zeros(config)
+    w = {name: weights[name].float() for name in GDN_WEIGHT_NAMES}
+    xf = hidden_states.float()
     T = xf.shape[0]
-    Nk, Nv, Dk, Dv = shape.num_k_heads, shape.num_v_heads, shape.head_k_dim, shape.head_v_dim
-    kc = shape.conv_kernel
+    Nk, Nv, Dk, Dv = config.num_key_heads, config.num_value_heads, config.head_k_dim, config.head_v_dim
+    kc = config.conv_kernel_size
 
     qkv = xf @ w["in_proj_qkv.weight"].T  # [T, C]
     z = xf @ w["in_proj_z.weight"].T  # [T, Nv*Dv]
@@ -126,22 +89,21 @@ def gdn_layer_reference(
     taps = w["conv1d.weight"][:, 0, :]  # [C, K]; tap j multiplies row t - (K-1) + j
     conv = sum(padded[j : j + T] * taps[:, j] for j in range(kc))
     conv = F.silu(conv)
-    q = conv[:, : shape.key_dim].reshape(T, Nk, Dk)
-    k = conv[:, shape.key_dim : 2 * shape.key_dim].reshape(T, Nk, Dk)
-    v = conv[:, 2 * shape.key_dim :].reshape(T, Nv, Dv)
+    q = conv[:, : config.q_dim].reshape(T, Nk, Dk)
+    k = conv[:, config.q_dim : config.q_dim + config.k_dim].reshape(T, Nk, Dk)
+    v = conv[:, config.q_dim + config.k_dim :].reshape(T, Nv, Dv)
 
     beta = torch.sigmoid(b)
     g = -w["A_log"].exp() * F.softplus(a + w["dt_bias"])
     q = _l2norm(q) * Dk**-0.5
     k = _l2norm(k)
-    group = Nv // Nk
-    q = q.repeat_interleave(group, dim=1)
-    k = k.repeat_interleave(group, dim=1)
+    q = q.repeat_interleave(config.group, dim=1)
+    k = k.repeat_interleave(config.group, dim=1)
 
     o, recurrent = delta_rule_recurrence(q, k, v, g, beta, state.recurrent)
 
-    normed = o * torch.rsqrt(o.pow(2).mean(-1, keepdim=True) + shape.eps) * w["norm.weight"]
+    normed = o * torch.rsqrt(o.pow(2).mean(-1, keepdim=True) + config.norm_eps) * w["norm.weight"]
     gated = (normed * F.silu(z.reshape(T, Nv, Dv))).reshape(T, Nv * Dv)
     out = gated @ w["out_proj.weight"].T
     new_conv = padded[-(kc - 1) :].clone()
-    return out, GdnState(conv=new_conv, recurrent=recurrent)
+    return out, GDNReferenceState(conv=new_conv, recurrent=recurrent)
