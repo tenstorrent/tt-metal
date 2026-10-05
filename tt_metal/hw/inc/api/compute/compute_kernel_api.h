@@ -31,9 +31,9 @@
 #include "llk_math_binary_api.h"
 #include "llk_math_reduce_api.h"
 // SFPU op kernels invoked directly via the unary macros below. The macros
-// themselves come from llk_math_eltwise_unary_sfpu_macros.h. These BH/WH-only
-// kernels (log, abs, ...) have no Quasar implementation; sigmoid/silu are
-// shared and included for Quasar in the #else branch below.
+// themselves come from llk_math_eltwise_unary_sfpu_macros.h. The Quasar
+// branch below includes the subset Quasar implements (Quasar has no signbit,
+// unary max/min or pack-thread SFPU).
 #include "ckernel_sfpu_sigmoid.h"
 #include "ckernel_sfpu_silu.h"
 #include "ckernel_sfpu_log.h"
@@ -55,9 +55,10 @@
 #include "ckernel_sfpu_silu.h"
 #include "ckernel_sfpu_tanh.h"
 #include "ckernel_sfpu_square.h"
-// Ported SFPI kernels behind the log, sign, tiled_prod, power, exp2, heaviside, expm1,
+// Ported SFPI kernels behind the log, abs, sign, tiled_prod, power, exp2, heaviside, expm1,
 // add_top_row and alt_complex_rotate90 entry points below.
 #include "ckernel_sfpu_log.h"
+#include "ckernel_sfpu_abs.h"
 #include "ckernel_sfpu_sign.h"
 #include "ckernel_sfpu_tiled_prod.h"
 #include "ckernel_sfpu_unary_power.h"
@@ -370,7 +371,7 @@ ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
         base_scale));
 }
 
-#ifndef ARCH_QUASAR  // pack-thread SFPU, signbit and abs are BH/WH only
+#ifndef ARCH_QUASAR  // pack-thread SFPU and signbit are BH/WH only
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tanh_tile_init_pack() {
     PACK(SFPU_UNARY_INIT_FN(tanh, sfpu::tanh_init, (fast_and_approx, is_fp32_dest_acc_en)));
@@ -439,6 +440,8 @@ ALWI void signbit_tile_int32(uint32_t idst) {
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_signbit_int32, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
 }
 
+#endif  // !ARCH_QUASAR
+
 // clang-format off
 /**
  * Performs element-wise computation of absolute value on each element of a tile
@@ -481,8 +484,6 @@ ALWI void abs_tile_init() { MATH(SFPU_UNARY_INIT(abs)); }
 ALWI void abs_tile_int32(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs_int32, (APPROX), idst, VectorMode::RC));
 }
-
-#endif  // !ARCH_QUASAR
 
 // clang-format off
 /**
