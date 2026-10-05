@@ -347,6 +347,20 @@ def test_multi_tile_bfp8_reads_every_tile_at_the_padded_stride():
     assert back.tolist() == torch.cat(tiles).tolist()
 
 
+@pytest.mark.parametrize("datums", [TILE + 1, 2 * TILE - 1, TILE // 2])
+def test_a_partial_tile_is_refused_rather_than_dropped(datums):
+    with pytest.raises(ValueError, match="whole number"):
+        QUASAR.pack_to_l1(torch.ones(datums), DataFormat.Float32)
+
+
+def test_an_explicit_tile_count_packs_a_prefix_but_not_past_the_end():
+    x = torch.arange(2 * TILE, dtype=torch.float32)
+    l1 = QUASAR.pack_to_l1(x, DataFormat.Float32, tile_count=1)
+    assert QUASAR.unpack_from_l1(l1, DataFormat.Float32).tolist() == x[:TILE].tolist()
+    with pytest.raises(ValueError, match="tile_count=3"):
+        QUASAR.pack_to_l1(x, DataFormat.Float32, tile_count=3)
+
+
 # ---------------------------------------------------------------------------
 # Packer ReLU and its 16-bit threshold field
 
