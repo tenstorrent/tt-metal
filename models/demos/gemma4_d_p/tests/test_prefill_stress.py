@@ -103,7 +103,8 @@ def test_prefill_stress(mesh_device, num_iters, n_chunks, tmp_path):
                     runtime.validate_chunk(slot, start, end)
                     stage_start = time.perf_counter()
                     ttnn.copy_host_to_device_tensor(host_chunks[slot][chunk], runtime.input_tokens)
-                    runtime.model.prefill_metadata.update(slot_idx=slot, actual_start=start, actual_end=end)
+                    # Same staging as Gemma4PrefillRuntime.prefill_chunk: slot / KV position metadata and positions.
+                    runtime._stage_positions(slot, start)
                     ttnn.synchronize_device(mesh_device)
                     staging_ms = (time.perf_counter() - stage_start) * 1000
                     forward_start = time.perf_counter()
