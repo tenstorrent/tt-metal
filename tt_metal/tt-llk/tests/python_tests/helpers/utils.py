@@ -385,13 +385,11 @@ def _bfp_block_aware_compare(
     # so on ULP 0: the first has no finite lane to judge, and in the second every finite
     # lane is exactly 0, which `tiny_ok` accepts on absolute closeness below.
     nonzero = block_max > 0
-    # log2 in float64 so floor() lands on the same integer math.log2 gave per block;
-    # in float32 an exact power of two can come back a hair under and floor a step early.
     safe_max = torch.where(nonzero, block_max, torch.ones_like(block_max)).double()
     one_ulp = (
         torch.where(
             nonzero,
-            torch.exp2(torch.floor(torch.log2(safe_max)) - (mantissa_bits - 1)),
+            torch.exp2(floor_log2(safe_max) - (mantissa_bits - 1)),
             torch.zeros_like(safe_max),
         )
         .float()
@@ -495,7 +493,7 @@ def _mxint_block_aware_compare(
     amax_safe = torch.where(nonzero, block_amax, torch.ones_like(block_amax))
     scale_factor = torch.where(
         nonzero,
-        torch.exp2(torch.floor(torch.log2(amax_safe))),
+        torch.exp2(floor_log2(amax_safe)),
         torch.zeros_like(block_amax),
     )
     # Relative float32-rounding guard (~1 ULP at the block magnitude) instead of a
@@ -525,6 +523,22 @@ _MXFP_COMPARE_PARAMS = {
 }
 
 
+def floor_log2(values: torch.Tensor) -> torch.Tensor:
+    """``floor(log2(x))`` for positive `x`, computed exactly.
+
+    ``torch.log2`` on a float32 immediately below a power of two rounds up to
+    the exact integer, so ``floor`` lands a binade high. ``frexp`` returns the
+    exponent directly -- ``value = mantissa * 2^exp`` with the mantissa in
+    [0.5, 1), so the floor is ``exp - 1`` with no rounding involved.
+
+    The packers derive the E8M0 block scale this way, so the comparators have
+    to as well: disagreeing about a block's scale means disagreeing about its
+    tolerance, on exactly the datums a boundary-value test would use.
+    """
+    _, exponent = torch.frexp(values)
+    return (exponent - 1).to(values.dtype)
+
+
 def mxfp_local_step(
     magnitude: torch.Tensor,
     mantissa_bits: int,
@@ -548,7 +562,7 @@ def mxfp_local_step(
     n = magnitude.numel()
     safe = magnitude > 0
     exp = torch.zeros_like(magnitude)
-    exp[safe] = torch.floor(torch.log2(magnitude[safe]))
+    exp[safe] = floor_log2(magnitude[safe])
     local_ulp = torch.where(
         safe, torch.pow(2.0, exp - mantissa_bits), torch.zeros_like(magnitude)
     )
@@ -566,9 +580,7 @@ def mxfp_local_step(
     # (15 for E5M2's 57344, 8 for E4M3's 448, 2 for E2M1's 6.0).
     elem_exp_max_unbiased = math.floor(math.log2(element_max_normal))
     scale_exp = torch.zeros_like(block_max)
-    scale_exp[has_nonzero] = (
-        torch.floor(torch.log2(block_max[has_nonzero])) - elem_exp_max_unbiased
-    )
+    scale_exp[has_nonzero] = floor_log2(block_max[has_nonzero]) - elem_exp_max_unbiased
     block_min_ulp = (
         torch.pow(2.0, scale_exp) * element_min_subnormal
     ).repeat_interleave(block_size)[:n]
