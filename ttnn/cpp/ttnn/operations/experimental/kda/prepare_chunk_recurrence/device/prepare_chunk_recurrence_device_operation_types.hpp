@@ -14,6 +14,8 @@ namespace ttnn::experimental::prim {
 struct PrepareChunkRecurrenceParams {
     uint32_t sequence_parallel_axis;
     uint32_t num_heads;
+    // Q/K heads; V head hv reads K head hv / (num_heads / num_key_heads). Part of program identity.
+    uint32_t num_key_heads;
     uint32_t num_chunks;
     uint32_t key_dim;
     uint32_t value_dim;

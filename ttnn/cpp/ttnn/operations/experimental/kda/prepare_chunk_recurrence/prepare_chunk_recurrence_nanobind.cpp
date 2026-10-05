@@ -28,16 +28,21 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
         outputs are unspecified. Bounds are caller preconditions, not read on host.
 
         Args:
-            q (ttnn.Tensor): Flat queries ``[1, T, H*K]`` in BFLOAT16.
-            k (ttnn.Tensor): Flat keys ``[1, T, H*K]`` in BFLOAT16.
+            q (ttnn.Tensor): Flat queries ``[1, T, Hk*K]`` in BFLOAT16.
+            k (ttnn.Tensor): Flat keys ``[1, T, Hk*K]`` in BFLOAT16.
             v (ttnn.Tensor): Flat values ``[1, T, H*V]`` in BFLOAT16.
-            g (ttnn.Tensor): Flat per-key log decays ``[1, T, H*K]`` in BFLOAT16.
+            g (ttnn.Tensor): Flat per-key log decays ``[1, T, H*K]`` in BFLOAT16, per
+                value head.
             beta (ttnn.Tensor): Per-token update strengths ``[H, N, 32, 1]`` in
                 FLOAT32, where ``N = T / 32``.
-            num_heads (int): Number of heads ``H``. Flat Q/K/G and V widths must be
-                divisible by ``H``.
+            num_heads (int): Number of value heads ``H``; outputs are per value head.
+                Flat G and V widths must be divisible by ``H``.
 
         Keyword Args:
+            num_key_heads (int, optional): Number of query/key heads ``Hk``. Defaults
+                to ``H``. ``H`` must be divisible by ``Hk``; value head ``h`` uses
+                query/key head ``h // (H / Hk)``, the order of expanding Q and K with
+                ``repeat_interleave(H / Hk)``, and the outputs equal that expanded call.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
@@ -71,6 +76,7 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
         nb::arg("beta").noconvert(),
         nb::arg("num_heads"),
         nb::kw_only(),
+        nb::arg("num_key_heads") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("output_bf16_mask") = 0,
