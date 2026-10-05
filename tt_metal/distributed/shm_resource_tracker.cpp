@@ -327,10 +327,14 @@ bool read_manifest(const std::string& path, dev_t& dev, ino_t& ino, ManifestCont
     char buf[4096];
     for (;;) {
         const ssize_t n = ::read(fd, buf, sizeof(buf));
-        if (n < 0 && errno == EINTR) {
-            continue;
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            ::close(fd);
+            return false;  // a partial read must not be judged: entries would be missed
         }
-        if (n <= 0) {
+        if (n == 0) {
             break;
         }
         text.append(buf, static_cast<std::size_t>(n));
@@ -380,9 +384,9 @@ StaleScan collect_stale_shm_resources() {
         pid_t manifest_pid = extract_pid_from_manifest_name(name);
         if (manifest_pid > 0) {
             StaleManifest stale;
-            stale.path = "/dev/shm/" + name;
+            stale.manifest.path = "/dev/shm/" + name;
             ManifestContents contents;
-            if (!read_manifest(stale.path, stale.dev, stale.ino, contents)) {
+            if (!read_manifest(stale.manifest.path, stale.manifest.dev, stale.manifest.ino, contents)) {
                 continue;  // gone already; nothing to judge
             }
             bool is_stale = false;
@@ -400,7 +404,13 @@ StaleScan collect_stale_shm_resources() {
             }
             if (is_stale) {
                 stale.shm_names = std::move(contents.shm_names);
-                stale.file_paths = std::move(contents.file_paths);
+                for (auto& file_path : contents.file_paths) {
+                    struct stat st{};
+                    if (::stat(file_path.c_str(), &st) != 0) {
+                        continue;  // already gone; nothing to remove
+                    }
+                    stale.files.push_back({std::move(file_path), st.st_dev, st.st_ino});
+                }
                 scan.manifests.push_back(std::move(stale));
             }
             continue;
@@ -417,43 +427,54 @@ StaleScan collect_stale_shm_resources() {
     return scan;
 }
 
+namespace {
+
+// True while `path` still names the file that was judged (same device and inode).
+bool still_the_judged_file(const JudgedFile& file) {
+    struct stat st{};
+    return ::stat(file.path.c_str(), &st) == 0 && st.st_dev == file.dev && st.st_ino == file.ino;
+}
+
+}  // namespace
+
 void reap_stale_shm_resources(const StaleScan& scan) {
     for (const auto& manifest : scan.manifests) {
+        // Every writer removes its resources before its manifest (shutdown,
+        // signal cleanup, this scan), so a manifest that is gone or has been
+        // replaced since it was judged means its resources are gone too; the
+        // replacement belongs to a live owner and is left alone. The window
+        // between these checks and the removals below is a few instructions
+        // and is as small as the filesystem API allows.
+        if (!still_the_judged_file(manifest.manifest)) {
+            log_info(
+                LogMetal,
+                "ShmResourceTracker: stale manifest '{}' changed since it was judged; left for the next scan",
+                manifest.manifest.path);
+            continue;
+        }
         for (const auto& shm_name : manifest.shm_names) {
             if (shm_unlink(shm_name.c_str()) == 0) {
                 log_info(LogMetal, "ShmResourceTracker: removed stale shm '{}'", shm_name);
             }
         }
-        for (const auto& file_path : manifest.file_paths) {
-            if (std::remove(file_path.c_str()) == 0) {
-                log_info(LogMetal, "ShmResourceTracker: removed stale file '{}'", file_path);
+        for (const auto& file : manifest.files) {
+            // Descriptor files are republished at the same path by a replacement
+            // owner; only the file that was judged may go.
+            if (still_the_judged_file(file) && std::remove(file.path.c_str()) == 0) {
+                log_info(LogMetal, "ShmResourceTracker: removed stale file '{}'", file.path);
             }
         }
-        // Remove the manifest only if it is still the file that was judged. The
-        // live holder of a reused pid may have reaped its predecessor and
-        // published its own manifest at this path in the meantime; that one
-        // must stay. (A republish between this stat and the remove is still
-        // possible in principle, but the window is a few instructions.)
-        struct stat st{};
-        if (::stat(manifest.path.c_str(), &st) != 0) {
-            continue;  // already gone
-        }
-        if (st.st_dev != manifest.dev || st.st_ino != manifest.ino) {
-            log_info(
-                LogMetal,
-                "ShmResourceTracker: stale manifest '{}' was republished by a live owner before it could be removed; "
-                "left in place",
-                manifest.path);
+        if (!still_the_judged_file(manifest.manifest)) {
             continue;
         }
-        std::remove(manifest.path.c_str());
+        std::remove(manifest.manifest.path.c_str());
         if (manifest.pid_reused) {
             log_info(
                 LogMetal,
                 "ShmResourceTracker: removed stale manifest '{}' (its pid now belongs to another process)",
-                manifest.path);
+                manifest.manifest.path);
         } else {
-            log_info(LogMetal, "ShmResourceTracker: removed stale manifest '{}'", manifest.path);
+            log_info(LogMetal, "ShmResourceTracker: removed stale manifest '{}'", manifest.manifest.path);
         }
     }
 

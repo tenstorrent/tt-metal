@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -223,42 +224,122 @@ TEST(ShmResourceTrackerManifest, ScanJudgesManifestWithoutStartLineByPidAlone) {
     manifest_test_remove(dead, dead_name);
 }
 
+// Runs a cleanup action when the scope ends, also on ASSERT exits.
+class ManifestTestScopeExit {
+public:
+    explicit ManifestTestScopeExit(std::function<void()> fn) : fn_(std::move(fn)) {}
+    ~ManifestTestScopeExit() { fn_(); }
+
+private:
+    std::function<void()> fn_;
+};
+
 TEST(ShmResourceTrackerManifest, ManifestRepublishedBetweenJudgementAndReapIsKept) {
     // A scanner judges the predecessor's manifest at a pid that a live process has since
     // been handed. Before the scanner reaps, that live owner reaps its predecessor itself
-    // and publishes its own manifest at the same path. Only what the judged manifest
-    // listed may go; the live owner's manifest and segment must stay.
+    // and publishes its own manifest at the same path, re-exporting a descriptor file at
+    // the same deterministic path. Only what the judged manifest listed, as it was, may
+    // go; the live owner's manifest, segment and republished file must stay.
     ManifestTestChild live_owner;
     ASSERT_GT(live_owner.pid(), 0) << std::strerror(errno);
     const uint64_t live_start = process_start_time(live_owner.pid());
     ASSERT_NE(live_start, 0u);
     const std::string stale_name = fmt::format("/tt_test_manifest_racestale_{}", getpid());
     const std::string live_name = fmt::format("/tt_test_manifest_racelive_{}", getpid());
-    manifest_test_plant(live_owner.pid(), live_start + 1, stale_name);  // the dead predecessor's
+    const std::string card = fmt::format("/dev/shm/tt_test_manifest_racecard_{}.bin", getpid());
+    const ManifestTestScopeExit cleanup([&] {
+        ::shm_unlink(stale_name.c_str());
+        ::shm_unlink(live_name.c_str());
+        std::remove(card.c_str());
+        std::remove(manifest_test_path(live_owner.pid()).c_str());
+    });
+
+    // The dead predecessor's manifest: its segment plus a descriptor file.
+    manifest_test_plant(live_owner.pid(), live_start + 1, stale_name);
     if (HasFatalFailure()) {
         return;
+    }
+    {
+        std::ofstream ofs(card);
+        ofs << "predecessor";
+    }
+    {
+        std::ofstream manifest(manifest_test_path(live_owner.pid()), std::ios::app);
+        manifest << "file " << card << "\n";
     }
 
     const StaleScan scan = collect_stale_shm_resources();
     const auto judged = std::find_if(scan.manifests.begin(), scan.manifests.end(), [&](const StaleManifest& m) {
-        return m.path == manifest_test_path(live_owner.pid());
+        return m.manifest.path == manifest_test_path(live_owner.pid());
     });
     ASSERT_NE(judged, scan.manifests.end()) << "predecessor's manifest was not judged stale";
     ASSERT_EQ(judged->shm_names, std::vector<std::string>{stale_name});
+    ASSERT_EQ(judged->files.size(), 1u);
+    EXPECT_EQ(judged->files.front().path, card);
 
-    // The live owner publishes its own manifest (new file, renamed into place) and segment.
+    // The live owner publishes: its own segment, the card re-exported at the same path
+    // (new file renamed into place, as write_to_file does), and its manifest.
     manifest_test_plant(live_owner.pid(), live_start, live_name);
     if (HasFatalFailure()) {
         return;
     }
+    {
+        std::ofstream ofs(card + ".tmp");
+        ofs << "replacement";
+    }
+    ASSERT_EQ(std::rename((card + ".tmp").c_str(), card.c_str()), 0) << std::strerror(errno);
 
     reap_stale_shm_resources(scan);
 
     EXPECT_FALSE(manifest_test_shm_exists(stale_name)) << "predecessor's segment was kept";
     EXPECT_TRUE(manifest_test_shm_exists(live_name)) << "live owner's segment was removed";
+    EXPECT_TRUE(manifest_test_file_exists(card)) << "live owner's republished descriptor file was removed";
     EXPECT_TRUE(manifest_test_has_line(manifest_test_path(live_owner.pid()), "shm " + live_name))
         << "live owner's republished manifest was removed";
-    manifest_test_remove(live_owner.pid(), live_name);
+}
+
+TEST(ShmResourceTrackerManifest, ManifestGoneBeforeReapLeavesItsEntriesAlone) {
+    // Judged stale, then the whole manifest disappears before the reap (the owner's
+    // successor reaped it, or a graceful teardown finished). Nothing listed may be touched:
+    // a new owner may already have re-exported a file at the same path.
+    const pid_t dead = manifest_test_reaped_pid();
+    ASSERT_GT(dead, 0) << std::strerror(errno);
+    const std::string name = fmt::format("/tt_test_manifest_gone_{}", getpid());
+    const std::string card = fmt::format("/dev/shm/tt_test_manifest_gonecard_{}.bin", getpid());
+    const ManifestTestScopeExit cleanup([&] {
+        ::shm_unlink(name.c_str());
+        std::remove(card.c_str());
+        std::remove(manifest_test_path(dead).c_str());
+    });
+    manifest_test_plant(dead, std::nullopt, name);
+    if (HasFatalFailure()) {
+        return;
+    }
+    {
+        std::ofstream ofs(card);
+        ofs << "x";
+    }
+    {
+        std::ofstream manifest(manifest_test_path(dead), std::ios::app);
+        manifest << "file " << card << "\n";
+    }
+
+    const StaleScan scan = collect_stale_shm_resources();
+    ASSERT_TRUE(std::any_of(scan.manifests.begin(), scan.manifests.end(), [&](const StaleManifest& m) {
+        return m.manifest.path == manifest_test_path(dead);
+    }));
+
+    // The manifest goes away and a new owner re-exports a file at the same path.
+    std::remove(manifest_test_path(dead).c_str());
+    {
+        std::ofstream ofs(card + ".tmp");
+        ofs << "new owner";
+    }
+    ASSERT_EQ(std::rename((card + ".tmp").c_str(), card.c_str()), 0) << std::strerror(errno);
+
+    reap_stale_shm_resources(scan);
+
+    EXPECT_TRUE(manifest_test_file_exists(card)) << "a file re-exported after the manifest vanished was removed";
 }
 
 }  // namespace
