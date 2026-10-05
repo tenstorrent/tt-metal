@@ -250,24 +250,8 @@ compiles three point markers into them (`_Event`, `_Data`, `_Iter`); the compute
 
 ## 10. Load: the instructions are rewritten
 
-**Where 47 comes from.** The loader moves `.tt_zone_ids` from where the linker put it, `0x06800000`, to this
-image's block start from step 9, `42`. Every handle keeps its offset inside the section, so the handle at offset 5
-(the sixth zone, `T1_Zone5`) lands at `42 + 5 = 47`.
-
-Each relocation from step 7 names the *symbol* `__tt_zone_0_6`, not a number. For every one of them the loader
-computes the new value the same way (`RebaseZoneIds` in `llrt/tt_elffile.cpp`):
-
-```
-value = symbol's link address + (new base − old base)
-      = 0x06800005           + (42 − 0x06800000)
-      = 5 + 42
-      = 47
-```
-
-`0x06800005` comes from the ELF's symbol table (step 4), `42` from step 9. Because all three relocations name the
-same symbol, all three get the same 47; this step writes it into the two instructions, step 11 into the record.
-
-The two `.text` relocations split 47 the same way the linker split `0x06800005` in step 5:
+The id is now 47 (step 9). The loader takes the two `.text` relocations from step 7 and writes 47 into them,
+split the same way the linker split `0x06800005` in step 5:
 
 | instruction | carries | for `47` (`0x0000002f`) |
 |---|---|---|
@@ -283,28 +267,37 @@ set, and 47 is not one of them.)
 7c38:  005a0a13  addi s4, s4, 5      →   02fa0a13  addi s4, s4, 47
 ```
 
-Only the immediate digits change (`06800 → 00000`, `005 → 02f`). The `lui` now loads 0, because every id below
-2048 fits in the `addi`'s 12 bits; it stays anyway, since the loader rewrites numbers in place and never removes an
-instruction.
+Only the immediate digits change (`06800 → 00000`, `005 → 02f`). The `lui` now loads 0, because 47 fits in the
+`addi` alone; it stays anyway, since the loader rewrites numbers in place and never removes an instruction.
 
-**Why `0x06800000` and not `0`.** If the section were linked below 4 KiB, the linker would see that the `lui`
-loads 0 and delete it, leaving a single `addi` whose 12 bits cap the value at 2047. The loader could then never
-give that site an id of 2048 or more. Placing the section at `0x06800000` keeps the `lui` in every site, so the
-loader can write any 16-bit id.
+**Why the linker script uses a high address.** At link time the `lui` is only kept if it has something to load.
+Had the section been linked at a small address (below 4096), the `lui` would have loaded 0 and the linker would
+have deleted it, leaving just the `addi`, which can hold at most 2047. The loader could then never give that zone
+an id above 2047. Linking at the high address `0x06800000` guarantees every zone keeps its `lui`, so the loader
+can write any id up to `0xFFFE`.
 
 ## 11. Load: the record is rewritten
 
-The third relocation from step 7 is the `R_RISCV_32` at `0x06700050`. Keep the two numbers apart:
-
-- **`0x06700050` is *where*:** the address of the record's id field inside `.tt_zone_meta` (step 6). The
-  loader uses it only to find which 4 bytes to overwrite; it does not change.
-- **`0x06800005` → `47` is *what*:** the value in that field. It is computed exactly as in step 10, from the same
-  symbol, so it comes out as the same 47. `R_RISCV_32` means the whole 32-bit word is replaced
-  (`0x0000002f`, stored as the bytes `2f 00 00 00`):
+The third relocation from step 7 points at `0x06700050`, the id field of record 5 in `.tt_zone_meta`. That address
+is *where* the value sits and does not change; the loader replaces the value inside it with the same 47, as the
+whole 32-bit word (`R_RISCV_32`, stored as the bytes `2f 00 00 00`):
 
 ```
 0x06700050:  05008006 …   →   2f000000 …
 ```
+
+**Getting from `0x06700050` to 47:**
+
+```
+field at 0x06700050 holds          0x06800005      (step 6)
+minus where .tt_zone_ids was linked − 0x06800000   = 5, the zone's offset
+plus this image's block start      + 42            (step 9)
+                                   = 47
+```
+
+The record's position gives the same offset: `(0x06700050 − 0x06700000) / 16 = 0x50 / 16 = 5`, record 5. That
+match is only because records and handles were emitted in the same order; the loader uses the field's value, not
+the position.
 
 Nothing moves by `0x06700000`: the only section that moves is `.tt_zone_ids`. The name and file fields point into
 `.tt_zone_str`, which stays where it is, so `0x066000a9` and `0x06600009` are still right; the line is a plain
@@ -319,8 +312,6 @@ number. One word of the record's four changes.
 | `.tt_zone_meta` | the record's id field | the host, which maps 47 to `"T1_Zone5"` (step 12) |
 
 The device and the host never consult each other; they agree because both were filled in from the same symbol.
-The record is also the fifth-from-zero in `.tt_zone_meta`, matching offset 5, but only because the records were
-emitted in the same order as the handles; the host relies on the id field, not on the position.
 
 ## 12. Load: the name is registered
 
@@ -335,16 +326,20 @@ This happens before the image's bytes are copied to the device, so the name exis
 
 ## 13. Run: the device packs the marker
 
-**Where the device's 47 comes from.** The two instructions rewritten in step 10 run when the zone closes. They are
-ordinary instructions that load a constant into register `s4`:
+**The id is already decided.** It was fixed at load time (step 10): 47 is written into the bytes of the kernel's
+code before the kernel is copied to the device. Nothing the device does at run time chooses, computes or looks up
+the id.
+
+What the device does need is the value *in a register*, to store it into the marker. So when the zone closes, the
+two instructions from step 10 copy that constant into register `s4`, the same way a kernel loads any literal
+number such as `x = 47`:
 
 ```
 7c34:  lui  s4, 0x0         s4 = 0
 7c38:  addi s4, s4, 47      s4 = 0 + 47 = 47
 ```
 
-That is the whole lookup: the device does not read any table, it just executes the number the loader wrote into
-its code. `s4` now holds the zone id, 47.
+They read no memory and depend on nothing at run time; they would produce 47 on any core, every time.
 
 **Building the marker word.** The first word of a zone packet holds two things side by side: a packet type in the
 top 5 bits and the zone id in the bottom 27 bits. The source line that builds it is `ppfmt::w0` in
