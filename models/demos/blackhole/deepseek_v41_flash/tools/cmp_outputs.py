@@ -1,34 +1,31 @@
-"""python cmp_outputs.py <log A> <log B> <scenario id> -- compares the plain "==USER n - OUTPUT" texts of one session scenario of two demo logs:
-number of identical users and, per differing user, the length of the common prefix (chars) / total chars."""
-
+"""python cmp_outputs.py <log_a> <mode_a|-> <log_b> <mode_b|-> <scenario e.g. isl32k_b8>: compare the per-user generated 64-token OUTPUT blocks of the plain run of a scenario
+(mode '-' = scenario header without a MODE suffix, else the header '... MODE <mode>:')."""
 import re
 import sys
 
 
-def grab(log, scen):
-    txt = open(log).read()
-    txt = txt[txt.index(f"=== session scenario {scen} ===") :]
-    nxt = txt.find("=== session scenario ", 10)
-    txt = txt if nxt < 0 else txt[:nxt]
+def blocks(path, scen, mode):
+    txt = open(path, errors="replace").read()
+    pat = f"=== session scenario {scen} ===" + ("" if mode == "-" else f" MODE {mode}:")
+    a = txt.find(pat)
+    assert a >= 0, (path, pat)
+    nxt = txt.find("=== session scenario", a + 10)
+    seg = txt[a : nxt if nxt > 0 else None]
     out = {}
-    for m in re.finditer(r"==USER (\d+) - OUTPUT\n(.*?)(?=\n==USER|\n==REPEAT|\n\d{4}-\d\d-\d\d |\Z)", txt, re.S):
-        out[int(m.group(1))] = m.group(2)
-    ttft = re.search(r"TTFT \(whole batch of (\d+) users, ISL max (\d+)\): (\d+) ms -> prefill (\d+) tok/s", txt)
-    return out, ttft
+    for m in re.finditer(r"==USER (\d+) - OUTPUT\n(.*?)(?=\n\n|\Z)", seg, re.S):
+        out.setdefault(int(m.group(1)), m.group(2))  # first occurrence (plain run)
+    first = re.search(r"First generated token: '([^']*)'", seg)
+    return out, first.group(1) if first else None
 
 
-a, ta = grab(sys.argv[1], sys.argv[3])
-b, tb = grab(sys.argv[2], sys.argv[3])
-users = sorted(set(a) & set(b))
-same = 0
-for u in users:
-    if a[u] == b[u]:
-        same += 1
-        continue
-    n = 0
-    while n < min(len(a[u]), len(b[u])) and a[u][n] == b[u][n]:
-        n += 1
-    print(f"user {u}: common prefix {n} chars of {len(a[u])}/{len(b[u])}")
-print(f"{sys.argv[3]}: {same}/{len(users)} users identical")
-print("A:", ta.group(0) if ta else None)
-print("B:", tb.group(0) if tb else None)
+la, ma, lb, mb, scen = sys.argv[1:6]
+a, fa = blocks(la, scen, ma)
+b, fb = blocks(lb, scen, mb)
+same = [u for u in a if u in b and a[u] == b[u]]
+print(f"{scen} {ma} vs {mb}: first token {fa!r} vs {fb!r}; users with identical 64-token output {len(same)}/{len(a)}")
+for u in sorted(a):
+    if u in b and a[u] != b[u]:
+        x, y = a[u], b[u]
+        k = next((i for i in range(min(len(x), len(y))) if x[i] != y[i]), min(len(x), len(y)))
+        print(f"  user {u}: first differing char {k}/{len(x)}: A={x[max(0,k-20):k+30]!r} B={y[max(0,k-20):k+30]!r}")
+        break

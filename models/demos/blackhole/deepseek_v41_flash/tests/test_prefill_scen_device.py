@@ -249,13 +249,13 @@ def test_prefill_scenarios(mesh_device):
 
         mode = ""
         if set(flags) & set(
-            "mPRE"
+            "mPREQ"
         ):  # prefill optimisation mode of this scenario: m = baseline, P = packed mHC, R = + own-chunk router, E = + own-chunk Engram
             fl = set(flags)
-            os.environ["DSV41_PF_MHC"] = "packed" if fl & set("PRE") else "0"
+            os.environ["DSV41_PF_MHC"] = "packed" if fl & set("PREQ") else "0"
             os.environ["DSV41_PF_ROUTE_OWN"] = "1" if fl & set("RE") else "0"
-            os.environ["DSV41_PF_ENGRAM_OWN"] = "1" if "E" in fl else "0"
-            mode = "_" + "".join(ch for ch in "mPRE" if ch in fl)
+            os.environ["DSV41_PF_ENGRAM_OWN"] = "1" if fl & set("EQ") else "0"
+            mode = "_" + "".join(ch for ch in "mPREQ" if ch in fl)
             if getattr(model, "dyn", None) is not None:
                 model.teardown_dyn()  # a new trace capture with the new mode
             log(
