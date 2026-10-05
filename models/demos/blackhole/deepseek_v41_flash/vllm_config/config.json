@@ -1,0 +1,22 @@
+{
+  "architectures": ["DeepseekV41ForCausalLM"],
+  "model_type": "llama",
+  "_comment": "Serving shim for vLLM: transformers does not know model_type deepseek_v41 (the real checkpoint config.json), so vLLM gets this llama-shaped config via --hf-config-path (dims from the checkpoint). The TT model class reads the real checkpoint itself (DSV41_CKPT) and ignores this file apart from the dims vLLM sizes its scheduler with. The checkpoint's fp8/fp4 quantization_config is deliberately absent: the weights are loaded by tt/loader.py, not by vLLM.",
+  "vocab_size": 129280,
+  "hidden_size": 5120,
+  "intermediate_size": 2304,
+  "num_hidden_layers": 40,
+  "num_attention_heads": 64,
+  "num_key_value_heads": 1,
+  "head_dim": 512,
+  "hidden_act": "silu",
+  "max_position_embeddings": 1048576,
+  "rms_norm_eps": 1e-06,
+  "rope_theta": 10000,
+  "tie_word_embeddings": false,
+  "attention_bias": false,
+  "bos_token_id": 0,
+  "eos_token_id": 1,
+  "pad_token_id": 2,
+  "torch_dtype": "bfloat16"
+}

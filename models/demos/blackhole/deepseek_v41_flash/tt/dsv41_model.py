@@ -414,13 +414,16 @@ class Model:
             )
 
     # ---- paged users ----------------------------------------------------------------------------------------------------------------
-    def admit_users(self, prompt_lens, max_new_tokens):
-        """(Re)admit every user: pages for the prompt + the generated tokens (+1), page table uploaded into the persistent device tensor."""
-        for b in range(self.B):
+    def admit_users(self, prompt_lens, max_new_tokens, active=None):
+        """(Re)admit every user: pages for the prompt + the generated tokens (+1), page table uploaded into the persistent device tensor.
+        ``active`` (bool [B], serving / vLLM interface only): re-admit only the users where it is True; the other users keep their pages.
+        """
+        users = range(self.B) if active is None else [b for b in range(self.B) if bool(active[b])]
+        for b in users:
             r, k = self.pool.user_key(b)
             if k in self.pool.allocs[r].pages:
                 self.pool.release(b)
-        for b in range(self.B):
+        for b in users:
             self.pool.admit(b, int(prompt_lens[b]) + 1, reserve_tokens=max_new_tokens)
         self.pool.sync_page_table()
         self.admitted = True
@@ -451,8 +454,13 @@ class Model:
         hook=None,
         enable_trace=True,
         s_pad_max=None,
+        active=None,
     ):
-        """Traced-chunk prefill (default): ONE chunk of ``chunk`` tokens per user is captured once and REPLAYED for every chunk of the prompt, the per-chunk values
+        """``active`` (bool [B], serving / vLLM interface only, traced-chunk path only): prefill only the users where it is True; the others (prompt_lens
+        must be 0 for them) keep their KV / ring / compressor state, pages and Engram history untouched (their rows are computed on filler tokens but every
+        hand-off write is masked) and get first token -1. The index-key export (decode indexer on, ``use_indexer``) rewrites the key slab of EVERY user of a
+        mesh row, so with the indexer on the caller must not leave a live user inactive (it re-prefills them: ``generator_vllm``).
+        Traced-chunk prefill (default): ONE chunk of ``chunk`` tokens per user is captured once and REPLAYED for every chunk of the prompt, the per-chunk values
         (positions, rope rows, masks, page-table / write-index tensors of the hand-off) being persistent device tensors refreshed before each replay
         (tt/prefill_dyn.py of the prefill model + ``PagedStateSink.update``). ``enable_trace=False``: the same dynamic chunk driven eagerly (compile / reference).
         Traced-chunk prefill is the default (verified at 40 layers, ISL 128); DSV41_PREFILL_DYN=0 selects the eager per-chunk reference path.
@@ -461,8 +469,9 @@ class Model:
             hasattr(self.prefill_model, "run_traced_chunks") and os.environ.get("DSV41_PREFILL_DYN", "1") != "0"
         ):  # UNVALIDATED until h44p validates the traced-chunk path
             return self.prefill_forward_dyn(
-                tokens, prompt_lens, chunk, max_new_tokens, want_logits, enable_trace, s_pad_max
+                tokens, prompt_lens, chunk, max_new_tokens, want_logits, enable_trace, s_pad_max, active
             )
+        assert active is None, "partial prefill (active mask) needs the traced-chunk path (DSV41_PREFILL_DYN != 0)"
         return self.prefill_forward_legacy(tokens, prompt_lens, chunk, max_new_tokens, want_logits, hook)
 
     def prepare_for_traces(self, lens):
@@ -541,10 +550,16 @@ class Model:
                 tok = int(ttnn.to_torch(devs[r * cols]).reshape(-1)[off])
                 self._res[b] = (tok, None if full is None else full[r, off].clone())
 
-    def prefill_forward_dyn(self, tokens, prompt_lens, chunk, max_new_tokens, want_logits, enable_trace, s_pad_max):
+    def prefill_forward_dyn(
+        self, tokens, prompt_lens, chunk, max_new_tokens, want_logits, enable_trace, s_pad_max, active=None
+    ):
         B = self.B
         assert tokens.shape[0] == B
         lens = torch.as_tensor(prompt_lens).long()
+        if active is not None:
+            active = torch.as_tensor(active).bool()
+            assert not bool((lens[~active] != 0).any()), "inactive users must have prompt length 0"
+            assert bool((lens[active] > 0).all()), "active users need a non-empty prompt"
         assert int(lens.max()) + max_new_tokens <= self.max_ctx, "prompt + generated tokens exceed the model's max_ctx"
         self.check_context_supported(int(lens.max()) + max_new_tokens)
         t_start = time.perf_counter()
@@ -552,7 +567,7 @@ class Model:
         C = chunk or -(-S // 128) * 128
         S_pad = max(-(-S // C) * C, s_pad_max or 0)
         self.log(f"  prefill_dyn: admit users")
-        self.admit_users(lens, max_new_tokens)
+        self.admit_users(lens, max_new_tokens, active)
         self.sink.set_lengths(lens)
         self.sink.bind(C)
         bis = os.environ.get("DSV41_BISECT", "")
@@ -570,8 +585,16 @@ class Model:
             n = int(lens[b])
             tp[b, :n] = tokens[b, :n].long()
             tp[b, n:] = tokens[b, n - 1]
+        if active is not None and self.host_rows is not None:
+            # the ragged hash writes every user's token history (``cache``): keep the history of the inactive (decoding) users
+            st_cache, keep = self.hasher.st.cache, (~active).nonzero().reshape(-1)
+            saved = st_cache[keep].clone()
         hashes = self.hasher(tp, torch.zeros(B, dtype=torch.long)) if self.host_rows is not None else None
+        if active is not None and self.host_rows is not None:
+            st_cache[keep] = saved
         self._res, self._last_pos, self._want_logits = {}, lens - 1, want_logits
+        if active is not None:  # inactive users: no last token inside any chunk -> first token -1
+            self._res = {b: (-1, None) for b in range(B) if not bool(active[b])}
         if getattr(self, "_hooks_set", None) is not pm:
             pm.pre_replay_hooks.append(lambda s0, C_: self.sink.update(s0, C_))
             pm.post_replay_hooks.append(self._post_chunk)
@@ -609,7 +632,16 @@ class Model:
         self.log_dram("prefill end")
         self.timing = dict(pm.timing, total=time.perf_counter() - t_start)
         first = torch.tensor([self._res[b][0] for b in range(B)], dtype=torch.long)
-        logits = torch.stack([self._res[b][1] for b in range(B)]) if want_logits else None
+        logits = (
+            torch.stack(
+                [
+                    self._res[b][1] if self._res[b][1] is not None else torch.zeros(self.args.vocab_size)
+                    for b in range(B)
+                ]
+            )
+            if want_logits
+            else None
+        )
         return first, logits
 
     def prefill_forward_legacy(self, tokens, prompt_lens, chunk=None, max_new_tokens=0, want_logits=False, hook=None):
