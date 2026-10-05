@@ -21,8 +21,7 @@ FUSED_TESTS_DIR = Path("sources/fused_tests")
 
 @lru_cache(maxsize=512)
 def format_cpp(source: str, source_dir: Path, cache_dir: Path) -> str:
-    formatter = shutil.which("clang-format")
-    if not formatter:
+    if not shutil.which("clang-format"):
         return source
 
     key = sha256(f"{source_dir}\0{source}".encode()).hexdigest()
@@ -31,7 +30,9 @@ def format_cpp(source: str, source_dir: Path, cache_dir: Path) -> str:
     with FileLock(cached.with_suffix(".lock")):
         if not cached.exists():
             result = subprocess.run(
-                [formatter, f"--assume-filename={source_dir / 'kernel.cpp'}"],
+                ["clang-format", "--assume-filename=kernel.cpp"],
+                cwd=source_dir,
+                shell=False,
                 input=source,
                 text=True,
                 stdout=subprocess.PIPE,
