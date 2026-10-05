@@ -13,6 +13,15 @@ from tests.model_behavior.adapters.paged import PagedAdapter
 from tests.model_behavior.adapters.profiles import HARDWARE, PROFILES, select_sku
 from tests.model_behavior.driver import Sample
 
+# L1_SMALL bytes reserved per core when the adapter opens the mesh, by model family.
+# Qwen's GDN conv1d needs the same 24 KiB reservation as
+# models/demos/blackhole/qwen36/tests/test_factory.py. GPT-OSS throughput experts
+# build a fabric mux in selective_reduce_combine, which TT_FATALs when the device
+# has no L1_SMALL bank (#56784, #56769); match
+# models/demos/gpt_oss/tests/test_factory.py::L1_SMALL_SIZE. Every other family
+# keeps the ttnn default of 0.
+L1_SMALL_SIZE_BY_FAMILY = {"qwen": 24_576, "gpt_oss": 16_384}
+
 
 def vocabulary_groups(shape, axis, data_parallel):
     """Device indices for each independent batch's complete vocabulary."""
@@ -464,9 +473,7 @@ def open_adapter(execution_mode, *, backend, sku=None, skip_model_load=False):
             parent_mesh = ttnn.open_mesh_device(
                 mesh_shape=ttnn.MeshShape(4, 8) if galaxy_submesh else ttnn.MeshShape(*hardware.shape),
                 trace_region_size=resolve_trace_region_size(backend, sku),
-                # Qwen's GDN conv1d needs the same 24 KiB L1_SMALL reservation
-                # as models/demos/blackhole/qwen36/tests/test_factory.py.
-                l1_small_size=24_576 if profile.family == "qwen" else 0,
+                l1_small_size=L1_SMALL_SIZE_BY_FAMILY.get(profile.family, 0),
             )
             mesh = parent_mesh.create_submesh(ttnn.MeshShape(*hardware.shape)) if galaxy_submesh else parent_mesh
             mesh.enable_program_cache()
