@@ -186,8 +186,6 @@ class SFTTrainer:
         self.eval_dataloader = eval_dataloader
         self.config = config
         self.step = 0  # 0-based; incremented after each optimizer step
-        # Axes to all-reduce gradients across each step; empty (single-device / TP-only) = no-op.
-        self._grad_sync_axes = self._resolve_grad_sync_axes()
         self._validate_clip_grad_norm()
 
         self._optimizer = self._build_optimizer(optimizer)
@@ -261,8 +259,7 @@ class SFTTrainer:
                     cb.on_after_backward(self, batch)
                 ttml.autograd.AutoContext.get_instance().reset_graph()
 
-            if self._grad_sync_axes:
-                ttml.sync_gradients(self.model.parameters(), axis_names=self._grad_sync_axes)
+            ttml.sync_gradients(self.model.parameters())
 
             for cb in list(self._callbacks):
                 cb.on_before_optimizer_step(self)
@@ -505,7 +502,7 @@ class SFTTrainer:
         """Pick the cross-entropy variant matching the LM head's logit sharding.
 
         When the active mesh has a TP axis with size > 1 the conventional
-        SFTTrainer model shape (Llama with ``use_tp=True`` or
+        SFTTrainer model shape (a tensor-parallel Llama, or
         ``models.distributed.{llama,gpt2}``) emits vocab-sharded logits via
         ``ColumnParallelLinear(gather_output=False)``.  Plain
         ``cross_entropy_loss`` would compute its softmax denominator over each
@@ -561,17 +558,3 @@ class SFTTrainer:
                 "clip_grad_norm is not supported with sharded parameters (FSDP/TP): each device holds "
                 "only a shard, so the per-shard norm is wrong"
             )
-
-    @staticmethod
-    def _resolve_grad_sync_axes() -> tuple[str, ...]:
-        """Mesh axes to all-reduce gradients across each step.
-
-        The subset of ``("dp", "fsdp")`` present on the active mesh with size > 1; empty otherwise
-        (single device / TP-only). FSDP-sharded params are skipped per-axis by ``ttml.sync_gradients``
-        (``fully_shard``'s backward hooks already reduce-scattered them), so this covers DDP, the dp axis
-        of HSDP, and non-sharded params on the fsdp axis.
-        """
-        mesh = ttml.maybe_mesh()
-        if mesh is None:
-            return ()
-        return tuple(name for name in ("dp", "fsdp") if mesh.has_axis(name) and mesh.axis_size(name) > 1)

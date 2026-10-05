@@ -63,6 +63,7 @@ _saved_utils = {k: sys.modules.pop(k) for k in list(sys.modules) if k == "utils"
 try:
     from ttml.models.qwen3 import Qwen3Config  # noqa: E402
     from ttml.models.llama import EmbeddingPlacement, Llama, LlamaConfig  # noqa: E402
+    from ttml.parallel import TPStrategy  # noqa: E402
     from utils.context_managers import empty_init  # noqa: E402
     from model_qwen3_distributed import (  # noqa: E402
         DistributedQwen3ForCausalLM,
@@ -130,7 +131,7 @@ def test_llama_padded_vocab_gives_tile_aligned_shards(tp_mesh, vocab):
         intermediate_size=128,
         vocab_size=vocab,
         max_position_embeddings=32,
-        use_tp=True,
+        tp_strategy=TPStrategy.TENSOR,
         embedding_placement=EmbeddingPlacement.VocabParallel,
     )
     _assert_shards_tile_aligned(Llama(cfg).padded_vocab_size, vocab, tp_mesh.axis_size("tp"))
