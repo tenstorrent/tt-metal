@@ -76,6 +76,7 @@ DEST_STORAGE_FORMATS = frozenset(
         DataFormat.Float16_b,
         DataFormat.Int16,
         DataFormat.Int8,
+        DataFormat.UInt8,
     }
 )
 
@@ -202,8 +203,15 @@ class DataTransferBlocks(ABC):
         exponent rebiasing into the 5-bit range. Every case is bit-slicing, so
         nothing rounds: bits below the target width are dropped, not folded in.
 
-        * **Float16_b / Int16** keep 7 mantissa bits and zero-fill the low 3, so
-          a bf16 Dest does **not** come back with a src register's full 10.
+        * **Float16_b** keeps 7 mantissa bits and zero-fills the low 3, so a
+          bf16 Dest does **not** come back with a src register's full 10.
+        * **Int16 is carried unchanged.** The hardware routes it through the
+          same path by labelling it bf16, but that is transport, not
+          conversion: the routing redistributes all 16 bits of the datum --
+          sign, then bits 14:8, three padding zeros, then bits 7:0 -- so every
+          bit survives and the move back reassembles them. Treating the label
+          as a conversion and masking in the float domain would quantize a
+          genuine integer instead, turning 257 into 256 and 1001 into 1000.
         * **Float16** passes as fp16 — 10 mantissa bits, 5-bit exponent.
         * **Int32 saturates to INT8**, clamping to +/-127. A wide integer Dest
           cannot survive the trip, and the clamp is silent.
@@ -211,7 +219,11 @@ class DataTransferBlocks(ABC):
           the src register is Float16, in which case the exponent is rebiased and
           values below the fp16 normal range flush to zero.
         """
-        if dest_format in (DataFormat.Float16_b, DataFormat.Int16):
+        if dest_format is DataFormat.Int16:
+            # Bit-preserving: see the Int16 note above. The hardware borrows the
+            # bf16 label only to get the datum across intact.
+            return values
+        if dest_format is DataFormat.Float16_b:
             # 7 explicit mantissa bits survive; the low 3 arrive as zeros.
             raw = values.to(torch.float32).contiguous().view(torch.int32)
             return (raw & ~((1 << (23 - 7)) - 1)).view(torch.float32)

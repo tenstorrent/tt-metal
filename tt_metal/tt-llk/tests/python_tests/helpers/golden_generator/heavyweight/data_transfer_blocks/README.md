@@ -102,7 +102,7 @@ Truncation, never rounding: `_truncate_src_mantissa` masks off the low
 ## Dest storage
 
 ```python
-DEST_STORAGE_FORMATS = {Float32, Int32, Float16, Float16_b, Int16, Int8}
+DEST_STORAGE_FORMATS = {Float32, Int32, Float16, Float16_b, Int16, Int8, UInt8}
 DEST_32_BIT_FORMATS  = {Float32, Int32}
 ```
 
@@ -188,8 +188,9 @@ folded in.
 
 | | L1 formats | Dest formats | Has | Lacks |
 |---|---|---|---|---|
-| Quasar | 15 | `Float16` `Float16_b` `Float32` `Int8` `Int16` `Int32` | MX — `MxFp8R` `MxFp8P` `MxFp4` `MxInt8` `MxInt4` `MxInt2` | **No block float.** No `MxFp4_2x_A/B` — src-register formats, never L1 formats. |
-| Wormhole · Blackhole | 14 | `Float16` `Float16_b` `Float32` `Int8` `Int32` | Block float — `Bfp8` `Bfp8_b` `Bfp4_b` `Bfp2_b` | **No MX.** |
+| Quasar | 15 | `Float16` `Float16_b` `Float32` `Int8` `Int16` `Int32` `UInt8` | MX — `MxFp8R` `MxFp8P` `MxFp4` `MxInt8` `MxInt4` `MxInt2` | **No block float.** No `MxFp4_2x_A/B` — src-register formats, never L1 formats. |
+| Blackhole | 14 | `Float16` `Float16_b` `Float32` `Int8` `Int32` `UInt8` | Block float — `Bfp8` `Bfp8_b` `Bfp4_b` `Bfp2_b` | **No MX.** |
+| Wormhole | 13 | `Float16` `Float16_b` `Float32` `Int8` `Int32` `UInt8` | Block float — `Bfp8` `Bfp8_b` `Bfp4_b` `Bfp2_b` | **No MX.** No `Fp8_e4m3` — Wormhole's only fp8 is Lf8 (e5m2). |
 
 Quasar's L1 → src mapping in full:
 
