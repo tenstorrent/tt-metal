@@ -1489,3 +1489,142 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     assert torch.all(
         is_valid
     ), f"Test failed: {(~is_valid).sum()} elements outside tolerance (atol={atol}, rtol={rtol})"
+
+
+# Every finite BF16 value through the BF16 kernel (FP32 DEST off), in the approximation
+# mode whose instance the BF16 kernel replaces. Subnormal inputs and NaN lanes are
+# outside a step count (see helpers/ulp_sweep.py); finite/non-finite disagreements on
+# normal inputs are failures in their own right. The step metric ranks -0 with +0, so
+# the specials are judged apart, by output class and sign. max_ulp is 0 for an exact fit.
+_BF16_EXHAUSTIVE_OPS = [
+    (MathOperation.Selu, ApproximationMode.No, 1),
+]
+# Boards where the op keeps its stock kernel, which this sweep does not test.
+_BF16_STOCK_BOARDS = {}
+# Special input classes where the kernel returns its stock kernel's class instead of torch's.
+_BF16_STOCK_SPECIALS = {
+    MathOperation.Selu: {
+        ChipArchitecture.BLACKHOLE: (
+            "neg_nan",
+            "neg_subnormal",
+            "neg_zero",
+        ),
+        ChipArchitecture.WORMHOLE: (
+            "neg_nan",
+            "neg_subnormal",
+            "neg_zero",
+        ),
+    },
+}
+
+
+def _special_class(value):
+    sign = "neg" if struct.unpack("<I", struct.pack("<f", value))[0] >> 31 else "pos"
+    kind = (
+        "nan" if value != value else ("inf" if abs(value) == float("inf") else "zero")
+    )
+    return f"{sign}_{kind}"
+
+
+@pytest.mark.parametrize("mathop,approx_mode,max_ulp", _BF16_EXHAUSTIVE_OPS)
+def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
+    if TestConfig.CHIP_ARCH in _BF16_STOCK_BOARDS.get(mathop, ()):
+        pytest.skip(f"{mathop.name} keeps the stock kernel on {TestConfig.CHIP_ARCH}")
+    from helpers.ulp import ulp_distance
+    from helpers.ulp_sweep import measurable_mask, nonfinite_failures, sweep_spec
+
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    dest_acc = DestAccumulation.No
+    dimensions = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * 64]
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=dimensions,
+        spec_A=sweep_spec(),
+    )
+    # The sweep pads with +0 and drops -0. The specials go in that padding, under the
+    # edge sweep's gates for what the golden defines and the pipeline delivers.
+    specials = [0.0]
+    if negative_zero_delivered(formats.input_format, dest_acc):
+        specials.append(-0.0)
+    nonfinite = mathop in SPECIALS_READY_OPS and specials_safe(
+        formats.input_format, formats.output_format, dest_acc
+    )
+    if _gate_unspecified_nan_sign(mathop, formats, dest_acc, nonfinite):
+        specials += [float("inf"), float("-inf"), float("nan"), _NEGATIVE_NAN]
+    kept = _BF16_STOCK_SPECIALS.get(mathop, {}).get(TestConfig.CHIP_ARCH, ())
+    specials = [value for value in specials if _special_class(value) not in kept]
+    # Through the bit pattern: a float-to-bfloat16 cast drops a NaN's sign.
+    bits = torch.tensor(specials, dtype=torch.float32).view(torch.int32) >> 16
+    src_A[-len(specials) :] = bits.to(torch.int16).view(torch.bfloat16).to(src_A.dtype)
+    golden = get_golden_generator(UnarySFPUGolden)(
+        mathop, src_A, formats.output_format, dest_acc, formats.input_format, dimensions
+    )
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(dimensions, dimensions),
+            APPROX_MODE(approx_mode),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=mathop),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=False,
+    )
+    result = torch.tensor(
+        configuration.run().result, dtype=format_dict[formats.output_format]
+    )
+    failures = nonfinite_failures(src_A, golden, result, formats.input_format)
+    assert (
+        not failures.any()
+    ), f"{mathop.name}: {int(failures.sum())} lanes disagree on finiteness"
+
+    def output_class(values):
+        values = values.float()
+        return torch.stack(
+            [
+                values.isnan(),
+                values.isinf(),
+                values == 0,
+                values.signbit() & ~values.isnan(),
+            ]
+        )
+
+    wrong = (
+        output_class(golden[-len(specials) :]) != output_class(result[-len(specials) :])
+    ).any(0)
+    assert not wrong.any(), (
+        f"{mathop.name}: {int(wrong.sum())} of {len(specials)} special inputs "
+        f"{specials} change output class or sign"
+    )
+    mask = measurable_mask(src_A, golden, result, formats.input_format)
+    over = int(((ulp_distance(golden.to(result.dtype), result) > max_ulp) & mask).sum())
+    assert passed_test(
+        golden, result, formats.output_format, max_ulp=max_ulp, mask=mask
+    ), f"{mathop.name}: {over} lanes over the {max_ulp}-ULP budget"
