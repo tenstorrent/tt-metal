@@ -527,13 +527,20 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
         )
 
     # The overlap's fwd_arrived, final_arrived and expert_go outlive every launch -- neighbouring chips bump them
-    # across launches -- so the case keeps one set for all of its calls, as a model keeps one per mesh.
-    grid = mesh_device.compute_with_storage_grid_size()
-    all_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
-    fwd_arrived, final_arrived, expert_go = (ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(3))
-    ttnn.synchronize_device(mesh_device)
+    # across launches -- so the case keeps one set for all of its calls, as a model keeps one per mesh. Created on
+    # the overlap's first call, not here: the solo routed expert's arena is the whole L1 bank, so it only fits
+    # while nothing else is allocated, and the perf test runs it first. That first call is eager, never a capture.
+    overlap_semaphores = []
 
     def overlapped():
+        if not overlap_semaphores:
+            grid = mesh_device.compute_with_storage_grid_size()
+            all_cores = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+            )
+            overlap_semaphores.extend(ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(3))
+            ttnn.synchronize_device(mesh_device)
+        fwd_arrived, final_arrived, expert_go = overlap_semaphores
         return routed_expert(
             dispatched_metadata=tt_metadata,
             expert_offsets=tt_expert_offsets,
