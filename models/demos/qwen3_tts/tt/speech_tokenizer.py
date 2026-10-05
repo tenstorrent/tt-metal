@@ -162,35 +162,75 @@ def _zero_insert_nlc(x_nlc: ttnn.Tensor, stride: int, device) -> ttnn.Tensor:
 
 
 def transpose_conv1d_nhwc(x_nhwc: ttnn.Tensor, weight: torch.Tensor, bias, stride: int, device, cache=None, key=None):
-    """ConvTranspose1d via zero-insertion + regular conv1d (numerically exact).
+    """ConvTranspose1d via sub-pixel (phase) decomposition -- numerically exact.
 
-    ``ttnn.conv_transpose2d`` loses accuracy at large stride/kernel; this identity
-    (upsample-with-zeros, then a flipped regular conv with full padding) matches
-    ``F.conv_transpose1d`` with padding=0. Input/output are NHWC [batch, 1, L, C].
-    Returns (output_nhwc, out_len) with out_len = (L-1)*stride + kernel.
+    ``ttnn.conv_transpose2d`` loses accuracy at large stride/kernel. The obvious
+    replacement -- insert zeros then run one wide conv1d -- is exact but makes the
+    conv see (L-1)*stride + 2(k-1) positions, and that op deadlocks ttnn's
+    block-sharded mcast activation reader once the talker has run. It also spends
+    ``stride`` times the arithmetic multiplying against the inserted zeros.
+
+    Output position t = q*stride + r only ever touches kernel taps j = r (mod
+    stride), so each phase r is an independent narrow causal correlation over the
+    ORIGINAL length:
+
+        y[q*stride + r] = sum_m x[q - m] * weight[:, :, m*stride + r]
+
+    Interleaving the ``stride`` phase outputs reconstructs the transposed conv. For
+    kernel=16/stride=8 this cuts the conv from 1046 to 129 input positions and from
+    16 taps to 2. Verified exact against F.conv_transpose1d in float64.
+
+    Unlike the old form this returns the CAUSAL result directly: exactly the first
+    ``L*stride`` samples callers previously got by trimming (kernel - stride) off
+    the right. Returns (output_nhwc, L*stride).
     """
     mc = ttnn.DRAM_MEMORY_CONFIG
     in_c, out_c, k = int(weight.shape[0]), int(weight.shape[1]), int(weight.shape[-1])
     b, L, c = int(x_nhwc.shape[0]), int(x_nhwc.shape[2]), int(x_nhwc.shape[3])
+    if k < stride:
+        raise ValueError(
+            f"sub-pixel transposed conv needs kernel >= stride, got kernel={k} stride={stride}; "
+            "a shorter kernel leaves some output phases with no taps."
+        )
     x_nlc = ttnn.reshape(x_nhwc, (b, L, c), memory_config=mc)
-    x_up = _zero_insert_nlc(x_nlc, stride, device)  # [b, (L-1)*s+1, in_c]
-    up_len = (L - 1) * stride + 1
-    x_pad = _pad_nlc(x_up, k - 1, k - 1, device)  # full padding both sides
-    w_reg = weight.permute(1, 0, 2).flip(-1).contiguous()  # [out, in, k]
-    conv = _cached_conv(
-        cache,
-        key,
-        device=device,
-        in_channels=in_c,
-        out_channels=out_c,
-        kernel_size=k,
-        padding=0,
-        weight=w_reg,
-        bias_tensor=bias,
-    )
-    y, out_len = conv(x_pad, up_len + 2 * (k - 1))  # out_len = (L-1)*s + k
-    y4 = ttnn.reshape(y, (b, 1, out_len, out_c), memory_config=mc)
-    return y4, out_len
+
+    phase_nlc = []
+    for r in range(stride):
+        sub = weight[:, :, r::stride]  # [in, out, taps] for this phase
+        taps = int(sub.shape[-1])
+        # conv1d correlates forwards, so flip the taps and left-pad to make the
+        # phase conv causal: output q depends on x[q], x[q-1] ... x[q-taps+1].
+        w_phase = sub.permute(1, 0, 2).flip(-1).contiguous()  # [out, in, taps]
+        x_pad = _causal_left_pad_nlc(x_nlc, taps - 1, device)
+        conv = _cached_conv(
+            cache,
+            f"{key}.ph{r}" if key else None,
+            device=device,
+            in_channels=in_c,
+            out_channels=out_c,
+            kernel_size=taps,
+            padding=0,
+            weight=w_phase,
+            bias_tensor=bias,
+        )
+        y_r, y_len = conv(x_pad, L + taps - 1)  # y_len == L
+        phase_nlc.append(ttnn.reshape(y_r, (b, y_len, out_c), memory_config=mc))
+
+    out_total = L * stride
+    if stride == 1:
+        y_nlc = phase_nlc[0]
+    else:
+        # Interleave the phases along length. Concatenating on channels and then
+        # reshaping IS that interleave in row-major NLC: element (q, r*out_c + ch)
+        # lies at q*stride*out_c + r*out_c + ch, the flat index of (q*stride+r, ch).
+        orig_layout = phase_nlc[0].layout
+        rm = [ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT) for t in phase_nlc]
+        cat = ttnn.concat(rm, dim=-1, memory_config=mc)  # [b, L, stride*out_c]
+        y_nlc = ttnn.reshape(cat, (b, out_total, out_c), memory_config=mc)
+        y_nlc = ttnn.to_layout(y_nlc, orig_layout)
+
+    y4 = ttnn.reshape(y_nlc, (b, 1, out_total, out_c), memory_config=mc)
+    return y4, out_total
 
 
 def convnext_block(
@@ -386,19 +426,14 @@ def conv_decoder_block(
         )
         x = ttnn_snake_activation(x, alpha_tt, beta_tt)
 
-    # Transposed conv for upsampling.
-    # Official qwen_tts uses NO padding in conv_transpose1d, then trims the right
-    # side by (kernel - stride) to keep the op causal.
+    # Transposed conv for upsampling. Official qwen_tts uses NO padding in
+    # conv_transpose1d then trims (kernel - stride) off the right to stay causal;
+    # the sub-pixel form returns that trimmed L*stride result directly.
     if "block.1.conv.weight" in block_weights:
         up_w = block_weights["block.1.conv.weight"]
         up_b = block_weights.get("block.1.conv.bias")
-        k_up = int(up_w.shape[-1])
         x, l = transpose_conv1d_nhwc(x, up_w, up_b, upsample_rate, device, cache=cache, key=f"{kp}.up" if kp else None)
         c = int(up_w.shape[1])
-        right_pad = k_up - upsample_rate
-        if right_pad > 0:
-            x = ttnn.slice(x, [0, 0, 0, 0], [b, 1, l - right_pad, c], memory_config=mc)
-            l = l - right_pad
 
     # Residual layers (dilations [1, 3, 9], causal dilated convs)
     dilations = [1, 3, 9]
@@ -1353,9 +1388,9 @@ class TtSpeechTokenizerDecoder(LightweightModule):
                 conv_weight = self.upsample_weights[conv_weight_key]
                 conv_bias = self.upsample_weights.get(conv_bias_key)
 
-                # Upsample via zero-insertion + conv1d (exact transposed conv),
-                # then trim the right side by (kernel - stride) to stay causal.
-                k_up = int(conv_weight.shape[-1])
+                # Upsample via the sub-pixel transposed conv, which already returns
+                # the causal L*ratio result (the old zero-insertion form needed a
+                # trim of (kernel - stride) off the right).
                 out_c = int(conv_weight.shape[1])
                 hidden_states_tt, up_len = transpose_conv1d_nhwc(
                     hidden_states_tt,
@@ -1366,14 +1401,6 @@ class TtSpeechTokenizerDecoder(LightweightModule):
                     cache=self._cache,
                     key=f"upsample.{i}.up",
                 )
-                right_pad = k_up - ratio
-                if right_pad > 0:
-                    hidden_states_tt = ttnn.slice(
-                        hidden_states_tt,
-                        [0, 0, 0, 0],
-                        [int(hidden_states_tt.shape[0]), 1, up_len - right_pad, out_c],
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    )
 
                 # ConvNeXt block
                 prefix = f"upsample.{i}.1."
@@ -1579,6 +1606,12 @@ class TtSpeechTokenizerDecoder(LightweightModule):
 
         # 3. Conv decoder (TTNN path)
         audio_ttnn = self._conv_decoder_forward(hidden_states_ttnn)
+        # The conv output comes back sharded, and reading it straight to host spins
+        # forever once the talker's 2CQ traces have run. Drain the queues and move
+        # to interleaved DRAM first so the readback is a plain linear copy.
+        ttnn.synchronize_device(self.device)
+        audio_ttnn = ttnn.to_memory_config(audio_ttnn, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.synchronize_device(self.device)
         audio = _mesh_to_torch(audio_ttnn, dtype=torch.float32).squeeze(-1).contiguous()
 
         # Trim the padded bucket back to the real audio length (samples/frame=1920).
