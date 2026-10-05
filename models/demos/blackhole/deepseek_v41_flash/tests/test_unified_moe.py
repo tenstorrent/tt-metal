@@ -96,6 +96,13 @@ def test_unified_moe(mesh_device):
 
     torch.manual_seed(0)
     x = torch.randn(ROWS, N, D).to(torch.bfloat16)
+    real = os.environ.get(
+        "DSV41_UM_REAL"
+    )  # real post-norm FFN inputs of the S=128 CPU dump (16 users x 128 tokens -> N = 512 tokens per mesh row)
+    if real:
+        assert N == 512
+        d_ = torch.load(f"/mnt/tt-data/ssinghal/dsv4-prefill-s128/layer_{layer}.pt", mmap=True)["prefill"]["ffn_in"]
+        x = d_.float().reshape(ROWS, N, D).to(torch.bfloat16)
     xd = ttnn.from_torch(
         x.reshape(ROWS, 1, N, D),
         device=md,

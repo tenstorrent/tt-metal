@@ -327,6 +327,24 @@ def _run_demo(
                     logger.info(
                         f"PREFILL_ONLY user {u_} top5 ids {i_.tolist()} logits {[round(float(x), 3) for x in v_]}"
                     )
+            for rt_ in [
+                int(x) for x in os.environ.get("DSV41_ROWTOK_SWEEP", "").split(",") if x
+            ]:  # chunk-size sweep: DSV41_PREFILL_ROW_TOKENS per entry, 2 calls each
+                os.environ["DSV41_PREFILL_ROW_TOKENS"] = str(rt_)
+                try:
+                    for rep_ in range(2):
+                        t_ = time.perf_counter()
+                        generator.prefill_forward_text(input_tokens_prefill, **prefill_kw)
+                        dt_ = time.perf_counter() - t_
+                    tm_ = generator.m.timing
+                    nrow_ = rt_ // users_per_row * users_per_row  # tokens per row per chunk
+                    logger.info(
+                        f"ROWTOK_SWEEP row_tokens={rt_} chunk={max(128, rt_ // users_per_row // 128 * 128)}: TTFT {dt_ * 1e3:.0f} ms, {real_tokens / dt_:.0f} tok/s, "
+                        f"replay_loop {tm_.get('total_replay_loop', float('nan')):.2f} s, replay {tm_.get('replay_per_chunk', float('nan')):.2f} s, host {tm_.get('host_per_chunk', float('nan')):.2f} s"
+                    )
+                except Exception as e_:
+                    logger.info(f"ROWTOK_SWEEP row_tokens={rt_} FAILED: {type(e_).__name__}: {str(e_)[:300]}")
+                    break
             return
         pre_spec = None
         if spec_k and os.environ.get("DSV41_SPEC_DIAG") == "1":
