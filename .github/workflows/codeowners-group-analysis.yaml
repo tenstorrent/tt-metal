@@ -263,10 +263,42 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
           SENDER: ${{ github.event.sender.login }}
+          EVENT_ACTION: ${{ github.event.action }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PREVIOUS_BODY: ${{ github.event.changes.body.from }}
           PING_COOLDOWN_SECONDS: 60
         run: |
           echo "PR number: $PR_NUMBER"
           echo "Checkbox ticked by: $SENDER"
+
+          # The job-level `if` is a substring prefilter. Confirm the box is a real
+          # task-list line (not text in a comment or code block) that is ticked
+          # now and was not ticked before.
+          TICKED_LINE='^[[:space:]]*[-*] \[[xX]\] Ping pending code owners[[:space:]]*$'
+          # Drop fenced code blocks and HTML comments before matching.
+          markdown_text() {
+            printf '%s\n' "$1" | tr -d '\r' | awk '
+              /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
+              fence { next }
+              { line = $0
+                while (1) {
+                  if (incomment) { e = index(line, "-->"); if (!e) { line = ""; break }
+                                   line = substr(line, e + 3); incomment = 0 }
+                  s = index(line, "<!--"); if (!s) break
+                  out = out substr(line, 1, s - 1); line = substr(line, s + 4); incomment = 1
+                }
+                print out line; out = "" }'
+          }
+          if ! markdown_text "$PR_BODY" | grep -qE "$TICKED_LINE"; then
+            echo "Checkbox is not ticked as a task-list item; nothing to do"
+            echo "should-run=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          if [ "$EVENT_ACTION" = "edited" ] && markdown_text "$PREVIOUS_BODY" | grep -qE "$TICKED_LINE"; then
+            echo "Checkbox was already ticked before this edit; nothing to do"
+            echo "should-run=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
           # Same access rule as the comment commands: tenstorrent org members only.
           MEMBERSHIP_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
@@ -300,11 +332,18 @@ jobs:
                    -H "Accept: application/vnd.github.v3+json" \
                    "$REACTIONS_API/$(echo "$LAST_PING" | jq -r '.id')"
             fi
-            curl -s -X POST -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
+            # Stamped before the ping, not after, so a tap seconds later is already
+            # inside the cooldown. If the ping then fails, the cost is a 60s wait;
+            # `/codeowners ping` has no cooldown and can be used immediately.
+            REACTION_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+                 -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
                  -H "Accept: application/vnd.github.v3+json" \
                  -H "Content-Type: application/json" \
                  -d '{"content": "rocket"}' \
-                 "$REACTIONS_API" > /dev/null
+                 "$REACTIONS_API")
+            if [ "$REACTION_HTTP_CODE" != "201" ] && [ "$REACTION_HTTP_CODE" != "200" ]; then
+              echo "::warning::Could not record the cooldown marker (HTTP $REACTION_HTTP_CODE); pinging without a cooldown."
+            fi
 
             {
               echo "should-run=true"
