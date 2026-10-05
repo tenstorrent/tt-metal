@@ -88,17 +88,16 @@ effect (up to ~1.7×, Wormhole B0; see [`report.md`](split_reader/report.md)) �
 the knob, not the point.
 
 ## ⭐⭐ T2 — [`bank_stagger`](bank_stagger/README.md)
-**Concept:** DRAM bank contention — rotate each core's block and read **issue order** so the grid's
-requests at any moment land on different banks instead of all on one.
-**Situation:** every core walks its data in the same order and the data lines up on the banks.
-(1) **Width-sharded DRAM source**, one shard per bank: a column block is one bank, so the whole grid
-sits on one bank per block. (2) **Width blocking** of an interleaved source: cores read the same rows.
-(3) **Height blocking** on Blackhole: each core's rows start at `32·k`, always bank 0 with 8 banks.
-**Measured win (Blackhole, 110 cores):** case 1, rotating the **block order** (`core % n_w`):
-**1.31×** at 256 B reads and 1.16× at 1024 B with 8 blocks per core, saving 24–55 µs and growing
-with the work. Cases 2–3, rotating the **row order** (`core % 32`): 1.04–1.07×, a fixed 0.3–1.2 µs.
-**Gist:** start each core's walk at a different index and wrap. Each lever is a compile-time switch
-(`stagger_blocks`, `stagger_reads`), so flip it per call to check whether it pays on your shape.
+**Concept:** DRAM bank contention — rotate each core's **issue order** so the grid's requests at any
+moment land on different banks instead of all on one.
+**Situation:** every core walks its data in the same order and the data lines up on the banks — e.g.
+a **width-sharded DRAM source** with one shard per bank, where each column block is one bank (measured);
+also width blocking of an interleaved source, height blocking on Blackhole, and writes into
+width-sharded or bank-aligned outputs (see the README).
+**Measured win (Blackhole, 110 cores):** starting each core at block `core % n_w` is **1.32×** at
+256 B reads and 1.16× at 1024 B with 8 blocks per core; the saving grows with the work (24–41 µs).
+**Gist:** start each core's walk at a different index and wrap. `stagger_blocks` is a compile-time
+switch, so flip it per call to check whether it pays on your shape.
 
 ## ⭐⭐ T2 — [`matmul_output_subblock`](matmul_output_subblock/README.md)
 **Concept:** matmul output-subblock shape → SRC-register operand reuse (via the `matmul_block` helper).
