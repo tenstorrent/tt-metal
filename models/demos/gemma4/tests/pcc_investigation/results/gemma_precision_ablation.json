@@ -1,0 +1,112 @@
+[
+ {
+  "config": "qk: queries+keys bf16",
+  "mean_pcc_500": 0.97497,
+  "below_099": 175,
+  "top1_agree": 82.0,
+  "expert_flip_pct_mean": 15.85,
+  "expert_flip_first_layer": 0.78,
+  "expert_flip_last_layer": 34.12,
+  "seconds": 19
+ },
+ {
+  "config": "logits: attention scores bf16",
+  "mean_pcc_500": 0.97013,
+  "below_099": 184,
+  "top1_agree": 82.6,
+  "expert_flip_pct_mean": 19.33,
+  "expert_flip_first_layer": 2.64,
+  "expert_flip_last_layer": 35.58,
+  "seconds": 20
+ },
+ {
+  "config": "probs: attention probabilities bf16",
+  "mean_pcc_500": 0.9831,
+  "below_099": 137,
+  "top1_agree": 86.8,
+  "expert_flip_pct_mean": 11.95,
+  "expert_flip_first_layer": 0.1,
+  "expert_flip_last_layer": 27.86,
+  "seconds": 20
+ },
+ {
+  "config": "v: values + attention output bf16",
+  "mean_pcc_500": 0.98111,
+  "below_099": 158,
+  "top1_agree": 86.0,
+  "expert_flip_pct_mean": 13.01,
+  "expert_flip_first_layer": 0.39,
+  "expert_flip_last_layer": 29.42,
+  "seconds": 19
+ },
+ {
+  "config": "lin: all matmul outputs bf16",
+  "mean_pcc_500": 0.97987,
+  "below_099": 170,
+  "top1_agree": 84.6,
+  "expert_flip_pct_mean": 15.62,
+  "expert_flip_first_layer": 0.98,
+  "expert_flip_last_layer": 33.53,
+  "seconds": 20
+ },
+ {
+  "config": "norm: layer-norm outputs bf16",
+  "mean_pcc_500": 0.97138,
+  "below_099": 169,
+  "top1_agree": 83.6,
+  "expert_flip_pct_mean": 15.24,
+  "expert_flip_first_layer": 0.59,
+  "expert_flip_last_layer": 33.82,
+  "seconds": 19
+ },
+ {
+  "config": "res: residual stream (layer outputs) bf16",
+  "mean_pcc_500": 0.98247,
+  "below_099": 151,
+  "top1_agree": 83.8,
+  "expert_flip_pct_mean": 11.5,
+  "expert_flip_first_layer": 0.0,
+  "expert_flip_last_layer": 27.17,
+  "seconds": 20
+ },
+ {
+  "config": "router: router steps bf16",
+  "mean_pcc_500": 0.96132,
+  "below_099": 228,
+  "top1_agree": 81.4,
+  "expert_flip_pct_mean": 25.0,
+  "expert_flip_first_layer": 3.62,
+  "expert_flip_last_layer": 44.09,
+  "seconds": 20
+ },
+ {
+  "config": "experts: expert steps bf16",
+  "mean_pcc_500": 0.98119,
+  "below_099": 145,
+  "top1_agree": 83.8,
+  "expert_flip_pct_mean": 14.85,
+  "expert_flip_first_layer": 0.0,
+  "expert_flip_last_layer": 31.09,
+  "seconds": 24
+ },
+ {
+  "config": "emb: embedding output bf16",
+  "mean_pcc_500": 0.98518,
+  "below_099": 124,
+  "top1_agree": 86.4,
+  "expert_flip_pct_mean": 11.54,
+  "expert_flip_first_layer": 0.29,
+  "expert_flip_last_layer": 28.05,
+  "seconds": 20
+ },
+ {
+  "config": "ALL of the above",
+  "mean_pcc_500": 0.95672,
+  "below_099": 226,
+  "top1_agree": 76.2,
+  "expert_flip_pct_mean": 25.5,
+  "expert_flip_first_layer": 5.18,
+  "expert_flip_last_layer": 44.67,
+  "seconds": 26
+ }
+]

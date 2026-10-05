@@ -1,0 +1,258 @@
+[
+ {
+  "layer": 0,
+  "top4": [
+   1614,
+   121,
+   1573,
+   1955
+  ],
+  "top4_energy_pct": 3.1,
+  "top4_after_norm_pct": 0.6,
+  "top1_abs": 0.03,
+  "median_abs": 0.0037,
+  "norm_w_top1": -0.0,
+  "norm_w_median": 0.0072,
+  "dilution": 1.071
+ },
+ {
+  "layer": 1,
+  "top4": [
+   1614,
+   563,
+   121,
+   1573
+  ],
+  "top4_energy_pct": 19.6,
+  "top4_after_norm_pct": 0.3,
+  "top1_abs": 0.07,
+  "median_abs": 0.0034,
+  "norm_w_top1": 0.0,
+  "norm_w_median": 0.0144,
+  "dilution": 1.257
+ },
+ {
+  "layer": 2,
+  "top4": [
+   121,
+   1614,
+   563,
+   1573
+  ],
+  "top4_energy_pct": 31.1,
+  "top4_after_norm_pct": 3.4,
+  "top1_abs": 0.04,
+  "median_abs": 0.004,
+  "norm_w_top1": 0.0045,
+  "norm_w_median": 0.0189,
+  "dilution": 1.16
+ },
+ {
+  "layer": 3,
+  "top4": [
+   121,
+   1614,
+   563,
+   1573
+  ],
+  "top4_energy_pct": 24.4,
+  "top4_after_norm_pct": 4.2,
+  "top1_abs": 0.04,
+  "median_abs": 0.0049,
+  "norm_w_top1": 0.0078,
+  "norm_w_median": 0.0194,
+  "dilution": 1.11
+ },
+ {
+  "layer": 4,
+  "top4": [
+   121,
+   563,
+   1614,
+   137
+  ],
+  "top4_energy_pct": 19.9,
+  "top4_after_norm_pct": 6.5,
+  "top1_abs": 0.04,
+  "median_abs": 0.0058,
+  "norm_w_top1": 0.0072,
+  "norm_w_median": 0.0229,
+  "dilution": 1.093
+ },
+ {
+  "layer": 5,
+  "top4": [
+   563,
+   1614,
+   137,
+   513
+  ],
+  "top4_energy_pct": 8.7,
+  "top4_after_norm_pct": 9.3,
+  "top1_abs": 0.09,
+  "median_abs": 0.0069,
+  "norm_w_top1": 0.0173,
+  "norm_w_median": 0.0242,
+  "dilution": 1.063
+ },
+ {
+  "layer": 6,
+  "top4": [
+   563,
+   1614,
+   162,
+   137
+  ],
+  "top4_energy_pct": 8.6,
+  "top4_after_norm_pct": 7.9,
+  "top1_abs": 0.11,
+  "median_abs": 0.0086,
+  "norm_w_top1": 0.0217,
+  "norm_w_median": 0.0275,
+  "dilution": 1.058
+ },
+ {
+  "layer": 7,
+  "top4": [
+   563,
+   955,
+   162,
+   1614
+  ],
+  "top4_energy_pct": 9.7,
+  "top4_after_norm_pct": 7.0,
+  "top1_abs": 0.12,
+  "median_abs": 0.0101,
+  "norm_w_top1": 0.0236,
+  "norm_w_median": 0.0302,
+  "dilution": 1.072
+ },
+ {
+  "layer": 8,
+  "top4": [
+   955,
+   563,
+   162,
+   292
+  ],
+  "top4_energy_pct": 10.9,
+  "top4_after_norm_pct": 10.3,
+  "top1_abs": 0.16,
+  "median_abs": 0.0121,
+  "norm_w_top1": 0.0133,
+  "norm_w_median": 0.0398,
+  "dilution": 1.077
+ },
+ {
+  "layer": 9,
+  "top4": [
+   955,
+   162,
+   563,
+   292
+  ],
+  "top4_energy_pct": 10.9,
+  "top4_after_norm_pct": 11.0,
+  "top1_abs": 0.19,
+  "median_abs": 0.015,
+  "norm_w_top1": 0.0117,
+  "norm_w_median": 0.0518,
+  "dilution": 1.074
+ },
+ {
+  "layer": 10,
+  "top4": [
+   955,
+   162,
+   563,
+   379
+  ],
+  "top4_energy_pct": 10.5,
+  "top4_after_norm_pct": 11.1,
+  "top1_abs": 0.28,
+  "median_abs": 0.0213,
+  "norm_w_top1": 0.0175,
+  "norm_w_median": 0.0623,
+  "dilution": 1.07
+ },
+ {
+  "layer": 11,
+  "top4": [
+   955,
+   162,
+   379,
+   563
+  ],
+  "top4_energy_pct": 10.3,
+  "top4_after_norm_pct": 13.6,
+  "top1_abs": 0.39,
+  "median_abs": 0.0306,
+  "norm_w_top1": 0.0267,
+  "norm_w_median": 0.0718,
+  "dilution": 1.063
+ },
+ {
+  "layer": 12,
+  "top4": [
+   955,
+   379,
+   162,
+   563
+  ],
+  "top4_energy_pct": 8.7,
+  "top4_after_norm_pct": 11.2,
+  "top1_abs": 0.42,
+  "median_abs": 0.0398,
+  "norm_w_top1": 0.0236,
+  "norm_w_median": 0.0928,
+  "dilution": 1.052
+ },
+ {
+  "layer": 13,
+  "top4": [
+   955,
+   379,
+   162,
+   563
+  ],
+  "top4_energy_pct": 8.7,
+  "top4_after_norm_pct": 9.4,
+  "top1_abs": 0.6,
+  "median_abs": 0.055,
+  "norm_w_top1": 0.0311,
+  "norm_w_median": 0.1299,
+  "dilution": 1.048
+ },
+ {
+  "layer": 14,
+  "top4": [
+   955,
+   379,
+   162,
+   1016
+  ],
+  "top4_energy_pct": 8.0,
+  "top4_after_norm_pct": 8.8,
+  "top1_abs": 0.77,
+  "median_abs": 0.0713,
+  "norm_w_top1": 0.0388,
+  "norm_w_median": 0.1396,
+  "dilution": 1.044
+ },
+ {
+  "layer": 15,
+  "top4": [
+   955,
+   379,
+   162,
+   1139
+  ],
+  "top4_energy_pct": 12.1,
+  "top4_after_norm_pct": 7.9,
+  "top1_abs": 1.39,
+  "median_abs": 0.0908,
+  "norm_w_top1": 0.0444,
+  "norm_w_median": 0.1689,
+  "dilution": 1.07
+ }
+]
