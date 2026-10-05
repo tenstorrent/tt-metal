@@ -273,6 +273,8 @@ def _chunked_paged_attention(
     *,
     scale=None,
     paged_cache_geometry=None,
+    sliding_window_size=None,
+    attention_sink=None,
 ):
     input_tensor_k = _paged_cache_view(input_tensor_k, paged_cache_geometry, input_tensor_q.shape[-1])
     input_tensor_v = _paged_cache_view(input_tensor_v, paged_cache_geometry, input_tensor_q.shape[-1])
@@ -287,6 +289,8 @@ def _chunked_paged_attention(
         is_causal=True,
         scale=scale,
         query_start=chunk_start_idx,
+        sliding_window_size=sliding_window_size,
+        attention_sink=attention_sink,
     )
 
 
@@ -300,6 +304,8 @@ def chunked_scaled_dot_product_attention_golden(
     chunk_start_idx_tensor=None,
     scale=None,
     paged_cache_geometry=None,
+    sliding_window_size=None,
+    attention_sink=None,
     **_,
 ):
     runtime_start = chunk_start_idx_tensor if chunk_start_idx_tensor is not None else chunk_start_idx
@@ -311,6 +317,8 @@ def chunked_scaled_dot_product_attention_golden(
         runtime_start,
         scale=scale,
         paged_cache_geometry=paged_cache_geometry,
+        sliding_window_size=sliding_window_size,
+        attention_sink=attention_sink,
     )
 
 
