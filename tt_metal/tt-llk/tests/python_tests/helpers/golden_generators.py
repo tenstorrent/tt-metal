@@ -2300,6 +2300,7 @@ class UnarySFPUGolden:
     def __init__(self):
         self.ops = {
             MathOperation.Abs: self._abs,
+            MathOperation.AbsInt32: self._abs,
             MathOperation.EqualZero: self._equal_zero,
             MathOperation.NotEqualZero: self._not_equal_zero,
             MathOperation.LessThanZero: self._less_than_zero,
@@ -2450,6 +2451,7 @@ class UnarySFPUGolden:
             MathOperation.UnaryBitwiseXor,
             MathOperation.RsubScalarInt32,
             MathOperation.RemainderUint32,
+            MathOperation.AbsInt32,
             # identity also runs on floats; an integer input takes the bit-exact vUInt copy.
             MathOperation.Identity,
             # relu_min is the one op here that is not integer-*only*: sfpu_operations.h

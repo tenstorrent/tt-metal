@@ -290,6 +290,8 @@ OUTPUT_DIMS = {
 
 UNARY_SFPU_OPS = {
     MathOperation.Abs,
+    MathOperation.AbsInt32,
+    MathOperation.Fill,
     MathOperation.Exp,
     MathOperation.Gelu,
     MathOperation.Reciprocal,
@@ -402,6 +404,11 @@ BINARY_SFPU_OPS = {
     MathOperation.SfpuIntSumAdd,
     MathOperation.SfpuClampedSiluGlu,
     MathOperation.SfpuSituGlu,
+    MathOperation.SfpuLogaddexp,
+    MathOperation.SfpuLogaddexp2,
+    MathOperation.SfpuElwRightShift,
+    MathOperation.SfpuElwLeftShift,
+    MathOperation.SfpuElwLogicalRightShift,
 }
 
 

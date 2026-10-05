@@ -189,6 +189,8 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"log_with_base", {{"SFPU_OP_CHAIN_0", "log_with_base_tile_init(); log_with_base_tile(0, 0x3EDE5BD9u);"}}},
     {"tiled_prod", {{"SFPU_OP_CHAIN_0", "tiled_prod_tile_init(); tiled_prod_tile(0);"}}},
     {"alt_complex_rotate90", {{"SFPU_OP_CHAIN_0", "alt_complex_rotate90_tile_init(); alt_complex_rotate90_tile(0);"}}},
+    {"abs", {{"SFPU_OP_CHAIN_0", "abs_tile_init(); abs_tile(0);"}}},
+    {"fill", {{"SFPU_OP_FILL_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "fill_tile_init(); fill_tile(0, 5.0f);"}}},
 };
 
 // digamma / trigamma in double: recurrence up to x >= 6, then the asymptotic series.
@@ -232,7 +234,7 @@ bool is_exact_unary_sfpu_op(const std::string& op_name) {
     return op_name == "ceil" || op_name == "floor" || op_name == "trunc" || op_name == "frac" || op_name == "round" ||
            op_name == "isinf" || op_name == "isposinf" || op_name == "isneginf" || op_name == "isnan" ||
            op_name == "isfinite" || op_name == "logical_not" || op_name == "heaviside" || op_name == "identity" ||
-           op_name.starts_with("unary_");
+           op_name == "abs" || op_name == "fill" || op_name.starts_with("unary_");
 }
 
 // Binary SFPU ops driven by `run_sfpu_binary_two_input_buffer`.
@@ -404,6 +406,27 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
      {{"SFPU_OP_MASK_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "mask_tile_init();"},
       {"SFPU_OP_CHAIN_0", "mask_tile(0, 1, DataFormat::Int32);"}}},
+    // DST[0] shifted by DST[1]; an amount outside [0, 32) gives 0.
+    {"left_shift_binary",
+     {{"SFPU_OP_BINARY_SHIFT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "binary_shift_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "binary_left_shift_tile<DataFormat::Int32>(0, 1, 0);"}}},
+    {"right_shift_binary",
+     {{"SFPU_OP_BINARY_SHIFT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "binary_shift_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "binary_right_shift_tile<DataFormat::Int32>(0, 1, 0);"}}},
+    {"logical_right_shift_binary",
+     {{"SFPU_OP_BINARY_SHIFT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "binary_shift_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "binary_logical_right_shift_tile<DataFormat::Int32>(0, 1, 0);"}}},
+    {"logaddexp_binary",
+     {{"SFPU_OP_BINARY_LOGADDEXP_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "logaddexp_binary_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "logaddexp_binary_tile(0, 1, 0);"}}},
+    {"logaddexp2_binary",
+     {{"SFPU_OP_BINARY_LOGADDEXP_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "logaddexp2_binary_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "logaddexp2_binary_tile(0, 1, 0);"}}},
 };
 
 // ---- Tile-layout ops (goldens mirror the tt-llk SFPU tests' UnarySFPUGolden) --------------------
@@ -523,6 +546,11 @@ const map<std::string, std::map<std::string, std::string>> sfpu_int32_unary_op_t
      {{"SFPU_OP_INT_SUM_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "sfpu_sum_int_init(); sfpu_sum_int_col(0);"}}},
     {"sum_int_row",
      {{"SFPU_OP_INT_SUM_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "sfpu_sum_int_init(); sfpu_sum_int_row(0);"}}},
+    {"abs_int32",
+     {{"SFPU_OP_COMPUTE_KERNEL_API_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "abs_tile_init(); abs_tile_int32(0);"}}},
+    {"fill_int32",
+     {{"SFPU_OP_FILL_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "fill_tile_init(); fill_tile_int<DataFormat::Int32>(0, 5u);"}}},
 };
 
 int32_t int32_unary_result(const std::string& op_name, int32_t x) {
@@ -547,15 +575,25 @@ int32_t int32_unary_result(const std::string& op_name, int32_t x) {
     if (op_name == "logical_not_int32") {
         return x == 0 ? 1 : 0;
     }
+    if (op_name == "abs_int32") {
+        return x < 0 ? -x : x;
+    }
+    if (op_name == "fill_int32") {
+        return 5;
+    }
     TT_THROW("Unsupported int unary op_name in test");
 }
 
 // Int8 binary ops whose operands stay non-negative (see generate_non_negative_int8_binary_inputs).
+bool is_binary_shift_op(const std::string& op_name) {
+    return op_name == "left_shift_binary" || op_name == "right_shift_binary" || op_name == "logical_right_shift_binary";
+}
+
 bool is_non_negative_int8_binary_op(const std::string& op_name) {
     return op_name == "add_top_row_int32" || op_name == "div_int32_floor" || op_name == "div_int32_trunc" ||
            op_name == "div_int32" || op_name == "fmod_int32" || op_name == "remainder_int32" ||
            op_name == "bitwise_and_binary" || op_name == "bitwise_or_binary" || op_name == "bitwise_xor_binary" ||
-           op_name == "rsub_int" || op_name == "sfpu_add_int" || op_name == "int_mask";
+           op_name == "rsub_int" || op_name == "sfpu_add_int" || op_name == "int_mask" || is_binary_shift_op(op_name);
 }
 
 // Rows 0-3 of faces 0 and 1 in tile order: what sfpu_add_top_row writes (see ckernel_sfpu_add_top_row.h).
@@ -577,11 +615,24 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_non_negative_int8_binary_
     }
     std::uniform_int_distribution<int> lhs_dist(0, is_rsub ? 63 : 127);
     std::uniform_int_distribution<int> rhs_dist(rhs_min, masks ? 1 : 127);
+    // Shift amounts: [0, 24] keeps 127 << amount below 2**31, so the result stays non-negative; one
+    // lane in eight takes an out-of-range amount in [32, 127], which gives 0.
+    std::uniform_int_distribution<int> shift_dist(0, 24);
+    std::uniform_int_distribution<int> out_of_range_shift_dist(32, 127);
+    const bool shifts = is_binary_shift_op(op_name);
     const size_t words = (numel + 3) / 4;
     vector<uint32_t> lhs(words, 0), rhs(words, 0);
     for (size_t i = 0; i < numel; ++i) {
         lhs[i / 4] |= static_cast<uint32_t>(lhs_dist(rng)) << (8 * (i % 4));
-        rhs[i / 4] |= static_cast<uint32_t>(rhs_dist(rng)) << (8 * (i % 4));
+        int rhs_value = 0;
+        if (!shifts) {
+            rhs_value = rhs_dist(rng);
+        } else if (i % 8 == 7) {
+            rhs_value = out_of_range_shift_dist(rng);
+        } else {
+            rhs_value = shift_dist(rng);
+        }
+        rhs[i / 4] |= static_cast<uint32_t>(rhs_value) << (8 * (i % 4));
     }
     return {lhs, rhs};
 }
@@ -600,6 +651,12 @@ float sfpu_function(const std::string& op_name, float input) {
     const double d = input;  // for the goldens computed in double
     if (op_name == "relu") {
         return fmaxf(input, 0.0f);
+    }
+    if (op_name == "abs") {
+        return std::fabs(input);
+    }
+    if (op_name == "fill") {
+        return 5.0f;
     }
     if (op_name == "relu_min") {
         return fmaxf(input, 5.1f);
@@ -917,6 +974,12 @@ bfloat16 sfpu_binary_function(const std::string& op_name, const bfloat16& lhs_bf
     if (op_name == "add_top_row") {
         return bfloat16(lhs + rhs);  // top rows only; the caller restores the rest
     }
+    if (op_name == "logaddexp_binary") {
+        return bfloat16(static_cast<float>(std::max(a, b) + std::log1p(std::exp(-std::fabs(a - b)))));
+    }
+    if (op_name == "logaddexp2_binary") {
+        return bfloat16(static_cast<float>(std::max(a, b) + std::log2(1.0 + std::exp2(-std::fabs(a - b)))));
+    }
     TT_THROW("Unsupported binary op_name in test");
 }
 
@@ -1023,6 +1086,13 @@ int32_t get_binary_int_operation_result(const std::string& op_name, int lhs, int
     if (op_name == "int_mask") {
         return rhs == 0 ? 0 : lhs;
     }
+    if (is_binary_shift_op(op_name)) {
+        // Non-negative operands: the arithmetic and logical right shifts agree.
+        if (rhs < 0 || rhs >= 32) {
+            return 0;
+        }
+        return op_name == "left_shift_binary" ? static_cast<int32_t>(static_cast<uint32_t>(lhs) << rhs) : lhs >> rhs;
+    }
     TT_THROW("Unsupported int8 binary op_name in test");
 }
 
@@ -1112,7 +1182,7 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
     if (op_name == "celu" || op_name == "elu" || op_name == "selu" || op_name == "softshrink" ||
         op_name == "hardshrink" || op_name == "hardtanh" || op_name == "erf" || op_name == "erfc" ||
         op_name == "identity" || op_name == "hardmish" || op_name == "prelu" || op_name == "tanhshrink" ||
-        op_name == "xielu" || op_name == "power") {
+        op_name == "xielu" || op_name == "power" || op_name == "abs" || op_name == "fill") {
         return uniform(-3.0f, 3.0f);
     }
     if (op_name == "tiled_prod") {
@@ -1224,6 +1294,17 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
     }
     if (op_name == "add_top_row") {
         return {uniform(-4.0f, 4.0f, seed), uniform(-4.0f, 4.0f, seed + 1)};
+    }
+    if (op_name == "logaddexp_binary" || op_name == "logaddexp2_binary") {
+        // Past the point where the composed log(exp(a) + exp(b)) overflows (|x| > 88.7, resp. 127).
+        // Every fourth RHS lane copies its LHS: equal inputs give max + ln 2, resp. + 1.
+        auto lhs = uniform(-200.0f, 200.0f, seed);
+        auto rhs = unpack_vector<bfloat16, uint32_t>(uniform(-200.0f, 200.0f, seed + 1));
+        const auto lhs_values = unpack_vector<bfloat16, uint32_t>(lhs);
+        for (size_t i = 0; i < rhs.size(); i += 4) {
+            rhs[i] = lhs_values[i];
+        }
+        return {lhs, pack_vector<uint32_t, bfloat16>(rhs)};
     }
     if (op_name == "div_binary" || op_name == "mul_float") {
         // Reuse the div operand generator: values in [-4,-0.25] ∪ [0.25,4]. For mul this
@@ -2644,7 +2725,9 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "expm1"),
         std::make_tuple(1, "log_with_base"),
         std::make_tuple(1, "tiled_prod"),
-        std::make_tuple(1, "alt_complex_rotate90")),
+        std::make_tuple(1, "alt_complex_rotate90"),
+        std::make_tuple(1, "abs"),
+        std::make_tuple(1, "fill")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
@@ -2891,7 +2974,9 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "expm1"),
         std::make_tuple(1, "log_with_base"),
         std::make_tuple(1, "tiled_prod"),
-        std::make_tuple(1, "alt_complex_rotate90")),
+        std::make_tuple(1, "alt_complex_rotate90"),
+        std::make_tuple(1, "abs"),
+        std::make_tuple(1, "fill")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
@@ -3097,7 +3182,12 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "bitwise_xor_binary"),
         std::make_tuple(1, "rsub_int"),
         std::make_tuple(1, "sfpu_add_int"),
-        std::make_tuple(1, "int_mask")),
+        std::make_tuple(1, "int_mask"),
+        std::make_tuple(1, "left_shift_binary"),
+        std::make_tuple(1, "right_shift_binary"),
+        std::make_tuple(1, "logical_right_shift_binary"),
+        std::make_tuple(1, "logaddexp_binary"),
+        std::make_tuple(1, "logaddexp2_binary")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
@@ -3186,7 +3276,9 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "rsub_unary_int32"),
         std::make_tuple(1, "logical_not_int32"),
         std::make_tuple(1, "sum_int_col"),
-        std::make_tuple(1, "sum_int_row")),
+        std::make_tuple(1, "sum_int_row"),
+        std::make_tuple(1, "abs_int32"),
+        std::make_tuple(1, "fill_int32")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
