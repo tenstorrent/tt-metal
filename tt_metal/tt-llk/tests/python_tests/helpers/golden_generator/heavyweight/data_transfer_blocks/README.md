@@ -292,17 +292,18 @@ bug.**
 
 ## `PackEdgeMask(masks, select, mode)`
 
-Per-datum masking at tile edges. Up to `EDGE_MASK_COUNT = 4` masks of
-`EDGE_MASK_WIDTH = 16` bits.
+Masking at tile edges. Up to `EDGE_MASK_COUNT = 4` masks of
+`EDGE_MASK_WIDTH = 16` bits, one bit per datum of a 16-datum row.
 
 | Field | Notes |
 |---|---|
-| `masks` | A set bit **keeps** the datum; the hardware masks where the bit is **clear**. Note the polarity. |
-| `select` | One index for every datum, or a per-datum sequence matching the hardware's 2-bit selector. |
+| `masks` | The raw register values. **What a set bit means depends on the architecture**: on Quasar it masks the datum (the packer inverts the register before the gasket), on Wormhole/Blackhole it keeps it. The blocks resolve this through `EDGE_MASK_MASKED_WHEN_SET`, so `dest_to_l1` applies the right one. |
+| `select` | Which mask each **row** uses: one index for every row, or one per row. The hardware selector is 2 bits per row, so a row cannot mix masks. `from_face_select_words(masks, words)` builds it from Quasar's four `EDGE_MASK_SELECT_FACE*` words. |
 | `mode` | `EdgeMaskMode.ZERO`, or `NEG_SATURATE` — the latter exists so a masked datum *loses* a following max-reduce rather than winning it at zero. |
 
-`keep(count)` gives the boolean survival mask; `apply(values)` substitutes zero
-or `-inf`. Construction validates mask count, bit width and mode.
+`keep(count, masked_when_set=...)` gives the boolean survival mask;
+`apply(values, masked_when_set=...)` substitutes zero or `-inf`. Construction
+validates mask count, bit width, selector range and mode.
 
 ## `is_deterministic(stoch_rnd)`
 

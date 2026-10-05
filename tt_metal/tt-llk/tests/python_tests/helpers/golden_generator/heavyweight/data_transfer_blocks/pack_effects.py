@@ -48,16 +48,19 @@ class EdgeMaskMode(IntEnum):
 
 @dataclass(frozen=True)
 class PackEdgeMask:
-    """Per-datum edge masking, as the packer applies it at tile edges.
+    """Edge masking at tile edges, as the packer's configuration registers hold it.
 
     Args:
-        masks: up to ``EDGE_MASK_COUNT`` masks of ``EDGE_MASK_WIDTH`` bits. A set
-            bit **keeps** the datum in that column; a clear bit masks it —
-            note the polarity, the hardware masks where the bit is clear.
-        select: which mask applies. An int uses one mask for every datum;
-            a sequence gives a per-datum mask index, matching the hardware's
-            2-bit per-datum selector.
-        mode: :class:`EdgeMaskMode` — zero or negative-saturate.
+        masks: up to ``EDGE_MASK_COUNT`` masks of ``EDGE_MASK_WIDTH`` bits, the raw
+            register values. Bit *j* covers datum *j* of a 16-datum row. Whether a
+            set bit keeps or masks that datum depends on the architecture, so the
+            caller says which -- see ``masked_when_set`` on :meth:`keep`.
+        select: which mask each 16-datum row uses. An int uses one mask for every
+            row; a sequence gives one index per row, in the order the rows sit in
+            the data. The hardware selector is 2 bits **per row**, never per datum
+            (Quasar's ``EDGE_MASK_SELECT_FACE*``, Wormhole/Blackhole's
+            ``TILE_ROW_SET_MAPPING``), so a row cannot mix masks.
+        mode: :class:`EdgeMaskMode` -- zero or negative-saturate.
     """
 
     masks: Sequence[int] = (0xFFFF,)
@@ -71,32 +74,64 @@ class PackEdgeMask:
             )
         if any(not 0 <= m < (1 << EDGE_MASK_WIDTH) for m in self.masks):
             raise ValueError(f"each mask must fit {EDGE_MASK_WIDTH} bits")
+        selectors = [self.select] if isinstance(self.select, int) else self.select
+        if any(not 0 <= s < len(self.masks) for s in selectors):
+            raise ValueError(
+                f"each selector must index one of the {len(self.masks)} masks"
+            )
         # Raises for anything outside the enum, and normalises a raw int to the
         # member, so the stored value matches the annotation. object.__setattr__
         # because the dataclass is frozen.
         object.__setattr__(self, "mode", EdgeMaskMode(self.mode))
 
-    def keep(self, count: int) -> torch.Tensor:
-        """Bool tensor, True where datum *i* survives the mask."""
-        if isinstance(self.select, int):
-            indices = [self.select] * count
-        else:
-            indices = list(self.select)
-            if len(indices) < count:
-                raise ValueError(
-                    f"select has {len(indices)} entries for {count} datums"
-                )
-        return torch.tensor(
-            [
-                bool((self.masks[indices[i]] >> (i % EDGE_MASK_WIDTH)) & 1)
-                for i in range(count)
-            ]
-        )
+    @classmethod
+    def from_face_select_words(
+        cls,
+        masks: Sequence[int],
+        face_select_words: Sequence[int],
+        mode: EdgeMaskMode = EdgeMaskMode.ZERO,
+    ) -> "PackEdgeMask":
+        """Build from Quasar's ``EDGE_MASK_SELECT_FACE0..3`` register words.
 
-    def apply(self, values: torch.Tensor) -> torch.Tensor:
+        Each 32-bit word holds a 2-bit selector for each of a face's 16 rows,
+        row 0 in the low bits, which is the row-major order this class indexes.
+        """
+        select = [
+            (word >> (2 * row)) & 0x3
+            for word in face_select_words
+            for row in range(EDGE_MASK_WIDTH)
+        ]
+        return cls(masks=masks, select=select, mode=mode)
+
+    def keep(self, count: int, *, masked_when_set: bool = False) -> torch.Tensor:
+        """Bool tensor, True where datum *i* survives the mask.
+
+        `masked_when_set` is the architecture's polarity: True on Quasar, whose
+        packer inverts the register before the gasket applies it, False on
+        Wormhole/Blackhole, where a set bit passes the datum through.
+        """
+        if count % EDGE_MASK_WIDTH:
+            raise ValueError(
+                f"{count} datums is not a whole number of {EDGE_MASK_WIDTH}-datum rows"
+            )
+        rows = count // EDGE_MASK_WIDTH
+        if isinstance(self.select, int):
+            selectors = [self.select] * rows
+        else:
+            selectors = list(self.select)
+            if len(selectors) < rows:
+                raise ValueError(f"select has {len(selectors)} entries for {rows} rows")
+        words = torch.tensor([self.masks[s] for s in selectors[:rows]])
+        columns = torch.arange(EDGE_MASK_WIDTH)
+        bit_set = ((words[:, None] >> columns) & 1).bool().reshape(-1)
+        return ~bit_set if masked_when_set else bit_set
+
+    def apply(
+        self, values: torch.Tensor, *, masked_when_set: bool = False
+    ) -> torch.Tensor:
         """Replace masked datums with zero, or with negative saturation."""
         flat = values.reshape(-1)
-        keep = self.keep(flat.numel())
+        keep = self.keep(flat.numel(), masked_when_set=masked_when_set)
         replacement = (
             torch.full_like(flat, float("-inf"))
             if self.mode == EdgeMaskMode.NEG_SATURATE
@@ -226,9 +261,14 @@ def apply_pack_effects(
     relu_threshold: float = 0.0,
     dest_format: DataFormat = DataFormat.Float16_b,
     edge_mask: Optional[PackEdgeMask] = None,
+    edge_mask_masked_when_set: bool = False,
 ) -> torch.Tensor:
-    """ReLU then edge masking, in the order the packer applies them."""
+    """ReLU then edge masking, in the order the packer applies them.
+
+    `edge_mask_masked_when_set` is the architecture's mask polarity -- see
+    :meth:`PackEdgeMask.keep`.
+    """
     values = apply_relu(values, relu_type, relu_threshold, dest_format)
     if edge_mask is not None:
-        values = edge_mask.apply(values)
+        values = edge_mask.apply(values, masked_when_set=edge_mask_masked_when_set)
     return values
