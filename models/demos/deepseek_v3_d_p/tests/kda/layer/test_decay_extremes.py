@@ -76,7 +76,9 @@ _MEASURED_FAILURES = {
     "synthetic-strong-saturated-h0-1-T1280x1": "strong decay |G_last|=160 (g=-5): output token 31 of a chunk error/RMS "
     "9.6e-2 (control 3.3e-2); output PCC 0.99994; KDA strong-end prep fix not done (tt_metal_tracker-g1b.7)",
     "k3-weak-h24-25-T1280x8": "tt_metal_tracker-g1b.4.12: K3 weak decay |G_last| ~1.6e-3, beta ~3e-4: final state PCC "
-    "0.99939, key row 65 error/RMS 0.271 (0.9875 / 0.93 before g1b.7); suspected BF16 gate projection (large A)",
+    "0.99939, key row 65 error/RMS 0.271 (0.9875 / 0.93 before g1b.7). Cause (device stage substitution): BF16 "
+    "decay_rank (f_a x, RMS 76 from the out-of-domain crafted input) amplified by K3 f_b; an FP32 rank projection gives "
+    "0.99997 / 0.065, an FP32 gate chain alone does not help. Decision: tt_metal_tracker-g1b.4.17",
     "glm-strong-h50-51-T1280x1": "GLM layer 0, strong decay |G_last|~150 (fractional gates): final state norm ratio "
     "0.951 (control 0.987), key row error/RMS 0.35; KDA strong-end prep fix not done (tt_metal_tracker-g1b.7)",
     "k3-control-h48-49-T1280x1": "tt_metal_tracker-g1b.4.11: output PCC 0.99943 < 0.9995, token error/RMS 0.116. Cause "
