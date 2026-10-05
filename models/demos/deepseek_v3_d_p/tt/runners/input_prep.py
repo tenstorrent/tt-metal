@@ -152,8 +152,8 @@ def mtp_generation_union_rows(
         else:
             rows.append(None)
     assert any(r is not None for r in rows), (
-        f"no chip holds global position {actual_end + level}: chunk_start={chunk_start} "
-        f"chunk_size={chunk_size} num_mtp_tokens={num_mtp_tokens} level={level}. MTP levels must be <= num_mtp_tokens."
+        f"no chip holds global position {global_pos}: chunk_start={chunk_start} chunk_size={chunk_size} "
+        f"level={level} num_levels={num_levels}. The level must be < num_levels."
     )
     return rows
 
