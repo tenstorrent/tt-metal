@@ -7314,9 +7314,10 @@ if MESH_CONFIG.is_galaxy:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
         # 8-device ring (Galaxy, sp=8 tp=4)
-        # Three-run medians with compute optimizations and blocking K multicast: 5.676 / 8.599 ms.
-        ("kimi50k", 32, 640, 8, 69.39, RING_JOINT_PERF_MARGIN),
-        ("kimi_k3", 32, 640, 8, 68.71, RING_JOINT_PERF_MARGIN),
+        # Three-run medians: 5.576 / 8.489 ms. kimi50k runs ~1.6% hotter on the CI host
+        # (71.77% vs a 70.49-70.85% local span), so center it on the span and widen to +/-1.5%.
+        ("kimi50k", 32, 640, 8, 71.2, 0.015),
+        ("kimi_k3", 32, 640, 8, 69.59, RING_JOINT_PERF_MARGIN),
     ]
 else:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
