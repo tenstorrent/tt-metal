@@ -486,12 +486,14 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
 
     if (fuse_swiglu) {
         defines["FUSE_SWIGLU"] = "1";
-        // A block-float output's 7-bit mantissas hide a cheaper sigmoid's error (swiglu_sfpu.hpp); bf16 / fp32 outputs
-        // keep silu_tile's.
-        if (output_data_format == tt::DataFormat::Bfp8_b || output_data_format == tt::DataFormat::Bfp4_b) {
-            defines["SWIGLU_BLOCK_FLOAT_OUTPUT"] = "1";
-        }
     }
+    // Without a bias the compute kernel applies SwiGLU on the pack thread in each output block's last K block
+    // (matmul_blocks_swiglu); with one it runs the swiglu_block epilogue.
+    const bool swiglu_in_k_loop = fuse_swiglu && !use_bias;
+    // A block-float output's 7-bit mantissas hide a cheaper sigmoid's error (swiglu_sfpu.hpp); bf16 / fp32 outputs
+    // keep silu_tile's.
+    const bool swiglu_block_float_output =
+        output_data_format == tt::DataFormat::Bfp8_b || output_data_format == tt::DataFormat::Bfp4_b;
 
     if (use_fused_ternary) {
         defines["FUSE_TERNARY"] = "1";
@@ -825,6 +827,8 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
                 {"N_blocks_per_core", N_blocks_per_core},
                 {"subblock_h", subblock_h},
                 {"subblock_w", subblock_w},
+                {"swiglu_in_k_loop", swiglu_in_k_loop ? 1u : 0u},
+                {"swiglu_block_float_output", swiglu_block_float_output ? 1u : 0u},
             },
         .runtime_arg_schema = compute_schema,
         .hw_config = compute_hw,
