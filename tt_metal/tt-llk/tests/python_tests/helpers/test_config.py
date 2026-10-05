@@ -112,6 +112,39 @@ class StimuliMode(Enum):
     LOAD_CACHED = 2  # load from disk, skip computation
 
 
+def should_compute_direct_golden(subject: str = "this golden") -> bool:
+    """Whether to compute a golden the test constructs itself, not via the registry.
+
+    ``get_golden_generator`` is the hook :meth:`TestConfig.setup_mode` swaps per
+    run mode: a dummy under ``--compile-producer`` so compile-only jobs never
+    pay for golden maths, and a caching or loading ``GeneratorProxy`` under
+    ``--stimuli-only`` / ``--use-stimuli``. A test that builds its golden
+    directly misses all three.
+
+    The heavyweight goldens have to be built directly: ``register_golden``
+    instantiates with ``cls()`` and they take their operation, fidelity and
+    reuse mode at construction, so they cannot go in the registry as it stands.
+    That leaves the mode decisions to the caller, which is what this makes.
+
+    Returns ``False`` under ``--compile-producer``, where ``TestConfig.run()``
+    raises the compile skip before any golden is read -- so computing one is
+    pure cost, and an exception in it would fail a job that never wanted the
+    answer. Raises ``pytest.skip`` for the two cached-stimuli modes, which
+    cannot work without the proxy at all: ``--stimuli-only`` would leave
+    ``GeneratorProxy.TEMP_RESULT`` unset and ``StimuliConfig.save_to_cache``
+    would raise on it (or silently cache a previous test's golden), and
+    ``--use-stimuli`` would recompute instead of loading the cached value,
+    quietly defeating the point of the run.
+    """
+    if TestConfig.STIMULI_MODE != StimuliMode.INLINE:
+        pytest.skip(
+            f"{subject} is constructed directly rather than through "
+            f"get_golden_generator, so it bypasses GeneratorProxy, which "
+            f"--stimuli-only and --use-stimuli both depend on"
+        )
+    return TestConfig.BUILD_MODE != BuildMode.PRODUCE
+
+
 @dataclass
 class TestOutcome:
     result: Any = None

@@ -13,6 +13,9 @@ from helpers.constraints import get_valid_math_fidelities
 from helpers.data_format_inference import data_formats
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.golden_generator.heavyweight.operations.quasar_operations import (
+    QuasarMatmulGolden,
+)
 from helpers.golden_generators import (
     TILE_DIM,
     MatmulGolden,
@@ -40,6 +43,7 @@ from helpers.param_config import (
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.test_config import should_compute_direct_golden
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
@@ -255,6 +259,40 @@ MATMUL_FORMAT = (
 )
 
 FULL_MATMUL_SHAPES = [((TILE_DIM, TILE_DIM), (TILE_DIM, TILE_DIM))]
+
+
+def heavyweight_golden_applies(
+    format,
+    transpose,
+    rt_dim,
+    ct_dim,
+    kt_dim,
+    input_A_tile_dimensions,
+    input_B_tile_dimensions,
+):
+    """Whether the heavyweight golden models this parametrization.
+
+    It is being adopted one slice at a time; everything it does not cover stays
+    on the existing golden, which keeps serving the whole sweep. The slice is
+    narrow on purpose -- a single 32x32 tile each way, no transpose, no MX, no
+    2x register format -- because those are the cases the heavyweight model has
+    been validated against silicon on.
+
+    The multi-tile exclusion is not cosmetic: a multi-tile matmul is a block
+    matmul over the inner dimension and ``MatmulGolden.build_chain`` has no
+    notion of K-blocking, so it raises rather than returning something.
+    """
+    return (
+        rt_dim == ct_dim == kt_dim == 1
+        and transpose == Transpose.No
+        and not format.input_format.is_mx_format()
+        and not format.output_format.is_mx_format()
+        and format.register_format_hint is None
+        and tuple(input_A_tile_dimensions) == (TILE_DIM, TILE_DIM)
+        and tuple(input_B_tile_dimensions) == (TILE_DIM, TILE_DIM)
+    )
+
+
 TINY_MATMUL_SHAPE_CASES = [((16, 16), (16, 16))] + [
     ((height, 32), (32, width))
     for height in (1, 2, 4, 8, 16, 32)
@@ -430,19 +468,14 @@ def test_matmul(
         )[0]
         pack_src_format = formats_config.pack_src
 
-        generate_golden = get_golden_generator(MatmulGolden)
-        golden_tensor = generate_golden(
-            src_A_golden,
-            src_B_golden,
-            format.output_format,
-            math_fidelity,
-            input_A_dimensions=input_A_dimensions,
-            input_B_dimensions=input_B_dimensions,
-            tilize=False,
-            input_A_format=format.input_format,
-            input_B_format=format.input_format,
-            math_format=pack_src_format,  # For accumulation of results in matmul we require to calculate in pack_src_format.
-            dest_acc=dest_acc,
+        use_heavyweight = heavyweight_golden_applies(
+            format,
+            transpose,
+            rt_dim,
+            ct_dim,
+            kt_dim,
+            input_A_tile_dimensions,
+            input_B_tile_dimensions,
         )
         golden_dimensions = (input_A_dimensions[0], input_B_dimensions[1])
         golden_format = (
@@ -450,7 +483,45 @@ def test_matmul(
             if format.output_format.is_mx_format()
             else format.output_format
         )
-        if output_tile_dimensions[0] < 16 and output_tile_dimensions[1] == 16:
+
+        if use_heavyweight:
+            # The heavyweight golden takes L1-layout stimuli and returns the
+            # result in L1 layout too, so it lands already comparable with the
+            # device buffer -- no tilize of the golden afterwards.
+            # Built directly, so unlike the else branch below it misses the
+            # run-mode swaps on get_golden_generator -- see
+            # should_compute_direct_golden. Only the heavyweight variants are
+            # affected, so the decision sits inside this branch.
+            if should_compute_direct_golden("the heavyweight matmul golden"):
+                generate_golden = QuasarMatmulGolden(math_fidelity)
+                golden_tensor = generate_golden.run(
+                    [tilized_A.flatten(), tilized_B.flatten()],
+                    format.input_format,
+                    format.output_format,
+                    dest_acc=dest_acc == DestAccumulation.Yes,
+                )
+        else:
+            generate_golden = get_golden_generator(MatmulGolden)
+            golden_tensor = generate_golden(
+                src_A_golden,
+                src_B_golden,
+                format.output_format,
+                math_fidelity,
+                input_A_dimensions=input_A_dimensions,
+                input_B_dimensions=input_B_dimensions,
+                tilize=False,
+                input_A_format=format.input_format,
+                input_B_format=format.input_format,
+                math_format=pack_src_format,  # For accumulation of results in matmul we require to calculate in pack_src_format.
+                dest_acc=dest_acc,
+            )
+
+        # The existing golden returns a logical matrix, so it needs laying out
+        # in tile order before it can be compared; the heavyweight one is
+        # already there.
+        if not use_heavyweight and (
+            output_tile_dimensions[0] < 16 and output_tile_dimensions[1] == 16
+        ):
             tile_rows, tile_cols = output_tile_dimensions
             golden_tensor = (
                 golden_tensor.reshape(
@@ -463,7 +534,7 @@ def test_matmul(
                 .flatten()
                 .to(format_dict[golden_format])
             )
-        else:
+        elif not use_heavyweight:
             golden_tensor = tilize_block(
                 golden_tensor,
                 dimensions=golden_dimensions,
