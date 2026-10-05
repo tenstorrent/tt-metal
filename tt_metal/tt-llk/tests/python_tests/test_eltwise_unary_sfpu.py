@@ -1491,7 +1491,6 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     ), f"Test failed: {(~is_valid).sum()} elements outside tolerance (atol={atol}, rtol={rtol})"
 
 
-
 # Every finite BF16 value through the BF16 kernel (FP32 DEST off), in the approximation
 # mode whose instance the BF16 kernel replaces. Subnormal inputs and NaN lanes are
 # outside a step count (see helpers/ulp_sweep.py); finite/non-finite disagreements on
@@ -1506,13 +1505,21 @@ _BF16_STOCK_BOARDS = {
 }
 # Special input classes where the kernel returns its stock kernel's class instead of torch's.
 _BF16_STOCK_SPECIALS = {
-    MathOperation.Reciprocal: {ChipArchitecture.WORMHOLE: ('neg_inf', 'neg_nan', 'pos_nan',)},
+    MathOperation.Reciprocal: {
+        ChipArchitecture.WORMHOLE: (
+            "neg_inf",
+            "neg_nan",
+            "pos_nan",
+        )
+    },
 }
 
 
 def _special_class(value):
     sign = "neg" if struct.unpack("<I", struct.pack("<f", value))[0] >> 31 else "pos"
-    kind = "nan" if value != value else ("inf" if abs(value) == float("inf") else "zero")
+    kind = (
+        "nan" if value != value else ("inf" if abs(value) == float("inf") else "zero")
+    )
     return f"{sign}_{kind}"
 
 
@@ -1595,21 +1602,30 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
         configuration.run().result, dtype=format_dict[formats.output_format]
     )
     failures = nonfinite_failures(src_A, golden, result, formats.input_format)
-    assert not failures.any(), f"{mathop.name}: {int(failures.sum())} lanes disagree on finiteness"
+    assert (
+        not failures.any()
+    ), f"{mathop.name}: {int(failures.sum())} lanes disagree on finiteness"
 
     def output_class(values):
         values = values.float()
         return torch.stack(
-            [values.isnan(), values.isinf(), values == 0, values.signbit() & ~values.isnan()]
+            [
+                values.isnan(),
+                values.isinf(),
+                values == 0,
+                values.signbit() & ~values.isnan(),
+            ]
         )
 
-    wrong = (output_class(golden[-len(specials) :]) != output_class(result[-len(specials) :])).any(0)
+    wrong = (
+        output_class(golden[-len(specials) :]) != output_class(result[-len(specials) :])
+    ).any(0)
     assert not wrong.any(), (
         f"{mathop.name}: {int(wrong.sum())} of {len(specials)} special inputs "
         f"{specials} change output class or sign"
     )
     mask = measurable_mask(src_A, golden, result, formats.input_format)
     over = int(((ulp_distance(golden.to(result.dtype), result) > max_ulp) & mask).sum())
-    assert passed_test(golden, result, formats.output_format, max_ulp=max_ulp, mask=mask), (
-        f"{mathop.name}: {over} lanes over the {max_ulp}-ULP budget"
-    )
+    assert passed_test(
+        golden, result, formats.output_format, max_ulp=max_ulp, mask=mask
+    ), f"{mathop.name}: {over} lanes over the {max_ulp}-ULP budget"

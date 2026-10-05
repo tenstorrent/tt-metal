@@ -722,7 +722,6 @@ def test_bessel_ops(device, ttnn_op, low, high):
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
-
 def test_reciprocal_bf16_unflushed_zero_and_subnormal_inputs(device):
     """TT-NN's copy into DEST keeps -0 and subnormal BF16 inputs, which the LLK sweep's unpack delivers as +0.
 
@@ -732,9 +731,9 @@ def test_reciprocal_bf16_unflushed_zero_and_subnormal_inputs(device):
     instead, as {word: [(first input, last input), ...]} over the input bits.
     """
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
-    if board not in ('wormhole_b0',):
+    if board not in ("wormhole_b0",):
         pytest.skip(f"ttnn.reciprocal keeps its stock kernel on {board}")
-    STOCK = {'wormhole_b0': {0x7F80: [(0x0021, 0x007F)], 0xFF80: [(0x8021, 0x807F)]}}
+    STOCK = {"wormhole_b0": {0x7F80: [(0x0021, 0x007F)], 0xFF80: [(0x8021, 0x807F)]}}
     words = torch.cat([torch.arange(0x80), torch.arange(0x8000, 0x8080)]).to(torch.int16)
     x = words.view(torch.bfloat16).repeat(4).reshape(1, 1, 32, 32)
     tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)

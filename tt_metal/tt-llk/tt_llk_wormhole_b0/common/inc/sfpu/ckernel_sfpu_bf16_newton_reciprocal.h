@@ -18,7 +18,7 @@ namespace ckernel::sfpu::bf16 {
 // all-ones exponent (Inf, NaN) a signed zero, with no compare. Row A uses L0 (y), L2 (s) and
 // L3 (x, then n, t and u); row B L4, L5 and L6; L7 holds 0x7F800000 for the call. Every FMA's
 // result is read two slots after it issues.
-constexpr uint32_t kNewtonReciprocalSlots = 26u;
+constexpr std::uint32_t kNewtonReciprocalSlots = 26u;
 
 inline void newton_reciprocal_pair() {
     TTI_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_3, 0);  // x (row A)
