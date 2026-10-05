@@ -134,6 +134,9 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
  * @tparam is_fp32_dest_acc_en If true, DEST registers are fp32, and output does not need to be rounded to bfloat16
  * @tparam ITERATIONS Number of iterations for given face
  */
+// Whether BF16 DEST runs the generated log1p kernel as one call over the whole tile.
+inline constexpr bool log1p_bf16_whole_tile = false;
+
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_log1p() {
 #pragma GCC unroll 8
