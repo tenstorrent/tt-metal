@@ -297,7 +297,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
         // the wider clear at an unaligned address changes how many Ethernet commands UMD issues per
         // remote write during bring-up, which shifts the Ethernet core UMD ends up using for all
         // subsequent remote reads.
-        if (this->sender_txq_id != this->receiver_txq_id) {
+        if (this->multi_txq_enabled()) {
             this->router_buffer_clear_size_words = num_words_consumed_per_counter;
         }
 
