@@ -623,8 +623,15 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_non_negative_int8_binary_
     const size_t words = (numel + 3) / 4;
     vector<uint32_t> lhs(words, 0), rhs(words, 0);
     for (size_t i = 0; i < numel; ++i) {
-        const int rhs_value = !shifts ? rhs_dist(rng) : (i % 8 == 7) ? out_of_range_shift_dist(rng) : shift_dist(rng);
         lhs[i / 4] |= static_cast<uint32_t>(lhs_dist(rng)) << (8 * (i % 4));
+        int rhs_value = 0;
+        if (!shifts) {
+            rhs_value = rhs_dist(rng);
+        } else if (i % 8 == 7) {
+            rhs_value = out_of_range_shift_dist(rng);
+        } else {
+            rhs_value = shift_dist(rng);
+        }
         rhs[i / 4] |= static_cast<uint32_t>(rhs_value) << (8 * (i % 4));
     }
     return {lhs, rhs};
