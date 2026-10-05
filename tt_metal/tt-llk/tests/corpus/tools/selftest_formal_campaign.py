@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import tempfile
 import time
@@ -131,6 +132,50 @@ class FormalCampaignTests(unittest.TestCase):
             complete = json.loads((root / "formal-results.json").read_text())
             self.assertEqual(complete["status"], "COMPLETE")
             self.assertEqual(complete["selected"], complete["expected_total"])
+
+    def test_checkpoint_files_are_atomically_replaced(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            json_path = root / "formal-results.json"
+            tsv_path = root / "formal-results.tsv"
+            old_json = '{"generation": "old"}\n'
+            old_tsv = "generation\nold\n"
+            json_path.write_text(old_json)
+            tsv_path.write_text(old_tsv)
+            real_replace = os.replace
+            replacements = []
+
+            def inspect_then_replace(source, destination):
+                source = Path(source)
+                destination = Path(destination)
+                self.assertEqual(source.parent, destination.parent)
+                self.assertNotEqual(source, destination)
+                if destination == json_path:
+                    self.assertEqual(destination.read_text(), old_json)
+                    checkpoint = json.loads(source.read_text())
+                    self.assertEqual(checkpoint["selected"], 1)
+                elif destination == tsv_path:
+                    self.assertEqual(destination.read_text(), old_tsv)
+                    rows = source.read_text().splitlines()
+                    self.assertEqual(
+                        rows[0].split("\t")[:3],
+                        ["op", "status", "compiler_status"],
+                    )
+                    self.assertEqual(
+                        rows[1].split("\t")[:2], ["a", "PROVEN_EQUIVALENT"]
+                    )
+                else:
+                    self.fail(f"unexpected checkpoint destination: {destination}")
+                replacements.append(destination)
+                real_replace(source, destination)
+
+            records = [{"op": "a", "status": "PROVEN_EQUIVALENT"}]
+            with mock.patch.object(campaign.os, "replace", side_effect=inspect_then_replace):
+                campaign.write_results(root, records, {}, time.monotonic(), 1)
+
+            self.assertEqual(replacements, [tsv_path, json_path])
+            self.assertEqual(json.loads(json_path.read_text())["status"], "COMPLETE")
+            self.assertEqual(list(root.glob(".*.tmp")), [])
 
     @mock.patch.object(campaign, "prove_pair")
     @mock.patch.object(campaign, "run_leg")

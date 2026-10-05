@@ -18,6 +18,7 @@ import concurrent.futures
 import csv
 import fnmatch
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -732,6 +733,27 @@ def preflight(tests: Path, python: Path, sim: Path) -> dict:
     }
 
 
+def atomic_write_text(path: Path, content: str) -> None:
+    """Publish a complete text file without exposing a truncated checkpoint."""
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
+    temporary = Path(temporary_name)
+    try:
+        mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
+        os.chmod(temporary, mode)
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+            descriptor = -1
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if descriptor != -1:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+
+
 def write_results(
     root: Path,
     records: list[dict],
@@ -809,7 +831,7 @@ def write_results(
         "metadata": metadata,
         "results": records,
     }
-    (root / "formal-results.json").write_text(json.dumps(summary, indent=2) + "\n")
+    json_content = json.dumps(summary, indent=2) + "\n"
     columns = (
         "op",
         "status",
@@ -824,11 +846,16 @@ def write_results(
         "baseline_flags",
         "detail",
     )
-    with (root / "formal-results.tsv").open("w", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=columns, delimiter="\t")
-        writer.writeheader()
-        for record in records:
-            writer.writerow({name: record.get(name, "") for name in columns})
+    stream = io.StringIO(newline="")
+    writer = csv.DictWriter(stream, fieldnames=columns, delimiter="\t")
+    writer.writeheader()
+    for record in records:
+        writer.writerow({name: record.get(name, "") for name in columns})
+    # Publish the detail first and the JSON summary last so consumers that use
+    # the summary as a checkpoint marker cannot observe a newer summary paired
+    # with an older TSV.
+    atomic_write_text(root / "formal-results.tsv", stream.getvalue())
+    atomic_write_text(root / "formal-results.json", json_content)
 
 
 def main(argv: list[str] | None = None) -> int:
