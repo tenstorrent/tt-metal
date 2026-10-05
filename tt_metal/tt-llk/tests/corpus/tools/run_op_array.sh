@@ -20,6 +20,11 @@ if [ "${GALAXY_SHARD:-0}" = 1 ]; then
   export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
   export NUMEXPR_NUM_THREADS=1 MALLOC_CONF=background_thread:false
   export OP="$op" OUT="$OUT/$op"
-  exec bash "$(dirname "$0")/galaxy_shard.sh"
+  exec bash "$FARM_ROOT/tests/corpus/tools/galaxy_shard.sh"
 fi
-exec bash "$(dirname "$0")/run_op.sh" "$op"
+RUN_OP="${RUN_OP:-$(dirname "$0")/run_op.sh}"
+[ -f "$RUN_OP" ] || {
+  echo "run_op.sh is not beside the Slurm spool copy; export RUN_OP=<staged path>" >&2
+  exit 2
+}
+exec bash "$RUN_OP" "$op"
