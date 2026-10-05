@@ -2827,14 +2827,21 @@ def build_device_decoder(device, decoder_weights: dict, max_decode_bucket: int =
 
 
 def decode_bucket_for(max_ref_frames: int, max_new_tokens: int, step: int = 64) -> int:
-    """Smallest bucket (multiple of ``step``) covering the longest ref+generated decode.
+    """Bucket length covering the longest ref+generated decode, rounded to a power of two.
 
     ``decode_audio_device`` decodes ``cat([ref_codes, codes])``, so the bucket must
     cover BOTH the reference and the generated frames -- sizing it off the generated
     count alone leaves live requests un-warmed.
+
+    Rounded to a power of two rather than a multiple of ``step`` because conv1d
+    weight-prepare was observed to deadlock the device at 192 frames while 64 and
+    128 prepared fine; non-power-of-two lengths appear to hit a bad prepare path.
     """
-    total = int(max_ref_frames) + int(max_new_tokens)
-    return max(step, ((total + step - 1) // step) * step)
+    total = max(int(step), int(max_ref_frames) + int(max_new_tokens))
+    bucket = int(step)
+    while bucket < total:
+        bucket *= 2
+    return bucket
 
 
 def prepare_device_decoder(
@@ -2842,18 +2849,19 @@ def prepare_device_decoder(
     decoder_weights: dict,
     max_ref_frames: int,
     max_new_tokens: int,
-    pin_single_bucket: bool = False,
+    pin_single_bucket: bool = True,
 ):
     """Build, warm and freeze the device decoder for serving. Returns (decoder, buckets).
 
-    Must be called BEFORE the first ``run_inference``: preparing conv weights is only
-    safe until the talker's traced decode has run. After this returns, no live request
-    can allocate a new bucket -- an over-long decode raises instead of hanging.
+    Call BEFORE the first live request. After this returns, no request can trigger a
+    conv weight-prepare: an over-long decode raises instead of hanging the device.
 
-    By default every bucket from one step up to the max is warmed, so each request
-    still decodes at its own tight length (shorter bucket = faster decode). With
-    ``pin_single_bucket`` only the max bucket is built, which costs max-length decode
-    time on every request but holds one conv cache instead of N.
+    ``pin_single_bucket`` (the default) builds ONE bucket, so exactly one conv cache
+    is ever prepared. Every decode then pads to that length, which costs some decode
+    time on short utterances but is the only configuration we have seen warm up
+    reliably -- preparing a third bucket deadlocked the device, whether from the
+    non-power-of-two length or from per-bucket weight duplication exhausting L1.
+    Warming the full ladder instead keeps short decodes faster, but hangs today.
     """
     step = 64
     max_bucket = decode_bucket_for(max_ref_frames, max_new_tokens, step=step)
