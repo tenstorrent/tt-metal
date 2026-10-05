@@ -382,6 +382,11 @@ constexpr uint16_t kFusedRedoSumBf16 = 0x3F00;
 // cold: out of line and size-optimized so the ring kernels fit the kernel config buffer.
 #define SDPA_RECIPE_COLD __attribute__((noinline, optimize("Os")))
 #endif
+// Streamed ring checkpoints rely on every restored block's first chunk being a fused chunk (it waits for each
+// group's O rows); without fused chunks compute keeps the synchronous protocol (the writer serves both).
+#if defined(SDPA_RING_STREAM_STATE) && !defined(SDPA_RECIPE_FUSED_ACTIVE)
+#undef SDPA_RING_STREAM_STATE
+#endif
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 namespace ckernel::sfpu {
 // dest tile 0: max(m_ref, rowmax) from the reduce; tile `group`: m_ref. Keep m_ref unless exceeded by theta.
