@@ -681,8 +681,10 @@ def test_dsv41_demo_session(mesh_device, device_params):
             wu = False
         cont = os.environ.get("DSV41_SESSION_CONTINUE") == "1"  # keep going after a failing scenario (OOM at a large budget)
         budget_i = int(os.environ.get("DSV41_PREFILL_ROW_TOKENS") or 0)
-        if cont and budget_i >= failed.get(s.id, 1 << 30):
-            logger.info(f"=== session scenario {s.id} ROW_TOKENS={budget_i} SKIPPED (budget >= failed {failed[s.id]}) ===")
+        if cont and budget_i >= min(failed.get(s.id, 1 << 30), failed.get("*", 1 << 30)):
+            logger.info(
+                f"=== session scenario {s.id} ROW_TOKENS={budget_i} SKIPPED (budget >= failed {min(failed.get(s.id, 1 << 30), failed.get('*', 1 << 30))}) ==="
+            )
             continue
         try:
             _run_demo_wrap(
@@ -691,7 +693,9 @@ def test_dsv41_demo_session(mesh_device, device_params):
         except Exception as e:  # noqa: BLE001
             if not cont:
                 raise
-            failed[s.id] = min(failed.get(s.id, 1 << 30), budget_i)
+            oom = any(w in str(e) for w in ("Out of Memory", "out of memory", "DRAM", "OOM", "allocate"))
+            key = "*" if (oom and os.environ.get("DSV41_PREFILL_SPAD_MAX")) else s.id  # sized for the max context: a DRAM failure holds for every ISL
+            failed[key] = min(failed.get(key, 1 << 30), budget_i)
             logger.error(f"=== SCENARIO FAILED {s.id} ROW_TOKENS={budget_i}: {type(e).__name__}: {str(e)[:400]} ===")
             for _, (_, m, _) in cache.items():
                 try:
