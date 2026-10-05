@@ -1385,6 +1385,8 @@ class TestConfig:
         )
         if TestConfig.TEST_TARGET.run_simulator and sim_path.endswith(".so"):
             OPTIONS_COMPILE += "-DTT_METAL_TTSIM "
+        if TestConfig.TEST_TARGET.run_simulator:
+            OPTIONS_COMPILE += "-DLLK_SIMULATOR "
 
         NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
 
