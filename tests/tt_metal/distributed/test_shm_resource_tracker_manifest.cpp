@@ -27,7 +27,7 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
-#include "tt_metal/distributed/shm_resource_tracker.hpp"
+#include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {
