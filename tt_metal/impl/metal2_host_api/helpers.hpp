@@ -6,12 +6,22 @@
 
 #include <string_view>
 #include <type_traits>
+#include <umd/device/types/arch.hpp>
 #include <unordered_set>
 #include <variant>
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
+#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
+
+#include "llrt/hal.hpp"
 
 namespace tt::tt_metal::experimental {
+
+// ============================================================================
+// Basic Utility Helpers
+// ============================================================================
 
 // TODO: This should be upstreamed.
 inline NodeRangeSet to_node_range_set(const Nodes& nodes) {
@@ -79,6 +89,64 @@ inline bool IsValidCppIdentifier(std::string_view s) {
 
     // If we got this far, and the name doesn't match any keywords, it's valid.
     return !kCppKeywords.contains(s);
+}
+
+inline bool is_gen2_arch(const Hal& hal) { return hal.get_arch() == tt::ARCH::QUASAR; }
+
+inline bool is_gen1_arch(const Hal& hal) {
+    tt::ARCH arch = hal.get_arch();
+    return arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
+}
+
+inline bool nodes_intersect(const Nodes& a, const Nodes& b) {
+    NodeRangeSet a_set = to_node_range_set(a);
+    NodeRangeSet b_set = to_node_range_set(b);
+    return a_set.intersects(b_set);
+}
+
+// Set equality that is independent of how the two sets decompose into ranges (NodeRangeSet's
+// operator== compares the range lists, so equal sets with different range splits compare unequal).
+inline bool same_node_set(const NodeRangeSet& a, const NodeRangeSet& b) {
+    return a.num_cores() == b.num_cores() && a.intersection(b).num_cores() == a.num_cores();
+}
+
+// TODO: Move this as prefetcher domain
+
+// Role of a kernel binding a PrefetcherPipe accessor group, from its nodes and the group's receiver
+// sets alone (the spec does not name senders; a pipe's sender is the pipe object's). The kernel is
+// the group's receiver when its nodes are exactly the union of the receiver sets, and its sender
+// when its nodes avoid every receiver and number one per pipe (which node hosts which pipe is
+// settled when the pipes are supplied). ValidateProgramSpec and ReservePrefetcherPipeSlots both
+// derive the role through these two definitions.
+inline bool is_prefetcher_pipe_receiver_role(const NodeRangeSet& kernel_nodes, const NodeRangeSet& group_receivers) {
+    return same_node_set(kernel_nodes, group_receivers);
+}
+
+inline bool is_prefetcher_pipe_sender_role(
+    const NodeRangeSet& kernel_nodes, const NodeRangeSet& group_receivers, size_t num_pipes) {
+    return !kernel_nodes.intersects(group_receivers) && kernel_nodes.num_cores() == num_pipes;
+}
+
+// Helper: return a DFB's alias-with list.
+inline const std::vector<DFBSpecName>& dfb_alias_with(const DataflowBufferSpec& dfb) {
+    return dfb.advanced_options.alias_with;
+}
+
+// Whether a DM kernel opts out of implicit sync for a particular DFB.
+// Two routes lead to the same opt-out:
+//   - disable_dfb_implicit_sync_for_all: the per-kernel hammer, covering every DFB the kernel binds.
+//   - disable_dfb_implicit_sync_for: an explicit per-DFB list.
+// If config_2xx is not engaged, implicit sync stays at its default (on for every bound DFB).
+inline bool DmKernelDisablesImplicitSync(const DataMovementHardwareConfig& dm_config, const DFBSpecName& dfb_name) {
+    if (!dm_config.config_2xx.has_value()) {
+        return false;
+    }
+    const auto& gen2_config = *dm_config.config_2xx;
+    if (gen2_config.disable_dfb_implicit_sync_for_all) {
+        return true;
+    }
+    const auto& vec = gen2_config.disable_dfb_implicit_sync_for;
+    return std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
 }
 
 }  // namespace tt::tt_metal::experimental
