@@ -19,10 +19,7 @@ def test_glm_merged_table_config_names_survive_protobuf_round_trip(tmp_path, mon
         dtype=ttnn.bfloat8_b,
         buffer_address=lambda: 0x20000,
     )
-    stage_layouts = [
-        [{"rank": 0, "first_layer": 0, "count": 1, "base_addr": base}]
-        for base in (0x10000, 0x20000)
-    ]
+    stage_layouts = [[{"rank": 0, "first_layer": 0, "count": 1, "base_addr": base}] for base in (0x10000, 0x20000)]
     monkeypatch.setattr(kv_chunk_table, "populate_kv_chunk_address_table_block_cyclic", lambda **kwargs: None)
     monkeypatch.setattr(ttnn, "distributed_context_get_rank", lambda: 0)
 
