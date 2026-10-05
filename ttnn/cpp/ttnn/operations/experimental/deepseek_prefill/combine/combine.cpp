@@ -34,9 +34,11 @@ ttnn::Tensor combine(
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
-    // A whole singleton mesh has no fabric peers. Keep the local worker pipeline,
-    // but avoid fabric discovery (including the default one-link request).
-    const bool local_only = mesh_device->shape().mesh_size() == 1 && dispatch_group_size == 1;
+    // A singleton communication axis has no peers, even when other axes have devices.
+    // Preserve omitted-axis behavior and the existing local worker pipeline.
+    const bool singleton_domain =
+        mesh_device->shape().mesh_size() == 1 || (cluster_axis == 0 && mesh_device->shape()[0] == 1);
+    const bool local_only = singleton_domain && dispatch_group_size == 1;
     // Validate fabric configuration - only tested values are supported
     TT_FATAL(
         cluster_axis.value_or(0) == 0,
