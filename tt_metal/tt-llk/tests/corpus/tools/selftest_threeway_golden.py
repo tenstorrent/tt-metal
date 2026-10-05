@@ -1075,6 +1075,36 @@ def case_modelling_contracts():
             f"compare-only body: golden {got!r} (flushing would give "
             f"{float(tg.format_golden_f32_noacc(spec.math(tg.input_ftz(x)))[0])!r})",
         )
+
+    # (1b) WHOLE-POPULATION SPECIALS. These are the exact witnesses that
+    # distinguish a finite-domain polynomial/select from the operation it
+    # implements. NaNs become signed infinities at the bf16 destination
+    # boundary; that is the existing packer model, not a numeric relaxation.
+    for op, patt, want in (
+        # None means a converted NaN: either infinity sign is accepted by the
+        # policy because a NaN sign is not a numeric quantity.
+        ("elu-fresh", 0xFF81, None),
+        ("gelu-fresh", 0xFF81, None),
+        ("relu", 0x7F81, None),
+        ("sigmoid-fitted", 0x7F81, None),
+        ("tanh-fresh", 0x7F81, None),
+        ("threshold-fresh", 0xFF81, None),
+        ("threshold-fitted", 0xFF81, None),
+        ("log-fresh", 0x7F80, math.inf),
+        ("sigmoidappx-tree", 0x7F80, 1.0),
+        ("sigmoidappx-tree", 0xFF80, 0.0),
+        ("rsqrt-fresh", 0x8000, -math.inf),
+        ("rsqrt-fresh", 0x8001, -math.inf),
+    ):
+        spec = tg.get_spec(op)
+        x = tg._bf16_bits_to_f32(np.array([patt], dtype=np.uint32))
+        got = float(tg.format_golden_f32_noacc(spec.evaluate(x))[0])
+        matches = math.isinf(got) if want is None else got == want
+        check(
+            f"whole-population-special[{op}@0x{patt:04x}]",
+            matches,
+            f"golden {got!r}, expected {'converted NaN' if want is None else repr(want)}",
+        )
     # and the flush must never be applied to a normal operand
     normal = ~sub & np.isfinite(xs)
     check(

@@ -20,22 +20,23 @@
 namespace ckernel::sfpu
 {
 
-// NOTE on NaN: this body keeps the kernel contract's `v <= t -> value`
-// direction, so a lane the predicate REJECTS passes through unchanged, while
-// the torch definition (x if x > t else value) hands a NaN lane `value`.  The
-// sibling fitted arm spells the strict `x > t` form for exactly that reason
-// (fresh_cpp/threshold_fitted.h BOUNDARY OWNERSHIP).  The two agree on every
-// finite lane, and NaN is outside the swept domain (sfpu_domains.py
-// SPECIALS_READY_OPS is empty), so no node distinguishes them.
+// NOTE on NaN: PyTorch propagates it.  SFPU comparisons total-order NaNs, so
+// the finite-domain `v <= t` spelling needs an explicit final pass-through.
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_threshold_fresh_cpp(const float threshold, const float value)
 {
     for (int d = 0; d < ITERATIONS; ++d)
     {
-        sfpi::vFloat v = sfpi::dst_reg[0];
+        const sfpi::vFloat input = sfpi::dst_reg[0];
+        sfpi::vFloat v           = input;
         v_if (v <= threshold)
         {
             v = value;
+        }
+        v_endif;
+        v_if (sfpi::is_nan(input))
+        {
+            v = input;
         }
         v_endif;
         sfpi::dst_reg[0] = v;

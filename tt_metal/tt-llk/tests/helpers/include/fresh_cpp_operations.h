@@ -135,7 +135,9 @@ __attribute__((noinline)) void calculate_sigmoid_appx_tree_cpp()
     {
         const sfpi::vFloat input = sfpi::dst_reg[0];
         const sfpi::vFloat mag   = sfpi::abs(input);
-        sfpi::vFloat g           = mag * 0.0f + 0.5f;
+        // A literal tail is equivalent for every finite input and avoids the
+        // otherwise-observable 0*inf NaN at the saturated endpoints.
+        sfpi::vFloat g           = 0.5f;
         v_if (mag < 1.0f)
         {
             g = mag * 0.2265625f + 0.0f;
@@ -599,6 +601,13 @@ __attribute__((noinline)) void calculate_log_fresh_cpp()
         v_if (in == 0.0f)
         {
             result = -std::numeric_limits<float>::infinity();
+        }
+        v_endif;
+        // The polynomial reduction is finite-only.  Pass infinities and NaNs
+        // through so log(+inf) and NaN propagation retain their semantics.
+        v_if (sfpi::abs(in) >= std::numeric_limits<float>::infinity())
+        {
+            result = in;
         }
         v_endif;
         sfpi::dst_reg[0] = result;

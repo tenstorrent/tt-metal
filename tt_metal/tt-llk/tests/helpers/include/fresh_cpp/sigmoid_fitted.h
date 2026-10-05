@@ -76,8 +76,13 @@ __attribute__((noinline)) void calculate_sigmoid_fitted_cpp()
         // (g(0)=c0 may sit just off 1.0, so a bare setexp would mis-scale).
         const sfpi::vInt pe  = sfpi::exexp(p, sfpi::ExponentMode::Biased);
         const sfpi::vFloat y = sfpi::setexp(p, ep + pe - 127); // == exp(-x)
-        const sfpi::vFloat s = fresh_recip<1>(1.0f + y);
-        sfpi::dst_reg[0]     = sfpi::convert<sfpi::vFloat16b>(s, sfpi::RoundMode::Nearest);
+        sfpi::vFloat s = fresh_recip<1>(1.0f + y);
+        v_if (sfpi::is_nan(x))
+        {
+            s = x;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(s, sfpi::RoundMode::Nearest);
         sfpi::dst_reg++;
     }
 }

@@ -39,6 +39,11 @@ __attribute__((noinline)) void calculate_tanh_fresh_cpp()
         r                    = r * a;
         r                    = sfpi::min(r, 1.0f);
         r                    = sfpi::copysgn(r, x);
+        v_if (sfpi::is_nan(x))
+        {
+            r = x;
+        }
+        v_endif;
         sfpi::dst_reg[0]     = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
         sfpi::dst_reg++;
     }

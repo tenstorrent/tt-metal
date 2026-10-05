@@ -75,6 +75,13 @@ __attribute__((noinline)) void calculate_gelu_fresh_cpp()
             r                     = x * (P0 + x * odd);
         }
         v_endif;
+        // The region predicates order NaNs by their sign-magnitude encoding;
+        // restore IEEE propagation after the finite piecewise computation.
+        v_if (sfpi::is_nan(x))
+        {
+            r = x;
+        }
+        v_endif;
         sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
         sfpi::dst_reg++;
     }

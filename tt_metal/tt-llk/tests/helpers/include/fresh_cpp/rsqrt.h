@@ -10,6 +10,7 @@
 // only in the final refinement arm, so the sqrt fresh row consumes this
 // same header (its own fresh_cpp/sqrt.h migration should include it).
 #include <cstdint>
+#include <limits>
 
 namespace ckernel::sfpu
 {
@@ -65,6 +66,13 @@ __attribute__((noinline)) void calculate_sqrt_rsqrt_fresh_cpp()
         v_if (x < 0.0f)
         {
             y = std::numeric_limits<float>::quiet_NaN();
+        }
+        v_endif;
+        // The SFPU arithmetic path flushes subnormals to signed zero.  Make
+        // the pole explicit so -0 and negative subnormals produce -inf.
+        v_if (sfpi::abs(x) < std::numeric_limits<float>::min())
+        {
+            y = sfpi::copysgn(infinity, x);
         }
         v_endif;
         sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);

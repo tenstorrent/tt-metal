@@ -8,8 +8,8 @@
 // _relu_max_impl_ — an un-unrolled runtime-count loop behind a VectorType/T
 // dispatch wrapper.  Semantic statement of the golden
 // (torch.relu(torch.min(x, threshold))): clamp above at the threshold, zero
-// below 0.  The predicate form preserves the production kernel's NaN
-// pass-through (NaN fails both compares).  Outputs are the input value,
+// below 0.  SFPU comparisons total-order NaNs, so an explicit final predicate
+// restores the mathematical NaN pass-through.  Outputs are the input value,
 // the threshold, or 0 — all exactly representable — so no store rounding.
 #include <cstdint>
 
@@ -26,7 +26,8 @@ __attribute__((noinline)) void calculate_relu_max_fresh_cpp(const float threshol
 {
     for (int d = 0; d < ITERATIONS; ++d)
     {
-        sfpi::vFloat v = sfpi::dst_reg[0];
+        const sfpi::vFloat input = sfpi::dst_reg[0];
+        sfpi::vFloat v           = input;
         v_if (v > threshold)
         {
             v = threshold;
@@ -35,6 +36,13 @@ __attribute__((noinline)) void calculate_relu_max_fresh_cpp(const float threshol
         v_if (v < 0.0f)
         {
             v = 0.0f;
+        }
+        v_endif;
+        // The hardware comparisons total-order NaNs and would otherwise
+        // clamp them.  ReluMax propagates NaN under its mathematical contract.
+        v_if (sfpi::is_nan(input))
+        {
+            v = input;
         }
         v_endif;
         sfpi::dst_reg[0] = v;

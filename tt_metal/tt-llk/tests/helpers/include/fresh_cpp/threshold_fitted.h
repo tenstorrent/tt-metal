@@ -24,7 +24,8 @@
 //   keeps x only for STRICT x > threshold, so x == 5.0 must produce 10.0 —
 //   and bf16 stimuli from U[-5, 5] DO hit 5.0 exactly.  The generic fitter
 //   cascade's `x >= boundary` select would be wrong here; this kernel uses
-//   the strict v_if (x > 5.0f).  NaN lanes also fall to 10.0, matching torch.
+//   the strict v_if (x > 5.0f).  A final explicit NaN pass-through matches
+//   PyTorch despite the SFPU comparison's sign-magnitude total order.
 //   RE-SYNC: when the rlibm refits merge upstream or the fitter refits,
 //   re-derive from the then-current frontier selection.
 
@@ -60,6 +61,11 @@ __attribute__((noinline)) void calculate_threshold_fitted_cpp()
         v_if (x > THRESHOLD)
         {
             p = x; // segment 1: exact identity (strict >, torch semantics)
+        }
+        v_endif;
+        v_if (sfpi::is_nan(x))
+        {
+            p = x;
         }
         v_endif;
         sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(p, sfpi::RoundMode::Nearest);

@@ -41,6 +41,14 @@ __attribute__((noinline)) void calculate_elu_fresh_cpp()
             r = x;
         }
         v_endif;
+        // SFPU comparisons use a sign-magnitude total order, so neither arm
+        // is an IEEE NaN propagation mechanism.  Preserve the source NaN
+        // explicitly (including its sign) for the whole-population contract.
+        v_if (sfpi::is_nan(x))
+        {
+            r = x;
+        }
+        v_endif;
         // bf16 destination: round to nearest-even before the store truncates.
         sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
         sfpi::dst_reg++;
