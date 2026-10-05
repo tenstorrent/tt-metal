@@ -57,8 +57,7 @@ inline GdnTinv gdn_tinv_resolve(
         case ChunkGdnWyInverse::AUTO:
             return gdn_tinv_sfpu_supported(chunk_size, any_input) ? GdnTinv::SFPU_FP32 : GdnTinv::HORNER;
     }
-    TT_FATAL(false, "chunk_gdn: unknown wy_inverse {}", static_cast<uint32_t>(wy_inverse));
-    return GdnTinv::HORNER;  // unreachable
+    TT_THROW("chunk_gdn: unknown wy_inverse {}", static_cast<uint32_t>(wy_inverse));
 }
 
 inline void validate_gdn_tinv(GdnTinv tinv, uint32_t chunk_size, const Tensor& any_input) {
