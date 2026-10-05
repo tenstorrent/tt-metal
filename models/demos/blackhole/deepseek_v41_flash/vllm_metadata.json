@@ -1,0 +1,4 @@
+{
+  "arch": "DeepseekV41ForCausalLM",
+  "main_class": "models.demos.blackhole.deepseek_v41_flash.tt.generator_vllm:DeepseekV41ForCausalLM"
+}
