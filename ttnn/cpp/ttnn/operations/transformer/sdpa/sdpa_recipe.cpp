@@ -93,10 +93,11 @@ ProgramDescriptor recipe_compute_program(
                                                                           : DataType::BFLOAT4_B;
     const auto kv_format = datatype_to_dataformat_converter(kv_type);
     const uint32_t kv_bytes = kv_type == DataType::BFLOAT16 ? 2048 : kv_type == DataType::BFLOAT8_B ? 1088 : 576;
-    // LOW_PRECISION runs every K chunk after a Q chunk's first on the fused chunk (recipe_fused_chunk.hpp). It
-    // needs QK subblocks at least two tiles wide: the one-wide LoFi matmul reuses its other operand, which the
-    // m_ref inner step does not support.
-    const bool fused = policy.selection.recipe == Recipe::E && recipe_subblock_width(k_tiles) >= 2;
+    // STANDARD and LOW_PRECISION (the reference-max recipes) run every K chunk after a Q chunk's first on the
+    // fused chunk (recipe_fused_chunk.hpp). It needs QK subblocks at least two tiles wide: the one-wide LoFi
+    // matmul reuses its other operand, which the m_ref inner step does not support.
+    const bool fused = (policy.selection.recipe == Recipe::B || policy.selection.recipe == Recipe::E) &&
+                       recipe_subblock_width(k_tiles) >= 2;
     ProgramDescriptor program;
     auto add_cb = [&](uint8_t index, uint32_t count, uint32_t page, tt::DataFormat format) {
         CBDescriptor cb{

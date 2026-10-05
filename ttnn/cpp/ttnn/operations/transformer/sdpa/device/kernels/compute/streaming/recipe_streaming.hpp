@@ -364,7 +364,7 @@ constexpr uint32_t kRefMaxExpOctaves = 28;
 // Rescale threshold: keep m_ref until the row max exceeds it by theta (natural-log units of the
 // scaled scores). theta + 0.72 must stay below tau, so P never saturates.
 constexpr float kRefMaxTheta = 16.0f * 0.69314718055994531f;
-// Fused chunks (SDPA_RECIPE_FUSED: LOW_PRECISION without an attn_mask), see sdpa_fused_chunk.
+// Fused chunks (SDPA_RECIPE_FUSED: STANDARD and LOW_PRECISION without an attn_mask), see sdpa_fused_chunk.
 #if defined(SDPA_RECIPE_FUSED) && !defined(SDPA_RECIPE_MASK)
 #define SDPA_RECIPE_FUSED_ACTIVE 1
 // One BF16 tile: a row group's saturation check (max of its chunk row-sum tiles).
@@ -400,7 +400,7 @@ inline void calculate_sdpa_ref_max_select() {
 }
 #ifdef SDPA_RECIPE_FUSED_ACTIVE
 // Round the reference max toward zero to 7 significant bits (clear the lowest BF16 mantissa bit): the fused
-// QK reads m_ref through LoFi's srcB, which keeps 7, so every chunk subtracts the same m_ref.
+// QK reads m_ref through srcB, which keeps 7 at LoFi and HiFi2, so every chunk subtracts the same m_ref.
 inline void calculate_sdpa_trunc7() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     for (int i = 0; i < 4; ++i) {
