@@ -6,104 +6,111 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <limits>
 #include <string>
-#include <string_view>
 
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal::streaming_profiler {
 
-namespace api = experimental::streaming_profiler;
+using experimental::streaming_profiler::Processor;
 
-OpsCsvConsumer::OpsCsvConsumer(const std::string& path) : f_(std::fopen(path.c_str(), "w")) {
-    TT_FATAL(f_ != nullptr, "streaming profiler: cannot open {} for the ops CSV", path);
+OpsCsvConsumer::OpsCsvConsumer(const std::string& path) : file_(std::fopen(path.c_str(), "w")) {
+    TT_FATAL(file_ != nullptr, "streaming profiler: cannot open {} for the ops CSV", path);
 }
 
 void OpsCsvConsumer::operator()(const Batch& batch) {
-    for (const auto& z : batch.zones()) {
-        if (z.runtime_id() == 0 || !z.site().name.ends_with("-KERNEL")) {
+    for (const auto& zone : batch.zones()) {
+        if (zone.runtime_id() == 0 || !zone.site().name.ends_with("-KERNEL")) {
             continue;
         }
-        const api::Core c = z.core();
-        if (!devices_.contains(c.chip_id)) {
-            devices_.emplace(c.chip_id, DeviceMeta{static_cast<uint32_t>(c.chip_id), z.frequency_ghz()});
-        }
-        const uint32_t risc = static_cast<uint32_t>(c.risc);
-        const uint32_t core_key = (static_cast<uint32_t>(c.logical.y) << 16) | static_cast<uint32_t>(c.logical.x);
-        // The wrapper zone never self-nests, so the k-th one on a lane for a prog is execution k.
-        uint32_t& completed = pair_count_[{c.chip_id, core_key, risc, z.runtime_id()}];
-        OpAgg& op = ops_[{c.chip_id, z.runtime_id(), completed}];
+        const experimental::streaming_profiler::Core core = zone.core();
+        const uint32_t processor = static_cast<uint32_t>(core.processor);
+        const uint32_t core_key =
+            (static_cast<uint32_t>(core.physical.y) << 16) | static_cast<uint32_t>(core.physical.x);
+        // A "-KERNEL" zone never nests, so the k-th one on a RISC for a runtime id is that op's k-th execution.
+        uint32_t& completed = executions_seen_[{core.chip_id, core_key, processor, zone.runtime_id()}];
+        OpAgg& op = ops_[{core.chip_id, zone.runtime_id(), completed}];
         completed++;
-        const uint64_t start = z.start_timestamp();
-        const uint64_t end = z.end_timestamp();
-        auto& core = op.cores[core_key];
-        op.k_start = std::min(op.k_start, start);
-        op.k_start_last = std::max(op.k_start_last, start);
-        if (risc <= 1) {
-            op.dm_start = std::min(op.dm_start, start);
+        if (!is_ethernet(core.processor)) {
+            op.start_cycles = std::min(op.start_cycles, zone.start_device_cycles());
+            op.end_cycles = std::max(op.end_cycles, zone.end_device_cycles());
         }
-        op.risc_start[risc] = std::min(op.risc_start[risc], start);
-        core.first = core.first == 0 ? start : std::min(core.first, start);
-        op.k_end = std::max(op.k_end, end);
-        op.risc_end[risc] = std::max(op.risc_end[risc], end);
-        core.second = std::max(core.second, end);
+        const Time start = zone.start_time();
+        const Time end = zone.end_time();
+        op.last_kernel_start = std::max(op.last_kernel_start, start);
+        for (Span* span : {&op.processors[processor], &op.cores[core_key]}) {
+            span->start = std::min(span->start, start);
+            span->end = std::max(span->end, end);
+        }
     }
 }
 
 void OpsCsvConsumer::write_csv() {
-    FILE* const f = f_;
-    std::fputs(
-        "DEVICE ID,GLOBAL CALL COUNT,EXECUTION,CORE COUNT,DEVICE KERNEL START CYCLE,DEVICE KERNEL END CYCLE,"
-        "DEVICE KERNEL DURATION [ns],DEVICE KERNEL DURATION DM START [ns],"
-        "DEVICE KERNEL DURATION PER CORE MIN [ns],DEVICE KERNEL DURATION PER CORE MAX [ns],"
-        "DEVICE KERNEL DURATION PER CORE AVG [ns],DEVICE KERNEL FIRST TO LAST START [ns],"
-        "DEVICE BRISC KERNEL DURATION [ns],DEVICE NCRISC KERNEL DURATION [ns],"
-        "DEVICE TRISC0 KERNEL DURATION [ns],DEVICE TRISC1 KERNEL DURATION [ns],"
-        "DEVICE TRISC2 KERNEL DURATION [ns]\n",
-        f);
-    for (const auto& [key, op] : ops_) {
-        const auto& [chip, prog, exec] = key;
-        const auto mit = devices_.find(chip);
-        const DeviceMeta meta = mit != devices_.end() ? mit->second : DeviceMeta{chip, 0.0};
-        const double freq = meta.frequency_ghz;
-        auto ns = [&](uint64_t start, uint64_t end) {
-            return (freq > 0.0 && end > start && start != UINT64_MAX) ? (end - start) / freq : 0.0;
-        };
-        uint64_t core_min = UINT64_MAX, core_max = 0, core_sum = 0;
-        uint32_t core_n = 0;
-        for (const auto& [c, se] : op.cores) {
-            if (se.first == 0 || se.second <= se.first) {
-                continue;
-            }
-            const uint64_t d = se.second - se.first;
-            core_min = std::min(core_min, d);
-            core_max = std::max(core_max, d);
-            core_sum += d;
-            core_n++;
-        }
-        auto cyc_ns = [&](uint64_t cyc) { return freq > 0.0 ? cyc / freq : 0.0; };
-        std::fprintf(
-            f,
-            "%u,%u,%u,%u,%llu,%llu,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f\n",
-            meta.chip_id,
-            prog,
-            exec,
-            core_n,
-            static_cast<unsigned long long>(op.k_start == UINT64_MAX ? 0 : op.k_start),
-            static_cast<unsigned long long>(op.k_end),
-            ns(op.k_start, op.k_end),
-            ns(op.dm_start, op.k_end),
-            core_n != 0 ? cyc_ns(core_min) : 0.0,
-            core_n != 0 ? cyc_ns(core_max) : 0.0,
-            core_n != 0 ? cyc_ns(core_sum) / core_n : 0.0,
-            ns(op.k_start, op.k_start_last),
-            ns(op.risc_start[0], op.risc_end[0]),
-            ns(op.risc_start[1], op.risc_end[1]),
-            ns(op.risc_start[2], op.risc_end[2]),
-            ns(op.risc_start[3], op.risc_end[3]),
-            ns(op.risc_start[4], op.risc_end[4]));
+    FILE* const out = file_.get();
+    if (!header_written_) {
+        header_written_ = true;
+        std::fputs(
+            "DEVICE ID,GLOBAL CALL COUNT,EXECUTION,CORE COUNT,DEVICE KERNEL START CYCLE,DEVICE KERNEL END CYCLE,"
+            "DEVICE KERNEL DURATION [ns],DEVICE KERNEL DURATION DM START [ns],"
+            "DEVICE KERNEL DURATION PER CORE MIN [ns],DEVICE KERNEL DURATION PER CORE MAX [ns],"
+            "DEVICE KERNEL DURATION PER CORE AVG [ns],DEVICE KERNEL FIRST TO LAST START [ns],"
+            "DEVICE BRISC KERNEL DURATION [ns],DEVICE NCRISC KERNEL DURATION [ns],"
+            "DEVICE TRISC0 KERNEL DURATION [ns],DEVICE TRISC1 KERNEL DURATION [ns],"
+            "DEVICE TRISC2 KERNEL DURATION [ns],DEVICE ERISC0 KERNEL DURATION [ns],DEVICE ERISC1 KERNEL DURATION "
+            "[ns]\n",
+            out);
     }
-    std::fclose(f);
+    const auto elapsed_ns = [](Time start, Time end) {
+        return end > start ? std::chrono::duration<double, std::nano>(end - start).count() : 0.0;
+    };
+    for (const auto& [key, op] : ops_) {
+        const auto& [chip, runtime_id, execution] = key;
+        const auto processor = [&](Processor p) -> const Span& { return op.processors[static_cast<uint32_t>(p)]; };
+        const auto processor_ns = [&](Processor p) { return elapsed_ns(processor(p).start, processor(p).end); };
+        const Time start = std::ranges::min(op.processors, {}, &Span::start).start;
+        const Time end = std::ranges::max(op.processors, {}, &Span::end).end;
+        const Time dm_start = std::min(
+            {processor(Processor::BRISC).start,
+             processor(Processor::NCRISC).start,
+             processor(Processor::ERISC0).start,
+             processor(Processor::ERISC1).start});
+        double core_min = std::numeric_limits<double>::infinity(), core_max = 0.0, core_sum = 0.0;
+        for (const auto& [core, span] : op.cores) {
+            const double core_ns = elapsed_ns(span.start, span.end);
+            core_min = std::min(core_min, core_ns);
+            core_max = std::max(core_max, core_ns);
+            core_sum += core_ns;
+        }
+        std::fprintf(out, "%u,%u,%u,%zu,", chip, runtime_id, execution, op.cores.size());
+        if (op.start_cycles != UINT64_MAX) {
+            std::fprintf(
+                out,
+                "%llu,%llu,",
+                static_cast<unsigned long long>(op.start_cycles),
+                static_cast<unsigned long long>(op.end_cycles));
+        } else {
+            std::fputs(",,", out);
+        }
+        std::fprintf(
+            out,
+            "%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f\n",
+            elapsed_ns(start, end),
+            elapsed_ns(dm_start, end),
+            core_min,
+            core_max,
+            core_sum / static_cast<double>(op.cores.size()),
+            elapsed_ns(start, op.last_kernel_start),
+            processor_ns(Processor::BRISC),
+            processor_ns(Processor::NCRISC),
+            processor_ns(Processor::TRISC0),
+            processor_ns(Processor::TRISC1),
+            processor_ns(Processor::TRISC2),
+            processor_ns(Processor::ERISC0),
+            processor_ns(Processor::ERISC1));
+    }
+    std::fflush(out);
+    ops_.clear();
 }
 
 }  // namespace tt::tt_metal::streaming_profiler
