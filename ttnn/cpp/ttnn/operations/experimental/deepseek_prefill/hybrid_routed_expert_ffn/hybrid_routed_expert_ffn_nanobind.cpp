@@ -34,6 +34,10 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         combine bfloat8_b tiles, as the two ops do back to back), and expert_offsets,
         replicated_global_expert_idx_table (the full table on every device), expert_region_offsets,
         combine_axis, combine_num_links, num_experts_per_tok and seq_len_per_chip are combine's.
+        The overlap also needs fwd_arrived_semaphore, final_arrived_semaphore and expert_go_semaphore:
+        global semaphores created once, initialised to zero, and passed on every call, since
+        neighbouring chips bump them across launches. Everything else it places in L1 is freed when
+        the call returns.
         )doc",
         &hybrid_routed_expert_moe,
         nb::arg("dispatched_buffer").noconvert(),
@@ -57,7 +61,10 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         nb::arg("combine_axis") = 0,
         nb::arg("combine_num_links") = 2,
         nb::arg("num_experts_per_tok") = 0,
-        nb::arg("seq_len_per_chip") = 0);
+        nb::arg("seq_len_per_chip") = 0,
+        nb::arg("fwd_arrived_semaphore") = nb::none(),
+        nb::arg("final_arrived_semaphore") = nb::none(),
+        nb::arg("expert_go_semaphore") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn::detail

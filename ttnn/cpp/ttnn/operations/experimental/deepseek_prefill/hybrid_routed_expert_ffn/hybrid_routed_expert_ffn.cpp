@@ -8,7 +8,19 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 
+#include <algorithm>
+
+#include <tt-metalium/allocator.hpp>
+
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
+
+namespace {
+
+uint32_t semaphore_addr(const std::optional<GlobalSemaphore>& sem) {
+    return sem.has_value() ? static_cast<uint32_t>(sem->address()) : 0u;
+}
+
+}  // namespace
 
 ttnn::Tensor hybrid_routed_expert_moe(
     const ttnn::Tensor& dispatched_buffer,
@@ -31,7 +43,10 @@ ttnn::Tensor hybrid_routed_expert_moe(
     uint32_t combine_axis,
     uint32_t combine_num_links,
     uint32_t num_experts_per_tok,
-    uint32_t seq_len_per_chip) {
+    uint32_t seq_len_per_chip,
+    const std::optional<GlobalSemaphore>& fwd_arrived_semaphore,
+    const std::optional<GlobalSemaphore>& final_arrived_semaphore,
+    const std::optional<GlobalSemaphore>& expert_go_semaphore) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
         "gate/up/down projection lists must have the same length (got {}, {}, {})",
@@ -111,9 +126,32 @@ ttnn::Tensor hybrid_routed_expert_moe(
     // inside the op: the program keeps a raw pointer to this buffer and re-reads its address on
     // every program-cache hit, so it must be owned by something that outlives the program. One
     // shard per worker core, which gives every core an arena at one common L1 address.
-    // Overlapped with combine, the op allocates its own arena; see HybridOverlapProgramFactory.
+    //
+    // Overlapped with combine the arena spans every worker core, because combine lays its rings and control
+    // region over it on rows 0-1, and it takes what L1 is free up to the same budget. Its address is a
+    // compile-time argument of combine's kernels, so it is hashed below rather than re-read on a cache hit.
     std::optional<ttnn::Tensor> l1_arena;
-    if (fused_half_runs && !overlap_combine) {
+    if (fused_half_runs && overlap_combine) {
+        auto* device = dispatched_buffer.device();
+        const auto grid = device->compute_with_storage_grid_size();
+        const tt::tt_metal::CoreRangeSet all_workers(
+            tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{grid.x - 1, grid.y - 1}));
+        const auto free_l1 = device->allocator()->get_statistics(tt::tt_metal::BufferType::L1);
+        const uint32_t arena_bytes =
+            std::min<uint32_t>(
+                hybrid_l1_arena_bytes(device), static_cast<uint32_t>(free_l1.largest_free_block_bytes)) &
+            ~static_cast<uint32_t>(63);
+        const uint32_t cols = arena_bytes / 2;
+        l1_arena = ttnn::empty(
+            ttnn::Shape({static_cast<uint32_t>(grid.x * grid.y), cols}),
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::Layout::ROW_MAJOR,
+            device,
+            tt::tt_metal::MemoryConfig{
+                tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+                tt::tt_metal::BufferType::L1,
+                tt::tt_metal::ShardSpec{all_workers, {1, cols}, tt::tt_metal::ShardOrientation::ROW_MAJOR}});
+    } else if (fused_half_runs) {
         auto* device = dispatched_buffer.device();
         const uint32_t arena_bytes = hybrid_l1_arena_bytes(device);
         // Whole bfloat16 elements. hybrid_l1_arena_bytes rounds down to 64B units, so the halving
@@ -151,7 +189,16 @@ ttnn::Tensor hybrid_routed_expert_moe(
             .combine_axis = combine_axis,
             .combine_num_links = combine_num_links,
             .num_experts_per_tok = num_experts_per_tok,
-            .seq_len_per_chip = seq_len_per_chip},
+            .seq_len_per_chip = seq_len_per_chip,
+            .fwd_arrived = fwd_arrived_semaphore,
+            .final_arrived = final_arrived_semaphore,
+            .expert_go = expert_go_semaphore,
+            .fwd_arrived_addr = semaphore_addr(fwd_arrived_semaphore),
+            .final_arrived_addr = semaphore_addr(final_arrived_semaphore),
+            .expert_go_addr = semaphore_addr(expert_go_semaphore),
+            .l1_arena_addr = overlap_combine && l1_arena.has_value()
+                                 ? static_cast<uint32_t>(l1_arena->buffer()->address())
+                                 : 0u},
         OperationType::tensor_args_t{
             .x = dispatched_buffer,
             .gate_projs = gate_projs,

@@ -32,6 +32,11 @@ using unified::RoutedExpertActivation;
 // writes -- the same handoff as running the two ops back to back -- which combine's untilizers dequantise. The
 // remaining combine arguments are required in that mode and ignored otherwise; the index table there is the full
 // (groups, extent, experts_per_chip) one, replicated on every device.
+//
+// The overlap also needs three global semaphores the caller creates once and passes on every call: combine's
+// fwd_arrived and final_arrived receive counts and the routed expert's expert_go start signal. They outlive the
+// program because neighbouring chips bump them across launches. Everything else the overlap places in L1 -- an arena
+// over every worker core when the fused pass runs -- is allocated per call and freed when it returns.
 ttnn::Tensor hybrid_routed_expert_moe(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& expert_region_offsets,
@@ -53,7 +58,10 @@ ttnn::Tensor hybrid_routed_expert_moe(
     uint32_t combine_axis = 0,
     uint32_t combine_num_links = 2,
     uint32_t num_experts_per_tok = 0,
-    uint32_t seq_len_per_chip = 0);
+    uint32_t seq_len_per_chip = 0,
+    const std::optional<GlobalSemaphore>& fwd_arrived_semaphore = std::nullopt,
+    const std::optional<GlobalSemaphore>& final_arrived_semaphore = std::nullopt,
+    const std::optional<GlobalSemaphore>& expert_go_semaphore = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn
 
