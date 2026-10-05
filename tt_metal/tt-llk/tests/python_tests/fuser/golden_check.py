@@ -14,6 +14,8 @@ from .pack_node import PackNode
 DEFAULT_BASE_ATOL = 0.05
 DEFAULT_BASE_RTOL = 0.05
 DEFAULT_BASE_PCC = 0.99
+DEFAULT_L1_ATOL = 0.1
+DEFAULT_L1_RTOL = 0.1
 
 
 class GoldenCheck:
@@ -37,8 +39,8 @@ class GoldenCheck:
         l1_golden = l1_golden.flatten()
         master_golden = master_golden.flatten()
 
-        l1_atol = output.atol if output.atol is not None else 0.1
-        l1_rtol = output.rtol if output.rtol is not None else 0.1
+        l1_atol = output.atol if output.atol is not None else DEFAULT_L1_ATOL
+        l1_rtol = output.rtol if output.rtol is not None else DEFAULT_L1_RTOL
         master_atol = output.atol if output.atol is not None else output.acc_atol
         master_rtol = output.rtol if output.rtol is not None else output.acc_rtol
 
