@@ -5,7 +5,7 @@
 // so what remains is arena offsets, the credit array and the header both sides check.
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 
 namespace tt::tt_metal::experimental {
 
