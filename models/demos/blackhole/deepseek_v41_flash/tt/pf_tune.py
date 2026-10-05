@@ -31,20 +31,34 @@ import ttnn
 
 _CACHE = {}
 
+# every knob is read from the environment at the time it is used (not at import), so a driver can flip them between two captures of the same process (tools/pfa_e2e.sh with
+# DSV41_PFA_AB, demo/text_demo.py): module attributes QC, KC, EXP_APPROX, QKV8, SP_KC, SP_FP8, LIN_COMP, LIN_ROPE, ROPE_PE, MM, FP4 resolve through ``__getattr__``.
+_KNOBS = {
+    "QC": ("DSV41_PFA_QC", "128", int),
+    "KC": ("DSV41_PFA_KC", "128", int),
+    "EXP_APPROX": ("DSV41_PFA_EXP_APPROX", "0", lambda v: v == "1"),
+    "QKV8": ("DSV41_PFA_QKV8", "0", lambda v: v == "1"),
+    "SP_KC": ("DSV41_PFA_SP_KC", "128", int),
+    "SP_FP8": ("DSV41_PFA_SP_FP8", "0", lambda v: v == "1"),
+    "LIN_COMP": ("DSV41_PFA_LIN_COMP", "0", lambda v: v == "1"),
+    "LIN_ROPE": ("DSV41_PFA_LIN_ROPE", "0", lambda v: v == "1"),
+    "ROPE_PE": ("DSV41_PFA_ROPE_PE", "0", lambda v: v == "1"),
+    "MM": ("DSV41_PFA_MM", "", str),
+    "FP4": ("DSV41_PFA_FP4", "", str),
+}
+
+
+def __getattr__(name):
+    if name in _KNOBS:
+        env, default, conv = _KNOBS[name]
+        return conv(os.environ.get(env, default))
+    raise AttributeError(name)
+
 
 def _flag(name, default):
     return os.environ.get(name, default) == "1"
 
 
-QC = int(os.environ.get("DSV41_PFA_QC", "128"))
-KC = int(os.environ.get("DSV41_PFA_KC", "128"))
-EXP_APPROX = _flag("DSV41_PFA_EXP_APPROX", "0")
-QKV8 = _flag("DSV41_PFA_QKV8", "0")
-SP_KC = int(os.environ.get("DSV41_PFA_SP_KC", "128"))
-SP_FP8 = _flag("DSV41_PFA_SP_FP8", "0")
-LIN_COMP = _flag("DSV41_PFA_LIN_COMP", "0")
-LIN_ROPE = _flag("DSV41_PFA_LIN_ROPE", "0")
-ROPE_PE = _flag("DSV41_PFA_ROPE_PE", "0")
 ROPE_DIM = 64
 _P64 = {}
 
@@ -105,7 +119,11 @@ def sdpa_ckc(attn):
 def lin_ckc(attn, kind="lin"):
     """compute config of the prefill dense linears. kind: 'lin' (projections), 'comp' (compressor), 'rope' (rotation matmul)."""
     fid = os.environ.get("DSV41_PFA_LIN_FID")
-    if fid is None or (kind == "comp" and not LIN_COMP) or (kind == "rope" and not LIN_ROPE):
+    if (
+        fid is None
+        or (kind == "comp" and not __getattr__("LIN_COMP"))
+        or (kind == "rope" and not __getattr__("LIN_ROPE"))
+    ):
         return attn.ckc
     fp32 = _flag("DSV41_PFA_LIN_FP32", "1")
     l1acc = _flag("DSV41_PFA_LIN_L1ACC", "0" if fid == "HiFi4" else "1")
@@ -121,15 +139,15 @@ def shared_ckc(sh, md):
 
 def to8(x):
     """bfp8_b copy of a bf16 tile tensor (no-op unless DSV41_PFA_QKV8=1)."""
-    return ttnn.typecast(x, ttnn.bfloat8_b) if QKV8 and x.dtype != ttnn.bfloat8_b else x
+    return ttnn.typecast(x, ttnn.bfloat8_b) if __getattr__("QKV8") and x.dtype != ttnn.bfloat8_b else x
 
 
 def sdpa_cfg(md):
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=md.compute_with_storage_grid_size(),
-        q_chunk_size=QC,
-        k_chunk_size=KC,
-        exp_approx_mode=EXP_APPROX,
+        q_chunk_size=__getattr__("QC"),
+        k_chunk_size=__getattr__("KC"),
+        exp_approx_mode=__getattr__("EXP_APPROX"),
     )
 
 
@@ -146,11 +164,12 @@ def idx_ckc(dec):
     )
 
 
-MM = os.environ.get("DSV41_PFA_MM", "")
-
-
 def _mm_cfg(md):
-    key = ("mm", id(md))
+    key = (
+        "mm",
+        id(md),
+        *(os.environ.get(k, "") for k in ("DSV41_PFA_MM_BLK", "DSV41_PFA_MM_GRID", "DSV41_PFA_MM_SUB")),
+    )
     if key not in _CACHE:
         m, k, n = (int(v) for v in os.environ.get("DSV41_PFA_MM_BLK", "8,8,8").split(","))
         gx, gy = (int(v) for v in os.environ.get("DSV41_PFA_MM_GRID", "8,10").split(","))
@@ -165,7 +184,7 @@ def _mm_cfg(md):
 
 def linear(x, w, ckc, md):
     """ttnn.linear of the prefill projections (auto program config) or, with DSV41_PFA_MM=minimal, the swept-block minimal_matmul."""
-    if MM == "minimal":
+    if __getattr__("MM") == "minimal":
         cfg = _mm_cfg(md)
         M, K, N = x.shape[-2] // 32, x.shape[-1] // 32, w.shape[-1] // 32
         if (
@@ -173,9 +192,6 @@ def linear(x, w, ckc, md):
         ):  # else the auto program config
             return ttnn.experimental.minimal_matmul(x, w, compute_kernel_config=ckc, config=cfg)
     return ttnn.linear(x, w, compute_kernel_config=ckc)
-
-
-FP4 = os.environ.get("DSV41_PFA_FP4", "")
 
 
 def fp4_fast(x):

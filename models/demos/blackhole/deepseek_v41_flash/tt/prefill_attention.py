@@ -64,12 +64,7 @@ class DSV41PrefillAttention:
         self.U = attn.T
         self.compressed = isinstance(attn, DSV41CompressedAttention)
         self.ratio = attn.ratio if self.compressed else 0
-        if pf_tune.ROPE_PE:
-            pf_tune.p64(attn.mesh_device)  # constant created outside any trace capture
-        self.q_chunk, self.k_chunk = q_chunk or pf_tune.QC, k_chunk or pf_tune.KC
-        self.lckc = pf_tune.lin_ckc(attn)  # dense projections (env DSV41_PFA_LIN_*; baseline = decode ckc)
-        self.cckc = pf_tune.lin_ckc(attn, "comp")
-        self.rckc = pf_tune.lin_ckc(attn, "rope")
+        pf_tune.p64(attn.mesh_device)  # constant created outside any trace capture
         md = self.md
         rows, cols = attn.rows, attn.cols
         # sink for the prefill SDPA: [1, 8 local heads, 1, 1] per column, pre-divided by the softmax scale (the kernel multiplies by it)
@@ -88,7 +83,6 @@ class DSV41PrefillAttention:
         self.rs_tokens = False  # column-split mode (DSV41PrefillLayer.forward_cols): the attention output is reduce-scattered over tokens
         self.halo = None  # [U,1,128,512] kv rows (post RoPE) of the 128 positions before the next chunk (None before the first chunk)
         self.lat_all = None  # owner layers: [U,1,L,512] latents of every group closed so far (RoPE'd)
-        self.ckc_sdpa = pf_tune.sdpa_ckc(attn)
         self.dyn = None  # DynCtx: traced-chunk mode (forward_dyn)
         self.lat_buf = None  # [U,1,Lmax,512] FIFO of latents (kv-source layers, traced-chunk mode)
         self.state_sink = None  # optional callable(self, kv, lat, cs, s0, C, h) called once per chunk; replaces the dense decode-cache write
@@ -141,6 +135,31 @@ class DSV41PrefillAttention:
             kp = torch.arange(WINDOW + C).view(1, -1)
             _MASKS[key] = self._up(torch.where((kp <= t) & (kp > t - WINDOW), 0.0, NEG).reshape(1, 1, C, WINDOW + C))
         return _MASKS[key]
+
+    # the tuning knobs (tt/pf_tune.py) are read when a trace is captured, not at construction
+    @property
+    def lckc(self):
+        return pf_tune.lin_ckc(self.a)
+
+    @property
+    def cckc(self):
+        return pf_tune.lin_ckc(self.a, "comp")
+
+    @property
+    def rckc(self):
+        return pf_tune.lin_ckc(self.a, "rope")
+
+    @property
+    def ckc_sdpa(self):
+        return pf_tune.sdpa_ckc(self.a)
+
+    @property
+    def q_chunk(self):
+        return pf_tune.QC
+
+    @property
+    def k_chunk(self):
+        return pf_tune.KC
 
     def _lin(self, x, w):
         return pf_tune.linear(x, w, self.lckc, self.md)
