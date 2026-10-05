@@ -179,11 +179,15 @@ def _validated_parallel_geometry(
     return mesh_shape, _validated_tensor_parallel_size(mesh_shape, config, tensor_parallel_axis)
 
 
-def _group_projection_rows_by_tp_rank(
+def group_projection_rows_by_tp_rank(
     weights: tuple[torch.Tensor, ...],
     tensor_parallel_size: int,
 ) -> torch.Tensor:
-    """Place every projection's corresponding head slice next to the same TP rank."""
+    """Place every projection's corresponding head slice next to the same TP rank.
+
+    Row block ``r`` of the result is ``[w_0 rows of rank r | w_1 rows of rank r | ...]``; each weight is split into
+    ``tensor_parallel_size`` equal contiguous row blocks. Shared with the GDN weight preparation.
+    """
     grouped = []
     for device_index in range(tensor_parallel_size):
         rank_weights = []
@@ -208,7 +212,7 @@ def _prepare_kda_host_weights(
         state_dict["f_a_proj.weight"].repeat(tensor_parallel_size, 1),
     )
     if config.use_full_rank_gate:
-        input_projection = _group_projection_rows_by_tp_rank(
+        input_projection = group_projection_rows_by_tp_rank(
             common_input_weights
             + (
                 state_dict["g_proj.weight"],
@@ -226,7 +230,7 @@ def _prepare_kda_host_weights(
             output_gate_projection,
             state_dict["g_a_proj.weight"],
         ).reshape(config.v_dim, config.hidden_size)
-        input_projection = _group_projection_rows_by_tp_rank(
+        input_projection = group_projection_rows_by_tp_rank(
             common_input_weights
             + (
                 output_gate_direct,
@@ -249,7 +253,7 @@ def _prepare_kda_host_weights(
             state_dict["k_conv1d.weight"][:, 0, tap],
             state_dict["v_conv1d.weight"][:, 0, tap],
         )
-        fused_tap = _group_projection_rows_by_tp_rank(tap_weights, tensor_parallel_size).reshape(1, 1, -1)
+        fused_tap = group_projection_rows_by_tp_rank(tap_weights, tensor_parallel_size).reshape(1, 1, -1)
         convolution_taps.append(fused_tap)
 
     return _KDAHostWeights(
@@ -263,7 +267,7 @@ def _prepare_kda_host_weights(
     )
 
 
-def _mesh_mapper(
+def tensor_parallel_mesh_mapper(
     device: ttnn.Device | ttnn.MeshDevice | None,
     *,
     mesh_shape: tuple[int, int],
@@ -271,6 +275,8 @@ def _mesh_mapper(
     tensor_parallel_axis: int,
     shard_dim: int | None,
 ) -> ttnn.CppTensorToMesh | None:
+    """Shard ``shard_dim`` over the TP axis and replicate over the other axis; ``None`` replicates (and TP1 maps
+    nothing). Shared with the GDN weight materialization."""
     if tensor_parallel_size == 1:
         return None
     placements = [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]
@@ -310,7 +316,7 @@ def _materialize_kda_tensor(
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device if place_on_device else None,
-        mesh_mapper=_mesh_mapper(
+        mesh_mapper=tensor_parallel_mesh_mapper(
             device,
             mesh_shape=mesh_shape,
             tensor_parallel_size=tensor_parallel_size,

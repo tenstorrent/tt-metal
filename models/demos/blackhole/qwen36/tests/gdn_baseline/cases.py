@@ -7,10 +7,10 @@ carried state; ``ragged`` runs one full chunk and then a partial last chunk of `
 (masked ``valid_len``), whose padding rows hold large finite poison values.
 
 Local files live under ``<checkout>/.weights/<org>--<name>/<revision>/`` (``GDN_BASELINE_WEIGHTS`` overrides the
-root): ``config.json`` and the tokenizer for every case; for real weights also ``layer0.safetensors`` (the first GDN
+root): the tokenizer for text cases; for real weights also ``layer0.safetensors`` (the first GDN
 layer's ``linear_attn.*`` tensors plus ``input_layernorm.weight``), ``embed_rows.safetensors`` (only the embedding
 rows the text needs) and ``manifest.json``. ``prepare.py`` fetches them and fills the reference cache; the device
-tests only read and fail on a miss.
+tests only read and fail on a miss. Model configs are the pinned in-tree copies (``reference/gdn/qwen_models.py``).
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ import torch
 
 from models.demos.deepseek_v3_d_p.reference.gdn.config import GDNConfig
 from models.demos.deepseek_v3_d_p.reference.gdn.layer import gdn_forward_reference
+from models.demos.deepseek_v3_d_p.reference.gdn.qwen_models import QWEN_GDN_MODELS, qwen_gdn_config, qwen_model_config
 from models.demos.deepseek_v3_d_p.reference.gdn.weights import GDN_WEIGHT_NAMES
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[6]
@@ -47,16 +48,7 @@ PREFIX = (
 TEXT_URL = "https://www.gutenberg.org/cache/epub/1342/pg1342.txt"  # Pride and Prejudice, public domain
 
 
-@dataclass(frozen=True)
-class ModelSource:
-    repo: str
-    revision: str
-
-
-MODELS = {
-    "qwen38_27b": ModelSource("Qwen/Qwen3.8-27B", "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"),
-    "qwen36_35b": ModelSource("Qwen/Qwen3.6-35B-A3B", "995ad96eacd98c81ed38be0c5b274b04031597b0"),
-}
+MODELS = {name: QWEN_GDN_MODELS[name] for name in ("qwen38_27b", "qwen36_35b")}  # pinned repo + revision
 TOKENS = (640, 1280)
 
 
@@ -119,26 +111,13 @@ def corpus_path() -> Path:
 
 
 def text_config(model: str) -> dict:
-    path = model_dir(model) / "config.json"
-    if not path.is_file():
-        raise FileNotFoundError(f"{path} missing; run: python -m {__package__}.prepare --fetch-config {model}")
-    config = json.loads(path.read_text())
+    """The pinned config.json's text tower (in-tree copy, ``reference/gdn/model_configs``)."""
+    config = qwen_model_config(model)
     return config.get("text_config", config)
 
 
 def gdn_config(model: str) -> GDNConfig:
-    tc = text_config(model)
-    return GDNConfig(
-        hidden_size=tc["hidden_size"],
-        num_key_heads=tc["linear_num_key_heads"],
-        num_value_heads=tc["linear_num_value_heads"],
-        head_k_dim=tc["linear_key_head_dim"],
-        head_v_dim=tc["linear_value_head_dim"],
-        conv_kernel_size=tc["linear_conv_kernel_dim"],
-        norm_eps=tc["rms_norm_eps"],
-        # transformers qwen3_5 / qwen3_5_moe hard-wire the silu gate (config output_gate_type is swish or unset).
-        output_gate_activation="silu",
-    )
+    return qwen_gdn_config(model)
 
 
 def _file_sha256(path: Path) -> str:
@@ -258,7 +237,7 @@ def case_identity(case: GdnCase, fingerprint: str) -> dict:
     identity = {
         "case": asdict(case),
         "version": REFERENCE_CACHE_VERSION,
-        "model": asdict(MODELS[case.model]),
+        "model": {"repo": MODELS[case.model].repo, "revision": MODELS[case.model].revision},
         "weights_fingerprint": fingerprint,
         "valid_lengths": case.valid_lengths,
     }
