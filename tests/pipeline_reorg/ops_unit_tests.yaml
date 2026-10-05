@@ -18,7 +18,7 @@
 # --- Python per-op tests ---
 
 - name: ttnn NoC atomic barrier operation tests
-  cmd: 'TT_METAL_NOC_DEBUG_DUMP=1 pytest -xv tests/ttnn/unit_tests/operations/test_noc_atomic_barriers_single_device.py'
+  cmd: 'tests/scripts/single_card/run_noc_atomic_barrier_tests.sh'
   skus:
     wh_n150_civ2:
       timeout: 15
