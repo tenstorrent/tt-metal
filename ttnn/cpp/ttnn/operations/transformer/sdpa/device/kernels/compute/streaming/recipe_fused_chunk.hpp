@@ -196,16 +196,29 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         tile_regs_release();
     };
 
-    // Saturation check of group g: max over its chunk row-sum tiles, into the one-tile check CB.
-    auto check_group = [&](uint32_t g) {
-        const uint32_t h = rows(g);
-        CircularBuffer(cb_qkt_im).wait_front((H * g + h) * KT);  // g's sums were packed before its push
+    // Saturation check of groups [g0, g0 + n): max over their chunk row-sum tiles, into the one-tile check CB.
+    // STANDARD (math-bound) reduces columns only, LOW_PRECISION (pack-bound) to a scalar; read_check takes the max.
+#ifdef SDPA_RECIPE_LOFI
+    constexpr ReduceDim check_dim = ReduceDim::REDUCE_SCALAR;
+#else
+    constexpr ReduceDim check_dim = ReduceDim::REDUCE_COL;
+#endif
+    // Check unit size (groups per check). STANDARD is math-bound, so halving the checks' fixed cost pays;
+    // LOW_PRECISION checks every group.
+#ifdef SDPA_RECIPE_LOFI
+    constexpr uint32_t CG = 1;
+#else
+    constexpr uint32_t CG = 2;
+#endif
+    auto check_groups = [&](uint32_t g0, uint32_t n) {
+        const uint32_t last = g0 + n - 1;
+        const uint32_t row_end = H * last + rows(last);
+        CircularBuffer(cb_qkt_im).wait_front(row_end * KT);  // the groups' sums were packed before their push
         set_srca(psum_cb);
-        constexpr ReduceDim check_dim = ReduceDim::REDUCE_SCALAR;
         reduce_init<PoolType::MAX, check_dim>(psum_cb, cb_identity_scale_in, check_cb);
         tile_regs_acquire();
-        for (uint32_t t = 0; t < h * sbw; ++t) {
-            reduce_tile<PoolType::MAX, check_dim>(psum_cb, cb_identity_scale_in, H * g * sbw + t, 0, 0);
+        for (uint32_t t = H * g0 * sbw; t < row_end * sbw; ++t) {
+            reduce_tile<PoolType::MAX, check_dim>(psum_cb, cb_identity_scale_in, t, 0, 0);
         }
         tile_regs_commit();
         reduce_uninit();
@@ -221,13 +234,23 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         tile_regs_release();
         CircularBuffer(check_cb).push_back(1);
     };
-    auto read_check = [&](uint32_t) -> bool {
+    // The verdict of the oldest issued check: does any of its groups' partial sums reach the redo threshold.
+    auto read_check = [&]() -> bool {
         uint32_t redo = 0;
         UNPACK({
             CircularBuffer(check_cb).wait_front(1);
             auto* check =
                 reinterpret_cast<volatile uint32_t*>(get_tile_l1_byte_address(get_operand_id(check_cb), 0));
-            redo = (check[0] & 0x7fffu) >= kFusedRedoSumBf16 ? 1u : 0u;
+            if constexpr (check_dim == ReduceDim::REDUCE_SCALAR) {
+                redo = (check[0] & 0x7fffu) >= kFusedRedoSumBf16 ? 1u : 0u;
+            } else {
+                // Column maxima: row 0 of faces 0 and 1, BF16 pairs at uint32 words 0-7 and 128-135.
+                for (uint32_t i = 0; i < 8; ++i) {
+                    const uint32_t a = check[i], b = check[128 + i];
+                    redo |= ((a & 0x7fffu) >= kFusedRedoSumBf16) | (((a >> 16) & 0x7fffu) >= kFusedRedoSumBf16) |
+                            ((b & 0x7fffu) >= kFusedRedoSumBf16) | (((b >> 16) & 0x7fffu) >= kFusedRedoSumBf16);
+                }
+            }
             CircularBuffer(check_cb).pop_front(1);
             mailbox_write(ckernel::ThreadId::MathThreadId, redo);
             mailbox_write(ckernel::ThreadId::PackThreadId, redo);
@@ -441,14 +464,30 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     // chunk folds per group, ahead of each group's normalization.
     const bool late_fold = !is_last_iter;
     uint32_t redone = 0;
-    // Lag 2: iteration it runs QK of group it, the check of group it - 1 and PV of group it - 2, so a group's
-    // verdict is read one iteration after its check was issued and before its PV touches O.
-    for (uint32_t it = 0; it < G + 2; ++it) {
+    // Groups are checked in units of CG: one reduce, one verdict and one round of handshakes per unit; a unit
+    // whose verdict fires is re-checked group by group, so only the groups that need it are redone. Iteration it runs QK of group it, the check of the unit ending at group it - 1 and PV of group
+    // it - CG - 1, so a unit's verdicts are read one iteration after its check was issued and before its first
+    // group's PV touches O.
+    uint32_t unit_redo = 0;  // the current check unit's verdicts, bit j for its group j
+    for (uint32_t it = 0; it < G + CG + 1; ++it) {
         const bool do_qk = it < G;
-        const bool do_check = it >= 1 && it <= G;
-        bool do_pv = it >= 2;
-        const uint32_t pg = it - 2;
-        if (do_pv && read_check(pg)) {
+        const uint32_t cg_last = it - 1;
+        const bool do_check = it >= 1 && it <= G && ((cg_last + 1) % CG == 0 || cg_last == G - 1);
+        bool do_pv = it >= CG + 1;
+        const uint32_t pg = it - CG - 1;
+        if (do_pv && pg % CG == 0) {
+            const uint32_t n = G - pg < CG ? G - pg : CG;
+            unit_redo = read_check() ? 1u : 0u;
+            if (unit_redo && n > 1) {
+                // Rare: find which groups need the redo (redoing a neighbour would change its numerics).
+                unit_redo = 0;
+                for (uint32_t j = 0; j < n; ++j) {
+                    check_groups(pg + j, 1);
+                    unit_redo |= (read_check() ? 1u : 0u) << j;
+                }
+            }
+        }
+        if (do_pv && ((unit_redo >> (pg % CG)) & 1u)) {
             redo_group(pg);
             finish_group(pg);
             redone |= 1u << pg;
@@ -464,7 +503,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
                 }
             }
             if (do_check && piece == 0) {
-                check_group(it - 1);
+                check_groups(cg_last - cg_last % CG, cg_last % CG + 1);
             }
             if (do_pv) {
                 pv_piece(pg, piece * piece_k, piece_k, 0, true);
