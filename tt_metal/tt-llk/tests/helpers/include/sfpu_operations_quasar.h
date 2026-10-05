@@ -815,14 +815,7 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     }
     else if constexpr (OPERATION == SfpuType::power_iterative)
     {
-        SFPU_UNARY_CALL(
-            DST_SYNC,
-            is_fp32_dest_acc_en,
-            calculate_unary_power_iterative,
-            (APPROX, ITERATIONS),
-            dst_index,
-            VectorMode::RC,
-            3u /* exponent */);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_unary_power_iterative, (APPROX, ITERATIONS), dst_index, VectorMode::RC, 3u /* exponent */);
     }
     else if constexpr (OPERATION == SfpuType::log)
     {
@@ -1241,7 +1234,7 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
                 DST_SYNC,
                 is_fp32_dest_acc_en,
                 calculate_add_int,
-                (false, ITERATIONS, DataFormat::Int32, 0, false),
+                (false, ITERATIONS, DataFormat::Int32, 0, SIGN_MAGNITUDE_FORMAT),
                 src0_tile,
                 src1_tile,
                 dst_tile,
