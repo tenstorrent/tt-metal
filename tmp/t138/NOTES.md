@@ -12,3 +12,12 @@ and S2 (1088x1920); the output is native 1920x1088.
 
 Output on blx03: /var/tmp/fasth3/t138/{driver.log,job_id,broker_slice.log,journal_slice.log,out/}
 Done marker: grep T138_DRIVER_DONE /var/tmp/fasth3/t138/driver.log  (rc 9 = drop/reboot during OUR job -> stop all)
+
+## 2026-10-05 20:11 UTC: submitted
+blx03 rebooted at 20:06 (none of our jobs ran; we had not submitted). Startup gate passed (32 chips, fabric OK 20:09:22).
+Broker job 099 (timeout 2400 s), queued behind ltx-host job 098. The first driver submitted 099 just before I
+killed it to fix its health grep; the second driver was killed before it submitted. A watch-only driver
+(WATCH_JOB=099) now polls 099, runs the post-job gate and writes T138_DRIVER_DONE.
+Next: when T138_DRIVER_DONE lands, read driver.log (rc 9 = drop during our job: stop all, report with
+broker_slice.log/journal_slice.log), then pull run.log timings, copy mp4s + stills back to tt-project/t-e2e/,
+and run ltx_eval video --vbench none against tt-project/baselines/t20/ltx_av_fast_1920x1088_{0,1}.mp4.

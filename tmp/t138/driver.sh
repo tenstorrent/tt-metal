@@ -17,7 +17,7 @@ gate_fail_since() { awk -v s="$1" -v ok="$OKRE" -v bad="$BADRE" 'substr($0,1,19)
 health() {
   systemctl is-active -q tt-device-broker || { log "health: broker inactive"; return 1; }
   st=$(tt-device-mcp status 1 2>&1) || { log "health: status failed"; return 1; }
-  echo "$st" | grep -qiE 'health-gate|fabric-check|recover|upgrade' && { log "health: broker gate/recovery running"; return 1; }
+  echo "$st" | sed -n '/^RUNNING/,/^QUEUED/p' | grep -qiE 'health-gate|fabric-check|recover|upgrade' && { log "health: broker gate/recovery running"; return 1; }
   last=$(grep -E "HEALTH-GATE|$OKRE|ESCALATE|RECOVER|[|] ERROR [|]" $SL | tail -1)
   if echo "$last" | grep -qE "$OKRE" && ! echo "$last" | grep -qE "$BADRE"; then return 0; fi
   log "health: last event not healthy: ${last:0:200}"; return 1
@@ -38,6 +38,10 @@ run_job() {
   log "$name submit rc=$src: $(echo "$out" | tr '\n' ' ' | cut -c1-300)"
   [ $src = 0 ] || return 7
   JOB=$(echo "$out" | tail -1); log "$name JOB=$JOB"; echo $JOB > $V/job_id
+  watch_job "$name"
+}
+watch_job() {  # polls $JOB to the end, then the post-job gate; T0 = our submit time
+  local name=$1
   while :; do
     st=$(tt-device-mcp status -j $JOB 2>&1)
     echo "$st" | grep -qiE "^Status: *(running|queued|pending)" || break
@@ -65,5 +69,9 @@ if [ "$cur" != "$TIP" ]; then
   fi
 fi
 log "tree HEAD $(git -C $W rev-parse --short=11 HEAD) status: $(git -C $W status --porcelain -uno | head -5 | tr '\n' ' ')"
-run_job e2e 2400 env W=$W bash $V/run_e2e.sh; rc=$?
+if [ -n "$WATCH_JOB" ]; then  # re-attach to an already submitted job: never submit another
+  JOB=$WATCH_JOB; T0=$WATCH_T0; log "watch-only JOB=$JOB since $T0"; watch_job e2e; rc=$?
+else
+  run_job e2e 2400 env W=$W bash $V/run_e2e.sh; rc=$?
+fi
 done_ e2e $rc
