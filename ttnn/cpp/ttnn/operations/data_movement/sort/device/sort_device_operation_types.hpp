@@ -14,6 +14,7 @@ struct SortParams {
     const bool descending;
     const bool stable;
     const tt::tt_metal::MemoryConfig output_mem_config;
+    const bool sort_dim_padded;
 };
 
 struct SortInputs {

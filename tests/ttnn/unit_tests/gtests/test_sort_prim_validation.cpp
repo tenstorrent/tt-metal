@@ -35,7 +35,8 @@ TEST_F(SortPrimValidationFixture, RejectsNonPowerOfTwoWidth) {
             /*descending=*/false,
             /*stable=*/false,
             input.memory_config(),
-            std::vector<std::optional<Tensor>>{}),
+            std::vector<std::optional<Tensor>>{},
+            /*sort_dim_padded=*/false),
         std::exception);
 }
 
@@ -50,7 +51,8 @@ TEST_F(SortPrimValidationFixture, AcceptsPowerOfTwoWidth) {
         /*descending=*/false,
         /*stable=*/false,
         input.memory_config(),
-        std::vector<std::optional<Tensor>>{}));
+        std::vector<std::optional<Tensor>>{},
+        /*sort_dim_padded=*/false));
 }
 
 }  // namespace ttnn::prim::test
