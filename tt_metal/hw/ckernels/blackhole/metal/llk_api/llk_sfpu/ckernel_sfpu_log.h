@@ -139,6 +139,13 @@ void calculate_log2_bf16();
 void init_log2_bf16();
 // Whether BF16 DEST runs the generated log2 kernel as one call over the whole tile.
 inline constexpr bool log2_bf16_whole_tile = true;
+// Sets up the generated BF16 log2 kernel for the instance it serves.
+template <bool bf16_kernel>
+inline void log2_bf16_tile_init() {
+    if constexpr (bf16_kernel) {
+        init_log2_bf16();
+    }
+}
 
 template <
     bool APPROXIMATION_MODE,
@@ -151,7 +158,6 @@ inline void calculate_log(uint log_base_scale_factor) {
     if constexpr (
         !is_fp32_dest_acc_en && !FAST_APPROX && IS_BASE_TWO == true && HAS_BASE_SCALING == true && ITERATIONS == 32) {
         if (bf16_dest_log2() && log_base_scale_factor == 0x3fb8aa3bu) {
-            init_log2_bf16();
             calculate_log2_bf16<ITERATIONS>();
             return;
         }

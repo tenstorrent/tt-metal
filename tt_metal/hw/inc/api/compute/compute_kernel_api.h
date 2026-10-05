@@ -341,6 +341,7 @@ template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MOD
 ALWI void log_with_base_tile_init() {
     // TODO(AP): move out init
     MATH(SFPU_UNARY_INIT_FN(log_with_base, sfpu::log_init, (APPROX, fast_and_approx, is_fp32_dest_acc_en)));
+    MATH(ckernel::sfpu::log2_bf16_tile_init<!is_fp32_dest_acc_en>());
 }
 
 // clang-format off
