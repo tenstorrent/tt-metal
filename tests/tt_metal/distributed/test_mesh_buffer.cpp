@@ -10,6 +10,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <array>
 #include <cstddef>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -36,6 +37,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include "env_lib.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_config.hpp>
@@ -184,6 +186,85 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteMeshBufferValidSrcSize) {
     EXPECT_THROW(EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, small_src_vec), std::exception);
     EXPECT_NO_THROW(EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, exact_src_vec, true));
     EXPECT_NO_THROW(EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, large_src_vec, true));
+}
+
+// A graph-capture hook that intercepts device writes, as a NO_DISPATCH capture does. Nothing else
+// is intercepted, so the buffers below are real allocations and the test can read them back.
+class BlockDeviceWritesHook : public IGraphHooks {
+public:
+    bool hook_allocate(const Buffer* /*buffer*/) override { return false; }
+    bool hook_deallocate(Buffer* /*buffer*/) override { return false; }
+    bool hook_program(Program* /*program*/) override { return false; }
+    bool hook_write_to_device(const Buffer* /*buffer*/) override { return true; }
+    bool hook_write_to_device(const MeshBuffer* /*mesh_buffer*/) override { return true; }
+    bool hook_read_from_device(Buffer* /*buffer*/) override { return false; }
+    bool hook_read_from_device(const MeshBuffer* /*mesh_buffer*/) override { return false; }
+};
+
+// Installs a hook on the calling thread for the enclosing scope.
+class ScopedGraphHook {
+public:
+    explicit ScopedGraphHook(const std::shared_ptr<IGraphHooks>& hook) {
+        TT_FATAL(GraphTracker::instance().add_hook(hook), "A graph hook is already installed on this thread");
+    }
+    ~ScopedGraphHook() { GraphTracker::instance().clear_hook(); }
+    ScopedGraphHook(const ScopedGraphHook&) = delete;
+    ScopedGraphHook& operator=(const ScopedGraphHook&) = delete;
+};
+
+// The graph-capture hook is per-thread, while MeshCommandQueue hands each shard write to its
+// dispatch thread pool. A write issued on a thread that holds a write-blocking hook must still be
+// dropped -- under a NO_DISPATCH capture the buffer's address is a placeholder (0), and letting a
+// worker perform the write corrupts L1. Each test writes a pattern to a real L1 buffer, issues an
+// overwrite under the hook through one of the two fanning-out entry points, and checks every
+// shard still holds the original pattern.
+void expect_write_under_blocking_hook_is_dropped(
+    MeshDevice& mesh_device,
+    const std::function<void(MeshCommandQueue&, std::shared_ptr<MeshBuffer>&, std::vector<uint32_t>&)>& overwrite) {
+    constexpr uint32_t page_size = 1024;
+    constexpr uint32_t buffer_size = 16 * page_size;
+    const DeviceLocalBufferConfig device_local_config{.page_size = page_size, .buffer_type = BufferType::L1};
+    auto mesh_buffer =
+        MeshBuffer::create(ReplicatedBufferConfig{.size = buffer_size}, device_local_config, &mesh_device);
+    auto& mesh_cq = mesh_device.mesh_command_queue();
+
+    std::vector<uint32_t> original(buffer_size / sizeof(uint32_t));
+    std::iota(original.begin(), original.end(), 0);
+    EnqueueWriteMeshBuffer(mesh_cq, mesh_buffer, original, /*blocking=*/true);
+
+    std::vector<uint32_t> overwrite_data(original.size(), 0xDEADBEEF);
+    {
+        ScopedGraphHook hook(std::make_shared<BlockDeviceWritesHook>());
+        overwrite(mesh_cq, mesh_buffer, overwrite_data);
+    }
+    Finish(mesh_cq);
+
+    for (const auto& coord : MeshCoordinateRange(mesh_device.shape())) {
+        std::vector<uint32_t> readback;
+        ReadShard(mesh_cq, readback, mesh_buffer, coord);
+        EXPECT_EQ(readback, original) << "a write issued under a write-blocking graph hook reached device " << coord;
+    }
+}
+
+TEST_F(MeshBufferTestSuite, EnqueueWriteMeshBufferUnderBlockingGraphHookIsDropped) {
+    // enqueue_write_mesh_buffer -> enqueue_write_shard_to_sub_grid (replicated fan-out).
+    expect_write_under_blocking_hook_is_dropped(
+        *mesh_device_, [](MeshCommandQueue& mesh_cq, std::shared_ptr<MeshBuffer>& buffer, std::vector<uint32_t>& data) {
+            EnqueueWriteMeshBuffer(mesh_cq, buffer, data, /*blocking=*/true);
+        });
+}
+
+TEST_F(MeshBufferTestSuite, WriteShardsUnderBlockingGraphHookIsDropped) {
+    // enqueue_write_shards -> enqueue_write_shards_nolock (per-shard fan-out), the path TTNN uses.
+    expect_write_under_blocking_hook_is_dropped(
+        *mesh_device_,
+        [this](MeshCommandQueue& mesh_cq, std::shared_ptr<MeshBuffer>& buffer, std::vector<uint32_t>& data) {
+            std::vector<ShardDataTransfer> transfers;
+            for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+                transfers.push_back(ShardDataTransfer{coord}.host_data(data.data()));
+            }
+            mesh_cq.enqueue_write_shards(buffer, transfers, /*blocking=*/true);
+        });
 }
 
 TEST_F(MeshBufferTest2x4, Deallocation) {
