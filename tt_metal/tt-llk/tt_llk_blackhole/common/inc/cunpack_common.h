@@ -215,7 +215,8 @@ enum class BlockReplayBody : std::uint8_t
 constexpr std::uint8_t BLOCK_REPLAY_HALF_0 = 0x10;
 constexpr std::uint8_t BLOCK_REPLAY_HALF_1 = 0x20;
 
-inline BlockReplayBody& block_replay_body()
+// Internal linkage: a kernel that never reads the record (no block call) drops the variable and the inits' stores to it.
+static inline BlockReplayBody& block_replay_body()
 {
     static BlockReplayBody body = BlockReplayBody::None;
     return body;
