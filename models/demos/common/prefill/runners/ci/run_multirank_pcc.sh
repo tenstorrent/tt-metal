@@ -53,6 +53,9 @@ SC1_NUM_LAYERS=""
 SC1_NUM_USERS=1
 
 case "${MODEL}" in
+  gptoss120b)
+    source "${TT_METAL_HOME}/models/demos/gpt_oss_d_p/scripts/ci/runner_config.sh"
+    ;;
   llama31)
     source "${TT_METAL_HOME}/models/demos/llama_3p1_8b_d_p/scripts/ci/runner_config.sh"
     ;;
@@ -342,10 +345,10 @@ set -e
 RUNNER_RC=0
 if [ "${PROD_RC}" -eq 0 ]; then
   # A producer can finish successfully while a runner hangs during shutdown.
-  if timeout 120 tail --pid="${RUNNER_PID}" -f /dev/null; then
+  if timeout "${RUNNER_SHUTDOWN_TIMEOUT_S:-120}" tail --pid="${RUNNER_PID}" -f /dev/null; then
     wait "${RUNNER_PID}" || RUNNER_RC=$?
   else
-    echo "runner did not shut down within 120 seconds" >&2
+    echo "runner did not drain its shutdown sentinel before the timeout" >&2
     RUNNER_RC=124
   fi
 fi
