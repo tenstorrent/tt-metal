@@ -163,6 +163,37 @@ def test_a_row_a_narrower_re_emit_did_not_supersede_keeps_its_own_run(table):
     assert "2026" not in second  # this run's rows name it through the key line
 
 
+def test_a_re_emit_credits_no_run_with_a_hand_written_note_or_an_arch_row(table):
+    """Only a note `_render` writes is an earlier emit's figure. A hand-written one --
+    "fp32 output, not swept", or Frac's sampled `max 384 ULP, 40 variants / ...`, which
+    starts like an emitted note -- names no run on the key line, and an `arch:` row is
+    one no Wormhole run measured; crediting either to the outgoing clause made the
+    provenance audit read a sample as exhaustive."""
+    table.write_text(
+        "Gelu:\n"
+        "  - {in: Float16_b, out: Float32, max_ulp: 9}  # fp32 output, not swept\n"
+        "  - {out: Float16, metric: tolerance}  # max 384 ULP, 40 variants / 737k lanes\n"
+        "  - {in: Float16_b, out: Float16_b, arch: BLACKHOLE, max_ulp: 44}  # bh\n",
+        encoding="utf-8",
+    )
+    for in_fmt, run in (
+        ("Float16", "sweep A, wormhole, 2026-09-23"),
+        ("Float16_b", "sweep B, wormhole, 2026-09-24"),
+    ):
+        MEASURED.clear()
+        for approx in ("No", "Yes"):
+            for dest in ("No", "Yes"):
+                record("Gelu", (in_fmt, in_fmt, approx, dest), 1)
+        write_table(table, run)
+    rows = _rows(table)
+    assert any(r.endswith("# fp32 output, not swept") for r in rows)
+    assert any(r.endswith("# max 384 ULP, 40 variants / 737k lanes") for r in rows)
+    assert any(r.endswith("max_ulp: 44}  # bh") for r in rows)
+    # And the first run's emitted rows still go with it.
+    first = next(r for r in rows if "in: Float16, out: Float16," in r)
+    assert first.endswith("# max 1 ULP, sweep A, wormhole, 2026-09-23")
+
+
 def test_a_demotion_names_the_budget_it_would_have_needed(table):
     """A cell demotes only once its *measurement* is past the ceiling (one inside it
     enrols, capped), and the row names both numbers so the claim is checkable against
@@ -329,6 +360,8 @@ def test_the_emitted_budget_uses_the_declared_headroom(monkeypatch):
     # A block float never enrols from a sorted sweep, however small the reading.
     assert _verdict(3, "Bfp8_b") == ("block", 3)
     assert _verdict(0, "Bfp8_b") == ("block", 0)
+    monkeypatch.setattr(ulp_sweep, "EMIT_HEADROOM", 1.5)
+    assert _verdict(10, "Float32") == ("ulp", 15)
 
 
 def test_a_nonfinite_disagreement_is_reported_rather_than_only_masked_out():

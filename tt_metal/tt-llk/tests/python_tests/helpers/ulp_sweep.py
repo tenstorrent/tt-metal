@@ -1053,8 +1053,7 @@ _DATED = re.compile(r"\d{4}-\d{2}-\d{2}")
 #: same way -- Frac's `max 384 ULP, 40 variants / 737k lanes, ...` from a sample -- is
 #: not.
 _EMITTED_NOTE = re.compile(
-    r"max \d+ ULP(, budget would be \d+ > \d+-step ceiling|, block-quantized, so "
-    r"tolerance)?|not measurable: .+"
+    r"max \d+ ULP(, budget \d+ > ceiling \d+|, block-quantized)?|not measurable: .+"
 )
 
 

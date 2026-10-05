@@ -1819,14 +1819,14 @@ def _budgets_past_their_measurement(path=_TABLE_PATH):
 
 
 def test_a_demotion_note_names_the_budget_the_emitter_computes():
-    """A tolerance row the emitter demoted says ``budget would be B > C-step ceiling``,
-    and both numbers are checkable: B is ``_verdict``'s budget for the measurement
-    beside it, and it does cross C. A block kept verbatim is never re-rendered, so a
+    """A tolerance row the emitter demoted says ``budget B > ceiling C``, and both
+    numbers are checkable: B is ``_verdict``'s budget for the measurement beside it,
+    and it does cross C. A block kept verbatim is never re-rendered, so a
     stale figure there -- Gelu's 31406 from the old float ceil, where 28550 x 1.1 is
     exactly 31405 -- survives every re-emit unless something reads it."""
-    from helpers.ulp_sweep import _verdict
+    from helpers.ulp_sweep import _is_exact, _verdict
 
-    note = re.compile(r"max (\d+) ULP, budget would be (\d+) > (\d+)-step ceiling")
+    note = re.compile(r"max (\d+) ULP, budget (\d+) > ceiling (\d+)")
     wrong, op = [], None
     for line in _TABLE_PATH.read_text(encoding="utf-8").splitlines():
         if line and not line[0].isspace() and not line.startswith("#"):
@@ -1835,8 +1835,8 @@ def test_a_demotion_note_names_the_budget_the_emitter_computes():
         if not found:
             continue
         measured, budget, ceiling = (int(g) for g in found.groups())
-        out_fmt = _row_fields(line)["out"]
-        expected = _verdict(measured, out_fmt)
+        fields = _row_fields(line)
+        expected = _verdict(measured, fields["out"], fields.get("in"), _is_exact(op))
         if expected != ("tolerance", budget) or budget <= ceiling:
             wrong.append(f"{op}: {line.split('#', 1)[0].strip()} -> {expected}")
     assert not wrong, "\n".join(wrong)
