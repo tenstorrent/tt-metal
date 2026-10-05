@@ -460,6 +460,7 @@ def _strong_decay_inputs(chunk_log_decay: float) -> tuple[torch.Tensor, ...]:
 _STRONG_DECAY_PEAK_ERROR = {"intra": 2.5e-4, "k_dec_t": 3.0e-3}
 _ANCHORED_RANGE_XFAIL = pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason="KDA prep anchors exp(G - G_last/2) and exp(G_last/2 - G); beyond |G_last| ~ 150 per chunk "
     "these factors leave the exponent range and intra/k_dec_t entries are silently wrong (finite)",
 )
@@ -588,6 +589,7 @@ def _per_channel_gate_inputs(gate_case: str) -> tuple[torch.Tensor, ...]:
 
 _FRACTIONAL_GATE_XFAIL = pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason="k_dec_t = k*exp(G_last/2 - G)*exp(G_last/2) loses precision when its anchored exponent arguments carry "
     "fractional bits (|G_last| ~ 80-130): last-token k_dec_t peak error ~8-9e-3 > 3e-3 (tt_metal_tracker-g1b.7)",
 )

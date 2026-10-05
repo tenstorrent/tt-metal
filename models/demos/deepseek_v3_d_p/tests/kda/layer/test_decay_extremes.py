@@ -89,7 +89,7 @@ def _case_ids() -> list:
         pytest.param(
             name,
             id=name,
-            marks=[pytest.mark.xfail(strict=True, reason=_MEASURED_FAILURES[name])]
+            marks=[pytest.mark.xfail(strict=True, raises=AssertionError, reason=_MEASURED_FAILURES[name])]
             if name in _MEASURED_FAILURES
             else [],
         )
