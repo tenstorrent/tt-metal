@@ -231,7 +231,7 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
     disagg = ttnn.experimental.disaggregation
     layer_rows = list(layer_ids)
     configs = {}
-    for name, kind in (("1", "kda_recurrent"), ("2", "kda_convolution")):
+    for name, kind in (("01", "kda_recurrent"), ("02", "kda_convolution")):
         cfg = disagg.KvChunkAddressTableConfig()
         cfg.num_layers = max(layer_rows) + 1
         cfg.max_sequence_length = kda_max_sequence_length(geometry)
@@ -240,7 +240,7 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
         cfg.chunk_size_bytes = kda_segment_bytes(geometry, kind)
         configs[name] = cfg
     table = disagg.KvChunkAddressTable(configs)
-    for name, kind, slab in (("1", "kda_recurrent", slabs.recurrent), ("2", "kda_convolution", slabs.convolution)):
+    for name, kind, slab in (("01", "kda_recurrent", slabs.recurrent), ("02", "kda_convolution", slabs.convolution)):
         populate_kv_chunk_address_table_kda(
             table,
             configs[name],
@@ -259,7 +259,7 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
         rec_segments = {
             segment: recurrent_segment_to_torch(
                 table.read_device_chunk(
-                    layer, kda_position(geometry, "kda_recurrent", segment), slot, table.config_id_of("1")
+                    layer, kda_position(geometry, "kda_recurrent", segment), slot, table.config_id_of("01")
                 ),
                 geometry,
             )
@@ -269,7 +269,7 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
         conv_segments = {
             segment: convolution_segment_to_torch(
                 table.read_device_chunk(
-                    layer, kda_position(geometry, "kda_convolution", segment), slot, table.config_id_of("2")
+                    layer, kda_position(geometry, "kda_convolution", segment), slot, table.config_id_of("02")
                 ),
                 geometry,
             )
@@ -282,7 +282,7 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
     # 5. A UMD read at the documented address matches the table's own read.
     fid = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(0, 0))
     probe_layer, probe_slot = layer_ids[-1], num_slots - 1
-    loc = table.lookup(probe_layer, kda_position(geometry, "kda_recurrent", 5), probe_slot, table.config_id_of("1"))
+    loc = table.lookup(probe_layer, kda_position(geometry, "kda_recurrent", 5), probe_slot, table.config_id_of("01"))
     assert loc.size_bytes == geometry.recurrent_segment_bytes
     shard = slabs.batch_index(probe_slot, probe_layer) * geometry.recurrent_shards_per_layer + 5
     banks = mesh_device.dram_grid_size().x
@@ -291,7 +291,7 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
     )
     # 6. The window decode asks for (v = (real_len - 1) % 8, here the last one) aliases window 0: same
     #    location on the real table object, same bytes through its own read path.
-    for name, kind in (("1", "kda_recurrent"), ("2", "kda_convolution")):
+    for name, kind in (("01", "kda_recurrent"), ("02", "kda_convolution")):
         cfg_id = table.config_id_of(name)
         head = table.lookup(probe_layer, kda_position(geometry, kind, 5, 0), probe_slot, cfg_id)
         alias = table.lookup(probe_layer, kda_position(geometry, kind, 5, KDA_VERSIONS - 1), probe_slot, cfg_id)

@@ -176,7 +176,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         num_my_layers=None,
         stage_layouts=None,
     ) -> str:
-        """One merged table over kvpe (config "0") and the KDA slabs (configs "1" and "2").
+        """One merged table over kvpe (config "00") and the KDA slabs (configs "01" and "02").
 
         `stage_layouts` is one gathered layout per stage of `kv_migration_stages`, in order; None
         (single-rank / tests) gathers them here. Only the kvpe layout goes to the shared builder as a

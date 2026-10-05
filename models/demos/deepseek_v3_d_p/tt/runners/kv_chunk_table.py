@@ -70,7 +70,7 @@ def dflash_config_name(kind: str, head_idx: int) -> str:
 
 @dataclass(frozen=True)
 class KdaTableSpec:
-    """The Kimi-K3 KDA state slabs as the table sees them: configs "1" (recurrent) and "2" (convolution).
+    """The Kimi-K3 KDA state slabs as the table sees them: configs "01" (recurrent) and "02" (convolution).
 
     ``geometry`` fixes the segment numbering; ``recurrent`` / ``convolution`` are this rank's slabs when it
     holds any (None on a rank that builds the table for KDA layers it does not own); the two layouts are
@@ -153,8 +153,8 @@ def build_and_serialize_kv_chunk_table(
     """Build the MLA block-cyclic KV chunk address table and serialize it to ``path`` for the
     inference server's SET_TABLE. Returns the path on success.
 
-    ``kda`` (Kimi-K3 only): a :class:`KdaTableSpec` describing the KDA state slabs. It adds configs "1"
-    (recurrent) and "2" (convolution) after the kvpe config, on the contract's synthetic position axis
+    ``kda`` (Kimi-K3 only): a :class:`KdaTableSpec` describing the KDA state slabs. It adds configs "01"
+    (recurrent) and "02" (convolution) after the kvpe config, on the contract's synthetic position axis
     (strides 96 / 64 over ``KDA_VERSIONS`` aliased windows, see ``kda_position``) and published on the
     model's layer axis via its own ``layer_rows``; ``layer_rows`` (the kvpe map) is honoured on the merged
     path as well.
@@ -290,7 +290,7 @@ def _build_and_serialize_merged_kv_chunk_table(
 ) -> str:
     """Build ONE KvChunkAddressTable over every cache this rank owns and serialize it to ``path``.
     ``caches`` is a tagged list of ``(kind, payload)``: ``("kvpe", tensor)`` / ``("index", tensor)`` for
-    the block-cyclic MLA caches, named "0" (KVPE), "1" (GLM-5.3 index); ``("dflash", (k_cache, v_cache))``
+    the block-cyclic MLA caches, named "00" (KVPE), "01" (GLM-5.3 index); ``("dflash", (k_cache, v_cache))``
     for the DFlash drafter (Kimi-only), which adds one config per (K|V, kv-head) via
     :func:`dflash_config_name`. Names must stay in sorted order (asserted) so the protobuf round-trip
     keeps KVPE at config id 0 and the index at 1 — see the naming note at the top of this module.
@@ -318,9 +318,10 @@ def _build_and_serialize_merged_kv_chunk_table(
     entries = []
     dflash_kv_heads = 0
     n_block_cyclic = 0
-    # Known up front so config_name() can pad to a stable width: the block-cyclic caches are the only
-    # positionally-named configs, and their count fixes the width for all of them.
-    n_block_cyclic_total = sum(1 for kind, _ in caches if kind in ("kvpe", "index"))
+    # Known up front so config_name() can pad to a stable width: the block-cyclic caches and the KDA
+    # state slabs are the positionally-named configs, and their count fixes the width for all of them.
+    n_positional = sum(1 for kind, _ in caches if kind in ("kvpe", "index") or kind in KDA_TABLE_KINDS)
+    kvpe_config_name = config_name(0, n_positional)
     index_config_name = None
     # Drafter-only, pipeline-parallel path: config name -> its all-gathered stage layout, and the
     # geometry that replaces the tensor a non-owning rank does not have. Empty on the single-stage path.
@@ -332,11 +333,11 @@ def _build_and_serialize_merged_kv_chunk_table(
     for kind, payload in caches:
         if kind in ("kvpe", "index"):  # block-cyclic MLA caches -> populate_kv_chunk_address_table_block_cyclic
             if kind == "index":
-                index_config_name = config_name(n_block_cyclic, n_block_cyclic_total)
-            entries.append((config_name(n_block_cyclic, n_block_cyclic_total), payload, None))
+                index_config_name = config_name(n_block_cyclic, n_positional)
+            entries.append((config_name(n_block_cyclic, n_positional), payload, None))
             n_block_cyclic += 1
         elif kind in KDA_TABLE_KINDS:
-            kda_configs[str(n_block_cyclic + len(kda_configs))] = (kind, payload)
+            kda_configs[config_name(n_block_cyclic + len(kda_configs), n_positional)] = (kind, payload)
         elif kind == "dflash_staged":
             # Pipeline-parallel drafter: rank 0 builds the table but owns no drafter tensor, so the
             # entries are described entirely by gathered metadata + the drafter config every rank loads.
@@ -448,17 +449,17 @@ def _build_and_serialize_merged_kv_chunk_table(
     # (the extent grows, the DRAM rows the gathered layout addresses do not). Same rule as the index
     # widening below and as the single-config path.
     if kvpe_layer_rows is not None:
-        dense_rows = configs["0"].num_layers
+        dense_rows = configs[kvpe_config_name].num_layers
         assert (
             len(kvpe_layer_rows) == dense_rows
         ), f"kvpe_layer_rows has {len(kvpe_layer_rows)} entries but config 0 spans {dense_rows} compacted slabs"
-        configs["0"].num_layers = max(configs["0"].num_layers, max(kvpe_layer_rows) + 1)
+        configs[kvpe_config_name].num_layers = max(configs[kvpe_config_name].num_layers, max(kvpe_layer_rows) + 1)
 
     for name, (kind, spec) in kda_configs.items():
         cfg = disagg.KvChunkAddressTableConfig()
         # One layer axis for every config: the KDA rows sit at their model layers, so the extent is the
         # kvpe config's (already widened to the model's layer count) or the KDA rows', whichever is larger.
-        cfg.num_layers = max(configs["0"].num_layers, max(spec.layer_rows) + 1)
+        cfg.num_layers = max(configs[kvpe_config_name].num_layers, max(spec.layer_rows) + 1)
         cfg.max_sequence_length = kda_max_sequence_length(spec.geometry)
         cfg.num_slots = num_users
         cfg.chunk_n_tokens = kda_chunk_n_tokens(spec.geometry, kind)
@@ -481,7 +482,7 @@ def _build_and_serialize_merged_kv_chunk_table(
     if index_config_name is not None and index_layer_ids is not None:
         index_dense_layers = configs[index_config_name].num_layers
         # Global layer total: under PP the `num_layers` arg is this rank's slice, config 0 spans every stage.
-        global_layers = configs[config_name(0, n_block_cyclic_total)].num_layers
+        global_layers = configs[kvpe_config_name].num_layers
         assert len(index_layer_ids) == index_dense_layers, (
             f"index_layer_ids has {len(index_layer_ids)} entries but the index config spans "
             f"{index_dense_layers} compacted layers; every dense row needs a global layer id"
@@ -510,7 +511,9 @@ def _build_and_serialize_merged_kv_chunk_table(
                 config_id=config_id,
                 stage_layout=layout_of[name],
                 layer_rows=(
-                    index_layer_ids if name == index_config_name else (kvpe_layer_rows if name == "0" else None)
+                    index_layer_ids
+                    if name == index_config_name
+                    else (kvpe_layer_rows if name == kvpe_config_name else None)
                 ),
                 tp_axis=tp_axis if kv_dedup else None,
             )

@@ -5,9 +5,9 @@ KV chunk address table that carries the MLA kvpe cache, as two extra configs:
 
 | config | name | holds | position axis | segment |
 |---|---|---|---|---|
-| 0 | `"0"` | MLA kvpe cache | tokens (32 per chunk) | `[32, 576]` bfp8, 19584 B |
-| 1 | `"1"` | KDA recurrent state | synthetic, `chunk_n_tokens = 96` | `[128, 32]` FP32 V-band, 16384 B |
-| 2 | `"2"` | KDA convolution tail | synthetic, `chunk_n_tokens = 64` | `[3, 64]` BF16 rectangle, 384 B |
+| 0 | `"00"` | MLA kvpe cache | tokens (32 per chunk) | `[32, 576]` bfp8, 19584 B |
+| 1 | `"01"` | KDA recurrent state | synthetic, `chunk_n_tokens = 96` | `[128, 32]` FP32 V-band, 16384 B |
+| 2 | `"02"` | KDA convolution tail | synthetic, `chunk_n_tokens = 64` | `[3, 64]` BF16 rectangle, 384 B |
 
 Every config is published on the model's layer axis (rows 3, 7, 11, ... for kvpe; every other row
 for KDA). A KDA config has no token axis, so it uses the synthetic axis of the K3 disaggregation
