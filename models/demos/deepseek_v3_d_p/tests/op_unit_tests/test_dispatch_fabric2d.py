@@ -612,8 +612,7 @@ def test_dispatch_fabric2d_relaunch(mesh_device, device_params, num_links, emb_d
             capacity_div=8,
         )
         payload, metadata = fx.run(cfg.sp_axis, num_links, layout=layout)
-        # Reading the outputs back is what synchronises the launches: this op deadlocks if a chip
-        # starts sending into a downstream chip that is still retiring the previous one.
+        # Reading the outputs back keeps the launches apart; the back-to-back and overlapped-skew tests overlap them.
         fx.check(payload, metadata, f"{label}, emb {emb_dim}")
         if entries_after_first is None:
             entries_after_first = mesh_device.num_program_cache_entries()
@@ -671,15 +670,11 @@ def test_dispatch_fabric2d_unaligned_emb_dim(mesh_device, device_params, num_lin
 )
 @pytest.mark.timeout(900)
 def test_dispatch_fabric2d_back_to_back(mesh_device, device_params, num_links):
-    """Four launches queued with no host sync between them, as in a traced replay.
+    """Four launches queued with no host sync between them, as in a traced replay, over two alternating draws.
 
-    Every other test reads outputs between launches, so launches never overlap. Here a chip that
-    finishes early can start sending into a downstream chip still finishing the previous launch, racing the
-    reset of the arrival counter:
-
-    - An increment lost to the reset hangs the forward waiting for it.
-    - A counter left too high lets the forward read pages before they arrive. Alternating two draws
-      makes those stale pages differ from the expected ones.
+    A chip that finishes early is held by its sender's launch credit until the downstream chip has started the
+    same launch, so the arrival counter and the forwarding region stay right without a host sync. A stale count
+    or page would hand back the other draw's pages, which alternating the draws makes visible.
     """
     cfg = extract_mesh_config(mesh_device)
     a = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=31, capacity_div=8)
@@ -691,6 +686,63 @@ def test_dispatch_fabric2d_back_to_back(mesh_device, device_params, num_links):
     for i, (fx, (payload, metadata)) in enumerate(zip(order, results)):
         fx.check(payload, metadata, f"launch {i} of four with no host sync between them")
     logger.info("back-to-back: 4 unsynchronised launches byte-exact")
+
+
+def _starve_a_relay(fx):
+    """Rewrite a fixture's draw so chip 0 floods chip 1's forwarding region while chip 1 is busy.
+
+    Chip 0 sends every pick two hops, to chip 2, so all of it lands in chip 1's forwarding region. Chip 1 sends
+    every pick of its own one hop, to chip 2, and reads its forwarding region only after its own sends. Every
+    other chip keeps its picks local. Chip 0 then finishes a launch long before chip 1 has read what it sent,
+    and is free to start the next launch's forwards into pages chip 1 has not read yet.
+    """
+    G, H = fx.G, fx.H
+    for g in range(G):
+        experts_on = {pos: [e for e in range(fx.num_routed_experts) if int(fx.table[g, e]) == pos] for pos in range(H)}
+        for origin in range(H):
+            target = 2 if origin < 2 else origin
+            picks = experts_on[target][: fx.topk]
+            assert len(picks) == fx.topk, f"chip {target} hosts {len(picks)} experts, need {fx.topk}"
+            fx.indices[g, origin, :, :] = torch.tensor(picks, dtype=torch.int64)
+    fx.rebuild()
+    return fx
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+# Short of the CI job's budget, so a launch credit that never arrives fails this test rather than the job.
+@pytest.mark.timeout(180)
+def test_dispatch_fabric2d_overlapped_skew(mesh_device, device_params, num_links):
+    """Overlapped launches stay byte-exact when one chip runs a launch ahead of its relay.
+
+    The forwarding region is reused at the same offsets every launch. With `_starve_a_relay`'s draw chip 0
+    finishes early and, left to itself, starts the next launch's forwards into chip 1's region while chip 1 is
+    still reading the previous launch's pages. The launch credit holds chip 0's sender until chip 1 has
+    started the new launch. Without it the overwrite shows within the first few launches.
+
+    Four payloads in rotation over one routing. A stale page then carries the right next hop and fails as
+    wrong bytes, rather than as a misrouted token that could hang the ring.
+    """
+    cfg = extract_mesh_config(mesh_device)
+    launches = 8
+    # Half of roomy: chip 2 takes three origins' picks, 15360 pages, and nothing is dropped.
+    payloads = [
+        _starve_a_relay(
+            _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=40 + i, capacity_div=2)
+        )
+        for i in range(4)
+    ]
+    assert all(torch.equal(fx.indices, payloads[0].indices) for fx in payloads), "the routing must not vary"
+    order = [payloads[i % len(payloads)] for i in range(launches)]
+
+    # Queued together, read afterwards. Nothing here waits on the device.
+    results = [fx.run(cfg.sp_axis, num_links) for fx in order]
+    for i, (fx, (payload, metadata)) in enumerate(zip(order, results)):
+        fx.check(payload, metadata, f"launch {i} of {launches}, chip 1 starved")
+    logger.info(f"overlapped skew: {launches} launches byte-exact")
 
 
 @pytest.mark.parametrize(
