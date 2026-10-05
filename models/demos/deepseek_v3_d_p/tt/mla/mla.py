@@ -433,6 +433,8 @@ class ttMLA:
             mesh_device.compute_with_storage_grid_size().x - 1,
             mesh_device.compute_with_storage_grid_size().y,
         )
+        sdpa_fidelity = getattr(config, "mla_chunked_sdpa_matmul_fidelity", None)
+        self.sdpa_matmul_fidelity = getattr(ttnn.MathFidelity, sdpa_fidelity) if sdpa_fidelity and is_chunked else None
 
         # Create CCL object for semaphore management
         self.tt_ccl = get_tt_ccl(mesh_device)
@@ -913,6 +915,7 @@ class ttMLA:
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
             exp_approx_mode=False,
+            matmul_math_fidelity=self.sdpa_matmul_fidelity,
         )
 
     def _apply_rope_padded(
