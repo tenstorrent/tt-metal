@@ -15,7 +15,7 @@
 // 2. Add the `SfpuType` enumerator to the `if constexpr` chain in
 //    call_unary_sfpu_operation_quasar() (and to init_unary_sfpu_operation_quasar()
 //    if the op needs an init step).
-#include "experimental/ckernel_sfpu_abs.h"
+#include "llk_sfpu/ckernel_sfpu_abs.h"
 #include "llk_sfpu/ckernel_sfpu_activations.h"
 #include "llk_sfpu/ckernel_sfpu_add1.h"
 #include "llk_sfpu/ckernel_sfpu_alt_complex_rotate90.h"
@@ -78,6 +78,7 @@
 #include "llk_sfpu/ckernel_sfpu_unary_power.h"
 #include "llk_sfpu/ckernel_sfpu_unary_shift.h"
 #include "llk_sfpu/ckernel_sfpu_xielu.h"
+#include "sfpu/ckernel_sfpu_fill.h"
 #include "sfpu/ckernel_sfpu_sigmoid.h"
 #include "sfpu/ckernel_sfpu_silu.h"
 #include "sfpu/ckernel_sfpu_sqrt.h"
@@ -107,9 +108,12 @@
 #include "llk_sfpu/ckernel_sfpu_div_int32_floor.h"  // calculate_div_int32_trunc / calculate_div_int32_floor
 #include "llk_sfpu/ckernel_sfpu_int_sum.h"          // add_int (Dest tile += the next tile) / sum_int_init
 #include "llk_sfpu/ckernel_sfpu_isclose.h"          // calculate_sfpu_isclose / isclose_init
+#include "llk_sfpu/ckernel_sfpu_logaddexp.h"        // calculate_sfpu_logaddexp / calculate_sfpu_logaddexp_init
+#include "llk_sfpu/ckernel_sfpu_logaddexp2.h"       // calculate_sfpu_logaddexp2 / calculate_sfpu_logaddexp2_init
 #include "llk_sfpu/ckernel_sfpu_logsigmoid.h"       // calculate_logsigmoid (x, exp(-x) -> logsigmoid(x))
 #include "llk_sfpu/ckernel_sfpu_mask.h"             // calculate_mask / calculate_mask_posinf / calculate_int_mask
 #include "llk_sfpu/ckernel_sfpu_quant.h"            // quant_family / quant_family_init (quant/requant/dequant)
+#include "llk_sfpu/ckernel_sfpu_shift.h"            // calculate_binary_left_shift / right / logical right
 #include "llk_sfpu/ckernel_sfpu_situ_glu.h"         // calculate_situ_glu (softcapped gate * sigmoid(gate) * softcapped up)
 #include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
 #include "sfpu/ckernel_sfpu_binary_comp.h" // calculate_binary_comp_int32 (int gt/lt/le/ge)
@@ -183,6 +187,10 @@ void init_unary_sfpu_operation_quasar()
     if constexpr (OPERATION == SfpuType::gelu)
     {
         gelu_init<APPROX, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == SfpuType::abs || OPERATION == SfpuType::abs_int32)
+    {
+        abs_init();
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
@@ -518,7 +526,31 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     constexpr std::uint32_t kReluThresholdBits = 0x40A00000u; // 5.0f
     if constexpr (OPERATION == SfpuType::abs)
     {
-        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_abs_, (ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_abs, (APPROX, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::abs_int32)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_abs_int32, (APPROX, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::fill)
+    {
+        // Fills with 5, the Blackhole harness's fill_const_value (and the golden's const_value): Int32
+        // through the INT32 store, every float format through the float fill.
+        if (sfpu_format == DataFormat::Int32)
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                _calculate_fill_int_,
+                (APPROX, ckernel::InstrModLoadStore::INT32, ITERATIONS),
+                dst_index,
+                VectorMode::RC,
+                5u /* fill value */);
+        }
+        else
+        {
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_fill_, (APPROX, ITERATIONS), dst_index, VectorMode::RC, 5.0f /* fill value */);
+        }
     }
     else if constexpr (OPERATION == SfpuType::exponential)
     {
@@ -1195,6 +1227,17 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
     {
         init_add_top_row();
     }
+    else if constexpr (OP == BinaryOp::LOGADDEXP)
+    {
+        // log1p's coefficients live in the program constant registers and differ by destination
+        // precision; the init also programs the ADDR_MOD_6 the store advances through.
+        calculate_sfpu_logaddexp_init<is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OP == BinaryOp::LOGADDEXP2)
+    {
+        calculate_sfpu_logaddexp2_init<is_fp32_dest_acc_en>();
+    }
+    // RSHFT / LSHFT / LOGICAL_RSHFT need no init beyond the shared SFPU one.
     // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID are stateless — no init.
 }
 
@@ -1536,6 +1579,73 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
         {
             LLK_ASSERT(math_format == DataFormat::Float32, "ADD_TOP_ROW supports Float32 and Int32");
             SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_add_top_row, (DataFormat::Float32), src0_tile, src1_tile, dst_tile, VectorMode::None);
+        }
+    }
+    else if constexpr (OP == BinaryOp::LOGADDEXP)
+    {
+        // is_fp32_dest_acc_en selects the fp32 or bf16 exponential, the log1p coefficient set the
+        // paired init loaded, and the bf16 rounding before the store.
+        SFPU_BINARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_sfpu_logaddexp,
+            (APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            VectorMode::RC);
+    }
+    else if constexpr (OP == BinaryOp::LOGADDEXP2)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_sfpu_logaddexp2,
+            (APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            VectorMode::RC);
+    }
+    else if constexpr (OP == BinaryOp::RSHFT || OP == BinaryOp::LSHFT || OP == BinaryOp::LOGICAL_RSHFT)
+    {
+        // INT32, not INT32_2S_COMP, as in the Blackhole harness and binary_shift.h: Int32 tiles reach
+        // Dest raw, so the shift operates on the bits directly. a = src0, shift amount = src1.
+        if constexpr (OP == BinaryOp::RSHFT)
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                calculate_binary_right_shift,
+                (APPROXIMATION_MODE, ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
+                src0_tile,
+                src1_tile,
+                dst_tile,
+                VectorMode::RC);
+        }
+        else if constexpr (OP == BinaryOp::LSHFT)
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                calculate_binary_left_shift,
+                (APPROXIMATION_MODE, ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
+                src0_tile,
+                src1_tile,
+                dst_tile,
+                VectorMode::RC);
+        }
+        else
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                calculate_logical_right_shift,
+                (APPROXIMATION_MODE, ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
+                src0_tile,
+                src1_tile,
+                dst_tile,
+                VectorMode::RC);
         }
     }
     else if constexpr (OP == BinaryOp::ISCLOSE)
