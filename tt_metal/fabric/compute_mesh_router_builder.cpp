@@ -18,6 +18,7 @@
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/builder/injection_policy.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_collector.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -976,6 +977,21 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         eth_chan,
         get_eth_direction(),
         eth_chan == ctx.master_router_chan);
+}
+
+manifest::Router ComputeMeshRouterBuilder::collect_manifest_router(const ChipRoutingFacts& chip_facts) const {
+    ManifestRouterInputs inputs{
+        .erisc_builder = *erisc_builder_,
+        .vc_shape = vc_shape_,
+        .location = location_,
+        .chip_facts = chip_facts,
+        .control_plane = fabric_context_.get_control_plane(),
+        .named_ct_args_per_risc = {},
+    };
+    for (uint32_t risc_id = 0; risc_id < get_configured_risc_count(); ++risc_id) {
+        inputs.named_ct_args_per_risc.push_back(erisc_builder_->get_compile_time_args(risc_id).named);
+    }
+    return tt::tt_fabric::collect_manifest_router(inputs);
 }
 
 FabricDatamoverBuilderBase* ComputeMeshRouterBuilder::get_builder_for_vc_channel(

@@ -6,22 +6,30 @@
 
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <fmt/format.h>
 #include <nlohmann/json.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <llrt/tt_cluster.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <ctime>
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <unistd.h>
@@ -32,7 +40,11 @@ namespace {
 
 using json = nlohmann::ordered_json;
 
+using manifest::chip_key;
+using manifest::direction_letter;
 using manifest::lower_enum_name;
+using manifest::mesh_key;
+using manifest::router_key;
 
 // Returns the current UTC time in ISO 8601 format.
 std::string utc_now_iso8601() {
@@ -77,19 +89,286 @@ json make_fabric_context_json(const FabricContext& fabric_context) {
     return block;
 }
 
+// ============ Paths ============
+
+// One part of the manifest refers to a router elsewhere by its path, e.g. "M0/C7/E0".
+std::string router_path(FabricNodeId node, const std::string& key) {
+    return fmt::format("{}/{}/{}", mesh_key(node.mesh_id), chip_key(node.chip_id), key);
+}
+
+// ============ Link facts ============
+
+// The path of the router on `peer_chan`, or nullopt when ControlPlane has no active router there (the
+// channel was trimmed from the peer's routing planes).
+std::optional<std::string> peer_router_path(
+    const ControlPlane& control_plane, FabricNodeId peer_node, chan_id_t peer_chan) {
+    for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(peer_node)) {
+        if (chan == peer_chan) {
+            return router_path(peer_node, router_key(direction, control_plane.get_routing_plane_id(peer_node, chan)));
+        }
+    }
+    return std::nullopt;
+}
+
+// Fails unless the physical system descriptor has a cable from `chan` on `node` to `peer_chan` on `peer_node`.
+void check_link_is_cabled(
+    const ControlPlane& control_plane, FabricNodeId node, chan_id_t chan, FabricNodeId peer_node, chan_id_t peer_chan) {
+    const auto connections = control_plane.get_physical_system_descriptor().get_eth_connections(
+        control_plane.get_asic_id_from_fabric_node_id(node), control_plane.get_asic_id_from_fabric_node_id(peer_node));
+    const bool cabled = std::ranges::any_of(connections, [&](const auto& connection) {
+        return connection.src_chan == chan && connection.dst_chan == peer_chan;
+    });
+    TT_FATAL(
+        cabled,
+        "Fabric manifest: ControlPlane pairs {} channel {} with {} channel {}, but no cable connects them",
+        node,
+        chan,
+        peer_node,
+        peer_chan);
+}
+
+// Wrap edges are resolved here rather than inferred by the viewer: a link wraps when its axis genuinely
+// closes and its coordinate delta spans the mesh.
+bool is_wrap_link(
+    FabricType fabric_type,
+    const MeshGraph& mesh_graph,
+    FabricNodeId node,
+    eth_chan_directions direction,
+    const std::optional<std::pair<FabricNodeId, chan_id_t>>& peer) {
+    const MeshShape mesh_shape = mesh_graph.get_mesh_shape(node.mesh_id);
+    const bool is_east_west = direction == eth_chan_directions::EAST || direction == eth_chan_directions::WEST;
+    const bool is_north_south = direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH;
+
+    // Wrap links require a 2D mesh, a peer in the same mesh, and an east-west or north-south direction
+    if (mesh_shape.dims() != 2 || !peer.has_value() || peer->first.mesh_id != node.mesh_id ||
+        !(is_east_west || is_north_south)) {
+        return false;
+    }
+    const uint32_t axis = is_east_west ? 1 : 0;
+    if (!has_genuine_torus_axis(fabric_type, mesh_shape, axis)) {
+        return false;
+    }
+    const uint32_t here = mesh_graph.chip_to_coordinate(node.mesh_id, node.chip_id)[axis];
+    const uint32_t there = mesh_graph.chip_to_coordinate(node.mesh_id, peer->first.chip_id)[axis];
+    const uint32_t delta = here > there ? here - there : there - here;
+    return delta == mesh_shape[axis] - 1;
+}
+
+// ============ Router ============
+
+// The router's mesh and chip are its path, so they are not repeated here.
+json router_identity_json(const manifest::RouterIdentity& identity, json logical_core, json virtual_core) {
+    json out;
+    out["eth_chan"] = identity.eth_chan;
+    out["logical_core"] = std::move(logical_core);
+    out["virtual_core"] = std::move(virtual_core);
+    return out;
+}
+
+// Direction and routing plane are the router's key, so they are not repeated here.
+json eth_link_json(const manifest::EthLink& link, const std::optional<std::string>& peer, bool cross_host, bool wrap) {
+    json out;
+    out["edge_capability"] = lower_enum_name(link.edge_capability);
+    out["peer"] = peer.has_value() ? json(*peer) : json(nullptr);
+    out["cross_host"] = cross_host;
+    out["wrap"] = wrap;
+    out["dispatch_link"] = link.is_dispatch_link;
+    return out;
+}
+
+json router_shape_json(const manifest::RouterShape& shape) {
+    json out;
+    out["num_vcs"] = shape.num_vcs;
+    out["senders_per_vc"] = shape.senders_per_vc;
+    out["receivers_per_vc"] = shape.receivers_per_vc;
+    out["num_active_eriscs"] = shape.num_active_eriscs;
+    out["channel_trimming_overrides_applied"] = shape.channel_trimming_overrides_applied;
+    out["vc0_bubble_flow_control"] = shape.vc0_bubble_flow_control;
+    return out;
+}
+
+// A collected router with what ControlPlane and the cluster know about it: peer, cross-host, wrap and cores.
+json make_router_json(
+    const manifest::Router& router,
+    const ControlPlane& control_plane,
+    const tt::Cluster& cluster,
+    FabricType fabric_type,
+    FabricNodeId node,
+    ChipId physical_chip_id) {
+    const chan_id_t chan = router.identity.eth_chan;
+
+    const auto peer = control_plane.try_get_connected_mesh_chip_chan_ids(node, chan);
+    std::optional<std::string> peer_path;
+    if (peer.has_value()) {
+        check_link_is_cabled(control_plane, node, chan, peer->first, peer->second);
+        peer_path = peer_router_path(control_plane, peer->first, peer->second);
+    }
+
+    const auto logical_core =
+        cluster.get_soc_desc(physical_chip_id).get_eth_core_for_channel(chan, CoordSystem::LOGICAL);
+    const auto virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
+        physical_chip_id, tt::tt_metal::CoreCoord(logical_core.x, logical_core.y), CoreType::ETH);
+
+    json out;
+    out["identity"] = router_identity_json(
+        router.identity, json::array({logical_core.x, logical_core.y}), json::array({virtual_core.x, virtual_core.y}));
+    out["link"] = eth_link_json(
+        router.link,
+        peer_path,
+        control_plane.is_cross_host_eth_link(physical_chip_id, chan),
+        is_wrap_link(fabric_type, control_plane.get_mesh_graph(), node, router.link.direction, peer));
+    out["shape"] = router_shape_json(router.shape);
+    return out;
+}
+
+// ============ Chip and mesh ============
+
+// The chip's routers keyed <direction><routing_plane>. ControlPlane's active channels and the collected routers
+// must correspond one to one, and agree on each router's direction.
+json make_chip_routers_json(
+    const manifest::Chip& chip,
+    const ControlPlane& control_plane,
+    const tt::Cluster& cluster,
+    FabricType fabric_type,
+    FabricNodeId node,
+    ChipId physical_chip_id) {
+    std::map<chan_id_t, const manifest::Router*> collected;
+    for (const auto& router : chip.routers) {
+        TT_FATAL(
+            collected.emplace(router.identity.eth_chan, &router).second,
+            "Fabric manifest: {} has two collected routers on channel {}",
+            node,
+            router.identity.eth_chan);
+    }
+
+    json routers = json::object();
+    for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(node)) {
+        const auto it = collected.find(chan);
+        TT_FATAL(
+            it != collected.end(),
+            "Fabric manifest: {} channel {} is an active fabric router, but no router was collected for it",
+            node,
+            chan);
+        const manifest::Router& router = *it->second;
+        collected.erase(it);
+        TT_FATAL(
+            router.link.direction == direction,
+            "Fabric manifest: {} channel {} was built facing {}, but ControlPlane has it facing {}",
+            node,
+            chan,
+            direction_letter(router.link.direction),
+            direction_letter(direction));
+
+        const auto key = router_key(direction, control_plane.get_routing_plane_id(node, chan));
+        TT_FATAL(!routers.contains(key), "Fabric manifest: {} has two routers keyed {}", node, key);
+        routers[key] = make_router_json(router, control_plane, cluster, fabric_type, node, physical_chip_id);
+    }
+    TT_FATAL(
+        collected.empty(),
+        "Fabric manifest: {} has {} collected routers on channels that are not active fabric routers",
+        node,
+        collected.size());
+    return routers;
+}
+
+// Every chip in the mesh graph appears, local or not, so the viewer can draw the whole mesh and show the host
+// boundary. Only local chips have routers.
+json make_chip_json(
+    const ControlPlane& control_plane,
+    const tt::Cluster& cluster,
+    const FabricBuilderContext& builder_context,
+    FabricType fabric_type,
+    FabricNodeId node) {
+    const MeshCoordinate mesh_coord = control_plane.get_mesh_graph().chip_to_coordinate(node.mesh_id, node.chip_id);
+    const auto physical_chip_id = control_plane.try_get_physical_chip_id_from_fabric_node_id(node);
+    // A chip this rank cannot map to a physical device is a chip it cannot peek, so resolvability is the
+    // practical definition of locality.
+    const bool is_local = physical_chip_id.has_value();
+
+    json chip;
+    json coord = json::array();
+    for (size_t dim = 0; dim < mesh_coord.dims(); ++dim) {
+        coord.push_back(mesh_coord[dim]);
+    }
+    chip["mesh_coord"] = std::move(coord);
+    if (!is_local) {
+        chip["physical_chip_id"] = json(nullptr);
+        chip["asic_id"] = json(nullptr);
+        chip["is_local"] = false;
+        return chip;
+    }
+
+    // A chip that built no routers publishes nothing.
+    static const manifest::Chip no_routers{};
+    const manifest::Chip& collected = builder_context.has_manifest_chip(*physical_chip_id)
+                                          ? builder_context.get_manifest_chip(*physical_chip_id)
+                                          : no_routers;
+    chip["physical_chip_id"] = *physical_chip_id;
+    // Hex string: the value exceeds what JSON numbers represent exactly.
+    chip["asic_id"] = fmt::format("0x{:016x}", *control_plane.get_asic_id_from_fabric_node_id(node));
+    chip["is_local"] = true;
+    chip["z_port_role"] = lower_enum_name(collected.z_port_role);
+    chip["routers"] = make_chip_routers_json(collected, control_plane, cluster, fabric_type, node, *physical_chip_id);
+    return chip;
+}
+
+json make_mesh_json(
+    const ControlPlane& control_plane,
+    const tt::Cluster& cluster,
+    const FabricBuilderContext& builder_context,
+    FabricType fabric_type,
+    MeshId mesh_id) {
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const MeshShape mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+
+    json mesh;
+    json shape = json::array();
+    for (size_t dim = 0; dim < mesh_shape.dims(); ++dim) {
+        shape.push_back(mesh_shape[dim]);
+    }
+    mesh["shape"] = std::move(shape);
+    // has_genuine_torus_axis() is defined only for a 2D shape, and deliberately reports false for a declared
+    // torus axis whose extent is too small to realize a distinct wrap edge.
+    if (mesh_shape.dims() == 2) {
+        json torus;
+        torus["y"] = has_genuine_torus_axis(fabric_type, mesh_shape, 0);
+        torus["x"] = has_genuine_torus_axis(fabric_type, mesh_shape, 1);
+        mesh["torus"] = std::move(torus);
+    }
+    mesh["express_routing"] = control_plane.express_routing_enabled(mesh_id);
+
+    json chips = json::object();
+    for (const auto& [_, fabric_chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
+        chips[chip_key(fabric_chip_id)] =
+            make_chip_json(control_plane, cluster, builder_context, fabric_type, FabricNodeId(mesh_id, fabric_chip_id));
+    }
+    mesh["chips"] = std::move(chips);
+    return mesh;
+}
+
 // Writes the manifest to a temporary name and renames it into place, so a reader never sees a partial manifest.
 void serialize_fabric_manifest_to_file(
     const ControlPlane& control_plane, const std::filesystem::path& output_file_path) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const FabricType fabric_type = get_fabric_type(control_plane.get_fabric_config(), cluster.is_ubb_galaxy());
     const auto& fabric_context = control_plane.get_fabric_context();
     TT_FATAL(
         fabric_context.has_builder_context(), "Fabric manifest: must be written after the fabric routers are compiled");
+    const auto& builder_context = fabric_context.get_builder_context();
 
     json manifest;
     manifest["manifest_version"] = FABRIC_MANIFEST_VERSION;
     manifest["kind"] = "fabric_manifest";
     manifest["run"] = make_run_json(control_plane, cluster);
     manifest["fabric_context"] = make_fabric_context_json(fabric_context);
+
+    auto mesh_ids = control_plane.get_mesh_graph().get_all_mesh_ids();
+    std::ranges::sort(mesh_ids, {}, [](const MeshId& mesh_id) { return *mesh_id; });
+    json meshes = json::object();
+    for (const auto& mesh_id : mesh_ids) {
+        meshes[mesh_key(mesh_id)] = make_mesh_json(control_plane, cluster, builder_context, fabric_type, mesh_id);
+    }
+    manifest["meshes"] = std::move(meshes);
 
     std::filesystem::create_directories(output_file_path.parent_path());
     const std::filesystem::path temporary_path =

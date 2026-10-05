@@ -224,6 +224,7 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
     }
     master_router_chans_.resize(num_devices_, UNINITIALIZED_MASTER_ROUTER_CHAN);
     num_initialized_routers_.resize(num_devices_, UNINITIALIZED_ROUTERS);
+    manifest_chips_.resize(num_devices_);
 }
 
 std::unique_ptr<FabricEriscDatamoverConfig> FabricBuilderContext::create_edm_config(
@@ -302,6 +303,28 @@ chan_id_t FabricBuilderContext::get_fabric_master_router_chan(ChipId chip_id) co
         "Error, querying master router channel for an unknown device {}",
         chip_id);
     return master_router_chans_[chip_id];
+}
+
+void FabricBuilderContext::publish_manifest_chip(ChipId chip_id, manifest::Chip chip) {
+    TT_FATAL(chip_id < num_devices_, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices_);
+    TT_FATAL(!manifest_chips_[chip_id].has_value(), "Fabric manifest: chip {} was already published", chip_id);
+    TT_FATAL(
+        num_initialized_routers_[chip_id] != UNINITIALIZED_ROUTERS &&
+            chip.routers.size() == num_initialized_routers_[chip_id],
+        "Fabric manifest: chip {} published {} routers, but the builder initialized {}",
+        chip_id,
+        chip.routers.size(),
+        num_initialized_routers_[chip_id]);
+    manifest_chips_[chip_id] = std::move(chip);
+}
+
+bool FabricBuilderContext::has_manifest_chip(ChipId chip_id) const {
+    return chip_id < num_devices_ && manifest_chips_[chip_id].has_value();
+}
+
+const manifest::Chip& FabricBuilderContext::get_manifest_chip(ChipId chip_id) const {
+    TT_FATAL(has_manifest_chip(chip_id), "Fabric manifest: chip {} was not published", chip_id);
+    return *manifest_chips_[chip_id];
 }
 
 std::vector<size_t> FabricBuilderContext::get_fabric_router_addresses_to_clear() const {
