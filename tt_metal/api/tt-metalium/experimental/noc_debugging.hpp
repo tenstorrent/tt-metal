@@ -23,7 +23,8 @@ struct NocDebugStateSummary {
 };
 
 // These test-support functions read or reset the NoC debug state for the complete Metal context. The caller must
-// synchronize all devices and must have exclusive ownership of every mesh in that context.
+// synchronize all devices and must have exclusive ownership of every mesh in that context. Before reset, the caller
+// must complete a profiler read. Device profiler buffers can otherwise restore old events after the reset.
 NocDebugStateSummary GetNocDebugStateSummary(distributed::MeshDevice& mesh_device);
 
 void ResetNocDebugState(distributed::MeshDevice& mesh_device);

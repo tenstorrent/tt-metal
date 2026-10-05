@@ -303,8 +303,8 @@ private:
         std::array<std::unordered_map<uint64_t, PendingWriteInfo>, MAX_NOCS> nonposted_writes_pending{};
 
         // Pending non-posted atomic increments, tracked for each processor and NOC (dst_addr -> info). Kept
-        // separate from writes because atomics use their own counter: an atomic/full barrier on the issuing
-        // processor releases them, but a barrier on another processor does not.
+        // separate from writes because atomics use their own counter. An atomic or full barrier on any processor
+        // releases all pending atomics for the same core and NOC.
         std::array<std::array<std::unordered_map<uint64_t, PendingWriteInfo>, MAX_NOCS>, MAX_PROCESSORS>
             atomics_pending{};
 
