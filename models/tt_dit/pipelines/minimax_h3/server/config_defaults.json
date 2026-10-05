@@ -744,7 +744,15 @@
   "lora_strength": 1.0,
   "nfe": 4,
   "num_frames": 124,
-  "peak_dram_gib": 19.94,
+  "peak_dram_gib": 21.65,
+  "peak_dram_gib_note": "WORST of the five prompts at this point, matching how e2e_s and phases_s are sampled in this block. The value here used to be 19.94, which is the MINIMUM of the same five. The 19.94 -> 21.65 step is reproducible and pre-existing -- stage 06's ctlC, ctlF and ctlG all show it on their second (blacksmith) clip -- and it is prompt-driven, not an effect of the LoRA page-in re-merge, which adds no DRAM at all (lora_cache_capacity is 0, so the A/B factors are freed per apply). Size stage 07/08 against 21.65.",
+  "peak_dram_gib_samples": [
+   19.94,
+   19.94,
+   19.94,
+   21.65,
+   21.65
+  ],
   "phases_s": {
    "audio": 0.603,
    "denoising": 42.362,
