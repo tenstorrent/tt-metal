@@ -44,3 +44,19 @@ cd tt_metal/tt-llk/tests
 Each run prints the INIT, TILE_LOOP and KERNEL cycles and leaves `run.log`,
 `perf_math_matmul.csv` and, for Versim, the Versim log (and VCD) in `/tmp/repro_phase/<name>/`.
 TILE_LOOP is the measured pack loop. `grep -c "ASSERTION FAILED" versim_*.log` must be 0.
+
+## Check that the code is the same for every K
+
+The ELF files differ only in debug information (each run builds in its own directory). The code is
+identical; compare the `.text` sections:
+
+```bash
+B=sfpi/compiler/bin
+for t in unpack math pack; do
+  for k in 0 100; do
+    e=$(find /tmp/repro_phase/hw_k${k}_n0_t6000_l256_i15/build -name $t.elf | head -1)
+    $B/riscv-tt-elf-objcopy -O binary --only-section=.text "$e" /tmp/text_$k.bin
+  done
+  cmp /tmp/text_0.bin /tmp/text_100.bin && echo "$t: same code"
+done
+```
