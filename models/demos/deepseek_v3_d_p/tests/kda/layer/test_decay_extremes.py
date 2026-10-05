@@ -6,6 +6,7 @@ One crafted head per case (tests/kda/decay_extremes.py) on one device, with the 
 configuration at T=1280 (grouped scan, 20-chunk summary groups, BF16 summaries, HiFi2 prefix). Calls are chained
 through the device-resident state. Besides PCC, the test gates the localized and scale errors the decay path can
 introduce: the worst per-token output error and the final recurrent state's worst per-key-row error and norm.
+Real-text cases (tt_metal_tracker-g1b.7.2) feed the model's own text input to its most extreme heads instead.
 
 References are prepared without a device: python -m models.demos.deepseek_v3_d_p.tests.kda.decay_extremes
 """
@@ -81,6 +82,20 @@ _MEASURED_FAILURES = {
     "k3-control-h48-49-T1280x1": "K3 baseline input: long-memory row contraction fixed by g1b.7 (norm ratio 0.914 -> "
     "0.976); output PCC 0.99943 < 0.9995 and token error/RMS 0.116 remain, from strongly decaying rows (row error up "
     "to 0.21, unchanged; inferred: the prep k_dec_t precision with fractional gates, g1b.7 T2)",
+    # Real text (tt_metal_tracker-g1b.7.2; decay numerics owned by tt_metal_tracker-g1b.7). Worst state rows are
+    # long-memory channels (median per-chunk |G_last| 1e-3 to 3e-2) except glm-text-h18 (strong, median 128).
+    "k3-text-h28-29-T1280x4": "K3 layers.1 strongest text head (|G_last| max 73.9): output token error/RMS up to 0.18, "
+    "state PCC 0.99935, norm ratio 0.944, key row 80 (median |G_last| 2.6e-2) error/RMS 0.70; output PCC 0.99963",
+    "k3-text-h1-2-T1280x8": "K3 layers.1 text head 1 (LB-B failure head), long-memory rows (|G_last| ~2e-3): output "
+    "PCC falls to 0.9939 over 8 calls, token error/RMS 0.31, state PCC 0.9889, norm ratio 0.943, key row error/RMS 0.66",
+    "k3-text-h24-25-T1280x8": "K3 layers.1 text head 24 (107 weak channels): final state PCC 0.99949 (key row 22, "
+    "|G_last| ~2.6e-3, error/RMS 0.22); output within gates",
+    "k3-text-h36-37-T1280x8": "K3 layers.1 text head 36 (64 weak channels, beta median 0.11): output PCC falls to "
+    "0.99839, token error/RMS 0.15; state PCC 0.99859",
+    "glm-text-h18-19-T1280x1": "GLM layer 0 text head 18 (|G_last| up to 156.9): state only; key row 91 (median "
+    "|G_last| 128, own error 3.9%) error/RMS 0.33, state norm ratio 0.969; output PCC 0.99998, token error 3.4e-2",
+    "glm-text-h10-11-T1280x8": "GLM layer 0 text head 10 (LB-B failure head), long-memory rows (|G_last| ~2e-3): "
+    "output PCC falls to 0.9982, token error/RMS 0.41, norm ratio 0.937; state PCC 0.9972, norm ratio 0.949",
 }
 
 

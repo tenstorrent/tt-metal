@@ -3,7 +3,9 @@
 """Dependency-light numerical assertions shared by KDA tests."""
 
 from __future__ import annotations
-from collections.abc import Callable, Sequence
+
+import contextlib
+from collections.abc import Callable, Iterator, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -54,6 +56,18 @@ def _relative_rmse(expected: torch.Tensor, actual: torch.Tensor) -> float:
     return float(difference / scale) if float(scale) > 0 else float(difference)
 
 
+def accuracy_metrics(expected: torch.Tensor, actual: torch.Tensor) -> dict[str, float]:
+    """PCC, relative RMSE, relative L-inf (peak error over the expected RMS) and peak absolute error."""
+    max_abs = float((expected.float() - actual.float()).abs().max()) if expected.numel() else 0.0
+    scale = float(expected.float().pow(2).mean().sqrt()) if expected.numel() else 0.0
+    return {
+        "pcc": _pcc(expected, actual),
+        "rel_rmse": _relative_rmse(expected, actual),
+        "rel_linf": max_abs / scale if scale > 0 else max_abs,
+        "max_abs": max_abs,
+    }
+
+
 def assert_accurate(
     expected: torch.Tensor,
     actual: torch.Tensor,
@@ -91,11 +105,8 @@ def assert_accurate(
     if failures:
         raise AssertionError("\n".join(failures))
 
-    pcc = _pcc(expected, actual)
-    rmse = _relative_rmse(expected, actual)
-    max_abs = float((expected.float() - actual.float()).abs().max()) if expected.numel() else 0.0
-    scale = float(expected.float().pow(2).mean().sqrt()) if expected.numel() else 0.0
-    linf = max_abs / scale if scale > 0 else max_abs
+    metrics = accuracy_metrics(expected, actual)
+    pcc, rmse, linf, max_abs = metrics["pcc"], metrics["rel_rmse"], metrics["rel_linf"], metrics["max_abs"]
     print(expected_summary)
     print(actual_summary)
     print(f"{name}: PCC={pcc:.6f}, rel_RMSE={rmse:.3e}, rel_Linf={linf:.3e}, max_abs={max_abs:.6e}")
@@ -282,3 +293,23 @@ def make_actual_start(device: ttnn.MeshDevice, actual_start: int = 0) -> ttnn.Te
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     )
+
+
+@contextlib.contextmanager
+def single_threaded_torch() -> Iterator[None]:
+    """Run Torch CPU work on one intra-op thread, restoring the previous count on exit.
+
+    KDA device tests compute their CPU oracles while the process holds the shared device. With the host at
+    load average 45-70 on 32 cores, Torch's default 32-thread OpenMP pool made the small-matrix oracles 50x
+    to over 100x slower (one SP-contract oracle sweep: 2.2 s on one thread, 22 s on four, over 180 s on 8 or
+    32). One thread is also the fastest choice for those oracles on an idle host, and every measured oracle
+    gave bit-identical outputs at 1, 4, 8 and 32 threads. Large single oracles give up their idle-host
+    parallel speedup (production chunk-preparation oracle: 2.7 s on 32 threads, 10 s on one); expensive
+    oracles belong in the CPU-only preparation step rather than inside the device lock.
+    """
+    previous = torch.get_num_threads()
+    torch.set_num_threads(1)
+    try:
+        yield
+    finally:
+        torch.set_num_threads(previous)

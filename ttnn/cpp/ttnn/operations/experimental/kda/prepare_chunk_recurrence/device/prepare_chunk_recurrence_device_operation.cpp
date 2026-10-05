@@ -64,22 +64,35 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         q_shape[0] == 1 && k_shape[0] == 1 && v_shape[0] == 1 && g_shape[0] == 1,
         "prepare_chunk_recurrence: q, k, v, and g must have leading dimension 1");
+    TT_FATAL(k_shape == q_shape, "prepare_chunk_recurrence: q and k must have matching shapes");
     TT_FATAL(
-        k_shape == q_shape && g_shape == q_shape, "prepare_chunk_recurrence: q, k, and g must have matching shapes");
-    TT_FATAL(v_shape[1] == q_shape[1], "prepare_chunk_recurrence: q, k, v, and g must have matching sequence lengths");
+        v_shape[1] == q_shape[1] && g_shape[1] == q_shape[1],
+        "prepare_chunk_recurrence: q, k, v, and g must have matching sequence lengths");
     TT_FATAL(
         q_shape[1] > 0 && q_shape[1] % tt::constants::TILE_HEIGHT == 0,
         "prepare_chunk_recurrence: sequence length must be positive and divisible by 32");
     TT_FATAL(attrs.num_heads > 0, "prepare_chunk_recurrence: num_heads must be positive");
+    TT_FATAL(attrs.num_key_heads > 0, "prepare_chunk_recurrence: num_key_heads must be positive");
     TT_FATAL(
-        q_shape[2] % attrs.num_heads == 0 && v_shape[2] % attrs.num_heads == 0,
-        "prepare_chunk_recurrence: flat widths must be divisible by num_heads");
+        attrs.num_heads % attrs.num_key_heads == 0,
+        "prepare_chunk_recurrence: num_heads must be divisible by num_key_heads, got {} and {}",
+        attrs.num_heads,
+        attrs.num_key_heads);
+    TT_FATAL(
+        q_shape[2] % attrs.num_key_heads == 0 && v_shape[2] % attrs.num_heads == 0,
+        "prepare_chunk_recurrence: flat widths must be divisible by num_heads (v) and num_key_heads (q, k)");
     TT_FATAL(
         attrs.key_dim > 0 && attrs.value_dim > 0 && attrs.key_dim % tt::constants::TILE_WIDTH == 0 &&
             attrs.value_dim % tt::constants::TILE_WIDTH == 0,
         "prepare_chunk_recurrence: K and V must be positive and tile aligned");
     TT_FATAL(
-        q_shape[2] == attrs.num_heads * attrs.key_dim && v_shape[2] == attrs.num_heads * attrs.value_dim &&
+        g_shape[2] == attrs.num_heads * attrs.key_dim,
+        "prepare_chunk_recurrence: g must be per V head: width num_heads times K, got {} for num_heads {} and K {}",
+        g_shape[2],
+        attrs.num_heads,
+        attrs.key_dim);
+    TT_FATAL(
+        q_shape[2] == attrs.num_key_heads * attrs.key_dim && v_shape[2] == attrs.num_heads * attrs.value_dim &&
             q_shape[1] == attrs.num_chunks * tt::constants::TILE_HEIGHT,
         "prepare_chunk_recurrence: flat input shapes must match operation attributes");
 
@@ -155,6 +168,7 @@ std::vector<Tensor> prepare_chunk_recurrence(
     const Tensor& g,
     const Tensor& beta,
     uint32_t num_heads,
+    uint32_t num_key_heads,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     uint32_t output_bf16_mask,
@@ -174,19 +188,26 @@ std::vector<Tensor> prepare_chunk_recurrence(
         q_shape.rank() == 3 && v_shape.rank() == 3,
         "prepare_chunk_recurrence: q and v must be rank 3 production-flat tensors");
     TT_FATAL(num_heads > 0, "prepare_chunk_recurrence: num_heads must be positive");
+    TT_FATAL(num_key_heads > 0, "prepare_chunk_recurrence: num_key_heads must be positive");
+    TT_FATAL(
+        num_heads % num_key_heads == 0,
+        "prepare_chunk_recurrence: num_heads must be divisible by num_key_heads, got {} and {}",
+        num_heads,
+        num_key_heads);
     TT_FATAL(
         q_shape[1] > 0 && q_shape[1] % tt::constants::TILE_HEIGHT == 0,
         "prepare_chunk_recurrence: sequence length must be positive and divisible by 32");
     TT_FATAL(
-        q_shape[2] % num_heads == 0 && v_shape[2] % num_heads == 0,
-        "prepare_chunk_recurrence: flat widths must be divisible by num_heads");
+        q_shape[2] % num_key_heads == 0 && v_shape[2] % num_heads == 0,
+        "prepare_chunk_recurrence: flat widths must be divisible by num_heads (v) and num_key_heads (q, k)");
     const uint32_t num_chunks = q_shape[1] / tt::constants::TILE_HEIGHT;
-    const uint32_t key_dim = q_shape[2] / num_heads;
+    const uint32_t key_dim = q_shape[2] / num_key_heads;
     const uint32_t value_dim = v_shape[2] / num_heads;
     return ttnn::device_operation::launch<PrepareChunkRecurrenceOperation>(
         PrepareChunkRecurrenceParams{
             .sequence_parallel_axis = sequence_parallel_axis,
             .num_heads = num_heads,
+            .num_key_heads = num_key_heads,
             .num_chunks = num_chunks,
             .key_dim = key_dim,
             .value_dim = value_dim,
