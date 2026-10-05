@@ -181,14 +181,18 @@ def test_overlapping_move_flushes_worker_atomics(device, shape, layout):
 
 
 CONV_CASES = [
-    pytest.param(2, 16, 16, 256, 256, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 32, id="height_sharded"),
-    pytest.param(2, 384, 353, 8, 8, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None, id="width_sharded"),
-    pytest.param(2, 128, 128, 32, 32, ttnn.TensorMemoryLayout.BLOCK_SHARDED, None, id="block_sharded"),
+    pytest.param(
+        2, 16, 16, 256, 256, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 32, (2, 2), (1, 2, 2, 3), id="height_sharded"
+    ),
+    pytest.param(
+        2, 384, 353, 8, 8, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None, (2, 2), (1, 2, 2, 3), id="width_sharded"
+    ),
+    pytest.param(1, 8, 64, 8, 8, ttnn.TensorMemoryLayout.BLOCK_SHARDED, None, (1, 1), (1, 1), id="block_sharded"),
 ]
 
 
 @pytest.mark.parametrize(
-    "batch_size, input_channels, output_channels, input_height, input_width, shard_layout, act_block_h",
+    "batch_size, input_channels, output_channels, input_height, input_width, shard_layout, act_block_h, stride, padding",
     CONV_CASES,
 )
 def test_conv2d_flushes_receiver_atomics(
@@ -200,6 +204,8 @@ def test_conv2d_flushes_receiver_atomics(
     input_width,
     shard_layout,
     act_block_h,
+    stride,
+    padding,
 ):
     _require_grid(device, 4, 4)
     torch.manual_seed(4)
@@ -242,8 +248,8 @@ def test_conv2d_flushes_receiver_atomics(
             device=device,
             bias_tensor=bias_tensor,
             kernel_size=(3, 3),
-            stride=(2, 2),
-            padding=(1, 2, 2, 3),
+            stride=stride,
+            padding=padding,
             dilation=(1, 1),
             batch_size=batch_size,
             input_height=input_height,
