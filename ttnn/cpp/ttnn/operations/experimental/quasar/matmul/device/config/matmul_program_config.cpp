@@ -1350,7 +1350,10 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 .per_core_N = per_core_N,
                 .transpose_mcast = transpose_mcast,
                 .fused_activation = std::nullopt,
-                .fuse_batch = false,
+                // A sharded output requires the batch to be folded into M (compute_output_specs sizes the
+                // output shard grid assuming fused batch); legal when B is unbatched.
+                .fuse_batch = mem_config.is_sharded() && get_batch_size(a_shape_padded) > 1 &&
+                              get_batch_size(b_shape_padded) == 1,
             };
         }
     }

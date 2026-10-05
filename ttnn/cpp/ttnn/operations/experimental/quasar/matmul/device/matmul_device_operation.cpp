@@ -2094,7 +2094,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                                          operations::experimental::quasar::matmul::
                                              MatmulMultiCoreReuseMultiCastProgramConfig>) {
                     const auto M = operations::experimental::quasar::matmul::utilities::get_M_dim(
-                        a_shape_padded, in0_tile, /*fuse_batch=*/true);
+                        a_shape_padded, in0_tile, program_config.fuse_batch);
                     const auto N =
                         operations::experimental::quasar::matmul::utilities::get_N_dim(b_shape_padded, in1_tile);
                     uint32_t per_core_M = program_config.per_core_M;

@@ -731,3 +731,18 @@ def test_rejections(device, expect_error, make_config, out_mem, pattern):
             memory_config=out_mem or ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=_hifi4(device),
         )
+
+
+@pytest.mark.parametrize("sharded_out", [True, False], ids=["block_sharded_out", "interleaved_out"])
+def test_auto_config_batched_a_unbatched_b(device, sharded_out):
+    torch.manual_seed(8)
+    a, b = _randn(2, 1, 1024, 1024), _randn(1, 1, 1024, 1024)
+    a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    out_mem = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG if sharded_out else ttnn.DRAM_MEMORY_CONFIG
+    out = ttnn.experimental.quasar.matmul(a_t, b_t, memory_config=out_mem, compute_kernel_config=_hifi4(device))
+
+    golden = _golden(a, b)
+    out_f = ttnn.to_torch(out).to(torch.float32)
+    assert out_f.shape == golden.shape
+    assert_with_pcc(golden, out_f, 0.999)
