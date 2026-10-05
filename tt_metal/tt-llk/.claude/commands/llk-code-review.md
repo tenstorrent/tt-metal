@@ -255,13 +255,18 @@ Follow these steps precisely:
      one direct call:
 
      ```bash
-     gh api 'repos/OWNER/REPOSITORY/compare/REVIEWED_HEAD_SHA...CURRENT_HEAD_SHA' --jq '[.files[].filename]'
+     gh api 'repos/OWNER/REPOSITORY/compare/REVIEWED_HEAD_SHA...CURRENT_HEAD_SHA' --jq '{status: .status, truncated: (.files[299] != null), paths: [.files[].filename, (.files[].previous_filename // empty)]}'
      ```
 
-     If the call fails (for example, a force push made the reviewed commit
-     unreachable), treat every finding as being in a changed file.
+     `paths` also holds the old path of every renamed file. Trust `paths` only
+     when `status` is `ahead` (new commits were added on top of the reviewed
+     commit) and `truncated` is false; GitHub lists at most 300 files per
+     comparison. Any other status means the branch history was rewritten (rebase,
+     amend, or reset), and `paths` then misses files whose reviewed changes were
+     dropped. In that case, or if the call fails, treat every finding as being in
+     a changed file.
      Add this note, with literal short SHAs, as the first line of every finding
-     whose `path` is in that list:
+     whose `path` is in `paths`:
 
      ```markdown
      _Reviewed at `REVIEWED_SHORT_SHA`; the PR has since moved to `CURRENT_SHORT_SHA`, so this may already be addressed._
@@ -280,6 +285,22 @@ Follow these steps precisely:
      commit.
      ```
 
+   The head can also move while results are being posted. After the last
+   review-result write, query `.head.sha` once more with a direct `gh api` call.
+   If the pre-write check matched the reviewed head but this one does not, post
+   this issue-level comment with one direct issue-comments `gh api` call using
+   `--raw-field body=... --jq '.html_url'`, and verify that it returns a non-empty
+   URL. The body ends with the comment signature footer. Skip this note when the
+   pre-write check already found a moved head.
+
+   ```markdown
+   ## Code review
+
+   This review covers `REVIEWED_SHORT_SHA`. The PR head moved to
+   `CURRENT_SHORT_SHA` while the review was being posted. Dispatch the review
+   again to cover the latest commit.
+   ```
+
    If no findings survived, post this issue-level comment with one direct issue-
    comments `gh api` call using `--raw-field body=... --jq '.html_url'`. The body
    ends with the comment signature footer:
@@ -294,8 +315,9 @@ Follow these steps precisely:
    _Posted by the **LLK PR Reviewer**._
    ```
 
-   Verify that the command result is a non-empty URL. Only then return the concise
-   no-findings summary and the posted URL in the final response.
+   Verify that the command result is a non-empty URL, then run the final head
+   check above. Only then return the concise no-findings summary and the posted
+   URLs in the final response.
 
 8. If findings survived, refresh the PR's issue comments and inline review
    comments immediately before posting. Remove any finding another reviewer has
@@ -338,8 +360,9 @@ Follow these steps precisely:
    so the location is preserved. A fallback failure is an error. Never
    finish a `--comment` run without at least one successful GitHub write.
 
-   Only after all required writes have returned non-empty URLs may you return the
-   concise findings summary and posted URLs in the final response.
+   Then run the final head check from step 7. Only after all required writes,
+   including that check's note when needed, have returned non-empty URLs may you
+   return the concise findings summary and posted URLs in the final response.
 
 When a comment relies on a documented repository rule, identify that rule and
 link it using the reviewed repository and full head SHA. Do not add redundant
