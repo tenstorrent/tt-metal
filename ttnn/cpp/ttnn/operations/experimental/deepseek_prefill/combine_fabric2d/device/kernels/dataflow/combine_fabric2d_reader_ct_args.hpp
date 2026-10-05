@@ -33,8 +33,8 @@ struct ReaderCtArgs {
     uint32_t forwarding_metadata_size;
     uint32_t batch;
     uint32_t ring_addr;
-    uint32_t filled_addr;
-    uint32_t freed_addr;
+    uint32_t filled_slot;
+    uint32_t freed_slot;
     uint32_t fwd_pages_per_stream;
     uint32_t my_stream;
     uint32_t num_forwarding_chunks = 0;  // Host construction derives this from the descriptor block.
@@ -62,7 +62,7 @@ struct ReaderCtArgs {
     uint32_t unt_ring_batches;
     uint32_t num_untilizers;
     // The counter this reader owns on each untilizer core, bumped once per batch it is done with.
-    uint32_t unt_freed_addr;
+    uint32_t unt_freed_slot;
     // Bumped by the upstream sender for every token it writes straight into this chip's output.
     uint32_t final_sem_addr;
 
@@ -81,8 +81,8 @@ struct ReaderCtArgs {
         forwarding_metadata_size(FORWARDING_METADATA_SIZE),
         batch(BATCH),
         ring_addr(l1.ring),
-        filled_addr(plan.ring_filled_addr),
-        freed_addr(plan.ring_freed_addr),
+        filled_slot(plan.ring_filled_slot),
+        freed_slot(plan.ring_freed_slot),
         fwd_pages_per_stream(plan.pages_per_stream),
         // Our region of the forwarding buffer. (plane, direction) identifies the upstream sender uniquely
         // from the downstream chip's point of view, so the reader WRITES region q of the neighbour's buffer
@@ -106,7 +106,7 @@ struct ReaderCtArgs {
         unt_ring_addr(untilizers.ring_addr),
         unt_ring_batches(UNT_RING_BATCHES),
         num_untilizers(static_cast<uint32_t>(untilizers.peers.size())),
-        unt_freed_addr(untilizers.my_freed_addr),
+        unt_freed_slot(untilizers.my_freed_slot),
         final_sem_addr(plan.final_arrived_addr) {
         // Schedule: the work order, relays tagged. An own entry carries its index into the table that
         // follows.
@@ -139,7 +139,7 @@ struct ReaderCtArgs {
         for (const auto& u : untilizers.peers) {
             blocks_.push_back(u.noc.x);
             blocks_.push_back(u.noc.y);
-            blocks_.push_back(u.counter_addr);
+            blocks_.push_back(u.counter_slot);
         }
     }
 
@@ -150,8 +150,8 @@ struct ReaderCtArgs {
             forwarding_metadata_size,
             batch,
             ring_addr,
-            filled_addr,
-            freed_addr,
+            filled_slot,
+            freed_slot,
             fwd_pages_per_stream,
             my_stream,
             num_forwarding_chunks,
@@ -172,7 +172,7 @@ struct ReaderCtArgs {
             unt_ring_addr,
             unt_ring_batches,
             num_untilizers,
-            unt_freed_addr,
+            unt_freed_slot,
             final_sem_addr};
         word_arr.insert(word_arr.end(), blocks_.begin(), blocks_.end());
         return word_arr;
@@ -184,8 +184,8 @@ struct ReaderCtArgs {
         forwarding_metadata_size(get_compile_time_arg_val(2)),
         batch(get_compile_time_arg_val(3)),
         ring_addr(get_compile_time_arg_val(4)),
-        filled_addr(get_compile_time_arg_val(5)),
-        freed_addr(get_compile_time_arg_val(6)),
+        filled_slot(get_compile_time_arg_val(5)),
+        freed_slot(get_compile_time_arg_val(6)),
         fwd_pages_per_stream(get_compile_time_arg_val(7)),
         my_stream(get_compile_time_arg_val(8)),
         num_forwarding_chunks(get_compile_time_arg_val(9)),
@@ -206,18 +206,18 @@ struct ReaderCtArgs {
         unt_ring_addr(get_compile_time_arg_val(24)),
         unt_ring_batches(get_compile_time_arg_val(25)),
         num_untilizers(get_compile_time_arg_val(26)),
-        unt_freed_addr(get_compile_time_arg_val(27)),
+        unt_freed_slot(get_compile_time_arg_val(27)),
         final_sem_addr(get_compile_time_arg_val(28)) {}
 
     // Hand-placed L1: this op owns these counters and hands the next launch a zeroed set.
     volatile tt_l1_ptr uint32_t* filled_ptr() const {
-        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(filled_addr);
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(filled_slot);
     }
     volatile tt_l1_ptr uint32_t* freed_ptr() const {
-        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(freed_addr);
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(freed_slot);
     }
     uint32_t unt_produced_word(uint32_t peer_word) const { return peer_word; }
-    uint32_t unt_freed_addr_value() const { return unt_freed_addr; }
+    uint32_t unt_freed_addr_value() const { return unt_freed_slot; }
     void reset_produced_counter(volatile tt_l1_ptr uint32_t* p) const { noc_semaphore_set(p, 0); }
 
     static constexpr uint32_t schedule_base = READER_SCALAR_CT_ARGS;
