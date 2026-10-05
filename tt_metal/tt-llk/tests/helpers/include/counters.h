@@ -617,7 +617,7 @@ inline void read_last_zone()
 #endif // PERF_COUNTERS_COMPILED
 
 // The zone object of both builds: the same rendezvous, with the counter work only in counters on.
-template <PerfRunType RUN_TYPE>
+template <PerfRunType RUN_TYPE, bool LOOP_PAD = false>
 struct perf_counter_scoped
 {
     std::uint32_t zone_id;
@@ -747,12 +747,14 @@ inline void read_last_zone()
 #if defined(LLK_PROFILER)
 #define PERF_COUNTER_VAR_CONCAT_(a, b) a##b
 #define PERF_COUNTER_VAR_(line)        PERF_COUNTER_VAR_CONCAT_(_perf_ctr_, line)
+#define LLK_IS_TILE_LOOP_(zone_name)   (llk_perf::detail::zone_name_hash(zone_name) == llk_perf::detail::zone_name_hash("TILE_LOOP"))
 #if defined(PERF_COUNTERS_COMPILED)
 #define LLK_PERF_ZONE_ID_(zone_name) llk_perf::get_zone_id(llk_perf::detail::zone_name_hash(zone_name))
 #else
 #define LLK_PERF_ZONE_ID_(zone_name) 0u // counters off: no zone needs an id
 #endif
-#define MEASURE_PERF_COUNTERS(zone_name) const llk_perf::perf_counter_scoped<PERF_RUN_TYPE> PERF_COUNTER_VAR_(__LINE__)(LLK_PERF_ZONE_ID_(zone_name));
+#define MEASURE_PERF_COUNTERS(zone_name) \
+    const llk_perf::perf_counter_scoped<PERF_RUN_TYPE, LLK_IS_TILE_LOOP_(zone_name)> PERF_COUNTER_VAR_(__LINE__)(LLK_PERF_ZONE_ID_(zone_name));
 #else
 #define MEASURE_PERF_COUNTERS(zone_name)
 #endif
