@@ -8,8 +8,8 @@ import torch
 import ttnn
 
 # split_size is the divisor of the last dim, and the resulting tensor count divides the width in
-# turn, so 0 and a split wider than the input used to kill the process with SIGFPE. A split that
-# does not divide the width silently produced slices of a different width.
+# turn, so test that split_size of 0, or wider than the input, or a value that does not divide the width is rejected,
+# otherwise it could lead to division by 0 or silently produce incorrect results.
 _INVALID_SPLIT_SIZES = pytest.mark.parametrize(
     "split_size", [0, 512, 96], ids=["zero", "wider_than_input", "not_a_divisor"]
 )

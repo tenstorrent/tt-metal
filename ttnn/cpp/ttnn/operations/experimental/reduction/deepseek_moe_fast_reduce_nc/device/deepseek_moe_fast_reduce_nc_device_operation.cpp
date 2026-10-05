@@ -60,9 +60,9 @@ tt::tt_metal::TensorSpec DeepseekMoEFastReduceNCDeviceOperation::compute_output_
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     const auto& input_shape = input_tensor.logical_shape();
 
+    TT_FATAL(input_shape[-1] > 0, "Last dim of the input must be greater than 0");
     TT_FATAL(
-        operation_attributes.split_size > 0 && operation_attributes.split_size <= input_shape[-1] &&
-            input_shape[-1] % operation_attributes.split_size == 0,
+        operation_attributes.split_size > 0 && input_shape[-1] % operation_attributes.split_size == 0,
         "split_size ({}) must be greater than 0 and divide the last dim ({})",
         operation_attributes.split_size,
         input_shape[-1]);

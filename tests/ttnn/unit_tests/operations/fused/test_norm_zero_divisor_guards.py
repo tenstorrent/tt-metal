@@ -8,18 +8,15 @@ import torch
 import ttnn
 
 
-# These zero arguments used to reach an integer division on the host, which killed the process
-# with SIGFPE instead of raising.
-
-
+# Check that groupnorm rejects 0 groups.
 def test_group_norm_num_groups_zero(device, expect_error):
     x = ttnn.from_torch(torch.randn(1, 1, 32, 64).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     with expect_error(RuntimeError, "num_groups must be greater than 0"):
         ttnn.group_norm(x, num_groups=0)
 
 
-# With a mask, the sharded arm divides by block_w * block_h * tile_hw before the block_h shard check
-# runs. block_h = 2**53 with block_w = 2 and a 1024-element tile wraps that product to 0.
+# Check that masked sharded softmax rejects a zero shard volume (block_w * block_h * tile_hw), both for
+# block_h = 0 and for block_h = 2**53 with block_w = 2 and a 1024-element tile, whose product wraps to 0.
 @pytest.mark.parametrize("block_h", [0, 1 << 53], ids=["zero", "product_wraps_to_zero"])
 def test_softmax_sharded_masked_zero_shard_volume(device, expect_error, block_h):
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
