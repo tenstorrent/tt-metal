@@ -333,9 +333,11 @@ void write_block_sync_granular(
                 out_read_ptr += tile_size_bytes;
             }
         }
+        // Drain this row's write-source reads out of cb_out before releasing the
+        // slot back to compute, else packer repacks it mid-flight (WAR on cb_out).
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_out, N_block_tiles);
     }
-    noc_async_writes_flushed();
 }
 
 /**
@@ -377,9 +379,11 @@ void write_block_sync_granular_interleaved(
                 out_read_ptr += tile_size_bytes;
             }
         }
+        // Drain this row's write-source reads out of cb_out before releasing the
+        // slot back to compute, else packer repacks it mid-flight (WAR on cb_out).
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_out, N_block_tiles);
     }
-    noc_async_writes_flushed();
 }
 
 /**
@@ -508,7 +512,9 @@ void write_block_sync_granular_split(
                 out_read_ptr += tile_size_bytes;
             }
         }
+        // Drain this row's write-source reads out of cb_out before releasing the
+        // slot back to compute, else packer repacks it mid-flight (WAR on cb_out).
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_out, N_block_tiles);
     }
-    noc_async_writes_flushed();
 }
