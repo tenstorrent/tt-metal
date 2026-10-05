@@ -3,6 +3,8 @@
 
 import fcntl
 import glob
+import gzip
+import json
 import os
 import re
 import shlex
@@ -75,6 +77,7 @@ from .llk_params import (
     MailboxesCoverage,
     MailboxesCoverageQuasar,
     MailboxesQuasar,
+    PerfRunType,
 )
 from .logger import logger
 from .stimuli_config import StimuliConfig
@@ -1137,9 +1140,10 @@ class TestConfig:
 
         self.runtime_arguments_struct = lines
 
-    def write_runtimes_to_L1(self):
+    def runtime_arguments_bytes(self) -> bytes:
+        """The RuntimeParams bytes write_runtimes_to_L1 writes (none with speed of light)."""
         if TestConfig.SPEED_OF_LIGHT:
-            return
+            return b""
 
         argument_data = [
             self.pack_size,  # uint32_t TILE_SIZE_PACK;
@@ -1184,8 +1188,10 @@ class TestConfig:
                 ]
             )
 
-        serialised_data = struct.pack(self.runtime_format, *argument_data)
+        return struct.pack(self.runtime_format, *argument_data)
 
+    def write_runtimes_to_L1(self):
+        serialised_data = self.runtime_arguments_bytes()
         if len(serialised_data) != 0:
             if TestConfig.WITH_COVERAGE:
                 write_to_device(
@@ -1410,8 +1416,9 @@ class TestConfig:
             OPTIONS_COMPILE += "-DLLK_PROFILER "
         if self._wormhole_perf_barrier():
             # BRISC restarts the TRISCs at every rendezvous from 512 B aligned points and INIT runs out of line,
-            # so a code change outside the measured code cannot move it (see barrier.h)
-            OPTIONS_COMPILE += "-DLLK_DBG_BARRIER "
+            # so a code change outside the measured code cannot move it (see barrier.h); with INIT out of line GCC
+            # would save callee saved registers inside the measured loops, so they are saved on entry instead
+            OPTIONS_COMPILE += "-DLLK_DBG_BARRIER -fno-shrink-wrap-separate "
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
@@ -1699,8 +1706,249 @@ class TestConfig:
                 f"Failed to parse text size from riscv-tt-elf-size output for {elf_path}:\n{result.stdout}"
             ) from e
 
-    def build_elfs(self):
+    def _build_kernel_part(
+        self, name: str, variant_dir: Path, elf_dir: Path, pads=None
+    ):
+        """Compiles and links one thread's ELF of this variant into elf_dir. Wormhole perf builds compile to assembly
+        once and link it with the layout pads (pads = (P, Z) bytes, see perf/layout.py) as assembler symbols.
+        """
+        local_options_compile, local_memory_layout_ld, _ = (
+            self.resolve_compile_options()
+        )
+        shared_obj_dir = (
+            TestConfig.PROFILER_SHARED_OBJ_DIR
+            if self.profiler_build == ProfilerBuild.Yes
+            else TestConfig.SHARED_OBJ_DIR
+        )
+        src_include_prepend, src_include_append = self._extra_src_include_flag_lists()
+        # COMPILE_FOR_TRISC is the single source of truth for the compute thread id on every
+        # arch (unpack=0/math=1/pack=2/sfpu=3). Quasar also gets -DLLK_TRISC_<NAME> below, but the
+        # LLK headers now require COMPILE_FOR_TRISC (see ckernel_addrmod.h), so pass it for Quasar too.
+        optional_kernel_flags = "-DCOMPILE_FOR_TRISC=" + str(
+            TestConfig.KERNEL_COMPONENTS.index(name)
+        )
 
+        if not self.compile_time_formats:
+            optional_kernel_flags += " -DRUNTIME_FORMATS"
+
+        # Both builds get the L1 selection (mux group on tt-1xx, l1_client event on Quasar): the
+        # counters off build compiles the same zone code with the counters stopped (counters.h).
+        if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
+            optional_kernel_flags += (
+                f" -DLLK_PERF_L1_CLIENT_SEL={TestConfig.PERF_L1_CLIENT_SEL}"
+            )
+        else:
+            optional_kernel_flags += (
+                f" -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP}"
+            )
+        if TestConfig.ENABLE_PERF_COUNTERS:
+            optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
+
+        coverage_args = (
+            [
+                "-Wl,--start-group",
+                str(shared_obj_dir / "coverage.o"),
+                "-lgcov",
+                "-Wl,--end-group",
+            ]
+            if self.coverage_build == CoverageBuild.Yes
+            else []
+        )
+        trisc_define = "ISOLATE_SFPU" if name == "sfpu" else name.upper()
+        device_print_flags = ""
+        if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
+            risc_id, _ = TestConfig.RISC_INFO[name]
+            # Quasar: kernel addresses the buffer through the uncached alias
+            # (see device_print.h:get_lock_atomic).
+            kernel_buffer_base = TestConfig.DEVICE_PRINT_BUFFER_BASE + (
+                0x400000 if TestConfig.ARCH == ChipArchitecture.QUASAR else 0
+            )
+            device_print_flags = (
+                "-DDEBUG_PRINT_ENABLED "
+                f"-DLLK_DEVICE_PRINT_BUFFER_BASE={kernel_buffer_base:#x} "
+                f"-DLLK_RUNTIME_ARGS_START={TestConfig.DEVICE_PRINT_RUNTIME_ARGS_START:#x} "
+                f"-DDEVICE_PRINT_BUFFER_SIZE={TestConfig.DEVICE_PRINT_BUFFER_SIZE} "
+                f"-DDEVICE_PRINT_BUFFER_SIZE2={TestConfig.DEVICE_PRINT_BUFFER_SIZE2} "
+                f"-DPROCESSOR_INDEX={risc_id} "
+            )
+        compile_flags = TestConfig._argv(
+            TestConfig.ARCH_COMPUTE,
+            TestConfig.OPTIONS_ALL,
+            [f"-I{TestConfig.TESTS_WORKING_DIR}"],
+            src_include_prepend,
+            [f"-I{TestConfig.RISCV_SOURCES}"],
+            src_include_append,
+            [f"-I{variant_dir}"],
+            local_options_compile,
+            optional_kernel_flags,
+            f"-DLLK_TRISC_{trisc_define}",
+            device_print_flags,
+        )
+        link_flags = TestConfig._argv(
+            TestConfig.OPTIONS_LINK,
+            coverage_args,
+            [
+                f"-T{local_memory_layout_ld}",
+                f"-T{TestConfig.LINKER_SCRIPTS / name}.ld",
+                f"-T{TestConfig.LINKER_SCRIPTS / 'sections.ld'}",
+            ],
+        )
+        # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3)
+        # that -nostdlib drops; only referenced helpers are linked.
+        libs_out = ["-lc", "-lgcc", "-o", str(elf_dir / f"{name}.elf")]
+        source = (
+            f"{self._barrier_reservation_include()}"
+            f"{self._kernel_placement_include()}"
+            f"{self._kernel_source_include()}#include  <trisc.cpp>\n"
+        )
+        if not self._wormhole_perf_barrier():
+            compile_command = [
+                TestConfig.GXX,
+                *compile_flags,
+                *link_flags,
+                "-x",
+                "c++",
+                "-",
+                *libs_out,
+            ]
+            logger.trace(" ".join(shlex.quote(part) for part in compile_command))
+            run_shell_command(  # %.elf : path/to/kernel/test.cpp trisc.cpp [coverage.o libgcov.a]
+                compile_command, TestConfig.TESTS_WORKING_DIR, source
+            )
+            return
+
+        # the assembly is kept compressed for the padded copies: with debug info it is about 0.6 MB a thread
+        assembly = variant_dir / "obj" / f"{name}.s"
+        if pads is None:
+            compile_command = [
+                TestConfig.GXX,
+                *compile_flags,
+                "-S",
+                "-x",
+                "c++",
+                "-",
+                "-o",
+                str(assembly),
+            ]
+            logger.trace(" ".join(shlex.quote(part) for part in compile_command))
+            run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
+            text = assembly.read_text()
+            with gzip.open(assembly.with_suffix(".s.gz"), "wt") as f:
+                f.write(text)
+            assembly.unlink()
+        else:
+            with gzip.open(assembly.with_suffix(".s.gz"), "rt") as f:
+                text = f.read()
+        p, z = pads or (0, 0)
+        # without -g, as the one step build, so the link gives the same ELF
+        link_command = [
+            TestConfig.GXX,
+            *[flag for flag in compile_flags if flag != "-g"],
+            f"-Wa,--defsym,llk_loop_pad={p}",
+            f"-Wa,--defsym,llk_loop_end_pad={z}",
+            *link_flags,
+            "-x",
+            "assembler",
+            "-",
+            "-x",
+            "none",
+            *libs_out,
+        ]
+        logger.trace(" ".join(shlex.quote(part) for part in link_command))
+        run_shell_command(link_command, TestConfig.TESTS_WORKING_DIR, text)
+
+    # Threads whose measured loop takes layout pads (perf/layout.py). The packer loops are left alone: their speed
+    # does not follow the modelled branch predictor and instruction cache.
+    LAYOUT_THREADS: ClassVar[dict] = {
+        PerfRunType.UNPACK_ISOLATE: ("unpack",),
+        PerfRunType.MATH_ISOLATE: ("math",),
+        PerfRunType.L1_TO_L1: ("unpack", "math"),
+        PerfRunType.L1_CONGESTION: ("unpack", "math"),
+    }
+
+    def _layout_elf_dir(self, build: bool) -> Path:
+        """ELF dir to run for the current runtime arguments. Wormhole perf builds run a copy of the variant whose
+        measured loop threads take the pads perf/layout.py picks for these arguments; build makes it when missing.
+        """
+        variant_dir = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
+        threads = (
+            TestConfig.LAYOUT_THREADS.get(getattr(self, "current_run_type", None), ())
+            if self._wormhole_perf_barrier()
+            else ()
+        )
+        if not threads:
+            return variant_dir / "elf"
+        from .perf import layout
+
+        runtime = self.runtime_arguments_bytes()
+        key = sha256(runtime + self.current_run_type.name.encode()).hexdigest()[:16]
+        choice = variant_dir / "layout" / f"{key}.json"
+        try:
+            pads = json.loads(choice.read_text())
+        except (
+            OSError,
+            ValueError,
+        ):  # not chosen yet, or being written by another worker
+            pads = {}
+            for t in threads:
+                try:
+                    pads[t] = layout.choose(
+                        variant_dir / "elf" / f"{t}.elf",
+                        t,
+                        runtime,
+                        variant_dir / "layout",
+                    )
+                except (
+                    Exception
+                ) as e:  # never fail a test on the layout model: run it unpadded
+                    logger.warning(
+                        "Layout choice for {} {} failed: {}", self.variant_id[:12], t, e
+                    )
+                    pads[t] = (0, 0)
+            layout.write_json(choice, pads)
+        tag = "_".join(f"{t}{p}-{z}" for t, (p, z) in sorted(pads.items()) if p or z)
+        if not tag:
+            return variant_dir / "elf"
+        layout_dir = variant_dir / f"layout_{tag}"
+        done, failed = layout_dir / ".build_complete", layout_dir / ".build_failed"
+        if not done.exists() and not failed.exists():
+            if not build:
+                raise RuntimeError(
+                    f"{layout_dir} was not built: run the producer for this test"
+                )
+            with FileLock(TestConfig.SYNC_DIR / f"{self.variant_id}-{tag}.lock"):
+                if not done.exists() and not failed.exists():
+                    elf_dir = layout_dir / "elf"
+                    create_directories([elf_dir])
+                    try:
+                        for name in TestConfig.KERNEL_COMPONENTS:
+                            p, z = pads.get(name, (0, 0))
+                            if p or z:
+                                self._build_kernel_part(
+                                    name, variant_dir, elf_dir, (p, z)
+                                )
+                            else:
+                                shutil.copy2(
+                                    variant_dir / "elf" / f"{name}.elf", elf_dir
+                                )
+                        done.touch()
+                    # a pad can push the code past its region: run it unpadded
+                    except Exception as e:
+                        logger.warning(
+                            "Layout {} of {} failed, running it unpadded: {}",
+                            tag,
+                            self.variant_id[:12],
+                            e,
+                        )
+                        failed.touch()
+        return layout_dir / "elf" if done.exists() else variant_dir / "elf"
+
+    def build_elfs(self):
+        self._build_variant_elfs()
+        if not TestConfig.INFRA_TESTING:
+            self._layout_elf_dir(build=True)
+
+    def _build_variant_elfs(self):
         VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
         if not self.skip_build_header:
             header_content = self.generate_build_header()
@@ -1730,119 +1978,17 @@ class TestConfig:
 
             create_directories([VARIANT_OBJ_DIR, VARIANT_ELF_DIR])
 
-            local_options_compile, local_memory_layout_ld, _ = (
-                self.resolve_compile_options()
-            )
-
             if not self.skip_build_header:
                 with open(VARIANT_DIR / "build.h", "w") as f:
                     f.write(header_content)
-
-            # Use correct shared artefact directory based on profiler build
-            shared_obj_dir = (
-                TestConfig.PROFILER_SHARED_OBJ_DIR
-                if self.profiler_build == ProfilerBuild.Yes
-                else TestConfig.SHARED_OBJ_DIR
-            )
-
-            src_include_prepend, src_include_append = (
-                self._extra_src_include_flag_lists()
-            )
-
-            def build_kernel_part(name: str):
-                # COMPILE_FOR_TRISC is the single source of truth for the compute thread id on every
-                # arch (unpack=0/math=1/pack=2/sfpu=3). Quasar also gets -DLLK_TRISC_<NAME> below, but the
-                # LLK headers now require COMPILE_FOR_TRISC (see ckernel_addrmod.h), so pass it for Quasar too.
-                optional_kernel_flags = "-DCOMPILE_FOR_TRISC=" + str(
-                    TestConfig.KERNEL_COMPONENTS.index(name)
-                )
-
-                if not self.compile_time_formats:
-                    optional_kernel_flags += " -DRUNTIME_FORMATS"
-
-                # Both builds get the L1 selection (mux group on tt-1xx, l1_client event on Quasar): the
-                # counters off build compiles the same zone code with the counters stopped (counters.h).
-                if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
-                    optional_kernel_flags += (
-                        f" -DLLK_PERF_L1_CLIENT_SEL={TestConfig.PERF_L1_CLIENT_SEL}"
-                    )
-                else:
-                    optional_kernel_flags += (
-                        f" -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP}"
-                    )
-                if TestConfig.ENABLE_PERF_COUNTERS:
-                    optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
-
-                coverage_args = (
-                    [
-                        "-Wl,--start-group",
-                        str(shared_obj_dir / "coverage.o"),
-                        "-lgcov",
-                        "-Wl,--end-group",
-                    ]
-                    if self.coverage_build == CoverageBuild.Yes
-                    else []
-                )
-                trisc_define = "ISOLATE_SFPU" if name == "sfpu" else name.upper()
-                device_print_flags = ""
-                if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
-                    risc_id, _ = TestConfig.RISC_INFO[name]
-                    # Quasar: kernel addresses the buffer through the uncached alias
-                    # (see device_print.h:get_lock_atomic).
-                    kernel_buffer_base = TestConfig.DEVICE_PRINT_BUFFER_BASE + (
-                        0x400000 if TestConfig.ARCH == ChipArchitecture.QUASAR else 0
-                    )
-                    device_print_flags = (
-                        "-DDEBUG_PRINT_ENABLED "
-                        f"-DLLK_DEVICE_PRINT_BUFFER_BASE={kernel_buffer_base:#x} "
-                        f"-DLLK_RUNTIME_ARGS_START={TestConfig.DEVICE_PRINT_RUNTIME_ARGS_START:#x} "
-                        f"-DDEVICE_PRINT_BUFFER_SIZE={TestConfig.DEVICE_PRINT_BUFFER_SIZE} "
-                        f"-DDEVICE_PRINT_BUFFER_SIZE2={TestConfig.DEVICE_PRINT_BUFFER_SIZE2} "
-                        f"-DPROCESSOR_INDEX={risc_id} "
-                    )
-                compile_command = TestConfig._argv(
-                    [TestConfig.GXX],
-                    TestConfig.ARCH_COMPUTE,
-                    TestConfig.OPTIONS_ALL,
-                    [f"-I{TestConfig.TESTS_WORKING_DIR}"],
-                    src_include_prepend,
-                    [f"-I{TestConfig.RISCV_SOURCES}"],
-                    src_include_append,
-                    [f"-I{VARIANT_DIR}"],
-                    local_options_compile,
-                    optional_kernel_flags,
-                    f"-DLLK_TRISC_{trisc_define}",
-                    device_print_flags,
-                    TestConfig.OPTIONS_LINK,
-                    coverage_args,
-                    [
-                        f"-T{local_memory_layout_ld}",
-                        f"-T{TestConfig.LINKER_SCRIPTS / name}.ld",
-                        f"-T{TestConfig.LINKER_SCRIPTS / 'sections.ld'}",
-                    ],
-                    # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3)
-                    # that -nostdlib drops; only referenced helpers are linked.
-                    ["-x", "c++", "-", "-lc", "-lgcc", "-o"],
-                    [str(VARIANT_ELF_DIR / f"{name}.elf")],
-                )
-
-                logger.trace(" ".join(shlex.quote(part) for part in compile_command))
-
-                run_shell_command(  # %.elf : path/to/kernel/test.cpp trisc.cpp [coverage.o libgcov.a]
-                    compile_command,
-                    TestConfig.TESTS_WORKING_DIR,
-                    (
-                        f"{self._barrier_reservation_include()}"
-                        f"{self._kernel_placement_include()}"
-                        f"{self._kernel_source_include()}#include  <trisc.cpp>\n"
-                    ),
-                )
 
             with ThreadPoolExecutor(
                 max_workers=len(TestConfig.KERNEL_COMPONENTS)
             ) as executor:
                 futures = [
-                    executor.submit(build_kernel_part, name)
+                    executor.submit(
+                        self._build_kernel_part, name, VARIANT_DIR, VARIANT_ELF_DIR
+                    )
                     for name in TestConfig.KERNEL_COMPONENTS
                 ]
                 for fut in futures:
@@ -1999,8 +2145,8 @@ class TestConfig:
         else:
             commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
 
-        VARIANT_ELF_DIR = (
-            TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
+        VARIANT_ELF_DIR = self._layout_elf_dir(
+            build=TestConfig.BUILD_MODE != BuildMode.CONSUME
         )
 
         self.temp_elfs = [

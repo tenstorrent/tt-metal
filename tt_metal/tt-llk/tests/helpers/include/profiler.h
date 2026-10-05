@@ -164,7 +164,7 @@ __attribute__((noipa, section(".text.llk_zone.record"))) inline void zone_record
     write_entry_at(EntryType::ZONE_END, id16, end_timestamp);
 }
 
-template <std::uint16_t id16>
+template <std::uint16_t id16, bool LOOP_PAD = false>
 class zone_scoped
 {
 private:
@@ -196,6 +196,10 @@ public:
         {
             const std::uint64_t end_timestamp = ckernel::read_wall_clock();
 #if defined(LLK_DBG_BARRIER) // the id hashes the source line: a fixed lui + addi keeps its size from moving the code after it
+            // llk_loop_end_pad bytes of NOPs after the TILE_LOOP end read move the code after it against the loop (perf/layout.py)
+            asm volatile(".ifndef llk_loop_end_pad\n\t.set llk_loop_end_pad, 0\n.endif\n.rept (llk_loop_end_pad / 4) * %[on]\n\tnop\n\t.endr"
+                         :
+                         : [on] "i"(LOOP_PAD ? 1 : 0));
             std::uint32_t id;
             asm volatile("lui %0, %%hi(%1)\n\taddi %0, %0, %%lo(%1)" : "=r"(id) : "i"(id16));
             zone_record(static_cast<std::uint16_t>(id), start_timestamp, end_timestamp);
@@ -228,7 +232,7 @@ __attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16, s
 
 #define ZONE_SCOPED(marker)            \
     PROFILER_META(MARKER_FULL(marker)) \
-    const auto _zone_scoped_ = llk_profiler::zone_scoped<MARKER_ID(marker)>();
+    const auto _zone_scoped_ = llk_profiler::zone_scoped<MARKER_ID(marker), hashString16(marker) == hashString16("TILE_LOOP")>();
 
 #define TIMESTAMP(marker)              \
     PROFILER_META(MARKER_FULL(marker)) \
