@@ -209,6 +209,17 @@ struct ReaderCtArgs {
         unt_freed_addr(get_compile_time_arg_val(27)),
         final_sem_addr(get_compile_time_arg_val(28)) {}
 
+    // Hand-placed L1: this op owns these counters and hands the next launch a zeroed set.
+    volatile tt_l1_ptr uint32_t* filled_ptr() const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(filled_addr);
+    }
+    volatile tt_l1_ptr uint32_t* freed_ptr() const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(freed_addr);
+    }
+    uint32_t unt_produced_word(uint32_t peer_word) const { return peer_word; }
+    uint32_t unt_freed_addr_value() const { return unt_freed_addr; }
+    void reset_produced_counter(volatile tt_l1_ptr uint32_t* p) const { noc_semaphore_set(p, 0); }
+
     static constexpr uint32_t schedule_base = READER_SCALAR_CT_ARGS;
     static constexpr uint32_t assignment_base = schedule_base + get_compile_time_arg_val(13);  // schedule_len
     static constexpr uint32_t forwarding_chunk_base =
