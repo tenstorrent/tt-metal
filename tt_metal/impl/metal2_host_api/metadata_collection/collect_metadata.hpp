@@ -76,6 +76,21 @@ struct CollectedSpecData {
     //  - dfb_node_set: union of binding-kernels' node sets (local DFBs only).
     std::unordered_map<KernelSpecName, NodeRangeSet> kernel_node_set;
     std::unordered_map<DFBSpecName, NodeRangeSet> dfb_node_set;
+
+    // Semaphore binder census (derived from kernel semaphore bindings and kernel_node_set): which
+    // kernel instances bind each semaphore, and their placement. A kernel binds a given semaphore at
+    // most once (enforced during collection). A declared but unbound semaphore has no entry.
+    struct SemaphoreBinderInfo {
+        struct BinderRecord {
+            const KernelSpec* kernel = nullptr;
+            const SemaphoreBinding* binding = nullptr;
+        };
+        std::vector<BinderRecord> binders;
+        NodeRangeSet binder_node_set;
+        uint32_t binder_instance_count = 0;
+    };
+    using SemaphoreBinderCensus = std::unordered_map<SemaphoreSpecName, SemaphoreBinderInfo>;
+    SemaphoreBinderCensus semaphore_binders;
 };
 
 // ----------------------------------------------------------------------------

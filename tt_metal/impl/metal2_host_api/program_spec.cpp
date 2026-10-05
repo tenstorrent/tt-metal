@@ -3033,12 +3033,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     // Step 1a: Collect derived data (builds lookup tables, checks structural invariants)
     CollectedSpecData collected = CollectSpecData(spec);
 
-    // Step 1b: Census the semaphore binders, using the kernel node sets from Step 1a. Runs
-    // unconditionally because it also rejects a kernel that binds the same semaphore twice.
-    const sem_solver::SemaphoreBinderCensus semaphore_binders =
-        sem_solver::CollectSemaphoreBinders(spec, collected.kernel_node_set);
-
-    // Step 1c: Validate semantic rules (can be skipped for trusted inputs)
+    // Step 1b: Validate semantic rules (can be skipped for trusted inputs)
     if (!skip_validation) {
         ValidateProgramSpec(spec, collected, metal_ctx, *mesh_device.allocator());
     }
@@ -3229,7 +3224,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     // device's), not the default context, so a non-default-context device resolves its own arch
     // and target device.
     const sem_solver::SemaphoreNameToScopeMap semaphore_name_to_scope =
-        sem_solver::ResolveSemaphoreScopes(spec, semaphore_binders, metal_env);
+        sem_solver::ResolveSemaphoreScopes(spec, collected.semaphore_binders, metal_env);
 
     // Create Kernels (arch-specific)
     for (const KernelSpec& kernel_spec : spec.kernels) {
@@ -3244,8 +3239,8 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
             dfb_name_to_prefetcher_pipe_id,
             collected.dfb_by_name,
             dfb_name_to_id);
-        const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
-            MakeSemaphoreBindingHandles(kernel_spec, semaphore_binders, semaphore_name_to_id, semaphore_name_to_scope);
+        const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles = MakeSemaphoreBindingHandles(
+            kernel_spec, collected.semaphore_binders, semaphore_name_to_id, semaphore_name_to_scope);
 
         // Resolve TensorBindings for this kernel:
         //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer

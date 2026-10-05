@@ -14,6 +14,7 @@
 #include <tt-metalium/hal.hpp>
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/metal2_host_api/helpers.hpp"
+#include "impl/metal2_host_api/metadata_collection/collect_metadata.hpp"
 #include "jit_build/jit_build_settings.hpp"
 
 // ============================================================================
@@ -41,20 +42,10 @@ namespace sem_solver {
 
 using SemaphoreNameToScopeMap = std::unordered_map<SemaphoreSpecName, SemScope>;
 
-// Data structure used to keep track of the kernel instances that bind to a given
-// semaphore, and their placement (derived from kernel bindings).
-struct SemaphoreBinderInfo {
-    struct BinderRecord {
-        const KernelSpec* kernel = nullptr;
-        const SemaphoreBinding* binding = nullptr;
-    };
-    std::vector<BinderRecord> binders;
-    NodeRangeSet binder_node_set;
-    uint32_t binder_instance_count = 0;
-};
-
-// Every bound semaphore in the program. A declared but unbound semaphore has no entry.
-using SemaphoreBinderCensus = std::unordered_map<SemaphoreSpecName, SemaphoreBinderInfo>;
+// The census data structure lives in CollectedSpecData (built by CollectSpecData).
+// Every bound semaphore in the program has an entry; a declared but unbound semaphore has none.
+using SemaphoreBinderInfo = CollectedSpecData::SemaphoreBinderInfo;
+using SemaphoreBinderCensus = CollectedSpecData::SemaphoreBinderCensus;
 
 // Look up a semaphore's binder info; an unbound semaphore returns an empty record.
 inline const SemaphoreBinderInfo& SemaphoreBinders(const SemaphoreBinderCensus& census, const SemaphoreSpecName& name) {

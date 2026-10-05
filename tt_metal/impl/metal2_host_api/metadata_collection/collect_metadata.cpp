@@ -4,6 +4,7 @@
 
 #include "impl/metal2_host_api/metadata_collection/collect_metadata.hpp"
 #include "impl/metal2_host_api/helpers.hpp"
+#include "impl/metal2_host_api/semaphore_scope.hpp"
 
 namespace tt::tt_metal::experimental {
 
@@ -499,6 +500,10 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         }
         collected.dfb_node_set[dfb.unique_id] = node_set;
     }
+
+    // Census the semaphore binders. Needs the kernel node sets derived above. Also rejects a kernel
+    // that binds the same semaphore twice.
+    collected.semaphore_binders = sem_solver::CollectSemaphoreBinders(spec, collected.kernel_node_set);
 
     return collected;
 }
