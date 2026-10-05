@@ -104,6 +104,7 @@ env:
     galaxy_profiler_tests.yaml
     single_card_profiler_tests.yaml
     t3k_profiler_tests.yaml
+    bh_lb_profiler_tests.yaml
     fabric_sanity_tests.yaml
     fabric_perf_tests.yaml
     runtime_perf_profiler_tests.yaml

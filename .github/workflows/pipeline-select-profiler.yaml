@@ -16,7 +16,7 @@ on:
         type: boolean
         default: false
       run-blackhole-profiler:
-        description: "Blackhole profiler"
+        description: "Blackhole profiler (single card and LoudBox)"
         required: false
         type: boolean
         default: true
@@ -61,6 +61,7 @@ jobs:
     outputs:
       run-galaxy: ${{ steps.logic.outputs.run-galaxy }}
       run-t3k: ${{ steps.logic.outputs.run-t3k }}
+      run-bh-lb: ${{ steps.logic.outputs.run-bh-lb }}
       run-single-card: ${{ steps.logic.outputs.run-single-card }}
       single-card-skus: ${{ steps.logic.outputs.single-card-skus }}
       any-selected: ${{ steps.logic.outputs.any-selected }}
@@ -103,6 +104,7 @@ jobs:
 
           echo "run-galaxy=$galaxy"        >> "$GITHUB_OUTPUT"
           echo "run-t3k=$t3k"              >> "$GITHUB_OUTPUT"
+          echo "run-bh-lb=$bh"             >> "$GITHUB_OUTPUT"
           echo "run-single-card=$run_sc"   >> "$GITHUB_OUTPUT"
           echo "single-card-skus=$sc_skus" >> "$GITHUB_OUTPUT"
           echo "any-selected=$any"         >> "$GITHUB_OUTPUT"
@@ -124,8 +126,8 @@ jobs:
 
   # Bakes the source tree and this run's build output into one image the test legs
   # run in, so they need no artifact download and no recursive checkout. One bake
-  # serves all three legs, since they share the one build-artifact above and all
-  # take the build tarball on the dev base.
+  # serves the galaxy, LoudBox and single-card legs, since they share the one
+  # build-artifact above and all take the build tarball on the dev base.
   #
   # No consumer gate needed here: determine-tests.any-selected is true only when at
   # least one of run-galaxy, run-t3k and run-single-card is, and all three of those
@@ -175,6 +177,18 @@ jobs:
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+  bh-lb-profiler-tests:
+    needs: [determine-tests, build-artifact, bake-env-dev-full]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' &&
+     needs.determine-tests.outputs.run-bh-lb == 'true' }}
+    uses: ./.github/workflows/bh-lb-profiler-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
