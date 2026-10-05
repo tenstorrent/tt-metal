@@ -3,7 +3,6 @@
 both made every Latency Breakdown bar read baseline == current (galaxy qwen: identical bars while e2e
 was 3.11x faster). With no pin, baseline_ms is None (UI shows current + the e2e gain); with a pin it
 is the pinned value."""
-
 import json
 
 from tt_hw_planner.optimize_dashboard import collect_state
