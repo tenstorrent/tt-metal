@@ -42,6 +42,11 @@ def from_chunks(ch, rows, users, Sp, S, tail):
     return xr.reshape(rows * users, Sp, *tail)[:, :S]
 
 
+ENGRAM_OWN = (
+    os.environ.get("DSV41_PF_ENGRAM_OWN", "0") == "1"
+)  # column-split Engram on the own chunks only (forward_v2_own)
+
+
 class DSV41PrefillModel:
     def __init__(self, md, layers, embedding, head, engram=None, host_rows=None, users_per_row=4):
         """layers: list of (layer_id, DSV41PrefillLayer); engram: {layer_id: DSV41DeviceEngram}; host_rows: HostEngramRows."""
@@ -217,7 +222,19 @@ class DSV41PrefillModel:
                 sl = lambda c: ttnn.to_layout(
                     ttnn.slice(erows_dev[lid], [0, 0, c * T, 0], [1, 1, (c + 1) * T, kin]), ttnn.TILE_LAYOUT
                 )  # (to_layout is a no-op for tile rows)
-                if (
+                if self.cs and ENGRAM_OWN and fe.__name__ == "forward_v2" and self.engram[lid].mesh_config is not None:
+                    # own chunks only: one kv matmul per 8-chunk group + all_to_all of the kv shards (no gather of x, no 8 calls, no reduce_scatter)
+                    new = []
+                    for g, x in enumerate(xs):
+                        rg = ttnn.to_layout(
+                            ttnn.slice(
+                                erows_dev[lid], [0, 0, g * self.cols * T, 0], [1, 1, (g + 1) * self.cols * T, kin]
+                            ),
+                            ttnn.TILE_LAYOUT,
+                        )
+                        new.append(self.engram[lid].forward_v2_own(x, rg))
+                        ttnn.deallocate(rg)
+                elif (
                     self.cs
                 ):  # own-token chunks -> replicated 8-chunk groups -> Engram -> back (reduce_scatter of 8 identical copies, x1/8 exact)
                     mc, cc = pl.L.mesh_config, pl.L.ccl
