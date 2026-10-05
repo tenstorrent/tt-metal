@@ -49,6 +49,48 @@ def test_scaled_dot_product_attention_golden_matches_torch_gqa_causal():
     torch.testing.assert_close(actual, expected)
 
 
+@pytest.mark.parametrize("sliding_window", [None, 3])
+@pytest.mark.parametrize("use_sink", [False, True])
+@pytest.mark.parametrize("tensor_start", [False, True])
+def test_chunked_sdpa_golden_honors_window_and_sink(sliding_window, use_sink, tensor_start):
+    torch.manual_seed(18)
+    query = torch.randn(1, 2, 3, 4)
+    key = torch.randn(1, 1, 12, 4)
+    value = torch.randn_like(key)
+    page_table = torch.tensor([[2, 0, 1]], dtype=torch.int32)
+    key_pages = torch.empty(3, 1, 4, 4)
+    value_pages = torch.empty_like(key_pages)
+    for logical_page, physical_page in enumerate(page_table[0]):
+        key_pages[physical_page] = key[0, :, logical_page * 4 : (logical_page + 1) * 4]
+        value_pages[physical_page] = value[0, :, logical_page * 4 : (logical_page + 1) * 4]
+    sink = torch.tensor([-2.0, 4.0]).reshape(1, 2, 1, 1) if use_sink else None
+    start, scale = 5, 0.5
+    start_arg = {"chunk_start_idx_tensor": torch.tensor([start])} if tensor_start else {"chunk_start_idx": start}
+    golden = ttnn.get_golden_function(ttnn.transformer.chunked_scaled_dot_product_attention)
+    actual = golden(
+        query,
+        key_pages,
+        value_pages,
+        page_table,
+        **start_arg,
+        scale=scale,
+        sliding_window_size=sliding_window,
+        attention_sink=sink,
+    )
+
+    expected_rows = []
+    for row, position in enumerate(range(start, start + query.shape[2])):
+        first_key = 0 if sliding_window is None else max(0, position - sliding_window + 1)
+        keys = key[:, :, first_key : position + 1].repeat_interleave(2, dim=1)
+        values = value[:, :, first_key : position + 1].repeat_interleave(2, dim=1)
+        scores = query[:, :, row : row + 1] @ keys.transpose(-2, -1) * scale
+        if use_sink:
+            scores = torch.cat([scores, sink * scale], dim=-1)
+        probabilities = scores.softmax(dim=-1)[..., : keys.shape[2]]
+        expected_rows.append(probabilities @ values)
+    torch.testing.assert_close(actual, torch.cat(expected_rows, dim=2))
+
+
 def test_sdpa_decode_golden_supports_mixed_query_and_kv_dtypes():
     torch.manual_seed(6)
     query = torch.randn(1, 1, 2, 4, dtype=torch.bfloat16)

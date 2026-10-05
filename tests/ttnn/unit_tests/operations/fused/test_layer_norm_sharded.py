@@ -6,13 +6,15 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import is_watcher_enabled
+from models.common.utility_functions import is_watcher_enabled, run_for_wormhole_b0_or_blackhole
 from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     layernorm_test_main,
     single_stage_param_sets,
     simple_size_params,
     generate_input_tensor,
     ttnn_layer_norm_sharded,
+    create_sharded_mem_config,
+    torch_layer_norm,
     ttnn_rms_norm_sharded,
     make_sharded_norm_mem_config,
     run_sharded_norm_logical_width_multicore,
@@ -23,6 +25,7 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES,
     UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS,
 )
+from tests.ttnn.unit_tests.operations.test_utils import TILE_WIDTH
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
@@ -161,6 +164,42 @@ def test_layer_norm_sharded_with_weight_and_bias_row_major(device, use_welford, 
         weight=weight[0],
         bias=bias[0],
         weight_bias_layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+
+@run_for_wormhole_b0_or_blackhole()
+def test_layer_norm_sharded_tile_backend_does_not_require_reciprocal(device):
+    torch.manual_seed(20260824)
+    h, w, num_cores_h, num_cores_w, block_ht, block_wt, _ = simple_size_params(False)
+    torch_input = torch.rand((h, w), dtype=torch.bfloat16)
+    reference = torch.nn.functional.layer_norm(torch_input, normalized_shape=[w])
+    memory_config = create_sharded_mem_config(h, w, num_cores_h, num_cores_w, two_stage=False)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+
+    output = ttnn_layer_norm_sharded(
+        device,
+        input_tensor,
+        use_welford=True,
+        block_ht=block_ht,
+        block_wt=block_wt,
+        provide_reciprocal=False,
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+        ),
+    )
+
+    assert_numeric_metrics(
+        reference,
+        output,
+        pcc_threshold=0.99999,
+        rtol=0,
+        atol=0.015,
+        frobenius_threshold=0.005,
     )
 
 
@@ -508,6 +547,54 @@ def test_layer_norm_sharded_1d_mcast_with_grid_offset(device, grid_offset, use_w
 def test_layer_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w, use_welford, dtype):
     run_sharded_norm_logical_width_multicore(
         device, is_rmsnorm=False, w=w, num_cores_w=num_cores_w, dtype=dtype, use_welford=use_welford
+    )
+
+
+# A width-sharded grid with an idle row (more cores than real width-slices) must raise, not hang.
+@pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
+@pytest.mark.parametrize(
+    ("h", "w", "num_cores_w", "num_cores_h", "expect_idle_shard_error"),
+    [
+        (32, 256, 4, 2, False),  # 8 cores, tensor width needs all 8: valid
+        (32, 128, 4, 2, True),  # 8 cores, tensor width only needs 4: other 4 are idle
+    ],
+    ids=["grid_matches_tiles", "idle_row"],
+)
+def test_layer_norm_sharded_core_grid_utilization(
+    device, h, w, num_cores_w, num_cores_h, expect_idle_shard_error, use_welford, expect_error
+):
+    torch_input_tensor = generate_input_tensor(h, w, "random_normal", torch.float32)
+
+    core_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, num_cores_h - 1))}
+    )
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(core_grid, [h, TILE_WIDTH], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.Layout.TILE, device=device, memory_config=sharded_mem_config
+    )
+
+    if expect_idle_shard_error:
+        with expect_error(RuntimeError, "does not align with tensor width"):
+            ttnn_layer_norm_sharded(device, tt_input_tensor, use_welford=use_welford, block_ht=1, block_wt=1)
+        return
+
+    output_ttnn = ttnn_layer_norm_sharded(device, tt_input_tensor, use_welford=use_welford, block_ht=1, block_wt=1)
+    ref_output_tensor = torch_layer_norm(torch_input_tensor)
+    if use_welford:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.99975, 0.14, 0.085, 0.02
+    else:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.9999, 0.065, 0.065, 0.014
+    assert_numeric_metrics(
+        ref_output_tensor,
+        output_ttnn,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
     )
 
 

@@ -690,46 +690,9 @@ def test_ng_scalar_dram_sharded_cache_miss_across_page_counts(device, isolate_pr
     assert device.cache_entries_counter.total == 2
 
 
-@pytest.mark.parametrize(
-    "out_dtype",
-    [
-        ttnn.bfloat16,
-        pytest.param(
-            ttnn.float32,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="https://github.com/tenstorrent/tt-metal/issues/54138 -- ttnn.where with a preallocated "
-                "float32 output silently ignores the "
-                "predicate and returns t_true. Reproduces on a SINGLE call against a cold program cache, "
-                "so this is a plain correctness bug rather than the cache-key collision finding #3 "
-                "describes. Unfixed; see the docstring. strict so that fixing it fails here and forces "
-                "this marker to be removed rather than lingering as a silent XPASS.",
-            ),
-        ),
-    ],
-    ids=["out_bf16", "out_f32"],
-)
+@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.float32], ids=["out_bf16", "out_f32"])
 def test_ng_where_scalar_preallocated_output_dtype(device, isolate_program_cache, out_dtype):
-    """Issue #54138 finding #3 predicted a CACHE-HIT defect: a caller-supplied output tensor reaches the
-    key only by proxy through attributes.dtype, which where_operation_with_scalar leaves as std::nullopt,
-    so get_dtype() collapses to the INPUT dtype and the real output dtype never enters the key. The
-    finding was tiered "Blocking (minor)" on the premise that "a single call with the odd value works
-    correctly" and only the cache hit goes wrong.
-
-    Measured on Wormhole, that premise does not hold. With a preallocated FLOAT32 output and bfloat16
-    inputs, a single call against a freshly-cleared program cache already returns the wrong answer --
-    2022 of 2048 elements mismatched, and the output is approximately t_true, i.e. the predicate is
-    dropped entirely. The bfloat16-output case is exact (0/2048) under the same conditions.
-
-    So this domain is broken with or without a cache, which by the issue's own cache-dependence test
-    makes it a report rather than a port blocker: adding the output dtype to the key would only give
-    each dtype its own separately-wrong program. Adding it also costs real cache reuse, because hashing
-    the output tensor's presence stops in-place and out-of-place calls from sharing one entry (it breaks
-    test_ng_cache_mixed_inplace_outofplace_interleaved). The underlying correctness bug must be fixed
-    first; only then is a key entry meaningful.
-
-    This test is parametrized so the passing bfloat16 case pins the behavior that DOES work, and the
-    xfail marks the float32 case that does not."""
+    """Issue #54138: bf16 inputs with a preallocated float32 output gave wrong values."""
     shape = [1, 1, 32, 64]
     torch.manual_seed(0)
 
@@ -747,6 +710,25 @@ def test_ng_where_scalar_preallocated_output_dtype(device, isolate_program_cache
 
     ref = torch.where(pred.bool(), t_true.float(), torch.full(shape, scalar_false))
     assert_with_pcc(ref, ttnn.to_torch(res).float(), 0.999)
+
+
+def test_ng_where_scalar_output_dtype_in_cache_key(device, isolate_program_cache):
+    """bf16 and float32 outputs need separate cache entries."""
+    shape = [1, 1, 64, 128]
+    torch.manual_seed(0)
+    pred = (torch.rand(shape) > 0.5).to(torch.bfloat16)
+    t_true = torch.rand(shape, dtype=torch.bfloat16)
+    tt_pred = ttnn.from_torch(pred, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_true = ttnn.from_torch(t_true, layout=ttnn.TILE_LAYOUT, device=device)
+    ref = torch.where(pred.bool(), t_true.float(), torch.tensor(-1.0))
+
+    for out_dtype in [ttnn.bfloat16, ttnn.float32, ttnn.bfloat16]:
+        out = ttnn.from_torch(torch.zeros(shape), dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn.where(tt_pred, tt_true, -1.0, output_tensor=out)
+        expected = ref if out_dtype == ttnn.float32 else ref.to(torch.bfloat16).float()
+        assert torch.equal(ttnn.to_torch(out).float(), expected), out_dtype
+
+    assert device.num_program_cache_entries() == 2
 
 
 @pytest.mark.parametrize("op", [ttnn.add, ttnn.subtract, ttnn.multiply, ttnn.div])
