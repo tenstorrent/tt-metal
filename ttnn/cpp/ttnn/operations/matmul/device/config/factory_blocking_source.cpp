@@ -38,22 +38,28 @@ uint32_t max_in0_block_w(
     const MatmulDesc& p,
     Family family,
     uint32_t out_block_h,
-    uint32_t out_block_w) {
+    uint32_t out_block_w,
+    bool a_in_place = false) {
     const uint32_t Kt = p.Kt;
     // Tiles per K step of the operand(s) each core reads itself rather than receiving by multicast
     uint32_t self_read = 0;
     switch (family) {
         case Family::Mcast2D: self_read = 0; break;
         case Family::Mcast1DIn0: self_read = out_block_w; break;
-        case Family::Mcast1DIn1: self_read = out_block_h; break;
+        case Family::Mcast1DIn1: self_read = a_in_place ? 0 : out_block_h; break;
         case Family::Reuse: self_read = out_block_h + out_block_w; break;
     }
     uint32_t depth = params.tuned.max_in0_block_w;
+    // A read in place splits K only into full-depth blocks; otherwise one block of all of K beats shallower ones
+    if (a_in_place && Kt % depth != 0) {
+        return Kt;
+    }
     // Interleaved 2D where K blocks are costly (costly_k_blocks): K may be split into as few as
     // Tuned::max_costly_k_blocks blocks, and the block search trades output block size against that depth.
     if (family == Family::Mcast2D && costly_k_blocks(p, out_block_h, out_block_w) && !sharded_layout(p) &&
         params.tuned.max_costly_k_blocks != 0) {
-        depth = std::max(depth, div_up(Kt, params.tuned.max_costly_k_blocks));
+        depth = std::max(
+            depth, std::min(div_up(Kt, params.tuned.max_costly_k_blocks), params.tuned.max_costly_in0_block_w));
     }
     const uint32_t self_read_limit =
         self_read == 0
@@ -185,8 +191,9 @@ std::optional<Blocking> block_1d(
         if (!block_allowed(rules, per_core_N, out_block_w) || (split && out_block_w > split_w)) {
             return std::nullopt;
         }
-        const uint32_t k_limit =
-            rules.k_fixed != 0 ? rules.k_fixed : max_in0_block_w(params, p, family, out_block_h, out_block_w);
+        const uint32_t k_limit = rules.k_fixed != 0
+                                     ? rules.k_fixed
+                                     : max_in0_block_w(params, p, family, out_block_h, out_block_w, rules.a_in_place);
         for (uint32_t k : divisors_desc(p.Kt)) {
             if ((k > k_limit && !rules.prefers(k)) || !k_allowed(rules, k)) {
                 continue;
@@ -667,12 +674,15 @@ std::vector<Candidate> FactoryBlockingSource::sharded_candidates(const MatmulDes
                     std::nullopt,
                     false);
             } else {
-                // 1D in1-mcast on A's grid, reading A in place (in0_block_w = K)
+                // 1D in1-mcast on A's grid, reading A in place. All of K is one block (B single-buffered) unless it
+                // splits into blocks of the full depth limit (A is in each core's own L1, so the self-read limit
+                // doesn't apply): a large K then overlaps B's reads with math.
                 if (p.b.l1_sharded()) {
                     return result;
                 }
                 BlockRules rules = out_rules;
-                rules.k_fixed = p.Kt;
+                rules.k_divides = p.Kt;
+                rules.a_in_place = true;
                 add(Family::Mcast1DIn1,
                     blocking_->block(p, hw, Family::Mcast1DIn1, {a.shard_h, p.Nt, true}, rules),
                     grid,

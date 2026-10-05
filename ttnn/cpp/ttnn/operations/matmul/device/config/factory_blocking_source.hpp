@@ -34,6 +34,9 @@ struct BlockRules {
     // A's shard width. Each K block is then a whole shard column, multicast in place; a narrower one makes the
     // sender copy every K block out of the shard first (extract_shard_sub_blocks).
     uint32_t k_preferred = 0;
+    // A is read in place (a height-sharded A on 1D in1-mcast): A doesn't count toward the self-read K limit, and K
+    // is split only into blocks of the full depth limit
+    bool a_in_place = false;
 
     bool prefers(uint32_t k) const { return k_preferred != 0 && k == k_preferred; }
     bool prefers_other(uint32_t k) const { return k_preferred != 0 && k != k_preferred; }
@@ -102,6 +105,12 @@ public:
         // 8-wide grid, the K depth a 67-case 2D probe found pays under those conditions; without it 13 gist and suite
         // cases (70B qkv_proj fwd T=1024, 1B down_proj fwd T=1024, ...) fall to 0.83-0.95 of legacy.
         uint32_t max_costly_k_blocks = 8;
+        // ...but no deeper than this: with a very large K (Kt 512 and up) the K-block count stops mattering and the
+        // deeper block only enlarges B's buffer. Basis: a sweep of 18 2D cases with block-float B and Kt 256-1024
+        // (generated/matmul_oob/bigk): K 64 was never the fastest, K 32 within 2% of the best or better than 64 on
+        // all; test_prefill_mm_interleaved_sharded wo (Kt 512) 0.91x of its hand config at K 64. No suite case goes
+        // above 32.
+        uint32_t max_costly_in0_block_w = 32;
         // K block depth is further limited so that the operand a core reads by itself (not by multicast) moves at
         // most this many tiles per K block: B's slice in 1D in0-mcast, A's in 1D in1-mcast, both in Reuse, none in
         // 2D. Small per-step reads keep the double-buffered DRAM stream ahead of math; wide per-core blocks get
