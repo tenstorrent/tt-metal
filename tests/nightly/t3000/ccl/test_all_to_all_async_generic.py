@@ -380,14 +380,14 @@ def test_all_to_all(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [{"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
 def test_generic_all_to_all_drains_noc_atomics(mesh_device):
     run_all_to_all_impl(
         mesh_device,
         mesh_device.get_num_devices(),
-        logical_shape=[1, 32, 32, 64],
+        logical_shape=[1, 128, 128, 512],
         in_dim=1,
         out_dim=2,
         num_links=1,
