@@ -25,6 +25,7 @@
 #include "fabric/fabric_context.hpp"
 #include "fabric/fabric_builder_context.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
+#include "fabric/debug/visualizer/manifest/fabric_manifest.hpp"
 
 namespace tt::tt_metal {
 
@@ -296,9 +297,16 @@ void FabricFirmwareInitializer::init(
     // I/O that MockChip discards.
     if (descriptor_->is_mock_device()) {
         const auto fabric_manager = descriptor_->fabric_manager();
-        if (has_flag(fabric_manager, tt_fabric::FabricManagerMode::INIT_FABRIC) ||
-            has_flag(fabric_manager, tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
+        const bool init_fabric = has_flag(fabric_manager, tt_fabric::FabricManagerMode::INIT_FABRIC);
+        const bool terminate_fabric = has_flag(fabric_manager, tt_fabric::FabricManagerMode::TERMINATE_FABRIC);
+        if (init_fabric) {
+            tt_fabric::remove_stale_fabric_manifest(rtoptions_);
+        }
+        if (init_fabric || terminate_fabric) {
             compile_fabric_only();
+        }
+        if (init_fabric && rtoptions_.get_generate_fabric_manifest()) {
+            tt_fabric::write_fabric_manifest(control_plane_, rtoptions_);
         }
         return;
     }
@@ -317,6 +325,7 @@ void FabricFirmwareInitializer::init(
             devices_.size());
 
         log_info(tt::LogMetal, "Initializing Fabric");
+        tt_fabric::remove_stale_fabric_manifest(rtoptions_);
 #if defined(TT_UMD_BUILD_SIMULATION)
         if (rtoptions_.get_simulator_enabled()) {
             for (auto* dev : devices_) {
@@ -333,6 +342,9 @@ void FabricFirmwareInitializer::init(
 #endif
         control_plane_.write_routing_tables_to_all_chips();
         compile_and_configure_fabric();
+        if (rtoptions_.get_generate_fabric_manifest()) {
+            tt_fabric::write_fabric_manifest(control_plane_, rtoptions_);
+        }
         log_info(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
     } else if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
         log_info(tt::LogMetal, "Compiling fabric to setup fabric context for fabric termination");
