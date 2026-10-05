@@ -243,6 +243,11 @@ each core's runtime-arg vector has that fixed length.
 longest vector in its kernel group; it does not write those slots. A shorter
 vector on a cache hit would not match that count.
 
+Each core takes a contiguous run of the tile list. The list is ordered `b`, then
+query block, then head, so a core's consecutive tiles mostly share one query
+block: `reference_points` is head-invariant, and the V2 reader stages it once
+per query block rather than once per tile.
+
 All runtime args, buffer addresses included, are plain values that
 `ProgramFactory::override_runtime_arguments` rebuilds on every cache hit. That
 is what lets `num_valid_queries` stay out of the program hash.
@@ -422,8 +427,9 @@ reader_msda_v2.cpp ─┘   (staging, gather, tile scatter)     (SFPU geometry, 
 
 **Reader** (both variants). Per output tile `(b, h, q_start, v_rows)`:
 
-1. stage attention weights and locations/offsets (+ reference points for V2)
-   for all `v_rows` rows into L1 arenas — one `noc.async_read` per page;
+1. stage attention weights and locations/offsets (+ reference points for V2,
+   unless the previous tile staged the same query block) for all `v_rows` rows
+   into L1 arenas — one `noc.async_read` per page;
 2. for each `(l, p)`: write the bf16 operands into column 0 of the geometry
    tiles and push them. No arithmetic — the reader moves bit patterns;
 3. take `x0`, `y0` back from the SFPU, decode them with integer shifts, and

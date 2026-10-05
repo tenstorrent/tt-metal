@@ -217,10 +217,14 @@ MSDAWorkSplit msda_work_split(
     // themselves are not used, since every core gets that many slots.
     split.slots = slots_group_1;
 
+    // Heads innermost: each core takes a contiguous run of tiles, so most of
+    // its consecutive tiles share (b, q_start), and the V2 reader stages the
+    // head-invariant reference points once per query block in its run rather
+    // than once per tile.
     for (uint32_t b = 0; b < s.batch; ++b) {
         const uint32_t q_end = attrs.num_valid_queries.empty() ? s.num_queries : attrs.num_valid_queries[b];
-        for (uint32_t h = 0; h < s.num_heads; ++h) {
-            for (uint32_t q_start = 0; q_start < q_end; q_start += kTileMaxRows) {
+        for (uint32_t q_start = 0; q_start < q_end; q_start += kTileMaxRows) {
+            for (uint32_t h = 0; h < s.num_heads; ++h) {
                 split.tiles.push_back({b, h, q_start, std::min(kTileMaxRows, q_end - q_start)});
             }
         }
