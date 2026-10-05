@@ -42,7 +42,17 @@
 #include "hostdevcommon/common_values.hpp"
 #include "chunk_gdn_handoff_dm.hpp"
 #include "chunk_gdn_fused_map.hpp"
+#include "api/debug/assert.h"
+#include "api/debug/waypoint.h"
 #include "chunk_gdn_handoff.hpp"
+
+// Runtime checks of the protocol's invariants (chunk_gdn_handoff_protocol.md, "Runtime checks"): compiled only
+// where the watcher's ASSERT is, so release kernels are unchanged.
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
+#define GDN_HANDOFF_WATCHER_CHECKS 1
+#else
+#define GDN_HANDOFF_WATCHER_CHECKS 0
+#endif
 
 // CB indices (prep compute's output slots == the scan side's hand-off slots), checked against the shared map.
 constexpr uint32_t cb_Tinv = 13, cb_vbeta = 14, cb_nkd = 18, cb_qdecay = 19, cb_intra = 20;
@@ -252,6 +262,7 @@ void kernel_main() {
         load_head(h);
         // Wait for the chunk's outputs in the phased prep writer's drain order (roughly
         // compute's push order), so producer-side backpressure matches that writer exactly.
+        WAYPOINT("TXCB");
         {
             DeviceZoneScopedN("tx_wait_cb");
             CircularBuffer(cb_vbeta).wait_front(cv);
@@ -267,10 +278,34 @@ void kernel_main() {
         // would be a protocol bug and shows up as a hang here rather than as corrupt output. The
         // word is per (head, slot): its next credit (chunk c + NBUF) can only follow this chunk's
         // VALID -> pop -> reserve, so the reset below never races an increment.
+        // C3': compute pushed exactly n_tiles per item, so this item's front slot is n % NBUF in every ring.
+#if GDN_HANDOFF_WATCHER_CHECKS
+        {
+            const uint32_t kslot = n % NBUF;
+            ASSERT(CircularBuffer(cb_vbeta).get_read_ptr() == base_vbeta + kslot * cv * tb);
+            ASSERT(CircularBuffer(cb_Tinv).get_read_ptr() == base_Tinv + kslot * cc * tb);
+            ASSERT(CircularBuffer(cb_nkd).get_read_ptr() == base_kd + kslot * ck * tb);
+            ASSERT(CircularBuffer(cb_intra).get_read_ptr() == base_intra + kslot * cc * tb);
+            ASSERT(CircularBuffer(cb_qdecay).get_read_ptr() == base_qdecay + kslot * ck * tb);
+            ASSERT(CircularBuffer(cb_kdec_t).get_read_ptr() == base_kdec_t + kslot * kc * tb);
+            ASSERT(CircularBuffer(cb_dl).get_read_ptr() == base_dl + kslot * 1 * tb);
+        }
+#endif
         const CoreLocalMem<volatile uint32_t> credit_word = credit + (h * NBUF + slot);
+        WAYPOINT("TXCR");
         {
             DeviceZoneScopedN("tx_wait_credit");
+#if GDN_HANDOFF_WATCHER_CHECKS
+            // C1: the word counts one chunk at a time (I1); more than NV credits is a protocol bug that would
+            // otherwise hang here silently.
+            uint32_t seen;
+            do {
+                seen = gdn_handoff::read_word(credit_word);
+                ASSERT(seen <= NV);
+            } while (seen != NV);
+#else
             gdn_handoff::wait_word(credit_word, NV);
+#endif
         }
         *credit_word = 0;
 
@@ -292,6 +327,7 @@ void kernel_main() {
             send_shared(cb_kdec_t, kc, base_kdec_t + slot * kc * tb);
             send_shared(cb_dl, 1, base_dl + slot * 1 * tb);
         }
+        WAYPOINT("TXBR");
         {
             DeviceZoneScopedN("tx_barrier");
             if constexpr (POSTED) {
@@ -305,6 +341,7 @@ void kernel_main() {
                 noc.async_write_barrier();
             }
         }
+        WAYPOINT("TXVL");
         {
             DeviceZoneScopedN("tx_valid");
             set_valid(slot);
@@ -332,7 +369,15 @@ void kernel_main() {
     // transaction may be outstanding at kernel exit. Their acks return on this NoC while the credits
     // that prove the increments landed arrive on the other, so only the barrier makes it a guarantee.
     noc.async_atomic_barrier();
+#if GDN_HANDOFF_WATCHER_CHECKS
+    // C2: every credit this producer was granted was consumed by a send (I1 over the whole run): a stray credit
+    // means a receiver credited a chunk this producer never sent (owner map or N_INIT mismatch).
+    for (uint32_t i = 0; i < BH * NBUF; i++) {
+        ASSERT(gdn_handoff::read_word(credit + i) == 0);
+    }
+#endif
     for (uint32_t s = 0; s < NBUF; s++) {
         Semaphore<>(SEM_VALID + s).set(INVALID);  // restore the semaphores' initial value
     }
+    WAYPOINT("DONE");
 }
