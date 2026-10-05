@@ -24,7 +24,6 @@ import pytest
 from filelock import FileLock
 from ttexalens.tt_exalens_lib import (
     TTException,
-    load_elf,
     parse_elf,
     read_word_from_device,
 )
@@ -47,6 +46,7 @@ from .device import (
     exalens_device_setup,
     get_soft_reset_mask,
     handle_if_assert_hit,
+    load_elf,
     reset_mailboxes,
     set_tensix_soft_reset,
     soft_reset_bits,
@@ -209,7 +209,6 @@ class TestConfig:
     # silicon init_ttexalens and the RTL remote connect both happen after it.
     _PENDING_WORKER_INDEX: ClassVar[int | None] = None
     STIMULI_ADDRESS_MAP: ClassVar[dict[str, int]] = {}
-    SIMULATOR_TIMEOUT: ClassVar[int] = 600
 
     # When the infrastructure itself needs to be tested, some functionality like compiling the artefacts and writing them
     # to tmpfs can be skipped (eg. object, elf and coverage data files etc.). This flag is used to skip such code to enable fast execution of infra tests.
@@ -2109,7 +2108,7 @@ class TestConfig:
 
         mailboxes = {core for core in device_module.Mailboxes}
         timeout = (
-            TestConfig.SIMULATOR_TIMEOUT
+            TestConfig.TEST_TARGET.kernel_timeout_s
             if TestConfig.TEST_TARGET.run_simulator
             else timeout
         )
