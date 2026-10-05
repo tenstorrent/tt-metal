@@ -56,6 +56,17 @@ def loop_factor(kt, ct):
     return 256 if kt * ct < 8 else 64
 
 
+# Production calls at decode (M 1, K 7168): the DeepSeek b1 unified matmul with one output tile per call or two (the
+# dense MLP's W_up), and the Kimi K2 router projection (ct 1, kt 224); both run split_acc with finalize, the rows
+# without split_acc are the alternative.
+PRODUCTION_CALLS = [
+    (in1_format, ct, 224, split_acc)
+    for in1_format in (DataFormat.Bfp8_b, DataFormat.Bfp4_b)
+    for ct in (1, 2)
+    for split_acc in (False, True)
+]
+
+
 @pytest.mark.perf
 @parametrize(
     in1_format=[DataFormat.Float16_b, DataFormat.Bfp8_b, DataFormat.Bfp4_b],
@@ -64,6 +75,20 @@ def loop_factor(kt, ct):
     split_acc=[False, True],
 )
 def test_perf_custom_mm(perf_report, in1_format, in0_face_r_dim, call_shape, split_acc):
+    _run_perf_custom_mm(perf_report, in1_format, in0_face_r_dim, call_shape, split_acc)
+
+
+@pytest.mark.perf
+@pytest.mark.parametrize(
+    "in1_format,ct,kt,split_acc",
+    PRODUCTION_CALLS,
+    ids=[f"{f.name}-ct{ct}-kt{kt}-split{s}" for f, ct, kt, s in PRODUCTION_CALLS],
+)
+def test_perf_custom_mm_production(perf_report, in1_format, ct, kt, split_acc):
+    _run_perf_custom_mm(perf_report, in1_format, 1, (ct, kt), split_acc)
+
+
+def _run_perf_custom_mm(perf_report, in1_format, in0_face_r_dim, call_shape, split_acc):
     ct, kt = call_shape
     configuration = PerfConfig(
         "sources/custom_mm_perf.cpp",
