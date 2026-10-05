@@ -15,20 +15,22 @@ from models.experimental.bevformer.tests.decoder_common import (
     NUM_QUERY,
     assert_channels_close,
     build_reference_decoder,
+    init_reg_branches,
 )
 
 
 def build_reference_head(bev_shape, seed=0):
     """BEVFormer's head with dummy weights over a ``bev_shape`` BEV map, all drawn from ``seed``.
 
-    The decoder is ``build_reference_decoder``'s, and ``reference_points`` gets BEVFormer's
-    xavier init, which spreads the initial points over the BEV grid. The rest keeps
-    PyTorch's default init.
+    The decoder is ``build_reference_decoder``'s, the reg branches get ``init_reg_branches``'
+    scale, and ``reference_points`` gets BEVFormer's xavier init, which spreads the initial
+    points over the BEV grid. The rest keeps PyTorch's default init.
     """
     torch.manual_seed(seed)
     model = BEVFormerHead(*bev_shape, num_query=NUM_QUERY, embed_dims=EMBED_DIMS)
     nn.init.xavier_uniform_(model.reference_points.weight)
     nn.init.zeros_(model.reference_points.bias)
+    init_reg_branches(model.reg_branches)
     model.decoder = build_reference_decoder(seed)
     return model.eval().requires_grad_(False)
 
