@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 
 
 def _to_device(t, device, dtype=ttnn.bfloat16):
@@ -20,9 +20,8 @@ def test_remainder_scalar_honours_activations(device):
         _to_device(x, device), -3.0, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)]
     )
     # remainder by a negative divisor is <= 0, so a dropped RELU would leave negative values.
-    golden = torch.relu(torch.remainder(x.float(), -3.0))
-    assert_with_pcc(golden, ttnn.to_torch(out).float(), 0.99)
-    assert ttnn.to_torch(out).min() >= 0
+    golden = torch.relu(torch.remainder(x.float(), -3.0)).bfloat16()
+    assert_with_ulp(expected_result=golden, actual_result=ttnn.to_torch(out), ulp_threshold=1)
 
 
 def test_remainder_scalar_honours_dtype(device):
@@ -30,7 +29,7 @@ def test_remainder_scalar_honours_dtype(device):
     x = torch.randn(1, 1, 32, 64, dtype=torch.bfloat16) * 10
     out = ttnn.experimental.quasar.remainder(_to_device(x, device), 3.0, dtype=ttnn.float32)
     assert out.dtype == ttnn.float32
-    assert_with_pcc(torch.remainder(x.float(), 3.0), ttnn.to_torch(out), 0.99)
+    assert_with_ulp(expected_result=torch.remainder(x.float(), 3.0), actual_result=ttnn.to_torch(out), ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -76,4 +75,6 @@ def test_rank7_lhs_with_rank6_rhs(device):
     a = torch.randn(1, 2, 1, 1, 2, 32, 32, dtype=torch.bfloat16)
     b = torch.randn(2, 1, 1, 2, 32, 32, dtype=torch.bfloat16)
     out = ttnn.experimental.quasar.add(_to_device(a, device), _to_device(b, device))
-    assert_with_pcc(a.float() + b.float(), ttnn.to_torch(out).float(), 0.999)
+    assert_with_ulp(
+        expected_result=(a.float() + b.float()).bfloat16(), actual_result=ttnn.to_torch(out), ulp_threshold=1
+    )
