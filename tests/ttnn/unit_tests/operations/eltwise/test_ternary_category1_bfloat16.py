@@ -5,8 +5,14 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_ulp, ulp_distance, flush_subnormal_values_to_zero
+from tests.ttnn.utils_for_testing import (
+    assert_allclose,
+    assert_with_ulp,
+    ulp_distance,
+    flush_subnormal_values_to_zero,
+)
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
+    SMALLEST_NORMAL_BF16,
     pairwise_inputs,
     run_ternary,
     ternary_inputs,
@@ -47,6 +53,21 @@ UNDERFLOW_BAND = 2.0**-119
 # rounding of the intermediate, so a ULP metric on the output stops measuring
 # the kernel. 2^-8 is the bf16 significand.
 CANCELLATION_RATIO = 2.0**-8
+
+# addcdiv divides by multiplying with recip(c), and that reciprocal underflows
+# to zero for divisors this large, so the device returns a quotient of +0 where
+# torch still has a finite value. Same fence as the binary divide sweep.
+RECIPROCAL_FLUSH_DIVISOR = 2.0**126
+
+# Inside the band a ULP metric is useless but an absolute one is not, so the
+# band is checked with assert_allclose the way the binary sweeps check theirs
+# (test_binary_category4_bfloat16.py). Each bound is the measured worst case on
+# this grid rounded up to a power of two; the band itself reaches 128 smallest
+# normals, so none of these is a vacuous ceiling.
+MAC_BAND_ATOL = 2 * SMALLEST_NORMAL_BF16
+LERP_BAND_ATOL = 2 * SMALLEST_NORMAL_BF16
+ADDCMUL_BAND_ATOL = 16 * SMALLEST_NORMAL_BF16
+ADDCDIV_BAND_ATOL = 32 * SMALLEST_NORMAL_BF16
 
 
 def nonfinite_disagreement(golden, result):
@@ -90,7 +111,8 @@ def test_mac(device, ttnn_op):
     actually disagree, the rest being triples where both sides already return
     the same infinity and the rewrite is a no-op. Stage 2 is gated on a real
     disagreement, so all 3,804 of its positions are ones the assertion would
-    otherwise reject.
+    otherwise reject, and it is bounded absolutely rather than waived: the
+    worst case on this grid is 1.06 smallest normals.
     """
     input_a, input_b, input_c = ternary_inputs(include_zero=True)
     golden, result = run_ternary(device, ttnn_op, input_a, input_b, input_c)
@@ -126,6 +148,9 @@ def test_mac(device, ttnn_op):
         & (ulp_distance(golden.to(torch.bfloat16), result.to(torch.bfloat16)) > 1)
     )
     assert in_band.any(), "expected underflow-band disagreements in this sweep"
+    # The band is excused from the ULP budget, not from accuracy: bound it
+    # absolutely first so a regression returning any larger magnitude fails.
+    assert_allclose(expected_result=golden[in_band], actual_result=result[in_band], rtol=0, atol=MAC_BAND_ATOL)
     result = torch.where(in_band, golden, result)
 
     # a * b + c overflows to ±inf for large-magnitude triples.
@@ -180,8 +205,10 @@ def test_where_ttt(device, pattern, include_spl_values):
     golden, result = run_ternary(device, ttnn.where, predicate, input_true, input_false)
 
     if not include_spl_values:
-        # Pure copy: compare encodings, which is stricter than any ULP budget
-        # and catches a -0 that lost its sign or a payload that got rewritten.
+        # Pure copy: compare encodings, which is stricter than any ULP budget.
+        # This grid is +0 and finite normals only -- -0 and NaN live in the
+        # include_spl_values branch below -- so what this catches is a selected
+        # value whose bits came back altered at all, however slightly.
         assert torch.equal(
             golden.view(torch.uint16), result.view(torch.uint16)
         ), "where is expected to carry finite values through bit-for-bit"
@@ -222,7 +249,11 @@ def test_lerp(device, ttnn_op):
     Only stage 1 excuses its whole range, and it still asserts the stronger
     property that the device returns a there. The others fire only where the
     two sides really disagree -- stages 3 and 4 by more than 1 ULP, stage 2 on
-    a non-finite -- so each removes far less than its range would suggest.
+    a non-finite -- so each removes far less than its range would suggest, and
+    stage 4 is bounded absolutely before it is waived (worst case on this grid
+    is 1.00 smallest normals). Stage 3 is the one range with no bound to give:
+    the output there is built entirely out of the rounding of b - a, so it is
+    far from the golden in both relative and absolute terms by construction.
     The remaining 99.6% is checked at 1 ULP, and 1,068 positions use it.
     """
     input_a, input_b, input_weight = ternary_inputs(include_zero=True)
@@ -288,6 +319,7 @@ def test_lerp(device, ttnn_op):
     #    such position that disagrees by more than 1 ULP also lands in here.
     in_band = both_finite & (golden.abs() < UNDERFLOW_BAND) & (ulp_now(result) > 1)
     assert in_band.any(), "expected underflow-band disagreements in this sweep"
+    assert_allclose(expected_result=golden[in_band], actual_result=result[in_band], rtol=0, atol=LERP_BAND_ATOL)
     result = torch.where(in_band, golden, result)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
@@ -325,43 +357,86 @@ def intermediate_overflow_exception(golden, scaled_b, term):
     return ("expected an intermediate to overflow bf16", lambda result: region & nonfinite_disagreement(golden, result))
 
 
-def scaled_underflow_exception(golden, input_a, scaled_b):
-    """Mirror image of the overflow: value * b landing on a bf16 subnormal is
-    flushed by the device and kept by the golden, so the device drops the whole
-    correction and returns a.
+def collapses_to_a_exception(golden, input_a, region, reason, detail):
+    """A stage whose device behaviour is fully determined: something upstream
+    flushes to zero, the whole correction term vanishes, and the result is a.
 
-        value = 0.5, a = b = 1.1755e-38, c = 65536
-        0.5 * b = 5.877e-39 -> device 0, so the result is a; torch keeps the
-        subnormal and reaches 3.8519e-34.
-
-    Returning a is asserted rather than assumed, so a regression that lands on
-    some other finite value here still fails. The assertion only holds once the
-    bottom-binade band has been taken out: inside it the output itself is
-    subnormal and the device flushes the *sum*, which is a different behaviour.
+    That is asserted rather than assumed, so a regression landing on any other
+    finite value here still fails. Each of these only holds once the
+    bottom-binade band has been taken out: inside the band the output itself is
+    subnormal and the device flushes the *sum*, which is a different behaviour
+    with a different expected value.
     """
-    region = (scaled_b != 0) & (scaled_b.abs() < MIN_NORMAL_BF16)
     ulp = ulp_against(golden)
 
     def build_mask(result):
         mask = region.expand_as(result) & (ulp(result) > 1)
-        assert torch.equal(
-            result[mask].to(torch.bfloat16), input_a.expand_as(result)[mask]
-        ), "device is expected to return a unchanged when value * b flushes to zero"
+        assert torch.equal(result[mask].to(torch.bfloat16), input_a.expand_as(result)[mask]), detail
         return mask
 
-    return ("expected value * b to underflow on this grid", build_mask)
+    return (reason, build_mask)
 
 
-def underflow_band_exception(golden):
-    """The same bottom-binade fence mac and lerp use."""
+def scaled_underflow_exception(golden, input_a, scaled_b):
+    """value * b landing on a bf16 subnormal is flushed by the device and kept
+    by the golden, so the device drops the correction and returns a.
+
+        value = 0.5, a = b = 1.1755e-38, c = 65536
+        0.5 * b = 5.877e-39 -> device 0, so the result is a; torch keeps the
+        subnormal and reaches 3.8519e-34.
+    """
+    return collapses_to_a_exception(
+        golden,
+        input_a,
+        (scaled_b != 0) & (scaled_b.abs() < MIN_NORMAL_BF16),
+        "expected value * b to underflow on this grid",
+        "device is expected to return a unchanged when value * b flushes to zero",
+    )
+
+
+def reciprocal_flush_exception(golden, input_a, input_c):
+    """The device divides by multiplying with recip(c), and that reciprocal
+    underflows to zero once |c| >= 2^126, so the quotient vanishes and the
+    result is a. Same fence as the binary divide sweep."""
+    return collapses_to_a_exception(
+        golden,
+        input_a,
+        input_c.abs().to(torch.float64) >= RECIPROCAL_FLUSH_DIVISOR,
+        "expected recip(c) to flush to zero on this grid",
+        "device is expected to return a unchanged when recip(c) flushes to zero",
+    )
+
+
+def cancellation_exception(golden, input_a, term):
+    """a + term lands more than a bf16 significand below the larger of the two,
+    so every bit of the output came out of the rounding of term. This is the
+    one range with no bound to offer: the output is far from the golden in
+    absolute terms as well as relative ones, by construction."""
+    larger_operand = torch.maximum(input_a.abs().to(torch.float64), term.abs())
     ulp = ulp_against(golden)
     return (
-        "expected underflow-band disagreements in this sweep",
+        "expected cancellation cases in this sweep",
         lambda result: torch.isfinite(golden)
         & torch.isfinite(result)
-        & (golden.abs() < UNDERFLOW_BAND)
+        & (golden.abs() < larger_operand * CANCELLATION_RATIO)
         & (ulp(result) > 1),
     )
+
+
+def underflow_band_exception(golden, atol):
+    """The same bottom-binade fence mac and lerp use. A ULP metric is useless
+    in here but an absolute one is not, so the slice is bounded by ``atol``
+    before it is rewritten -- otherwise any finite magnitude would pass. Run it
+    after the cancellation stage: a cancelled result can land in the band too,
+    and that population genuinely has no absolute bound."""
+    ulp = ulp_against(golden)
+
+    def build_mask(result):
+        mask = torch.isfinite(golden) & torch.isfinite(result) & (golden.abs() < UNDERFLOW_BAND) & (ulp(result) > 1)
+        assert_allclose(expected_result=golden[mask], actual_result=result[mask], rtol=0, atol=atol)
+        return mask
+
+    return ("expected underflow-band disagreements in this sweep", build_mask)
 
 
 @pytest.mark.parametrize("value", [1.0, -1.0, 0.5, -0.5, 2.0, -2.0, 0.0])
@@ -381,23 +456,24 @@ def test_addcmul(device, value):
 
       #  Stage                      Range that fires it                  |v|=1   |v|=0.5     |v|=2
       1  an intermediate overflows  |value*b| or |term| > bf16 max       3,120     2,080     5,688
-      2  bottom-binade rounding     |out| < 2^-119                       3,804    20,320       232
-      3  value * b underflows       |value * b| < 2^-126                     -    84,908         -
+      2  catastrophic cancellation  |out| < max(|a|, |term|) * 2^-8        384     2,248        40
+      3  bottom-binade rounding     |out| < 2^-119                       3,420    18,104       192
+      4  value * b underflows       |value * b| < 2^-126                     -    84,876         -
                                                               total      6,924   107,308     5,920
                                                                         0.041%    0.640%    0.035%
 
     Everything else holds to 1 ULP, the same SFPMAD tie-breaking budget as mac.
 
-    Stage 3 is the only one that excuses a range outright, and it asserts in
+    Stage 4 is the only one that excuses a range outright, and it asserts in
     exchange that the device returns a across the whole of it. It exists only
     for |value| < 1: the grid carries no subnormal inputs, so scaling by 1 or 2
     cannot produce a subnormal and the stage would be empty.
 
-    There is no cancellation exception, and that is measured rather than
-    assumed: across all six non-zero values, not one triple has a + value*b*c
-    collapsing far enough below its operands to disagree by more than 1 ULP
-    once stage 2 has run. The multiply keeps enough of the correction term for
-    the trailing add to stay accurate; the divide does not.
+    Stage 3 is bounded absolutely rather than waived; the worst case on this
+    grid is 16 smallest normals, at value = 0.5 where the device flushed
+    value * b and the golden kept it. Stage 2 has to run first, because a
+    cancelled result can land in the band as well and that population has no
+    absolute bound to give -- it reaches 1.99 at value = 0.5.
     """
     input_a, input_b, input_c = ternary_inputs(include_zero=True)
     golden, result = run_ternary(device, ttnn.addcmul, input_a, input_b, input_c, golden_kwargs={"value": value})
@@ -416,19 +492,14 @@ def test_addcmul(device, value):
 
     stages = [
         intermediate_overflow_exception(golden, scaled_b, term),
-        underflow_band_exception(golden),
+        cancellation_exception(golden, input_a, term),
+        underflow_band_exception(golden, ADDCMUL_BAND_ATOL),
     ]
     if abs(value) < 1.0:
         stages.append(scaled_underflow_exception(golden, input_a, scaled_b))
     result = apply_exceptions(golden, result, stages, require_nonempty=True)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
-
-
-# recip(b) underflows to zero for divisors this large, so the device returns a
-# quotient of +0 where torch still has a finite value. Same fence as the binary
-# divide sweep.
-RECIPROCAL_FLUSH_DIVISOR = 2.0**126
 
 
 @pytest.mark.parametrize("value", [1.0, -1.0, 0.5, -0.5, 2.0, -2.0, 0.0])
@@ -449,15 +520,20 @@ def test_addcdiv(device, value):
 
       #  Stage                      Range that fires it                   |v|=1   |v|=0.5     |v|=2
       1  an intermediate overflows  |value*b| or |term| > bf16 max        1,056       528     1,320
-      2  recip(c) flushes to zero   |c| >= 2^126                        171,840   169,324   156,972
-      3  bottom-binade rounding     |out| < 2^-119                       12,980    26,240     6,704
-      4  value * b underflows       |value * b| < 2^-126                      -    83,936         -
+      2  catastrophic cancellation  |out| < max(|a|, |term|) * 2^-8       5,792     7,232     4,852
+      3  bottom-binade rounding     |out| < 2^-119                       30,660    41,036    26,556
+      4  recip(c) flushes to zero   |c| >= 2^126                        148,368   147,304   132,268
+      5  value * b underflows       |value * b| < 2^-126                      -    83,928         -
                                                                 total   185,876   280,028   164,996
                                                                          1.108%    1.669%    0.983%
 
-    Everything else holds to 1 ULP. As with addcmul, stage 4 is the only one
-    that excuses a range outright and it asserts that the device returns a over
-    all of it, and no cancellation fence is needed once stage 3 has run.
+    Everything else holds to 1 ULP. Stages 4 and 5 excuse their ranges outright
+    and assert in exchange that the device returns a over all of them. Stage 3
+    is bounded absolutely instead (worst case on this grid is 31.75 smallest
+    normals). Stage 2 is the only range with nothing to assert, and it has to
+    run first: a cancelled result can land in the band or in the recip-flush
+    range, and there it is neither close to the golden nor equal to a -- the
+    absolute error reaches 7.6e30.
     """
     input_a, input_b, input_c = ternary_inputs(include_zero=False)
     golden, result = run_ternary(device, ttnn.addcdiv, input_a, input_b, input_c, golden_kwargs={"value": value})
@@ -472,12 +548,11 @@ def test_addcdiv(device, value):
         assert torch.equal(golden, result), "a + 0 * b / c is expected to return a unchanged"
         return
 
-    reciprocal_flush = input_c.abs().to(torch.float64) >= RECIPROCAL_FLUSH_DIVISOR
-    ulp = ulp_against(golden)
     stages = [
         intermediate_overflow_exception(golden, scaled_b, term),
-        ("expected recip(c) to flush to zero on this grid", lambda result: reciprocal_flush & (ulp(result) > 1)),
-        underflow_band_exception(golden),
+        cancellation_exception(golden, input_a, term),
+        underflow_band_exception(golden, ADDCDIV_BAND_ATOL),
+        reciprocal_flush_exception(golden, input_a, input_c),
     ]
     if abs(value) < 1.0:
         stages.append(scaled_underflow_exception(golden, input_a, scaled_b))
