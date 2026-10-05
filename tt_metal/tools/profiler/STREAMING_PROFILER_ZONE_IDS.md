@@ -120,10 +120,13 @@ What matters in that expansion:
 - **`.ifndef` makes it one handle per site.** A site inside an inline function or a template is expanded
   wherever the function is; the guard assembles the handle and the record only the first time the label is
   seen in this assembly, so an inlined site has one id however many copies of its code exist.
-- **`__tt_zone_<tag>_<counter>`** -- the label is local to the object file (nothing outside it can see it).
-  `<counter>` is `__COUNTER__`, unique within the translation unit; `<tag>` is the TU's index in its link
-  (`-DTT_PROFILER_TU_ID`, from `jit_build/build.cpp`), which keeps labels apart when LTO merges a link's TUs
-  into one assembly.
+- **`__tt_zone_<tu>_<counter>` is only a label *name*, never the id.** The id is the label's address. The
+  name exists so the `lui`/`addi` and the record can refer to the handle, and so `.ifndef` can recognize a
+  site it has already emitted. It is local to the object file and gone after assembly; nothing on the device
+  or the host ever sees it. `<counter>` is `__COUNTER__`, unique within the translation unit; `<tu>` is
+  `TT_PROFILER_TU_ID`, which the JIT build sets to the TU's index in its link (`jit_build/build.cpp`), so
+  names stay apart when LTO merges a link's TUs into one assembly. On main the same define came from a
+  registry and formed the upper bits of the id; here it does neither.
 - **Everything is assembler directives, not C++ objects.** A `static` with a section attribute inside a
   vague-linkage function (inline, template, class-template member) becomes COMDAT, which GCC refuses to put
   in a named section (`-fno-lto`: "section type conflict"; LTO: an internal compiler error). The asm form
