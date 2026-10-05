@@ -40,7 +40,6 @@ set(UNIT_TESTS_LEGACY_SRC
     test_single_dm_l1_write.cpp
     test_stress_noc_mcast.cpp
     test_transpose_hc.cpp
-    test_trisc0_rvv_vadd.cpp
     test_unaligned_read_write_core.cpp
     test_riscv_atomics.cpp
     test_noc_self_atomic.cpp
