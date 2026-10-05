@@ -312,7 +312,7 @@ __attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16, s
 
 #define ZONE_SCOPED(marker)            \
     PROFILER_META(MARKER_FULL(marker)) \
-    const auto _zone_scoped_ = llk_profiler::zone_scoped<MARKER_ID(marker)>();
+    const auto _zone_scoped_ = llk_profiler::zone_scoped<MARKER_ID(marker), hashString16(marker) == hashString16("TILE_LOOP")>();
 
 // A peer's TILE_LOOP zone in PACK_ISOLATE: it holds its epilogue until the pack thread is done (quiet_wait).
 #define ZONE_SCOPED_Q(marker, quiet_wait) \
