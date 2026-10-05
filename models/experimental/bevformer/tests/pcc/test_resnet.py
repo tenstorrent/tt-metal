@@ -71,15 +71,13 @@ def test_bottleneck_layer3(device, reset_seeds, reference_and_parameters):
     torch_input = torch.randn(NUM_CAMS, 512, IMAGE_HEIGHT // 8, IMAGE_WIDTH // 8)
     torch_output = reference_model.layer3[0].eval()(torch_input)
 
-    # layer3 reads layer2's bfloat8_b output.
     ttnn_model = TtBottleneck(
         parameters.conv_args.layer3[0],
         parameters["res_model"]["layer3"][0],
         device,
         **_layer_kwargs(2),
-        input_dtype=ttnn.bfloat8_b,
     )
-    ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat8_b))
+    ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16))
     _check(torch_output, ttnn_model, ttnn_output)
 
 
@@ -106,14 +104,13 @@ def test_reslayer1(device, reset_seeds, reference_and_parameters):
     torch_input = torch.randn(NUM_CAMS, 64, IMAGE_HEIGHT // 4, IMAGE_WIDTH // 4)
     torch_output = reference_model.layer1.eval()(torch_input)
 
-    # As in TtResNet: layer1 reads the max pool's ROW_MAJOR output and emits bfloat8_b.
+    # As in TtResNet: layer1 reads the max pool's ROW_MAJOR output.
     ttnn_model = TtResLayer(
         parameters.conv_args.layer1,
         parameters["res_model"]["layer1"],
         device,
         **_layer_kwargs(0),
         input_layout=ttnn.ROW_MAJOR_LAYOUT,
-        output_dtype=ttnn.bfloat8_b,
     )
     ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT))
     _check(torch_output, ttnn_model, ttnn_output)
@@ -130,7 +127,6 @@ def test_reslayer2(device, reset_seeds, reference_and_parameters):
         parameters["res_model"]["layer2"],
         device,
         **_layer_kwargs(1),
-        input_dtype=ttnn.bfloat8_b,
     )
-    ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat8_b))
+    ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16))
     _check(torch_output, ttnn_model, ttnn_output)

@@ -19,6 +19,10 @@ from models.experimental.bevformer.reference.resnet import ModulatedDeformConv2d
 DCN_OFFSET_STD = 0.04
 DCN_MASK_BIAS = 2.6
 RESIDUAL_BN_GAMMA = (0.1, 0.3)
+# The std of backbone_common.random_image_batch, at the pixel scale of BEVFormer's inputs. The
+# stem conv is divided by it, so everything after the stem sees the unit scale the values
+# above were tuned for.
+INPUT_STD = 21.0
 
 
 def init_dummy_backbone_weights(torch_model, seed=0):
@@ -72,6 +76,8 @@ def init_dummy_backbone_weights(torch_model, seed=0):
         for module in torch_model.modules():
             if hasattr(module, "bn3") and isinstance(module.bn3, nn.modules.batchnorm._BatchNorm):
                 uniform_(module.bn3.weight, *RESIDUAL_BN_GAMMA)
+
+        torch_model.conv1.weight /= INPUT_STD
 
     torch_model.eval()
     return torch_model
