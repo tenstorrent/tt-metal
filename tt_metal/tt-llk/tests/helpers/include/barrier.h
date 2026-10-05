@@ -127,6 +127,9 @@ namespace detail
 // Park at the BRISC barrier server (brisc.cpp dbg_barrier): the resume PC goes into this thread's reset PC, the arrive
 // read blocks until BRISC has every thread, and the ebreak halts the core. BRISC flushes the pipeline (registers and
 // branch predictor stay) and restarts it at 1f, where the hold read waits for the common release.
+// The TILE_LOOP park restarts after llk_loop_pad bytes of never executed NOPs, an assembler symbol perf/layout.py
+// sets per kernel when it links: they move the measured loop without recompiling it.
+template <bool LOOP_PAD = false>
 __attribute__((always_inline)) inline void park()
 {
     volatile std::uint32_t* reset_pc = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE) + TRISC_RESET_PC_SEC0_PC_ADDR32 + THREAD_ID;
@@ -143,11 +146,17 @@ __attribute__((always_inline)) inline void park()
         ".word 0x00000013\n\t"
         ".endr\n"
         ".balign 512\n" // the code after 1f keeps its address mod 512 B (branch predictor hash, icache sets) as code before it moves
+        ".ifndef llk_loop_pad\n\t"
+        ".set llk_loop_pad, 0\n"
+        ".endif\n"
+        ".rept (llk_loop_pad / 4) * %[on]\n\t"
+        "nop\n\t"
+        ".endr\n"
         "1:\n\t"
         "lw    %[s], 0(%[pcb])\n\t"
         "andi  %[s], %[s], 0\n\t"
         : [s] "=&r"(scratch)
-        : [rpc] "r"(reset_pc), [pcb] "r"(ckernel::pc_buf_base)
+        : [rpc] "r"(reset_pc), [pcb] "r"(ckernel::pc_buf_base), [on] "i"(LOOP_PAD ? 1 : 0)
         : "memory");
 }
 } // namespace detail
@@ -155,7 +164,7 @@ __attribute__((always_inline)) inline void park()
 
 // The release is a level, sampled by each peer before it arrives and flipped once every peer has; a token on a
 // shared count could be consumed twice and release a peer early. Waiters poll the PC buffer, not the measured L1.
-template <typename Action>
+template <bool LOOP_PAD = false, typename Action>
 __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Action action)
 {
     ckernel::fence_compiler();
@@ -178,7 +187,7 @@ __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Act
     {
         ckernel::semaphore_post(ARRIVE_SEM);
     }
-    detail::park();
+    detail::park<LOOP_PAD>();
 #else
     if (is_action_thread)
     {
