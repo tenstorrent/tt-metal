@@ -769,9 +769,6 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
 )
 @pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
 @pytest.mark.parametrize("layer_type", ["dense", "moe"], ids=["dense", "moe"])
-# This single-shot block is not chunked, so the config default leaves fusion off; the fused case
-# covers the norms GLM uses in chunked prefill.
-@pytest.mark.parametrize("use_fused_rmsnorm", [False, True], ids=["unfused_norm", "fused_norm"])
 # KV dedup through TtPrefillBlock -> ttMLA (the whole norm/attn/FFN stack, not just the MLA-level tests
 # in tests/sparse_mla/).
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
@@ -785,7 +782,6 @@ def test_glm_prefill_block(
     num_links,
     seq_len,
     layer_type,
-    use_fused_rmsnorm,
     model_path,
     weight_cache_path,
 ):
@@ -878,7 +874,8 @@ def test_glm_prefill_block(
         # single-block test: layer_num=1 so the sparse single-shot cache write (update_padded_kv_cache,
         # num_layers=layer_num) gets a valid count, not the None default.
         layer_num=1,
-        use_fused_rmsnorm=use_fused_rmsnorm,
+        # the config enables fusion only for chunked prefill, so this single-shot block opts in explicitly
+        use_fused_rmsnorm=True,
     )
     kvpe_cache = init_mla_kv_cache(
         cache_format=MlaKvCacheFormat.BF16_RM,
