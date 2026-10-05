@@ -10,9 +10,9 @@ bits. A serving stack that decodes concurrent requests in different padded
 batches therefore cannot reproduce a seeded completion, and a wide graph with
 a few active rows leaves most of the grid idle.
 
-Both tests are expected to fail until the kernel allocates cores by active
-rows (or reduces in a split-invariant order); the strict ``xfail`` flips to a
-failure once it is fixed, which is the reminder to drop the marker.
+With ``active_row_allocation=True`` the kernel deals its cores to the rows whose
+``cur_pos`` is not -1, so both properties hold; the default (static) mode is run
+alongside as the documented counter-example.
 """
 
 import time
@@ -45,7 +45,7 @@ def _paged_cache(b, nkv, s, d, block_size):
     return to_paged(K)[permutation], to_paged(V)[permutation], page_table
 
 
-def _decode(device, tt_K, tt_V, Q, page_table, cur_pos, grid_size, k_chunk_size, nh, d):
+def _decode(device, tt_K, tt_V, Q, page_table, cur_pos, grid_size, k_chunk_size, nh, d, active_rows=True):
     """One decode step for ``Q.shape[1]`` rows; rows with ``cur_pos == -1`` are padding."""
     b = Q.shape[1]
     padded_heads = nearest_pow_2(nearest_n(nh, n=32))
@@ -74,11 +74,11 @@ def _decode(device, tt_K, tt_V, Q, page_table, cur_pos, grid_size, k_chunk_size,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        active_row_allocation=active_rows,
     )
     return ttnn.to_torch(out)[:, :, :nh, :]
 
 
-@pytest.mark.xfail(strict=True, reason=ISSUE)
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("active_rows, wide_batch", [(4, 32), (3, 32), (8, 32)])
 def test_active_rows_match_bitwise_across_padded_batches(device, active_rows, wide_batch):
@@ -112,8 +112,41 @@ def test_active_rows_match_bitwise_across_padded_batches(device, active_rows, wi
         f"(max |diff| {max_abs:.3e}); the per-row core split changed the reduction order"
     )
 
+    # The result must also be the attention itself (not merely self-consistent): compare the wide
+    # run's active rows with the static-mode narrow run, which the existing PCC tests cover.
+    static_narrow = _decode(
+        device, tt_K, tt_V, Q[:, :active_rows], page_table[:active_rows], cur_pos[:active_rows], grid_size, k_chunk,
+        nh, d, active_rows=False,
+    )
+    diff = (static_narrow[:, :active_rows].float() - wide_rows.float()).abs().max().item()
+    ref_scale = static_narrow.float().abs().max().item()
+    assert diff <= 2e-2 * max(ref_scale, 1e-3), f"active-row result deviates from the static kernel (max |diff| {diff:.3e})"
 
-@pytest.mark.xfail(strict=True, reason=ISSUE)
+
+def test_static_allocation_is_the_documented_counterexample(device):
+    """Without active-row allocation the same rows differ between the 4-row and the 32-row graph.
+    Kept so the property the new mode restores stays visible; drop it if the static path changes."""
+    nh, nkv, d, s, block_size, k_chunk = 8, 1, 128, 4096, 128, 128
+    grid_size = (8, 8)
+    grid = device.compute_with_storage_grid_size()
+    if grid_size[0] > grid.x or grid_size[1] > grid.y:
+        pytest.skip(f"needs an {grid_size} grid, device has {grid.x}x{grid.y}")
+    active_rows, wide_batch = 4, 32
+    paged_k, paged_v, page_table = _paged_cache(wide_batch, nkv, s, d, block_size)
+    tt_K = ttnn.as_tensor(paged_k, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    tt_V = ttnn.as_tensor(paged_v, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+    torch.manual_seed(7)
+    Q = fa_rand(1, wide_batch, nh, d)
+    cur_pos = [s - 1 - 37 * i for i in range(active_rows)] + [-1] * (wide_batch - active_rows)
+    narrow = _decode(
+        device, tt_K, tt_V, Q[:, :active_rows], page_table[:active_rows], cur_pos[:active_rows], grid_size, k_chunk,
+        nh, d, active_rows=False,
+    )
+    wide = _decode(device, tt_K, tt_V, Q, page_table, cur_pos, grid_size, k_chunk, nh, d, active_rows=False)
+    if torch.equal(narrow[:, :active_rows], wide[:, :active_rows]):
+        pytest.skip("static allocation happened to split cores identically for both batches on this grid")
+
+
 @pytest.mark.timeout(600)
 def test_wide_graph_with_few_active_rows_uses_the_idle_cores(device):
     """Four deep active rows inside a 32-row graph should not take much longer than the

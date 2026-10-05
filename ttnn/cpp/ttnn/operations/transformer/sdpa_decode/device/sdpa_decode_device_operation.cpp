@@ -81,6 +81,17 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             q_shape[3]);
     }
 
+    if (operation_attributes.active_row_allocation) {
+        TT_FATAL(
+            tensor_args.cur_pos_tensor.has_value(),
+            "active_row_allocation needs a cur_pos_tensor: the active rows are read on device");
+        TT_FATAL(operation_attributes.is_causal, "active_row_allocation requires is_causal");
+        TT_FATAL(!spec_multi_pos, "active_row_allocation is not supported with spec_multi_pos_tiles");
+        TT_FATAL(
+            !operation_attributes.output_mem_config.is_sharded(),
+            "active_row_allocation requires an interleaved output: a row's reducer is not its output core");
+    }
+
     if (spec_multi_pos) {
         // Speculative multi-position mode: spec_T candidates folded onto EACH batch row, so
         // every row scans its KV cache once instead of spec_T times. With B batch rows the
@@ -661,7 +672,8 @@ Tensor sdpa_decode(
     std::optional<uint32_t> head_dim_v,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> cache_position_modulo,
-    uint32_t spec_multi_pos_tiles) {
+    uint32_t spec_multi_pos_tiles,
+    bool active_row_allocation) {
     using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_causal = is_causal,
@@ -680,6 +692,7 @@ Tensor sdpa_decode(
             paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         .cache_position_modulo = cache_position_modulo,
         .spec_multi_pos_tiles = spec_multi_pos_tiles,
+        .active_row_allocation = active_row_allocation,
     };
 
     auto tensor_args = OperationType::tensor_args_t{

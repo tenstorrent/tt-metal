@@ -121,7 +121,13 @@ void bind_sdpa_decode(nb::module_& mod) {
         // b*Tg+j attends to [0, cur_pos[b*Tg+j]] inclusive. Output is [1, B, Tg*32, DH] —
         // byte-identical to the legacy B*Tg-row output [1, B*Tg, 32, DH]. Requires causal +
         // paged + num_kv_heads==1, unsharded bf16 TILE Q, no sliding window, no MLA.
-        nb::arg("spec_multi_pos_tiles") = 0u);
+        nb::arg("spec_multi_pos_tiles") = 0u,
+        // active_row_allocation deals the core grid to the rows whose cur_pos != -1 at runtime
+        // instead of to the padded batch (tenstorrent/tt-metal#59300): a few active rows in a
+        // wide padded batch use every core, and a given occupancy always sees the same per-row
+        // core split, so the result no longer depends on the padded batch. Requires
+        // cur_pos_tensor, causal, no spec_multi_pos_tiles, interleaved output.
+        nb::arg("active_row_allocation") = false);
 
     ttnn::bind_function<"flash_multi_latent_attention_decode", "ttnn.transformer.">(
         mod,

@@ -46,8 +46,13 @@ void kernel_main() {
     // vector (group base = cur_batch*Tg). 0 = off.
     constexpr uint32_t spec_multi_pos_T = get_compile_time_arg_val(22);
     constexpr bool spec_multi_pos = spec_multi_pos_T > 0;
+    // Deal cores to the ACTIVE rows of this step (tenstorrent/tt-metal#59300): row, head, rank
+    // and the reduction tree come from the cur_pos vector; the group's core coordinates come
+    // from the all-core table appended to the runtime args.
+    constexpr bool active_row_alloc = get_compile_time_arg_val(23) == 1;
+    constexpr uint32_t B = get_compile_time_arg_val(24);
 
-    constexpr auto out_args = TensorAccessorArgs<23>();
+    constexpr auto out_args = TensorAccessorArgs<25>();
 
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
@@ -72,15 +77,17 @@ void kernel_main() {
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
     const bool do_output = get_arg_val<uint32_t>(arg_idx++) == 1;
-    const uint32_t cur_head_group = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t cur_head_group = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t cores_in_group = num_cores_per_head;
+    uint32_t active_group_base = 0;
 
     // Tree reduction parameters
-    const bool is_tree_root = get_arg_val<uint32_t>(arg_idx++) == 1;
-    const uint32_t parent_core_in_group = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t send_at_round = get_arg_val<uint32_t>(arg_idx++);
+    bool is_tree_root = get_arg_val<uint32_t>(arg_idx++) == 1;
+    uint32_t parent_core_in_group = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t send_at_round = get_arg_val<uint32_t>(arg_idx++);
 
     // Semaphore encoding: each round uses a 4-bit field (nibble) in the semaphore value
     // Round 0: bits 0-3, Round 1: bits 4-7, Round 2: bits 8-11, etc.
@@ -141,6 +148,39 @@ void kernel_main() {
 #endif
                 // Positions are ascending within a group, so its last entry sets the KV scan range.
                 cur_pos = spec_pos[spec_multi_pos_T - 1];
+            } else if constexpr (active_row_alloc) {
+                uint32_t active_rows[B];
+                uint32_t active_count = 0;
+                for (uint32_t b = 0; b < B; ++b) {
+                    if (index_ptr[b] != UINT32_MAX) {
+                        active_rows[active_count++] = b;
+                    }
+                }
+                // core_index is the first trailing arg after the reducer and output tables, which are
+                // parsed further down; both table sizes are compile-time constants.
+                const uint32_t core_index =
+                    get_arg_val<uint32_t>(arg_idx + 2 * num_reducer_cores + 2 * num_output_cores);
+                const auto assignment =
+                    assign_core_to_active_row<num_cores, num_kv_heads>(active_rows, active_count, core_index);
+                if (assignment.idle) {
+                    cb_index.pop_front(1);
+                    return;
+                }
+                cur_batch = assignment.row;
+                cur_head_group = assignment.head;
+                core_num_in_reduce = assignment.rank;
+                cores_in_group = assignment.group_size;
+                const auto tree = device_tree_reduction_params(assignment.rank, assignment.group_size);
+                is_tree_root = tree.is_root;
+                parent_core_in_group = tree.parent;
+                send_at_round = tree.send_at_round;
+                for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
+                    children_per_round[r] = tree.children_per_round[r];
+                }
+                // The group's coordinates are the all-core table from the group's base index.
+                // (consumed below once the trailing args are parsed)
+                active_group_base = assignment.group_base;
+                cur_pos = index_ptr[cur_batch];
             } else {
                 cur_pos = index_ptr[(uint32_t)(cur_batch / q_heads_parallel_factor)];
             }
@@ -167,7 +207,7 @@ void kernel_main() {
         get_workload_for_core(
             cur_pos,
             core_num_in_reduce,
-            num_cores_per_head,
+            cores_in_group,
             k_chunk_size_dynamic,
             sliding_window_size > 0 ? std::optional<uint32_t>(sliding_window_size) : std::nullopt);
 
@@ -206,7 +246,17 @@ void kernel_main() {
     arg_idx += num_reducer_cores;
     tt_l1_ptr uint32_t* all_output_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_output_cores;
-    tt_l1_ptr uint32_t* all_output_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx++));
+    tt_l1_ptr uint32_t* all_output_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += num_output_cores;
+    arg_idx++;  // core_index (read above when active_row_alloc)
+    if constexpr (active_row_alloc) {
+        tt_l1_ptr uint32_t* all_core_xs = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+        arg_idx += num_cores;
+        tt_l1_ptr uint32_t* all_core_ys = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+        arg_idx += num_cores;
+        reduction_group_core_xs = all_core_xs + active_group_base;
+        reduction_group_core_ys = all_core_ys + active_group_base;
+    }
 
     constexpr uint32_t out_chunk_tiles = PNHt * vDHt;
 

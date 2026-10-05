@@ -47,6 +47,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
     const auto& program_config = operation_attributes.program_config;
     const uint32_t k_chunk_size = operation_attributes.k_chunk_size;
+    // Active-row core allocation (tenstorrent/tt-metal#59300): the kernels deal the grid to the
+    // rows whose cur_pos != -1 at runtime instead of to the padded batch.
+    const bool active_row_alloc = operation_attributes.active_row_allocation;
     const uint32_t head_dim_v = operation_attributes.head_dim_v.value_or(0);
     const auto& cur_pos_ids = operation_attributes.cur_pos;
     const float scale =
@@ -214,6 +217,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t num_output_cores = B;
     const uint32_t num_active_cores = num_cores_per_head * num_kv_heads * B / num_heads_per_core;
 
+
     // ========== Compute Kernel Config ==========
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -262,6 +266,16 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // column-major group indexing is used to keep batch groups spatially close for efficient K multicast along columns.
     const bool use_col_major_group_indexing =
         (q_heads_parallel_factor > 1) && (grid_size.y >= num_cores_per_head) && !on_subcoregrid && q_locally_available;
+    if (active_row_alloc) {
+        TT_FATAL(
+            num_heads_per_core == 1,
+            "active_row_allocation needs one kv head per core (num_heads_per_core={}); widen the grid",
+            num_heads_per_core);
+        TT_FATAL(
+            !use_col_major_group_indexing,
+            "active_row_allocation is not supported with column-major group indexing (q_heads_parallel_factor={})",
+            q_heads_parallel_factor);
+    }
     uint32_t num_group_rows = 0;
     uint32_t num_group_cols = 0;
     uint32_t num_groups_total = 0;
@@ -784,6 +798,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         Bmask,
         capacity_t,
         spec_multi_pos_tiles,
+        static_cast<uint32_t>(active_row_alloc),
     };
     tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
@@ -823,6 +838,8 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         sliding_window_size,
         original_block_size,
         spec_multi_pos_tiles,
+        static_cast<uint32_t>(active_row_alloc),
+        B,
     };
     tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
 
@@ -855,6 +872,10 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         sliding_window_size,
         original_block_size,
         spec_multi_pos_tiles,
+        static_cast<uint32_t>(active_row_alloc),
+        B,
+        num_active_cores,
+        num_kv_heads,
     };
 
     // ========== Compute Defines ==========
@@ -1021,6 +1042,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         reader_rt_args.push_back(mcast_y0);
         reader_rt_args.push_back(mcast_y1);
         reader_rt_args.push_back(num_dests);
+        reader_rt_args.push_back(i);  // static core index (active-row allocation); parsed before the tables
         reader_rt_args.append(output_core_physical_xs);
         reader_rt_args.append(output_core_physical_ys);
 
@@ -1054,6 +1076,12 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         writer_rt_args.append(reduce_core_physical_ys);
         writer_rt_args.append(output_core_physical_xs);
         writer_rt_args.append(output_core_physical_ys);
+        writer_rt_args.push_back(i);  // static core index (active-row allocation)
+        if (active_row_alloc) {
+            // Every active core's coordinates: a runtime group reads its ranks from its base index.
+            writer_rt_args.append(reduction_group_core_xs);
+            writer_rt_args.append(reduction_group_core_ys);
+        }
 
         // compute runtime args
         KernelDescriptor::RTArgList compute_rt_args;
@@ -1068,6 +1096,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         for (uint32_t children : tree_params.children_per_round) {
             compute_rt_args.push_back(children);
         }
+        compute_rt_args.push_back(i);  // static core index (active-row allocation)
         reader_desc.emplace_runtime_args(core, reader_rt_args);
         writer_desc.emplace_runtime_args(core, writer_rt_args);
         compute_desc.emplace_runtime_args(core, compute_rt_args);
@@ -1080,18 +1109,20 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
 
             // Reader runtime args
             // Base args (18): includes K-mcast args [do_k_mcast, mcast_x, mcast_y0, mcast_y1, num_dests]
-            KernelDescriptor::CoreRuntimeArgs reader_rt_args(18, 0);
+            KernelDescriptor::CoreRuntimeArgs reader_rt_args(19, 0);
 
             // Writer runtime args - need to match the size with tree reduction params
             // Base args (6) + tree params (3) + children_per_round (MAX_TREE_REDUCTION_ROUNDS) + group coords
             // (2*num_cores_per_head)
             // + reducer coords + output coords
             KernelDescriptor::CoreRuntimeArgs writer_rt_args(
-                6 + 3 + MAX_TREE_REDUCTION_ROUNDS + (2 * num_cores_per_head), 0);
+                6 + 3 + MAX_TREE_REDUCTION_ROUNDS + (2 * num_cores_per_head) + 1 +
+                    (active_row_alloc ? 2 * num_active_cores : 0),
+                0);
 
             // Compute runtime args - 65 indicates idle core
             // Base args (4) + tree params (2) + children_per_round (MAX_TREE_REDUCTION_ROUNDS)
-            KernelDescriptor::CoreRuntimeArgs compute_rt_args(4 + 2 + MAX_TREE_REDUCTION_ROUNDS, 0);
+            KernelDescriptor::CoreRuntimeArgs compute_rt_args(4 + 2 + MAX_TREE_REDUCTION_ROUNDS + 1, 0);
             compute_rt_args[0] = 65;  // Idle marker
 
             reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));

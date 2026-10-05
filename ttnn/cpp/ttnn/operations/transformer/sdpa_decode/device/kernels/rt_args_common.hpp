@@ -105,3 +105,94 @@ inline uint32_t get_dynamic_Sk_chunk_t(int cur_pos) {
     }
     return Sk_chunk_t;
 }
+
+/******************************************************************************
+ *       Active-row core allocation (tenstorrent/tt-metal#59300)              *
+ ******************************************************************************/
+
+// Which padded batch row, kv head and reduction rank a core serves when cores are dealt to the
+// ACTIVE rows of a step instead of to the padded batch. ``active`` lists the rows whose cur_pos
+// is not -1, in row order. C cores over R active rows give floor(C / R) cores per row, split
+// evenly over the kv heads; each (row, head) group reduces over ``group_size`` ranks whose static
+// core indices are contiguous from ``group_base``. Cores left over (index >= R * group) are idle.
+struct ActiveRowAssignment {
+    bool idle = true;
+    uint32_t row = 0;
+    uint32_t head = 0;
+    uint32_t rank = 0;
+    uint32_t group_size = 1;
+    uint32_t group_base = 0;
+};
+
+template <uint32_t num_cores, uint32_t num_kv_heads>
+inline ActiveRowAssignment assign_core_to_active_row(
+    const uint32_t* active, uint32_t active_count, uint32_t core_index) {
+    ActiveRowAssignment a;
+    if (active_count == 0) {
+        return a;
+    }
+    const uint32_t cores_per_row = num_cores / active_count;
+    uint32_t cores_per_head = cores_per_row / num_kv_heads;
+    if (cores_per_head == 0) {
+        cores_per_head = 1;
+    }
+    const uint32_t group = cores_per_head * num_kv_heads;
+    const uint32_t slot = core_index / group;
+    if (slot >= active_count) {
+        return a;
+    }
+    const uint32_t within = core_index % group;
+    a.idle = false;
+    a.row = active[slot];
+    a.head = within / cores_per_head;
+    a.rank = within % cores_per_head;
+    a.group_size = cores_per_head;
+    a.group_base = slot * group + a.head * cores_per_head;
+    return a;
+}
+
+// Device-side twin of the host get_tree_reduction_params(): binary tree over N ranks, rank 0 is
+// the root, vid = (N-1) - rank. Kept bit-for-bit identical so the static and the active-row
+// paths reduce in the same order for the same N.
+struct DeviceTreeReductionParams {
+    uint32_t num_rounds = 0;
+    bool is_root = false;
+    uint32_t parent = 0xFFFFFFFFu;
+    uint32_t send_at_round = 0xFFFFFFFFu;
+    uint32_t children_per_round[6] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
+};
+
+inline DeviceTreeReductionParams device_tree_reduction_params(uint32_t rank, uint32_t N) {
+    DeviceTreeReductionParams p;
+    if (N <= 1) {
+        p.is_root = true;
+        return p;
+    }
+    const uint32_t vid = (N - 1) - rank;
+    p.num_rounds = 32 - __builtin_clz(N - 1);  // ceil(log2(N))
+    p.is_root = (rank == 0);
+    for (uint32_t r = 0; r < p.num_rounds; r++) {
+        const uint32_t mask = (2u << r) - 1;
+        if ((vid & mask) == mask) {
+            const uint32_t child_vid = vid - (1u << r);
+            if (child_vid < N) {
+                p.children_per_round[r] = (N - 1) - child_vid;
+            }
+        }
+    }
+    if (!p.is_root) {
+        const uint32_t trailing_ones = __builtin_ctz(~vid);
+        const uint32_t parent_vid = vid + (1u << trailing_ones);
+        p.parent = (parent_vid < N) ? (N - 1) - parent_vid : 0;
+        p.send_at_round = trailing_ones;
+    } else {
+        for (uint32_t c = 1; c < N; c++) {
+            const uint32_t cv = (N - 1) - c;
+            const uint32_t t = __builtin_ctz(~cv);
+            if (cv + (1u << t) >= N && p.children_per_round[t] == 0xFFFFFFFFu) {
+                p.children_per_round[t] = c;
+            }
+        }
+    }
+    return p;
+}
