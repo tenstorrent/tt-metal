@@ -47,6 +47,10 @@ UNI_MOE = (
 def UNI_LAYERS(layer_ids):
     """Layers that use the unified prefill MoE: DSV41_UNI_LAYERS="all" (default) or e.g. "2-11,20"."""
     v = os.environ.get("DSV41_UNI_LAYERS", "all")
+    if v.startswith(
+        "auto"
+    ):  # DSV41_UNI_LAYERS=auto: as many layers as fit next to the decode weights, added after the rest of the model is built (Model._uni_auto)
+        return set()
     if v == "all":
         return set(layer_ids)
     out = set()
@@ -178,6 +182,8 @@ class Model:
         self.trace_id = None
         self.admitted = False
         self.pool_pages_free = None
+        if UNI_MOE and os.environ.get("DSV41_UNI_LAYERS", "all").startswith("auto"):
+            self._uni_auto(pls)
         self.log_dram("model built")
         if os.environ.get("DSV41_MEMLOG") in (
             "1",
@@ -257,6 +263,30 @@ class Model:
             )[0]
         log(
             f"model built: {len(self.layer_ids)} layers, U={self.U} users/row (batch {self.B}), pool {self.num_pages} pages/row ({time.time() - t0:.0f}s)"
+        )
+
+    def _uni_auto(self, pls):
+        """DSV41_UNI_LAYERS=auto: the unified-layout expert weights (~54 MiB/bank/layer) are a SECOND copy next to the moe_compute decode weights, so only
+        some layers fit. Add them layer by layer, after everything else (pool, decode weights, Engram, head) is resident, while the free DRAM per bank
+        stays above DSV41_UNI_RESERVE_MIB (default 450: the growth from 'model built' to the peak of the traced prefill + decode, 130-390 MiB in the grid
+        logs, plus the unified shared buffers). DSV41_UNI_MAX=<n> caps the count."""
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_unified_moe import DSV41UnifiedMoE
+
+        mib = 2**20
+        per = float(os.environ.get("DSV41_UNI_LAYER_MIB", "54"))
+        reserve = float(os.environ.get("DSV41_UNI_RESERVE_MIB", "450"))
+        cap = int(os.environ.get("DSV41_UNI_MAX", "99"))
+        n = 0
+        for L, pl in pls:
+            mv = ttnn.get_memory_view(self.md, ttnn.BufferType.DRAM)
+            free = mv.total_bytes_free_per_bank / mib
+            if n >= cap or free - per < reserve:
+                break
+            pl.umoe = DSV41UnifiedMoE(self.md, L, log=self.log)
+            n += 1
+        self.uni_layers = [L for L, pl in pls if pl.umoe is not None]
+        self.log(
+            f"UNI auto: unified prefill MoE on {n}/{len(pls)} layers {self.uni_layers} (reserve {reserve} MiB/bank)"
         )
 
     def log_dram(self, tag):

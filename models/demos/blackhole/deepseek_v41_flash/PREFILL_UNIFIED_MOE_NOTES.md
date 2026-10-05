@@ -48,3 +48,10 @@ Whole model, 40 layers, prefill only (DSV41_PREFILL_MOE=unified DSV41_UNI_NODECO
 | isl32k_b8 (ISL 30059) | 77.2 s, 3114 tok/s | 44.8 s, 5364 tok/s |
 The replay loop alone: 18.77 -> 10.61 s, 10.88 -> 5.49 s, 74.2 -> 43.4 s.
 Chunk size (6 layers, U=4): replay per row token is flat from 512 to 2048 tokens per user (0.113-0.115 ms for unified, 0.205-0.210 ms for the moe_compute path): a bigger chunk does not help once the experts see >= 256 rows each.
+
+## Unified prefill MoE next to the decode weights (pf_unifit)
+Both expert copies are fully sharded over all 32 chips (384 experts, 12 per chip, no replication): decode moe_compute copy = 497 MB/chip/layer
+(ring layout [8 cores, L, E, groups, K, 4 tiles], N 9 -> 10 tiles padding), unified copy = 451 MB/chip/layer (12 x 3 tensors of 5120x2304 bf8; 56.9 MiB/bank
+measured: 0-3 layers 295.8 -> 523.2 MiB/bank). 40 layers: 2371 MiB/bank (decode) + 2274 MiB/bank (unified) vs ~3880 MiB/bank of DRAM. Re-sharding cannot help (already 1/32 per chip);
+only ONE shared copy (the unified op reading the decode ring layout, or moe_compute reading the unified layout: a kernel change) fits all 40 layers.
+DSV41_UNI_LAYERS=auto (DSV41_UNI_RESERVE_MIB, DSV41_UNI_MAX): hybrid, unified weights added after the model is built for as many layers as fit. tools/memtab_grid.py: grid DRAM headroom table.
