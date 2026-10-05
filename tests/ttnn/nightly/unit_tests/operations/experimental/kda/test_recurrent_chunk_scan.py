@@ -59,7 +59,8 @@ _REGRESSION_CASE = _PerformanceCase(
     num_chunks=4,
     key_dim=32,
     value_dim=64,
-    expected_duration_ns=16_269,
+    # Recalibrated for the FP32 state carry (tt_metal_tracker-g1b.7): 16,430 -> 16,963 ns median of 3 runs.
+    expected_duration_ns=16_963,
 )
 _PRODUCTION_CASE = _PerformanceCase(
     "pr7-leaf-bh96-n20-k128-v128",

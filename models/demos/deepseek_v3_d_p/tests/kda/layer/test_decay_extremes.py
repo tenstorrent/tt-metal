@@ -70,32 +70,24 @@ def _dump(case_name: str, name: str, tensor: torch.Tensor) -> None:
 # Failures measured on today's code (Blackhole, 2026-10-05, tt_metal_tracker-g1b.7.1). Each passes the K3 acceptance
 # output PCC (0.9995) except k3-control; the targeted gates catch them.
 _MEASURED_FAILURES = {
+    # Remaining failures after the weak-decay fix (tt_metal_tracker-g1b.7: complement-form decay, FP32 state carry),
+    # measured on device 2026-10-05. Weak-decay cases fixed by it (synthetic-weak, glm-weak, real-text k3 h1/h24/h36)
+    # pass and carry no mark.
     "synthetic-strong-saturated-h0-1-T1280x1": "strong decay |G_last|=160 (g=-5): output token 31 of a chunk error/RMS "
-    "9.6e-2 (control 3.3e-2); output PCC 0.99994",
-    # The weak-decay contraction is fixed by the complement-form decay and FP32 state carry (tt_metal_tracker-g1b.7):
-    # synthetic-weak and glm-weak pass. K3's remaining error is upstream of the recurrence (inferred: its BF16
-    # gate projection, amplified by K3's large A in the sigmoid tail, gives the long-memory rows ~22% gate error).
-    "k3-weak-h24-25-T1280x8": "K3 layer 1, weak decay |G_last| ~1.6e-3 with beta~3e-4: final state PCC 0.99939, key "
-    "row 65 error/RMS 0.271 (was 0.9875 / 0.93 before g1b.7); output within gates; inferred cause BF16 gate logits",
+    "9.6e-2 (control 3.3e-2); output PCC 0.99994; KDA strong-end prep fix not done (tt_metal_tracker-g1b.7)",
+    "k3-weak-h24-25-T1280x8": "tt_metal_tracker-g1b.4.12: K3 weak decay |G_last| ~1.6e-3, beta ~3e-4: final state PCC "
+    "0.99939, key row 65 error/RMS 0.271 (0.9875 / 0.93 before g1b.7); suspected BF16 gate projection (large A)",
     "glm-strong-h50-51-T1280x1": "GLM layer 0, strong decay |G_last|~150 (fractional gates): final state norm ratio "
-    "0.951 (control 0.987), key row error/RMS 0.35; output within gates",
-    "k3-control-h48-49-T1280x1": "K3 baseline input: long-memory row contraction fixed by g1b.7 (norm ratio 0.914 -> "
-    "0.976); output PCC 0.99943 < 0.9995 and token error/RMS 0.116 remain, from strongly decaying rows (row error up "
-    "to 0.21, unchanged; inferred: the prep k_dec_t precision with fractional gates, g1b.7 T2)",
-    # Real text (tt_metal_tracker-g1b.7.2; decay numerics owned by tt_metal_tracker-g1b.7). Worst state rows are
-    # long-memory channels (median per-chunk |G_last| 1e-3 to 3e-2) except glm-text-h18 (strong, median 128).
-    "k3-text-h28-29-T1280x4": "K3 layers.1 strongest text head (|G_last| max 73.9): output token error/RMS up to 0.18, "
-    "state PCC 0.99935, norm ratio 0.944, key row 80 (median |G_last| 2.6e-2) error/RMS 0.70; output PCC 0.99963",
-    "k3-text-h1-2-T1280x8": "K3 layers.1 text head 1 (LB-B failure head), long-memory rows (|G_last| ~2e-3): output "
-    "PCC falls to 0.9939 over 8 calls, token error/RMS 0.31, state PCC 0.9889, norm ratio 0.943, key row error/RMS 0.66",
-    "k3-text-h24-25-T1280x8": "K3 layers.1 text head 24 (107 weak channels): final state PCC 0.99949 (key row 22, "
-    "|G_last| ~2.6e-3, error/RMS 0.22); output within gates",
-    "k3-text-h36-37-T1280x8": "K3 layers.1 text head 36 (64 weak channels, beta median 0.11): output PCC falls to "
-    "0.99839, token error/RMS 0.15; state PCC 0.99859",
-    "glm-text-h18-19-T1280x1": "GLM layer 0 text head 18 (|G_last| up to 156.9): state only; key row 91 (median "
-    "|G_last| 128, own error 3.9%) error/RMS 0.33, state norm ratio 0.969; output PCC 0.99998, token error 3.4e-2",
-    "glm-text-h10-11-T1280x8": "GLM layer 0 text head 10 (LB-B failure head), long-memory rows (|G_last| ~2e-3): "
-    "output PCC falls to 0.9982, token error/RMS 0.41, norm ratio 0.937; state PCC 0.9972, norm ratio 0.949",
+    "0.951 (control 0.987), key row error/RMS 0.35; KDA strong-end prep fix not done (tt_metal_tracker-g1b.7)",
+    "k3-control-h48-49-T1280x1": "tt_metal_tracker-g1b.4.11: output PCC 0.99943 < 0.9995, token error/RMS 0.116 from "
+    "strongly decaying rows; long-memory contraction fixed by g1b.7 (row norm ratio 0.914 -> 0.976)",
+    # Real text (tt_metal_tracker-g1b.7.2).
+    "k3-text-h28-29-T1280x4": "tt_metal_tracker-g1b.4.13: K3 layers.1 head 28 early-token output error/RMS 0.106 "
+    "(call 0, token 113; own 13.5%) unchanged by g1b.7; state PCC 0.99993 and norm ratio 0.989 pass",
+    "glm-text-h18-19-T1280x1": "GLM layer 0 head 18 strong band (|G_last| up to 156.9): state only, key row 91 (median "
+    "|G_last| 128) error/RMS 0.313, state norm ratio 0.971; no KDA strong-end fix yet (tt_metal_tracker-g1b.7)",
+    "glm-text-h10-11-T1280x8": "GLM layer 0 head 10 token gate only: output token error/RMS 0.061-0.092 over 8 calls "
+    "(gate 0.066; own-relative <= 3.6%); state fixed by g1b.7 (PCC 0.99995, norm ratio 1.0004; was 0.9972 / 0.949)",
 }
 
 

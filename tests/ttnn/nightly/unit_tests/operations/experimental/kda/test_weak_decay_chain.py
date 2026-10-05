@@ -20,7 +20,6 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
     CHUNK_SIZE,
-    single_threaded_oracle,
     to_device,
 )
 
@@ -56,7 +55,6 @@ def _chain_protocol(heads: int, chunks: int, *, seed: int) -> tuple[torch.Tensor
     return v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv
 
 
-@single_threaded_oracle
 def _oracle(protocol: tuple[torch.Tensor, ...], state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """FP64 chain over the given (already quantized) protocol values. Returns (last-chunk output, final state)."""
     v_beta, _, q_decay, _, k_dec_t, final_decay, _ = (t.double() for t in protocol)

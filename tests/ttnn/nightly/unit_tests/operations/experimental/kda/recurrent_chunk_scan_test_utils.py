@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import functools
 from collections.abc import Callable, Collection, Sequence
 
 import torch
@@ -16,28 +15,6 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
 )
 
 CHUNK_SIZE = 32
-
-
-def single_threaded_oracle(function):
-    """Run a small-matrix CPU oracle on one Torch thread.
-
-    These oracles run inside the device lock (tests call them after opening the device) and issue thousands of
-    tiny matmuls. On a shared, loaded host the default thread pool oversubscribes and slowed them about 1000x
-    (34 s vs 0.04 s for 16 segmented summaries); one thread gives the same values.
-    """
-
-    @functools.wraps(function)
-    def wrapper(*args, **kwargs):
-        threads = torch.get_num_threads()
-        torch.set_num_threads(1)
-        try:
-            return function(*args, **kwargs)
-        finally:
-            torch.set_num_threads(threads)
-
-    return wrapper
-
-
 PROTOCOL_NAMES = ("v_beta", "kd", "q_decay", "intra", "k_dec_t", "final_decay", "t_inv")
 BF16_ALLOWED = frozenset({"v_beta", "kd", "q_decay", "k_dec_t", "final_decay"})
 
@@ -79,7 +56,6 @@ def initial_state(batch_heads: int, key_dim: int, value_dim: int, *, seed: int =
     return (0.04 * torch.randn(batch_heads, key_dim, value_dim, generator=generator)).float()
 
 
-@single_threaded_oracle
 def _scan_state(protocol: Sequence[torch.Tensor], state: torch.Tensor) -> torch.Tensor:
     v_beta, kd, _, _, k_dec_t, final_decay, t_inv = (tensor.float() for tensor in protocol)
     state = state.float().clone()
@@ -89,7 +65,6 @@ def _scan_state(protocol: Sequence[torch.Tensor], state: torch.Tensor) -> torch.
     return state
 
 
-@single_threaded_oracle
 def recurrent_oracle(protocol: Sequence[torch.Tensor], state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv = (tensor.float() for tensor in protocol)
     state = state.float().clone()
@@ -102,7 +77,6 @@ def recurrent_oracle(protocol: Sequence[torch.Tensor], state: torch.Tensor) -> t
     return torch.stack(chunks, dim=1).to(torch.bfloat16), state.float()
 
 
-@single_threaded_oracle
 def summary_oracle(protocol: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
     """Affine summary S -> S + E S + B of a chunk run, in complement form: (E = A - I, B)."""
     batch_heads, _, _, key_dim = protocol[1].shape
@@ -116,7 +90,6 @@ def summary_oracle(protocol: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torc
     return affine_e.float(), affine_b.float()
 
 
-@single_threaded_oracle
 def segmented_summary_oracle(
     host_inputs: tuple[torch.Tensor, ...], groups_per_head: int, chunks_per_group: int, wrap_chunk: int
 ) -> tuple[torch.Tensor, ...]:
