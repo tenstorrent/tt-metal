@@ -13,6 +13,19 @@ HF_HUB_OFFLINE=1 HF_MODEL=~/benchmark-data/gemma-4-26B-A4B-it HF_MODEL_ID=google
 128 prefill + 128 decode tokens vs HF bf16; prints `ACCURACY ... top1_pct top5_pct mean_corr`.
 The scripts below use other text and positions, so their numbers aren't comparable to the gate's.
 
+Expected results (QB2, 2026-10-05):
+
+| Code | Gate top-1 | Gate top-5 | Gate mean PCC | Decode ms/token |
+|---|---|---|---|---|
+| this branch (optimized + main 2026-10-05), switches off | 80.62% | 94.57% | 0.9637 | 23.70 |
+| optimized, before merging main | 81.40% | 95.35% | 0.9655 | 24.15 |
+| optimized + fp32 switches on | 83.72% | 97.67% | 0.9768 | 39.15 |
+| unmodified port | 80.62% | 93.02% | 0.9610 | 54.44 |
+| unmodified + fp32 switches on | 86.82% | 97.67% | 0.9770 | 70.37 |
+
+`chip/tt_token_accuracy.py` (book text, 500 decode positions, vs HF bf16): this branch top-1 69.6%, top-5 88.6%,
+mean PCC 0.9396; optimized before the merge 66.6% / 88.2% / 0.9376.
+
 ## Paths
 
 | | Default | Env var |
