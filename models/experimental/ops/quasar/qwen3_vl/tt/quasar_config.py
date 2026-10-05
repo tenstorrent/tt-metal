@@ -6,8 +6,9 @@ import math
 
 
 def vision_padded_seq_len(n: int) -> int:
-    # vision_attention needs a multiple of 128, and of 2048 once the sequence exceeds 2048.
-    step = 128 if n <= 2048 else 2048
+    # Always a multiple of 128 (vision_attention). Above 1024 the MLP and WO reshape into 1024-row chunks and,
+    # above 2048, the QKV matmul into 2048-row chunks, so anything over 1024 rounds up to a multiple of 2048.
+    step = 128 if n <= 1024 else 2048
     return math.ceil(n / step) * step
 
 
@@ -43,9 +44,29 @@ QUASAR_DEVICE_NAME = "N150"
 def bf16_decoders_precision(num_decoders, model_name):
     settings = {
         "TensorPrecision": {g: PrecisionSetting.BF16 for g in TensorGroup},
-        "OpFidelity": {g: MathFidelitySetting.HIFI4 for g in OpGroup},
+        # HiFi4 without fp32 dest accumulation: matmuls reload fp32 partials through srcA, which is undefined.
+        "OpFidelity": {g: MathFidelitySetting.HIFI4_FP16 for g in OpGroup},
     }
     return DecodersPrecision(num_decoders, model_name, ModelOptimizations(settings))
+
+
+def strip_fp32_dest_acc(args):
+    """Turn off fp32 dest accumulation in every compute_kernel_config_* attribute; returns the names changed."""
+    changed = []
+    for name, cfg in list(vars(args).items()):
+        if name.startswith("compute_kernel_config") and getattr(cfg, "fp32_dest_acc_en", False):
+            setattr(
+                args,
+                name,
+                ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=cfg.math_fidelity,
+                    math_approx_mode=cfg.math_approx_mode,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=cfg.packer_l1_acc,
+                ),
+            )
+            changed.append(name)
+    return changed
 
 
 @contextmanager
@@ -73,11 +94,14 @@ class _QuasarArgsMixin:
             parent_init(self, *args, **kwargs)
         self.lm_head_dtype = ttnn.bfloat16
         self.ccl_dtype = ttnn.bfloat16
+        strip_fp32_dest_acc(self)
 
 
 class QuasarModelArgs(_QuasarArgsMixin, ModelArgs):
     def __init__(self, *args, **kwargs):
         self._quasar_init(ModelArgs.__init__, *args, **kwargs)
+        # ttnn.scatter is not ported to Quasar; the vision-token merge copies rows on the host instead.
+        self.device_scatter = False
 
 
 class QuasarVisionModelArgs(_QuasarArgsMixin, VisionModelArgs):

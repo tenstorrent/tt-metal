@@ -82,7 +82,20 @@ def test_preset_kv_capacity_covers_seq():
         assert p.kv_blocks * p.block_size >= p.max_seq_len
 
 
-@pytest.mark.parametrize("n, want", [(1, 128), (216, 256), (256, 256), (2048, 2048), (2049, 4096), (11008, 12288)])
+@pytest.mark.parametrize(
+    "n, want",
+    [
+        (1, 128),
+        (216, 256),
+        (256, 256),
+        (1024, 1024),
+        (1025, 2048),
+        (1152, 2048),
+        (2048, 2048),
+        (2049, 4096),
+        (11008, 12288),
+    ],
+)
 def test_vision_padded_seq_len(n, want):
     assert vision_padded_seq_len(n) == want
 
@@ -202,8 +215,9 @@ def test_progress_log_unfinished(tmp_path):
     log.stage = "text.layer0"
     log.pre(_Op(), (torch.zeros(2, 3),), {})
     log.post(_Op(), (torch.zeros(2, 3),), {}, None)
-    log.pre(_Op(), (torch.zeros(4),), {})
+    log.pre(_Op(), (torch.zeros(4),), {"bias": torch.zeros(7), "dtype": 1})
     assert log.last_unfinished().startswith("ttnn.fake")
+    assert "bias=(shape=[7]" in log.last_unfinished() and "dtype=1" not in log.last_unfinished()
     text = (tmp_path / "progress.log").read_text()
     assert "PRE ttnn.fake stage=text.layer0" in text and "POST ttnn.fake" in text
 
@@ -242,7 +256,8 @@ def test_bf16_precision_everywhere():
         for g in TensorGroup:
             assert p.get_tensor_dtype(d, g) == ttnn.bfloat16, g
     conf = p.decoder_optimizations[0]
-    assert all(v.value == "hifi4" for v in conf.op_fidelity_settings.values())
+    # HiFi4 without fp32 dest accumulation: fp32 partials reloaded through srcA are undefined (ttsim, Quasar llama).
+    assert all(v.value == "hifi4fp16" for v in conf.op_fidelity_settings.values())
 
 
 def test_model_args_classes_selection():
@@ -256,3 +271,88 @@ def test_model_args_classes_selection():
 
     assert model_args_classes(force=True) == (QuasarModelArgs, QuasarVisionModelArgs)
     assert issubclass(QuasarVisionModelArgs, VisionModelArgs) and issubclass(QuasarModelArgs, ModelArgs)
+
+
+def test_resolve_dotted_target():
+    import ttnn
+
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    parent, attr = O.resolve("ttnn.experimental.paged_update_cache")
+    assert parent is ttnn.experimental and attr == "paged_update_cache"
+
+
+def test_fp32_host_cast_workaround_predicate_and_rewrite():
+    import ttnn
+
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    wa = next(w for w in O.WORKAROUNDS if w.name == "host_cast_fp32_upload")
+    x = torch.randn(4, 4)
+    assert wa.applies((x,), {"dtype": ttnn.bfloat16, "device": object()})
+    assert not wa.applies((x,), {"dtype": ttnn.bfloat16})  # host-only conversion is fine
+    assert not wa.applies((x,), {"dtype": ttnn.float32, "device": object()})
+    assert not wa.applies((x.bfloat16(),), {"dtype": ttnn.bfloat16, "device": object()})
+    seen = {}
+    wa.rewrite(lambda t, **kw: seen.update(dtype=t.dtype), (x,), {"dtype": ttnn.bfloat16, "device": object()})
+    assert seen["dtype"] == torch.bfloat16
+
+
+def test_session_installs_and_counts_workarounds(monkeypatch):
+    import ttnn
+
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    calls = []
+    monkeypatch.setattr(ttnn, "from_torch", lambda t, **kw: calls.append(t.dtype))
+    s = O.OverrideSession(mesh_device=None, host_ops=(), disable_wa=())
+    s.install(monkeypatch)
+    ttnn.from_torch(torch.randn(2, 2), dtype=ttnn.bfloat16, device=object())
+    ttnn.from_torch(torch.randn(2, 2), dtype=ttnn.bfloat16)
+    assert calls == [torch.bfloat16, torch.float32]
+    assert s.hits["wa:host_cast_fp32_upload"] == 1
+
+
+def test_session_disable_workaround(monkeypatch):
+    import ttnn
+
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    calls = []
+    monkeypatch.setattr(ttnn, "from_torch", lambda t, **kw: calls.append(t.dtype))
+    O.OverrideSession(None, (), ("host_cast_fp32_upload",)).install(monkeypatch)
+    ttnn.from_torch(torch.randn(2, 2), dtype=ttnn.bfloat16, device=object())
+    assert calls == [torch.float32]
+
+
+def test_strip_fp32_dest_acc_rewrites_only_fp32_configs():
+    import ttnn
+
+    from models.experimental.ops.quasar.qwen3_vl.tt.quasar_config import strip_fp32_dest_acc
+
+    class Args:
+        pass
+
+    a = Args()
+    a.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+    )
+    keep = ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=False)
+    a.compute_kernel_config_hifi2_fp16 = keep
+    a.unrelated = 3
+    assert strip_fp32_dest_acc(a) == ["compute_kernel_config_hifi4"]
+    c = a.compute_kernel_config_hifi4
+    assert not c.fp32_dest_acc_en and c.packer_l1_acc and c.math_fidelity == ttnn.MathFidelity.HiFi4
+    assert a.compute_kernel_config_hifi2_fp16 is keep
+
+
+def test_scatter_rows_matches_index_put():
+    from models.experimental.ops.quasar.qwen3_vl.tt.common import scatter_rows
+
+    base = torch.randn(10, 4)
+    rows = torch.randn(3, 4)
+    idx = torch.tensor([2, 3, 7])
+    out = scatter_rows(base, idx, rows)
+    want = base.clone()
+    want[idx] = rows
+    assert torch.equal(out, want) and not torch.equal(base, want)  # input left untouched

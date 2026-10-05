@@ -32,18 +32,19 @@ class ProgressLog:
         self._open = []
         self._f = open(path, "a", buffering=1)
 
-    def _line(self, operation, args):
-        return f"{_name(operation)} stage={self.stage} " + " ".join(_describe(a) for a in args)
+    def _line(self, operation, args, kwargs):
+        named = [f"{k}={_describe(v)}" for k, v in kwargs.items() if hasattr(v, "shape")]
+        return f"{_name(operation)} stage={self.stage} " + " ".join([_describe(a) for a in args] + named)
 
     def pre(self, operation, args, kwargs):
-        line = self._line(operation, args)
+        line = self._line(operation, args, kwargs)
         self._open.append(line)
         self._f.write(f"{time.time():.3f} PRE {line}\n")
 
     def post(self, operation, args, kwargs, output):
         if self._open:
             self._open.pop()
-        self._f.write(f"{time.time():.3f} POST {self._line(operation, args)}\n")
+        self._f.write(f"{time.time():.3f} POST {self._line(operation, args, kwargs)}\n")
 
     def last_unfinished(self):
         return self._open[-1] if self._open else None
