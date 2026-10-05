@@ -26,17 +26,29 @@ class TopKSfpu(Sfpu):
         ]
 
     def init(self, operation, config, compute_unit, block):
-        return (
-            "SFPU_UNARY_INIT_FN(topk_local_sort, ckernel::sfpu::topk_init, (false));\n"
+        nodes = (
+            operation.math_nodes
+            if compute_unit in operation.math_nodes
+            else operation.pack_nodes
         )
+        index = nodes.index(compute_unit)
+        previous = getattr(nodes[index - 1], "sfpu", None) if index else None
+        if isinstance(previous, TopKSfpu) and (previous.k, previous.descending) == (
+            self.k,
+            self.descending,
+        ):
+            return ""
+        return "SFPU_UNARY_INIT_FN(topk_local_sort, ckernel::sfpu::topk_init, (false /* APPROX */));\n"
 
     def calculate(self, operation, config, compute_unit, block):
         direction = int(not self.descending)
         logk = self.k.bit_length() - 1
-        templates = f"false, {config.dest_acc.cpp_enum_value}"
+        templates = f"false /* APPROX */, {config.dest_acc.cpp_enum_value}"
         if self.operation == MathOperation.TopKLocalSort:
             function = "calculate_bitonic_topk_phases_steps"
-            args = f"{direction}, {logk - 1}, 0, 10, 0"
+            end_phase, start_phase = logk - 1, 0
+            end_step, start_step = 0, 0
+            args = f"{direction}, {end_phase}, {start_phase}, {end_step}, {start_step}"
         elif self.operation == MathOperation.TopKMerge:
             function = "calculate_bitonic_topk_merge"
             templates += f", {direction}"
