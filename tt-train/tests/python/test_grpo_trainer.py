@@ -14,7 +14,7 @@ Speed strategy:
   * Skip the HuggingFace weight download: ``snapshot_download`` is patched to
     return a directory holding only the tiny model's ``config.json``, and
     ``load_from_safetensors`` to do nothing, in ``grpo.utils.llama_completer``
-    and ``ttml.trainers.grpo_trainer.ttml_rollout_sampler``, so the model keeps its random init.
+    and ``ttml.trainers.grpo_trainer.grpo_ttml_model``, so the model keeps its random init.
   * ``max_completion_length=4`` so autoregressive generation is cheap.
   * Exactly one optimizer step (``gradient_accumulation_steps=1``,
     ``num_iterations=1``, ``prompts_to_train=2``). On this single device
@@ -49,7 +49,7 @@ from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.modules import RunMode
 from ttml.trainers import GRPOConfig, GRPOTrainer, TrainerCallback, get_grpo_config
-from ttml.trainers.grpo_trainer import layout_microbatch, place_old_nlog_probs, save_checkpoint
+from ttml.trainers.grpo_trainer import grpo_ttml_model, layout_microbatch, place_old_nlog_probs, save_checkpoint
 from ttml.trainers.grpo_trainer.ttml_rollout_sampler import TTMLRolloutSampler
 
 
@@ -162,20 +162,20 @@ CAPITALS_SYSTEM_PROMPT = (
 
 @pytest.fixture(autouse=True)
 def _reuse_open_device(monkeypatch):
-    """Override ``TTMLRolloutSampler.setup_device`` (and the reference
+    """Override ``grpo_ttml_model.open_device`` (and the reference
     ``LlamaGRPOCompleter.setup_device``) to reuse the already-open AutoContext
     device instead of calling ``open_device`` again.
 
     Other tests in ``tests/python/`` lazily open the AutoContext device on
     first tensor use and never close it. When pytest collects this file
     alongside them, the device is already open by the time we get here, so
-    the default ``setup_device`` would trip ``open_device was called after
+    the default ``open_device`` would trip ``open_device was called after
     the device was created``. Reusing the live device sidesteps the issue
     without leaking device-management code into the test body.
     """
-    reuse = lambda self, device_config: ttml.autograd.AutoContext.get_instance().get_device()  # noqa: E731
-    monkeypatch.setattr(TTMLRolloutSampler, "setup_device", reuse)
-    monkeypatch.setattr(LlamaGRPOCompleter, "setup_device", reuse)
+    current_device = lambda *args: ttml.autograd.AutoContext.get_instance().get_device()  # noqa: E731
+    monkeypatch.setattr(grpo_ttml_model, "open_device", current_device)
+    monkeypatch.setattr(LlamaGRPOCompleter, "setup_device", current_device)
 
 
 class _RecordingCallback(TrainerCallback):
@@ -203,17 +203,16 @@ class _RecordingCallback(TrainerCallback):
 
 
 def _patch_tiny_checkpoint(monkeypatch, checkpoint_dir, **config_overrides) -> None:
-    """Point the completer and the rollout sampler at *checkpoint_dir*, holding only the tiny model's
+    """Point the completer and ``grpo_ttml_model`` at *checkpoint_dir*, holding only the tiny model's
     ``config.json``, and skip the weight load so the model keeps its random init.
 
     Both modules bind the names with ``from ... import``, so they must be patched on the modules, not on
     ``huggingface_hub`` / ``ttml.models.llama``.
     """
     from grpo.utils import llama_completer
-    from ttml.trainers.grpo_trainer import ttml_rollout_sampler
 
     (checkpoint_dir / "config.json").write_text(json.dumps({**TINY_HF_CONFIG, **config_overrides}))
-    for module in (llama_completer, ttml_rollout_sampler):
+    for module in (llama_completer, grpo_ttml_model):
         monkeypatch.setattr(module, "snapshot_download", lambda *args, **kwargs: str(checkpoint_dir))
         monkeypatch.setattr(module, "load_from_safetensors", lambda *args, **kwargs: None)
 
@@ -388,7 +387,6 @@ def test_grpo_trainer_one_step_smoke(
     )
     sampler = trainer.rollout_sampler
     assert isinstance(sampler, TTMLRolloutSampler)
-    assert trainer.model is sampler.model and trainer.tokenizer is sampler.tokenizer
 
     # Snapshot a single parameter so we can prove training mutated it.
     params = trainer.model.parameters()

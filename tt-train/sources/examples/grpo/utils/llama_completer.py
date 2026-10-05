@@ -23,7 +23,8 @@ from transformers import AutoTokenizer
 from ttml.trainers.grpo_trainer import GRPOCompleter
 from ttml.common.sampling import positions_to_tensor
 
-from ttml.trainers.grpo_trainer.ttml_rollout_sampler import async_read_to_host, deallocate_tensors, load_checkpoint
+from ttml.trainers.grpo_trainer.grpo_ttml_model import load_checkpoint
+from ttml.trainers.grpo_trainer.ttml_rollout_sampler import async_read_to_host, deallocate_tensors
 
 TILE_SIZE = 32
 SAMPLE_SEED = 42
