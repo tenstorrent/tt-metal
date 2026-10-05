@@ -50,7 +50,13 @@ void kernel_main() {
 #endif
     // True iff the factory configured the input buffer with UnpackToDestFp32. Used by the
     // non-FUSE branch to gate the welford state re-establishment after the transpose.
-    constexpr bool welford_unpack_fp32_active = get_arg(args::welford_unpack_fp32_active) != 0;
+    [[maybe_unused]] constexpr bool welford_unpack_fp32_active = get_arg(args::welford_unpack_fp32_active) != 0;
+#ifdef ARCH_BLACKHOLE
+    // The Blackhole Welford record (replay slots 0 to 15) and the 32-bit transpose record (16 to 31) are disjoint.
+    constexpr bool welford_rerecord_per_tile = false;
+#else
+    constexpr bool welford_rerecord_per_tile = welford_unpack_fp32_active;
+#endif
 
 #ifdef FUSE_PRE_ADD
     compute_kernel_hw_startup(dfb::in0, dfb::res, dfb_inp_id);
@@ -163,15 +169,18 @@ void kernel_main() {
             welford_restore_state(dst1);
 
             reconfig_data_format_srca(dfb::m2_spill, dfb_inp_id);
-            if constexpr (!welford_unpack_fp32_active) {
+            if constexpr (!welford_rerecord_per_tile) {
                 transpose_init(dfb_inp_id);
+                if constexpr (welford_unpack_fp32_active) {
+                    welford_init<WelfordInitMode::PreserveStats>();
+                }
             }
             for (auto i : block.local()) {
-                if constexpr (welford_unpack_fp32_active) {
+                if constexpr (welford_rerecord_per_tile) {
                     transpose_init(dfb_inp_id);
                 }
                 transpose_tile(dfb_inp_id, i, dst0);
-                if constexpr (welford_unpack_fp32_active) {
+                if constexpr (welford_rerecord_per_tile) {
                     welford_init<WelfordInitMode::PreserveStats>();
                 }
                 if (block.to_global(i) < Wt - 1) {
@@ -247,11 +256,11 @@ void kernel_main() {
         // gated out.
         for (uint32_t wt = 0; wt < (Wt - 1); wt++) {
             dfb_inp.wait_front(1);  // cumulative wait
-            if constexpr (welford_unpack_fp32_active) {
+            if constexpr (welford_rerecord_per_tile) {
                 transpose_init(dfb_inp_id);
             }
             transpose_tile(dfb_inp_id, 0, dst0);
-            if constexpr (welford_unpack_fp32_active) {
+            if constexpr (welford_rerecord_per_tile) {
                 welford_init<WelfordInitMode::PreserveStats>();
             }
             // welford_tile<dst0, dst1, dst2, true, 0>((wt) * 32, W, 0, {});
@@ -260,11 +269,11 @@ void kernel_main() {
             dfb_inp.pop_front(1);
         }
         dfb_inp.wait_front(1);  // cumulative wait
-        if constexpr (welford_unpack_fp32_active) {
+        if constexpr (welford_rerecord_per_tile) {
             transpose_init(dfb_inp_id);
         }
         transpose_tile(dfb_inp_id, 0, dst0);
-        if constexpr (welford_unpack_fp32_active) {
+        if constexpr (welford_rerecord_per_tile) {
             welford_init<WelfordInitMode::PreserveStats>();
         }
         welford_update_rows<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);
