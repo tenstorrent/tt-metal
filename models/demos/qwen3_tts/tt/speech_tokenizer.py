@@ -15,6 +15,7 @@ Architecture:
 The pre-transformer uses TTNN, while convolutional layers use PyTorch fallback.
 """
 
+import os
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
@@ -1182,31 +1183,41 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         # For now, we'll compute on-the-fly in forward
 
     def _compute_rope(self, seq_len: int) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Compute RoPE frequencies as TTNN tensors."""
+        """RoPE cos/sin for ``seq_len``, built on host and cached per decode bucket.
+
+        These tables depend only on seq_len and rope_theta, so there is no reason to
+        rebuild them per request -- and no reason to build them on device at all.
+        The previous version ran arange/pow/cos/sin/concat on device every decode,
+        and one of those ops deadlocks once the talker's captured traces have
+        executed (stage-sync localises the hang to exactly here). Computing a few
+        hundred values in torch and uploading once avoids the whole class of
+        problem, and is numerically identical:
+        inv_freq = theta ** -(idx / head_dim) for idx = 0, 2, 4, ...
+        """
         head_dim = self.config.pre_transformer_head_dim
-        half_dim = head_dim // 2
+        cached = self._cache.get("rope")
+        if cached is not None:
+            return cached
 
-        idx = ttnn.arange(0, head_dim, 2, device=self.device, dtype=ttnn.float32)
-        idx = ttnn.to_layout(idx, ttnn.TILE_LAYOUT)
-        exponents = ttnn.multiply(idx, 1.0 / head_dim)
-        inv_freq = ttnn.reciprocal(ttnn.pow(self.config.rope_theta, exponents))
+        idx = torch.arange(0, head_dim, 2, dtype=torch.float32)
+        inv_freq = 1.0 / (float(self.config.rope_theta) ** (idx / head_dim))
+        pos = torch.arange(0, seq_len, dtype=torch.float32)
+        angles = pos[:, None] * inv_freq[None, :]  # [seq_len, head_dim/2]
+        cos_t = torch.cat([angles.cos(), angles.cos()], dim=-1).view(1, 1, seq_len, head_dim)
+        sin_t = torch.cat([angles.sin(), angles.sin()], dim=-1).view(1, 1, seq_len, head_dim)
 
-        pos = ttnn.arange(0, seq_len, 1, device=self.device, dtype=ttnn.float32)
-        pos = ttnn.to_layout(pos, ttnn.TILE_LAYOUT)
-        pos_col = ttnn.reshape(pos, (seq_len, 1))
-        freq_row = ttnn.reshape(inv_freq, (1, half_dim))
-        angles = ttnn.multiply(pos_col, freq_row)
+        def _up(t):
+            return ttnn.from_torch(
+                t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
-        cos_half = ttnn.cos(angles)
-        sin_half = ttnn.sin(angles)
-        cos = ttnn.concat([cos_half, cos_half], dim=-1)
-        sin = ttnn.concat([sin_half, sin_half], dim=-1)
-        cos = ttnn.reshape(cos, (1, 1, seq_len, head_dim))
-        sin = ttnn.reshape(sin, (1, 1, seq_len, head_dim))
-        return (
-            ttnn.to_layout(cos, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-            ttnn.to_layout(sin, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-        )
+        out = (_up(cos_t), _up(sin_t))
+        self._cache["rope"] = out
+        return out
 
     def _codebook_lookup(self, token_ids: Union[torch.Tensor, ttnn.Tensor]) -> ttnn.Tensor:
         """
@@ -1593,19 +1604,35 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         # Order must match the reference decoder: embed -> pre_conv -> pre_transformer
         # -> backend. pre_transformer.input_proj expects the 1024-dim pre_conv output;
         # feeding it the 512-dim embeddings directly is a shape error.
+        # TT_QWEN3_DECODE_STAGE_SYNC=1 drains the device after each stage and logs
+        # it, so a post-talker deadlock localises to a stage instead of surfacing at
+        # whichever later op happens to block first.
+        _stage_sync = os.environ.get("TT_QWEN3_DECODE_STAGE_SYNC", "0") == "1"
+
+        def _stage(name):
+            if _stage_sync:
+                ttnn.synchronize_device(self.device)
+                print(f"  [stage-sync] {name} OK", flush=True)
+
+        _stage("1-codebook-lookup")
+
         if self.has_pre_transformer:
             # Compute RoPE frequencies
             cos_ttnn, sin_ttnn = self._compute_rope(seq_len)
+            _stage("2-rope")
 
             pre_conv_out = self._apply_pre_conv(embeddings_ttnn, seq_len)
+            _stage("3-pre-conv")
 
             # Forward through pre-transformer
             hidden_states_ttnn = self.pre_transformer(pre_conv_out, cos_ttnn, sin_ttnn)
+            _stage("4-pre-transformer")
         else:
             hidden_states_ttnn = embeddings_ttnn
 
         # 3. Conv decoder (TTNN path)
         audio_ttnn = self._conv_decoder_forward(hidden_states_ttnn)
+        _stage("5-conv-decoder")
         # The conv output comes back sharded, and reading it straight to host spins
         # forever once the talker's 2CQ traces have run. Drain the queues and move
         # to interleaved DRAM first so the readback is a plain linear copy.

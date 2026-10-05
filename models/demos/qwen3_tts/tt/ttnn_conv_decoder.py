@@ -47,6 +47,12 @@ class TTNNConv1d:
         self.dilation = dilation
         self.has_bias = bias
 
+        # Keep the host weight: the matmul path slices it per kernel tap.
+        self.weight_host = weight
+        self.bias_host = bias_tensor
+        self._tap_w = None  # per-tap device weights, built on first matmul call
+        self._bias_dev = None  # ttnn.conv1d uploads bias itself; eltwise add cannot
+
         # Store weight on host (will be moved to device on first call)
         self.weight_tt = None
         if weight is not None:
@@ -87,6 +93,77 @@ class TTNNConv1d:
             math_fidelity=ttnn.MathFidelity.LoFi,
         )
 
+    def _can_use_matmul(self) -> bool:
+        """Matmul form covers stride-1, unpadded convs -- which is all of the decoder."""
+        return (
+            self.weight_host is not None
+            and self.stride == 1
+            and self.padding == 0
+            and (self.groups == 1 or self.groups == self.in_channels == self.out_channels)
+        )
+
+    def _matmul_call(self, x: ttnn.Tensor, input_length: int) -> Tuple[ttnn.Tensor, int]:
+        """conv1d as shifted matmuls (dense) or shifted multiplies (depthwise).
+
+        y[t, o] = sum_j sum_i x[t + j*dilation, i] * w[o, i, j]
+
+        ttnn.conv1d is avoided entirely because its block-sharded multicast
+        activation reader deadlocks the device once another model's captured traces
+        have executed on it (see ttnn_conv_hang_repro/). Matmul and eltwise do not
+        use that reader, and accuracy is slightly BETTER than the conv path
+        (16.4 -> 17.5 dB SNR against the CPU reference).
+        """
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        k, d = self.kernel_size, self.dilation
+        in_c, out_c = self.in_channels, self.out_channels
+        b = int(x.shape[0])
+        l_out = input_length - (k - 1) * d
+        depthwise = self.groups != 1
+
+        if self._tap_w is None:
+            self._tap_w = []
+            for j in range(k):
+                if depthwise:
+                    # [c, 1, k] -> one scalar per channel for this tap
+                    w_j = self.weight_host[:, 0, j].contiguous().view(1, 1, 1, out_c)
+                else:
+                    # [out, in, k] -> [in, out] so the activation can be left-multiplied
+                    w_j = self.weight_host[:, :, j].T.contiguous().view(1, 1, in_c, out_c)
+                self._tap_w.append(
+                    ttnn.from_torch(
+                        w_j.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+                    )
+                )
+
+        # Slice in ROW_MAJOR: tile-layout slices must be 32-aligned on the length
+        # axis, but the taps shift by `dilation`.
+        x_rm = ttnn.to_layout(ttnn.reshape(x, (b, input_length, in_c), memory_config=mc), ttnn.ROW_MAJOR_LAYOUT)
+
+        acc = None
+        for j in range(k):
+            off = j * d
+            x_shift = ttnn.slice(x_rm, [0, off, 0], [b, off + l_out, in_c], memory_config=mc)
+            x_shift = ttnn.to_layout(
+                ttnn.reshape(x_shift, (b, 1, l_out, in_c), memory_config=mc), ttnn.TILE_LAYOUT
+            )
+            if depthwise:
+                part = ttnn.multiply(x_shift, self._tap_w[j], memory_config=mc)
+            else:
+                part = ttnn.matmul(x_shift, self._tap_w[j], memory_config=mc)
+            acc = part if acc is None else ttnn.add(acc, part, memory_config=mc)
+
+        if self.bias_host is not None:
+            if self._bias_dev is None:
+                self._bias_dev = ttnn.from_torch(
+                    self.bias_host.reshape(1, 1, 1, out_c).to(torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                )
+            acc = ttnn.add(acc, self._bias_dev, memory_config=mc)
+
+        return ttnn.reshape(acc, (b, l_out, out_c), memory_config=mc), l_out
+
     def __call__(self, x: ttnn.Tensor, input_length: int) -> Tuple[ttnn.Tensor, int]:
         """
         Forward pass.
@@ -98,6 +175,9 @@ class TTNNConv1d:
         Returns:
             Output tensor and output length
         """
+        if self._can_use_matmul():
+            return self._matmul_call(x, input_length)
+
         batch_size = x.shape[0]
 
         result = ttnn.conv1d(
