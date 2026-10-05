@@ -12,8 +12,10 @@ def causal_depthwise_conv_reference(
     inputs: torch.Tensor,
     weight: torch.Tensor,
     initial_state: torch.Tensor | None = None,
+    *,
+    dtype: torch.dtype = torch.float32,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Apply causal depthwise convolution and SiLU with ``[B,W-1,D]`` history."""
+    """Apply causal depthwise convolution and SiLU with ``[B,W-1,D]`` history, computing in ``dtype``."""
     batch, _, channels = inputs.shape
     if weight.ndim != 3 or tuple(weight.shape[:2]) != (channels, 1):
         raise ValueError(f"convolution weight shape {tuple(weight.shape)} incompatible with D={channels}")
@@ -26,8 +28,8 @@ def causal_depthwise_conv_reference(
     else:
         history = initial_state
 
-    window = torch.cat((history.float(), inputs.float()), dim=1)
-    output = F.conv1d(window.transpose(1, 2), weight.float(), groups=channels).transpose(1, 2)
+    window = torch.cat((history.to(dtype), inputs.to(dtype)), dim=1)
+    output = F.conv1d(window.transpose(1, 2), weight.to(dtype), groups=channels).transpose(1, 2)
     final_state = (window[:, -(kernel - 1) :] if kernel > 1 else window[:, :0]).clone()
     return F.silu(output), final_state
 
@@ -37,24 +39,26 @@ def kda_gate_reference(
     a_log: torch.Tensor,
     dt_bias: torch.Tensor,
     lower_bound: float | None = None,
+    *,
+    dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
-    """Convert raw gate logits to negative per-key log decay."""
+    """Convert raw gate logits to negative per-key log decay, computing in ``dtype``."""
     heads, key_dim = raw_gate.shape[-2:]
     if a_log.numel() != heads:
         raise ValueError(f"A_log has {a_log.numel()} values, expected {heads}")
     if dt_bias.numel() != heads * key_dim:
         raise ValueError(f"dt_bias has {dt_bias.numel()} values, expected {heads * key_dim}")
-    scale = a_log.float().reshape(1, 1, heads, 1).exp()
-    bias = dt_bias.float().reshape(1, 1, heads, key_dim)
-    gate_input = raw_gate.float() + bias
+    scale = a_log.to(dtype).reshape(1, 1, heads, 1).exp()
+    bias = dt_bias.to(dtype).reshape(1, 1, heads, key_dim)
+    gate_input = raw_gate.to(dtype) + bias
     if lower_bound is not None:
         return lower_bound * torch.sigmoid(scale * gate_input)
     return -scale * F.softplus(gate_input)
 
 
-def l2_norm_reference(inputs: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """Match FLA's ``x / sqrt(sum(x²) + eps)`` normalization."""
-    inputs = inputs.float()
+def l2_norm_reference(inputs: torch.Tensor, eps: float = 1e-6, *, dtype: torch.dtype = torch.float32) -> torch.Tensor:
+    """Match FLA's ``x / sqrt(sum(x²) + eps)`` normalization, computing in ``dtype``."""
+    inputs = inputs.to(dtype)
     return inputs * torch.rsqrt(inputs.square().sum(dim=-1, keepdim=True) + eps)
 
 
@@ -65,8 +69,10 @@ def kda_recurrent_reference(
     gate: torch.Tensor,
     beta: torch.Tensor,
     initial_state: torch.Tensor | None = None,
+    *,
+    dtype: torch.dtype = torch.float32,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Execute the token-ordered KDA recurrence in ``[B,T,H,D]`` layout."""
+    """Execute the token-ordered KDA recurrence in ``[B,T,H,D]`` layout, computing in ``dtype``."""
     batch, sequence, heads, key_dim = q.shape
     value_dim = v.shape[-1]
     expected = {
@@ -82,16 +88,16 @@ def kda_recurrent_reference(
 
     state_shape = (batch, heads, key_dim, value_dim)
     if initial_state is None:
-        state = torch.zeros(state_shape, device=q.device, dtype=torch.float32)
+        state = torch.zeros(state_shape, device=q.device, dtype=dtype)
     elif tuple(initial_state.shape) != state_shape:
         raise ValueError(f"recurrent state shape {tuple(initial_state.shape)} != {state_shape}")
     else:
-        state = initial_state.float().clone()
+        state = initial_state.to(dtype).clone()
 
-    q = l2_norm_reference(q) * (key_dim**-0.5)
-    k = l2_norm_reference(k)
-    v, gate, beta = v.float(), gate.float(), beta.float()
-    output = torch.empty(batch, sequence, heads, value_dim, device=q.device, dtype=torch.float32)
+    q = l2_norm_reference(q, dtype=dtype) * (key_dim**-0.5)
+    k = l2_norm_reference(k, dtype=dtype)
+    v, gate, beta = v.to(dtype), gate.to(dtype), beta.to(dtype)
+    output = torch.empty(batch, sequence, heads, value_dim, device=q.device, dtype=dtype)
 
     for token in range(sequence):
         q_t, k_t, v_t = q[:, token], k[:, token], v[:, token]
@@ -108,8 +114,10 @@ def sigmoid_gated_rms_norm_reference(
     gate: torch.Tensor,
     weight: torch.Tensor,
     eps: float,
+    *,
+    dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
-    """Apply RMSNorm followed by sigmoid output gating, per Kimi/FLA."""
-    inputs = inputs.float()
+    """Apply RMSNorm followed by sigmoid output gating, per Kimi/FLA, computing in ``dtype``."""
+    inputs = inputs.to(dtype)
     normalized = inputs * torch.rsqrt(inputs.square().mean(dim=-1, keepdim=True) + eps)
-    return normalized * weight.float() * torch.sigmoid(gate.float())
+    return normalized * weight.to(dtype) * torch.sigmoid(gate.to(dtype))

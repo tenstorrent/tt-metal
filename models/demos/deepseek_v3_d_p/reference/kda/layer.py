@@ -46,22 +46,33 @@ def kda_forward_reference(
     weights: Mapping[str, torch.Tensor],
     config: KDAConfig,
     state: KDAReferenceState | None = None,
+    *,
+    dtype: torch.dtype = torch.float32,
 ) -> tuple[torch.Tensor, KDAReferenceState]:
-    """Execute the complete Kimi Delta Attention layer in pure Torch."""
+    """Execute the complete Kimi Delta Attention layer in pure Torch, computing in ``dtype`` (FP32 by default)."""
     if hidden_states.ndim != 3 or hidden_states.shape[-1] != config.hidden_size:
         raise ValueError(f"hidden_states shape {tuple(hidden_states.shape)} must be [B,T,{config.hidden_size}]")
     validate_kda_weights(weights, config)
     state = _initial_state(hidden_states, config) if state is None else state
-    hidden = hidden_states.float()
+    hidden = hidden_states.to(dtype)
 
     q, q_state = causal_depthwise_conv_reference(
-        F.linear(hidden, weights["q_proj.weight"].float()), weights["q_conv1d.weight"], state.q_convolution
+        F.linear(hidden, weights["q_proj.weight"].to(dtype)),
+        weights["q_conv1d.weight"],
+        state.q_convolution,
+        dtype=dtype,
     )
     k, k_state = causal_depthwise_conv_reference(
-        F.linear(hidden, weights["k_proj.weight"].float()), weights["k_conv1d.weight"], state.k_convolution
+        F.linear(hidden, weights["k_proj.weight"].to(dtype)),
+        weights["k_conv1d.weight"],
+        state.k_convolution,
+        dtype=dtype,
     )
     v, v_state = causal_depthwise_conv_reference(
-        F.linear(hidden, weights["v_proj.weight"].float()), weights["v_conv1d.weight"], state.v_convolution
+        F.linear(hidden, weights["v_proj.weight"].to(dtype)),
+        weights["v_conv1d.weight"],
+        state.v_convolution,
+        dtype=dtype,
     )
 
     batch, sequence, _ = hidden.shape
@@ -69,20 +80,22 @@ def kda_forward_reference(
     k = k.reshape(batch, sequence, config.num_heads, config.head_k_dim)
     v = v.reshape(batch, sequence, config.num_heads, config.head_v_dim)
     raw_gate = F.linear(
-        F.linear(hidden, weights["f_a_proj.weight"].float()), weights["f_b_proj.weight"].float()
+        F.linear(hidden, weights["f_a_proj.weight"].to(dtype)), weights["f_b_proj.weight"].to(dtype)
     ).reshape(batch, sequence, config.num_heads, config.head_k_dim)
-    gate = kda_gate_reference(raw_gate, weights["A_log"], weights["dt_bias"], config.gate_lower_bound)
-    beta = torch.sigmoid(F.linear(hidden, weights["b_proj.weight"].float()))
-    output, recurrent = kda_recurrent_reference(q, k, v, gate, beta, state.recurrent)
+    gate = kda_gate_reference(raw_gate, weights["A_log"], weights["dt_bias"], config.gate_lower_bound, dtype=dtype)
+    beta = torch.sigmoid(F.linear(hidden, weights["b_proj.weight"].to(dtype)))
+    output, recurrent = kda_recurrent_reference(q, k, v, gate, beta, state.recurrent, dtype=dtype)
 
     if config.use_full_rank_gate:
-        output_gate = F.linear(hidden, weights["g_proj.weight"].float())
+        output_gate = F.linear(hidden, weights["g_proj.weight"].to(dtype))
     else:
-        output_gate = F.linear(F.linear(hidden, weights["g_a_proj.weight"].float()), weights["g_b_proj.weight"].float())
+        output_gate = F.linear(
+            F.linear(hidden, weights["g_a_proj.weight"].to(dtype)), weights["g_b_proj.weight"].to(dtype)
+        )
     output_gate = output_gate.reshape(batch, sequence, config.num_heads, config.head_v_dim)
-    output = sigmoid_gated_rms_norm_reference(output, output_gate, weights["o_norm.weight"], config.norm_eps).reshape(
-        batch, sequence, config.v_dim
-    )
-    output = F.linear(output, weights["o_proj.weight"].float())
+    output = sigmoid_gated_rms_norm_reference(
+        output, output_gate, weights["o_norm.weight"], config.norm_eps, dtype=dtype
+    ).reshape(batch, sequence, config.v_dim)
+    output = F.linear(output, weights["o_proj.weight"].to(dtype))
 
     return output, KDAReferenceState(recurrent, q_state, k_state, v_state)
