@@ -20,6 +20,7 @@ from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     MAX_BF16,
     SMALLEST_NORMAL_BF16,
 )
+from models.common.utility_functions import is_blackhole
 
 pytestmark = pytest.mark.use_module_device
 
@@ -720,3 +721,71 @@ def test_bessel_ops(device, ttnn_op, low, high):
     golden = flush_to_zero(golden)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+
+@pytest.mark.parametrize("generated_first", [True, False])
+def test_tanh_with_sqrt_in_sfpu_chain(device, generated_first):
+    """tanh in one SFPU chain with stock sqrt, both orders.
+
+    Stock sqrt after tanh must match its own standalone run bit for bit; tanh after
+    sqrt must match torch on sqrt's device result, which the chain keeps in DEST.
+    """
+    generated = (ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH), lambda tensor: ttnn.tanh(tensor))
+    stock = (ttnn.UnaryWithParam(ttnn.UnaryOpType.SQRT), lambda tensor: ttnn.sqrt(tensor))
+    first, second = (generated, stock) if generated_first else (stock, generated)
+    input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    result = ttnn.to_torch(ttnn.unary_chain(tt_in, [first[0], second[0]]))
+    middle = ttnn.to_torch(first[1](tt_in))
+    checked = torch.isfinite(middle) & (middle.abs() > SMALLEST_NORMAL_BF16)
+    if generated_first:
+        expected = ttnn.to_torch(second[1](to_tt_tensor(middle, device)))
+    else:
+        expected = ttnn.get_golden_function(ttnn.tanh)(middle, device=device)
+    checked &= torch.isfinite(expected) & (expected.abs() > SMALLEST_NORMAL_BF16)
+    assert checked.sum() > 1024
+
+    if generated_first:
+        # Exactly the stock op's own result, which itself meets torch as its suites require.
+        assert torch.equal(result[checked], expected[checked].to(result.dtype))
+        golden = ttnn.get_golden_function(ttnn.sqrt)(middle, device=device)
+        torch_checked = checked & torch.isfinite(golden) & (golden.abs() > SMALLEST_NORMAL_BF16)
+        assert_with_ulp(expected_result=golden[torch_checked], actual_result=result[torch_checked], ulp_threshold=2)
+    else:
+        assert_with_ulp(expected_result=expected[checked], actual_result=result[checked], ulp_threshold=1)
+
+
+@pytest.mark.parametrize("generated_first", [True, False])
+def test_tanh_with_softcap_in_sfpu_chain(device, generated_first):
+    """tanh in one SFPU chain with stock softcap, both orders.
+
+    Stock softcap after tanh must match its own standalone run bit for bit; tanh after
+    softcap must match torch on softcap's device result, which the chain keeps in DEST.
+    """
+    if not is_blackhole():
+        pytest.skip("softcap is implemented for Blackhole only")
+    generated = (ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH), lambda tensor: ttnn.tanh(tensor))
+    stock = (ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTCAP, 2.0), lambda tensor: ttnn.softcap(tensor, 2.0))
+    first, second = (generated, stock) if generated_first else (stock, generated)
+    input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    result = ttnn.to_torch(ttnn.unary_chain(tt_in, [first[0], second[0]]))
+    middle = ttnn.to_torch(first[1](tt_in))
+    checked = torch.isfinite(middle) & (middle.abs() > SMALLEST_NORMAL_BF16)
+    if generated_first:
+        expected = ttnn.to_torch(second[1](to_tt_tensor(middle, device)))
+    else:
+        expected = ttnn.get_golden_function(ttnn.tanh)(middle, device=device)
+    checked &= torch.isfinite(expected) & (expected.abs() > SMALLEST_NORMAL_BF16)
+    assert checked.sum() > 1024
+
+    if generated_first:
+        # Exactly the stock op's own result, which itself meets torch as its suites require.
+        assert torch.equal(result[checked], expected[checked].to(result.dtype))
+        golden = ttnn.get_golden_function(ttnn.softcap)(middle, beta=2.0, device=device)
+        torch_checked = checked & torch.isfinite(golden) & (golden.abs() > SMALLEST_NORMAL_BF16)
+        assert_with_ulp(expected_result=golden[torch_checked], actual_result=result[torch_checked], ulp_threshold=2)
+    else:
+        assert_with_ulp(expected_result=expected[checked], actual_result=result[checked], ulp_threshold=1)

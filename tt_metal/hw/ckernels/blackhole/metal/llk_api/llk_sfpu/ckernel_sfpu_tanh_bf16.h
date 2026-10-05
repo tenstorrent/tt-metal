@@ -14,7 +14,6 @@ struct TanhBf16Config {
     static constexpr bool kIntrinsicExceptional = true;
     static constexpr bool kIntrinsicTerminal = true;
     static constexpr uint32_t kTerminalBoundBits = 0x40a00000u;
-    static constexpr bool kTerminalInclusive = false;
 };
 }  // namespace ckernel::sfpu
 

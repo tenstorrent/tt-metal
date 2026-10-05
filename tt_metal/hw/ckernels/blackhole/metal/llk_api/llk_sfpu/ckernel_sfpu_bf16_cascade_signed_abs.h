@@ -54,13 +54,8 @@ sfpi_inline sfpi::vFloat signed_abs_finish(sfpi::vFloat x, sfpi::vFloat magnitud
         // predicate owns both finite tails and signed exponent-FF terminals.
         sfpi::vFloat bound = signed_abs_fp32_from_bits(Config::kTerminalBoundBits);
         sfpi::vFloat terminal = signed_abs_fp32_from_bits(Config::kClampMaxBits);
-        if constexpr (Config::kTerminalInclusive) {
-            v_if(input_exponent == 255 || sfpi::abs(x) >= bound) { result = sfpi::copysgn(terminal, x); }
-            v_endif;
-        } else {
-            v_if(input_exponent == 255 || sfpi::abs(x) > bound) { result = sfpi::copysgn(terminal, x); }
-            v_endif;
-        }
+        v_if(input_exponent == 255 || sfpi::abs(x) > bound) { result = sfpi::copysgn(terminal, x); }
+        v_endif;
     } else if constexpr (!Config::kIntrinsicExceptional) {
         // Decoded BF16 ingress retains nonfinite sign on both targets. Saturate
         // explicitly: Horner overflow and unordered min cannot own this terminal.
@@ -71,10 +66,6 @@ sfpi_inline sfpi::vFloat signed_abs_finish(sfpi::vFloat x, sfpi::vFloat magnitud
         v_endif;
     }
     // TTNN input DAZ maps both zero signs and every BF16 subnormal to +0.
-    if constexpr (!Config::kIntrinsicExceptional) {
-        v_if(input_exponent == 0) { result = 0.0f; }
-        v_endif;
-    }
     return sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
 }
 
