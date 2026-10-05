@@ -276,10 +276,15 @@ the only arithmetic left on the data-movement RISCs is the integer decode, the
 bounds test and the page index.
 
 Both sides run **one sampling point ahead** of the work they feed — the reader
-pushes point `j+1`'s operand tiles before waiting for point `j`'s corners, and
-the compute kernel solves point `j+1` before reducing point `j`. Without that
-lookahead the two ping-pong, each idle through the other's turn. The CB depths
-above are what make it legal: `scalar_tile` and `input_tile` hold two points'
+pushes point `j+1`'s operand tiles before it gathers point `j`, and the compute
+kernel solves point `j+1` before reducing point `j`. Without that lookahead the
+two ping-pong, each idle through the other's turn. Where the push sits depends
+on the gather: with the reader-only gather it goes out before the reader waits
+for point `j`'s `x0` / `y0`; with the split gather (§8) it goes out after point
+`j` is posted to the writer, so the writer gathers while the reader builds the
+tiles. That order cannot deadlock, because compute produces point `j`'s `x0` /
+`y0` while solving `j`, before it waits for `j+1`'s tiles. The CB depths above are
+what make the lookahead legal: `scalar_tile` and `input_tile` hold two points'
 worth, the geometry pipes three to four.
 
 The floored corner crosses as **bf16**, which is exact for every integer up to
@@ -359,7 +364,7 @@ reader_msda_v1.cpp ─┐                                      compute_msda.cpp
 reader_msda_v2.cpp ─┘   (staging, gather, tile scatter)     (SFPU geometry, reduction)
                                  │                                                    │
                                  └──── msda_gather_rows.hpp (row-major gather) ───────┘
-                                       rows 0-15 on the reader, 16-31 on the writer
+                                       rows [0, SPLIT_ROW) on the reader, the rest on the writer
 ```
 
 **Reader** (both variants). Per output tile `(b, h, q_start, v_rows)`:
@@ -374,7 +379,7 @@ reader_msda_v2.cpp ─┘   (staging, gather, tile scatter)     (SFPU geometry, 
    corner's `D`-wide stick straight in its slot of row `r`
    (`r * 4*D*2 + c * D*2`), zero the skipped slots while the reads are in
    flight, barrier, and push once. The reader copies no value data; with the
-   split gather it does this for rows 0-15 only and waits for the writer's
+   split gather it does this for rows `[0, SPLIT_ROW)` only and waits for the writer's
    rows before the push. Other `D`:
    for each corner, read the sticks into `value_scratch`, scatter them into
    `n_d_tiles` tile rows, zero the rows it skipped, and push. The stick is at
@@ -403,18 +408,21 @@ step 2 calls the primary and which the secondary.
 **Writer** (shared). Waits on `n_d_tiles` accumulated tiles, gathers each query
 row's `D` values across them into a stick, and writes it at
 `page_id = b*Q + q`, `offset_bytes = h*D*2`. No SCA/BEV scatter logic, ever.
-With the split gather it first gathers rows 16-31 of every point of the block,
+With the split gather it first gathers rows `[SPLIT_ROW, 32)` of every point of the block,
 so it also takes the `value` accessor and address.
 
 **Split gather** (`D % 32 == 0`, Blackhole). The reader's gather is bound by how
 fast one RISC can decode corners and issue `D*2`-byte reads, and the writer RISC
-has spare issue capacity and its own NoC. So both take half of every row-major
-block: the reader rows `0-15`, the writer rows `16-31`, through
-`fused_msda_gather::gather_rows` (`msda_gather_rows.hpp`, which also documents
-the handshake). Per point the reader posts the point's arguments to
-`gather_mailbox` and bumps the `ready` semaphore; the writer gathers its rows,
-barriers and bumps `done`; the reader waits for `done` before it pops `x0` /
-`y0` and pushes the block. Both counters only grow, and launch restarts them
+has spare issue capacity and its own NoC. So both take part of every row-major
+block: the reader rows `[0, SPLIT_ROW)`, the writer rows `[SPLIT_ROW, 32)`,
+through `fused_msda_gather::gather_rows` (`msda_gather_rows.hpp`, which also
+documents the handshake and how `SPLIT_ROW` was chosen).
+Per point the reader posts the point's arguments to `gather_mailbox` and bumps
+the `ready` semaphore, then pushes the next point's geometry tiles while the
+writer gathers; the writer gathers its rows, barriers and bumps `done`; the
+reader gathers its own rows and waits for `done` before it pops `x0` / `y0` and
+pushes the block. Because the reader also builds the geometry tiles, it takes
+fewer rows than the writer. Both counters only grow, and launch restarts them
 from their initial value.
 
 The split is by rows of one block rather than the per-RISC-CB split reader of

@@ -5,8 +5,8 @@
 // Row-major gather of one sampling point's four bilinear corners, for a range of
 // query rows. Shared by the reader and, when the gather is split, by the writer:
 // the two data-movement RISCs each take a disjoint range of rows of the same
-// staging block, so issue cost halves while every row is still produced by
-// exactly one RISC.
+// staging block, so they share the issue cost while every row is still produced
+// by exactly one RISC.
 //
 // Row r of the block is [NW | NE | SW | SE], D bf16 each (see
 // fused_msda_reader_common.hpp). A row is either fully written by NoC reads
@@ -78,12 +78,23 @@ static_assert(sizeof(PointArgs) <= GATHER_MAILBOX_NBYTES, "PointArgs no longer f
 
 // Split gather: the reader takes rows [0, SPLIT_ROW), the writer the rest. A
 // tail block with v_rows <= SPLIT_ROW leaves the writer only zeroing.
-constexpr uint32_t SPLIT_ROW = fused_msda_tile_layout::TILE_MAX_ROWS / 2;
+//
+// The reader also builds the next point's geometry tiles while the writer
+// gathers, so it takes fewer rows. 15 is the measured optimum on Blackhole for
+// the BEVFormer nuscenes_base shape with value in L1 (D = 32,
+// test_fused_msda_perf.py); with value in DRAM, 13-16 are within run-to-run
+// noise of each other. The time is not linear in the split, so re-measure
+// rather than derive it. test_fused_msda_v1_masks_out_of_bounds_corners puts
+// v_rows on SPLIT_ROW and SPLIT_ROW + 1 through its own copy of this value;
+// change both together.
+constexpr uint32_t SPLIT_ROW = 15;
+static_assert(SPLIT_ROW > 0 && SPLIT_ROW < fused_msda_tile_layout::TILE_MAX_ROWS);
 
 // Split-gather handshake. Per point, in the same (tile, level, point) order on
 // both RISCs:
-//   reader: post_point(pt); ready = ++seq; gather rows [0, SPLIT_ROW); barrier;
-//           wait done == seq; pop x0/y0; push the block.
+//   reader: post_point(pt); ready = ++seq; push the next point's geometry;
+//           gather rows [0, SPLIT_ROW); barrier; wait done == seq; pop x0/y0;
+//           push the block.
 //   writer: wait ready == ++seq; fetch_point; gather rows [SPLIT_ROW, 32);
 //           barrier; done = seq.
 // Both sides must post or consume exactly NUM_LEVELS * NUM_POINTS points per

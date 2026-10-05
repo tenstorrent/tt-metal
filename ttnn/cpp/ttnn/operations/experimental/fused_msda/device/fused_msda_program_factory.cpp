@@ -116,8 +116,10 @@ AxisConstants axis_constants(uint32_t extent, bool align_corners, bool grid_spac
 }
 
 // CB depths for the geometry pipeline. Both the reader and the compute kernel
-// run one sampling point ahead of the work they are feeding, so every pipe
-// between them has to hold two points' worth plus the one in flight.
+// run at most one sampling point ahead of the work they are feeding (where the
+// reader's push sits depends on the split gather; see the pipelining note in
+// fused_msda_reader_common.hpp), so every pipe between them has to hold two
+// points' worth plus the one in flight.
 //
 // kScalarCbPages is a hard deadlock floor: at the fourth corner_weight of point
 // j+1 the PACK thread holds 7 pages and reserves the 8th, and UNPACK cannot free
@@ -278,10 +280,11 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
     // compute tilizes it on the unpacker, so the reader copies nothing. Other
     // D fall back to the reader scattering sticks into tile faces.
     const bool rm_staging = s.head_dim % TILE_WIDTH == 0;
-    // Split gather: the writer RISC gathers half of every row-major block on its
-    // own NoC (see msda_gather_rows.hpp), since one RISC's decode and read issue
-    // bound the reader. Measured on Blackhole only, with value in L1 and in DRAM
-    // (both faster); Wormhole keeps the reader-only gather until it is measured.
+    // Split gather: the writer RISC gathers rows [SPLIT_ROW, 32) of every
+    // row-major block on its own NoC (see msda_gather_rows.hpp), since one
+    // RISC's decode and read issue bound the reader. Measured on Blackhole only,
+    // with value in L1 and in DRAM (both faster than the reader-only gather);
+    // Wormhole keeps the reader-only gather until it is measured.
     // The scatter path (D % 32 != 0) is always reader-only.
     const bool split_gather = rm_staging && device->arch() == tt::ARCH::BLACKHOLE;
 

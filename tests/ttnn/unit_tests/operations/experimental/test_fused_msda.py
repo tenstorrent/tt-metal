@@ -88,6 +88,11 @@ def _locations_from_offsets(reference_points, sampling_offsets, spatial_shapes, 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+# Row at which the Blackhole split gather hands a block's rows from the reader
+# to the writer. Must equal fused_msda_gather::SPLIT_ROW in msda_gather_rows.hpp.
+SPLIT_ROW = 15
+
+
 def _pack_locations(loc: torch.Tensor) -> torch.Tensor:
     """(B, Q, H, L, P, 2) -> (B, Q, H, L*P*2), the layout the reader indexes as (l*P+p)*2."""
     B, Q, H = loc.shape[:3]
@@ -473,7 +478,7 @@ def test_fused_msda_v1_partially_out_of_bounds(device):
 
 @pytest.mark.parametrize("memory", ["dram", "l1"])
 @pytest.mark.parametrize("D", [32, 64])
-@pytest.mark.parametrize("Q", [129, 16, 17, 48, 49])
+@pytest.mark.parametrize("Q", [129, SPLIT_ROW, SPLIT_ROW + 1, 32 + SPLIT_ROW, 32 + SPLIT_ROW + 1])
 def test_fused_msda_v1_masks_out_of_bounds_corners(device, Q, D, memory):
     """An out-of-bounds corner must contribute nothing, element by element.
 
@@ -493,8 +498,8 @@ def test_fused_msda_v1_masks_out_of_bounds_corners(device, Q, D, memory):
     skips has just been written with a real value stick by an earlier point.
     Every Q leaves a partial trailing block, so the `r >= v_rows` half of the
     zeroing predicate is taken as well. With the gather split between the two
-    data-movement RISCs at row 16, v_rows = 16 / 17 sit on the split: the writer
-    only zeroes, or gathers exactly one row.
+    data-movement RISCs at ``SPLIT_ROW``, v_rows = SPLIT_ROW / SPLIT_ROW + 1 sit
+    on the split: the writer only zeroes, or gathers exactly one row.
     """
     spatial_shapes = [(16, 20), (8, 10), (4, 5), (2, 3)]
     B, H, L, P = 1, 4, 4, 4
