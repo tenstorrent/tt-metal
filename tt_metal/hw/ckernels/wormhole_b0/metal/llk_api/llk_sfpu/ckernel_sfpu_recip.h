@@ -32,7 +32,13 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     // If in ≠ ±0 and in ≠ ±inf, then x = in * 2**(127-in.Exp).
     // If in = ±0 or in = ±inf, then x = ±1.
     // Then negative_x = -x.
-    sfpi::vFloat negative_x = sfpi::copyman(-1.0f, in);
+    sfpi::vFloat negative_x;
+    if constexpr (normalized) {
+        // The exponent is already 127; only the sign needs changing.
+        negative_x = sfpi::setsgn(in, 1);
+    } else {
+        negative_x = sfpi::copyman(-1.0f, in);
+    }
 
     // Quadratic initial estimate: y = k2 - k1*x + k0*x**2.
     sfpi::vFloat y = sfpi::vConstFloatPrgm1 + sfpi::vConstFloatPrgm0 * negative_x;

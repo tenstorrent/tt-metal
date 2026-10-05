@@ -264,7 +264,9 @@ inline void calculate_sfpu_binary_div(
             // sign test on SFPIADD, and the compares narrow lanes without SFPAND.
             v_if(!(ea >= 1 && ea < 255 && eb >= -126 && eb < 128)) {
                 sfpi::vInt inf_bits = 0x7f800000;
-                sfpi::vFloat scale = sfpi::setman(sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(in1) ^ inf_bits), 0);
+                // Clear the mantissa first so XOR can reuse the scale register.
+                sfpi::vInt scale_bits = sfpi::as<sfpi::vInt>(sfpi::setman(in1, 0));
+                sfpi::vFloat scale = sfpi::as<sfpi::vFloat>(scale_bits ^ inf_bits);
                 result = in0 * scale;
                 // The zero scale would hide NaN divisors, so propagate them.
                 v_and(sfpi::as<sfpi::vInt>(sfpi::setsgn(in1, 0)) > inf_bits);
