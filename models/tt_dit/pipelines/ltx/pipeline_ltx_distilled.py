@@ -722,6 +722,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 parallel_config=self.parallel_config,
                 anchor_frames=anchor_frames,
                 ref_num_frames=ref_num_frames,
+                fps=self.fps,
             )
             # traced=True => ttnn.copy into the baked buffer, not a fresh allocation the captured trace
             # would never reference.
