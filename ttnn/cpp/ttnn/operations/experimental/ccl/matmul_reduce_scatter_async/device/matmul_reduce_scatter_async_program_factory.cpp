@@ -81,7 +81,11 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         ttnn::ccl::resolve_fp32_acc_compute_kernel_config(std::nullopt, output_tensors.mm.dtype());
 
     // Reduce Scatter - use the new artifacts-based helper
-    auto reduce_scatter_artifacts = ttnn::experimental::prim::build_ring_reduce_scatter_minimal_async_program_artifacts(
+    auto build_reduce_scatter =
+        topology == ttnn::ccl::Topology::Linear
+            ? ttnn::experimental::prim::build_line_reduce_scatter_minimal_async_program_artifacts
+            : ttnn::experimental::prim::build_ring_reduce_scatter_minimal_async_program_artifacts;
+    auto reduce_scatter_artifacts = build_reduce_scatter(
         program,
         output_tensors.mm,
         tensor_args.persistent_intermediate,
@@ -141,7 +145,7 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
     const MatmulReduceScatterAsyncInputs& tensor_args,
     MatmulReduceScatterAsyncResult& output_tensors) {
     const auto ccl_args = ReduceScatterProgramArtifacts::collect_runtime_args(
-        true,
+        args.reduce_scatter_params.topology != ttnn::ccl::Topology::Linear,
         args.reduce_scatter_params.barrier_semaphore,
         args.reduce_scatter_params.semaphore,
         output_tensors.mm,
