@@ -769,7 +769,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     // labels of this link's TUs apart when LTO merges them into one assembly (hostdev/observability_event_id.h).
     // Kept out of `defines_`/`build_key_`: it is a property of the source list, not of the recipe.
     if (env_.get_rtoptions().get_streaming_profiler_enabled()) {
-        defines.push_back(fmt::format("-DTT_OBSERVABILITY_EVENT_TU_TAG={}", src_index));
+        defines.push_back(fmt::format("-DTT_PROFILER_TU_ID={}", src_index));
     }
 
     const std::string obj_path = out_dir + this->objs_[src_index];

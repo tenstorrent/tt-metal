@@ -21,11 +21,11 @@
 // section attributes because a zone site inside a vague-linkage function (inline, template, class-template member)
 // makes such objects COMDAT, which GCC will not put in a named section (without LTO a "section type conflict", with LTO
 // an lto1 ICE). The handle's label is local to the object and guarded by .ifndef, so however many times an inlined site
-// is expanded there is one handle and one record for it; TT_OBSERVABILITY_EVENT_TU_TAG (this TU's index in its link,
-// from jit_build/build.cpp) keeps labels apart when LTO merges a link's TUs into one assembly.
-// .tt_observability_event_str is "MS" so __FILE__ is stored once per file; .tt_observability_event_meta has a real
-// sh_entsize of 16 so the host walks a plain array. Record layout (little-endian; must match
-// ObservabilityEventMetaRecord in llrt/observability_event_meta.cpp):
+// is expanded there is one handle and one record for it; TT_PROFILER_TU_ID (this TU's index in its link, from
+// jit_build/build.cpp) keeps labels apart when LTO merges a link's TUs into one assembly. .tt_observability_event_str
+// is "MS" so __FILE__ is stored once per file; .tt_observability_event_meta has a real sh_entsize of 16 so the host
+// walks a plain array. Record layout (little-endian; must match ObservabilityEventMetaRecord in
+// llrt/observability_event_meta.cpp):
 //   [0] u32 event_id (the handle's VMA)   [4] u32 name_ptr (VMA in .tt_observability_event_str)   [8] u32 file_ptr [12]
 //   u32 line
 // The whole path, with diagrams: tools/profiler/STREAMING_PROFILER_ZONE_IDS.md.
@@ -53,13 +53,12 @@
 #define TT_OBSERVABILITY_EVENT_STR(x) TT_OBSERVABILITY_EVENT_STR_(x)
 
 // This TU's index among the objects of its link, injected by the JIT build; a TU built outside it is alone.
-#ifndef TT_OBSERVABILITY_EVENT_TU_TAG
-#define TT_OBSERVABILITY_EVENT_TU_TAG 0
+#ifndef TT_PROFILER_TU_ID
+#define TT_PROFILER_TU_ID 0
 #endif
 
-#define TT_OBSERVABILITY_EVENT_LABEL(ctr)                   \
-    "__tt_observability_event_" TT_OBSERVABILITY_EVENT_STR( \
-        TT_OBSERVABILITY_EVENT_TU_TAG) "_" TT_OBSERVABILITY_EVENT_STR(ctr)
+#define TT_OBSERVABILITY_EVENT_LABEL(ctr) \
+    "__tt_observability_event_" TT_OBSERVABILITY_EVENT_STR(TT_PROFILER_TU_ID) "_" TT_OBSERVABILITY_EVENT_STR(ctr)
 
 // Declares `site` as this zone site's type; site::id() returns the site's id in two instructions with no
 // memory access. Usable at namespace or block scope. `ctr` is a parameter because __COUNTER__ increments on
