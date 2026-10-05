@@ -82,12 +82,7 @@ WATCHDOG_ENV = "TT_METAL_OPERATION_TIMEOUT_SECONDS"
 TRIAGE_ENV = "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE"
 
 
-def device_params_for(fabric_config):
-    return {
-        "fabric_config": fabric_config,
-        "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-        "l1_small_size": 1152,
-    }
+DEVICE_PARAMS = {"l1_small_size": 1152}
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -162,7 +157,7 @@ def describe(runtime_id, identity, asics=None):
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [
-        pytest.param((1, 1), device_params_for(ttnn.FabricConfig.FABRIC_2D), id="fabric2d-1x1"),
+        pytest.param((1, 1), DEVICE_PARAMS, id="1x1"),
     ],
     indirect=["mesh_device", "device_params"],
 )
