@@ -11,12 +11,10 @@ struct MishBf16Config {
     static constexpr float kNegativeSlope = __builtin_bit_cast(float, 0x3f804189u);
     static constexpr float kPositiveScale = __builtin_bit_cast(float, 0x46ffbe77u);
     static constexpr uint32_t kRawNegativeNanWord = 32640u;
-    static constexpr bool kSymmetric = false;
     static constexpr float kCoefficients[] = {
         __builtin_bit_cast(float, 0x3f803884u),
         __builtin_bit_cast(float, 0x3f285adeu),
         __builtin_bit_cast(float, 0x3eaca410u)};
-    static constexpr uint32_t kBiasBf16 = 0x4306u;
     static constexpr uint32_t kCoordinateUpperBf16 = 17172u;
 };
 }  // namespace ckernel::sfpu
