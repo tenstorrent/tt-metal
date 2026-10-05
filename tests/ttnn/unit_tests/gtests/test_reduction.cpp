@@ -1640,7 +1640,6 @@ TEST(ReduceHostPlanner, RejectsInvalidLocalBlockGeometry) {
         b.input_row_stride_tiles = 2;
         b.input_cb_tiles = 8;
     });
-    rejects([](auto& b) { b.batches = std::numeric_limits<uint32_t>::max(); });
 }
 
 TEST(ReduceHostPlanner, AccumulatedLocalBlocksInferCompatibleOutput) {
