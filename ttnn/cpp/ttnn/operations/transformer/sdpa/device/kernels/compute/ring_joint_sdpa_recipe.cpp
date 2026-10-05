@@ -131,7 +131,11 @@ void kernel_main() {
     }
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
+#ifdef SDPA_RECIPE_LOFI
+    recipe_mm_init(cb_q_in, cb_k_in, true, 1, 1, 1);  // no MOP matmul code (see normalize_row_streaming)
+#else
     matmul_init(cb_q_in, cb_k_in);
+#endif
 
     // Wait once for the reduce scaler and column identity. The recipe masks key tails from valid-row
     // counts in the pack thread, so it never reads the writer's lightweight mask tiles.
