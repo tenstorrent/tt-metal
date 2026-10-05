@@ -12,7 +12,7 @@ produces a non-degenerate gradient update.
 Speed strategy:
   * Tiny random-init Llama (1 layer, hidden=64, head_dim=32).
   * Skip the HuggingFace weight download by monkey-patching
-    ``snapshot_download`` and ``load_from_safetensors`` in
+    ``_download_hf_repo`` and ``load_from_safetensors`` in
     ``ttml.trainers.grpo_trainer.grpo_ttml_model`` to no-ops; the model keeps its random init.
   * ``max_completion_length=4`` so autoregressive generation is cheap.
   * Exactly one optimizer step (``gradient_accumulation_steps=1``,
@@ -182,10 +182,13 @@ class _RecordingCallback(TrainerCallback):
 def patch_llama_weight_loading(monkeypatch):
     """Skip the HF download / safetensors load so the tiny model keeps random init.
 
-    ``grpo_ttml_model`` binds both names with ``from ... import``, so they must be
-    patched on that module, not on ``huggingface_hub`` / ``ttml.models.llama``.
+    Both names are patched on ``grpo_ttml_model`` only. ``_download_hf_repo`` wraps
+    ``huggingface_hub.snapshot_download``, which is left alone because transformers
+    also uses it to fetch the tokenizer this test loads. ``load_from_safetensors`` is
+    bound there with ``from ... import``, so patching ``ttml.models.llama`` would not
+    reach it.
     """
-    monkeypatch.setattr(grpo_ttml_model, "snapshot_download", lambda *args, **kwargs: "/tmp/unused")
+    monkeypatch.setattr(grpo_ttml_model, "_download_hf_repo", lambda model_source: "/tmp/unused")
     monkeypatch.setattr(grpo_ttml_model, "load_from_safetensors", lambda *args, **kwargs: None)
 
 

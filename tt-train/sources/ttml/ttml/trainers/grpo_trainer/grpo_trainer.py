@@ -27,6 +27,7 @@ from ttml.common.utils import build_causal_mask, create_optimizer, round_up_to_t
 from ttml.modules import RunMode
 
 from ..callback import TrainerCallback
+from .grpo_ttml_model import setup_ttml_model
 
 try:
     import wandb as _wandb  # type: ignore
@@ -1019,9 +1020,6 @@ class GRPOTrainer:
         self.optimizer_dict = optimizer_dict
         self.callbacks: List[Any] = list(callbacks or [])
         self.model_source = model_source
-
-        # Imported lazily so ``import ttml.trainers`` doesn't pull in transformers / huggingface_hub.
-        from .grpo_ttml_model import setup_ttml_model
 
         self.model: Any
         self.tokenizer: Any
