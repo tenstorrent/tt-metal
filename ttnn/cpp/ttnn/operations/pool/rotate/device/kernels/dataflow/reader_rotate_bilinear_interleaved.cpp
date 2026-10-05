@@ -139,7 +139,7 @@ void kernel_main() {
 
         scalar_dfb.reserve_back(1);
         const uint32_t l1_write_scalar_addr = scalar_dfb.get_write_ptr();
-        fill_four_val(l1_write_scalar_addr, weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
+        fill_four_val<scalar_cb_id>(l1_write_scalar_addr, weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
         scalar_dfb.push_back(1);
 
         noc.async_read_barrier();

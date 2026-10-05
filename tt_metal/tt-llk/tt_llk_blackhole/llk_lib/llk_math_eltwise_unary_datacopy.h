@@ -431,8 +431,6 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
 template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType bcast_type = BroadcastType::NONE, bool tilize = false, bool is_int_fpu_en = false>
 inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32_t total_rows, const std::uint32_t num_faces, const std::uint32_t dst_format)
 {
-    // always move 32x32 tile, packed as 16x16x4
-
     if constexpr (type == DataCopyType::A2D)
     {
         std::uint32_t innerloop = (rows_per_inst == p_mova2d::MOV_1_ROW) ? total_rows : (total_rows >> 3);
@@ -464,7 +462,8 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
     {
         std::uint32_t addr_mod  = (rows_per_inst == p_movb2d::MOV_1_ROW) ? ADDR_MOD_0 : ADDR_MOD_2;
         std::uint32_t innerloop = (rows_per_inst == p_movb2d::MOV_1_ROW) ? total_rows : (total_rows >> 2);
-        std::uint32_t outerloop = 4;
+        // One outer iteration per face: end_op clears a SrcB DVALID each iteration.
+        std::uint32_t outerloop = num_faces;
         auto broadcast_type     = p_movb2d::MOV_1_ROW; // No broadcast;
 
         if constexpr (bcast_type == BroadcastType::COL)
