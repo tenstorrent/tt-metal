@@ -28,6 +28,7 @@ using test_helpers::MakeMinimalGen2ComputeKernel;
 using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::ProgramSpecTestBlackhole;
 using test_helpers::ProgramSpecTestGen1;
 using test_helpers::ProgramSpecTestQuasar;
 
@@ -56,8 +57,9 @@ TEST_F(ProgramSpecTestQuasar, CPU_ComputeHardwareConfigDefaultsMapToInternalDefa
     const auto& built = std::get<experimental::quasar::QuasarComputeConfig>(built_variant);
     EXPECT_EQ(built.math_fidelity, MathFidelity::HiFi4);
     EXPECT_FALSE(built.fp32_dest_acc_en);
-    EXPECT_FALSE(built.dst_full_sync_en);  // double_buffer_dest defaults true -> !true
-    EXPECT_FALSE(built.math_approx_mode);  // sfpu_precision_mode defaults Precise
+    EXPECT_FALSE(built.dst_full_sync_en);   // double_buffer_dest defaults true -> !true
+    EXPECT_FALSE(built.math_approx_mode);   // sfpu_precision_mode defaults Precise
+    EXPECT_FALSE(built.enable_trisc0_rvv);  // config_2xx unset
 }
 
 // Gen1 counterpart of the compute-config translation-stability tests (the Gen2 pair lives in the
@@ -74,6 +76,39 @@ TEST_F(ProgramSpecTestGen1, CPU_ComputeHardwareConfigDefaultsMapToInternalDefaul
     EXPECT_FALSE(built.dst_full_sync_en);   // double_buffer_dest defaults true -> !true
     EXPECT_FALSE(built.bfp8_pack_precise);  // bfp_pack_precision_mode defaults Approximate
     EXPECT_FALSE(built.math_approx_mode);   // sfpu_precision_mode defaults Precise
+    EXPECT_FALSE(built.enable_trisc2_rvv);  // config_1xx unset
+}
+
+// The generation-specific RVV opt-ins must reach the internal configs. MakeProgramFromSpec also
+// compiles, so each test runs on a mock architecture that supports its opt-in.
+TEST_F(ProgramSpecTestQuasar, CPU_Config2xxTrisc0RvvMapsToInternal) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    for (auto& kernel : spec.kernels) {
+        if (kernel.is_compute_kernel()) {
+            std::get<ComputeHardwareConfig>(kernel.hw_config).config_2xx =
+                ComputeHardwareConfig::Compute2XXConfig{.enable_trisc0_rvv = true};
+        }
+    }
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    const auto built_variant = program.impl().get_kernel_by_spec_name("compute_kernel")->config();
+    const auto& built = std::get<experimental::quasar::QuasarComputeConfig>(built_variant);
+    EXPECT_TRUE(built.enable_trisc0_rvv);
+}
+
+TEST_F(ProgramSpecTestBlackhole, CPU_Config1xxTrisc2RvvMapsToInternal) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    for (auto& kernel : spec.kernels) {
+        if (kernel.is_compute_kernel()) {
+            std::get<ComputeHardwareConfig>(kernel.hw_config).config_1xx =
+                ComputeHardwareConfig::Compute1XXConfig{.enable_trisc2_rvv = true};
+        }
+    }
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    const auto built_variant = program.impl().get_kernel_by_spec_name("compute_kernel")->config();
+    const auto& built = std::get<ComputeConfig>(built_variant);
+    EXPECT_TRUE(built.enable_trisc2_rvv);
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ComputeHardwareConfigInversionAndEnumMapToInternal) {
