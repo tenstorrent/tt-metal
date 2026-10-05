@@ -43,8 +43,6 @@ def run_moreh_softmin_test(
     strategy=None,
     compute_kernel_options=None,
 ):
-    if ttnn_dtype == ttnn.bfloat8_b:
-        pytest.skip(f"bfloat8_b is not supported")
     torch_dtype = get_torch_dtype(ttnn_dtype)
     if use_randint == True:
         torch_input = torch.randint(low=0, high=4, size=shape).to(torch_dtype) + 100
@@ -181,6 +179,7 @@ def test_softmin_for_dim_hw(shape_dim, dtype, compute_kernel_options, device):
     "dtype",
     [
         ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
