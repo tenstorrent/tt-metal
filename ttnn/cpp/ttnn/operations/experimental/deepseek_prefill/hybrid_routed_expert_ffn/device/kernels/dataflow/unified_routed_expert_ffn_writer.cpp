@@ -56,6 +56,12 @@ namespace HYB_NS {
 
 constexpr uint32_t TILE_HEIGHT = 32;
 
+#ifdef URE_FAR_EXT_OFF
+// Overlapped with combine: the chunk each expert's combine walks open on, appended to the counts table.
+#define URE_FIRST_CHUNK(counts_ptr, gid) ((counts_ptr)[URE_FAR_EXT_OFF / sizeof(uint32_t) + (gid)])
+#else
+#define URE_FIRST_CHUNK(counts_ptr, gid) 0u
+#endif
 void kernel_main() {
     Noc noc;
 
@@ -271,7 +277,9 @@ void kernel_main() {
         const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
         const uint32_t row_offset_tiles = start_ptr[global_expert_id] / TILE_HEIGHT;
 
-        for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
+        for (uint32_t chunk_i = 0; chunk_i < effective_chunks; ++chunk_i) {
+            const uint32_t chunk =
+                adaptive_chunk::chunk_at(chunk_i, effective_chunks, URE_FIRST_CHUNK(counts_ptr, global_expert_id));
             // ---- Phase 1/2 weight feed: writer reads `up` on NoC 1 (UP_SPLIT) ----
             // Streams `up` from DRAM concurrent with the reader's NoC-0 `gate` read.
             // Runs before the cb_out drain.

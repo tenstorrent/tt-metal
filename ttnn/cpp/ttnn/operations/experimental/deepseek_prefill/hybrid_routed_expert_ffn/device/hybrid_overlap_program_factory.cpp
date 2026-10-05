@@ -15,6 +15,7 @@
 #include "hybrid_program_factory.hpp"
 #include "hybrid_routed_expert_ffn_device_operation.hpp"
 #include "combine/combine_fabric2d_program_factory.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
@@ -103,6 +104,29 @@ OverlapL1 allocate_overlap_l1(ttnn::MeshDevice* mesh, bool with_arena) {
     return l1;
 }
 
+// The unified reader's view of where combine's walks open: expert_offsets' row for the ring chip diametrically
+// opposite this one, which both of combine's walk directions take first. Appended past every other argument.
+void append_far_run(tt::tt_metal::ProgramDescriptor& desc, tt::tt_metal::Buffer* expert_offsets, uint32_t dg_far) {
+    auto reader = std::find_if(desc.kernels.begin(), desc.kernels.end(), [](const auto& k) {
+        return k.kernel_source.find("hybrid_reader.cpp") != std::string::npos;
+    });
+    TT_FATAL(reader != desc.kernels.end(), "hybrid routed expert: the program carries no reader kernel");
+    uint32_t base = 0;
+    for (const auto& [core, args] : reader->runtime_args) {
+        base = std::max(base, static_cast<uint32_t>(args.size()));
+    }
+    for (auto& [core, args] : reader->runtime_args) {
+        args.resize(base, 0);
+        args.push_back(static_cast<uint32_t>(expert_offsets->address()));
+        args.push_back(static_cast<uint32_t>(expert_offsets->aligned_page_size()));
+        args.push_back(dg_far);
+        // The address is re-patched on every program-cache hit: the tensor may live elsewhere next call.
+        reader->buffer_bindings.push_back(
+            tt::tt_metal::BufferBinding{.core = core, .arg_idx = base, .buffer = expert_offsets});
+    }
+    reader->defines.emplace_back("URE_FAR_RT_BASE", std::to_string(base));
+}
+
 }  // namespace
 
 tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_descriptor(
@@ -155,6 +179,12 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
                 .collector_noc_y = static_cast<uint32_t>(collector.worker_virtual.y),
                 .collector_counts_addr = collector.counts_addr,
                 .go_addr = static_cast<uint32_t>(l1.go->address())});
+        {
+            namespace cf = ttnn::operations::experimental::deepseek_prefill::combine_fabric2d;
+            const uint32_t extent = cf::ring_extent(combine_args);
+            append_far_run(
+                re, t.expert_offsets->buffer(), (cf::my_dg_index(combine_args, coord) + extent / 2) % extent);
+        }
         program.descriptor = tt::tt_metal::merge_program_descriptors({program.descriptor, re});
     }
 
