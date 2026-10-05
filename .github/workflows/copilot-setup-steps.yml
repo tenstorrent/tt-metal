@@ -51,6 +51,58 @@ jobs:
           done
           printf 'no_proxy=%s\nNO_PROXY=%s\n' "$bypass" "$bypass" >> "$GITHUB_ENV"
 
+      - name: Make the agent's Node client use the outbound proxy
+        # Direct egress from these pods is dropped (deny-by-default NetworkPolicy,
+        # no reset), so a client that ignores the proxy hangs until its own connect
+        # timeout. The agent engine runs on Node, whose built-in fetch ignores
+        # *_proxy variables unless NODE_USE_ENV_PROXY=1. Its GitHub write tools
+        # (engine-tools-reply_to_comment, report_progress's PR-description update)
+        # have failed after a constant ~10.5s in every session on this runner pool.
+        # Only the pool's proxy settings are copied; nothing is set when no proxy
+        # is configured (e.g. a GitHub-hosted runner).
+        run: |
+          set_proxy=0
+          for scheme in https http; do
+            lower="${scheme}_proxy"
+            upper="$(printf '%s' "$lower" | tr '[:lower:]' '[:upper:]')"
+            value="${!lower:-${!upper:-}}"
+            if [ -n "$value" ]; then
+              printf '%s=%s\n' "$upper" "$value" >> "$GITHUB_ENV"
+              set_proxy=1
+            fi
+          done
+          if [ "$set_proxy" = 1 ]; then
+            echo "NODE_USE_ENV_PROXY=1" >> "$GITHUB_ENV"
+            echo "Exported HTTP(S)_PROXY and NODE_USE_ENV_PROXY=1 for the agent runtime."
+          else
+            echo "::notice::No http(s)_proxy in the environment; leaving Node proxy settings alone."
+          fi
+
+      - name: Diagnose GitHub egress for the agent runtime
+        # Temporary: confirms why the agent's GitHub write calls time out. Expected
+        # on this pool: via-proxy curl and node-with-env-proxy succeed; direct curl
+        # and plain node fetch time out. Remove once reply_to_comment is confirmed
+        # working in a session log. Never fails the job.
+        continue-on-error: true
+        run: |
+          url=https://api.github.com/zen
+          node_bin="${RUNNER_TEMP}/ghcca-node/node/bin/node"
+          [ -x "$node_bin" ] || node_bin="$(command -v node || true)"
+          out="$(mktemp -d)"
+          probe='const t=Date.now();fetch(process.argv[1],{signal:AbortSignal.timeout(15000)}).then(r=>console.log("ok",r.status,Date.now()-t+"ms")).catch(e=>console.log("ERR",e.cause?.code||e.name,Date.now()-t+"ms"))'
+          (curl -sS --max-time 15 -o /dev/null -w 'curl via proxy : %{http_code} %{time_total}s\n' "$url" > "$out/1" 2>&1 || echo "curl via proxy : FAILED" >> "$out/1") &
+          (curl -sS --noproxy '*' --max-time 15 -o /dev/null -w 'curl direct    : %{http_code} %{time_total}s\n' "$url" > "$out/2" 2>&1 || echo "curl direct    : FAILED" >> "$out/2") &
+          if [ -n "$node_bin" ]; then
+            echo "node: $("$node_bin" --version)" > "$out/0"
+            (echo "node plain     : $(env -u NODE_USE_ENV_PROXY "$node_bin" -e "$probe" "$url" 2>&1)" > "$out/3") &
+            (echo "node env-proxy : $(NODE_USE_ENV_PROXY=1 "$node_bin" -e "$probe" "$url" 2>&1)" > "$out/4") &
+          else
+            echo "node not found; skipping node probes" > "$out/0"
+          fi
+          wait
+          echo "proxy env: https_proxy=${https_proxy:-<unset>} HTTPS_PROXY=${HTTPS_PROXY:-<unset>} NODE_USE_ENV_PROXY=${NODE_USE_ENV_PROXY:-<unset>}"
+          cat "$out"/* 2>/dev/null
+
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
