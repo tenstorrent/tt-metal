@@ -645,12 +645,8 @@ def test_a_tolerance_cell_with_no_recorded_figure_is_counted_not_passed_silently
 
 #: The modules the slim runner loads, by path: the tool, and the one sibling it reads
 #: the table through.
-_SLIM_MODULES = (
-    "ulp_budget_diff.py",
-    "ulp_provenance.py",
-    "migrate_provenance_to_fields.py",
-)
-_SLIM_SIBLINGS = {"ulp_provenance", "migrate_provenance_to_fields"}
+_SLIM_MODULES = ("ulp_budget_diff.py", "ulp_provenance.py")
+_SLIM_SIBLINGS = {"ulp_provenance"}
 
 
 @pytest.mark.parametrize("module", _SLIM_MODULES)
@@ -1148,25 +1144,3 @@ def test_a_named_junit_report_that_is_missing_fails_the_comparison(tmp_path, cap
     ]
     assert main(argv) == 1
     assert "No JUnit report" in capsys.readouterr().out
-
-
-def test_a_base_from_before_the_field_format_is_compared_as_migrated(tmp_path):
-    """The change that moved provenance into row fields is diffed against a base whose
-    figures are in comments. Read as it is, that base records nothing, and every
-    migrated not-measurable row read as a raised lane count; migrated in memory first,
-    a pure format change reports no change at all."""
-    legacy = (
-        "Abs:  # measured by: exhaustive Float16_b sweep, wormhole, 2026-01-01, except "
-        "where a row says otherwise\n"
-        '  - {in: Float16_b, out: Float16_b, dest: "Yes", metric: tolerance}  # not '
-        "measurable: 6 lane(s) disagreeing with the golden about being finite (golden "
-        "-> result: x=3e38: 3e38 -> inf); max 393 ULP over the 65000 measurable lanes\n"
-        "  - {in: Float16, out: Float16_b, max_ulp: 4}  # max 3 ULP\n"
-    )
-    from helpers.migrate_provenance_to_fields import migrate
-
-    base = _write(tmp_path, "base.yaml", legacy)
-    head = _write(tmp_path, "head.yaml", migrate(legacy))
-    out = tmp_path / "r.md"
-    assert main(["diff", "--base", base, "--head", head, "--out", str(out)]) == 0
-    assert "No budget changed" in out.read_text(encoding="utf-8")

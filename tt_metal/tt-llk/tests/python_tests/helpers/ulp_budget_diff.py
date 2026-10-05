@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,10 +30,8 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from xml.etree import ElementTree
 
 if __package__:
-    from .migrate_provenance_to_fields import migrate
     from .ulp_provenance import BudgetTable, Provenance
 else:  # run by path on the slim runner, where `helpers/__init__.py` cannot import
-    from migrate_provenance_to_fields import migrate
     from ulp_provenance import BudgetTable, Provenance
 
 #: The key dimensions of a row, in the order a cell is named in a report. The registry's
@@ -628,10 +625,23 @@ def _headroom_line(cell: Cell, worst: int, reference: int, verdict: str) -> str:
     return f"| `{_cell_name(*cell)}` | {worst} | {reference} | {verdict} |"
 
 
-#: The sweep's test id (test_unary_sfpu_ulp.py's parametrize ids), read back into the
-#: cell it ran: ``test_unary_sfpu_ulp_sweep[Abs-in:Float16_b-out:Float16_b-approx:No-
+#: The labels of the sweep's test id after the op (test_unary_sfpu_ulp.py's parametrize
+#: ids): ``test_unary_sfpu_ulp_sweep[Abs-in:Float16_b-out:Float16_b-approx:No-
 #: dest_acc:Yes]``.
-_SWEEP_ID = re.compile(r"\[(\w+)-in:(\w+)-out:(\w+)-approx:(\w+)-dest_acc:(\w+)\]$")
+_SWEEP_ID_LABELS = ("in", "out", "approx", "dest_acc")
+
+
+def _sweep_cell(name: str) -> Optional[Tuple[str, str, str, str, str]]:
+    """The cell a sweep test id ran, as ``(op, in, out, approx, dest)``, or ``None`` for
+    any other test. Neither an op nor a format name holds a ``-``."""
+    if not name.endswith("]") or "[" not in name:
+        return None
+    op, *parts = name[name.index("[") + 1 : -1].split("-")
+    pairs = [part.partition(":") for part in parts]
+    if [label for label, _, _ in pairs] != list(_SWEEP_ID_LABELS):
+        return None
+    return (op, *(value for _, _, value in pairs))
+
 
 #: A failure message longer than this is cut: the first line of an assertion already
 #: names the cell and the figure, and a PR comment has a size limit.
@@ -662,12 +672,11 @@ def junit_failures(text: str) -> List[Failure]:
             continue
         name = case.get("name", "")
         lines = (bad.get("message") or bad.text or "").strip().splitlines()
-        found = _SWEEP_ID.search(name)
         failures.append(
             Failure(
                 test=name[name.find("[") :] if "[" in name else name,
                 message=(lines[0] if lines else "")[:_MESSAGE_CHARS],
-                cell=found.groups() if found else None,
+                cell=_sweep_cell(name),
             )
         )
     return failures
@@ -682,9 +691,9 @@ def junit_completed(text: str) -> List[Tuple[str, str, str, str, str]]:
     for case in ElementTree.fromstring(text).iter("testcase"):
         if case.find("failure") is not None or case.find("error") is not None:
             continue
-        found = _SWEEP_ID.search(case.get("name", ""))
-        if found:
-            cells.append(found.groups())
+        cell = _sweep_cell(case.get("name", ""))
+        if cell is not None:
+            cells.append(cell)
     return cells
 
 
@@ -843,21 +852,10 @@ def render_headroom(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _in_fields(text: str) -> str:
-    """*text* with its provenance in row fields. A revision from before provenance moved
-    out of the comments -- the base of the change that moved it -- is migrated in
-    memory; read as it is, its comments' figures would be absent and every one the
-    migrated table carries would read as raised."""
-    rows = BudgetTable(text).rows
-    if not rows or any(row.provenance.as_fields() for row in rows):
-        return text
-    return migrate(text)
-
-
 def _diff(args) -> Tuple[str, int]:
     changes = compare(
-        parse_table(_in_fields(args.base.read_text(encoding="utf-8"))),
-        parse_table(_in_fields(args.head.read_text(encoding="utf-8"))),
+        parse_table(args.base.read_text(encoding="utf-8")),
+        parse_table(args.head.read_text(encoding="utf-8")),
     )
     report = render_budget_diff(changes, args.label_hint)
     regressions = [c for c in changes if c.is_regression]
