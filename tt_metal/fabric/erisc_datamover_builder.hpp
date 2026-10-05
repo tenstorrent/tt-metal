@@ -242,6 +242,9 @@ struct FabricEriscDatamoverConfig {
     std::size_t num_fwd_paths = 0;
     std::size_t sender_txq_id = 0;
     std::size_t receiver_txq_id = 0;
+    // Senders and receivers transmit on separate Ethernet TX queues, which two-ERISC mode enables. Credits on VC0
+    // and VC1 then travel in L1 counters. The kernel derives the same flag from SENDER_TXQ_ID and RECEIVER_TXQ_ID.
+    bool multi_txq_enabled() const { return sender_txq_id != receiver_txq_id; }
     std::size_t num_riscv_cores = 0;
     tt::ARCH arch = tt::ARCH::Invalid;
 

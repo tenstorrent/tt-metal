@@ -8,13 +8,17 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
+#include <algorithm>
+#include <array>
 #include <numeric>
 
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
+#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/builder/protected_domain_effect.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_router_builder.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
 
 namespace tt::tt_fabric {
 
@@ -116,6 +120,84 @@ manifest::RouterShape collect_shape(const ManifestRouterInputs& inputs) {
     return shape;
 }
 
+bool is_cleared_by_host(const ManifestRouterInputs& inputs, size_t address) {
+    return std::ranges::find(inputs.addresses_to_clear, address) != inputs.addresses_to_clear.end();
+}
+
+// An array of T filling `size` bytes at `address`.
+template <typename T>
+manifest::L1Region l1_array(const ManifestRouterInputs& inputs, size_t address, size_t size) {
+    TT_FATAL(
+        size % sizeof(T) == 0,
+        "Fabric manifest: array at {:#x} is {} bytes, not a whole number of {}-byte elements",
+        address,
+        size,
+        sizeof(T));
+    return {
+        .address = static_cast<uint32_t>(address),
+        .size = static_cast<uint32_t>(size),
+        .num_elements = static_cast<uint32_t>(size / sizeof(T)),
+        .size_per_element = static_cast<uint32_t>(sizeof(T)),
+        .schema = manifest::schema_name_of<T>(),
+        .cleared_by_host = is_cleared_by_host(inputs, address),
+    };
+}
+
+// A credit counter array's base address and the compile-time argument that passes it to the kernel.
+struct CounterBase {
+    const char* ct_arg_name;
+    size_t address;
+};
+
+// Return the router's four L1 credit counter arrays. The kernel sends each pair to the peer in one packet, so it
+// relies on the arrays being back to back and the same size; the size comes from that spacing.
+manifest::L1CreditCounters collect_credit_counters(const ManifestRouterInputs& inputs) {
+    const auto& config = inputs.erisc_builder.config;
+    // In L1 order
+    const std::array<CounterBase, 4> bases = {{
+        {"TO_SENDER_REMOTE_ACK_COUNTERS_BASE_ADDR", config.to_sender_channel_remote_ack_counters_base_addr},
+        {"TO_SENDER_REMOTE_COMPLETION_COUNTERS_BASE_ADDR",
+         config.to_sender_channel_remote_completion_counters_base_addr},
+        {"LOCAL_RECEIVER_ACK_COUNTERS_BASE_ADDR", config.receiver_channel_remote_ack_counters_base_addr},
+        {"LOCAL_RECEIVER_COMPLETION_COUNTERS_BASE_ADDR", config.receiver_channel_remote_completion_counters_base_addr},
+    }};
+
+    for (const auto& base : bases) {
+        check_named_arg(inputs.named_ct_args_per_risc, base.ct_arg_name, static_cast<uint32_t>(base.address));
+    }
+
+    const size_t size = bases[1].address - bases[0].address;
+    for (size_t i = 1; i < bases.size(); ++i) {
+        TT_FATAL(
+            bases[i].address > bases[i - 1].address && bases[i].address - bases[i - 1].address == size,
+            "Fabric manifest: credit counter array {} at {:#x} does not follow {} at {:#x} as a {}-byte array",
+            bases[i].ct_arg_name,
+            bases[i].address,
+            bases[i - 1].ct_arg_name,
+            bases[i - 1].address,
+            size);
+    }
+
+    return {
+        .to_sender_ack = l1_array<uint32_t>(inputs, bases[0].address, size),
+        .to_sender_completion = l1_array<uint32_t>(inputs, bases[1].address, size),
+        .receiver_ack = l1_array<uint32_t>(inputs, bases[2].address, size),
+        .receiver_completion = l1_array<uint32_t>(inputs, bases[3].address, size),
+    };
+}
+
+// Every RISC's VC*_USES_COUNTER_CREDITS arguments must match the mesh's credit plan, which the writer serializes as
+// the mesh's credit_transport.
+void check_credit_transport_args(const ManifestRouterInputs& inputs) {
+    const auto& plan = inputs.stream_assignment.plan();
+    for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        check_named_arg(
+            inputs.named_ct_args_per_risc,
+            fmt::format("VC{}_USES_COUNTER_CREDITS", vc),
+            plan.vc_uses_counters(vc) ? 1 : 0);
+    }
+}
+
 }  // namespace
 
 manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs) {
@@ -124,11 +206,13 @@ manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs) {
         "Fabric manifest: got compile-time arguments for {} RISCs, but the router runs {}",
         inputs.named_ct_args_per_risc.size(),
         inputs.erisc_builder.get_configured_risc_count());
+    check_credit_transport_args(inputs);
 
     return {
         .identity = collect_identity(inputs.location),
         .link = collect_link(inputs),
         .shape = collect_shape(inputs),
+        .credit_counters = collect_credit_counters(inputs),
     };
 }
 
