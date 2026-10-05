@@ -140,6 +140,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifdef LLK_TRISC_MATH
+static std::uint32_t repro_rt_at = 0; // experiment: runtime injection iteration
 
 #include "llk_math_common.h"
 #include "llk_math_matmul.h"
@@ -175,6 +176,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
         _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
             in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
+        repro_rt_at = *reinterpret_cast<volatile std::uint32_t*>(0x16AFE4); // experiment: host-written, read before TILE_LOOP
         PROFILER_SYNC();
     }
     {
@@ -187,7 +189,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             // Experiment (bistability repro): one controlled operation REPRO_INJ_AT spins after the zone opens.
-            if constexpr (REPRO_INJ >= 11)
+            if constexpr (REPRO_INJ == 15)
+            {
+                // Same code for every value: one L1 load at the runtime spin iteration read in INIT (0 = none).
+                volatile std::uint32_t* repro_l1 = &llk_profiler::buffer[llk_profiler::TRISC_ID][llk_profiler::BUFFER_LENGTH - 1];
+                std::uint32_t repro_n, repro_v;
+                std::uint32_t repro_k = repro_rt_at == 0 ? 0xFFFFFFFFu : 20000 - repro_rt_at;
+                asm volatile(
+                    ".option push\n\t.option norvc\n\t"
+                    "li %0, 20000\n"
+                    "1:\n\tnop\n\tbne %0, %2, 2f\n\tlw %1, 0(%3)\n"
+                    "2:\n\taddi %0, %0, -1\n\tbnez %0, 1b\n\t.option pop"
+                    : "=&r"(repro_n), "=&r"(repro_v)
+                    : "r"(repro_k), "r"(repro_l1)
+                    : "memory");
+            }
+            else if constexpr (REPRO_INJ >= 11)
             {
                 // One loop, one fixed code path: at iteration REPRO_INJ_AT the body falls through into a single
                 // 4-byte slot: nop (11), L1 load (12), L1 store (13) or wall-clock MMIO read (14).

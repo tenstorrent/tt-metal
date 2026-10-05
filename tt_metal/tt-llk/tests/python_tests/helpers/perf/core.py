@@ -1041,6 +1041,7 @@ class PerfConfig(TestConfig):
                 write_words_to_device(
                     TestConfig.TENSIX_LOCATION, _START_OFFSET_ADDR, [0]
                 )
+                write_words_to_device(TestConfig.TENSIX_LOCATION, 0x16AFE4, [int(os.environ.get('REPRO_RT', '0'))])  # experiment
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
 
@@ -1074,6 +1075,7 @@ class PerfConfig(TestConfig):
                 write_words_to_device(
                     TestConfig.TENSIX_LOCATION, _START_OFFSET_ADDR, [offset]
                 )
+                write_words_to_device(TestConfig.TENSIX_LOCATION, 0x16AFE4, [int(os.environ.get('REPRO_RT', '0'))])  # experiment
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
                 # Counter config is written by BRISC from built-in array (local L1 write).
