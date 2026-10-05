@@ -4,8 +4,11 @@
 
 """Re-export shim. Implementation lives in tt_py_test_utils_common.perf.merge_device_perf_results."""
 
+import sys
+
 from tt_py_test_utils_common.perf import merge_device_perf_results as _impl
 
-_KEEP = {"__name__", "__file__", "__package__", "__loader__", "__spec__", "__cached__"}
-globals().update({k: v for k, v in _impl.__dict__.items() if k not in _KEEP})
-del _KEEP
+if __name__ == "__main__":
+    raise SystemExit(_impl.main())
+
+sys.modules[__name__] = _impl

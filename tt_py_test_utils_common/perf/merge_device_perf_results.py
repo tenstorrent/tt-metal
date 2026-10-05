@@ -58,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-if __name__ == "__main__":
+def main() -> None:
     args = parse_args()
     assert (
         args.output_filename
@@ -70,3 +70,7 @@ if __name__ == "__main__":
     else:
         merge_perf_files(args.output_filename, f"device_perf", expected_cols)
         check_device_perf_results(args.output_filename, expected_cols, check_cols)
+
+
+if __name__ == "__main__":
+    main()

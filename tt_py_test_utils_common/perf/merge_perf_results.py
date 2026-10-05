@@ -51,7 +51,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-if __name__ == "__main__":
+def main() -> None:
     args = parse_args()
     fname = f"Models_Perf_{today}.csv"
     if str(args.modelperf) == "REPORT":
@@ -65,3 +65,7 @@ if __name__ == "__main__":
         check_perf_results(
             fname, expected_cols, check_cols, lower_threshold=args.lower_threshold, upper_threshold=args.upper_threshold
         )
+
+
+if __name__ == "__main__":
+    main()
