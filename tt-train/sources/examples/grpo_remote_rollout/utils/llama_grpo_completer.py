@@ -31,11 +31,11 @@ from transformers import AutoTokenizer
 from ttml.common.config import TransformerConfig
 from ttml.common.utils import no_grad, round_up_to_tile
 from ttml.models import RunnerType
-from ttml.models.llama import LlamaConfig, load_from_safetensors
+from ttml.models.llama import Llama, LlamaConfig, load_from_safetensors
 from ttml.trainers.grpo_trainer import GRPOCompleter
+from ttml.trainers.grpo_trainer.grpo_ttml_model import weights_ref_hf_dict
 
 from .mpi_rollout import MPIRolloutClient
-from .llama_overrides import LlamaHfExport
 
 
 @dataclass
@@ -141,7 +141,7 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
                 f"the tokenizer has {len(tokenizer)} tokens but the checkpoint embeds {llama_cfg.vocab_size}"
             )
 
-        tt_model = LlamaHfExport(llama_cfg)
+        tt_model = Llama(llama_cfg)
 
         if enable_ddp:
             autograd_ctx.initialize_parallelism_context(
@@ -273,7 +273,7 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
         Call once before ``GRPOTrainer.train()`` to overwrite the worker's dummy
         boot weights; the caller re-invokes it to re-sync during training.
         """
-        hf_dict = self._model.weights_ref_hf_dict()
+        hf_dict = weights_ref_hf_dict(self._model)
         try:
             self._client.send_weights(hf_dict)
         finally:
