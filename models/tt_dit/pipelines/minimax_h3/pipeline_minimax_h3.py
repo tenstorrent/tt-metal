@@ -2784,6 +2784,11 @@ class MiniMaxH3Pipeline:
                     dram_probe.report(f"after OOM in prepare_static_sources, rung {rung}")
                 raise
             ttnn.synchronize_device(self.mesh_device)
+        # The refiner has consumed the prompt (its rows now live in the source table) and nothing reads
+        # `prompt_embeds` after this point, but as a caller's local it would stay allocated through the
+        # whole denoise and decode: a cap-sized block (168 MB/device at a 16384-token presentation)
+        # pinned in the middle of the heap exactly where the DiT's pairs and activations need to fit.
+        ttnn.deallocate(prompt_device)
         dram_probe.report(f"after prepare_static_sources, rung {rung}")
 
         state.adaln.update(self._row_indices(adaln_indices(layout.token_tags, row_slot), rung), traced=traced)
