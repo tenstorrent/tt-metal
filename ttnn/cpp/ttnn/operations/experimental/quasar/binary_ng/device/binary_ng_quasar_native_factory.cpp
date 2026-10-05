@@ -379,6 +379,8 @@ m2::DataflowBufferSpec make_dfb(
 // Tiles per core when a, b and c are L1-interleaved and borrowable: bank k holds pages k, k+N, ... from the
 // buffer's address, one bank per core, so a core's slices of a, b and c hold the same pages. Every bank
 // reserves the same page count, and a short bank computes a pad slot. No tail rings, so C must divide it.
+// A program-cache hit keeps this decision. It reads only the hashed specs and worker grid, the tuning, and
+// the bank layout of the operands' device, which never changes after the device opens.
 std::optional<uint32_t> l1_interleaved_borrow_tiles(
     const Tensor& a, const Tensor& b, const Tensor& c, const CoreRangeSet& worker_grid, uint32_t compute_threads) {
     const Buffer* c_buffer = c.buffer();
@@ -397,10 +399,13 @@ std::optional<uint32_t> l1_interleaved_borrow_tiles(
         if (buffer->aligned_page_size() != tile_bytes) {
             return std::nullopt;
         }
-        // The gate admits one padded shape only, and every interleaved buffer lives in the global allocator.
-        TT_ASSERT(
-            buffer->num_pages() == c_buffer->num_pages() && buffer->allocator() == c_buffer->allocator(),
-            "binary_ng Quasar-native: L1-interleaved operands must share one page count and one allocator");
+        // A core's slices hold the same pages only when a, b and c have one page count and one bank layout.
+        // Otherwise every operand takes the NoC path.
+        const bool same_bank_slices =
+            buffer->num_pages() == c_buffer->num_pages() && buffer->allocator() == c_buffer->allocator();
+        if (!same_bank_slices) {
+            return std::nullopt;
+        }
     }
     // The bank's own reservation, which the runtime also checks the borrowed DFB against.
     const auto tiles = static_cast<uint32_t>(c_buffer->aligned_size_per_bank() / c_buffer->aligned_page_size());
