@@ -129,6 +129,10 @@ PrepareChunkRecurrenceOperation::create_op_performance_model(
     const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
     using namespace kda_performance_model;
 
+    // Canonical work per (head, chunk). Matrix: Akk and Aqk products, 2 * (2*C*C*K), plus the unit-lower
+    // inverse. G = cumsum(g) counts as (C-1)*K additions, and G_last is G's last row, so it costs nothing.
+    // The kernel computes both as [C,C]@[C,K] matmuls (prefix mask and sum broadcast), adding 4*C*C*K
+    // matrix FLOPs. That is implementation cost and part of the measured gap, not the theoretical bound.
     constexpr double chunk = tt::constants::TILE_HEIGHT;
     constexpr double inverse_flops = chunk * (chunk - 1.0) * (chunk + 1.0) / 3.0;
     const double instances = static_cast<double>(attrs.num_heads) * attrs.num_chunks;
