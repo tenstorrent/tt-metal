@@ -167,6 +167,11 @@ Setup: 40 layers, Engram on, traced chunk prefill, prefill-only, fixed chunk C =
 | ISL | budget | C | status | TTFT s | replay s | ms/row-token | capture s | min free MiB | end free MiB | first tok vs 4096/2048 default |
 |---|---|---|---|---|---|---|---|---|---|---|
 
+
 ### uni B=4 (U=1): /mnt/tt-data/ssinghal/dsv4-logs/pf_chunkcal_uni_b4_k2.log
 | ISL | budget | C | status | TTFT s | replay s | ms/row-token | capture s | min free MiB | end free MiB | first tok vs 4096/2048 default |
 |---|---|---|---|---|---|---|---|---|---|---|
+| isl4k_b4 | 1024 | 1024 | ok | 93.78 | 3.37 | 0.823 | 74.6 | 812.5 | 822.2 | - |
+| isl8k_b4 | 1024 | 1024 | ok | 8.948 | 6.65 | 0.812 | None | 822.2 | 822.2 | - |
+| isl32k_b4 | 1024 | 1024 | ok | 25.468 | 24.85 | 0.809 | None | 822.2 | 822.2 | - |
+| isl64k_b4 | 1024 | 1024 | ok | 50.403 | 49.78 | 0.810 | None | 822.1 | 822.1 | - |
