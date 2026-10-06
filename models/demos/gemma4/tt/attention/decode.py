@@ -166,12 +166,18 @@ def decode_forward(
         # q*cos + rotate_half(q)*sin (numerically equivalent — isolation PCC
         # ~0.99999 vs the fused op and the HF reference — but a few ops costlier).
         batch = tt_q.shape[1]
-        if batch > 1:
+        # The fused op and the elementwise form agree to PCC ~0.99999, not bitwise. With decode
+        # graphs per batch size (GEMMA4_DECODE_WARMUP_BATCHES) a request decoded in the batch-1
+        # graph then sees different Q/K than the same request in a wider graph, which breaks
+        # seeded reproducibility (tt-metal#59300). GEMMA4_ROPE_PERUSER_B1=1 keeps every graph on
+        # the elementwise form; off by default until measured.
+        peruser_at_b1 = os.environ.get("GEMMA4_ROPE_PERUSER_B1", "0") == "1"
+        if batch > 1 or peruser_at_b1:
             cos_b = ttnn.transpose(cos_pos, 1, 2)[:, :batch, :, :]  # [1, batch, 1, head_dim]
             sin_b = ttnn.transpose(sin_pos, 1, 2)[:, :batch, :, :]
 
         def _rope(t):
-            if batch == 1:
+            if batch == 1 and not peruser_at_b1:
                 return apply_rope(t, cos_pos, sin_pos, token_index=0)
             return apply_rope_decode_peruser(t, cos_b, sin_b)
 
