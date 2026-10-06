@@ -824,7 +824,8 @@
       0.3278
      ],
      "note": "a wash: mean 0.3423 -> 0.3398, largest per-prompt move 0.0114 against the ~0.045 spread CLIP shows between adjacent points of one identical configuration."
-    }
+    },
+    "where_the_wall_win_actually_is": "NOT in compute. step_s and the denoising phase are unchanged between the arms (10.57-10.59 s per step both ways); the whole 74.6 -> 67.3 s is wall-minus-phases, 20.0-20.2 s resident against 12.7-12.9 s precomputed. That is the same untimed weight page-in gap that fix_cost.removable says a capacity-1 A/B LRU would buy about 2.4 s back from, and that fix_cost.caveat_from_review says has uncharacterised run-to-run spread. The two savings overlap and must NOT be added."
    },
    "against_and_why_it_is_not_taken": {
     "audio_rms_falls_on_five_of_five": {
@@ -850,11 +851,11 @@
       0.968
      ],
      "geometric_mean": 0.798,
-     "convention": "prove_h3's own audio_rms (mono, decoded from the mp4's AAC track), the same number its floor check reads, for both arms."
+     "convention": "prove_h3's own audio_rms for both arms: RMS over a 32 kHz STEREO AAC decode of the mp4. prove_h3.decode_audio passes ffmpeg -ac 2 and the RMS is taken over both channels, and this is the same number prove_h3's 0.002 floor check reads. CORRECTED 2026-10-05: this said 'mono'. It never was. No ratio or decision changes -- every number here is the same metric computed the same way -- but a true mono downmix runs 18-31% higher on these clips, which matters to anyone acting on quality_known_exception's stage-07 item about making the floor duration-aware."
     },
     "it_pushes_the_one_failing_clip_further_under": "the fox clip goes from 5% under prove_h3's absolute 0.002 floor (0.0019) to 38% under (0.0012).",
     "it_is_not_a_property_of_the_flag": "the SAME axis on base-model weights moves audio the OTHER way. Quoted in audio_rms, the same metric and convention as the cost above, so the two sides of this argument are comparable: ctlG (resident) -> ctlD (precomputed) goes 0.0231892 -> 0.0279340 (+20.5%) on the coastline prompt and 0.0120094 -> 0.0213720 (+78.0%) on the blacksmith. (The same pair in audio abs max reads 0.1246 -> 0.1468 and 0.2420 -> 0.3072 -- same direction, weaker statement.) So the drop is not what host adaLN tables simply do; it is specific to this configuration and uncontrolled.",
-    "it_weakens_the_cross_mesh_sentence_the_fox_waiver_leans_on": "at the served resident setting the duration-matched p150-vs-p300x2 audio comparison reads +61% / +5% (p300x2 louder or equal). Re-derived on the precomputed arm it would read about +5.5% / -10.5%, i.e. marginal on one prompt and inverted on the other.",
+    "it_weakens_the_cross_mesh_sentence_the_fox_waiver_leans_on": "at the served resident setting the duration-matched p150-vs-p300x2 audio comparison reads +61% / +5% (p300x2 louder or equal). Re-derived on the precomputed arm it would read about +5.5% / -10.5%, i.e. marginal on one prompt and inverted on the other. UNIT (named here because the two sibling keys name theirs): these are TOTAL AUDIO ENERGY, mean(x^2) * duration over both channels of the .wav -- not the audio_rms the cost above uses. p150 ctlB 5.0630e-03 / 3.2632e-03 against resident 8.1610e-03 / 3.4140e-03 and precomputed 5.3430e-03 / 2.9205e-03.",
     "verdict": "one-directional, arm-wide, on half of what this model outputs, with no control and no explanation. A ~20% audio amplitude cost is not bought by 9.8% wall and 6.16 GiB in the stage whose entire reason for existing is that a silent quality defect shipped under an adapter's name."
    },
    "what_would_close_it": "An audio-branch control at the served setting: the audio decode path with adaLN precomputed vs resident on identical latents, to separate 'the host adaLN table changes the audio modulation' from 'the two arms sample different trajectories'. If the drop is explained or shown benign, the lever is worth taking -- it is cheaper and smaller and better on motion. Owner: stage 07."
