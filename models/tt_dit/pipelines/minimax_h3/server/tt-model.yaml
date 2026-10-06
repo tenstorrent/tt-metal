@@ -61,6 +61,11 @@ runtime:
     - "huggingface_hub"                  # weights + adapter resolution against the mounted /hf cache
     - "transformers==5.12.1"             # Qwen3VLForConditionalGeneration (host conditioner) + Auto{Tokenizer,ImageProcessor,VideoProcessor}
     - "tokenizers"
+    - "torchvision"                      # transformers 5 gates Auto{Image,Video}Processor on torchvision, and the
+                                         # pipeline builds an image processor for EVERY request, t2va included.
+                                         # `from transformers import AutoImageProcessor` succeeds without it (the
+                                         # backend check only fires on attribute access), so only a real
+                                         # from_pretrained call catches this -- a verify line cannot.
     - "imageio-ffmpeg>=0.5"              # the ffmpeg binary the engine muxes h264 + AAC with
     - "loguru"
     - "pyyaml"
@@ -116,6 +121,11 @@ verify:
   - "import models.tt_dit.models.audio_vae.minimax_h3.decoder_minimax_h3_audio"
   - "import models.tt_dit.experimental.lora.h3_adapter_loader as l; assert l"
   - "from transformers import AutoTokenizer, AutoImageProcessor, Qwen3VLForConditionalGeneration"
+  # The import above is NOT enough: transformers 5 gates Auto{Image,Video}Processor on torchvision and
+  # raises only when an attribute is touched, so the import succeeds in an image where every request
+  # would later die in `_build_presentation`. Touching `from_pretrained` runs the backend check here,
+  # at build time, without needing any weights.
+  - "from transformers import AutoImageProcessor, AutoVideoProcessor; AutoImageProcessor.from_pretrained; AutoVideoProcessor.from_pretrained"
   # The served point, the Turbo file, the LoRA scale and both shifts are read from this file at
   # boot; it is loaded with a silent-free `Path(__file__).with_name`, so omitting it from the
   # allowlist would be a boot crash with no other symptom.
