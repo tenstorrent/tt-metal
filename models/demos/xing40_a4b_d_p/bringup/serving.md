@@ -6,6 +6,13 @@ Serving contract for Xing4.0-29B-A4B (`xing40_a4b_d_p`), 4x2 Blackhole p150b, SP
 chunk 5120, max seq 56320 (11 chunks), 40 layers. Server paths are relative to tt-d-gen, tt-metal paths to tt-metal.
 Numbers below use W = chunk / sp = 1280.
 
+**Deployed geometry (2026-10-06): chunk 2048, max seq 4096, 1 slot**, to pair with the frozen Xing decode (tt-blaze
+xchin/xing4-integration @ 17edc80257: 1 slot x 4096 positions, bfp8 TILE 576-wide latent; its kernels are compiled for
+that cache). The values live in tt/settings.py (`SERVE_CHUNK` / `SERVE_MAX_SEQ` / `SERVE_SLOTS`, env `XING_SERVE_*`);
+the contract tests run at them (tests/bringup/contract/server_rules.py SCENARIOS). The rules below are geometry-free;
+their worked numbers are for the bring-up target 5120 / 56320 (W = 1280); at 2048 / 4096, W = 512. Prompt plus
+generation is at most 4096 tokens until decode is rebuilt with a deeper cache.
+
 ## 1. Prefill call sequence
 
 **Answer.** The server (prefill role) plans a request once, at admission: `base = align_down_32(resident)` where
@@ -191,18 +198,21 @@ budget bringup/plan.md:8, 127-146.
 **Answer.** Two configs must agree.
 
 Server worker config (`runtime` / `device.prefill`), schema as models/deepseek-r1/dynamo.disagg.prefill.json:26-64:
-`role: prefill`, `layers_per_chunk: 40`, `max_slots: N` (= PREFILL_NUM_USERS), `max_seq_len: 56320`,
-`chunk_size: 5120`, `kv_block_size` (64 shipped; see section 1 and the audit: 0 until the model takes unaligned starts),
+`role: prefill`, `layers_per_chunk: 40`, `max_slots: 1` (= PREFILL_NUM_USERS = the decode's slots), `max_seq_len: 4096`
+(= the decode's cache depth), `chunk_size: 2048`, `kv_block_size` (64 shipped; see section 1 and the audit: 0 until the model takes unaligned starts),
 `min_copy_tokens` (256 shipped; only acts with kv_block_size > 0), `kv_num_layers: 40` (migrate range [0, 40)),
 `device.prefill.sp_factor: 4`, `service_id` = PREFILL_H2D_SERVICE_ID, `ack_shm_name: /tt_prefill_layer_acks_<service_id>`.
 Dynamo validates `min_disagg_tokens > kv_block_size` (adapters/dynamo/tt_dynamo/config.py:649-654).
 
 tt-metal runner env (rank binding `global_env`, tt-run does not forward shell PREFILL_*):
 `PREFILL_MODEL=xing40_a4b_d_p`, `PREFILL_SP=4`, `PREFILL_TP=2`, `PREFILL_FABRIC_MODE=2d`, `PREFILL_NUM_LAYERS=40`,
-`PREFILL_CHUNK_SIZE=5120`, `PREFILL_MAX_SEQ_LEN=56320`, `PREFILL_NUM_USERS=N`, `PREFILL_H2D_SERVICE_ID=<id>`,
+`PREFILL_CHUNK_SIZE=2048`, `PREFILL_MAX_SEQ_LEN=4096`, `PREFILL_NUM_USERS=1`, `PREFILL_H2D_SERVICE_ID=<id>`,
 `PREFILL_LAYER_ACK_D2H=0`, `PREFILL_USE_TRACE=0` (no capture_trace), migration: `PREFILL_ENABLE_MIGRATION=1`
 (+ `PREFILL_MIGRATION_EXPORT_TO_FILE`, table / device-map paths) or `PREFILL_MOCK_MIGRATION=1` for the read-back
-test. `PREFILL_XING_LAYERS` must be unset (or equal to all 40) in serving.
+test. `PREFILL_XING_LAYERS` must be unset (or equal to all 40) in serving. Keep `XING_KV_CACHE_DTYPE` unset (bfp8): bf16
+makes the record 36864 B and the KV Manager's pairing with the decode table fails. These three values are the
+deployment geometry (tt/settings.py SERVE_*); the bring-up target (5120 / 56320 / 16) returns when decode is rebuilt
+with a deeper cache, and max_seq must then stay a multiple of both the chunk and decode's 4096 stride.
 
 Defaults that are wrong for this box: `PREFILL_SP=8`, `PREFILL_TP=4` (prefill_runner.py:74-75), fabric
 `FABRIC_2D_TORUS_XY` when PREFILL_FABRIC_MODE is unset (runner_utils.py:23-38; owner rule is FABRIC_2D),

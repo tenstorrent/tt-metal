@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Prefill-server KV-cache contract for Xing4.0 on a 4x2 mesh (SP = 4 over axis 0 x TP = 2 over axis 1).
+"""Prefill-server KV-cache contract for Xing4.0 on an SP x TP mesh (SP over axis 0 x TP over axis 1, from mesh.shape;
+4x2 on the LoudBox).
 
 The engine-owned cache IS the model's device state: TtMlaAttention writes and gathers it in place (``bind_cache``),
 so there is no copy and nothing to sync but the layer itself.
 
-  * ``kvpe`` [num_users * L, 1, max_seq / 4, 576] bfp8_b TILE per chip: the MLA latent cache
+  * ``kvpe`` [num_users * L, 1, max_seq / SP, 576] bfp8_b TILE per chip: the MLA latent cache
     (kv_a_layernorm(latent 512) | RoPE(k_pe 64), interleaved RoPE in checkpoint order, as the golden kv_latent);
     batch = slot * L + layer row (L = served layers). bfp8_b TILE is the one 576-wide format both ring_mla (TILE
     only) and the server's KV tools (tools/launch_harness/tables.py keys the geometry on the record size: 19584 B =
@@ -15,13 +16,13 @@ so there is no copy and nothing to sync but the layer itself.
     XING_KV_CACHE_DTYPE=bf16 switches both to the K.1 bf16 TILE cache.
 
 It is an ``init_kvpe_cache(tp_axis=None)`` cache, the layout of the attention's own geometry cache: DRAM NdShard
-[1, 1, 32, 576] ROUND_ROBIN_1D over the DRAM banks, block-cyclic over the 4 mesh rows with the model's chunk as the
-period (row r holds positions j * chunk + r * chunk / 4 + [0, chunk / 4) of every slab j), replicated over the 2
-columns (both columns compute the all-reduced kv and write their own copy). The table's period is the served chunk
+[1, 1, 32, 576] ROUND_ROBIN_1D over the DRAM banks, block-cyclic over the SP mesh rows with the model's chunk as the
+period (row r holds positions j * chunk + r * chunk / SP + [0, chunk / SP) of every slab j), replicated over the TP
+columns (every column computes the all-reduced kv and writes its own copy). The table's period is the served chunk
 (the DeepSeek builder hard-codes 5120), so this module walks it itself.
 
-Address table: config "0" = kvpe on the layer axis 0..L-1. One device group per mesh row holding both column
-replicas (MeshCoordinate(r, 0), (r, 1)), as the DeepSeek TP-replicated table. Entry = one 32-token block: 18 bfp8
+Address table: config "0" = kvpe on the layer axis 0..L-1. One device group per mesh row holding all its column
+replicas (MeshCoordinate(r, 0) .. (r, TP - 1)), as the DeepSeek TP-replicated table. Entry = one 32-token block: 18 bfp8
 tiles (19584 B). With the runner's gathered ``stage_layout`` (single stage) the base address, bank count, chips and
 host tag come from it, as DeepSeek's populate_kv_chunk_address_table_block_cyclic.
 """
@@ -34,7 +35,6 @@ import torch
 
 import ttnn
 
-MESH = (4, 2)
 BLOCK = 32  # tokens per DRAM bank shard / table entry
 KV_WIDTH = 576
 
@@ -47,9 +47,10 @@ def cache_dtype():
     return kv_cache_dtype()
 
 
-def chip_of(pos: int, chunk: int) -> tuple[int, int]:
-    """Natural position -> (mesh row, local row) in the block-cyclic cache (inverse of update_padded_kv_cache)."""
-    q = chunk // MESH[0]
+def chip_of(pos: int, chunk: int, sp: int) -> tuple[int, int]:
+    """Natural position -> (mesh row, local row) in the block-cyclic cache over sp mesh rows (inverse of
+    update_padded_kv_cache)."""
+    q = chunk // sp
     slab, off = divmod(pos, chunk)
     return off // q, slab * q + off % q
 
@@ -61,8 +62,9 @@ class XingContractKV:
         from models.demos.common.prefill.runners.migration import get_num_dram_banks
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
-        assert tuple(mesh.shape) == MESH, f"Xing contract cache is built for a 4x2 mesh, got {mesh.shape}"
-        assert max_seq % chunk == 0 and chunk % (BLOCK * MESH[0]) == 0, (max_seq, chunk)
+        self.mesh_shape = tuple(mesh.shape)
+        assert len(self.mesh_shape) == 2, f"Xing contract cache wants a 2D mesh, got {mesh.shape}"
+        assert max_seq % chunk == 0 and chunk % (BLOCK * self.mesh_shape[0]) == 0, (max_seq, chunk, self.mesh_shape)
         self.mesh, self.layers = mesh, list(layers)
         self.max_seq, self.chunk, self.num_users = max_seq, chunk, num_users
         self.num_banks = get_num_dram_banks(mesh)
@@ -70,7 +72,7 @@ class XingContractKV:
             KV_WIDTH,
             mesh,
             max_seq,
-            MESH,
+            self.mesh_shape,
             0,
             len(self.layers),
             num_users=num_users,
@@ -94,9 +96,8 @@ class XingContractKV:
         L = len(self.layers)
         nbytes = self.entry_bytes(self.kvpe)
         base, num_banks, host = int(self.kvpe.buffer_address()), self.num_banks, socket.gethostname()
-        fnids = [
-            [self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(r, c)) for c in range(MESH[1])] for r in range(MESH[0])
-        ]
+        sp, tp = self.mesh_shape
+        fnids = [[self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(r, c)) for c in range(tp)] for r in range(sp)]
         if stage_layout is not None:
             assert len(stage_layout) == 1, "single-rank table: one stage"
             st = stage_layout[0]
@@ -114,17 +115,17 @@ class XingContractKV:
             }
         )
         groups = []
-        for r in range(MESH[0]):
+        for r in range(sp):
             groups.append(table.add_device_group(list(fnids[r])))
             for fid in fnids[r]:
                 table.set_fabric_node_host(fid, host_name=host)
         cid = table.config_id_of("0")
-        blocks_per_batch = (self.max_seq // MESH[0]) // BLOCK
+        blocks_per_batch = (self.max_seq // sp) // BLOCK
         for slot in range(self.num_users):
             for row in range(L):
                 b = slot * L + row
                 for pos in range(0, seq_len, BLOCK):
-                    chip_row, lr = chip_of(pos, self.chunk)
+                    chip_row, lr = chip_of(pos, self.chunk, sp)
                     # ROUND_ROBIN_1D: shard j (row-major over [batch, rows / 32]) lives in bank j % B at j // B.
                     j = b * blocks_per_batch + lr // BLOCK
                     loc = D.KvCacheLocation()

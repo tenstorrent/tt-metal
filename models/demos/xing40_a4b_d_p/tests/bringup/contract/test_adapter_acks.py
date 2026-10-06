@@ -7,16 +7,18 @@
 The adapter builds a 2-layer runtime (PrefillRunParams.num_layers = 2) with 2 slots, exports its table the way the
 runner's migration path does (stages -> allgather_kv_stage_layouts -> build_kv_chunk_table(..., first_layer_idx,
 num_my_layers, stage_layout)), and gets the server's chunks as the H2D stream delivers them (PAD_ID tail,
-ring_sdpa_reshuffle by actual_start, [4, 1, 1280] uint32 sharded over axis 0). Plan, interleaved round-robin
-(server_rules.interleave): slot 0 turns 3000 then 9000 (follow-up from the 2944 resident prefix), slot 1 turn 6000.
+ring_sdpa_reshuffle by actual_start, [sp, 1, chunk / sp] uint32 sharded over axis 0). Plan, interleaved round-robin
+(server_rules.interleave) of server_rules.SCENARIOS "acks"; at chunk 2048 / max_seq 4096: slot 0 turns 1000 then 3500
+(follow-up from the 960 resident prefix), slot 1 turn 3000 [5120 / 56320: 3000 then 9000 from 2944; 6000].
 
 Inside every ack (the host layer-completion sink, the shipped single-rank transport) the test reads that layer's
 records for the chunk through the table over UMD, as the KV Manager does, and checks them. Pass:
   - acks: one per layer per chunk, in layer order, global layer ids, the request_id passed through
   - at each ack: [actual_start, actual_end) of that layer vs the golden (kv_dump_compare per-channel PCC >= 0.97),
     the pad rows of the last record zero, every chip of the record's device group holding the same bytes
-  - at the end: each slot's [0, end) vs the golden; slot 0's reused prefix [0, 2944) byte-identical to what turn 1's
-    acks shipped, its last block [2944, 3000) PCC >= 0.99 against it (the harness's source / destination rule)
+  - at the end: each slot's [0, end) vs the golden; slot 0's reused prefix [0, resident) byte-identical to what turn
+    1's acks shipped, its last block [resident, turn 1) PCC >= 0.99 against it (the harness's source / destination
+    rule)
   - the table: tables.read_table and layout accept it, every (slot, layer, pos < max_seq) record present, one size,
     no two records on one address; decoded with the harness's geometry it is the KV the model wrote
 """
@@ -32,7 +34,7 @@ S = spec()
 pytestmark = device_timeout(S)
 
 N_LAYERS, N_SLOTS = 2, 2
-TURNS = {0: [3000, 9000], 1: [6000]}
+TURNS = R.scenario()["acks"]
 
 
 @mesh_parametrize
