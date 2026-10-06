@@ -312,5 +312,23 @@ def create_bevformer_layer_parameters(layer, device, dtype=DEFAULT_DTYPE):
 
 
 def create_bevformer_encoder_parameters(encoder, device, dtype=DEFAULT_DTYPE):
-    """``reference.encoder.BEVFormerEncoder`` as TTBEVFormerEncoder takes it, one entry per layer."""
-    return SimpleNamespace(layers=[create_bevformer_layer_parameters(layer, device, dtype) for layer in encoder.layers])
+    """``reference.encoder.BEVFormerEncoder`` as TTBEVFormerEncoder takes it: one entry per layer,
+    and the encoder's configuration, so the port cannot disagree with the model it was built from."""
+    config = SimpleNamespace(
+        **{
+            name: getattr(encoder, name)
+            for name in (
+                "embed_dims",
+                "num_heads",
+                "num_levels",
+                "num_points",
+                "num_cams",
+                "tsa_num_points",
+                "num_points_in_pillar",
+                "pc_range",
+            )
+        }
+    )
+    return SimpleNamespace(
+        config=config, layers=[create_bevformer_layer_parameters(layer, device, dtype) for layer in encoder.layers]
+    )

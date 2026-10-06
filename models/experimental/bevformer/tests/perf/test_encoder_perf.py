@@ -6,15 +6,14 @@
 Inputs shaped like ``test_encoder``'s second frame, a smooth random previous BEV and an ego
 shift: a PCC gate that doubles as the warmup, then the forward captured as a trace and one
 signposted replay, so the report covers already-compiled programs with no host dispatch in
-between. ``num_layers=1``
-measures a single layer.
+between. ``num_layers=1`` measures a single layer.
 
 The camera geometry (``prepare_frame``) runs before the capture, once per frame as in the
 detector, which refills the same plan for every later frame. The capture is also the check that
 the forward has no host operations: any read or write between host and device inside a capture
-region fails it. After the profiled replay, the trace replays once more on the next frame (a new
-previous BEV and shift written into the captured buffers, the plan refilled in place), checked
-against the reference.
+region fails it. After the profiled replay, the trace replays once more on the next frame of the
+same rig: a new previous BEV and shift written into the captured buffers and the plan refilled
+in place with the same geometry, checked against the reference.
 """
 
 import subprocess
@@ -121,8 +120,8 @@ def test_encoder_perf(device, reset_seeds, num_layers):
 
     try:
         check(torch_output, tt_output)
-        # The next frame through the same trace: a new previous BEV and shift written into the
-        # captured buffers and the plan refilled in place, so the replay must read them.
+        # The next frame of the same rig through the same trace: the replay must read the new
+        # previous BEV and shift from the captured buffers; the refilled plan keeps its geometry.
         next_prev_bev = random_bev((bev_h, bev_w), 1, torch.Generator().manual_seed(2))
         next_shift = -2 * shift
         ttnn.copy_host_to_device_tensor(

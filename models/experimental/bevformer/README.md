@@ -54,7 +54,10 @@ against upstream's modules, run on CPU with the checkpoint's weights.
   the points' precision. The forward then runs on device only and can be traced.
 - The plan's device buffers have a fixed capacity per camera. `prepare_frame(img_metas, plan=plan)`
   refills them in place for the next frame, so a trace captured with the plan replays on every
-  later frame; give the first `prepare_frame` a `capacity` that covers every rig it will see.
+  later frame. By default the first `prepare_frame` sizes the plan for its own frame only; a plan
+  that later frames refill needs a `capacity` covering every rig it will see, a bound for the rig or
+  `full_capacity(bev_h * bev_w)`, which runs the deformable attention on every query per camera
+  (with nuScenes' rig the busiest camera sees about a quarter of the base grid).
   `tests/perf/test_encoder_perf.py` captures the forward as a trace, which fails on any host read
   or write, and replays it on the next frame.
 - As upstream, with batch size above 1 every sample gathers the queries the first sample's cameras
@@ -116,10 +119,11 @@ range filter.
 ```
 models/experimental/bevformer/
 ├── config/             # Configuration files and model parameters
-│   └── encoder_config/ # Encoder-specific configurations
+│   └── encoder_config/ # Dataset presets (camera rigs, point-cloud ranges) for the tests
 ├── reference/          # PyTorch reference implementation
 ├── tests/              # All tests together
-│   └── pcc/            # Unit tests for individual components
+│   ├── pcc/            # Unit tests for individual components
+│   └── perf/           # Traced device-perf harnesses (backbone and FPN, encoder)
 └── tt/                 # TTNN optimized implementation
 ```
 
@@ -232,7 +236,7 @@ Tests the six-layer encoder over two consecutive frames.
 
 **What it tests:**
 - The base (200x200) BEV grid with six layers and with one, the tiny (50x50) grid with batch sizes
-  1 and 2, and a non-square 50x100 grid
+  1 and 2 (per-sample shifts, the second sample's rig turned), and a non-square 50x100 grid
 - Two frames: the first without a previous BEV, the second with each side's own first-frame output
   as its previous BEV and an ego shift, so the device's error is carried forward as in the
   detector; PCC 0.997 on both frames' outputs
@@ -265,7 +269,8 @@ pytest models/experimental/bevformer/tests/pcc/test_temporal_self_attention.py
 Tests the spatial cross-attention alone, with a rebatch plan from `build_rebatch_plan`, on the
 tiny, base and non-square grids, CARLA's rig, batch size 2 with the second sample's rig turned, a
 frame no camera sees (an empty plan) and a frame that fills the plan exactly. PCC 0.999 on the
-output and on the attended part alone. `test_rebatch_plan_update` refills a plan in place for
+output and on the attended part alone, except for the empty plan, whose attended part is the output
+projection's bias alone. `test_rebatch_plan_update` refills a plan in place for
 another rig.
 
 **Usage:**
@@ -342,4 +347,4 @@ The encoder, decoder and head take plain constructor arguments; their defaults a
 
 `config/encoder_config/` holds dataset presets (camera rigs, image sizes, point-cloud ranges) and the
 deformable-attention model sizes the multi-scale deformable attention and point-sampling tests use;
-the encoder tests take only its camera rigs.
+the encoder tests take only its camera rigs and point-cloud ranges.

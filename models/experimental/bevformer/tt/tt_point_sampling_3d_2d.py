@@ -5,8 +5,9 @@
 
 Not on the encoder's path: ``TTBEVFormerEncoder.prepare_frame`` projects once per frame in
 float32 on the host (``point_sampling_3d_2d.camera_geometry``), as upstream does, because in
-bfloat16 the projection's homogeneous divide loses the points' precision. This bfloat16 port and
-its test (``tests/pcc/test_point_sampling_3d_2d.py``) remain for on-device projection.
+bfloat16 the projection's homogeneous divide loses the points' precision. This bfloat16 port
+(tested by ``tests/pcc/test_point_sampling_3d_2d.py``) is for on-device projection; the encoder
+does not use it.
 """
 
 import ttnn
