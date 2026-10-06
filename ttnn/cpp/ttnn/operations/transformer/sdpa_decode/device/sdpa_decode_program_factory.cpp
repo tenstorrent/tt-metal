@@ -470,13 +470,20 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
                                        : tt::DataFormat::Float16_b;
     const tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    const tt::DataFormat im_df = tt::DataFormat::Float16_b;
-    const tt::DataFormat stats_df = tt::DataFormat::Float16_b;
-    // QK scores stay in fp32 when DEST accumulates in fp32, as the SDPA prefill factory does
-    // (fp32_dest_intermediate_dataformat). Packing raw scores to bf16 before the running max is
-    // subtracted costs up to |score| * 2^-9, which reorders near-tied keys once logits reach the
-    // thousands (#44295).
-    const tt::DataFormat qk_im_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    // With fp32_dest_acc_en every softmax intermediate stays in fp32 across CB round trips: the QK
+    // scores / P (c_24), the running max and sum, the exp-max-diff corrections, the partial outputs,
+    // and the per-core (m, l, O) partials exchanged by the cross-core tree reduction (c_16..c_19).
+    // Packing raw scores to bf16 before the running max is subtracted costs up to |score| * 2^-9,
+    // which reorders near-tied keys once logits reach the thousands (#44295); bf16 partials re-round
+    // the online-softmax state once per K chunk and once per reduction round. All intermediates
+    // share one format so the kernel's format-agnostic moves between them stay valid.
+    const tt::DataFormat fp32_im_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const tt::DataFormat im_df = fp32_im_df;
+    const tt::DataFormat stats_df = fp32_im_df;
+    const tt::DataFormat qk_im_df = fp32_im_df;
+    // The attention sink is DMA'd tile-for-tile from a BF16 DRAM tensor (validated), so its CB keeps
+    // the tensor's format.
+    const tt::DataFormat sink_df = tt::DataFormat::Float16_b;
 
     // ========== Tile Configurations ==========
     const auto half_tile = tt::tt_metal::Tile({16, 32});
@@ -529,6 +536,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t im_tile_size = im_tile.get_tile_size(im_df);
     const uint32_t qk_im_tile_size = im_tile.get_tile_size(qk_im_df);
     const uint32_t stats_tile_size = stats_tile.get_tile_size(stats_df);
+    const uint32_t sink_tile_size = stats_tile.get_tile_size(sink_df);
 
     // ========== Debug Logging ==========
     log_debug(tt::LogOp, "Dimensions: B={}, PNH={}, S={}, DH={}, vDH={}, Bkv={}", B, PNH, S, DH, vDH, Bkv);
@@ -612,7 +620,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     add_cb(CBIndex::c_2, v_tiles * v_tile_size, v_df, v_tile_size);                        // V input
     add_cb(CBIndex::c_3, qk_tiles * mask_tile_size, mask_df, mask_tile_size, &mask_tile);  // attn_mask
     if (use_attention_sink) {
-        add_cb(CBIndex::c_4, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+        add_cb(CBIndex::c_4, statistics_tiles * sink_tile_size, sink_df, sink_tile_size, &stats_tile);
     }
     add_cb(CBIndex::c_5, scale_tiles * scalar_tile_size, scalar_df, scalar_tile_size, &scalar_tile);   // scale
     add_cb(CBIndex::c_6, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);  // m_in
