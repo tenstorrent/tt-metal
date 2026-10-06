@@ -7,17 +7,7 @@ from typing import ClassVar, FrozenSet
 
 from helpers.format_config import DataFormat
 
-from ..data_transfer_blocks import DataTransferBlocks
-
-#: Block float is the Wormhole/Blackhole answer to what MX does on Quasar.
-_BFP_FORMATS = frozenset(
-    {
-        DataFormat.Bfp8,
-        DataFormat.Bfp8_b,
-        DataFormat.Bfp4_b,
-        DataFormat.Bfp2_b,
-    }
-)
+from ..data_transfer_blocks import BLOCK_FLOAT_FORMATS, DataTransferBlocks
 
 
 class WormholeDataTransferBlocks(DataTransferBlocks):
@@ -30,16 +20,19 @@ class WormholeDataTransferBlocks(DataTransferBlocks):
     it, so there is no codec to pack or unpack one.
     """
 
-    SUPPORTED_L1_FORMATS: ClassVar[FrozenSet[DataFormat]] = _BFP_FORMATS | frozenset(
-        {
-            DataFormat.Float32,
-            DataFormat.Tf32,
-            DataFormat.Float16,
-            DataFormat.Float16_b,
-            DataFormat.Int32,
-            DataFormat.UInt32,
-            DataFormat.UInt16,
-            DataFormat.Int8,
-            DataFormat.UInt8,
-        }
+    SUPPORTED_L1_FORMATS: ClassVar[FrozenSet[DataFormat]] = (
+        BLOCK_FLOAT_FORMATS
+        | frozenset(
+            {
+                DataFormat.Float32,
+                DataFormat.Tf32,
+                DataFormat.Float16,
+                DataFormat.Float16_b,
+                DataFormat.Int32,
+                DataFormat.UInt32,
+                DataFormat.UInt16,
+                DataFormat.Int8,
+                DataFormat.UInt8,
+            }
+        )
     )
