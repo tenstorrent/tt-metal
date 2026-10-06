@@ -19,6 +19,12 @@
 // callers pass base_addr = cb_write_address(...) and a compile-time page_stride derived from the output
 // descriptor (fifo_page_size == a single tile size assumption -- see experimental/2_0/llk_pack_untilize.h).
 
+// Never defined: a call that survives constant folding fails the kernel build.
+[[gnu::error(
+    "pack untilize: an Fp8_e4m3 output in one-tile blocks of a wider row writes 32 bytes of zeros after every row "
+    "(tt-metal#59140); split the row into blocks of two or more tiles")]] void
+llk_pack_untilize_fp8_one_tile_block_unsupported();
+
 template <
     std::uint32_t block_ct_dim = 8,
     std::uint32_t full_ct_dim = block_ct_dim,
@@ -31,6 +37,13 @@ inline void llk_pack_untilize_init_impl(
     const std::uint32_t face_r_dim,
     const std::uint32_t num_faces) {
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format, pack_dst_format));
+    if constexpr (block_ct_dim == 1 && full_ct_dim > 1 && !narrow_row) {
+        // A kernel with a compile-time output format is refused at build time; the LLK asserts otherwise.
+        if (__builtin_constant_p(pack_dst_format) &&
+            pack_dst_format == static_cast<std::uint32_t>(DataFormat::Fp8_e4m3)) {
+            llk_pack_untilize_fp8_one_tile_block_unsupported();
+        }
+    }
 
     if constexpr (narrow_row || row_num_datums != TILE_C_DIM) {
         // Narrow-row packing is not modelled yet: https://github.com/tenstorrent/tt-metal/issues/56088

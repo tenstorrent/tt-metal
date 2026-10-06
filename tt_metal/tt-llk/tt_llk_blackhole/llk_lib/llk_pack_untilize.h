@@ -347,6 +347,10 @@ inline void _llk_pack_untilize_init_(
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(!dense || (num_faces == 2), "num_faces must be 2 when dense");
     LLK_ASSERT(num_faces < 4 || face_r_dim == FACE_R_DIM, "four faces need full face rows");
+    // Each row of a one-tile block is its own 32-datum stream, and an Fp8_e4m3 stream pads to 64 datums (#59140).
+    LLK_ASSERT(
+        !(block_ct_dim == 1 && full_ct_dim > 1 && !narrow_row && static_cast<DataFormat>(pack_dst_format) == DataFormat::Fp8_e4m3),
+        "an Fp8_e4m3 output needs blocks of two or more tiles when a row has several blocks");
 
     if constexpr (narrow_row)
     {

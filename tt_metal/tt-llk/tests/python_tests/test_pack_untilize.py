@@ -115,7 +115,9 @@ def test_pack_untilize_rows(
         and block_ct_dim == 1
         and block_ct_dim * 32 < input_dimensions[1]
     ):
-        pytest.skip("An 8-bit block row of one tile clobbers the next 32 bytes, #59140")
+        pytest.skip(
+            "An Fp8_e4m3 block row of one tile pads the next 32 bytes and is refused, #59140"
+        )
     _check_pack_untilize(
         formats, dest_acc, input_dimensions, DestSync.Half, 0, block_ct_dim or None
     )

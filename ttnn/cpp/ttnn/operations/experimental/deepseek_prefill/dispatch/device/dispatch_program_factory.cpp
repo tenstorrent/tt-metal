@@ -274,6 +274,11 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     while (full_ct_dim_dispatch % block_ct_dim_dispatch != 0) {
         --block_ct_dim_dispatch;
     }
+    TT_FATAL(
+        is_row_major || !operation_attributes.fp8_output || block_ct_dim_dispatch > 1 || full_ct_dim_dispatch == 1,
+        "fp8_output untilizes in blocks of two or more tiles, and hidden_size / 32 = {} has no divisor between 2 and 8 "
+        "(tt-metal#59140)",
+        full_ct_dim_dispatch);
 
     // ==================== Semaphores ====================
     // Per-entry credit, each kept on the consumer's L1 (producer NOC-incs):
