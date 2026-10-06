@@ -222,10 +222,9 @@ void kernel_main() {
         dfb_partial_obj.pop_front(static_cast<uint16_t>(num_tiles_per_partial_result * block_h));
 
         // Pop what the wait above acquired, under the same condition, so dfb_reduce_first_stage_obj
-        // is left balanced. The second-stage reader gathers from that buffer over the NOC after the
-        // signal; popping here is safe not because that read has finished, which nothing here
-        // enforces, but because no code on this core reserves that buffer again, so its pages are
-        // never overwritten.
+        // is left balanced. This pop is deliberately not ordered against the second-stage reader's
+        // NOC gather. It is safe because the producer reserves this buffer exactly once per kernel;
+        // see the note at that reserve in compute/layernorm_sharded_pre_allgather.cpp.
         if constexpr (is_all_to_all_worker) {
             dfb_reduce_first_stage_obj.pop_front(
                 static_cast<uint16_t>(num_tiles_per_partial_result * num_tiles_to_read));
