@@ -87,8 +87,10 @@ struct WorkerToFabricEdmSenderBase {
 
     WorkerToFabricEdmSenderBase() = default;
 
-    // sem_args_are_l1_addresses: take the teardown and buffer-index runtime args as raw L1
-    // addresses instead of resolving them as program semaphore ids.
+    // my_core_type identifies the programmable core executing this adapter and selects
+    // the core-specific address space used while resolving runtime arguments.
+    // sem_args_are_l1_addresses selects whether the teardown and producer-cursor arguments
+    // are program-semaphore IDs (default) or L1 addresses supplied directly.
     template <ProgrammableCoreType my_core_type, bool sem_args_are_l1_addresses = false>
     static WorkerToFabricEdmSenderBase build_from_args(std::size_t& arg_idx) {
         constexpr bool is_persistent_fabric = true;
