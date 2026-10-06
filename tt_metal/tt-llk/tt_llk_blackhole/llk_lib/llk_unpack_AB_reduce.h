@@ -248,6 +248,7 @@ inline void _llk_unpack_AB_reduce_block_(
     if (!contiguous)
     {
         // The tile stride for CFGSHIFTMASK, written in the instruction stream behind the CFGSHIFTMASKs of an earlier block
+        // SCRATCH_SEC0 is shared: the tilize, tilizeA_B and compressed custom_mm inits set it and run again after this
         TT_SETDMAREG(0, LOWER_HALFWORD(tile_stride_16B), 0, LO_16(p_gpr_unpack::TMP0));
         TT_SETDMAREG(0, UPPER_HALFWORD(tile_stride_16B), 0, HI_16(p_gpr_unpack::TMP0));
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
@@ -288,6 +289,7 @@ inline void _llk_unpack_AB_reduce_block_(
                 if (contiguous)
                 {
                     TTI_UNPACR(Srcs::SrcB, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                    // Z runs past the tile's Z dim into the next tile, linear in L1 (as in the block row max)
                     TTI_INCADCZW(data_unp, 0, 0, 0, 4);
                 }
                 else
@@ -304,7 +306,8 @@ inline void _llk_unpack_AB_reduce_block_(
             {
                 if (contiguous)
                 {
-                    // The data Z counter runs on into the next tile; the scaler restarts at its first face
+                    // The data Z counter runs past the tile's Z dim into the next tile, linear in L1 (as in the block
+                    // row max); the scaler restarts at its first face
                     TTI_SETADCZW(scaler_unp, 0, 0, 0, 0, 0b1111);
                 }
                 else
