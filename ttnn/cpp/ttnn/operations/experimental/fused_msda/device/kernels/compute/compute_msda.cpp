@@ -49,13 +49,14 @@ constexpr uint32_t reduction_size = get_compile_time_arg_val(3);  // = 4 * L * P
 constexpr uint32_t n_d_tiles = get_compile_time_arg_val(4);       // = ceil(D / 32)
 
 void kernel_main() {
+    compute_kernel_hw_startup(input_cb_index, scalar_cb_index, output_cb_index);
+
     const uint32_t num_output_tiles = get_arg_val<uint32_t>(0);
 
     CircularBuffer input_cb(input_cb_index);
     CircularBuffer scalar_cb(scalar_cb_index);
     CircularBuffer output_cb(output_cb_index);
 
-    compute_kernel_hw_startup(input_cb_index, scalar_cb_index, output_cb_index);
     bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(input_cb_index, scalar_cb_index);
 
     for (uint32_t out = 0; out < num_output_tiles; ++out) {
