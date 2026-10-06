@@ -29,6 +29,7 @@ void kernel_main() {
     uint32_t num_output_blocks = get_arg_val<uint32_t>(6);
     uint32_t num_iterations = get_arg_val<uint32_t>(7);
     uint32_t blocks_per_row = get_arg_val<uint32_t>(8);  // Nt / kBlockN
+    uint32_t total_output_blocks = get_arg_val<uint32_t>(9);
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
@@ -43,7 +44,9 @@ void kernel_main() {
 
     for (uint32_t iter = 0; iter < num_iterations; iter++) {
         for (uint32_t blk = 0; blk < num_output_blocks; blk++) {
-            const uint32_t block_id = block_start_id + blk;
+            // Wrap so that in fixed mode a core whose range runs past the last block starts
+            // over at block 0 instead of reading past the end of A and B.
+            const uint32_t block_id = (block_start_id + blk) % total_output_blocks;
             const uint32_t block_row = block_id / blocks_per_row;
             const uint32_t block_col = block_id % blocks_per_row;
             const uint32_t row0 = block_row * kBlockM;  // first output tile row in the block

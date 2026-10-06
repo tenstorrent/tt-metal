@@ -28,6 +28,7 @@ void kernel_main() {
     uint32_t write_repeats = get_arg_val<uint32_t>(4);
     uint32_t blocks_per_row = get_arg_val<uint32_t>(5);  // Nt / kBlockN
     uint32_t Nt = get_arg_val<uint32_t>(6);
+    uint32_t total_output_blocks = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t cb_id_out = tt::CBIndex::c_16;
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
@@ -37,7 +38,8 @@ void kernel_main() {
 
     for (uint32_t iter = 0; iter < num_iterations; iter++) {
         for (uint32_t blk = 0; blk < num_output_blocks; blk++) {
-            const uint32_t block_id = block_start_id + blk;
+            // Wrap the same way as the reader, so fixed mode never writes past the end of C.
+            const uint32_t block_id = (block_start_id + blk) % total_output_blocks;
             const uint32_t row0 = (block_id / blocks_per_row) * kBlockM;
             const uint32_t col0 = (block_id % blocks_per_row) * kBlockN;
 

@@ -71,7 +71,9 @@ Output block: 2x4 tiles  |  256 blocks  |  0.750 DRAM tile reads per multiply (1
 
 After each grid an `Output checksum: sum=... absmax=...` line is printed. The workload never
 verifies its output, so this is the only signal that the tile indexing is right: with the same
-inputs, shape and op, the checksum must be identical for every grid and every block size.
+inputs, shape and op, the checksum must be identical for every grid and every block size. This
+holds in split mode only: in fixed mode the cores may not cover every output block, so blocks
+nobody writes keep whatever DRAM held before.
 
 ## Tuning the workload
 

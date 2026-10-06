@@ -499,8 +499,9 @@ int main(int argc, char* argv[]) {
             for (const auto& [ranges, work_per_core] : work_groups) {
                 for (const auto& range : ranges.ranges()) {
                     for (const auto& core : range) {
-                        // In fixed mode each core starts at a different offset (wrapping) so
-                        // cores hit different DRAM addresses and don't serialise on the same bank.
+                        // In fixed mode each core starts at a different offset so cores hit
+                        // different DRAM addresses and don't serialise on the same bank. Both the
+                        // offset and the reader/writer block index wrap at total_output_blocks.
                         const uint32_t effective_offset = (fixed_tiles_per_core > 0)
                             ? (core_linear_idx * fixed_tiles_per_core) % total_output_blocks
                             : work_offset;
@@ -509,12 +510,13 @@ int main(int argc, char* argv[]) {
                             program, reader_id, core,
                             {src0_dram->address(), src1_dram->address(),
                              Mt, Kt, Nt,
-                             effective_offset, work_per_core, num_iterations, blocks_per_row});
+                             effective_offset, work_per_core, num_iterations, blocks_per_row,
+                             total_output_blocks});
 
                         tt_metal::SetRuntimeArgs(
                             program, writer_id, core,
                             {dst_dram->address(), work_per_core, effective_offset, num_iterations,
-                             write_repeats, blocks_per_row, Nt});
+                             write_repeats, blocks_per_row, Nt, total_output_blocks});
 
                         tt_metal::SetRuntimeArgs(
                             program, compute_id, core,
