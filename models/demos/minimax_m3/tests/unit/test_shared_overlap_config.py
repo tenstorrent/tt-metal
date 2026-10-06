@@ -229,7 +229,7 @@ def _moe_with_recorder(monkeypatch, overlap):
             log.append(("clear",))
 
     moe = object.__new__(TtMiniMaxMoE)
-    routing = (_T("offs"), _T("counts"), _T("regions"), _T("all_offs"))
+    routing = (_T("offs"), _T("counts"), _T("regions"), _T("histograms"), _T("all_offs"))
     moe.__dict__.update(
         mesh_device=SimpleNamespace(shape=(2, 4)),
         num_routed_experts=128,
