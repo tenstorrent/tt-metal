@@ -13,6 +13,7 @@ from models.experimental.bevformer.tests.encoder_common import (
     NUM_CAMS,
     SPATIAL_SHAPES,
     build_reference_encoder,
+    camera_rows,
     img_metas,
     pc_range,
     random_bev,
@@ -98,7 +99,9 @@ def test_spatial_cross_attention(device, reset_seeds, name, bev_shape, batch_siz
     plan = build_rebatch_plan(reference_points_cam, bev_mask, tt_model.embed_dims, device, GRID_DTYPE)
     if geometry == "full-plan":
         assert plan.capacity == FULL_PLAN_ROWS
-    tt_output = tt_model(_to_device(query, device), _to_device(inputs["value"], device), tt_model.frame_inputs(plan))
+    tt_output = tt_model(
+        _to_device(query, device), _to_device(camera_rows(inputs["value"]), device), tt_model.frame_inputs(plan)
+    )
     tt_output = ttnn.to_torch(tt_output).float().reshape(torch_output.shape)
     # comp_pcc zeroes NaN and Inf before correlating, so they must be ruled out here.
     assert torch.isfinite(tt_output).all(), "non-finite values in the cross-attention output"
@@ -126,6 +129,8 @@ def test_rebatch_plan_update(device, reset_seeds):
     update_rebatch_plan(plan, *second)
 
     torch_output = torch_model(query, inputs["value"], *second, torch.tensor(SPATIAL_SHAPES))
-    tt_output = tt_model(_to_device(query, device), _to_device(inputs["value"], device), tt_model.frame_inputs(plan))
+    tt_output = tt_model(
+        _to_device(query, device), _to_device(camera_rows(inputs["value"]), device), tt_model.frame_inputs(plan)
+    )
     tt_output = ttnn.to_torch(tt_output).float().reshape(torch_output.shape)
     assert_pcc(torch_output - query, tt_output - query, 0.999)

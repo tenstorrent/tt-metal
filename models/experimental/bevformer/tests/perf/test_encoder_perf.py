@@ -30,6 +30,7 @@ from models.experimental.bevformer.tests.encoder_common import (
     NUM_LAYERS,
     SPATIAL_SHAPES,
     build_reference_encoder,
+    camera_rows,
     ego_shift,
     random_bev,
     random_encoder_inputs,
@@ -93,7 +94,7 @@ def test_encoder_perf(device, reset_seeds, num_layers):
     # Uploaded once so the profiled replay measures the encoder, not the transfers.
     tt_inputs = dict(
         bev_query=_to_device(inputs["bev_query"].permute(1, 0, 2), device),
-        value=_to_device(inputs["value"], device),
+        value=_to_device(camera_rows(inputs["value"]), device),
         bev_pos=_to_device(inputs["bev_pos"].permute(1, 0, 2), device),
         plan=plan,
         prev_bev=_to_device(prev_bev.permute(1, 0, 2), device),
