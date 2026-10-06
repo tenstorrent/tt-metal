@@ -500,7 +500,7 @@ def prepare_cumsum_inputs(
 # Ops whose result depends on where in the tile a datum sits, so L1 has to hold a real tilized tile.
 # Every other op in this suite is element-wise and cannot tell a tilized buffer from a row-major one,
 # which is why the suite has always written the latter.
-LAYOUT_SENSITIVE_OPS = (MathOperation.Cumsum, MathOperation.ReshuffleRows)
+LAYOUT_SENSITIVE_OPS = (MathOperation.Cumsum,)
 
 
 def prepare_unary_inputs(
@@ -1407,6 +1407,12 @@ RESHUFFLE_MASKS = {
     ],
     "all_to_last": [DEFAULT_TILE_R_DIM - 1] * DEFAULT_TILE_R_DIM,
     "mixed": _reshuffle_mixed_mask(),
+    # Every non-sentinel out-of-range target must be skipped too, not just 255: 32 would alias
+    # into accumulator row 16, 47 into row 31, 48+ would walk into the next Dest tile.
+    "out_of_range": [
+        [32, 47, 48, 254, 64, 100, 128, 200][i % 8] if i % 2 else i
+        for i in range(DEFAULT_TILE_R_DIM)
+    ],
 }
 
 # Two tile rows of (input, accumulator) pairs: the second pair runs at a non-zero Dest index.
@@ -1436,20 +1442,20 @@ def _reshuffle_mask_buffer(mask: List[int]) -> torch.Tensor:
 
 @pytest.mark.quasar
 @parametrize(
-    reshuffle_variant_sync_mask=[
-        (variant, DestSync.Half, runtime(mask_name))
+    reshuffle_variant_mask=[
+        (variant, runtime(mask_name))
         for variant in generate_quasar_sfpu_format_variants(
             MathOperation.ReshuffleRows, SFPU_UNARY_FORMATS
         )
         for mask_name in RESHUFFLE_MASKS
     ],
 )
-def test_reshuffle_rows_quasar(reshuffle_variant_sync_mask):
+def test_reshuffle_rows_quasar(reshuffle_variant_mask):
     """
     reshuffle_rows against an exact oracle: every accumulator tile must equal its initial
     value plus the mask-selected input rows, and every input tile must come back unchanged.
     """
-    (format_variant, dest_sync, mask_name) = reshuffle_variant_sync_mask[0]
+    (format_variant, mask_name) = reshuffle_variant_mask[0]
     formats = format_variant.formats
     dest_acc = format_variant.dest_acc
     mask = RESHUFFLE_MASKS[mask_name]
@@ -1484,7 +1490,7 @@ def test_reshuffle_rows_quasar(reshuffle_variant_sync_mask):
                     if format_variant.unpack_to_dest
                     else UnpackerEngine.UnpA
                 ),
-                DEST_SYNC(dest_sync),
+                DEST_SYNC(DestSync.Half),
                 TYPECAST_FORMATS(),
             ],
             "runtimes": [

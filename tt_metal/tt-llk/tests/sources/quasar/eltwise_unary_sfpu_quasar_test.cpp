@@ -205,11 +205,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         if (i % 2 == 0)
                         {
                             test_utils::call_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, dest_sync, is_fp32_dest_acc_en, APPROX_MODE>(
-                                DST_INDEX + i,
+                                DST_INDEX + i /*dst_index*/,
                                 sfpu_in_format,
                                 true /*first*/,
-                                5.0f /*fill_const_value, unused*/,
-                                buffer_B[0] - RESHUFFLE_MASK_HEADER_BYTES);
+                                5.0f /*fill_const_value*/,
+                                buffer_B[0] - RESHUFFLE_MASK_HEADER_BYTES /*idx_addr*/);
                         }
                     }
                     else

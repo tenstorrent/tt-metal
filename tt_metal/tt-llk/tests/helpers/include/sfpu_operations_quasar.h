@@ -462,10 +462,6 @@ void init_unary_sfpu_operation_quasar()
         tanh_derivative_sech2_init<APPROX>();
     }
     // rsub_scalar_int32 is stateless: its compute API init is SFPU_UNARY_INIT(unused).
-    else if constexpr (OPERATION == SfpuType::reshuffle_rows)
-    {
-        reshuffle_rows_init();
-    }
 }
 
 /**
@@ -812,6 +808,10 @@ void call_unary_sfpu_operation_quasar(
     else if constexpr (OPERATION == SfpuType::reshuffle_rows)
     {
         // Whole-tile scatter-add from tile dst_index into tile dst_index + 1, run once per tile.
+        // _sfpu_check_ only validates dst_index, so bound the accumulator tile here as well.
+        LLK_ASSERT(
+            (dst_index + 1 < trisc::get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, trisc::DstTileShape::Tile32x32>()),
+            "reshuffle_rows accumulator tile dst_index + 1 exceeds max dest tiles");
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_reshuffle_rows, (APPROX), dst_index, VectorMode::RC_custom, idx_addr);
     }
     else if constexpr (OPERATION == SfpuType::floor)

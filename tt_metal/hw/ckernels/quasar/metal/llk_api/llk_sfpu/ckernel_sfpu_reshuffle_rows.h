@@ -38,6 +38,9 @@ constexpr std::uint32_t RESHUFFLE_OUTPUT_TILE_OFFSET =
 // Legacy tile-header bytes that precede the 32 destination-row mask bytes.
 constexpr std::uint32_t RESHUFFLE_MASK_HEADER_BYTES = 16;
 
+// SFPLOAD/SFPSTORE `done` immediate: no Dest-counter side effects on any quad access.
+constexpr std::uint32_t RESHUFFLE_SFPMEM_DONE = 0;
+
 // Input quad lives in LREG0-3, output quad in LREG4-7: the two banks SFPTRANSP swizzles independently.
 constexpr std::uint32_t RESHUFFLE_IN_BANK = p_sfpu::LREG0;
 constexpr std::uint32_t RESHUFFLE_OUT_BANK = p_sfpu::LREG4;
@@ -61,10 +64,30 @@ constexpr std::uint32_t _reshuffle_quad_addr_(const std::uint32_t row) {
  * @param quad_addr: Dest address of the quad, from @ref _reshuffle_quad_addr_.
  */
 inline void _reshuffle_load_quad_(const std::uint32_t bank, const std::uint32_t quad_addr) {
-    TT_SFPLOAD(bank + 0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, quad_addr + RESHUFFLE_LEFT_EVEN);
-    TT_SFPLOAD(bank + 1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, quad_addr + RESHUFFLE_LEFT_ODD);
-    TT_SFPLOAD(bank + 2, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, quad_addr + RESHUFFLE_RIGHT_EVEN);
-    TT_SFPLOAD(bank + 3, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, quad_addr + RESHUFFLE_RIGHT_ODD);
+    TT_SFPLOAD(
+        bank + 0 /*lreg_ind*/,
+        p_sfpu::sfpmem::DEFAULT,
+        ADDR_MOD_7,
+        RESHUFFLE_SFPMEM_DONE /*done*/,
+        quad_addr + RESHUFFLE_LEFT_EVEN /*dest_reg_addr*/);
+    TT_SFPLOAD(
+        bank + 1 /*lreg_ind*/,
+        p_sfpu::sfpmem::DEFAULT,
+        ADDR_MOD_7,
+        RESHUFFLE_SFPMEM_DONE /*done*/,
+        quad_addr + RESHUFFLE_LEFT_ODD /*dest_reg_addr*/);
+    TT_SFPLOAD(
+        bank + 2 /*lreg_ind*/,
+        p_sfpu::sfpmem::DEFAULT,
+        ADDR_MOD_7,
+        RESHUFFLE_SFPMEM_DONE /*done*/,
+        quad_addr + RESHUFFLE_RIGHT_EVEN /*dest_reg_addr*/);
+    TT_SFPLOAD(
+        bank + 3 /*lreg_ind*/,
+        p_sfpu::sfpmem::DEFAULT,
+        ADDR_MOD_7,
+        RESHUFFLE_SFPMEM_DONE /*done*/,
+        quad_addr + RESHUFFLE_RIGHT_ODD /*dest_reg_addr*/);
 }
 
 /**
@@ -75,20 +98,31 @@ inline void _reshuffle_load_quad_(const std::uint32_t bank, const std::uint32_t 
  * @note The bank must be in load order, i.e. post-involution - see @ref _calculate_reshuffle_rows_row_.
  */
 inline void _reshuffle_store_quad_(const std::uint32_t bank, const std::uint32_t quad_addr) {
-    TT_SFPSTORE(bank + 0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, quad_addr + RESHUFFLE_LEFT_EVEN);
-    TT_SFPSTORE(bank + 1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, quad_addr + RESHUFFLE_LEFT_ODD);
-    TT_SFPSTORE(bank + 2, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, quad_addr + RESHUFFLE_RIGHT_EVEN);
-    TT_SFPSTORE(bank + 3, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, quad_addr + RESHUFFLE_RIGHT_ODD);
+    TT_SFPSTORE(
+        bank + 0 /*lreg_ind*/,
+        p_sfpu::sfpmem::DEFAULT,
+        ADDR_MOD_7,
+        RESHUFFLE_SFPMEM_DONE /*done*/,
+        quad_addr + RESHUFFLE_LEFT_EVEN /*dest_reg_addr*/);
+    TT_SFPSTORE(
+        bank + 1 /*lreg_ind*/,
+        p_sfpu::sfpmem::DEFAULT,
+        ADDR_MOD_7,
+        RESHUFFLE_SFPMEM_DONE /*done*/,
+        quad_addr + RESHUFFLE_LEFT_ODD /*dest_reg_addr*/);
+    TT_SFPSTORE(
+        bank + 2 /*lreg_ind*/,
+        p_sfpu::sfpmem::DEFAULT,
+        ADDR_MOD_7,
+        RESHUFFLE_SFPMEM_DONE /*done*/,
+        quad_addr + RESHUFFLE_RIGHT_EVEN /*dest_reg_addr*/);
+    TT_SFPSTORE(
+        bank + 3 /*lreg_ind*/,
+        p_sfpu::sfpmem::DEFAULT,
+        ADDR_MOD_7,
+        RESHUFFLE_SFPMEM_DONE /*done*/,
+        quad_addr + RESHUFFLE_RIGHT_ODD /*dest_reg_addr*/);
 }
-
-/**
- * @brief Reset the RWC counters so the tile-relative Dest immediates start at the tile base.
- *
- * @note Call this before @ref calculate_reshuffle_rows. On Quasar the generic
- *       @ref _llk_math_sfpu_init_ already resets the same counters, so this exists for parity with
- *       the Blackhole/Wormhole API name that metal wires through SFPU_UNARY_INIT.
- */
-inline void reshuffle_rows_init() { math::_reset_counters_<p_setrwc::SET_ABD_F>(); }
 
 /**
  * @brief Accumulate input tile row `in_row` into accumulator tile row `out_row`.
@@ -119,7 +153,7 @@ inline void _calculate_reshuffle_rows_row_(const std::uint32_t in_row, const std
 
     // SFPADD is dest = a*b + c, so b = 1.0 makes it out = in + out. No SFPNOP before the dependent
     // SFPTRANSP - the hardware interlocks a dependent consumer of a 2-cycle MAD.
-    TT_SFPADD(in_reg, p_sfpu::LCONST_1, out_reg, out_reg, 0 /* instr_mod1: no negation */);
+    TT_SFPADD(in_reg /*lreg_a*/, p_sfpu::LCONST_1, out_reg /*lreg_c*/, out_reg /*lreg_dest*/, 0 /*instr_mod1*/);
 
     TTI_SFPTRANSP;
 
@@ -139,8 +173,9 @@ inline void _calculate_reshuffle_rows_row_(const std::uint32_t in_row, const std
  * @note Run this once per tile under VectorMode::RC_custom, not once per face - one call walks all
  *       RESHUFFLE_TILE_ROWS rows. It needs idst+1 to be a valid Dest tile, which the wrapper's
  *       _sfpu_check_ does not validate, and the caller packs idst+1 rather than idst.
- * @note Call @ref reshuffle_rows_init before this. The mask is read on the math RISC as plain
- *       volatile bytes, so ordering it against whoever wrote L1 is the caller's responsibility.
+ * @note Stateless: no init beyond `_llk_math_eltwise_sfpu_init_()`, whose RWC reset makes the
+ *       tile-relative Dest immediates start at the tile base. The mask is read on the math RISC as
+ *       plain volatile bytes, so ordering it against whoever wrote L1 is the caller's responsibility.
  */
 template <bool APPROXIMATION_MODE /*unused*/>
 inline void calculate_reshuffle_rows(const std::uint32_t idx_addr) {
