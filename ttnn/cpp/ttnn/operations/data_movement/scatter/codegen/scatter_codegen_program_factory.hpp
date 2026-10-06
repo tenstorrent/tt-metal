@@ -145,7 +145,9 @@ struct ScatterCodegenProgramFactoryInterleaved {
         const ScatterCodegenParams& attributes, const ScatterCodegenInputs& tensor_args, Tensor& output_tensor);
 };
 
-// TILE, chunked streaming fallback for rows too wide for the interleaved plan's L1 budget.
+// TILE, split by output column. Chosen by select_program_factory() when the interleaved plan's row
+// does not fit L1, or when the tile-row count underfills the grid while more than one output column
+// exists (Ht < column_cores && Wt_output > 1), so every core gets work.
 struct ScatterCodegenProgramFactoryStreaming {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const ScatterCodegenParams& attributes, const ScatterCodegenInputs& tensor_args, Tensor& output_tensor);
