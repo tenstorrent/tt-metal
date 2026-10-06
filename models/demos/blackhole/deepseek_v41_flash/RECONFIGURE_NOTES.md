@@ -120,7 +120,7 @@ first build ('model built', U=1): alloc 2955.8 MiB/bank, free 927.9, largest blo
 | B 16 -> 4 (ctx 16384 -> 8192) | 3.1 | 66.9 | 658.2 | 2550.3 / 1333.4 | 2961.4 / 922.2 / 835.6 | 0 / 38464 |
 
 Reconfigure time at 40 layers: 67-98 s (release 2-3 s) against 60-90 min for a build. The remaining DRAM difference at the end (alloc 2961.4 vs 2955.8 MiB/bank, largest block 835.6 vs 927.8) is the Engram `_w_rows`
-cache described above (fixed afterwards; see `s40b` below if present).
+cache described above (fixed afterwards, see 3b).
 
 Timings of the scenarios (same session, noisy host): B=4 TTFT 5.9 s (first build) / 2.8 s (after 4 reconfigures; grid 3.4 s), B=16 11.9 s (grid 9.4 s), B=64 45.5 s (grid 39.3 s), decode 43.4 / 43.9 / 63.9 ms/token
 (grid 45.0 / 42.7 / 65.5): no systematic difference after a reconfigure (the first, freshly built B=4 run of the same session was as slow as the reconfigured ones).
@@ -134,3 +134,18 @@ Timings of the scenarios (same session, noisy host): B=4 TTFT 5.9 s (first build
 * `kv_dtype` can change in a reconfigure (`DSV41_POOL_DTYPE`) but was not exercised; the layer set cannot change.
 * A speculative runner (`enable_spec`) is dropped by `Generator.reconfigure` and must be built again after the next prefill.
 * A reconfigure while a scenario failed half-way (open trace capture) is not attempted; the demo's failure hook releases the traces first.
+
+### 3b. 40 layers with the Engram-cache fix: `isl4k_b4, isl4k_b16, isl4k_b64, isl4k_b128, isl4k_b4` (`s40b`, 58 min including a 25 min build)
+Equal to the grid fresh-process runs for ALL users at B=4, 16, 64, 128 and B=4 again after four reconfigures.
+
+first build ('model built', U=1): alloc 2955.8 MiB/bank, free 927.9, largest block 927.8
+
+| reconfigure | release s | rebuild s | free MiB/bank before | weights only: alloc / free | after: alloc / free / largest block | L1 B/bank released / after |
+|---|---|---|---|---|---|---|
+| B 4 -> 16 (ctx 8192 -> 8192) | 1.7 | 86.5 | 832.6 | 2544.6 / 1339.0 | 2979.0 / 904.7 / 903.0 | 0 / 38848 |
+| B 16 -> 64 (ctx 8192 -> 8192) | 2.3 | 74.1 | 691.3 | 2544.6 / 1339.0 | 3071.6 / 812.1 / 809.8 | 0 / 40384 |
+| B 64 -> 128 (ctx 8192 -> 8192) | 2.3 | 69.5 | 729.8 | 2544.7 / 1339.0 | 3195.1 / 688.6 / 686.9 | 0 / 42432 |
+| B 128 -> 4 (ctx 8192 -> 8192) | 2.7 | 63.6 | 628.1 | 2544.7 / 1339.0 | 2955.8 / 927.9 / 926.5 | 0 / 38464 |
+
+After the last reconfigure (B=4) the allocation is again exactly that of the first build (2955.8 MiB/bank allocated, 927.9 free; largest block 926.5 vs 927.8), the weights-only
+level is constant (2544.6 -> 2544.7 MiB/bank), L1 allocated is 0 B after each release.
