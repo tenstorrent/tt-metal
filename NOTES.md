@@ -1,25 +1,27 @@
-# t48 notes: all LTX-2.5 wins on one branch
+# t158 — g15blx02 as a second 4x8 LTX-2.5 box (state at hand-off of run 645)
 
-Branch ttp/t48-ltx25-integrated (= ttp/t48-integrate-all-ltx-2-5-wins-on-one-branch), base t36 16ba9a383dc.
-Merged: t20+t40 (9e336c44b71, includes 0533827a419), t13 (eee3baf7c0d), t18 (63902277007),
-t44 tip (1968790b040 + its A/B harness), t8 ltx_eval harness. Python-only diff against t36.
+Done:
+- Worktree tt-project/worktrees/t158 on ttp/t158-g15blx02-ltx25-4x8 at bf7db12a149 (same hash as blx03 t48: c4409b1fa24 + t149 TT_FATAL guard).
+- Broker on g15blx02 healthy at 20:11 UTC (32 chips, HEALTH-GATE OK). Live ltx-host runs ~19 min jobs back to back; ours queues behind.
+- VAE source: /mnt/MLPerf .../LTX-2.3/.../ltx-2.3-22b-dev.safetensors. Its 170 vae.* tensors (1.45 GB) and VAE config are
+  byte-identical to blx03's ltx-2.3-22b-distilled-1.1 monolith (checked on blx03), so no local copy. The 2.5 test path uses
+  LTX_CHECKPOINT only for the skipif; GEMMA_PATH is unused (Gemma-4 comes from LTX25_ROOT).
+- Disk: freed build_Release of done tasks t60/t134 and removed clean, pushed worktrees t60, t81, t133, t149 (branches kept).
+  ~/fasth3 was 20 GB before staging. Plan: +72 GB caches, +2.2 build, +~1.4 VAE caches, +JIT -> ~97 GB (< 100).
+- Detached (ttp detach, run dir state/runs/645):
+  - t158-stage: rsync of the 8 4x8 cache dirs from g14blx03:/var/tmp/fasth3/cache/dit-ltx25 (read-only there) to
+    tt-project/data/g15/dit-ltx25. Script tt-project/data/g15/stage.sh. Done when t158-stage.rc exists (0 = ok).
+  - t158-build2: tmp/t158/build.sh (submodule init + ./build_metal.sh with python_env). Done when t158-build2.rc exists.
+  - (t158-build, the first attempt, failed: submodules missing. Ignore it.)
 
-Conflicts:
-- pipeline_ltx_distilled.py: t13 and t40 both capture the Gemma encode trace after gen #0. Kept t40's
-  open_trace_gate() + capture_trace() (guarded by _trace_captured). t13's open_trace_gate(capture_prompt=) was removed in t55 (no caller).
-- utils/video.py: t18's YuvVideoExport (worker-thread video encode) + t13's zero-copy frame wrap and start_encoding;
-  the AAC encode runs in finish() before joining the worker, so it overlaps the video encode as in t13.
-  test_yuv_export_encodes_audio_alongside_video now gates the video worker on the audio encode starting
-  (fails if finish() encodes audio after the join; checked).
-- test_ltx_export_latency.py: gemma -> gemma3 import path.
-
-CPU tests (python_env, PYTHONPATH=worktree): export/trace/eval/cache/ltx set (13 files) 78 passed, 8 skipped;
-13 pre-existing failures in test_ltx_euler_tail.py and test_ltx_embedding_cache_identity.py (they read
-models/tt_dit/encoders/gemma/, renamed to gemma3); same 13 fail on the t36 base tree.
-Fold CPU reference (--noconftest): 5 passed. The 78 include the ltx_eval harness (8) and the 13 export/trace tests.
-
-Device: not run (blx03 paused; full-mesh barred by the 22:10 rule). Ready job: tmp/READY_48.md, tmp/blx03/run48.sh.
-Next: when the user allows full-mesh runs on blx03, follow tmp/READY_48.md (setup, one job, timings, ltx_eval vs t20).
-
-t113: folded t100 47aecb9bdd7 (halo sweep harness + CPU test) and 118ed6de1f4 (conv3d _BLOCKINGS (4,8):
-s4_res (128,64,6,4,8), s1_up (128,64,5,2,16); bit-identical, traced decode 519.7 -> 506.2 ms, blx03 job 469, 544x960/145f).
+Next (one run):
+1. Check both rc files are 0 and `du -sh ~/fasth3` < 100 GB.
+2. A PreToolUse hook (reservation_cap.py) blocks broker timeouts > 600 s. The job's first run is cold (JIT compile of all
+   kernels + VAE cache build), so prewarm kernels first: tt_metal/tools/kernel_prewarm/prewarm_and_submit.sh (README there),
+   with TT_METAL_CACHE=tt-project/data/g15/tt-metal-cache. Then submit with -t 600 (blx03 job 099 used 2400; size from its
+   measured device-held time).
+3. Start tmp/t158/driver.sh with `ttp detach` (waits for build/stage, health-checks, submits ONE job via run-bg, watches it,
+   checks broker log for drops, writes tt-project/data/g15/driver/DRIVER.done = "<code> <reason>").
+4. After the job: stage table from tt-project/data/g15/out/run.log, ltx_eval PCC/PSNR of gen#0 vs
+   tt-project/baselines/ltx25_1080p_6s/ref_dv145 seed0 (ref used DiffVAE) and vs tt-project/t-e2e/t138 job 099 outputs;
+   still frames *_t3s.png. Only on success write tt-project/state/ready/g15blx02.READY.
