@@ -2460,6 +2460,9 @@ class UnarySFPUGolden:
             # the vFloat branch otherwise, so the same MathOperation needs an exact
             # integer golden as well as the float one. See _relu_min.
             MathOperation.ReluMin,
+            # signbit on Int32 runs calculate_signbit_int32, which writes bit 31 as the integer
+            # 0 or 1 rather than the float 0.0 or 1.0. See _signbit.
+            MathOperation.Signbit,
         }
         # Fixed dispatch constants shared with sfpu_operations.h: unary shift by 3
         # bits, integer unary max/min against the scalar 1000.
@@ -2837,6 +2840,9 @@ class UnarySFPUGolden:
         return 1.0 if x != 0.0 else 0.0
 
     def _signbit(self, x):
+        if isinstance(x, int):
+            # Integer dst: bit 31 of the two's-complement word, as the integer 0 or 1.
+            return 1 if x < 0 else 0
         # Mirrors the kernel: logical-shift the fp32 bit pattern right by 31,
         # i.e. return 1.0 iff the sign bit is set (negative, incl. -0.0).
         return 1.0 if math.copysign(1.0, x) < 0.0 else 0.0
@@ -3827,6 +3833,7 @@ class EltwiseBinaryGolden(FidelityMasking):
         acc_to_dest=False,
         tile_shape=None,
         num_tiles_per_accumulation=1,
+        dest_acc=DestAccumulation.No,
     ):
         if tile_shape is None:
             tile_shape = construct_tile_shape()
@@ -3856,9 +3863,13 @@ class EltwiseBinaryGolden(FidelityMasking):
         # and multi-tile accumulation rounds the same way as hardware.
         out_is_mx = data_format.is_mx_format()
         hw_dest_dtype = (
-            torch.float16
-            if (out_is_mx and input_format == DataFormat.Float16)
-            else torch.bfloat16
+            torch.float32
+            if dest_acc == DestAccumulation.Yes
+            else (
+                torch.float16
+                if (out_is_mx and input_format == DataFormat.Float16)
+                else torch.bfloat16
+            )
         )
         # Step 1: Quantize each input independently to match what hardware sees
         # after unpacking from L1. Each operand uses its own format.

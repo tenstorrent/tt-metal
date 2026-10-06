@@ -99,7 +99,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const std::uint32_t num_faces   = params.num_faces;
 #endif
-    DataFormat src_format                     = static_cast<DataFormat>(formats.math);
+    // formats.math holds a 2x-packed register format's non-2x family member, since the 2x formats exist only in the
+    // Src registers; the ALU is configured with the register format itself, the one the unpacker implies
+    const DataFormat unpack_dst_format        = static_cast<DataFormat>(formats.unpack_A_dst);
+    const bool is_2x_format                   = (unpack_dst_format == DataFormat::MxFp4_2x_A) || (unpack_dst_format == DataFormat::MxFp4_2x_B);
+    DataFormat src_format                     = is_2x_format ? unpack_dst_format : static_cast<DataFormat>(formats.math);
     const bool use_int32_dest_alu             = is_fp32_dest_acc_en && static_cast<DataFormat>(formats.pack_src) == DataFormat::Int32;
     const bool is_int_fpu_en                  = use_int32_dest_alu && (REDUCE_DIM == ReduceDim::REDUCE_ROW || REDUCE_DIM == ReduceDim::REDUCE_SCALAR);
     const ckernel::TensorShape tensor_shape_A = tensor_shape_from_params(params);
@@ -113,14 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
-        if (use_int32_dest_alu)
-        {
-            _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, false /* fp32 dest */, true /* int32 dest */>(src_format, src_format);
-        }
-        else
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /* int32 dest */>(src_format, src_format);
-        }
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(src_format, src_format);
 
         if (is_int_fpu_en)
         {
