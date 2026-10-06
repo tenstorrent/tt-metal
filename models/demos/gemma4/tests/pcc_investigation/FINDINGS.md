@@ -167,3 +167,24 @@ prefill q_chunk 32/128: gate unchanged, book 0.9357; prefill QKV HiFi4: gate 0.9
   the most precise combination scores below the baseline on the gate text. Attention precision is not the limit: the
   layer-output error falls only 15% for a 38% attention gain and expert agreement only 92.7% -> 93.8%; the experts' own
   error (about 11e-4) is ~4x attention's.
+
+## 10. Can any setting reach 0.99 on the accuracy gate? (2026-10-06)
+The gate scores against Hugging Face bf16 (sdpa attention). Hugging Face itself, re-run on the gate's 129 positions with one
+thing changed (reference/hf_gate_variants.py): identical settings or 1 CPU thread 1.00000 (bit-identical); **eager attention
+instead of sdpa, same bf16: 0.98179** (52/129 positions below 0.99); fp32: 0.97328. Only a bit-for-bit copy of the reference's
+CPU rounding reaches 0.99; an independent implementation of the same precision lands around 0.98.
+
+Best chip results on the gate (vs HF bf16), chip/attn_sweep.py (results/attn_sweep_v3a/v3b/v4.jsonl):
+| Configuration | Gate vs bf16 | Gate vs fp32 | Book vs fp32 |
+|---|---|---|---|
+| current code (065d1b0167f) | 0.96367 | 0.97347 | 0.93876 |
+| mimic HF bf16 (every matmul / norm HiFi4 + fp32 accumulation, bf16 tensors, SDPA HiFi4 exact) | 0.97420 | 0.97072 | **0.95777** |
+| all fp32 switches (fp32 intermediates, top-k on scores, fp32 manual attention) | **0.98180** | 0.97689 | |
+| fp32 switches + prefill k_chunk 32 | 0.98024 | 0.97843 | |
+| fp32 switches + prefill QKV HiFi4 | 0.97330 | **0.98045** | |
+| fp32 switches, SDPA attention (fp32 attention off) | 0.97285 | 0.96896 | |
+
+With the fp32 switches the chip equals HF's own eager-vs-sdpa agreement (0.9818). More precision moves the chip toward fp32
+and away from the bf16 reference (prefill QKV HiFi4: fp32 0.9805, bf16 0.9733). Mimic HF bf16 is the largest real gain with
+bf16 tensors: isolated layer-output error -39% (0.98e-4), experts error -35%, book +0.019; untraced 0.105 vs 0.101 s/step
+(traced cost not measured). No attention setting or combination reaches 0.99 against the bf16 reference.

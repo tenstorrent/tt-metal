@@ -1,0 +1,6 @@
+{"setting": "baseline", "gate": {"pcc_fp32": 0.97689, "pcc_bf16": 0.9818, "min_pcc_fp32": 0.5134, "below_099_fp32": 46, "top1_bf16": 84.5, "top5_bf16": 95.35, "first_pcc_fp32": 0.98798}, "seconds": 52}
+{"setting": "qkv_hifi4", "gate": {"pcc_fp32": 0.97689, "pcc_bf16": 0.9818, "min_pcc_fp32": 0.5134, "below_099_fp32": 46, "top1_bf16": 84.5, "top5_bf16": 95.35, "first_pcc_fp32": 0.98798}, "seconds": 17}
+{"setting": "oproj_hifi4", "gate": {"pcc_fp32": 0.97689, "pcc_bf16": 0.9818, "min_pcc_fp32": 0.5134, "below_099_fp32": 46, "top1_bf16": 84.5, "top5_bf16": 95.35, "first_pcc_fp32": 0.98798}, "seconds": 17}
+{"setting": "combo_max_precision", "gate": {"pcc_fp32": 0.97689, "pcc_bf16": 0.9818, "min_pcc_fp32": 0.5134, "below_099_fp32": 46, "top1_bf16": 84.5, "top5_bf16": 95.35, "first_pcc_fp32": 0.98798}, "seconds": 17}
+{"setting": "prefill_qkv_hifi4", "gate": {"pcc_fp32": 0.98045, "pcc_bf16": 0.9733, "min_pcc_fp32": 0.6916, "below_099_fp32": 48, "top1_bf16": 81.4, "top5_bf16": 96.12, "first_pcc_fp32": 0.98792}, "seconds": 17}
+{"setting": "prefill_kchunk32", "gate": {"pcc_fp32": 0.97843, "pcc_bf16": 0.98024, "min_pcc_fp32": 0.5119, "below_099_fp32": 43, "top1_bf16": 86.05, "top5_bf16": 96.12, "first_pcc_fp32": 0.98788}, "seconds": 17}

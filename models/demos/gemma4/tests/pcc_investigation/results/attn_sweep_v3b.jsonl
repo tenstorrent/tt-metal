@@ -1,0 +1,5 @@
+{"setting": "baseline", "gate": {"pcc_fp32": 0.96896, "pcc_bf16": 0.97285, "min_pcc_fp32": 0.5311, "below_099_fp32": 61, "top1_bf16": 82.17, "top5_bf16": 96.12, "first_pcc_fp32": 0.98798}, "seconds": 14}
+{"setting": "qkv_hifi4", "gate": {"pcc_fp32": 0.96896, "pcc_bf16": 0.97285, "min_pcc_fp32": 0.5311, "below_099_fp32": 61, "top1_bf16": 82.17, "top5_bf16": 96.12, "first_pcc_fp32": 0.98798}, "seconds": 14}
+{"setting": "combo_max_precision", "gate": {"pcc_fp32": 0.96896, "pcc_bf16": 0.97285, "min_pcc_fp32": 0.5311, "below_099_fp32": 61, "top1_bf16": 82.17, "top5_bf16": 96.12, "first_pcc_fp32": 0.98798}, "seconds": 14}
+{"setting": "sdpa_kchunk32", "gate": {"pcc_fp32": 0.96911, "pcc_bf16": 0.97486, "min_pcc_fp32": 0.5131, "below_099_fp32": 58, "top1_bf16": 86.05, "top5_bf16": 96.9, "first_pcc_fp32": 0.98798}, "seconds": 14}
+{"setting": "sdpa_cores_per_head1", "gate": {"pcc_fp32": 0.97317, "pcc_bf16": 0.97631, "min_pcc_fp32": 0.5212, "below_099_fp32": 55, "top1_bf16": 86.05, "top5_bf16": 97.67, "first_pcc_fp32": 0.98798}, "seconds": 16}

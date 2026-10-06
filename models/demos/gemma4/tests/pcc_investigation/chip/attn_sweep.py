@@ -5,6 +5,7 @@
 # scored per position against Hugging Face fp32 (gate_hf_fp32_logits.pt, book_logits_hf_fp32.pt) and bf16 (the gate's
 # own cached reference / the .refpt logits). Results append to $GEMMA4_PCC_DATA/attn_sweep_<label>.jsonl as they finish.
 # Usage: attn_sweep.py <label> [setting names...]    (no names: all settings in SETTINGS order)
+# SWEEP_GATE_ONLY=1 skips the book text; SWEEP_ISO=<positions> adds the isolated per-layer error.
 import os as _os
 from pathlib import Path as _Path
 
@@ -76,6 +77,8 @@ SETTINGS = {
     "combo_qkv_hifi4_kchunk32": {"qkv": dict(fid=F.HiFi4, fp32=True), "k_chunk": 32},
     "combo_max_precision": {"qkv": dict(fid=F.HiFi4, fp32=True), "sdpa_ckc": (F.HiFi4, False, False, False),
                             "headnorm_fp32": True, "oproj": dict(fid=F.HiFi4, fp32=True)},
+    "mimic_hf_bf16": {"mimic": True, "sdpa_ckc": (F.HiFi4, False, False, False)},
+    "mimic_hf_bf16_kchunk32": {"mimic": True, "sdpa_ckc": (F.HiFi4, False, False, False), "k_chunk": 32},
     "combo_max_precision_kchunk32": {"qkv": dict(fid=F.HiFi4, fp32=True), "sdpa_ckc": (F.HiFi4, False, False, False),
                                      "headnorm_fp32": True, "oproj": dict(fid=F.HiFi4, fp32=True), "k_chunk": 32},
 }
@@ -169,6 +172,42 @@ def pqkv(hidden_states, weights, memory_config=None):
 
 
 PRE.apply_qkv_projection = pqkv
+
+# "mimic": compute like Hugging Face bf16 on CPU -- every matmul and RMSNorm accumulates in fp32 (HiFi4) while the
+# tensors stay bf16. Program configs whose output subblock exceeds the 4-tile fp32 dest get a fitting subblock for
+# the duration of the call (restored afterwards).
+_HIFI4_ACC = ckc(F.HiFi4, False, True, False)
+
+
+def _fit_subblock(pc):
+    if pc is None or not hasattr(pc, "out_subblock_w"):
+        return None
+    h, w = pc.out_subblock_h, pc.out_subblock_w
+    if h * w <= 4:
+        return None
+    n = getattr(pc, "per_core_N", w)
+    new_w = max(d for d in range(1, max(1, 4 // h) + 1) if n % d == 0)
+    pc.out_subblock_w = new_w
+    return (pc, w)
+
+
+def _mimic_op(orig, key="compute_kernel_config"):
+    def f(*a, **k):
+        if not SET.get("mimic"):
+            return orig(*a, **k)
+        k[key] = _HIFI4_ACC
+        fixed = _fit_subblock(k.get("program_config"))
+        try:
+            return orig(*a, **k)
+        finally:
+            if fixed:
+                fixed[0].out_subblock_w = fixed[1]
+    return f
+
+
+for _name in ("linear", "matmul", "sparse_matmul", "rms_norm"):
+    if hasattr(ttnn, _name):
+        setattr(ttnn, _name, _mimic_op(getattr(ttnn, _name)))
 
 # ---------------------------------------------------------------- isolated per-layer error (SWEEP_ISO=<positions>)
 # Decode positions 0..N-1 of the book one at a time with every layer fed Hugging Face's exact fp32 input
@@ -327,10 +366,11 @@ try:
         try:
             g = run(gate_tokens, GATE.PROMPT_TOKENS, len(gate_tokens))
             r["gate"] = score(g, gate_f32[GATE.PROMPT_TOKENS - 1:], gate_bf16[GATE.PROMPT_TOKENS - 1:])
-            t_book = time.time()
-            b = run(book_tokens, 512, 1011)
-            r["book"] = score(b, book_f32[511:1011], book_bf16[511:1011])
-            r["book_s_per_decode"] = round((time.time() - t_book) / 499, 3)
+            if os.environ.get("SWEEP_GATE_ONLY") != "1":
+                t_book = time.time()
+                b = run(book_tokens, 512, 1011)
+                r["book"] = score(b, book_f32[511:1011], book_bf16[511:1011])
+                r["book_s_per_decode"] = round((time.time() - t_book) / 499, 3)
             if ISO_N:
                 REC.clear(); ISO["on"] = True
                 try:
