@@ -11,8 +11,6 @@
 namespace ckernel::sfpu::bf16 {
 template <typename Config, int Iterations = 8>
 inline void calculate_clamped_affine() {
-    {
-        clamped_affine_pairs<Config, Iterations>();
-    }
+    clamped_affine_pairs<Config, Iterations>();
 }
 }  // namespace ckernel::sfpu::bf16
