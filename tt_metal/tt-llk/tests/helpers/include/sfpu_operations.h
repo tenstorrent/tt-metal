@@ -398,6 +398,8 @@ void call_unary_typecast_operation(std::uint32_t dst_index)
  * @tparam APPROX_MODE Whether to use approximation mode for the SFPU operation
  * @tparam is_fp32_dest_acc_en Whether the destination accumulator is in FP32 mode
  * @tparam ITERATIONS Number of SFPU iterations (typically 32 for full tile)
+ * @param math_format Math format of the paired call_unary_sfpu_operation(); pass the same value so a
+ *        format-selected body runs under its own init
  */
 template <
     SfpuType OPERATION,
@@ -410,7 +412,7 @@ template <
     DataFormat TYPECAST_IN  = DataFormat::Invalid,
     DataFormat TYPECAST_OUT = DataFormat::Invalid,
     bool FUSED_SORT         = false>
-void call_unary_sfpu_operation_init()
+void call_unary_sfpu_operation_init(std::uint32_t math_format)
 {
     // Once-per-kernel SFPU init (SFPU config reg + invariant ADDR_MOD_7). In metal this is hoisted into the
     // full-init entry points (compute_kernel_hw_startup / init_sfpu / unary_op_init_common); this standalone
@@ -492,7 +494,15 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::signbit)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(signbit_init);
+        // calculate_signbit_int32 and calculate_signbit each run the SFPLOADMACRO program their own init writes.
+        if (math_format == ckernel::to_underlying(DataFormat::Int32))
+        {
+            llk_math_eltwise_unary_sfpu_init<OPERATION>(signbit_int32_init);
+        }
+        else
+        {
+            llk_math_eltwise_unary_sfpu_init<OPERATION>(signbit_init);
+        }
     }
     else if constexpr (OPERATION == SfpuType::lgamma)
     {
@@ -612,7 +622,12 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
+#ifdef ARCH_WORMHOLE
+        constexpr bool round_to_bf16 = !APPROX_MODE && !is_fp32_dest_acc_en;
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(recip_init<APPROX_MODE, is_fp32_dest_acc_en, round_to_bf16>);
+#else
         llk_math_eltwise_unary_sfpu_init<OPERATION>(recip_init<APPROX_MODE, is_fp32_dest_acc_en>);
+#endif
     }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
