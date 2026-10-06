@@ -189,8 +189,7 @@ def test_bf16_profile_is_the_no_op_policy():
 def test_only_the_arithmetic_preset_hands_the_attention_an_override():
     """The attention owns its own matmul config, so the policy has to reach it explicitly.
 
-    This is the regression test for the stage-06 review finding: the first version of the precision
-    policy was wired into the block only, so to_qkv and to_out -- 26.7 ms of a 221.7 ms block -- kept
+    The first version of the precision policy was wired into the block only, so to_qkv and to_out -- 26.7 ms of a 221.7 ms block -- kept
     fp32 destination accumulation while the shipped description said all four matmuls had changed.
     """
     for name in PRESETS:
