@@ -58,7 +58,7 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
-from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_tp0, unrotate_cache_layer
+from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_natural, unrotate_cache_layer
 
 CHUNK = 5120
 # 11 chunks is 56320 tokens — the "55k" leg, and past the 10-chunk mark the memory gate wants.
@@ -123,7 +123,8 @@ def _dram_bytes(mesh_device):
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
 @pytest.mark.parametrize("num_layers", DEPTHS, ids=[f"L{n}" for n in DEPTHS])
-def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layers):
+@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
+def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layers, tp_shard_kv):
     checkpoint = resolve_checkpoint()
     trace = resolve_trace(TRACE_1M if num_layers >= DEEP_TRACE_FROM else TRACE_100K)
     if checkpoint is None or trace is None:
@@ -177,6 +178,7 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
         max_seq_len=TOTAL_LEN,
         is_chunked=True,
         weight_cache_path=cache,
+        tp_shard_kv=tp_shard_kv,
     )
 
     # One slot per MLA layer, spanning the whole sequence: chunk N+1's attention reads the KV that
@@ -191,6 +193,7 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
             sp_axis=SP_AXIS,
             num_layers=model.schedule.num_mla_layers,
             num_users=1,
+            tp_axis=TP_AXIS if tp_shard_kv else None,
         )
 
     # The migration copy of the carries: the runner binds the engine-owned slabs at compile(), and from
@@ -345,8 +348,8 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
     # attention depends on all of it. The device cache is indexed by rank-local MLA slot and the
     # golden by model layer — the schedule owns that mapping.
     if kvpe is not None:
-        cache = gather_cache_tp0(kvpe.storage, mesh_device)
-        positions = blockcyclic_positions(tuple(mesh_device.shape)[SP_AXIS], CHUNK, TOTAL_LEN)
+        cache, stripes = gather_cache_natural(kvpe.storage, mesh_device, tp_shard_kv)
+        positions = blockcyclic_positions(stripes, CHUNK, TOTAL_LEN)
         for slot, model_layer in enumerate(model.schedule.mla_layer_ids[: model.schedule.num_mla_layers]):
             if not trace.has_kv_cache(model_layer):
                 continue
