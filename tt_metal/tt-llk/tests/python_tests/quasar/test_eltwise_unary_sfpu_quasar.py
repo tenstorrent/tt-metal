@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import struct
 from dataclasses import dataclass
 from typing import List
 
@@ -57,6 +58,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
+    RAND_RANGE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     TYPECAST_FORMATS,
@@ -1549,3 +1551,237 @@ def test_typecast_fp32_to_uint16_edge_cases_quasar(dest_sync):
         f"got      {result[:32].tolist()}\n"
         f"expected {expected_flat[:32].tolist()}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Rand: a property-based check.
+#
+# rand overwrites Dest with draws from the per-lane hardware PRNG, so no element-wise golden
+# exists. The oracle checks the properties the op promises instead: every value lies in
+# [from, from + scale], the sample is uniform (mean, spread, histogram), every lane and every
+# row gets its own draw, and scale == 0 yields a constant tile. The input tile is filled with
+# a value outside every tested interval, so an element the kernel failed to write fails the
+# range check.
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True, repr=False)
+class RandCase:
+    name: str
+    from_value: float
+    scale: float
+    formats: tuple  # DataFormats whose Dest can represent [from, from + scale]
+
+    def __repr__(self) -> str:
+        return self.name
+
+
+_RAND_FLOAT_FORMATS = (DataFormat.Float16, DataFormat.Float32, DataFormat.Float16_b)
+
+# A scale whose fp32 exponent is <= 31 cannot absorb the 2^-31 normalization, so the kernel
+# records its per-row-normalize body (SFPMULI) instead of the folded one.
+_RAND_PER_ROW_NORMALIZE_SCALE = 2.0**-96
+
+RAND_CASES = (
+    RandCase("unit", 1.0, 2.0, _RAND_FLOAT_FORMATS),
+    RandCase("signed", -4.0, 8.0, _RAND_FLOAT_FORMATS),
+    # Float16 cannot represent 2^-96, so the per-row-normalize case runs on the 8-bit-exponent formats.
+    RandCase(
+        "per_row_normalize",
+        0.0,
+        _RAND_PER_ROW_NORMALIZE_SCALE,
+        (DataFormat.Float32, DataFormat.Float16_b),
+    ),
+    RandCase("zero_scale", 1.5, 0.0, _RAND_FLOAT_FORMATS),
+)
+
+# Written to Dest before rand runs; outside every RandCase interval.
+_RAND_UNWRITTEN_SENTINEL = -100.0
+
+_RAND_HISTOGRAM_BINS = 8
+
+
+def _fp32_bits(value: float) -> int:
+    return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
+def generate_rand_combinations():
+    """unit sweeps dest-sync and tile count; the other cases pin DestSync.Half and 4 tiles."""
+    combinations = []
+    for case in RAND_CASES:
+        for variant in generate_quasar_sfpu_format_variants(
+            MathOperation.Rand, input_output_formats(list(case.formats))
+        ):
+            if case.name == "unit":
+                sync_dims = [
+                    (sync, dims) for sync in DEST_SYNC_MODES for dims in TENSOR_DIMS
+                ]
+            else:
+                sync_dims = [(DestSync.Half, [64, 64])]
+            for dest_sync, dims in sync_dims:
+                combinations.append((case, variant, dest_sync, runtime(dims)))
+    return combinations
+
+
+def _rand_output_ulp(magnitude: float, output_format: DataFormat) -> float:
+    mantissa_bits = {
+        DataFormat.Float16_b: 7,
+        DataFormat.Float16: 10,
+        DataFormat.Float32: 23,
+    }[output_format]
+    return (
+        math.ldexp(1.0, math.frexp(magnitude)[1] - 1 - mantissa_bits)
+        if magnitude
+        else 0.0
+    )
+
+
+def _serial_correlation(sequence: torch.Tensor) -> float:
+    a = sequence[:-1] - sequence[:-1].mean()
+    b = sequence[1:] - sequence[1:].mean()
+    return float((a * b).sum() / torch.sqrt((a * a).sum() * (b * b).sum()))
+
+
+def _check_rand_properties(values: torch.Tensor, case: RandCase, output_format):
+    """Assert the uniform-distribution properties of a flat, tile-ordered rand result."""
+    n = values.numel()
+    lo = case.from_value
+    hi = case.from_value + case.scale
+
+    assert torch.isfinite(values).all(), "rand produced a non-finite value"
+
+    out_of_range = ((values < lo) | (values > hi)).nonzero().flatten()
+    assert out_of_range.numel() == 0, (
+        f"{out_of_range.numel()} of {n} values fall outside [{lo}, {hi}]; first: "
+        f"{values[out_of_range[:8]].tolist()} at {out_of_range[:8].tolist()}"
+    )
+
+    if case.scale == 0.0:
+        assert torch.all(values == lo), (
+            f"scale == 0 must give a constant {lo} tile, got "
+            f"{torch.unique(values)[:8].tolist()}"
+        )
+        return
+
+    # Mean within 6 sigma of the midpoint, plus one output ulp for the truncating 16-bit store.
+    sigma = case.scale / math.sqrt(12.0)
+    mean = float(values.mean())
+    mean_tol = 6.0 * sigma / math.sqrt(n) + _rand_output_ulp(
+        max(abs(lo), abs(hi)), output_format
+    )
+    assert (
+        abs(mean - (lo + hi) / 2) <= mean_tol
+    ), f"mean {mean} is not within {mean_tol} of the midpoint {(lo + hi) / 2}"
+
+    std = float(values.std())
+    assert (
+        abs(std - sigma) <= 0.15 * sigma
+    ), f"standard deviation {std} is not within 15% of the uniform {sigma}"
+
+    counts = torch.histc(values, bins=_RAND_HISTOGRAM_BINS, min=lo, max=hi)
+    expected = n / _RAND_HISTOGRAM_BINS
+    assert torch.all(
+        (counts >= 0.5 * expected) & (counts <= 1.5 * expected)
+    ), f"histogram over [{lo}, {hi}] is not uniform: {counts.tolist()} (expected ~{expected})"
+
+    distinct = torch.unique(values).numel()
+    min_distinct = int(0.95 * n) if output_format == DataFormat.Float32 else 64
+    assert (
+        distinct >= min_distinct
+    ), f"only {distinct} distinct values in {n} draws (need >= {min_distinct})"
+
+    # Face rows: each row of a 16x16 face is one PRNG step across 16 lanes.
+    face_rows = values.reshape(-1, MAX_FACE_R_DIM)
+    row_distinct = torch.tensor([torch.unique(r).numel() for r in face_rows])
+    assert torch.all(row_distinct >= MAX_FACE_R_DIM // 2), (
+        f"lanes are not independent: a face row holds only {int(row_distinct.min())} "
+        f"distinct values of {MAX_FACE_R_DIM}"
+    )
+    lane_distinct = torch.tensor([torch.unique(c).numel() for c in face_rows.T])
+    assert torch.all(lane_distinct >= face_rows.shape[0] // 4), (
+        f"the PRNG does not advance per row: a lane holds only "
+        f"{int(lane_distinct.min())} distinct values over {face_rows.shape[0]} rows"
+    )
+    distinct_rows = torch.unique(face_rows, dim=0).shape[0]
+    assert (
+        distinct_rows == face_rows.shape[0]
+    ), f"{face_rows.shape[0] - distinct_rows} face rows repeat an earlier row"
+
+    lane_corr = _serial_correlation(face_rows.flatten())
+    row_corr = _serial_correlation(face_rows.T.flatten())
+    assert (
+        abs(lane_corr) < 0.2 and abs(row_corr) < 0.2
+    ), f"adjacent draws are correlated: lane-to-lane {lane_corr:.3f}, row-to-row {row_corr:.3f}"
+
+
+@pytest.mark.quasar
+@parametrize(rand_case_formats_sync_dims=generate_rand_combinations())
+def test_rand_quasar(rand_case_formats_sync_dims):
+    """Property-based check of the Quasar rand SFPU op over both recorded bodies and scale == 0."""
+    case, format_variant, dest_sync, input_dimensions = rand_case_formats_sync_dims[0]
+    formats = format_variant.formats
+
+    input_torch_format = format_dict[formats.input_format]
+    element_count = input_dimensions[0] * input_dimensions[1]
+    tile_count = element_count // (DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM)
+    src_A = torch.full(
+        (element_count,), _RAND_UNWRITTEN_SENTINEL, dtype=input_torch_format
+    )
+    # src_B is unused by a unary op, but StimuliConfig requires an operand-B buffer.
+    src_B = torch.zeros_like(src_A)
+
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs={
+            "test_name": "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
+            "formats": formats,
+            "templates": [
+                MATH_OP(mathop=MathOperation.Rand),
+                APPROX_MODE(ApproximationMode.No),
+                IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
+                DATA_COPY_TYPE(DataCopyType.A2D),
+                UNPACKER_ENGINE_SEL(
+                    UnpackerEngine.UnpDest
+                    if format_variant.unpack_to_dest
+                    else UnpackerEngine.UnpA
+                ),
+                DEST_SYNC(dest_sync),
+                TYPECAST_FORMATS(),
+                RAND_RANGE(
+                    rand_from_bits=_fp32_bits(case.from_value),
+                    rand_scale_bits=_fp32_bits(case.scale),
+                ),
+            ],
+            "runtimes": [
+                TILE_COUNT(tile_count),
+                NUM_FACES(MAX_NUM_FACES),
+                TEST_FACE_DIMS(),
+                DEST_INDEX(0),
+                LOOP_FACTOR(1),
+            ],
+            "variant_stimuli": StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_count,
+                tile_count_B=tile_count,
+                tile_count_res=tile_count,
+                num_faces=MAX_NUM_FACES,
+            ),
+            "unpack_to_dest": format_variant.unpack_to_dest,
+            "dest_acc": format_variant.dest_acc,
+        },
+    )
+
+    format_variant.apply_formats(configuration.formats_config)
+
+    res_from_L1 = configuration.run().result
+    values = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format]).to(
+        torch.float64
+    )
+    assert (
+        values.numel() == element_count
+    ), f"result has {values.numel()} elements, expected {element_count}"
+
+    _check_rand_properties(values, case, formats.output_format)
