@@ -41,7 +41,9 @@ midpoint. If you are migrating a test that pre-quantizes its stimuli, delete
 that step — the stimuli and the golden go through the same packer, so they land
 on the same lattice by construction.
 
-That leaves exactly one real conversion for these blocks to model: **the
+What is left is the loss each boundary takes — unpack into a src register, the
+FPU's write to Dest, Dest fed back into a src register, and the packer's ReLU,
+edge mask and requantization. Exactly one of those varies by architecture: **the
 unpacker lands every L1 format in one of a small number of src-register storage
 families, and the family — not the L1 format — is what the FPU reads.**
 

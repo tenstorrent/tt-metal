@@ -14,13 +14,16 @@ There is deliberately no quantization step. Storing a tensor as MxFp8R *is* the
 quantization; by the time the L1 bytes exist the loss has happened, and reading
 them back just reports it. Use :func:`.l1_codec.pack_to_l1` to build a buffer.
 
-That leaves one real conversion for these blocks to model: the unpacker lands
-every L1 format in one of a small number of src-register storage families. The
-family, not the L1 format, is what the FPU reads.
+What is left is the loss each boundary takes: the unpacker landing an L1 datum
+in a src register, the FPU writing a Dest slot, Dest fed back into a src
+register, and the packer's ReLU, edge mask and requantization on the way out.
 
-Architectures differ in which L1 formats exist and in that mapping, so the
-machinery lives here and each architecture supplies the differences. Notably
-Quasar has the MX family and **no block float**; Wormhole/Blackhole the reverse.
+One of those varies by architecture — the unpacker lands every L1 format in one
+of a small number of src-register storage families, and the family, not the L1
+format, is what the FPU reads. Architectures differ in which L1 formats exist
+and in that mapping, so the machinery lives here and each architecture supplies
+the differences. Notably Quasar has the MX family and **no block float**;
+Wormhole and Blackhole the reverse.
 """
 
 import warnings
