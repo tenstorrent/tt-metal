@@ -151,9 +151,13 @@ void kernel_main() {
                                 cb_addcmul_temp.reserve_back(tile_granularity);
                                 tile_regs_wait();
                                 pack_reconfig_data_format(addcmul_temp_cb);
+#ifdef ARCH_BLACKHOLE
+                                pack_block_mop(0, addcmul_temp_cb, tiles_to_read_in_this_step);
+#else
                                 for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
                                     pack_tile(tile_id, addcmul_temp_cb);
                                 }
+#endif
                                 tile_regs_release();
                                 cb_addcmul_temp.push_back(tile_granularity);
 
@@ -214,9 +218,13 @@ void kernel_main() {
                                 cb_out.reserve_back(tile_granularity);
                                 tile_regs_wait();
                                 pack_reconfig_data_format(output_cb);
+#ifdef ARCH_BLACKHOLE
+                                pack_block_mop(0, output_cb, tiles_to_read_in_this_step);
+#else
                                 for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
                                     pack_tile(tile_id, output_cb);
                                 }
+#endif
                                 tile_regs_release();
                                 cb_out.push_back(tile_granularity);
                             } else {
@@ -236,9 +244,13 @@ void kernel_main() {
 
                                 cb_out.reserve_back(tile_granularity);
                                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                                pack_block_mop(0, output_cb, tiles_to_read_in_this_step);
+#else
                                 for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
                                     pack_tile(tile_id, output_cb);
                                 }
+#endif
                                 tile_regs_release();
                                 cb_out.push_back(tile_granularity);
 #ifdef FUSE_RS_ADDCMUL

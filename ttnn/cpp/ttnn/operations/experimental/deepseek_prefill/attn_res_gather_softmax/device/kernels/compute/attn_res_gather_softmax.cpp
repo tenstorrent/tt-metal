@@ -216,8 +216,12 @@ void derive_row_weights(CircularBuffer& cb_row_obj) {
 
     cb_row_obj.reserve_back(kRowWeights);
     tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+    pack_block_mop(dst_a, cb_row, 2);
+#else
     pack_tile(dst_a, cb_row);
     pack_tile(dst_b, cb_row);
+#endif
     tile_regs_release();
     cb_row_obj.push_back(kRowWeights);
 

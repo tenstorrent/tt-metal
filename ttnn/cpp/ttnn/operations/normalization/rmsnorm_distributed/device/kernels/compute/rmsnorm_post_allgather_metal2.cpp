@@ -130,10 +130,17 @@ void kernel_main() {
             dfb_norm_x.wait_front(blk);
             dfb_normed_output.reserve_back(blk);
             ACQ();
+#ifdef ARCH_BLACKHOLE
+            for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                mul_tiles_bcast_cols(dfb_norm_x_input, dfb::recip_sqrt_var, wtr, 0, wtr);
+            }
+            pack_block_mop(0, normed_output_dfb, blk);
+#else
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 mul_tiles_bcast_cols(dfb_norm_x_input, dfb::recip_sqrt_var, wtr, 0, wtr);
                 pack_tile(wtr, normed_output_dfb);
             }
+#endif
             REL();
             dfb_normed_output.push_back(blk);
             dfb_norm_x.pop_front(blk);
@@ -152,10 +159,17 @@ void kernel_main() {
             dfb_normed_output.wait_front(blk);
             dfb_times_gamma.reserve_back(blk);
             ACQ();
+#ifdef ARCH_BLACKHOLE
+            for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                mul_tiles_bcast_rows(dfb::x_normed, dfb::gamma, wtr, wt + wtr, wtr);
+            }
+            pack_block_mop(0, dfb_times_gamma_out, blk);
+#else
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 mul_tiles_bcast_rows(dfb::x_normed, dfb::gamma, wtr, wt + wtr, wtr);
                 pack_tile(wtr, dfb_times_gamma_out);
             }
+#endif
             REL();
             dfb_times_gamma.push_back(blk);
             dfb_normed_output.pop_front(blk);
