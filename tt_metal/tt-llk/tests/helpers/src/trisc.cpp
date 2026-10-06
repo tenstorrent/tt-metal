@@ -43,10 +43,9 @@ extern "C"
 {
     extern void gcov_dump(void);
 }
-constexpr std::uint32_t mailboxes_start = 0x6DFB8;
-#else
-constexpr std::uint32_t mailboxes_start = 0x1FFB8;
 #endif
+extern const volatile struct RuntimeParams __runtime_args_start[];
+const std::uint32_t mailboxes_start = reinterpret_cast<std::uintptr_t>(__runtime_args_start) - 0x48U;
 
 #if defined(LLK_TRISC_UNPACK)
 constexpr std::uint32_t mailbox_offset = 0;
@@ -62,7 +61,6 @@ constexpr std::uint32_t mailbox_offset = 3 * sizeof(std::uint32_t);
 
 void copy_runtimes_from_L1(struct RuntimeParams* temp_args)
 {
-    extern const volatile struct RuntimeParams __runtime_args_start[];
     ckernel::memcpy_blocking(temp_args, __runtime_args_start, sizeof(struct RuntimeParams));
 }
 

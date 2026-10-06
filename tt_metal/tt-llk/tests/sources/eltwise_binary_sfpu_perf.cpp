@@ -27,6 +27,9 @@ static constexpr ckernel::BroadcastType BROADCAST_TYPE = ckernel::BroadcastType:
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_A.h"
+#ifdef TT_POLY_LLK_PERF_HAS_FPU
+#include "llk_unpack_AB.h"
+#endif
 #include "llk_unpack_common.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -64,6 +67,69 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("TILE_LOOP")
 
+#ifdef TT_POLY_LLK_PERF_PAIRED
+        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+        {
+            for (std::uint32_t stage = 0; stage < TT_POLY_LLK_STAGE_COUNT; ++stage)
+            {
+#ifdef TT_POLY_LLK_PERF_HAS_FPU
+                if (TT_POLY_LLK_STAGE_FPU[stage])
+                {
+                    _llk_unpack_AB_init_<>(DEFAULT_TENSOR_SHAPE);
+                }
+                else
+                {
+                    _llk_unpack_A_init_<BROADCAST_TYPE, false, reuse_dest_type, unpack_to_dest>(
+                        UNPACK_TRANSPOSE_FACES,
+                        UNPACK_TRANSPOSE_WITHIN_FACE,
+                        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
+                        formats.unpack_A_src,
+                        formats.unpack_A_dst);
+                }
+#endif
+                for (std::uint32_t pair = 0; pair < TILE_CNT * TT_POLY_LLK_INPUT_ARITY; pair += TT_POLY_LLK_INPUT_ARITY)
+                {
+#ifdef TT_POLY_LLK_PERF_HAS_FPU
+                    if (TT_POLY_LLK_STAGE_FPU[stage])
+                    {
+                        const auto address = [&](int slot)
+                        {
+                            return slot < 0   ? L1_ADDRESS(params.buffer_B[-slot - 1])
+                                   : slot < 2 ? L1_ADDRESS(params.buffer_A[pair + slot])
+                                              : L1_ADDRESS(params.buffer_C[(slot - 2) * TILE_CNT + pair / TT_POLY_LLK_INPUT_ARITY]);
+                        };
+                        _llk_unpack_AB_<>(address(TT_POLY_LLK_STAGE_INPUT[stage][0]), address(TT_POLY_LLK_STAGE_INPUT[stage][1]));
+                        continue;
+                    }
+#endif
+                    for (std::uint32_t lane = 0; lane < TT_POLY_LLK_STAGE_ARITY[stage]; ++lane)
+                    {
+                        const auto slot    = TT_POLY_LLK_STAGE_INPUT[stage][lane];
+                        const auto address = slot < 0   ? L1_ADDRESS(params.buffer_B[-slot - 1])
+                                             : slot < 2 ? L1_ADDRESS(params.buffer_A[pair + slot])
+                                                        : L1_ADDRESS(params.buffer_C[(slot - 2) * TILE_CNT + pair / TT_POLY_LLK_INPUT_ARITY]);
+#ifdef TT_POLY_LLK_PERF_DEST_REUSE
+                        if (TT_POLY_LLK_STAGE_DEST_REUSE[stage] && lane == 1)
+                        {
+                            _llk_unpack_A_init_<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                                false, false, DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+                            _llk_unpack_A_<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                                address, formats.unpack_A_src, formats.unpack_A_dst);
+                            continue;
+                        }
+                        _llk_unpack_A_init_<BROADCAST_TYPE, false, reuse_dest_type, unpack_to_dest>(
+                            UNPACK_TRANSPOSE_FACES, UNPACK_TRANSPOSE_WITHIN_FACE, DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+#endif
+                        _llk_unpack_A_<BROADCAST_TYPE, false, reuse_dest_type, unpack_to_dest>(address, formats.unpack_A_src, formats.unpack_A_dst);
+                    }
+                }
+#ifdef TT_POLY_LLK_PERF_STAGED
+                tensix_sync();
+                llk_profiler::sync_threads();
+#endif
+            }
+        }
+#else
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // In case of math isolate, we don't want any software synchronization from unpack to math.
@@ -92,6 +158,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
             }
         }
+#endif
         PROFILER_SYNC();
     }
 }
@@ -101,8 +168,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 #include "llk_math_common.h"
 #include "llk_math_eltwise_binary_sfpu.h"
+#if defined(TT_POLY_LLK_PERF_HAS_FPU) || defined(TT_POLY_LLK_PERF_DEST_REUSE)
+#include "llk_math_eltwise_binary.h"
+#endif
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "sfpu_operations.h"
+#ifdef TT_POLY_LLK_TEST_FACTOR_HEADER
+#include TT_POLY_LLK_TEST_FACTOR_HEADER
+#endif
+#ifdef TT_POLY_LLK_TEST_HEADER
+#include TT_POLY_LLK_TEST_HEADER
+#endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -126,12 +202,125 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_pack_sync_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
+#ifdef TT_POLY_LLK_PERF_PAIRED
+#ifdef TT_POLY_LLK_TEST_HEADER
+#if defined(TT_POLY_LLK_TEST_NO_STOCK_INIT) && !defined(TT_POLY_LLK_TEST_REPLACE_INIT)
+        ckernel::llk_math_eltwise_unary_sfpu_init<SfpuType::unused, is_fp32_dest_acc_en>();
+#elif !defined(TT_POLY_LLK_TEST_REPLACE_INIT)
+        test_utils::call_unary_sfpu_operation_init<SFPU_UNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS, false, false /* STABLE_SORT */, false>();
+#endif
+#ifdef TT_POLY_LLK_TEST_INIT
+#ifdef TT_POLY_LLK_TEST_REPLACE_INIT
+#ifdef TT_POLY_LLK_TEST_PRECISION_SPLIT
+        ckernel::llk_math_eltwise_unary_sfpu_init<SFPU_UNARY_OPERATION>(ckernel::sfpu::TT_POLY_LLK_TEST_INIT<APPROX_MODE, true>);
+#else
+        ckernel::llk_math_eltwise_unary_sfpu_init<SFPU_UNARY_OPERATION>(ckernel::sfpu::TT_POLY_LLK_TEST_INIT<>);
+#endif
+#else
+        ckernel::sfpu::TT_POLY_LLK_TEST_INIT();
+#endif
+#endif
+#endif
+#ifdef TT_POLY_LLK_TEST_FACTOR_HEADER
         test_utils::call_binary_sfpu_operation_init<APPROX_MODE, is_fp32_dest_acc_en, SFPU_BINARY_OPERATION, ITERATIONS>();
+        ckernel::llk_math_eltwise_unary_sfpu_init<SfpuType::unused, is_fp32_dest_acc_en>();
+#ifdef TT_POLY_LLK_TEST_FACTOR_INIT
+        ckernel::sfpu::TT_POLY_LLK_TEST_FACTOR_INIT();
+#endif
+#endif
+#else
+        test_utils::call_binary_sfpu_operation_init<APPROX_MODE, is_fp32_dest_acc_en, SFPU_BINARY_OPERATION, ITERATIONS>();
+#endif
         PROFILER_SYNC();
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
 
+#ifdef TT_POLY_LLK_PERF_PAIRED
+        // One input/gradient pair owns DST; upper tiles remain callback scratch.
+        static_assert(PERF_RUN_TYPE == PerfRunType::L1_TO_L1);
+        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+        {
+            for (std::uint32_t stage = 0; stage < TT_POLY_LLK_STAGE_COUNT; ++stage)
+            {
+#ifdef TT_POLY_LLK_PERF_STOCK_CHAIN
+                TT_POLY_LLK_STOCK_STAGE_INIT(stage);
+#endif
+                for (std::uint32_t pair = 0; pair < TILE_CNT * TT_POLY_LLK_INPUT_ARITY; pair += TT_POLY_LLK_INPUT_ARITY)
+                {
+                    _llk_math_wait_for_dest_available_<DST_SYNC_MODE>();
+#ifdef TT_POLY_LLK_PERF_HAS_FPU
+                    if (!TT_POLY_LLK_STAGE_FPU[stage])
+#endif
+#ifdef TT_POLY_LLK_PERF_INLINE_LOAD
+                        if (!TT_POLY_LLK_STAGE_INLINE_LOAD[stage])
+#endif
+                            for (std::uint32_t tile = 0; tile < TT_POLY_LLK_STAGE_ARITY[stage]; ++tile)
+                            {
+#ifdef TT_POLY_LLK_TEST_COPY_REBASE
+                                _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                                    1, formats.math, formats.math);
+                                TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
+#else
+                        _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                            TT_POLY_LLK_STAGE_DST[stage][tile], formats.math, formats.math);
+#endif
+                            }
+#ifdef TT_POLY_LLK_TEST_HEADER
+#ifdef TT_POLY_LLK_TEST_CALC
+                    SFPU_UNARY_CALL(
+                        DST_SYNC_MODE, is_fp32_dest_acc_en, TT_POLY_LLK_TEST_CALC, (TT_POLY_LLK_TEST_ITERATIONS), 0, VectorMode::TT_POLY_LLK_TEST_VECTOR_MODE);
+#elif defined(TT_POLY_LLK_TEST_STOCK_CALL)
+                    TT_POLY_LLK_TEST_STOCK_CALL
+#else
+                    test_utils::call_unary_sfpu_operation<
+                        DST_SYNC_MODE,
+                        is_fp32_dest_acc_en,
+                        SFPU_UNARY_OPERATION,
+                        APPROX_MODE,
+                        is_fp32_dest_acc_en,
+                        ITERATIONS,
+                        false,
+                        false /* STABLE_SORT */,
+                        false>(0, formats.math);
+#endif
+#elif defined(TT_POLY_LLK_TEST_FACTOR_HEADER)
+                    if (TT_POLY_LLK_STAGE_GENERATED[stage])
+                    {
+                        SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, TT_POLY_LLK_TEST_FACTOR_CALC, (32), 0, VectorMode::None);
+#ifdef TT_POLY_LLK_TEST_FACTOR_CALC_2
+                        if constexpr (TT_POLY_LLK_TEST_FACTOR_FINISH_IF)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, TT_POLY_LLK_TEST_FACTOR_CALC_2, (32), 0, VectorMode::None);
+                        }
+#endif
+                    }
+#ifdef TT_POLY_LLK_PERF_STOCK_CHAIN
+                    else
+                    {
+                        TT_POLY_LLK_STOCK_STAGE_CALC(stage);
+                    }
+#endif
+#elif defined(TT_POLY_LLK_PERF_STOCK_CHAIN)
+                    TT_POLY_LLK_STOCK_STAGE_CALC(stage);
+#else
+                    // The stock heterogeneous chain re-initializes each operation per tile.
+                    test_utils::call_unary_sfpu_operation_init<SFPU_UNARY_OPERATION, false, is_fp32_dest_acc_en, ITERATIONS>();
+                    test_utils::call_unary_sfpu_operation<DST_SYNC_MODE, is_fp32_dest_acc_en, SFPU_UNARY_OPERATION, false, is_fp32_dest_acc_en, ITERATIONS>(
+                        0, formats.math);
+                    // Gradient is the first multiply operand, as in the public kernel.
+                    test_utils::call_binary_sfpu_operation_init<false, is_fp32_dest_acc_en, SFPU_BINARY_OPERATION, ITERATIONS>();
+                    test_utils::call_binary_sfpu_operation<DST_SYNC_MODE, is_fp32_dest_acc_en, false, SFPU_BINARY_OPERATION, ITERATIONS, formats.math>(1, 0, 0);
+#endif
+                    _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
+                }
+#ifdef TT_POLY_LLK_PERF_STAGED
+                tensix_sync();
+                llk_profiler::sync_threads();
+#endif
+            }
+        }
+#else
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
@@ -247,6 +436,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
             }
         }
+#endif
         PROFILER_SYNC();
     }
 }
@@ -286,6 +476,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("TILE_LOOP")
 
+#ifdef TT_POLY_LLK_PERF_PAIRED
+        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+        {
+            for (std::uint32_t stage = 0; stage < TT_POLY_LLK_STAGE_COUNT; ++stage)
+            {
+                for (std::uint32_t pair = 0; pair < TILE_CNT * TT_POLY_LLK_INPUT_ARITY; pair += TT_POLY_LLK_INPUT_ARITY)
+                {
+                    _llk_packer_wait_for_math_done_();
+                    const auto slot    = TT_POLY_LLK_STAGE_OUTPUT[stage];
+                    const auto address = slot == TT_POLY_LLK_RESULT_SLOT ? L1_ADDRESS(params.buffer_Res[pair / TT_POLY_LLK_INPUT_ARITY])
+                                                                         : L1_ADDRESS(params.buffer_C[(slot - 2) * TILE_CNT + pair / TT_POLY_LLK_INPUT_ARITY]);
+                    _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en>(0, address);
+                    _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
+                }
+#ifdef TT_POLY_LLK_PERF_STAGED
+                // Section completion drains PACK before publishing the L1 tensor.
+                tensix_sync();
+                llk_profiler::sync_threads();
+#endif
+            }
+        }
+#else
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
@@ -325,6 +537,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
+#endif
         PROFILER_SYNC();
     }
 }

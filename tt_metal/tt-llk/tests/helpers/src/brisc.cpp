@@ -15,11 +15,8 @@
 #ifdef LLK_BOOT_MODE_BRISC
 
 // Mailbox addresses
-#ifdef COVERAGE
-static const mailbox_t mailboxes_arr = reinterpret_cast<mailbox_t>(0x6DFB8U);
-#else
-static const mailbox_t mailboxes_arr = reinterpret_cast<mailbox_t>(0x1FFB8U);
-#endif
+extern const volatile char __runtime_args_start[];
+static const mailbox_t mailboxes_arr = reinterpret_cast<mailbox_t>(reinterpret_cast<std::uintptr_t>(__runtime_args_start) - 0x48U);
 
 #ifdef ARCH_WORMHOLE
 #define ARCH_CYCLE_MICRO_SECOND 1000
