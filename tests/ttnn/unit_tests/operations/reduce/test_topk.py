@@ -11,6 +11,8 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics
 
 UINT16_MAX = 65535
+# Smallest tile-aligned width whose indices need 32 bits: 65536 still fits (largest index 65535).
+W_NEEDS_UINT32 = UINT16_MAX + 1 + 32
 TEST_PADDING_VALUE = -42
 
 
@@ -30,8 +32,10 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
 
     # Input tensor
     shape = [N, C, H, W]
-    ttnn_indices_dtype = ttnn.uint16 if W <= UINT16_MAX else ttnn.uint32
-    torch_indices_dtype = torch.uint16 if W <= UINT16_MAX else torch.uint32
+    # Index width follows the tile-padded width; 16 bits hold every width up to 65536 (index 65535).
+    padded_W = -(-W // 32) * 32
+    ttnn_indices_dtype = ttnn.uint16 if padded_W <= UINT16_MAX + 1 else ttnn.uint32
+    torch_indices_dtype = torch.uint16 if padded_W <= UINT16_MAX + 1 else torch.uint32
     torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
     input = torch.randn(shape, dtype=torch_dtype) * 0.9
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
@@ -400,10 +404,12 @@ def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device, expect_
         (64, ttnn.bfloat16, ttnn.uint16, False),
         (64, ttnn.bfloat16, ttnn.uint32, False),
         (UINT16_MAX + 1, ttnn.bfloat16, ttnn.uint32, False),
-        (UINT16_MAX + 1, ttnn.bfloat16, ttnn.uint16, True),
+        (UINT16_MAX + 1, ttnn.bfloat16, ttnn.uint16, False),
+        (W_NEEDS_UINT32, ttnn.bfloat16, ttnn.uint32, False),
+        (W_NEEDS_UINT32, ttnn.bfloat16, ttnn.uint16, True),
         (64, ttnn.float32, ttnn.uint16, True),
     ],
-    ids=["w64_u16", "w64_u32", "w65536_u32", "w65536_u16_raises", "fp32_u16_raises"],
+    ids=["w64_u16", "w64_u32", "w65536_u32", "w65536_u16", "w65568_u32", "w65568_u16_raises", "fp32_u16_raises"],
 )
 def test_topk_preallocated_indices_width(W, input_dtype, index_dtype, raises, device, expect_error):
     # index_dtype is the preallocated output indices tensor. A 16-bit one on an input that needs
@@ -570,11 +576,42 @@ def test_topk_indices_tensor_labels_above_uint16_max(device):
     assert_equal(torch.gather(torch_input, -1, indices - offset), ttnn.to_torch(values))
 
 
+@pytest.mark.parametrize("with_indices_tensor", (False, True), ids=("auto_indices", "uint16_indices_tensor"))
+@pytest.mark.parametrize("placement", ("end", "spread"))
+def test_topk_w65536_uint16_indices_are_exact(placement, with_indices_tensor, device):
+    """A 65536-wide row has indices 0..65535, which fit 16 bits exactly, so the op returns UINT16
+    indices and accepts a UINT16 indices_tensor. The top-k is planted at known columns -- the very
+    last ones (index 65535 first) or spread across the row including 0 and 65535 -- and every
+    returned index must be that column."""
+    W, k = UINT16_MAX + 1, 32
+    columns = (
+        list(range(W - 1, W - 1 - k, -1))
+        if placement == "end"
+        else ([65535, 0, 32767, 65504, 1, 40000, 65534, 12345] + list(range(50000, 50024)))
+    )
+    torch.manual_seed(0)
+    torch_input = torch.rand(1, 1, 32, W) * 0.5  # background in [0, 0.5)
+    planted = torch.linspace(10.0, 1.0, k)  # distinct, descending, far above the background
+    torch_input[..., columns] = planted
+    ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    kwargs = {}
+    if with_indices_tensor:
+        kwargs["indices_tensor"] = ttnn.from_torch(
+            torch.arange(W, dtype=torch.int32).repeat(1, 1, 32, 1), ttnn.uint16, layout=ttnn.Layout.TILE, device=device
+        )
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, **kwargs)
+
+    assert ttnn_indices.dtype == ttnn.uint16
+    indices = ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64) & 0xFFFF
+    assert_equal(torch.tensor(columns).repeat(1, 1, 32, 1), indices)
+    assert_equal(planted.to(torch.bfloat16).repeat(1, 1, 32, 1), ttnn.to_torch(ttnn_values))
+
+
 def test_topk_indices_tensor_too_narrow_raises(device, expect_error):
-    # W is past 65535, so the op resolves the index dtype to UINT32 and sizes the index CB 32-bit,
+    # W is past 65536, so the op resolves the index dtype to UINT32 and sizes the index CB 32-bit,
     # but the payload here is UINT16. Reject rather than read a 16-bit tensor at a 32-bit stride.
     k = 32
-    W = UINT16_MAX + 1  # smallest width that forces UINT32
+    W = W_NEEDS_UINT32  # smallest tile-aligned width that forces UINT32
     shape = [1, 1, 32, W]
 
     ttnn_input = ttnn.from_torch(
@@ -957,26 +994,31 @@ def test_topk_large_k_routed_single_row(device):
 @pytest.mark.skipif(
     not is_blackhole(), reason="large-k routing is Blackhole-only; stock single-core takes minutes at these shapes"
 )
-def test_topk_large_k_routed_neginf_lanes(device):
+@pytest.mark.parametrize("W", (UINT16_MAX + 1, W_NEEDS_UINT32), ids=("w65536_u16", "w65568_u32"))
+def test_topk_large_k_routed_neginf_lanes(W, device):
     # Rows whose top-k contains exact -inf: the routed path clamps the op's
     # input to the lowest finite bf16 (the op then sees no -inf and stamps a
     # REAL source position for every lane — its 0xFFFFFFFF sentinel never
     # fires) and gathers values from the ORIGINAL tensor, so -inf values are
     # bit-exact and -inf lanes carry real positions (stock/torch parity).
-    # W=65536 is tile-aligned, so every returned index must be a real
+    # W is tile-aligned, so every returned index must be a real
     # in-range column.
     torch.manual_seed(2005)
-    W, k, finite_count = 65536, 512, 100  # W=65536 -> tile-padded > 65535 -> uint32 indices
+    # At W=65536 the indices are UINT16 and the largest real index is 65535, so no lane may come
+    # back as a 16-bit sentinel; W=65568 covers the 32-bit path.
+    k, finite_count = 512, 100
     torch_input = torch.full((1, 1, 32, W), -float("inf"), dtype=torch.bfloat16)
     finite = (torch.randn(1, 1, 32, finite_count) * 0.9).to(torch.bfloat16)
     torch_input[..., :finite_count] = finite
 
     ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
     ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=True, sorted=True)
-    assert ttnn_indices.dtype == ttnn.uint32
+    assert ttnn_indices.dtype == (ttnn.uint16 if W <= UINT16_MAX + 1 else ttnn.uint32)
 
     torch_values = ttnn.to_torch(ttnn_values)
-    torch_indices = ttnn.to_torch(ttnn_indices, dtype=torch.uint32).to(torch.int64)
+    torch_indices = ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64) & (
+        0xFFFF if W <= UINT16_MAX + 1 else 0xFFFFFFFF
+    )
     pyt_values, _ = torch.topk(torch_input, k, dim=-1, largest=True, sorted=True)
 
     # Values match torch exactly, including the -inf tail.
@@ -1272,10 +1314,10 @@ def test_topk_stable_index_parity_float32(W, k, largest, device):
     assert_equal(order, ttnn_torch_indices)
 
 
-@pytest.mark.parametrize("W, k", ((65536, 32), (65536, 16), (131072, 32)))
+@pytest.mark.parametrize("W, k", ((W_NEEDS_UINT32, 32), (W_NEEDS_UINT32, 16), (131072, 32)))
 @pytest.mark.parametrize("largest", (True, False))
 def test_topk_stable_index_parity_wide_u32(W, k, largest, device):
-    """stable=True at W >= 65536: indices no longer fit 16 bits, so the auto-selected
+    """stable=True at W > 65536: indices no longer fit 16 bits, so the auto-selected
     index dtype is UINT32 and the single-core path runs the RANK-STAMPED fast engine
     (sign-conditioned local-rank tags on the unstable network, true u32 indices riding
     index tracking) — bf16-family only; fp32 keeps the comparator. k > 32 runs the
@@ -1298,15 +1340,15 @@ def test_topk_stable_index_parity_wide_u32(W, k, largest, device):
 
 @pytest.mark.parametrize("largest", (True, False))
 def test_topk_stable_wide_tie_saturation(largest, device):
-    """Tie-heavy rank-stamped coverage at W=65536: rows bulk-filled from the two middle
+    """Tie-heavy rank-stamped coverage at W=65568 (the smallest tile-aligned width that needs 32-bit indices): rows bulk-filled from the two middle
     levels (+-0.5), plus 12 scattered occurrences each of +-2.0 and +-1.0 at strided
     columns. In each direction the top-32 therefore spans THREE exact-tie groups —
     two extreme groups (12 elements each) entirely inside the top-k, and the k=32 cut
     landing inside the third (dominant ~32k-element) group — so every tie must break by
-    ascending original index across the full 2048-tile insertion pipeline (accumulator
+    ascending original index across the full 2049-tile insertion pipeline (accumulator
     vs incoming chunk at every step). Strict torch-stable parity on values and indices."""
     torch.manual_seed(5)
-    W, k = 65536, 32
+    W, k = W_NEEDS_UINT32, 32
     shape = [1, 1, 32, W]
     levels = torch.tensor([-0.5, 0.5], dtype=torch.bfloat16)
     input = levels[torch.randint(0, 2, shape)]
@@ -1330,12 +1372,12 @@ def test_topk_stable_wide_tie_saturation(largest, device):
 
 @pytest.mark.parametrize("largest", (True, False))
 def test_topk_stable_wide_signed_zero(largest, device):
-    """bf16 +-0.0 tie class at W=65536 on the rank-stamped engine: the local-position
+    """bf16 +-0.0 tie class at W=65568 (the smallest tile-aligned width that needs 32-bit indices) on the rank-stamped engine: the local-position
     stamp folds -0.0 into +0.0 before tagging, so the whole zero group breaks by index
     like torch (which treats +-0 as one tie class). Zeros straddle the k cut for the
     smallest direction; normals cover the largest direction."""
     torch.manual_seed(6)
-    W, k = 65536, 32
+    W, k = W_NEEDS_UINT32, 32
     shape = [1, 1, 32, W]
     input = torch.randn(shape, dtype=torch.bfloat16).abs() + 0.5  # positive normals
     # 48 zeros per row, alternating +0.0 / -0.0, scattered across the row (so the zero
@@ -1357,12 +1399,12 @@ def test_topk_stable_wide_signed_zero(largest, device):
 @pytest.mark.parametrize("largest", (True, False))
 @pytest.mark.parametrize("k", (64, 128))
 def test_topk_stable_wide_cascade_parity(k, largest, device):
-    """k > 32 at W=65536 runs the multi-tile insertion CASCADE (output_tiles = k/32)
+    """k > 32 at W=65568 (the smallest tile-aligned width that needs 32-bit indices) runs the multi-tile insertion CASCADE (output_tiles = k/32)
     on the rank-stamped engine with CHAIN-RANK stamps: each level re-stamps its
     accumulator tile with that tile's round-start chain-position range while the
     loser tile's tags ride to the next level. Plain data-random parity."""
     torch.manual_seed(7)
-    W = 65536
+    W = W_NEEDS_UINT32
     shape = [1, 1, 32, W]
     input = torch.randint(-4, 4, shape).to(torch.bfloat16)
     golden_values, order = _stable_topk_golden(input, k, largest)
@@ -1386,7 +1428,7 @@ def test_topk_stable_wide_cascade_displacement_ties(k, largest, device):
     (the displaced element would be ranked after the accumulator ties it must precede).
     Chain-rank stamps keep those ties in true index order; strict torch-stable parity."""
     torch.manual_seed(9)
-    W = 65536
+    W = W_NEEDS_UINT32
     shape = [1, 1, 32, W]
     levels = torch.tensor([-0.5, 0.5], dtype=torch.bfloat16)
     input = levels[torch.randint(0, 2, shape)]
@@ -1409,15 +1451,15 @@ def test_topk_stable_wide_cascade_displacement_ties(k, largest, device):
 
 
 def test_topk_stable_wide_program_cache(device):
-    """Program-cache behavior across the rank-stamp variants: W=65536 stable k=32
-    (rank-stamped, single tile), W=65536 unstable (plain network) and W=65536
+    """Program-cache behavior across the rank-stamp variants: W=65568 stable k=32
+    (rank-stamped, single tile), W=65568 unstable (plain network) and W=65568
     stable k=64 (rank-stamped CASCADE, two output tiles) must be three DISTINCT
     cache entries — the gate inputs (stable flag, k) are covered by the program
     hash — and a cache-hit rerun of the rank-stamped program on fresh data must
     stay torch-stable-correct (guards the classic works-first-time /
     wrong-on-second-run failure mode)."""
     torch.manual_seed(8)
-    W = 65536
+    W = W_NEEDS_UINT32
     # 64 rows: a shape no other test in this module uses at this width, so the three
     # programs below are guaranteed fresh entries regardless of what ran earlier in
     # the same device session.
