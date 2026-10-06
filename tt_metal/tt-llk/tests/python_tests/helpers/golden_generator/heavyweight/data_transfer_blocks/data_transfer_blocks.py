@@ -280,8 +280,9 @@ class DataTransferBlocks(ABC):
         """Values visible in SrcS.
 
         SrcS uses a per-slice L1 layout rather than one flat block list, so the
-        buffer must have been packed with ``use_srcs=True``. `dest_acc` picks the
-        32-bit slice layout as well as the storage format.
+        buffer must have been packed with ``use_srcs=True``. `dest_acc` selects
+        the storage format; the slice layout follows the resolved src format's
+        width instead, which is what the hardware keys on.
 
         Not a delegate of :meth:`l1_to_srcA`: SrcS has its own format rules, and
         under SrcA's a Float32 input would lose the 13 mantissa bits SrcS keeps.
@@ -300,7 +301,16 @@ class DataTransferBlocks(ABC):
                 f"stays as itself."
             )
         geometry.setdefault("use_srcs", True)
-        values = self.unpack_from_l1(l1_bytes, l1_format, dest_acc=dest_acc, **geometry)
+        # The slice layout follows the SrcS element width, not dest_acc. On
+        # device ``_is_srcs_32bit_mode_`` keys on the UNP_S destination format
+        # -- 32-bit only for Float32, Int32 and Tf32 -- and the harness derives
+        # it the same way, from ``unpack_S_dst.is_32_bit()``. MX lands in SrcS
+        # as Float16_b, so an MX buffer holds 144-byte slices whatever dest_acc
+        # says; reading it at 80 would take the wrong stride through data the
+        # device wrote.
+        values = self.unpack_from_l1(
+            l1_bytes, l1_format, dest_acc=src_format.is_32_bit(), **geometry
+        )
         return self._to_src_storage(values, src_format)
 
     def l1_to_dest(

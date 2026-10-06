@@ -735,3 +735,24 @@ def test_the_enum_and_the_bool_round_trip_identically():
             ).float()
         )
     assert torch.equal(out[0], out[1])
+
+
+# MxFp8R and MxFp8P are the only MX formats the packer lays out in SrcS slices;
+# the others raise NotImplementedError for use_srcs.
+@pytest.mark.parametrize(
+    "l1_format", [DataFormat.MxFp8R, DataFormat.MxFp8P], ids=lambda f: f.name
+)
+def test_the_srcs_slice_layout_follows_the_src_width_not_dest_acc(l1_format):
+    """MX lands in SrcS as Float16_b, so its buffer holds 144-byte slices
+    whatever dest_acc says. Keying the layout on dest_acc would read a
+    device-written buffer at the 80-byte stride."""
+    values = torch.randn(TILE)
+    buf = QUASAR.pack_to_l1(
+        values, l1_format, use_srcs=True, dest_acc=False, **ONE_TILE_GEOMETRY
+    )
+    read = [
+        QUASAR.l1_to_srcS(buf, l1_format, None, dest_acc=acc, **ONE_TILE_GEOMETRY)
+        for acc in (False, True)
+    ]
+    assert read[0].numel() == TILE
+    assert torch.equal(read[0].float(), read[1].float())
