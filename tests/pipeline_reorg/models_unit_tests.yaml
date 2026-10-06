@@ -1928,7 +1928,7 @@
   cmd: |
     export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
-    pytest --tb=short --ignore=models/common/tests/modules models/common/tests
+    pytest --tb=short --ignore=models/common/tests/moe models/common/tests
   model: tt-transformers-common
   model_family: TTTv2
   skus:
