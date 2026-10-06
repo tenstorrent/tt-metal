@@ -129,6 +129,8 @@ inline uint32_t dispatch_read_group_status(uint32_t group_id) { return FdsDispat
 
 inline void dispatch_clear_worker_status(uint32_t worker_lane) { FdsDispatch::fds_clear_neo_status(worker_lane); }
 
+inline void dispatch_clear_group_status(uint32_t group_id) { FdsDispatch::fds_write_group_status(group_id, 0); }
+
 inline uint32_t dispatch_read_group_count(uint32_t group_id) { return FdsDispatch::fds_read_group_count(group_id); }
 
 // Worker PLIC delivery: FDS group g arrives at the PLIC as source plic_source_base + g.
@@ -187,6 +189,11 @@ inline void worker_config_group(uint32_t group_id, uint32_t lane_mask, uint32_t 
 inline uint32_t worker_read_group_status(uint32_t group_id) { return FdsNeo::fds_read_group_status(group_id); }
 
 inline void worker_clear_dispatch_status(uint32_t dispatch_lane) { FdsNeo::fds_clear_de_status(dispatch_lane); }
+
+// Clears only the given lanes.
+inline void worker_clear_group_status(uint32_t group_id, uint32_t dispatch_lanes) {
+    FdsNeo::fds_write_group_status(group_id, ~dispatch_lanes);
+}
 
 inline void worker_wait_for_auto_dispatch_queue_space() {
     WAYPOINT("FADW");
