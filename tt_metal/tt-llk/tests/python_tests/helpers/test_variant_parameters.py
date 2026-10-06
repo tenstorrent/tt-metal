@@ -1964,6 +1964,53 @@ class FILL_INT_FORMAT(TemplateParameter):
 
 
 @dataclass
+class WELFORDS(TemplateParameter):
+    """Compile-time schedule of the Quasar Welford test (sfpu_welfords_quasar_test.cpp).
+
+    Every tile of the bank is folded into the running state in order; the last one covers
+    only rows [start_row, start_row + num_rows) when partial_last_tile is set. With
+    save_restore the state is saved to tile state_dst (mean) / state_dst + 1 (M2) before
+    tile save_after_tiles, cleared, and restored. The finalize writes mean to final_dst and
+    variance to final_dst + 1.
+    """
+
+    reciprocal_size: int = 0
+    partial_last_tile: bool = False
+    start_row: int = 0
+    num_rows: int = 32
+    face_layout: bool = False
+    final_grouped: bool = False
+    final_group_id: int = 0
+    final_dst: int = 0
+    save_restore: bool = False
+    state_grouped: bool = False
+    state_group_id: int = 0
+    state_dst: int = 0
+    save_after_tiles: int = 0
+
+    def convert_to_cpp(self) -> str:
+        def b(value: bool) -> str:
+            return str(value).lower()
+
+        lines: list[str] = [
+            f"constexpr std::size_t WELFORDS_RECIP_SIZE = {self.reciprocal_size};",
+            f"constexpr bool WELFORDS_PARTIAL_LAST_TILE = {b(self.partial_last_tile)};",
+            f"constexpr std::uint32_t WELFORDS_START_ROW = {self.start_row};",
+            f"constexpr std::uint32_t WELFORDS_NUM_ROWS = {self.num_rows};",
+            f"constexpr bool WELFORDS_FACE_LAYOUT = {b(self.face_layout)};",
+            f"constexpr bool WELFORDS_FINAL_GROUPED = {b(self.final_grouped)};",
+            f"constexpr std::uint32_t WELFORDS_FINAL_GROUP_ID = {self.final_group_id};",
+            f"constexpr std::uint32_t WELFORDS_FINAL_DST = {self.final_dst};",
+            f"constexpr bool WELFORDS_SAVE_RESTORE = {b(self.save_restore)};",
+            f"constexpr bool WELFORDS_STATE_GROUPED = {b(self.state_grouped)};",
+            f"constexpr std::uint32_t WELFORDS_STATE_GROUP_ID = {self.state_group_id};",
+            f"constexpr std::uint32_t WELFORDS_STATE_DST = {self.state_dst};",
+            f"constexpr std::uint32_t WELFORDS_SAVE_AFTER_TILES = {self.save_after_tiles};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class TYPECAST_FORMATS(TemplateParameter):
     """Compile-time config for the SFPU typecast test kernel.
 

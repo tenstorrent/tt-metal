@@ -5654,6 +5654,41 @@ class Top32RmGolden:
 
 
 @register_golden
+class WelfordsGolden:
+    """Golden for the Welford running per-column mean / population variance SFPU kernel.
+
+    Folds ``row_blocks`` (each ``[rows, columns]``, in the order the kernel visits them) one
+    row at a time with Welford's update in float64. With ``save_before_block`` set, the state
+    reached just before that block is returned as ``saved_mean`` / ``saved_m2`` and, when
+    ``state_format`` is given, rounded to it before folding continues - the save/restore
+    round trip goes through Dest in that format.
+    """
+
+    def __call__(self, row_blocks, save_before_block=None, state_format=None):
+        columns = row_blocks[0].shape[1]
+        mean = torch.zeros(columns, dtype=torch.float64)
+        m2 = torch.zeros(columns, dtype=torch.float64)
+        count = 0
+        result = {}
+        for block_index, block in enumerate(row_blocks):
+            if block_index == save_before_block:
+                if state_format is not None:
+                    torch_format = format_dict[state_format]
+                    mean = mean.to(torch_format).to(torch.float64)
+                    m2 = m2.to(torch_format).to(torch.float64)
+                result["saved_mean"] = mean.clone()
+                result["saved_m2"] = m2.clone()
+            for row in block.to(torch.float64):
+                count += 1
+                delta = row - mean
+                mean = mean + delta / count
+                m2 = m2 + delta * (row - mean)
+        result["mean"] = mean
+        result["var"] = m2 / count
+        return result
+
+
+@register_golden
 class WhereGolden:
     def __call__(self, operand1, true_value, false_value):
         # Element-wise select matching the C++ sfpu_ternary_function:
