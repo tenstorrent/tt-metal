@@ -619,3 +619,40 @@ def test_integer_dest_accumulates_exactly(current, addend, expected):
         torch.tensor([current], dtype=torch.int32),
     )
     assert got.item() == expected
+
+
+# A derived Dest format gets the same checks as an explicit one. Deriving it is
+# not a reason to skip them: an Int32 input with accumulation off would
+# otherwise produce a 32-bit Dest that resolve_dest_format rejects when the
+# caller passes the identical format by hand.
+@pytest.mark.parametrize(
+    "blocks, l1_format, dest_acc",
+    [
+        (QUASAR, DataFormat.Int32, False),  # 32-bit Dest, accumulation off
+        (QUASAR, DataFormat.Int16, True),  # Int16 cannot drive a 32-bit Dest
+        (WORMHOLE, DataFormat.UInt16, False),  # readable from L1, not a Dest format
+        (WORMHOLE, DataFormat.UInt32, False),
+    ],
+    ids=["int32-no-acc", "int16-acc", "wh-uint16", "wh-uint32"],
+)
+def test_a_derived_integer_dest_is_checked_like_an_explicit_one(
+    blocks, l1_format, dest_acc
+):
+    with pytest.raises(ValueError):
+        blocks.dest_format_for(l1_format, dest_acc)
+
+
+@pytest.mark.parametrize(
+    "l1_format, dest_acc, expected",
+    [
+        (DataFormat.Int8, False, DataFormat.Int8),
+        (DataFormat.Int8, True, DataFormat.Int32),
+        (DataFormat.UInt8, False, DataFormat.UInt8),
+        (DataFormat.UInt8, True, DataFormat.Int32),
+        (DataFormat.Int16, False, DataFormat.Int16),
+        (DataFormat.Int32, True, DataFormat.Int32),
+    ],
+    ids=lambda v: getattr(v, "name", str(v)),
+)
+def test_the_legal_integer_dest_pairings_still_resolve(l1_format, dest_acc, expected):
+    assert QUASAR.dest_format_for(l1_format, dest_acc) == expected
