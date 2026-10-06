@@ -16,7 +16,12 @@ highlighted, which answers *where* in the tile. What it cannot answer is:
   this report does not have. What it shows is the golden's, which narrows the
   question: a device zero against a golden Dest above the Dest format's
   smallest normal is not explained by flush-to-zero alone. To settle it, re-run
-  with a Float16 output, where the device's packed result *is* its Dest.
+  with an output **in the Dest format**, where the device's packed result *is*
+  its Dest. Not "with a Float16 output": that only coincides when Dest is
+  Float16 too, and for a Float16_b input Dest is Float16_b, so a Float16 output
+  narrows the exponent range and can zero values between 2**-126 and 2**-14 by
+  itself -- which is the very symptom this was meant to settle.
+  ``describe_mismatch`` already knows which is which, through ``dest_format``.
 
 So this adds a step-ranked table, the golden's pre-pack Dest beside it, and the
 chain that produced it. Use it alongside ``passed_test``, not instead of it.
@@ -27,7 +32,13 @@ from typing import Optional, Sequence, Tuple
 import torch
 from helpers.format_config import DataFormat
 from helpers.llk_params import format_dict
-from helpers.utils import _MXFP_COMPARE_PARAMS, calculate_pcc, mxfp_local_step
+from helpers.tile_constants import MAX_TILE_ELEMENTS
+from helpers.utils import (
+    _MXFP_COMPARE_PARAMS,
+    calculate_pcc,
+    mxfp_local_step,
+    tolerances,
+)
 
 from .operations.chain import Chain, StageRecord
 
@@ -54,13 +65,18 @@ def lattice_step(
     return step, max_steps
 
 
+#: ``passed_test``'s PCC gate for a format with no block-float special case.
+#: Mirrored rather than imported: it is a local in ``passed_test``.
+DEFAULT_PCC_THRESHOLD = 0.99
+
+
 def describe_mismatch(
     golden: torch.Tensor,
     actual: torch.Tensor,
     *,
     context: str = "",
     output_format: Optional[DataFormat] = None,
-    datums_per_tile: int = 1024,
+    datums_per_tile: int = MAX_TILE_ELEMENTS,
     chain: Optional[Chain] = None,
     trace: Optional[Sequence[StageRecord]] = None,
     dest: Optional[torch.Tensor] = None,
@@ -124,12 +140,38 @@ def describe_mismatch(
             f"   PCC {calculate_pcc(golden, actual):.9f}"
         )
     else:
-        lines.append(
-            f"  {int(differ.sum())} / {g.numel()} datums differ"
-            f"   PCC {calculate_pcc(golden, actual):.9f}\n"
-            f"  No lattice model for this output format, so the ranking below "
-            f"is by absolute error and the tolerance is not shown"
-        )
+        # Same two gates passed_test applies, so "failures" here means the same
+        # thing it does: torch.isclose at the format's tolerance, then PCC.
+        # Without this the line counts every non-zero error, most of which pass,
+        # and the top of the table reads as the cause when it is noise.
+        pcc = calculate_pcc(golden, actual)
+        tolerance = tolerances.get(output_format) if output_format else None
+        if tolerance is not None:
+            close = torch.isclose(g, a, rtol=tolerance.rtol, atol=tolerance.atol) | (
+                torch.isnan(g) & torch.isnan(a)
+            )
+            over = ~close
+            lines.append(
+                f"  {int(differ.sum())} / {g.numel()} datums differ, of which "
+                f"{int(over.sum())} are outside atol={tolerance.atol} "
+                f"rtol={tolerance.rtol} -- those are the failures; the rest "
+                f"differ but pass"
+                f"   PCC {pcc:.9f} (threshold {DEFAULT_PCC_THRESHOLD})"
+            )
+            lines.append(
+                f"  No lattice model for this output format, so the ranking "
+                f"below is by absolute error -- with rtol in play a large "
+                f"passing datum can outrank a small failing one"
+            )
+        else:
+            over = None
+            lines.append(
+                f"  {int(differ.sum())} / {g.numel()} datums differ"
+                f"   PCC {pcc:.9f}\n"
+                f"  No lattice model and no tolerance for this output format, "
+                f"so the ranking below is by absolute error and the tolerance "
+                f"is not shown"
+            )
 
     order = torch.argsort(steps, descending=True)[:worst]
     d = (
