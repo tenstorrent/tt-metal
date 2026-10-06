@@ -420,7 +420,7 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 1750
+    bh_sc1: 1790
     bh_sc1_high_power: 448
     bh_sc4: 60
     wh_n150: 500
@@ -472,7 +472,8 @@ syseng:
     wh_n150_civ2: 34
     wh_n300_civ2: 36
     bh_p100: 20
-    bh_p150b_civ2: 20
+    bh_p150b_civ2: 30
+    bh_p300: 10
 
 gtm:
   e2e:

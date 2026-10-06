@@ -11,7 +11,7 @@ import pytest
 import torch
 from conftest import skip_for_quasar
 from helpers.chip_architecture import ChipArchitecture
-from helpers.data_format_inference import is_format_combination_outlier
+from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -20,14 +20,23 @@ from helpers.golden_generators import (
     get_golden_generator,
     quantize_input_to_unpack_format,
 )
+from helpers.llk_params import (
+    ApproximationMode,
+)
 from helpers.llk_params import BroadcastType as LlkBroadcastType
-from helpers.llk_params import DestAccumulation, DestSync, MathOperation, format_dict
+from helpers.llk_params import (
+    DestAccumulation,
+    DestSync,
+    MathOperation,
+    format_dict,
+)
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
     runtime,
 )
+from helpers.sfpu_accuracy_budget import assert_within_contract_tolerance
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
     _SFPU_BINARY_OPS,
@@ -56,7 +65,6 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.tilize_untilize import tilize
-from helpers.utils import passed_test
 
 # =============================================================================
 # Shared skip helpers
@@ -100,50 +108,11 @@ def _skip_sfpu_lcm_dest_acc_bh(mathop, dest_acc):
 # Number of faces per tile for the [64, 32] two-tile binary harness layout
 # (a 32x32 tile is 4 faces of 16x16, and input_dimensions=[64, 32] is 8 faces).
 _FACES_PER_TILE = 4
+
+#: The approximation mode the contract-gated drivers below compile, and so the one their
+#: contract names.
+_APPROX_MODE = ApproximationMode.No
 _ELEMENTS_PER_TILE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
-
-
-# Per-op (atol, rtol) overrides. The unary side's CUSTOM_TOLERANCES is gone: those numbers
-# moved next to their ops in helpers/sfpu_accuracy_budget.yaml, which the unary driver
-# reads through accuracy_contract() in helpers/sfpu_accuracy_budget.py -- the table is the
-# YAML, the module only loads and resolves it. This table is the binary equivalent, not
-# yet migrated.
-# `None` keeps the format default. Only two ops belong here: their error is a property of the
-# op's own composition rather than of the stimuli, so it grows with the operands however the
-# domain is drawn. pow's error is relative and roughly flat; xlogy's is absolute and linear in
-# x. Both are measured over the registered domains -- re-measure before widening either.
-BINARY_CUSTOM_TOLERANCES = {
-    # Listed per output format only to keep Bfp8_b out of it: its default rtol is 0.2, so an
-    # override of 0.15 would tighten rather than loosen it. pow's error does not scale with the
-    # output format's precision, so the same rtol suits every float column.
-    MathOperation.SfpuElwpow: {
-        DataFormat.Float32: (None, 0.15),
-        DataFormat.Float16_b: (None, 0.15),
-        DataFormat.Float16: (None, 0.15),
-    },
-    # Keyed by output format, because the measured error splits by nearly 5x between them:
-    # applying Float16_b's atol to Float32 would accept five times what that format produces.
-    MathOperation.SfpuXlogy: {
-        DataFormat.Float32: (0.14, None),  # 0.116 measured, same ~20% margin as bf16
-        DataFormat.Float16_b: (0.6, None),
-        DataFormat.Float16: (0.12, None),  # 0.0989 measured
-    },
-}
-
-# Fallback for an output format the per-format table does not list: no override at all, so the
-# per-format tolerance in helpers/utils.py applies. Deliberately not the widest measured value,
-# which would loosen an unlisted format well past anything the measurement covered.
-_UNLISTED_FORMAT_TOLERANCE = (None, None)
-
-
-def _custom_tolerances(mathop, output_format):
-    """The (atol, rtol) override for *mathop*, per output format where it has one."""
-    entry = BINARY_CUSTOM_TOLERANCES.get(mathop)
-    if entry is None:
-        return (None, None)
-    if isinstance(entry, dict):
-        return entry.get(output_format, _UNLISTED_FORMAT_TOLERANCE)
-    return entry
 
 
 def _build_paired_tile_override(pairs, dtype):
@@ -531,8 +500,15 @@ def sfpu_binary(
             tile_cnt=tile_cnt_A,
         )
 
-    # Blackhole needs a 32-bit Dest for these formats. Hoisted above the golden call, which
-    # models the Dest width from the effective dest_acc.
+    # The kernel runs with a 32-bit Dest where the hardware needs one -- an exponent-B
+    # input packed to Float16 on every arch but Quasar (`effective_dest_acc`, the rule
+    # TestConfig applies silently), a Float16/Float32 input on Blackhole -- so dest_acc
+    # is promoted here too. Hoisted above the golden, which models the Dest width from
+    # it, and above the contract, whose `dest: "Yes"` rows describe the kernel that ran.
+    # Left at No, both would describe a variant that never executed.
+    dest_acc = effective_dest_acc(
+        formats.input_format, formats.output_format, dest_acc, TestConfig.CHIP_ARCH
+    )
     if (
         formats.input_format in [DataFormat.Float16, DataFormat.Float32]
         and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
@@ -582,7 +558,7 @@ def sfpu_binary(
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop),
-            APPROX_MODE(),
+            APPROX_MODE(_APPROX_MODE),
             BROADCAST_TYPE(bcast),
         ],
         runtimes=[
@@ -614,11 +590,6 @@ def sfpu_binary(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
 
-    # Per-op tolerances, for the two ops whose error is a property of the op's own
-    # composition rather than of the stimuli, and per output format where the error splits by
-    # format. See BINARY_CUSTOM_TOLERANCES.
-    custom_atol, custom_rtol = _custom_tolerances(mathop, formats.output_format)
-
     if unspecified_nonfinite_sign and generated_nan_chunks:
         # Clear the sign only on lanes that held a generated NaN and where both sides are
         # non-finite, so this excuses one bit on the lanes the ISA declines to pin and nothing
@@ -631,13 +602,14 @@ def sfpu_binary(
         golden_tensor = torch.where(unspecified, golden_tensor.abs(), golden_tensor)
         res_tensor = torch.where(unspecified, res_tensor.abs(), res_tensor)
 
-    assert passed_test(
+    assert_within_contract_tolerance(
+        mathop,
+        formats,
+        dest_acc,
         golden_tensor,
         res_tensor,
-        formats.output_format,
-        custom_atol=custom_atol,
-        custom_rtol=custom_rtol,
-    ), "Assert against golden failed"
+        approx_mode=_APPROX_MODE,
+    )
 
 
 # =============================================================================
@@ -699,11 +671,10 @@ def test_eltwise_binary_sfpu_float(
             "Bfp8_b input is not supported for XLOGY/LOGADDEXP/LOGADDEXP2 coverage"
         )
 
-    if bcast_dim == LlkBroadcastType.Row and (
-        dest_acc == DestAccumulation.Yes
-        or is_format_combination_outlier(
-            formats.input_format, formats.output_format, dest_acc
-        )
+    if (
+        bcast_dim == LlkBroadcastType.Row
+        and effective_dest_acc(formats.input_format, formats.output_format, dest_acc)
+        == DestAccumulation.Yes
     ):
         pytest.skip(
             "Row broadcast with FP32 dest: B2D datacopy uses MOVB2D which can't handle FP32 dest format conversion"
@@ -1600,7 +1571,7 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop):
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop),
-            APPROX_MODE(),
+            APPROX_MODE(_APPROX_MODE),
             BROADCAST_TYPE(LlkBroadcastType.None_),
         ],
         runtimes=[
@@ -1632,9 +1603,15 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop):
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
 
-    assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
-    ), "Assert against golden failed"
+    # Without this a row for SfpuAddTopRow would be inert.
+    assert_within_contract_tolerance(
+        mathop,
+        formats,
+        dest_acc,
+        golden_tensor,
+        res_tensor,
+        approx_mode=_APPROX_MODE,
+    )
 
 
 # =============================================================================
@@ -1805,6 +1782,7 @@ def test_eltwise_binary_sfpu_bcast(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
-    assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
-    ), "Assert against golden failed"
+    # approx_mode unset: this kernel compiles no APPROX_MODE.
+    assert_within_contract_tolerance(
+        mathop, formats, dest_acc, golden_tensor, res_tensor
+    )
