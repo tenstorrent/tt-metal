@@ -1967,11 +1967,12 @@ class FILL_INT_FORMAT(TemplateParameter):
 class WELFORDS(TemplateParameter):
     """Compile-time schedule of the Quasar Welford test (sfpu_welfords_quasar_test.cpp).
 
-    Every tile of the bank is folded into the running state in order; the last one covers
-    only rows [start_row, start_row + num_rows) when partial_last_tile is set. With
-    save_restore the state is saved to tile state_dst (mean) / state_dst + 1 (M2) before
-    tile save_after_tiles, cleared, and restored. The finalize writes mean to final_dst and
-    variance to final_dst + 1.
+    Every tile is folded into the running state in order; the last one covers only rows
+    [start_row, start_row + num_rows) when partial_last_tile is set. The tiles pass through
+    Dest in blocks of tiles_per_block (0 = one block), one Dest section each. With
+    save_restore the state is saved to tile state_dst (mean) / state_dst + 1 (M2) of the
+    current block before global tile save_after_tiles, cleared, and restored. The finalize,
+    in the last block, writes mean to final_dst and variance to final_dst + 1.
     """
 
     reciprocal_size: int = 0
@@ -1987,6 +1988,7 @@ class WELFORDS(TemplateParameter):
     state_group_id: int = 0
     state_dst: int = 0
     save_after_tiles: int = 0
+    tiles_per_block: int = 0
 
     def convert_to_cpp(self) -> str:
         def b(value: bool) -> str:
@@ -2006,6 +2008,7 @@ class WELFORDS(TemplateParameter):
             f"constexpr std::uint32_t WELFORDS_STATE_GROUP_ID = {self.state_group_id};",
             f"constexpr std::uint32_t WELFORDS_STATE_DST = {self.state_dst};",
             f"constexpr std::uint32_t WELFORDS_SAVE_AFTER_TILES = {self.save_after_tiles};",
+            f"constexpr std::uint32_t WELFORDS_TILES_PER_BLOCK = {self.tiles_per_block};",
         ]
         return "\n".join(lines)
 
