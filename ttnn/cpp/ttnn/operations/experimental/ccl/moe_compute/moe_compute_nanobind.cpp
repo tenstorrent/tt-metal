@@ -417,9 +417,10 @@ void bind_moe_compute_utils(nb::module_& mod) {
         reads (each ring core stores only its own gate/up columns). See
         ``ttnn.experimental.moe_compute_utils`` for the layout contract. Output
         local shape: ``(num_banks, L, E, bank_blocks_per_expert, block_rows,
-        4*TILE_SIZE)`` in TILE_LAYOUT (block_rows = 7*TILE_SIZE for 14-tile transactions, 5*TILE_SIZE for
-        10), or, for 14-tile transactions where every core owns the same even
-        column count, ``(num_cores, L, E, groups_per_core, K_padded, 4*TILE_SIZE)``.
+        4*TILE_SIZE)`` in TILE_LAYOUT (block_rows = 7*TILE_SIZE for 14-tile
+        transactions, 10*TILE_SIZE for 20-tile ones), or, for 14-tile
+        transactions where every core owns the same even column count,
+        ``(num_cores, L, E, groups_per_core, K_padded, 4*TILE_SIZE)``.
 
         The per-core shard map is derived internally from ``K`` (hidden_size)
         and ``N`` (intermediate_size) via ``get_weight_core_shard_maps``.
@@ -438,7 +439,9 @@ void bind_moe_compute_utils(nb::module_& mod) {
         R"doc(
         Pack W2 into the ring-rotated per-core layout the MoE kernel reads.
         Output local shape:
-        ``(num_cores, L, E, w2_groups_per_core, N_padded, 4*TILE_SIZE)`` in TILE_LAYOUT.
+        ``(num_cores, L, E, w2_groups_per_core, N_padded, 4*TILE_SIZE)`` in TILE_LAYOUT,
+        or ``(num_cores, L, E, w2_blocks_per_core, block_rows, 4*TILE_SIZE)`` when the
+        last a2a iteration is half width (20-tile transactions only).
 
         The per-core shard maps are derived internally from ``K`` (hidden_size)
         and ``N`` (intermediate_size) via ``get_weight_core_shard_maps``.

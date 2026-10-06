@@ -8,8 +8,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "moe_ring_common.h"
 
-// Weight CB slots (blocks): Cfg::weight_cb_slots -- 3 for 14- and 20-tile transactions (4 for 10-tile); all but one
-// slot hold blocks whose DRAM reads are in flight.
+// Weight CB slots (blocks): Cfg::weight_cb_slots; all but one slot hold blocks whose DRAM reads are in flight.
 #define NUM_SLOTS Cfg::weight_cb_slots
 
 // Helper macros for counter advancement (avoids modulo on RISC-V)
@@ -35,7 +34,7 @@ void kernel_main() {
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t num_shared_experts = get_named_compile_time_arg_val("num_shared_experts");
     constexpr uint32_t shared_expert_tp_factor = get_named_compile_time_arg_val("shared_expert_tp_factor");
-    // Per-shape DRAM transaction size of both weight streams (moe_ring::tiles_per_txn_for_shape: 14, or 10)
+    // Per-shape DRAM transaction size of both weight streams (moe_ring::tiles_per_txn_for_shape: 14, or 20)
     constexpr uint32_t tiles_per_txn = get_named_compile_time_arg_val("tiles_per_txn");
 
     using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias, shared_expert_tp_factor, tiles_per_txn>;
@@ -112,16 +111,14 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // W0 and W1 reading constants
     //-------------------------------------------------------------------------
-    // The transaction size is a per-shape parameter (Cfg::tiles_per_txn: 14, or 20 for the 2560/640 expert),
-    // the same for both streams.
-    constexpr uint32_t w0_w1_txns_per_block = Cfg::txns_per_block;
+    // Both streams use the same transaction size. A block is 2 transactions: 28 tiles with 14-tile
+    // transactions, 40 with 20-tile ones.
     constexpr uint32_t w0_w1_tiles_per_txn = Cfg::tiles_per_txn;
-    constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28 (10 * 2)
+    constexpr uint32_t w0_w1_tiles_per_block = Cfg::tiles_per_block;
 
     // W2 reading constants
-    constexpr uint32_t w2_txns_per_block = Cfg::txns_per_block;
     constexpr uint32_t w2_tiles_per_txn = Cfg::tiles_per_txn;
-    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;  // 14 * 2 = 28 (10 * 2)
+    constexpr uint32_t w2_tiles_per_block = Cfg::tiles_per_block;
 
     //-------------------------------------------------------------------------
     // DRAM Reading constants
