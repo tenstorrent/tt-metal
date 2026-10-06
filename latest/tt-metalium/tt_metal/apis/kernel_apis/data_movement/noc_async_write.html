@@ -311,7 +311,7 @@
 </dt>
 <dd>
 <p>Initiates an asynchronous write from a source address in L1 memory on the Tensix core executing this function call. The destination is specified using a uint64_t encoding referencing an on-chip node located at NOC coordinates (x,y) and a local address created using get_noc_addr function. Also, see <em>noc_async_write_barrier</em>.</p>
-<p>The destination node can be either a DRAM bank, Tensix core+L1 memory address or a PCIe controller.</p>
+<p>The destination node can be either a DRAM bank or a Tensix core+L1 memory address. To write to a PCIe-routed address, use <em>noc_async_write_pcie</em> instead.</p>
 <p>Return value: None</p>
 <p></p>
 <div class="tt-api-param-list colwidths-auto docutils container">
