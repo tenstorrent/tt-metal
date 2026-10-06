@@ -4009,6 +4009,14 @@ class EltwiseBinaryGolden(FidelityMasking):
         return (t1 >= t2).to(torch.int32)
 
 
+# The fixed destination-row mask of BinaryOp::RESHUFFLE_ROWS in the Quasar test dispatch
+# (RESHUFFLE_ROWS_FUSER_MASK in sfpu_operations_quasar.h, after its 16 header bytes). Keep in sync.
+RESHUFFLE_ROWS_FUSER_MASK = [
+    *(31, 30, 16, 15, 255, 32, 0, 0, 0, 47, 5, 5, 48, 254, 17, 3),
+    *(1, 2, 31, 31, 100, 8, 9, 15, 16, 255, 20, 21, 22, 64, 7, 0),
+]
+
+
 @register_golden
 class BinarySFPUGolden(EltwiseBinaryGolden):
     def __init__(self):
@@ -4033,6 +4041,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuElwLeftShift: self._left_shift,
                 MathOperation.SfpuElwLogicalRightShift: self._logical_right_shift,
                 MathOperation.SfpuAddTopRow: self._add_top_row,
+                MathOperation.SfpuReshuffleRows: self._reshuffle_rows,
                 MathOperation.SfpuElwLt: self._lt,
                 MathOperation.SfpuElwGt: self._gt,
                 MathOperation.SfpuElwLe: self._le,
@@ -4155,6 +4164,21 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 src2_idx,
                 dst_idx,
                 data_format,
+            )
+
+        if operation == MathOperation.SfpuReshuffleRows:
+            if not skip_tilize or tile_dimensions != TILE_DIMENSIONS:
+                raise ValueError(
+                    "SfpuReshuffleRows works on a tilized Dest image of 32x32 tiles "
+                    "(skip_tilize=True)"
+                )
+            if src2_idx != src1_idx + 1 or dst_idx != src2_idx:
+                raise ValueError(
+                    "SfpuReshuffleRows needs src2 = src1 + 1 and dst = src2, got "
+                    f"({src1_idx}, {src2_idx}, {dst_idx})"
+                )
+            return self._reshuffle_rows(
+                tensor.flatten(), src1_idx, dst_idx, data_format
             )
 
         if not skip_tilize and data_format not in (
@@ -4608,6 +4632,32 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         # stimuli; the golden only needs x. It is a piecewise (poly + exp) approximation,
         # so it is matched under the PCC tolerance. Evaluated in fp32.
         return torch.nn.functional.logsigmoid(t1.to(torch.float32))
+
+    def _reshuffle_rows(self, tensor, src_idx, dst_idx, data_format):
+        """
+        reshuffle_rows on a tilized Dest image: every row ``i`` of tile ``src_idx`` with
+        ``RESHUFFLE_ROWS_FUSER_MASK[i] < 32`` is added into row ``mask[i]`` of tile ``dst_idx``,
+        in row order, each partial sum rounded to ``data_format`` as the per-row Dest store does.
+        """
+        result = tensor.clone()
+        torch_format = format_dict[data_format]
+
+        def tile_row(tile, row):
+            # Row r of a tilized 32x32 tile: 16 datums in the left face, 16 in the one beside it.
+            face = (row // FACE_DIM) * 2
+            base = tile * ELEMENTS_PER_TILE + face * FACE_DIM * FACE_DIM
+            start = base + (row % FACE_DIM) * FACE_DIM
+            left = torch.arange(start, start + FACE_DIM)
+            return torch.cat([left, left + FACE_DIM * FACE_DIM])
+
+        for in_row, out_row in enumerate(RESHUFFLE_ROWS_FUSER_MASK):
+            if out_row >= TILE_DIM:
+                continue
+            src = tile_row(src_idx, in_row)
+            dst = tile_row(dst_idx, out_row)
+            summed = result[dst].to(torch.float32) + result[src].to(torch.float32)
+            result[dst] = summed.to(torch_format).to(result.dtype)
+        return result
 
     def _add_top_row(
         self,

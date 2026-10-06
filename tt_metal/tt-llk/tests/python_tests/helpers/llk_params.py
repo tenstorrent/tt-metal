@@ -264,6 +264,9 @@ class MathOperation(Enum):
     SfpuElwpow = OpSpec("POW", MathOpType.SFPU_BINARY)
     SfpuLogaddexp = OpSpec("LOGADDEXP", MathOpType.SFPU_BINARY)
     SfpuLogaddexp2 = OpSpec("LOGADDEXP2", MathOpType.SFPU_BINARY)
+    # reshuffle_rows as the fuser drives it: tile in0 scatter-added into tile in1 = in0 + 1 (in place)
+    # under the fixed row mask RESHUFFLE_ROWS_FUSER_MASK of the Quasar test dispatch.
+    SfpuReshuffleRows = OpSpec("RESHUFFLE_ROWS", MathOpType.SFPU_BINARY)
     SfpuElwmulInt = OpSpec("MUL", MathOpType.SFPU_BINARY_INT)
     SfpuGtInt = OpSpec("GT_INT", MathOpType.SFPU_BINARY_INT)
     SfpuLtInt = OpSpec("LT_INT", MathOpType.SFPU_BINARY_INT)
