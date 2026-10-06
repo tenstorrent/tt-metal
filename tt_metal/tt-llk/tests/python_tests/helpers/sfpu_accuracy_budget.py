@@ -134,18 +134,21 @@ class AccuracyContract:
             return {}
         return {"custom_atol": self.atol, "custom_rtol": self.rtol}
 
-    def passed_test_kwargs(self, flush_subnormals: bool = False) -> Dict[str, Any]:
+    def passed_test_kwargs(
+        self, flush_subnormals: Optional[bool] = None
+    ) -> Dict[str, Any]:
         """The contract as ``passed_test`` keyword arguments, whichever metric it is on,
         so a call site is one ``**`` expansion and switching metrics is a table edit.
 
-        *flush_subnormals* asks the ULP arm to rank with the subnormal band collapsed,
-        which only changes anything on an fp16 output: the golden keeps IEEE fp16
+        *flush_subnormals* means what it means to ``passed_test``: ``None`` keeps the
+        metric's per-dtype default, ``True``/``False`` override it for the ULP arm. It
+        only changes anything on an fp16 output, where the golden keeps IEEE fp16
         subnormals the pack does not reproduce. The tolerance arm has no such notion, so
         it is dropped there rather than passed on for ``passed_test`` to refuse."""
         if self.metric is Metric.ULP:
             kwargs = {"max_ulp": self.max_ulp, "near_zero_atol": self.near_zero_atol}
-            if flush_subnormals:
-                kwargs["flush_subnormals"] = True
+            if flush_subnormals is not None:
+                kwargs["flush_subnormals"] = flush_subnormals
             return kwargs
         return {"custom_atol": self.atol, "custom_rtol": self.rtol}
 
@@ -455,9 +458,10 @@ def accuracy_contract(
 #: included. The metric keeps fp16's subnormal band by default, but the golden keeps IEEE
 #: subnormals the pack path does not reproduce: a near-cancelling ``a - b`` lands there
 #: 140 steps from a correct kernel, and an exact unary op read 512 steps on
-#: Float16_b->Float16 from that band alone. One policy, named once: the binary and ternary
-#: gate (:func:`assert_against_contract`) and the exhaustive unary sweep's emit and gate
-#: all rank with it, and their rows were measured that way.
+#: Float16_b->Float16 from that band alone. One policy, named once: every step-budget gate
+#: hands it to ``passed_test_kwargs`` -- the binary and ternary gate
+#: (:func:`assert_against_contract`), the unary step-budget drivers, and the exhaustive
+#: unary sweep's emit and gate -- and their rows were measured that way.
 FLUSH_SUBNORMAL_OUTPUTS = True
 
 

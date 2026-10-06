@@ -304,8 +304,7 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         result,
         out_fmt,
         mask=mask,
-        flush_subnormals=_FLUSH_SUBNORMALS,
-        **contract.passed_test_kwargs(),
+        **contract.passed_test_kwargs(flush_subnormals=_FLUSH_SUBNORMALS),
     ), (
         f"{cell}: failed a {contract.max_ulp}-step budget over {lanes} swept lanes; "
         "the failing lanes are in the ULP-budget log above. Raw maximum before any "

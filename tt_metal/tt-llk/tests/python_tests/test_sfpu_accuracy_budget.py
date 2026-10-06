@@ -232,11 +232,14 @@ def test_a_contract_translates_to_passed_test_arguments(contract, by_ulp, by_tol
     assert contract.passed_test_kwargs() == by_ulp
     assert contract.tolerance_kwargs() == by_tolerance
     # The flush request reaches only the ULP arm: passed_test refuses it without a budget.
-    flushed = contract.passed_test_kwargs(flush_subnormals=True)
-    if contract.metric is Metric.ULP:
-        assert flushed == {**by_ulp, "flush_subnormals": True}
-    else:
-        assert flushed == by_ulp
+    # Either value is passed on as passed_test reads it -- False is "unflushed", not the
+    # per-dtype default, which only None keeps.
+    for flush in (True, False):
+        flushed = contract.passed_test_kwargs(flush_subnormals=flush)
+        if contract.metric is Metric.ULP:
+            assert flushed == {**by_ulp, "flush_subnormals": flush}
+        else:
+            assert flushed == by_ulp
 
 
 @pytest.mark.parametrize(
@@ -273,7 +276,8 @@ def test_the_binary_gate_enforces_the_whole_contract(arch, gated, monkeypatch):
 
     fp16 = InputOutputFormat(DataFormat.Float16, DataFormat.Float16)
     golden = torch.ones(lanes, dtype=torch.float16)
-    golden[0] = 3.0e-5  # an fp16 subnormal: ~500 steps from 0 unflushed
+    # Half the smallest fp16 normal: an fp16 subnormal, 512 steps from 0 unflushed.
+    golden[0] = float(torch.finfo(torch.float16).smallest_normal) / 2
     flushed = golden.clone()
     flushed[0] = 0.0
     assert_against_contract(
@@ -989,6 +993,13 @@ def _exact_driver_skip(driver, op, formats, dest_acc):
     return None
 
 
+def _step_gateable_output(fmt) -> bool:
+    """An output a step budget can gate: not an integer, which wants bit equality, nor a
+    block float, which keeps its lattice compare. The exact-op guards and the
+    not-measurable audit filter on it, so they agree on what "gateable" means."""
+    return has_ulp_gate(fmt) and fmt not in _ULP_PROXY_DTYPES
+
+
 def test_every_driven_variant_of_an_exact_op_is_gated():
     """`test_an_exact_op_never_carries_a_wide_budget` asks only that each exact op keep
     *some* step budget: drop every `SfpuMask` Float16_b row and keep its Float32 one, and
@@ -1005,8 +1016,8 @@ def test_every_driven_variant_of_an_exact_op_is_gated():
     ungated, claimed = [], []
     for driver, op, formats, approx, dest in _exact_op_driver_variants():
         out_fmt = formats.output_format
-        if not has_ulp_gate(out_fmt) or out_fmt in _ULP_PROXY_DTYPES:
-            continue  # an integer output wants bit equality; a block float a lattice
+        if not _step_gateable_output(out_fmt):
+            continue
         promoted = effective_dest_acc(
             formats.input_format, out_fmt, dest, MEASURED_ARCH
         )
@@ -1051,8 +1062,7 @@ def test_every_exact_op_is_driven_by_a_gate():
     driven = {
         op
         for driver, op, formats, _, dest in _exact_op_driver_variants()
-        if has_ulp_gate(formats.output_format)
-        and formats.output_format not in _ULP_PROXY_DTYPES
+        if _step_gateable_output(formats.output_format)
         and not _exact_driver_skip(driver, op, formats, dest)
     }
     unreached = set(EXACT_ZERO_BY_CONSTRUCTION) - driven - set(_swept_exact_ops())
@@ -1408,8 +1418,8 @@ def _not_measurable_cells(path=_TABLE_PATH):
             continue
         fields = _row_fields(line)
         out_fmt = DataFormat[fields["out"]]
-        if not has_ulp_gate(out_fmt) or out_fmt in _ULP_PROXY_DTYPES:
-            continue  # a block output is never gated from this sweep
+        if not _step_gateable_output(out_fmt):
+            continue
         cells.append(
             (
                 MathOperation[op],

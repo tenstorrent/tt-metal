@@ -80,15 +80,12 @@ def fp32_no_dest_acc_skip_reason(formats, dest_acc):
     ``None``. The exact-op guard in test_sfpu_accuracy_budget.py asks it too, so its
     exclusions cannot drift from the skip."""
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        return (
-            "32-bit inputs need dest_acc=Yes here: sfpu_binary unpacks a 32-bit input "
-            "straight to Dest (unpack_to_dest), which needs a 32-bit Dest"
-        )
+        return "32-bit inputs need a 32-bit Dest (dest_acc=Yes)"
     return None
 
 
 def _skip_fp32_no_dest_acc(formats, dest_acc):
-    """sfpu_binary unpacks a 32-bit input straight to Dest, which needs dest_acc=Yes."""
+    """32-bit inputs need a 32-bit Dest (dest_acc=Yes)."""
     reason = fp32_no_dest_acc_skip_reason(formats, dest_acc)
     if reason:
         pytest.skip(reason)
@@ -1895,9 +1892,7 @@ def _run_sfpu_binary_bcast(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
     # approx_mode unset: this kernel compiles no APPROX_MODE.
-    assert_against_contract(
-        mathop, formats, dest_acc, golden_tensor, res_tensor
-    )
+    assert_against_contract(mathop, formats, dest_acc, golden_tensor, res_tensor)
 
 
 @skip_for_quasar

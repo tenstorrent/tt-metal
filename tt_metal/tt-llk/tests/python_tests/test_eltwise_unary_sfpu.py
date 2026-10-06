@@ -29,7 +29,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
-from helpers.sfpu_accuracy_budget import accuracy_contract
+from helpers.sfpu_accuracy_budget import FLUSH_SUBNORMAL_OUTPUTS, accuracy_contract
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
     SHIFT_EDGE_AMOUNTS,
@@ -1178,18 +1178,21 @@ ISINF_ISNAN_MATHOPS = [
 
 
 # The predicates a bf16 input at dest_acc=Yes cannot answer. That unpack path hands the
-# SFPU a NaN as -inf (measured on Wormhole: Identity writes -inf on every NaN lane, while
-# +inf and -inf arrive intact), and which predicates that breaks follows from it rather
-# than being a blanket property of the pipeline: on the NaN lanes is_nan reads 0 where the
-# golden says 1, and is_inf and is_neg_inf read 1 where it says 0. The other two survive
-# because -inf answers them as NaN would -- isposinf and isfinite are 0 for both.
+# SFPU a NaN as the infinity of its own sign (measured on Wormhole with both NaN signs
+# driven: Identity writes +inf on every +NaN lane and -inf on every -NaN lane, while +inf
+# and -inf arrive intact), and which predicates that breaks follows from it rather than
+# being a blanket property of the pipeline: is_nan reads 0 on every NaN lane, is_inf 1,
+# is_pos_inf 1 on +NaN and is_neg_inf 1 on -NaN, where the golden says the opposite. Only
+# is_finite survives, being 0 for an infinity and a NaN alike. (A stimulus of one NaN sign
+# hides half of that: torch's bf16 cast gives 0xFFFF, and is_pos_inf then read clean.)
 #
-# Skipping the whole op list here withheld those two as well; they are swept now, so a
+# Skipping the whole op list here withheld is_finite as well; it is swept now, so a
 # regression in the inf path is caught on a bf16 input instead of only on Float32.
 _ISINF_ISNAN_BF16_DEST_UNSUPPORTED = [
     MathOperation.Isinf,
     MathOperation.Isneginf,
     MathOperation.Isnan,
+    MathOperation.Isposinf,
 ]
 
 
@@ -1203,22 +1206,38 @@ def isinf_isnan_skip_reason(formats, mathop, dest_acc):
         and mathop in _ISINF_ISNAN_BF16_DEST_UNSUPPORTED
     ):
         return (
-            "bf16->fp32 dest unpack delivers NaN as -inf, so this predicate "
-            "cannot be evaluated on this pipeline"
+            "bf16->fp32 dest unpack delivers a NaN as the infinity of its sign, so "
+            "this predicate cannot be evaluated on this pipeline"
         )
     return None
 
 
+#: A positive quiet NaN's bit pattern in each stimulus dtype, as the signed integer view
+#: of that width. The NaNs are written as bits because neither a cast nor a negation says
+#: which sign the kernel is fed: torch's fp32 -> bfloat16 cast canonicalises every NaN to
+#: 0xFFFF, sign set, and bfloat16 arithmetic drops a NaN's sign.
+_QUIET_NAN_BITS = {
+    torch.bfloat16: (torch.int16, 0x7FC0),
+    torch.float32: (torch.int32, 0x7FC00000),
+}
+
+
 def _isinf_isnan_stimuli_spec():
     def dist(size, dtype, generator):
-        # Finite ramp in [-5, 5] with regular +inf / -inf / nan injected so every
-        # face carries all special classes plus finite values.
+        # Finite ramp in [-5, 5] with regular +inf / -inf / NaN injected so every
+        # face carries all special classes plus finite values. The NaN lanes alternate
+        # +NaN and -NaN: the bf16 -> 32-bit Dest unpack turns a NaN into the infinity of
+        # its sign, so one sign alone would hide what half the predicates see.
         idx = torch.arange(size, dtype=torch.float32)
-        x = (idx % 11) - 5.0
+        x = ((idx % 11) - 5.0).to(dtype)
         x[0::7] = float("inf")
         x[1::7] = float("-inf")
-        x[2::7] = float("nan")
-        return x.to(dtype)
+        int_dtype, positive_nan = _QUIET_NAN_BITS[dtype]
+        sign_bit = 1 << (torch.iinfo(int_dtype).bits - 1)
+        bits = x.view(int_dtype)
+        bits[2::14] = positive_nan
+        bits[9::14] = positive_nan - sign_bit  # the same pattern with the sign bit set
+        return x
 
     return StimuliSpec(distribution=dist, seed=0)
 
@@ -1239,8 +1258,8 @@ def test_eltwise_unary_sfpu_isinf_isnan(
 ):
     _skip_bh_unless_fp32(formats, dest_acc)
 
-    # bf16->fp32 dest unpack (non-32-bit input + dest_acc=Yes) delivers NaN as -inf,
-    # which only the three predicates below can see; the rest are swept here.
+    # bf16->fp32 dest unpack (non-32-bit input + dest_acc=Yes) delivers a NaN as the
+    # infinity of its sign, which every predicate but is_finite can see; it is swept here.
     # See _ISINF_ISNAN_BF16_DEST_UNSUPPORTED.
     reason = isinf_isnan_skip_reason(formats, mathop, dest_acc)
     if reason:
@@ -1490,7 +1509,7 @@ def eltwise_unary_sfpu(
         res_tensor,
         formats.output_format,
         **(
-            contract.passed_test_kwargs()
+            contract.passed_test_kwargs(flush_subnormals=FLUSH_SUBNORMAL_OUTPUTS)
             if gate_on_step_budget
             else contract.tolerance_kwargs()
         ),
