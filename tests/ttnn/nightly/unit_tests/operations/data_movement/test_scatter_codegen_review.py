@@ -4,7 +4,8 @@
 
 # Hand-written regressions for the scatter routing seams the generated sweep in
 # test_scatter_codegen_routing.py does not reach: the demotion predicate's axis spelling, an output
-# placement that differs from the input's, empty operands, and the bf16 reduce path.
+# placement that differs from the input's, empty operands, the bf16 reduce path, the index dtypes
+# and an explicit core grid.
 
 import pytest
 import torch
@@ -125,3 +126,28 @@ def test_scatter_codegen_row_major_bf16_reduce_matches_native(device, reduce):
     xt, it, st = _make_case([1, 1, 32, 64], [1, 1, 32, 32], -1, ttnn.ROW_MAJOR_LAYOUT, device, index_max=8)
     golden = ttnn.to_torch(_force_native(xt, -1, it, st, reduce=reduce))
     assert_equal(golden, ttnn.to_torch(_force_codegen(xt, -1, it, st, reduce=reduce)))
+
+
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["row_major", "tile"])
+@pytest.mark.parametrize("index_dtype", [ttnn.int32, ttnn.uint32], ids=["int32", "uint32"])
+def test_scatter_codegen_index_dtype_matches_native(device, layout, index_dtype):
+    xt, it, st = _make_case([1, 1, 64, 64], [1, 1, 64, 32], -1, layout, device, index_dtype=index_dtype)
+    golden = ttnn.to_torch(_force_native(xt, -1, it, st))
+    assert_equal(golden, ttnn.to_torch(_force_codegen(xt, -1, it, st)))
+
+
+def test_scatter_codegen_uint16_index_stays_native(device):
+    xt, it, st = _make_case([1, 1, 64, 64], [1, 1, 64, 32], -1, ttnn.ROW_MAJOR_LAYOUT, device, index_dtype=ttnn.uint16)
+    _, added = _run_auto_against_native(device, xt, it, st, -1)
+    assert added == 0, "auto routed a uint16 index to codegen; expected native"
+
+
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["row_major", "tile"])
+def test_scatter_codegen_sub_core_grids_matches_native(device, layout):
+    # Ht=2 tile rows against Wt_output=8 columns: on the full grid column_cores=8 > Ht selects the
+    # column-split (streaming) factory; a two-core grid caps column_cores at 2, so the same call
+    # lands on the row-resident factory. Either way the grid, not the default, drives the split.
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
+    xt, it, st = _make_case([1, 1, 64, 256], [1, 1, 64, 64], -1, layout, device)
+    golden = ttnn.to_torch(_force_native(xt, -1, it, st, sub_core_grids=grid))
+    assert_equal(golden, ttnn.to_torch(_force_codegen(xt, -1, it, st, sub_core_grids=grid)))
