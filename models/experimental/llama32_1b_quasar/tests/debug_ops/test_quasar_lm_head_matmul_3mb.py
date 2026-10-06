@@ -151,3 +151,72 @@ def test_lm_head_chunk_matmul_3mb(qsr_device, cfg_id, grid_x, ibw):
     logger.info(f"[lm_head-3mb][{cfg_id}] DONE finite={torch.isfinite(o).all().item()} PCC={pcc:.4f}")
     assert tuple(o.shape) == (1, 1, M, N), f"{cfg_id}: unexpected shape {tuple(o.shape)}"
     assert pcc > 0.99, f"{cfg_id}: PCC {pcc}"
+
+
+def _hold_l1(dev, mb):
+    """Allocate and return a resident L1 tensor of ~`mb` MB per core, to simulate the e2e's L1 occupancy
+    at the lm_head. ROW_MAJOR L1 interleaved (no tilize, avoids the wide-short from_torch(TILE) fault)."""
+    if mb <= 0:
+        return None
+    # bf16 L1 interleaved [1,1,32,W]; 32*W*2 bytes spread over NUM_L1_BANKS=2 cores -> ~mb MB/core at W≈mb*64*2/... keep simple: total bytes = mb*2*1MB (both banks), W = mb*2*1024*1024/(32*2).
+    total_bytes = int(mb * 2 * 1024 * 1024)
+    w_cols = max(32, (total_bytes // (32 * 2)) // 32 * 32)
+    t = torch.zeros(1, 1, 32, w_cols, dtype=torch.bfloat16)
+    return ttnn.from_torch(
+        t,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=dev,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(dev),
+    )
+
+
+# The op PASSES in isolation (empty L1), but the e2e hangs it late in prefill when resident tensors occupy
+# L1. This sweep HOLDS `pressure_mb` of L1 while running the lm_head matmul, to reproduce that context and
+# measure the footprint margin: ibw=4 CBs ≈2.5 MB, ibw=2 ≈1.5 MB, against ~2.83 MB allocatable. If ibw=4
+# hangs at a pressure where ibw=2 still passes, the fix is the in0_block_w shrink (apply it unconditionally
+# on small L1 — it was reverted because the empty-L1 standalone couldn't show the margin matters).
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("ibw", [4, 2], ids=["ibw4", "ibw2"])
+@pytest.mark.parametrize("pressure_mb", [0.0, 0.5, 1.0, 1.5], ids=lambda p: f"p{p}mb")
+def test_lm_head_matmul_under_l1_pressure(qsr_device, pressure_mb, ibw):
+    dev = qsr_device
+    grid = dev.compute_with_storage_grid_size()
+    grid_x = min(int(grid.x), 2)
+    nt = N // 32
+    per_core_n = max((nt + grid_x - 1) // grid_x, 1)
+
+    held = _hold_l1(dev, pressure_mb)  # kept alive for the duration -> L1 stays occupied
+    try:
+        torch.manual_seed(0)
+        x = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
+        w = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+        xt = _dram_bf16(x, dev)
+        wt = _dram_bf16(w, dev)
+        pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(grid_x, 1),
+            in0_block_w=ibw,
+            out_subblock_h=1,
+            out_subblock_w=_out_subblock_w(per_core_n),
+            per_core_M=1,
+            per_core_N=per_core_n,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=(grid_x > 1),
+        )
+        logger.info(
+            f"[lm_head-3mb-pressure] held={pressure_mb}MB/core ibw={ibw} per_core_N={per_core_n} "
+            f"weights_CB~={ibw * per_core_n * 2} tiles; starting matmul"
+        )
+        out = ttnn.matmul(xt, wt, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.synchronize_device(dev)  # hangs HERE if the held L1 + CBs overflow / trip the e2e failure
+        o = ttnn.to_torch(out)
+    finally:
+        if held is not None:
+            ttnn.deallocate(held)
+
+    ref = x.float().reshape(M, K) @ w.float().reshape(K, N)
+    pcc = _pcc(o, ref)
+    logger.info(f"[lm_head-3mb-pressure] held={pressure_mb}MB ibw={ibw} DONE PCC={pcc:.4f}")
+    assert pcc > 0.99, f"pressure={pressure_mb}MB ibw={ibw}: PCC {pcc}"
