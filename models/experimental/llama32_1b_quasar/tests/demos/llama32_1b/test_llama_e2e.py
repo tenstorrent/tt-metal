@@ -309,6 +309,14 @@ def _install_quasar_interleaved_matmul(monkeypatch, mesh_device):
     gx, gy = min(int(dev.x), 2), 1
     mm_core_grid = ttnn.CoreGrid(y=gy, x=gx)
 
+    # Only shrink in0_block_w on the small-L1 (3 MB) variant, so the 4 MB flow stays byte-identical
+    # (in0_block_w=4). l1_size_per_core() is the soc descriptor's real per-core L1 (3 MB vs 4 MB); if it can't
+    # be queried, fail safe toward the smaller footprint (shrink).
+    try:
+        _small_l1 = 0 < int(mesh_device.l1_size_per_core()) < 4 * 1024 * 1024
+    except Exception:
+        _small_l1 = True
+
     def _blk(v, sub, cap):
         # largest divisor of v that is a multiple of `sub` and <= cap
         best, d = sub, sub
@@ -319,16 +327,15 @@ def _install_quasar_interleaved_matmul(monkeypatch, mesh_device):
         return best
 
     def _ibw_for(kt, per_core_n):
-        # in0_block_w, capped so the weights CB (= in0_block_w * per_core_N tiles, double-buffered) stays
-        # small enough to coexist with resident L1 on the 3 MB-L1 Quasar variant. The wide lm_head 1D-mcast
-        # matmul (per_core_N=128) at in0_block_w=4 needs ~2.56 MB of static DFBs and CLASHES with as little
-        # as 0.5 MB of resident L1 (TT_THROW "Statically allocated dataflow buffers ... clash"); at
-        # in0_block_w=2 it survives >= 1.5 MB. So cap in0_block_w*per_core_N <= 256 (double-buffered CB
-        # <= ~1 MB): per_core_N=128 -> 2, narrow decode matmuls keep <= 4. Confirmed by
-        # debug_ops/test_quasar_lm_head_matmul_3mb.py::test_lm_head_matmul_under_l1_pressure. Still <= 4 so
-        # the TEN-4746 large-in0_block_w path is avoided. On the 4 MB emulator this only adds K-blocks to
-        # the wide matmuls (correctness unchanged); it is not gated on device size to avoid a fragile probe.
-        cap = max(1, min(4, 256 // max(int(per_core_n), 1)))
+        # in0_block_w, capped (on the 3 MB variant only) so the weights CB (= in0_block_w * per_core_N tiles,
+        # double-buffered) stays small enough to coexist with resident L1. A wide 1D-mcast matmul
+        # (per_core_N=128) at in0_block_w=4 needs ~2.56 MB of static DFBs and CLASHES with as little as 0.5 MB
+        # of resident L1 (TT_THROW "Statically allocated dataflow buffers ... clash"); at in0_block_w=2 it
+        # survives >= 1.5 MB. So on small L1 cap in0_block_w*per_core_N <= 256 (double-buffered CB <= ~1 MB):
+        # per_core_N=128 -> 2, narrow matmuls keep <= 4. Confirmed by
+        # debug_ops/test_quasar_lm_head_matmul_3mb.py::test_lm_head_matmul_under_l1_pressure. Still <= 4 so the
+        # TEN-4746 large-in0_block_w path is avoided. On 4 MB: unchanged (in0_block_w=4).
+        cap = max(1, min(4, 256 // max(int(per_core_n), 1))) if _small_l1 else 4
         return _blk(kt, 1, cap)
 
     def _wrap(orig):
