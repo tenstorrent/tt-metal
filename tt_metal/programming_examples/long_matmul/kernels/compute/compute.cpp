@@ -90,7 +90,7 @@ void kernel_main() {
     for (uint32_t iter = 0; iter < num_iterations; iter++) {
         if (iter % 10 == 0) {
             // Only print from TRISC0, otherwise we'll get three identical prints
-            DPRINT("Iteration {} of {}\n", iter, num_iterations);
+            DPRINT_UNPACK("Iteration {} of {}\n", iter, num_iterations);
         }
         for (uint32_t blk = 0; blk < num_output_blocks; blk++) {
             // TRISC1 acquires the tile registers -- kBlockTiles of them, one accumulator per
@@ -152,7 +152,7 @@ void kernel_main() {
             // TRISC2 marks the result tiles as used by pushing them to the back of the output
             // circular buffer (writer kernel can read them now)
             cb_push_back(cb_out, kBlockTiles);
-            // TRISC1 releases the tile registers, allowing TRISC0 to acquire them again
+            // TRISC2 releases the tile registers, allowing TRISC1 to acquire them again
             tile_regs_release();
         }
     }

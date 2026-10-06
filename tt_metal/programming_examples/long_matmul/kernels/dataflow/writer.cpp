@@ -43,6 +43,9 @@ void kernel_main() {
             const uint32_t row0 = (block_id / blocks_per_row) * kBlockM;
             const uint32_t col0 = (block_id % blocks_per_row) * kBlockN;
 
+            // When LONG_MATMUL_DISABLE_WRITER is set the writer keeps draining the output CB -- so
+            // compute never stalls on a full CB -- but issues no DRAM traffic, leaving the output
+            // buffer stale. Harmless: the app never verifies its output.
             cb_wait_front(cb_id_out, kBlockTiles);
             uint32_t l1_read_addr = get_read_ptr(cb_id_out);
 #ifndef LONG_MATMUL_DISABLE_WRITER
