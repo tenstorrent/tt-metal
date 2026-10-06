@@ -452,6 +452,10 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 
     program_packer_destination(address);
 
+#if defined(LLK_PACK_RESYNC)
+    // Experiment: start every tile with all four packers idle, so no DEST bank lag carries over between tiles.
+    TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK);
+#endif
     mop_run(1, 1);
 
     if constexpr (pack_mode == PackMode::Untilize)
