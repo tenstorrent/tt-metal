@@ -70,9 +70,15 @@ ALWI void find_shift(
             mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
                 dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/0, /*popm=*/0);
 
+#ifdef ARCH_QUASAR
+            pack_init(dfb::max);  // Quasar: retarget the packer at every output switch (see moreh_pack_retarget)
+#endif
             ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb::tmp, dfb::max_scaler, dfb::max>(
                 ckl::ReduceInputBlockShape::single());
         } else {
+#ifdef ARCH_QUASAR
+            pack_init(dfb::max);  // Quasar: see moreh_pack_retarget
+#endif
             ckl::reduce<
                 PoolType::MAX,
                 ReduceDim::REDUCE_COL,
@@ -84,6 +90,9 @@ ALWI void find_shift(
 
             mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
                 dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, Ht - 1, 0, /*pop0=*/0, /*popm=*/0);
+#ifdef ARCH_QUASAR
+            pack_init(dfb::max);  // Quasar: see moreh_pack_retarget
+#endif
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb::tmp, dfb::max_scaler, dfb::max>(
                 compute_kernel_lib::ReduceInputBlockShape::single(),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
@@ -95,6 +104,9 @@ ALWI void find_shift(
             mask_posinf_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
                 dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/0, /*popm=*/0);
 
+#ifdef ARCH_QUASAR
+            pack_init(dfb::max);  // Quasar: see moreh_pack_retarget
+#endif
             ckl::reduce<
                 kShiftPool,
                 ReduceDim::REDUCE_COL,
@@ -118,6 +130,9 @@ ALWI void find_shift(
             }
             mask_posinf_tile_to_dfb<dfb::in0, dfb::mask, dfb::x_minus_max>(
                 dfb_in0_obj, dfb_mask_obj, dfb_x_m_max_obj, Ht - 1, 0, /*pop0=*/0, /*popm=*/0);
+#ifdef ARCH_QUASAR
+            pack_init(dfb::max);  // Quasar: see moreh_pack_retarget
+#endif
             ckl::reduce<
                 kShiftPool,
                 ReduceDim::REDUCE_COL,
@@ -172,6 +187,9 @@ void kernel_main() {
 #endif
 
         // compute x - max(x)
+#ifdef ARCH_QUASAR
+        pack_init(dfb::x_minus_max);  // Quasar: see moreh_pack_retarget
+#endif
         ckl::sub<
             ckl::input(
                 dfb::in0,
@@ -190,6 +208,9 @@ void kernel_main() {
         constexpr bool is_softmax = true;
 #else
         constexpr bool is_softmax = false;
+#endif
+#ifdef ARCH_QUASAR
+        pack_init(dfb::exps);  // Quasar: see moreh_pack_retarget (both exp chains below pack to dfb::exps)
 #endif
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(Ht - 1),
@@ -226,6 +247,9 @@ void kernel_main() {
             ckl::PackTile<ckl::output(
                 dfb::exps, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{dfb_exps_obj});
 
+#ifdef ARCH_QUASAR
+        pack_init(dfb::recip_sum_exps);  // Quasar: see moreh_pack_retarget
+#endif
 #ifdef LOG
         // log(sum) - pop tiles after reduce
         ckl::reduce<
@@ -262,6 +286,9 @@ void kernel_main() {
 
         // compute final result
         dfb_x_m_max_obj.wait_front(Ht);
+#ifdef ARCH_QUASAR
+        pack_init(dfb::out0);  // Quasar: see moreh_pack_retarget
+#endif
 #ifdef LOG
         ckl::sub<
             ckl::input(
@@ -294,6 +321,12 @@ void kernel_main() {
                 kDataFormatReconfig),
             ckl::output(dfb::out0, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
             ckl::IterationShape::tiles(Ht), dfb_exps_obj, dfb_recipsumexps_obj, dfb_out0_obj);
+#endif
+#if defined(ARCH_QUASAR) && !defined(LOG)
+        // TEN-4746: the wait_front above re-armed dfb::x_minus_max, but only the LOG path's final sub
+        // unpacks it again (the softmax path multiplies dfb::exps); Quasar's TDMA guard rejects the
+        // wait -> pop pair with no UNPACR in between, so issue the no-op unpack before the pop.
+        dummy_unpack(dfb::x_minus_max);
 #endif
         dfb_x_m_max_obj.pop_front(Ht);
     }
