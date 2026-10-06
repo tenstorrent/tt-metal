@@ -26,14 +26,14 @@ health() {
 wait_health() { for i in $(seq 360); do health && return 0; sleep 60; done; return 1; }
 others() { pgrep -f 'bash /var/tmp/fasth3/t136/driver.sh|bash /home/smarton/fasth3/t141drv/driver.sh' > /dev/null; }
 # The t136 A/B and t141 5-seed e2e go first: wait until both driver logs end in a DONE line, or until
-# neither driver nor any smarton job has been seen for 2 h (they were not relaunched).
+# neither driver nor any smarton job has been seen for 30 min (a driver killed by a reboot is not coming back).
 pair_done() { for t in t136 t141; do tail -1 /var/tmp/fasth3/$t/driver.log 2>/dev/null | grep -q _DRIVER_DONE || return 1; done; }
 smarton_job() { tt-device-mcp status 1 2>&1 | sed -n '/^RUNNING/,/^RECENT/p' | grep -qw smarton; }
 wait_pair() {
   local idle=0
   until pair_done; do
     if others || smarton_job; then idle=0; else idle=$((idle+2)); fi
-    [ $idle -ge 120 ] && { log "e2e pair: no driver or job for 2 h, going ahead"; return; }
+    [ $idle -ge 30 ] && { log "e2e pair: no driver or job for 30 min, going ahead"; return; }
     sleep 120
   done
   log "e2e pair done"
@@ -68,7 +68,8 @@ while read -r cfg flags <&3; do
   if grep -qs "T140_EXIT\[$cfg\]=0" $V/$cfg/run.log; then log "$cfg already done"; continue; fi
   drops=0; result=""
   while [ -z "$result" ]; do
-    while others; do sleep 120; done
+    job=$(our_live_job $cfg)
+    [ -n "$job" ] || while others || smarton_job; do sleep 120; done
     wait_health || { log "broker never healthy (6 h)"; log "T140_DRIVER_DONE health_timeout $summary"; exit 0; }
     job=$(our_live_job $cfg); T0=$(now)
     if [ -n "$job" ]; then
