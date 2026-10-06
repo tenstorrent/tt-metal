@@ -145,7 +145,7 @@ def prepare_case(spec) -> None:
     from models.demos.deepseek_v3_d_p.tests.gdn.reference_cache import prepare_cpu_references
     from models.demos.deepseek_v3_d_p.tt.gdn.weights import GDNWeights
 
-    case = build_gdn_case(spec)
+    case = build_gdn_case(spec, compute_missing_input=True)
     cache_dir = gdn_weight_cache_dir(case.weights, spec.mesh_shape, spec.tensor_parallel_axis)
     prefix = gdn_weight_cache_prefix(case.weights)
     start = time.perf_counter()
@@ -170,6 +170,41 @@ def prepare_case(spec) -> None:
         f"GDN prepare {spec.name}: CPU references {hits}/{len(references)} hits, "
         f"{sum(reference.seconds for reference in references):.1f} s"
     )
+    if spec.weights == "real":
+        log(f"GDN_DECAY_EXPOSURE {spec.name} {json.dumps(decay_exposure(case))}")
+
+
+# Per-32-token-chunk |G_last| bands: above STRONG the pre-g1b.7 KDA prep was wrong on device; below WEAK exp(G_last)
+# rounds to 1 in bf16 (g1b.7 complement form).
+STRONG_DECAY = 100.0
+WEAK_DECAY = 2.0**-9
+
+
+def decay_exposure(case) -> dict:
+    """Which decay bands a case's input drives the layer's V heads into (per aligned 32-token chunk, valid tokens)."""
+    import torch
+    import torch.nn.functional as F
+
+    weights = case.weights.load_state_dict()
+    chunk_g = []
+    for chunk in range(case.num_chunks):
+        hidden = case.chunk_valid_hidden(chunk).float()
+        a = hidden @ weights["in_proj_a.weight"].float().T
+        g = -weights["A_log"].float().exp() * F.softplus(a + weights["dt_bias"].float())
+        chunk_g.append(g.reshape(-1, 32, g.shape[-1]).sum(1).abs())
+    g_last = torch.cat(chunk_g)  # [aligned chunks, V heads]
+    weak = g_last < WEAK_DECAY
+    flat = int(g_last.argmax())
+    return {
+        "aligned_chunks": g_last.shape[0],
+        "value_heads": g_last.shape[1],
+        "max_abs_G_last": round(float(g_last.max()), 2),
+        "max_head": flat % g_last.shape[1],
+        "strong_heads": torch.nonzero(g_last.max(0).values > STRONG_DECAY).flatten().tolist(),
+        "weak_fraction": round(float(weak.float().mean()), 4),
+        "mostly_weak_heads": torch.nonzero(weak.float().mean(0) >= 0.5).flatten().tolist(),
+        "min_abs_G_last": float(g_last.min()),
+    }
 
 
 def _prepare_cases(arguments: argparse.Namespace) -> None:

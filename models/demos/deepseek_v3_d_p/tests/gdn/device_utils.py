@@ -148,7 +148,14 @@ def chunk_gate_rows(
                 [per_head_relative_rmse(state.recurrent, snapshot_tensors[name]) for name in names]
             )
             worst_head = int(head_errors.max(0).values.argmax())
+            row["head_rel_rmse"] = [round(float(error), 6) for error in head_errors.max(0).values]
             row["worst_head"] = worst_head
+            worst_rank = int(head_errors[:, worst_head].argmax())
+            row["worst_head_rank"] = names[worst_rank]
+            row["worst_head_rms"] = {
+                "expected": float(state.recurrent[worst_head].float().pow(2).mean().sqrt()),
+                "actual": float(snapshot_tensors[names[worst_rank]][worst_head].float().pow(2).mean().sqrt()),
+            }
             row["worst_head_rel_rmse"] = float(head_errors.max())
             if row["worst_head_rel_rmse"] > HEAD_STATE_REL_RMSE_THRESHOLD:
                 failures.append(

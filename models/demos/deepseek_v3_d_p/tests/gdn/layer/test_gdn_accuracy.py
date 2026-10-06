@@ -9,6 +9,8 @@ replay the output and the persisted carries are compared with the chained CPU re
 relative RMSE and norm ratio, D5 worst V-head state error). The schedule then runs a second time under the trace
 and once eagerly; both must reproduce the first replay bit for bit (R10 repetition, R11 trace == eager).
 
+Weights and inputs: synthetic weights on seeded random inputs for every model and layout; for the Qwen models at
+LB-A and LB-B also the real layer-0 weights on random inputs and on real text (R13; local only, never CI).
 Layouts and schedules: tests/gdn/cases.py. CPU references and weight caches come from the CPU preparation step
 (``python -m models.demos.deepseek_v3_d_p.tests.gdn.prepare --case <name>``); this test only loads them.
 """
@@ -22,10 +24,12 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
+from models.demos.deepseek_v3_d_p.reference.gdn.qwen_models import QWEN_GDN_MODELS
 from models.demos.deepseek_v3_d_p.tests.gdn.cases import (
     GDN_MODELS,
     LAYOUTS,
     SCHEDULES,
+    TEXT_EXPOSED_GALAXY_RANK,
     GDNTestCase,
     build_gdn_case,
     make_gdn_device_case,
@@ -47,6 +51,54 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import acc
 pytestmark = [run_for_blackhole(), pytest.mark.timeout(1800)]
 
 
+# (weights, inputs): besides synthetic weights on seeded random inputs (every model and layout), real layer-0 weights on
+# random inputs and on real text (tests/gdn/text_input.py) at the LoudBox layouts. Real weights are local only.
+_REAL = (("real", "randn"), ("real", "text"))
+
+
+def _cells() -> list[tuple[str, str, str, str, int]]:
+    """(model, layout, weights, inputs, Galaxy rank) of every registered accuracy cell."""
+    cells = []
+    for model in GDN_MODELS:
+        for layout in LAYOUTS:
+            cells.append((model, layout, "synthetic", "randn", 0))
+            if model in QWEN_GDN_MODELS and layout in ("LB-A", "LB-B"):
+                cells.extend((model, layout, weights, inputs, 0) for weights, inputs in _REAL)
+    cells.extend((model, "LB-B", "real", "text", rank) for model, rank in TEXT_EXPOSED_GALAXY_RANK.items())
+    return cells
+
+
+def _cell_id(model: str, layout: str, weights: str, inputs: str, rank: int) -> str:
+    if weights == "synthetic":
+        return f"{model}-{layout}-synthetic"
+    return f"{model}-{layout}-real-{inputs}" + (f"-rank{rank}" if rank else "")
+
+
+_D5_NEAR_ZERO_HEAD = (
+    "tt_metal_tracker-g1b.5.18: D5 divides by the head's own expected state RMS; a full-forgetting head whose last "
+    "valid token has a tiny beta has an expected state of ~1e-6 (absolute error <= 4.5e-4)"
+)
+# Cells that fail a §6.3 gate for a cause tracked in its own bead (strict: a fix makes them XPASS and fail).
+_KNOWN_FAILURES = {
+    "qwen38_2_4t-LB-A-real-text-ragged": _D5_NEAR_ZERO_HEAD + " (V head 5, chunk 1)",
+    "qwen38_2_4t-LB-B-real-text-single": _D5_NEAR_ZERO_HEAD + " (V head 2)",
+    "qwen38_2_4t-LB-B-real-text-chained3": _D5_NEAR_ZERO_HEAD
+    + " (V head 2); also tt_metal_tracker-g1b.5.17: chunk 1 output peak error 0.70 (11x the other chunks), ungated",
+    "qwen38_2_4t-LB-B-real-text-ragged": _D5_NEAR_ZERO_HEAD
+    + " (V head 2); tt_metal_tracker-g1b.5.17: long-memory V head 17 state rel RMSE 0.15, recurrent PCC 0.99846",
+    **{
+        f"qwen38_2_4t-LB-B-real-text-rank3-{schedule}": _D5_NEAR_ZERO_HEAD + " (local V head 22)"
+        for schedule in SCHEDULES
+    },
+}
+
+
+def _known_failure(cell: str) -> list:
+    if cell not in _KNOWN_FAILURES:
+        return []
+    return [pytest.mark.xfail(strict=True, raises=AssertionError, reason=_KNOWN_FAILURES[cell])]
+
+
 def _params() -> list:
     return [
         pytest.param(
@@ -54,11 +106,14 @@ def _params() -> list:
             gdn_device_params(LAYOUTS[layout][0]),
             model,
             layout,
+            weights,
+            inputs,
+            rank,
             schedule,
-            id=f"{model}-{layout}-synthetic-{schedule}",
+            id=f"{_cell_id(model, layout, weights, inputs, rank)}-{schedule}",
+            marks=_known_failure(f"{_cell_id(model, layout, weights, inputs, rank)}-{schedule}"),
         )
-        for model in GDN_MODELS
-        for layout in LAYOUTS
+        for model, layout, weights, inputs, rank in _cells()
         for schedule in SCHEDULES
     ]
 
@@ -94,13 +149,24 @@ def _run_schedule(
 
 
 @pytest.mark.parametrize(
-    "mesh_device,device_params,model,layout,schedule", _params(), indirect=["mesh_device", "device_params"]
+    "mesh_device,device_params,model,layout,weights,inputs,galaxy_rank,schedule",
+    _params(),
+    indirect=["mesh_device", "device_params"],
 )
 def test_gdn_layer_accuracy(
-    mesh_device: ttnn.MeshDevice, device_params: dict, model: str, layout: str, schedule: str
+    mesh_device: ttnn.MeshDevice,
+    device_params: dict,
+    model: str,
+    layout: str,
+    weights: str,
+    inputs: str,
+    galaxy_rank: int,
+    schedule: str,
 ) -> None:
-    spec = registered_gdn_case(model, layout, schedule)
+    spec = registered_gdn_case(model, layout, schedule, weights, inputs, galaxy_rank)
     mesh_device = layout_mesh(mesh_device, spec.mesh_shape)
+    grid = mesh_device.compute_with_storage_grid_size()
+    compute_grid = (grid.x, grid.y)
     case = build_gdn_case(spec)
     references = cpu_references(case)
     layer = make_gdn_device_case(mesh_device, case)
@@ -189,8 +255,18 @@ def test_gdn_layer_accuracy(
                 "schedule": schedule,
                 "chunk_valid_tokens": list(spec.chunk_valid_tokens),
                 "value_heads_per_chip": case.config.num_value_heads // spec.mesh_shape[spec.tensor_parallel_axis],
+                "compute_grid": list(compute_grid),
                 "min_pcc": min(row["pcc"] for row in rows),
+                "weights": weights,
+                "inputs": inputs,
+                "key_head_slice": spec.key_head_slice,
                 "max_output_rel_rmse": max(row["rel_rmse"] for row in rows if row["tensor"] == "output"),
+                "max_output_rel_linf": max(row["rel_linf"] for row in rows if row["tensor"] == "output"),
+                "max_recurrent_rel_linf": max(row["rel_linf"] for row in recurrent_rows),
+                "output_norm_ratio_range": [
+                    min(row["norm_ratio"] for row in rows if "norm_ratio" in row),
+                    max(row["norm_ratio"] for row in rows if "norm_ratio" in row),
+                ],
                 "worst_head_state_rel_rmse": max(row["worst_head_rel_rmse"] for row in recurrent_rows),
                 "trace_repeat_bit_identical": not repeat_mismatches,
                 "trace_equals_eager": not eager_mismatches,

@@ -44,6 +44,11 @@ from models.demos.deepseek_v3_d_p.tests.gdn.checkpoint_utils import (
     gdn_state_dict_sha256,
     load_gdn_layer_state_dict,
 )
+from models.demos.deepseek_v3_d_p.tests.gdn.text_input import (
+    build_gdn_text_input,
+    gdn_text_input_cache_path,
+    load_gdn_text_input,
+)
 from models.demos.deepseek_v3_d_p.tt.gdn.config import gdn_program_config
 from models.demos.deepseek_v3_d_p.tt.gdn.gdn import ttGDN
 from models.demos.deepseek_v3_d_p.tt.gdn.weights import GDNWeights
@@ -300,15 +305,23 @@ class GDNTestCase:
         return self.chunk_hidden(chunk)[0, : self.spec.chunk_valid_tokens[chunk]]
 
 
-def build_gdn_case(spec: GDNCaseSpec) -> GDNTestCase:
-    """Build a case deterministically; identical in the preparation step and the device test."""
+def build_gdn_case(spec: GDNCaseSpec, *, compute_missing_input: bool | None = None) -> GDNTestCase:
+    """Build a case deterministically; identical in the preparation step and the device test.
+
+    A real-text input (``tests/gdn/text_input.py``) is loaded from the prepared cache; a miss builds it when
+    ``compute_missing_input`` (default: ``GDN_CACHE_MISS=compute``) and otherwise fails fast.
+    """
     weights = spec.weight_source()
-    if spec.inputs == TEXT:
-        # The case is expressible so the accuracy beads (tt_metal_tracker-g1b.5.6 / .7 / .8 / .11) register their
-        # cells here; building the embedded real-text window (layer-0 input norm, Flash-Next hyper-connection mix,
-        # as g1b.5.12's gdn_decay_range_qwen.py) is theirs to add.
-        raise NotImplementedError(f"{spec.name}: real-text GDN inputs are not built yet (g1b.5.6/.7/.8/.11)")
     tokens = spec.chunk_tokens * len(spec.chunk_valid_tokens)
+    if spec.inputs == TEXT:
+        hidden = load_gdn_text_input(spec.model, weights.layer_idx, tokens)
+        if hidden is None:
+            if not (compute_on_cache_miss() if compute_missing_input is None else compute_missing_input):
+                raise prepared_cache_miss(
+                    spec.name, "text input", gdn_text_input_cache_path(spec.model, weights.layer_idx, tokens)
+                )
+            hidden = build_gdn_text_input(spec.model, weights.layer_idx, tokens)
+        return GDNTestCase(spec=spec, weights=weights, hidden=hidden)
     hidden = torch.randn(
         1,
         tokens,
@@ -353,11 +366,22 @@ def _schedule(chunk_tokens: int, schedule: str) -> tuple[int, ...]:
     }[schedule]
 
 
-def gdn_case_spec(model: str, layout: str, schedule: str, weights: str = SYNTHETIC, inputs: str = RANDN) -> GDNCaseSpec:
+def gdn_case_spec(
+    model: str,
+    layout: str,
+    schedule: str,
+    weights: str = SYNTHETIC,
+    inputs: str = RANDN,
+    galaxy_rank: int = 0,
+) -> GDNCaseSpec:
+    """Spec of one cell; a per-rank-heads layout runs Galaxy TP rank ``galaxy_rank``'s K heads and their V heads."""
     mesh_shape, tensor_parallel_axis, chunk_tokens, rank_heads = LAYOUTS[layout]
     key_heads = GDN_MODELS[model].config().num_key_heads
     if rank_heads and key_heads % GALAXY_TENSOR_PARALLEL_SIZE:
         raise ValueError(f"{model}: {key_heads} K heads do not split into Galaxy TP{GALAXY_TENSOR_PARALLEL_SIZE} ranks")
+    if not 0 <= galaxy_rank < GALAXY_TENSOR_PARALLEL_SIZE or (galaxy_rank and not rank_heads):
+        raise ValueError(f"galaxy_rank {galaxy_rank} needs a per-rank-heads layout and 0 <= rank < 4, got {layout}")
+    rank_key_heads = key_heads // GALAXY_TENSOR_PARALLEL_SIZE
     return GDNCaseSpec(
         model=model,
         weights=weights,
@@ -365,9 +389,24 @@ def gdn_case_spec(model: str, layout: str, schedule: str, weights: str = SYNTHET
         tensor_parallel_axis=tensor_parallel_axis,
         chunk_tokens=chunk_tokens,
         chunk_valid_tokens=_schedule(chunk_tokens, schedule),
-        key_head_slice=(0, key_heads // GALAXY_TENSOR_PARALLEL_SIZE) if rank_heads else None,
+        key_head_slice=(galaxy_rank * rank_key_heads, (galaxy_rank + 1) * rank_key_heads) if rank_heads else None,
         inputs=inputs,
     )
+
+
+# Galaxy TP rank whose layer-0 heads real text drives into both decay bands, per model: the extra LB-B real-text
+# cells run it next to rank 0 so the 8-rank composition at 5120 tokens also covers the weak-band and full-forgetting
+# heads (measured by the prepare step's GDN_DECAY_EXPOSURE on the full-head LB-A text case, Pride and Prejudice
+# tokens [0, 3840); V head j reads K head j // (Hv / Hk)):
+# * qwen38_27b: rank 2 (K heads 8-11, V heads 24-35) holds mostly-weak V heads 27, 28 and the only strong head 32
+#   (max |G_last| 226); rank 0 holds neither band (max 58, no weak chunk).
+# * qwen36_35b: rank 2 (K heads 8-11, V heads 16-23) holds full-forgetting heads 18, 19, 22 (max |G_last| 2930) and
+#   mostly-weak head 23; rank 0 holds weak heads 0, 6, 7 but its strongest head reaches only 162.
+# * qwen38_2_4t: rank 3 (K heads 12-15, V heads 96-127) holds the only mostly-weak V heads 111, 113 and 11 strong
+#   heads; rank 0 holds the strongest head 9 (max |G_last| 7977) but no mostly-weak head (0.2 % weak chunks).
+# * qwen38_flash_next: rank 1 (K heads 4-7, V heads 12-23) holds mostly-weak heads 15, 18 and the strongest head 22
+#   (max |G_last| 4073) with strong heads 16, 17, 20; rank 0 holds weak head 9 and strong head 3 (max 1577).
+TEXT_EXPOSED_GALAXY_RANK = {"qwen38_27b": 2, "qwen36_35b": 2, "qwen38_2_4t": 3, "qwen38_flash_next": 1}
 
 
 _REGISTERED_SPECS = (
@@ -381,16 +420,22 @@ _REGISTERED_SPECS = (
         for inputs in (RANDN, TEXT)
         for schedule in SCHEDULES
     ),
+    # Real text on the decay-exposed Galaxy rank's heads at LB-B.
+    *(
+        gdn_case_spec(model, "LB-B", schedule, REAL, TEXT, rank)
+        for model, rank in TEXT_EXPOSED_GALAXY_RANK.items()
+        for schedule in SCHEDULES
+    ),
 )
 GDN_CASES: dict[str, GDNCaseSpec] = {spec.name: spec for spec in _REGISTERED_SPECS}
 assert len(GDN_CASES) == len(_REGISTERED_SPECS), "duplicate GDN case names"
 
 
 def registered_gdn_case(
-    model: str, layout: str, schedule: str, weights: str = SYNTHETIC, inputs: str = RANDN
+    model: str, layout: str, schedule: str, weights: str = SYNTHETIC, inputs: str = RANDN, galaxy_rank: int = 0
 ) -> GDNCaseSpec:
     """Return the registered spec; unregistered cases cannot be prepared, so they are rejected."""
-    spec = gdn_case_spec(model, layout, schedule, weights, inputs)
+    spec = gdn_case_spec(model, layout, schedule, weights, inputs, galaxy_rank)
     if spec.name not in GDN_CASES:
         raise KeyError(f"GDN case {spec.name} is not registered in tests/gdn/cases.py::GDN_CASES")
     return GDN_CASES[spec.name]
