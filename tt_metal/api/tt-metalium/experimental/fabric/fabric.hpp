@@ -32,7 +32,7 @@ class MeshShape;
 }  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_fabric {
-class FabricContext;
+class ControlPlane;
 class FabricNodeId;
 enum class RoutingDirection;
 struct FabricEriscDatamoverConfig;
@@ -228,8 +228,8 @@ public:
     std::vector<uint32_t> get_fabric_mux_compile_time_args() const;
 
     // Returns the compile time args for relay mux. The relay mux always connects to the fabric router (never a
-    // tensix extension), so it passes the fabric context it is built against.
-    std::vector<uint32_t> get_fabric_mux_compile_time_args_for_relay_mux(const FabricContext& fabric_context) const;
+    // tensix extension), so it passes the control plane it is built against.
+    std::vector<uint32_t> get_fabric_mux_compile_time_args_for_relay_mux(const ControlPlane& control_plane) const;
 
     // Returns the run-time arguments for the mux kernel depending on the connection setup with fabric router
     template <typename ProgramOrDescriptor = tt::tt_metal::Program>
