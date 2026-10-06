@@ -20,7 +20,7 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"
-#include "toy_scaled_add_args.hpp"
+#include "ttnn/cpp/ttnn/operations/toy_scaled_add/device/kernels/toy_scaled_add_args.hpp"
 
 namespace ckl = compute_kernel_lib;
 using namespace toy_scaled_add;
