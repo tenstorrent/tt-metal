@@ -1,0 +1,37 @@
+# reshuffle_rows (embedding-backward row scatter-add): every row i of Dest tile 0 is added into row
+# mask[i] of Dest tile 1, which is packed. The fuser cannot hand an SFPU op an L1 buffer, so the
+# BinaryOp::RESHUFFLE_ROWS test dispatch drives the kernel with one fixed 32-entry mask
+# (RESHUFFLE_ROWS_FUSER_MASK): in-place, swapped and face-pair-crossing rows (15 <-> 16, 0 <-> 31),
+# up to four input rows piled onto one output row, the 255 sentinel and the other out-of-range
+# targets 32, 47, 48, 64, 100 and 254, which must be skipped too. Other masks are covered by
+# test_reshuffle_rows_quasar.
+# Stimuli are half-integers in [-2, 2], so every partial sum is exact in the Dest format and a lost,
+# doubled or misplaced row cannot hide inside the comparison tolerance.
+#
+# Generated for the Quasar reshuffle_rows kernel, using only existing fuser features:
+# dest_acc is fixed per file (hence the _dest16 / _dest32 files), every float input goes through
+# the FPU datacopy path, and stimuli are finite intervals and points (no inf, NaN, -0 or INT_MIN).
+
+dest_acc: false
+
+operands:
+  - name: "input_A"
+    dims: [32, 64]
+    format: [Float16_b]
+    stimuli:
+      include: [-2.0, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0]
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float16_b
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 64]}
+      - type: "BinarySfpu"
+        operation: [SfpuReshuffleRows]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+        indexes: {src0: 0, src1: 1, dest: 1}
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32], indexes: {dest: 1, out: 0}}
