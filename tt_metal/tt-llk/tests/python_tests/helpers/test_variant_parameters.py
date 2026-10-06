@@ -6,7 +6,7 @@ import math
 import struct
 from abc import ABC, abstractmethod
 from ctypes import c_uint32
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass
 
 from .format_config import DataFormat
 from .golden_generators import TILE_DIMENSIONS
@@ -786,16 +786,21 @@ class TILIZE(TemplateParameter):
         return f"constexpr bool tilize_en = {str(self.tilize.value).lower()};"
 
 
-@dataclass
+@dataclass(repr=False)
 class PER_FACE_HANDOFF(TemplateParameter):
-    """Blackhole eltwise binary: per-face hand-off, SrcDvalid::PerFace on both threads."""
+    """Blackhole eltwise binary: SrcDvalid::PerFace on both threads. It follows from the swept op, fidelity and
+    transpose, so it is not a report column; repr carries it into the variant hash."""
 
-    per_face_handoff: bool = False
+    _per_face_handoff: InitVar[bool] = False
+
+    def __post_init__(self, _per_face_handoff: bool):
+        self.value = _per_face_handoff
+
+    def __repr__(self) -> str:
+        return f"PER_FACE_HANDOFF({self.value})"
 
     def convert_to_cpp(self) -> str:
-        return (
-            f"constexpr bool per_face_handoff = {str(self.per_face_handoff).lower()};"
-        )
+        return f"constexpr bool per_face_handoff = {str(self.value).lower()};"
 
 
 @dataclass
