@@ -4,12 +4,18 @@
 #include "ckernel_sfpu_bf16_sfpi_isa.h"
 // Include inside namespace sfpi after sfpi_min_max.h; callers own traversal/init.
 
-template <uint32_t A, uint32_t B, uint32_t Hold, uint32_t Advance>
+// StepEach: Advance steps one row (dest += 2, stock's ADDR_MOD_6), so both stores advance.
+template <uint32_t A, uint32_t B, uint32_t Hold, uint32_t Advance, bool StepEach = false>
 inline void simple_finish_pair() {
     ::ckernel::sfpu::bf16_sfpi::sfp_stoch_rnd(SFPSTOCHRND_RND_EVEN, 0, A, A, A, SFPSTOCHRND_MOD1_FP32_TO_FP16B);
     ::ckernel::sfpu::bf16_sfpi::sfp_stoch_rnd(SFPSTOCHRND_RND_EVEN, 0, B, B, B, SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-    ::ckernel::sfpu::bf16_sfpi::sfpstore(A, 0, Hold, 0);
-    ::ckernel::sfpu::bf16_sfpi::sfpstore(B, 0, Advance, 2);  // pair complete, dest += 4
+    if constexpr (StepEach) {
+        ::ckernel::sfpu::bf16_sfpi::sfpstore(A, 0, Advance, 0);
+        ::ckernel::sfpu::bf16_sfpi::sfpstore(B, 0, Advance, 0);
+    } else {
+        ::ckernel::sfpu::bf16_sfpi::sfpstore(A, 0, Hold, 0);
+        ::ckernel::sfpu::bf16_sfpi::sfpstore(B, 0, Advance, 2);  // pair complete, dest += 4
+    }
 }
 
 template <
@@ -69,7 +75,8 @@ template <
     uint32_t NonzeroMask,
     uint32_t Output,
     uint32_t Hold,
-    uint32_t Advance>
+    uint32_t Advance,
+    bool StepEach = false>
 inline void simple_gated_pair() {
     ::ckernel::sfpu::bf16_sfpi::sfpload(ckernel::p_sfpu::LREG0, 0, Hold, 0);  // xA
     ::ckernel::sfpu::bf16_sfpi::sfpload(ckernel::p_sfpu::LREG1, 0, Hold, 2);  // xB
@@ -118,5 +125,5 @@ inline void simple_gated_pair() {
             Output,
             Hold>();
     }
-    simple_finish_pair<ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG3, Hold, Advance>();
+    simple_finish_pair<ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG3, Hold, Advance, StepEach>();
 }

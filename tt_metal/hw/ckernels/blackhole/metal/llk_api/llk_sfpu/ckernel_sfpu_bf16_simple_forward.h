@@ -17,8 +17,7 @@ inline void init_simple_forward() {
     // INCRWC and never reads it.
     constexpr bool folds = Config::kKind == 1 && Config::kBodySlots == 11;
     if constexpr (Config::kRowsPerReplay && !folds) {
-        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2 * Config::kRowsPerReplay}}.set(
-            ADDR_MOD_6);
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     }
 }
 template <typename Config, int Iterations = 8>
@@ -29,7 +28,7 @@ inline void calculate_simple_forward() {
     ::ckernel::sfpu::bf16_sfpi::sfploadi(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, Config::kInterceptBits >> 16);
     ::ckernel::sfpu::bf16_sfpi::sfploadi(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, Config::kInterceptBits & 65535);
     ::ckernel::sfpu::bf16_sfpi::replay(0, Config::kBodySlots, 1, 1);
-    sfpi::simple_gated_pair<false, (Config::kRawEqual != 0u), Config::kRawEqual, 0, 0, ADDR_MOD_7, ADDR_MOD_6>();
+    sfpi::simple_gated_pair<false, (Config::kRawEqual != 0u), Config::kRawEqual, 0, 0, ADDR_MOD_7, ADDR_MOD_6, true>();
 #pragma GCC unroll 8
     for (int row = Config::kRowsPerReplay; row < Iterations; row += Config::kRowsPerReplay) {
         ::ckernel::sfpu::bf16_sfpi::replay(0, Config::kBodySlots, 0, 0);
