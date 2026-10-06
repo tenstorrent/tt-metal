@@ -5,7 +5,8 @@
 set -uo pipefail
 cd /work
 OPT=$1; shift
-if [[ "${1:-}" == "--nodes-file" ]]; then mapfile -t NODES < "$2"; shift 2; set -- "$@" "${NODES[@]}"; fi
+SEL=()
+if [[ "${1:-}" == "--nodes-file" ]]; then export EB_NODES_FILE=$(readlink -f "$2"); shift 2; set -- "$@" $(cut -d: -f1 "$EB_NODES_FILE" | sort -u); SEL=(-p eb_select_plugin); fi
 O=/tmp/ebset; mkdir -p $O
 export PYTHONPATH=/work:/work/tests/eb_r3_ci:${PYTHONPATH:-}
 declare -a FILES
@@ -30,7 +31,7 @@ for v in main optin optin main; do
   export TT_METAL_CACHE=$O/cache_$v TT_METAL_PROFILER_DIR=$O/profraw_$run
   mkdir -p "$TT_METAL_CACHE" "$TT_METAL_PROFILER_DIR"
   OUT=$O/out_set_${run}_$v; rm -rf "$OUT"
-  timeout -s INT -k 60 ${EB_RUN_LIMIT:-2400} python3 -m tracy -r -p --no-web-server -o "$OUT" -m pytest -p eb_prof_plugin -p no:cacheprovider -o timeout_method=thread -q -rfEs "$@" > $O/log_${run}_$v.txt 2>&1
+  timeout -s INT -k 60 ${EB_RUN_LIMIT:-2400} python3 -m tracy -r -p --no-web-server -o "$OUT" -m pytest -p eb_prof_plugin "${SEL[@]}" -p no:cacheprovider -o timeout_method=thread -q -rfEs "$@" > $O/log_${run}_$v.txt 2>&1
   echo "--- run $run $v rc=$?: $(grep -E 'passed|failed|skipped|error' $O/log_${run}_$v.txt | tail -1)"
   grep -E "^(FAILED|ERROR)" $O/log_${run}_$v.txt | cut -c1-200 | head -10
 done
