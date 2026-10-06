@@ -158,6 +158,7 @@ def _reset_card():
 def capture_pristine(worktree, arch, test_id, timeout, out_path):
     """Captures the clean hardware state after a reset."""
     _reset_card()
+    out_path = os.path.abspath(out_path)
     test_dir = os.path.join(worktree, "tests", "python_tests")
     env = {**pytest_env(worktree), "CHIP_ARCH": arch, "LLK_CFG_SNAPSHOT": out_path}
 
