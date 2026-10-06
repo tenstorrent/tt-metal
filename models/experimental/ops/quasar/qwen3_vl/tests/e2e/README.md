@@ -83,12 +83,14 @@ A hang shows up as the pytest timeout. The script prints the last lines of `prog
 
 | PR | Commits | Why | Drop when |
 |---|---|---|---|
-| — | — | — | — |
+| [#59510](https://github.com/tenstorrent/tt-metal/issues/59510) (not a PR yet) | `[droppable] WH exp: SFPNOP after SFPMAD ...` | WH approx exp returns zeros with `TT_METAL_DISABLE_SFPLOADMACRO=1` (SDPA outputs zeros on WH silicon) | the upstream fix lands |
 
 ## Baselines
 
 | Target | Grid | Size | V/T/K | Verdict | Wall time | Run folder |
 |---|---|---|---|---|---|---|
-| ttsim WH | 8x8 | tiny | 2/2/1 | PASS (all stages >= 0.9993) | 9 min | `generated/qwen3_vl_quasar/dev/eleventh` |
+| ttsim WH | 8x8 | tiny | 2/2/1 | PASS (all stages >= 0.9993) | 10 min | `generated/qwen3_vl_quasar/wh_bh_wh_native_quasar/20261006T154929Z` |
 | ttsim WH | 2x1 | tiny | 2/2/1 | PASS (all stages >= 0.9985) | 10 min | `generated/qwen3_vl_quasar/wh_bh_wh_2x3_quasar/20261006T153843Z` |
 | WH N150 silicon | 8x9 | tiny | 2/2/1 | PASS (all stages >= 0.9993), with the #59510 fix commit | — | aus-wh-08 `wh_bh_hw_native_quasar/20261006T182734Z` |
+
+Blackhole (ttsim and hardware) is not part of the baseline.
