@@ -65,27 +65,26 @@ inline VTYPE _typecast_load_() {
     if constexpr (
         FMT == DataFormat::Float16 || FMT == DataFormat::Float16_b || FMT == DataFormat::Float32 ||
         FMT == DataFormat::Tf32) {
-        constexpr sfpi::DataLayout layout = FMT == DataFormat::Float16     ? sfpi::DataLayout::F16a
+        constexpr sfpi::DataLayout layout = FMT == DataFormat::Float16 ? sfpi::DataLayout::F16a
                                     : FMT == DataFormat::Float16_b ? sfpi::DataLayout::F16b
                                     : FMT == DataFormat::Float32 || FMT == DataFormat::Tf32
-                                        ? sfpi::DataLayout::F32
-            : sfpi::DataLayout::None;  // Invalid, compile error
-        return sfpi::as<VTYPE>(sfpi::vFloat(sfpi::dst_reg[0].mode<layout> ()));
+                                    ? sfpi::DataLayout::F32 : sfpi::DataLayout::None;
+        return sfpi::as<VTYPE>(sfpi::vFloat(sfpi::dst_reg[0].mode<layout>()));
     } else if constexpr (FMT == DataFormat::Int32 || FMT == DataFormat::Int16 || FMT == DataFormat::Int8) {
-        constexpr sfpi::DataLayout layout = FMT == DataFormat::Int32   ? sfpi::DataLayout::SM32
+        constexpr sfpi::DataLayout layout = FMT == DataFormat::Int32 ? sfpi::DataLayout::SM32
                                     : FMT == DataFormat::Int16 ? sfpi::DataLayout::SM16
                                     : FMT == DataFormat::Int8  ? sfpi::DataLayout::SM8
             : sfpi::DataLayout::None;
-        return sfpi::as<VTYPE>(sfpi::vSMag(sfpi::dst_reg[0].mode<layout> ()));
+        return sfpi::as<VTYPE>(sfpi::vSMag(sfpi::dst_reg[0].mode<layout>()));
     } else if constexpr (FMT == DataFormat::UInt16 || FMT == DataFormat::UInt8) {
-                                   constexpr sfpi::DataLayout layout = FMT == DataFormat::UInt16  ? sfpi::DataLayout::U16
+        constexpr sfpi::DataLayout layout = FMT == DataFormat::UInt16 ? sfpi::DataLayout::U16
                                     : FMT == DataFormat::UInt8 ? sfpi::DataLayout::U8
-                                       : sfpi::DataLayout::None;
-        return sfpi::as<VTYPE>(sfpi::vUInt(sfpi::dst_reg[0].mode<layout> ()));
+                                    : sfpi::DataLayout::None;
+        return sfpi::as<VTYPE>(sfpi::vUInt(sfpi::dst_reg[0].mode<layout>()));
     } else {
         // No dedicated SFPU mode (fp8, MX block formats, 4-bit ints): fall back to the implied/
         // default register-file format. Matches the runtime overload's default case.
-        return sfpi::as<VTYPE>(sfpi::vFloat(sfpi::dst_reg[0].mode<sfpi::DataLayout::FSrcB> ()));
+        return sfpi::as<VTYPE>(sfpi::vFloat(sfpi::dst_reg[0].mode<sfpi::DataLayout::FSrcB>()));
     }
 }
 
@@ -97,22 +96,21 @@ inline void _typecast_store_(TYPE value) {
     if constexpr (
         FMT == DataFormat::Float16 || FMT == DataFormat::Float16_b || FMT == DataFormat::Float32 ||
         FMT == DataFormat::Tf32) {
-        constexpr sfpi::DataLayout layout = FMT == DataFormat::Float16     ? sfpi::DataLayout::F16a
+        constexpr sfpi::DataLayout layout = FMT == DataFormat::Float16 ? sfpi::DataLayout::F16a
                                     : FMT == DataFormat::Float16_b ? sfpi::DataLayout::F16b
                                     : FMT == DataFormat::Float32 || FMT == DataFormat::Tf32
-                                        ? sfpi::DataLayout::F32
-            : sfpi::DataLayout::None;  // Invalid, compile error
+                                    ? sfpi::DataLayout::F32 : sfpi::DataLayout::None;
         sfpi::dst_reg[0].mode<layout>(ADDR_MOD_6) = sfpi::as<sfpi::vFloat>(value);
     } else if constexpr (FMT == DataFormat::Int32 || FMT == DataFormat::Int16 || FMT == DataFormat::Int8) {
-        constexpr sfpi::DataLayout layout = FMT == DataFormat::Int32   ? sfpi::DataLayout::SM32
+        constexpr sfpi::DataLayout layout = FMT == DataFormat::Int32 ? sfpi::DataLayout::SM32
                                     : FMT == DataFormat::Int16 ? sfpi::DataLayout::SM16
                                     : FMT == DataFormat::Int8  ? sfpi::DataLayout::SM8
-            : sfpi::DataLayout::None;
+                                    : sfpi::DataLayout::None;
         sfpi::dst_reg[0].mode<layout>(ADDR_MOD_6) = sfpi::as<sfpi::vSMag>(value);
     } else if constexpr (FMT == DataFormat::UInt16 || FMT == DataFormat::UInt8) {
         constexpr sfpi::DataLayout layout = FMT == DataFormat::UInt16  ? sfpi::DataLayout::U16
                                     : FMT == DataFormat::UInt8 ? sfpi::DataLayout::U8
-            : sfpi::DataLayout::None;
+                                    : sfpi::DataLayout::None;
         sfpi::dst_reg[0].mode<layout>(ADDR_MOD_6) = sfpi::as<sfpi::vUInt>(value);
     } else {
         // No dedicated SFPU mode (fp8, MX block formats, 4-bit ints): fall back to the implied/
