@@ -24,9 +24,11 @@ from helpers.ulp_sweep import (
     export_measured,
     finish_emit,
     flushed_inputs,
+    known_nonfinite_lanes,
     measurable_mask,
     merge_measured,
     nonfinite_failures,
+    received_inputs,
     record,
     stale_excuses,
     write_table,
@@ -423,6 +425,94 @@ def test_a_block_float_input_the_quantizer_flushes_is_the_flush_not_the_op():
     )[zero]
 
 
+def _bf16_run(first: int, last: int) -> torch.Tensor:
+    """The bf16 values ``first..last`` by bit pattern, in the sweep's sorted order."""
+    return torch.arange(first, last + 1, dtype=torch.int16).view(torch.bfloat16)
+
+
+def test_a_block_float_lane_is_judged_where_the_quantizer_puts_it():
+    """In the sorted sweep 1.0 is the last lane of the Bfp8_b block ``0x3F71..0x3F80``,
+    and the shared exponent hands the golden and the kernel 0x3F7E and 0x3F7F (0.992,
+    0.996) as exactly 1.0. Whether a lane is on a singularity or inside the op's claim
+    is a question about that value. For Atanh both lanes are the pole, so a finite
+    answer to their infinite golden is excused like 1.0's; for Acosh they are the
+    defined side, so an inf there fails. Read off the raw stimulus, both came out the
+    other way round -- which is what a Float16_b input, where nothing moves, still
+    shows."""
+    src = _bf16_run(0x3F71, 0x3F80)
+    block, flat, out = DataFormat.Bfp8_b, DataFormat.Float16_b, DataFormat.Float16_b
+    received = received_inputs(src, block)
+    assert (received == 1.0).tolist() == [False] * 13 + [True] * 3
+    assert torch.equal(received_inputs(src, flat), src)
+
+    golden = torch.atanh(received.float()).to(torch.bfloat16)
+    finite = torch.where(torch.isinf(golden), 3.0e38, golden.float()).to(torch.bfloat16)
+    assert not nonfinite_failures(
+        MathOperation.Atanh, src, golden, finite, block, out
+    ).any()
+    assert nonfinite_failures(
+        MathOperation.Atanh, src, golden, finite, flat, out
+    ).tolist() == [False] * 13 + [True, True, False]
+
+    golden = torch.acosh(received.float()).to(torch.bfloat16)
+    inf = torch.full_like(src, float("inf"))
+    assert (
+        nonfinite_failures(MathOperation.Acosh, src, golden, inf, block, out).tolist()
+        == [False] * 13 + [True] * 3
+    )
+    assert nonfinite_failures(
+        MathOperation.Acosh, src, golden, inf, flat, out
+    ).tolist() == [False] * 15 + [True]
+
+
+def test_the_reciprocal_saturation_lane_is_two_to_the_minus_16_as_received():
+    """#57215: 1/x at x = 2**-16 is 2**16, past fp16's range, and the approximate
+    reciprocal's shortfall leaves it for the store to saturate to 65504. One step above,
+    1/x is ~65028, a finite fp16 answer: an inf there is a failure on Float16_b. On
+    Bfp8_b the shared exponent hands the kernel 2**-16 itself for the two steps under it
+    and the one above, so they are the same input and excused with it.
+
+    Two blocks, aligned as the sweep aligns them: 2**-16 closes ``0x3771..0x3780``."""
+    src = _bf16_run(0x3771, 0x3790)
+    edge = int((src == 2.0**-16).nonzero())
+    above = edge + 1
+    cell = dict(approx_mode=ApproximationMode.Yes, dest_acc=DestAccumulation.Yes)
+    out = DataFormat.Float16
+    for fmt, named in (
+        (DataFormat.Float16_b, [edge]),
+        (DataFormat.Bfp8_b, [edge - 2, edge - 1, edge, above]),
+    ):
+        excused = known_nonfinite_lanes(
+            MathOperation.Reciprocal, src, fmt, out, *cell.values()
+        )
+        assert excused.nonzero().flatten().tolist() == named, fmt.name
+
+        # What silicon answers: the saturated store on the named lanes, and the golden
+        # everywhere else.
+        received = received_inputs(src, fmt).float()
+        golden = (1 / received).to(torch.float16)
+        result = torch.where(excused, 65504.0, golden.float()).to(torch.float16)
+        failures = nonfinite_failures(
+            MathOperation.Reciprocal, src, golden, result, fmt, out, **cell
+        )
+        assert not failures.any(), fmt.name
+        assert (
+            stale_excuses(
+                MathOperation.Reciprocal, src, golden, result, fmt, out, *cell.values()
+            )
+            == []
+        ), fmt.name
+
+    fmt = DataFormat.Float16_b
+    golden = (1 / src.float()).to(torch.float16)
+    assert torch.isfinite(golden[above])
+    result = golden.clone()
+    result[above] = float("inf")
+    assert nonfinite_failures(
+        MathOperation.Reciprocal, src, golden, result, fmt, out, **cell
+    ).nonzero().flatten().tolist() == [above]
+
+
 def test_a_known_nonfinite_lane_is_excused_on_its_cell_and_nowhere_else():
     """Celu returns inf for x in 65408..65504 on a 16-bit Float16 Dest (#58607). The
     entry names those inputs on that cell. The lane below the interval is still a
@@ -713,6 +803,34 @@ def test_effective_dest_acc_promotes_an_exponent_b_input_packed_to_float16(
         promoted
     )
     assert effective_dest_acc(DataFormat.Float16, DataFormat.Float16, No, arch) == No
+
+
+def test_effective_dest_acc_asks_for_the_chip_only_for_an_outlier(monkeypatch):
+    """Block sizing calls it for every variant; an ordinary combination cannot be
+    promoted, so it must not need a chip context to say so."""
+    import helpers.data_format_inference as inference
+
+    def no_chip():
+        raise AssertionError("looked up the chip for a combination it cannot promote")
+
+    monkeypatch.setattr(inference, "get_chip_architecture", no_chip)
+    for dest_acc in DestAccumulation:
+        assert (
+            inference.effective_dest_acc(
+                DataFormat.Float16, DataFormat.Float16, dest_acc
+            )
+            == dest_acc
+        )
+    assert (
+        inference.effective_dest_acc(
+            DataFormat.Float16_b, DataFormat.Float16, DestAccumulation.Yes
+        )
+        == DestAccumulation.Yes
+    )
+    with _refuses("looked up the chip", AssertionError):
+        inference.effective_dest_acc(
+            DataFormat.Float16_b, DataFormat.Float16, DestAccumulation.No
+        )
 
 
 def test_emit_sweeps_every_keyed_op_and_only_those(monkeypatch):

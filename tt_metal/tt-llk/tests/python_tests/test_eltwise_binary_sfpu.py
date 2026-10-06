@@ -11,10 +11,7 @@ import pytest
 import torch
 from conftest import skip_for_quasar
 from helpers.chip_architecture import ChipArchitecture
-from helpers.data_format_inference import (
-    effective_dest_acc,
-    is_format_combination_outlier,
-)
+from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -674,11 +671,10 @@ def test_eltwise_binary_sfpu_float(
             "Bfp8_b input is not supported for XLOGY/LOGADDEXP/LOGADDEXP2 coverage"
         )
 
-    if bcast_dim == LlkBroadcastType.Row and (
-        dest_acc == DestAccumulation.Yes
-        or is_format_combination_outlier(
-            formats.input_format, formats.output_format, dest_acc
-        )
+    if (
+        bcast_dim == LlkBroadcastType.Row
+        and effective_dest_acc(formats.input_format, formats.output_format, dest_acc)
+        == DestAccumulation.Yes
     ):
         pytest.skip(
             "Row broadcast with FP32 dest: B2D datacopy uses MOVB2D which can't handle FP32 dest format conversion"

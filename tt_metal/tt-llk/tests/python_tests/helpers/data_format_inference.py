@@ -130,15 +130,14 @@ def effective_dest_acc(
     perf sweep, the cells an exhaustive sweep can key a measurement on -- has to apply
     the same rule, and used to spell it out again each time. *arch* defaults to the
     chip this session targets; a host check of another architecture's table passes
-    its own.
+    its own. It is looked up only for an outlier, so sizing an ordinary combination
+    stays a host-only call.
     """
+    if not is_format_combination_outlier(input_format, output_format, dest_acc):
+        return dest_acc
     if arch is None:
         arch = get_chip_architecture()
-    if arch != ChipArchitecture.QUASAR and is_format_combination_outlier(
-        input_format, output_format, dest_acc
-    ):
-        return DestAccumulation.Yes
-    return dest_acc
+    return DestAccumulation.Yes if arch != ChipArchitecture.QUASAR else dest_acc
 
 
 _SRCAB_ONLY_FORMATS = {

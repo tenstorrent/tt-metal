@@ -218,8 +218,8 @@ def pytest_addoption(parser):
         action="store_true",
         help="Re-measure rather than gate: the exhaustive unary sweep records what it "
         "measures and folds it back into helpers/sfpu_accuracy_budget.yaml at the end "
-        "of the session, replacing each swept op's rows. Writes the table; use it "
-        "deliberately.",
+        "of the session, replacing the rows of each (op, in, out) it measured and "
+        "keeping hand-maintained rows. Writes the table; use it deliberately.",
     )
     parser.addoption(
         "--ulp-report",

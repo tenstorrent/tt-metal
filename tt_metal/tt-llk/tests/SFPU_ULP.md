@@ -214,11 +214,13 @@ pytest test_sfpu_accuracy_budget.py test_ulp_sweep.py -q
 - **Budgets do not transfer between architectures.** Every unkeyed number was measured
   on Wormhole. Off it, an op falls back to tolerance unless a row names that `arch`
   itself. Re-measure before trusting any of it on Blackhole.
-- **An exact op may not carry a wide budget.** Sign-bit ops, copies, integer results,
-  predicates and constant fills are the flakiness canaries: if one fails, the golden or
-  the datapath moved. `test_an_exact_op_never_carries_a_wide_budget` holds their
-  budgets, and `test_every_swept_cell_of_an_exact_op_is_gated_or_waived` holds the cells
-  demoted to tolerance to an explicit list, each with its measurement.
+- **An exact op may not carry a wide budget.** Sign-bit ops, copies and integer results
+  are the flakiness canaries: if one fails, the golden or the datapath moved.
+  `test_an_exact_op_never_carries_a_wide_budget` holds their budgets, and
+  `test_every_swept_cell_of_an_exact_op_is_gated_or_waived` holds the cells demoted to
+  tolerance to an explicit list, each with its measurement. Both cover only those ops
+  (`EXACT_BY_CONSTRUCTION`); from #57024 they hold predicates, signs and constant fills
+  too.
 - **`Bfp8_b` charges for block quantization.** A budget there is denominated in bfloat16
   steps, two to one `Bfp8_b` step, and does not forgive the shared exponent. No cell
   with a `Bfp8_b` output is gated by steps: the sweep records its measurement and the

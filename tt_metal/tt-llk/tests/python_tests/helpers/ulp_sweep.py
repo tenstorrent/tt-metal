@@ -132,14 +132,38 @@ def padding_lanes(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     return flat.reshape(src.shape)
 
 
+def received_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
+    """*src* as the op receives it: what ``quantize_input_to_unpack_format`` hands the
+    golden, and the unpack hands the kernel. The same tensor on every format but a block
+    float.
+
+    The lane checks that ask where an input *is* -- on a singularity, inside the op's
+    claim, inside a tracked issue's lanes -- have to ask it of this value, not of the one
+    generated. On Bfp8_b the shared exponent moves a value across those boundaries: in
+    the sorted sweep 1.0 is the last lane of the block ``0x3F71..0x3F80``, so 0.992 and
+    0.996 both arrive as exactly 1.0, and ``atanh`` of them is the pole.
+    """
+    from helpers.bfp_format_utils import BFP_BLOCK
+    from helpers.golden_generators import quantize_input_to_unpack_format
+
+    # The block quantizer works on whole BFP_BLOCK-lane blocks. A device sweep is 65,536
+    # lanes; a host test may hand in a fragment, so pad it with zeros, which never raise
+    # a block's exponent, and drop the padding again.
+    flat = src.detach().flatten()
+    short = (-flat.numel()) % BFP_BLOCK
+    padded = torch.cat([flat, torch.zeros(short, dtype=flat.dtype, device=flat.device)])
+    received = quantize_input_to_unpack_format(padded, input_format)[: flat.numel()]
+    return received.reshape(src.shape)
+
+
 def flushed_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     """Lanes whose input the unpack path flushes to zero and the golden does not.
 
     Two values are tested against the *stimuli* format's smallest normal: the input as
-    generated, and the input as ``quantize_input_to_unpack_format`` hands it to the
-    golden. They differ on a block float. The sweep's one ``-0.0`` shares a Bfp8_b block
-    with the bf16 subnormals ``0x8001..0x800F``, the shared exponent is 0, and the
-    quantizer's forced hidden bit gives the golden ``-2**-127``; ``floor`` of that is -1
+    generated, and as received (:func:`received_inputs`). They differ on a block float.
+    The sweep's one ``-0.0`` shares a Bfp8_b block with the bf16 subnormals
+    ``0x8001..0x800F``, the shared exponent is 0, and the quantizer's forced hidden bit
+    gives the golden ``-2**-127``; ``floor`` of that is -1
     against the 0 silicon sees. That one lane was 16,129 steps on every Bfp8_b-input
     cell of Floor, and the reason Ceil and Trunc read 0 on the same cells.
 
@@ -148,8 +172,6 @@ def flushed_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     bf16's smallest normal is 1.18e-38 and fp16's is 6.1e-05, so 2,046 flushed lanes
     read as a 14,337-step error on ``Abs``, an op that cannot be wrong.
     """
-    from helpers.bfp_format_utils import BFP_BLOCK
-    from helpers.golden_generators import quantize_input_to_unpack_format
     from helpers.llk_params import format_dict
 
     stimuli_dtype = format_dict[stimuli_format_for(input_format)]
@@ -164,14 +186,7 @@ def flushed_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
         magnitude = values.detach().to(torch.float32).abs()
         return (magnitude < smallest_normal) & (magnitude != 0)
 
-    # The block quantizer works on whole BFP_BLOCK-lane blocks. A device sweep is 65,536
-    # lanes; a host test may hand in a fragment, so pad it with zeros, which never raise
-    # a block's exponent, and drop the padding again.
-    flat = src.detach().flatten()
-    short = (-flat.numel()) % BFP_BLOCK
-    padded = torch.cat([flat, torch.zeros(short, dtype=flat.dtype, device=flat.device)])
-    quantized = quantize_input_to_unpack_format(padded, input_format)[: flat.numel()]
-    return (subnormal(flat) | subnormal(quantized)).reshape(src.shape)
+    return subnormal(src) | subnormal(received_inputs(src, input_format))
 
 
 def measurable_mask(
@@ -259,6 +274,8 @@ def _claimed(op, src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     """Lanes where *op* claims a finite, accurate answer: the whole format, less the
     side of each ``_OP_SINGULARITIES`` point the op is undefined on, the point itself
     for a pole, and any ``_CLAIM_LIMIT`` for the format *input_format* is swept in.
+    Judged on the input as received (:func:`received_inputs`): a Bfp8_b 0.996 that
+    arrives as 1.0 is ``acosh``'s defined side.
 
     Deliberately not the functional driver's sampling window, which is where a few
     thousand points are drawn, not where the op stops being defined: Abs is sampled on
@@ -268,7 +285,7 @@ def _claimed(op, src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     """
     from helpers.sfpu_domains import _OP_SINGULARITIES, Operand, SingularitySide
 
-    value = src.detach().to(torch.float32)
+    value = received_inputs(src, input_format).to(torch.float32)
     claimed = torch.ones_like(value, dtype=torch.bool)
     for point, side in _OP_SINGULARITIES.get(op, {}).get(Operand.A, ()):
         # The defined side keeps the point: sqrt(0) and acosh(1) are answers. A golden
@@ -285,11 +302,12 @@ def _claimed(op, src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     return claimed
 
 
-def _at_a_singularity(op, src: torch.Tensor) -> torch.Tensor:
-    """Lanes sitting exactly on one of *op*'s ``_OP_SINGULARITIES`` points, either side."""
+def _at_a_singularity(op, src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
+    """Lanes received (:func:`received_inputs`) exactly on one of *op*'s
+    ``_OP_SINGULARITIES`` points, either side."""
     from helpers.sfpu_domains import _OP_SINGULARITIES, Operand
 
-    value = src.detach().to(torch.float32)
+    value = received_inputs(src, input_format).to(torch.float32)
     on_point = torch.zeros_like(value, dtype=torch.bool)
     for point, _side in _OP_SINGULARITIES.get(op, {}).get(Operand.A, ()):
         on_point |= value == point
@@ -315,7 +333,8 @@ class KnownNonfiniteLanes:
     #: The input formats the entry holds on.
     inputs: Tuple[DataFormat, ...]
     output: DataFormat
-    #: Inclusive bounds on the input -- on ``|x|`` when *magnitude* is set.
+    #: Inclusive bounds on the input as received (:func:`received_inputs`) -- on ``|x|``
+    #: when *magnitude* is set.
     low: float
     high: float
     #: ``ApproximationMode`` / ``DestAccumulation``, or ``None`` for either value.
@@ -332,8 +351,8 @@ class KnownNonfiniteLanes:
             and (self.dest is None or dest_acc == self.dest)
         )
 
-    def lanes(self, src: torch.Tensor) -> torch.Tensor:
-        value = src.detach().to(torch.float32)
+    def lanes(self, received: torch.Tensor) -> torch.Tensor:
+        value = received.detach().to(torch.float32)
         if self.magnitude:
             value = value.abs()
         return (value >= self.low) & (value <= self.high)
@@ -385,9 +404,13 @@ def _known_lanes() -> Dict:
                 ),
             ),
             # #57215: the Float16 store saturates a value just past 65504 to 65504 rather
-            # than to an infinity. 1/x for |x| a step or two under 2**-16 is such a
-            # value, and the approximate reciprocal's few-percent shortfall keeps it
-            # under 2**16, the one value the store does carry to inf.
+            # than to an infinity. 1/x at |x| = 2**-16 is 2**16, past fp16's range, and
+            # the approximate reciprocal falls just short of it, into (65504, 2**16),
+            # where the store saturates instead of carrying it to inf. Only that input:
+            # a step or two under it the answer agrees with the golden (measured), and a
+            # step above, 1/x is ~65028, a finite answer an inf must not be excused on.
+            # Bfp8_b needs no wider bounds: its 2**-16 block hands the kernel exactly
+            # 2**-16 for all four of 0x377E..0x3781, and the bounds are on that value.
             MathOperation.Reciprocal: (
                 KnownNonfiniteLanes(
                     issue="#57215",
@@ -395,8 +418,8 @@ def _known_lanes() -> Dict:
                     output=DataFormat.Float16,
                     approx=ApproximationMode.Yes,
                     dest=DestAccumulation.Yes,
-                    low=1.51e-5,
-                    high=1.54e-5,
+                    low=2.0**-16,
+                    high=2.0**-16,
                     magnitude=True,
                     why="+-65504 where 1/x is past fp16's range and the store saturates instead of overflowing",
                 ),
@@ -415,10 +438,11 @@ def known_nonfinite_lanes(
     dest_acc,
 ) -> torch.Tensor:
     """The lanes of *src* a :data:`_KNOWN_NONFINITE_LANES` entry names on this cell."""
+    received = received_inputs(src, input_format)
     excused = torch.zeros(src.shape, dtype=torch.bool, device=src.device)
     for entry in _known_lanes().get(op, ()):
         if entry.applies_to(input_format, output_format, approx_mode, dest_acc):
-            excused |= entry.lanes(src)
+            excused |= entry.lanes(received)
     return excused
 
 
@@ -448,11 +472,12 @@ def stale_excuses(
         dest_acc,
         known_lanes=False,
     )
+    received = received_inputs(src, input_format)
     return [
         entry
         for entry in _known_lanes().get(op, ())
         if entry.applies_to(input_format, output_format, approx_mode, dest_acc)
-        and not bool((entry.lanes(src) & without).any())
+        and not bool((entry.lanes(received) & without).any())
     ]
 
 
@@ -496,12 +521,12 @@ def nonfinite_failures(
       answer against such a golden is still judged: ``exp`` past overflow returning
       3.39e38 where the golden is ``+inf`` is the kernel being wrong, and the ranking
       mask drops that lane too.
-    * **an infinite golden on a registered singularity point itself** -- ``log(0)``,
-      ``rsqrt(0)``, ``atanh(-1)``. The value there is a limit, not a number, and what
-      the pipeline makes of it is not the op's accuracy: the unpack drops the sign of
-      ``-0.0``, so ``rsqrt(-0)`` answers ``+inf`` against ``-inf``, and a 16-bit fp16
-      Dest has no infinity, so ``log(0)`` answers -130560. Only the point: one step off
-      it the op claims a finite answer again.
+    * **an infinite golden on a registered singularity point itself**, as received --
+      ``log(0)``, ``rsqrt(0)``, ``atanh(-1)``. The value there is a limit, not a number,
+      and what the pipeline makes of it is not the op's accuracy: the unpack drops the
+      sign of ``-0.0``, so ``rsqrt(-0)`` answers ``+inf`` against ``-inf``, and a 16-bit
+      fp16 Dest has no infinity, so ``log(0)`` answers -130560. Only the point: one step
+      off it the op claims a finite answer again.
     * **the sweep's own zero padding**, which is not a value it chose to feed.
     * **an input the op makes no claim on** (:func:`_claimed`): the op's own limit
       rather than the sweep's -- the undefined side of a registered singularity, or
@@ -530,7 +555,7 @@ def nonfinite_failures(
         torch.isinf(result) & (torch.signbit(result) == torch.signbit(golden))
     )
     excused = torch.isnan(golden) | (
-        past_range & (saturated | _at_a_singularity(op, src))
+        past_range & (saturated | _at_a_singularity(op, src, input_format))
     )
     return (
         nonfinite_mismatches(golden, result)
