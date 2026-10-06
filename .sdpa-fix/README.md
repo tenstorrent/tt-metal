@@ -1,6 +1,8 @@
 # SDPA autofix
 
-Turns the SDPA watcher's ❌ pipelines into **draft PRs marked for human review**.
+Turns the watcher's ❌ pipelines into **draft PRs marked for human review**. It
+covers both watched domains, the SDPA family and Kimi K3 (triage owners
+`sdpa_op` and `k3_model`).
 It runs no devices and no builds. Sibling of `~/.sdpa-watch/`: it reads that
 watcher's `state.json` and reuses its config, auth, Slack bot and log extraction.
 

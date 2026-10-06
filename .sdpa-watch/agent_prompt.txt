@@ -9,32 +9,39 @@ Format:
 <detail lines — see rules below>
 <run URL>
 
+What this watcher covers — TWO domains:
+1. The SDPA family: SDPA ops and kernels, ring / joint attention, MLA attention, sparse SDPA, indexer_score, the experimental KDA op.
+2. Kimi K3: every Kimi-K3 test end to end (MoE, KDA layers, AttnRes, transformer, disaggregated prefill runner), in the pipelines whose test-focus hint lists K3 jobs.
+Rules for Kimi-K3 failures:
+- Prefix every K3 bullet label with `K3 ` (e.g. `K3 test_kimi_k3_moe[…]`, `K3 infra:disagg-prefill-sc1`) so it reads apart from SDPA failures.
+- Say who owns the failure: an SDPA-team op or kernel (sdpa, ring MLA, experimental/kda, attn_res op, high_bw_all_gather) or K3 model code under models/demos/deepseek_v3_d_p/ (the Kimi-K3 model owners).
+
 Scope policy (applies to every pipeline):
-- The test-focus hint is the primary anchor for the in-scope subset (typically a test path, e.g. `tests/.../sdpa`). In-scope ALSO covers any other SDPA-related log evidence even if the hint path doesn't appear, including but not limited to:
+- The test-focus hint is the primary anchor for the in-scope subset (typically a test path, e.g. `tests/.../sdpa`). In-scope ALSO covers any other SDPA-related (or, where the hint lists K3 jobs, Kimi-K3-related) log evidence even if the hint path doesn't appear, including but not limited to:
     * pytest FAILED lines whose path matches the hint, OR whose test name contains `sdpa`
     * compile/link errors in files under any `*/sdpa/*` path or files whose name contains `sdpa`
     * kernel build / TT-Metal kernel compile failures for SDPA kernels (e.g. errors mentioning `sdpa`, `scaled_dot_product`, `ring_sdpa`, `mla`)
-    * runtime errors, hangs, asserts, or device crashes that occurred while an SDPA test was executing — EXCEPT collateral device hangs inherited from an earlier out-of-scope failure (see the "Collateral" rule below)
+    * runtime errors, hangs, asserts, or device crashes that occurred while an in-scope test was executing — EXCEPT collateral device hangs inherited from an earlier out-of-scope failure (see the "Collateral" rule below)
     * ring-attention / MLA failures (treat as SDPA)
 - Completely ignore out-of-scope failures. Do NOT name them, do NOT include a count, do NOT add explanation lines about them.
 - The header emoji and `<status>` are keyed on the IN-SCOPE result, not the workflow conclusion:
     ✅ success  — zero in-scope failures detected (even if the overall workflow conclusion is failure)
     ❌ failure  — one or more in-scope failures detected (test, build, or kernel)
-    ⚠️ tests-did-not-run — use whenever the in-scope tests never actually executed, regardless of the workflow conclusion. This covers GH conclusions cancelled / timed_out / startup_failure AND `failure` conclusions where the failure occurred in setup (env install, runner provisioning, docker pull, dependency fetch, etc.) before the SDPA tests had a chance to start. If you're unsure whether tests ran, prefer ⚠️ over ❌ when there's no evidence the in-scope tests were invoked.
+    ⚠️ tests-did-not-run — use whenever the in-scope tests never actually executed, regardless of the workflow conclusion. This covers GH conclusions cancelled / timed_out / startup_failure AND `failure` conclusions where the failure occurred in setup (env install, runner provisioning, docker pull, dependency fetch, etc.) before the in-scope tests had a chance to start. If you're unsure whether tests ran, prefer ⚠️ over ❌ when there's no evidence the in-scope tests were invoked.
     ⏸ skipped  — in-scope subset was skipped entirely
-    🚫 blocked (out-of-scope hang) — the ONLY in-scope failures are collateral: SDPA tests that timed out on a device already wedged by an earlier out-of-scope failure in the same job (see the "Collateral" rule below)
+    🚫 blocked (out-of-scope hang) — the ONLY in-scope failures are collateral: in-scope tests that timed out on a device already wedged by an earlier out-of-scope failure in the same job (see the "Collateral" rule below)
     ❔ anything else
 - If the in-scope subset cannot be evaluated because the log excerpt has no evidence either way, default to ✅ success (we did not detect an in-scope failure).
 
 Collateral rule — "NOT OUR PROBLEM" (device wedged by an out-of-scope failure):
-Some pipelines run SDPA tests in the SAME job, on the SAME device, as out-of-scope tests, and that device is NOT reset between tests (e.g. `t3k_ccl_tests` runs CCL all_reduce / reduce_scatter alongside ring-joint SDPA). Once any test wedges the device, every later test inherits dead hardware and times out — that is not an SDPA regression.
-- Trigger: an out-of-scope test EARLIER in the same job already hit a fatal device state ("device timeout", "potential hang detected", "unrecoverable", or a "Timeout ... waiting for physical cores" THROW), AND the in-scope SDPA test(s) after that point fail ONLY with a device timeout/hang — no PCC mismatch, no SDPA-specific assert, no compile/kernel error of their own.
-- When triggered, treat those SDPA failures as COLLATERAL, not in-scope failures:
+Some pipelines run in-scope tests in the SAME job, on the SAME device, as out-of-scope tests, and that device is NOT reset between tests (e.g. `t3k_ccl_tests` runs CCL all_reduce / reduce_scatter alongside ring-joint SDPA). Once any test wedges the device, every later test inherits dead hardware and times out — that is not a regression in our scope.
+- Trigger: an out-of-scope test EARLIER in the same job already hit a fatal device state ("device timeout", "potential hang detected", "unrecoverable", or a "Timeout ... waiting for physical cores" THROW), AND the in-scope test(s) after that point fail ONLY with a device timeout/hang — no PCC mismatch, no assert of their own, no compile/kernel error of their own.
+- When triggered, treat those in-scope failures as COLLATERAL, not in-scope failures:
     * Do NOT set the header to ❌. If collateral is the only in-scope problem, set the header to 🚫 blocked (out-of-scope hang).
     * Emit exactly ONE footnote line and no per-test bullets:
       🚫 not our problem — `<sdpa_test>` timed out on a device already wedged by an out-of-scope `<first-failing-test-or-op>` hang (shared job, no reset between tests).
     * Likely-cause line still follows the normal rules; point at the out-of-scope hang if identifiable, else "unclear".
-- Do NOT apply this rule if the SDPA test produced a genuine failure signal of its own (bad PCC, its own assert, a compile/kernel error) or if the SDPA test was itself the FIRST thing to wedge the device — those are real ❌ in-scope failures.
+- Do NOT apply this rule if the in-scope test produced a genuine failure signal of its own (bad PCC, its own assert, a compile/kernel error) or if that test was itself the FIRST thing to wedge the device — those are real ❌ in-scope failures.
 - If a run has BOTH a real in-scope ❌ failure and separate collateral timeouts, keep the header ❌, list the real failures as bullets, and add the 🚫 collateral footnote below them.
 
 For SUCCESS: omit detail lines entirely. The block is just the header line and the URL on a second line.
@@ -43,8 +50,8 @@ For FAILURE: list EVERY in-scope failure as its own bullet (no truncation, no "a
   - the qualified test name (e.g. `test_sdpa_decode_xyz`) for a pytest failure,
   - `build:<short_filename>` for a compile/link error (e.g. `build:sdpa_op.cpp`),
   - `kernel:<short_kernel_name>` for an SDPA kernel build failure (e.g. `kernel:ring_sdpa`),
-  - `runtime:<test_or_op>` for a hang/crash/device error during an SDPA test,
-  - `infra:<short_label>` for anything else SDPA-related that's neither test nor build.
+  - `runtime:<test_or_op>` for a hang/crash/device error during an in-scope test,
+  - `infra:<short_label>` for anything else in scope that's neither test nor build (runner, MPI, missing data).
 Format:
   • `<label>` — <one-line cause from the log>
   • `<label>` — <one-line cause from the log>

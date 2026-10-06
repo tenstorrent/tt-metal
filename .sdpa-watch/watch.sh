@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SDPA pipeline watcher — invoked by cron every 4h (or manually).
+# SDPA + Kimi K3 pipeline watcher — invoked by cron every 4h (or manually).
 # Posts one Slack digest with per-pipeline status. Uses a cache keyed by
 # run_id so unchanged pipelines reuse their previous summary block without
 # re-invoking the LLM.
@@ -663,7 +663,7 @@ else
   title_ts="$ts_human"
   last_ok="$ts_human"
 fi
-title="SDPA Pipelines — $BRANCH — $title_ts"
+title="SDPA + Kimi K3 Pipelines — $BRANCH — $title_ts"
 
 # Autofix status, written INTO the failing pipeline's block: each note is
 # appended to the bullet of the failing test it is about (matched on the test

@@ -1,13 +1,24 @@
-# SDPA Pipeline Watcher
+# SDPA + Kimi K3 Pipeline Watcher
 
 Monitors selected `tenstorrent/tt-metal` GitHub Actions workflows on `main` for
-SDPA-related failures and posts a digest to Slack on a cron schedule.
+failures in **two domains** and posts a digest to Slack on a cron schedule:
+
+1. **SDPA family:** SDPA ops and kernels, ring / joint attention, MLA, sparse
+   SDPA, indexer_score, the experimental KDA op.
+2. **Kimi K3:** every Kimi-K3 test end to end (MoE, KDA layers, AttnRes,
+   transformer, disaggregated prefill runner), in Blaze Prefill and Blackhole
+   E2E.
+
+K3 failures are labelled `K3 …` and say who owns them: an SDPA-team op or
+kernel, or K3 model code. The shared rules live in `agent_prompt.txt`; each
+pipeline's hint in `config.sh` lists only its in-scope jobs. The directory,
+the Slack channel (`#sdpa-watch`) and the bot keep their SDPA names.
 
 - **Green pipelines** are collapsed into one `✅` line (just names).
 - **Red pipelines** get a full block: every failing in-scope test, a short cause for each, and a likely-cause commit if attributable.
-- **Out-of-scope failures** (anything not SDPA-related) are completely ignored, no count, no mention.
+- **Out-of-scope failures** (anything outside SDPA and Kimi K3) are completely ignored, no count, no mention.
 
-Currently watches 9 pipelines (see `config.sh`). Cron currently fires every hour.
+Currently watches 6 pipelines (see `config.sh`). Cron fires every hour at :00.
 
 > **2026-08-21 — edit-in-place digest (Slack bot API).** When
 > `~/.sdpa-watch/slack_bot_token` (xoxb, scope `chat:write`) and
