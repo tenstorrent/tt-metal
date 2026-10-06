@@ -141,6 +141,10 @@ class PrefillModelAdapter(ABC):
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
     supports_mtp: bool = False
+    # Whether this model's MoE can run the routed expert and combine as one overlapped program. On Blackhole
+    # that path uses combine_fabric2d, which carries a whole bf16 token plus a 64 B routing tail in a single
+    # fabric packet, so the mesh is opened with room for it rather than the model's own FABRIC_PAYLOAD_SIZE.
+    moe_overlaps_routed_expert_with_combine: bool = False
 
     def cache_kind(self, config_id: int) -> str:
         """What migration-table config ``config_id`` holds. Generic consumers understand ``"kvpe"`` and

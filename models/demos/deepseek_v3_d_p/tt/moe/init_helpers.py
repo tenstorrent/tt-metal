@@ -32,6 +32,25 @@ def get_max_payload_size() -> int:
     return (MAX_PAYLOAD_SIZE_BH if is_blackhole() else MAX_PAYLOAD_SIZE_WH) + CMB_FABRIC2D_ROUTING_INFO_BYTES
 
 
+def combine_overlap_payload_size(routed_emb_dim: int) -> int:
+    """The fabric payload the routed expert / combine_fabric2d overlap needs: combine_fabric2d sends a whole
+    bfloat16 token plus its routing tail in one packet."""
+    return 2 * routed_emb_dim + CMB_FABRIC2D_ROUTING_INFO_BYTES
+
+
+def moe_fabric_payload_size(model_cfg) -> int:
+    """The fabric payload to open a mesh with for a model whose MoE is TtMoe.
+
+    On Blackhole TtMoe overlaps the routed expert with combine_fabric2d, so the mesh needs room for a bf16 token
+    plus combine's routing tail. Everywhere else TtMoe runs the routed expert then combine as separate ops, and
+    the model's own FABRIC_PAYLOAD_SIZE stands. TtMoe reads the payload back to decide whether to overlap, so a
+    mesh opened any other way simply runs without it. Deferred to avoid probing hardware at import time.
+    """
+    if is_blackhole():
+        return combine_overlap_payload_size(model_cfg.EMB_SIZE)
+    return model_cfg.FABRIC_PAYLOAD_SIZE
+
+
 @dataclass
 class MeshConfig:
     """Mesh configuration extracted from mesh_device."""

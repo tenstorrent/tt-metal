@@ -17,7 +17,11 @@ def _create_fabric_router_config(max_payload_size):
 
 
 def open_mesh_device(
-    mesh_shape: tuple, model_cfg: type, l1_small_size: int = 0, trace_region_size: int = 0
+    mesh_shape: tuple,
+    model_cfg: type,
+    l1_small_size: int = 0,
+    trace_region_size: int = 0,
+    moe_overlaps_routed_expert_with_combine: bool = False,
 ) -> ttnn.MeshDevice:
     sp = mesh_shape[0]
     fabric_mode = os.environ.get("PREFILL_FABRIC_MODE", "").strip().lower()
@@ -38,9 +42,16 @@ def open_mesh_device(
         fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
     logger.info(f"Fabric config: {fabric_config} (sp={sp}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})")
 
-    fabric_router_config = _create_fabric_router_config(
-        max_payload_size=model_cfg.FABRIC_PAYLOAD_SIZE,
-    )
+    # A model whose MoE overlaps the routed expert with combine reaches combine_fabric2d on Blackhole, which
+    # sends a whole bf16 token plus its routing tail in one packet; the MoE reads this payload back to decide
+    # whether to overlap. Everywhere else, and for every other model, the model's own payload stands.
+    if moe_overlaps_routed_expert_with_combine:
+        from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import moe_fabric_payload_size
+
+        max_payload_size = moe_fabric_payload_size(model_cfg)
+    else:
+        max_payload_size = model_cfg.FABRIC_PAYLOAD_SIZE
+    fabric_router_config = _create_fabric_router_config(max_payload_size=max_payload_size)
 
     ttnn.set_fabric_config(
         fabric_config,
