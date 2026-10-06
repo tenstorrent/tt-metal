@@ -108,6 +108,16 @@ void ScatterCodegenDeviceOperation::validate_on_program_cache_miss(
     const auto& index_tensor = tensor_args.index_tensor;
     const auto& src_tensor = tensor_args.src_tensor;
 
+    // Checked ahead of supported_by_codegen() (which also rejects it) so a direct prim caller gets the
+    // specific reason: a zero extent divides the CB page or page-map arithmetic by zero on the host.
+    TT_FATAL(
+        input_tensor.logical_shape().volume() != 0 && index_tensor.logical_shape().volume() != 0 &&
+            src_tensor.logical_shape().volume() != 0,
+        "scatter_codegen: zero-volume operands are not supported (input {}, index {}, src {}).",
+        input_tensor.logical_shape(),
+        index_tensor.logical_shape(),
+        src_tensor.logical_shape());
+
     // The prim only ever holds an already-normalized tensor (transpose-to-last-dim already applied),
     // so the scatter axis here is always the last dim; -1 says that without re-deriving rank.
     TT_FATAL(
