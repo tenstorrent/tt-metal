@@ -1,0 +1,61 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/conv3d/device/conv3d_program_factory.cpp b/ttnn/cpp/ttnn/operations/experimental/conv3d/device/conv3d_program_factory.cpp
+index 830a59f4c52..33d54ffa6ea 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/conv3d/device/conv3d_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/conv3d/device/conv3d_program_factory.cpp
+@@ -14,6 +14,8 @@
+ #include "ttnn/operations/cb_utils.hpp"
+ #include "ttnn/operations/data_movement/pad/pad.hpp"
+ #include <algorithm>
++#include <cstdlib>
++#include <string_view>
+ #include <tt-metalium/tensor_accessor_args.hpp>
+ #include <tt-metalium/hal.hpp>
+ #include <hostdevcommon/common_values.hpp>
+@@ -166,19 +168,24 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
+     // Fused tilize+matmul: compute tilizes row-by-row but batches out_subblock_h
+     // tile-rows before each matmul call, so vol2col_tiled needs out_subblock_h*K_t
+     // tiles instead of the full M_t*K_t.
+-    // vol2col_rm only needs TILE_HEIGHT pages since tilize consumes each row before
+-    // the next is pushed.
+-    // Double-buffer (2x) when num_patches isn't tile-aligned to avoid CB deadlock
+-    // between reader pushes and compute tilize pops on the partial last row.
+-    // The reader pushes TILE_HEIGHT-page chunks plus a num_patches % TILE_HEIGHT tail per block,
+-    // so with more than 2 * TILE_HEIGHT unaligned patches the next block starts mid-CB and a full
+-    // chunk straddles the CB end. cb_push_back only wraps on an exact hit of fifo_limit, so the
+-    // reader then writes past the CB through the rest of L1 and the op hangs.
++    // The reader pushes TILE_HEIGHT-page chunks plus a num_patches % TILE_HEIGHT tail per block, and
++    // compute pops the same sizes. cb_push_back and cb_pop_front wrap only on an exact hit of
++    // fifo_limit, so every block must end exactly at the CB end or a chunk of the next block straddles
++    // it and the reader writes past the CB through L1. Tile-aligned blocks are all full chunks and
++    // need only TILE_HEIGHT pages (tilize consumes each row before the next is pushed). Unaligned
++    // blocks get exactly num_patches pages.
++    const bool vol2col_aligned = num_patches % tt::constants::TILE_HEIGHT == 0;
++    // Unaligned blocks over 2 * TILE_HEIGHT patches stay rejected until the num_patches sizing is
++    // checked on device; TT_CONV3D_ALLOW_UNALIGNED_VOL2COL=1 lifts the guard for that check.
++    static const bool allow_unaligned_vol2col = [] {
++        const char* env = std::getenv("TT_CONV3D_ALLOW_UNALIGNED_VOL2COL");
++        return env != nullptr && std::string_view(env) == "1";
++    }();
+     TT_FATAL(
+-        num_patches <= 2 * tt::constants::TILE_HEIGHT || num_patches % tt::constants::TILE_HEIGHT == 0,
++        allow_unaligned_vol2col || vol2col_aligned || num_patches <= 2 * tt::constants::TILE_HEIGHT,
+         "Conv3d blocking T_out_block={}, H_out_block={}, W_out_block={} gives {} patches per block. More than {} "
+-        "patches must be a multiple of {}, or the vol2col_rm CB chunks straddle the CB end and the reader overruns "
+-        "L1. Use a blocking whose T*H*W product is <= {} or a multiple of {}.",
++        "patches must be a multiple of {} until the unaligned vol2col_rm sizing is verified on device. Use a "
++        "blocking whose T*H*W product is <= {} or a multiple of {}, or set TT_CONV3D_ALLOW_UNALIGNED_VOL2COL=1.",
+         config.T_out_block,
+         config.H_out_block,
+         config.W_out_block,
+@@ -187,9 +194,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
+         tt::constants::TILE_HEIGHT,
+         2 * tt::constants::TILE_HEIGHT,
+         tt::constants::TILE_HEIGHT);
+-    uint32_t vol2col_rm_pages = (num_patches % tt::constants::TILE_HEIGHT == 0)
+-                                    ? std::min(num_patches, (uint32_t)tt::constants::TILE_HEIGHT)
+-                                    : std::min(num_patches, 2 * tt::constants::TILE_HEIGHT);
++    uint32_t vol2col_rm_pages =
++        vol2col_aligned ? std::min(num_patches, (uint32_t)tt::constants::TILE_HEIGHT) : num_patches;
+     uint32_t cb_vol2col_rm_id = next_cb_index++;
+     desc.cbs.push_back(CBDescriptor{
+         .total_size = vol2col_rm_pages * padded_patch_size_bytes,

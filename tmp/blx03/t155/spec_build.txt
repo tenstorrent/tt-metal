@@ -1,0 +1,7 @@
+ID=t155-build
+TASK=t155
+CONFIG=t155-build-t48
+TIMEOUT=1800
+WORKDIR=/home/smarton/fasth3/t48
+ENV=/home/smarton/fasth3/runner/env.yaml
+CMD=bash /home/smarton/fasth3/t155/build155.sh

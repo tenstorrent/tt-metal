@@ -1,0 +1,7 @@
+ID=t155-j2
+TASK=t155
+CONFIG=t152-exact_s2_res-64,128,7,4,4
+TIMEOUT=900
+WORKDIR=/var/tmp/fasth3/t155
+ENV=/home/smarton/fasth3/runner/env.yaml
+CMD=bash /home/smarton/fasth3/t155/job155.sh j2 64,128,7,4,4 j1

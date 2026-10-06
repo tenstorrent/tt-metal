@@ -1,3 +1,5 @@
+# #155 (current): see tt-project/t155/NOTES.md; specs t155-build, t155-j1, t155-j2 queued on the blx03 runner.
+
 # #122 bisect of the job-484 hang (combos 141,142,145-150)
 
 - Driver: g14blx03:/var/tmp/fasth3/t115/src/tmp/blx03/t115/driver115.sh, launched 2026-10-06 02:55 UTC, pid in
