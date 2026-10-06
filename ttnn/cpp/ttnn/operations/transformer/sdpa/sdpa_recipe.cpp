@@ -24,11 +24,10 @@ RecipeSelection select_recipe(ttnn::transformer::SDPAPrecision precision, DataTy
     using ttnn::transformer::SDPAPrecision;
     Recipe recipe;
     switch (precision) {
-        case SDPAPrecision::FAST: recipe = Recipe::A; break;
         case SDPAPrecision::STANDARD: recipe = Recipe::B; break;
         case SDPAPrecision::BALANCED: recipe = Recipe::C; break;
         case SDPAPrecision::ACCURATE: recipe = Recipe::D; break;
-        case SDPAPrecision::LOW_PRECISION: recipe = Recipe::E; break;
+        case SDPAPrecision::FAST: recipe = Recipe::E; break;
         default: TT_THROW("Unknown SDPA precision recipe");
     }
     const auto storage = kv_type == DataType::BFLOAT4_B   ? KVStorage::BFP4
@@ -117,7 +116,7 @@ ProgramDescriptor recipe_compute_program(
     uint32_t d_tiles) {
     TT_FATAL(q_tiles >= 1 && k_tiles >= 1 && d_tiles >= 1, "SDPA recipes require tile-aligned chunks and head dims");
     const bool fp32 = policy.fp32_destination;
-    // STANDARD and LOW_PRECISION keep a reference-max state in Float32 L1 (O in CB 9, l in CB 13).
+    // STANDARD and FAST keep a reference-max state in Float32 L1 (O in CB 9, l in CB 13).
     const bool ref_max = policy.recurrent_state == RecurrentState::ReferenceMaxFP32;
     const auto state_format = fp32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t state_bytes = fp32 ? 4096 : 2048;
@@ -126,7 +125,7 @@ ProgramDescriptor recipe_compute_program(
                                                                           : DataType::BFLOAT4_B;
     const auto kv_format = datatype_to_dataformat_converter(kv_type);
     const uint32_t kv_bytes = kv_type == DataType::BFLOAT16 ? 2048 : kv_type == DataType::BFLOAT8_B ? 1088 : 576;
-    // STANDARD and LOW_PRECISION (the reference-max recipes) run every K chunk after a Q chunk's first on the
+    // STANDARD and FAST (the reference-max recipes) run every K chunk after a Q chunk's first on the
     // fused chunk (recipe_fused_chunk.hpp). It needs QK subblocks at least two tiles wide: the one-wide LoFi
     // matmul reuses its other operand, which the m_ref inner step does not support.
     const bool fused = (policy.selection.recipe == Recipe::B || policy.selection.recipe == Recipe::E) &&
@@ -211,12 +210,9 @@ ProgramDescriptor recipe_compute_program(
              {"SDPA_RECIPE_QK_W", std::to_string(recipe_subblock_width(k_tiles))},
              {"SDPA_RECIPE_PV_W", std::to_string(recipe_subblock_width(d_tiles))}},
         .config = compute_config};
-    // B-E record their exp programs in the replay buffer once and replay them per tile from other functions;
-    // the SFPI compiler's replay optimization would overwrite them (tenstorrent/tt-metal#58433). FAST is the
-    // legacy kernel and keeps its build.
-    if (policy.selection.recipe != Recipe::A) {
-        compute.defines.emplace_back(tt::tt_metal::experimental::DISABLE_SFPU_REPLAY_OPTIMIZATION_DEFINE, "1");
-    }
+    // The recipes record their exp programs in the replay buffer once and replay them per tile from other
+    // functions; the SFPI compiler's replay optimization would overwrite them (tenstorrent/tt-metal#58433).
+    compute.defines.emplace_back(tt::tt_metal::experimental::DISABLE_SFPU_REPLAY_OPTIMIZATION_DEFINE, "1");
     if (fp32) {
         compute.defines.emplace_back("SDPA_RECIPE_FP32", "1");
     }
@@ -228,9 +224,6 @@ ProgramDescriptor recipe_compute_program(
     }
     if (fused) {
         compute.defines.emplace_back("SDPA_RECIPE_FUSED", "1");
-    }
-    if (policy.selection.recipe == Recipe::A) {
-        compute.defines.emplace_back("SDPA_RECIPE_BASELINE", "1");
     }
     program.kernels.push_back(std::move(compute));
     return program;
@@ -405,11 +398,8 @@ static std::vector<Tensor> run_recipe_segments(
     const auto& output = outputs.front();
     const uint32_t compute_q_tiles = recipe_compute_q_tiles(policy, q_tiles, k_tiles, attn_mask.has_value());
     auto program = recipe_compute_program(policy, grid, k_chunks, compute_q_tiles, k_tiles, d_tiles);
-    // QK row-group height the compute consumes the mask in: FAST uses legacy streaming subblocks
-    // (two rows for even Q chunks), FP32 recipes single rows, paired BF16 recipes row pairs.
-    const uint32_t mask_group_rows = policy.fp32_destination             ? 1
-                                     : policy.selection.recipe == Recipe::A ? (q_tiles % 2 == 0 ? 2 : 1)
-                                                                            : 2;
+    // QK row-group height the compute consumes the mask in: FP32 recipes single rows, paired BF16 recipes row pairs.
+    const uint32_t mask_group_rows = policy.fp32_destination ? 1 : 2;
     if (attn_mask) {
         // The reader streams mask tiles one Q tile row (k_tiles tiles) at a time in whole row groups
         // (an odd paired chunk's last group is padded with a zero row), and compute pops one group at a

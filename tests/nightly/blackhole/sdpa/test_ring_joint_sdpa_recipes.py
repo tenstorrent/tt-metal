@@ -30,10 +30,10 @@ def randn(*shape, seed):
 
 
 def precision_inputs(mesh, variant, values, mapper):
-    """Upload values; LOW_PRECISION inputs are rounded with prepare_sdpa_input (Q first, then K and V)."""
+    """Upload values; FAST inputs are rounded with prepare_sdpa_input (Q first, then K and V)."""
     precision, kv_dtype = VARIANTS[variant]
     tensors = [ttnn.from_torch(x, device=mesh, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper) for x in values]
-    if precision == ttnn.SDPAPrecision.LOW_PRECISION:
+    if precision == ttnn.SDPAPrecision.FAST:
         tensors = [
             ttnn.transformer.prepare_sdpa_input(x, is_query=i == 0, dtype=ttnn.bfloat16 if i == 0 else kv_dtype)
             for i, x in enumerate(tensors)
@@ -199,18 +199,11 @@ def ring_case(mesh, variant, case):
     return inputs, joints, backing, logical_n, kwargs, expected, joint is not None
 
 
-def legacy_ring_supports(q_chunk, k_chunk, head_dim):
-    """FAST runs the legacy ring kernels, which support only these geometries."""
-    return 128 <= q_chunk <= 320 and q_chunk % 32 == 0 and k_chunk in (256, 384, 512) and head_dim in (64, 128, 256)
-
-
 @pytest.mark.parametrize("case", RING_CASES)
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_ring_joint_sdpa_recipe(ring_mesh, variant, case):
     mesh, semaphores, ccl_column = ring_mesh
     _, _, _, _, _, d, q_chunk, k_chunk, _, _, _ = RING_CASES[case]
-    if variant == "fast" and not legacy_ring_supports(q_chunk, k_chunk, d):
-        pytest.skip("FAST keeps the legacy ring kernels' geometry limits")
     inputs, joints, backing, logical_n, kwargs, expected, has_joint = ring_case(mesh, variant, case)
     out = run_ring(
         mesh,
@@ -230,7 +223,7 @@ def test_ring_joint_sdpa_recipe(ring_mesh, variant, case):
         assert l2_pct(got, expected(chip)) < L2_PCT_BOUND[variant], f"chip {chip}"
 
 
-@pytest.mark.parametrize("variant", ["fast", "standard", "accurate", "low_precision_bfp8"])
+@pytest.mark.parametrize("variant", ["standard", "accurate", "fast_bfp8"])
 def test_ring_joint_sdpa_recipe_device_lengths(ring_mesh, variant):
     """logical_n as a device tensor: one trace, replayed as the length changes, matches the host-scalar path."""
     mesh, semaphores, ccl_column = ring_mesh
@@ -257,7 +250,7 @@ def test_ring_joint_sdpa_recipe_device_lengths(ring_mesh, variant):
         ttnn.release_trace(mesh, trace)
 
 
-@pytest.mark.parametrize("variant", ["fast", "standard", "accurate", "low_precision_bfp8"])
+@pytest.mark.parametrize("variant", ["standard", "accurate", "fast_bfp8"])
 def test_ring_joint_sdpa_recipe_op_selected_blocking(ring_mesh, variant):
     """Chunk sizes of 0: the op chooses them."""
     mesh, semaphores, ccl_column = ring_mesh
@@ -277,22 +270,3 @@ def test_ring_joint_sdpa_recipe_op_selected_blocking(ring_mesh, variant):
     for chip in range(RING):
         got = torch.cat([per_chip(out[0])[chip], per_chip(out[1])[chip]], dim=2)
         assert l2_pct(got, expected(chip)) < L2_PCT_BOUND[variant], f"chip {chip}"
-
-
-def test_ring_joint_sdpa_fast_matches_legacy(ring_mesh):
-    mesh, semaphores, ccl_column = ring_mesh
-    inputs, joints, backing, logical_n, kwargs, _, _ = ring_case(mesh, "fast", "joint_sharded")
-    fast = run_ring(
-        mesh,
-        semaphores,
-        ccl_column,
-        inputs,
-        joints,
-        backing,
-        logical_n=logical_n,
-        precision=ttnn.SDPAPrecision.FAST,
-        **kwargs,
-    )
-    legacy = run_ring(mesh, semaphores, ccl_column, inputs, joints, backing, logical_n=logical_n, **kwargs)
-    for index in (0, 1):
-        assert all(torch.equal(a, b) for a, b in zip(per_chip(fast[index]), per_chip(legacy[index])))

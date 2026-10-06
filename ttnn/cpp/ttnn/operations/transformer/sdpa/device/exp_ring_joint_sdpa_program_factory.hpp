@@ -123,7 +123,7 @@ struct ExpRingJointSDPAMeshWorkloadFactory {
 
 static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<ExpRingJointSDPAMeshWorkloadFactory>);
 
-// Named precision recipes B-E (precision set and not FAST): recipe-owned compute, reader and writer kernels on
+// Named precision recipes B-E (precision set): recipe-owned compute, reader and writer kernels on
 // the shared exp-ring transport (exp_ring_joint_sdpa_program_builder.hpp).
 struct ExpRingJointSDPARecipeProgramFactory {
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
