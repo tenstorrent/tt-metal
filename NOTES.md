@@ -58,3 +58,13 @@ Submitted g15 job 406 at 21:26:59 UTC, -t 600 (unmeasured config), queued behind
 Next on wake: section times from out/a/run.log; process wall; E2E_WALL_S per gen; framemd5 of
 out/a/ltx_av_fast_1920x1088_1.mp4 vs data/g15/out/ltx_av_fast_1920x1088_1.mp4 (job 399), and _0 too;
 then land 0ee3d31bda9 on t48; result.json with -t recommendations.
+
+## Result (standard wake 21:33 UTC): job 406 done
+g15blx02 job 406 (TAG=a, T2V_ONLY=1, ENCODERS=0, seeds 0-4, -t 600): exit 0, broker runtime 152 s, process wall 150 s,
+pytest 137.6 s, JIT 3215/3217 hits. Warmup 57.2 s (was 81.7 s in job 399, same box/cache):
+gemma encode+loads 12.8 | s1 7.9 | upsample 1.2 | s2+vae 9.4 | audio eager 15.8 | audio capture 9.8; i2v families and
+image/gemma encoder warmups skipped. gen#0 35.7 s; warm gens 6.018 / 6.107 / 6.142 / 6.063 / 6.037 s.
+Bit-identical: _0.mp4 and _1.mp4 byte-identical md5 to job 399 (video and audio framemd5 identical too).
+Landed: abfd309e797 on origin/ttp/t48-ltx25-integrated (cherry-pick of 0ee3d31bda9; ttp push checks passed).
+-t: 5-seed job 240 s (152 s +50%); one eval-pack config job (1-2 warm gens) 180 s, 300 s if it changes kernels.
+Both assume a warm JIT cache for the tree; a cold cache (job 621: 0/3653 hits) adds ~450 s of compile.
