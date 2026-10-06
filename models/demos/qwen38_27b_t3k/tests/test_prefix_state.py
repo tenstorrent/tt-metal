@@ -28,6 +28,9 @@ from models.demos.qwen38_27b_t3k.tt.generator import build_generator, configure_
 PROMPT = 96
 STEPS = 6
 LAYERS = [0, 3]  # layer_types alternates every fourth index: 0 is linear_attention, 3 full
+# Where a 32-token page size stops a 96-token prompt: the last boundary strictly below it,
+# so the pass that follows still has tokens to run.
+BOUNDARY = 64
 
 
 @pytest.fixture(scope="module")
@@ -122,7 +125,10 @@ def test_a_restored_slot_continues_prefill_where_the_snapshot_left_off(harness):
 
     # The continuity gate reads the reinstated length, so the next chunk is accepted as the
     # continuation it is rather than refused as a prefix-cache hit with no state behind it.
-    gen.prefill_forward(prompt, page_table=table, kv_cache=cache, prompt_lens=[32], start_pos=[PROMPT], slots=[0])
+    # Prefill reads its tokens from index zero, so the chunk is what gets passed, not the prompt.
+    gen.prefill_forward(
+        prompt[:, PROMPT:], page_table=table, kv_cache=cache, prompt_lens=[32], start_pos=[PROMPT], slots=[0]
+    )
     assert gen._slot_prefix_len[0] == PROMPT + 32
 
 
@@ -133,3 +139,115 @@ def test_a_freed_snapshot_is_refused_rather_than_restoring_stale_rows(harness):
     handle = gen.save_slot_state(0)
     gen.free_slot_state(handle)
     assert not gen.restore_slot_state(0, handle)
+
+
+def _gdn_state(gen, mesh, slot=0):
+    """Every GDN layer's conv and recurrent rows for one slot, as host tensors.
+
+    Read straight off the cache rather than through the model's output: the state is what the
+    split has to preserve, and two layers of model between it and the logits dilute a wrong
+    answer until it reads like rounding. These tensors are sharded, so the composer is not
+    optional -- one device's share would look plausible and be an eighth of the state.
+    """
+    out = {}
+    for index, layer in enumerate(gen.cache.layers):
+        for name in ("conv", "recurrent"):
+            tensor = getattr(layer, name)
+            if tensor is not None:
+                whole = ttnn.to_torch(tensor[slot : slot + 1], mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+                out[(index, name)] = whole.float()
+    return out
+
+
+def _state_drift(a, b):
+    """Largest elementwise difference across every layer, relative to the state's own scale."""
+    worst = 0.0
+    for key, left in a.items():
+        right = b[key]
+        scale = max(float(left.abs().max()), 1e-6)
+        worst = max(worst, float((left - right).abs().max()) / scale)
+    return worst
+
+
+def test_a_split_prefill_leaves_the_recurrent_state_a_single_pass_would(harness):
+    """The state at the boundary is what the snapshot keeps, so it is what has to survive.
+
+    Bit-exactness was never available -- two passes are different matmul and GDN scan shapes than
+    one, and prefill already re-chunks every 4096 tokens -- so the measure is relative drift,
+    read against the drift of a prefix that is actually wrong.
+    """
+    gen, mesh, cache, table = harness
+    prompt = torch.randint(1000, 5000, (1, PROMPT), dtype=torch.int32)
+    other = torch.randint(1000, 5000, (1, PROMPT), dtype=torch.int32)
+
+    def prefill(chunks, tokens=prompt):
+        gen.reset_recurrent_slots([0])
+        for begin, stop in chunks:
+            gen.prefill_forward(
+                tokens[:, begin:stop],
+                page_table=table,
+                kv_cache=cache,
+                prompt_lens=[stop - begin],
+                start_pos=[begin],
+                slots=[0],
+            )
+        return _gdn_state(gen, mesh)
+
+    whole = prefill([(0, PROMPT)])
+    measured = {
+        "split@64": _state_drift(prefill([(0, 64), (64, PROMPT)]), whole),
+        "split@32": _state_drift(prefill([(0, 32), (32, PROMPT)]), whole),
+        "another_prompt": _state_drift(prefill([(0, PROMPT)], tokens=other), whole),
+    }
+    print("STATE_DRIFT=" + repr(measured))
+
+    # Re-chunking has to be an order of magnitude below computing the wrong prefix entirely,
+    # or nothing here distinguishes a split from a corrupted restore.
+    assert measured["another_prompt"] > 10 * max(measured["split@64"], measured["split@32"]), measured
+
+
+def test_a_snapshot_taken_at_the_boundary_serves_the_rest_of_the_prompt(harness):
+    """The whole point, end to end: a later request skips what an earlier one already computed.
+
+    The snapshot is taken where the split stops, the slot is reused by something else, and the
+    prefix is then reinstated and only the tail prefilled. The state that leaves has to be the
+    state a full prefill would have left, and the wrong-prefix arm is what says the comparison
+    can tell the difference.
+    """
+    gen, mesh, cache, table = harness
+    prompt = torch.randint(1000, 5000, (1, PROMPT), dtype=torch.int32)
+    other = torch.randint(1000, 5000, (1, PROMPT), dtype=torch.int32)
+
+    def prefill(chunks, tokens=prompt):
+        for begin, stop in chunks:
+            gen.prefill_forward(
+                tokens[:, begin:stop],
+                page_table=table,
+                kv_cache=cache,
+                prompt_lens=[stop - begin],
+                start_pos=[begin],
+                slots=[0],
+            )
+
+    gen.reset_recurrent_slots([0])
+    prefill([(0, PROMPT)])
+    whole = _gdn_state(gen, mesh)
+
+    def serve_from(tokens):
+        gen.reset_recurrent_slots([0])
+        prefill([(0, BOUNDARY)], tokens=tokens)
+        handle = gen.save_slot_state(0)
+        assert handle is not None
+        # Whatever held the slot next leaves nothing of the prefix behind.
+        gen.reset_recurrent_slots([0])
+        assert gen.restore_slot_state(0, handle)
+        assert gen._slot_prefix_len[0] == BOUNDARY
+        prefill([(BOUNDARY, PROMPT)])
+        state = _gdn_state(gen, mesh)
+        gen.free_slot_state(handle)
+        return state
+
+    served = _state_drift(serve_from(prompt), whole)
+    wrong = _state_drift(serve_from(other), whole)
+    print(f"SERVED_STATE_DRIFT={served} WRONG_PREFIX_DRIFT={wrong}")
+    assert wrong > 10 * served, (served, wrong)
