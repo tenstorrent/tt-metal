@@ -755,21 +755,16 @@ class TtMoe(LightweightModule):
             logger.warning(f"[TtMoe] routing dump for layer {self.layer_idx} failed: {exc}")
 
     def _routed_expert_and_combine(
-        self, dispatched_buffer, metadata, expert_offsets, expert_token_counts, expert_region_offsets
+        self, dispatched_buffer, metadata, all_expert_offsets, expert_token_counts, expert_region_offsets
     ):
         """Steps 3 and 4 as one program: the routed expert, and combine_fabric2d taking each expert as soon
         as it is written. Returns combine's output, the same (1, 1, seq_len_per_chip, topk, emb) the separate
-        combine produces."""
-        # Each chip holds only its own origin row of the dispatch offsets; combine walks every origin chip's
-        # runs, so it takes all of them.
-        all_expert_offsets = ttnn.all_gather(
-            expert_offsets,
-            dim=0,
-            cluster_axis=0,
-            num_links=self.row_num_links,
-            topology=self.row_topology,
-        )
-        combined_output = self.routed_expert.forward_with_combine(
+        combine produces.
+
+        `all_expert_offsets` is every origin chip's row of the dispatch offsets, (dispatch_group_size,
+        num_routed_experts) replicated along the dispatch axis: combine walks every origin chip's runs, not
+        just its own. offset_cumsum already builds it from the histograms it gathers, so no all-gather here."""
+        return self.routed_expert.forward_with_combine(
             dispatched_buffer,
             expert_token_counts,
             expert_region_offsets,
@@ -782,8 +777,6 @@ class TtMoe(LightweightModule):
             seq_len_per_chip=self.seq_len_per_chip,
             combine_semaphores=self.combine_overlap_semaphores,
         )
-        ttnn.deallocate(all_expert_offsets)
-        return combined_output
 
     def forward(
         self,
@@ -900,7 +893,13 @@ class TtMoe(LightweightModule):
 
         self._dump_routing(indices, scores, actual_start or 0, cache_user_id, metadata is not None)
 
-        tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _, _ = self.routing_setup(
+        (
+            tt_expert_offsets,
+            tt_expert_token_counts,
+            tt_expert_region_offsets,
+            _,
+            tt_all_expert_offsets,
+        ) = self.routing_setup(
             ttnn_top_k_experts_indices=indices,
             num_routed_experts=self.num_routed_experts,
             num_experts_per_tok=self.num_experts_per_tok,
@@ -1058,7 +1057,7 @@ class TtMoe(LightweightModule):
             logger.info("TtMoe: traced forward runs the routed expert overlapped with combine_fabric2d")
         if overlap_combine:
             combined_output = self._routed_expert_and_combine(
-                squeezed_dispatch, metadata, tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets
+                squeezed_dispatch, metadata, tt_all_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets
             )
             # The routed expert's output is internal to the overlapped program.
             expert_outputs = None
