@@ -257,7 +257,8 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     // half, so the matmul contraction K must instead span the full weight K (both concat halves).
     uint32_t K_in = in0_tensor_shape[-1];
     uint32_t M = dynamic_m ? static_cast<uint32_t>(in0_tensor_shape[-2]) : input_tensor.physical_volume() / K_in;
-    uint32_t K = two_input_split ? static_cast<uint32_t>(in1_tensor_shape[-2]) : K_in;
+    const bool in0_k_prefix = operation_attributes.in0_k_prefix;
+    uint32_t K = (two_input_split || in0_k_prefix) ? static_cast<uint32_t>(in1_tensor_shape[-2]) : K_in;
     uint32_t N = in1_tensor_shape[-1];
 
     uint32_t M_tiles = M / tt::constants::TILE_HEIGHT;
@@ -507,6 +508,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
 
     if (dynamic_m) {
         defines["DYNAMIC_M"] = "1";
+    }
+    if (in0_k_prefix) {
+        defines["IN0_ROW_TILES"] = std::to_string(K_in / tt::constants::TILE_WIDTH);
     }
 
     if (use_fused_ternary) {

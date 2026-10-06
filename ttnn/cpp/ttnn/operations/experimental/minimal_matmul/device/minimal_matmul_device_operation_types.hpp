@@ -46,6 +46,8 @@ struct MinimalMatmulParams {
     uint32_t kv_layer_idx = 0;
     // Writes the [M_cap, N] result head-major as [1, N / out_head_dim, M_cap, out_head_dim].
     std::optional<uint32_t> out_head_dim;
+    // Contract over only the first weight-K columns of each (wider) in0 row.
+    bool in0_k_prefix = false;
 };
 
 struct MinimalMatmulInputs {

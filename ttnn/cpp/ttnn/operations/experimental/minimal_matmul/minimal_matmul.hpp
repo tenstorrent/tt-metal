@@ -45,5 +45,6 @@ ttnn::Tensor minimal_matmul(
     const std::optional<ttnn::Tensor>& slot_tensor = std::nullopt,
     uint32_t kv_num_layers = 1,
     uint32_t kv_layer_idx = 0,
-    std::optional<uint32_t> out_head_dim = std::nullopt);
+    std::optional<uint32_t> out_head_dim = std::nullopt,
+    bool in0_k_prefix = false);
 }

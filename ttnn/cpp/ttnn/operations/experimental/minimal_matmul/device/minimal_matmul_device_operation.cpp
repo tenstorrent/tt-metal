@@ -77,6 +77,9 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
     const uint32_t K_w = w_logical[-2];
     const uint32_t N = w_logical[-1];
 
+    TT_FATAL(
+        !(operation_attributes.in0_k_prefix && tensor_args.optional_input_tensor.has_value()),
+        "minimal_matmul in0_k_prefix is not supported with fused concat");
     if (tensor_args.optional_input_tensor.has_value()) {
         // Fused concat: in0's K = input_tensor (prefix) + optional_input_tensor (suffix); the split
         // point is input_tensor's K width. The two sources must be concatenable on K (differ only on
@@ -124,6 +127,12 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
             prefix_padded_K,
             suffix_padded_K,
             weight_padded_K);
+    } else if (operation_attributes.in0_k_prefix) {
+        TT_FATAL(
+            K_w <= K && weight_tensor.padded_shape()[-2] <= act_tensor.padded_shape()[-1],
+            "minimal_matmul in0_k_prefix requires weight K ({}) <= activation K ({})",
+            K_w,
+            K);
     } else {
         TT_FATAL(K == K_w, "minimal_matmul inner dimensions must match, got K={} and K_w={}", K, K_w);
     }
@@ -408,7 +417,8 @@ std::vector<Tensor> minimal_matmul(
     const std::optional<Tensor>& slot_tensor,
     uint32_t kv_num_layers,
     uint32_t kv_layer_idx,
-    std::optional<uint32_t> out_head_dim) {
+    std::optional<uint32_t> out_head_dim,
+    bool in0_k_prefix) {
     using OperationType = experimental::prim::MinimalMatmulDeviceOperation;
     const auto arch = input_tensor.device()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -434,7 +444,8 @@ std::vector<Tensor> minimal_matmul(
             .valid_rows_addend = valid_rows_addend,
             .kv_num_layers = kv_num_layers,
             .kv_layer_idx = kv_layer_idx,
-            .out_head_dim = out_head_dim},
+            .out_head_dim = out_head_dim,
+            .in0_k_prefix = in0_k_prefix},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weight_tensor = weight_tensor,

@@ -23,7 +23,7 @@ void bind_minimal_matmul(nb::module_& mod) {
     ttnn::bind_function<"minimal_matmul", "ttnn.experimental.">(
         mod,
         R"doc(
-        minimal_matmul(input_tensor, weight_tensor, bias_tensor=None, *, fused_activation=None, config=None, memory_config=None, dtype=None, compute_kernel_config=None, fuse_swiglu=False, valid_rows_tensor=None, valid_rows_addend=0, slot_tensor=None, kv_num_layers=1, kv_layer_idx=0, out_head_dim=None)
+        minimal_matmul(input_tensor, weight_tensor, bias_tensor=None, *, fused_activation=None, config=None, memory_config=None, dtype=None, compute_kernel_config=None, fuse_swiglu=False, valid_rows_tensor=None, valid_rows_addend=0, slot_tensor=None, kv_num_layers=1, kv_layer_idx=0, out_head_dim=None, in0_k_prefix=False)
 
         Experimental, high-performance matrix multiply (A @ B [+ bias]) with optional fused activation.
         This op expects TILE layout tensors on device and operates in tile units internally. It is designed
@@ -97,6 +97,10 @@ void bind_minimal_matmul(nb::module_& mod) {
 
         out_head_dim : Optional[int], default: None
             Tile-multiple head width; writes the output head-major as [1, N / out_head_dim, M_cap, out_head_dim].
+
+        in0_k_prefix : bool, default: False
+            Contract over only the first weight-K columns of each input_tensor row, which may be wider
+            (e.g. the 512 latent columns of a 576-wide kvpe cache). Not supported with fused concat.
 
         config : Optional[MinimalMatmulConfig], default: None
             Execution configuration in tile units. If omitted, reasonable defaults are selected based on tensor
@@ -186,7 +190,8 @@ void bind_minimal_matmul(nb::module_& mod) {
         nb::arg("slot_tensor") = nb::none(),
         nb::arg("kv_num_layers") = 1,
         nb::arg("kv_layer_idx") = 0,
-        nb::arg("out_head_dim") = nb::none());
+        nb::arg("out_head_dim") = nb::none(),
+        nb::arg("in0_k_prefix") = false);
 
     auto py_minimal_matmul_config = nb::class_<MinimalMatmulConfig>(
                                         mod,

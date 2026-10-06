@@ -1185,6 +1185,54 @@ def test_linear_valid_rows(device, M_cap, N, head_dim, valid_value, addend, batc
     assert check["relative_rmse"] < 0.02
 
 
+@pytest.mark.parametrize("K_block", [4, 6, 8])
+@pytest.mark.parametrize("M_cap, N", [(4096, 2048), (1024, 8192)], ids=["wide_M", "wide_N"])
+@pytest.mark.parametrize("dynamic", [True, False], ids=["dynamic", "static"])
+def test_linear_in0_k_prefix(device, K_block, M_cap, N, dynamic):
+    K_row, K_w, head_dim = 576, 512, 128
+    num_layers, layer_idx, slot, batch_extent = 2, 1, 1, 4
+    torch_cache, _, tt_cache, _, _, compute_config = _valid_rows_setup(
+        device, batch_extent if dynamic else 1, M_cap, K_row, N
+    )
+    torch_weight = torch.randn(K_w, N, dtype=torch.bfloat16)
+    tt_weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    config = ttnn.MinimalMatmulConfig(
+        M_block_size=8,
+        K_block_size=K_block,
+        N_block_size=8,
+        subblock_h=2,
+        subblock_w=2,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+    )
+    if dynamic:
+        n_rows = min(2016, M_cap)
+        tt_out = ttnn.experimental.minimal_matmul(
+            tt_cache,
+            tt_weight,
+            config=config,
+            compute_kernel_config=compute_config,
+            valid_rows_tensor=_uint32_scalar(device, n_rows),
+            slot_tensor=_uint32_scalar(device, slot),
+            kv_num_layers=num_layers,
+            kv_layer_idx=layer_idx,
+            out_head_dim=head_dim,
+            in0_k_prefix=True,
+        )
+        out = ttnn.to_torch(tt_out)[:, :, :n_rows].float()
+        batch = slot * num_layers + layer_idx
+        ref = (torch_cache[batch, 0, :n_rows, :K_w].float() @ torch_weight.float()).reshape(n_rows, -1, head_dim)
+        ref = ref.permute(1, 0, 2).unsqueeze(0)
+    else:
+        tt_out = ttnn.experimental.minimal_matmul(
+            tt_cache, tt_weight, config=config, compute_kernel_config=compute_config, in0_k_prefix=True
+        )
+        out = ttnn.to_torch(tt_out).float()
+        ref = torch_cache[..., :K_w].float() @ torch_weight.float()
+    check = assert_quality(ref, out)
+    assert check["pcc"] > 0.999
+    assert check["relative_rmse"] < 0.02
+
+
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
 def test_linear_valid_rows_trace(device):
     M_cap, K, N, head_dim, chunk = 4096, 576, 2048, 128, 1024

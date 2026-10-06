@@ -26,7 +26,8 @@ ttnn::Tensor minimal_matmul(
     const std::optional<ttnn::Tensor>& slot_tensor,
     uint32_t kv_num_layers,
     uint32_t kv_layer_idx,
-    std::optional<uint32_t> out_head_dim) {
+    std::optional<uint32_t> out_head_dim,
+    bool in0_k_prefix) {
     // Unpack: single Tensor, or [prefix, suffix] virtually concatenated over K (concat-free).
     ttnn::Tensor main_input;
     std::optional<ttnn::Tensor> second_input;
@@ -63,7 +64,8 @@ ttnn::Tensor minimal_matmul(
         slot_tensor,
         kv_num_layers,
         kv_layer_idx,
-        out_head_dim);
+        out_head_dim,
+        in0_k_prefix);
 
     // Extract and return the single output
     TT_FATAL(outputs.size() == 1, "Expected single output from minimal_matmul, got {}", outputs.size());
