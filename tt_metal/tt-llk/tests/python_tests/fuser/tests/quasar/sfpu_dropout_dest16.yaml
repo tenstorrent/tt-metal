@@ -1,0 +1,61 @@
+# dropout at the harness defaults (sfpu_operations_quasar.h): p = 0, scale 2.0, so no datum is
+# dropped and each call is the deterministic x * 2.0. Two calls back to back (x * 4.0) check that
+# a second dropout_init / scale and probability load leaves the first call's result intact.
+# The drop path (p > 0) is nondeterministic and the fuser cannot set the probability, seed or
+# scale, so it is covered by test_dropout_probability_quasar / test_dropout_reseed_quasar instead.
+# Input: [-8, 8] plus 0, +-0.5, +-1, +-2, a small normal (1e-4), a denormal (1e-40), +-100 and
+# +-8000 (x * 4.0 stays finite in every format here).
+#
+# Generated using only existing fuser features: dest_acc is fixed per file (hence the _dest16 /
+# _dest32 pair), every float input goes through the FPU datacopy path, and stimuli are finite
+# intervals and points (no inf, NaN, -0 or INT_MIN). Special points sit outside the random
+# ranges, so each is drawn about as often as a unit of range.
+
+dest_acc: false
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Float16_b, Float16]
+    stimuli:
+      include:
+        - [-8.0, -2.01]
+        - [-1.99, -1.01]
+        - [-0.99, -0.51]
+        - [-0.49, -0.01]
+        - [0.0101, 0.49]
+        - [0.51, 0.99]
+        - [1.01, 1.99]
+        - [2.01, 8.0]
+        - -8000.0
+        - -100.0
+        - -2.0
+        - -1.0
+        - -0.5
+        - 0.0
+        - 1.0e-40
+        - 0.0001
+        - 0.5
+        - 1.0
+        - 2.0
+        - 100.0
+        - 8000.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float16_b
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32]}
+      - type: "UnarySfpu"
+        operation: [Dropout]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+      - type: "UnarySfpu"
+        operation: [Dropout]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32]}
