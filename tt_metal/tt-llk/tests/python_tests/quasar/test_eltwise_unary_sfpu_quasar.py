@@ -1782,7 +1782,7 @@ def _rand_config(
                     rand_from_bits=_fp32_bits(case.from_value),
                     rand_scale_bits=_fp32_bits(case.scale),
                 ),
-                RAND_SEED(seed=seed),
+                RAND_SEED(rand_seed=seed),
             ],
             "runtimes": [
                 TILE_COUNT(tile_count),

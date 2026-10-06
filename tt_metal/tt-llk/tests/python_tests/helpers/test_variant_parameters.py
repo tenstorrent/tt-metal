@@ -350,10 +350,10 @@ class RAND_SEED(TemplateParameter):
     build that does not pass this parameter.
     """
 
-    seed: int = 0x12345678
+    rand_seed: int = 0x12345678
 
     def convert_to_cpp(self) -> str:
-        return f"#define RAND_SEED {self.seed:#010x}u"
+        return f"#define RAND_SEED {self.rand_seed:#010x}u"
 
 
 @dataclass

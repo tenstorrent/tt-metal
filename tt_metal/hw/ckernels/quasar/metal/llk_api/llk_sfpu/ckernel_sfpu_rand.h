@@ -61,7 +61,13 @@ constexpr std::uint32_t FP32_HALF_MASK = 0xFFFF;
 // All-ones is the XNOR LFSR lock-up state.
 constexpr std::uint32_t PRNG_LFSR_LOCKUP_SEED = 0xFFFFFFFF;
 constexpr std::uint32_t PRNG_LFSR_LOCKUP_REPAIR = 0xFFFFFFFE;
-constexpr std::uint32_t PRNG_SEED_SETTLE_NOPS = 1024;  // no seeder busy flag to poll
+// The seed is a RISC MMIO store to the config register, which reaches the per-lane PRNGs over the seed
+// bus independently of the Tensix instruction FIFO, and the seeder exposes no busy flag to poll. The
+// SFPNOPs queued behind the store keep later PRNG-sampling SFPU instructions from issuing until it has
+// landed. No Quasar document gives a minimum; 1024 is a conservative bound (Blackhole's
+// init_prng_seed uses 600). test_rand_seed_quasar fails if it is too short: a late seed lets the first
+// draws come from the previous run's PRNG state, so the same seed no longer reproduces the same tile.
+constexpr std::uint32_t PRNG_SEED_SETTLE_NOPS = 1024;
 
 // The row-pair body is recorded once, by init_rand, as a head and a tail. The folded body replays
 // both back to back; the per-row-normalize body issues its SFPMULI between them.

@@ -1060,7 +1060,7 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_eltwise_unary_sfpu_quasar": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "approx_mode",
             "data_copy_type",
@@ -1085,6 +1085,9 @@ PERF_TEST_SCHEMAS_QSR = {
             "num_faces_A",
             "num_faces_B",
             "output_format",
+            "rand_from_bits",
+            "rand_scale_bits",
+            "rand_seed",
             "tile_cnt",
             "unpack_to_dest",
             "unpacker_engine_sel",
