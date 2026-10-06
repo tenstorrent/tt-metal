@@ -165,8 +165,9 @@ bool supported_by_codegen(
     if (layout == Layout::TILE) {
         // The streaming factory's footprint is a small, FIXED number of tile pages (2 output + 2
         // input + 1 index + 1 src, none of them scaled by Wt_output/Ht), so it always fits; the
-        // interleaved plan is only ever an optional, L1-gated upgrade select_program_factory() makes
-        // at descriptor-build time. Nothing to reject here.
+        // interleaved plan is only ever an optional upgrade select_program_factory() makes at
+        // descriptor-build time, when its row-resident footprint fits L1 AND the tile-row count
+        // does not underfill the grid. Nothing to reject here.
         return true;
     }
     // ROW_MAJOR: the input/output sticks (post-transpose axis length) stay fully resident by
@@ -208,6 +209,10 @@ namespace {
 // See prefers_row_major_strategy(): the tile-row threshold, the longest stick the detour's untilize
 // may materialize, and the NOC transaction boundary the untilized stick must already sit on.
 constexpr uint32_t kRowMajorRerouteMaxHt = 32;
+// A carried-over ceiling, not a measured one: the widest stick the RM reader could hold fully
+// resident before it streamed index/src in chunks (input + output + index + src sticks of
+// 32768 x (2 + 2 + 4 + 2) bytes = 320 KiB). The chunked reader (scatter_rm_chunk_elems) no longer
+// needs it; it survives only as the detour's bound, which the L1 check below would otherwise set.
 constexpr uint32_t kRowMajorRerouteMaxStickElems = 32768;
 constexpr uint32_t kRowMajorRerouteNocAlign = 32;
 
@@ -281,14 +286,14 @@ bool is_demoted(
     // A unit logical row in TILE layout is padded to 32 rows, so input, index, src and output all
     // carry 32x their logical volume through every transpose in the pre/post sandwich and through
     // the kernel itself; the streaming reader additionally scans and rejects the 992 padded-row
-    // positions one element at a time. Native's own force_row_major path collapses the padding to
-    // logical volume (an UntilizeWithUnpadding bookend) before it ever transposes or scatters, so it
-    // pays the 32x cost nowhere. `rank == 1` inputs normalize to a [1,1,1,N] working shape, whose row
-    // extent is 1 by construction. Index and src necessarily share the unit row here: scatter
-    // requires index.shape[d] <= input.shape[d] for every non-scatter axis d, and this row is never
-    // the scatter axis (the scatter axis is transposed to last, so this is always the pre-last axis
-    // of the post-transpose shape) -- so a 1 here forces the same 1 on index/src without checking
-    // them separately.
+    // positions (31 padded rows x 32 columns per tile) one element at a time. Native's own
+    // force_row_major path collapses the padding to logical volume (an UntilizeWithUnpadding
+    // bookend) before it ever transposes or scatters, so it pays the 32x cost nowhere. `rank == 1`
+    // inputs normalize to a [1,1,1,N] working shape, whose row extent is 1 by construction. Index and
+    // src necessarily share the unit row here: scatter requires index.shape[d] <= input.shape[d] for
+    // every non-scatter axis d, and this row is never the scatter axis (the scatter axis is
+    // transposed to last, so this is always the pre-last axis of the post-transpose shape) -- so a 1
+    // here forces the same 1 on index/src without checking them separately.
     // A call the row-major detour serves never reaches the TILE factories, so it pays none of this:
     // its unit row is untilized to one logical stick before any kernel runs. The detour's own gate
     // decides that (prefers_row_major_strategy), on the same working shapes and output placement the

@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Scatter reader – streaming mode (NCRISC).
-// For large Wt_output (>60 tiles) where the full output row cannot fit in L1.
+// Chosen by the host's select_program_factory() when the full output row does
+// not fit L1, or when the tile-row count would leave most of the grid idle.
 //
 // Work is split by Wt_output across cores (each core handles a subset of output
 // columns). For each assigned output column, ALL Wt_src src tiles are scanned
