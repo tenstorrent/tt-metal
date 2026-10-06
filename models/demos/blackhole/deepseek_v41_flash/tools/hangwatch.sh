@@ -7,6 +7,7 @@ M=/mnt/tt-data/ssinghal/tests/tt-metal
 while kill -0 $pid 2>/dev/null; do
   age=$(( ( $(date +%s) - $(stat -c %Y "$log" 2>/dev/null || date +%s) ) / 60 ))
   if [ $age -ge $stall ]; then
+    kill -USR1 $pid; sleep 3
     rep=$out/hang_$(hostname -s | tr -dc 0-9 | tail -c 2)_${pid}_$(date +%H%M).txt
     echo "[hangwatch] pid $pid log silent ${age} min -> triage -> $rep" | tee -a "$log"
     ( cd $M && source python_env/bin/activate && export TT_METAL_HOME=$M PYTHONPATH=$M && \

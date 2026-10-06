@@ -359,6 +359,7 @@ class DraftAttention(_PagedMixin, DSV41Attention):
             mesh_mapper=ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(self.rows, self.cols)),
         )
         self.pt = mk(torch.arange(U).repeat(BLOCK).reshape(T_d, 1))  # draft rows i*U+u -> page u
+        self._mk_pt = mk
         self.pt_v = mk(torch.arange(U).repeat_interleave(n).reshape(U * n, 1))  # verify rows u*n+j -> page u
         self.cache = self._up(torch.zeros(U, 1, L_D, HEAD_DIM))
         # row-masked block-slot indices: call i writes the rows of block index i (rows i*U .. i*U+U-1) at slot RING + i
@@ -378,6 +379,13 @@ class DraftAttention(_PagedMixin, DSV41Attention):
             )
         self.blk_idx = blk
         self._k_chunk = 64
+
+    def view_n(self, n):
+        """Shallow copy for another verify block size n: SAME ring cache / weights, own verify-row page table."""
+        v = copy.copy(self)
+        v.n = n
+        v.pt_v = self._mk_pt(torch.arange(self.U).repeat_interleave(n).reshape(self.U * n, 1))
+        return v
 
     def seed_ring(self, ring, S):
         """ring [rows*U, 128, 512] reference window cache (slot = pos % 128) after S prefilled positions -> paged cache slots pos % RING."""
@@ -450,7 +458,15 @@ class DraftState:
             mesh_mapper=rep,
         )
         self.off_d = fl(torch.arange(self.T_d) // U + 1, self.T_d)  # query position = f + 1 + i
+        self._fl = fl
         self.jmask = [fl((torch.arange(self.T_v) % n == j), self.T_v) for j in range(n)]
+
+    def view_n(self, n):
+        """Shallow copy for another verify block size n (position tables shared, own per-j masks)."""
+        v = copy.copy(self)
+        v.n, v.T_v = n, self.U * n
+        v.jmask = [self._fl((torch.arange(v.T_v) % n == j), v.T_v) for j in range(n)]
+        return v
 
     def _rows(self, name, idx, shape):
         return ttnn.to_layout(
@@ -577,6 +593,23 @@ class DSparkDrafter:
             use_height_and_width_as_shard_shape=True,
         )
 
+    def view_n(self, n):
+        """The same drafter (weights, rings, MoE buffers) for ANOTHER verify block size n (rows U*n): used by the adaptive-length spec runners that share one drafter."""
+        if n == self.n:
+            return self
+        v = copy.copy(self)
+        v.n, v.T_v = n, self.U * n
+        v.attn = [a.view_n(n) for a in self.attn]
+        v.state = self.state.view_n(n)
+        v.ucfg_v = ttnn.create_sharded_memory_config(
+            shape=(32, HEAD_DIM),
+            core_grid=ttnn.num_cores_to_corerangeset(v.T_v, ttnn.CoreCoord(8, 8), row_wise=True),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        return v
+
     # -- verify side: main_kv of every verified position into the 3 rings --------------------------------------------------
     def write_main(self, hidden, st_v):
         """hidden [1,1,T_v,15360] bf16 tile (concat of the means of the 4 streams at the INPUT of backbone layers 37/38/39 for the verify rows);
@@ -686,7 +719,15 @@ class DSparkDrafter:
         tok_rows = ttnn.concat([t_next, self._noise], dim=0)
         f_rows = ttnn.reshape(ttnn.concat([f_next] * BLOCK, dim=0), [BLOCK * U])
         d = self.draft(tok_rows, f_rows)
+        self.conf_q = self._conf_quant(d["conf"])
         return d, ttnn.concat(d["tokens"], dim=0)
+
+    def _conf_quant(self, conf):
+        """conf [1,1,T_d,32] fp32 (col 0 = the confidence logit of draft row i*U+u) -> uint32 [1, 5U] = round(65535 * sigmoid(logit)), same row order as the drafts."""
+        c = ttnn.slice(conf, [0, 0, 0, 0], [1, 1, self.T_d, 1])
+        q = ttnn.multiply(ttnn.sigmoid(c), 65535.0)
+        q = ttnn.typecast(ttnn.to_layout(ttnn.reshape(q, [self.T_d, 1]), ttnn.ROW_MAJOR_LAYOUT), ttnn.uint32)
+        return ttnn.reshape(q, [1, self.T_d])
 
 
 class ChunkedDrafter:
@@ -712,6 +753,14 @@ class ChunkedDrafter:
             self.subs.append(sub)
         self.attn = [a for sub in self.subs for a in sub.attn]
 
+    def view_n(self, n):
+        if n == self.n:
+            return self
+        v = copy.copy(self)
+        v.n = n
+        v.subs = [sub.view_n(n) for sub in self.subs]
+        return v
+
     def write_main_full(self, hidden, pos):
         Tc = self.Uc * self.n
         for c, sub in enumerate(self.subs):
@@ -729,4 +778,6 @@ class ChunkedDrafter:
         drafts = ttnn.concat(
             [ttnn.concat([o[0]["tokens"][i] for o in outs], dim=0) for i in range(BLOCK)], dim=0
         )  # [5U,1] block-index-major over ALL users
+        cq = [ttnn.reshape(sub.conf_q, [BLOCK, Uc]) for sub in self.subs]  # per chunk [5, Uc]
+        self.conf_q = ttnn.reshape(ttnn.concat(cq, dim=1) if len(cq) > 1 else cq[0], [1, BLOCK * self.U])
         return outs[-1][0], drafts
