@@ -75,7 +75,9 @@ class ReduceCase:
     @property
     def uses_sfpu(self) -> bool:
         return self.dim != "REDUCE_SCALAR" and (
-            self.input_dtype == "int32" or (self.input_dtype == "fp32" and self.fp32_mode == "Accurate")
+            self.input_dtype == "int32"
+            or (self.input_dtype == "fp32" and self.fp32_mode == "Accurate")
+            or (self.input_dtype == "bf16" and self.pool == "MIN")
         )
 
     @property
@@ -470,10 +472,14 @@ def _auxiliary_offset_cases() -> list[ReduceCase]:
 
 def _no_auxiliary_cases() -> list[ReduceCase]:
     cases = []
-    for dtype, pools in (("int32", ("SUM", "MAX", "MIN")), ("fp32", ("SUM", "MAX"))):
+    for dtype, pools, call_counts in (
+        ("int32", ("SUM", "MAX", "MIN"), (1, 2)),
+        ("fp32", ("SUM", "MAX"), (1, 2)),
+        ("bf16", ("MIN",), (1,)),
+    ):
         for pool in pools:
             for dim in ("REDUCE_ROW", "REDUCE_COL"):
-                for calls in (1, 2):
+                for calls in call_counts:
                     cases.append(
                         _case(
                             f"no-auxiliary-{dtype}-{pool}-{dim}-calls{calls}",
@@ -852,8 +858,10 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
 def _skip_reason(device, case: ReduceCase) -> str | None:
     if "QUASAR" not in str(device.arch()).upper():
         return None
+    if case.uses_sfpu and case.input_dtype != "bf16":
+        return "The reduce helper rejects Int32 and accurate fp32 SFPU reduce paths on Quasar"
     if case.uses_sfpu:
-        return "The reduce helper rejects SFPU reduce paths on Quasar"
+        return "bf16 MIN is not validated on Quasar"
     if case.additive:
         return "AccumulateViaAdd is not validated on Quasar"
     if case.pool == "MAX" and case.dim == "REDUCE_ROW" and case.calls > 1:
@@ -862,14 +870,19 @@ def _skip_reason(device, case: ReduceCase) -> str | None:
 
 
 @pytest.mark.parametrize("case", ALL_CASES, ids=lambda case: case.name)
-def test_reduce_explicit_modes(device, case: ReduceCase):
+def test_reduce_explicit_modes(request, device, case: ReduceCase):
     reason = _skip_reason(device, case)
     if reason:
         pytest.skip(reason)
     if case.uses_sfpu and case.pool == "SUM" and case.dim == "REDUCE_ROW" and case.calls > 1:
-        # The LLK reduce pack mask leaves partial sums in the right faces of an SFPU row output, and the
-        # accumulator reload folds them in again.
-        pytest.xfail("SFPU REDUCE_ROW accumulator carries unmasked right faces until the LLK pack-mask fix lands")
+        # Remove once #56754 (LLK reduce pack-mask fix) is merged. The pack mask leaves partial sums in the
+        # right faces of an SFPU row output, and the accumulator reload folds them in again.
+        request.applymarker(
+            pytest.mark.xfail(
+                strict=True,
+                reason="SFPU REDUCE_ROW accumulator carries unmasked right faces until #56754 is merged",
+            )
+        )
 
     actual, expected = _run_case(device, case)
     if case.input_dtype == "int32":
