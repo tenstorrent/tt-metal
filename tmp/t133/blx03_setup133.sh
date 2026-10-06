@@ -29,6 +29,9 @@ run() {
   git -C $BASE merge-base --is-ancestor $REV_A \$REV_B || return 18
   one /home/smarton/fasth3/t133a $REV_A || return \$?
   one /home/smarton/fasth3/t133b \$REV_B || return \$?
+  # The 4x8 test exists only on B; A runs the same file untracked.
+  mkdir -p /home/smarton/fasth3/t133a/tmp/t133 &&
+    cp /home/smarton/fasth3/t133b/tmp/t133/test_t133_4x8.py /home/smarton/fasth3/t133a/tmp/t133/ || return 19
 }
 run; echo "SETUP133_DONE rc=\$?"
 EOF
