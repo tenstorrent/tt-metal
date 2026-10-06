@@ -686,11 +686,11 @@ Exp2:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-
 # Measured on Wormhole 2026-09-18 over the standard unary sweep with --ulp-report.
 # These ops are exactly rounded by construction -- a predicate writing 1.0/0.0, a
 # constant fill, a clamp, or a subtraction the hardware does in one step -- so the budget
-# is 0 and any drift at all is a regression. The exception is ReluMax, ReluMin and Frac
-# into Float16_b from a wider input, which measure 1 step: the op is still exact, and
-# the step is the output rounding on the way out of Dest, as the rows there record. A sampled row
-# carries that 1; a row the sweep emitted carries 2, the measured step plus the emitter's
-# 1.1x headroom rounded up to a whole step.
+# is 0 and any drift at all is a regression. The exception is a 16-bit output from a
+# wider input, where a selection or clamp that passes x through can measure 1 step: the
+# op is still exact, and the step is the output rounding on the way out of Dest, as the
+# rows there record. A sampled row carries that 1; a row the sweep emitted carries 2, the
+# measured step plus the emitter's 1.1x headroom rounded up to a whole step.
 #
 # Every row names an output format that was actually measured. Nothing is enrolled on
 # Bfp8_b: its shared block exponent quantises a small element in a wide block to zero,
@@ -1067,7 +1067,7 @@ Isinf:  # 0 ULP, 6 variants / 24576 lanes, 2026-09-18
   - {out: Float16_b, max_ulp: 0}
   - {in: Float16_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-  - {in: Float16_b, dest: "Yes", metric: tolerance}  # not measured: this unpack delivers NaN and -inf to the LREG as +inf, so the predicate cannot be answered here; the isinf/isnan sweep skips the cell
+  - {in: Float16_b, dest: "Yes", metric: tolerance}  # not measured: this unpack hands the SFPU a NaN as -inf, so the predicate reads the -inf answer on NaN lanes; the isinf/isnan sweep skips the cell
   - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
@@ -1077,7 +1077,7 @@ Isnan:  # 0 ULP, 6 variants / 24576 lanes, 2026-09-18
   - {out: Float16_b, max_ulp: 0}
   - {in: Float16_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-  - {in: Float16_b, dest: "Yes", metric: tolerance}  # not measured: this unpack delivers NaN and -inf to the LREG as +inf, so the predicate cannot be answered here; the isinf/isnan sweep skips the cell
+  - {in: Float16_b, dest: "Yes", metric: tolerance}  # not measured: this unpack hands the SFPU a NaN as -inf, so the predicate reads the -inf answer on NaN lanes; the isinf/isnan sweep skips the cell
   - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
@@ -1087,7 +1087,7 @@ Isneginf:  # 0 ULP, 6 variants / 24576 lanes, 2026-09-18
   - {out: Float16_b, max_ulp: 0}
   - {in: Float16_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-  - {in: Float16_b, dest: "Yes", metric: tolerance}  # not measured: this unpack delivers NaN and -inf to the LREG as +inf, so the predicate cannot be answered here; the isinf/isnan sweep skips the cell
+  - {in: Float16_b, dest: "Yes", metric: tolerance}  # not measured: this unpack hands the SFPU a NaN as -inf, so the predicate reads the -inf answer on NaN lanes; the isinf/isnan sweep skips the cell
   - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
@@ -1582,15 +1582,18 @@ SfpuBinaryFmod:
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 564}  # max 512 ULP, wormhole, 2026-09-21
 
 # -- Binary selection and arithmetic -----------------------------------------
-# max/min select an operand, so Float32 is exact and the 16-bit columns cost one step of
-# output rounding. Bfp8_b measured 17 steps and is left on tolerance with the rest.
+# max/min are a bare SFPSWAP operand selection, so the answer is one of the inputs and
+# exact. The one step is the output pack on a cell whose output has fewer mantissa bits
+# than its input -- Float16 -> Float16_b and Float32 -> Float16 read 1, every other cell
+# 0 (Float32 -> Float16_b's sampled 0 is floored to 1) -- so every 16-bit cell is keyed
+# by input, and an exponent-B input into Float16, which only ever runs on the promoted
+# 32-bit Dest, by no Dest at all. A Bfp8_b output measured up to 17 steps and is left on
+# tolerance with the rest.
 SfpuBinaryMax:
   - {out: Float32, max_ulp: 0}       # 0 ULP, 11 variants / 306k lanes, 2026-09-18
-  - {out: Float16_b, max_ulp: 1}     # 1 ULP, 11 variants / 311k lanes, 2026-09-18
-  - {out: Float16, max_ulp: 1}       # 1 ULP, 7 variants / 213k lanes, 2026-09-18
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21; block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21; block-quantized, so tolerance
-  - {in: Bfp8_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float16, max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Bfp8_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Bfp8_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Bfp8_b, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
@@ -1605,22 +1608,21 @@ SfpuBinaryMax:
   - {in: Float16, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 13 ULP, wormhole, 2026-09-21; block-quantized, so tolerance
   - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 13 ULP, wormhole, 2026-09-21; block-quantized, so tolerance
-  - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16, max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float16_b, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, dest: "No", metric: tolerance}  # not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs the {out: ...} wildcards there
   - {in: Float32, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 17 ULP, wormhole, 2026-09-21; block-quantized, so tolerance
   - {in: Float32, out: Float16, dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the same measurement carried before
   - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 SfpuBinaryMin:
   - {out: Float32, max_ulp: 0}       # 0 ULP, 11 variants / 309k lanes, 2026-09-18
-  - {out: Float16_b, max_ulp: 1}     # 1 ULP, 11 variants / 311k lanes, 2026-09-18
-  - {out: Float16, max_ulp: 1}       # 1 ULP, 7 variants / 213k lanes, 2026-09-18
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21; block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21; block-quantized, so tolerance
-  - {in: Bfp8_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp8_b, out: Float16, max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Bfp8_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Bfp8_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Bfp8_b, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
@@ -1635,11 +1637,12 @@ SfpuBinaryMin:
   - {in: Float16, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float16_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 13 ULP, wormhole, 2026-09-21; block-quantized, so tolerance
   - {in: Float16_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 13 ULP, wormhole, 2026-09-21; block-quantized, so tolerance
-  - {in: Float16_b, out: Float16, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float16_b, out: Float16, max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float16_b, out: Float16_b, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float16_b, out: Float16_b, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float16_b, out: Float32, dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float16_b, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Float32, dest: "No", metric: tolerance}  # not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs the {out: ...} wildcards there
   - {in: Float32, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 17 ULP, wormhole, 2026-09-21; block-quantized, so tolerance
   - {in: Float32, out: Float16, dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the same measurement carried before
   - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
@@ -1814,13 +1817,14 @@ SfpuElwadd:
   - {in: Float32, out: Float16_b, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
 
-# Division is driven by two sweeps: the shared binary sweep, where it is exact on both
-# float columns, and test_eltwise_binary_sfpu_div, whose own stimuli are what set these
-# numbers. The budget has to cover the harder of the two -- an earlier pass measured only
-# the shared sweep and enrolled 0, which the dedicated sweep then failed on hardware.
+# Division is driven by two sweeps: the nightly test_eltwise_binary_sfpu_edges (its
+# registered poles, on Float16_b and Float32), where it is exact on both float columns,
+# and test_eltwise_binary_sfpu_div, whose own stimuli are what set these numbers. The
+# budget has to cover the harder of the two -- an earlier pass enrolled the 0 the edge
+# sweep supports, which the dedicated sweep then failed on hardware.
 SfpuElwdiv:
-  - {out: Float32, max_ulp: 40960}   # max 32768 ULP on the div sweep (0 on the shared one), 14 variants, 2026-09-18
-  - {out: Float16_b, max_ulp: 1}     # max 1 ULP on the div sweep (0 on the shared one), 14 variants, 2026-09-18
+  - {out: Float32, max_ulp: 40960}   # max 32768 ULP on the div sweep (0 on the edge sweep), 14 variants, 2026-09-18
+  - {out: Float16_b, max_ulp: 1}     # max 1 ULP on the div sweep (0 on the edge sweep), 14 variants, 2026-09-18
   - {out: Float16, max_ulp: 5}       # max 4 ULP on the div sweep, fp16-subnormals flushed (305 unflushed), 5 variants, 2026-10-05
   - {in: Float16, out: Float16, dest: "No", max_ulp: 5}  # max 4 ULP, wormhole, 2026-09-21
   - {in: Float16, out: Float16, dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
