@@ -12,6 +12,10 @@ sessions and pair adjacent sessions (tt_metal_tracker-g1b.7, tt_metal_tracker-g1
   ``KDA_LAYER_OUTPUT_DUMP=<path>`` to save the first replay's output for a cross-revision comparison.
 - ``test_loudbox_layer_op_breakdown``: realtime-profiler duration (max over chips) of every program of 3 eager
   forwards and 3 trace replays, in dispatch order; prints ``KDA_LAYER_OPS=<json>``.
+- ``test_loudbox_layer_profile``: device-profiler capture for ``scripts/run_safe_pytest.sh --profile`` (Tracy ops CSV
+  with op codes and performance-model fields, raw per-core log): 2 warm forwards (flushed), one trace capture, then
+  ``_PROFILED_REPLAYS`` blocking replays (trace replay sessions 1..3) read in one ``ReadDeviceProfiler``
+  (tt_metal_tracker-g1b.4.9).
 """
 
 from __future__ import annotations
@@ -37,6 +41,7 @@ _LAYOUTS = {"LB-A": (2, 4), "LB-B": (8, 1)}
 _MODELS = ("kimi_k3", "glm_5_3_flash")
 _REPETITIONS = 10
 _SAMPLES = 16
+_PROFILED_REPLAYS = 3
 _PARAMS = [
     pytest.param(_LAYOUTS[layout], fabric_1d_device_params(), model, layout, id=f"{model}-{layout}")
     for model in _MODELS
@@ -150,3 +155,25 @@ def test_loudbox_layer_op_breakdown(mesh_device: ttnn.MeshDevice, device_params:
         deallocate_state(next_state)
         deallocate_state(state)
     print("KDA_LAYER_OPS=" + json.dumps({"model": model, "layout": layout, "eager": eager, "traced": traced}))
+
+
+@pytest.mark.parametrize("mesh_device,device_params,model,layout", _PARAMS, indirect=["mesh_device", "device_params"])
+def test_loudbox_layer_profile(mesh_device: ttnn.MeshDevice, device_params: dict, model: str, layout: str) -> None:
+    layer, hidden, state, actual_start = _production_layer(mesh_device, model, layout)
+    _warm(mesh_device, layer, hidden, state, actual_start)
+    ttnn.ReadDeviceProfiler(mesh_device)
+    trace = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    output, next_state = layer.forward(hidden, state, actual_start)
+    ttnn.end_trace_capture(mesh_device, trace, cq_id=0)
+    try:
+        for _ in range(_PROFILED_REPLAYS):
+            ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=True)
+        ttnn.ReadDeviceProfiler(mesh_device)
+        output_finite = bool(torch.isfinite(_host_output(output)).all())
+    finally:
+        ttnn.release_trace(mesh_device, trace)
+        ttnn.deallocate(output)
+        deallocate_state(next_state)
+        deallocate_state(state)
+    print("KDA_LAYER_PROFILE=" + json.dumps({"model": model, "layout": layout, "replays": _PROFILED_REPLAYS}))
+    assert output_finite
