@@ -32,8 +32,13 @@ class BatchedPrefillDispatchTests(unittest.TestCase):
             ),
             _release_traces=lambda **kw: None,
             _refresh_table=lambda table: None,
+            _slot_prefix_len=[0] * self.cache.batch_size,
         )
-        methods = load_methods("generator.py", "Qwen38Generator", ["prefill_forward"], self.ops)
+        methods = load_methods(
+            "generator.py", "Qwen38Generator", ["prefill_forward", "_begin_prefix", "_end_prefix"], self.ops
+        )
+        self.gen._begin_prefix = MethodType(methods["_begin_prefix"], self.gen)
+        self.gen._end_prefix = MethodType(methods["_end_prefix"], self.gen)
         self.forward = MethodType(methods["prefill_forward"], self.gen)
 
     def batch(self, tokens, **kwargs):
@@ -42,6 +47,10 @@ class BatchedPrefillDispatchTests(unittest.TestCase):
 
     def run_prefill(self, lengths, slots, starts=None):
         tokens = torch.stack([torch.full((max(lengths),), i + 1) for i in range(len(lengths))])
+        # A nonzero start continues a request that already advanced this slot.
+        for start, slot in zip(starts or [0] * len(slots), slots):
+            if 0 <= slot < len(self.gen._slot_prefix_len):
+                self.gen._slot_prefix_len[slot] = start
         return self.forward(
             tokens, page_table=self.table, kv_cache=self.cache, prompt_lens=lengths, slots=slots, start_pos=starts
         )

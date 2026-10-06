@@ -51,6 +51,26 @@ def configure_fabric(*, payload_bytes=None):
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING, router_config=router)
 
 
+def validate_prefix_continuity(starts, slots, prefix_lens):
+    """Refuse a prefill chunk that does not continue the prefix its own slot holds.
+
+    Attention KV is paged, so a chunk may attend to pages another request filled. GDN state is
+    not: `recurrent` and `conv` summarise the tokens one slot has seen and carry from chunk to
+    chunk implicitly. A chunk starting anywhere other than the slot's held length would run 48 of
+    the 64 layers over unrelated state and return a plausible wrong answer. A held length of -1
+    marks state left indeterminate by a failed chunk, and matches no start.
+
+    A start of zero is always legal: it begins a new request, and the caller resets the slot.
+    """
+    for start, slot in zip(starts, slots):
+        held = prefix_lens[slot]
+        # A chunk starting at zero is a new request, whose caller zeroes the slot.
+        if start and start != held:
+            raise ValueError(
+                f"Prefill for slot {slot} starts at {start} but the slot holds {held} tokens of " "recurrent state"
+            )
+
+
 class Qwen38Generator:
     def __init__(self, model, *, host_sampling=False, sampling_strategy="split"):
         self.model, self.mesh = model, model.mesh
@@ -100,6 +120,7 @@ class Qwen38Generator:
             torch.zeros(1, 1, 1, 32, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
         )
         self.positions = self.page_table = self.logits = None
+        self._slot_prefix_len = []
         self.prefill_signatures = set()
         self.page_host = None
         self.counters = Counter()
@@ -257,6 +278,8 @@ class Qwen38Generator:
         for start, end, slot in zip(starts, ends, slots):
             if not 0 <= slot < kv_cache.batch_size or not 0 <= start < end <= min(tokens.shape[1], kv_cache.capacity):
                 raise ValueError("Serving prompt positions or slots exceed the bound cache")
+        validate_prefix_continuity(starts, slots, self._slot_prefix_len)
+        self._begin_prefix(slots)
         if len(ends) == 1 and slots == [0] and starts == [0] and ends[0] <= 4096:
             self._refresh_table(page_table)
             output = self._prefill_for_generate(tokens[:, : ends[0]], trace_sampling=True)
@@ -267,6 +290,7 @@ class Qwen38Generator:
             else:
                 ttnn.execute_trace(self.mesh, self.prefill_sample_trace, cq_id=0, blocking=False)
                 self.counters["prefill_sampling_replays"] += 1
+            self._end_prefix(slots, ends)
             return self.tokens
         signature = self._prepare_serving_prefill_sampling(
             tokens, page_table=page_table, kv_cache=kv_cache, ends=ends, starts=starts, slots=slots
@@ -280,6 +304,7 @@ class Qwen38Generator:
             ttnn.execute_trace(self.mesh, self.prefill_sample_trace, cq_id=0, blocking=False)
             self.counters["prefill_sampling_replays"] += 1
         self._prefill_sampling_signatures.add(signature)
+        self._end_prefix(slots, ends)
         return self.tokens
 
     def _prepare_serving_prefill_sampling(self, tokens, *, page_table, kv_cache, ends, starts, slots):
@@ -346,6 +371,7 @@ class Qwen38Generator:
         self.cache = self.model.allocate_cache(
             batch_size=batch, capacity=min(self.model.context, ((capacity + 31) // 32) * 32)
         )
+        self._slot_prefix_len = [0] * self.cache.batch_size
         self.positions = self.model.upload(
             torch.zeros(batch, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
         )
@@ -472,6 +498,8 @@ class Qwen38Generator:
                 raise ValueError("Invalid slot or logical prompt length")
             if start < 0 or start + length > kv_cache.capacity:
                 raise ValueError("Prompt exceeds cache capacity")
+            validate_prefix_continuity([start], [slot], self._slot_prefix_len)
+            self._begin_prefix([slot])
             # Chunk across the whole stack, retaining only one chunk of activations.
             chunks = []
             for offset in range(0, length, 4096):
@@ -492,6 +520,7 @@ class Qwen38Generator:
                 )
                 if return_all_logits:
                     chunks.append(self._host_logits(logits))
+            self._end_prefix([slot], [start + length])
             results.append(torch.cat(chunks, dim=1) if return_all_logits else logits)
         self.prefill_signatures.update(signatures)
         if return_all_logits:
@@ -558,8 +587,23 @@ class Qwen38Generator:
         self._prefill_sampling_signatures = warmed
         return self.tokens
 
+    def _begin_prefix(self, slots):
+        """Mark a slot's recurrent state untrusted while a chunk is in flight.
+
+        A chunk that raises partway leaves the state somewhere between its old and new prefix,
+        and -1 matches no start, so the next chunk is refused until the slot is reset.
+        """
+        for slot in slots:
+            self._slot_prefix_len[slot] = -1
+
+    def _end_prefix(self, slots, ends):
+        for slot, end in zip(slots, ends):
+            self._slot_prefix_len[slot] = int(end)
+
     def reset_recurrent_slots(self, slots):
         """Start new requests without clearing any scheduler-owned attention pages."""
+        for slot in slots:
+            self._slot_prefix_len[slot] = 0
         resident = getattr(self.model, "_resident_decode_bucket", None)
         if resident is not None and resident[1] == (0,) and list(slots) == [0] and self.model._resident_decode_valid:
             # The owned slot-zero prefill trace uses this same B1 state. Reset
@@ -596,6 +640,7 @@ class Qwen38Generator:
         if order == list(range(self.cache.batch_size)):
             return
         self._release_traces(keep_prefill=True)
+        self._slot_prefix_len = [self._slot_prefix_len[i] for i in order]
         for state in self.cache.layers:
             for name in ("conv", "recurrent"):
                 tensor = getattr(state, name)
@@ -865,6 +910,7 @@ class Qwen38Generator:
         self.prefill_signatures.clear()
         self.remaining_steps = None
         self.cache = cache
+        self._slot_prefix_len = [0] * cache.batch_size
         self.owns_cache = False
         self.positions = self.model.upload(
             torch.zeros(cache.batch_size, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
