@@ -26,8 +26,8 @@ request) is prefilled the way ``tests/prefill/test_prefill_decode_demo.py`` does
 a 32-chip Galaxy the decode model and a :class:`DeepSeekV4PrefillModel` share eight
 ``1 x 4`` TP4 stages (one per mesh row), the prompt's 128-aligned prefix (up to
 ``--prefill-max-len``, by default the whole context) runs through the traced, pipelined
-prefill (one trace per stage, ``--prefill-trace-chunk`` tokens per chunk, the stages on
-consecutive chunks at once),
+prefill (one trace per stage and position tier, ``--prefill-trace-chunk`` tokens per chunk,
+the stages on consecutive chunks at once; the sliding layers run mask-free),
 its attention state is committed into the session's decode buffers on device, and the
 ragged tail is replayed through decode. A follow-up turn feeds only the tokens it adds
 through decode, unless rewinding and prefilling the whole conversation is estimated to
@@ -90,7 +90,9 @@ snippet), ``p`` pauses the scroll,
 * ``max_tokens`` caps the reply (default: the engine-wide ``--max-new-tokens``);
   ``temperature`` / ``top_p`` sample from the per-step logits (default greedy
   argmax). ``thinking: true`` and ``reasoning_effort`` are DeepSeek-V4 extensions
-  that switch that session to the thinking template. In thinking mode the reply
+  that switch that session to the thinking template. ``reasoning_effort`` is
+  ``low``, ``medium``, ``high``, or ``max`` (``medium`` uses the same template
+  as ``high``). In thinking mode the reply
   carries the reasoning block in the ``reasoning_content`` field, exactly like the
   DeepSeek reasoner API, while ``content`` holds the answer. ``stop`` sequences
   are not supported.
@@ -149,6 +151,7 @@ from models.experimental.deepseek_v4_flash.demo.chat_cli import (
     open_mesh_device,
 )
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import (
+    REASONING_EFFORTS,
     merge_tool_messages,
     render_message,
     sort_tool_results_by_call_order,
@@ -747,7 +750,10 @@ class _Prefiller:
         model = engine.model
         self.engine = engine
         self.chunk_size = args.prefill_trace_chunk
-        # Every chunk attends the whole FIFO sized for ``max_len``, so this is a speed knob too.
+        # Sizes the persistent buffers and the position tiers (the prefill model reads its RoPE rows from
+        # ``engine.rope``, which spans ``engine.max_seq``, so ``max_len`` must stay below it). A chunk's cost follows its
+        # position, not ``max_len`` (DEEPSEEK_V4_PREFILL_TIER_FACTOR), so this is a capacity knob: a larger value costs
+        # DRAM for the buffers and a trace per stage for each further tier, not speed.
         self.max_len = min(args.prefill_max_len or engine.max_seq, engine.max_seq - 1) // ALIGNMENT * ALIGNMENT
         if self.max_len < ALIGNMENT:
             raise ValueError(f"traced prefill needs a context of at least {ALIGNMENT + 1} tokens")
@@ -755,7 +761,8 @@ class _Prefiller:
         # What a prefill costs, for choosing it over replaying the prompt through decode: the first chunk
         # crosses every stage before its logits arrive (plus the write-back and the commit), each later one
         # lands a stage behind it. Seeded from test_prefill_decode_demo.py on 8 stages with 1024-token
-        # chunks; every prefill folds its own timings in.
+        # chunks; every prefill folds its own timings in. Chunks of later position tiers cost more than early
+        # ones, so the per-chunk figure is a mean over the prompts seen, good enough to tell prefill from replay.
         self.fill_seconds = 1.6
         self.chunk_seconds = 0.23
         self._loud = True
@@ -778,6 +785,8 @@ class _Prefiller:
             weight_dtype=_ATTENTION_WEIGHT_DTYPE,
             dense_csa=True,
             lightning_indexer=indexer,
+            # Sliding layers attend without an additive mask (CSA / HCA stay masked), as in the test.
+            maskless=True,
             progress=self._note,
         )
         self.model.synchronize("uploads")
@@ -1834,8 +1843,10 @@ class GenerationServer:
             user.thinking_mode = "thinking" if body.get("thinking") else "chat"
         effort = body.get("reasoning_effort")
         if effort is not None:
-            if effort not in ("high", "max"):
-                raise RequestError(400, "reasoning_effort must be 'high' or 'max'")
+            if effort not in REASONING_EFFORTS:
+                raise RequestError(
+                    400, f"reasoning_effort must be 'low', 'medium', 'high', or 'max', but got {effort!r}"
+                )
             user.reasoning_effort = effort
 
     def _render_ids(self, user: UserSession, include_assistant: bool) -> list[int]:
@@ -2198,11 +2209,17 @@ def _add_model_args(p: argparse.ArgumentParser, sys_cfg) -> None:
     )
     p.add_argument(
         "--reasoning-effort",
-        choices=("high", "max"),
+        choices=REASONING_EFFORTS,
         default=None,
-        help="reasoning-effort hint, only meaningful with --think",
+        help="reasoning-effort hint, only meaningful with --think " "(medium uses the same template as high)",
     )
-    p.add_argument("--trace-region-size", type=int, default=sys_cfg.device.trace_region_size)
+    p.add_argument(
+        "--trace-region-size",
+        type=int,
+        default=sys_cfg.device.trace_region_size,
+        help="bytes reserved for the captured traces; with the prefill model on that is decode's plus one prefill "
+        "trace per stage and position tier, so raise it if a capture reports the trace region too small",
+    )
     p.add_argument("--quiet", action="store_true", help="only warnings and above from the model logs")
 
 
@@ -2261,8 +2278,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=int(os.environ.get("DEEPSEEK_V4_PREFILL_MAX_LEN", "0")),
         help="longest prompt prefix the prefill model takes (rounded down to 128, capped by the "
         "context; 0, the default, = the whole --max-context); the rest is replayed through "
-        "decode, ~30x slower. Every chunk attends buffers sized for it, so a smaller value "
-        "prefills shorter prompts faster but replays the excess of longer ones",
+        "decode, ~30x slower. It sizes the prefill buffers and position tiers (one trace per "
+        "stage and tier, DEEPSEEK_V4_PREFILL_TIER_FACTOR); a chunk's cost follows its position, "
+        "not this value, so a smaller one saves DRAM and traces but replays the excess of "
+        "longer prompts through decode",
     )
     p.add_argument(
         "--prefill-trace-chunk",

@@ -348,10 +348,15 @@ _STATIC_SEQ_LEN = 1024
 _STATIC_MAX_LEN = 2048
 
 
+@pytest.mark.parametrize("tiered", [False, True], ids=["full-cap", "tiered"])
 @pytest.mark.parametrize("maskless", [False, True], ids=["masked", "maskless"])
 @pytest.mark.parametrize("layer_idx", _LAYERS)
-def test_prefill_attention_static_chunked(device, reset_seeds, layer_idx, maskless):
-    """``forward_static`` over persistent buffers, chunk by chunk, against the single-pass reference."""
+def test_prefill_attention_static_chunked(device, reset_seeds, layer_idx, maskless, tiered):
+    """``forward_static`` over persistent buffers, chunk by chunk, against the single-pass reference.
+
+    ``tiered`` gives each chunk's step only the entry rows that chunk can reach (a position tier of the traced
+    prefill: ``cap`` below the buffers' size), so the key axis and the entry reads grow with the position.
+    """
     if maskless and layer_idx != 0:
         pytest.skip("maskless only changes sliding layers")
     ref = _reference(layer_idx, _STATIC_SEQ_LEN)
@@ -363,13 +368,18 @@ def test_prefill_attention_static_chunked(device, reset_seeds, layer_idx, maskle
     bufs = attn.new_static_buffers(_STATIC_CHUNK, cap)
 
     for start in range(0, _STATIC_SEQ_LEN, _STATIC_CHUNK):
-        step = _static_step(attn, start, _STATIC_CHUNK, cap)
+        step_cap = cap
+        if tiered and not attn.is_sliding:
+            step_cap = min(cap, -(-((start + _STATIC_CHUNK) // attn.rate) // ALIGNMENT) * ALIGNMENT)
+        step = _static_step(attn, start, _STATIC_CHUNK, step_cap)
         out = attn.forward_static(_to_device(ref.hidden[:, start : start + _STATIC_CHUNK], device), bufs, step)
         _assert_pcc(
             ref.output[:, start : start + _STATIC_CHUNK],
             _to_host(out),
             _CHUNKED_PCC,
-            f"{layer_type} static chunk rows [{start}, {start + _STATIC_CHUNK})" + (", maskless" if maskless else ""),
+            f"{layer_type} static chunk rows [{start}, {start + _STATIC_CHUNK})"
+            + (", maskless" if maskless else "")
+            + (f", cap {step_cap}" if tiered else ""),
         )
 
     _assert_pcc(ref.kv_tail, _to_host(bufs.tail), _CHUNKED_STATE_PCC, f"{layer_type} static K=V tail")

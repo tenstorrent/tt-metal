@@ -63,7 +63,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.experimental.deepseek_v4_flash.encoding_dsv4 import render_message
+from models.experimental.deepseek_v4_flash.encoding_dsv4 import REASONING_EFFORTS, render_message
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
 from models.experimental.deepseek_v4_flash.tt.decode.paged_cache import PagedCacheFull, round_context
@@ -909,9 +909,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--reasoning-effort",
-        choices=("high", "max"),
+        choices=REASONING_EFFORTS,
         default=None,
-        help="reasoning-effort hint, only meaningful with --think",
+        help="reasoning-effort hint, only meaningful with --think " "(medium uses the same template as high)",
     )
     p.add_argument("--trace-region-size", type=int, default=sys_cfg.device.trace_region_size)
     p.add_argument("--quiet", action="store_true", help="only warnings and above from the model logs")
