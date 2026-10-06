@@ -60,25 +60,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 if constexpr (BROADCAST_TYPE == BroadcastType::NONE)
                 {
-                    // SrcA plus a SrcB zerosrc dvalid every face, including dest_acc=No (#1230).
-                    _perf_unpack_loop_set_valid</* src A */ true, /* src B */ true>(/* iterations */ tile_iters * num_faces);
+                    // SrcA plus a SrcB zerosrc dvalid every face, including dest_acc=No (tenstorrent/budabackend#1230).
+                    _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(tile_iters * num_faces /*iterations*/);
                 }
                 else if constexpr (BROADCAST_TYPE == BroadcastType::ROW)
                 {
-                    _perf_unpack_loop_set_valid</* src A */ false, /* src B */ true>(/* iterations */ tile_iters * num_faces);
+                    _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(tile_iters * num_faces /*iterations*/);
                 }
                 else if constexpr (BROADCAST_TYPE == BroadcastType::COL)
                 {
                     // Interleave per tile; bulk posting deadlocks on the 2-deep src banks.
                     for (std::uint32_t i = 0; i < tile_iters; ++i)
                     {
-                        _perf_unpack_loop_set_valid</* src A */ true, /* src B */ true>(/* iterations */ 1);
-                        _perf_unpack_loop_set_valid</* src A */ false, /* src B */ true>(/* iterations */ 1);
+                        _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(1 /*iterations*/);
+                        _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(1 /*iterations*/);
                     }
                 }
                 else
                 {
-                    _perf_unpack_loop_set_valid</* src A */ true, /* src B */ true>(/* iterations */ tile_iters);
+                    _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(tile_iters /*iterations*/);
                 }
             }
         }
@@ -151,7 +151,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
                         {
-                            _llk_math_eltwise_unary_datacopy_<copy_type, DstSync::SyncHalf, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                            // Handshake only. Column/scalar unpack-to-dest expands the broadcast
+                            // in this call, which would land in the unpack number. L1_TO_L1 below
+                            // keeps BROADCAST_TYPE.
+                            _llk_math_eltwise_unary_datacopy_<copy_type, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                                 tile, formats.math, formats.math);
                         }
                     }
@@ -159,23 +162,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else if constexpr (BROADCAST_TYPE == BroadcastType::NONE)
             {
-                _perf_math_loop_clear_valid</* src A */ true, /* src B */ true>(/* iterations */ tile_iters * num_faces);
+                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(tile_iters * num_faces /*iterations*/);
             }
             else if constexpr (BROADCAST_TYPE == BroadcastType::ROW)
             {
-                _perf_math_loop_clear_valid</* src A */ false, /* src B */ true>(/* iterations */ tile_iters * num_faces);
+                _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(tile_iters * num_faces /*iterations*/);
             }
             else if constexpr (BROADCAST_TYPE == BroadcastType::COL)
             {
                 for (std::uint32_t i = 0; i < tile_iters; ++i)
                 {
-                    _perf_math_loop_clear_valid</* src A */ true, /* src B */ true>(/* iterations */ 1);
-                    _perf_math_loop_clear_valid</* src A */ false, /* src B */ true>(/* iterations */ 1);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(1 /*iterations*/);
+                    _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(1 /*iterations*/);
                 }
             }
             else
             {
-                _perf_math_loop_clear_valid</* src A */ true, /* src B */ true>(/* iterations */ tile_iters);
+                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(tile_iters /*iterations*/);
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -267,7 +270,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
-                    for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+                    // The SFPU writes the result on the even dest slot. Packing operand B
+                    // as well would count two packs per result. tile_cnt still counts both
+                    // operands, so this is one pack per normalized pair. L1_TO_L1 below
+                    // still packs every dest tile for the golden.
+                    for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; tile += 2)
                     {
                         const std::uint32_t result_tile = block * NUM_TILES_IN_BLOCK + tile;
                         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(buffer_Res[result_tile]));

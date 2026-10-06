@@ -3,7 +3,8 @@
 
 import pytest
 import test_eltwise_binary_sfpu as _func
-from helpers.llk_params import ApproximationMode, MathOperation
+from helpers.constraints import distinct_dest_accumulation_modes
+from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 
@@ -38,6 +39,26 @@ _INT_UNIFORM_PERF_SWEEP = {
 }
 
 
+_BOTH_DEST_ACC = [DestAccumulation.No, DestAccumulation.Yes]
+
+
+def _distinct_dest_acc(sweep):
+    """Drop dest_acc modes that TestConfig promotes onto the same kernel.
+
+    Outlier format combos record dest_acc=Yes for a requested No, so a [No, Yes]
+    sweep would publish two rows with one measurement. Functional tests still
+    ask for both; only the perf copy narrows the axis.
+    """
+    if sweep.get("dest_acc") != _BOTH_DEST_ACC:
+        return sweep
+    return {
+        **sweep,
+        "dest_acc": lambda formats: distinct_dest_accumulation_modes(
+            formats, list(_BOTH_DEST_ACC)
+        ),
+    }
+
+
 def _perf_kwargs(perf_report, run_types, loop_factor, iterations, approx_mode, is_perf):
     return dict(
         is_perf=is_perf,
@@ -51,7 +72,7 @@ def _perf_kwargs(perf_report, run_types, loop_factor, iterations, approx_mode, i
 
 @pytest.mark.perf
 @parametrize(
-    **_func.FLOAT_SWEEP,
+    **_distinct_dest_acc(_func.FLOAT_SWEEP),
     **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_float(
@@ -79,7 +100,7 @@ def test_perf_eltwise_binary_sfpu_float(
 
 @pytest.mark.perf
 @parametrize(
-    **_func.DIV_SWEEP,
+    **_distinct_dest_acc(_func.DIV_SWEEP),
     **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_div(
@@ -103,7 +124,7 @@ def test_perf_eltwise_binary_sfpu_div(
 
 @pytest.mark.perf
 @parametrize(
-    **_func.FLOAT_EXTENDED_SWEEP,
+    **_distinct_dest_acc(_func.FLOAT_EXTENDED_SWEEP),
     **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_float_extended(
@@ -129,7 +150,7 @@ def test_perf_eltwise_binary_sfpu_float_extended(
 
 @pytest.mark.perf
 @parametrize(
-    **_func.MASK_SWEEP,
+    **_distinct_dest_acc(_func.MASK_SWEEP),
     **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_mask(
@@ -155,7 +176,7 @@ def test_perf_eltwise_binary_sfpu_mask(
 
 @pytest.mark.perf
 @parametrize(
-    **_func.ATAN2_SWEEP,
+    **_distinct_dest_acc(_func.ATAN2_SWEEP),
     **_ATAN2_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_atan2(
@@ -181,7 +202,7 @@ def test_perf_eltwise_binary_sfpu_atan2(
 
 @pytest.mark.perf
 @parametrize(
-    **_func.EQ_NE_SWEEP,
+    **_distinct_dest_acc(_func.EQ_NE_SWEEP),
     **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_eq_ne(
@@ -207,7 +228,7 @@ def test_perf_eltwise_binary_sfpu_eq_ne(
 
 @pytest.mark.perf
 @parametrize(
-    **_func.FLOAT_COMPARISON_SWEEP,
+    **_distinct_dest_acc(_func.FLOAT_COMPARISON_SWEEP),
     **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_float_comparison(
@@ -233,7 +254,7 @@ def test_perf_eltwise_binary_sfpu_float_comparison(
 
 @pytest.mark.perf
 @parametrize(
-    **_func.ISCLOSE_SWEEP,
+    **_distinct_dest_acc(_func.ISCLOSE_SWEEP),
     **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_isclose(
@@ -259,7 +280,7 @@ def test_perf_eltwise_binary_sfpu_isclose(
 
 @pytest.mark.perf
 @parametrize(
-    **_func.LOGSIGMOID_SWEEP,
+    **_distinct_dest_acc(_func.LOGSIGMOID_SWEEP),
     **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_logsigmoid(
@@ -413,7 +434,7 @@ def test_perf_eltwise_binary_sfpu_eq_ne_int(
 
 @pytest.mark.perf
 @parametrize(
-    **_func.ADD_TOP_ROW_SWEEP,
+    **_distinct_dest_acc(_func.ADD_TOP_ROW_SWEEP),
     **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_add_top_row(
@@ -439,7 +460,7 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
 
 @pytest.mark.perf
 @parametrize(
-    **_func.BCAST_SWEEP,
+    **_distinct_dest_acc(_func.BCAST_SWEEP),
     **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_bcast(

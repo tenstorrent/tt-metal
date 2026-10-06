@@ -81,27 +81,6 @@ def _skip_fp32_no_dest_acc(formats, dest_acc):
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
 
 
-def _skip_outlier_dest_acc_no(formats, dest_acc, *, is_perf=False):
-    """Outlier 8-bit-exp -> Float16 combos promote dest_acc=No to Yes.
-
-    TestConfig flips dest_acc for those combos so the kernel matches hardware.
-    Perf then records dest_acc=Yes for both sweep points, and combining worker
-    CSVs fails because the two rows share a key but not a measurement.
-    """
-    if (
-        is_perf
-        and dest_acc == DestAccumulation.No
-        and is_format_combination_outlier(
-            formats.input_format, formats.output_format, dest_acc
-        )
-        and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
-    ):
-        pytest.skip(
-            "Outlier format combo promotes dest_acc=No to Yes; the dest_acc=Yes "
-            "sweep point already covers this hardware config"
-        )
-
-
 def _skip_bh_float16_no_dest_acc(formats, dest_acc):
     """Blackhole can't run Float16 SFPU input without a 32-bit dest intermediate."""
     if (
@@ -514,8 +493,6 @@ def sfpu_binary(
     tensor can hold both a non-finite whose sign the ISA leaves open and one it specifies.
     """
 
-    _skip_outlier_dest_acc_no(formats, dest_acc, is_perf=is_perf)
-
     # Seed the draw so the stimuli are identical run to run; an unseeded redraw makes a
     # variant near its tolerance fail unreproducibly.
     torch.manual_seed(0)
@@ -645,7 +622,7 @@ def sfpu_binary(
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             LOOP_FACTOR(loop_factor),
-            NUM_FACES(4),
+            NUM_FACES(),
         ],
         "variant_stimuli": StimuliConfig(
             src_A,
@@ -826,11 +803,17 @@ def test_eltwise_binary_sfpu_float(
     # Bfp8_b quantization can map small positive operands to zero, making xlogy's
     # logarithm -inf. LOGADDEXP and LOGADDEXP2 are skipped here too: their +/-200
     # domain under Bfp8_b's shared-exponent quantization collapses most of the
-    # |a - b| < 20 correction band this sweep exists to exercise.
-    if formats.input_format == DataFormat.Bfp8_b and mathop in (
-        MathOperation.SfpuXlogy,
-        MathOperation.SfpuLogaddexp,
-        MathOperation.SfpuLogaddexp2,
+    # |a - b| < 20 correction band this sweep exists to exercise. Perf compares
+    # no golden, so those rows still run.
+    if (
+        not run_kwargs.get("is_perf")
+        and formats.input_format == DataFormat.Bfp8_b
+        and mathop
+        in (
+            MathOperation.SfpuXlogy,
+            MathOperation.SfpuLogaddexp,
+            MathOperation.SfpuLogaddexp2,
+        )
     ):
         pytest.skip(
             "Bfp8_b input is not supported for XLOGY/LOGADDEXP/LOGADDEXP2 coverage"
@@ -1721,7 +1704,7 @@ def _run_sfpu_add_top_row(
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             LOOP_FACTOR(loop_factor),
-            NUM_FACES(4),
+            NUM_FACES(),
         ],
         "variant_stimuli": StimuliConfig(
             src_A,
@@ -1846,8 +1829,6 @@ def _run_sfpu_binary_bcast(
     iterations=32,
     approx_mode=ApproximationMode.No,
 ):
-    _skip_outlier_dest_acc_no(formats, dest_acc, is_perf=is_perf)
-
     input_dimensions = [32, 32]
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -1896,7 +1877,7 @@ def _run_sfpu_binary_bcast(
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             LOOP_FACTOR(loop_factor),
-            NUM_FACES(4),
+            NUM_FACES(),
         ],
         "variant_stimuli": StimuliConfig(
             tilize(src_A, stimuli_format=formats.input_format),

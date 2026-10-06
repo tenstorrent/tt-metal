@@ -68,7 +68,6 @@ PERF_TEST_SCHEMAS = {
         "version": 5,
         "columns": [
             "approx_mode",
-            "bcast_dim",
             "block_ct_dim",
             "block_rt_dim",
             "broadcast_type",
@@ -95,6 +94,7 @@ PERF_TEST_SCHEMAS = {
             "num_tiles_in_block",
             "output_num_blocks",
             "output_num_tiles_in_block",
+            "sfpu_bcast_dim",
             "tile_cnt",
             "unpack_to_dest",
         ],

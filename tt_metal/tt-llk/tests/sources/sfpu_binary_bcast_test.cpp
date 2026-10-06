@@ -68,8 +68,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
-                // SrcA plus a SrcB zerosrc dvalid every face, including dest_acc=No (#1230).
-                _perf_unpack_loop_set_valid</* src A */ true, /* src B */ true>(/* iterations */ src_handshake_iters);
+                // SrcA plus a SrcB zerosrc dvalid every face, including dest_acc=No (tenstorrent/budabackend#1230).
+                _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(src_handshake_iters /*iterations*/);
             }
         }
         else
@@ -140,7 +140,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else
             {
-                _perf_math_loop_clear_valid</* src A */ true, /* src B */ true>(/* iterations */ src_handshake_iters);
+                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(src_handshake_iters /*iterations*/);
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)

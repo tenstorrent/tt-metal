@@ -83,7 +83,6 @@ DB_SCHEMA = [
     # configuration
     Column("alpha_bits", "int64", True, "configuration"),
     Column("approx_mode", "string", True, "configuration"),
-    Column("bcast_dim", "string", True, "configuration"),
     Column("beta_bits", "int64", True, "configuration"),
     Column("binop_mathop", "string", True, "configuration"),
     Column("block_ct_dim", "int64", True, "configuration"),
@@ -127,6 +126,7 @@ DB_SCHEMA = [
     Column("r_dimm", "int64", True, "configuration"),
     Column("reduce_pool_type", "string", True, "configuration"),
     Column("relu_config", "int64", True, "configuration"),
+    Column("sfpu_bcast_dim", "string", True, "configuration"),
     Column("srca_reuse_count", "int64", True, "configuration"),
     Column("stable_sort", "string", True, "configuration"),
     Column("ternary_mathop", "string", True, "configuration"),

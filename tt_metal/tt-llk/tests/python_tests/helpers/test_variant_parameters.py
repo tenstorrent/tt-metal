@@ -121,10 +121,10 @@ class SFPU_BCAST_DIM(TemplateParameter):
     add_top_row pass it so every binary-SFPU variant emits the same CSV column.
     """
 
-    bcast_dim: BroadcastType = BroadcastType.None_
+    sfpu_bcast_dim: BroadcastType = BroadcastType.None_
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr auto BCAST_DIM = ckernel::BroadcastType::{self.bcast_dim.value};"
+        return f"constexpr auto BCAST_DIM = ckernel::BroadcastType::{self.sfpu_bcast_dim.value};"
 
 
 @dataclass
