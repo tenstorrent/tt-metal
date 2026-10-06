@@ -15,7 +15,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.sfpu_accuracy_budget import accuracy_contract
+from helpers.sfpu_accuracy_budget import FLUSH_SUBNORMAL_OUTPUTS, accuracy_contract
 from helpers.sfpu_domains import (
     SPECIALS_READY_OPS,
     edge_spec,
@@ -157,7 +157,7 @@ def _run_sfpu_binop_scalar(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **contract.passed_test_kwargs(),
+        **contract.passed_test_kwargs(flush_subnormals=FLUSH_SUBNORMAL_OUTPUTS),
     ), "Assert against golden failed"
 
 

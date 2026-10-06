@@ -2191,8 +2191,8 @@ def _not_measurable_cells(path=_TABLE_PATH):
             continue
         fields = _row_fields(line)
         out_fmt = DataFormat[fields["out"]]
-        if not has_ulp_gate(out_fmt) or out_fmt in _ULP_PROXY_DTYPES:
-            continue  # a block output is never gated from this sweep
+        if not _step_gateable_output(out_fmt):
+            continue
         cells.append(
             (
                 MathOperation[op],
