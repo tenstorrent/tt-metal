@@ -13,7 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.qwen38_27b_t3k.tt.decoder_tp import resolve_mesh_tp, supported_device_counts
-from models.demos.qwen38_27b_t3k.tt.generator import build_generator
+from models.demos.qwen38_27b_t3k.tt.generator import MAX_PREFIX_SNAPSHOTS, build_generator
 from models.demos.qwen38_27b_t3k.tt.model import MAX_SERVING_BATCH, ModelCache
 
 
@@ -22,13 +22,16 @@ def _shared_pool_ceiling():
 
     Re-derived from the recorded byte budget rather than a transcribed token count, so a
     correction to the capacity contract cannot leave this bound behind.
+
+    Prefix snapshots are the same recurrent bytes held a second time, drawn from this same
+    budget, so the store's hard cap is reserved here whether or not prefix caching is on: the
+    pool is sized once at startup and cannot give the memory back later.
     """
     contract = json.loads((Path(__file__).parents[1] / "doc/context_contract.json").read_text())
     budget = contract["per_device_bytes"]
-    pages = (budget["state_budget_remaining"] - budget["gdn_recurrent_and_conv_per_request"]) // budget[
-        "kv_cache_per_page"
-    ]
-    return pages * 32
+    per_request = budget["gdn_recurrent_and_conv_per_request"]
+    spare = budget["state_budget_remaining"] - per_request * (1 + MAX_PREFIX_SNAPSHOTS)
+    return spare // budget["kv_cache_per_page"] * 32
 
 
 class Qwen38ForCausalLM:
@@ -37,8 +40,18 @@ class Qwen38ForCausalLM:
     # No explicit-seed stream reaches int32 overflow or manual_seed's -1 sentinel.
     _SEED_MODULUS = (1 << 31) - _MAX_CONTEXT - 1
 
+    # Half the store's hard cap, so a snapshot taken before the displaced one is freed -- the
+    # free travels a step behind -- still finds room rather than being dropped.
+    _PREFIX_SNAPSHOTS = MAX_PREFIX_SNAPSHOTS // 2
+
     model_capabilities = {
+        # The 48 GDN layers summarise one slot's tokens sequentially, so a cached prefix is only
+        # servable where a snapshot holds that summary. Staying False until a prefill can be made
+        # to stop on a block boundary: without that, a snapshot is nameable only when the prompt
+        # happens to be a multiple of the page size, and prefix caching would cost bookkeeping
+        # for almost no hits.
         "supports_prefix_caching": False,
+        "recurrent_prefix_snapshots": _PREFIX_SNAPSHOTS,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
         "max_device_top_k": 32,
@@ -236,6 +249,17 @@ class Qwen38ForCausalLM:
             )
             self._sampling_key = key
         return True
+
+    def restore_recurrent_prefix(self, slot, handle):
+        """Reinstate a saved prefix into ``slot``, so a prefill may continue from it."""
+        return self.generator.restore_slot_state(slot, handle)
+
+    def save_recurrent_prefix(self, slot):
+        """Keep ``slot``'s current recurrent state, returning a handle or None when full."""
+        return self.generator.save_slot_state(slot)
+
+    def free_recurrent_prefix(self, handle):
+        self.generator.free_slot_state(handle)
 
     def prefill_forward(
         self,
