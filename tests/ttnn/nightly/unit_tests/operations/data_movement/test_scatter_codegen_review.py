@@ -4,7 +4,7 @@
 
 # Hand-written regressions for the scatter routing seams the generated sweep in
 # test_scatter_codegen_routing.py does not reach: the demotion predicate's axis spelling, an output
-# placement that differs from the input's, and empty operands.
+# placement that differs from the input's, empty operands, and the bf16 reduce path.
 
 import pytest
 import torch
@@ -116,3 +116,12 @@ def test_scatter_codegen_empty_operands_stay_native(device, shape, index_shape, 
     assert device.num_program_cache_entries() == entries_before, "auto routed an empty tensor to codegen"
     with expect_error(RuntimeError, "scatter_force_codegen invoked for a case the codegen path does not support"):
         _force_codegen(xt, -1, it, st)
+
+
+@pytest.mark.parametrize("reduce", ["add", "multiply"])
+def test_scatter_codegen_row_major_bf16_reduce_matches_native(device, reduce):
+    # Positions drawn from the first 8 of 64 columns, so every hit column accumulates several
+    # updates: the FP32 accumulator's rounding order is what this pins against native.
+    xt, it, st = _make_case([1, 1, 32, 64], [1, 1, 32, 32], -1, ttnn.ROW_MAJOR_LAYOUT, device, index_max=8)
+    golden = ttnn.to_torch(_force_native(xt, -1, it, st, reduce=reduce))
+    assert_equal(golden, ttnn.to_torch(_force_codegen(xt, -1, it, st, reduce=reduce)))
