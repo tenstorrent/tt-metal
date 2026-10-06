@@ -12,6 +12,23 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 
+#if defined(ARCH_BLACKHOLE)
+// The copy init of c_0 serves an operand that shares its formats and tile geometry.
+template <uint32_t cb>
+constexpr bool copy_init_shared_with_c0() {
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
+    constexpr uint32_t c0 = tt::CBIndex::c_0;
+    return unpack_src_format[cb] == unpack_src_format[c0] && unpack_dst_format[cb] == unpack_dst_format[c0] &&
+           unpack_tile_num_faces[cb] == unpack_tile_num_faces[c0] &&
+           unpack_tile_face_r_dim[cb] == unpack_tile_face_r_dim[c0] &&
+           unpack_partial_face[cb] == unpack_partial_face[c0] && unpack_narrow_tile[cb] == unpack_narrow_tile[c0] &&
+           unpack_tile_r_dim[cb] == unpack_tile_r_dim[c0] && unpack_tile_c_dim[cb] == unpack_tile_c_dim[c0];
+#else
+    return true;
+#endif
+}
+#endif
+
 ALWI void process_tile(
     uint32_t predicate_cb_id,
     uint32_t true_cb_id,
@@ -21,6 +38,12 @@ ALWI void process_tile(
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
+#if defined(ARCH_BLACKHOLE)
+    constexpr bool shared_copy_init =
+        copy_init_shared_with_c0<tt::CBIndex::c_1>() && copy_init_shared_with_c0<tt::CBIndex::c_2>();
+#else
+    constexpr bool shared_copy_init = false;
+#endif
 
     DataflowBuffer predicate_dfb(predicate_cb_id);
     DataflowBuffer true_dfb(true_cb_id);
@@ -55,17 +78,25 @@ ALWI void process_tile(
         tile_regs_acquire();
 
         // Copy all 3 inputs to destination registers
-        copy_init(predicate_dfb.get_id());
+        if constexpr (!shared_copy_init) {
+            copy_init(predicate_dfb.get_id());
+        }
         copy_tile(predicate_dfb.get_id(), 0, 0);  // predicate to reg 0, 3, 6, ...
 
-        copy_init(true_dfb.get_id());
+        if constexpr (!shared_copy_init) {
+            copy_init(true_dfb.get_id());
+        }
         copy_tile(true_dfb.get_id(), 0, 1);  // true to reg 1, 4, 7, ...
 
-        copy_init(false_dfb.get_id());
+        if constexpr (!shared_copy_init) {
+            copy_init(false_dfb.get_id());
+        }
         copy_tile(false_dfb.get_id(), 0, 2);  // false to reg 2, 5, 8, ...
 
         // Perform the ternary operation
+#if !defined(ARCH_BLACKHOLE)
         TERNARY_SFPU_OP_INIT();
+#endif
         TERNARY_SFPU_OP_FUNC(0, 1, 2, 0);
 
         tile_regs_commit();
@@ -119,6 +150,9 @@ void kernel_main() {
 
     compute_kernel_hw_startup(predicate_cb_id, cb_out_id);
     copy_init(predicate_cb_id);
+#if defined(ARCH_BLACKHOLE)
+    TERNARY_SFPU_OP_INIT();
+#endif
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
