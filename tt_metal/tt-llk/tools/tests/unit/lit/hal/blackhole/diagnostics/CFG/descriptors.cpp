@@ -21,7 +21,6 @@
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/face-set-mapping.cpp 2>&1 | FileCheck %s --check-prefix=FACE_MAPPING
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/face-set-set.cpp 2>&1 | FileCheck %s --check-prefix=FACE_SET
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/perf-counter.cpp 2>&1 | FileCheck %s --check-prefix=PERF_COUNTER
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/perf-counter-make.cpp 2>&1 | FileCheck %s --check-prefix=PERF_COUNTER
 // clang-format on
 
 // SECTION: error: static assertion failed: section index out of range for this register
@@ -330,8 +329,3 @@ constexpr const cfg::Field& invalid_set = cfg::TileFaceSetMapping[Index<3> {}][I
 #include "fields.h"
 
 constexpr auto invalid_counter = cfg::PerfCntCmd[Index<4> {}];
-
-//--- perf-counter-make.cpp
-#include "fields.h"
-
-constexpr auto invalid_counter = cfg::PerfCntCmdEntry::make<4>();

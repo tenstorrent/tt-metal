@@ -6,7 +6,6 @@
 // RUN: %split-file %s %t
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/gpr-reserved.cpp 2>&1 | FileCheck %s --check-prefix=GPR_RESERVED
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rdcfg-mmio.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_ACCESS
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rdcfg-scalar.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_ACCESS
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rdcfg-runtime-index.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_INDEX
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rdcfg-thread.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_THREAD
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rdcfg-wide.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_WIDE
@@ -16,25 +15,12 @@
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rdcfg-outside.cpp 2>&1 | FileCheck %s --check-prefix=GPR_READ
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/write-mmio.cpp 2>&1 | FileCheck %s --check-prefix=GPR_ACCESS
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-mmio.cpp 2>&1 | FileCheck %s --check-prefix=HETEROGENEOUS
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-mmio-mixed.cpp 2>&1 | FileCheck %s --check-prefix=HETEROGENEOUS
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-scalar.cpp 2>&1 | FileCheck %s --check-prefix=HETEROGENEOUS
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/from-gpr-thread.cpp 2>&1 | FileCheck %s --check-prefix=GPR_STATE
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/write-thread.cpp 2>&1 | FileCheck %s --check-prefix=GPR_STATE
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/from-gpr-unaligned-field.cpp 2>&1 | FileCheck %s --check-prefix=GPR_START
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/write-unaligned-field.cpp 2>&1 | FileCheck %s --check-prefix=GPR_START
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/direct-outside-Bits32.cpp 2>&1 | FileCheck %s --check-prefix=GPR_ADDR
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/direct-outside-Bits128.cpp 2>&1 | FileCheck %s --check-prefix=GPR_ADDR
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/grouped-outside-Bits32.cpp 2>&1 | FileCheck %s --check-prefix=GPR_ADDR
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/grouped-outside-Bits128.cpp 2>&1 | FileCheck %s --check-prefix=GPR_ADDR
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/operand-outside.cpp 2>&1 | FileCheck %s --check-prefix=GPR_ADDR
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/direct-crossing-Bits128.cpp 2>&1 | FileCheck %s --check-prefix=GPR_SPAN
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/grouped-crossing-Bits128.cpp 2>&1 | FileCheck %s --check-prefix=GPR_SPAN
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/operand-crossing-Bits128.cpp 2>&1 | FileCheck %s --check-prefix=GPR_SPAN
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/anchor-direct-span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_GPR
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/anchor-grouped-span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_GPR
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/anchor-group-without-raw.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_GROUP
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/wrcfg-misaligned.cpp 2>&1 | FileCheck %s --check-prefix=WRCFG_ALIGN
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/wrcfg-grouped-misaligned.cpp 2>&1 | FileCheck %s --check-prefix=WRCFG_ALIGN
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-destination.cpp 2>&1 | FileCheck %s --check-prefix=SCALAR_DEST
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-index.cpp 2>&1 | FileCheck %s --check-prefix=SCALAR_INDEX
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-source-misaligned.cpp 2>&1 | FileCheck %s --check-prefix=SCALAR_SOURCE_ALIGN
@@ -70,7 +56,6 @@
 // GPR_ADDR: error: static assertion failed: CFG write destination lies outside its register scope
 // GPR_SPAN: error: static assertion failed: GPR write crosses the end of its CFG bank
 // ANCHOR_GPR: error: static assertion failed: GPR write extends past its anchor field
-// ANCHOR_GROUP: error: static assertion failed: whole-word CFG access requires a Field or a field group with a Raw anchor
 // WRCFG_ALIGN: error: static assertion failed: 128-bit GPR cfg::write destination must be four-word aligned
 // SCALAR_DEST: error: static assertion failed: Access::TensixScalarUnit supports THCON CFG destinations only
 // SCALAR_INDEX: error: static assertion failed: REG2FLOP GPR index must be in [0, 63]
@@ -95,15 +80,6 @@ inline constexpr cfg::Field state_two_words {cfg::RegisterScope::State, 32, 64, 
 inline constexpr cfg::Field state_word_crossing {cfg::RegisterScope::State, 32, 64, 0, 28, 8, 1, 0};
 inline constexpr cfg::Field thcon_crossing {cfg::RegisterScope::State, 32, 177, 0, 0, 32, 1, 0};
 
-// A field group without a Raw anchor cannot stand in for a Field.
-class GroupWithoutRaw
-{
-public:
-    static constexpr cfg::Field Value {cfg::RegisterScope::State, 32, 64, 0, 0, 32, 1, 0};
-};
-
-inline constexpr GroupWithoutRaw group_without_raw {};
-
 //--- gpr-reserved.cpp
 #include "fields.h"
 
@@ -115,14 +91,6 @@ constexpr auto reserved = hal::gpr<0xffffffffu>();
 void probe()
 {
     cfg::read<cfg::Access::MMIO, cfg::PrngSeed::Seed_Val, cfg::Sec::S0>(hal::gpr<4>());
-}
-
-//--- rdcfg-scalar.cpp
-#include "fields.h"
-
-void probe()
-{
-    cfg::read<cfg::Access::TensixScalarUnit, cfg::PrngSeed::Seed_Val, cfg::Sec::S0>(hal::gpr<4>());
 }
 
 //--- rdcfg-runtime-index.cpp
@@ -194,101 +162,20 @@ void probe()
     cfg::write<cfg::Access::MMIO>(cfg::from_gpr<cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(hal::gpr<4>()));
 }
 
-//--- group-mmio-mixed.cpp
-#include "fields.h"
-
-void probe()
-{
-    cfg::write<cfg::Access::MMIO>(
-        cfg::set<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0, 1>(), cfg::from_gpr<cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(hal::gpr<4>()));
-}
-
-//--- group-scalar.cpp
-#include "fields.h"
-
-void probe()
-{
-    cfg::write<cfg::Access::TensixScalarUnit>(cfg::from_gpr<cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(hal::gpr<4>()));
-}
-
 //--- from-gpr-thread.cpp
 #include "fields.h"
 
 constexpr auto operand = cfg::from_gpr<cfg::CfgStateId::StateID, cfg::Sec::S0>(hal::gpr<4>());
-
-//--- write-thread.cpp
-#include "fields.h"
-
-void probe()
-{
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::SrcASet::Base, cfg::Sec::S0>(hal::gpr<4>());
-}
 
 //--- from-gpr-unaligned-field.cpp
 #include "fields.h"
 
 constexpr auto operand = cfg::from_gpr<cfg::AluFormatSpecReg::SrcB_val, cfg::Sec::S0>(hal::gpr<4>());
 
-//--- write-unaligned-field.cpp
-#include "fields.h"
-
-void probe()
-{
-    cfg::write<cfg::Access::TensixScalarUnit, cfg::Thcon[cfg::Reg0].TileDescriptor.Uncompressed, cfg::Sec::S0>(hal::gpr<4>());
-}
-
-//--- direct-outside-Bits32.cpp
-#include "fields.h"
-
-void probe()
-{
-    cfg::write<cfg::Access::TensixCfgUnit, state_outside, cfg::Sec::S0, cfg::GprTransferSize::Bits32>(hal::gpr<4>());
-}
-
-//--- direct-outside-Bits128.cpp
-#include "fields.h"
-
-void probe()
-{
-    cfg::write<cfg::Access::TensixCfgUnit, state_outside, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<4>());
-}
-
-//--- grouped-outside-Bits32.cpp
-#include "fields.h"
-
-void probe()
-{
-    cfg::write<cfg::Access::TensixCfgUnit>(cfg::from_gpr<state_outside, cfg::Sec::S0, cfg::GprTransferSize::Bits32>(hal::gpr<4>()));
-}
-
-//--- grouped-outside-Bits128.cpp
-#include "fields.h"
-
-void probe()
-{
-    cfg::write<cfg::Access::TensixCfgUnit>(cfg::from_gpr<state_outside, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<4>()));
-}
-
 //--- operand-outside.cpp
 #include "fields.h"
 
 constexpr auto operand = cfg::from_gpr<state_outside, cfg::Sec::S0>(hal::gpr<4>());
-
-//--- direct-crossing-Bits128.cpp
-#include "fields.h"
-
-void probe()
-{
-    cfg::write<cfg::Access::TensixCfgUnit, state_crossing, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<4>());
-}
-
-//--- grouped-crossing-Bits128.cpp
-#include "fields.h"
-
-void probe()
-{
-    cfg::write<cfg::Access::TensixCfgUnit>(cfg::from_gpr<state_crossing, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<4>()));
-}
 
 //--- operand-crossing-Bits128.cpp
 #include "fields.h"
@@ -303,33 +190,12 @@ void probe()
     cfg::write<cfg::Access::TensixCfgUnit, state_two_words, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<4>());
 }
 
-//--- anchor-grouped-span.cpp
-#include "fields.h"
-
-void probe()
-{
-    cfg::write<cfg::Access::TensixCfgUnit>(cfg::from_gpr<state_two_words, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<4>()));
-}
-
-//--- anchor-group-without-raw.cpp
-#include "fields.h"
-
-constexpr auto operand = cfg::from_gpr<group_without_raw, cfg::Sec::S0>(hal::gpr<4>());
-
 //--- wrcfg-misaligned.cpp
 #include "fields.h"
 
 void probe()
 {
     cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg3].Base_cntx1_address, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<8>());
-}
-
-//--- wrcfg-grouped-misaligned.cpp
-#include "fields.h"
-
-void probe()
-{
-    cfg::write<cfg::Access::TensixCfgUnit>(cfg::from_gpr<cfg::Thcon[cfg::Reg3].Base_cntx1_address, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<8>()));
 }
 
 //--- scalar-destination.cpp

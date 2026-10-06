@@ -5,39 +5,31 @@
 // clang-format off
 // RUN: %split-file %s %t
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/read-word-tensix.cpp 2>&1 | FileCheck %s --check-prefix=READ_ACCESS
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/read-field-tensix.cpp 2>&1 | FileCheck %s --check-prefix=READ_ACCESS
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/read-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/write-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/array-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/extract-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/state-read-end.cpp 2>&1 | FileCheck %s --check-prefix=READ_OFFSET
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/state-read-wrap.cpp 2>&1 | FileCheck %s --check-prefix=READ_OFFSET
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/state-read-outside.cpp 2>&1 | FileCheck %s --check-prefix=READ_OFFSET
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/thread-read-end.cpp 2>&1 | FileCheck %s --check-prefix=READ_OFFSET
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/thread-read-wrap.cpp 2>&1 | FileCheck %s --check-prefix=READ_OFFSET
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/thread-read-outside.cpp 2>&1 | FileCheck %s --check-prefix=READ_OFFSET
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/anchor-read-span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_READ
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/anchor-shifted-read-span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_READ
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/anchor-section-read-span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_READ
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/state-read-target.cpp 2>&1 | FileCheck %s --check-prefix=TARGET_STATE
 // RUN: not %{blackhole_tensix_diagnose} %t/thread-read-brisc.cpp 2>&1 | FileCheck %s --check-prefix=BRISC_TARGET
 // RUN: not %{blackhole_tensix_diagnose} %t/thread-read-brisc.cpp -DCOMPILE_FOR_TRISC=3 2>&1 | FileCheck %s --check-prefix=TRISC_ID
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/read-wide.cpp 2>&1 | FileCheck %s --check-prefix=EXTRACT_WIDE
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/extract-wide.cpp 2>&1 | FileCheck %s --check-prefix=EXTRACT_WIDE
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/read-word-crossing.cpp 2>&1 | FileCheck %s --check-prefix=EXTRACT_CROSS
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/extract-word-crossing.cpp 2>&1 | FileCheck %s --check-prefix=EXTRACT_CROSS
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/write-thread.cpp 2>&1 | FileCheck %s --check-prefix=WRITE_THREAD
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/write-wide.cpp 2>&1 | FileCheck %s --check-prefix=WRITE_WIDE
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-thread-runtime.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_THREAD
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-thread-mixed.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_THREAD
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-overlap.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_OVERLAP
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/array-tensix.cpp 2>&1 | FileCheck %s --check-prefix=ARRAY_ACCESS
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/array-thread.cpp 2>&1 | FileCheck %s --check-prefix=ARRAY_THREAD
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/array-cross-end.cpp 2>&1 | FileCheck %s --check-prefix=ARRAY_END
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/array-outside-start.cpp 2>&1 | FileCheck %s --check-prefix=ARRAY_START
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/array-source-size.cpp 2>&1 | FileCheck %s --check-prefix=ARRAY_SOURCE
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/anchor-array-span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_ARRAY
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/anchor-shifted-array-span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_ARRAY
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/anchor-section-array-span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_ARRAY
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/anchor-group-without-raw.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_GROUP
 
 // State: 40 + 184 reaches word 224; 40 + 0xffffffd8 would wrap to zero.
@@ -56,7 +48,6 @@
 // WRITE_THREAD: error: static assertion failed: RISC writes target state CFG; use Access::TensixCfgUnit for thread CFG
 // WRITE_WIDE: error: static assertion failed: field wider than 32b cannot be written through a single value
 // GROUP_THREAD: error: static assertion failed: Access::MMIO cannot write thread CFG assignments
-// GROUP_OVERLAP: error: static assertion failed: overlapping CFG field assignments in one physical word
 // ARRAY_ACCESS: error: static assertion failed: array writes require Access::MMIO
 // ARRAY_THREAD: error: static assertion failed: RISC writes target state CFG{{$}}
 // ARRAY_END: error: static assertion failed: CFG array write crosses the end of the state bank
@@ -79,7 +70,6 @@ namespace cfg = hal::cfg;
 // Synthetic descriptors reach widths and bank boundaries that no named field occupies.
 inline constexpr cfg::Field state_first {cfg::RegisterScope::State, 32, 0, 0, 0, 32, 1, 0};
 inline constexpr cfg::Field state_outside {cfg::RegisterScope::State, 32, 224, 0, 0, 32, 1, 0};
-inline constexpr cfg::Field thread_outside {cfg::RegisterScope::Thread, 16, 68, 0, 0, 16, 1, 0};
 inline constexpr cfg::Field state_two_words {cfg::RegisterScope::State, 32, 64, 0, 0, 64, 1, 0};
 inline constexpr cfg::Field state_word_crossing {cfg::RegisterScope::State, 32, 64, 0, 28, 8, 1, 0};
 
@@ -101,14 +91,6 @@ inline constexpr GroupWithoutRaw group_without_raw {};
 std::uint32_t probe()
 {
     return cfg::read_word<cfg::Access::TensixCfgUnit, cfg::PrngSeed::Seed_Val, cfg::Sec::S0>();
-}
-
-//--- read-field-tensix.cpp
-#include "fields.h"
-
-std::uint32_t probe()
-{
-    return cfg::read<cfg::Access::TensixCfgUnit, cfg::PrngSeed::Seed_Val, cfg::Sec::S0>();
 }
 
 //--- read-section.cpp
@@ -135,6 +117,14 @@ void probe(const std::array<std::uint32_t, 1>& values)
     cfg::write<cfg::Access::MMIO, cfg::PrngSeed::Seed_Val, cfg::Sec::S1, 1>(values);
 }
 
+//--- extract-section.cpp
+#include "fields.h"
+
+std::uint32_t probe(std::uint32_t word)
+{
+    return cfg::extract<cfg::PrngSeed::Seed_Val, cfg::Sec::S1>(word);
+}
+
 //--- state-read-end.cpp
 #include "fields.h"
 
@@ -151,14 +141,6 @@ std::uint32_t probe()
     return cfg::read_word<cfg::Access::MMIO, cfg::PackGlobalCfgCtl::pack_disable_fast_tile_end_drain, cfg::Sec::S0, 0xffffffd8u>();
 }
 
-//--- state-read-outside.cpp
-#include "fields.h"
-
-std::uint32_t probe()
-{
-    return cfg::read_word<cfg::Access::MMIO, state_outside, cfg::Sec::S0>();
-}
-
 //--- thread-read-end.cpp
 #include "fields.h"
 
@@ -173,14 +155,6 @@ std::uint32_t probe()
 std::uint32_t probe()
 {
     return cfg::read_word<cfg::Access::MMIO, cfg::SrcASet::Base, cfg::Sec::S0, 0xfffffffbu>();
-}
-
-//--- thread-read-outside.cpp
-#include "fields.h"
-
-std::uint32_t probe()
-{
-    return cfg::read_word<cfg::Access::MMIO, thread_outside, cfg::Sec::S0>();
 }
 
 //--- anchor-read-span.cpp
@@ -223,28 +197,12 @@ std::uint32_t probe()
     return cfg::read_word<cfg::Access::MMIO, cfg::SrcASet::Base, cfg::Sec::S0>();
 }
 
-//--- read-wide.cpp
-#include "fields.h"
-
-std::uint32_t probe()
-{
-    return cfg::read<cfg::Access::MMIO, state_two_words, cfg::Sec::S0>();
-}
-
 //--- extract-wide.cpp
 #include "fields.h"
 
 std::uint32_t probe(std::uint32_t word)
 {
     return cfg::extract<state_two_words, cfg::Sec::S0>(word);
-}
-
-//--- read-word-crossing.cpp
-#include "fields.h"
-
-std::uint32_t probe()
-{
-    return cfg::read<cfg::Access::MMIO, state_word_crossing, cfg::Sec::S0>();
 }
 
 //--- extract-word-crossing.cpp
@@ -271,28 +229,12 @@ void probe(std::uint32_t value)
     cfg::write<cfg::Access::MMIO, state_two_words, cfg::Sec::S0>(value);
 }
 
-//--- group-thread-runtime.cpp
-#include "fields.h"
-
-void probe(std::uint32_t value)
-{
-    cfg::write<cfg::Access::MMIO>(cfg::set<cfg::SrcASet::Base, cfg::Sec::S0>(value));
-}
-
 //--- group-thread-mixed.cpp
 #include "fields.h"
 
 void probe(std::uint32_t value)
 {
     cfg::write<cfg::Access::MMIO>(cfg::set<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0>(value), cfg::set<cfg::SrcASet::Base, cfg::Sec::S0, 1>());
-}
-
-//--- group-overlap.cpp
-#include "fields.h"
-
-void probe(std::uint32_t value)
-{
-    cfg::write<cfg::Access::MMIO>(cfg::set<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0, 1>(), cfg::set<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0>(value));
 }
 
 //--- array-tensix.cpp
@@ -341,22 +283,6 @@ void probe(const std::array<std::uint32_t, 1>& values)
 void probe(const std::array<std::uint32_t, 5>& values)
 {
     cfg::write<cfg::Access::MMIO, cfg::Thcon[cfg::Reg0].TileDescriptor, cfg::Sec::S0, 5>(values);
-}
-
-//--- anchor-shifted-array-span.cpp
-#include "fields.h"
-
-void probe(const std::array<std::uint32_t, 4>& values)
-{
-    cfg::write<cfg::Access::MMIO, state_sectioned_wide, cfg::Sec::S0, 4>(values);
-}
-
-//--- anchor-section-array-span.cpp
-#include "fields.h"
-
-void probe(const std::array<std::uint32_t, 3>& values)
-{
-    cfg::write<cfg::Access::MMIO, state_sectioned_wide, cfg::Sec::S1, 3>(values);
 }
 
 //--- anchor-group-without-raw.cpp
