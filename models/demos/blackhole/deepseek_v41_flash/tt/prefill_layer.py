@@ -352,6 +352,8 @@ class DSV41PrefillLayer:
         own = moe_cols(self.umoe, L.moe.gate, hh_own, L.mesh_config, L.ccl)  # [1,1,n8*32,D]
         if n8 > 1:
             ttnn.deallocate(hh_own)
+        if n8 == 1:  # U=2 x C=128: a full-extent slice aliases ``own`` (freeing it would free the result: "Tensor is not allocated")
+            return [own]
         D = own.shape[3]
         outs = [ttnn.slice(own, [0, 0, g * T, 0], [1, 1, (g + 1) * T, D]) for g in range(n8)]
         ttnn.deallocate(own)
