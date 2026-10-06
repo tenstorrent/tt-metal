@@ -16,6 +16,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim::ccl_fusion {
 
@@ -47,6 +48,21 @@ void override_mcast_2d_runtime_arguments(
 
 ttnn::device_operation::CachedProgram<Mcast2DSharedVariables> matmul_multi_core_reuse_mcast_2d_optimized_helper(
     tt::tt_metal::Program& program, /* Take programa as input by reference */
+    const Tensor& a,
+    const Tensor& b,
+    const std::optional<const Tensor>& bias,
+    Tensor& output_tensor,
+    bool broadcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const operations::matmul::MatmulProgramConfig& program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler);
+
+// ProgramDescriptor form of the helper above: appends the matmul's kernels, CBs and semaphores to `desc`. Tensor
+// addresses are recorded as buffer bindings, so a WorkloadDescriptor op built from it needs no matmul-specific
+// cache-hit refresh.
+void matmul_multi_core_reuse_mcast_2d_optimized_helper(
+    tt::tt_metal::ProgramDescriptor& desc,
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor>& bias,
