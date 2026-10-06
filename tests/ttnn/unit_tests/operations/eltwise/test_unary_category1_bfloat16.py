@@ -726,36 +726,34 @@ def test_bessel_ops(device, ttnn_op, low, high):
 def test_gelu_with_sqrt_in_sfpu_chain(device, generated_first):
     """gelu in one SFPU chain with stock sqrt, both orders.
 
-    Stock sqrt after gelu must match its own standalone run bit for bit; gelu after
-    sqrt must match torch on sqrt's device result, which the chain keeps in DEST.
+    Each chain step runs the kernel its own TT-NN op runs, and the second op stores exactly what it
+    stores standalone on the first op's device result, which the chain keeps in DEST.
     """
-    generated = (ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU), lambda tensor: ttnn.gelu(tensor))
+    generated = (ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0), lambda tensor: ttnn.gelu(tensor))
     stock = (ttnn.UnaryWithParam(ttnn.UnaryOpType.SQRT), lambda tensor: ttnn.sqrt(tensor))
     first, second = (generated, stock) if generated_first else (stock, generated)
     input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
     tt_in = to_tt_tensor(input_tensor, device)
 
-    result = ttnn.to_torch(ttnn.unary_chain(tt_in, [first[0], second[0]]))
-    middle = ttnn.to_torch(first[1](tt_in))
-    checked = torch.isfinite(middle) & (middle.abs() > SMALLEST_NORMAL_BF16)
-    if generated_first:
-        expected = ttnn.to_torch(second[1](to_tt_tensor(middle, device)))
-    else:
-        expected = ttnn.get_golden_function(ttnn.gelu)(middle, device=device)
-    checked &= torch.isfinite(expected) & (expected.abs() > SMALLEST_NORMAL_BF16)
-    # ``checked`` depends only on standalone results, never on the chain's, so it can only say the
-    # comparisons below see enough lanes. Two rows: erfinv after log is defined on 368 inputs, and
-    # stock erfinv flushes tiny inputs that torch maps to tiny outputs.
-    assert checked.sum() >= 64
+    def words(tensor):
+        return ttnn.to_torch(tensor).view(torch.int16)
 
-    if generated_first:
-        # Exactly the stock op's own result, which itself meets torch as its suites require.
-        assert torch.equal(result[checked], expected[checked].to(result.dtype))
-        golden = ttnn.get_golden_function(ttnn.sqrt)(middle, device=device)
-        torch_checked = checked & torch.isfinite(golden) & (golden.abs() > SMALLEST_NORMAL_BF16)
-        assert_with_ulp(expected_result=golden[torch_checked], actual_result=result[torch_checked], ulp_threshold=2)
-    else:
-        assert_with_ulp(expected_result=expected[checked], actual_result=result[checked], ulp_threshold=1)
+    for step, standalone in (generated, stock):
+        assert torch.equal(
+            words(ttnn.unary_chain(tt_in, [step])), words(standalone(tt_in))
+        ), f"{step} is not its op's kernel"
+
+    result = words(ttnn.unary_chain(tt_in, [first[0], second[0]]))
+    middle = ttnn.to_torch(first[1](tt_in))
+    expected = words(second[1](to_tt_tensor(middle, device)))
+    # A finite normal first result sits in DEST exactly as stored, so both runs feed the second op the same input.
+    checked = torch.isfinite(middle) & (middle.abs() >= SMALLEST_NORMAL_BF16)
+    assert checked.sum() >= 64
+    mismatched = checked & (result != expected)
+    assert not mismatched.any(), (
+        f"{int(mismatched.sum())} of {int(checked.sum())} lanes differ from the standalone second op, "
+        f"first at its input {middle[mismatched][0].item()!r}"
+    )
 
 
 def test_gelu_bf16_unflushed_zero_and_subnormal_inputs(device):
