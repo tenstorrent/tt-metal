@@ -37,26 +37,26 @@ Speed of light (SoL) is the roofline limit from
 [All About Transformer Inference](https://jax-ml.github.io/scaling-book/inference/): decode reads the 6.5 GB of
 weights a token uses plus the KV cache at 2.05 TB/s; time to first token (TTFT) is the larger of reading the weights
 and doing the FLOPs at 2.88 PFLOP/s. The target is 50% of SoL, the usual mark for MoE models (80% for dense). Measured
-on 2026-10-05 with the perf demo, normal decode.
+on 2026-10-06 with the perf demo, normal decode.
 
 | Input tokens | Decode SoL (tok/s/user) | Decode target | Decode measured | TTFT SoL | TTFT target | TTFT measured |
 |---:|---:|---:|---:|---:|---:|---:|
 | 128 | 316 | 158 | 18.3 | 33 ms | 66 ms | 0.23 s |
-| 1,024 | 314 | 157 | 18.1 | 33 ms | 66 ms | 2.42 s |
-| 2,048 | 312 | 156 | 18.1 | 33 ms | 66 ms | 2.81 s |
-| 4,096 | 310 | 155 | 18.0 | 33 ms | 66 ms | 9.47 s |
+| 1,024 | 314 | 157 | 18.1 | 33 ms | 66 ms | 2.39 s |
+| 2,048 | 312 | 156 | 18.0 | 33 ms | 66 ms | 2.80 s |
+| 4,096 | 310 | 155 | 18.0 | 33 ms | 66 ms | 9.45 s |
 | 8,192 | 305 | 152 | 18.0 | 52 ms | 103 ms | 19.9 s |
 
 With DFlash speculative decoding (same run):
 
 | Input tokens | 128 | 1,024 | 2,048 | 4,096 | 8,192 |
 |---|---:|---:|---:|---:|---:|
-| Decode tok/s/user | 28.0 | 40.5 | 25.0 | 45.4 | 30.1 |
+| Decode tok/s/user | 28.0 | 40.5 | 25.3 | 45.8 | 31.1 |
 | Decode speedup over normal decode | 1.5x | 2.2x | 1.4x | 2.5x | 1.7x |
-| TTFT | 0.37 s | 2.57 s | 2.99 s | 9.61 s | 20.0 s |
-| TTFT change from normal decode | +0.14 s | +0.15 s | +0.18 s | +0.14 s | +0.16 s |
+| TTFT | 0.37 s | 2.53 s | 2.94 s | 9.59 s | 20.0 s |
+| TTFT change from normal decode | +0.14 s | +0.14 s | +0.14 s | +0.14 s | +0.17 s |
 
-DFlash only speeds up decode; the prompt is still processed by Laguna itself, so TTFT stays about the same (0.14-0.18 s
+DFlash only speeds up decode; the prompt is still processed by Laguna itself, so TTFT stays about the same (0.14-0.17 s
 slower). DFlash's decode speedup depends on how much of the draft model's guess Laguna accepts, so it varies from
 prompt to prompt.
 
