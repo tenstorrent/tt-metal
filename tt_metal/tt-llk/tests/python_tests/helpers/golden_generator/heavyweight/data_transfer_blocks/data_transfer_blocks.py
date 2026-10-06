@@ -661,12 +661,29 @@ class DataTransferBlocks(ABC):
             return saturate_to_integer(values, target, dest_format)
         return flush_subnormals(values.to(target))
 
+    @staticmethod
+    def _normalised_geometry(geometry: dict) -> dict:
+        """`geometry` with any ``dest_acc`` reduced to a bool.
+
+        The codec tests it with a plain ``if``, and ``DestAccumulation`` has no
+        ``__bool__``, so ``DestAccumulation.No`` passed straight through would
+        select the 32-bit SrcS slice layout -- 1280 bytes where 1152 is
+        correct. Nothing downstream notices: the read back finds one tile's
+        worth of datums in the wrong layout and returns them.
+
+        Every block reaches L1 through :meth:`pack_to_l1` or
+        :meth:`unpack_from_l1`, so normalising in both covers the lot.
+        """
+        if "dest_acc" not in geometry:
+            return geometry
+        return {**geometry, "dest_acc": as_dest_acc(geometry["dest_acc"])}
+
     def pack_to_l1(
         self, tensor: torch.Tensor, l1_format: DataFormat, **geometry
     ) -> list:
         """Lay `tensor` out in L1 as `l1_format`. Where precision is lost."""
         self._check_supported(l1_format)
-        return pack_to_l1(tensor, l1_format, **geometry)
+        return pack_to_l1(tensor, l1_format, **self._normalised_geometry(geometry))
 
     def unpack_from_l1(
         self, l1_bytes: L1Buffer, l1_format: DataFormat, **geometry
@@ -678,7 +695,9 @@ class DataTransferBlocks(ABC):
                 "L1 holds bytes, not a tensor. Build a buffer with "
                 f"pack_to_l1(tensor, {l1_format}) and pass that instead."
             )
-        return unpack_from_l1(l1_bytes, l1_format, **geometry)
+        return unpack_from_l1(
+            l1_bytes, l1_format, **self._normalised_geometry(geometry)
+        )
 
     def _check_supported(self, l1_format: DataFormat) -> None:
         # Two different failures, kept apart because they call for opposite
