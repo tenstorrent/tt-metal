@@ -211,6 +211,34 @@ def test_cpu_medium_routes_on_merge_group(tmp_path: Path):
     assert matrix[0]["runs_on"] == ["tt-ubuntu-2204-medium-prio-stable"]
 
 
+@pytest.mark.parametrize(
+    "event, expected_sku, expected_pipeline",
+    [
+        ("merge_group", "wh_galaxy_merge_gate_dedicated", "pipeline-merge-gate"),
+        ("pull_request", "wh_galaxy", "pipeline-functional"),
+        ("workflow_dispatch", "wh_galaxy", "pipeline-functional"),
+    ],
+)
+def test_wh_galaxy_merge_gate_routes_by_event(tmp_path: Path, event: str, expected_sku: str, expected_pipeline: str):
+    """Only the merge queue lands on the dedicated galaxies; every other trigger uses wh_galaxy."""
+    path = tmp_path / "tests.yaml"
+    path.write_text("- name: galaxy\n  cmd: echo ok\n  skus:\n    wh_galaxy_merge_gate:\n      timeout: 5\n  team: models\n")
+    matrix = run_matrix(path, "ALL_SKUS_IN_TESTS", "--event", event)
+    assert matrix[0]["sku"] == expected_sku
+    assert matrix[0]["logical_sku"] == "wh_galaxy_merge_gate"
+    assert expected_pipeline in matrix[0]["runs_on"]
+    assert "in-service" in matrix[0]["runs_on"]
+
+
+def test_wh_galaxy_merge_gate_dedicated_never_carries_general_pipeline_labels():
+    with open(SKU_CONFIG) as f:
+        cfg = yaml.safe_load(f)["skus"]
+    runs_on = cfg["wh_galaxy_merge_gate_dedicated"]["runs_on"]
+    assert "pipeline-merge-gate" in runs_on
+    assert "in-service" in runs_on
+    assert not {"pipeline-functional", "pipeline-perf"} & set(runs_on)
+
+
 def test_matrix_event_name_env_triggers_rewrite(tests_yaml: Path):
     matrix = run_matrix(
         tests_yaml,
