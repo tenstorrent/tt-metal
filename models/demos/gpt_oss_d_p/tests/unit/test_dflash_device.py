@@ -98,7 +98,7 @@ def test_dflash_accumulator_sp_sequence_tp_width_sharded(mesh_device, reset_seed
 
     # The result remains seq/SP x feature/TP sharded.  Reconstruct both axes
     # solely for the test's torch comparison.
-    assert ttnn.get_device_tensors(tt_result)[0].shape[-2:] == (seq // rows, hidden // cols)
+    assert tuple(ttnn.get_device_tensors(tt_result)[0].shape)[-2:] == (seq // rows, hidden // cols)
     result = ttnn.to_torch(
         tt_result,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
