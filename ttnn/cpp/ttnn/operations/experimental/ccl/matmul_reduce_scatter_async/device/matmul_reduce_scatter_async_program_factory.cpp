@@ -15,7 +15,7 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
-#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
+#include "ttnn/operations/experimental/matmul/ccl_fusion/device/ccl_fusion_mcast_2d.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -117,7 +117,7 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         reduce_scatter_fused_op_signaler->fused_op_signaler_mode);
 
     // Matmul
-    auto matmul_cached_program = ttnn::prim::matmul_multi_core_reuse_mcast_2d_optimized_helper(
+    auto matmul_cached_program = ttnn::prim::ccl_fusion::matmul_multi_core_reuse_mcast_2d_optimized_helper(
         program,
         tensor_args.input,
         tensor_args.weight,
@@ -151,10 +151,9 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
         std::vector<Tensor> matmul_output_tensors = {output_tensors.mm};
-        ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
+        ttnn::prim::ccl_fusion::override_mcast_2d_runtime_arguments(
             program,
             shared_vars.matmul_shared_variables,
-            args.matmul_struct,
             {.input_tensors = {tensor_args.input, tensor_args.weight},
              .optional_input_tensors = {tensor_args.bias},
              .optional_output_tensors = {output_tensors.mm}},
