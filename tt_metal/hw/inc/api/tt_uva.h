@@ -157,7 +157,12 @@ FORCE_INLINE void land_one() {
     const bool addressable = len <= tail && off <= g_sig_span && len <= g_sig_span - off;
     // Unaddressable lands in the staging buffer instead, which is where it went before any
     // of this: no worse, and the signal below still says a frame arrived.
-    pull(src, addressable ? g_rx_l1_base + off : g_landing, len);
+    // Clamped there, not trusted: length came off the wire, and the H2H harvest does not
+    // check it. tail is all the landing page holds ahead of the trailer read above, so a
+    // stale or corrupt length can neither overwrite that trailer nor run on into L1.
+    // Addressable already implies len <= tail, so this changes nothing on that path.
+    const uint32_t bytes = len <= tail ? len : tail;
+    pull(src, addressable ? g_rx_l1_base + off : g_landing, bytes);
     noc_async_read_barrier();
 
     socket_pop_pages(g_rx, 1);
