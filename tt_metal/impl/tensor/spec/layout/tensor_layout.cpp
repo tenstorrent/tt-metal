@@ -216,10 +216,12 @@ BufferShardingArgs TensorLayoutImpl::compute_buffer_sharding_args(const tt::tt_m
     std::optional<ShardSpecBuffer> shard_spec_buffer;
     std::optional<BufferDistributionSpec> distribution_spec;
 
-    // Skip the legacy path when the config originates from a shard_spec. The nd_shard_spec is copied from the
-    // same spec and overwrites the result in the nd path below. Keep the legacy path for configs originating
-    // from an nd_shard_spec since its derived shard_spec is validated separately with different inputs.
-    // These checks are not covered by the nd path. The legacy result is overwritten.
+    // Skip the legacy path when the config originates from a shard_spec. Its nd_shard_spec is a copy of that
+    // shard_spec. The nd path below makes the same from_shard_spec call with the same checks and overwrites the result.
+    // A config that originates from an nd_shard_spec still runs the legacy path, but only for its checks. The nd path
+    // overwrites the result. Its shard_spec is derived from the nd spec. For a block layout the legacy call uses
+    // GRID_2D, which checks that the grid is one contiguous range and the shards fit in it. An nd_shard_spec using
+    // ROUND_ROBIN_1D does not check this.
     const bool nd_shard_spec_will_overwrite =
         memory_config_.nd_shard_spec().has_value() && !memory_config_.created_with_nd_shard_spec();
 

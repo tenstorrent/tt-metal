@@ -360,7 +360,8 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         // dimension to allow cache reuse when only height differs
         input_tensor.layout() == Layout::ROW_MAJOR ? std::optional{input_tensor.padded_shape()} : std::nullopt,
         distribution_key(input_tensor.tensor_spec(), &input_tensor, "input"),
-        // No check needed here since a preallocated output and a newly allocated output are created from output_spec.
+        // A preallocated output is checked against its own spec. A new output has no buffer yet; it is allocated from
+        // output_spec.
         distribution_key(
             output_spec, tensor_args.output_tensor.has_value() ? &*tensor_args.output_tensor : nullptr, "output"),
         src_shard_vol,
