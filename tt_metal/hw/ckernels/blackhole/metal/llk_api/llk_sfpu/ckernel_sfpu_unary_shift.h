@@ -50,20 +50,21 @@ inline void calculate_right_shift(const uint shift_amt) {
     // SFPI overloads both `vInt << unsigned` and `vUInt << unsigned`, so the shift amount's type is
     // independent of the element type being shifted. Cast to a 32-bit `unsigned` so shift is chosen exactly.
     const unsigned eff = (shift_amt >= 32) ? 31u : static_cast<unsigned>(shift_amt);
-    const unsigned sign_mask = (eff > 0) ? (~0u << (32 - eff)) : 0u;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         if constexpr (DATA_FORMAT == DataFormat::UInt16) {
             sfpi::vUInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::U16>();
             sfpi::dst_reg[0].mode<sfpi::DataLayout::U16>() = v >> eff;
+        } else if constexpr (DATA_FORMAT == DataFormat::Int32) {
+            // Blackhole SFPSHFT fills the vacated high bits from the sign bit in arithmetic mode, which is what
+            // sfpi emits for `vInt >> unsigned` (mod1 = SHIFT_LREGC | ARITHMETIC | SRC_LREGC). For eff in [1, 31]
+            // that equals the logical shift ORed with the top eff bits when the sign is set, and for eff == 0
+            // both are the identity, so no sign-mask predicate is needed.
+            sfpi::vInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = v >> eff;
         } else {
             sfpi::vInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
-            sfpi::vUInt res = sfpi::as<sfpi::vUInt>(v) >> eff;
-            if constexpr (DATA_FORMAT == DataFormat::Int32) {
-                v_if(v < 0) { res = res | sign_mask; }
-                v_endif;
-            }
-            sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = sfpi::as<sfpi::vInt>(res);
+            sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(v) >> eff);
         }
         sfpi::dst_reg++;
     }

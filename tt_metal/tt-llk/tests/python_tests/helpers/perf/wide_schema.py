@@ -123,9 +123,11 @@ DB_SCHEMA = [
     Column("partial_face_math", "bool", True, "configuration"),
     Column("partial_face_pack", "bool", True, "configuration"),
     Column("pool_type", "string", True, "configuration"),
+    Column("quant_variant", "string", True, "configuration"),
     Column("r_dimm", "int64", True, "configuration"),
     Column("reduce_pool_type", "string", True, "configuration"),
     Column("relu_config", "int64", True, "configuration"),
+    Column("shift_amount", "int64", True, "configuration"),
     Column("srca_reuse_count", "int64", True, "configuration"),
     Column("stable_sort", "string", True, "configuration"),
     Column("ternary_mathop", "string", True, "configuration"),
@@ -135,6 +137,7 @@ DB_SCHEMA = [
     Column("unpack_transpose_faces", "string", True, "configuration"),
     Column("unpack_transpose_within_face", "string", True, "configuration"),
     Column("value_bits", "int64", True, "configuration"),
+    Column("zero_point_bits", "int64", True, "configuration"),
     # timing (complete {mean, std} x base grid — see _TIMING_COLUMNS above)
     *_TIMING_COLUMNS,
     # ── provenance: stamped by the publish layer, never emitted by a test ──

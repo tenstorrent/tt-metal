@@ -541,11 +541,12 @@ inline void calculate_typecast_uint32_to_uint16() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-        TTI_SFPSHFT((-16) & 0xFFF, 0, p_sfpu::LREG0, 1);
-        TTI_SFPGT(0, p_sfpu::LCONST_0, p_sfpu::LREG0, SFPGT_MOD1_SET_ALL_ONES);  // Set LREG0 = -1 if greater than 0
-        TTI_SFPOR(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);  // Leaves garbage in high bits, but packer will ignore it
-        TTI_SFPSTORE(p_sfpu::LREG1, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_6, 0);  // Swap hi and low 16 before write
+        // LREG1 = LREG0 >> 16 (logical). mod1 = SHIFT_LREGC | SRC_LREGC shifts the source LREG0 by the immediate
+        // and writes LREG1, so the value needs no SFPMOV copy before the in-place shift.
+        TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT_MOD1_SHIFT_LREGC | sfpi::SFPSHFT_MOD1_SRC_LREGC);
+        TTI_SFPGT(0, p_sfpu::LCONST_0, p_sfpu::LREG1, SFPGT_MOD1_SET_ALL_ONES);  // Set LREG1 = -1 if greater than 0
+        TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // Leaves garbage in high bits, but packer will ignore it
+        TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_6, 0);  // Swap hi and low 16 before write
     }
 }
 
@@ -964,26 +965,23 @@ inline void calculate_typecast_fp32_to_uint8() {
             0, p_sfpu::LCONST_0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
         // LaneEnabled = true
         TTI_SFPENCC(0, 0, 0, 0);
-        // result += 256 (packer format; for negatives: −|v|+256 gives correct uint8 wrap)
-        TTI_SFPIADD(256, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-        // result &= 0xFF
+        // result &= 0xFF. This is also the uint8 wrap of a negated magnitude: (-m) & 0xFF == (256 - m) & 0xFF
+        // for every m, so no +256 bias is needed before the mask.
         TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
         TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
     }
 }
 
+// The output byte is the low 8 bits of the input word, so `& 0xFF` is the whole conversion: it discards a
+// UInt16 input's garbage high half (no 0xFFFF pre-mask needed) and wraps a negative Int32 the same way a +256
+// bias would ((-3) & 0xFF == 0xFD == (256 - 3) & 0xFF). The `u16` parameter is kept for the callers that pass
+// the input width; the body no longer depends on it.
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool u16 = false>
 inline void calculate_typecast_uint_to_uint8() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; ++d) {
-        if constexpr (u16) {
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-            TTI_SFPAND(0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
-        } else {
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-        }
-        TTI_SFPIADD(256, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);  // result &= 0xFF
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
     }
 }
@@ -1086,7 +1084,6 @@ inline void init_typecast_uint_to_uint8() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstIntPrgm0 = 0xFF;
-    sfpi::vConstIntPrgm1 = UINT16_LOW_MASK;
 }
 
 template <bool APPROXIMATION_MODE>

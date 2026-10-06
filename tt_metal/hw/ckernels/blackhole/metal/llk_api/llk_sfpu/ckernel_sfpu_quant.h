@@ -30,40 +30,44 @@ namespace ckernel::sfpu {
 // recordings.
 //
 // Body content (see the inits for the exact emission order). No SFPNOPs are
-// emitted: on Blackhole the SFPU implicitly stalls on read-after-write
-// hazards between back-to-back fp32 ops, so SFPMAD->STOCH_RND,
-// SFPADD->SFPMUL and SFPMUL->SFPSTORE don't need explicit pipeline bubbles.
+// emitted except the one in the int8 pack: on Blackhole the SFPU implicitly stalls on
+// read-after-write hazards between back-to-back fp32 ops, so SFPMAD->STOCH_RND,
+// SFPADD->SFPMUL and SFPMUL->SFPSTORE don't need explicit pipeline bubbles; SFPSWAP is
+// the documented exception (see _int8_pack_fixup_).
 //   QUANT   ( 2s-comp, 4 ) : SFPMAD, STOCH_RND, SFPCAST, SFPSETSGN
 //   QUANT   (sign-magn, 2) : SFPMAD, STOCH_RND
-//   QUANT   (int8-out, 6 ) : SFPMAD, <5-instr offset-128 pack: SFPSETCC,
-//                             SFPMOV, SFPENCC, STOCH_RND, SFPXOR>
+//   QUANT   (int8-out, 5 ) : SFPMAD, <4-instr offset-128 pack: SFPNOP, SFPSWAP(max 0),
+//                             STOCH_RND, SFPXOR>
 //   REQUANT ( 2s-comp, 7 ) : SFPCAST+SFPSETSGN(in), SFPCAST(int->fp32), SFPMAD,
 //                             STOCH_RND, SFPCAST+SFPSETSGN(out)
 //   REQUANT (sign-magn, 3) : SFPCAST(int->fp32), SFPMAD, STOCH_RND
 //   REQUANT (int8-in,  5 ) : SFPCAST(int->fp32), SFPMAD, STOCH_RND, SFPCAST+SFPSETSGN(out)
-//   REQUANT (int8-out, 7 ) : SFPCAST(int->fp32), SFPMAD, <5-instr pack>             (int8 input)
-//   REQUANT (int8-out, 9 ) : SFPCAST+SFPSETSGN(in), SFPCAST, SFPMAD, <5-instr pack> (int32 input)
+//   REQUANT (int8-out, 6 ) : SFPCAST(int->fp32), SFPMAD, <4-instr pack>             (int8 input)
+//   REQUANT (int8-out, 8 ) : SFPCAST+SFPSETSGN(in), SFPCAST, SFPMAD, <4-instr pack> (int32 input)
 //   DEQUANT ( 2s-comp, 5 ) : SFPCAST+SFPSETSGN(in), SFPCAST(int->fp32),
 //                             SFPADD, SFPMUL
 //   DEQUANT (sign-magn, 3) : SFPCAST(int->fp32), SFPADD, SFPMUL
 //
 // The int8-out bodies fold the +128 offset into the fp32 zero-point once at init, so the per-iteration
 // MAD already yields v + 128 and the pack needs no per-element SFPADDI. The int8-out requant records two
-// body lengths: int8 input unbiases inline (7), while int32 input runs the 2's-complement -> sign-magnitude
-// inside the recorded body (9).
+// body lengths: int8 input unbiases inline (6), while int32 input runs the 2's-complement -> sign-magnitude
+// inside the recorded body (8).
 constexpr std::uint32_t QUANT_REPLAY_SLOT = 0;
 constexpr std::uint32_t QUANT_REPLAY_LEN_2S_COMP = 4;
 constexpr std::uint32_t QUANT_REPLAY_LEN_SIGN_MAGN = 2;
-constexpr std::uint32_t QUANT_REPLAY_LEN_INT8_OUT = 6;
-constexpr std::uint32_t QUANT_REPLAY_LEN_MAX = QUANT_REPLAY_LEN_INT8_OUT;
+constexpr std::uint32_t QUANT_REPLAY_LEN_INT8_OUT = 5;
+constexpr std::uint32_t QUANT_REPLAY_LEN_MAX =
+    (QUANT_REPLAY_LEN_2S_COMP > QUANT_REPLAY_LEN_INT8_OUT) ? QUANT_REPLAY_LEN_2S_COMP : QUANT_REPLAY_LEN_INT8_OUT;
 
 constexpr std::uint32_t REQUANT_REPLAY_SLOT = QUANT_REPLAY_SLOT + QUANT_REPLAY_LEN_MAX;
 constexpr std::uint32_t REQUANT_REPLAY_LEN_2S_COMP = 7;
 constexpr std::uint32_t REQUANT_REPLAY_LEN_SIGN_MAGN = 3;
 constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_IN = 5;
-constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_OUT = 7;
-constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_OUT_INT32_IN = 9;
-constexpr std::uint32_t REQUANT_REPLAY_LEN_MAX = REQUANT_REPLAY_LEN_INT8_OUT_INT32_IN;
+constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_OUT = 6;
+constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_OUT_INT32_IN = 8;
+constexpr std::uint32_t REQUANT_REPLAY_LEN_MAX = (REQUANT_REPLAY_LEN_2S_COMP > REQUANT_REPLAY_LEN_INT8_OUT_INT32_IN)
+                                                     ? REQUANT_REPLAY_LEN_2S_COMP
+                                                     : REQUANT_REPLAY_LEN_INT8_OUT_INT32_IN;
 
 constexpr std::uint32_t DEQUANT_REPLAY_SLOT = REQUANT_REPLAY_SLOT + REQUANT_REPLAY_LEN_MAX;
 constexpr std::uint32_t DEQUANT_REPLAY_LEN_2S_COMP = 5;
@@ -134,9 +138,22 @@ inline void _int8_pack_fixup_() {
     // magnitude of a negative input instead of 0, so clamp these lanes to 0.0 first:
     // FP32_TO_UINT8(0.0) = 0, and 0 ^ 0x80 = 0x80, which is the two's-complement encoding of
     // -128 (the minimum int8 value).
-    TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
-    TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-    TTI_SFPENCC(0, 0, 0, 0);
+    //
+    // The clamp is a float max against LCONST_0 (SFPSWAP VEC_MAX_MIN, the idiom
+    // calculate_typecast_fp32_to_uint16 uses) instead of the SFPSETCC / SFPMOV / SFPENCC
+    // predicate. Identical for every finite input and for +/-Inf (-Inf -> 0 -> -128; +Inf
+    // saturates to 255 -> 127); -0.0 becomes +/-0 and rounds to 0 either way. NaN lanes are
+    // implementation-defined in both forms (the sign-bit test used to send a negative-signed
+    // NaN to -128; now SFPSWAP's NaN ordering decides).
+    //
+    // The SFPNOP is required: the value in LREG0 is the preceding SFPMAD's result, and on
+    // Blackhole the SFPU scoreboard does not stall an SFPSWAP consumer of an in-flight
+    // result (sfpi-gcc rvtt.md marks rvtt_sfpswap_int with xtt_dynamic_bug for BH, so the
+    // compiler pads that pair with one sfpnop; SFPSETCC is not in that errata set, which
+    // is why the predicate form needed none). Without it SFPSWAP reads the pre-MAD LREG0
+    // and every negative input clamps to -128 (seen on silicon).
+    TTI_SFPNOP;
+    TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);  // LREG0 = max(LREG0, 0.0)
     TTI_SFP_STOCH_RND(
         sfpi::SFPSTOCHRND_RND_EVEN,
         0 /*imm8*/,
@@ -254,8 +271,8 @@ void requant_init(const uint zero_point) {
         _int8_bias_zero_point_();  // fold +128 into the fp32 zero-point in LREG2
         _quant_kernels_configure_dest_incr_addrmod_();
         // Record the int8 body. Int8 input is unbiased (byte ^ 0x80) inline by the kernel
-        // before the replay, so its body is just CAST + MAD + offset-128 pack (7). Int32
-        // input runs the 2's-complement -> sign-magnitude fixup inside the recorded body (9).
+        // before the replay, so its body is just CAST + MAD + offset-128 pack (6). Int32
+        // input runs the 2's-complement -> sign-magnitude fixup inside the recorded body (8).
         constexpr std::uint32_t REPLAY_LEN =
             INT8_INPUT ? REQUANT_REPLAY_LEN_INT8_OUT : REQUANT_REPLAY_LEN_INT8_OUT_INT32_IN;
         lltt::record<lltt::NoExec>(REQUANT_REPLAY_SLOT, REPLAY_LEN);
