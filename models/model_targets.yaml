@@ -6,6 +6,22 @@ description: Centralized perf/accuracy targets for models CI.
 # - TODO: explicit gap placeholder; excluded from normal target resolution and treated as missing/TODO by validator.
 # `prefill_time_to_first_token` values are in milliseconds (ms).
 targets:
+  qwen-image-2.1-p150:
+    skus:
+      bh_p150:
+        entries:
+          - batch_size: 1
+            status: active
+            perf: {}
+            accuracy:
+              # One text image vs independent CUDA bf16; one edit vs original P150 output.
+              # These numerical regression checks do not measure population image quality.
+              text_image_pcc: 1.0
+              text_image_pcc_tolerance: 0.03
+              edit_image_pcc: 1.0
+              edit_image_pcc_tolerance: 0.03
+            owner_id: U03HY7MK4BT
+            team: models
   gemma4-31b-qb2:
     skus:
       p300x2:
@@ -367,6 +383,17 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
+
+  paddleocr-vl-1.6:
+    aliases: ["PaddleOCR-VL-1.6", "PaddlePaddle/PaddleOCR-VL-1.6"]
+    skus:
+      bh_p150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
 
   gemma-4-26b-a4b:
     aliases: ["gemma-4-26b-a4b", "google/gemma-4-26B-A4B-it"]
@@ -736,14 +763,15 @@ targets:
             team: models
           # batch-32 ci-eval-32 DRAM-prefetcher run (single repeat batch) on bh_quietbox_2.
           # Specific entry so it wins over the catch-all for this config without disturbing
-          # the b4/b1 runs above. Seeded from the prefetcher run once the job could pass (#47820).
+          # the b4/b1 runs above. Reseeded after removing dummy host-logprob copies:
+          # run 36987762999, job 110780206653 measured 71.1432 t/s/u and 2276.5818 t/s.
           - batch_size: 32
             seq_len: 712
             status: active
             perf:
               prefill_time_to_first_token: 28
-              decode_t/s/u: 57
-              decode_t/s: 1824
+              decode_t/s/u: 71.1
+              decode_t/s: 2275.2
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
@@ -1626,6 +1654,50 @@ targets:
             perf: {}
             accuracy: {}
             owner_id: U0491KT8MNY # Mohamed Bahnas
+            team: models
+
+  qwen3-tts-1.7b:
+    aliases: ["Qwen3-TTS-12Hz-1.7B-Base", "Qwen/Qwen3-TTS-12Hz-1.7B-Base", "Qwen3-TTS-12Hz-1.7B-CustomVoice", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U09LNK7BT1Q # Andrija Cicovic
+            team: models
+      bh_p150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U09LNK7BT1Q # Andrija Cicovic
+            team: models
+
+  qwen3-tts-0.6b:
+    aliases: ["Qwen3-TTS-12Hz-0.6B-Base", "Qwen/Qwen3-TTS-12Hz-0.6B-Base", "Qwen3-TTS-12Hz-0.6B-CustomVoice", "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U09LNK7BT1Q # Andrija Cicovic
+            team: models
+      bh_p150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U09LNK7BT1Q # Andrija Cicovic
             team: models
 
   vit:

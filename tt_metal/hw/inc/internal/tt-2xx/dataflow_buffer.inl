@@ -441,11 +441,11 @@ inline void DataflowBuffer::handle_final_credits(uint32_t transactions_issued, u
     while (static_cast<int16_t>(read_actual_slot0() - expected_slot0) < 0) {
         uint64_t tack, tiles;
         if constexpr (is_producer) {
-            tack  = CMDBUF_TR_ACK_TRID(OVERLAY_RD_CMD_BUF, tail_txn_id);
-            tiles = CMDBUF_READ_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, tail_txn_id);
+            tack  = __builtin_riscv_ttrocc_cmdbuf_tr_ack_trid(OVERLAY_RD_CMD_BUF, tail_txn_id);
+            tiles = __builtin_riscv_ttrocc_cmdbuf_read_tiles_to_process_tr_ack_tr_id(OVERLAY_RD_CMD_BUF, tail_txn_id);
         } else {
-            tack  = CMDBUF_WR_SENT_TRID(OVERLAY_WR_CMD_BUF, tail_txn_id);
-            tiles = CMDBUF_READ_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, tail_txn_id);
+            tack  = __builtin_riscv_ttrocc_cmdbuf_wr_sent_trid(OVERLAY_WR_CMD_BUF, tail_txn_id);
+            tiles = __builtin_riscv_ttrocc_cmdbuf_read_tiles_to_process_wr_sent_tr_id(OVERLAY_WR_CMD_BUF, tail_txn_id);
         }
         if (tack == 0 && tiles > 0) {
             break;
@@ -458,9 +458,10 @@ inline void DataflowBuffer::handle_final_credits(uint32_t transactions_issued, u
     // different threads' checks, causing some to enter the barrier and others to skip
     // it. Once past this point, tiles_to_process on the tail txn_id reflects the
     // contributions of all producers / consumers for this collective batch.
-    // Producer and consumer kernels co-reside with different thread counts, so each
-    // side uses its own barrier (0 = producer, 1 = consumer) — sharing one deadlocks.
-    sync_threads(is_producer ? 0 : 1);
+    // Producer and consumer kernels co-reside with different thread counts, so each must
+    // rendezvous on its own barrier — sharing one deadlocks. They are distinct kernels and every
+    // kernel gets its own barrier slot, so plain sync_threads() already keeps them apart.
+    sync_threads();
 
     // ISR already handled the collective batch — modular check (see WTP1).
     if (static_cast<int16_t>(read_actual_slot0() - expected_slot0) >= 0) {
@@ -475,9 +476,9 @@ inline void DataflowBuffer::handle_final_credits(uint32_t transactions_issued, u
     while (static_cast<int16_t>(read_actual_slot0() - expected_slot0) < 0) {
         uint64_t tiles;
         if constexpr (is_producer) {
-            tiles = CMDBUF_READ_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, tail_txn_id);
+            tiles = __builtin_riscv_ttrocc_cmdbuf_read_tiles_to_process_tr_ack_tr_id(OVERLAY_RD_CMD_BUF, tail_txn_id);
         } else {
-            tiles = CMDBUF_READ_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, tail_txn_id);
+            tiles = __builtin_riscv_ttrocc_cmdbuf_read_tiles_to_process_wr_sent_tr_id(OVERLAY_WR_CMD_BUF, tail_txn_id);
         }
         if (tiles > 0 && tiles < global_threshold) {
             break;

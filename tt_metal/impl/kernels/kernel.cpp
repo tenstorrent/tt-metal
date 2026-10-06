@@ -27,6 +27,8 @@
 #include <tt_stl/fmt.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
+#include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
+#include "impl/program/program_impl.hpp"
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
@@ -309,12 +311,14 @@ void Kernel::process_named_compile_time_args(
     callback(this->named_compile_time_args());
 }
 
-void Kernel::process_dataflow_buffer_binding_handles(
-    const std::function<void(
-        const std::string& accessor_name, uint16_t logical_dfb_id, bool is_relay, uint8_t prefetcher_pipe_id)> callback)
-    const {
+void Kernel::process_dataflow_buffer_binding_handles(const std::function<void(
+                                                         const std::string& accessor_name,
+                                                         uint16_t logical_dfb_id,
+                                                         bool is_relay,
+                                                         uint8_t prefetcher_pipe_id,
+                                                         const std::optional<LLKMetadata>&)>& callback) const {
     for (const auto& [accessor_name, handle] : this->dataflow_buffer_binding_handles_) {
-        callback(accessor_name, handle.logical_dfb_id, handle.is_relay, handle.prefetcher_pipe_id);
+        callback(accessor_name, handle.logical_dfb_id, handle.is_relay, handle.prefetcher_pipe_id, handle.llk_metadata);
     }
 }
 
@@ -331,17 +335,25 @@ void Kernel::process_tensor_binding_handles(const std::function<void(
                                                 const std::string& accessor_name,
                                                 uint32_t cta_offset,
                                                 uint32_t addr_crta_offset,
-                                                uint32_t num_runtime_field_crta_words)> callback) const {
+                                                uint32_t num_runtime_field_crta_words,
+                                                const LLKMetadata&)>& callback) const {
     for (const auto& handle : this->tensor_binding_handles_) {
-        callback(handle.accessor_name, handle.cta_offset, handle.addr_crta_offset, handle.num_runtime_field_crta_words);
+        callback(
+            handle.accessor_name,
+            handle.cta_offset,
+            handle.addr_crta_offset,
+            handle.num_runtime_field_crta_words,
+            handle.llk_metadata);
     }
 }
 
-void Kernel::process_scratchpad_binding_handles(
-    const std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)> callback)
-    const {
+void Kernel::process_scratchpad_binding_handles(const std::function<void(
+                                                    const std::string& accessor_name,
+                                                    uint32_t size_bytes,
+                                                    uint32_t addr_crta_word,
+                                                    const std::optional<LLKMetadata>&)>& callback) const {
     for (const auto& handle : this->scratchpad_binding_handles_) {
-        callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word);
+        callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word, handle.llk_metadata);
     }
 }
 
@@ -436,6 +448,96 @@ std::vector<std::string> Kernel::file_paths(const IDevice& device, const std::st
 
 void Kernel::set_precompiled_config(experimental::PrecompiledKernelConfig config) {
     precompiled_config_ = std::move(config);
+}
+
+ll_api::BufRwInfo Kernel::query_buf_rw(const IDevice& device) const {
+    ll_api::BufRwInfo info;
+    const auto context_id = extract_context_id(&device);
+    const auto& hal = MetalContext::instance(context_id).hal();
+    const uint32_t core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
+    const uint32_t processor_class = enchantum::to_underlying(this->get_kernel_processor_class());
+    const std::string binary_root = BuildEnvManager::get_instance(context_id)
+                                        .get_device_build_env(device.build_id())
+                                        .build_env.get_out_kernel_root_path();
+    // Resolve each binary's (path, load_type) exactly as read_binaries did when the loader loaded it, so
+    // llrt::get_binary_metadata is a cache read against the same entry -- no ELF handling here. Records come
+    // mostly from data-movement binaries; a compute kernel's TRISC binaries carry them only where it holds a
+    // LocalTensorAccessor. Every binary of a kernel accesses on the kernel's behalf, so the kernel's R/W set is
+    // the union over its binaries.
+    for (int i = 0; i < this->expected_num_binaries(); ++i) {
+        const uint32_t processor_type = this->get_kernel_processor_type(i);
+        const auto load_type = hal.get_jit_build_config(core_type, processor_class, processor_type).memory_load;
+        const std::string path = BuildEnvManager::get_instance(context_id)
+                                     .get_kernel_binary_path(
+                                         device.build_id(),
+                                         core_type,
+                                         processor_class,
+                                         processor_type,
+                                         binary_root,
+                                         this->kernel_full_name_);
+        const ll_api::BinaryMetadata& md = llrt::get_binary_metadata(path, load_type);
+        info.reads.insert(md.buf_rw.reads.begin(), md.buf_rw.reads.end());
+        info.writes.insert(md.buf_rw.writes.begin(), md.buf_rw.writes.end());
+        info.opaque = info.opaque || md.buf_rw.opaque;
+    }
+    return info;
+}
+
+ResolvedBufRw Kernel::resolve_buf_rw(const IDevice& device, const detail::ProgramImpl& program) {
+    const ll_api::BufRwInfo raw = this->query_buf_rw(device);
+    ResolvedBufRw out;
+    out.opaque = raw.opaque;
+    out.reads.reserve(raw.reads.size());
+    out.writes.reserve(raw.writes.size());
+    // The slot is a binding's base-address CRTA byte offset: it names the binding (its
+    // tensor_parameter_name) and points at the CRTA word the runtime filled with the bound buffer address.
+    // A slot that doesn't name one of this kernel's bindings, or points outside its CRTA, can't be attributed (stale
+    // or foreign metadata): mark the kernel opaque and drop it, rather than report an access at a made-up address.
+    const RuntimeArgsData& crta = this->common_runtime_args_data();
+    auto resolve = [&](uint32_t slot) -> std::optional<ResolvedBufRw::Access> {
+        const std::size_t word = slot / sizeof(uint32_t);
+        if (slot % sizeof(uint32_t) != 0 || word >= crta.size()) {
+            return std::nullopt;
+        }
+        for (const auto& handle : this->tensor_binding_handles_) {
+            if (handle.addr_crta_offset == slot) {
+                // param_name is a string_view into the handle -- no copy
+                return ResolvedBufRw::Access{.param_name = handle.tensor_parameter_name, .address = crta.data()[word]};
+            }
+        }
+        return std::nullopt;
+    };
+    auto resolve_all = [&](const auto& slots, auto& accesses) {
+        for (uint32_t slot : slots) {
+            if (auto access = resolve(slot)) {
+                accesses.push_back(*access);
+            } else {
+                out.opaque = true;
+            }
+        }
+    };
+    resolve_all(raw.reads, out.reads);
+    resolve_all(raw.writes, out.writes);
+    // A borrowed-memory DFB is the tensor's memory, but the kernel reaches it only as a DFB, so its device code can't
+    // note the tensor. The program says which tensor each DFB borrows and the binding says which side(s) this kernel
+    // is on: producing fills the entries (writes the tensor), consuming drains them (reads it).
+    for (const auto& [accessor_name, handle] : this->dataflow_buffer_binding_handles_) {
+        if (!handle.borrowed_dfb_id.has_value()) {
+            continue;
+        }
+        const auto dfb = program.get_dataflow_buffer(*handle.borrowed_dfb_id);
+        TT_FATAL(
+            dfb != nullptr, "Borrowed-memory DFB {} bound as '{}' not found", *handle.borrowed_dfb_id, accessor_name);
+        ResolvedBufRw::Access access{
+            .param_name = handle.borrowed_tensor_parameter_name, .address = dfb->borrowed_addr_};
+        if (handle.produces) {
+            out.writes.push_back(access);
+        }
+        if (handle.consumes) {
+            out.reads.push_back(access);
+        }
+    }
+    return out;
 }
 
 std::vector<std::string> Kernel::elf_paths_by_processor_index(
@@ -575,11 +677,27 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second));
     }
+    auto hash_llk_fields = [&hasher](const LLKMetadata& metadata) {
+        hasher.update(static_cast<uint64_t>(metadata.format));
+        hasher.update(static_cast<uint64_t>(metadata.tile.get_height()));
+        hasher.update(static_cast<uint64_t>(metadata.tile.get_width()));
+        hasher.update(static_cast<uint64_t>(metadata.tile.get_face_shape()[0]));
+        hasher.update(static_cast<uint64_t>(metadata.tile.get_num_faces()));
+    };
+    auto hash_llk_metadata = [&hasher, &hash_llk_fields](const std::optional<LLKMetadata>& metadata) {
+        hasher.update(static_cast<uint64_t>(metadata.has_value()));
+        if (metadata.has_value()) {
+            hash_llk_fields(*metadata);
+        }
+    };
     for (const auto& it : sorted_iters(this->dataflow_buffer_binding_handles_)) {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second.logical_dfb_id));
         hasher.update(static_cast<uint64_t>(it->second.is_relay ? 1 : 0));
         hasher.update(static_cast<uint64_t>(it->second.prefetcher_pipe_id));
+        if (!it->second.is_relay) {
+            hash_llk_metadata(it->second.llk_metadata);
+        }
     }
     for (const auto& it : sorted_iters(this->semaphore_binding_handles_)) {
         hasher.update(it->first);
@@ -599,6 +717,7 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.cta_offset));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_offset));
         hasher.update(static_cast<uint64_t>(handle.num_runtime_field_crta_words));
+        hash_llk_fields(handle.llk_metadata);
     }
     // Scratchpad binding handles: like tensor bindings, stored in order and emitted by genfiles in
     // the same order. Hash accessor_name + size_bytes + addr_crta_word — the accessor's compile-time
@@ -609,6 +728,7 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(handle.accessor_name);
         hasher.update(static_cast<uint64_t>(handle.size_bytes));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
+        hash_llk_metadata(handle.llk_metadata);
     }
     // PrefetcherPipe binding handles: the slot id is baked into the generated `pipe::` token.
     hasher.update(static_cast<uint64_t>(this->prefetcher_pipe_binding_handles_.size()));

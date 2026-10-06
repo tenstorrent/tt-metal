@@ -20,7 +20,6 @@ manifest_env() {
 MGD="${MGD_DIR}/${CONFIG}_mgd.textproto"
 
 CHUNK_SIZE=5120
-GOLDEN_LEN=56320
 WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
 RUNNER_ENV=""
@@ -28,8 +27,7 @@ PRODUCER_ENV=""
 PRODUCER_USERS="${PREFILL_PRODUCER_NUM_USERS:-1}"
 TCP_INTERFACE="${PREFILL_TCP_INTERFACE:-ens5f0np0}"
 # sc1 runs a single galaxy, so both of these exist to shrink the sc4 model down to what one fits.
-# Defaults keep every model that does fit unchanged: full 256k context, full manifest depth.
-SC1_MAX_SEQ_LEN=256000
+SC1_MAX_SEQ_LEN=""
 SC1_NUM_LAYERS=""
 SC1_NUM_USERS=1
 
@@ -48,14 +46,16 @@ case "${MODEL}" in
   kimi27)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
-    PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}';"
-    ;;
-  glm52)
-    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm52_prefill_runner_kv}"
-    MANIFEST="${MANIFEST_DIR}/glm52.json"
-    RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
-        export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k;"
+        export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/deepseek-ai/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-256000-last5120;"
+    ;;
+  glm53)
+    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm53_prefill_runner_kv}"
+    MANIFEST="${MANIFEST_DIR}/glm53.json"
+    RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
+    PCC_THRESHOLD=0.83
+    PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
+        export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
     ;;
   kimi_k3)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_prefill_runner_kv}"
@@ -63,11 +63,16 @@ case "${MODEL}" in
     # 93 layers do not fit one galaxy -- MLA's static CBs become unplaceable past ~36 layers on a
     # rank (#54876) and a 48-layer single rank OOMs at 2 users. 24 fits, ends on an MLA layer, and
     # is the deepest depth the golden's decoder-output stream covers, so sc1 is a real accuracy gate
-    # rather than a smaller copy of sc4. The context is the same on both: K3's whole window is the
-    # golden's 11 chunks, so there is nothing to shrink.
+    # rather than a smaller copy of sc4. sc1 keeps the default 256k context, so its perf probes are
+    # the 5k..250k ones GLM-5.3 reports and sc4's 1M request adds 510k and 1M on top. Not a
+    # baseline for sc4 -- 24 layers against 93 -- which is why the summary job reports sc4 alone.
     SC1_NUM_LAYERS=24
-    SC1_MAX_SEQ_LEN=56320
-    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized;"
+    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized;"
+    # PREFILL_TRACE_DIR is the one K3 path still on NFS, deliberately. The sc4 93-layer leg's KV PCC
+    # collapsed to ~0 past layer ~24 on run 36717057668 with the Weka trace (it reads 0.900..0.994 on
+    # run 36524165128), and the two candidates -- the Weka golden copy and the Weka TTNN cache -- give
+    # the same symptom. This is pinned here as the one-variable test; do not move it until sc4 has
+    # produced a clean run, which the bh_sc4 pool has been failing to do in multihost setup.
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/k3_vllm_code_debug_1M;"
     ;;
@@ -84,6 +89,7 @@ NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
 
 RUNNER_OVERRIDES=""
 SC4_MAX_SEQ_LEN=${MAX_SEQ_LEN}
+SC1_MAX_SEQ_LEN=${SC1_MAX_SEQ_LEN:-${MAX_SEQ_LEN}}
 NUM_LAYERS_ENV=""
 if [ "${CONFIG}" = sc1 ]; then
   MAX_SEQ_LEN=${SC1_MAX_SEQ_LEN}
@@ -233,7 +239,6 @@ set +e
     export PREFILL_NUM_USERS=${PRODUCER_USERS}; \
     export PREFILL_PRODUCER_CHUNKS=${REAL_CHUNKS}; \
     export PREFILL_PRODUCER_WARMUP_CHUNKS=${WARMUP_CHUNKS}; \
-    export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     export PREFILL_PCC_SUMMARY_DIR='${PCC_DIR}'; \
     export PREFILL_PRODUCER_CHECK_PCC=1; \

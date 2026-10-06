@@ -5,6 +5,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cmath>
 #include <set>
@@ -175,11 +176,14 @@ bool is_axis_wrap_wired(const tt::tt_metal::distributed::MeshDevice& mesh_device
         return false;
     }
 
-    // Axis 0 runs down a column, axis 1 along a row.
-    for (uint32_t row_or_col = 0; row_or_col < mesh_shape[1 - axis]; row_or_col++) {
-        const auto nodes = axis == 0 ? mesh_view.get_fabric_node_ids_on_column(row_or_col)
-                                     : mesh_view.get_fabric_node_ids_on_row(row_or_col);
-        if (tt::tt_fabric::get_neighbor_eth_directions(nodes.back(), nodes.front()).empty()) {
+    const auto num_lines = mesh_shape[1 - axis];
+    for (uint32_t line = 0; line < num_lines; ++line) {
+        const MeshCoordinate first = axis == 0 ? MeshCoordinate(0, line) : MeshCoordinate(line, 0);
+        const MeshCoordinate last =
+            axis == 0 ? MeshCoordinate(mesh_shape[0] - 1, line) : MeshCoordinate(line, mesh_shape[1] - 1);
+        const auto first_node = mesh_view.get_fabric_node_id(first);
+        const auto last_node = mesh_view.get_fabric_node_id(last);
+        if (!tt::tt_fabric::are_intra_mesh_neighbors(mesh_device, last_node, first_node)) {
             return false;
         }
     }
@@ -213,7 +217,7 @@ tt::tt_fabric::Topology get_usable_topology(
     const Tensor& tensor,
     const std::optional<tt::tt_fabric::Topology>& topology,
     const std::optional<uint32_t>& cluster_axis) {
-    tt::tt_fabric::Topology topology_ = topology.value_or(tt::tt_fabric::get_fabric_topology());
+    tt::tt_fabric::Topology topology_ = topology.has_value() ? *topology : tt::tt_fabric::get_fabric_topology();
     if (topology_ == tt::tt_fabric::Topology::Ring || topology_ == tt::tt_fabric::Topology::Torus) {
         bool wraps;
         if (cluster_axis.has_value()) {
@@ -1884,6 +1888,22 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     return std::make_tuple(forward_args, backward_args);
 }
 
+namespace {
+
+void validate_fabric_mux_client_index(
+    uint32_t client_index,
+    tt::tt_fabric::FabricMuxChannelType channel_type,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config) {
+    const auto channel_count = mux_kernel_config.get_num_channels(channel_type);
+    TT_FATAL(
+        client_index < channel_count,
+        "Fabric mux client index {} is out of range for channel count {}",
+        client_index,
+        channel_count);
+}
+
+}  // namespace
+
 void fabric_mux_connection_ct_args(
     const uint32_t num_workers_per_direction,
     const tt::tt_fabric::FabricMuxChannelType channel_type,
@@ -1910,6 +1930,7 @@ void fabric_mux_connection_rt_args(
     CoreCoord termination_master_virtual_core,
     std::vector<uint32_t>& worker_rt_args,
     std::optional<uint32_t> termination_master_semaphore_id) {
+    validate_fabric_mux_client_index(worker_id, channel_type, mux_kernel_config);
     worker_rt_args.push_back(mux_connection_valid);   // mux_connection_valid 0
     worker_rt_args.push_back(is_termination_master);  // is_termination_master 1
     worker_rt_args.push_back(mux_virtual_core.x);     // fabric_mux_x 2
@@ -1926,8 +1947,10 @@ void fabric_mux_connection_rt_args(
         mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address 8
     worker_rt_args.push_back(
         mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));  // fabric_mux_channel_id 9
-    worker_rt_args.push_back(termination_master_semaphore_id.value_or(
-        CreateSemaphore(program, {worker_logical_core}, 0)));                      // termination_sync_address 10
+    const uint32_t termination_sync_semaphore_id = termination_master_semaphore_id.has_value()
+                                                       ? *termination_master_semaphore_id
+                                                       : CreateSemaphore(program, {worker_logical_core}, 0);
+    worker_rt_args.push_back(termination_sync_semaphore_id);                       // termination_sync_address 10
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_fabric_mux_status_address 11
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_flow_control_address 12
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_teardown_address 13
@@ -1936,11 +1959,6 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(termination_master_virtual_core.y);                   // termination_master_noc_y 16
 }
 
-// ProgramDescriptor (Contract-2) variant — mirrors the legacy Program& helper above.
-// Allocates the same five mux-side semaphores by pushing SemaphoreDescriptors into
-// desc.semaphores and recording their IDs into worker_rt_args. The arg-vector
-// layout (positions 0..16) is identical to the legacy helper so worker kernels
-// are byte-compatible across the two variants.
 void fabric_mux_connection_rt_args(
     const bool mux_connection_valid,
     const bool is_termination_master,
@@ -1953,6 +1971,7 @@ void fabric_mux_connection_rt_args(
     CoreCoord termination_master_virtual_core,
     std::vector<uint32_t>& worker_rt_args,
     std::optional<uint32_t> termination_master_semaphore_id) {
+    validate_fabric_mux_client_index(worker_id, channel_type, mux_kernel_config);
     // Allocate a worker-core-scoped semaphore by querying the next available ID
     // and parking a SemaphoreDescriptor on the ProgramDescriptor. Returns the new ID.
     auto alloc_sem = [&]() -> uint32_t {
@@ -1989,7 +2008,9 @@ void fabric_mux_connection_rt_args(
         mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address 8
     worker_rt_args.push_back(
         mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));    // fabric_mux_channel_id 9
-    worker_rt_args.push_back(termination_master_semaphore_id.value_or(alloc_sem()));  // termination_sync_address 10
+    const uint32_t termination_sync_semaphore_id =
+        termination_master_semaphore_id.has_value() ? *termination_master_semaphore_id : alloc_sem();
+    worker_rt_args.push_back(termination_sync_semaphore_id);      // termination_sync_address 10
     worker_rt_args.push_back(alloc_sem());                        // local_fabric_mux_status_address 11
     worker_rt_args.push_back(alloc_sem());                        // local_flow_control_address 12
     worker_rt_args.push_back(alloc_sem());                        // local_teardown_address 13
