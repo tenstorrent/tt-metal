@@ -1679,22 +1679,8 @@ class TestConfig:
                 f"Failed to parse text size from riscv-tt-elf-size output for {elf_path}:\n{result.stdout}"
             ) from e
 
-    def _compile_kernel_part(self, name, compile_command, source) -> Path | None:
+    def _compile_kernel_part(self, name, compile_command, source):
         run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
-
-    def _extract_profiler_metadata(self, elf_path, meta_bin_path):
-        run_shell_command(
-            [
-                TestConfig.OBJCOPY,
-                "-O",
-                "binary",
-                "-j",
-                ".profiler_meta",
-                str(elf_path),
-                str(meta_bin_path),
-            ],
-            TestConfig.TESTS_WORKING_DIR,
-        )
 
     def build_elfs(self):
 
@@ -1830,7 +1816,7 @@ class TestConfig:
 
                 logger.trace(" ".join(shlex.quote(part) for part in compile_command))
 
-                return self._compile_kernel_part(
+                self._compile_kernel_part(
                     name,
                     compile_command,
                     (
@@ -1842,13 +1828,12 @@ class TestConfig:
             with ThreadPoolExecutor(
                 max_workers=len(TestConfig.KERNEL_COMPONENTS)
             ) as executor:
-                futures = {
-                    name: executor.submit(build_kernel_part, name)
+                futures = [
+                    executor.submit(build_kernel_part, name)
                     for name in TestConfig.KERNEL_COMPONENTS
-                }
-                cached_metadata = {
-                    name: future.result() for name, future in futures.items()
-                }
+                ]
+                for fut in futures:
+                    fut.result()
 
             if self.profiler_build == ProfilerBuild.Yes:
                 # Extract profiler metadata
@@ -1861,10 +1846,18 @@ class TestConfig:
                 for component in TestConfig.KERNEL_COMPONENTS:
                     elf_path = VARIANT_ELF_DIR / f"{component}.elf"
                     meta_bin_path = PROFILER_VARIANT_META_DIR / f"{component}.meta.bin"
-                    if cached_metadata[component] is None:
-                        self._extract_profiler_metadata(elf_path, meta_bin_path)
-                    else:
-                        shutil.copyfile(cached_metadata[component], meta_bin_path)
+                    run_shell_command(
+                        [
+                            TestConfig.OBJCOPY,
+                            "-O",
+                            "binary",
+                            "-j",
+                            ".profiler_meta",
+                            str(elf_path),
+                            str(meta_bin_path),
+                        ],
+                        TestConfig.TESTS_WORKING_DIR,
+                    )
 
             # Mark build as complete so other processes know they can use the artefacts
             done_marker.touch()

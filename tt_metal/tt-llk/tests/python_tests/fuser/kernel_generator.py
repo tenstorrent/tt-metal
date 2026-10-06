@@ -14,7 +14,7 @@ from filelock import FileLock
 from helpers.chip_architecture import ChipArchitecture
 
 from .fuser_config import FuserConfig
-from .pipeline_plan import PlannedBlock
+from .pipeline_plan import PlannedBlock, plan_pipeline
 
 FUSED_TESTS_DIR = Path("sources/fused_tests")
 
@@ -29,17 +29,14 @@ def format_cpp(source: str, source_dir: Path, cache_dir: Path) -> str:
     cache_dir.mkdir(parents=True, exist_ok=True)
     with FileLock(cached.with_suffix(".lock")):
         if not cached.exists():
-            result = subprocess.run(
+            formatted = subprocess.check_output(
                 ["clang-format", "--assume-filename=kernel.cpp"],
                 cwd=source_dir,
-                shell=False,
                 input=source,
                 text=True,
-                stdout=subprocess.PIPE,
-                check=True,
             )
             temporary = cached.with_suffix(".tmp")
-            temporary.write_text(result.stdout)
+            temporary.write_text(formatted)
             temporary.replace(cached)
         return cached.read_text()
 
@@ -154,7 +151,10 @@ class FusedKernelGenerator:
         self.sfpu_gen = SfpuKernelGenerator(self.config)
 
     def generate_all(self) -> Dict[str, str]:
-        plans = self.config.get_pipeline_plans()
+        plans = [
+            plan_pipeline(op, self.config.global_config.dest_acc.value)
+            for op in self.config.pipeline
+        ]
         return {
             "unpack": self.unpack_gen.generate(plans),
             "math": self.math_gen.generate(plans),
@@ -220,11 +220,6 @@ class FusedKernelGenerator:
             name: format_cpp(kernel, cpp_path.parent, format_cache)
             for name, kernel in kernels.items()
         }
-        combined = common + "".join(
-            kernels[name] for name in ("unpack", "math", "sfpu", "pack")
-        )
-
-        with open(cpp_path, "w") as f:
-            f.write(combined)
+        cpp_path.write_text(common + "".join(kernels.values()))
 
         return {name: common + kernel for name, kernel in kernels.items()}
