@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "binary_ng_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
@@ -1007,7 +1008,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         const auto block_float = [](DataType dt) { return dt == DataType::BFLOAT8_B || dt == DataType::BFLOAT4_B; };
         const DataType srca_dtype = scalar_first ? b_dtype : a_dtype;
         const DataType srcb_dtype = scalar_first ? a_dtype : b_dtype;
-        exact_mul_at_hifi2 = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op &&
+        exact_mul_at_hifi2 = std::getenv("EB_R3_NO_HIFI2") == nullptr &&  // CI measurement toggle, not in the PR
+                             tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op &&
                              std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
                              std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) == OpConfig::FpuBinaryOp::MUL &&
                              lhs_activations.empty() && rhs_activations.empty() && block_float(srcb_dtype) &&
