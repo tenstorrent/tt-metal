@@ -2,11 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""FPN neck for BEVFormer.
+
+Lateral 1x1 convs, a top-down upsample-and-add, then the output convs. Extra
+convs, when the reference FPN has them, run on the lowest output.
+"""
+
 import ttnn
 from models.experimental.bevformer.tt.tt_common import TtnnConv2D
 
 
 class TtConvModule:
+    """One FPN convolution.
+
+    Accumulates in an fp32 destination register. The call returns the output tensor;
+    output height and width stay on the conv, which the top-down pass reads.
+    """
+
     def __init__(
         self,
         conv_args,
@@ -40,6 +52,15 @@ class TtConvModule:
 
 
 class TtFPN:
+    """Feature pyramid over the backbone levels.
+
+    ``input_dtypes`` are the dtypes of the backbone levels the FPN reads, in order.
+    ``dram_activation_levels`` lists the pyramid levels whose lateral and output convs
+    keep their activations in DRAM, for levels too large for L1; their 3x3 convs run in
+    ``dram_conv_slices`` width slices. ``block_sharded_levels`` lists the levels whose
+    output conv is block sharded with act_block_h 128.
+    """
+
     def __init__(
         self,
         conv_args,
@@ -50,11 +71,6 @@ class TtFPN:
         dram_conv_slices=None,
         block_sharded_levels=(),
     ):
-        """``input_dtypes`` are the dtypes of the backbone levels the FPN reads, in order.
-        ``dram_activation_levels`` lists the pyramid levels whose lateral and output convs
-        keep their activations in DRAM, for levels too large for L1; their 3x3 convs run in
-        ``dram_conv_slices`` width slices. ``block_sharded_levels`` lists the levels whose
-        output conv is block sharded with act_block_h 128."""
         assert conv_args.add_extra_convs == "on_output", f"extra convs {conv_args.add_extra_convs!r} are not supported"
         self.lateral_convs = []
         self.fpn_convs = []

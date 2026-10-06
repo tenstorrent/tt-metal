@@ -2,6 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""ResNet101-DCN backbone for BEVFormer.
+
+Bottleneck stages. layer3 and layer4 use a modulated deformable conv for conv2.
+Each BatchNorm is already folded into the conv before it.
+"""
+
 from types import SimpleNamespace
 
 import torch
@@ -93,6 +99,12 @@ class TtModulatedDeformConv2dPack:
 
 
 class TtResLayer:
+    """One ResNet layer (layer1 .. layer4), one bottleneck per block in ``conv_pth``.
+
+    ``input_dtype``, ``input_layout`` and ``dram_input`` describe the layer input, which
+    only the first block reads. The other arguments go to every block.
+    """
+
     def __init__(
         self,
         conv_args,
@@ -106,9 +118,6 @@ class TtResLayer:
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
     ):
-        """One ResNet layer (layer1 .. layer4), one bottleneck per block in ``conv_pth``.
-        ``input_dtype``, ``input_layout`` and ``dram_input`` describe the layer input, which
-        only the first block reads. The other arguments go to every block."""
         num_blocks = len(conv_pth)
         self.layer = []
         for j in range(num_blocks):
@@ -136,6 +145,23 @@ class TtResLayer:
 
 
 class TtBottleneck:
+    """One bottleneck block.
+
+    Every conv's shape and stride come from ``conv_args``, recorded from one forward of
+    the reference model. The block's conv2 is DCNv2 when ``conv_pth.conv2`` has an offset
+    conv, and the block has a downsample shortcut when ``conv_pth`` has one.
+
+    ``input_dtype`` and ``input_layout`` describe the block input; the dtype and layout
+    each conv sees follow from them. ``dram_activation`` keeps the activations of conv1,
+    a non-DCN conv2, conv3 and the downsample in DRAM, slicing the spatial convs into
+    ``dram_conv_slices`` width slices; a DCN conv2 is unaffected. ``dram_input`` only
+    covers the convs that read the block input, for a block fed by a DRAM layer whose own
+    activations fit in L1. ``block_sharded_downsample`` block-shards the downsample conv.
+    ``fp32_acc`` turns on fp32 destination accumulation (``fp32_dest_acc_en``) for conv1, a
+    non-DCN conv2, conv3 and the downsample; a DCN conv2 always has it
+    (TtModulatedDeformConv2dPack).
+    """
+
     def __init__(
         self,
         conv_args,
@@ -149,19 +175,6 @@ class TtBottleneck:
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
     ):
-        """Every conv's shape and stride come from ``conv_args``, recorded from one forward of
-        the reference model. The block's conv2 is DCNv2 when ``conv_pth.conv2`` has an offset
-        conv, and the block has a downsample shortcut when ``conv_pth`` has one.
-
-        ``input_dtype`` and ``input_layout`` describe the block input; the dtype and layout
-        each conv sees follow from them. ``dram_activation`` keeps the activations of conv1,
-        a non-DCN conv2, conv3 and the downsample in DRAM, slicing the spatial convs into
-        ``dram_conv_slices`` width slices; a DCN conv2 is unaffected. ``dram_input`` only
-        covers the convs that read the block input, for a block fed by a DRAM layer whose own
-        activations fit in L1. ``block_sharded_downsample`` block-shards the downsample conv.
-        ``fp32_acc`` turns on fp32 destination accumulation (``fp32_dest_acc_en``) for conv1, a
-        non-DCN conv2, conv3 and the downsample; a DCN conv2 always has it
-        (TtModulatedDeformConv2dPack)."""
         self.with_dcn = "conv_offset" in conv_pth.conv2
         self.is_downsample = "downsample" in conv_pth
 
@@ -249,6 +262,22 @@ class TtBottleneck:
 
 
 class TtResNet:
+    """Bottleneck ResNet built from ``conv_args`` and ``conv_pth``.
+
+    ``create_resnet_parameters`` records those from one forward of the reference model: the conv
+    shapes and strides, the max pool, each layer's block count and which blocks are DCNv2.
+
+    ``out_indices``, ``dram_activation_stages`` and ``block_sharded_downsample_stages``
+    index the four ResNet layers (0 is layer1). ``dram_activation_stages`` lists the layers
+    whose activations are kept in DRAM, for layers whose convs do not fit in L1: their
+    spatial convs run in ``dram_conv_slices`` width slices and their 1x1 convs as a DRAM
+    matmul. A layer that follows one of them and is not listed itself reads its input from
+    DRAM the same way. ``block_sharded_downsample_stages`` lists the layers whose downsample
+    conv is block sharded, and ``fp32_acc_stages`` the layers whose convs accumulate in an fp32
+    destination register (see TtBottleneck). The defaults keep everything in L1 at bfloat16
+    accumulation; ``config/backbone_config.tt_resnet_kwargs`` gives BEVFormer-base's values.
+    """
+
     num_layers = 4
 
     def __init__(
@@ -262,19 +291,6 @@ class TtResNet:
         block_sharded_downsample_stages=(),
         fp32_acc_stages=(),
     ):
-        """Bottleneck ResNet built from ``conv_args`` and ``conv_pth``, which
-        ``create_resnet_parameters`` records from one forward of the reference model: the conv
-        shapes and strides, the max pool, each layer's block count and which blocks are DCNv2.
-
-        ``out_indices``, ``dram_activation_stages`` and ``block_sharded_downsample_stages``
-        index the four ResNet layers (0 is layer1). ``dram_activation_stages`` lists the layers
-        whose activations are kept in DRAM, for layers whose convs do not fit in L1: their
-        spatial convs run in ``dram_conv_slices`` width slices and their 1x1 convs as a DRAM
-        matmul. A layer that follows one of them and is not listed itself reads its input from
-        DRAM the same way. ``block_sharded_downsample_stages`` lists the layers whose downsample
-        conv is block sharded, and ``fp32_acc_stages`` the layers whose convs accumulate in an fp32
-        destination register (see TtBottleneck). The defaults keep everything in L1 at bfloat16
-        accumulation; ``config/backbone_config.tt_resnet_kwargs`` gives BEVFormer-base's values."""
         self.out_indices = out_indices
         self.maxpool_args = conv_args.maxpool
         stage_config = dict(
