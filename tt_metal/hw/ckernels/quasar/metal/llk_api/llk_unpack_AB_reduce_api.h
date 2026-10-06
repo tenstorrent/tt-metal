@@ -30,6 +30,10 @@
  * applies.
  *
  */
+// The DFB whose unpacker llk_unpack_AB_reduce_init moved to the 2x format for a 2x column reduce's scaler, or -1, so
+// that llk_unpack_AB_reduce_uninit, which is only given the data operand, can put it back.
+inline std::int32_t reduce_2x_scaler_operand_id = -1;
+
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::uint32_t operandB) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
@@ -41,16 +45,23 @@ inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::u
 
     _llk_unpack_reduce_init_<pool_type, reduce_dim>(bfd_a, bfd_b, tensor_shape);
 
-    // Column reduce (GAPOOL) consumes MxFp4 SrcA as the 2x-packed src-register format, like matmul.
+    // Column reduce (GAPOOL) can consume MxFp4 as the 2x-packed src-register format, like matmul, but
+    // only with a 2x scaler: the 2x multiply is FP4 by FP4, and once SrcA is 2x the FPU reads SrcB as
+    // packed FP4 pairs too, whatever SrcB holds, so a Float16_b scaler would be misread. So both
+    // operands must be MxFp4; otherwise the reduce runs on the op-agnostic Float16_b formats.
     // Override only the unpacker gasket OUT_DATA_FORMAT to MxFp4_2x_B (shadow register; unpacker idle
     // at init before the first UNPACR; buffer descriptor keyed on the MxFp4 L1 format is unchanged).
-    // operandA -> SrcA -> UNP_A. Only REDUCE_COL supports 2x, and only GAPOOL (SUM/AVG) accepts a 2x
-    // SrcA - GMPOOL (MAX) does not. EN_32BIT_DEST does not affect the MxFp4->MxFp4_2x_B reconfig
-    // validity, so pass false.
+    // operandA -> SrcA -> UNP_A, operandB -> SrcB -> UNP_B. Only REDUCE_COL supports 2x, and only
+    // GAPOOL (SUM/AVG) accepts a 2x SrcA - GMPOOL (MAX) does not. EN_32BIT_DEST does not affect the
+    // MxFp4->MxFp4_2x_B reconfig validity, so pass false.
     if constexpr ((pool_type == PoolType::SUM || pool_type == PoolType::AVG) && reduce_dim == ReduceDim::REDUCE_COL) {
-        if (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) {
+        if ((static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) &&
+            (static_cast<DataFormat>(get_operand_src_format(operandB_id)) == DataFormat::MxFp4)) {
             _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, false>(
                 get_operand_src_format(operandA_id), static_cast<std::uint32_t>(DataFormat::MxFp4_2x_B));
+            _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_B, false>(
+                get_operand_src_format(operandB_id), static_cast<std::uint32_t>(DataFormat::MxFp4_2x_B));
+            reduce_2x_scaler_operand_id = static_cast<std::int32_t>(operandB_id);
         }
     }
 }
@@ -63,15 +74,23 @@ inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::u
  * Restores SrcA's unpacker OUT_DATA_FORMAT to the op-agnostic unpack_dst_format[] value (Float16_b),
  * so a following NON-reduce op on the same MxFp4 buffer unpacks correctly. Needed because non-reduce
  * unpack inits never reprogram OUT_DATA_FORMAT and reconfig_data_format is silently skipped for a
- * same-format operand. Only column reduce overrode it (SrcA -> UNP_A); restoring an operand that was
- * never overridden just reprograms it to the same table value (harmless), so this gates on MxFp4 only
- * and needs no reduce_dim template. Pair with the ALU restore in @ref llk_math_reduce_uninit.
+ * same-format operand. Only a 2x column reduce overrode it (SrcA -> UNP_A); restoring an operand that
+ * was never overridden just reprograms it to the same table value (harmless), so this gates on MxFp4
+ * only and needs no reduce_dim template. The scaler's UNP_B override is restored from the operand
+ * id init recorded, since this is only given the data operand. Pair with the ALU restore in
+ * @ref llk_math_reduce_uninit.
  */
 inline void llk_unpack_AB_reduce_uninit(const std::uint32_t operandA) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     if (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) {
         _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, false>(
             get_operand_src_format(operandA_id), unpack_dst_format[operandA_id]);
+    }
+    if (reduce_2x_scaler_operand_id >= 0) {
+        const std::uint32_t operandB_id = static_cast<std::uint32_t>(reduce_2x_scaler_operand_id);
+        _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_B, false>(
+            get_operand_src_format(operandB_id), unpack_dst_format[operandB_id]);
+        reduce_2x_scaler_operand_id = -1;
     }
 }
 

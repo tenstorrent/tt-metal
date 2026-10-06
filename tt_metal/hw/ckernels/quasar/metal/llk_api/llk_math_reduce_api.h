@@ -35,17 +35,20 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
-    // Column reduce is a GAPOOL (op-mmul family) and consumes MxFp4 SrcA as the 2x-packed
-    // src-register format, exactly like matmul. Derive the effective SrcA format from the L1/src
-    // format; the matching unpacker OUT_DATA_FORMAT override lives in llk_unpack_AB_reduce_init.
-    // Only REDUCE_COL supports 2x (row/scalar reduce post-pool ELWADDDI does not), and only GAPOOL
-    // (SUM/AVG) accepts a 2x SrcA - GMPOOL (MAX) does not.
+    // Column reduce is a GAPOOL (op-mmul family) and can consume MxFp4 as the 2x-packed src-register
+    // format, like matmul, but only when the scaler is MxFp4 too: the 2x multiply is FP4 by FP4, and
+    // a 2x SrcA makes the FPU read SrcB as packed FP4 pairs whatever it holds. Derive the effective
+    // SrcA/SrcB formats from the L1/src formats; the matching unpacker OUT_DATA_FORMAT overrides live
+    // in llk_unpack_AB_reduce_init. Only REDUCE_COL supports 2x (row/scalar reduce post-pool ELWADDDI
+    // does not), and only GAPOOL (SUM/AVG) accepts a 2x SrcA - GMPOOL (MAX) does not.
     const bool srcA_2x = (pool_type == PoolType::SUM || pool_type == PoolType::AVG) &&
                          (reduce_dim == ReduceDim::REDUCE_COL) &&
-                         (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4);
+                         (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) &&
+                         (static_cast<DataFormat>(get_operand_src_format(operandB_id)) == DataFormat::MxFp4);
     const DataFormat srcA_format =
         srcA_2x ? DataFormat::MxFp4_2x_B : static_cast<DataFormat>(unpack_dst_format[operandA_id]);
-    const DataFormat srcB_format = static_cast<DataFormat>(unpack_dst_format[operandB_id]);
+    const DataFormat srcB_format =
+        srcA_2x ? DataFormat::MxFp4_2x_B : static_cast<DataFormat>(unpack_dst_format[operandB_id]);
 
     // When srcA_2x, srcA_format deviates from the op-agnostic unpack_dst_format[] table that kernel
     // startup (llk_math_hw_configure) already programmed the ALU from and latched as
