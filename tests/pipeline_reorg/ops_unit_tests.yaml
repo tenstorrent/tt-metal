@@ -523,10 +523,12 @@
     # Cheap host-side coverage for the mixed-format cache contract and producer decoding.
     pytest models/demos/common/prefill/tests/test_prefill_producer_kv_decode.py models/demos/deepseek_v3_d_p/tests/test_sparse_kv_cache_contract.py -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or (4x2 and pcc_check and fabric2d)) and (not test_rope_prefill or 4x2) and (not update_padded_kv_cache or 2x4) and (not rotary_embedding_indexed or 2x4) and (not moe_padding_config or fabric2d-2x4) and (not zero_padded or torus-y-8x1 or fabric2d-2x4) and not single-1 and not test_hybrid_routed_expert_combine and (not test_prefill_dispatch or ((bf16_in and tile and bf16_out) or (fp8_scaled_in and row_major and fp8_out)))" -m "not extended_model" || exit_code=$?
+    # The routed expert overlapped with combine_fabric2d on the LoudBox's 8-chip TorusY ring: one dispatch group.
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_hybrid_routed_expert_combine.py -vvv --tb=short -k "test_hybrid_routed_expert_combine_overlap and not perf and 8x1 and not galaxy" || exit_code=$?
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 10
+      timeout: 25
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
   budget_type: e2e
@@ -562,16 +564,14 @@
 # its relaunch, back-to-back and next-op cases are 8x4-only. A CI Galaxy skips TorusXY unless certified;
 # BH Galaxy runners are health-checked against the XY-torus cabling, so this leg certifies itself.
 # The routed expert overlapped with combine_fabric2d (test_hybrid_routed_expert_combine) also only runs on the 8x4
-# torus: its 8x4 accuracy cases, which TtMoe's traced Blackhole prefill runs in production. Its perf, 8x1 and
-# dg0-only cases are run by hand.
+# torus: its 8x4 accuracy cases, which TtMoe's traced Blackhole prefill runs in production. Its standalone 8x1
+# cases run on the LoudBox leg; its perf, 8x1-galaxy and dg0-only cases are run by hand.
 - name: Disaggregated prefill op unit tests (BH Galaxy)
   cmd: |
-    exit_code=0
     export TT_MESH_GRAPH_DESC_PATH=tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
     export PREFILL_TORUS_XY_CERTIFIED=1
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_combine_fabric2d.py -vvv --tb=short -k "torus-xy-8x4" || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_hybrid_routed_expert_combine.py -vvv --tb=short -k "test_hybrid_routed_expert_combine_overlap and not perf and 8x4 and not dg0only" || exit_code=$?
-    exit $exit_code
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_combine_fabric2d.py -vvv --tb=short -k "torus-xy-8x4" || exit $?
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_hybrid_routed_expert_combine.py -vvv --tb=short -k "test_hybrid_routed_expert_combine_overlap and not perf and 8x4 and not dg0only" || exit $?
   skus:
     bh_galaxy:
       timeout: 40
