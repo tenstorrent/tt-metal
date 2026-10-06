@@ -23,6 +23,7 @@ Both schedules are on by default (like deepseek_v3_d_p's overlap). The overlap f
 the MoE on the full grid. ``M3_MOE_FUSE_SHARED_RS=0`` gives it back its own TP collective.
 """
 
+import functools
 import math
 import os
 
@@ -92,12 +93,13 @@ def _block_cost(k_tiles, per_core_M, per_core_N, obh, obw, w):
     return per_core_M * per_core_N * k_tiles / 2 + reads + 64 * (k_tiles // w) * nbx * nby
 
 
-def matmul_2d_config(grid, m_tiles, k_tiles, n_tiles, budget_tiles=CB_BUDGET_TILES):
-    """2D mcast config over `grid` (M over rows, N over columns) whose CBs fit budget_tiles, the cheapest
-    by _block_cost. per_core_M / per_core_N may round up past the minimum when that gives better blocks
-    (the launched grid is then smaller than `grid`)."""
+@functools.lru_cache(maxsize=None)
+def _matmul_2d_blocks(grid_x, grid_y, m_tiles, k_tiles, n_tiles, budget_tiles):
+    """(per_core_M, per_core_N, out_block_h, out_block_w, in0_block_w, out_subblock_h, out_subblock_w): the
+    cheapest blocking by _block_cost whose CBs fit budget_tiles. Pure in its args, so cached: every sparse layer
+    asks for the same few shapes on every forward."""
     best = None
-    m0, n0 = math.ceil(m_tiles / grid.y), math.ceil(n_tiles / grid.x)
+    m0, n0 = math.ceil(m_tiles / grid_y), math.ceil(n_tiles / grid_x)
     for per_core_M in range(m0, m0 + 3):
         for per_core_N in range(n0, n0 + 2):
             for obh in _divisors_desc(per_core_M):
@@ -115,11 +117,21 @@ def matmul_2d_config(grid, m_tiles, k_tiles, n_tiles, budget_tiles=CB_BUDGET_TIL
         ((h, sw) for h in _divisors_desc(obh) for sw in _divisors_desc(obw) if h * sw <= DEST_TILES),
         key=lambda hw: (hw[0] * hw[1], hw[1]),
     )
+    return per_core_M, per_core_N, obh, obw, w, sub[0], sub[1]
+
+
+def matmul_2d_config(grid, m_tiles, k_tiles, n_tiles, budget_tiles=CB_BUDGET_TILES):
+    """2D mcast config over `grid` (M over rows, N over columns) whose CBs fit budget_tiles, the cheapest
+    by _block_cost. per_core_M / per_core_N may round up past the minimum when that gives better blocks
+    (the launched grid is then smaller than `grid`)."""
+    per_core_M, per_core_N, obh, obw, w, sub_h, sub_w = _matmul_2d_blocks(
+        grid.x, grid.y, m_tiles, k_tiles, n_tiles, budget_tiles
+    )
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=w,
-        out_subblock_h=sub[0],
-        out_subblock_w=sub[1],
+        out_subblock_h=sub_h,
+        out_subblock_w=sub_w,
         out_block_h=obh,
         out_block_w=obw,
         per_core_M=per_core_M,
