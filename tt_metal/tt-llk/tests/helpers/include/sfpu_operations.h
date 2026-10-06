@@ -594,7 +594,7 @@ void call_unary_sfpu_operation_init()
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(hardsigmoid_init<APPROX_MODE>);
     }
-    else if constexpr (OPERATION == SfpuType::log || OPERATION == SfpuType::log_with_base)
+    else if constexpr (OPERATION == SfpuType::log || OPERATION == SfpuType::log_with_base || OPERATION == SfpuType::log10)
     {
         // log_init seeds the vConstFloatPrgm0-2 constants calculate_log reads; the
         // fp32/bf16 sets differ by dest-accum mode, so the flag must be forwarded.
@@ -987,6 +987,17 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             dst_index,
             vector_mode,
             0x3FB8AA3Bu /* 1/ln(2) in fp32 -> log2(x) */);
+    }
+    else if constexpr (OPERATION == SfpuType::log10)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_log,
+            (APPROX_MODE, FAST_MODE, true /* HAS_BASE_SCALING */, is_fp32_dest_acc_en, ITERATIONS, false /* IS_BASE_TWO */),
+            dst_index,
+            vector_mode,
+            0x3ede5bd9u /* base_scale = 0.4342944920063019f */);
     }
     else if constexpr (OPERATION == SfpuType::log1p)
     {

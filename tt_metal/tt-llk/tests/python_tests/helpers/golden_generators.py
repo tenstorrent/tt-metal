@@ -2350,6 +2350,7 @@ class UnarySFPUGolden:
             MathOperation.GeluTanh: self._gelu_tanh,
             MathOperation.GeluDerivative: self._gelu_derivative,
             MathOperation.LogWithBase: self._log_with_base,
+            MathOperation.Log10: self._log10,
             MathOperation.ExpWithBase: self._exp_with_base,
             MathOperation.Neg: self._neg,
             MathOperation.Tanh: self._tanh,
@@ -2873,6 +2874,9 @@ class UnarySFPUGolden:
     # 1/ln(2), i.e. log2 with an exact exponent term, so torch.log2 is the golden.
     def _log_with_base(self, x):
         return self._torch_unary(x, torch.log2)
+
+    def _log10(self, x):
+        return self._torch_unary(x, torch.log10)
 
     def _log1p(self, x):
         return self._torch_unary(x, torch.log1p)

@@ -176,4 +176,5 @@ enum class SfpuType {
     sqrt_custom,
     tanh_derivative_lut,
     expm1_cw,
+    log10,
 };
