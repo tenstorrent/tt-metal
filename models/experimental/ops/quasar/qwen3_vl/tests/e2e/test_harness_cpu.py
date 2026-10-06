@@ -739,3 +739,9 @@ def test_golden_fallback_still_works_after_wrappers_installed(monkeypatch):
     s.install(monkeypatch)  # ttnn.linear is now wrapped twice (workaround, then fallback)
     a, b = torch.randn(32, 64), torch.randn(64, 16)
     assert torch.allclose(O.FALLBACKS["ttnn.linear"].torch_fn([a, b], {}).float(), a @ b, atol=1e-4)
+
+
+def test_every_fallback_is_certified():
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    assert set(O.CERTIFIED) == set(O.FALLBACKS)  # so --host-ops all needs no --qwen-allow-uncertified

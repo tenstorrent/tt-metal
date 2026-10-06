@@ -14,8 +14,7 @@ from models.experimental.ops.quasar.qwen3_vl.tests.e2e.pcc import pcc
 from models.experimental.ops.quasar.qwen3_vl.tests.e2e.recorder import to_host
 from models.experimental.ops.quasar.tests.qwen3_vl_ops import graph_case as G
 
-# Fallback target -> generated qwen3_vl_ops module holding its captured CASES. ttnn.matmul and
-# chunked_scaled_dot_product_attention have no captured calls, so they stay uncertified.
+# Fallback target -> generated qwen3_vl_ops module holding its captured CASES.
 _CASE_MODULE = {
     "ttnn.linear": "test_linear",
     "ttnn.rms_norm": "test_rms_norm",
