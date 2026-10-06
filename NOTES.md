@@ -36,3 +36,12 @@ Setup (t133a/t133b builds) and driver started on blx03 (driver pid 39509, boot 0
 submit.sh (one project job at a time). Next run: if driver.log has T133_DRIVER_DONE, read T133_CMP lines and act
 (identical + faster: cherry-pick 27a9c2f95c9 onto t48 and push; then cleanup). If the driver died (reboot), relaunch
 it with the same command; finished jobs are skipped.
+
+## Status (#135 run 2, 2026-10-06 03:12 UTC)
+blx03 rebooted ~03:02 UTC (no t133 job running); the run-1 driver died before submitting. Relaunched: job 244 (j1)
+failed at once. Arm A refused to run because `git rev-parse --short` gives 10 chars on blx03 vs the 11-char pin;
+arm B then had no reference to compare against. B alone ran fine (traced median 0.5558 s, min 0.5438; eager med
+0.5351). Fixed in 8e45440b891 (full-hash compare); t133b on blx03 moved to it (only tmp/ + NOTES differ, no rebuild).
+Old logs: /var/tmp/fasth3/t133/{driver.run1.log,run133_j1.job244.log}. Driver relaunched 03:09:10 (pid 24636).
+Drop (not ours): 03:10:17 UTC, job 246 (smarton, another task's t48 driver), chips 8-15 / tray 2 left PCIe;
+broker HELD and recovering. Our driver waits for the health check, then submits j1.
