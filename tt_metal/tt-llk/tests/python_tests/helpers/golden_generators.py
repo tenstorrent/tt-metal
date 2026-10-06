@@ -8,6 +8,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import ClassVar, Optional
 
+import mpmath
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
@@ -2300,6 +2301,7 @@ class UnarySFPUGolden:
     def __init__(self):
         self.ops = {
             MathOperation.Abs: self._abs,
+            MathOperation.AbsInt32: self._abs,
             MathOperation.EqualZero: self._equal_zero,
             MathOperation.NotEqualZero: self._not_equal_zero,
             MathOperation.LessThanZero: self._less_than_zero,
@@ -2450,6 +2452,7 @@ class UnarySFPUGolden:
             MathOperation.UnaryBitwiseXor,
             MathOperation.RsubScalarInt32,
             MathOperation.RemainderUint32,
+            MathOperation.AbsInt32,
             # identity also runs on floats; an integer input takes the bit-exact vUInt copy.
             MathOperation.Identity,
             # relu_min is the one op here that is not integer-*only*: sfpu_operations.h
@@ -2472,6 +2475,34 @@ class UnarySFPUGolden:
         # take away precision Dest still holds.
         self.dst_format = None
         self.dest_acc = DestAccumulation.No
+
+    def _round_once_to_dest(self, value) -> float:
+        """The mpmath *value* rounded once, to nearest even, onto Dest's grid (its subnormals included).
+
+        A float64 or float32 intermediate would round twice. A magnitude past the format's largest
+        finite value is an infinity; a nonzero value that rounds to zero keeps its sign.
+        """
+        if mpmath.isnan(value):
+            return math.nan
+        if mpmath.isinf(value) or value == 0:
+            return float(value)
+        info = torch.finfo(format_dict[self.dst_format])
+        significand_bits = 1 - round(math.log2(info.eps))
+        _, exponent = mpmath.frexp(value)
+        exponent = max(exponent, round(math.log2(info.smallest_normal)) + 1)
+        quantum = mpmath.ldexp(1, exponent - significand_bits)
+        rounded = mpmath.nint(value / quantum) * quantum
+        if abs(rounded) > info.max:
+            return math.copysign(math.inf, value)
+        return float(rounded) if rounded != 0 else math.copysign(0.0, value)
+
+    def _infinite(self, value: float) -> float:
+        """An infinite result as Dest's format returns it (see handle_infinite_numbers)."""
+        return (
+            math.copysign(self.handle_infinite_numbers(math.inf), value)
+            if math.isinf(value)
+            else value
+        )
 
     def __call__(
         self,
@@ -2936,7 +2967,19 @@ class UnarySFPUGolden:
         return math.sinh(x)
 
     def _cosh(self, x):
-        return math.inf if abs(x) >= 710.0 else math.cosh(x)
+        # Generated from activations/cosh.json and torch 2.11's recorded results: torch's own result at its
+        # special inputs, the exact cosh(x) elsewhere, evaluated at
+        # 320 bits and rounded once onto Dest's grid. The golden this replaces disagreed with torch on
+        # 30,364 of the 65,536 BF16 inputs, raising on 30,364.
+        if math.isnan(x):
+            return math.nan
+        if math.isinf(x):
+            return math.inf if x > 0 else math.inf
+        if x == 0.0:
+            return 1.0 if math.copysign(1.0, x) > 0 else 1.0
+        with mpmath.workprec(320):
+            x = mpmath.mpf(x)
+            return self._round_once_to_dest(mpmath.cosh(x))
 
     def _square(self, x):
         # A finite input that overflows saturates, and handle_infinite_numbers picks inf or NaN
@@ -5409,6 +5452,26 @@ class TopKGolden:
         )
 
         return result
+
+
+@register_golden
+class MaxPoolWithIndicesGolden:
+    """Column-wise arg-max over the first ``num_rows`` rows of a values tile, carrying an
+    indices tile in lockstep (SFPU ``calculate_max_pool_with_indices``).
+
+    Operates on logical (untilized) 32x32 tiles. Returns ``(values_row, indices_row, argmax_row)``:
+    the per-column maximum, the index-tile entry at the row that held it, and that row.
+    On a tie any row holding the maximum is a valid result, so callers must check tied
+    columns by value rather than against ``indices_row``.
+    """
+
+    def __call__(self, values, indices, num_rows, data_format):
+        torch_format = format_dict[data_format]
+        values = values.reshape(32, 32)[:num_rows].to(torch.float32)
+        indices = indices.reshape(32, 32)[:num_rows]
+        values_row, argmax_row = torch.max(values, dim=0)
+        indices_row = indices.gather(0, argmax_row.unsqueeze(0)).squeeze(0)
+        return values_row.to(torch_format), indices_row.to(torch_format), argmax_row
 
 
 @register_golden
