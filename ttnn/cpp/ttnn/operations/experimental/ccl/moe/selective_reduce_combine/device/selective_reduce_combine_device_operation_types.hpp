@@ -34,7 +34,7 @@ struct SelectiveReduceCombineParams {
     std::optional<GlobalSemaphore> optional_cross_device_semaphore;
 
     // When true, the combine runs as a single-device local reduction with no fabric/mux
-    // setup. Used by moe_compute's FullLocal path on a 1x1 mesh. The axis/topology/num_links
+    // setup. Used by moe_compute's SingleDevice path on a 1x1 mesh. The axis/topology/num_links
     // /mux_core_range_set/optional_cross_device_semaphore fields are ignored in this mode.
     bool local_combine = false;
 

@@ -362,7 +362,7 @@ void kernel_main() {
     // When compute_only=1, the fused selective_reduce_combine path is bypassed and no combine
     // kernels run on combine cores. Skip the metadata-ready signal to combine cores.
     constexpr bool compute_only = get_named_compile_time_arg_val("compute_only") == 1;
-    // When local_output=1 (moe_compute LocalOutput) there are no combine kernels either, and
+    // When local_output=1 (moe_compute SingleCluster) there are no combine kernels either, and
     // moe_compute's dm1 reads the e_t tensor (token id + k slot per entry) for its output rows as
     // soon as metadata_ready releases it, so the drain publishes that tensor before the release.
     constexpr bool local_output = get_named_compile_time_arg_val("local_output") == 1;
