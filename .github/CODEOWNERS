@@ -121,6 +121,7 @@ tt_metal/api/ @tenstorrent/metalium-api-owners
 tt_metal/api/tt-metalium/experimental/disaggregation/ @SeanNijjar @ubcheema # disaggregation experimental APIs
 tt_metal/api/tt-metalium/experimental/fabric @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr # fabric experimental APIs
 tt_metal/api/tt-metalium/experimental/noc_estimator/ @nstamatovicTT @atatuzunerTT
+tt_metal/api/tt-metalium/experimental/command_list.hpp @anashTT @cfjchu @aliuTT @tt-asaigal @jbaumanTT @sidnadTT
 tt_metal/api/tt-metalium/experimental/dispatch_telemetry.hpp @anashTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
 tt_metal/api/tt-metalium/experimental/udm/ @yugaoTT @SeanNijjar
 tt_metal/api/internal/disaggregation/ @SeanNijjar @ubcheema # disaggregation internal APIs (moved from experimental in #48638)
@@ -131,6 +132,7 @@ tt_metal/core_descriptors/ @abhullar-tt @aliuTT @ubcheema
 tt_metal/detail/ @abhullar-tt @tt-aho @tt-asaigal @cfjchu # this should go away
 tt_metal/detail/**/CMakeLists.txt @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/metalium-developers-infra # this should go away
 tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal @jbaumanTT @sidnadTT
+tt_metal/distributed/experimental/command_list.* @anashTT @cfjchu @aliuTT @tt-asaigal @jbaumanTT @sidnadTT
 tt_metal/distributed/realtime_profiler_manager.* @mo-tenstorrent @yusufbashiTT @cfjchu @aliuTT @tt-asaigal @jbaumanTT @sidnadTT
 tt_metal/distributed/**/CMakeLists.txt @cfjchu @aliuTT @tt-asaigal @jbaumanTT @sidnadTT @tenstorrent/metalium-developers-infra
 tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr
@@ -262,6 +264,7 @@ tt_metal/tt-llk/tt_llk_wormhole_b0/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovi
 
 # metal tests
 tests/tt_metal/distributed/ @tenstorrent/metalium-developers-metal-distributed
+tests/tt_metal/distributed/test_mesh_command_list.cpp @anashTT @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @sidnadTT
 tests/tt_metal/distributed/**/CMakeLists.txt @cfjchu @tt-asaigal @tenstorrent/metalium-developers-infra
 tests/tt_metal/microbenchmarks/ethernet/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT
 tests/tt_metal/test_utils/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu
@@ -271,6 +274,7 @@ tests/tt_metal/tt_metal/dispatch/dispatch_program/*realtime_profiler* @mo-tensto
 tests/tt_metal/tt_metal/dispatch/dispatch_util/test_dispatch_telemetry.cpp @anashTT @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @sidnadTT
 tests/tt_metal/tt_metal/misc/test_broadcast_ring.cpp @yusufbashiTT @mo-tenstorrent @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @sidnadTT
 tests/tt_metal/tt_metal/sources.cmake @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @sidnadTT @riverwuTT @akerteszTT
+tests/tt_metal/tt_metal/test_kernels/dataflow/command_list_l1_write.cpp @anashTT @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @sidnadTT
 tests/tt_metal/tt_metal/**/CMakeLists.txt @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @tenstorrent/metalium-developers-infra
 tests/tt_metal/tt_metal/api/metal2_host_api/ @tenstorrent/metalium-api-owners
 tests/tt_metal/tt_metal/api/tensor/ @akerteszTT @riverwuTT @aliaksei-sala
@@ -502,6 +506,7 @@ tests/ttnn/unit_tests/gtests/conv/ @tenstorrent/metalium-developers-convolutions
 tests/ttnn/unit_tests/gtests/sdpa/ @tenstorrent/metalium-developers-sdpa
 tests/ttnn/unit_tests/gtests/udm/ @yugaoTT @SeanNijjar
 tests/ttnn/unit_tests/gtests/udm/**/CMakeLists.txt @yugaoTT @SeanNijjar @tenstorrent/metalium-developers-infra
+tests/ttnn/unit_tests/kernel_lib/ @tenstorrent/metalium-developers-kernel-lib
 tests/ttnn/unit_tests/operations/ccl/ @tenstorrent/metalium-developers-ops-data-movement
 tests/ttnn/unit_tests/operations/data_movement/ @tenstorrent/metalium-developers-ops-data-movement
 tests/ttnn/unit_tests/operations/eltwise/ @tenstorrent/metalium-developers-eltwise
