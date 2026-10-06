@@ -12,10 +12,13 @@ Per chip p, per direction and per link, one *port* core (reader NCRISC / compute
   A relay (every block but the line end's own) reads the chunk upstream sent into this chip's scratch, adds its own
   partial for it (compute) and sends the sum one hop on, into the same pages of the downstream chip's scratch.
   The last block a port sends is the downstream chip's own block: its chunks go to the downstream *final* core.
-Per chip and per link one *final* core: own block = own partial + what arrived from p-1 + what arrived from p+1 (two
-or three inputs), written to the output.
+Per chip and per link two *final* cores, each owning half of the link's banks (bank set l + h L, stride 2 L): own block
+= own partial + what arrived from p-1 + what arrived from p+1 (two or three inputs), written to the output. A final core
+reads two input streams per chunk, twice what a port reads, and one core can't sustain that at the link's rate; halving
+each final core's banks lets the senders run at the link's rate.
 Arrival counters (as fabric_all_gather's): every 8th chunk of a stream (and its last) is a fused write + increment of
-the receiving core's counter; a reader waits for chunk i once the counter covers it. Forward-arriving chunks count on
+the receiving core's counter (the final core that owns the chunk's bank); a reader waits for chunk i of its own walk
+once the counter covers it. Forward-arriving chunks count on
 semaphore A, backward-arriving ones on B (only final cores receive both). The ready fence between calls is
 fabric_all_gather's: no port writes into a neighbour's scratch before the neighbour has started the same call.
 Scratch: [1, 1, (G + 1) Sb, W] per chip; forward chunks of block j land in slot j, backward chunks in slot j except
@@ -34,6 +37,7 @@ from ttnn.operations.examples.fabric_all_gather.program_descriptor_with_inline_k
     _needs_ready,
     _num_banks,
     _OPP,
+    allowed_cores,
     plan,
 )
 
@@ -322,10 +326,10 @@ inline void route_one_hop(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t c
 """
     + _CHUNK_WALK
     + r"""
-// Port sender: every chunk of c_16 (the sums, or a line end's partials) into the downstream chip's scratch. Two
+// Port sender: every chunk of c_16 (the sums, or a line end's partials) into the downstream chip's scratch. Three
 // increment streams: the relay blocks count on the downstream port's counter (A), the last block (the downstream
-// chip's own) on the downstream final core's counter (A forward, B backward); every inc_every-th chunk and each
-// stream's last carries one. After sending: wait for everything upstream sends me, then re-arm my counter.
+// chip's own) on the counter (A forward, B backward) of the downstream final core that owns the chunk's bank; every
+// inc_every-th chunk and each stream's last carries one. After sending: wait for everything upstream sends me, then re-arm my counter.
 void kernel_main() {
     constexpr uint32_t page_bytes = get_compile_time_arg_val(0);
     constexpr uint32_t run_pages = get_compile_time_arg_val(1);
@@ -353,6 +357,10 @@ void kernel_main() {
     const uint32_t peer_y = get_arg_val<uint32_t>(a++);
     const uint32_t final_x = get_arg_val<uint32_t>(a++);
     const uint32_t final_y = get_arg_val<uint32_t>(a++);
+    const uint32_t final_x1 = get_arg_val<uint32_t>(a++);  // the final core of the second half of my bank set
+    const uint32_t final_y1 = get_arg_val<uint32_t>(a++);
+    const uint32_t full_f0 = get_arg_val<uint32_t>(a++);  // chunks of the last block for each final core
+    const uint32_t full_f1 = get_arg_val<uint32_t>(a++);
     const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
     const uint16_t dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
     const uint32_t nblocks = get_arg_val<uint32_t>(a++);  // entries: block | slot << 16
@@ -381,9 +389,10 @@ void kernel_main() {
         }
         const uint64_t relay_noc = get_noc_addr(peer_x, peer_y, arrival_addr);
         const uint64_t final_noc = get_noc_addr(final_x, final_y, final_sem_addr);
+        const uint64_t final_noc1 = get_noc_addr(final_x1, final_y1, final_sem_addr);
         const uint32_t relay_total = (nblocks - 1) * full;
         uint32_t chunks_left = nblocks * full;
-        uint32_t sent_relay = 0, sent_final = 0;
+        uint32_t sent_relay = 0, sent_f0 = 0, sent_f1 = 0;
         uint32_t h = 0, unflushed = 0;
         for (uint32_t k = 0; k < nblocks; ++k) {
             const uint32_t entry = get_arg_val<uint32_t>(blocks_idx + k);
@@ -399,9 +408,12 @@ void kernel_main() {
                 bool inc;
                 uint64_t ctr;
                 if (fin) {
-                    ++sent_final;
-                    inc = (sent_final % inc_every) == 0 || sent_final == full;
-                    ctr = final_noc;
+                    // final core h owns banks first_bank + (2 i + h) * bank_stride of my set
+                    const bool h1 = (((page % num_banks) - first_bank) / bank_stride) & 1;
+                    uint32_t& sent = h1 ? sent_f1 : sent_f0;
+                    ++sent;
+                    inc = (sent % inc_every) == 0 || sent == (h1 ? full_f1 : full_f0);
+                    ctr = h1 ? final_noc1 : final_noc;
                 } else {
                     ++sent_relay;
                     inc = (sent_relay % inc_every) == 0 || sent_relay == relay_total;
@@ -478,7 +490,7 @@ def create_mesh_program_descriptor(
         rg = ch["rings"][0]
         p = rg["p"]
         program = ttnn.ProgramDescriptor()
-        ports, finals = ch["ports"], ch["copy"]
+        ports, finals = ch["ports"], ch["finals"]
         cbs = []
         for idx in (CB_OWN, CB_IN, CB_IN2, CB_OUT):
             cores = list(ports.values()) + finals if idx != CB_IN2 else finals
@@ -510,27 +522,57 @@ def create_mesh_program_descriptor(
             args += [1, rc.x, rc.y] if send_ready else [0, 0, 0]
             if rg.get(f"{d}_links") and blocks:
                 pc = virt(chips[peer]["ports"][(j, d, l)])
-                fc = virt(chips[peer]["copy"][l])
+                fc0 = virt(chips[peer]["finals"][2 * l])
+                fc1 = virt(chips[peer]["finals"][2 * l + 1])
+                nf0 = _chunks_per_shard(blk_pages, l, 2 * stride, num_banks, run_pages)
+                nf1 = _chunks_per_shard(blk_pages, l + stride, 2 * stride, num_banks, run_pages)
                 pn = node(peer)
-                args += [pc.x, pc.y, fc.x, fc.y, int(pn.mesh_id), int(pn.chip_id), len(blocks)] + packed
+                args += [
+                    pc.x,
+                    pc.y,
+                    fc0.x,
+                    fc0.y,
+                    fc1.x,
+                    fc1.y,
+                    nf0,
+                    nf1,
+                    int(pn.mesh_id),
+                    int(pn.chip_id),
+                    len(blocks),
+                ] + packed
                 args += list(ttnn.setup_fabric_connection(node(coord), pn, rg[f"{d}_links"][l], program, core))
             elif send_ready:
-                args += [0, 0, 0, 0, *(lambda n: (int(n.mesh_id), int(n.chip_id)))(node(peer)), 0]
+                args += [0] * 8 + [*(lambda n: (int(n.mesh_id), int(n.chip_id)))(node(peer)), 0]
                 args += list(ttnn.setup_fabric_connection(node(coord), node(peer), rg[f"{d}_links"][l], program, core))
             else:
-                args += [0, 0, 0, 0, 0, 0, 0]
+                args += [0] * 11
             ps_rt[core.x][core.y] = args
         fr_rt, fc_rt, fw_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         has_f, has_b = int(rg["prev"] is not None), int(rg["next"] is not None)
-        for l, core in enumerate(finals):
-            n = _chunks_per_shard(blk_pages, l, stride, num_banks, run_pages)
-            fr_rt[core.x][core.y] = [in_addr, scr_addr, blk_pages, l, stride, p, p, G, has_f, has_b, sem_a, sem_b, n]
+        for i, core in enumerate(finals):  # final core 2 l + h: banks l + h L, stride 2 L
+            first, fstride = i // 2 + (i % 2) * stride, 2 * stride
+            n = _chunks_per_shard(blk_pages, first, fstride, num_banks, run_pages)
+            fr_rt[core.x][core.y] = [
+                in_addr,
+                scr_addr,
+                blk_pages,
+                first,
+                fstride,
+                p,
+                p,
+                G,
+                has_f,
+                has_b,
+                sem_a,
+                sem_b,
+                n,
+            ]
             fc_rt[core.x][core.y] = [n, has_f, has_b]
             fw_rt[core.x][core.y] = [
                 out_addr,
                 blk_pages,
-                l,
-                stride,
+                first,
+                fstride,
                 n,
                 sem_a,
                 _incs(n, inc_every) if has_f else 0,
@@ -589,6 +631,27 @@ def create_mesh_program_descriptor(
 _SEM_CACHE, _SCRATCH_CACHE, _PLAN_CACHE = {}, {}, {}
 
 
+def _with_final_cores(mesh_device, chips, num_links):
+    """Each chip's plan plus "finals": two final cores per link, [link 0 half 0, link 0 half 1, link 1 half 0, ...].
+    Half 0 is fabric_all_gather's copy core of the link; half 1 the next free core in its row (else any free core)."""
+    allowed = sorted(allowed_cores(mesh_device), key=lambda c: (c[1], c[0]))
+    out = {}
+    for coord, ch in chips.items():
+        taken = {(c.x, c.y) for c in list(ch["ports"].values()) + ch["copy"]}
+        finals = []
+        for l in range(num_links):
+            row = ch["copy"][l].y
+            extra = next((c for c in allowed if c[1] == row and c not in taken), None) or next(
+                (c for c in allowed if c not in taken), None
+            )
+            if extra is None:
+                raise ValueError("fabric_reduce_scatter: the core grid has too few cores for two final cores per link")
+            taken.add(extra)
+            finals += [ch["copy"][l], ttnn.CoreCoord(*extra)]
+        out[coord] = {**ch, "finals": finals}
+    return out
+
+
 def fabric_reduce_scatter(input_tensor, *, cluster_axis=0, num_links=1, output=None, placement="auto"):
     """Reduce-scatter `input_tensor` ([1, 1, G * Sb, W] bf16 TILE, DRAM interleaved, a partial per chip) over each line
     along `cluster_axis`: chip p gets block p of the sum, [1, 1, Sb, W] (the layout ttnn.reduce_scatter(dim=2) gives).
@@ -603,7 +666,7 @@ def fabric_reduce_scatter(input_tensor, *, cluster_axis=0, num_links=1, output=N
             num_links=num_links,
             placement=placement,
         )
-        _PLAN_CACHE[key] = (mesh_device, chips)
+        _PLAN_CACHE[key] = (mesh_device, _with_final_cores(mesh_device, chips, num_links))
     chips = _PLAN_CACHE[key][1]
     G = next(iter(chips.values()))["G"]
     _check_dram_interleaved(input_tensor, "input")
@@ -628,7 +691,7 @@ def fabric_reduce_scatter(input_tensor, *, cluster_axis=0, num_links=1, output=N
         )
         _SCRATCH_CACHE[skey] = (mesh_device, scr)
     scratch = _SCRATCH_CACHE[skey][1]
-    cores = {(c.x, c.y) for ch in chips.values() for c in list(ch["ports"].values()) + ch["copy"]}
+    cores = {(c.x, c.y) for ch in chips.values() for c in list(ch["ports"].values()) + ch["finals"]}
     ckey = (id(mesh_device), tuple(sorted(cores)))
     if ckey not in _SEM_CACHE:
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sorted(cores)])

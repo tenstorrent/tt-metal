@@ -28,9 +28,14 @@ the 4-chip box can form.
   does.
 - **Placement is found, not configured:** a one-time probe program builds each fabric connection on device and
   reports its router's (translated) coordinates; the host maps them to physical NoC columns with the chip's
-  Ethernet harvesting mask, and puts each port core directly below. Worker coordinates are translated too, and with
-  Tensix harvesting the live columns are compacted (a column right of a harvested one has translated x ≠ physical x),
-  so candidate workers are mapped back to physical columns with the chip's Tensix harvesting mask before matching.
+  Ethernet harvesting mask, and gives each port the free core with the fewest NoC1 hops (the sender's NoC: -Y,
+  then -X, wrapping) to its Ethernet core, ties to the lower row — directly below it when that column has Tensix
+  cores. Worker coordinates are translated too, and with Tensix harvesting the live columns are compacted (a column
+  right of a harvested one has translated x ≠ physical x), so candidate workers are mapped back to physical columns
+  with the chip's Tensix harvesting mask before matching. An Ethernet core can sit above a harvested Tensix column
+  (LoudBox p150b: Tensix columns 7 and 10 harvested, the axis-0 links on Ethernet columns 10 / 11 and 6 / 7): nearest
+  by column then put both links' ports in one column, sharing its NoC1 segment into the Ethernet row, which cost the
+  2-chip line ~60 µs of 263 at 16 MiB (2 links); by NoC1 hops the two land in two columns (205 µs, as the C++ op).
 - **Why it's kernel-level:** how often an increment rides on a packet, what the relay waits for, and which core
   serves each link are decisions of the kernel and program author.
 
@@ -98,8 +103,8 @@ All 112 combinations (7 fabric configs × 8 topologies × 1 and 2 links) are bit
   router payload (measure it for your config).
 - **More links: diminishing past two.** On FABRIC_1D a ring goes 71 → 125 → 141 → 143 GB/s per chip for 1–4 links,
   a 4-chip line 48 → 88 → 103 → 104.
-- **Placement is automatic and matters.** Every port core sits directly below its connection's Ethernet core, so the
-  per-link streams share no NoC links.
+- **Placement is automatic and matters.** Every port core sits on the NoC1-nearest core to its connection's Ethernet
+  core (directly below it where the column is live), so the per-link streams share no NoC links.
 
 ### Row-major and fp8
 The kernels move whole pages and never look inside them, so any dtype and either layout works: a TILE page is a

@@ -515,19 +515,65 @@ def _eth_physical_lists(mesh_device):
     return lists
 
 
-def eth_noc_column(mesh_device, coord, xy):
-    """Physical NoC column of the Ethernet core the probe reported (translated or physical coordinates)."""
+def eth_noc_coord(mesh_device, coord, xy):
+    """Physical NoC (x, y) of the Ethernet core the probe reported (translated or physical coordinates)."""
     x, y = xy
     eth_list, translated, _ = _chip_maps(mesh_device, coord)
     if translated and eth_list is not None and x >= _BH_ETH_TRANSLATED_X0:
-        return eth_list[x - _BH_ETH_TRANSLATED_X0][0]
-    return x
+        return eth_list[x - _BH_ETH_TRANSLATED_X0]
+    return x, y
+
+
+def eth_noc_column(mesh_device, coord, xy):
+    """Physical NoC column of the Ethernet core the probe reported (translated or physical coordinates)."""
+    return eth_noc_coord(mesh_device, coord, xy)[0]
+
+
+_NOC_GRID_CACHE = {}
+
+
+def _noc_grid(mesh_device):
+    """(x_size, y_size) of the chip's NoC grid, from the arch SoC descriptor."""
+    if id(mesh_device) not in _NOC_GRID_CACHE:
+        import os
+        import yaml
+
+        root = os.environ.get("TT_METAL_HOME", os.getcwd())
+        arch_yaml = {"BLACKHOLE": "blackhole_140_arch.yaml", "WORMHOLE_B0": "wormhole_b0_80_arch.yaml"}[
+            str(mesh_device.arch()).split(".")[-1]
+        ]
+        grid = yaml.safe_load(open(os.path.join(root, "tt_metal", "soc_descriptors", arch_yaml)))["grid"]
+        _NOC_GRID_CACHE[id(mesh_device)] = (mesh_device, (int(grid["x_size"]), int(grid["y_size"])))
+    return _NOC_GRID_CACHE[id(mesh_device)][1]
 
 
 def _chip_maps(mesh_device, coord):
     node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
     uid = int(ttnn.cluster.get_chip_unique_id_from_fabric_node_id(int(node.mesh_id), int(node.chip_id)))
     return _eth_physical_lists(mesh_device).get(uid, (None, False, {}))
+
+
+def _worker_nearest_noc1(mesh_device, coord, eth_xy, taken, allowed):
+    """Logical worker core (from `allowed`, not yet taken) with the fewest NoC1 hops to the Ethernet core at physical
+    eth_xy; ties to the lower row, then the lower column. NoC1 (the sender's NoC) routes -Y, then -X, wrapping around
+    the grid, so the hop count is directional: a core one column left of a harvested column would wrap the whole row.
+    Two links whose Ethernet cores sit over one live and one harvested column then get workers in two columns (as
+    fabric_all_gather's C++ op places them), instead of both in the live column, where their writes to the routers
+    would share the column's NoC1 segment into the Ethernet row."""
+    t2p = _chip_maps(mesh_device, coord)[2]
+    gx, gy = _noc_grid(mesh_device)
+    ex, ey = eth_xy
+    best = None
+    for x, y in sorted(allowed):
+        lc = ttnn.CoreCoord(x, y)
+        if (x, y) in taken:
+            continue
+        v = mesh_device.worker_core_from_logical_core(lc)
+        px = t2p.get(v.x, v.x)
+        score = ((v.y - ey) % gy + (px - ex) % gx, v.y, px)
+        if best is None or score < best[0]:
+            best = (score, lc)
+    return best[1] if best is not None else None
 
 
 def _worker_below(mesh_device, coord, noc_x, taken, allowed):
@@ -700,9 +746,9 @@ def plan(
                 for l in range(num_links):
                     core = None
                     if eth is not None and rg.get(f"{d}_links"):
-                        ex = eth_noc_column(mesh_device, coord, eth[(coord, peer, rg[f"{d}_links"][l])])
-                        core = _worker_below(mesh_device, coord, ex, taken, allowed)
-                        ch.setdefault("eth_cols", {})[(j, d, l)] = ex
+                        exy = eth_noc_coord(mesh_device, coord, eth[(coord, peer, rg[f"{d}_links"][l])])
+                        core = _worker_nearest_noc1(mesh_device, coord, exy, taken, allowed)
+                        ch.setdefault("eth_cols", {})[(j, d, l)] = exy[0]
                     elif isinstance(placement, dict):
                         core = placement.get((j, d, l))
                     ports[(j, d, l)] = core
