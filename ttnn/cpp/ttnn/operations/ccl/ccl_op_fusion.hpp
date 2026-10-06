@@ -56,6 +56,12 @@ struct AllGatherFusedOpSignaler {
 
         const tt::tt_metal::CoreRangeSet& all_gather_workers,
         std::vector<tt::tt_metal::CoreCoord>& all_gather_worker_cores);
+    // ProgramDescriptor form of init_all_gather: the worker sync semaphore becomes a SemaphoreDescriptor in `desc`.
+    void init_all_gather(
+        tt::tt_metal::ProgramDescriptor& desc,
+        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::CoreRangeSet& all_gather_workers,
+        std::vector<tt::tt_metal::CoreCoord>& all_gather_worker_cores);
 
     void push_all_gather_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args,
