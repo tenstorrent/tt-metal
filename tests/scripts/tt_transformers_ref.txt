@@ -1,0 +1,6 @@
+# tenstorrent/tt-transformers commit whose tests tt-metal CI runs, through
+# tests/scripts/run_tt_transformers_tests.sh, against the ttnn built from this tree.
+# Bump it in an ordinary PR; that PR runs the tt-transformers CI legs.
+# This is a test input, not a dependency. QB2 pins its own runtime copy in
+# models/demos/llama31_8b_qb2/requirements.txt.
+b7d1ab5257da73c588a61720fcfafec246c6fa4f
