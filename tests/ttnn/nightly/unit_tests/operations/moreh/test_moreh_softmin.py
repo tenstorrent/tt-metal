@@ -554,3 +554,125 @@ def test_softmin_backward_callback(shape_dim_strategy, dtype, device):
             assert device.num_program_cache_entries() == num_program_cache_entries
         torch_dummy = torch.randn([32, 32])
         tt_dummy = ttnn.from_torch(torch_dummy, device=device)
+
+
+@pytest.mark.parametrize(
+    "shape, dim, strategy",
+    [
+        pytest.param(
+            [32, 32],
+            1,
+            ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.SMALL_W,
+            id="small-w-single",
+        ),
+        pytest.param(
+            [32, 128],
+            1,
+            ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_W,
+            id="large-w-4tiles",
+        ),
+        pytest.param(
+            [128, 32],
+            0,
+            ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_H,
+            id="large-h-4tiles",
+        ),
+        pytest.param(
+            [1, 6, 32, 32],
+            1,
+            ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_C,
+            id="large-c-dim1",
+        ),
+        pytest.param(
+            [1, 1, 32, 33],
+            3,
+            ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.SMALL_W,
+            id="small-w-unaligned-2tiles",
+        ),
+        pytest.param(
+            [1, 1, 33, 32],
+            2,
+            ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.SMALL_H,
+            id="small-h-unaligned-2tiles",
+        ),
+    ],
+)
+@pytest.mark.parametrize("plant_pos", ["first", "last"], ids=["plant-first", "plant-last"])
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+@pytest.mark.parametrize(
+    "special_value",
+    [float("inf"), float("-inf")],
+    ids=["plus-inf", "minus-inf"],
+)
+def test_softmin_special_value_in_row(shape, dim, strategy, plant_pos, compute_kernel_options, special_value, device):
+    """The one planted special value must land where the documented device contract says.
+
+    Each case plants exactly one special element, so exactly one reduction group is affected and every other
+    group must still match torch. `plant_pos` picks the lane along the reduced dim: `first` is the second
+    lane, `last` is the final one -- the masked tail tile for every multi-tile entry here -- so the padding
+    and the per-tile staging/folding are exercised with a special value in them, not only with finite data.
+
+    +inf: torch returns a valid distribution with 0 at the +inf position, and the kernel matches it.
+
+    -inf: torch returns NaNs (inf - inf) in the affected reduction group; this kernel instead returns a
+    finite distribution concentrated on the (unique) -inf minimum. That divergence is the behaviour
+    recorded in #56371 -- a measured kernel result, not an IEEE-equivalent one -- and it is the single
+    place where the MIN statistic changes which operands the subtraction sees (the minimum is -inf
+    where main's maximum was finite, and the subtraction itself lowers to the FPU, not the SFPU).
+    The affected group is therefore graded against the stated contract rather than against torch's NaN.
+
+    See issue #56371.
+    """
+    torch.manual_seed(0)
+
+    torch_input = torch.rand(size=shape, dtype=torch.bfloat16) + 100
+    plant_idx = [0] * len(shape)
+    plant_idx[dim] = 1 if plant_pos == "first" else shape[dim] - 1
+    torch_input[tuple(plant_idx)] = special_value
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.operations.moreh.softmin(
+        ttnn_input,
+        dim,
+        strategy=strategy,
+        compute_kernel_config=get_compute_kernel_options(compute_kernel_options),
+    )
+    ttnn_output = ttnn.to_torch(ttnn_output).to(torch.bfloat16)
+
+    actual = ttnn_output.float()
+    expected = F.softmin(torch_input.float(), dim).to(torch.bfloat16).float()
+    assert list(actual.shape) == list(expected.shape)
+
+    if special_value == float("-inf"):
+        # Documented device contract: the affected group is one-hot on the planted -inf minimum.
+        # torch instead yields NaNs there, so the group is replaced rather than compared.
+        group_idx = [0] * len(shape)
+        group_idx[dim] = slice(None)
+        expected[tuple(group_idx)] = 0.0
+        expected[tuple(plant_idx)] = 1.0
+
+    assert torch.isfinite(actual).all()
+    assert (actual >= 0).all()
+
+    # The unaffected groups are still torch's rows, so a uniform or mislocated distribution fails here.
+    torch.testing.assert_close(actual, expected, rtol=0.02, atol=1e-3)
+    # Normalisation over the reduced dim, independent of where the mass sits in the affected group.
+    torch.testing.assert_close(
+        actual.sum(dim=dim),
+        torch.ones_like(actual.sum(dim=dim)),
+        rtol=0,
+        atol=0.02,
+    )
+
+    if special_value == float("inf"):
+        torch.testing.assert_close(
+            actual[tuple(plant_idx)],
+            torch.zeros_like(actual[tuple(plant_idx)]),
+            rtol=0,
+            atol=1e-3,
+        )
+    else:
+        # "Concentrated on the planted minimum" is the contract, and the elementwise tolerances above
+        # would also accept only 0.98 there with the remaining 0.02 spread over the group, so check the
+        # concentration itself.
+        assert actual[tuple(plant_idx)] >= 0.9
