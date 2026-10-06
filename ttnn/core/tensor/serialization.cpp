@@ -14,6 +14,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <cstring>
+#include <atomic>
+#include <fmt/format.h>
 
 #include <flatbuffers/flatbuffers.h>
 #include <flatbuffers/reflection.h>
@@ -32,6 +34,12 @@ using tt::tt_metal::MemoryPin;
 
 namespace {
 
+// Distinguishes temporary files written by different threads of one process.
+uint64_t next_temp_file_id() {
+    static std::atomic<uint64_t> counter{0};
+    return counter.fetch_add(1, std::memory_order_relaxed);
+}
+
 void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& tensor, DumpTensorMode mode) {
     Tensor cpu_tensor = tensor.cpu();
 
@@ -48,12 +56,26 @@ void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& ten
         }
     }
 
-    FILE* output_file = fopen(file_name.c_str(), "wb");
+    // Write to a private temporary sibling and rename it into place. rename(2) is atomic, so a
+    // concurrent reader (another process sharing the same tensor cache, e.g. the engines of a
+    // multi-process data-parallel vLLM server) sees either no file or a complete one, never a
+    // half-written file that load_tensor_flatbuffer would accept and then crash on. Two writers
+    // racing on the same name each produce a complete file; the last rename wins.
+    const std::string temp_file_name = fmt::format("{}.tmp.{}.{}", file_name, getpid(), next_temp_file_id());
+    FILE* output_file = fopen(temp_file_name.c_str(), "wb");
     TT_FATAL(
-        output_file != nullptr, "Cannot open \"{}\" for writing: errno={} \"{}\"", file_name, errno, strerror(errno));
-    auto cleanup = ttsl::make_cleanup([f = output_file, &file_name]() {
+        output_file != nullptr,
+        "Cannot open \"{}\" for writing: errno={} \"{}\"",
+        temp_file_name,
+        errno,
+        strerror(errno));
+    bool renamed = false;
+    auto cleanup = ttsl::make_cleanup([f = output_file, &temp_file_name, &renamed]() {
         if (f && fclose(f) != 0) {
-            log_warning(tt::LogAlways, "Failed to close \"{}\"", file_name);
+            log_warning(tt::LogAlways, "Failed to close \"{}\"", temp_file_name);
+        }
+        if (!renamed) {
+            unlink(temp_file_name.c_str());
         }
     });
 
@@ -62,7 +84,17 @@ void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& ten
     auto tensor_offset = ttnn::to_flatbuffer(cpu_tensor, builder, buffers);
     builder.Finish(tensor_offset);
 
-    write_tensor_file(output_file, file_name, builder, buffers);
+    write_tensor_file(output_file, temp_file_name, builder, buffers);
+
+    TT_FATAL(fflush(output_file) == 0, "Cannot flush \"{}\": errno={} \"{}\"", temp_file_name, errno, strerror(errno));
+    TT_FATAL(
+        rename(temp_file_name.c_str(), file_name.c_str()) == 0,
+        "Cannot rename \"{}\" to \"{}\": errno={} \"{}\"",
+        temp_file_name,
+        file_name,
+        errno,
+        strerror(errno));
+    renamed = true;
 
     if (mode == DumpTensorMode::DISTRIBUTED_GATHER) {
         const auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
