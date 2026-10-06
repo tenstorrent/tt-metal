@@ -64,7 +64,9 @@ ALWI void recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_reciprocal,
-        (approximation == ReciprocalApproxMode::Default ? APPROX : approximation == ReciprocalApproxMode::Approximate, is_fp32_dest_acc_en, 8 /*ITERATIONS*/),
+        (approximation == ReciprocalApproxMode::Default ? APPROX : approximation == ReciprocalApproxMode::Approximate,
+         is_fp32_dest_acc_en,
+         8 /*ITERATIONS*/),
         idst,
         vector_mode));
 }

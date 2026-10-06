@@ -11,7 +11,7 @@ struct ReciprocalBf16Config {
     static constexpr uint32_t kC2Bits = 0x4007c1f2u;
     static constexpr uint32_t kBodySlots = 26u;
 };
-}
+}  // namespace ckernel::sfpu
 #include "ckernel_sfpu_bf16_newton_reciprocal.h"
 
 namespace ckernel::sfpu {
