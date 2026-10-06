@@ -340,7 +340,9 @@ public:
         uint32_t teardown_sem_id = 0;
     };
 
+    // mesh_device selects the context whose HAL and fabric config the mux L1 map is computed against.
     FabricMuxV2Config(
+        const tt::tt_metal::distributed::MeshDevice& mesh_device,
         uint8_t num_channels,
         uint8_t num_buffers_per_channel,
         size_t channel_buffer_size_bytes,
