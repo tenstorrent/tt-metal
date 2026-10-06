@@ -1,5 +1,5 @@
-# MiniMax-M3 — 4-stage intragalaxy accuracy gate, merged KV table left on disk (derived from
-# topology_configuration/pipeline_prefill_request_intragalaxy_4rank.yaml + the 2rank binding).
+# MiniMax-M3 — 4-stage intragalaxy merged-mock accuracy gate (derived from
+# topology_configuration/pipeline_prefill_request_intragalaxy_4rank.yaml + the 2rank mock binding).
 # One 8x4 galaxy carved into 4 Z-chained [2,4] sub-meshes, 15 layers per stage.
 #
 # Launch:

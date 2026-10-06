@@ -31,9 +31,10 @@ Same two processes as the perf run below (runner under `tt-run`, producer on ran
 reads the KV back and PCCs it against the golden trace. The runner always publishes a KV chunk table, at
 any rank count and with no flag: every rank joins the stage-layout all-gather, rank 0 writes ONE table
 spanning all layers, and each rank writes a rank-scoped device map (`<stem>_r<rank>.json`; the producer
-merges the local ones). Leave `PREFILL_ENABLE_MIGRATION` at `0` so the table stays on disk for the
-read-back instead of going to a migration worker. Multi-rank, point `PREFILL_MIGRATION_TABLE_PATH` at
-shared storage — rank 0 writes it and every other host's producer reads it, so `/tmp` cannot work.
+merges the local ones). Leave `PREFILL_ENABLE_MIGRATION` at `0` (mock migration) so the table stays on
+disk for the read-back instead of going to a migration worker. Multi-rank, point
+`PREFILL_MIGRATION_TABLE_PATH` at shared storage — rank 0 writes it and every other host's producer reads
+it, so `/tmp` cannot work.
 On the producer (Process 2) add `PREFILL_PRODUCER_CHECK_PCC=1` and set `PREFILL_PRODUCER_MAX_REQUESTS=1`
 so every slot's KV is still resident when it is read back. PASS = `[producer] KV cache PCC PASSED`
 (threshold `PREFILL_STANDALONE_CHUNKED_PCC`, default `0.93`).
@@ -206,9 +207,9 @@ TT_CACHE_PATH=<pp-cache-root> PREFILL_MANIFEST=models/demos/minimax_m3/tt/runner
 The producer command is the multi-galaxy one with `PREFILL_SP=4` (2-stage) / `PREFILL_SP=2` (4-stage) —
 same plot/readout (`parse_iteration_times.py`, `plot_pipeline_trace`).
 
-### Accuracy — KV PCC (merged table on disk)
+### Accuracy — KV PCC (merged mock)
 
-Ready-made manifests (10240 ISL, 2 chunks/slot; table on shared storage, producer
+Ready-made manifests (10240 ISL, 2 chunks/slot; the merged-mock env, table on shared storage, producer
 PCC threshold set to M3's 0.88 gate):
 
 ```bash

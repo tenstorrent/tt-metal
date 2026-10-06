@@ -10,7 +10,7 @@ Assumes the model is already integrated — adapter registered, golden trace sta
 
 | Gate | What it exercises | Needs |
 |------|-------------------|-------|
-| **1 — disk table** | Prefill writes correct KV (precondition for everything) and the KV-chunk address table is correct, read device-lessly | tt-metal tree only |
+| **1 — mock migration** | Prefill writes correct KV (precondition for everything) and the KV-chunk address table is correct, read device-lessly | tt-metal tree only |
 | **2 — loopback migration** | The real DRAM → transport → DRAM copy, and the destination slots read back by the driver (`--verify-migration`, default `dst-bytes`) | + tt-llm-engine binaries |
 
 Gate 2 covers the same ground as the harness's own prefill-loopback stage. The difference is only that the
@@ -65,7 +65,7 @@ stays 32-token-block aligned).
 **`PREFILL_ENABLE_MIGRATION` picks the table's consumer, not whether one is built.** Every run all-gathers
 the per-rank stage layouts and rank 0 builds one merged table spanning every rank's layers. `1` (Gate 2)
 hands it to a live migration worker over the client queues (`deliver_device_map_and_gather_stage_layouts`)
-and blocks on the worker's ready; `0` (Gate 1) leaves it on disk for an offline reader such as
+and blocks on the worker's ready; `0` (Gate 1, mock migration) leaves it on disk for an offline reader such as
 `prefill_producer`. Both run on 1, 2 or 4 ranks — see *Covering every rank* below for what that costs on the
 read-back side.
 
@@ -405,7 +405,7 @@ flags go after the script's three positional arguments and reach every rank verb
 
 ---
 
-## Gate 1 — disk table and producer read-back
+## Gate 1 — mock migration and producer read-back
 
 This is also the KV-correctness precondition: prefill must write correct KV before migration means
 anything. The runner serialises the KV-chunk table and device map and nothing else; the producer reads

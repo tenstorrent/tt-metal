@@ -166,7 +166,11 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         anchored on whichever tensor it migrates, since the engine treats `kv_cache` as opaque and
         cannot pick for you. Number a stage in its own space when that is not the model's global layer
         numbering (a cache only some layers write), and map it back to model layers in your
-        `build_kv_chunk_table` (see DeepSeek's `kv_table_layer_rows`)."""
+        `build_kv_chunk_table` (see DeepSeek's `kv_table_layer_rows`).
+
+        Return `[]` only for a cache layout with no table yet (GPT-OSS's bounded sliding cache): the
+        engine then serves without a table, which it allows single-rank with both
+        `PREFILL_ENABLE_MIGRATION` and `PREFILL_MIGRATION_EXPORT_TO_FILE` off, and rejects otherwise."""
 
     # If your merged table's second config is NOT a DSA index cache, override `cache_kind(config_id)`
     # on the ADAPTER (default: 0 = "kvpe", 1 = "index", else "other") so the producer and the
