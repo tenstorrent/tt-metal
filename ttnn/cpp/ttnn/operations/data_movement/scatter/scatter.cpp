@@ -372,7 +372,7 @@ Tensor scatter_native(
 // transpose/4D-fold sandwich (the TILE and ROW_MAJOR program factories each address that layout
 // directly), so a TILE input never pays native's forced untilize -> scatter(ROW_MAJOR) -> tilize
 // round trip -- except for the low-tile-row reroute below, which pays the equivalent round trip
-// deliberately because the TILE factories' per-row work split leaves most cores idle at that width.
+// deliberately because the TILE factories' per-tile-row work split leaves most cores idle at that tile-row count.
 Tensor scatter_codegen_dispatch(
     const Tensor& input_tensor,
     const int32_t& dim,
@@ -478,9 +478,11 @@ Tensor scatter_force_codegen(
     TT_FATAL(
         codegen_can_serve(input_tensor, dim, index_tensor, source_tensor, output_memory_config, opt_reduction_string),
         "scatter_force_codegen invoked for a case the codegen path does not support (requires a single shared "
-        "layout -- TILE or ROW_MAJOR -- across bfloat16 input/src and an int32/uint32 index, all non-sharded, an "
-        "untransposed default tile when that layout is TILE, no reduction other than add/multiply (and only on "
-        "ROW_MAJOR), an unsharded output placement, and enough per-core L1 for the codegen plan). This entry never "
+        "layout -- TILE or ROW_MAJOR -- across bfloat16 input/src and an int32/uint32 index, all non-sharded and "
+        "non-empty, an untransposed default tile when that layout is TILE, no reduction other than add/multiply (and "
+        "only on ROW_MAJOR), an unsharded output placement that on ROW_MAJOR shares the input's buffer type, and "
+        "enough per-core L1 for the codegen plan; see supported_by_codegen() and supported_execution_controls()). "
+        "This entry never "
         "falls back to native, because a forced leg that quietly served native would make any comparison against "
         "native vacuous. Use ttnn::scatter if you want the case routed.");
     return scatter_codegen_dispatch(
