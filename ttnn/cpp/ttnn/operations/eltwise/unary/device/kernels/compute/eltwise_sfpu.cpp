@@ -39,6 +39,13 @@ void kernel_main() {
             SFPU_OP_CHAIN_0_INIT_0
         }
         SFPU_OP_CHAIN_0_FUNC_0
+#elif defined(ARCH_BLACKHOLE) && defined(SFPU_OP_CHAIN_0_TILE)
+        // The host wraps the inits whose state no other op of the chain writes.
+#define SFPU_OP_CHAIN_FIRST_TILE_ONLY(init) \
+    if (i == 0) {                           \
+        init                                \
+    }
+        SFPU_OP_CHAIN_0_TILE
 #else
 #ifdef SFPU_OP_CHAIN_0
         SFPU_OP_CHAIN_0

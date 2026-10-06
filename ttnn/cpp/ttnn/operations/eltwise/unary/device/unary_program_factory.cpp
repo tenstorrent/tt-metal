@@ -74,6 +74,108 @@ bool pack_first_op_scalars(
 
 bool needs_tmp0_cb(UnaryOpType t) { return t == UnaryOpType::LOGIT; }
 
+// Blackhole SFPU state beyond the part every init writes alike (LaneConfig, ADDR_MOD_7 = 0, counter reset).
+enum SfpuState : uint32_t {
+    kPrgm0 = 1u << 0,  // LREG12-14, the programmable constants
+    kPrgm1 = 1u << 1,
+    kPrgm2 = 1u << 2,
+    kMacroTemplates01 = 1u << 3,  // SFPLOADMACRO instruction templates, sequences and Misc
+    kMacroTemplates23 = 1u << 4,
+    kMacroSequence0 = 1u << 5,
+    kMacroSequence1 = 1u << 6,
+    kMacroSequences23 = 1u << 7,
+    kMacroMisc = 1u << 8,
+    kReplay = 1u << 9,
+    kAddrMod6 = 1u << 10,
+    kLregs = 1u << 11,  // LREG0-7
+};
+constexpr uint32_t kPrgm = kPrgm0 | kPrgm1 | kPrgm2;
+
+struct ChainOpState {
+    uint32_t init;  // programmed by the op's init and read by its call
+    uint32_t call;  // overwritten by the op's call
+};
+
+// The ops of the chains ttnn and the models build (sigmoid's fast-exp mode, the unary and binary backward chains,
+// the softcapping chains), for float inputs with math_approx_mode off. Any other op keeps the chain on per-tile inits.
+std::optional<ChainOpState> chain_op_state(const EltwiseUnaryWithParam& op, DataType dtype, bool fp32_dest_acc_en) {
+    if (dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32 && dtype != DataType::BFLOAT8_B) {
+        return std::nullopt;
+    }
+    const auto param0 = std::visit(
+        [](auto params) { return params.empty() ? std::optional<float>{} : std::optional<float>(params[0]); },
+        op.get_params());
+    // An sfpi body can record its row into the replay buffer, and every body uses LREG0-7.
+    constexpr uint32_t body = kReplay | kLregs;
+    switch (op.type()) {
+        case UnaryOpType::NEG:
+        case UnaryOpType::ABS:
+        case UnaryOpType::ADD_UNARY_SFPU:
+        case UnaryOpType::SUB_UNARY_SFPU:
+        case UnaryOpType::MUL_UNARY_SFPU:
+        case UnaryOpType::DIV_UNARY_SFPU: return ChainOpState{0, body};
+        case UnaryOpType::SQUARE: return ChainOpState{kPrgm | kAddrMod6, body};
+        case UnaryOpType::RSQRT: return ChainOpState{kPrgm, body};
+        case UnaryOpType::TANH:
+            if (param0.value_or(0.0f) != 0.0f) {
+                return std::nullopt;  // the LUT form keeps its table in LREG0-6
+            }
+            return ChainOpState{kPrgm, body};
+        case UnaryOpType::EXP:
+            if (param0.value_or(0.0f) != 1.0f) {
+                return std::nullopt;
+            }
+            return ChainOpState{
+                kPrgm | kMacroTemplates01 | kMacroTemplates23 | kMacroSequence0 | kMacroSequence1 | kMacroMisc, body};
+        case UnaryOpType::RECIP:
+            if (fp32_dest_acc_en) {
+                return ChainOpState{
+                    kPrgm0 | kMacroTemplates01 | kMacroTemplates23 | kMacroSequence0 | kMacroSequence1 |
+                        kMacroSequences23 | kMacroMisc | kReplay | kAddrMod6,
+                    body};
+            }
+            return ChainOpState{kPrgm0 | kMacroTemplates01 | kMacroSequence0 | kMacroMisc | kAddrMod6, body};
+        default: return std::nullopt;
+    }
+}
+
+// Blackhole: in a chain of two or more ops, an init whose state no other op of the chain writes runs with the first
+// tile only. SFPU_OP_CHAIN_0_TILE is the per-tile chain with those inits wrapped for eltwise_sfpu.cpp.
+std::map<std::string, std::string> get_chain_init_once_defines(
+    const std::vector<EltwiseUnaryWithParam>& op_chain, DataType dtype, bool fp32_dest_acc_en) {
+    if (op_chain.size() < 2) {
+        return {};
+    }
+    std::vector<ChainOpState> states;
+    uint32_t call_writes = 0;
+    for (const auto& op : op_chain) {
+        const auto state = chain_op_state(op, dtype, fp32_dest_acc_en);
+        if (!state) {
+            return {};
+        }
+        states.push_back(*state);
+        call_writes |= state->call;
+    }
+    std::string tile;
+    bool any_once = false;
+    for (size_t k = 0; k < op_chain.size(); k++) {
+        bool once = (states[k].init & call_writes) == 0;
+        for (size_t j = 0; j < op_chain.size() && once; j++) {
+            // The same op's init writes the same values.
+            const bool same_init = op_chain[j].type() == op_chain[k].type() && states[j].init == states[k].init;
+            once = j == k || same_init || (states[j].init & states[k].init) == 0;
+        }
+        any_once |= once;
+        tile += once ? fmt::format("SFPU_OP_CHAIN_FIRST_TILE_ONLY(SFPU_OP_CHAIN_0_INIT_{}) ", k)
+                     : fmt::format("SFPU_OP_CHAIN_0_INIT_{} ", k);
+        tile += fmt::format("SFPU_OP_CHAIN_0_FUNC_{} ", k);
+    }
+    if (!any_once) {
+        return {};
+    }
+    return {{"SFPU_OP_CHAIN_0_TILE", tile}};
+}
+
 uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout memory_layout) {
     auto num_cores = shard_spec.grid.num_cores();
     if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -409,9 +511,13 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     const bool logit_clamp_enabled =
         CMAKE_UNIQUE_NAMESPACE::pack_first_op_scalars(ops_chain[0], input.dtype(), packed_scalar1, packed_scalar2);
 
-    const std::string compute_path = fmt::format(
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/{}",
-        get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
+    const std::string_view compute_kernel = get_compute_kernel_path(ops_chain[0].type(), input.dtype());
+    const std::string compute_path =
+        fmt::format("ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/{}", compute_kernel);
+    if (compute_kernel == "eltwise_sfpu.cpp" && input.device()->arch() == tt::ARCH::BLACKHOLE) {
+        unary_defines.merge(CMAKE_UNIQUE_NAMESPACE::get_chain_init_once_defines(
+            ops_chain, input.dtype(), operation_attributes.fp32_dest_acc_en));
+    }
 
     DataFormat cb_data_format_for_input =
         (ops_chain[0].type() == unary::UnaryOpType::BITCAST) ? cb_data_format_output : cb_data_format;
