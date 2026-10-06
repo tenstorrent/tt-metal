@@ -6,6 +6,8 @@
 
 #include <cstdlib>
 #include <mutex>
+#include <string>
+#include <unordered_map>
 
 #include <tt_stl/assert.hpp>
 #include "llrt/rtoptions.hpp"
@@ -79,10 +81,26 @@ inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtopti
     // If running in mock mode, derive architecture from provided cluster descriptor
     if (rtoptions.get_target_device() == tt::TargetDevice::Mock ||
         rtoptions.get_target_device() == tt::TargetDevice::Emule) {
-        auto cluster_desc = umd::ClusterDescriptor::create_from_yaml(rtoptions.get_mock_cluster_desc_path());
+        // Parse each descriptor once. This is on the hot path of ttnn.get_arch_name(), which model code
+        // calls per op; re-parsing the cluster YAML cost ~5 ms per call on a 32-chip descriptor.
+        // Keyed by path rather than call_once because tests open several mock descriptors in one process.
+        static std::mutex mock_arch_mutex;
+        static std::unordered_map<std::string, tt::ARCH> mock_arch_by_path;
+        const std::string& path = rtoptions.get_mock_cluster_desc_path();
+        {
+            std::lock_guard<std::mutex> lock(mock_arch_mutex);
+            if (auto it = mock_arch_by_path.find(path); it != mock_arch_by_path.end()) {
+                return it->second;
+            }
+        }
+        auto cluster_desc = umd::ClusterDescriptor::create_from_yaml(path);
         if (cluster_desc && cluster_desc->get_number_of_chips() > 0) {
             auto chips = cluster_desc->get_all_chips();
             arch = cluster_desc->get_arch(*chips.begin());
+        }
+        if (arch != tt::ARCH::Invalid) {
+            std::lock_guard<std::mutex> lock(mock_arch_mutex);
+            mock_arch_by_path.emplace(path, arch);
         }
         return arch;
     }
