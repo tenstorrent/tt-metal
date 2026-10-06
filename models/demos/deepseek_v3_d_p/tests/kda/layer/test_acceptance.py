@@ -187,3 +187,63 @@ def test_kimi_k3_layer_1_real_weights_accuracy(
         tensor_parallel_axis,
         pcc_threshold=0.9995,
     )
+
+
+@pytest.mark.parametrize(
+    "mesh_device,tensor_parallel_axis,device_params",
+    [
+        pytest.param((1, 8), 1, fabric_1d_device_params(), id="SP1xTP8"),
+        pytest.param((2, 4), 1, fabric_1d_device_params(), id="SP2xTP4"),
+        pytest.param((2, 4), 0, fabric_1d_device_params(), id="SP4xTP2"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_kimi_k3_layer_1_real_weights_unaligned_end(
+    mesh_device: ttnn.MeshDevice,
+    tensor_parallel_axis: int,
+    kimi_k3_checkpoint_dir: Path,
+) -> None:
+    """Real weights stop at a prompt's real length; NaN padding cannot reach the carries.
+
+    With T=128, the ends give a partial chunk on every layout and end segments of one and
+    two valid rows on SP4 (97, 66) and SP2 (66), plus a one-token prompt.
+    """
+    sequence = 128
+    case = make_kimi_k3_test_case(kimi_k3_checkpoint_dir, sequence=sequence)
+    sequence_parallel_axis = 1 - tensor_parallel_axis
+    local_chunks = sequence // tuple(mesh_device.shape)[sequence_parallel_axis] // ttnn.TILE_SIZE
+    layer, hidden_tt = make_kimi_k3_device_case(
+        mesh_device,
+        case,
+        tensor_parallel_axis=tensor_parallel_axis,
+        summary_group_chunks=local_chunks,
+    )
+    ttnn.deallocate(hidden_tt)
+    mesh_shape = tuple(mesh_device.shape)
+    layout = f"SP{mesh_shape[sequence_parallel_axis]}xTP{mesh_shape[tensor_parallel_axis]}"
+    start_tt = make_actual_start(layer.device, 0)
+    for valid_length in (97, 66, 1):
+        golden_output, golden_state = kda_forward_reference(case.hidden[:, :valid_length], case.state_dict, case.config)
+        poisoned = case.hidden.clone()
+        poisoned[:, valid_length:] = float("nan")
+        hidden_tt = to_sp_input(poisoned, mesh_device, sequence_parallel_axis)
+        end_tt = make_actual_start(layer.device, valid_length)
+        state = layer.allocate_state(batch_size=1)
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            output, state = layer.forward(hidden_tt, state, start_tt, end_tt)
+        ttnn.synchronize_device(mesh_device)
+        check_kimi_k3_accuracy(
+            f"Kimi-K3 layer 1 {layout} end={valid_length}",
+            case,
+            golden_output,
+            golden_state,
+            state,
+            output,
+            mesh_device,
+            tensor_parallel_axis,
+            pcc_threshold=0.9995,
+            valid_length=valid_length,
+        )
+        for tensor in (hidden_tt, end_tt, output, state.recurrent, state.convolution):
+            ttnn.deallocate(tensor)
+    ttnn.deallocate(start_tt)

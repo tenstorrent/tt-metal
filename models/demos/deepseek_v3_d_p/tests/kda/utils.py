@@ -195,8 +195,13 @@ def check_kimi_k3_accuracy(
     tensor_parallel_axis: int,
     *,
     pcc_threshold: float,
+    valid_length: int | None = None,
 ) -> dict[str, float]:
-    """Reconstruct an SP/TP K3 result and run the shared accuracy contract on every endpoint."""
+    """Reconstruct an SP/TP K3 result and run the shared accuracy contract on every endpoint.
+
+    ``valid_length`` restricts the output to rows before an ``actual_end``; padded rows
+    are unspecified. Input rows must be in natural order (``actual_start`` of zero).
+    """
     sequence_parallel_axis = 1 - tensor_parallel_axis
     mesh_shape = tuple(mesh_device.shape)
     sp_size = mesh_shape[sequence_parallel_axis]
@@ -209,6 +214,8 @@ def check_kimi_k3_accuracy(
         tp_dim=2,
         sp_dim=1,
     )
+    if valid_length is not None:
+        actual_output = actual_output[:, :valid_length]
     golden_output = golden_output.to(torch.bfloat16)
     golden_convolution = torch.cat(
         (golden_state.q_convolution, golden_state.k_convolution, golden_state.v_convolution), dim=-1

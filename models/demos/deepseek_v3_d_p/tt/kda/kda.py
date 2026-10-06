@@ -462,10 +462,11 @@ class ttKDA:
         performed. Pass an explicit zero-valued tensor for a zero-start call.
 
         Optional ``actual_end`` is a replicated device scalar defining the
-        exclusive global valid end. The interval is nonempty, 32-aligned, and
-        no larger than the constructed capacity. Omission means full capacity.
-        Bounds may change during trace replay; their addresses must stay alive.
-        Padded output rows are unspecified; returned carries stop at the valid end.
+        exclusive global valid end. The interval is nonempty and no larger than
+        the constructed capacity; the end need not be 32-aligned. Omission means
+        full capacity. Bounds may change during trace replay; their addresses must
+        stay alive. Padded rows may hold any values, including NaN: padded output
+        rows are unspecified, and returned carries stop at the valid end.
 
         The input state is only read. No tensor reachable from it is used as a
         ``ttnn.copy`` destination or retained on this layer. The returned output
