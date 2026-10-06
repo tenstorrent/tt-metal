@@ -5,9 +5,16 @@
 
 import pytest
 
-from models.tt_dit.utils.conv3d import _BLOCKINGS
+from models.tt_dit.utils.conv3d import _BLOCKINGS, _DEFAULT_BLOCKINGS, _FP32_BLOCKINGS
 
-from ..wan2_2.bruteforce_conv3d_sweep import HaloSpec, build_all_blockings, halo_masks, halo_sticks, prefetch_shard_fits
+from ..wan2_2.bruteforce_conv3d_sweep import (
+    HaloSpec,
+    build_all_blockings,
+    halo_masks,
+    halo_sticks,
+    prefetch_shard_fits,
+    vol2col_chunks_fit,
+)
 from .bruteforce_conv3d_sweep_ltx import _SWEEP_LAYERS_LTX25_544P_145F_HALO, _SWEEP_LAYERS_LTX25_544P_145F_HALO_EXACT
 
 
@@ -99,3 +106,29 @@ def test_ltx_table_blockings_without_prefetch_shard():
         (4, 8, 128, 1024, (3, 3, 3), 21, 5, 4),
         (2, 4, 128, 128, (3, 3, 3), 147, 136, 120),
     }
+
+
+@pytest.mark.parametrize(
+    "blocking, fits",
+    # exact_s2_res (C_in=512) blockings from blx03 jobs 269-285: the four that hung and those that passed.
+    [
+        ((64, 128, 5, 4, 4), False),
+        ((64, 128, 5, 8, 2), False),
+        ((64, 128, 7, 4, 4), False),
+        ((64, 128, 7, 8, 2), False),
+        ((64, 64, 3, 8, 8), True),
+        ((64, 64, 3, 16, 4), True),
+        ((64, 32, 3, 4, 4), True),
+        ((64, 32, 3, 8, 2), True),
+        ((64, 128, 6, 8, 2), True),
+    ],
+)
+def test_vol2col_chunks_fit_splits_job_484_bisect(blocking, fits):
+    assert vol2col_chunks_fit(*blocking[2:]) == fits
+
+
+@pytest.mark.parametrize("table", [_BLOCKINGS, _DEFAULT_BLOCKINGS, _FP32_BLOCKINGS], ids=["exact", "default", "fp32"])
+def test_table_blockings_fit_vol2col_chunks(table):
+    # The T-relaxed lookup clamps T_out_block down, so every smaller T must fit too.
+    bad = {k: v for k, v in table.items() if not all(vol2col_chunks_fit(t, *v[3:]) for t in range(1, v[2] + 1))}
+    assert bad == {}

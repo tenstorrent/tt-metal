@@ -149,6 +149,17 @@ L1_PREFETCH_HARD_CAP = 500 * 1024
 DRAM_READ_ALIGNMENT = 64
 
 
+def vol2col_chunks_fit(t_blk, h_blk, w_blk):
+    """True when conv3d_program_factory accepts this block's patch count.
+
+    The reader pushes TILE_HEIGHT-page chunks into a vol2col_rm CB of at most 2 * TILE_HEIGHT pages.
+    Past that, an unaligned patch count makes a chunk straddle the CB end and the reader overruns L1
+    (the Cin64/Cout128 T=5|7 hangs of blx03 job 484), so the factory rejects it.
+    """
+    num_patches = t_blk * h_blk * w_blk
+    return num_patches <= 2 * TILE_HEIGHT or num_patches % TILE_HEIGHT == 0
+
+
 def prefetch_shard_fits(
     cin_block,
     cout_block,
@@ -539,6 +550,10 @@ def run_sweep(
         combos.sort(key=lambda c: sum(a != b for a, b in zip(c, table_blk)))
     if only_blockings is not None:
         combos = [tuple(b) for b in only_blockings]
+    straddle = [c for c in combos if not vol2col_chunks_fit(*c[2:])]
+    if straddle:
+        print(f"Dropping {len(straddle)} blockings whose vol2col_rm chunks straddle the CB: {straddle}")
+        combos = [c for c in combos if c not in straddle]
     if halo is not None:
         no_shard = [c for c in combos if not prefetch_shard_fits(*c, kernel_size, C_in)]
         if no_shard:

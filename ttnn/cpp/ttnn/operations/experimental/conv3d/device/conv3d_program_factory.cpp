@@ -170,6 +170,23 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     // the next is pushed.
     // Double-buffer (2x) when num_patches isn't tile-aligned to avoid CB deadlock
     // between reader pushes and compute tilize pops on the partial last row.
+    // The reader pushes TILE_HEIGHT-page chunks plus a num_patches % TILE_HEIGHT tail per block,
+    // so with more than 2 * TILE_HEIGHT unaligned patches the next block starts mid-CB and a full
+    // chunk straddles the CB end. cb_push_back only wraps on an exact hit of fifo_limit, so the
+    // reader then writes past the CB through the rest of L1 and the op hangs.
+    TT_FATAL(
+        num_patches <= 2 * tt::constants::TILE_HEIGHT || num_patches % tt::constants::TILE_HEIGHT == 0,
+        "Conv3d blocking T_out_block={}, H_out_block={}, W_out_block={} gives {} patches per block. More than {} "
+        "patches must be a multiple of {}, or the vol2col_rm CB chunks straddle the CB end and the reader overruns "
+        "L1. Use a blocking whose T*H*W product is <= {} or a multiple of {}.",
+        config.T_out_block,
+        config.H_out_block,
+        config.W_out_block,
+        num_patches,
+        2 * tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_HEIGHT,
+        2 * tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_HEIGHT);
     uint32_t vol2col_rm_pages = (num_patches % tt::constants::TILE_HEIGHT == 0)
                                     ? std::min(num_patches, (uint32_t)tt::constants::TILE_HEIGHT)
                                     : std::min(num_patches, 2 * tt::constants::TILE_HEIGHT);

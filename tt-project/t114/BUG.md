@@ -107,3 +107,76 @@ Each combo ran as its own broker job: full mesh opened, then create_submesh(2,4)
 
 Between hangs the broker ran its own galaxy recovery (job 275 and similar), and the device passed its health gate before the next combo started. Every combo with Cout=128 still hung on that freshly recovered device, so the hang follows the config and is not left over from a wedged mesh. The guard did not fire: these blockings pass prefetch_shard_fits() but still hang. So the job-484 hang is NOT limited to 143/144. It covers Cin_block=64 with Cout_block=128 (T=5 and T=7 tested). Cout 32 and 64 are fine.
 Combo 143 alone was not run: four reproducible hangs in a row already answer the question, and 143 is expected to hit the TT_FATAL guard before any device dispatch.
+
+## Root cause (#149, code reading only, 2026-10-06)
+
+**The vol2col_rm CB write pointer runs past the CB end.** This depends on the block's patch count, not on Cout_block.
+Cout=128 and T in {5,7} are fully confounded in the bisect above. Job 484 combo 140 (64,128,6,8,2) ran with
+Cout=128 and passed.
+
+- `conv3d_program_factory.cpp:173-175` (before the guard) sizes the vol2col_rm CB:
+  - `min(n, 32)` pages when n = T_out_block*H_out_block*W_out_block is a multiple of 32;
+  - otherwise `min(n, 64)` pages.
+- Per block, the reader's ChunkWriter (`kernels/reader_vol2col.cpp:142-208`, used at :1088 and :1178) pushes
+  32-page chunks plus an `n % 32` tail. Compute tilizes and pops the same chunks (`kernels/compute.cpp:422-445`).
+- When n > 64 and n % 32 != 0, each block ends at an offset of `n % 32` into the CB, so the next block starts
+  there. Its 32-page chunks then cross the 64-page CB end. Example: n=80. Block 0 pushes 0-32, 32-64 (wraps),
+  then 0-16. Block 1 pushes 16-48, then 48-80, which is 16 pages past the end.
+- `cb_push_back` (`tt_metal/hw/inc/api/dataflow/dataflow_api.h:216-217`) wraps only when
+  `fifo_wr_ptr == fifo_limit`. At 80 > 64 it never wraps again, so the reader keeps writing upward through L1:
+  vol2col_tiled, weights, interm, the prefetch shard, then past the end of L1. That corrupts the CBs and sends
+  NoC writes to invalid addresses, and the core hangs.
+- Compute's `llk_pop_tiles` (`llk_io_unpack.h:62`) wraps on `>=`, so the two sides also stop agreeing on where
+  data is.
+- Each core runs hundreds of blocks, so the overrun starts in block 1.
+
+`tt-project/t149/sim_vol2col_cb.py` replays the pointer arithmetic and matches all 9 data points:
+
+| (T,H,W) | patches | sim | device |
+|---|---|---|---|
+| (5,4,4), (5,8,2) | 80 | overrun in block 1 | HANG (273, 276) |
+| (7,4,4), (7,8,2) | 112 | overrun in block 1 | HANG (280, 285) |
+| (3,8,8), (3,16,4) | 192 (aligned) | ok | PASS (269, 270) |
+| (3,4,4), (3,8,2) | 48 (<= 64, CB = 48 pages) | ok | PASS (271, 272) |
+| (6,8,2) | 96 (aligned) | ok | PASS (job 484 combo 140, Cout=128) |
+
+I rebuilt job 484's combo order on CPU: `build_all_blockings(512,512,(3,3,3),36,32,75)` sorted near
+(64,256,1,8,4), 731 combos, positions 141-150 matching this file. No hazardous combo comes before 141, so no
+earlier pass contradicts this cause. The same sizing line is on upstream main, so the bug exists upstream too.
+
+Alternatives, ranked (all weaker):
+1. L1 overflow from CB sizing. This would raise a host allocation error, not hang.
+2. A weight-chain or reduction semaphore deadlock tied to Cout=128. Ruled out because combo 140 has the same
+   parallel split (c_in 8, c_out 4, t 4, Chain weight share) and passed.
+3. Matmul subblock or dst limits at N_t=4. Combo 140 has the same N_t and passed.
+4. The frozen eth heartbeat. This is likely a side effect of the wedged NoC or the teardown, not a separate
+   cause; this part is only weakly explained.
+
+## Guard (#149)
+
+- Factory: a TT_FATAL right before the vol2col_rm sizing rejects `n > 64 && n % 32 != 0` in every mode, not only
+  halo. It names the blocking. It is not compiled or device-tested yet (this task did no device work).
+  - It also rejects a hazardous blocking whose core would run only one block, which cannot overrun. That is
+    deliberate: the count of blocks per core depends on the shape and the grid, so this is the narrow and
+    simple rule.
+- Sweep harness: `vol2col_chunks_fit(t,h,w)` in `bruteforce_conv3d_sweep.py` drops these combos from every
+  sweep.
+- CPU tests in `test_conv3d_sweep_halo_cpu.py`:
+  - the predicate rejects the 4 hanging combos and accepts the 4 passing ones plus (64,128,6,8,2);
+  - no `_BLOCKINGS`, `_DEFAULT_BLOCKINGS` or `_FP32_BLOCKINGS` entry is hazardous, even after the T-relaxed
+    path clamps T_out_block down.
+- A proper fix (not done): size vol2col_rm at `n` pages when n is unaligned, so each block ends exactly at the
+  limit, or pad the tail push and pop to 32 pages. Then the guard can go.
+
+## Audit (#149)
+
+`tt-project/t149/audit_blockings.py` checks every table blocking. It also checks the smaller T_out_block values
+the T-relaxed path can clamp to.
+- 0 hits in `_BLOCKINGS`: 219 entries, 136 of them for mesh 4x8, which is what LTX_CONV3D_BLOCKING_MESH=4,8
+  selects.
+- 0 hits in `_DEFAULT_BLOCKINGS` (42), in `_FP32_BLOCKINGS` with the H3 audio entries (198), and in
+  `_H3_ENCODER_BLOCKINGS` (9).
+- The unaligned table blockings are all at most 56 patches.
+- No model code builds a Conv3dConfig outside these tables.
+
+Production decode cannot hit this hang. It came only from sweep combos, so no table blocking needs replacing.
