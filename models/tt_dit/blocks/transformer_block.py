@@ -40,10 +40,9 @@ class TransformerBlock(Module):
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
-        attention_k_chunk_size: int = 512,
-        attention_q_chunk_size: int = 128,
         is_fsdp: bool = False,
-        attention_exp_approx_mode: bool = False,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -116,10 +115,9 @@ class TransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
-            k_chunk_size=attention_k_chunk_size,
-            q_chunk_size=attention_q_chunk_size,
             is_fsdp=is_fsdp,
-            exp_approx_mode=attention_exp_approx_mode,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
 
         self.norm2 = DistributedLayerNorm(

@@ -51,7 +51,7 @@ from ....utils.test import (
         "4x8sp1tp0nl2_linear_is_fsdp0",  # BH (linear) on 4x8
         "4x8sp1tp0nl2_ring_is_fsdp0",  # BH (ring) on 4x8
         "4x32sp1tp0nl2_ring_is_fsdp0",
-        "2x4sp0tp1nl1_linear_is_fsdp1_bf8_lofi",  # FSDP on 2x4 with bf8 weights+activations, LoFi linear, bf8 HiFi2 SDPA
+        "2x4sp0tp1nl1_linear_is_fsdp1_bf8_lofi",  # FSDP on 2x4 with bf8 weights+activations, LoFi linear
     ],
     indirect=["mesh_device", "device_params"],
 )

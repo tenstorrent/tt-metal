@@ -311,6 +311,8 @@ class WanPipeline(PipelineAPIMixin):
         run_warmup: bool = True,
         lora_enabled: bool = False,
         pipeline_class: type[WanPipeline] | None = None,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> WanPipeline:
         """Build a pipeline from this variant's defaults plus the given overrides."""
         # Resolved off the class being constructed, not `cls`, so `pipeline_class` gets its
@@ -332,6 +334,12 @@ class WanPipeline(PipelineAPIMixin):
             scheduler=scheduler,
             run_warmup=run_warmup,
             lora_enabled=lora_enabled,
+            # Only when set: subclasses with their own __init__ (the I2V family) need not take the SDPA overrides.
+            **{
+                key: value
+                for key, value in (("sdpa_precision", sdpa_precision), ("sdpa_kv_dtype", sdpa_kv_dtype))
+                if value is not None
+            },
         )
 
     def __init__(
@@ -342,6 +350,8 @@ class WanPipeline(PipelineAPIMixin):
         scheduler: SchedulerMixin | None = None,
         run_warmup: bool = True,
         lora_enabled: bool = False,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -393,6 +403,8 @@ class WanPipeline(PipelineAPIMixin):
             is_fsdp=self.is_fsdp,
             model_type=self.model_type,
             lora_enabled=lora_enabled,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
 
         self.transformer_2 = self._checkpoint_2.build(
@@ -401,6 +413,8 @@ class WanPipeline(PipelineAPIMixin):
             is_fsdp=self.is_fsdp,
             model_type=self.model_type,
             lora_enabled=lora_enabled,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
 
         self._vae = WanVAEDecoderAdapter(

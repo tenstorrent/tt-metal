@@ -169,7 +169,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topolog
             False,
             None,
         ],
-        # FSDP on 2x4 with bf8 weights+activations, LoFi linear, bf8 HiFi2 SDPA
+        # FSDP on 2x4 with bf8 weights+activations, LoFi linear
         [(2, 4), (2, 4), 0, 1, 1, True, line_params_req_exact_devices, ttnn.Topology.Linear, True, "all_bf8_lofi"],
     ],
     ids=[
