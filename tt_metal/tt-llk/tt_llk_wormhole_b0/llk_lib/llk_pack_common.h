@@ -24,6 +24,8 @@ using namespace ckernel::packer;
 inline void _llk_packer_wait_for_math_done_()
 {
     TTI_SEMWAIT(p_stall::STALL_TDMA, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO);
+    // Start each DEST block with all four packers idle: a DEST bank lag between packers must not carry across blocks.
+    TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK);
 }
 
 /**
