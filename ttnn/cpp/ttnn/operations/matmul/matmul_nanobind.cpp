@@ -9,6 +9,8 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
+#include <nanobind/stl/tuple.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
@@ -17,6 +19,7 @@
 #include <fmt/ranges.h>
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_auto_config.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_optimized_program_factory.hpp"
@@ -1275,6 +1278,38 @@ void py_module(nb::module_& mod) {
         Returns the program config most recently auto-selected on this thread by a matmul called without a
         program_config, formatted as a string (None if there hasn't been one). After ttnn.matmul/ttnn.linear,
         this is the config that ran. With reset=True the recorded config is cleared after it is read.
+    )doc");
+
+    mod.def(
+        "matmul_record_enumerated_configs",
+        &auto_config::set_record_enumerated_configs,
+        nb::arg("on"),
+        R"doc(
+        Testing/benchmark only, not part of the public API.
+
+        While on (per thread), each matmul called without a program_config also records the configs a sweep can
+        time for its inputs (see matmul_last_enumerated_configs).
+    )doc");
+
+    mod.def(
+        "matmul_last_enumerated_configs",
+        [](bool reset) {
+            auto [configs, unsupported] = auto_config::last_enumerated_configs(reset);
+            std::vector<std::tuple<MatmulProgramConfig, std::string, std::string>> rows;
+            rows.reserve(configs.size());
+            for (auto& c : configs) {
+                rows.emplace_back(std::move(c.config), std::move(c.origin), std::move(c.error));
+            }
+            return std::make_pair(std::move(rows), std::move(unsupported));
+        },
+        nb::arg("reset") = false,
+        R"doc(
+        Testing/benchmark only, not part of the public API.
+
+        The configs recorded by the last matmul on this thread while matmul_record_enumerated_configs was on:
+        ([(program_config, origin, error)], unsupported). origin is "heuristic" for the config the v2 selection
+        chooses and "enumerated" for the others; error is why the matmul op rejects the config ("" if it doesn't);
+        unsupported is why there are no configs, if there are none.
     )doc");
 
     // Bind create_matmul_attributes helper

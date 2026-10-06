@@ -110,6 +110,7 @@ FIELDS = [
     "fallback",
     "device_ns",
     "device_ns_min",
+    "device_ns_max",
     "fw_ns",
     "brisc_ns",
     "ncrisc_ns",
@@ -449,6 +450,7 @@ class CaseRun:
             row.update(
                 device_ns=device_ns,
                 device_ns_min=total(calls[0], DURATION_KEY),
+                device_ns_max=total(calls[-1], DURATION_KEY),
                 programs_per_call=per_call,
                 util_pct=round(100 * ideal_ns / device_ns, 2),
                 dram_util_pct=round(100 * dram_ideal_ns / device_ns, 2),

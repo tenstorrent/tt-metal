@@ -1038,6 +1038,7 @@ MatmulProgramConfig get_program_config(
     }
     const uint32_t bias_single_tile_size =
         bias.has_value() ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(bias->dtype())) : 0;
+    auto_config::record_enumerated_configs(input_tensor_a, input_tensor_b, bias, attributes);
     std::optional<MatmulProgramConfig> auto_config;
     if (ttnn::CONFIG.get<"matmul_auto_config_v2">()) {
         // The new selector is the only one: inputs it has no config for are inputs matmul can't run (legacy fails

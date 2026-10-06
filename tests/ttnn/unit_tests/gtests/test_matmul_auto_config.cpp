@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -17,6 +18,7 @@
 
 #include <fmt/format.h>
 
+#include "ttnn/operations/matmul/device/config/enumerating_source.hpp"
 #include "ttnn/operations/matmul/device/config/factory_blocking_source.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_auto_config.hpp"
 #include "ttnn/operations/matmul/device/config/roofline_estimator.hpp"
@@ -307,6 +309,44 @@ TEST(MatmulAutoConfig, EmittedConfigsAreValid) {
             }
         }
     }
+}
+
+// The enumerating source leads with the heuristic source's choice, and everything it proposes is a config the
+// matmul op accepts
+TEST(MatmulAutoConfig, EnumeratedConfigsAreValid) {
+    size_t most = 0;
+    for (const auto& arch : kArchs) {
+        const auto hw = HardwareDesc::for_arch(arch.arch, arch.grid, kL1Budget);
+        for (const auto& s : shapes()) {
+            for (auto in1 : {tt::DataFormat::Float16_b, tt::DataFormat::Bfp8_b}) {
+                const auto p = make_matmul(s.batch_a, s.batch_b, s.M, s.K, s.N, in1);
+                const auto label = fmt::format(
+                    "{} b={}/{} M={} K={} N={} in1={}",
+                    arch.name,
+                    s.batch_a,
+                    s.batch_b,
+                    s.M,
+                    s.K,
+                    s.N,
+                    static_cast<int>(in1));
+                const auto proposed = EnumeratingSource().propose(p, hw);
+                const auto chosen = FactoryBlockingSource().propose(p, hw);
+                ASSERT_FALSE(proposed.empty()) << label;
+                ASSERT_FALSE(chosen.empty()) << label;
+                EXPECT_EQ(
+                    fmt::format("{}", to_program_config(p, proposed.front())),
+                    fmt::format("{}", to_program_config(p, chosen.front())))
+                    << label;
+                const auto specs = specs_of(p, hw);
+                for (const auto& c : proposed) {
+                    const auto config = to_program_config(p, c);
+                    EXPECT_EQ(check(specs, p, hw, config), "") << label << "\n" << fmt::format("{}", config);
+                }
+                most = std::max(most, proposed.size());
+            }
+        }
+    }
+    EXPECT_LE(most, 200u);
 }
 
 TEST(MatmulAutoConfig, TransposeAFitsL1) {

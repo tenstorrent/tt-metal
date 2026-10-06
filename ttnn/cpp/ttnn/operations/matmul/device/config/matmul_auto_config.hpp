@@ -10,6 +10,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -152,5 +153,34 @@ std::optional<MatmulProgramConfig> select_program_config(
     const std::optional<const Tensor>& bias,
     const ttnn::prim::MatmulParams& attributes,
     std::string* unsupported = nullptr);
+
+// For sweeps (testing/benchmark only): a config for a matmul call, where it came from ("heuristic": the config
+// select_program_config chooses; "enumerated": another of EnumeratingSource's proposals), and why the device op
+// rejects it (check(); empty if it doesn't).
+struct EnumeratedConfig {
+    MatmulProgramConfig config;
+    std::string origin;
+    std::string error;
+};
+
+// The config select_program_config chooses for matmul's inputs, then every other config EnumeratingSource proposes;
+// empty, with the reason in `unsupported` when given, for inputs the selector has no config for.
+std::vector<EnumeratedConfig> enumerate_program_configs(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const Tensor>& bias,
+    const ttnn::prim::MatmulParams& attributes,
+    std::string* unsupported = nullptr);
+
+// While on (per thread), each matmul that chooses its own config also records enumerate_program_configs for its
+// inputs, read back with last_enumerated_configs.
+void set_record_enumerated_configs(bool on);
+void record_enumerated_configs(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const Tensor>& bias,
+    const ttnn::prim::MatmulParams& attributes);
+// The configs last recorded on this thread, and why there are none (unsupported inputs); with reset, cleared after
+std::pair<std::vector<EnumeratedConfig>, std::string> last_enumerated_configs(bool reset);
 
 }  // namespace ttnn::operations::matmul::auto_config

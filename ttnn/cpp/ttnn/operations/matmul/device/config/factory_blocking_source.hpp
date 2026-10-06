@@ -49,6 +49,13 @@ struct BlockRules {
 
     bool prefers(uint32_t k) const { return k_preferred != 0 && k == k_preferred; }
     bool prefers_other(uint32_t k) const { return k_preferred != 0 && k != k_preferred; }
+    bool allows_k(uint32_t k) const { return (k_fixed == 0 || k == k_fixed) && (k_divides == 0 || k_divides % k == 0); }
+    // Validation also admits out_block_h == 1 with a narrower out_block_w, but the 1D in0-mcast factory then
+    // writes a sharded output wrongly (#58046), so a sharded output's blocks always span per_core_N.
+    bool allows_block_w(uint32_t per_core_N, uint32_t out_block_w) const {
+        return !sharded_out || out_block_w == per_core_N;
+    }
+    bool operator==(const BlockRules&) const = default;
 };
 
 // A layout's per-core work: per_core_M x per_core_N output tiles, with the batch folded into M or looped over
@@ -56,6 +63,8 @@ struct Split {
     uint32_t per_core_M = 0;
     uint32_t per_core_N = 0;
     bool fuse_batch = true;
+
+    bool operator==(const Split&) const = default;
 };
 
 // Chooses in0_block_w and the output blocks for a split (subblocks left 0), or nullopt if nothing fits L1

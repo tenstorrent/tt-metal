@@ -80,6 +80,16 @@ inline bool no_mcast_1d(const MatmulDesc& p) { return p.global_cb || dram_sharde
 // Rows of output tiles the mcast families split across cores: all batches when fused, else one batch.
 inline uint32_t output_rows(const MatmulDesc& p, bool fuse_batch) { return fuse_batch ? p.batch_a * p.Mt : p.Mt; }
 
+// Cores with work: one per output block (a Reuse block is a slice of a batch matrix, at most one per core)
+inline uint32_t cores_used(
+    const MatmulDesc& p, const HardwareDesc& hw, Family family, const Blocking& b, bool fuse_batch) {
+    if (family == Family::Reuse) {
+        const uint32_t blocks = p.batch_a * p.Mt / b.per_core_M;
+        return std::min(blocks, static_cast<uint32_t>(hw.grid.x * hw.grid.y));
+    }
+    return div_up(output_rows(p, fuse_batch), b.per_core_M) * div_up(p.Nt, b.per_core_N);
+}
+
 // Divisors of n, largest first.
 inline std::vector<uint32_t> divisors_desc(uint32_t n) {
     std::vector<uint32_t> small;

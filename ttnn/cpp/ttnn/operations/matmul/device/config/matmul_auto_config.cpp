@@ -6,11 +6,13 @@
 
 #include <algorithm>
 
+#include <fmt/format.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/hal.hpp>
 
 #include "ttnn/operations/matmul/device/config/auto_config_common.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
+#include "ttnn/operations/matmul/device/config/enumerating_source.hpp"
 #include "ttnn/operations/matmul/device/config/factory_blocking_source.hpp"
 #include "ttnn/operations/matmul/device/config/roofline_estimator.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
@@ -386,27 +388,31 @@ std::optional<MatmulProgramConfig> select_program_config(
     return config;
 }
 
-std::optional<MatmulProgramConfig> select_program_config(
+namespace {
+
+// What the selection needs to know about a matmul call
+struct Problem {
+    ttnn::prim::MatmulSpecs specs;
+    MatmulDesc matmul;
+    HardwareDesc hw;
+};
+
+// The matmul call's specs, description and hardware, or nullopt with the reason in `why` for inputs the selector
+// has no config for
+std::optional<Problem> describe_call(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias,
     const ttnn::prim::MatmulParams& attributes,
-    std::string* unsupported) {
-    auto reject = [&](std::string reason) -> std::optional<MatmulProgramConfig> {
-        if (unsupported != nullptr) {
-            *unsupported = std::move(reason);
-        }
-        return std::nullopt;
-    };
-    const auto specs = ttnn::prim::matmul_specs({input_tensor_a, input_tensor_b}, bias, attributes);
-    std::string why;
+    std::string& why) {
+    auto specs = ttnn::prim::matmul_specs({input_tensor_a, input_tensor_b}, bias, attributes);
     const auto described = describe_matmul(specs, why);
     if (!described) {
-        return reject(why);
+        return std::nullopt;
     }
     const MatmulDesc& p = *described;
-    if (auto reason = unsupported_reason(p); !reason.empty()) {
-        return reject(reason);
+    if (why = unsupported_reason(p); !why.empty()) {
+        return std::nullopt;
     }
 
     // Worker grid: the device's, or on a sub-device its worker rectangle (the factories anchor their grid at
@@ -420,7 +426,8 @@ std::optional<MatmulProgramConfig> select_program_config(
             device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, attributes.sub_device_id.value());
         const auto bbox = cores.bounding_box();
         if (cores.num_cores() != bbox.size()) {
-            return reject("sub-device worker cores not a rectangle");
+            why = "sub-device worker cores not a rectangle";
+            return std::nullopt;
         }
         grid = bbox.grid_size();
         origin = bbox.start_coord;
@@ -446,11 +453,85 @@ std::optional<MatmulProgramConfig> select_program_config(
     auto hw = HardwareDesc::for_arch(device->arch(), grid, budget);
     hw.origin = origin;
     hw.pinned_origin = on_sub_device;
-    auto config = choose_config(specs, p, hw, why);
-    if (!config) {
-        return reject(why);
+    return Problem{std::move(specs), p, hw};
+}
+
+}  // namespace
+
+std::optional<MatmulProgramConfig> select_program_config(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const Tensor>& bias,
+    const ttnn::prim::MatmulParams& attributes,
+    std::string* unsupported) {
+    std::string why;
+    std::optional<MatmulProgramConfig> config;
+    if (const auto problem = describe_call(input_tensor_a, input_tensor_b, bias, attributes, why)) {
+        config = choose_config(problem->specs, problem->matmul, problem->hw, why);
+    }
+    if (!config && unsupported != nullptr) {
+        *unsupported = std::move(why);
     }
     return config;
+}
+
+std::vector<EnumeratedConfig> enumerate_program_configs(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const Tensor>& bias,
+    const ttnn::prim::MatmulParams& attributes,
+    std::string* unsupported) {
+    std::string why;
+    const auto problem = describe_call(input_tensor_a, input_tensor_b, bias, attributes, why);
+    if (!problem) {
+        if (unsupported != nullptr) {
+            *unsupported = std::move(why);
+        }
+        return {};
+    }
+    const auto& [specs, p, hw] = *problem;
+    // The selection's own config leads, also when it isn't among the proposals (the non-reusing fallback)
+    std::vector<EnumeratedConfig> result;
+    std::string chosen_text;
+    if (auto chosen = choose_config(specs, p, hw, why)) {
+        chosen_text = fmt::format("{}", *chosen);
+        result.push_back({std::move(*chosen), "heuristic", ""});
+    }
+    for (const auto& candidate : EnumeratingSource().propose(p, hw)) {
+        auto config = to_program_config(p, candidate);
+        if (fmt::format("{}", config) != chosen_text) {
+            auto error = check(specs, p, hw, config);
+            result.push_back({std::move(config), "enumerated", std::move(error)});
+        }
+    }
+    return result;
+}
+
+namespace {
+thread_local bool record_enumerated = false;
+thread_local std::pair<std::vector<EnumeratedConfig>, std::string> last_enumerated;
+}  // namespace
+
+void set_record_enumerated_configs(bool on) { record_enumerated = on; }
+
+void record_enumerated_configs(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const Tensor>& bias,
+    const ttnn::prim::MatmulParams& attributes) {
+    if (record_enumerated) {
+        last_enumerated.second.clear();
+        last_enumerated.first =
+            enumerate_program_configs(input_tensor_a, input_tensor_b, bias, attributes, &last_enumerated.second);
+    }
+}
+
+std::pair<std::vector<EnumeratedConfig>, std::string> last_enumerated_configs(bool reset) {
+    auto result = last_enumerated;
+    if (reset) {
+        last_enumerated = {};
+    }
+    return result;
 }
 
 }  // namespace ttnn::operations::matmul::auto_config

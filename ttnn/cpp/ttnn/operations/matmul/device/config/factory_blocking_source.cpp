@@ -70,16 +70,6 @@ uint32_t max_in0_block_w(
     return std::min({depth, Kt, self_read_limit});
 }
 
-bool k_allowed(const BlockRules& rules, uint32_t k) {
-    return (rules.k_fixed == 0 || k == rules.k_fixed) && (rules.k_divides == 0 || rules.k_divides % k == 0);
-}
-
-// Validation also admits out_block_h == 1 with a narrower out_block_w, but the 1D in0-mcast factory then
-// writes a sharded output wrongly (#58046), so a sharded output's blocks always span per_core_N.
-bool block_allowed(const BlockRules& rules, uint32_t per_core_N, uint32_t out_block_w) {
-    return !rules.sharded_out || out_block_w == per_core_N;
-}
-
 // 2D mcast (issue #57884 heuristic 1): largest in0_block_w * out_block_h * out_block_w that fits L1 (among
 // blocks at the layout's preferred in0_block_w, if any fit, then among blocks that fit with in0_block_w at least
 // Limits::min_in0_block_w when Tuned::k_depth_over_block_size is on: every K block ends with a pack of the whole
@@ -125,12 +115,12 @@ std::optional<Blocking> block_2d(
                 static_cast<uint64_t>(h) * w * std::max(k_max, rules.k_preferred) < best_rank->volume) {
                 break;
             }
-            if (!block_allowed(rules, per_core_N, w)) {
+            if (!rules.allows_block_w(per_core_N, w)) {
                 continue;
             }
             // The largest fitting in0_block_w for this output block
             for (uint32_t k : divisors_desc(p.Kt)) {
-                if ((k > k_max && !rules.prefers(k)) || !k_allowed(rules, k)) {
+                if ((k > k_max && !rules.prefers(k)) || !rules.allows_k(k)) {
                     continue;
                 }
                 Blocking b{per_core_M, per_core_N, k, h, w, 0, 0};
@@ -190,14 +180,14 @@ std::optional<Blocking> block_1d(
         if (is_tall && div_up(M_rows, per_core_M) == 1 && M_rows % out_block_h != 0 && per_core_M != out_block_h) {
             return std::nullopt;
         }
-        if (!block_allowed(rules, per_core_N, out_block_w) || (split && out_block_w > split_w)) {
+        if (!rules.allows_block_w(per_core_N, out_block_w) || (split && out_block_w > split_w)) {
             return std::nullopt;
         }
         const uint32_t k_limit = rules.k_fixed != 0
                                      ? rules.k_fixed
                                      : max_in0_block_w(params, p, family, out_block_h, out_block_w, rules.a_in_place);
         for (uint32_t k : divisors_desc(p.Kt)) {
-            if ((k > k_limit && !rules.prefers(k)) || !k_allowed(rules, k)) {
+            if ((k > k_limit && !rules.prefers(k)) || !rules.allows_k(k)) {
                 continue;
             }
             Blocking b{per_core_M, per_core_N, k, out_block_h, out_block_w, 0, 0};
@@ -266,7 +256,7 @@ std::optional<Blocking> block_reuse(
                                  ? rules.k_fixed
                                  : max_in0_block_w(params, p, Family::Reuse, split.per_core_M, split.per_core_N);
     for (uint32_t k : divisors_desc(p.Kt)) {
-        if ((k > k_limit && !rules.prefers(k)) || !k_allowed(rules, k)) {
+        if ((k > k_limit && !rules.prefers(k)) || !rules.allows_k(k)) {
             continue;
         }
         Blocking b{split.per_core_M, split.per_core_N, k, split.per_core_M, split.per_core_N, 0, 0};
@@ -381,14 +371,6 @@ uint64_t total_input_tiles(const MatmulDesc& p, Family family, const Blocking& b
         return a_tiles + b_tiles * div_up(p.Mt, b.per_core_M);
     }
     return a_tiles * (b.per_core_N / b.out_block_w) + b_tiles * (b.per_core_M / b.out_block_h);
-}
-
-uint32_t cores_used(const MatmulDesc& p, const HardwareDesc& hw, Family family, const Blocking& b, bool fuse_batch) {
-    if (family == Family::Reuse) {
-        const uint32_t blocks = p.batch_a * p.Mt / b.per_core_M;
-        return std::min(blocks, static_cast<uint32_t>(hw.grid.x * hw.grid.y));
-    }
-    return div_up(output_rows(p, fuse_batch), b.per_core_M) * div_up(p.Nt, b.per_core_N);
 }
 
 // Among the multicast layouts: 2D unless a 1D layout keeps clearly more cores busy (in0-mcast first when both
