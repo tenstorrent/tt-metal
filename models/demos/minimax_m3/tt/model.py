@@ -117,6 +117,7 @@ class Model:
         layer_indices=None,
         is_first_rank=True,
         is_last_rank=True,
+        overlap_shared_expert=True,
     ):
         """
         Initialize MiniMax-M3 model
@@ -230,6 +231,7 @@ class Model:
                 expert_weight_dtype=expert_weight_dtype,
                 sequence_parallel=sequence_parallel,
                 cache_layer_idx=local_idx,
+                overlap_shared_expert=overlap_shared_expert,
             )
             for local_idx, global_idx in enumerate(self.global_layer_indices)
         ]

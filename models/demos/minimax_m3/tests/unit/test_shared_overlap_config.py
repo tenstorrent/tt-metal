@@ -21,7 +21,6 @@ from models.demos.minimax_m3.tt.moe.shared_overlap import (
     cb_tiles,
     fuse_shared_rs_enabled,
     matmul_2d_config,
-    overlap_shared_enabled,
     shared_expert_program_configs,
     split_grid,
 )
@@ -150,18 +149,15 @@ def test_overlap_release_and_recreate(monkeypatch):
 
 
 def test_knobs(monkeypatch, expect_error):
-    for var in ("M3_MOE_OVERLAP_SHARED", "M3_MOE_FUSE_SHARED_RS"):
-        monkeypatch.delenv(var, raising=False)
-    assert overlap_shared_enabled() and fuse_shared_rs_enabled()  # default on
-    monkeypatch.setenv("M3_MOE_OVERLAP_SHARED", "0")
+    monkeypatch.delenv("M3_MOE_FUSE_SHARED_RS", raising=False)
+    assert fuse_shared_rs_enabled()  # default on
     monkeypatch.setenv("M3_MOE_FUSE_SHARED_RS", "0")
-    assert not overlap_shared_enabled() and not fuse_shared_rs_enabled()
-    monkeypatch.setenv("M3_MOE_OVERLAP_SHARED", "1")
+    assert not fuse_shared_rs_enabled()
     monkeypatch.setenv("M3_MOE_FUSE_SHARED_RS", "")
-    assert overlap_shared_enabled() and fuse_shared_rs_enabled()
-    monkeypatch.setenv("M3_MOE_OVERLAP_SHARED", "yes")
+    assert fuse_shared_rs_enabled()
+    monkeypatch.setenv("M3_MOE_FUSE_SHARED_RS", "yes")
     with expect_error(ValueError, "must be 0 or 1"):
-        overlap_shared_enabled()
+        fuse_shared_rs_enabled()
 
 
 def test_hybrid_threshold_knob(monkeypatch, expect_error):

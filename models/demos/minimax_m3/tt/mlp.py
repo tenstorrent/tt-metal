@@ -16,7 +16,7 @@ from models.demos.minimax_m3.utils.substate import substate
 
 from .attention.operations import assert_sharded_residual_unpadded
 from .dense_mlp import DenseMLP
-from .moe.shared_overlap import fuse_shared_rs_enabled, overlap_shared_enabled
+from .moe.shared_overlap import fuse_shared_rs_enabled
 from .residual import use_sharded_residual
 from .topk import TopKRouter
 
@@ -66,6 +66,7 @@ class MLP:
         expert_weight_dtype=ttnn.bfloat4_b,
         use_ep_moe=False,
         ep_seq_len_per_chip=1024,
+        overlap_shared_expert=True,
     ):
         self.mesh_device = mesh_device
         self.mesh_config = mesh_config
@@ -178,9 +179,9 @@ class MLP:
             )
 
         # Shared-expert schedule (tt/moe/shared_overlap.py), both on by default: overlap_shared runs it on its
-        # own sub-device while dispatch runs; fuse_shared_rs folds its TP collective into the routed
-        # reduce-scatter.
-        self.overlap_shared = overlap_shared_enabled() and self.shared_expert is not None
+        # own sub-device while dispatch runs (TtPrefillRuntimeConfig.overlap_shared_expert); fuse_shared_rs
+        # folds its TP collective into the routed reduce-scatter.
+        self.overlap_shared = overlap_shared_expert and self.shared_expert is not None
         self.fuse_shared_rs = fuse_shared_rs_enabled() and self.shared_expert is not None
 
         # Routed experts: DeepSeek EP dispatch/combine + the fused unified_routed_expert_moe kernel with

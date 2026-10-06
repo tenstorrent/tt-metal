@@ -68,7 +68,7 @@ def _moe(x, w):
     return routed + _ffn(x, *w["shared"])
 
 
-def _build(mesh_device, seq_len):
+def _build(mesh_device, seq_len, overlap_shared_expert=True):
     """Random-weight MLP on the (8,4) mesh, its per-row input and the per-row torch reference."""
     rows, cols = mesh_device.shape
     assert (rows, cols) == (8, 4), "this test targets the (8,4) galaxy layout (EP=32, DP=8 rows)"
@@ -119,6 +119,7 @@ def _build(mesh_device, seq_len):
         expert_weight_dtype=ttnn.bfloat8_b,
         use_ep_moe=True,
         ep_seq_len_per_chip=seq_len,
+        overlap_shared_expert=overlap_shared_expert,
     )
     return mlp, x, ref
 
@@ -159,11 +160,10 @@ def test_ep_moe_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
     "overlap, fuse", [(True, False), (False, True), (True, True)], ids=["overlap", "fuse_rs", "overlap_fuse_rs"]
 )
 def test_ep_moe_shared_schedule(mesh_device, device_params, seq_len, overlap, fuse, reset_seeds, monkeypatch):
-    """M3_MOE_OVERLAP_SHARED / M3_MOE_FUSE_SHARED_RS vs the torch ref and vs the same MLP with both off (the
+    """overlap_shared_expert / M3_MOE_FUSE_SHARED_RS vs the torch ref and vs the same MLP with both off (the
     knobs only move the shared expert, so the two outputs must agree closely)."""
-    monkeypatch.setenv("M3_MOE_OVERLAP_SHARED", "1" if overlap else "0")
     monkeypatch.setenv("M3_MOE_FUSE_SHARED_RS", "1" if fuse else "0")
-    mlp, x, ref = _build(mesh_device, seq_len)
+    mlp, x, ref = _build(mesh_device, seq_len, overlap_shared_expert=overlap)
     assert (mlp.overlap_shared, mlp.fuse_shared_rs) == (overlap, fuse)
     scheduled = _run(mlp, mesh_device, x)
     mlp.overlap_shared = mlp.fuse_shared_rs = False
@@ -185,7 +185,6 @@ def test_ep_moe_shared_schedule(mesh_device, device_params, seq_len, overlap, fu
 def test_ep_moe_overlap_release_recreate(mesh_device, device_params, seq_len, reset_seeds, monkeypatch):
     """shared_overlap.release() removes the mesh's overlap manager; a forward of the same MLP and a newly built
     one on the same mesh re-create it and give bit-identical outputs."""
-    monkeypatch.setenv("M3_MOE_OVERLAP_SHARED", "1")
     monkeypatch.setenv("M3_MOE_FUSE_SHARED_RS", "1")
     mlp, x, ref = _build(mesh_device, seq_len)
     assert mlp.overlap_shared

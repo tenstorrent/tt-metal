@@ -75,6 +75,9 @@ class TtPrefillRuntimeConfig:
     # The runner picks the per-layer ack transport from this: traced runs use the host callback, untraced
     # ones the D2H service. M3 has no traced path, so it stays False.
     use_trace: bool = False
+    # MoE layers: run the shared expert on its own sub-device concurrently with dispatch (the runner's
+    # PrefillRunParams.overlap_shared_expert_with_dispatch). Off: it runs before the MoE on the full grid.
+    overlap_shared_expert: bool = True
 
     @property
     def sp_factor(self) -> int:
@@ -158,6 +161,7 @@ class TtPrefillRuntime:
             layer_indices=self.config.layer_indices,
             is_first_rank=self.config.is_first_rank,
             is_last_rank=self.config.is_last_rank,
+            overlap_shared_expert=self.config.overlap_shared_expert,
         )
         self.model_built = True
 

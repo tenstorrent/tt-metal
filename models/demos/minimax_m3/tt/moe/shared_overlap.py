@@ -18,8 +18,9 @@ them after the clear. Loading and clearing each drain the device.
 The manager is created once per mesh and shared by every MoE layer on it. ``release(mesh_device)`` removes it
 and must run before the mesh is closed (Model.release_sub_device_managers does it); a later load() re-creates it.
 
-Both schedules are on by default (like deepseek_v3_d_p's overlap); ``M3_MOE_OVERLAP_SHARED=0`` runs the shared
-expert before the MoE on the full grid, ``M3_MOE_FUSE_SHARED_RS=0`` gives it back its own TP collective.
+Both schedules are on by default (like deepseek_v3_d_p's overlap). The overlap follows the prefill runner's
+``PREFILL_OVERLAP_SHARED_EXPERT`` (TtPrefillRuntimeConfig.overlap_shared_expert); off, the shared expert runs before
+the MoE on the full grid. ``M3_MOE_FUSE_SHARED_RS=0`` gives it back its own TP collective.
 """
 
 import math
@@ -27,7 +28,6 @@ import os
 
 import ttnn
 
-DEFAULT_OVERLAP_SHARED = True
 DEFAULT_FUSE_SHARED_RS = True
 
 # dispatch puts its senders in its sub-device's first row.
@@ -54,11 +54,6 @@ def _flag(var, default):
     if value not in ("0", "1"):
         raise ValueError(f"{var} must be 0 or 1 (got {value!r})")
     return value == "1"
-
-
-def overlap_shared_enabled():
-    """Run the shared expert on its own sub-device concurrently with dispatch. ``M3_MOE_OVERLAP_SHARED=0|1``."""
-    return _flag("M3_MOE_OVERLAP_SHARED", DEFAULT_OVERLAP_SHARED)
 
 
 def fuse_shared_rs_enabled():
