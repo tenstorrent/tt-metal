@@ -85,6 +85,47 @@ def width_sharded_l1_memcfg(m_tiles: int, k_tiles: int, num_cores_x: int, num_co
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
+def sharded_hidden_width_memcfg(device, hidden_size: int, m: int = 32) -> ttnn.MemoryConfig:
+    """Width-shard [1, 1, m, hidden] on the same rectangular grid width-sharded RMSNorm uses.
+
+    Talker (hidden=2048) → 64 cores, 8×8, shard (m, 32). CodePredictor (1024) → 32 cores.
+    Used as the dest of padded-N slices so residual add / the next LN skip I2S.
+    """
+    assert m % TILE == 0, f"m={m} must be a multiple of TILE={TILE}"
+    dim_tiles = hidden_size // TILE
+    num_cores = next(c for c in (64, 32, 16, 8, 4, 2, 1) if dim_tiles % c == 0)
+    cg = device.compute_with_storage_grid_size()
+    cols = min(cg.x, num_cores)
+    while num_cores % cols != 0:
+        cols -= 1
+    rows = num_cores // cols
+    return width_sharded_l1_memcfg(m // TILE, dim_tiles, cols, rows)
+
+
+def decode_hidden_width_memcfg(device, hidden_size: int) -> ttnn.MemoryConfig:
+    """Width-shard decode activations (m=32). Alias for sharded_hidden_width_memcfg(m=32)."""
+    return sharded_hidden_width_memcfg(device, hidden_size, m=TILE)
+
+
+def unpad_dram_sharded_out(out_sharded: ttnn.Tensor, n: int, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
+    """Trim a DRAM-sharded matmul's N-padded output back to ``n`` columns.
+
+    ``pad_n_for_dram_align`` widens N to a multiple of the DRAM bank count (2048 ->
+    2304 on wormhole), so every DRAM-sharded projection whose real N is not aligned
+    needs its output trimmed. ``ttnn.slice`` reads the width-sharded output directly
+    and writes any layout (verified bit-exact into L1-interleaved and DRAM), so no
+    ShardedToInterleaved is needed first. Frees ``out_sharded``.
+    """
+    out = ttnn.slice(
+        out_sharded,
+        [0, 0, 0, 0],
+        [out_sharded.shape[0], out_sharded.shape[1], out_sharded.shape[2], n],
+        memory_config=memory_config,
+    )
+    ttnn.deallocate(out_sharded)
+    return out
+
+
 def dram_sharded_program_config(
     m: int, k: int, n: int, num_cores: int, fused_activation=None
 ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:

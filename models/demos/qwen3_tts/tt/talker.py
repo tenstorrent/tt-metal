@@ -10,14 +10,17 @@ and generates hidden states for the CodePredictor.
 Supports both prefill mode (full sequence) and decode mode (single token with KV cache).
 """
 
+import os
 from typing import List, Optional, Tuple
 
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen3_tts.tt.attention import prepare_fused_sdpa_mask, talker_fused_sdpa_enabled
 from models.demos.qwen3_tts.tt.decoder_layer import DecoderLayer
 from models.demos.qwen3_tts.tt.rmsnorm import RMSNorm
+from models.demos.qwen3_tts.tt.rope import shard_decode_rope_tables
 
 
 class Talker(LightweightModule):
@@ -66,7 +69,7 @@ class Talker(LightweightModule):
         # Codec embedding (for audio codec tokens). Stored ROW_MAJOR so
         # ttnn.embedding can index it directly without a per-call untilize of
         # the [vocab, hidden] table. (CodePredictor's codec_embeddings_tt do the
-        # same; the inconsistency was costing ~3.2 ms one-time on text_embedding.)
+        # same; the inconsistency cost a one-time untilize on text_embedding.)
         codec_embedding_weight = state_dict["talker.model.codec_embedding.weight"]
         self.codec_embedding = ttnn.as_tensor(
             codec_embedding_weight.unsqueeze(0).unsqueeze(0),
@@ -95,9 +98,10 @@ class Talker(LightweightModule):
             self.text_embedding = None
             self.text_vocab_size = 0
 
-        # Decoder layers — matmul (QKV/o_proj/MLP) weights at bfloat16.
-        # RMSNorm weights stay bfloat16 (small, dynamic-range-sensitive).
-        _matmul_dtype = ttnn.bfloat16
+        # Decoder layers — matmul (QKV/o_proj/MLP) weights. QWEN3_TTS_BF8_WEIGHTS=1
+        # stores them as bfloat8_b; see the note in code_predictor.py. RMSNorm weights
+        # stay bfloat16 (small, dynamic-range-sensitive).
+        _matmul_dtype = ttnn.bfloat8_b if os.environ.get("QWEN3_TTS_BF8_WEIGHTS", "1") != "0" else ttnn.bfloat16
         self.layers = []
         for i in range(self.num_layers):
             layer = DecoderLayer(
@@ -359,6 +363,17 @@ class Talker(LightweightModule):
                     (hidden_states.shape[0], 1, hidden_states.shape[1], hidden_states.shape[2]),
                 )
 
+        # Decode RoPE tables + fused-SDPA mask: convert once, reuse across layers.
+        _own_rope = False
+        if mode == "decode" or int(hidden_states.shape[-2]) == 1:
+            cos, sin, _own_rope = shard_decode_rope_tables(cos, sin, self.config.head_dim)
+        # Fused SDPA rejects the fp32 padding masks the caller builds; convert once
+        # here instead of once per layer (28 typecasts -> 1).
+        _own_decode_mask = _own_prefill_mask = False
+        if talker_fused_sdpa_enabled(self.device):
+            decode_attn_mask, _own_decode_mask = prepare_fused_sdpa_mask(decode_attn_mask)
+            prefill_attn_mask, _own_prefill_mask = prepare_fused_sdpa_mask(prefill_attn_mask)
+
         # Apply decoder layers
         updated_kv_caches = [] if kv_caches is not None else None
         for i, layer in enumerate(self.layers):
@@ -379,7 +394,19 @@ class Talker(LightweightModule):
             if updated_kv_caches is not None:
                 updated_kv_caches.append(updated_kv_cache)
 
-        # Final norm
+        if _own_rope:
+            ttnn.deallocate(cos)
+            ttnn.deallocate(sin)
+        if _own_decode_mask:
+            ttnn.deallocate(decode_attn_mask)
+        if _own_prefill_mask:
+            ttnn.deallocate(prefill_attn_mask)
+
+        # Prefill layers return width-sharded residual; final RMSNorm is interleaved.
+        if hidden_states.is_sharded():
+            hidden_il = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(hidden_states)
+            hidden_states = hidden_il
         hidden_states = self.norm(hidden_states)
 
         return hidden_states, updated_kv_caches

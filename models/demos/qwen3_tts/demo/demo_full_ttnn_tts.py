@@ -32,6 +32,12 @@ import torch
 
 import ttnn
 
+# One codec frame is 80 ms of audio: the codec runs at 12.5 fps (see
+# TTSConfig.trim_codec_frames, "4 frames = 0.32s at 12.5fps"). The HF repo is named
+# "12Hz", which is a rounding of 12.5 — taking 12 literally would give 83.3 ms and a
+# flatteringly lower RTF, so use the exact rate.
+_MS_PER_FRAME_REALTIME = 1000.0 / 12.5
+
 # ---------------------------------------------------------------------------
 # Server-side implementation lives in tt/server.py — re-export the public API
 # so existing call sites (web_demo.py, runner, tests) keep working.
@@ -76,7 +82,7 @@ def run_full_ttnn_tts(
     use_2cq: bool = False,
     seed: Optional[int] = None,
     ref_cache: str = None,
-    trim_frames: int = 0,
+    trim_frames: int = 4,
     load_cpu_inputs: str = None,
     hf_id: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
 ):
@@ -194,6 +200,32 @@ def run_full_ttnn_tts(
             ref_codes = ref_codes_original
             timings["encode_ref"] = time.time() - encode_start
 
+            # Capture the ECAPA traces once, before the first speaker-embedding call
+            # and before the heavier CP/Talker captures — the same ordering
+            # init_server_context relies on (traces captured later can land on
+            # trace_region positions overlapping executed ones). On by default
+            # (QWEN3_TTS_SE_TRACE=0 disables): tracing makes the speaker embedding two
+            # orders of magnitude cheaper, but the capture itself is not free, so a
+            # single-request run does not amortise it -- total wall time is a wash.
+            if os.environ.get("QWEN3_TTS_SE_TRACE", "1") != "0":
+                se = model.speaker_encoder
+                cap_start = time.time()
+                se.capture_se_block_traces()
+                se.capture_fc_trace()
+                se.capture_audio_forward_trace(audio_data)
+                if not se._audio_traces:
+                    # Waveform the device mel cannot take; fall back to the mel-in trace.
+                    se.capture_forward_trace(int(se.compute_mel_spectrogram(audio_data).shape[-1]))
+                se.activate_traced_extract()
+                timings["se_trace_capture"] = time.time() - cap_start
+                print(
+                    f"  ECAPA traces captured in {timings['se_trace_capture']*1000:.1f} ms "
+                    f"(SE blocks {len(getattr(se, '_se_traces', {}))}, "
+                    f"fc {getattr(se, '_fc_trace', None) is not None}, "
+                    f"forward lengths {sorted(se._fwd_traces)}, "
+                    f"audio samples {sorted(se._audio_traces)})"
+                )
+
             spk_start = time.time()
             speaker_embedding = model.extract_speaker_embedding(audio_data)
             timings["speaker_embed"] = time.time() - spk_start
@@ -214,14 +246,18 @@ def run_full_ttnn_tts(
             )
             timings["icl_embed"] = time.time() - icl_start
 
-        if seed is not None:
-            torch.manual_seed(seed)
-
         from models.demos.qwen3_tts.reference.functional import (
             SpeechTokenizerDecoderConfig,
             speech_tokenizer_decoder_forward,
         )
         from models.demos.qwen3_tts.tt.generator import StreamingAudioDecoder
+
+        # Seed AFTER these imports. reference/functional.py calls
+        # torch.manual_seed(0) at module scope, so seeding before the first import
+        # of it was silently overwritten and every run used seed 0 regardless of
+        # --seed (verified: seeds 5 and 6 produced byte-identical audio).
+        if seed is not None:
+            torch.manual_seed(seed)
 
         _decoder_cfg = SpeechTokenizerDecoderConfig()
 
@@ -265,11 +301,10 @@ def run_full_ttnn_tts(
         print(f"  Decoding: {ref_codes_len} ref (original) + {len(codes)} gen = {total_codes_len} total frames")
 
         decode_start = time.time()
-        _drain_t0 = time.time()
-        while not streaming_decoder.token_queue.empty() and time.time() - _drain_t0 < 5.0:
-            time.sleep(0.001)
+        # get_all_audio() stops the worker and waits for it, so every token submitted is
+        # decoded before it collects. An empty token_queue was never that signal: it only
+        # means the last token was dequeued, not that its chunk had been published.
         audio = streaming_decoder.get_all_audio()
-        streaming_decoder.stop()
         timings["decode"] = time.time() - decode_start
 
         audio_np = audio.squeeze().detach().cpu().float().numpy()
@@ -299,6 +334,11 @@ def run_full_ttnn_tts(
         print(f"{'Encode ref audio':<30} {timings['encode_ref']*1000:>10.1f}   Reference (Speech Tok Enc)")
         print(f"{'  Warmup (compile)':<30} {timings.get('warmup', 0)*1000:>10.1f}   TTNN [excluded from inference]")
         print(f"{'  Trace capture':<30} {timings.get('trace_capture', 0)*1000:>10.1f}   TTNN [excluded from inference]")
+        if "se_trace_capture" in timings:
+            print(
+                f"{'  ECAPA trace capture':<30} {timings['se_trace_capture']*1000:>10.1f}"
+                "   TTNN [excluded from inference]"
+            )
         print(f"{'Speaker embedding':<30} {timings['speaker_embed']*1000:>10.1f}   TTNN")
         print(f"{'ICL embedding':<30} {timings['icl_embed']*1000:>10.1f}   TTNN")
         print(f"{'Generation (' + str(num_frames) + ' frames)':<30} {timings['generation']*1000:>10.1f}   TTNN")
@@ -321,14 +361,47 @@ def run_full_ttnn_tts(
         print("  (TTFT and decode throughput breakdown printed above during generation)")
 
         total_time = time.time() - demo_start
+        audio_sec = len(audio_np) / 24000
+
+        # Real-time factor, three scopes. They differ by an order of magnitude, so
+        # each one is labelled with what it includes — quoting the steady number as
+        # "the RTF" of a one-shot run overstates it by ~6x.
+        #   decode  : the steady per-frame decode rate. What a warm, traced streaming
+        #             server sustains, and the number an AR-loop optimisation moves.
+        #   request : one request on an already-initialised process (speaker embed +
+        #             ICL + prefill + decode), i.e. warmup/trace capture amortised.
+        #   wall    : this invocation end to end, including weight load, model init,
+        #             warmup, trace capture and the host vocoder.
+        print(f"\n{'Real-time factor (RTF = compute / audio, <1 is faster than real time)'}")
+        print("-" * 70)
+        if timings.get("steady_avg_decode_ms", 0) > 0 and audio_sec > 0:
+            _rtf_decode = timings["steady_avg_decode_ms"] / _MS_PER_FRAME_REALTIME
+            print(
+                f"{'  RTF decode (steady, per frame)':<38} {_rtf_decode:>7.2f}"
+                f"   {timings['steady_avg_decode_ms']:.1f} ms vs {_MS_PER_FRAME_REALTIME:.0f} ms/frame"
+            )
+        if audio_sec > 0:
+            print(
+                f"{'  RTF request (warm, no compile)':<38} {inference_time / audio_sec:>7.2f}"
+                f"   {inference_time:.2f}s / {audio_sec:.2f}s audio"
+            )
+            print(
+                f"{'  RTF wall (this invocation)':<38} {total_time / audio_sec:>7.2f}"
+                f"   {total_time:.2f}s / {audio_sec:.2f}s audio"
+            )
+        print("-" * 70)
         print(f"\nOutput saved to: {output_path}")
-        print(f"Audio duration: {len(audio_np) / 24000:.2f}s")
+        print(f"Audio duration: {audio_sec:.2f}s")
         print(f"Total wall time: {total_time:.2f}s")
         print("=" * 80)
 
         result = {
             "prefill_ms": float(compile_timings.get("prefill_ms", 0.0)),
             "steady_ms_per_frame": float(compile_timings.get("steady_avg_decode_ms", 0.0)),
+            "audio_sec": float(len(audio_np) / 24000),
+            "rtf_decode": float(compile_timings.get("steady_avg_decode_ms", 0.0) / _MS_PER_FRAME_REALTIME),
+            "rtf_request": float(inference_time / (len(audio_np) / 24000)) if len(audio_np) else 0.0,
+            "rtf_wall": float(total_time / (len(audio_np) / 24000)) if len(audio_np) else 0.0,
             "steady_frames_per_sec": float(compile_timings.get("steady_frames_per_sec", 0.0)),
             "num_frames": int(num_frames),
             "output_wav": output_path,
@@ -413,11 +486,13 @@ def main():
     parser.add_argument(
         "--trim-frames",
         type=int,
-        default=0,
-        help="Deprecated, no effect: reference echo is removed by the HF-style ref cut after decode (default: 0)",
+        default=4,
+        help="Codec frames to trim from start (removes reference echo, default: 4)",
     )
-    parser.add_argument("--no-kv-cache", action="store_true", help="Disable KV cache (slower)")
-    parser.add_argument("--no-trace", action="store_true", help="Disable trace (use non-traced KV cache decode)")
+    # Kept so an existing command line still parses, but the generator refuses them:
+    # it has no untraced or cacheless path to fall back to.
+    parser.add_argument("--no-kv-cache", action="store_true", help="Not supported; the KV cache is always used")
+    parser.add_argument("--no-trace", action="store_true", help="Not supported; traces are always captured")
     parser.add_argument(
         "--use-2cq",
         action="store_true",

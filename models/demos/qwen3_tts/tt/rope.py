@@ -10,6 +10,7 @@ for temporal, height, and width dimensions.
 Standard RoPE is used by the CodePredictor model.
 """
 
+import os
 from typing import Optional, Tuple
 
 import torch
@@ -261,6 +262,191 @@ def get_transformation_mat(head_dim: int, device) -> ttnn.Tensor:
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     return trans_mat_ttnn
+
+
+_ROPE_DECODE_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+
+def _rope_decode_memcfg(width: int) -> ttnn.MemoryConfig:
+    """HEIGHT_SHARDED [TILE, width] on one core — the only layout decode-mode RoPE takes.
+
+    ``rotary_embedding_llama`` with ``is_decode_mode=True`` rejects interleaved and
+    width-sharded inputs for Q/K, cos, sin and the transformation matrix alike. Batch is
+    always 1 in Qwen3-TTS, so one core holds everything.
+    """
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(_ROPE_DECODE_GRID, (ttnn.TILE_SIZE, width), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+def get_decode_transformation_mat(device) -> ttnn.Tensor:
+    """Transformation matrix for decode-mode RoPE, in the sharded layout the op requires.
+
+    ``get_rot_transformation_mat`` ignores its ``dhead`` argument and always returns a
+    single 32x32 tile, so this is the *same* matrix :func:`get_transformation_mat` builds
+    for prefill — only the memory config differs. Build it once at module init so it is
+    allocated before any trace capture.
+    """
+    from models.tt_transformers.tt.common import get_rot_transformation_mat
+
+    return ttnn.from_torch(
+        get_rot_transformation_mat(dhead=ttnn.TILE_SIZE),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_rope_decode_memcfg(ttnn.TILE_SIZE),
+    )
+
+
+def apply_rope_qk(
+    q: ttnn.Tensor,
+    k: ttnn.Tensor,
+    cos: ttnn.Tensor,
+    sin: ttnn.Tensor,
+    trans_mat: ttnn.Tensor,
+    *,
+    head_dim: int,
+    decode_trans_mat: Optional[ttnn.Tensor] = None,
+    compute_kernel_config=None,
+    memory_config=None,
+    k_keep_decode_layout: bool = False,
+    qk_already_decode_layout: bool = False,
+) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Rotate Q ``[1, n_q, seq, head_dim]`` and K ``[1, n_kv, seq, head_dim]``.
+
+    Single-token Q/K route to ``is_decode_mode=True``, which is far cheaper. The prefill
+    kernel loops once per head, at a cost that scales with head count and is insensitive
+    to memory config and math fidelity; the decode kernel rotates every head inside one
+    tile. Reaching that layout costs one transpose in and one out, which the saved
+    per-head loop pays for several times over. cos/sin are reshared once for Q and K.
+
+    The two kernels are bit-identical on the same input (max|diff| == 0), so this
+    is a dispatch change with no numerical effect, and it is a win on every
+    wormhole SKU — hence no device gating.
+
+    Only ``seq == 1`` qualifies: decode mode applies one position to every row of the
+    tile, whereas a real multi-token sequence needs a distinct cos/sin row per position.
+    Callers that have no ``decode_trans_mat`` keep the prefill kernel.
+
+    ``qk_already_decode_layout=True`` says Q/K arrive as ``[1, 1, n_heads, head_dim]``
+    already — e.g. straight out of ``nlp_create_qkv_heads_decode`` — so the transpose in
+    is skipped. Q is still transposed back for SDPA unless the caller wants otherwise; K
+    obeys ``k_keep_decode_layout`` as usual.
+
+    ``k_keep_decode_layout=True`` returns K as ``[1, 1, n_kv, head_dim]`` — the decode
+    kernel's own output — instead of transposing it back. That layout is byte-identical
+    to what ``paged_update_cache`` / ``paged_fused_update_cache`` require, so the caller
+    that writes K straight to the cache saves both this transpose and its own. Raises if
+    the decode kernel would not be selected, so the caller can never silently receive
+    the other layout.
+    """
+    mc = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
+
+    def _prefill(t):
+        # Move the head axis into dim 0 before the call. The prefill factory splits work
+        # as `batch_parallel_factor = min(batch, num_cores)` and
+        # `seq_parallel_factor = min(num_cores/batch_parallel_factor, seq_len_t)`
+        # (rotary_embedding_llama_multi_core_program_factory.cpp:86) — heads appear ONLY
+        # as a multiplier on `num_rows_per_core`, never as a parallel axis. So Q
+        # [1, 16, 64, 128] gets batch=1, seq_len_t=2 -> 1 x 2 = TWO busy cores, each
+        # rotating 16 head-rows, and `num_rows_per_core = 16 > 8` additionally selects
+        # `use_reload_impl`, which re-reads cos/sin per row. That is why the op cost the
+        # same at seq=64 and seq=128: per-core work never changed.
+        #
+        # [nh, 1, S, D] gives batch=nh -> nh x seq_len_t cores and one row per core, so
+        # both Q and K get several times faster, across all 28 Talker layers.
+        #
+        # Prefill validation only asks for `cos.shape[0] == 1` and
+        # `cos.shape[1] in (input.shape[1], 1)`, and Qwen3-TTS cos/sin are head-broadcast
+        # (shape[1] == 1), so both forms are legal. [1,nh,S,D] and [nh,1,S,D] have the
+        # same linear tile order, so the reshape is metadata only — and the outputs are
+        # BIT-EXACT, max|diff| == 0 on all four (heads, seq) the demo runs.
+        # QWEN3_TTS_ROPE_HEAD_BATCH=0 reverts.
+        _shape = tuple(int(d) for d in t.shape)
+        _fold = (
+            _shape[0] == 1
+            and _shape[1] > 1
+            and int(cos.shape[1]) == 1
+            and os.environ.get("QWEN3_TTS_ROPE_HEAD_BATCH", "1") != "0"
+        )
+        if _fold:
+            t = ttnn.reshape(t, [_shape[1], 1, _shape[2], _shape[3]])
+        out = ttnn.experimental.rotary_embedding_llama(
+            t,
+            cos,
+            sin,
+            trans_mat,
+            is_decode_mode=False,
+            memory_config=mc,
+            compute_kernel_config=compute_kernel_config,
+        )
+        return ttnn.reshape(out, list(_shape)) if _fold else out
+
+    # Every head must land in one 32-row tile after the transpose.
+    if qk_already_decode_layout:
+        # [1, 1, heads, head_dim]: heads sit on dim 2 and dim 1 is the (single) batch.
+        _decode_kernel = decode_trans_mat is not None and int(q.shape[-2]) <= ttnn.TILE_SIZE
+    else:
+        _decode_kernel = int(q.shape[-2]) == 1 and decode_trans_mat is not None and int(q.shape[1]) <= ttnn.TILE_SIZE
+    if not _decode_kernel:
+        if k_keep_decode_layout:
+            raise ValueError(
+                "k_keep_decode_layout needs the decode-mode kernel: seq==1, a decode_trans_mat "
+                f"and heads<={ttnn.TILE_SIZE} (got seq={int(q.shape[-2])}, heads={int(q.shape[1])}, "
+                f"decode_trans_mat={'set' if decode_trans_mat is not None else 'None'})"
+            )
+        return _prefill(q), _prefill(k)
+
+    hd_memcfg = _rope_decode_memcfg(head_dim)
+    if cos.memory_config() == hd_memcfg and sin.memory_config() == hd_memcfg:
+        cos_s, sin_s = cos, sin
+        _own_tables = False
+    else:
+        cos_s = ttnn.to_memory_config(cos, hd_memcfg)
+        sin_s = ttnn.to_memory_config(sin, hd_memcfg)
+        _own_tables = True
+    rotated = []
+    for _i, t in enumerate((q, k)):
+        # [1, n_heads, 1, head_dim] -> [1, 1, n_heads, head_dim]: packs all heads into
+        # the single tile the decode kernel wants. transpose writes the sharded layout
+        # directly, so no separate reshard is needed on either side.
+        if qk_already_decode_layout:
+            t_d = t if t.memory_config() == hd_memcfg else ttnn.to_memory_config(t, hd_memcfg)
+        else:
+            t_d = ttnn.transpose(t, 1, 2, memory_config=hd_memcfg)
+        r = ttnn.experimental.rotary_embedding_llama(
+            t_d,
+            cos_s,
+            sin_s,
+            decode_trans_mat,
+            is_decode_mode=True,
+            memory_config=hd_memcfg,
+            compute_kernel_config=compute_kernel_config,
+        )
+        if t_d is not t:
+            ttnn.deallocate(t_d)
+        if k_keep_decode_layout and _i == 1:
+            rotated.append(r)  # caller consumes the [1, 1, n_kv, head_dim] cache layout
+            continue
+        rotated.append(ttnn.transpose(r, 1, 2, memory_config=mc))
+        ttnn.deallocate(r)
+    if _own_tables:
+        ttnn.deallocate(cos_s)
+        ttnn.deallocate(sin_s)
+    return rotated[0], rotated[1]
+
+
+def shard_decode_rope_tables(cos: ttnn.Tensor, sin: ttnn.Tensor, head_dim: int):
+    """Reshard decode cos/sin once so every layer's apply_rope_qk can skip I2S.
+
+    Returns (cos, sin, owned). Caller must deallocate when owned is True.
+    """
+    hd_memcfg = _rope_decode_memcfg(head_dim)
+    if cos.memory_config() == hd_memcfg and sin.memory_config() == hd_memcfg:
+        return cos, sin, False
+    return ttnn.to_memory_config(cos, hd_memcfg), ttnn.to_memory_config(sin, hd_memcfg), True
 
 
 def rearrange_to_interleaved(x: torch.Tensor) -> torch.Tensor:

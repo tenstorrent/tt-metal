@@ -7,25 +7,23 @@ Decoder layer implementation for Qwen3-TTS.
 Supports both prefill mode (full sequence) and decode mode (single token with KV cache).
 """
 
+import os
 from typing import Optional, Tuple
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen3_tts.tt.attention import Attention
 from models.demos.qwen3_tts.tt.mlp import MLP
+from models.demos.qwen3_tts.tt.model_config import N150_DRAM_PREFILL_SEQS, PREFILL_SEQS, SHORT_SEQ_LIMIT
 from models.demos.qwen3_tts.tt.rmsnorm import RMSNorm
-
-# Prefill bucket sizes for which we pre-build sharded layernorm configs.
-# Matches SUPPORTED_PREFILL_LENS in demo_full_ttnn_tts.py.
-_PREFILL_SEQS = (32, 64, 96, 128, 192, 256)
 
 
 def _build_sharded_rmsnorm_configs(device, dim: int, num_cores: int, m: int = 32):
     """Build (input_memcfg, program_config) for a width-sharded multi-core RMSNorm
     on a [1,1,m,dim] tensor.  m and dim/TILE must both divide cleanly.
 
-    m=32   → decode (single-token, padded to 1 tile)
-    m=128  → prefill ISL=128 (4 tiles)
+    m=32 → decode (single-token, padded to 1 tile)
+    m>32 → prefill bucket (same width-shard grid as the consumer matmul)
     """
     TILE = 32
     assert m % TILE == 0, f"m={m} must be a multiple of TILE={TILE}"
@@ -89,6 +87,10 @@ class DecoderLayer(LightweightModule):
         super().__init__()
         self.device = device
         self.layer_idx = layer_idx
+        from models.demos.qwen3_tts.tt.mesh_utils import is_n150, is_wormhole
+
+        self._n150 = is_n150(device)
+        self._wormhole = is_wormhole(device)
 
         full_prefix = f"{layer_prefix}.layers.{layer_idx}"
 
@@ -139,23 +141,91 @@ class DecoderLayer(LightweightModule):
             weight_cache_path=weight_cache_path,
         )
 
-        # Optional sharded RMSNorm configs for decode-mode (env-gated).
-        # Pick the largest num_cores ≤ 64 that divides dim/TILE, so the output shard
-        # layout can match the QKV / MLP matmul in0 grid where possible.
-        # Talker (hidden=2048): 64 cores (1 tile/core).
-        # CodePredictor (hidden=1024): 32 cores.
-        # Sharded RMSNorm configs for decode (m=32) and each prefill bucket size.
-        # num_cores: largest ≤ 64 that divides dim/TILE so the output shard layout
-        # matches the QKV / MLP gate-up matmul in0 grid where applicable.
+        # Width-sharded RMSNorm: decode (m=32) and each prefill bucket.
+        # Talker (hidden=2048): 64 cores (1 tile/core). CodePredictor: 32 cores.
+        # MLP gate/up consume this layout in place. Prefill M>32 S2I's before 1D QKV in attention;
+        # N150 buckets 64/128 keep sharded through LN for the MLP handoff; attention S2I's before 1D QKV.
         dim_tiles = hidden_size // 32
         ln_num_cores = next(c for c in (64, 32, 16, 8, 4, 2, 1) if dim_tiles % c == 0)
         self._decode_ln_in_memcfg, self._decode_ln_progcfg = _build_sharded_rmsnorm_configs(
             device, hidden_size, ln_num_cores, m=32
         )
-        # Map bucket seq_len -> (in_memcfg, prog_config).
-        self._prefill_ln_configs = {
-            m: _build_sharded_rmsnorm_configs(device, hidden_size, ln_num_cores, m=m) for m in _PREFILL_SEQS
-        }
+
+        # Decode: give each norm the shard grid its CONSUMER matmul wants, so the
+        # reshard between them disappears.
+        #
+        # The widest grid that divides hidden is 64 cores, but the DRAM-sharded decode
+        # matmuls pick their grid from find_grid_k_n (it has to divide both K and N
+        # tiles), which lands on 8 for QKV, 32 for gate/up and 24 for down. That
+        # mismatch cost one reshard per matmul, three per layer, across all 28 layers.
+        #
+        # Moving the norm is free because a decode norm is one tile tall, so it is
+        # overhead-bound rather than parallelism-bound: its time is flat across core
+        # counts, and so is the residual add that feeds it. The norm on the consumer's
+        # narrower grid is as fast or faster AND the reshard goes away.
+        #
+        # NB this changes the norm's reduction grid, so it is NOT bit-exact: the
+        # width-wise sum is split across a different number of cores.
+        # QWEN3_TTS_LN_CONSUMER_GRID=0 restores the single 64-core norm grid + reshards.
+        _ln_consumer_grid = os.environ.get("QWEN3_TTS_LN_CONSUMER_GRID", "1") != "0"
+
+        def _consumer_grid_norm(src):
+            """Norm configs on ``src``'s shard grid, or None to keep the 64-core norm."""
+            cores = None
+            if src is not None:
+                try:
+                    cores = src.shard_spec.grid.num_cores()
+                except Exception:
+                    cores = None
+            if not (_ln_consumer_grid and cores and cores != ln_num_cores and dim_tiles % cores == 0):
+                return None
+            try:
+                return _build_sharded_rmsnorm_configs(device, hidden_size, cores, m=32)
+            except Exception:
+                return None
+
+        self._decode_ln_attn = _consumer_grid_norm(getattr(self.attention, "_decode_wqkv_in0_memcfg", None))
+        self._decode_ln_mlp = _consumer_grid_norm(getattr(self.mlp, "_decode_gate_up_in0_memcfg", None))
+        # Prefill RMSNorm grid. `ln_num_cores` above takes the LARGEST core count dividing
+        # dim_tiles (64 for hidden=2048), which drives block_w to (2048/64)/32 = 1 and
+        # subblock_w to 1 — the same "most cores, thinnest block" shape that the matmul
+        # program configs avoid. 32 cores with block_w=2 is the faster norm at both
+        # prefill buckets the demo uses.
+        #
+        # The bigger reason for 32 is that it is ALSO the MLP gate/up in0 grid, so the
+        # post-attention norm emits gate/up's layout directly and the Reshard between them
+        # disappears — one op per layer. Decode already does exactly this via
+        # `_decode_ln_mlp`; prefill had no equivalent, which is why the reshard was there.
+        # The two specs are identical by construction: the norm's width shard is
+        # (m, hidden/32) on 8x4 and `width_sharded_l1_memcfg(m/32, 64, 8, 4)` is the same.
+        #
+        # DEFAULT OFF, and the reason is a loose end rather than a measurement.
+        #
+        # The norm itself is BIT-IDENTICAL at the buckets the demo replays, and only
+        # diverges at m>=96 where the block change reorders the reduction. So switching
+        # the demo's own bucket to 32 cores should have been transparent. It is not: the
+        # demo audio md5 moves, and QWEN3_TTS_PREFILL_LN_CORES=0 restores it exactly, so
+        # this is the cause.
+        #
+        # The norm is not where the difference enters. Changing this grid also changes the
+        # spec the residual adds write and the spec attention receives, and some consumer
+        # downstream takes a different branch on it (attention compares the incoming
+        # memory_config against its own specs to decide whether to reshard). Until that is
+        # pinned down and run through the SIM/WER gate, shipping it would trade
+        # unexplained numerics for one op and a saving inside the window's noise band.
+        # Not worth it.
+        #
+        # Set QWEN3_TTS_PREFILL_LN_CORES=32 to take the op reduction and the faster norm.
+        _pf_ln_env = os.environ.get("QWEN3_TTS_PREFILL_LN_CORES")
+        _pf_ln_cores = ln_num_cores if not _pf_ln_env or _pf_ln_env == "0" else int(_pf_ln_env)
+        if dim_tiles % _pf_ln_cores or _pf_ln_cores > ln_num_cores:
+            _pf_ln_cores = ln_num_cores
+        self._prefill_ln_configs = {}
+        for m in PREFILL_SEQS:
+            try:
+                self._prefill_ln_configs[m] = _build_sharded_rmsnorm_configs(device, hidden_size, _pf_ln_cores, m=m)
+            except Exception:
+                self._prefill_ln_configs[m] = _build_sharded_rmsnorm_configs(device, hidden_size, ln_num_cores, m=m)
 
     def forward(
         self,
@@ -198,41 +268,71 @@ class DecoderLayer(LightweightModule):
             - output: tensor of shape [batch, 1, seq_len, hidden_size]
             - updated_kv_cache: tuple of (k_cache, v_cache) or None
         """
-        # Resolve which sharded layernorm configs to use (decode-style or prefill-ISL=128).
         seq_len_at_entry = x.shape[-2]
-        prefill_path = mode == "prefill" and seq_len_at_entry in self._prefill_ln_configs
         decode_path = mode == "decode"
+        # The m>32 bucket chain — width-sharded residual adds feeding a width-sharded
+        # post-attn LN straight into the MLP — is a wormhole-only fast path. Its shard
+        # specs and the 1D matmul grids that consume them were swept on an 8x8 compute
+        # grid; on Blackhole's 11x10 grid they silently produce garbage
+        # (talker_prefill_hidden PCC 0.009, EOS never fires, WER 100%). Blackhole keeps
+        # the bucket path only at seq<=32, where DRAM-sharded QKV needs the shard, and
+        # takes the generic interleaved path above it.
+        prefill_path = (
+            mode == "prefill"
+            and seq_len_at_entry in self._prefill_ln_configs
+            and (self._wormhole or seq_len_at_entry <= SHORT_SEQ_LIMIT)
+        )
         if prefill_path:
             ln_in_memcfg, ln_progcfg = self._prefill_ln_configs[seq_len_at_entry]
         else:
-            ln_in_memcfg = self._decode_ln_in_memcfg
-            ln_progcfg = self._decode_ln_progcfg
+            # input_layernorm feeds attention's QKV; emit that matmul's shard grid.
+            if decode_path and self._decode_ln_attn is not None:
+                ln_in_memcfg, ln_progcfg = self._decode_ln_attn
+            else:
+                ln_in_memcfg = self._decode_ln_in_memcfg
+                ln_progcfg = self._decode_ln_progcfg
 
         # Pre-norm attention
         residual = x
         residual_sharded = None
+        _own_residual_sharded = False
         if decode_path:
-            # Decode: keep the chain sharded — wo is DRAM-sharded and consumes sharded
-            # input directly. Reuse the sharded `x` buffer as `residual_sharded`.
-            residual_sharded = ttnn.to_memory_config(x, ln_in_memcfg)
+            # Decode: keep the chain sharded. Skip I2S when the previous layer's
+            # residual add already wrote this shard spec.
+            if x.memory_config() == ln_in_memcfg:
+                residual_sharded = x
+                _own_residual_sharded = False
+            else:
+                residual_sharded = ttnn.to_memory_config(x, ln_in_memcfg)
+                _own_residual_sharded = True
             x = self.input_layernorm(
                 residual_sharded,
                 program_config=ln_progcfg,
                 memory_config=ln_in_memcfg,
             )
         elif prefill_path:
-            # Prefill: matmul kernel inherits the input's shard grid → fewer cores.
-            # Convert layernorm output back to L1_INTERLEAVED so the matmul picks its
-            # default 96/128-core grid. Sharded layernorm itself is still ~3x faster.
-            x_sharded = ttnn.to_memory_config(x, ln_in_memcfg)
-            x_normed = self.input_layernorm(
+            # Seq<=32 stays sharded for DRAM-sharded QKV. N150 buckets 64/128 stay sharded
+            # for the MLP LN handoff; attention S2I's to L1 before 1D QKV.
+            if x.memory_config() == ln_in_memcfg:
+                x_sharded = x
+                _own_x_sharded = False
+            else:
+                x_sharded = ttnn.to_memory_config(x, ln_in_memcfg)
+                _own_x_sharded = True
+            x = self.input_layernorm(
                 x_sharded,
                 program_config=ln_progcfg,
                 memory_config=ln_in_memcfg,
             )
-            ttnn.deallocate(x_sharded)
-            x = ttnn.to_memory_config(x_normed, ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(x_normed)
+            if _own_x_sharded:
+                ttnn.deallocate(x_sharded)
+            _keep_sharded_qkv = seq_len_at_entry <= SHORT_SEQ_LIMIT or (
+                self._n150 and seq_len_at_entry in N150_DRAM_PREFILL_SEQS
+            )
+            if seq_len_at_entry > SHORT_SEQ_LIMIT and not _keep_sharded_qkv:
+                x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(x)
+                x = x_il
         else:
             x = self.input_layernorm(x)
         x, updated_kv_cache = self.attention(
@@ -252,54 +352,67 @@ class DecoderLayer(LightweightModule):
         if decode_path and x.is_sharded():
             # Sharded residual chain: wo (and later mlp.down) returned width-sharded.
             # `residual_sharded` was prepared earlier (shared with input_layernorm input).
-            x = ttnn.add(residual_sharded, x, memory_config=self._decode_ln_in_memcfg)
+            # post_attention_layernorm feeds the MLP's gate/up, so the residual add
+            # writes THAT grid and the norm keeps it — no reshard into gate/up.
+            _mlp_memcfg, _mlp_progcfg = self._decode_ln_mlp or (
+                self._decode_ln_in_memcfg,
+                self._decode_ln_progcfg,
+            )
+            x = ttnn.add(residual_sharded, x, memory_config=_mlp_memcfg)
             ttnn.deallocate(residual_sharded)
             residual = x  # sharded
             # post_attn layernorm consumes sharded x directly.
             x = self.post_attention_layernorm(
                 x,
-                program_config=self._decode_ln_progcfg,
-                memory_config=self._decode_ln_in_memcfg,
+                program_config=_mlp_progcfg,
+                memory_config=_mlp_memcfg,
             )
             x = self.mlp(x, mode=mode)
-            # Second residual add: stage to L1_INTERLEAVED instead of DRAM. Next
-            # layer's input_layernorm does to_memory_config(x, _decode_ln_in_memcfg)
-            # which is a cheap L1→L1 reshard rather than a DRAM round-trip on the
-            # 4 KB (Talker) / 2 KB (CP) per-layer activation.
-            x_out = ttnn.add(residual, x, memory_config=ttnn.L1_MEMORY_CONFIG)
+            # Write the next layer's input-LN shard spec so it skips the I2S/reshard.
+            x_out = ttnn.add(residual, x, memory_config=ln_in_memcfg)
             ttnn.deallocate(residual)
             return x_out, updated_kv_cache
 
-        # First residual add: result feeds the post_attention_layernorm + MLP. Force L1
-        # so we don't pay a DRAM write+read for the intermediate. Without this override,
-        # ttnn.add inherits DRAM from `residual` (which is the DRAM-backed layer input).
-        # When prefill_path engaged, residual_sharded was created above for the
-        # input_layernorm — release it now (caller of this branch already deallocated
-        # in the decode_path branch above).
-        if residual_sharded is not None:
+        # First residual add: result feeds the post_attention_layernorm + MLP.
+        if residual_sharded is not None and _own_residual_sharded:
             ttnn.deallocate(residual_sharded)
+        if prefill_path:
+            # Write the sum in the LN shard spec so post-attn LN (and the next
+            # layer's input LN) skip I2S. Decode already does this; BinaryNg
+            # output layout is independent of the addends.
+            attn_out = x
+            x = ttnn.add(residual, attn_out, memory_config=ln_in_memcfg)
+            ttnn.deallocate(attn_out)
+            residual = x
+            x = self.post_attention_layernorm(
+                x,
+                program_config=ln_progcfg,
+                memory_config=ln_in_memcfg,
+            )
+            x = self.mlp(x, mode=mode)
+            mlp_out = x
+            x = ttnn.add(residual, mlp_out, memory_config=ln_in_memcfg)
+            ttnn.deallocate(mlp_out)
+            ttnn.deallocate(residual)
+            return x, updated_kv_cache
+
+        # Non-bucket prefill: force L1 so we don't inherit DRAM from residual.
         x = ttnn.add(residual, x, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # Pre-norm MLP
         residual = x  # now in L1
         if decode_path:
-            x_sharded = ttnn.to_memory_config(x, ln_in_memcfg)
+            # This norm feeds the MLP's gate/up, whose DRAM-sharded grid differs from
+            # the one QKV wants, so shard straight into ITS grid and let the norm keep
+            # it — otherwise a reshard sits between the norm and gate/up.
+            _mlp_memcfg, _mlp_progcfg = self._decode_ln_mlp or (ln_in_memcfg, ln_progcfg)
+            x_sharded = ttnn.to_memory_config(x, _mlp_memcfg)
             x = self.post_attention_layernorm(
                 x_sharded,
-                program_config=ln_progcfg,
-                memory_config=ln_in_memcfg,
+                program_config=_mlp_progcfg,
+                memory_config=_mlp_memcfg,
             )
             ttnn.deallocate(x_sharded)
-        elif prefill_path:
-            x_sharded = ttnn.to_memory_config(x, ln_in_memcfg)
-            x_normed = self.post_attention_layernorm(
-                x_sharded,
-                program_config=ln_progcfg,
-                memory_config=ln_in_memcfg,
-            )
-            ttnn.deallocate(x_sharded)
-            x = ttnn.to_memory_config(x_normed, ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(x_normed)
         else:
             x = self.post_attention_layernorm(x)
         x = self.mlp(x, mode=mode)
