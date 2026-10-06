@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""MatmulUnifiedProgramConfig: one placement-first matmul factory (Quasar-native matmul, stages A and B).
+"""MatmulUnifiedProgramConfig: one placement-first matmul factory (Quasar-native matmul, stages A to C).
 
 Every test drives the same kernels through a different (cores, C_slice_M_tiles, C_slice_N_tiles) placement and
 memory layout. Correctness is checked with allclose against an fp32 golden of the bf16-rounded inputs
@@ -13,6 +13,11 @@ Compute threads (stage B): on Quasar the compute kernel runs on all four NEOs of
 (num_compute_threads auto = 4), and each C slice's subblocks are assigned round-robin to the threads.
 Wormhole / Blackhole have one compute engine per core, so there every test runs with one thread and the
 tests that set num_compute_threads > 1 are skipped.
+
+DM threads and buffering (stage C): on Quasar the reader runs on up to four DM cores, which take the K chunks of a
+core's walk round-robin, and the writer on two, which take the compute threads' shares of C. The A and B buffers
+hold operand_buffer_depth slices, and with C_buffer_depth = 2 the C buffer holds two C slices.
+Wormhole / Blackhole have one reader and one writer per core; the tests that set more threads are skipped there.
 
 Run on Wormhole / Blackhole:
     pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_matmul_unified.py
@@ -51,6 +56,11 @@ def _on_quasar(device):
 def _skip_unless_threads_supported(device, num_compute_threads):
     if num_compute_threads > 1 and not _on_quasar(device):
         pytest.skip("several compute threads per core need Quasar")
+
+
+def _skip_unless_dm_threads_supported(device, num_reader_threads, num_writer_threads=1):
+    if (num_reader_threads > 1 or num_writer_threads > 1) and not _on_quasar(device):
+        pytest.skip("several reader or writer threads per core need Quasar")
 
 
 def _rect(x0, y0, x1, y1):
@@ -171,9 +181,17 @@ def test_repr_and_fields():
     assert cfg.C_slice_M_tiles == 2 and cfg.C_slice_N_tiles == 3 and cfg.K_chunk_tiles == 4
     assert cfg.subblock_M_tiles == 0 and cfg.subblock_N_tiles == 0 and cfg.orientation == ROW_MAJOR
     assert cfg.num_compute_threads == 0
+    assert cfg.num_reader_threads == 0 and cfg.num_writer_threads == 0
+    assert cfg.operand_buffer_depth == 0 and cfg.C_buffer_depth == 0
     assert "MatmulUnifiedProgramConfig(" in repr(cfg) and "num_compute_threads=0" in repr(cfg)
+    assert "operand_buffer_depth=0" in repr(cfg) and "C_buffer_depth=0" in repr(cfg)
     cfg.num_compute_threads = 2
-    assert cfg.num_compute_threads == 2
+    cfg.num_reader_threads = 4
+    cfg.num_writer_threads = 2
+    cfg.operand_buffer_depth = 8
+    cfg.C_buffer_depth = 1
+    assert cfg.num_compute_threads == 2 and cfg.num_reader_threads == 4 and cfg.num_writer_threads == 2
+    assert cfg.operand_buffer_depth == 8 and cfg.C_buffer_depth == 1
 
 
 AUTO_C_SLICE_GRIDS = [
@@ -781,6 +799,173 @@ def test_compute_threads_rejections(device, expect_error):
     if not _on_quasar(device):
         with expect_error(RuntimeError, "needs Quasar"):
             run(2)
+
+
+# ----------------------------------------------------------------------------------------------------
+# DM threads and buffering (stage C): reader threads take K chunks round-robin, writer threads take compute
+# threads' shares, the A / B buffers hold operand_buffer_depth slices and the C buffer C_buffer_depth C slices
+# ----------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("K_chunk_tiles", [0, 1], ids=["single_K_chunk", "K_spill"])
+@pytest.mark.parametrize("C_buffer_depth", [1, 2])
+def test_C_buffer_depth(device, C_buffer_depth, K_chunk_tiles):
+    """Batch 2, M = 6, K = 2, N = 2 tiles on one core: three 2x2-tile C slices per batch, six in all, so with two
+    C slices in flight the C buffer wraps across the batch boundary (slice 2 of batch 0 and slice 0 of batch 1 sit
+    in different halves). K_chunk_tiles = 1 also spills partials between the two K chunks of every slice."""
+    B, M, K, N = 2, 6 * TILE, 2 * TILE, 2 * TILE
+    torch.manual_seed(21)
+    a, b = _randn(1, B, M, K), _randn(1, B, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, 0, 0),
+        C_slice_M_tiles=2,
+        C_slice_N_tiles=2,
+        K_chunk_tiles=K_chunk_tiles,
+        C_buffer_depth=C_buffer_depth,
+    )
+    out = _run(device, a, b, config)
+    _check(out, _golden(a, b))
+
+
+@pytest.mark.parametrize("operand_buffer_depth", [1, 2, 3])
+def test_operand_buffer_depth(device, operand_buffer_depth):
+    """M = 4, K = 6, N = 2 tiles on one core: two 2x2-tile C slices of three 2-tile K chunks each, six A / B slice
+    pairs in all, through buffers that hold one, two or three of them (three does not divide the C slice's K chunk
+    count, so a slice's K chunks wrap around the buffer)."""
+    M, K, N = 4 * TILE, 6 * TILE, 2 * TILE
+    torch.manual_seed(22)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, 0, 0),
+        C_slice_M_tiles=2,
+        C_slice_N_tiles=2,
+        K_chunk_tiles=2,
+        num_reader_threads=1,
+        operand_buffer_depth=operand_buffer_depth,
+    )
+    out = _run(device, a, b, config)
+    _check(out, _golden(a, b))
+
+
+@pytest.mark.parametrize("num_reader_threads,operand_buffer_depth", [(1, 2), (2, 2), (2, 4), (3, 6), (4, 4), (4, 8)])
+def test_reader_threads(device, num_reader_threads, operand_buffer_depth):
+    """Batch 2, M = 4, K = 6 (ragged: 5 tiles and 20 columns), N = 2 tiles on one core: two 2x2-tile C slices per
+    batch of three 2-tile K chunks each, so the core's walk has 12 K chunks and reader thread t reads every
+    num_reader_threads-th one, across C slices and batches. With two or four threads the last K chunk of A (the one
+    with the zeroed padding columns) is read by every thread in turn."""
+    _skip_unless_dm_threads_supported(device, num_reader_threads)
+    B, M, K, N = 2, 4 * TILE, 5 * TILE + 20, 2 * TILE
+    torch.manual_seed(23)
+    a, b = _randn(1, B, M, K), _randn(1, B, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, 0, 0),
+        C_slice_M_tiles=2,
+        C_slice_N_tiles=2,
+        K_chunk_tiles=2,
+        num_reader_threads=num_reader_threads,
+        operand_buffer_depth=operand_buffer_depth,
+    )
+    out = _run(device, a, b, config)
+    _check(out, _golden(a, b))
+
+
+@pytest.mark.parametrize("num_writer_threads", [1, 2, 4])
+def test_writer_threads(device, num_writer_threads):
+    """M = 4, K = 2, N = 4 tiles on one core with four compute threads: two 2x4-tile C slices of four 1x2 subblocks,
+    one per compute thread, and writer thread t writes the shares of compute threads t, t + num_writer_threads, ...
+    Ones as input, so every element of C must equal K = 64."""
+    _skip_unless_threads_supported(device, 4)
+    M, K, N = 4 * TILE, 2 * TILE, 4 * TILE
+    a, b = torch.ones(1, 1, M, K, dtype=torch.bfloat16), torch.ones(1, 1, K, N, dtype=torch.bfloat16)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, 0, 0),
+        C_slice_M_tiles=2,
+        C_slice_N_tiles=4,
+        subblock_M_tiles=1,
+        subblock_N_tiles=2,
+        num_compute_threads=4,
+        num_writer_threads=num_writer_threads,
+    )
+    out = _run(device, a, b, config)
+    assert torch.equal(out.to(torch.float32), torch.full((1, 1, M, N), float(K)))
+
+
+def test_six_dm_cores_with_K_spill_and_packer_l1_acc(device):
+    """Ragged M / K / N, a batch, several C slices per core on two cores, K spill with packer L1 accumulation and a
+    padded subblock, with four reader and two writer threads on Quasar (all six DM cores) and two C slices in
+    flight; one reader and one writer elsewhere."""
+    quasar = _on_quasar(device)
+    B, M, K, N = 2, 5 * TILE + 3, 8 * TILE + 7, 6 * TILE + 9
+    torch.manual_seed(24)
+    a, b = _randn(1, B, M, K), _randn(1, B, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, 1, 0),
+        C_slice_M_tiles=3,
+        C_slice_N_tiles=3,
+        K_chunk_tiles=1,
+        subblock_M_tiles=2,
+        subblock_N_tiles=2,
+        num_reader_threads=4 if quasar else 1,
+        num_writer_threads=2 if quasar else 1,
+        operand_buffer_depth=8 if quasar else 2,
+        C_buffer_depth=2,
+    )
+    out = _run(device, a, b, config, packer_l1_acc=True)
+    _check(out, _golden(a, b))
+
+
+def test_reader_threads_copy_borrowable_B(device):
+    """B width-sharded in L1 on the cores that own the C slices would be borrowed with one reader thread (as in
+    test_borrowed_B_over_several_K_chunks); with two the reader copies it, since each thread owns part of the B
+    buffer. Four K chunks per core, two per reader thread."""
+    _skip_unless_dm_threads_supported(device, 2)
+    M, K, N = 2 * TILE, 4 * TILE, 4 * TILE
+    cores = _rect(0, 0, 1, 0)
+    in1_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, _shard(cores, [K, 2 * TILE]))
+    torch.manual_seed(25)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=cores, C_slice_M_tiles=2, C_slice_N_tiles=2, K_chunk_tiles=1, num_reader_threads=2
+    )
+    out = _run(device, a, b, config, in1_mem=in1_mem)
+    _check(out, _golden(a, b))
+
+
+def test_dm_threads_and_buffering_rejections(device, expect_error):
+    M = K = N = 4 * TILE
+    a_t = ttnn.from_torch(_randn(1, 1, M, K), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    b_t = ttnn.from_torch(_randn(1, 1, K, N), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+
+    def run(**fields):
+        ttnn.experimental.quasar.matmul(
+            a_t,
+            b_t,
+            program_config=qsr.MatmulUnifiedProgramConfig(
+                cores=_rect(0, 0, 0, 0), C_slice_M_tiles=2, C_slice_N_tiles=2, K_chunk_tiles=1, **fields
+            ),
+            compute_kernel_config=_hifi4(device),
+        )
+
+    with expect_error(RuntimeError, "to 4, got 5"):
+        run(num_reader_threads=5)
+    with expect_error(RuntimeError, "1, 2 or 4, got 3"):
+        run(num_writer_threads=3)
+    with expect_error(RuntimeError, "1 or 2, got 3"):
+        run(C_buffer_depth=3)
+    with expect_error(RuntimeError, "must be at most"):
+        run(operand_buffer_depth=2**32 + 2)  # would narrow to 2
+    if _on_quasar(device):
+        with expect_error(RuntimeError, "must be a multiple of num_reader_threads"):
+            run(num_reader_threads=2, operand_buffer_depth=3)
+        with expect_error(RuntimeError, "must divide num_compute_threads"):
+            run(num_compute_threads=2, num_writer_threads=4)
+        with expect_error(RuntimeError, "exceed the 6 DM cores"):
+            run(num_reader_threads=4, num_writer_threads=4)
+    else:
+        with expect_error(RuntimeError, "need Quasar"):
+            run(num_reader_threads=2)
+        with expect_error(RuntimeError, "need Quasar"):
+            run(num_writer_threads=2)
 
 
 # ----------------------------------------------------------------------------------------------------

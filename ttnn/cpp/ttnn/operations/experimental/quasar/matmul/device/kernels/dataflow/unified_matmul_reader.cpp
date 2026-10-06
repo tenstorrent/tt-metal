@@ -7,6 +7,8 @@
 // row-major, matching the compute kernel's loop order and indexing. Slices are sized to the
 // subblock-padded C slice dims; tiles past the true slice or past M/N are never read (their stale
 // entries only reach C tiles the writer drops). A's K-padding columns are zeroed.
+// Reader threads (Quasar DM cores; one thread elsewhere) take the K chunks of the core's walk round-robin;
+// each pushes into its own part of the A and B DFBs, and the compute's waits take the threads' parts in turn.
 // Compile-time args are the template parameters, runtime args the function parameters.
 
 #include <stdint.h>
@@ -16,6 +18,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
@@ -33,7 +36,8 @@ template <
     uint32_t num_K_chunks,
     uint32_t A_last_K_tile_valid_columns,  // valid element columns in A's last K tile; 0 when K is a tile multiple
     uint32_t A_borrowed,                   // a borrowed operand is a resident L1 shard bound as the DFB: never read
-    uint32_t B_borrowed>
+    uint32_t B_borrowed,
+    uint32_t num_reader_threads>  // more than one only with copied A and B
 TT_KERNEL void reader(uint32_t first_C_slice, uint32_t num_C_slices) {
     // first_C_slice: this core's first C slice in the row-major walk over C (across N, then down M);
     // num_C_slices: how many consecutive ones it produces, per batch.
@@ -42,6 +46,7 @@ TT_KERNEL void reader(uint32_t first_C_slice, uint32_t num_C_slices) {
     constexpr uint32_t B_slice_tiles = K_chunk_tiles * C_slice_N_padded_tiles;
     constexpr uint32_t A_batch_stride_tiles = M_tiles * K_tiles;
     constexpr uint32_t C_slices_across_N = (N_tiles + C_slice_N_tiles - 1) / C_slice_N_tiles;
+    const uint32_t thread = get_my_thread_id();
 
     Noc noc;
     DataflowBuffer A_slice(dfb::A_slice);
@@ -66,6 +71,7 @@ TT_KERNEL void reader(uint32_t first_C_slice, uint32_t num_C_slices) {
     const uint32_t A_tile_bytes = get_tile_size(dfb::A_slice);
     const uint32_t B_tile_bytes = get_tile_size(dfb::B_slice);
 
+    uint32_t K_chunk_in_walk = 0;  // K chunks of the core's walk so far, over every C slice and batch
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
         const uint32_t A_batch_first_tile = batch * A_batch_stride_tiles;
         const uint32_t B_batch_first_tile = batch * B_batch_stride_tiles;
@@ -75,6 +81,9 @@ TT_KERNEL void reader(uint32_t first_C_slice, uint32_t num_C_slices) {
             const uint32_t C_slice_first_M_tile = ((first_C_slice + MN_chunk) / C_slices_across_N) * C_slice_M_tiles;
             const uint32_t C_slice_first_N_tile = ((first_C_slice + MN_chunk) % C_slices_across_N) * C_slice_N_tiles;
             for (uint32_t K_chunk = 0; K_chunk < num_K_chunks; ++K_chunk) {
+                if (K_chunk_in_walk++ % num_reader_threads != thread) {
+                    continue;
+                }
                 const uint32_t K_chunk_first_K_tile = K_chunk * K_chunk_tiles;
 
                 if constexpr (!A_borrowed) {

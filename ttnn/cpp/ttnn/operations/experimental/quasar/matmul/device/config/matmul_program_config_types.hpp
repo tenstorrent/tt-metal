@@ -90,9 +90,9 @@ struct MatmulMultiCoreProgramConfig {
 // Placement-first config for the Quasar-native matmul (GH#41910): the caller names the clusters and
 // the C slice (in 32x32 tiles) each produces in one go; the factory assigns one batch's C slices to
 // `cores` as contiguous runs. Edge C slices are clipped on read/write, so any M / N works. Within a
-// cluster the C slice's subblocks are assigned round-robin to the compute threads (NEOs).
-// Limits: one reader/writer per cluster, no bias/activation/untilize, 32x32 tiles only;
-// sharded output needs batch 1 and one C slice per core.
+// cluster the C slice's subblocks are assigned round-robin to the compute threads (NEOs), the K chunks
+// round-robin to the reader threads and the compute threads' shares of C to the writer threads (DM cores).
+// Limits: no bias/activation/untilize, 32x32 tiles only; sharded output needs batch 1 and one C slice per core.
 struct MatmulUnifiedProgramConfig {
     tt::tt_metal::CoreRangeSet cores;
     // C slice (in tiles) each core produces in one go. 0 = auto: the output shard when C is sharded, else the
@@ -116,6 +116,23 @@ struct MatmulUnifiedProgramConfig {
     // Compute threads per core (Quasar NEOs running the compute kernel); 1, 2 or 4. 0 = auto: 4 on Quasar,
     // 1 elsewhere (Wormhole / Blackhole have one compute engine per core).
     std::size_t num_compute_threads = 0;
+    // Reader threads per core (Quasar DM cores), 1 to 4: thread t reads the A and B slices of every
+    // num_reader_threads-th K chunk of the core's walk. More than one copies A and B even when an L1 shard could
+    // be borrowed. 0 = auto: on Quasar the most of 4, 2, 1 that gets each thread at least two K chunks and whose
+    // buffers fit L1 next to the minimum buffering, with no borrowed operand; else 1.
+    std::size_t num_reader_threads = 0;
+    // Writer threads per core (Quasar DM cores), 1, 2 or 4 and a divisor of num_compute_threads: thread t writes
+    // the shares of compute threads t, t + num_writer_threads, ... 0 = auto: 2 on Quasar with an even number of
+    // compute threads, else 1. Readers and writers together use at most the six DM cores of a cluster.
+    std::size_t num_writer_threads = 0;
+    // K chunks of A and B in flight: the A and B DFBs each hold this many slices, a multiple of
+    // num_reader_threads. 0 = auto: two per reader thread (one when a single slice passes through), falling back
+    // to one per reader thread when that does not fit next to the minimum buffering.
+    std::size_t operand_buffer_depth = 0;
+    // C slices in flight, 1 or 2: with 2 the C slice DFB holds two of every compute thread's shares, so the
+    // writer drains one C slice while the compute packs the next. 0 = auto: 2 when a core produces several C
+    // slices and they fit next to the minimum buffering, else 1.
+    std::size_t C_buffer_depth = 0;
 };
 
 using MatmulProgramConfig = std::variant<
