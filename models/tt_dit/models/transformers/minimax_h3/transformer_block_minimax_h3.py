@@ -68,6 +68,8 @@ class MiniMaxH3TransformerBlock(Module):
         is_fsdp: bool = False,
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -107,6 +109,8 @@ class MiniMaxH3TransformerBlock(Module):
             is_fsdp=is_fsdp,
             kv_gather_capacity=kv_gather_capacity,
             use_persistent_ccl_buffers=use_persistent_ccl_buffers,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
         self.norm2 = DistributedRMSNorm(
             embedding_dim=hidden_size,
