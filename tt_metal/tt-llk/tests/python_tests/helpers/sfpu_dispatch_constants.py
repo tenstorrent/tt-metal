@@ -82,3 +82,9 @@ SITU_GLU_BETA_UP = 25.0
 # rand's default interval [RAND_FROM, RAND_FROM + RAND_SCALE] (RAND_FROM_BITS / RAND_SCALE_BITS).
 RAND_FROM = 1.0
 RAND_SCALE = 2.0
+
+# EMA smoothing weights as fp32 bit patterns (kEmaAlphaBits / kEmaBetaBits in
+# sfpu_operations_quasar.h): EMA_new = alpha * EMA_old + beta * x. alpha = 0.6f is
+# non-dyadic, so alpha * EMA_old rounds, and it weights the carry above the input.
+EMA_ALPHA_BITS = 0x3F19999A  # 0.6f
+EMA_BETA_BITS = 0x3ECCCCCD  # 0.4f
