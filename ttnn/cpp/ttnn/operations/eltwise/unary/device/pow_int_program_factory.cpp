@@ -20,7 +20,9 @@ namespace m2 = tt::tt_metal::experimental;
 using ttnn::device_operation::ProgramArtifacts;
 
 ProgramArtifacts PowIntDeviceOperation::ProgramFactory::create_program_artifacts(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
     const Tensor& input = tensor_args.input;
 
     const tt::DataFormat data_format = datatype_to_dataformat_converter(input.dtype());
@@ -106,7 +108,8 @@ ProgramArtifacts PowIntDeviceOperation::ProgramFactory::create_program_artifacts
                  .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = m2::DFBEndpointType::CONSUMER},
              m2::DFBBinding{
                  .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER}},
-        .compile_time_args = {{"exponent", args.exponent}, {"data_format", static_cast<uint32_t>(data_format)}},
+        .compile_time_args =
+            {{"exponent", operation_attributes.exponent}, {"data_format", static_cast<uint32_t>(data_format)}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config = std::move(compute_hw),
     };
