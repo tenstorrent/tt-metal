@@ -36,3 +36,7 @@ No submit while recovery runs. Probe: tmp/probe_blx01.sh (exit 0 once nothing is
 On wake: check `tt-device-mcp status` on g15blx01 shows the recovery/fabric-check completed OK and no other job of ours runs,
 then resubmit: ssh g15blx01 "tt-device-mcp run-bg 'env TAG=a bash /var/tmp/fasth3/t166/job.sh' -w /var/tmp/fasth3/t48 -e /var/tmp/fasth3/t159/env.yaml -t 600".
 If recovery failed or chips 16-23 stay missing: move to g15blx02 (needs an overlay tree under ~/fasth3, python files only).
+
+## Light wake 21:22 UTC
+blx01 recovered (power-cycle 632, health-gate 637 OK, fabric-check 638 OK, hold 639 ended "ready for tenants").
+Resubmitted as blx01 job 640 (TAG=a, -t 600) at 21:22:37 UTC. Next: same steps as "Next" above with job 640.
