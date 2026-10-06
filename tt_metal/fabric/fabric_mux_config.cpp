@@ -248,12 +248,9 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const 
     return ct_args;
 }
 
-std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args_for_relay_mux() const {
-    const auto& fabric_router_config = tt::tt_metal::MetalContext::instance()
-                                           .get_control_plane()
-                                           .get_fabric_context()
-                                           .get_builder_context()
-                                           .get_fabric_router_config();
+std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args_for_relay_mux(
+    const FabricContext& fabric_context) const {
+    const auto& fabric_router_config = fabric_context.get_builder_context().get_fabric_router_config();
     auto* channel_allocator = fabric_router_config.channel_allocator.get();
     auto* const static_channel_allocator =
         dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
@@ -356,21 +353,6 @@ void FabricMuxConfig::set_num_full_size_channel_iters(size_t new_val) {
     TT_FATAL(new_val > 0, "Number of iterations must be greater than 0");
     num_full_size_channel_iters_ = new_val;
 }
-
-void FabricMuxConfig::set_num_iters_between_teardown_checks(size_t new_val) {
-    TT_FATAL(new_val > 0, "Setting num iters b/w teardown checks to 0 will result in no data being sent over fabric");
-    num_iters_between_teardown_checks_ = new_val;
-}
-
-void FabricMuxConfig::set_wait_for_fabric_endpoint_ready(bool wait_for_ready) {
-    wait_for_fabric_endpoint_ready_ = wait_for_ready;
-}
-
-void FabricMuxConfig::set_fabric_endpoint_channel_num_buffers(size_t num_buffers) {
-    fabric_endpoint_channel_num_buffers_ = num_buffers;
-}
-
-void FabricMuxConfig::set_fabric_endpoint_status_address(size_t address) { fabric_endpoint_status_address_ = address; }
 
 size_t FabricMuxConfig::get_memory_map_end_address() const { return memory_map_end_address_; }
 

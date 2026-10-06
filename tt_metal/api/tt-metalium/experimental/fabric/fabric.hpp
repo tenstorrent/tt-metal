@@ -32,6 +32,7 @@ class MeshShape;
 }  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_fabric {
+class FabricContext;
 class FabricNodeId;
 enum class RoutingDirection;
 struct FabricEriscDatamoverConfig;
@@ -127,11 +128,6 @@ std::vector<uint32_t> get_forwarding_link_indices(
 tt::tt_metal::CoreCoord get_forwarding_eth_core(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, uint32_t link_idx);
 
-FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id);
-
-std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
-    FabricNodeId fabric_node_id, RoutingDirection routing_direction);
-
 std::unordered_map<MeshId, tt::tt_metal::distributed::MeshShape> get_physical_mesh_shapes();
 
 std::vector<FabricType> get_all_mgd_fabric_types();
@@ -225,12 +221,9 @@ public:
     // Returns the compile time args to be passed for the mux kernel
     std::vector<uint32_t> get_fabric_mux_compile_time_args() const;
 
-    // Returns the compile time args for relay mux
-    std::vector<uint32_t> get_fabric_mux_compile_time_args_for_relay_mux() const;
-
-    // Returns the base compile time args without stream IDs (for custom stream ID override)
-    std::vector<uint32_t> get_fabric_mux_compile_time_main_args(
-        const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const;
+    // Returns the compile time args for relay mux. The relay mux always connects to the fabric router (never a
+    // tensix extension), so it passes the fabric context it is built against.
+    std::vector<uint32_t> get_fabric_mux_compile_time_args_for_relay_mux(const FabricContext& fabric_context) const;
 
     // Returns the run-time arguments for the mux kernel depending on the connection setup with fabric router
     template <typename ProgramOrDescriptor = tt::tt_metal::Program>
@@ -253,10 +246,6 @@ public:
     size_t get_flow_control_address(FabricMuxChannelType channel_type, uint8_t channel_id) const;
     size_t get_buffer_index_address(FabricMuxChannelType channel_type, uint8_t channel_id) const;
     void set_num_full_size_channel_iters(size_t new_val);
-    void set_num_iters_between_teardown_checks(size_t new_val);
-    void set_wait_for_fabric_endpoint_ready(bool wait_for_ready);
-    void set_fabric_endpoint_channel_num_buffers(size_t num_buffers);
-    void set_fabric_endpoint_status_address(size_t address);
 
     size_t get_memory_map_end_address() const;
 
@@ -264,6 +253,10 @@ public:
     std::vector<std::pair<size_t, size_t>> get_memory_regions_to_clear() const;
 
 private:
+    // Returns the base compile time args without stream IDs
+    std::vector<uint32_t> get_fabric_mux_compile_time_main_args(
+        const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const;
+
     void validate_channel_id(FabricMuxChannelType channel_type, uint8_t channel_id) const;
     uint8_t get_channel_global_offset(FabricMuxChannelType channel_type, uint8_t channel_id) const;
 
@@ -466,8 +459,5 @@ std::optional<eth_chan_directions> get_eth_forwarding_direction(
 bool is_1d_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
 
 bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
-
-// Routing planes usable for workload traffic
-size_t get_num_usable_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction);
 
 }  // namespace tt::tt_fabric

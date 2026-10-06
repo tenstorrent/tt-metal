@@ -66,17 +66,6 @@ size_t get_tt_fabric_max_payload_size_bytes() {
     return control_plane.get_fabric_context().get_fabric_max_payload_size_bytes();
 }
 
-FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    return control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
-}
-
-std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
-    FabricNodeId fabric_node_id, RoutingDirection routing_direction) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    return control_plane.get_active_fabric_eth_routing_planes_in_direction(fabric_node_id, routing_direction);
-}
-
 std::unordered_map<MeshId, MeshShape> get_physical_mesh_shapes() {
     std::unordered_map<MeshId, MeshShape> mesh_shapes;
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -592,10 +581,6 @@ bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
 }
 
-size_t get_num_usable_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    return control_plane.get_num_usable_routing_planes(fabric_node_id, routing_direction);
-}
 namespace experimental {
 
 size_t get_number_of_available_routing_planes(
