@@ -38,6 +38,28 @@ from models.demos.blackhole.deepseek_v41_flash.tt.paged_ops import PAGE_TOKENS, 
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import DSV41PrefillAttention, clear_chunk_caches
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_handoff import GenPrefillModel, PagedStateSink
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import DSV41PrefillLayer, DSV41PrefillMoE
+
+UNI_MOE = (
+    os.environ.get("DSV41_PREFILL_MOE", "") == "unified"
+)  # prefill routed experts via ttnn.experimental.deepseek_prefill (default off)
+
+
+def UNI_LAYERS(layer_ids):
+    """Layers that use the unified prefill MoE: DSV41_UNI_LAYERS="all" (default) or e.g. "2-11,20"."""
+    v = os.environ.get("DSV41_UNI_LAYERS", "all")
+    if v.startswith(
+        "auto"
+    ):  # DSV41_UNI_LAYERS=auto: as many layers as fit next to the decode weights, added after the rest of the model is built (Model._uni_auto)
+        return set()
+    if v == "all":
+        return set(layer_ids)
+    out = set()
+    for part in v.split(","):
+        lo, _, hi = part.partition("-")
+        out |= set(range(int(lo), int(hi or lo) + 1))
+    return out & set(layer_ids)
+
+
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_model import T
 
 GATE_CUTOFFS = json.loads((Path(__file__).resolve().parents[1] / "configs" / "gate_cutoffs.json").read_text())
@@ -83,8 +105,8 @@ class Model:
         sh = _Shards()
         pool = ThreadPoolExecutor(max_workers=2)
         futs = {}
-        submit = (
-            lambda L: futs.setdefault(L, pool.submit(load_layer, L, True, max_ctx + 128, self.use_indexer))
+        submit = lambda L: (
+            futs.setdefault(L, pool.submit(load_layer, L, True, max_ctx + 128, self.use_indexer))
             if L in self.layer_ids
             else None
         )
@@ -115,6 +137,18 @@ class Model:
             pmoe = DSV41PrefillMoE(layer.moe, T=T, buffers=None if first_pmoe is None else first_pmoe.decode.buffers)
             first_pmoe = first_pmoe or pmoe
             pls.append((L, DSV41PrefillLayer(layer, pa, pmoe, T=T)))
+            if UNI_MOE and L in UNI_LAYERS(
+                self.layer_ids
+            ):  # deepseek_prefill routed-expert pipeline (tt/prefill_unified_moe.py)
+                from models.demos.blackhole.deepseek_v41_flash.tt.prefill_unified_moe import DSV41UnifiedMoE
+
+                if os.environ.get("DSV41_UNI_RING", "0") == "1":
+                    # ONE weight copy: the unified op reads the decode moe_compute (ring layout) expert weights in place (RING_WEIGHTS mode, needs the
+                    # private/updated _ttnncpp); decode and interleaved prefill share the same read-only buffers
+                    es = layer.moe.decode.expert_state
+                    pls[-1][1].umoe = DSV41UnifiedMoE(mesh_device, L, log=log, ring=(es.tt_w0_w1, es.tt_w2))
+                else:
+                    pls[-1][1].umoe = DSV41UnifiedMoE(mesh_device, L, log=log)
             key = getattr(attn, "ratio", 0)
             if key not in self.step_groups:
                 self.step_groups[key] = DSV41StepState_paged(attn, max_ctx + 64, self.use_indexer)
@@ -154,6 +188,8 @@ class Model:
         self.trace_id = None
         self.admitted = False
         self.pool_pages_free = None
+        if UNI_MOE and os.environ.get("DSV41_UNI_LAYERS", "all").startswith("auto"):
+            self._uni_auto(pls)
         self.log_dram("model built")
         if os.environ.get("DSV41_MEMLOG") in (
             "1",
@@ -233,6 +269,30 @@ class Model:
             )[0]
         log(
             f"model built: {len(self.layer_ids)} layers, U={self.U} users/row (batch {self.B}), pool {self.num_pages} pages/row ({time.time() - t0:.0f}s)"
+        )
+
+    def _uni_auto(self, pls):
+        """DSV41_UNI_LAYERS=auto: the unified-layout expert weights (~54 MiB/bank/layer) are a SECOND copy next to the moe_compute decode weights, so only
+        some layers fit. Add them layer by layer, after everything else (pool, decode weights, Engram, head) is resident, while the free DRAM per bank
+        stays above DSV41_UNI_RESERVE_MIB (default 450: the growth from 'model built' to the peak of the traced prefill + decode, 130-390 MiB in the grid
+        logs, plus the unified shared buffers). DSV41_UNI_MAX=<n> caps the count."""
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_unified_moe import DSV41UnifiedMoE
+
+        mib = 2**20
+        per = float(os.environ.get("DSV41_UNI_LAYER_MIB", "54"))
+        reserve = float(os.environ.get("DSV41_UNI_RESERVE_MIB", "450"))
+        cap = int(os.environ.get("DSV41_UNI_MAX", "99"))
+        n = 0
+        for L, pl in pls:
+            mv = ttnn.get_memory_view(self.md, ttnn.BufferType.DRAM)
+            free = mv.total_bytes_free_per_bank / mib
+            if n >= cap or free - per < reserve:
+                break
+            pl.umoe = DSV41UnifiedMoE(self.md, L, log=self.log)
+            n += 1
+        self.uni_layers = [L for L, pl in pls if pl.umoe is not None]
+        self.log(
+            f"UNI auto: unified prefill MoE on {n}/{len(pls)} layers {self.uni_layers} (reserve {reserve} MiB/bank)"
         )
 
     def log_dram(self, tag):
@@ -493,6 +553,11 @@ class Model:
                 mesh_mapper=self._mp(),
             )
             self._upload_rows(host)
+        if (
+            os.environ.get("DSV41_UNI_NODECODE") == "1"
+        ):  # prefill-only unified mode: no decode weights, no decode compile pass
+            self._warm = True
+            return
         snaps = self.dec.snapshot_states()
         self.last_logits = (
             self.dec.forward()
@@ -519,7 +584,11 @@ class Model:
                 and os.environ.get("DSV41_PREFILL_DYN", "1") != "0"
             ):
                 continue
+            _t = time.perf_counter()
             ix.export_keys(dec.k_cache, int(torch.as_tensor(lens).max()) // self.attns[L].ratio)
+            if os.environ.get("DSV41_PF_TIMING") == "1":
+                ttnn.synchronize_device(self.md)
+                self.log(f"  export_keys layer {L}: {(time.perf_counter() - _t) * 1e3:.0f} ms")
         ttnn.synchronize_device(self.md)
 
     def _post_chunk(self, s0, C):
@@ -574,10 +643,14 @@ class Model:
         self._res, self._last_pos, self._want_logits = {}, lens - 1, want_logits
         if getattr(self, "_hooks_set", None) is not pm:
             pm.pre_replay_hooks.append(lambda s0, C_: self.sink.update(s0, C_))
-            pm.post_replay_hooks.append(self._post_chunk)
+            hook = lambda s0, C_: self._post_chunk(s0, C_)
+            # the async replay loop only synchronizes (and calls the hook) for chunks that hold some user's last prompt token
+            hook.needs_sync = lambda s0, C_: bool(((self._last_pos >= s0) & (self._last_pos < s0 + C_)).any())
+            hook.is_post_chunk = True
+            pm.post_replay_hooks.append(hook)
             self._hooks_set = pm
         if "nohead" in bis:
-            pm.post_replay_hooks[:] = [h for h in pm.post_replay_hooks if h != self._post_chunk]
+            pm.post_replay_hooks[:] = [h for h in pm.post_replay_hooks if not getattr(h, "is_post_chunk", False)]
         self.log(f"  prefill_dyn: run chunks (trace={enable_trace}, C={C}, S_pad={S_pad}, bisect={bis!r})")
         if enable_trace and getattr(pm, "dyn", None) is not None and (pm.dyn.C != C or pm.dyn.S_pad != S_pad):
             self.log_dram("before teardown (old S_pad %d)" % pm.dyn.S_pad)
@@ -604,8 +677,15 @@ class Model:
                 pm.forward_device(bufs, S, s0, C, dyn=True)
                 ttnn.synchronize_device(self.md)
                 self._post_chunk(s0, C)
+        _t0 = time.perf_counter()
         ttnn.synchronize_device(self.md)
+        _t1 = time.perf_counter()
         self._export_index_keys(lens)
+        _t2 = time.perf_counter()
+        if os.environ.get("DSV41_PF_TIMING") == "1":
+            self.log(
+                f"  prefill_dyn tail: sync {(_t1 - _t0) * 1e3:.0f} ms, export_index_keys {(_t2 - _t1) * 1e3:.0f} ms"
+            )
         self.log_dram("prefill end")
         self.timing = dict(pm.timing, total=time.perf_counter() - t_start)
         first = torch.tensor([self._res[b][0] for b in range(B)], dtype=torch.long)

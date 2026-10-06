@@ -49,6 +49,7 @@ NAMESPACES = [
     ("ttnn.experimental", lambda: ttnn.experimental),
     ("ttnn.experimental.deepseek", lambda: ttnn.experimental.deepseek),
     ("ttnn.experimental.deepseek.moe", lambda: ttnn.experimental.deepseek.moe),
+    ("ttnn.experimental.deepseek_prefill", lambda: ttnn.experimental.deepseek_prefill),
     ("ttnn.transformer", lambda: ttnn.transformer),
 ]
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -99,7 +100,9 @@ def kdesc(k, v):
 
 
 def caller():
+    """first non-ttnn frame, plus (after '<') the nearest frame of the prefill layer/model/attention/sparse/moe files (the model-level caller)."""
     f = sys._getframe(2)
+    first, outer = None, None
     while f is not None:
         fn = f.f_code.co_filename
         if (
@@ -108,9 +111,22 @@ def caller():
             and "site-packages" not in fn
             and "python_env" not in fn
         ):
-            return f"{os.path.basename(fn)}:{f.f_lineno}:{f.f_code.co_name}"
+            d = f"{os.path.basename(fn)}:{f.f_lineno}:{f.f_code.co_name}"
+            first = first or d
+            if os.path.basename(fn) in (
+                "prefill_layer.py",
+                "prefill_model.py",
+                "prefill_attention.py",
+                "prefill_sparse.py",
+                "prefill_unified_moe.py",
+                "prefill_dyn.py",
+            ):
+                outer = d
+                break
         f = f.f_back
-    return "?"
+    if first is None:
+        return "?"
+    return first if outer is None or outer == first else first + "<" + outer
 
 
 class OpRecorder:

@@ -350,6 +350,20 @@ class DSV41DeviceEngram:
             return ttnn.addcmul(x, gate, value)
         return ttnn.add(x, ttnn.multiply(gate, value))
 
+    def forward_v2_own(self, x, rows):
+        """Column-split Engram: ``x`` [T,1,hc,D] is THIS column's own chunk, ``rows`` [1,1,n*T,Kin] the rows of the n = #columns chunks of the group
+        (chunk j of the group belongs to column j; replicated on every device). The kv projection is sharded over the columns, so ONE matmul over all
+        n*T tokens gives each column its 1/n slice of every chunk's kv; an all_to_all (hidden shards -> own tokens) hands every column the FULL kv of
+        its own chunk, and the gating runs on the own T tokens only. Same maths as ``forward_v2`` on the gathered chunks (bit-identical), without the
+        all_gather of x, the n separate calls and the reduce_scatter of the n identical copies."""
+        kv = ttnn.matmul(
+            rows, self.wkv_T, compute_kernel_config=self.ckc, dtype=ttnn.bfloat16, core_grid=ttnn.CoreGrid(y=8, x=8)
+        )  # [1,1,n*T,(hc+1)D/n]
+        kv = ttnn.experimental.all_to_all_async_generic(
+            kv, in_dim=3, out_dim=2, num_links=self.ccl.num_links, topology=ttnn.Topology.Ring, cluster_axis=1
+        )  # [1,1,T,(hc+1)D]
+        return self._gate_matmul(x, kv)
+
     def _gate_matmul(self, x, kv):
         """kv: [1,1,T,(hc+1)D] (row t = token t)."""
         """Everything after the kv matmul in the compact [1,1,T*hc,D] layout, reductions over D as matmuls with a ones column

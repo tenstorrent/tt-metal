@@ -19,7 +19,8 @@ import torch
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as P
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM
-from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active
+from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active, unpack_streams
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_model import DSV41PrefillModel, T
 
 SKIP = 0xFFFFFFFF
@@ -129,18 +130,14 @@ class PagedStateSink:
         """Refresh the persistent index tensors for the chunk of positions [s0, s0 + C) (host work + 6 small uploads; call before each chunk / replay)."""
         bufs = self.bind(C)
         ring, lat, idx, m, hm = self._host_values(s0, C)
-        ttnn.copy_host_to_device_tensor(
-            self._host(ring.reshape(self.rows, 1, -1).to(torch.int32), ttnn.uint32), bufs["ring"]
-        )
+        h2d(self._host(ring.reshape(self.rows, 1, -1).to(torch.int32), ttnn.uint32), bufs["ring"])
         for s, v in lat.items():
-            ttnn.copy_host_to_device_tensor(
-                self._host(v.reshape(self.rows, 1, -1).to(torch.int32), ttnn.uint32), bufs["lat"][s]
-            )
-        ttnn.copy_host_to_device_tensor(self._host(idx, ttnn.uint32), bufs["idx"])
-        ttnn.copy_host_to_device_tensor(self._host(m, ttnn.float32, ttnn.TILE_LAYOUT), bufs["mask"])
-        ttnn.copy_host_to_device_tensor(self._host(hm, ttnn.float32, ttnn.TILE_LAYOUT), bufs["hmask"])
+            h2d(self._host(v.reshape(self.rows, 1, -1).to(torch.int32), ttnn.uint32), bufs["lat"][s])
+        h2d(self._host(idx, ttnn.uint32), bufs["idx"])
+        h2d(self._host(m, ttnn.float32, ttnn.TILE_LAYOUT), bufs["mask"])
+        h2d(self._host(hm, ttnn.float32, ttnn.TILE_LAYOUT), bufs["hmask"])
         if colsplit_active(self.U, C):
-            ttnn.copy_host_to_device_tensor(self._host_cs(hm, C), bufs["hmask_cs"])
+            h2d(self._host_cs(hm, C), bufs["hmask_cs"])
 
     # ---- the sink (trace-safe: static shapes, persistent index tensors) --------------------------------------------------------------
     def write(self, attn, pa, kv, lat, cs, s0, C, h):
@@ -269,6 +266,7 @@ class GenPrefillModel(DSV41PrefillModel):
         sync("embedding", t0)
         for lid, pl in self.layers:
             if lid in self.engram:
+                xs, pres = unpack_streams(xs, pres)
                 t0 = time.perf_counter()
                 kin = erows_dev[lid].shape[3]
                 new = [
@@ -295,7 +293,9 @@ class GenPrefillModel(DSV41PrefillModel):
             xs, pres = outs, pouts
             sync("layers", t0)
             if hook is not None:
+                xs, pres = unpack_streams(xs, pres)
                 hook(lid, xs, pres)
+        xs, pres = unpack_streams(xs, pres)
         t0 = time.perf_counter()
         out = self.ragged_tail(xs, pres, s0, C, last_pos, want_logits)
         for x in xs:
