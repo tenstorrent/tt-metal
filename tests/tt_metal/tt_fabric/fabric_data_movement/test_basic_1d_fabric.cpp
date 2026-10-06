@@ -1929,7 +1929,8 @@ void RunEDMConnectionStressTest(
             log_debug(tt::LogTest, "r={}, c={}", test_rows, c);
 
             // Set up worker cores for token ring
-            auto worker_logical_cores = CoreRangeSet(CoreRange({{c, test_rows}, {c + num_workers - 1, test_rows}}));
+            auto worker_logical_cores =
+                tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({{c, test_rows}, {c + num_workers - 1, test_rows}}));
             auto worker_logical_cores_vec = corerange_to_cores(worker_logical_cores, std::nullopt, false);
 
             // Map logical to virtual cores
@@ -1944,7 +1945,7 @@ void RunEDMConnectionStressTest(
 
             // Create semaphores for token passing (one per worker)
             auto connection_token_semaphore_id =
-                tt_metal::CreateSemaphore(program, CoreRangeSet(worker_logical_cores), 0);
+                tt_metal::CreateSemaphore(program, tt::tt_metal::CoreRangeSet(worker_logical_cores), 0);
 
             // Create source packet buffer (one per worker)
             static constexpr uint32_t source_l1_cb_index = tt::CB::c_in0;
@@ -2411,8 +2412,8 @@ void UDMFabricUnicastCommon(
         sender_cores.push_back(sender_logical_core);
         receiver_cores.push_back(receiver_logical_core);
     }
-    CoreRangeSet sender_core_range(sender_cores);
-    CoreRangeSet receiver_core_range(receiver_cores);
+    tt::tt_metal::CoreRangeSet sender_core_range(sender_cores);
+    tt::tt_metal::CoreRangeSet receiver_core_range(receiver_cores);
 
     // Sender compile time args (per-core receiver coords moved to runtime args)
     std::vector<uint32_t> sender_compile_time_args = {
@@ -2807,7 +2808,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocPacketType no
         }
 
         // Create sender kernel for all sender cores on this device
-        CoreRangeSet sender_core_range(sender_logical_cores);
+        tt::tt_metal::CoreRangeSet sender_core_range(sender_logical_cores);
         auto sender_kernel_risc0 = tt_metal::CreateKernel(
             programs[dev_idx],
             sender_kernel_path,
@@ -2876,7 +2877,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocPacketType no
         }
 
         // Create receiver kernel for all receiver cores on this device
-        CoreRangeSet receiver_core_range(receiver_logical_cores);
+        tt::tt_metal::CoreRangeSet receiver_core_range(receiver_logical_cores);
         auto receiver_kernel_risc0 = tt_metal::CreateKernel(
             programs[dev_idx],
             receiver_kernel_path,

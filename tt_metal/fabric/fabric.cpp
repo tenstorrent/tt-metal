@@ -56,6 +56,15 @@ bool is_TG_gateway_connection(
     return mmio_chip_id1 == mmio_chip_id2 && (mmio_chip_id1 == src_chip_id || mmio_chip_id2 == dst_chip_id);
 }
 
+bool is_neighbor_in_direction(
+    const tt::tt_fabric::ControlPlane& control_plane,
+    const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+    const tt::tt_fabric::FabricNodeId& dst_fabric_node_id,
+    tt::tt_fabric::RoutingDirection direction) {
+    const auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, direction);
+    return std::find(neighbors.begin(), neighbors.end(), dst_fabric_node_id.chip_id) != neighbors.end();
+}
+
 }  // namespace
 
 namespace tt::tt_fabric {
@@ -202,20 +211,22 @@ void append_fabric_connection_rt_args(
         auto teardown_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
         TT_FATAL(teardown_sem_id_opt.has_value(), "No available semaphore ID for teardown semaphore");
         worker_teardown_semaphore_id = teardown_sem_id_opt.value();
-        worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = worker_teardown_semaphore_id,
-            .core_type = core_type,
-            .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
-            .initial_value = 0});
+        worker_program_or_desc.semaphores.push_back(
+            tt::tt_metal::SemaphoreDescriptor{
+                .id = worker_teardown_semaphore_id,
+                .core_type = core_type,
+                .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
+                .initial_value = 0});
 
         auto buffer_index_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
         TT_FATAL(buffer_index_sem_id_opt.has_value(), "No available semaphore ID for buffer index semaphore");
         worker_buffer_index_semaphore_id = buffer_index_sem_id_opt.value();
-        worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-            .id = worker_buffer_index_semaphore_id,
-            .core_type = core_type,
-            .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
-            .initial_value = 0});
+        worker_program_or_desc.semaphores.push_back(
+            tt::tt_metal::SemaphoreDescriptor{
+                .id = worker_buffer_index_semaphore_id,
+                .core_type = core_type,
+                .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
+                .initial_value = 0});
     } else {
         worker_teardown_semaphore_id = tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
         worker_buffer_index_semaphore_id =
@@ -283,11 +294,12 @@ void append_fabric_connection_rt_args(
             TT_FATAL(flow_control_sem_id_opt.has_value(), "No available semaphore ID for flow control semaphore");
             worker_flow_control_semaphore_id = flow_control_sem_id_opt.value();
 
-            worker_program_or_desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-                .id = worker_flow_control_semaphore_id,
-                .core_type = core_type,
-                .core_ranges = CoreRangeSet(CoreRange(worker_core, worker_core)),
-                .initial_value = 0});
+            worker_program_or_desc.semaphores.push_back(
+                tt::tt_metal::SemaphoreDescriptor{
+                    .id = worker_flow_control_semaphore_id,
+                    .core_type = core_type,
+                    .core_ranges = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_core, worker_core)),
+                    .initial_value = 0});
         } else {
             worker_flow_control_semaphore_id =
                 tt_metal::CreateSemaphore(worker_program_or_desc, {worker_core}, 0, core_type);
@@ -302,14 +314,26 @@ void append_fabric_connection_rt_args(
     }
 }
 
+bool are_intra_mesh_neighbors(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, const FabricNodeId& node_a, const FabricNodeId& node_b) {
+    if (node_a.mesh_id != node_b.mesh_id) {
+        return false;
+    }
+    const auto& control_plane =
+        tt::tt_metal::MetalContext::instance(mesh_device.impl().get_context_id()).get_control_plane();
+    const auto& directions = FabricContext::routing_directions;
+    return std::any_of(directions.begin(), directions.end(), [&](const auto direction) {
+        return is_neighbor_in_direction(control_plane, node_a, node_b, direction);
+    });
+}
+
 std::vector<eth_chan_directions> get_neighbor_eth_directions(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     std::vector<eth_chan_directions> directions;
     directions.reserve(FabricContext::routing_directions.size());
     for (const auto& direction : FabricContext::routing_directions) {
-        auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, direction);
-        if (std::find(neighbors.begin(), neighbors.end(), dst_fabric_node_id.chip_id) != neighbors.end()) {
+        if (is_neighbor_in_direction(control_plane, src_fabric_node_id, dst_fabric_node_id, direction)) {
             directions.push_back(control_plane.routing_direction_to_eth_direction(direction));
         }
     }

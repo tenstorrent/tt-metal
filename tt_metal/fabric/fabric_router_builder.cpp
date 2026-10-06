@@ -11,6 +11,7 @@ namespace tt::tt_fabric {
 
 std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::create(
     const FabricContext& fabric_context,
+    CoreType dispatch_core_type,
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program,
     FabricNodeId local_node,
@@ -20,11 +21,13 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::create(
     bool is_switch_mesh = fabric_context.is_switch_mesh(local_node.mesh_id);
 
     if (is_switch_mesh) {
-        return SwitchMeshRouterBuilder::build(fabric_context, device, program, local_node, location, chip_facts);
+        return SwitchMeshRouterBuilder::build(
+            fabric_context, dispatch_core_type, device, program, local_node, location, chip_facts);
     }
 
     // Create compute mesh router - it handles its own config lookup
-    return ComputeMeshRouterBuilder::build(fabric_context, device, program, local_node, location, chip_facts);
+    return ComputeMeshRouterBuilder::build(
+        fabric_context, dispatch_core_type, device, program, local_node, location, chip_facts);
 }
 
 }  // namespace tt::tt_fabric
