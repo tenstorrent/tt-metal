@@ -76,3 +76,12 @@ stills, pick the default set, commit the table + video/still paths on this branc
   state/runs/695. Wake probe: `ttp detach --check state/runs/695/t164-phase2c.rc` (fires when phase 2 ends, or at
   once if the pack driver stops early). A third tray-1 drop on a baseline job stops the pack (marker 6): then move
   the pack to blx01 (/var/tmp/fasth3, t48 bf7db12a149 build from #159; its tray 3 config skip does not apply here).
+- DROP 2026-10-06 22:26:20 UTC, g15blx02, broker job 422 (ours, t164 baseline, 75 s in, encoder load/warmup),
+  chips 2,3,6,7 (tray 1) off the PCIe bus; broker DEAD-CHIP killed the job (-9). Evidence:
+  data/g15/t164/driver_pack3/{drop_evidence,broker_slice,journal_slice}_422.log, incident 20261006T222620Z.
+  Second baseline drop in a row (407, 422) -> baseline skipped on g15blx02, pack stopped (DRIVER.done "6 ..."),
+  phase 2 exited 11. Tray 1 dropped 3 times in 52 min (407 ours, 421 ltx-host, 422 ours): g15blx02 is not
+  usable for the pack until tray 1 is stable. No config has results. ~/fasth3 95G (du -sh) after.
+- Next: run the pack on blx01 under /var/tmp/fasth3/t164, using #166's blx01 overlay (/var/tmp/fasth3/t166:
+  mkoverlay.sh, job.sh) as the template, with the build /var/tmp/fasth3/t48 @ bf7db12a149 and the env
+  /var/tmp/fasth3/t159/env.yaml. blx01 tray 3 (chips 16-23) dropped twice under #166's config (jobs 625, 640).
