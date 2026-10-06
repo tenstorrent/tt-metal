@@ -224,6 +224,16 @@ ALWI void unary_gt_tile_init() { MATH(SFPU_UNARY_INIT(unary_gt)); }
  */
 // clang-format on
 ALWI void unary_gt_tile_int32(uint32_t idst, uint32_t param0) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_comp_unary_int_,
+        (APPROX, SfpuType::unary_gt, 32 /*ITERATIONS*/),
+        idst,
+        VectorMode::None,
+        param0));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -232,6 +242,7 @@ ALWI void unary_gt_tile_int32(uint32_t idst, uint32_t param0) {
         idst,
         VectorMode::RC,
         param0));
+#endif
 }
 
 // unary ge : if x >= value --> 1.0, else 0.0
@@ -288,6 +299,16 @@ ALWI void unary_ge_tile_init() { MATH(SFPU_UNARY_INIT(unary_ge)); }
  */
 // clang-format on
 ALWI void unary_ge_tile_int32(uint32_t idst, uint32_t param0) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_comp_unary_int_,
+        (APPROX, SfpuType::unary_ge, 32 /*ITERATIONS*/),
+        idst,
+        VectorMode::None,
+        param0));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -296,6 +317,7 @@ ALWI void unary_ge_tile_int32(uint32_t idst, uint32_t param0) {
         idst,
         VectorMode::RC,
         param0));
+#endif
 }
 
 // unary lt : if x < value --> 1.0, else 0.0
@@ -347,6 +369,16 @@ ALWI void unary_lt_tile(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void unary_lt_tile_int32(uint32_t idst, uint32_t param0) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_comp_unary_int_,
+        (APPROX, SfpuType::unary_lt, 32 /*ITERATIONS*/),
+        idst,
+        VectorMode::None,
+        param0));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -355,6 +387,7 @@ ALWI void unary_lt_tile_int32(uint32_t idst, uint32_t param0) {
         idst,
         VectorMode::RC,
         param0));
+#endif
 }
 
 /**
@@ -411,6 +444,16 @@ ALWI void unary_le_tile(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void unary_le_tile_int32(uint32_t idst, uint32_t param0) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_comp_unary_int_,
+        (APPROX, SfpuType::unary_le, 32 /*ITERATIONS*/),
+        idst,
+        VectorMode::None,
+        param0));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -419,6 +462,7 @@ ALWI void unary_le_tile_int32(uint32_t idst, uint32_t param0) {
         idst,
         VectorMode::RC,
         param0));
+#endif
 }
 
 /**
