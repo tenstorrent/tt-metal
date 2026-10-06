@@ -211,8 +211,9 @@ card:
     - **First boot is long.** The boot row above is a repeat boot on a host that has already served
       this image (200-210 s on `p150`, 160 s on `p300x2`). A first boot also compiles the kernels
       for the served shape — 451 s on `p150`, 320 s on `p300x2` — and if the mounted weight cache is
-      empty it converts the weights into it as well, which took 851 s on `p150` and wrote 26 GB.
-      All three are measured through this package with the weights already downloaded.
+      empty it converts the weights into it as well: 851 s on `p150` (writing 26 GB of converted
+      tensors) and 1242 s on `p300x2` (115 GB, which runs the conditioner on device at bf16).
+      All of these are measured through this package with the weights already downloaded.
     - **The weights are a ~144 GB download** on first pull, and the Turbo adapter is fetched from a
       second repo at boot — so the first boot needs network access even with the weights in place.
     - **Reference-conditioned generation (ref2va) is not included.**
