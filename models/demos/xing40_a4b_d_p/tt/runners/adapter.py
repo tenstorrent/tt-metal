@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """``XingPrefillAdapter``: the common/prefill engine <-> Xing4.0-29B-A4B (text decoder, MTP layer 40 skipped).
 
-Single rank on a 4x2 Blackhole mesh, FABRIC_2D, SP = 4 over axis 0 x TP = 2 over axis 1 (bringup/plan.md). The
+Single rank on a 2D Blackhole mesh, FABRIC_2D, SP = mesh rows over axis 0 x TP = mesh columns over axis 1 (4x2 on
+the LoudBox, bringup/plan.md). The
 model is the all-device tt/model.py:TtXingModel (the ladder's model, final norm unused). The KV cache the engine
 owns (tt/runners/kv_contract.py) is the model's own state: every slot's MLA latent cache, which the attention writes
 and gathers in place through ``TtMlaAttention.bind_cache``.
@@ -12,12 +13,12 @@ Served layers: every layer of the rank's range (num_kv_cache_layers(n) = n: ever
 ``PREFILL_XING_LAYERS`` (e.g. "0-5") restricts it for debugging, a contiguous run from the rank's first layer. The
 runtime acks exactly those layers, with their global index.
 
-Engine input (bringup/serving_contract.md "Input"): uint32 ROW_MAJOR [sp, 1, chunk / sp] with sp = mesh rows = 4,
+Engine input (bringup/serving_contract.md "Input"): uint32 ROW_MAJOR [sp, 1, chunk / sp] with sp = mesh rows (4 on 4x2),
 sharded over mesh axis 0, replicated over the columns, PAD_ID 0xFFFFFFFF past actual_end, already reshuffled by the
-server (ring_sdpa_reshuffle with kv_offset = actual_start: absolute position g on row (g // 1280) % 4, rising within
-a row). That is where the attention expects each token for a chunk at actual_start (update_padded_kv_cache,
+server (ring_sdpa_reshuffle with kv_offset = actual_start: absolute position g on row (g // (chunk / sp)) % sp, rising
+within a row). That is where the attention expects each token for a chunk at actual_start (update_padded_kv_cache,
 rotary_embedding_indexed and ring_mla derive the placement from it on the device), so the runtime only clamps the pad
-ids into the vocab and reshapes to [1, 1, 1, chunk/4], on the device. actual_start is any multiple of 32 (a follow-up
+ids into the vocab and reshapes to [1, 1, 1, chunk/sp], on the device. actual_start is any multiple of 32 (a follow-up
 turn starts at the reused prefix); pad tokens sit after every real token, so causality keeps them out of every real
 row's KV (MoE routing is per token).
 
@@ -40,7 +41,6 @@ from models.demos.common.prefill.adapter import KvCaches, PrefillModelAdapter, P
 from models.demos.xing40_a4b_d_p.tt.settings import settings
 
 MODEL_NAME = "xing40_a4b_d_p"
-MESH_SHAPE = (4, 2)
 SPEC_PATH = Path(__file__).resolve().parents[2] / "bringup" / "spec.yaml"
 
 
@@ -116,7 +116,7 @@ class XingPrefillRuntime:
         from models.demos.xing40_a4b_d_p.tt.model import TtXingModel
 
         assert params.is_first_rank and params.is_last_rank, "single-rank only"
-        assert tuple(params.mesh_shape) == MESH_SHAPE, f"built for a 4x2 mesh, got {params.mesh_shape}"
+        assert len(params.mesh_shape) == 2 and min(params.mesh_shape) > 1, f"2D mesh expected, got {params.mesh_shape}"
         sp = params.mesh_shape[0]
         assert params.chunk_size % (32 * sp) == 0 and params.max_seq_len % params.chunk_size == 0
         self.mesh_device, self.config = mesh_device, params
@@ -304,7 +304,7 @@ class XingPrefillAdapter(PrefillModelAdapter):
     def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> KvCaches:
         from models.demos.xing40_a4b_d_p.tt.runners.kv_contract import XingContractKV
 
-        assert tuple(params.mesh_shape) == MESH_SHAPE, f"built for a 4x2 mesh, got {params.mesh_shape}"
+        assert len(params.mesh_shape) == 2 and min(params.mesh_shape) > 1, f"2D mesh expected, got {params.mesh_shape}"
         layers = served_layers(params.first_layer_idx, params.num_layers)
         contract = XingContractKV(
             mesh_device, layers, max_seq=params.max_seq_len, chunk=params.chunk_size, num_users=params.num_users
