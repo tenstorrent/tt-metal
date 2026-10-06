@@ -8,14 +8,16 @@
 #include "hd_socket_descriptor_generated.h"
 
 #include <tt_stl/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
 #include <fstream>
+#include <optional>
 #include <thread>
+#include <utility>
 #include <variant>
 
 namespace tt::tt_metal::distributed {
@@ -47,7 +49,8 @@ flatbuffers::Offset<flatbuffer::HDSocketDescriptor> build_socket_descriptor_offs
         src.pcie_alignment,
         src.bytes_acked_device_offset,
         src.connector_state_offset,
-        fb_mesh_coord);
+        fb_mesh_coord,
+        src.owner_start_time);
 }
 
 // Like HDSocketDescriptor::read_from_file but decodes an embedded sub-table rather than a root table.
@@ -74,11 +77,11 @@ HDSocketDescriptor decode_socket_descriptor(const flatbuffer::HDSocketDescriptor
     if (const auto* mc = fb.mesh_coord()) {
         desc.mesh_coord.assign(mc->begin(), mc->end());
     }
+    desc.owner_start_time = fb.owner_start_time();
     return desc;
 }
 
-std::pair<flatbuffer::PlacementKind, int32_t> encode_placement(
-    const MeshMapperConfig::Placement& p) {
+std::pair<flatbuffer::PlacementKind, int32_t> encode_placement(const MeshMapperConfig::Placement& p) {
     return std::visit(
         [](auto&& arg) -> std::pair<flatbuffer::PlacementKind, int32_t> {
             using T = std::decay_t<decltype(arg)>;
@@ -96,8 +99,7 @@ std::pair<flatbuffer::PlacementKind, int32_t> encode_placement(
 MeshMapperConfig::Placement decode_placement(const flatbuffer::Placement& fb) {
     switch (fb.kind()) {
         case flatbuffer::PlacementKind::Replicate: return MeshMapperConfig::Replicate{};
-        case flatbuffer::PlacementKind::Shard:
-            return MeshMapperConfig::Shard{static_cast<int>(fb.dim())};
+        case flatbuffer::PlacementKind::Shard: return MeshMapperConfig::Shard{static_cast<int>(fb.dim())};
     }
     TT_THROW("Unknown PlacementKind: {}", static_cast<int>(fb.kind()));
 }
@@ -174,21 +176,20 @@ void H2DStreamServiceDescriptor::write_to_file(const std::string& path) const {
         std::strerror(errno));
 }
 
-H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
-    const std::string& path, uint32_t timeout_ms) {
-    auto start_time = std::chrono::high_resolution_clock::now();
-    while (!std::filesystem::exists(path)) {
-        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              std::chrono::high_resolution_clock::now() - start_time)
-                              .count();
-        if (static_cast<uint32_t>(elapsed_ms) > timeout_ms) {
-            TT_THROW("Timeout waiting for service descriptor file: {}", path);
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
+namespace {
 
+// Deserialize `path`; nullopt when the file does not exist. A dead owner's file may vanish between two
+// polls (the owner's successor removes it in its stale scan), so the wait loop treats a missing file as
+// "not published yet"; any other open failure is a real error and is thrown at once.
+std::optional<H2DStreamServiceDescriptor> read_service_descriptor_if_present(const std::string& path) {
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);
-    TT_FATAL(ifs.is_open(), "Failed to open service descriptor for reading: {}", path);
+    if (!ifs.is_open()) {
+        const int err = errno;
+        if (err == ENOENT) {
+            return std::nullopt;
+        }
+        TT_THROW("Failed to open service descriptor file for reading {}: {}", path, std::strerror(err));
+    }
     auto pos = ifs.tellg();
     TT_FATAL(pos > 0, "Service descriptor file is empty or unreadable: {}", path);
     auto size = static_cast<std::size_t>(pos);
@@ -200,11 +201,11 @@ H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
     const auto* fb = flatbuffer::GetH2DStreamServiceDescriptor(buf.data());
     TT_FATAL(fb, "Failed to parse flatbuffer service descriptor from: {}", path);
     TT_FATAL(
-        fb->version() == kVersion,
+        fb->version() == H2DStreamServiceDescriptor::kVersion,
         "H2DStreamServiceDescriptor version mismatch at {}: got {}, expected {}",
         path,
         fb->version(),
-        kVersion);
+        H2DStreamServiceDescriptor::kVersion);
 
     H2DStreamServiceDescriptor desc;
 
@@ -213,16 +214,14 @@ H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
     {
         const auto* fb_shape = fb_spec->shape();
         TT_FATAL(fb_shape != nullptr, "Service descriptor missing global_spec.shape");
-        desc.global_shape =
-            tt::tt_metal::Shape(ttsl::Span<const uint32_t>(fb_shape->data(), fb_shape->size()));
+        desc.global_shape = tt::tt_metal::Shape(ttsl::Span<const uint32_t>(fb_shape->data(), fb_shape->size()));
         desc.global_dtype = static_cast<DataType>(fb_spec->dtype());
     }
 
     {
         const auto* fb_mesh_shape = fb->mesh_shape();
         TT_FATAL(fb_mesh_shape != nullptr, "Service descriptor missing mesh_shape");
-        desc.mesh_shape =
-            MeshShape(ttsl::Span<const uint32_t>(fb_mesh_shape->data(), fb_mesh_shape->size()));
+        desc.mesh_shape = MeshShape(ttsl::Span<const uint32_t>(fb_mesh_shape->data(), fb_mesh_shape->size()));
     }
 
     {
@@ -236,11 +235,9 @@ H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
         std::optional<MeshShape> shape_override;
         const auto* fb_override = fb->mapper_shape_override();
         if (fb_override != nullptr && fb_override->size() > 0) {
-            shape_override =
-                MeshShape(ttsl::Span<const uint32_t>(fb_override->data(), fb_override->size()));
+            shape_override = MeshShape(ttsl::Span<const uint32_t>(fb_override->data(), fb_override->size()));
         }
-        desc.mapper_config =
-            MeshMapperConfig{.placements = placements, .mesh_shape_override = shape_override};
+        desc.mapper_config = MeshMapperConfig{.placements = placements, .mesh_shape_override = shape_override};
     }
 
     desc.socket_page_size = fb->socket_page_size();
@@ -267,6 +264,41 @@ H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
     }
 
     return desc;
+}
+
+}  // namespace
+
+H2DStreamServiceDescriptor H2DStreamServiceDescriptor::read_from_file(const std::string& path) {
+    auto desc = read_service_descriptor_if_present(path);
+    TT_FATAL(desc.has_value(), "Failed to open service descriptor for reading: {}", path);
+    return std::move(*desc);
+}
+
+H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(const std::string& path, uint32_t timeout_ms) {
+    auto start_time = std::chrono::high_resolution_clock::now();
+    bool logged_dead_owner = false;
+    while (true) {
+        if (auto desc = read_service_descriptor_if_present(path)) {
+            if (desc->owner_alive()) {
+                return std::move(*desc);
+            }
+            if (!logged_dead_owner) {
+                log_warning(
+                    LogMetal,
+                    "Service descriptor {} was exported by a process that is no longer alive; waiting for a live "
+                    "owner to publish it",
+                    path);
+                logged_dead_owner = true;
+            }
+        }
+        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::high_resolution_clock::now() - start_time)
+                              .count();
+        if (static_cast<uint32_t>(elapsed_ms) > timeout_ms) {
+            TT_THROW("Timeout waiting for service descriptor file: {}", path);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
 }
 
 }  // namespace tt::tt_metal::distributed

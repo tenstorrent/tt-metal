@@ -5,6 +5,7 @@
 #include <internal/service/inter_process_counter_channel.hpp>
 
 #include "inter_process_counter_layout.hpp"
+#include "shm_owner_liveness.hpp"
 
 #include <tt-logger/tt-logger.hpp>
 
@@ -15,6 +16,7 @@
 
 #include <cerrno>
 #include <chrono>
+#include <new>
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
@@ -34,6 +36,32 @@ std::string posix_errno_str() { return std::strerror(errno); }
     throw std::runtime_error("InterProcessCounterChannel: " + op + " failed (" + detail + "): " + posix_errno_str());
 }
 
+// pwrite() the whole buffer at offset 0, resuming after short writes and EINTR.
+bool write_fully(int fd, const void* data, std::size_t size) {
+    const auto* bytes = static_cast<const unsigned char*>(data);
+    std::size_t done = 0;
+    while (done < size) {
+        const ssize_t n = ::pwrite(fd, bytes + done, size - done, static_cast<off_t>(done));
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return false;
+        }
+        if (n == 0) {
+            errno = EIO;  // no progress; tmpfs reports a full disk as -1/ENOSPC, so this is belt and braces
+            return false;
+        }
+        done += static_cast<std::size_t>(n);
+    }
+    return true;
+}
+
+bool is_fully_sized(int fd) {
+    struct stat st{};
+    return ::fstat(fd, &st) == 0 && st.st_size >= static_cast<off_t>(sizeof(InterProcessCounterSegment));
+}
+
 }  // namespace
 
 // =============================================================================
@@ -41,8 +69,16 @@ std::string posix_errno_str() { return std::strerror(errno); }
 //
 // Creates the SHM segment fresh:
 //   shm_open(O_CREAT|O_EXCL|O_RDWR)   ← fails if a stale segment exists
-//   ftruncate to sizeof(InterProcessCounterSegment)
+//   one pwrite of the initialised segment image (sizes it to
+//     sizeof(InterProcessCounterSegment) and stamps it in the same step)
 //   mmap PROT_READ|PROT_WRITE, MAP_SHARED
+//
+// The image is written in one go instead of ftruncate + stamping after mmap
+// so the segment never exists at full size with owner_pid == 0: a connector
+// gates on the size (see connect) and would otherwise take the legacy
+// "unstamped owner" path during the stamping window, and an owner killed in
+// that window would leave a segment every later connector trusts. On tmpfs
+// the written bytes are in place before the file size is updated.
 //
 // On any failure mid-way, undo what was done so we don't leak a half-
 // initialised segment on /dev/shm.
@@ -57,15 +93,24 @@ InterProcessCounterChannel::InterProcessCounterChannel(const std::string& shm_na
         throw_posix("shm_open(O_CREAT|O_EXCL)", shm_path_);
     }
 
-    // Size the new segment to the layout struct exactly. POSIX
-    // guarantees the new region is zero-filled.
-    if (::ftruncate(fd_, sizeof(InterProcessCounterSegment)) != 0) {
+    // Initial state: producer_counter=0, consumer_cursor=0,
+    // prior_clean_shutdown=1 so the first connector's
+    // `had_clean_prior_shutdown()` returns true (there was no predecessor to
+    // have exited uncleanly), and the owner's identity so a connector can
+    // tell this live segment from one left behind by a crashed predecessor.
+    alignas(InterProcessCounterSegment) unsigned char image[sizeof(InterProcessCounterSegment)] = {};
+    auto* initial = new (image) InterProcessCounterSegment{};
+    initial->prior_clean_shutdown = 1;
+    const pid_t self = ::getpid();
+    initial->owner_pid = static_cast<uint32_t>(self);
+    initial->owner_start_time = process_start_time(self);
+    if (!write_fully(fd_, image, sizeof(image))) {
         const int saved = errno;
         ::close(fd_);
         ::shm_unlink(shm_path_.c_str());
         errno = saved;
         fd_ = -1;
-        throw_posix("ftruncate", shm_path_);
+        throw_posix("pwrite", shm_path_);
     }
 
     void* mapped = ::mmap(
@@ -86,21 +131,15 @@ InterProcessCounterChannel::InterProcessCounterChannel(const std::string& shm_na
     seg_ = static_cast<InterProcessCounterSegment*>(mapped);
     ::close(fd_);
     fd_ = -1;
-
-    // Initial state — producer_counter=0, consumer_cursor=0 — is
-    // guaranteed by POSIX ftruncate.
-    //
-    // prior_clean_shutdown is explicitly stamped to 1 so the first
-    // connector's `had_clean_prior_shutdown()` returns true — there
-    // was no predecessor to have exited uncleanly.
-    seg_->prior_clean_shutdown = 1;
 }
 
 // =============================================================================
 // Connector-side factory.
 //
-// Polls shm_open until the owner has exported the segment or
-// connect_timeout_ms elapses. On attach, reads
+// Polls shm_open until a LIVE owner has exported the segment or
+// connect_timeout_ms elapses. A segment whose stamped owner is dead
+// is what a crashed owner left behind; its successor re-creates it,
+// so until then it counts as "not exported yet". On attach, reads
 // prior_clean_shutdown and resets it to 0 (so this connector's own
 // dtor write is the only bit the NEXT connector sees).
 // =============================================================================
@@ -112,15 +151,51 @@ std::unique_ptr<InterProcessCounterChannel> InterProcessCounterChannel::connect(
     }
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(connect_timeout_ms);
     int fd = -1;
+    InterProcessCounterSegment* seg = nullptr;
+    bool logged_dead_owner = false;
     while (true) {
         fd = ::shm_open(shm_name.c_str(), O_RDWR, 0);
-        if (fd != -1) {
-            break;
-        }
-        if (errno != ENOENT) {
+        if (fd == -1 && errno != ENOENT) {
             // Anything other than "not found yet" is fatal — bad
             // permissions, EMFILE, etc.
             throw_posix("shm_open(O_RDWR)", shm_name);
+        }
+        if (fd != -1 && !is_fully_sized(fd)) {
+            // Owner is between create and its initialising write: not exported yet.
+            ::close(fd);
+            fd = -1;
+        }
+        if (fd != -1) {
+            void* mapped = ::mmap(
+                nullptr,
+                sizeof(InterProcessCounterSegment),
+                PROT_READ | PROT_WRITE,
+                MAP_SHARED,
+                fd,
+                /*offset=*/0);
+            if (mapped == MAP_FAILED) {
+                const int saved = errno;
+                ::close(fd);
+                errno = saved;
+                throw_posix("mmap", shm_name);
+            }
+            seg = static_cast<InterProcessCounterSegment*>(mapped);
+            // owner_pid == 0: created by an owner predating the stamp; nothing to check.
+            if (seg->owner_pid == 0 || is_process_alive(static_cast<pid_t>(seg->owner_pid), seg->owner_start_time)) {
+                break;
+            }
+            ::munmap(seg, sizeof(InterProcessCounterSegment));
+            ::close(fd);
+            seg = nullptr;
+            fd = -1;
+            if (!logged_dead_owner) {
+                log_warning(
+                    LogMetal,
+                    "InterProcessCounterChannel::connect: {} was created by a process that is no longer alive; "
+                    "waiting for a live owner to export it",
+                    shm_name);
+                logged_dead_owner = true;
+            }
         }
         if (std::chrono::steady_clock::now() >= deadline) {
             throw std::runtime_error(
@@ -129,21 +204,6 @@ std::unique_ptr<InterProcessCounterChannel> InterProcessCounterChannel::connect(
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
-
-    void* mapped = ::mmap(
-        nullptr,
-        sizeof(InterProcessCounterSegment),
-        PROT_READ | PROT_WRITE,
-        MAP_SHARED,
-        fd,
-        /*offset=*/0);
-    if (mapped == MAP_FAILED) {
-        const int saved = errno;
-        ::close(fd);
-        errno = saved;
-        throw_posix("mmap", shm_name);
-    }
-    auto* seg = static_cast<InterProcessCounterSegment*>(mapped);
 
     // Read prior_clean_shutdown ONCE — this is our snapshot of the
     // predecessor's exit. Clear it so the next connector's snapshot

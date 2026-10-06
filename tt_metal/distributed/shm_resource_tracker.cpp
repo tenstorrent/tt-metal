@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
+#include "shm_owner_liveness.hpp"
 
 #include <mutex>
 #include <tt-logger/tt-logger.hpp>
@@ -14,6 +15,7 @@
 #include <csignal>
 #include <dirent.h>
 #include <fstream>
+#include <sstream>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -36,25 +38,50 @@ pid_t extract_pid_from_manifest_name(const std::string& filename) {
     }
 }
 
-pid_t extract_pid_from_shm_name(const std::string& filename) {
-    // Expected format: tt_{prefix}_{pid}_{counter}
-    if (!filename.starts_with("tt_")) {
-        return 0;
+// Reads /proc/<pid>/stat: `state` is field 3, `num_threads` field 20 and
+// `start_time` field 22. comm may contain spaces and parentheses, so fields are
+// tokenised after the last ')'. False when the entry cannot be read.
+bool read_proc_stat(pid_t pid, char& state, long& num_threads, uint64_t& start_time) {
+    if (pid <= 0) {
+        return false;
     }
-    auto first = filename.find('_', 3);
-    if (first == std::string::npos) {
-        return 0;
+    std::ifstream stat_file(fmt::format("/proc/{}/stat", pid));
+    std::string line;
+    if (!stat_file.is_open() || !std::getline(stat_file, line)) {
+        return false;
     }
-    auto second = filename.find('_', first + 1);
-    if (second == std::string::npos) {
-        return 0;
+    const auto comm_end = line.rfind(')');
+    if (comm_end == std::string::npos) {
+        return false;
     }
+    std::istringstream fields(line.substr(comm_end + 1));
+    std::string token;
+    if (!(fields >> token) || token.empty()) {
+        return false;
+    }
+    state = token[0];
+    // num_threads is the 17th token after state, start_time the 19th.
     try {
-        return static_cast<pid_t>(std::stol(filename.substr(first + 1, second - first - 1)));
+        for (int i = 0; i < 19; ++i) {
+            if (!(fields >> token)) {
+                return false;
+            }
+            if (i == 16) {
+                num_threads = std::stol(token);
+            }
+        }
+        start_time = static_cast<uint64_t>(std::stoull(token));
     } catch (...) {
-        return 0;
+        return false;
     }
+    return true;
 }
+
+// What /proc says about a pid that kill(2) still accepts. A zombie (exited, not
+// yet reaped) is dead. The state belongs to the thread-group leader, though: a
+// live process whose main thread left through pthread_exit() also shows 'Z'
+// while its other threads run, so 'Z' only counts with no other threads.
+bool proc_says_dead(char state, long num_threads) { return state == 'X' || (state == 'Z' && num_threads <= 1); }
 
 struct sigaction prev_sigint, prev_sigterm;
 
@@ -96,11 +123,67 @@ std::string ShmResourceTracker::manifest_path_for_pid(pid_t pid) {
     return fmt::format("/dev/shm/tt_socket_manifest_{}", pid);
 }
 
+pid_t pid_from_shm_name(const std::string& shm_name) {
+    // Expected format: [/]tt_{prefix}_{pid}_{random}_{counter} (NamedShm::make_unique_name).
+    const std::string filename = (!shm_name.empty() && shm_name[0] == '/') ? shm_name.substr(1) : shm_name;
+    if (!filename.starts_with("tt_")) {
+        return 0;
+    }
+    auto first = filename.find('_', 3);
+    if (first == std::string::npos) {
+        return 0;
+    }
+    auto second = filename.find('_', first + 1);
+    if (second == std::string::npos) {
+        return 0;
+    }
+    try {
+        return static_cast<pid_t>(std::stol(filename.substr(first + 1, second - first - 1)));
+    } catch (...) {
+        return 0;
+    }
+}
+
 bool ShmResourceTracker::is_pid_alive(pid_t pid) {
     if (pid <= 0) {
         return false;
     }
-    return kill(pid, 0) == 0 || errno == EPERM;
+    if (kill(pid, 0) != 0 && errno != EPERM) {
+        return false;
+    }
+    // kill(2) also succeeds for a zombie: a process that exited and has not
+    // been reaped yet. Its resources are as orphaned as a reaped one's.
+    char state = 0;
+    long num_threads = 0;
+    uint64_t start_time = 0;
+    return !(read_proc_stat(pid, state, num_threads, start_time) && proc_says_dead(state, num_threads));
+}
+
+uint64_t process_start_time(pid_t pid) {
+    char state = 0;
+    long num_threads = 0;
+    uint64_t start_time = 0;
+    return read_proc_stat(pid, state, num_threads, start_time) ? start_time : 0;
+}
+
+bool is_process_alive(pid_t pid, uint64_t start_time) {
+    if (pid <= 0) {
+        return false;
+    }
+    if (kill(pid, 0) != 0 && errno != EPERM) {
+        return false;
+    }
+    // One /proc read answers both questions (this runs inside 1 ms poll loops).
+    char state = 0;
+    long num_threads = 0;
+    uint64_t current = 0;
+    if (!read_proc_stat(pid, state, num_threads, current)) {
+        return true;  // /proc not readable: nothing contradicts kill(2)
+    }
+    if (proc_says_dead(state, num_threads)) {
+        return false;
+    }
+    return start_time == 0 || current == 0 || current == start_time;
 }
 
 ShmResourceTracker::ShmResourceTracker() : manifest_path_(manifest_path_for_pid(getpid())) {
@@ -246,8 +329,8 @@ void ShmResourceTracker::cleanup_stale_resources() {
         }
 
         // Check for orphaned shm objects from dead processes
-        // Pattern: tt_{h2d|d2h}_{pid}_{counter}
-        pid_t shm_pid = extract_pid_from_shm_name(name);
+        // Pattern: tt_{h2d|d2h}_{pid}_{random}_{counter}
+        pid_t shm_pid = pid_from_shm_name(name);
         if (shm_pid > 0 && shm_pid != my_pid && !is_pid_alive(shm_pid)) {
             stale_shm_names.push_back(name);
         }

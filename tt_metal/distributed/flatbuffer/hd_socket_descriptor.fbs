@@ -45,6 +45,13 @@ table HDSocketDescriptor {
     // Appended last so old readers that don't know about this field still
     // parse the descriptor correctly.
     mesh_coord: [uint32];
+
+    // Start time (/proc/<pid>/stat field 22) of the process that exported this
+    // descriptor; its pid is already embedded in shm_name. Together they name one
+    // process instance, so a connector can tell a descriptor left behind by a dead
+    // owner, or by a dead owner whose pid was reused, from a live one. 0 from
+    // owners predating the field: the connector then checks the pid alone.
+    owner_start_time: uint64;
 }
 
 root_type HDSocketDescriptor;
