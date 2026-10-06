@@ -68,6 +68,20 @@ namespace {
 // topology_mapper_utils.hpp) so that ControlPlane (Phase 2) and generate_rank_bindings (Phase 1) apply the
 // exact same galaxy pin placement.
 
+// Galaxy pins name ASICs by (tray, location), which is only meaningful when every ASIC on a host has
+// its own position. A simulator image that enumerates its chips linearly on one bus gives them all
+// the same position, so pinning to the galaxy corners would rule out every placement.
+bool asic_positions_are_distinct_per_host(const tt::tt_metal::PhysicalSystemDescriptor& psd) {
+    std::set<std::tuple<std::string, uint32_t, uint32_t>> positions;
+    for (const auto& [unused_asic_id, desc] : psd.get_asic_descriptors()) {
+        (void)unused_asic_id;
+        if (!positions.emplace(desc.host_name, *desc.tray_id, *desc.asic_location).second) {
+            return false;
+        }
+    }
+    return true;
+}
+
 template <typename CONNECTIVITY_MAP_T>
 void build_golden_link_counts(
     CONNECTIVITY_MAP_T const& golden_connectivity_map,
@@ -460,7 +474,7 @@ void ControlPlane::init_control_plane(
         std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint> pinning_groups;
 
         // Apply galaxy pinnings to each mesh separately if it has 32 chips and is not 1D
-        if (cluster.is_ubb_galaxy()) {
+        if (cluster.is_ubb_galaxy() && asic_positions_are_distinct_per_host(*this->physical_system_descriptor_)) {
             for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
                 const auto& mesh_shape = this->mesh_graph_->get_mesh_shape(mesh_id);
                 const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
@@ -596,7 +610,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
     std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint> pinning_groups;
 
     // Apply galaxy pinnings to each mesh separately if it has 32 chips and is not 1D
-    if (cluster.is_ubb_galaxy()) {
+    if (cluster.is_ubb_galaxy() && asic_positions_are_distinct_per_host(*this->physical_system_descriptor_)) {
         for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
             const auto& mesh_shape = this->mesh_graph_->get_mesh_shape(mesh_id);
             const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
