@@ -1,0 +1,546 @@
+<title>SDPA Autofix Flow</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  --bg:#F2F4F7; --surface:#FFFFFF; --ink:#17202A; --muted:#5A6673; --faint:#B9C3CE; --line:#CFD7DF; --soft:#E8EDF2;
+  --accent:#0A6C75; --accent-soft:#D9EEF0; --human:#A65E00; --human-soft:#FBEAD1;
+  --ok:#23704A; --ok-soft:#DCF0E3; --bad:#B0312A; --bad-soft:#F8DFDC; --agent:#5A4BA8; --agent-soft:#E8E5F6;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --cond:"IBM Plex Sans Condensed","IBM Plex Sans",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#0D1217; --surface:#151C23; --ink:#E2E8EE; --muted:#96A3B0; --faint:#3A4652; --line:#2D3843; --soft:#1C252E;
+    --accent:#4DB7C1; --accent-soft:#11343A; --human:#E3A548; --human-soft:#3A2A12;
+    --ok:#62C48F; --ok-soft:#153323; --bad:#F0776D; --bad-soft:#3E1C1A; --agent:#A99CF0; --agent-soft:#262143;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0D1217; --surface:#151C23; --ink:#E2E8EE; --muted:#96A3B0; --faint:#3A4652; --line:#2D3843; --soft:#1C252E;
+  --accent:#4DB7C1; --accent-soft:#11343A; --human:#E3A548; --human-soft:#3A2A12;
+  --ok:#62C48F; --ok-soft:#153323; --bad:#F0776D; --bad-soft:#3E1C1A; --agent:#A99CF0; --agent-soft:#262143;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans);margin:0}
+.wrap{max-width:1320px;margin:0 auto;padding-inline:18px;padding-block:28px 60px}
+h1,h2,h3{font-family:var(--cond);margin:0;line-height:1.2;text-wrap:balance}
+h1{font-size:clamp(26px,4vw,36px);font-weight:600}
+code,pre{font-family:var(--mono)}
+.top{display:flex;flex-wrap:wrap;align-items:end;justify-content:space-between;gap:12px 24px}
+.eyebrow{font:500 12px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
+.sub{color:var(--muted);max-width:70ch;margin:6px 0 0}
+.tabs{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+.tab{font:500 13px/1.25 var(--sans);text-align:left;padding:9px 13px;border-radius:8px;border:1.5px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer;display:grid;gap:2px}
+.tab small{font:400 11px var(--mono);color:var(--muted)}
+.tab[aria-selected="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.tab:focus-visible,.btn:focus-visible,.dot:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.stage{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:16px;margin-top:16px;align-items:start}
+@media (max-width:1060px){.stage{grid-template-columns:1fr}}
+.canvas{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 10px 6px;min-width:0}
+.svgbox{overflow-x:auto}
+svg#map{display:block;width:100%;height:auto;min-width:720px;color:var(--ink)}
+.controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 6px 4px;border-top:1px solid var(--line);margin-top:6px}
+.btn{font:600 13px var(--sans);padding:8px 14px;border-radius:7px;border:1.5px solid var(--ink);background:var(--surface);color:var(--ink);cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.btn.primary{background:var(--ink);color:var(--surface)}
+.btn:disabled{opacity:.35;cursor:default}
+.counter{font:500 13px var(--mono);color:var(--muted);font-variant-numeric:tabular-nums;min-width:62px}
+.dots{display:flex;flex-wrap:wrap;gap:5px;flex:1;min-width:160px}
+.dot{width:22px;height:8px;border-radius:4px;border:0;background:var(--line);cursor:pointer;padding:0}
+.dot.done{background:var(--faint)}
+.dot.cur{background:var(--accent)}
+.kbd{font:400 11px var(--mono);color:var(--muted)}
+/* svg nodes */
+.node rect{fill:var(--surface);stroke:var(--faint);stroke-width:1.4;transition:stroke .3s,fill .3s,opacity .3s}
+.node text{transition:opacity .3s}
+.node .t{font:600 13px var(--sans);fill:var(--ink)}
+.node .s{font:400 10.5px var(--mono);fill:var(--muted)}
+.node.store rect{fill:var(--accent-soft)}
+.node.agent rect{fill:var(--agent-soft)}
+.node.ext rect{fill:var(--soft)}
+.node.dim rect{opacity:.45}
+.node.dim text{opacity:.4}
+.node.on rect{stroke:var(--accent);stroke-width:2.6}
+.node.agent.on rect{stroke:var(--agent)}
+.node.ok rect{stroke:var(--ok);stroke-width:2.8;fill:var(--ok-soft)}
+.node.bad rect{stroke:var(--bad);stroke-width:2.8;fill:var(--bad-soft)}
+.node.hum rect{stroke:var(--human);stroke-width:2.8;fill:var(--human-soft)}
+.node.on .halo{opacity:.55}
+.halo{fill:none;stroke:var(--accent);stroke-width:7;opacity:0;transition:opacity .3s}
+.node.agent .halo{stroke:var(--agent)}
+.node.ok .halo{stroke:var(--ok);opacity:.4}
+.node.bad .halo{stroke:var(--bad);opacity:.4}
+.node.hum .halo{stroke:var(--human);opacity:.4}
+@media (prefers-reduced-motion:no-preference){ .node.on .halo{animation:pulse 1.6s ease-in-out infinite} }
+@keyframes pulse{0%,100%{opacity:.15}50%{opacity:.55}}
+.grp{fill:none;stroke:var(--faint);stroke-width:1.4;stroke-dasharray:6 5}
+.gl{font:600 12px var(--mono);fill:var(--muted)}
+.edge{fill:none;stroke:var(--faint);stroke-width:1.4;transition:stroke .3s}
+.edge.live{stroke:var(--accent);stroke-width:2.4}
+.edge.bad{stroke:var(--bad);stroke-width:2.4}
+.edge.hum{stroke:var(--human);stroke-width:2.4}
+@media (prefers-reduced-motion:no-preference){ .edge.live,.edge.hum{stroke-dasharray:7 5;animation:flow 1s linear infinite} }
+@keyframes flow{to{stroke-dashoffset:-24}}
+.ah{fill:var(--faint)}
+.packet{fill:var(--accent);stroke:var(--surface);stroke-width:2.5}
+.packet.bad{fill:var(--bad)} .packet.hum{fill:var(--human)}
+.elab{font:500 10.5px var(--mono);fill:var(--muted);paint-order:stroke;stroke:var(--surface);stroke-width:4px;stroke-linejoin:round;opacity:0;transition:opacity .3s}
+.elab.show{opacity:1;fill:var(--ink)}
+.clock{font:600 12px var(--mono);fill:var(--accent)}
+/* side panel */
+aside{display:grid;gap:12px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px;display:grid;gap:10px}
+.phase{display:inline-flex;align-items:center;gap:8px;font:600 11px/1 var(--mono);letter-spacing:.07em;text-transform:uppercase;padding:6px 9px;border-radius:5px;justify-self:start}
+.ph-W{background:var(--soft);color:var(--muted)}
+.ph-S{background:var(--soft);color:var(--ink)}
+.ph-A{background:var(--human-soft);color:var(--human)}
+.ph-B{background:var(--agent-soft);color:var(--agent)}
+.ph-C{background:var(--accent-soft);color:var(--accent)}
+.ph-H{background:var(--human-soft);color:var(--human)}
+.when{font:500 12px var(--mono);color:var(--muted)}
+.step-title{font-size:21px}
+.step-text{margin:0;color:var(--ink)}
+pre.code{margin:0;background:var(--soft);border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.55;overflow-x:auto;white-space:pre}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font:500 12px/1.3 var(--mono);padding:4px 9px;border-radius:999px;border:1px solid var(--line)}
+.chip.go{border-color:var(--ok);color:var(--ok);background:var(--ok-soft)}
+.chip.stop{border-color:var(--bad);color:var(--bad);background:var(--bad-soft)}
+.chip.wait{color:var(--muted)}
+.chip.hum{border-color:var(--human);color:var(--human);background:var(--human-soft)}
+.panels{display:grid;gap:12px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 16px}
+.panel h3{font:600 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:8px;display:flex;justify-content:space-between}
+.kv{display:grid;grid-template-columns:96px minmax(0,1fr);gap:4px 10px;font:12.5px/1.45 var(--mono)}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0;overflow-wrap:anywhere;transition:background .6s}
+.kv dd.flash{background:var(--accent-soft)}
+.st-badge{display:inline-block;padding:1px 7px;border-radius:4px;font-weight:600}
+.st-tracking{background:var(--soft)} .st-proposed_dryrun{background:var(--soft)}
+.st-pr_open{background:var(--human-soft);color:var(--human)}
+.st-ci_passed,.st-merged,.st-verified,.st-resolved_on_main{background:var(--ok-soft);color:var(--ok)}
+.st-no_fix,.st-ci_failed{background:var(--bad-soft);color:var(--bad)}
+.st-fixed_upstream{background:var(--accent-soft);color:var(--accent)}
+.slackmsg{font:13px/1.45 var(--sans);border-left:3px solid var(--faint);padding:2px 0 2px 10px;color:var(--ink);min-height:20px}
+.slackmsg.flash{border-left-color:var(--accent)}
+.empty{color:var(--muted);font-style:italic}
+footer{margin-top:24px;color:var(--muted);font-size:13px;max-width:90ch}
+</style>
+
+<div class="wrap">
+  <div class="top">
+    <div>
+      <div class="eyebrow">~/.sdpa-fix · interactive walkthrough</div>
+      <h1>SDPA Autofix Flow</h1>
+      <p class="sub">Pick a scenario and step through it. Each step lights up the components involved, sends a packet along the real call path, and updates the ledger record, GitHub and Slack panels exactly as <code>fixer.sh</code> would.</p>
+    </div>
+  </div>
+
+  <div class="tabs" role="tablist" id="tabs"></div>
+
+  <div class="stage">
+    <div class="canvas">
+      <div class="svgbox"><svg id="map" viewBox="0 -6 1000 566" role="img" aria-label="Component map of the SDPA watcher and autofix bot, animated per step"></svg></div>
+      <div class="controls">
+        <button class="btn" id="prev" type="button">◀ Prev</button>
+        <button class="btn primary" id="play" type="button">▶ Play</button>
+        <button class="btn" id="next" type="button">Next ▶</button>
+        <button class="btn" id="replay" type="button" title="Replay this step's animation">↻</button>
+        <span class="counter" id="counter">1 / 1</span>
+        <div class="dots" id="dots"></div>
+        <span class="kbd">← → step · space play</span>
+      </div>
+    </div>
+
+    <aside>
+      <div class="card" aria-live="polite">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+          <span class="phase" id="phase">Phase</span><span class="when" id="when"></span>
+        </div>
+        <h2 class="step-title" id="title">Title</h2>
+        <p class="step-text" id="text"></p>
+        <pre class="code" id="code"></pre>
+        <div class="chips" id="chips"></div>
+      </div>
+      <div class="panels">
+        <div class="panel"><h3><span>ledger.json record</span><span id="sigshort"></span></h3><dl class="kv" id="ledger"></dl></div>
+        <div class="panel"><h3><span>GitHub</span></h3><dl class="kv" id="github"></dl></div>
+        <div class="panel"><h3><span>Slack #sdpa-watch</span></h3><div class="slackmsg" id="slack"></div></div>
+      </div>
+    </aside>
+  </div>
+
+  <footer>Scenario 3 replays the real dry-run attempt from 2026-10-06. Scenarios 1, 2 and 4 use an illustrative K3 MoE failure to show the paths that have not fired yet (live PR, duplicate tick, guard rejection); their run numbers and PR number are examples, not real records. Commands, file names, states and checks are the real ones.</footer>
+</div>
+
+<script>
+(function(){
+"use strict";
+const NS="http://www.w3.org/2000/svg";
+const NODES={
+  cron:{x:80,y:60,w:120,h:52,t:"cron",s:"hourly"},
+  watch:{x:260,y:60,w:150,h:52,t:"watch.sh",s:"watcher · :00"},
+  state:{x:450,y:60,w:150,h:52,t:"state.json",s:"run + summary",k:"store"},
+  gh:{x:680,y:60,w:170,h:52,t:"GitHub",s:"PRs · branches",k:"ext"},
+  slack:{x:895,y:60,w:150,h:52,t:"Slack",s:"#sdpa-watch",k:"ext"},
+  A:{x:200,y:250,w:190,h:64,t:"A · Follow-up",s:"open drafts (live)"},
+  B:{x:450,y:250,w:190,h:64,t:"B · Triage",s:"new watcher runs"},
+  C:{x:720,y:250,w:190,h:64,t:"C · Fix",s:"1 group per tick"},
+  ledger:{x:450,y:390,w:140,h:52,t:"ledger.json",s:"per signature",k:"store"},
+  wt:{x:720,y:390,w:150,h:52,t:"sdpa-fix-wt",s:"git worktree",k:"store"},
+  guard:{x:900,y:390,w:120,h:52,t:"guard",s:"diff checks"},
+  actions:{x:200,y:490,w:190,h:52,t:"GitHub Actions",s:"logs · runs",k:"ext"},
+  ctri:{x:450,y:490,w:190,h:52,t:"Claude triage",s:"opus-4.8 · schema",k:"agent"},
+  cfix:{x:720,y:490,w:190,h:52,t:"Claude fix",s:"opus-5.5 · edit only",k:"agent"}
+};
+const EDGES={
+  cron_watch:{d:"M140,60 H183",l:[161,48,""]},
+  watch_state:{d:"M335,60 H373",l:[354,48,"writes"]},
+  watch_slack:{d:"M260,34 V12 H895 V32",l:[578,8,"posts digest"]},
+  cron_fix:{d:"M80,86 V250 H103",l:[86,170,"starts :15"],a:"start"},
+  state_B:{d:"M450,86 V216",l:[456,150,"new run_id"],a:"start"},
+  logs:{d:"M295,490 H322 V262 H353",l:[300,440,"job logs"],a:"start"},
+  B_ctri:{d:"M530,282 V462",l:[536,430,"logs → JSON"],a:"start"},
+  B_ledger:{d:"M450,282 V362",l:[456,326,"upsert"],a:"start"},
+  ledger_C:{d:"M520,390 H600 V262 H623",l:[560,382,"eligible"]},
+  C_gh:{d:"M690,218 V88",l:[684,150,"search marker"],a:"end"},
+  C_push:{d:"M750,218 V88",l:[756,130,"push + PR"],a:"start"},
+  C_wt:{d:"M680,282 V362",l:[674,326,"reset"],a:"end"},
+  C_cfix:{d:"M815,262 H830 V490 H817",l:[836,440,"prompt"],a:"start"},
+  cfix_wt:{d:"M760,464 V418",l:[766,446,"edits"],a:"start"},
+  wt_guard:{d:"M795,390 H838",l:[816,380,"diff"]},
+  guard_C:{d:"M900,364 V240 H817",l:[906,320,"ok / reject"],a:"start"},
+  C_slack:{d:"M815,226 H895 V88",l:[901,170,"🛠 note"],a:"start"},
+  C_actions:{d:"M815,252 H985 V545 H200 V518",l:[600,541,"gh workflow run --ref branch"]},
+  A_actions:{d:"M200,282 V462",l:[206,380,"poll runs"],a:"start"},
+  A_gh:{d:"M200,218 V160 H640 V88",l:[300,155,"comment + status"]},
+  ledger_watch:{d:"M380,400 H345 V170 H260 V88",l:[352,230,"🛠 notes"],a:"start"}
+};
+
+/* ---------- scenarios ---------- */
+const SIG="9c41e07ab2d5";
+const T_MOE="pcc/test_ttnn_moe.py::test_kimi_k3_moe[…-5k-pcc]";
+const SCEN=[
+{ id:"live", name:"Regression → draft PR", note:"live mode, illustrative", steps:[
+  {ph:"W",when:"night 1 · 05:00 UTC nightly, :00 watcher",t:"The watcher sees a red nightly",
+   d:"Blaze's K3 MoE accuracy job fails. At :00 watch.sh analyzes the run, stores the summary in state.json and posts a ❌ block to Slack.",
+   code:"0 * * * * ~/.sdpa-watch/watch.sh",
+   nodes:["cron","watch","state","slack"],edges:[["cron_watch"],["watch_state"],["watch_slack"]],
+   slack:"▸ Blaze Prefill ❌ failure · K3 test_kimi_k3_moe — PCC 0.981 < 0.99"},
+  {ph:"S",when:"night 1 · :15",t:"Fixer starts: lock and auth",
+   d:"Cron starts fixer.sh. It takes .fix.lock (a duplicate cron firing exits here), refreshes the Claude OAuth token under the watcher's lock, and preflights both models.",
+   code:"flock -n 201 || exit 0\n( flock -w 900 9; refresh_oauth_credential ) 9>~/.sdpa-watch/.watch.lock\nclaude --model claude-opus-4-8 -p <<< 'reply OK'\nclaude --model claude-opus-5-5 -p <<< 'reply OK'",
+   nodes:["cron","A","B","C"],edges:[["cron_fix"]]},
+  {ph:"B",when:"night 1 · :15",t:"Read the watcher's verdict",
+   d:"Phase B reads run_id, sha and summary for each pipeline from state.json. This run_id has not been triaged yet, and the summary starts with ❌, so it goes to triage.",
+   code:"python3 fixlib.py triaged --workflow blaze-models-prefill-tests.yaml\n# → 37267163940  (previous run) ≠ 37416411631  → triage it",
+   nodes:["state","B"],edges:[["state_B"]],chips:[["stop","❌ → triage"]]},
+  {ph:"B",when:"night 1 · :15",t:"Fetch the failing job logs",
+   d:"Only failed jobs that match the pipeline's job pattern are fetched, and only the lines around FAILED / Traceback / ##[error] are kept.",
+   code:"gh api repos/tenstorrent/tt-metal/actions/runs/<id>/jobs --paginate\ngh api repos/tenstorrent/tt-metal/actions/jobs/<job_id>/logs | grep -E -B5 -A100 'FAILED |Traceback'",
+   nodes:["actions","B"],edges:[["logs"]]},
+  {ph:"B",when:"night 1 · :15",t:"Claude classifies each failure",
+   d:"The triage model gets logs, the in-scope hint and the watcher summary, and must answer in the JSON schema. Each failure gets a kind, an owner and a fixable flag.",
+   code:'{ "test": "'+T_MOE+'",\n  "kind": "code_regression", "owner": "k3_model",\n  "fixable": true, "group": "k3-moe-pcc", "culprit_sha": "" }',
+   nodes:["B","ctri"],edges:[["B_ctri"],["B_ctri",1]]},
+  {ph:"B",when:"night 1 · :15",t:"Record the signature",
+   d:"The failure becomes signature sha1(workflow :: job − [sku] :: test)[:12]. It is new, so the ledger opens a record in state tracking with streak 1. Streak 1 is below MIN_STREAK=2 and no culprit was pinned, so nothing more happens tonight.",
+   code:"signature = sha1('blaze-models-prefill-tests.yaml :: (Kimi-K3-2.8T) MoE accuracy 5k :: "+T_MOE+"')[:12]\n          = "+SIG,
+   nodes:["B","ledger"],edges:[["B_ledger"]],chips:[["wait","streak 1 < 2 → wait"]],
+   led:{sig:SIG,state:"tracking",streak:"1",runs:"#1732"}},
+  {ph:"B",when:"night 2 · :15",t:"Second red night: streak 2",
+   d:"Next night the same test fails again. Same signature, so the same ledger record: streak goes to 2 and the record becomes eligible.",
+   nodes:["state","B","ctri","ledger"],edges:[["state_B"],["B_ctri"],["B_ctri",1],["B_ledger"]],
+   led:{streak:"2",runs:"#1732, #1758"},chips:[["go","streak 2 ≥ 2 → eligible"]]},
+  {ph:"C",when:"night 2 · :15",t:"Pick the eligible group",
+   d:"fixlib.py eligible returns groups whose state is attemptable, kind and owner are fixable, the test still fails in the latest run, and the daily cap has room (0 of 3 used).",
+   code:"python3 fixlib.py eligible --mode live --min-streak 2 --max-per-day 3\n# → {groups:[{group:'k3-moe-pcc', sigs:['"+SIG+"']}], daily_room:3}",
+   nodes:["ledger","C"],edges:[["ledger_C"]]},
+  {ph:"C",when:"night 2 · :15",t:"Is a PR already on GitHub?",
+   d:"The ledger could have been wiped, so GitHub is asked directly: any PR (open or closed) whose body carries the hidden marker, or a pushed branch with the signature prefix. Both come back empty.",
+   code:"gh pr list --state all --search 'autofixsig"+SIG+"'      # → []\ngit ls-remote --exit-code origin 'refs/heads/skrstic/autofix/"+SIG.slice(0,8)+"*'   # → exit 2",
+   nodes:["C","gh"],edges:[["C_gh"],["C_gh",1]],chips:[["go","no PR · no branch → proceed"]],
+   gh:{search:"autofixsig"+SIG+" → none"}},
+  {ph:"C",when:"night 2 · :15",t:"Reset the isolated worktree",
+   d:"The agent never touches your checkout. Its worktree is forced back to fresh origin/main before every attempt.",
+   code:"git -C /localdev/skrstic/tt-metal fetch origin main\ngit -C /localdev/skrstic/sdpa-fix-wt checkout -f --detach origin/main\ngit -C /localdev/skrstic/sdpa-fix-wt clean -fd",
+   nodes:["C","wt"],edges:[["C_wt"]]},
+  {ph:"C",when:"night 2 · :15",t:"The fix agent works",
+   d:"Opus 5.5 gets the triage records, log excerpt, culprit range and any related human PRs. It may only read, grep, use read-only git and edit files. It cannot run tests, build, commit or push. It edits the worktree and returns a verdict.",
+   code:'claude --model claude-opus-5-5 -p --json-schema schemas/fix.json \\\n  --permission-mode acceptEdits --allowedTools Read Edit Grep "Bash(git log:*)" … \\\n  --disallowedTools "Bash(pytest:*)" "Bash(git push:*)" "Bash(*tt-smi*)" …\n# verdict: fixed=true, approach=forward_fix, confidence=high',
+   nodes:["C","cfix","wt"],edges:[["C_cfix"],["cfix_wt"],["C_cfix",1]]},
+  {ph:"C",when:"night 2 · :15",t:"Guard checks the diff",
+   d:"The script stages everything and checks the diff: not empty, under 300 lines, no .github/, no deleted files, no new skip/xfail, and no threshold change unless the verdict declares it. This one passes.",
+   code:"git add -A && git diff --cached HEAD > patch.diff\npython3 fixlib.py guard --verdict verdict.json --diff patch.diff --max-lines 300\n# → {ok: true, added: 9, deleted: 3, files: ['models/demos/deepseek_v3_d_p/tt/moe/…']}",
+   nodes:["wt","guard","C"],edges:[["wt_guard"],["guard_C"]],mark:{guard:"ok"},chips:[["go","guard ok"]]},
+  {ph:"C",when:"night 2 · :15",t:"Push and open the draft PR",
+   d:"Only now does the script (never the agent) create the branch, commit, push and open a draft PR assigned to you, labelled and titled for human review, with the signature hidden in the body. Two pending commit statuses go on the head.",
+   code:"git checkout -b skrstic/autofix/"+SIG.slice(0,8)+"-k3-moe-restore-…\ngit commit --no-verify && git push -u origin HEAD\ngh pr create --draft --label made-by-ai,automated --assignee @me \\\n  --title '[autofix · needs human review] …' --body-file pr_body.md\ngh api repos/…/statuses/<sha> -f state=pending -f context=autofix/human-review",
+   nodes:["C","gh"],edges:[["C_push"]],mark:{gh:"hum"},
+   gh:{branch:"skrstic/autofix/"+SIG.slice(0,8)+"-k3-moe-…",pr:"#59301 · draft",labels:"made-by-ai, automated",human:"⏳ pending",ci:"⏳ pending",search:"autofixsig"+SIG+" → #59301"},
+   led:{state:"pr_open",pr:"#59301"}},
+  {ph:"C",when:"night 2 · :15",t:"Dispatch the failing leg on the branch",
+   d:"Draft PRs skip the PR gate, so the fixer starts exactly the failing leg itself. The job name is mapped to dispatch inputs through the real matrix file, then the run id is polled for and linked in the PR body.",
+   code:"# '(Kimi-K3-2.8T) MoE accuracy 5k' → test_type in blaze_models_prefill_tests.yaml\ngh workflow run blaze-models-prefill-tests.yaml --ref skrstic/autofix/… -f test-type=kimi_k3_moe\ngh pr edit #59301 --body-file pr_body.md   # now links the run",
+   nodes:["C","actions","gh"],edges:[["C_actions"]],gh:{runs:"blaze kimi_k3_moe · running"}},
+  {ph:"C",when:"night 2 · :15",t:"Tell Slack",
+   d:"One message with the PR link. The ledger daily counter goes to 1 of 3.",
+   nodes:["C","slack"],edges:[["C_slack"]],
+   slack:"↳ thread: 🛠️ opened draft PR #59301 (needs human review): k3 moe: … · forward_fix, confidence high · targeted CI dispatched"},
+  {ph:"A",when:"night 2 · next ticks",t:"Follow up on the dispatched CI",
+   d:"Each tick, Phase A polls the run. When it finishes green, the fixer sets autofix/targeted-ci to success and comments on the PR. The PR stays a draft; autofix/human-review stays pending.",
+   code:"gh api repos/…/actions/runs/<id> --jq '.status + \"/\" + .conclusion'   # completed/success\ngh api repos/…/statuses/<sha> -f state=success -f context=autofix/targeted-ci\ngh pr comment #59301 --body '✅ autofix: all targeted CI legs passed …'",
+   nodes:["A","actions","gh","slack"],edges:[["A_actions"],["A_actions",1],["A_gh"]],mark:{gh:"hum"},
+   gh:{ci:"✅ success",runs:"blaze kimi_k3_moe · success"},led:{state:"ci_passed"},
+   slack:"↳ thread: ✅ autofix draft #59301: targeted CI passed, ready for your review"},
+  {ph:"W",when:"next :00",t:"The digest shows the PR",
+   d:"watch.sh's autofix_note() reads the ledger and appends a 🛠 line under the failing Blaze block, so the digest and the bot never disagree.",
+   code:"▸ Blaze Prefill ❌ failure …\n🛠 draft PR https://github.com/tenstorrent/tt-metal/pull/59301 — targeted CI ✅, awaiting your review",
+   nodes:["ledger","watch","slack"],edges:[["ledger_watch"],["watch_slack"]]},
+  {ph:"H",when:"whenever you look",t:"You review and merge",
+   d:"Only a person marks the PR ready and merges it. Next tick Phase A sees MERGED, records the merge commit as fix_sha, and replies in the digest thread. Merged is not done yet.",
+   code:"gh pr view #59301 --json mergeCommit --jq .mergeCommit.oid   # → 7c1e9a40d2…\npython3 fixlib.py mark --state merged --extra '{\"fix_sha\": \"7c1e9a40d2…\"}' "+SIG,
+   nodes:["gh","A","ledger","slack"],edges:[["A_gh",1],["C_slack"]],mark:{gh:"ok"},
+   gh:{pr:"#59301 · merged",human:"✅ reviewed by you"},led:{state:"merged",fix:"7c1e9a40d2"},chips:[["hum","human gate"],["go","merged"]],
+   slack:"↳ thread: 🟣 merged autofix #59301 · waiting for the next blaze run that contains 7c1e9a40d2 to confirm it is green"},
+  {ph:"B",when:"next Blaze nightly",t:"The next run confirms the fix",
+   d:"Phase B triages the next nightly. The job passes, and git confirms the run's sha contains the merge commit, so the record becomes verified and a ✅ reply goes into the thread: nothing more to add. If it had still failed, the record would reopen as tracking with a ❌ reply.",
+   code:"git merge-base --is-ancestor 7c1e9a40d2 <run sha>   # true\n# job green → verified   ·   still red → tracking (❌ still failing after fix)",
+   nodes:["state","B","ledger","slack"],edges:[["state_B"],["B_ledger"],["C_slack"]],mark:{ledger:"ok"},
+   led:{state:"verified",streak:"0"},chips:[["go","contains fix + green → verified"]],
+   slack:"↳ thread: ✅ verified: test_kimi_k3_moe passed in run #1803, which contains the fix #59301. Nothing more to add."}
+]},
+{ id:"dup", name:"Next tick: no duplicate", note:"why it never posts twice", steps:[
+  {ph:"S",when:"night 3 · :15",t:"A new tick, same failure",
+   d:"Suppose the nightly is still red the night after the draft PR was opened (the fix has not merged yet). The fixer runs again.",
+   nodes:["cron","A","B","C"],edges:[["cron_fix"]],
+   led:{sig:SIG,state:"pr_open",streak:"2",runs:"#1732, #1758",pr:"#59301"},
+   gh:{pr:"#59301 · draft",search:"autofixsig"+SIG+" → #59301",human:"⏳ pending",ci:"⏳ running"}},
+  {ph:"B",when:"night 3 · :15",t:"Triage folds it into the same record",
+   d:"The new run is triaged once. The failure hashes to the same signature, so the existing record's streak becomes 3. No new record, no new group.",
+   code:"signature(workflow, job, test) = "+SIG+"   # same as before",
+   nodes:["state","B","ctri","ledger"],edges:[["state_B"],["B_ctri"],["B_ctri",1],["B_ledger"]],led:{streak:"3",runs:"#1732, #1758, #1781"}},
+  {ph:"C",when:"night 3 · :15",t:"Eligibility says no",
+   d:"Only tracking records are attemptable (plus proposed_dryrun once, when going live). This record is pr_open, so it is skipped. The tick ends without calling the fix agent.",
+   code:"ATTEMPTABLE = {'tracking'}          # live adds 'proposed_dryrun'\nstate 'pr_open' ∉ ATTEMPTABLE → skip",
+   nodes:["ledger","C"],edges:[["ledger_C",0,"bad"]],mark:{C:"bad"},chips:[["stop","pr_open → skip"]]},
+  {ph:"C",when:"what if ledger.json is lost?",t:"Wiped ledger: the record comes back as tracking",
+   d:"If ledger.json were deleted, triage would recreate the record as tracking, streak 1, and once it is eligible again Phase C would pick it.",
+   nodes:["B","ledger","C"],edges:[["B_ledger"],["ledger_C"]],led:{state:"tracking",streak:"2",runs:"(rebuilt)",pr:"—"}},
+  {ph:"C",when:"what if ledger.json is lost?",t:"GitHub still knows",
+   d:"Before any fix, the hidden marker search finds PR #59301. The fixer adopts it into the ledger as pr_open with that URL. No agent run, no branch, no second PR.",
+   code:"gh pr list --state all --search 'autofixsig"+SIG+"'\n# → {url: …/pull/59301, state: OPEN}\npython3 fixlib.py mark --state pr_open --extra '{\"pr\": {…59301}}' "+SIG,
+   nodes:["C","gh","ledger"],edges:[["C_gh"],["C_gh",1,"hum"],["ledger_C",1]],mark:{gh:"hum"},
+   led:{state:"pr_open",pr:"#59301 (adopted)"},chips:[["hum","found → adopt, don't re-create"]]},
+  {ph:"A",when:"when the fix merges",t:"Main goes green: the record closes",
+   d:"After the fix merges, the next nightly passes. Triage sees the job succeed without this test, so the record leaves the open states. If a draft were still open at that point, it would be commented on and closed.",
+   nodes:["state","B","ledger"],edges:[["state_B"],["B_ledger"]],led:{state:"resolved_on_main",streak:"0"},chips:[["go","job green → resolved_on_main"]]}
+]},
+{ id:"dry", name:"Dry run today: already fixed", note:"real run, 2026-10-06", steps:[
+  {ph:"W",when:"L2 Nightly #10562",t:"The watcher reports an SDPA hang",
+   d:"L2 Nightly's sdpa job hung in test_sdpa_decode_cache on wh_n150 and wh_n300_civ2. The watcher stored a ❌ summary.",
+   nodes:["watch","state","slack"],edges:[["watch_state"],["watch_slack"]],
+   slack:"▸ L2 Nightly ❌ failure · test_attn_mask_realloc_reused_program_cache_hit — device timeout"},
+  {ph:"B",when:"2026-10-06 10:23 UTC",t:"Triage: two failures, one signature",
+   d:"Triage returned the same test on two Wormhole SKUs. The SKU is not part of the signature, so both land on ef36409625ce.",
+   code:'{ "test": "…/test_sdpa_decode_cache.py::test_attn_mask_realloc_reused_program_cache_hit",\n  "job": "ops-unit-tests / ttnn nightly sdpa tests [wh_n300_civ2]",\n  "kind": "code_regression", "owner": "sdpa_op", "group": "sdpa-decode-cache-hang" }\n# second record: same test, [wh_n150] → same signature',
+   nodes:["state","actions","B","ctri","ledger"],edges:[["state_B"],["logs"],["B_ctri"],["B_ctri",1],["B_ledger"]],
+   led:{sig:"ef36409625ce",state:"tracking",streak:"1",runs:"#10562"}},
+  {ph:"C",when:"10:26 UTC · forced MIN_STREAK=1",t:"Eligible (forced for the test)",
+   d:"Normally this would wait for a second red night. For the first test, the tick was run with MIN_STREAK=1.",
+   code:"ONLY=tt-metal-l2-nightly.yaml MIN_STREAK=1 FIX_SLACK=0 ~/.sdpa-fix/fixer.sh",
+   nodes:["ledger","C"],edges:[["ledger_C"]]},
+  {ph:"C",when:"10:26 UTC",t:"Dedup and worktree",
+   d:"No marker PR and no autofix branch on GitHub. The worktree is reset to origin/main, which is newer than the failing run's sha 53de0ba10.",
+   nodes:["C","gh","wt"],edges:[["C_gh"],["C_gh",1],["C_wt"]],gh:{search:"autofixsigef36409625ce → none"}},
+  {ph:"C",when:"10:26:50 → 10:27:09 UTC",t:"The agent finds the fix already on main",
+   d:"In 18 seconds and 5 turns the agent saw that e5f9d3186ef (#59127, reject [B,1] cur_pos tensors) landed after the failing sha. It changed nothing and returned fixed=false with already_fixed_upstream set. Cost $0.59.",
+   code:'{ "fixed": false, "approach": "none", "confidence": "high",\n  "already_fixed_upstream": "e5f9d3186efe (#59127 Fix sdpa_decode nightly hang: reject [B,1] cur_pos tensors)" }',
+   nodes:["C","cfix","wt"],edges:[["C_cfix"],["C_cfix",1]],mark:{cfix:"ok"},led:{state:"fixed_upstream",note:"e5f9d3186ef (#59127)"}},
+  {ph:"C",when:"10:27 UTC",t:"No PR; a Slack note instead",
+   d:"fixed_upstream is not a failure of the bot. The fixer posts a note and resets the worktree. The digest shows a 🛠 line under L2.",
+   nodes:["C","slack","ledger","watch"],edges:[["C_slack"],["ledger_watch"]],
+   slack:"↳ thread: 📌 already fixed on main: test_sdpa_decode_cache … fixed by #59127 e5f9d3186e · waiting for the next run that contains it"},
+  {ph:"B",when:"next L2 nightly",t:"Confirmation from the next run",
+   d:"If the next nightly (which contains e5f9d31) passes, the record becomes resolved_on_main. If it still fails, fixlib sees the run already contains that commit and puts the record back to tracking.",
+   code:"git merge-base --is-ancestor e5f9d3186ef <new run sha>\n# true + still failing → tracking   ·   job green → resolved_on_main",
+   nodes:["state","B","ledger"],edges:[["state_B"],["B_ledger"]],led:{state:"resolved_on_main"},chips:[["go","green → resolved_on_main"],["wait","still red → tracking"]]}
+]},
+{ id:"guard", name:"Guard rejects a bad fix", note:"illustrative", steps:[
+  {ph:"C",when:"some :15 tick",t:"An eligible group reaches the agent",
+   d:"Same path as before up to the agent: eligible, no marker PR, worktree reset.",
+   nodes:["ledger","C","gh","wt"],edges:[["ledger_C"],["C_gh"],["C_gh",1],["C_wt"]],
+   led:{sig:SIG,state:"tracking",streak:"2"}},
+  {ph:"C",when:"some :15 tick",t:"The agent takes a shortcut",
+   d:"Suppose the agent decides to mark the failing case xfail and reports fixed=true. The prompt forbids this, but the script does not trust the prompt.",
+   code:"+@pytest.mark.xfail(reason=\"K3 MoE PCC regression\")\n def test_kimi_k3_moe(...):",
+   nodes:["C","cfix","wt"],edges:[["C_cfix"],["cfix_wt"],["C_cfix",1]]},
+  {ph:"C",when:"some :15 tick",t:"Guard rejects it",
+   d:"fixlib.py guard finds an added xfail. The diff is never committed. The patch and reasons are kept under proposals/ for you to read.",
+   code:"{ \"ok\": false,\n  \"reasons\": [\"adds a skip/xfail in …/test_ttnn_moe.py: @pytest.mark.xfail(…)\"] }",
+   nodes:["wt","guard","C"],edges:[["wt_guard"],["guard_C",0,"bad"]],mark:{guard:"bad"},chips:[["stop","adds xfail"],["stop","no PR"]]},
+  {ph:"C",when:"some :15 tick",t:"no_fix, Slack note, worktree reset",
+   d:"The record becomes no_fix and is not retried. The worktree is reset to origin/main so nothing leaks into the next attempt.",
+   code:"git -C sdpa-fix-wt reset --hard && git -C sdpa-fix-wt clean -fd",
+   nodes:["C","slack","ledger","wt"],edges:[["C_slack"],["C_wt"]],led:{state:"no_fix"},
+   slack:"↳ thread: 🛠 autofix drafted a fix for test_kimi_k3_moe but the safety guard rejected it: adds a skip/xfail. Proposal: ~/.sdpa-fix/proposals/…"}
+]}
+];
+
+/* ---------- build svg ---------- */
+const svg=document.getElementById("map");
+function el(tag,attrs,parent){const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);(parent||svg).appendChild(e);return e;}
+const defs=el("defs",{});
+const mk=el("marker",{id:"ah",viewBox:"0 0 10 10",refX:"9",refY:"5",markerWidth:"6",markerHeight:"6",orient:"auto-start-reverse"},defs);
+el("path",{d:"M0,0 L10,5 L0,10 z",class:"ah"},mk);
+el("rect",{class:"grp",x:95,y:196,width:880,height:232,rx:12});
+el("text",{class:"gl",x:111,y:214}).textContent="fixer.sh · :15";
+const edgeEls={},labelEls={};
+for(const id in EDGES){
+  const e=EDGES[id];
+  edgeEls[id]=el("path",{d:e.d,class:"edge","marker-end":"url(#ah)"});
+}
+const nodeEls={};
+for(const id in NODES){
+  const n=NODES[id];
+  const g=el("g",{class:"node"+(n.k?" "+n.k:"")});
+  el("rect",{class:"halo",x:n.x-n.w/2-3,y:n.y-n.h/2-3,width:n.w+6,height:n.h+6,rx:10},g);
+  el("rect",{x:n.x-n.w/2,y:n.y-n.h/2,width:n.w,height:n.h,rx:8},g);
+  el("text",{class:"t",x:n.x,y:n.y-3,"text-anchor":"middle"},g).textContent=n.t;
+  el("text",{class:"s",x:n.x,y:n.y+14,"text-anchor":"middle"},g).textContent=n.s;
+  nodeEls[id]=g;
+}
+for(const id in EDGES){
+  const L=EDGES[id].l;
+  labelEls[id]=el("text",{class:"elab",x:L[0],y:L[1],"text-anchor":EDGES[id].a||"middle"});
+  labelEls[id].textContent=L[2];
+}
+const packetLayer=el("g",{});
+
+/* ---------- state ---------- */
+const reduce=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+let sc=0,idx=0,playing=false,timer=null,token=0;
+const $=id=>document.getElementById(id);
+
+function snapshot(){
+  const s=SCEN[sc].steps;const led={},gh={};let slack="";
+  for(let i=0;i<=idx;i++){Object.assign(led,s[i].led||{});Object.assign(gh,s[i].gh||{});if(s[i].slack)slack=s[i].slack;}
+  return {led,gh,slack};
+}
+const LED_KEYS=[["state","state"],["streak","streak"],["runs","failing runs"],["pr","PR"],["note","fixed by"],["fix","fix_sha"]];
+const GH_KEYS=[["search","marker search"],["branch","branch"],["pr","pull request"],["labels","labels"],["human","human-review"],["ci","targeted-ci"],["runs","dispatched"]];
+let prevPanel={};
+function kv(target,keys,obj,changed){
+  target.innerHTML="";
+  let any=false;
+  for(const [k,label] of keys){
+    if(obj[k]===undefined)continue;any=true;
+    const dt=document.createElement("dt");dt.textContent=label;
+    const dd=document.createElement("dd");
+    if(k==="state"){const b=document.createElement("span");b.className="st-badge st-"+obj[k];b.textContent=obj[k];dd.appendChild(b);}
+    else dd.textContent=obj[k];
+    if(changed.has(k))dd.classList.add("flash");
+    target.append(dt,dd);
+  }
+  if(!any){const dd=document.createElement("dd");dd.className="empty";dd.style.gridColumn="1 / -1";dd.textContent="nothing yet";target.appendChild(dd);}
+  setTimeout(()=>target.querySelectorAll(".flash").forEach(x=>x.classList.remove("flash")),900);
+}
+
+function renderTabs(){
+  const t=$("tabs");t.innerHTML="";
+  SCEN.forEach((s,i)=>{
+    const b=document.createElement("button");b.className="tab";b.type="button";b.setAttribute("role","tab");
+    b.setAttribute("aria-selected",i===sc?"true":"false");
+    b.innerHTML="<span>"+(i+1)+". "+s.name+"</span><small>"+s.note+" · "+s.steps.length+" steps</small>";
+    b.onclick=()=>{stop();sc=i;idx=0;prevPanel={};renderTabs();render();};
+    t.appendChild(b);
+  });
+}
+
+const PH={W:["Watcher","ph-W"],S:["Setup","ph-S"],A:["Phase A · Follow-up","ph-A"],B:["Phase B · Triage","ph-B"],C:["Phase C · Fix","ph-C"],H:["Human","ph-H"]};
+
+function render(){
+  const steps=SCEN[sc].steps,st=steps[idx];
+  token++;
+  packetLayer.innerHTML="";
+  // nodes
+  const on=new Set(st.nodes||[]);const mark=st.mark||{};
+  for(const id in nodeEls){
+    const g=nodeEls[id];let c="node"+(NODES[id].k?" "+NODES[id].k:"");
+    if(mark[id])c+=" "+mark[id];else if(on.has(id))c+=" on";else c+=" dim";
+    g.setAttribute("class",c);
+  }
+  // edges reset
+  for(const id in edgeEls){edgeEls[id].setAttribute("class","edge");labelEls[id].setAttribute("class","elab");}
+  // text
+  $("phase").textContent=PH[st.ph][0];$("phase").className="phase "+PH[st.ph][1];
+  $("when").textContent=st.when||"";
+  $("title").textContent=st.t;$("text").textContent=st.d;
+  const code=$("code");code.textContent=st.code||"";code.hidden=!st.code;
+  const chips=$("chips");chips.innerHTML="";(st.chips||[]).forEach(([k,txt])=>{const c=document.createElement("span");c.className="chip "+k;c.textContent=txt;chips.appendChild(c);});
+  chips.hidden=!(st.chips&&st.chips.length);
+  // panels
+  const snap=snapshot();
+  const chL=new Set(Object.keys(st.led||{})),chG=new Set(Object.keys(st.gh||{}));
+  $("sigshort").textContent=snap.led.sig?snap.led.sig:"";
+  kv($("ledger"),LED_KEYS,snap.led,chL);
+  kv($("github"),GH_KEYS,snap.gh,chG);
+  const sl=$("slack");sl.textContent=snap.slack||"";if(!snap.slack){sl.innerHTML='<span class="empty">no message yet</span>';}
+  sl.classList.toggle("flash",!!st.slack);
+  // controls
+  $("counter").textContent=(idx+1)+" / "+steps.length;
+  $("prev").disabled=idx===0;$("next").disabled=idx===steps.length-1&&!playing;
+  const dots=$("dots");dots.innerHTML="";
+  steps.forEach((s,i)=>{const d=document.createElement("button");d.type="button";d.className="dot"+(i<idx?" done":"")+(i===idx?" cur":"");d.title=(i+1)+". "+s.t;d.setAttribute("aria-label","Step "+(i+1)+": "+s.t);d.onclick=()=>{stop();idx=i;render();};dots.appendChild(d);});
+  animate(st.edges||[],token);
+}
+
+function edgeClass(kind){return kind==="bad"?"edge bad":kind==="hum"?"edge hum":"edge live";}
+function animate(list,tk){
+  let i=0;
+  const nextEdge=()=>{
+    if(tk!==token)return;
+    if(i>=list.length){if(playing)timer=setTimeout(advance,3200);return;}
+    const [id,rev,kind]=list[i++];
+    const p=edgeEls[id];
+    p.setAttribute("class",edgeClass(kind));labelEls[id].setAttribute("class","elab show");
+    if(reduce){nextEdge();return;}
+    const len=p.getTotalLength();
+    const dot=el("circle",{r:6,class:"packet"+(kind?" "+kind:"")},packetLayer);
+    const dur=Math.max(420,Math.min(1100,len*2.2));let t0=null;
+    const step=ts=>{
+      if(tk!==token){dot.remove();return;}
+      if(t0===null)t0=ts;
+      let f=Math.min(1,(ts-t0)/dur);f=f<.5?2*f*f:1-Math.pow(-2*f+2,2)/2;
+      const pt=p.getPointAtLength((rev?1-f:f)*len);
+      dot.setAttribute("cx",pt.x);dot.setAttribute("cy",pt.y);
+      if(f<1)requestAnimationFrame(step);else{setTimeout(()=>{dot.remove();nextEdge();},120);}
+    };
+    requestAnimationFrame(step);
+  };
+  nextEdge();
+}
+
+function advance(){
+  const n=SCEN[sc].steps.length;
+  if(idx<n-1){idx++;render();}
+  else{stop();}
+}
+function play(){playing=true;$("play").textContent="❚❚ Pause";if(idx===SCEN[sc].steps.length-1)idx=0;render();}
+function stop(){playing=false;clearTimeout(timer);$("play").textContent="▶ Play";$("next").disabled=idx===SCEN[sc].steps.length-1;}
+$("play").onclick=()=>playing?stop():play();
+$("next").onclick=()=>{stop();if(idx<SCEN[sc].steps.length-1){idx++;render();}};
+$("prev").onclick=()=>{stop();if(idx>0){idx--;render();}};
+$("replay").onclick=()=>{clearTimeout(timer);render();};
+document.addEventListener("keydown",e=>{
+  if(e.target.closest&&e.target.closest("input,textarea"))return;
+  if(e.key==="ArrowRight"){e.preventDefault();$("next").click();}
+  else if(e.key==="ArrowLeft"){e.preventDefault();$("prev").click();}
+  else if(e.key===" "&&!(e.target.tagName==="BUTTON")){e.preventDefault();$("play").click();}
+});
+renderTabs();render();
+})();
+</script>

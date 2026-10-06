@@ -14,10 +14,16 @@ SDPA_HOME="$HOME/.sdpa-watch"
 LOG="$SDPA_HOME/bootstrap.log"
 LOCK="$SDPA_HOME/.bootstrap.lock"
 MARKER='.sdpa-watch/watch.sh'
-CRON_LINE='0 * * * * $HOME/.sdpa-watch/watch.sh >> $HOME/.sdpa-watch/watch.log 2>&1'
+CRON_LINE='0 * * * * $HOME/.sdpa-watch/watch.sh >> $HOME/.sdpa-watch/logs/cron-preinit.log 2>&1'
+# Sibling autofix (~/.sdpa-fix), restored alongside the watcher when installed.
+FIX_MARKER='.sdpa-fix/fixer.sh'
+FIX_CRON_LINE='15 * * * * $HOME/.sdpa-fix/fixer.sh >> $HOME/.sdpa-fix/logs/cron.log 2>&1'
 
 daemon_up()  { pgrep -x cron >/dev/null 2>&1; }
-tab_present() { crontab -l 2>/dev/null | grep -qF "$MARKER"; }
+tab_present() {
+  crontab -l 2>/dev/null | grep -qF "$MARKER" || return 1
+  [[ ! -x "$HOME/.sdpa-fix/fixer.sh" ]] || crontab -l 2>/dev/null | grep -qF "$FIX_MARKER"
+}
 
 # Fast path: scheduler already installed, running, and scheduled.
 if daemon_up && tab_present; then
@@ -51,7 +57,8 @@ fi
     echo "[$(ts)] installing crontab entry"
     # Strip any pre-existing watcher lines first so a login burst after reboot
     # can never accumulate duplicates, then append exactly one.
-    ( crontab -l 2>/dev/null | grep -vF "$MARKER"; echo "$CRON_LINE" ) | crontab - \
+    ( crontab -l 2>/dev/null | grep -vF -e "$MARKER" -e "$FIX_MARKER"; echo "$CRON_LINE"
+      [[ -x "$HOME/.sdpa-fix/fixer.sh" ]] && echo "$FIX_CRON_LINE" ) | crontab - \
       && echo "[$(ts)] crontab entry installed" \
       || echo "[$(ts)] ERROR: crontab install failed"
   fi
