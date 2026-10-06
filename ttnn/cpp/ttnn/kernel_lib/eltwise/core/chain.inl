@@ -1194,13 +1194,27 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
                                 : (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB
                                                            : ckernel::EltwiseBinaryType::ELWMUL;
             if constexpr (Op == BinaryFpuOp::Mul) {
+#if defined(ARCH_BLACKHOLE)
+                // The hand-off that bcast.h's mul_tiles_bcast executes with
+                MATH((llk_math_eltwise_binary_init<
+                      et,
+                      bt,
+                      MATH_FIDELITY,
+                      ckernel::EltwiseBinaryReuseDestType::NONE,
+                      ckernel::detail::bcast_src_dvalid<et>>(CbA, CbB, Accumulation != DestAccumulation::Disabled)));
+#else
                 MATH((llk_math_eltwise_binary_init<et, bt, MATH_FIDELITY>(
                     CbA, CbB, Accumulation != DestAccumulation::Disabled)));
+#endif
             } else {
                 MATH((llk_math_eltwise_binary_init<et, bt, MathFidelity::LoFi>(
                     CbA, CbB, Accumulation != DestAccumulation::Disabled)));
             }
+#if defined(ARCH_BLACKHOLE)
+            UNPACK((llk_unpack_AB_init<bt, ckernel::detail::bcast_src_dvalid<et>>(CbA, CbB)));
+#else
             UNPACK((llk_unpack_AB_init<bt>(CbA, CbB)));
+#endif
         }
     }
 
