@@ -7,7 +7,7 @@ import ttnn
 from models.common.device_utils import get_device_name
 
 # =============================================================================
-# CCL tuning defaults - shared across all TTTv2 modules
+# CCL tuning defaults - shared by every TT_CCL user
 # =============================================================================
 
 # Default number of chunks per synchronization barrier in CCL operations.

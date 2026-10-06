@@ -9,12 +9,12 @@ Just signature adaptation for TTModelRunner.
 """
 
 # TODO: this experimental path must transition to
-# https://github.com/tenstorrent/tt_transformers. The in-tree TTTv2
+# https://github.com/tenstorrent/tt-transformers. The in-tree TTTv2
 # Llama3 executor/model was deleted from tt-metal.
 raise ImportError(
     "llama32_1b_quasar.models.generator imported models.common.models.llama3_8b, "
     "which left tt-metal. Port this path to "
-    "https://github.com/tenstorrent/tt_transformers"
+    "https://github.com/tenstorrent/tt-transformers"
 )
 
 

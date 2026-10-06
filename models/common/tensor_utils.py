@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tensor utility functions for TTTv2 modules.
+Tensor utility functions shared by models.common.lazy_weight, TTTv1 and the model demos.
 """
 
 import json
