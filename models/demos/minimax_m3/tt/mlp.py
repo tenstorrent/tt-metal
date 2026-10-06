@@ -261,6 +261,7 @@ class MLP:
                 topk_weights=wts,
                 padding_config=padding_config,
                 shared_fn=shared_fn,
+                overlap=self.overlap_shared,
                 fuse_shared=self.fuse_shared_rs,
             )
             if shared_partial is not None:

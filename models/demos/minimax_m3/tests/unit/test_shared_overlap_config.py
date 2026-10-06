@@ -283,7 +283,12 @@ def test_forward_default_unchanged(monkeypatch):
 def test_forward_window_order(monkeypatch, overlap, fuse):
     moe, log = _moe_with_recorder(monkeypatch, overlap=overlap)
     routed, shared = moe.forward(
-        _T("x"), topk_indices=_T("idx"), topk_weights=_T("wts"), shared_fn=_shared_fn(log), fuse_shared=fuse
+        _T("x"),
+        topk_indices=_T("idx"),
+        topk_weights=_T("wts"),
+        shared_fn=_shared_fn(log),
+        overlap=overlap,
+        fuse_shared=fuse,
     )
     (d,) = _names(log, "dispatch")
     (s,) = _names(log, "shared")
@@ -310,6 +315,21 @@ def test_forward_window_order(monkeypatch, overlap, fuse):
         assert log[r][1] is None and shared.name == "shared_partial"
 
 
+def test_forward_overlap_per_call(monkeypatch):
+    """overlap=False runs the shared expert on the full grid even when the split was built."""
+    moe, log = _moe_with_recorder(monkeypatch, overlap=True)
+    moe.forward(
+        _T("x"),
+        topk_indices=_T("idx"),
+        topk_weights=_T("wts"),
+        shared_fn=_shared_fn(log),
+        overlap=False,
+        fuse_shared=True,
+    )
+    assert not _names(log, "load") and not _names(log, "clear")
+    assert log[_names(log, "dispatch")[0]][2] is None and log[_names(log, "shared")[0]][1] is None
+
+
 @pytest.mark.parametrize("fail_in", ["dispatch", "shared", "load"])
 def test_forward_window_clears_on_error(monkeypatch, fail_in, expect_error):
     """Once load() succeeded, clear() runs exactly once even when dispatch or the shared expert raises, and no
@@ -332,7 +352,9 @@ def test_forward_window_clears_on_error(monkeypatch, fail_in, expect_error):
         return _T("shared_partial")
 
     with expect_error(RuntimeError, fail_in):
-        moe.forward(_T("x"), topk_indices=_T("idx"), topk_weights=_T("wts"), shared_fn=shared_fn, fuse_shared=True)
+        moe.forward(
+            _T("x"), topk_indices=_T("idx"), topk_weights=_T("wts"), shared_fn=shared_fn, overlap=True, fuse_shared=True
+        )
     if fail_in == "load":
         assert not _names(log, "clear")
     else:

@@ -216,7 +216,16 @@ class TtMiniMaxMoE(LightweightModule):
             reduce_scatter_fn=reduce_scatter_fn,
         )
 
-    def forward(self, x, topk_indices=None, topk_weights=None, padding_config=None, shared_fn=None, fuse_shared=False):
+    def forward(
+        self,
+        x,
+        topk_indices=None,
+        topk_weights=None,
+        padding_config=None,
+        shared_fn=None,
+        overlap=False,
+        fuse_shared=False,
+    ):
         """Routed (expert-parallel) MoE output.
 
         x: (dispatch_group_size, seq_len_per_chip, emb_dim) — emb may be TP-sharded
@@ -233,8 +242,9 @@ class TtMiniMaxMoE(LightweightModule):
            gate runs (standalone test path; expects TP-sharded emb).
         shared_fn: None -> returns the routed output only (the caller runs the shared expert). Otherwise
            ``shared_fn(sub_device, keep_alive)`` returns the shared expert's un-reduced partial and runs right
-           after dispatch is enqueued: on its own sub-device, concurrently with dispatch, when the overlap split
-           was built (sub_device = (id, cores)), else on the full grid (sub_device None). Returns
+           after dispatch is enqueued: on its own sub-device, concurrently with dispatch, when overlap is set
+           (sub_device = (id, cores); needs the split built with overlap_shared_expert), else on the full grid
+           (sub_device None). Returns
            ``(routed_output, shared_partial)``; with fuse_shared the partial is added before the routed
            reduce-scatter instead and shared_partial is None.
         """
@@ -267,7 +277,8 @@ class TtMiniMaxMoE(LightweightModule):
         # Dispatch -> per-expert buffers. With a shared_fn, x (the shared expert reads it too) is freed only
         # after the shared expert is enqueued and, when overlapped, after the sub-device manager is cleared.
         # Once loaded, the manager is cleared even if dispatch or the shared expert raises.
-        overlap = self.overlap if shared_fn is not None else None
+        assert not overlap or self.overlap is not None, "overlap needs TtMiniMaxMoE(overlap_shared_expert=True)"
+        overlap = self.overlap if shared_fn is not None and overlap else None
         shared_partial = None
         keep_alive = [x]
         loaded = False
