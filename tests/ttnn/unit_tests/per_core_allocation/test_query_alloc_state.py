@@ -76,3 +76,48 @@ def test_whole_device_matches_per_core_query(device):
         assert ranges == ttnn.experimental_get_l1_occupied_ranges(device, coord, c)
 
     ttnn.deallocate(tensor)
+
+
+def test_global_lockstep_query_excludes_per_core_and_range_lockstep(per_core_mesh_device):
+    mesh = per_core_mesh_device
+    coord = ttnn.MeshCoordinate(0, 0)
+    core = ttnn.CoreCoord(0, 0)
+    before = ttnn.experimental_get_l1_lockstep_occupied_ranges(mesh, coord)
+    tensors = []
+    try:
+        for policy in ("global", "per_core", "range"):
+            config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet([ttnn.CoreRange(core, core)]),
+                    [1, 1024],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+            if policy == "per_core":
+                config.experimental_set_per_core_allocation(True)
+            if policy == "range":
+                config.experimental_set_range_lockstep_allocation(True)
+            tensors.append(ttnn.from_torch(
+                torch.zeros((1, 1024), dtype=torch.uint8),
+                dtype=ttnn.uint8,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                memory_config=config,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            ))
+        global_tensor, local_tensor, range_tensor = tensors
+        ranges = ttnn.experimental_get_l1_lockstep_occupied_ranges(mesh, coord)
+        address = global_tensor.buffer_address()
+        assert _covers(ranges, address, address + 1024)
+        local_address = local_tensor.experimental_per_core_buffer_address(coord, core)
+        assert not _overlaps(ranges, local_address, local_address + 1024)
+        range_address = range_tensor.buffer_address()
+        assert not _overlaps(ranges, range_address, range_address + 1024)
+        for occupied in ttnn.experimental_get_l1_occupied_ranges(mesh, coord).values():
+            assert all(_covers(occupied, start, end) for start, end in ranges)
+    finally:
+        for tensor in reversed(tensors):
+            ttnn.deallocate(tensor)
+    assert ttnn.experimental_get_l1_lockstep_occupied_ranges(mesh, coord) == before

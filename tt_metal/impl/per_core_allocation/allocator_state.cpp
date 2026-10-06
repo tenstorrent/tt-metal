@@ -63,6 +63,25 @@ AddressRanges occupied_ranges(const std::vector<const AllocatorImpl*>& allocator
 
 }  // namespace
 
+AddressRanges get_l1_lockstep_occupied_ranges(
+    const distributed::MeshDevice& mesh_device, const distributed::MeshCoordinate& device_coord) {
+    AddressRanges ranges;
+    for (const AllocatorImpl* allocator : hybrid_allocators(mesh_device, device_coord)) {
+        const auto allocated = allocator->get_l1_allocated_ranges(BankManager::AllocatorDependencies::AllocatorID{0});
+        ranges.insert(ranges.end(), allocated.begin(), allocated.end());
+    }
+    std::sort(ranges.begin(), ranges.end());
+    AddressRanges merged;
+    for (const auto& [start, end] : ranges) {
+        if (!merged.empty() && start <= merged.back().second) {
+            merged.back().second = std::max(merged.back().second, end);
+        } else {
+            merged.emplace_back(start, end);
+        }
+    }
+    return merged;
+}
+
 AddressRanges get_l1_occupied_ranges(
     const distributed::MeshDevice& mesh_device,
     const distributed::MeshCoordinate& device_coord,

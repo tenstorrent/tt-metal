@@ -612,6 +612,16 @@ void device_module(nb::module_& m_device) {
         get_l1_occupied_ranges_doc.data());
 
     m_device.def(
+        "ExperimentalGetL1LockstepOccupiedRanges",
+        [](const MeshDevice& mesh_device, const distributed::MeshCoordinate& device_coord) {
+            return tt::tt_metal::experimental::per_core_allocation::get_l1_lockstep_occupied_ranges(
+                mesh_device, device_coord);
+        },
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("device_coord"),
+        "Experimental. Return global-lockstep L1 ownership from the device and mesh allocators, excluding range-lockstep.");
+
+    m_device.def(
         "ExperimentalGetL1FreeRanges",
         [](const MeshDevice& mesh_device, const distributed::MeshCoordinate& device_coord, const CoreCoord& core) {
             return tt::tt_metal::experimental::per_core_allocation::get_l1_free_ranges(
