@@ -607,11 +607,23 @@ def _build_lm_head(
     cache_path: Path | None,
 ) -> LMHead1D:
     lm_w = hf_lm_head.weight.detach().to(torch.bfloat16).clone()
+    # 3 MB-L1 Quasar variant: narrow the vocab chunks so each chunk's matmul (and its s2i / concat) fits
+    # alongside the L1 resident at the lm_head (end of prefill). At 8192-wide chunks the per-chunk matmul
+    # needs ~1.3 MB of L1 CBs and clashes with the prefill's resident L1 on the 3 MB part (static DFB vs L1
+    # clash -> hang); 2048-wide chunks need ~0.6 MB. The 4 MB part keeps 8192 (fewer chunks, faster). Gated
+    # on the soc descriptor's real per-core L1 size, so no env var and the 4 MB flow is byte-identical.
+    lm_max_cols = 8192
+    try:
+        if 0 < int(mesh_device.l1_size_per_core()) < 4 * 1024 * 1024:
+            lm_max_cols = 2048
+    except Exception:
+        pass
     lm_splits, lm_split_sizes, lm_weights_memcfgs = weight_utils.build_lm_head_lazy_weights(
         mesh_device,
         lm_w,
         dim=mcfg.dim,
         vocab_size=mcfg.vocab_size,
+        max_columns_per_device=lm_max_cols,
         dtype=lm_head_dtype,
         cache_dir=cache_path / "lm_head" if cache_path else None,
     )
