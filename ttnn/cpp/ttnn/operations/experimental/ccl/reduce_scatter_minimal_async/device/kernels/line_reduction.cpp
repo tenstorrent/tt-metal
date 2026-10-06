@@ -51,9 +51,13 @@ void kernel_main() {
 
                     cb_output.reserve_back(tile_granularity);
                     tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                    pack_block_mop(0, output_cb, num_pages_to_read);
+#else
                     for (uint32_t tile_id = 0; tile_id < num_pages_to_read; tile_id++) {
                         pack_tile(tile_id, output_cb);
                     }
+#endif
                     tile_regs_release();
                     cb_output.push_back(tile_granularity);
 

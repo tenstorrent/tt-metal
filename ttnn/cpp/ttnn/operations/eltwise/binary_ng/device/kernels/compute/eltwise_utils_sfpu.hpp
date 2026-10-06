@@ -39,9 +39,13 @@ ALWI void preprocess_sfpu_impl(
     tile_regs_commit();
 
     tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+    pack_block_mop(0, cb_post.get_cb_id(), per_core_block_size);
+#else
     for (uint32_t i = 0; i < per_core_block_size; ++i) {
         pack_tile(i, cb_post.get_cb_id());
     }
+#endif
     tile_regs_release();
 
     cb_pre.pop_front(per_core_block_size);

@@ -55,9 +55,13 @@ void kernel_main() {
         tile_regs_commit();
 
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, cb_out.get_cb_id(), n);
+#else
         for (uint32_t i = 0; i < n; ++i) {
             pack_tile(i, cb_out.get_cb_id());
         }
+#endif
         tile_regs_release();
 
         cb_out.push_back(n);
