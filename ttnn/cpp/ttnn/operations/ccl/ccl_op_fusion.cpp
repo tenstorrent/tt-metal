@@ -43,6 +43,24 @@ void AllGatherFusedOpSignaler::init_all_gather(
     initialized_all_gather = true;
 }
 
+void AllGatherFusedOpSignaler::init_all_gather(
+    ProgramDescriptor& desc,
+    const IDevice* device,
+    const CoreRangeSet& all_gather_workers,
+    std::vector<CoreCoord>& all_gather_worker_cores) {
+    // Create the sync semaphore for the all gather workers
+    if (all_gather_worker_cores.size() > 1) {
+        this->all_gather_worker_sync_semaphore = add_semaphore_descriptor(desc, all_gather_workers);
+    }
+
+    // Get the noc coords for the all gather workers
+    this->all_gather_worker_cores_noc.clear();
+    for (const auto& core : all_gather_worker_cores) {
+        this->all_gather_worker_cores_noc.push_back(device->worker_core_from_logical_core(core));
+    }
+    initialized_all_gather = true;
+}
+
 void AllGatherFusedOpSignaler::push_all_gather_fused_op_rt_args(
     std::vector<uint32_t>& out_rt_args,
 
