@@ -158,72 +158,81 @@ H2HSocket::~H2HSocket() = default;
 
 std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err) {
     err.clear();
-    if (!host_topology_ok(cfg.topo) || cfg.topo.num < 2) {
-        err =
-            "H2HSocket: the path is chip->host->host->chip and needs an addressable topology of "
-            "at least two hosts";
-        return nullptr;
-    }
-    if (cfg.topo.num > kMaxHosts) {
-        err = "H2HSocket: " + std::to_string(cfg.topo.num) + " hosts exceeds the " + std::to_string(kMaxHosts) +
-              " the credit array indexes";
-        return nullptr;
-    }
-    // Refused, not merely unimplemented -- see kMaxH2HHostsSupported for why it is below
-    // kMaxHosts. The receiver also keeps one cursor per core, not per core and origin.
-    if (cfg.topo.num > kMaxH2HHostsSupported) {
-        err = "H2HSocket: " + std::to_string(cfg.topo.num) + " hosts is not supported; the RX ring serves " +
-              std::to_string(kMaxH2HHostsSupported) + " (kMaxH2HHostsSupported), though the credit array indexes " +
-              std::to_string(kMaxHosts);
-        return nullptr;
-    }
-    // Not just non-zero: the payload put is page_bytes - kFrameTrailerBytes, which wraps
-    // below that and would ask MPI for a nearly 2^64 transfer.
-    if (cfg.page_bytes != 0 && cfg.page_bytes <= kFrameTrailerBytes) {
-        err = "H2HSocket: page_bytes " + std::to_string(cfg.page_bytes) + " leaves no room for the " +
-              std::to_string(kFrameTrailerBytes) + " B trailer";
-        return nullptr;
-    }
-    if (cfg.cores == 0 || cfg.page_bytes == 0 || cfg.region_base == nullptr) {
-        err = "H2HSocket: cores, page_bytes and region_base are all required";
-        return nullptr;
-    }
-    // This class computes credit_offset() and rx_slot_offset() itself, so it has to bound
-    // them itself: HostRegion and RingAlias each only police their own view of the region.
-    if (cfg.cores > kProvisionedCores) {
-        err = "H2HSocket: " + std::to_string(cfg.cores) + " cores exceeds the " + std::to_string(kProvisionedCores) +
-              " the credit and done arrays index";
-        return nullptr;
-    }
-    // Refused for the same reason as the host bound above: rx_arena_offset() takes a core
-    // and no chip, so one region holds one chip's arenas and chip 1 would alias chip 0.
-    if (cfg.topo.chips_per_host != 1) {
-        err = "H2HSocket: chips_per_host " + std::to_string(cfg.topo.chips_per_host) +
-              " is not supported; the arenas are not partitioned per chip (exactly 1)";
-        return nullptr;
-    }
-    // Checked here, not inherited from HostRegion: the chip comparisons below decode 0 for a
-    // single-chip host, so a non-zero cfg.chip would reject every frame instead of routing it.
-    if (cfg.chip >= cfg.topo.chips_per_host) {
-        err = "H2HSocket: chip " + std::to_string(cfg.chip) + " is outside 0.." +
-              std::to_string(cfg.topo.chips_per_host - 1);
-        return nullptr;
-    }
-    if (cfg.ring_pages == 0) {
-        err = "H2HSocket: ring_pages must be at least 1";
-        return nullptr;
-    }
-    // The same offsets are a local load in trailer_guard() and a remote displacement in the
-    // peer's window, so a short region is an out-of-bounds read here and an invalid RMA there.
-    if (const uint64_t need = pinned_bytes_for(cfg.cores); cfg.region_bytes < need) {
-        err = fmt::format(
-            "H2HSocket: region is {} B but {} cores need at least {} B", cfg.region_bytes, cfg.cores, need);
-        return nullptr;
-    }
-    if (cfg.rx_data_offset + static_cast<uint64_t>(cfg.ring_pages) * cfg.page_bytes > kArenaBytes) {
-        err = "H2HSocket: rx_data_offset + ring_pages x page_bytes (" + std::to_string(cfg.rx_data_offset) + " + " +
-              std::to_string(cfg.ring_pages) + " x " + std::to_string(cfg.page_bytes) + ") exceeds the " +
-              std::to_string(kArenaBytes >> 10) + " KiB arena";
+    // Every check below is local, and a config that fails on ONE host must not strand the
+    // peers in the agreement further down: all ranks reach the collective either way.
+    const bool local_ok = [&]() -> bool {
+        if (!host_topology_ok(cfg.topo) || cfg.topo.num < 2) {
+            err =
+                "H2HSocket: the path is chip->host->host->chip and needs an addressable topology of "
+                "at least two hosts";
+            return false;
+        }
+        if (cfg.topo.num > kMaxHosts) {
+            err = "H2HSocket: " + std::to_string(cfg.topo.num) + " hosts exceeds the " + std::to_string(kMaxHosts) +
+                  " the credit array indexes";
+            return false;
+        }
+        // Refused, not merely unimplemented -- see kMaxH2HHostsSupported for why it is below
+        // kMaxHosts. The receiver also keeps one cursor per core, not per core and origin.
+        if (cfg.topo.num > kMaxH2HHostsSupported) {
+            err = "H2HSocket: " + std::to_string(cfg.topo.num) + " hosts is not supported; the RX ring serves " +
+                  std::to_string(kMaxH2HHostsSupported) + " (kMaxH2HHostsSupported), though the credit array indexes " +
+                  std::to_string(kMaxHosts);
+            return false;
+        }
+        // Not just non-zero: the trailer has to fit inside the page, and a smaller page wraps
+        // below that and would ask MPI for a nearly 2^64 transfer.
+        if (cfg.page_bytes != 0 && cfg.page_bytes <= kFrameTrailerBytes) {
+            err = "H2HSocket: page_bytes " + std::to_string(cfg.page_bytes) + " leaves no room for the " +
+                  std::to_string(kFrameTrailerBytes) + " B trailer";
+            return false;
+        }
+        if (cfg.cores == 0 || cfg.page_bytes == 0 || cfg.region_base == nullptr) {
+            err = "H2HSocket: cores, page_bytes and region_base are all required";
+            return false;
+        }
+        // This class computes credit_offset() and rx_slot_offset() itself, so it has to bound
+        // them itself: HostRegion and RingAlias each only police their own view of the region.
+        if (cfg.cores > kProvisionedCores) {
+            err = "H2HSocket: " + std::to_string(cfg.cores) + " cores exceeds the " +
+                  std::to_string(kProvisionedCores) + " the credit and done arrays index";
+            return false;
+        }
+        // Refused for the same reason as the host bound above: rx_arena_offset() takes a core
+        // and no chip, so one region holds one chip's arenas and chip 1 would alias chip 0.
+        if (cfg.topo.chips_per_host != 1) {
+            err = "H2HSocket: chips_per_host " + std::to_string(cfg.topo.chips_per_host) +
+                  " is not supported; the arenas are not partitioned per chip (exactly 1)";
+            return false;
+        }
+        // Checked here, not inherited from HostRegion: the chip comparisons below decode 0 for a
+        // single-chip host, so a non-zero cfg.chip would reject every frame instead of routing it.
+        if (cfg.chip >= cfg.topo.chips_per_host) {
+            err = "H2HSocket: chip " + std::to_string(cfg.chip) + " is outside 0.." +
+                  std::to_string(cfg.topo.chips_per_host - 1);
+            return false;
+        }
+        if (cfg.ring_pages == 0) {
+            err = "H2HSocket: ring_pages must be at least 1";
+            return false;
+        }
+        // The same offsets are a local load in trailer_guard() and a remote displacement in the
+        // peer's window, so a short region is an out-of-bounds read here and an invalid RMA there.
+        if (const uint64_t need = pinned_bytes_for(cfg.cores); cfg.region_bytes < need) {
+            err = fmt::format(
+                "H2HSocket: region is {} B but {} cores need at least {} B", cfg.region_bytes, cfg.cores, need);
+            return false;
+        }
+        if (cfg.rx_data_offset + static_cast<uint64_t>(cfg.ring_pages) * cfg.page_bytes > kArenaBytes) {
+            err = "H2HSocket: rx_data_offset + ring_pages x page_bytes (" + std::to_string(cfg.rx_data_offset) + " + " +
+                  std::to_string(cfg.ring_pages) + " x " + std::to_string(cfg.page_bytes) + ") exceeds the " +
+                  std::to_string(kArenaBytes >> 10) + " KiB arena";
+            return false;
+        }
+
+        return true;
+    }();
+    if (!RdmaWindow::agree(local_ok, err)) {
         return nullptr;
     }
 
@@ -441,7 +450,6 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
                     want));
                 break;
             }
-            im.rx_pos[c] += im.cfg.page_bytes;
             const FrameTrailer* const t = im.trailer(c, slot);
 
             DeliverTask d;
@@ -456,6 +464,9 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
             if (!deliver(d)) {
                 break;
             }
+            // AFTER the handover, not before: Deliver may refuse for this lap, and a cursor
+            // already advanced makes the retry read a bogus frame-sequence mismatch.
+            im.rx_pos[c] += im.cfg.page_bytes;
 
             // Disarmed in consumed(), not here: deliver() above already released the far
             // device to pull this page, trailer included, and a zero would race that read.

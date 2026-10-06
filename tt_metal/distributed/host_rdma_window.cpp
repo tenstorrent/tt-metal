@@ -91,11 +91,6 @@ bool RdmaWindow::agree(bool local_ok, std::string& err) {
 std::unique_ptr<RdmaWindow> RdmaWindow::create(
     uint8_t* region_base, uint64_t region_bytes, uint32_t expect_rank, uint32_t expect_size, std::string& err) {
     err.clear();
-    if (region_base == nullptr || region_bytes == 0) {
-        err = "RdmaWindow::create: the region is empty";
-        return nullptr;
-    }
-
     std::unique_ptr<RdmaWindow> w(new RdmaWindow());
     Impl& im = *w->impl_;
     im.comm = MPI_COMM_WORLD;
@@ -104,16 +99,27 @@ std::unique_ptr<RdmaWindow> RdmaWindow::create(
     im.base = region_base;
     im.bytes = region_bytes;
 
-    // Host ids are passed straight to MPI as ranks, so a mismatch silently puts every frame
-    // on the wrong peer. Checked before the window exists, so there is nothing to free.
-    if (static_cast<uint32_t>(im.rank) != expect_rank || static_cast<uint32_t>(im.size) != expect_size) {
-        err = fmt::format(
+    // Every check in this function is rank-local, but MPI_Win_create and the agree() calls are
+    // collective. None may return early: a rank that leaves alone strands its peers inside the
+    // next collective for good. Each one records its failure and falls through instead.
+    std::string local_err;
+    if (region_base == nullptr || region_bytes == 0) {
+        local_err = "RdmaWindow::create: the region is empty";
+    } else if (static_cast<uint32_t>(im.rank) != expect_rank || static_cast<uint32_t>(im.size) != expect_size) {
+        // Host ids are passed straight to MPI as ranks, so a mismatch silently puts every frame
+        // on the wrong peer.
+        local_err = fmt::format(
             "RdmaWindow::create: this rank is {} of {} in MPI_COMM_WORLD but the socket topology calls it "
             "host {} of {}",
             im.rank,
             im.size,
             expect_rank,
             expect_size);
+    }
+    // Agreed BEFORE the window: a refused rank never enters MPI_Win_create, so no peer may
+    // either. The misconfigured host reports its own reason; the others learn a peer failed.
+    if (std::string peer_err; !agree(local_err.empty(), peer_err)) {
+        err = local_err.empty() ? peer_err : local_err;
         return nullptr;
     }
 
@@ -121,25 +127,24 @@ std::unique_ptr<RdmaWindow> RdmaWindow::create(
     if (const int rc =
             MPI_Win_create(region_base, static_cast<MPI_Aint>(region_bytes), 1, MPI_INFO_NULL, im.comm, &im.win);
         rc != MPI_SUCCESS) {
-        err = mpi_error_text("MPI_Win_create", rc);
-        return nullptr;
+        // Left null, so the destructor frees nothing; the agree() below still runs.
+        im.win = MPI_WIN_NULL;
+        local_err = mpi_error_text("MPI_Win_create", rc);
     }
-
-    // Both checks below are rank-local, but freeing the window is collective. Neither may
-    // return early: a rank freeing alone leaves the others waiting in a different collective.
-    std::string local_err;
 
     // The trailing flag needs the target to observe window memory with ordinary loads,
     // which is defined only under the unified model.
-    int* model = nullptr;
-    int flag = 0;
-    // void* by way of the address of the pointer: MPI's attribute out-param is void*, and
-    // int** converts to it only through an explicit cast.
-    MPI_Win_get_attr(im.win, MPI_WIN_MODEL, static_cast<void*>(&model), &flag);
-    if (flag == 0 || model == nullptr || *model != MPI_WIN_UNIFIED) {
-        local_err =
-            "RdmaWindow::create: this MPI provides a SEPARATE window memory model. The arrival "
-            "flag is read with an ordinary load on the target, which that model leaves undefined.";
+    if (local_err.empty()) {
+        int* model = nullptr;
+        int flag = 0;
+        // void* by way of the address of the pointer: MPI's attribute out-param is void*, and
+        // int** converts to it only through an explicit cast.
+        MPI_Win_get_attr(im.win, MPI_WIN_MODEL, static_cast<void*>(&model), &flag);
+        if (flag == 0 || model == nullptr || *model != MPI_WIN_UNIFIED) {
+            local_err =
+                "RdmaWindow::create: this MPI provides a SEPARATE window memory model. The arrival "
+                "flag is read with an ordinary load on the target, which that model leaves undefined.";
+        }
     }
 
     // Passive target for the whole run, so no access needs an epoch of its own.
@@ -151,8 +156,8 @@ std::unique_ptr<RdmaWindow> RdmaWindow::create(
         }
     }
 
-    // The one collective every rank reaches whatever it found. On failure they all destroy
-    // `w`, whose destructor unlocks and frees -- one path, taken by everyone or no one.
+    // Every rank reaches this whatever it found. On failure they all destroy `w`, whose
+    // destructor unlocks and frees what exists -- one path, taken by everyone or no one.
     std::string peer_err;
     if (!agree(local_err.empty(), peer_err)) {
         err = local_err.empty() ? peer_err : local_err;
