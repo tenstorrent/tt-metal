@@ -15,6 +15,7 @@ from helpers.format_config import (
     REG_EXP_FLUSH_AT,
     REG_EXP_SATURATE_AT,
     DataFormat,
+    e8m0_scale_factors,
 )
 
 from .llk_params import format_dict, format_tile_sizes
@@ -527,17 +528,12 @@ def _mxint_decode_blocks(scales_e8m0, int_blocks, elem_scale_divisor: float):
     it today.
     """
     scales_array = np.frombuffer(bytes(scales_e8m0), dtype=np.uint8)
-    nan_blocks = scales_array == E8M0_NAN_CODE
-    # Substitute a harmless scale for 0xFF before exponentiating: exp2(128)
-    # overflows float32 to Inf, and Inf times a coerced-to-zero element is a
-    # NaN raised by invalid-multiply rather than by the rule below. These rows
-    # are overwritten wholesale anyway.
-    safe_scales = np.where(nan_blocks, E8M0_BIAS, scales_array).astype(np.float32)
-    scale_factors = np.exp2(safe_scales - E8M0_BIAS)
+    # Same decode the packers use, NaN at 0xFF included -- multiplying by that
+    # NaN is what carries the rule through, so no separate overlay is needed.
+    scale_factors = e8m0_scale_factors(scales_array)
     decoded = int_blocks.astype(np.float32) * (
         scale_factors[:, np.newaxis] / elem_scale_divisor
     )
-    decoded[nan_blocks] = np.nan
     return torch.tensor(decoded.flatten(), dtype=torch.bfloat16)
 
 

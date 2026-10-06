@@ -14,6 +14,7 @@ from .format_config import (
     MX_FORMAT_BLOCK_SIZE,
     MX_FORMAT_MAX_NORMAL,
     DataFormat,
+    e8m0_scale_factors,
     l1_align,
 )
 from .tile_constants import (
@@ -410,33 +411,6 @@ def _mx_shared_exponents(blocks, elem_exp_max_unbiased):
     return np.where(all_inf_or_zero & has_inf, E8M0_INF_CODE, scales_e8m0_array)
 
 
-def _e8m0_scale_factors(scales_e8m0_array):
-    """E8M0 scale codes decoded to float32 multipliers, NaN where the code is 0xFF.
-
-    0xFF is the reserved NaN scale rather than an exponent, so it decodes to NaN
-    and that NaN propagates into whatever the caller does with the block. Where
-    it ends up differs by format: MXFP8 keeps it in the element encoding (0x7E
-    for E5M2, 0x7F for E4M3), while MXFP4 and MxInt zero their elements --
-    fp4 has no NaN nibble and MxInt no NaN at all -- so for those the 0xFF
-    scale is the only surviving record that the block was NaN. Either way the
-    block reads back as NaN, because unpacking takes that from the scale.
-
-    A harmless code is substituted before exponentiating because ``exp2(128)``
-    overflows float32. Computing it and masking afterwards gives the same
-    numbers but raises a spurious overflow warning, which then has to be
-    suppressed at every call site.
-
-    Args:
-        scales_e8m0_array: (num_blocks,) array of E8M0 scale codes, 0..255
-
-    Returns:
-        (num_blocks,) float32 array of multipliers, NaN at the 0xFF entries
-    """
-    nan_scales = scales_e8m0_array == E8M0_NAN_CODE
-    safe_scales = np.where(nan_scales, E8M0_BIAS, scales_e8m0_array).astype(np.float32)
-    return np.where(nan_scales, np.nan, np.exp2(safe_scales - E8M0_BIAS))
-
-
 def _pack_mxfp8(
     tensor,
     fp8_dtype,
@@ -495,7 +469,7 @@ def _pack_mxfp8(
     )
     scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
 
-    scale_factors = _e8m0_scale_factors(scales_e8m0_array)
+    scale_factors = e8m0_scale_factors(scales_e8m0_array)
 
     # Scale blocks and convert to FP8. With the floor block scale the largest
     # datum can land above the element format's max normal, and the clamp is
@@ -727,7 +701,7 @@ def pack_mxfp4(
     scales_e8m0_array = _mx_shared_exponents(blocks_raw, elem_exp_max_unbiased=2)
     scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
 
-    scale_factors = _e8m0_scale_factors(scales_e8m0_array)
+    scale_factors = e8m0_scale_factors(scales_e8m0_array)
 
     # Scale blocks and convert to FP4 using storage.py-style rounding.
     scaled_blocks = blocks / scale_factors[:, np.newaxis]
@@ -864,7 +838,7 @@ def _mxint_block_scale_and_quantize(
 
     scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
 
-    scale_factors = _e8m0_scale_factors(scales_e8m0_array)
+    scale_factors = e8m0_scale_factors(scales_e8m0_array)
 
     # Scale blocks; saturate Inf to ±2.0 and replace NaN with 0 so that int
     # conversion below can't overflow.
