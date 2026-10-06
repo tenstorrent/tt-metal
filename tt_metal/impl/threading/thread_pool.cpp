@@ -175,9 +175,9 @@ public:
 
     void done() {
         // A worker wakes the joining threads only if one is parked, and only when the count reaches zero.
-        if (pending_.fetch_sub(1, std::memory_order_seq_cst) == 1 &&
-            waiter_parked_.exchange(0, std::memory_order_seq_cst) != 0) {
-            futex_wake_all(waiter_parked_);
+        if (pending_.fetch_sub(1, std::memory_order_seq_cst) == 1 && parked_.load(std::memory_order_seq_cst) != 0) {
+            generation_.fetch_add(1, std::memory_order_release);
+            futex_wake_all(generation_);
         }
     }
 
@@ -194,20 +194,24 @@ public:
         if (pending_.load(std::memory_order_acquire) == 0) {
             return;
         }
+        // seq_cst pairs with done(): either done() sees the waiter registered, or the waiter sees zero.
+        parked_.fetch_add(1, std::memory_order_seq_cst);
         while (true) {
-            // seq_cst pairs with done(): either done() sees the waiter parked, or the waiter sees zero. Only done()
-            // clears the flag, so that a returning waiter can't hide another one that is parked.
-            waiter_parked_.store(1, std::memory_order_seq_cst);
+            // A wake after this load changes the generation, so futex_wait returns at once.
+            const uint32_t generation = generation_.load(std::memory_order_acquire);
             if (pending_.load(std::memory_order_seq_cst) == 0) {
-                return;
+                break;
             }
-            futex_wait(waiter_parked_, 1);
+            futex_wait(generation_, generation);
         }
+        parked_.fetch_sub(1, std::memory_order_relaxed);
     }
 
 private:
     alignas(64) std::atomic<int64_t> pending_ = 0;
-    alignas(64) std::atomic<uint32_t> waiter_parked_ = 0;
+    // Joining threads past the spin, and the futex word they park on.
+    alignas(64) std::atomic<uint32_t> parked_ = 0;
+    std::atomic<uint32_t> generation_ = 0;
 };
 
 // Single-producer, single-consumer ring of tasks.
