@@ -50,7 +50,7 @@ inline void hardmish_init() {
  * @note Call @ref hardmish_init after any other SFPU init that writes vConstFloatPrgm0 or ADDR_MOD_6;
  *       this reads 0.5 from vConstFloatPrgm0 and advances Dest through ADDR_MOD_6.
  */
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void hardmish() {
     static_assert(ITERATIONS % 2 == 0, "hardmish processes two rows per iteration");
 #pragma GCC unroll 4
@@ -63,12 +63,18 @@ inline void hardmish() {
         scale0 = sfpi::clamp(scale0, /*lower*/ 0.0f, /*upper*/ 1.0f);
         scale1 = sfpi::clamp(scale1, 0.0f, 1.0f);
 
-        sfpi::dst_reg[0] = x0 * scale0;
+        sfpi::vFloat result0 = x0 * scale0;
+        sfpi::vFloat result1 = x1 * scale1;
+        if constexpr (!is_fp32_dest_acc_en) {
+            result0 = sfpi::convert<sfpi::vFloat16b>(result0, sfpi::RoundMode::Nearest);
+            result1 = sfpi::convert<sfpi::vFloat16b>(result1, sfpi::RoundMode::Nearest);
+        }
+        sfpi::dst_reg[0] = result0;
 #if defined(MM_THROTTLE) && MM_THROTTLE > 0
-        sfpi::dst_reg[1] = x1 * scale1;
+        sfpi::dst_reg[1] = result1;
         sfpi::dst_reg += 2;
 #else
-        sfpi::dst_reg[1].mode(ADDR_MOD_2) = x1 * scale1;
+        sfpi::dst_reg[1].mode(ADDR_MOD_2) = result1;
 #endif
     }
 }
