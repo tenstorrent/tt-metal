@@ -93,9 +93,8 @@ WEIGHT_DTYPE = ttnn.bfloat16
 
 # The one path kept at higher precision: the router's softmax feeds a top-2 selection, so a
 # near-tie decided by rounding changes which experts a token visits. Rounding the probabilities
-# to bfloat16 before the topk reroutes 0.34% to 0.59% of tokens. ttnn.scatter rejects float32 so a cast
-# is unavoidable, but ttnn.topk takes fp32 and its uint32 index feeds the scatter unchanged, so
-# only the two selected weights are cast, after the selection.
+# to bfloat16 before the topk reroutes 0.34% to 0.59% of tokens. ttnn.topk takes fp32, so only the
+# two selected weights are cast, after the selection, for the bfloat16 gate the experts consume.
 ROUTER_DTYPE = ttnn.float32
 
 # The (1, E, T, F) expert intermediate: the w1 output, the GELU and the w2 input. See the module

@@ -147,7 +147,7 @@ inline void calculate_i1() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void i1_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
     _init_reciprocal_<APPROXIMATION_MODE>();

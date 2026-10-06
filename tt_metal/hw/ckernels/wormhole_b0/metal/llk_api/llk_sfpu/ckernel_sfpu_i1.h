@@ -154,10 +154,15 @@ inline void calculate_i1() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+void init_i1_bf16();
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void i1_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+        init_i1_bf16();
+    }
 }
 
 }  // namespace ckernel::sfpu

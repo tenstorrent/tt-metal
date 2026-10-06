@@ -30,10 +30,7 @@ struct I1Bf16Config {
     static constexpr unsigned kOriginShift = 126u;
     static constexpr unsigned kOriginScaledBits = 1073676288u;
     static constexpr unsigned kLateNegativeNanClass = 1u;
-    static constexpr bool kOdd = true;
-    static constexpr bool kOriginRepair = true;
     static constexpr bool kWormhole = false;
-    static constexpr bool kLateNegativeInf = true;
 
     // Typed domain actions.
     struct TtDomainActionRecord {
@@ -81,6 +78,11 @@ inline bool bf16_dest_i1() {
 template <int ITERATIONS = 8>
 inline void calculate_i1_bf16() {
     ckernel::sfpu::bf16::calculate_exp_root<ckernel::sfpu::I1Bf16Config, ITERATIONS>();
+}
+inline void init_i1_bf16() {
+    if (bf16_dest_i1()) {
+        ckernel::sfpu::bf16::init_exp_root<ckernel::sfpu::I1Bf16Config>();
+    }
 }
 
 }  // namespace ckernel::sfpu

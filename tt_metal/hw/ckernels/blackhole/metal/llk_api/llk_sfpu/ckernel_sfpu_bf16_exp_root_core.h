@@ -28,9 +28,7 @@ inline vFloat exp_root_eval(vFloat x) {
     for (int k = (int)Config::kCoreDegree - 1; k >= 0; --k) {
         core = core * square + Config::kCoreCoefficients[k];
     }
-    if constexpr (Config::kOdd) {
-        core = magnitude * core;
-    }
+    core = magnitude * core;
 
     // Match the fitter's biased one-FMA exponent state exactly.  The fixed
     // shift moves the large coefficient scale into an exact exponent add.
@@ -63,10 +61,8 @@ inline vFloat exp_root_eval(vFloat x) {
     v_endif;
     v_if(magnitude >= Config::kFiniteTerminal) { result = std::numeric_limits<float>::infinity(); }
     v_endif;
-    if constexpr (Config::kOdd) {
-        result = copysgn(result, x);
-    }
-    if constexpr (Config::kOriginRepair) {
+    result = copysgn(result, x);
+    {
         // The joint fitter may certify one x*P(x^2) origin cell whose final FP32
         // product is flushed before destination BF16 RNE.  Compare its derived
         // normal-domain image, then build signed FP32 MIN_NORMAL by clearing the

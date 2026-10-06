@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-// Include inside namespace sfpi. Typed callers retain the domain-action proof.
+// Include inside namespace sfpi.
 
 template <int CODE>
 inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f) {
@@ -23,30 +23,8 @@ inline vFloat target_raw_terminal_value(vFloat computed, float constant = 0.0f) 
     }
 }
 
-// Keep the selected BH conjunction and WH nested predicate distinct.
-template <int Code, bool Nested>
-inline void negative_nan_class_terminal(vUInt raw_u16, vFloat& result) {
-    static_assert(Code >= 0 && Code <= 4, "negative NaN requires a class result");
-    if constexpr (Nested) {
-        vUInt exponent_and_sign_delta = (raw_u16 ^ vUInt(0x80ffu)) & vUInt(0x80ffu);
-        v_if(exponent_and_sign_delta == 0u) {
-            vUInt mantissa = raw_u16 & vUInt(0x7f00u);
-            v_if(mantissa != 0u) { result = target_raw_terminal_value<Code>(result); }
-            v_endif;
-        }
-        v_endif;
-    } else {
-        vUInt exponent_and_sign = raw_u16 & vUInt(0x80ffu);
-        vUInt mantissa = raw_u16 & vUInt(0x7f00u);
-        v_if(exponent_and_sign == vUInt(0x80ffu) && mantissa != 0u) {
-            result = target_raw_terminal_value<Code>(result);
-        }
-        v_endif;
-    }
-}
-
-// Canonical ordered raw-action records. Product callers retain their selected
-// early exits/interleaving and opt into the existing negative-tail narrowing.
+// Ordered actions on raw input classes. Callers choose their own early exits
+// and interleaving, and opt into the negative-tail narrowing.
 template <typename Config, uint32_t INDEX, bool NegativeTailFold = false, typename Float>
 inline void apply_raw_domain_record(Float x_raw, Float& result) {
     constexpr auto record = Config::kDomainActions[INDEX];

@@ -488,7 +488,7 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::i1)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(i1_init<APPROX_MODE>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(i1_init<APPROX_MODE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::signbit)
     {
