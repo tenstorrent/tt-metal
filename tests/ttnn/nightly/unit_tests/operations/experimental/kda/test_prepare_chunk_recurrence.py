@@ -1125,3 +1125,414 @@ def test_prepare_chunk_recurrence_num_key_heads_is_program_identity(device: ttnn
     assert device.num_program_cache_entries() == entries + 1
     for tensor in (*implicit, *explicit, *mapped, *repeated):
         ttnn.deallocate(tensor)
+
+
+# Scalar-decay mode (GDN, tt_metal_tracker-g1b.5.4.2): g holds one FP32 log decay per (V head, token), laid out like
+# beta, [HV, N, 32, 1]; the mode is selected by that shape. The pairwise decay is formed in difference form, masked
+# before the exp, so the mode is exact at any per-chunk decay. The strict xfails of
+# test_prepare_chunk_recurrence_strong_scalar_decay above exercise the per-channel path with a broadcast gate and
+# stay owned by that path.
+def _scalar_decay_oracle(
+    inputs: tuple[torch.Tensor, ...],
+    num_heads: int,
+    output_bf16_mask: int,
+    *,
+    num_key_heads: int | None = None,
+) -> tuple[torch.Tensor, ...]:
+    """FP64 reference for scalar decay, from the FP32 gate as given (cumulative sums included)."""
+    q, k, v, g, beta = inputs
+    num_key_heads = num_heads if num_key_heads is None else num_key_heads
+    num_chunks = beta.shape[1]
+    key_dim = q.shape[-1] // num_key_heads
+    value_dim = v.shape[-1] // num_heads
+    q = _reshape_flat(_expand_key_heads(q, num_key_heads, num_heads), num_heads, num_chunks, key_dim).double()
+    k = _reshape_flat(_expand_key_heads(k, num_key_heads, num_heads), num_heads, num_chunks, key_dim).double()
+    v = _reshape_flat(v, num_heads, num_chunks, value_dim).double()
+    beta = beta.double()
+    q = q * torch.rsqrt(q.square().sum(dim=-1, keepdim=True) + 1e-6) * (key_dim**-0.5)
+    k = k * torch.rsqrt(k.square().sum(dim=-1, keepdim=True) + 1e-6)
+    cumulative = torch.cumsum(g.double()[..., 0], dim=-1)  # [H, N, C]
+    final = cumulative[..., -1:]
+    causal = torch.ones(CHUNK_SIZE, CHUNK_SIZE, dtype=torch.bool).tril()
+    pairwise = torch.exp((cumulative[..., :, None] - cumulative[..., None, :]).masked_fill(~causal, float("-inf")))
+    v_beta = beta * v
+    kd = beta * k * torch.exp(cumulative)[..., None]
+    q_decay = q * torch.exp(cumulative)[..., None]
+    k_dec_t = (k * torch.exp(final - cumulative)[..., None]).transpose(-1, -2)
+    final_decay = torch.expm1(final)[..., None].expand(num_heads, num_chunks, key_dim, 1)
+    akk = (beta * k) @ k.transpose(-1, -2) * pairwise
+    intra = q @ k.transpose(-1, -2) * pairwise
+    identity = torch.eye(CHUNK_SIZE, dtype=torch.float64)
+    t_inv = torch.linalg.inv(identity + torch.tril(akk, diagonal=-1))
+    outputs = (v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv)
+    return tuple(
+        output.to(torch.bfloat16) if output_bf16_mask & (1 << index) else output.float()
+        for index, output in enumerate(outputs)
+    )
+
+
+def _scalar_gate_profile(profile: str, chunk_log_decay: float, generator: torch.Generator) -> torch.Tensor:
+    """One chunk of FP32 per-token log decays summing to about -chunk_log_decay.
+
+    spread: fractional, randomly distributed over the chunk. spike: one token carries nearly all of the decay and
+    the others are small fractional gates, so later tokens pair large cumulative decays with small differences.
+    constant: equal per-token decay (Qwen's input-independent full-forgetting heads are of this kind).
+    """
+    if profile == "spread":
+        weights = -torch.log(torch.rand(CHUNK_SIZE, generator=generator, dtype=torch.float64))
+        gate = -chunk_log_decay * weights / weights.sum()
+    elif profile == "spike":
+        gate = -torch.rand(CHUNK_SIZE, generator=generator, dtype=torch.float64) * (chunk_log_decay / (2 * CHUNK_SIZE))
+        position = int(torch.randint(1, CHUNK_SIZE - 1, (1,), generator=generator))
+        gate[position] = 0.0
+        gate[position] = -(chunk_log_decay + float(gate.sum()))
+    elif profile == "constant":
+        gate = torch.full((CHUNK_SIZE,), -chunk_log_decay / CHUNK_SIZE, dtype=torch.float64)
+    else:
+        raise ValueError(f"unknown gate profile {profile}")
+    assert float(gate.max()) <= 0.0
+    return gate.float()
+
+
+def _scalar_gates(profiles: Sequence[Sequence[tuple[str, float]]], *, seed: int) -> torch.Tensor:
+    """Scalar gate [H, N, 32, 1] FP32 from a per-(head, chunk) table of (profile, |G_last|)."""
+    generator = torch.Generator().manual_seed(seed)
+    return torch.stack(
+        [
+            torch.stack([_scalar_gate_profile(profile, decay, generator) for profile, decay in chunks])
+            for chunks in profiles
+        ]
+    ).unsqueeze(-1)
+
+
+def _scalar_device_inputs(inputs: tuple[torch.Tensor, ...], device: ttnn.Device) -> tuple[ttnn.Tensor, ...]:
+    q, k, v, g, beta = inputs
+    return (
+        _to_device(q, device, ttnn.bfloat16),
+        _to_device(k, device, ttnn.bfloat16),
+        _to_device(v, device, ttnn.bfloat16),
+        _to_device(g, device, ttnn.float32),
+        _to_device(beta, device, ttnn.float32),
+    )
+
+
+def _per_channel_gate(g: torch.Tensor, key_dim: int) -> torch.Tensor:
+    """[H, N, 32, 1] scalar gate -> the equivalent per-channel gate [1, T, H*K], broadcast over K per V head."""
+    num_heads, num_chunks, chunk, _ = g.shape
+    flat = g[..., 0].permute(1, 2, 0).reshape(1, num_chunks * chunk, num_heads, 1)
+    return flat.expand(1, num_chunks * chunk, num_heads, key_dim).reshape(1, num_chunks * chunk, num_heads * key_dim)
+
+
+_SCALAR_DECAY_PEAK_ERROR = _STRONG_DECAY_PEAK_ERROR  # intra 2.5e-4, k_dec_t 3e-3 (FP64 oracle)
+_FINAL_DECAY_RELATIVE_ERROR = 2.0**-7
+
+
+def _assert_scalar_decay_accurate(
+    expected: Sequence[torch.Tensor], actual: Sequence[torch.Tensor], *, context: str
+) -> dict[str, float]:
+    """PCC on every output except final_decay, peak gates on intra/k_dec_t/t_inv, relative gate on final_decay.
+
+    final_decay is constant across a chunk's K rows and can be constant across chunks, so its PCC is undefined;
+    it is gated by the weak-end relative bound instead. Returns the peak absolute error per output.
+    """
+    peaks = {}
+    for name, expected_output, actual_output in zip(OUTPUT_NAMES, expected, actual, strict=True):
+        assert torch.isfinite(actual_output.float()).all(), f"{context} {name} contains nonfinite values"
+        peaks[name] = float((expected_output.float() - actual_output.float()).abs().max())
+        if name == "final_decay":
+            reference = expected_output.double()
+            relative = float(((actual_output.double() - reference).abs() / reference.abs().clamp_min(1e-30)).max())
+            peaks["final_decay_rel"] = relative
+            assert (
+                relative <= _FINAL_DECAY_RELATIVE_ERROR
+            ), f"{context} final_decay rel error {relative:.3e} > {_FINAL_DECAY_RELATIVE_ERROR:.1e}"
+        else:
+            _assert_output_accurate(name, expected_output, actual_output, context=context)
+    logger.info(f"{context}: peak abs error per output {peaks}")
+    for name, threshold in _SCALAR_DECAY_PEAK_ERROR.items():
+        assert peaks[name] <= threshold, f"{context} {name} max abs error {peaks[name]:.3e} > {threshold:.1e}"
+    return peaks
+
+
+def _run_scalar(
+    inputs: tuple[ttnn.Tensor, ...], num_heads: int, device: ttnn.Device, **options
+) -> tuple[torch.Tensor, ...]:
+    outputs = _run(
+        inputs,
+        num_heads,
+        output_bf16_mask=_PRODUCTION_OUTPUT_BF16_MASK,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=_production_compute_config(device),
+        **options,
+    )
+    actual = tuple(ttnn.to_torch(output) for output in outputs)
+    for output in outputs:
+        ttnn.deallocate(output)
+    return actual
+
+
+# Per-chunk |G_last| from below BF16 resolution of exp(G_last) to far beyond the per-channel path's limit (~150):
+# Qwen layer-0 per-chunk maxima 2931 (Qwen3.6-35B-A3B) and 8635 (Qwen3.8-2.4T), and constant full-forgetting heads at
+# 94 and 500 per token. Each case runs spread and spike profiles (fractional FP32 gates) and the constant profile.
+@pytest.mark.parametrize(
+    "chunk_log_decay",
+    [
+        pytest.param(1e-6, id="g1e-6"),
+        pytest.param(1e-3, id="g1e-3"),
+        pytest.param(16.0, id="g16"),
+        pytest.param(160.0, id="g160"),
+        pytest.param(1e3, id="g1e3"),
+        pytest.param(2931.0, id="qwen35b-g2931"),
+        pytest.param(3008.0, id="full-forget94-g3008"),
+        pytest.param(8635.0, id="qwen2p4t-g8635"),
+        pytest.param(1e4, id="g1e4"),
+        pytest.param(16000.0, id="full-forget500-g16000"),
+    ],
+)
+def test_prepare_chunk_recurrence_scalar_decay_range(device: ttnn.Device, chunk_log_decay: float) -> None:
+    num_heads, num_chunks, key_dim, value_dim = 2, 2, 128, 128
+    q, k, v, _, beta = _host_inputs(num_heads, num_chunks, key_dim, value_dim, seed=2209)
+    g = _scalar_gates(
+        [
+            [("spread", chunk_log_decay), ("spike", chunk_log_decay)],
+            [("spike", chunk_log_decay), ("constant", chunk_log_decay)],
+        ],
+        seed=2210,
+    )
+    host_inputs = (q, k, v, g, beta)
+    expected = _scalar_decay_oracle(host_inputs, num_heads, _PRODUCTION_OUTPUT_BF16_MASK)
+    assert all(torch.isfinite(output.float()).all() for output in expected), "oracle must stay finite at any decay"
+    actual = _run_scalar(_scalar_device_inputs(host_inputs, device), num_heads, device)
+    _assert_scalar_decay_accurate(expected, actual, context=f"scalar |G_last|={chunk_log_decay:g}")
+
+
+# Weak end in scalar mode (g1b.7 T3): final_decay carries expm1(G_last), so forgetting below BF16's resolution of 1.0
+# survives storage. One chunk per |G_last|, fractional spread gates.
+def test_prepare_chunk_recurrence_scalar_weak_final_decay(device: ttnn.Device) -> None:
+    num_heads, num_chunks, key_dim, value_dim = 1, len(_WEAK_DECAY_CHUNK_LOG_DECAYS), 128, 128
+    q, k, v, _, beta = _host_inputs(num_heads, num_chunks, key_dim, value_dim, seed=7302)
+    g = _scalar_gates([[("spread", decay) for decay in _WEAK_DECAY_CHUNK_LOG_DECAYS]], seed=7303)
+    actual = _run_scalar(_scalar_device_inputs((q, k, v, g, beta), device), num_heads, device)
+    final_decay = actual[OUTPUT_NAMES.index("final_decay")].double()[..., 0]  # [H, N, K]
+    expected = torch.expm1(g.double()[..., 0].sum(dim=-1))[..., None]  # [H, N, 1]
+    legacy = torch.exp(g.double()[..., 0].sum(dim=-1)).to(torch.bfloat16).double()[..., None] - 1.0
+    failures = []
+    for chunk, chunk_log_decay in enumerate(_WEAK_DECAY_CHUNK_LOG_DECAYS):
+        reference = expected[:, chunk]
+        error = float(((final_decay[:, chunk] - reference).abs() / reference.abs()).max())
+        legacy_error = float(((legacy[:, chunk] - reference).abs() / reference.abs()).max())
+        logger.info(
+            f"scalar |G_last|={chunk_log_decay:.1e}: final_decay rel error {error:.3e} (exp form {legacy_error:.3e})"
+        )
+        if not error <= _FINAL_DECAY_RELATIVE_ERROR:
+            failures.append(f"|G_last|={chunk_log_decay:.1e} rel error {error:.3e}")
+    assert not failures, "; ".join(failures)
+    # Negative control: the gate is sensitive to the exp form at the weak end.
+    assert float((legacy[:, 0] - expected[:, 0]).abs().max() / expected[:, 0].abs().max()) > 0.5
+
+
+def _bf16_scalar_gates(gate_case: str, num_heads: int, num_chunks: int, *, seed: int) -> torch.Tensor:
+    """Scalar gates whose values are exact in BF16, so both modes consume identical gates."""
+    generator = torch.Generator().manual_seed(seed)
+    shape = (num_heads, num_chunks, CHUNK_SIZE, 1)
+    if gate_case == "fractional-0.05":  # the prep's default gate domain, fractional BF16 values
+        g = -0.001 - 0.05 * torch.rand(shape, generator=generator)
+    elif gate_case == "eighths-4.5":  # multiples of 1/8 in [-4.5, 0]: |G_last| <= 144, every exponent TF32-exact
+        g = -torch.randint(0, 37, shape, generator=generator).float() / 8
+    else:
+        raise ValueError(gate_case)
+    return g.to(torch.bfloat16).float()
+
+
+# Scalar mode equals per-channel mode with g broadcast over K wherever the per-channel path is accurate (it loses
+# precision for fractional gates at |G_last| ~ 80-150 and is wrong beyond ~150; see the xfails above).
+@pytest.mark.parametrize("gate_case", ["fractional-0.05", "eighths-4.5"], ids=str)
+def test_prepare_chunk_recurrence_scalar_matches_broadcast(device: ttnn.Device, gate_case: str) -> None:
+    num_heads, num_chunks, key_dim, value_dim = 2, 4, 128, 128
+    q, k, v, _, beta = _host_inputs(num_heads, num_chunks, key_dim, value_dim, seed=2211)
+    g = _bf16_scalar_gates(gate_case, num_heads, num_chunks, seed=2212)
+    scalar = _run_scalar(_scalar_device_inputs((q, k, v, g, beta), device), num_heads, device)
+    broadcast = _run_scalar(_device_inputs((q, k, v, _per_channel_gate(g, key_dim), beta), device), num_heads, device)
+    _assert_outputs_accurate(broadcast, scalar, context=f"scalar vs broadcast {gate_case}")
+    for name, threshold in _SCALAR_DECAY_PEAK_ERROR.items():
+        index = OUTPUT_NAMES.index(name)
+        max_abs = float((broadcast[index].float() - scalar[index].float()).abs().max())
+        logger.info(f"scalar vs broadcast {gate_case} {name}: max abs difference {max_abs:.3e}")
+        assert max_abs <= threshold, f"{gate_case} {name} scalar vs broadcast {max_abs:.3e} > {threshold:.1e}"
+
+
+def _scalar_head_mapping_gates(case: _HeadMappingCase, *, seed: int) -> torch.Tensor:
+    decays = (0.5, 24.0, 300.0)
+    profiles = ("spread", "spike", "constant")
+    return _scalar_gates(
+        [
+            [(profiles[(head + chunk) % 3], decays[(head * 7 + chunk) % 3]) for chunk in range(case.num_chunks)]
+            for head in range(case.num_heads)
+        ],
+        seed=seed,
+    )
+
+
+@pytest.mark.parametrize("case", _HEAD_MAPPING_CASES, ids=lambda case: case.case_id)
+def test_prepare_chunk_recurrence_scalar_decay_head_mapping_equals_expansion(
+    device: ttnn.Device, case: _HeadMappingCase
+) -> None:
+    q, k, v, _, beta = _head_mapping_host_inputs(case, seed=5405)
+    host_inputs = (q, k, v, _scalar_head_mapping_gates(case, seed=5406), beta)
+    mapped = _run_scalar(
+        _scalar_device_inputs(host_inputs, device), case.num_heads, device, num_key_heads=case.num_key_heads
+    )
+    expanded_inputs = _expanded_inputs(host_inputs, case.num_key_heads, case.num_heads)
+    expanded = _run_scalar(_scalar_device_inputs(expanded_inputs, device), case.num_heads, device)
+    for name, mapped_output, expanded_output in zip(OUTPUT_NAMES, mapped, expanded, strict=True):
+        assert_bit_identical(expanded_output, mapped_output, name=f"{case.case_id} scalar {name}")
+
+
+def test_prepare_chunk_recurrence_scalar_decay_bounded_reference(device: ttnn.Device) -> None:
+    """Scalar mode with head mapping and chronology: nonzero actual_start, actual_end mid-sequence, FP64 oracle."""
+    case = _HeadMappingCase("scalar-hk4-hv12", 4, 12, 20, 128, 128)
+    start_row, valid_chunks = 64, 13
+    q, k, v, _, beta = _head_mapping_host_inputs(case, seed=5407)
+    host_inputs = (q, k, v, _scalar_head_mapping_gates(case, seed=5408), beta)
+    valid_rows = valid_chunks * CHUNK_SIZE
+    valid_inputs = (q[:, :valid_rows], k[:, :valid_rows], v[:, :valid_rows], host_inputs[3][:, :valid_chunks])
+    valid_inputs += (beta[:, :valid_chunks],)
+    expected = _scalar_decay_oracle(
+        valid_inputs, case.num_heads, _PRODUCTION_OUTPUT_BF16_MASK, num_key_heads=case.num_key_heads
+    )
+    start = make_actual_start(device, start_row)
+    end = make_actual_start(device, start_row + valid_rows)
+    actual = _run_scalar(
+        _scalar_device_inputs(host_inputs, device),
+        case.num_heads,
+        device,
+        num_key_heads=case.num_key_heads,
+        actual_start=start,
+        actual_end=end,
+    )
+    # Chunks past actual_end are unspecified; compare the valid prefix.
+    _assert_scalar_decay_accurate(expected, tuple(output[:, :valid_chunks] for output in actual), context=case.case_id)
+    for tensor in (start, end):
+        ttnn.deallocate(tensor)
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("scalar_bf16", "scalar-decay g must be FLOAT32"),
+        ("scalar_width", "scalar-decay g shape must be"),
+        ("scalar_heads", "scalar-decay g shape must be"),
+        ("scalar_chunks", "scalar-decay g shape must be"),
+        ("gate_rank", "g must be either"),
+    ],
+    ids=["scalar-bf16", "scalar-width", "scalar-heads", "scalar-chunks", "gate-rank"],
+)
+def test_prepare_chunk_recurrence_scalar_decay_rejects_invalid_gates(
+    device: ttnn.Device, expect_error: Callable, case: str, message: str
+) -> None:
+    """Rejected before any program is built: the program cache does not grow."""
+    num_heads, num_chunks = 2, 2
+    q, k, v, g, beta = _host_inputs(num_heads, num_chunks, 32, 32)
+    scalar = torch.zeros(num_heads, num_chunks, CHUNK_SIZE, 1) - 0.25
+    inputs = list(_scalar_device_inputs((q, k, v, scalar, beta), device))
+    if case == "scalar_bf16":
+        inputs[3] = _to_device(scalar, device, ttnn.bfloat16)
+    elif case == "scalar_width":
+        inputs[3] = _to_device(scalar.expand(-1, -1, -1, 2).contiguous(), device, ttnn.float32)
+    elif case == "scalar_heads":
+        inputs[3] = _to_device(scalar[:1], device, ttnn.float32)
+    elif case == "scalar_chunks":
+        inputs[3] = _to_device(scalar[:, :1], device, ttnn.float32)
+    elif case == "gate_rank":
+        inputs[3] = _to_device(g[0], device, ttnn.bfloat16)
+    entries = device.num_program_cache_entries()
+    with expect_error(RuntimeError, message):
+        _run(tuple(inputs), num_heads)
+    assert device.num_program_cache_entries() == entries
+
+
+def test_prepare_chunk_recurrence_decay_mode_is_program_identity(device: ttnn.Device) -> None:
+    """The decay mode selects a distinct program; a repeated scalar call with fresh tensors hits it and rebinds."""
+    num_heads, num_chunks, key_dim, value_dim = 2, 3, 64, 32
+    host_a = _host_inputs(num_heads, num_chunks, key_dim, value_dim, seed=5409)
+    host_b = _host_inputs(num_heads, num_chunks, key_dim, value_dim, seed=5410)
+    gates = [
+        [("spread", 40.0), ("spike", 400.0), ("constant", 4.0)],
+        [("spike", 3.0), ("spread", 900.0), ("constant", 0.01)],
+    ]
+    scalar_a = (*host_a[:3], _scalar_gates(gates, seed=5411), host_a[4])
+    scalar_b = (*host_b[:3], _scalar_gates(gates[::-1], seed=5412), host_b[4])
+    per_channel = _run(_device_inputs(host_a, device), num_heads)
+    entries = device.num_program_cache_entries()
+    inputs_a = _scalar_device_inputs(scalar_a, device)
+    outputs_a = _run(inputs_a, num_heads)
+    assert device.num_program_cache_entries() == entries + 1
+    inputs_b = _scalar_device_inputs(scalar_b, device)
+    outputs_b = _run(inputs_b, num_heads)
+    assert device.num_program_cache_entries() == entries + 1
+    assert all(a.buffer_address() != b.buffer_address() for a, b in zip(inputs_a, inputs_b, strict=True))
+    assert all(a.buffer_address() != b.buffer_address() for a, b in zip(outputs_a, outputs_b, strict=True))
+    for host, outputs, context in ((scalar_a, outputs_a, "scalar miss"), (scalar_b, outputs_b, "scalar hit fresh")):
+        _assert_scalar_decay_accurate(
+            _scalar_decay_oracle(host, num_heads, 0),
+            tuple(ttnn.to_torch(output) for output in outputs),
+            context=context,
+        )
+    for tensor in (*per_channel, *outputs_a, *outputs_b):
+        ttnn.deallocate(tensor)
+
+
+# Op-level device time of the two decay modes at the GDN per-chip shapes (TP4, 640 rows, Hk = 4): scalar mode against
+# per-channel mode on the same gate broadcast over K. References are medians of three runs (2026-10-05, LoudBox p150b,
+# tt_metal_tracker-g1b.5.4.2); margin as the production case.
+_GDN_PERFORMANCE_CASES = tuple(case for case in _HEAD_MAPPING_CASES if "chip" in case.case_id)
+_GDN_EXPECTED_DURATION_NS = {
+    ("27b-chip-hk4-hv12", "scalar"): 102_333,
+    ("27b-chip-hk4-hv12", "per-channel"): 172_070,
+    ("35b-chip-hk4-hv8", "scalar"): 79_821,
+    ("35b-chip-hk4-hv8", "per-channel"): 124_123,
+    ("2p4t-chip-hk4-hv32", "scalar"): 264_507,
+    ("2p4t-chip-hk4-hv32", "per-channel"): 312_969,
+}
+
+
+@pytest.mark.requires_host_iommu
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+@pytest.mark.parametrize("decay_mode", ["scalar", "per-channel"], ids=str)
+@pytest.mark.parametrize("case", _GDN_PERFORMANCE_CASES, ids=lambda case: case.case_id)
+def test_prepare_chunk_recurrence_gdn_decay_mode_performance(
+    device: ttnn.Device, case: _HeadMappingCase, decay_mode: str
+) -> None:
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail("Real-time profiler must be active for chunk-recurrence preparation performance checks")
+    q, k, v, _, beta = _head_mapping_host_inputs(case, seed=118)
+    gate = _scalar_head_mapping_gates(case, seed=119)
+    if decay_mode == "scalar":
+        inputs = _scalar_device_inputs((q, k, v, gate, beta), device)
+    else:
+        inputs = _device_inputs((q, k, v, _per_channel_gate(gate, case.key_dim), beta), device)
+
+    def run() -> list[ttnn.Tensor]:
+        return _run(
+            inputs,
+            case.num_heads,
+            num_key_heads=case.num_key_heads,
+            output_bf16_mask=_PRODUCTION_OUTPUT_BF16_MASK,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=_production_compute_config(device),
+        )
+
+    outputs, perf_record = profile_realtime_program(device, run)
+    duration_ns = perf_record["duration_ns"]
+    assert len(outputs) == 7
+    reference = _GDN_EXPECTED_DURATION_NS[(case.case_id, decay_mode)]
+    logger.info(
+        f"chunk-recurrence preparation {case.case_id} {decay_mode}: measured_ns={duration_ns:.0f}, "
+        f"reference_ns={reference}, runtime_id={perf_record['runtime_id']}"
+    )
+    upper = reference * (1 + _PERFORMANCE_MARGIN)
+    assert duration_ns <= upper, (
+        f"{case.case_id} {decay_mode} duration {duration_ns:.0f} ns exceeds {upper:.0f} ns "
+        f"(reference {reference} ns, margin {_PERFORMANCE_MARGIN * 100:.0f}%)"
+    )

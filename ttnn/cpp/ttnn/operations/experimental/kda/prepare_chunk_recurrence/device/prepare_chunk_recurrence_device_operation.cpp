@@ -38,9 +38,14 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     check_layout(in.v, Layout::TILE, operation_name, "v");
     check_dtype(in.v, DataType::BFLOAT16, operation_name, "v");
     check_interleaved(in.v, operation_name, "v");
+    const bool scalar_decay = attrs.decay_mode == PrepareChunkRecurrenceDecayMode::Scalar;
     check_allocated_device_tensor(in.g, operation_name, "g");
     check_layout(in.g, Layout::TILE, operation_name, "g");
-    check_dtype(in.g, DataType::BFLOAT16, operation_name, "g");
+    if (scalar_decay) {
+        check_dtype(in.g, DataType::FLOAT32, operation_name, "scalar-decay g");
+    } else {
+        check_dtype(in.g, DataType::BFLOAT16, operation_name, "g");
+    }
     check_interleaved(in.g, operation_name, "g");
     check_allocated_device_tensor(in.beta, operation_name, "beta");
     check_layout(in.beta, Layout::TILE, operation_name, "beta");
@@ -59,14 +64,19 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     const auto& g_shape = in.g.logical_shape();
     const auto& beta_shape = in.beta.logical_shape();
     TT_FATAL(
-        q_shape.rank() == 3 && k_shape.rank() == 3 && v_shape.rank() == 3 && g_shape.rank() == 3,
-        "prepare_chunk_recurrence: q, k, v, and g must be rank 3 production-flat tensors");
+        g_shape.rank() == (scalar_decay ? 4 : 3),
+        "prepare_chunk_recurrence: g must be either [1, T, num_heads * K] BFLOAT16 (per-channel decay) or "
+        "[num_heads, num_chunks, 32, 1] FLOAT32 (scalar decay), got shape {}",
+        g_shape);
     TT_FATAL(
-        q_shape[0] == 1 && k_shape[0] == 1 && v_shape[0] == 1 && g_shape[0] == 1,
-        "prepare_chunk_recurrence: q, k, v, and g must have leading dimension 1");
+        q_shape.rank() == 3 && k_shape.rank() == 3 && v_shape.rank() == 3,
+        "prepare_chunk_recurrence: q, k, and v must be rank 3 production-flat tensors");
+    TT_FATAL(
+        q_shape[0] == 1 && k_shape[0] == 1 && v_shape[0] == 1 && (scalar_decay || g_shape[0] == 1),
+        "prepare_chunk_recurrence: q, k, v, and per-channel g must have leading dimension 1");
     TT_FATAL(k_shape == q_shape, "prepare_chunk_recurrence: q and k must have matching shapes");
     TT_FATAL(
-        v_shape[1] == q_shape[1] && g_shape[1] == q_shape[1],
+        v_shape[1] == q_shape[1] && (scalar_decay || g_shape[1] == q_shape[1]),
         "prepare_chunk_recurrence: q, k, v, and g must have matching sequence lengths");
     TT_FATAL(
         q_shape[1] > 0 && q_shape[1] % tt::constants::TILE_HEIGHT == 0,
@@ -85,12 +95,24 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
         attrs.key_dim > 0 && attrs.value_dim > 0 && attrs.key_dim % tt::constants::TILE_WIDTH == 0 &&
             attrs.value_dim % tt::constants::TILE_WIDTH == 0,
         "prepare_chunk_recurrence: K and V must be positive and tile aligned");
-    TT_FATAL(
-        g_shape[2] == attrs.num_heads * attrs.key_dim,
-        "prepare_chunk_recurrence: g must be per V head: width num_heads times K, got {} for num_heads {} and K {}",
-        g_shape[2],
-        attrs.num_heads,
-        attrs.key_dim);
+    if (scalar_decay) {
+        TT_FATAL(
+            g_shape[0] == attrs.num_heads && g_shape[1] == attrs.num_chunks &&
+                g_shape[2] == tt::constants::TILE_HEIGHT && g_shape[3] == 1,
+            "prepare_chunk_recurrence: scalar-decay g shape must be [num_heads, num_chunks, 32, 1] = [{}, {}, 32, 1], "
+            "got {}",
+            attrs.num_heads,
+            attrs.num_chunks,
+            g_shape);
+    } else {
+        TT_FATAL(
+            g_shape[2] == attrs.num_heads * attrs.key_dim,
+            "prepare_chunk_recurrence: g must be per V head: width num_heads times K, got {} for num_heads {} and K "
+            "{}",
+            g_shape[2],
+            attrs.num_heads,
+            attrs.key_dim);
+    }
     TT_FATAL(
         q_shape[2] == attrs.num_key_heads * attrs.key_dim && v_shape[2] == attrs.num_heads * attrs.value_dim &&
             q_shape[1] == attrs.num_chunks * tt::constants::TILE_HEIGHT,
@@ -146,6 +168,8 @@ PrepareChunkRecurrenceOperation::create_op_performance_model(
     // inverse. G = cumsum(g) counts as (C-1)*K additions, and G_last is G's last row, so it costs nothing.
     // The kernel computes both as [C,C]@[C,K] matmuls (prefix mask and sum broadcast), adding 4*C*C*K
     // matrix FLOPs. That is implementation cost and part of the measured gap, not the theoretical bound.
+    // Scalar decay mode shares the matrix work; its gate terms scale with C instead of C*K (under 1% of the
+    // per-channel FPU work at K >= 32) and are not modelled separately.
     constexpr double chunk = tt::constants::TILE_HEIGHT;
     constexpr double inverse_flops = chunk * (chunk - 1.0) * (chunk + 1.0) / 3.0;
     const double instances = static_cast<double>(attrs.num_heads) * attrs.num_chunks;
@@ -203,9 +227,13 @@ std::vector<Tensor> prepare_chunk_recurrence(
     const uint32_t num_chunks = q_shape[1] / tt::constants::TILE_HEIGHT;
     const uint32_t key_dim = q_shape[2] / num_key_heads;
     const uint32_t value_dim = v_shape[2] / num_heads;
+    // The decay mode follows g's shape: rank-4 g is the scalar (beta-layout) gate. Validation checks the rest.
+    const auto decay_mode = g.logical_shape().rank() == 4 ? PrepareChunkRecurrenceDecayMode::Scalar
+                                                          : PrepareChunkRecurrenceDecayMode::PerChannel;
     return ttnn::device_operation::launch<PrepareChunkRecurrenceOperation>(
         PrepareChunkRecurrenceParams{
             .sequence_parallel_axis = sequence_parallel_axis,
+            .decay_mode = decay_mode,
             .num_heads = num_heads,
             .num_key_heads = num_key_heads,
             .num_chunks = num_chunks,

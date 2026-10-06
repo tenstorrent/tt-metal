@@ -31,8 +31,15 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
             q (ttnn.Tensor): Flat queries ``[1, T, Hk*K]`` in BFLOAT16.
             k (ttnn.Tensor): Flat keys ``[1, T, Hk*K]`` in BFLOAT16.
             v (ttnn.Tensor): Flat values ``[1, T, H*V]`` in BFLOAT16.
-            g (ttnn.Tensor): Flat per-key log decays ``[1, T, H*K]`` in BFLOAT16, per
-                value head.
+            g (ttnn.Tensor): Log decays (``g <= 0``) in one of two layouts, which select
+                the decay mode:
+
+                * per-channel: flat per-key log decays ``[1, T, H*K]`` in BFLOAT16, per
+                  value head (KDA);
+                * scalar: one log decay per value head and token, ``[H, N, 32, 1]`` in
+                  FLOAT32, laid out like ``beta`` (GDN). The pairwise decay is formed in
+                  difference form, so this mode stays exact at any per-chunk decay. The
+                  outputs equal the per-channel call with ``g`` broadcast over K.
             beta (ttnn.Tensor): Per-token update strengths ``[H, N, 32, 1]`` in
                 FLOAT32, where ``N = T / 32``.
             num_heads (int): Number of value heads ``H``; outputs are per value head.
@@ -61,7 +68,8 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
                 * ``intra[H,N,32,32]``
                 * ``k_dec_t[H,N,K,32]``
                 * ``final_decay[H,N,K,1]``: ``expm1(G_last) = exp(G_last) - 1``, the
-                  end-of-chunk decay in complement form
+                  end-of-chunk decay in complement form (the same value in every K row in
+                  scalar mode)
                 * ``t_inv[H,N,32,32]``
 
         Note:
