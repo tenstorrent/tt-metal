@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -32,6 +33,8 @@ struct ManifestRouterInputs {
     const StreamAssignment& stream_assignment;
     // get_fabric_router_addresses_to_clear()
     const std::vector<size_t>& addresses_to_clear;
+    // The router kernel's defines, the same on every RISC.
+    std::map<std::string, std::string> kernel_defines;
     // Indexed by RISC id, one per RISC the router runs.
     std::vector<std::unordered_map<std::string, uint32_t>> named_ct_args_per_risc;
 };
