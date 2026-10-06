@@ -1531,7 +1531,7 @@ class MAX_POOL_CHUNK(RuntimeParameter):
 
 @dataclass
 class SIGN_MAGNITUDE_FORMAT(TemplateParameter):
-    """Quant-family SMAG32 datapath toggle; read only by the quant binary ops."""
+    """SMAG32 Dest datapath toggle; read only by the quant binary ops and LCM."""
 
     sign_magnitude: bool = False
 
