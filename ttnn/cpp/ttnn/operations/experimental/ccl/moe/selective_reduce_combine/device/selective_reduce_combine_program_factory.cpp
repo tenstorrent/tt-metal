@@ -178,7 +178,7 @@ tt::tt_fabric::FabricMuxConfig get_fabric_mux_config(
 
 auto launch_mux_workers(
     const MeshDevice& mesh_device,
-    const CoreRangeSet& mux_core_range_set,
+    const tt::tt_metal::CoreRangeSet& mux_core_range_set,
     const tt::tt_fabric::FabricNodeId src_node_id,
     const std::vector<ttnn::MeshCoordinate>& neighbors,
     const uint32_t num_links,
@@ -256,13 +256,13 @@ auto launch_mux_workers(
             .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
-    std::vector<std::map<ttnn::MeshCoordinate, CoreCoord>> mux_neigbor_core_maps;
+    std::vector<std::map<ttnn::MeshCoordinate, tt::tt_metal::CoreCoord>> mux_neigbor_core_maps;
     mux_neigbor_core_maps.reserve(num_links);
 
     const auto mux_cores = corerange_to_cores(needed_mux_core_range_set);
     auto mux_core_iter = mux_cores.begin();
     for (uint32_t link = 0; link < num_links; ++link) {
-        std::map<ttnn::MeshCoordinate, CoreCoord> mux_neigbor_core_map;
+        std::map<ttnn::MeshCoordinate, tt::tt_metal::CoreCoord> mux_neigbor_core_map;
         for (const auto& neighbor_coord : neighbors) {
             auto mux_logical_core = *(mux_core_iter++);
             const auto mux_virtual_core = mesh_device.worker_core_from_logical_core(mux_logical_core);
@@ -282,7 +282,8 @@ auto launch_mux_workers(
 }
 
 void add_termination_master_rt_args(
-    const std::map<ttnn::MeshCoordinate, CoreCoord>& mux_neigbor_core_map, std::vector<uint32_t>& writer_runtime_args) {
+    const std::map<ttnn::MeshCoordinate, tt::tt_metal::CoreCoord>& mux_neigbor_core_map,
+    std::vector<uint32_t>& writer_runtime_args) {
     for (const auto& c : mux_neigbor_core_map) {
         const auto& mux_virtual_core = c.second;
         writer_runtime_args.push_back(mux_virtual_core.x);
@@ -339,7 +340,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     tt::tt_metal::Program program{};
     const ttnn::CoreRangeSet worker_core_range_set(operation_attributes.worker_cores);
     const uint32_t metadata_sync_semaphore_id =
-        tt::tt_metal::CreateSemaphore(program, CoreRangeSet(worker_core_range_set.bounding_box()), 1);
+        tt::tt_metal::CreateSemaphore(program, tt::tt_metal::CoreRangeSet(worker_core_range_set.bounding_box()), 1);
     const uint32_t compute_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range_set, 0);
     auto artifacts = build_selective_reduce_combine_program_artifacts(
         program,
@@ -400,7 +401,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const uint32_t metadata_sync_semaphore_id,
     const uint32_t compute_sync_semaphore_id,
     const uint32_t compute_cores_per_combine_core,
-    const std::optional<std::vector<CoreCoord>>& compute_cores_by_ring_id) {
+    const std::optional<std::vector<tt::tt_metal::CoreCoord>>& compute_cores_by_ring_id) {
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
     using namespace ttnn::ccl;
@@ -474,7 +475,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto& data_parallel_sizes_bytes = worker_layout.data_parallel_sizes_bytes;
     num_data_parallel_cores = worker_layout.num_data_parallel_cores;
     const auto num_worker_cores = worker_layout.num_worker_cores;
-    const std::vector<CoreCoord> sender_cores(worker_cores.begin(), worker_cores.begin() + num_worker_cores);
+    const std::vector<tt::tt_metal::CoreCoord> sender_cores(
+        worker_cores.begin(), worker_cores.begin() + num_worker_cores);
     const ttnn::CoreRangeSet needed_worker_core_range_set(sender_cores);
 
     // buffer padding NOT supported because we don't rely on tensor shapes to represent the data layout
@@ -923,7 +925,7 @@ void selective_reduce_combine_helper_override_runtime_arguments(
     tt::tt_metal::KernelHandle reader_kernel_id,
     tt::tt_metal::KernelHandle writer_kernel_id,
     tt::tt_metal::CBHandle data_cb_handle,
-    const std::vector<CoreCoord>& cores,
+    const std::vector<tt::tt_metal::CoreCoord>& cores,
     const experimental::prim::SelectiveReduceCombineTensors& tensor_args,
     Tensor& tensor_return_value,
     uint32_t init_semaphore_addr,

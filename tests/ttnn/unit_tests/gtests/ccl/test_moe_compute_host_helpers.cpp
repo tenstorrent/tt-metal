@@ -238,11 +238,11 @@ TEST(MoEComputeHostHelpers, ChunkHalvesAreTwoTodayAndRingsPlusOne) {
 // row's cores end up on distinct channels.
 TEST(MoEComputeHostHelpers, RingCoreVchannelsAreDistinctWithinARowAndUnchangedOnRingZero) {
     using tt::tt_metal::CoreCoord;
-    const std::vector<CoreCoord> ring0 = {{6, 9}, {0, 9}, {0, 7}, {6, 6}, {6, 4}, {0, 3}, {6, 1}, {0, 0}};
+    const std::vector<tt::tt_metal::CoreCoord> ring0 = {{6, 9}, {0, 9}, {0, 7}, {6, 6}, {6, 4}, {0, 3}, {6, 1}, {0, 0}};
     const auto one_ring = ttnn::operations::ccl::common::ring_core_vchannels(ring0, 8);
     EXPECT_EQ(one_ring, (std::vector<uint32_t>{0, 1, 2, 3, 0, 1, 2, 3}));
 
-    std::vector<CoreCoord> two_rings = ring0;
+    std::vector<tt::tt_metal::CoreCoord> two_rings = ring0;
     for (const auto& c : ring0) {
         two_rings.emplace_back(c.x == 0 ? 1 : 5, c.y);
     }
@@ -259,7 +259,7 @@ TEST(MoEComputeHostHelpers, RingCoreVchannelsAreDistinctWithinARowAndUnchangedOn
     }
 
     // three rings: six cores on a row, the four channels repeat at most twice on any row
-    std::vector<CoreCoord> three_rings = two_rings;
+    std::vector<tt::tt_metal::CoreCoord> three_rings = two_rings;
     for (const auto& c : ring0) {
         three_rings.emplace_back(c.x == 0 ? 2 : 4, c.y);
     }

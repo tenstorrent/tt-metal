@@ -56,24 +56,24 @@ uint32_t get_num_rows_st(const ttnn::Tensor& tensor) {
 std::tuple<
     std::vector<tt::tt_metal::CoreCoord>,  // T cores
     std::vector<tt::tt_metal::CoreCoord>,  // MM cores
-    CoreRangeSet,                          // T CoreRangeSet
-    CoreRangeSet,                          // MM CoreRangeSet
-    CoreRangeSet,                          // T + MM CoreRangeSet
-    CoreRangeSet,                          // Combine CoreRangeSet
-    CoreRangeSet,                          // C + MM CoreRangeSet
-    CoreRangeSet,                          // All worker cores (T + MM + C)
+    tt::tt_metal::CoreRangeSet,            // T CoreRangeSet
+    tt::tt_metal::CoreRangeSet,            // MM CoreRangeSet
+    tt::tt_metal::CoreRangeSet,            // T + MM CoreRangeSet
+    tt::tt_metal::CoreRangeSet,            // Combine CoreRangeSet
+    tt::tt_metal::CoreRangeSet,            // C + MM CoreRangeSet
+    tt::tt_metal::CoreRangeSet,            // All worker cores (T + MM + C)
     std::vector<tt::tt_metal::CoreCoord>,  // Combine vector of CoreCoord
-    CoreRange,                             // T bounding box
-    CoreRange,                             // MM bounding box
+    tt::tt_metal::CoreRange,               // T bounding box
+    tt::tt_metal::CoreRange,               // MM bounding box
     std::vector<tt::tt_metal::CoreCoord>,  // every prefill ring's cores, ring-major (ring 0 = MM)
-    CoreRangeSet>                          // their CoreRangeSet
+    tt::tt_metal::CoreRangeSet>            // their CoreRangeSet
 get_cores(
     ttnn::MeshDevice* mesh_device,
     const uint32_t combine_token_parallel_cores,
     uint32_t combine_data_parallel_cores,
     uint32_t hidden_size,
     uint32_t bh_ring_size,
-    const CoreRangeSet& mux_core_range_set,
+    const tt::tt_metal::CoreRangeSet& mux_core_range_set,
     uint32_t prefill_rings) {
     const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
         mesh_device,
@@ -125,7 +125,7 @@ std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     const uint32_t combine_token_parallel_cores,
     const uint32_t combine_data_parallel_cores,
     const uint32_t hidden_size,
-    const CoreRangeSet& mux_core_range_set,
+    const tt::tt_metal::CoreRangeSet& mux_core_range_set,
     const uint32_t bh_ring_size) {
     const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
         mesh_device,
@@ -142,7 +142,7 @@ ttnn::CoreCoord get_moe_tilize_drain_core(
     const uint32_t combine_token_parallel_cores,
     const uint32_t combine_data_parallel_cores,
     const uint32_t hidden_size,
-    const CoreRangeSet& mux_core_range_set,
+    const tt::tt_metal::CoreRangeSet& mux_core_range_set,
     const uint32_t bh_ring_size) {
     const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
         mesh_device,
@@ -160,7 +160,7 @@ ttnn::CoreRange get_moe_worker_mcast_bounding_box(
     const uint32_t combine_token_parallel_cores,
     const uint32_t combine_data_parallel_cores,
     const uint32_t hidden_size,
-    const CoreRangeSet& mux_core_range_set,
+    const tt::tt_metal::CoreRangeSet& mux_core_range_set,
     const uint32_t bh_ring_size) {
     const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
         mesh_device,
@@ -364,7 +364,8 @@ MoEComputeMeshWorkloadFactory::create_at(
                 combine_data_parallel_cores,
                 hidden_size,
                 args.bh_ring_size,
-                args.combine_params.has_value() ? args.combine_params->mux_core_range_set : CoreRangeSet{},
+                args.combine_params.has_value() ? args.combine_params->mux_core_range_set
+                                                : tt::tt_metal::CoreRangeSet{},
                 args.prefill_rings);
 
     const uint32_t tilize_num_cores = tilize_core_range_set.num_cores();
@@ -427,7 +428,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     // inside or outside the matmul bounding-box rectangle (not merely bbox intersection).
     bool any_sender_inside = false;
     bool any_sender_outside = false;
-    const auto check_matmul_mcast_sender = [&](const CoreCoord& sender) {
+    const auto check_matmul_mcast_sender = [&](const tt::tt_metal::CoreCoord& sender) {
         if (matmul_bounding_box.contains(sender)) {
             any_sender_inside = true;
         } else {
@@ -449,27 +450,29 @@ MoEComputeMeshWorkloadFactory::create_at(
         any_sender_inside ? matmul_bounding_box_num_cores - 1 : matmul_bounding_box_num_cores;
 
     // All worker cores bounding box
-    const CoreRange all_worker_cores_bounding_box = all_worker_cores_range_set.bounding_box();
+    const tt::tt_metal::CoreRange all_worker_cores_bounding_box = all_worker_cores_range_set.bounding_box();
     const uint32_t all_worker_cores_bounding_box_num_cores = all_worker_cores_bounding_box.size();
 
     // Logical mcast bounding box coordinates
-    const CoreCoord tilize_mcast_start_logical = tilize_bounding_box.start_coord;
-    const CoreCoord tilize_mcast_end_logical = tilize_bounding_box.end_coord;
-    const CoreCoord matmul_mcast_start_logical = matmul_bounding_box.start_coord;
-    const CoreCoord matmul_mcast_end_logical = matmul_bounding_box.end_coord;
-    const CoreCoord all_worker_cores_mcast_start_logical = all_worker_cores_bounding_box.start_coord;
-    const CoreCoord all_worker_cores_mcast_end_logical = all_worker_cores_bounding_box.end_coord;
+    const tt::tt_metal::CoreCoord tilize_mcast_start_logical = tilize_bounding_box.start_coord;
+    const tt::tt_metal::CoreCoord tilize_mcast_end_logical = tilize_bounding_box.end_coord;
+    const tt::tt_metal::CoreCoord matmul_mcast_start_logical = matmul_bounding_box.start_coord;
+    const tt::tt_metal::CoreCoord matmul_mcast_end_logical = matmul_bounding_box.end_coord;
+    const tt::tt_metal::CoreCoord all_worker_cores_mcast_start_logical = all_worker_cores_bounding_box.start_coord;
+    const tt::tt_metal::CoreCoord all_worker_cores_mcast_end_logical = all_worker_cores_bounding_box.end_coord;
 
     // Convert to physical NOC coordinates
-    const CoreCoord tilize_mcast_start_physical =
+    const tt::tt_metal::CoreCoord tilize_mcast_start_physical =
         mesh_device->worker_core_from_logical_core(tilize_mcast_start_logical);
-    const CoreCoord tilize_mcast_end_physical = mesh_device->worker_core_from_logical_core(tilize_mcast_end_logical);
-    const CoreCoord matmul_mcast_start_physical =
+    const tt::tt_metal::CoreCoord tilize_mcast_end_physical =
+        mesh_device->worker_core_from_logical_core(tilize_mcast_end_logical);
+    const tt::tt_metal::CoreCoord matmul_mcast_start_physical =
         mesh_device->worker_core_from_logical_core(matmul_mcast_start_logical);
-    const CoreCoord matmul_mcast_end_physical = mesh_device->worker_core_from_logical_core(matmul_mcast_end_logical);
-    const CoreCoord all_worker_cores_mcast_start_physical =
+    const tt::tt_metal::CoreCoord matmul_mcast_end_physical =
+        mesh_device->worker_core_from_logical_core(matmul_mcast_end_logical);
+    const tt::tt_metal::CoreCoord all_worker_cores_mcast_start_physical =
         mesh_device->worker_core_from_logical_core(all_worker_cores_mcast_start_logical);
-    const CoreCoord all_worker_cores_mcast_end_physical =
+    const tt::tt_metal::CoreCoord all_worker_cores_mcast_end_physical =
         mesh_device->worker_core_from_logical_core(all_worker_cores_mcast_end_logical);
 
     //-------------------------------------------------------------------------
@@ -543,7 +546,9 @@ MoEComputeMeshWorkloadFactory::create_at(
     // tilize_reader still calls get_semaphore() on it (a local L1 address lookup), so we still need
     // it to be allocated on at least the matmul core range set.
     const auto tilize_combine_sync_semaphore_id = tt::tt_metal::CreateSemaphore(
-        program, combine_built ? CoreRangeSet(combine_core_range_set.bounding_box()) : ring_core_range_set, INVALID);
+        program,
+        combine_built ? tt::tt_metal::CoreRangeSet(combine_core_range_set.bounding_box()) : ring_core_range_set,
+        INVALID);
 
     // Matmul dm1 signals combine cores when data is written; combine writer waits on this semaphore.
     // For double buffering, combine cores will also use this semaphore to signal matmul when buffer segments are free.
@@ -589,7 +594,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     uint32_t per_expert_total_tokens_cb_id = tt::CBIndex::c_2;
 
     // All cores (not just Tilize and Matmul)
-    const CoreRangeSet shard_cores = tilize_output_tensor.memory_config().shard_spec()->grid;
+    const tt::tt_metal::CoreRangeSet shard_cores = tilize_output_tensor.memory_config().shard_spec()->grid;
     const uint32_t shared_cb_num_pages = output_pages / shard_cores.num_cores();
     TT_FATAL(
         shared_cb_num_pages == chunk_halves * hidden_tiles,
@@ -927,7 +932,7 @@ MoEComputeMeshWorkloadFactory::create_at(
             args.has_bias ? intermediate_tiles + 1 : intermediate_tiles,
             matmul_num_cores,
             weight_tiles_per_txn);
-        std::map<uint32_t, std::vector<CoreRange>> cores_by_slice_blocks;
+        std::map<uint32_t, std::vector<tt::tt_metal::CoreRange>> cores_by_slice_blocks;
         for (uint32_t dram_bank = 0; dram_bank < matmul_num_cores; ++dram_bank) {
             const uint32_t ring_pos = bank2ring_pos[dram_bank].first;
             const uint32_t cols = moe_ring::w0_w1_stored_cols(intermediate_tiles, ring_pos, matmul_num_cores);
@@ -957,7 +962,7 @@ MoEComputeMeshWorkloadFactory::create_at(
                 slice_bytes,
                 ranges.size());
             tt::tt_metal::CreateCircularBuffer(
-                program, CoreRangeSet(ranges), weight_cb_config(slice_blocks * weight_tiles_per_block));
+                program, tt::tt_metal::CoreRangeSet(ranges), weight_cb_config(slice_blocks * weight_tiles_per_block));
         }
     } else {
         tt::tt_metal::CreateCircularBuffer(
@@ -1056,7 +1061,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         "tilize_cores ({}) must cover tilize_num_cores ({})",
         tilize_cores.size(),
         tilize_num_cores);
-    std::vector<CoreCoord> tilize_cores_physical(tilize_num_cores);
+    std::vector<tt::tt_metal::CoreCoord> tilize_cores_physical(tilize_num_cores);
     for (uint32_t i = 0; i < tilize_num_cores; i++) {
         tilize_cores_physical[i] = mesh_device->worker_core_from_logical_core(tilize_cores[i]);
     }
@@ -1071,7 +1076,7 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // Drain core is always the first tilize core (index 0)
     TT_FATAL(!tilize_cores_physical.empty(), "tilize_cores_physical must be non-empty");
-    CoreCoord tilize_drain_core_physical = tilize_cores_physical[0];
+    tt::tt_metal::CoreCoord tilize_drain_core_physical = tilize_cores_physical[0];
 
     // combine_cores[0] is read below for the combine_sync NOC coords.
     TT_FATAL(!combine_cores.empty(), "combine_cores must be non-empty");
@@ -1442,7 +1447,7 @@ MoEComputeMeshWorkloadFactory::create_at(
             (tilize_num_cores > 1 && i == primary_mcast_gather_group_num_cores) ? 1 : 0;
 
         // Initial split mcast cores
-        CoreCoord initial_mcast_gather_core_physical =
+        tt::tt_metal::CoreCoord initial_mcast_gather_core_physical =
             i < primary_mcast_gather_group_num_cores ? tilize_cores_physical[0]
                                                      : tilize_cores_physical[primary_mcast_gather_group_num_cores];
         tilize_runtime_args[initial_mcast_gather_core_nox_x_idx] = (uint32_t)initial_mcast_gather_core_physical.x;
@@ -1810,7 +1815,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     }
 
     // matmul cores ordered by core ID, this will be used by selective combine to direct semaphore signaling
-    std::vector<CoreCoord> ring_pos2core(matmul_num_cores);
+    std::vector<tt::tt_metal::CoreCoord> ring_pos2core(matmul_num_cores);
     // One NoC virtual channel per ring core, distinct within a row (ring_core_vchannels)
     const std::vector<uint32_t> vchannels =
         ttnn::operations::ccl::common::ring_core_vchannels(ring_cores, matmul_num_cores);
@@ -1860,7 +1865,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     std::vector<tt::tt_metal::KernelHandle> combine_kernel_handles;
     tt::tt_metal::CBHandle combine_data_cb_handle{};
     std::vector<GlobalSemaphore> combine_global_semaphores;
-    std::vector<CoreCoord> combine_cores_for_shared = combine_cores;
+    std::vector<tt::tt_metal::CoreCoord> combine_cores_for_shared = combine_cores;
 
     if (combine_built) {
         // combine_params validity, num_links, and axis range are all checked in

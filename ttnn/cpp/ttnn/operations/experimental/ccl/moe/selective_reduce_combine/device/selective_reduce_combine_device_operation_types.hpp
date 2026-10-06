@@ -29,7 +29,7 @@ struct SelectiveReduceCombineParams {
     uint32_t num_token_parallel_cores;
     uint32_t num_data_parallel_cores;
     std::vector<ttnn::CoreCoord> worker_cores;
-    CoreRangeSet mux_core_range_set;
+    tt::tt_metal::CoreRangeSet mux_core_range_set;
     ttnn::MemoryConfig output_memory_config;
     std::optional<GlobalSemaphore> optional_cross_device_semaphore;
 

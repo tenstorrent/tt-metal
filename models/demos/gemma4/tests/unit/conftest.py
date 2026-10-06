@@ -109,6 +109,7 @@ def _stub_runtime(patch):
                 {"release_persistent_capture": lambda self: self.__dict__.setdefault("base_releases", []).append(1)},
             ),
             "allocate_vllm_kv_cache": _unused,
+            "allocate_vllm_kv_cache_per_layer": _unused,
         },
         "models.demos.gemma4.tt.attention": {
             "_RING_HEADROOM_BLOCK": 64,

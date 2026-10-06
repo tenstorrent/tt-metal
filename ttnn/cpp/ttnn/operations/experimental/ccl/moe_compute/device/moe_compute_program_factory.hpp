@@ -20,13 +20,13 @@ struct MoEComputeMeshWorkloadFactory {
         std::vector<tt::tt_metal::KernelHandle> tilize_kernel_handles;
 
         // Tilize cores
-        std::vector<CoreCoord> tilize_cores;
+        std::vector<tt::tt_metal::CoreCoord> tilize_cores;
 
         // Matmul kernel handles
         std::vector<tt::tt_metal::KernelHandle> matmul_kernel_handles;
 
         // Matmul cores
-        std::vector<CoreCoord> matmul_cores;
+        std::vector<tt::tt_metal::CoreCoord> matmul_cores;
 
         // CB handle for tensor backed indices tensor
         tt::tt_metal::CBHandle indices_cb_handle;
@@ -50,7 +50,7 @@ struct MoEComputeMeshWorkloadFactory {
         tt::tt_metal::CBHandle expert_tokens_cb_handle;
 
         // Combine cores (empty in ComputeOnly mode)
-        std::vector<CoreCoord> combine_cores;
+        std::vector<tt::tt_metal::CoreCoord> combine_cores;
 
         // Combine global semaphores (empty in ComputeOnly mode)
         std::vector<GlobalSemaphore> combine_global_semaphores;
@@ -91,7 +91,7 @@ std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     uint32_t combine_token_parallel_cores,
     uint32_t combine_data_parallel_cores,
     uint32_t hidden_size,
-    const CoreRangeSet& mux_core_range_set,
+    const tt::tt_metal::CoreRangeSet& mux_core_range_set,
     uint32_t bh_ring_size);
 
 ttnn::CoreCoord get_moe_tilize_drain_core(
@@ -99,7 +99,7 @@ ttnn::CoreCoord get_moe_tilize_drain_core(
     uint32_t combine_token_parallel_cores,
     uint32_t combine_data_parallel_cores,
     uint32_t hidden_size,
-    const CoreRangeSet& mux_core_range_set,
+    const tt::tt_metal::CoreRangeSet& mux_core_range_set,
     uint32_t bh_ring_size);
 
 ttnn::CoreRange get_moe_worker_mcast_bounding_box(
@@ -107,7 +107,7 @@ ttnn::CoreRange get_moe_worker_mcast_bounding_box(
     uint32_t combine_token_parallel_cores,
     uint32_t combine_data_parallel_cores,
     uint32_t hidden_size,
-    const CoreRangeSet& mux_core_range_set,
+    const tt::tt_metal::CoreRangeSet& mux_core_range_set,
     uint32_t bh_ring_size);
 
 }  // namespace ttnn::experimental::prim

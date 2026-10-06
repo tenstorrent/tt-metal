@@ -18,7 +18,6 @@
 #include "device/device_impl.hpp"
 #include "common/executor.hpp"
 #include "impl/context/context_descriptor.hpp"
-#include "context/metal_context.hpp"
 
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
@@ -36,8 +35,8 @@ using tt::tt_fabric::EDMStatus;
 
 // Emule teleports cross-chip traffic at the fabric client-API shim and never runs the ERISC router,
 // so its launch/sync handshake would never complete — skip it (as for Mock).
-bool skip_fabric_fw_for_emule() {
-    return MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
+bool skip_fabric_fw_for_emule(const Cluster& cluster) {
+    return cluster.get_target_device_type() == tt::TargetDevice::Emule;
 }
 
 static_assert(static_cast<uint32_t>(EDMStatus::STARTED) != 0);
@@ -288,7 +287,7 @@ void FabricFirmwareInitializer::init(
     }
 
     // Emule compiles kernels to x86 and never links an erisc binary.
-    if (skip_fabric_fw_for_emule()) {
+    if (skip_fabric_fw_for_emule(cluster_)) {
         log_info(tt::LogMetal, "Skipping fabric initialization for emule devices");
         return;
     }
@@ -347,7 +346,7 @@ void FabricFirmwareInitializer::init(
 
 void FabricFirmwareInitializer::configure() {
     // Mock/Emule: no router ever runs, so the sync below would spin to its timeout and throw.
-    if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule()) {
+    if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule(cluster_)) {
         log_info(tt::LogMetal, "Skipping fabric configure (router sync) for mock/emule devices");
         initialized_.test_and_set();
         return;
@@ -362,7 +361,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
     TT_FATAL(
         !init_done.contains(InitializerKey::Dispatch),
         "FabricFirmwareInitializer must be torn down after DispatchKernelInitializer");
-    if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule()) {
+    if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule(cluster_)) {
         log_info(tt::LogMetal, "Skipping fabric teardown for mock/emule devices");
         init_done.erase(key);
         return;

@@ -388,8 +388,8 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
 
     // Validate that dynamic core placement succeeds for this hidden size and combine grid.
     // mux_core_range_set comes from combine_params when in Full mode; ComputeOnly uses an empty set.
-    const CoreRangeSet validate_mux_cores =
-        args.combine_params.has_value() ? args.combine_params->mux_core_range_set : CoreRangeSet{};
+    const tt::tt_metal::CoreRangeSet validate_mux_cores =
+        args.combine_params.has_value() ? args.combine_params->mux_core_range_set : tt::tt_metal::CoreRangeSet{};
     ttnn::operations::ccl::common::select_moe_compute_cores(
         mesh_device,
         combine_token_parallel_cores,
@@ -415,9 +415,9 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
 
     const uint32_t hidden_size = tilize_input_shape[-1];
 
-    const CoreCoord worker_grid_size = mesh_device->compute_with_storage_grid_size();
-    const CoreRangeSet shard_cores =
-        CoreRangeSet({CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1})});
+    const tt::tt_metal::CoreCoord worker_grid_size = mesh_device->compute_with_storage_grid_size();
+    const tt::tt_metal::CoreRangeSet shard_cores =
+        tt::tt_metal::CoreRangeSet({tt::tt_metal::CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1})});
     const auto num_cores = shard_cores.num_cores();
 
     //-------------------------------------------------------------------------
@@ -653,7 +653,7 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<uint32_t>& cluster_axis,
     const std::optional<tt::tt_fabric::Topology>& topology,
     const std::optional<uint32_t>& num_links,
-    const std::optional<CoreRangeSet>& mux_core_range_set,
+    const std::optional<tt::tt_metal::CoreRangeSet>& mux_core_range_set,
     const std::optional<ttnn::MemoryConfig>& output_memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore,
@@ -808,7 +808,7 @@ std::vector<ttnn::Tensor> moe_compute(
         num_token_parallel_cores,
         num_data_parallel_cores,
         hidden_size,
-        mux_core_range_set.value_or(CoreRangeSet{}),
+        mux_core_range_set.value_or(tt::tt_metal::CoreRangeSet{}),
         ring_n);
 
     std::optional<ttnn::experimental::prim::SelectiveReduceCombineParams> combine_params;
@@ -828,7 +828,7 @@ std::vector<ttnn::Tensor> moe_compute(
             .num_token_parallel_cores = num_token_parallel_cores,
             .num_data_parallel_cores = num_data_parallel_cores,
             .worker_cores = combine_cores,
-            .mux_core_range_set = CoreRangeSet{},
+            .mux_core_range_set = tt::tt_metal::CoreRangeSet{},
             .output_memory_config = output_memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
             .optional_cross_device_semaphore = std::nullopt,
             .local_combine = true};
@@ -891,7 +891,7 @@ std::vector<ttnn::Tensor> moe_compute(
             .num_token_parallel_cores = num_token_parallel_cores,
             .num_data_parallel_cores = num_data_parallel_cores,
             .worker_cores = combine_cores,
-            .mux_core_range_set = mux_core_range_set.value_or(CoreRangeSet{}),
+            .mux_core_range_set = mux_core_range_set.value_or(tt::tt_metal::CoreRangeSet{}),
             .output_memory_config = resolved_output_memory_config,
             .optional_cross_device_semaphore = optional_cross_device_semaphore};
     }

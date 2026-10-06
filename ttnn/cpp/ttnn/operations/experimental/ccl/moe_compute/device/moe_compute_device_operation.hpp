@@ -53,7 +53,7 @@ std::vector<Tensor> moe_compute(
     const std::optional<uint32_t>& cluster_axis,
     const std::optional<tt::tt_fabric::Topology>& topology,
     const std::optional<uint32_t>& num_links,
-    const std::optional<CoreRangeSet>& mux_core_range_set,
+    const std::optional<tt::tt_metal::CoreRangeSet>& mux_core_range_set,
     const std::optional<ttnn::MemoryConfig>& output_memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore,
