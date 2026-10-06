@@ -844,30 +844,30 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
         .core_range = all_cores_grid};
 }
 
-tt::tt_metal::ProgramDescriptor LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_descriptor(
+LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::descriptor_artifacts_t
+LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_descriptor_processing(
     const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& mesh_coordinate) {
+    tt::tt_metal::ProgramDescriptor& desc,
+    const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler) {
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
     using namespace ttnn::ccl;
 
-    TT_FATAL(mesh_coordinate.has_value(), "llama_reduce_scatter emits a different program on each device");
-    const ttnn::MeshCoordinate& coord = mesh_coordinate.value();
     TT_FATAL(
         operation_attributes.cross_device_semaphore.has_value(),
         "llama_reduce_scatter requires a cross-device semaphore");
-    const auto plan =
-        detail::make_llama_reduce_scatter_plan(operation_attributes, tensor_args, tensor_return_value, coord, false);
+    const auto plan = detail::make_llama_reduce_scatter_plan(
+        operation_attributes, tensor_args, tensor_return_value, mesh_coordinate, signaler.has_value());
     auto* mesh_device = tensor_args.input_tensor.device();
     TT_FATAL(plan.input_tensor_buffer != nullptr, "llama_reduce_scatter input tensor must have a buffer");
     TT_FATAL(plan.output_tensor_buffer != nullptr, "llama_reduce_scatter output tensor must have a buffer");
     TT_FATAL(plan.packet_buffer != nullptr, "llama_reduce_scatter packet buffer must have a buffer");
     TT_FATAL(!plan.all_cores.empty(), "llama_reduce_scatter requires at least one worker core");
 
-    ProgramDescriptor desc;
     auto push_cb = [&](uint32_t cb_id, uint32_t total_size, Buffer* buffer) {
         const bool is_header = cb_id == detail::LlamaReduceScatterPlan::packet_header_cb_index;
         desc.cbs.push_back(CBDescriptor{
@@ -906,17 +906,14 @@ tt::tt_metal::ProgramDescriptor LlamaReduceScatterDeviceOperation::LlamaReduceSc
             plan.output_tiles_per_core_width * plan.input_page_size * plan.ring_size,
         nullptr);
 
-    const auto local_semaphore_id = desc.find_available_semaphore_id(plan.all_cores.front(), tt::CoreType::WORKER);
-    TT_FATAL(local_semaphore_id.has_value(), "llama_reduce_scatter could not allocate a local semaphore");
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = local_semaphore_id.value(),
-        .core_ranges = plan.all_cores_grid,
-        .initial_value = INVALID,
-    });
+    // An id that is free on every core of the grid, also next to semaphores the caller already put there.
+    const uint32_t local_semaphore_id =
+        ttnn::experimental::ccl::add_semaphore_descriptor(desc, plan.all_cores_grid, INVALID);
 
     const auto reader_noc = operation_attributes.use_noc1_only ? NOC::NOC_1 : NOC::RISCV_1_default;
     const auto writer_noc = operation_attributes.use_noc1_only ? NOC::NOC_1 : NOC::RISCV_0_default;
     const auto noc_mode = operation_attributes.use_noc1_only ? NOC_MODE::DM_DYNAMIC_NOC : NOC_MODE::DM_DEDICATED_NOC;
+    const auto reader_kernel_index = static_cast<uint32_t>(desc.kernels.size());
     desc.kernels.push_back(KernelDescriptor{
         .kernel_source = "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/kernels/dataflow/"
                          "reader_llama_reduce_scatter.cpp",
@@ -927,6 +924,7 @@ tt::tt_metal::ProgramDescriptor LlamaReduceScatterDeviceOperation::LlamaReduceSc
             DataMovementConfigDescriptor{
                 .processor = DataMovementProcessor::RISCV_1, .noc = reader_noc, .noc_mode = noc_mode},
     });
+    const auto writer_kernel_index = static_cast<uint32_t>(desc.kernels.size());
     desc.kernels.push_back(KernelDescriptor{
         .kernel_source = "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/kernels/dataflow/"
                          "writer_llama_reduce_scatter.cpp",
@@ -948,11 +946,11 @@ tt::tt_metal::ProgramDescriptor LlamaReduceScatterDeviceOperation::LlamaReduceSc
     detail::LlamaCoreArgCursor cursor;
     const uint32_t semaphore_address = static_cast<uint32_t>(operation_attributes.cross_device_semaphore->address());
     for (const auto& core : plan.all_cores) {
-        auto core_args = detail::fill_llama_core_runtime_args(plan, cursor, local_semaphore_id.value(), core);
+        auto core_args = detail::fill_llama_core_runtime_args(plan, cursor, local_semaphore_id, core);
         if (core_args.is_sender) {
             core_args.writer.push_back(static_cast<uint32_t>(plan.forward_fabric_node_id.has_value()));
             if (plan.forward_fabric_node_id.has_value()) {
-                const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(coord);
+                const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                 tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
                     target_device_fabric_node_id,
                     plan.forward_fabric_node_id.value(),
@@ -963,7 +961,7 @@ tt::tt_metal::ProgramDescriptor LlamaReduceScatterDeviceOperation::LlamaReduceSc
             }
             core_args.writer.push_back(static_cast<uint32_t>(plan.backward_fabric_node_id.has_value()));
             if (plan.backward_fabric_node_id.has_value()) {
-                const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(coord);
+                const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                 tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
                     target_device_fabric_node_id,
                     plan.backward_fabric_node_id.value(),
@@ -973,22 +971,62 @@ tt::tt_metal::ProgramDescriptor LlamaReduceScatterDeviceOperation::LlamaReduceSc
                     core_args.writer);
             }
         }
+        if (signaler.has_value()) {
+            signaler.value().push_llama_rs_rt_args_for_rs(core_args.reader);
+        }
+        // smuggled-rta-ok: caller GlobalSemaphore, re-applied by apply_cross_device_semaphore
+        core_args.reader[kSemaphoreArgIdx] = semaphore_address;
+        core_args.writer[kSemaphoreArgIdx] = semaphore_address;
         KernelDescriptor::RTArgList reader_rt;
-        reader_rt.push_back(
-            semaphore_address);  // smuggled-rta-ok: caller GlobalSemaphore, re-applied by override_runtime_arguments
-        for (size_t arg = 1; arg < core_args.reader.size(); ++arg) {
-            reader_rt.push_back(core_args.reader[arg]);
-        }
-        desc.kernels[kReaderKernelIdx].emplace_runtime_args(core, reader_rt);
+        reader_rt.append(core_args.reader);
+        desc.kernels[reader_kernel_index].emplace_runtime_args(core, reader_rt);
         KernelDescriptor::RTArgList writer_rt;
-        writer_rt.push_back(
-            semaphore_address);  // smuggled-rta-ok: caller GlobalSemaphore, re-applied by override_runtime_arguments
-        for (size_t arg = 1; arg < core_args.writer.size(); ++arg) {
-            writer_rt.push_back(core_args.writer[arg]);
-        }
-        desc.kernels[kWriterKernelIdx].emplace_runtime_args(core, writer_rt);
+        writer_rt.append(core_args.writer);
+        desc.kernels[writer_kernel_index].emplace_runtime_args(core, writer_rt);
     }
+    return descriptor_artifacts_t{
+        .reader_kernel_index = reader_kernel_index, .writer_kernel_index = writer_kernel_index};
+}
+
+tt::tt_metal::ProgramDescriptor LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_coordinate) {
+    TT_FATAL(mesh_coordinate.has_value(), "llama_reduce_scatter emits a different program on each device");
+    tt::tt_metal::ProgramDescriptor desc;
+    const auto artifacts = create_at_program_descriptor_processing(
+        operation_attributes, mesh_coordinate.value(), tensor_args, tensor_return_value, desc, std::nullopt);
+    // Built into an empty descriptor, so the reader and writer are kernels[0] and kernels[1], where
+    // override_runtime_arguments looks for the semaphore slot.
+    TT_FATAL(
+        artifacts.reader_kernel_index == kReaderKernelIdx && artifacts.writer_kernel_index == kWriterKernelIdx,
+        "llama_reduce_scatter: reader/writer landed at kernels {}/{}, expected {}/{}",
+        artifacts.reader_kernel_index,
+        artifacts.writer_kernel_index,
+        kReaderKernelIdx,
+        kWriterKernelIdx);
     return desc;
+}
+
+void LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::apply_cross_device_semaphore(
+    tt::tt_metal::Program& program,
+    const descriptor_artifacts_t& artifacts,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
+    // cross_device_semaphore's address is not part of GlobalSemaphore's reflected attributes, so two
+    // calls can share this program and still carry different semaphore addresses.
+    TT_FATAL(
+        operation_attributes.cross_device_semaphore.has_value(),
+        "llama_reduce_scatter requires a cross-device semaphore");
+    const uint32_t semaphore_address = static_cast<uint32_t>(operation_attributes.cross_device_semaphore->address());
+    const auto all_cores_grid = std::get<1>(get_rs_core_grids(operation_attributes, tensor_args));
+    auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, artifacts.reader_kernel_index);
+    auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, artifacts.writer_kernel_index);
+    for (const auto& core : corerange_to_cores(all_cores_grid, std::nullopt)) {
+        reader_runtime_args[core.x][core.y][kSemaphoreArgIdx] = semaphore_address;
+        writer_runtime_args[core.x][core.y][kSemaphoreArgIdx] = semaphore_address;
+    }
 }
 
 void LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::override_runtime_arguments_per_program(
@@ -1030,21 +1068,8 @@ void LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::override_runtime_
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>&) {
-    // cross_device_semaphore's address is not part of GlobalSemaphore's reflected attributes, so two
-    // calls can share this program and still carry different semaphore addresses. This hook replaces
-    // binding patching, so the globally allocated circular buffers are refreshed here by CBIndex.
-    TT_FATAL(
-        operation_attributes.cross_device_semaphore.has_value(),
-        "llama_reduce_scatter requires a cross-device semaphore");
-    const uint32_t semaphore_address = static_cast<uint32_t>(operation_attributes.cross_device_semaphore->address());
-
-    const bool row_major =
-        tensor_args.input_tensor.shard_spec().value().orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR;
-    const auto [sender_core_grid, all_cores_grid] =
-        LlamaReduceScatterDeviceOperation::get_rs_core_grids(operation_attributes, tensor_args);
-    (void)sender_core_grid;
-    const auto cores = corerange_to_cores(all_cores_grid, std::nullopt, row_major);
-
+    // This hook replaces binding patching, so the globally allocated circular buffers are refreshed here by
+    // CBIndex, then the caller semaphore, which is not in the program hash.
     TT_FATAL(tensor_args.input_tensor.buffer() != nullptr, "llama_reduce_scatter input tensor must have a buffer");
     TT_FATAL(tensor_return_value.buffer() != nullptr, "llama_reduce_scatter output tensor must have a buffer");
     TT_FATAL(
@@ -1076,12 +1101,11 @@ void LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::override_runtime_
         kExpectedGlobalCbs,
         updated_global_cbs);
 
-    auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
-    auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);
-    for (const auto& core : cores) {
-        reader_runtime_args[core.x][core.y][kSemaphoreArgIdx] = semaphore_address;
-        writer_runtime_args[core.x][core.y][kSemaphoreArgIdx] = semaphore_address;
-    }
+    apply_cross_device_semaphore(
+        program,
+        descriptor_artifacts_t{.reader_kernel_index = kReaderKernelIdx, .writer_kernel_index = kWriterKernelIdx},
+        operation_attributes,
+        tensor_args);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

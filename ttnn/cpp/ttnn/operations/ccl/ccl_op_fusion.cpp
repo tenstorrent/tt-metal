@@ -582,6 +582,33 @@ void MatmulFusedOpSignaler::init_llama_rs_cores_mm(
     this->matmul_semaphore_target = cores.size() - 1;
 }
 
+void MatmulFusedOpSignaler::init_llama_rs_cores_rs(const CoreRangeSet& rs_cores, ProgramDescriptor& desc) {
+    TT_FATAL(
+        this->fused_op_type == MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER,
+        "attempted to initialize signaler to llama rs which has a different type");
+    this->initialized_llama_reduce_scatter_part1 = true;
+    this->rs_cores = rs_cores;
+    // On the RS cores themselves, never on their bounding box (see the Program& overload).
+    this->rs_semaphore = add_semaphore_descriptor(desc, rs_cores, INVALID);
+}
+
+void MatmulFusedOpSignaler::init_llama_rs_cores_mm(
+    const CoreRangeSet& matmul_cores,
+    ProgramDescriptor& desc,
+    const tt::tt_metal::distributed::MeshDevice* device,
+    int privilaged_index) {
+    // pick the privileged core, record the number of matmul cores
+    TT_FATAL(initialized_llama_reduce_scatter_part1, "reduce scatter half needs to be initialized first");
+    auto cores = corerange_to_cores(matmul_cores);
+    TT_FATAL(cores.size() > privilaged_index, "Privileged index is out of range of the matmul cores");
+    this->privilaged_core = cores.at(privilaged_index);
+    this->privilaged_core_physical = device->worker_core_from_logical_core(this->privilaged_core);
+    // Also reserved on the RS cores so its id can never alias rs_semaphore (see the Program& overload).
+    this->matmul_privilaged_semaphore =
+        add_semaphore_descriptor(desc, this->rs_cores.merge(CoreRangeSet(CoreRange(this->privilaged_core))), 0);
+    this->matmul_semaphore_target = cores.size() - 1;
+}
+
 void MatmulFusedOpSignaler::push_llama_rs_rt_args_for_rs(std::vector<uint32_t>& out_rt_args) const {
     out_rt_args.push_back(static_cast<uint32_t>(this->rs_semaphore));
 }
