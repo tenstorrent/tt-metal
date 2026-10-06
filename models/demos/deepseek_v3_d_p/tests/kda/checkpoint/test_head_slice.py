@@ -156,6 +156,9 @@ def test_slice_equals_tp_rank_device_shard(gate: dict[str, object]) -> None:
         )
         for name, shard_dim in _PREPARED_SHARD_DIMS.items():
             tensor = getattr(packed, name)
+            if tensor is None:  # the bounded gate folds its scale into the projection (no decay_scale_flat)
+                assert getattr(sliced, name) is None and config.gate_lower_bound is not None, f"rank {rank} {name}"
+                continue
             expected = tensor if shard_dim is None else tensor.chunk(_TP, dim=shard_dim)[rank]
             torch.testing.assert_close(getattr(sliced, name), expected, atol=0, rtol=0, msg=f"rank {rank} {name}")
         for tap, (tensor, sliced_tap) in enumerate(zip(packed.convolution_taps, sliced.convolution_taps, strict=True)):
