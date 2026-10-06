@@ -158,8 +158,9 @@ void ScatterCodegenDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         ttnn::operations::data_movement::scatter::supported_execution_controls(
             input_tensor, attributes.output_mem_config, tensor_args.output_tensor),
-        "scatter_codegen: requested output placement is not supported (sharded memory config, or a preallocated "
-        "output tensor whose layout, dtype or tile differ from what this op would create for itself).");
+        "scatter_codegen: requested output placement is not supported (sharded memory config, a ROW_MAJOR output "
+        "whose buffer type differs from the input's, or a preallocated output tensor whose shape, layout, dtype or "
+        "tile differ from what this op would create for itself).");
     if (tensor_args.output_tensor.has_value()) {
         const auto& out = tensor_args.output_tensor.value();
         TT_FATAL(
