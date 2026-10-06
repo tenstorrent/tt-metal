@@ -667,8 +667,9 @@ class Qwen38Generator:
             for name in ("conv", "recurrent"):
                 tensor = getattr(state, name)
                 if tensor is not None:
-                    # A slice does not alias its source, so this is already an owned copy.
-                    rows[(index, name)] = tensor[slot : slot + 1]
+                    # Clone, as _capture does: a stored slice still tracks later writes to the
+                    # source, so a reset before the restore would hand back zeros.
+                    rows[(index, name)] = ttnn.clone(tensor[slot : slot + 1])
         handle = self._next_snapshot_handle
         self._next_snapshot_handle += 1
         self._state_snapshots[handle] = (held, rows)
