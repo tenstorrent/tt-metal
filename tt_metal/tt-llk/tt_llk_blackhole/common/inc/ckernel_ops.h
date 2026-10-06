@@ -8,6 +8,9 @@
 
 #pragma once
 
+#define TT_LLK_SFPU_ARCH_BH 1
+#include "../../../common/ckernel_lreg_metadata.h"
+
 #define TT_OP(opcode, params) ((opcode << 24) + params)
 #define INSTRUCTION_WORD(x)   __asm__ __volatile__(".ttinsn %0" : : "n"((x))) // Swizzle 32 bits into the instruction stream.
 
@@ -569,293 +572,281 @@
 #define TT_OP_SFPABS(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_OP(0x7d, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPABS_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPABS(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPABS(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPABS(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPABS(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPABS(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPABS(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPABS(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPABS(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPADD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
     TT_OP(0x85, (((lreg_src_a) << 16) + ((lreg_src_b) << 12) + ((lreg_src_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPADD_VALID(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)                                                                  \
     (ckernel::is_valid(lreg_src_a, 8) && ckernel::is_valid(lreg_src_b, 4) && ckernel::is_valid(lreg_src_c, 4) && ckernel::is_valid(lreg_dest, 4) && \
      ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPADD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    ckernel::instrn_buffer[0] = TT_OP_SFPADD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)
-#define TTI_SFPADD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    INSTRUCTION_WORD(TT_OP_SFPADD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1))
+#define TT_SFPADD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPADD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1))
+#define TTI_SFPADD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPADD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPADDI(imm16_math, lreg_dest, instr_mod1) TT_OP(0x75, (((imm16_math) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPADDI_VALID(imm16_math, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm16_math, 16) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPADDI(imm16_math, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPADDI(imm16_math, lreg_dest, instr_mod1)
-#define TTI_SFPADDI(imm16_math, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPADDI(imm16_math, lreg_dest, instr_mod1))
+#define TT_SFPADDI(imm16_math, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPADDI(imm16_math, lreg_dest, instr_mod1))
+#define TTI_SFPADDI(imm16_math, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPADDI(imm16_math, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPAND(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_OP(0x7e, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPAND_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPAND(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPAND(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPAND(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPAND(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPAND(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPAND(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPAND(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPAND(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPARECIP(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     TT_OP(0x99, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPARECIP_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPARECIP(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPARECIP(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPARECIP(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPARECIP(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPARECIP(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPARECIP(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPARECIP(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPARECIP(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPCAST(lreg_src_c, lreg_dest, instr_mod1) TT_OP(0x90, (((lreg_src_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPCAST_VALID(lreg_src_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(lreg_src_c, 16) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPCAST(lreg_src_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPCAST(lreg_src_c, lreg_dest, instr_mod1)
-#define TTI_SFPCAST(lreg_src_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPCAST(lreg_src_c, lreg_dest, instr_mod1))
+#define TT_SFPCAST(lreg_src_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPCAST(lreg_src_c, lreg_dest, instr_mod1))
+#define TTI_SFPCAST(lreg_src_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPCAST(lreg_src_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPCOMPC(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     TT_OP(0x8b, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPCOMPC_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPCOMPC(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPCOMPC(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPCOMPC(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPCOMPC(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPCOMPC(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPCOMPC(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPCOMPC(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPCOMPC(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPCONFIG(imm16_math, config_dest, instr_mod1) TT_OP(0x91, (((imm16_math) << 8) + ((config_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPCONFIG_VALID(imm16_math, config_dest, instr_mod1) \
     (ckernel::is_valid(imm16_math, 16) && ckernel::is_valid(config_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPCONFIG(imm16_math, config_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPCONFIG(imm16_math, config_dest, instr_mod1)
-#define TTI_SFPCONFIG(imm16_math, config_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPCONFIG(imm16_math, config_dest, instr_mod1))
+#define TT_SFPCONFIG(imm16_math, config_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPCONFIG(imm16_math, config_dest, instr_mod1))
+#define TTI_SFPCONFIG(imm16_math, config_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPCONFIG(imm16_math, config_dest, instr_mod1))
 
 #define TT_OP_SFPDIVP2(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     TT_OP(0x76, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPDIVP2_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPDIVP2(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPDIVP2(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPDIVP2(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPDIVP2(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPDIVP2(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPDIVP2(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPDIVP2(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPDIVP2(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPENCC(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     TT_OP(0x8a, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPENCC_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPENCC(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPENCC(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPENCC(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPENCC(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPENCC(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPENCC(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPENCC(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPENCC(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPEXEXP(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     TT_OP(0x77, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPEXEXP_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPEXEXP(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPEXEXP(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPEXEXP(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPEXEXP(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPEXEXP(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPEXEXP(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPEXEXP(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPEXEXP(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPEXMAN(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     TT_OP(0x78, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPEXMAN_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPEXMAN(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPEXMAN(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPEXMAN(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPEXMAN(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPEXMAN(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPEXMAN(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPEXMAN(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPEXMAN(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPGT(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_OP(0x97, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPGT_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPGT(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPGT(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPGT(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPGT(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPGT(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPGT(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPGT(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPGT(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPIADD(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     TT_OP(0x79, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPIADD_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPIADD(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPIADD(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPIADD(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPIADD(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPIADD(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPIADD(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPIADD(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPIADD(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPLE(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_OP(0x96, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPLE_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPLE(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPLE(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPLE(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPLE(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPLE(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPLE(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPLE(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPLE(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) \
     TT_OP(0x70, (((lreg_ind) << 20) + ((instr_mod0) << 16) + ((sfpu_addr_mode) << 13) + ((dest_reg_addr) << 0)))
 #define TT_SFPLOAD_VALID(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) \
     (ckernel::is_valid(lreg_ind, 4) && ckernel::is_valid(instr_mod0, 4) && ckernel::is_valid(sfpu_addr_mode, 3) && ckernel::is_valid(dest_reg_addr, 13))
-#define TT_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) \
-    ckernel::instrn_buffer[0] = TT_OP_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr)
-#define TTI_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) INSTRUCTION_WORD(TT_OP_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr))
+#define TT_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr))
+#define TTI_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr))
 
 #define TT_OP_SFPLOADI(lreg_ind, instr_mod0, imm16)    TT_OP(0x71, (((lreg_ind) << 20) + ((instr_mod0) << 16) + ((imm16) << 0)))
 #define TT_SFPLOADI_VALID(lreg_ind, instr_mod0, imm16) (ckernel::is_valid(lreg_ind, 4) && ckernel::is_valid(instr_mod0, 4) && ckernel::is_valid(imm16, 16))
-#define TT_SFPLOADI(lreg_ind, instr_mod0, imm16)       ckernel::instrn_buffer[0] = TT_OP_SFPLOADI(lreg_ind, instr_mod0, imm16)
-#define TTI_SFPLOADI(lreg_ind, instr_mod0, imm16)      INSTRUCTION_WORD(TT_OP_SFPLOADI(lreg_ind, instr_mod0, imm16))
+#define TT_SFPLOADI(lreg_ind, instr_mod0, imm16) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPLOADI(lreg_ind, instr_mod0, imm16))
+#define TTI_SFPLOADI(lreg_ind, instr_mod0, imm16) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPLOADI(lreg_ind, instr_mod0, imm16))
 
 #define TT_OP_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) \
     TT_OP(0x93, (((lreg_ind) << 20) + ((instr_mod0) << 16) + ((sfpu_addr_mode) << 13) + ((dest_reg_addr) << 0)))
 #define TT_SFPLOADMACRO_VALID(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) \
     (ckernel::is_valid(lreg_ind, 4) && ckernel::is_valid(instr_mod0, 4) && ckernel::is_valid(sfpu_addr_mode, 3) && ckernel::is_valid(dest_reg_addr, 13))
 #define TT_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) \
-    ckernel::instrn_buffer[0] = TT_OP_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr)
+    TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr))
 #define TTI_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) \
-    INSTRUCTION_WORD(TT_OP_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr))
+    TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr))
 
 #define TT_OP_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr) TT_OP(0x73, (((lreg_ind) << 20) + ((instr_mod0) << 16) + ((dest_reg_addr) << 0)))
 #define TT_SFPLUT_VALID(lreg_ind, instr_mod0, dest_reg_addr) \
     (ckernel::is_valid(lreg_ind, 4) && ckernel::is_valid(instr_mod0, 4) && ckernel::is_valid(dest_reg_addr, 16))
-#define TT_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr)  ckernel::instrn_buffer[0] = TT_OP_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr)
-#define TTI_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr) INSTRUCTION_WORD(TT_OP_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr))
+#define TT_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr))
+#define TTI_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr))
 
 #define TT_OP_SFPLUTFP32(lreg_dest, instr_mod1)    TT_OP(0x95, (((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPLUTFP32_VALID(lreg_dest, instr_mod1) (ckernel::is_valid(lreg_dest, 20) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPLUTFP32(lreg_dest, instr_mod1)       ckernel::instrn_buffer[0] = TT_OP_SFPLUTFP32(lreg_dest, instr_mod1)
-#define TTI_SFPLUTFP32(lreg_dest, instr_mod1)      INSTRUCTION_WORD(TT_OP_SFPLUTFP32(lreg_dest, instr_mod1))
+#define TT_SFPLUTFP32(lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPLUTFP32(lreg_dest, instr_mod1))
+#define TTI_SFPLUTFP32(lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPLUTFP32(lreg_dest, instr_mod1))
 
 #define TT_OP_SFPLZ(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_OP(0x81, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPLZ_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPLZ(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPLZ(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPLZ(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPLZ(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPLZ(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPLZ(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPLZ(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPLZ(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPMAD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
     TT_OP(0x84, (((lreg_src_a) << 16) + ((lreg_src_b) << 12) + ((lreg_src_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPMAD_VALID(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)                                                                  \
     (ckernel::is_valid(lreg_src_a, 8) && ckernel::is_valid(lreg_src_b, 4) && ckernel::is_valid(lreg_src_c, 4) && ckernel::is_valid(lreg_dest, 4) && \
      ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPMAD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    ckernel::instrn_buffer[0] = TT_OP_SFPMAD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)
-#define TTI_SFPMAD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    INSTRUCTION_WORD(TT_OP_SFPMAD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1))
+#define TT_SFPMAD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPMAD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1))
+#define TTI_SFPMAD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPMAD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPMOV(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_OP(0x7c, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPMOV_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPMOV(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPMOV(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPMOV(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPMOV(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPMOV(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPMOV(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPMOV(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPMOV(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPMUL(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
     TT_OP(0x86, (((lreg_src_a) << 16) + ((lreg_src_b) << 12) + ((lreg_src_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPMUL_VALID(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)                                                                  \
     (ckernel::is_valid(lreg_src_a, 8) && ckernel::is_valid(lreg_src_b, 4) && ckernel::is_valid(lreg_src_c, 4) && ckernel::is_valid(lreg_dest, 4) && \
      ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPMUL(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    ckernel::instrn_buffer[0] = TT_OP_SFPMUL(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)
-#define TTI_SFPMUL(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    INSTRUCTION_WORD(TT_OP_SFPMUL(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1))
+#define TT_SFPMUL(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPMUL(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1))
+#define TTI_SFPMUL(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPMUL(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPMUL24(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
     TT_OP(0x98, (((lreg_src_a) << 16) + ((lreg_src_b) << 12) + ((lreg_src_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPMUL24_VALID(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)                                                                \
     (ckernel::is_valid(lreg_src_a, 8) && ckernel::is_valid(lreg_src_b, 4) && ckernel::is_valid(lreg_src_c, 4) && ckernel::is_valid(lreg_dest, 4) && \
      ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPMUL24(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    ckernel::instrn_buffer[0] = TT_OP_SFPMUL24(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)
-#define TTI_SFPMUL24(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    INSTRUCTION_WORD(TT_OP_SFPMUL24(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1))
+#define TT_SFPMUL24(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPMUL24(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1))
+#define TTI_SFPMUL24(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPMUL24(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPMULI(imm16_math, lreg_dest, instr_mod1) TT_OP(0x74, (((imm16_math) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPMULI_VALID(imm16_math, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm16_math, 16) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPMULI(imm16_math, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPMULI(imm16_math, lreg_dest, instr_mod1)
-#define TTI_SFPMULI(imm16_math, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPMULI(imm16_math, lreg_dest, instr_mod1))
+#define TT_SFPMULI(imm16_math, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPMULI(imm16_math, lreg_dest, instr_mod1))
+#define TTI_SFPMULI(imm16_math, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPMULI(imm16_math, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPNOP TT_OP(0x8f, 0)
-#define TTI_SFPNOP   INSTRUCTION_WORD(TT_OP_SFPNOP)
+#define TTI_SFPNOP TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPNOP)
 
 #define TT_OP_SFPNOT(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_OP(0x80, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPNOT_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPNOT(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPNOT(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPNOT(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPNOT(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPNOT(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPNOT(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPNOT(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPNOT(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPOR(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_OP(0x7f, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPOR_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPOR(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPOR(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPOR(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPOR(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPOR(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPOR(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPOR(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPOR(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPPOPC(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     TT_OP(0x88, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPPOPC_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPPOPC(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPPOPC(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPPOPC(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPPOPC(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPPOPC(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPPOPC(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPPOPC(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPPOPC(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPPUSHC(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     TT_OP(0x87, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPPUSHC_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPPUSHC(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPPUSHC(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPPUSHC(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPPUSHC(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPPUSHC(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPPUSHC(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPPUSHC(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPPUSHC(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPSETCC(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     TT_OP(0x7b, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPSETCC_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPSETCC(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPSETCC(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPSETCC(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPSETCC(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPSETCC(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPSETCC(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPSETCC(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPSETCC(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPSETEXP(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     TT_OP(0x82, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPSETEXP_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPSETEXP(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPSETEXP(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPSETEXP(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPSETEXP(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPSETEXP(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPSETEXP(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPSETEXP(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPSETEXP(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPSETMAN(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     TT_OP(0x83, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPSETMAN_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPSETMAN(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPSETMAN(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPSETMAN(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPSETMAN(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPSETMAN(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPSETMAN(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPSETMAN(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPSETMAN(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPSETSGN(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     TT_OP(0x89, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPSETSGN_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPSETSGN(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPSETSGN(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPSETSGN(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPSETSGN(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPSETSGN(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPSETSGN(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPSETSGN(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPSETSGN(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPSHFT(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     TT_OP(0x7a, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPSHFT_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPSHFT(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPSHFT(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPSHFT(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPSHFT(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPSHFT(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPSHFT(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPSHFT(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPSHFT(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPSHFT2(imm12_math, lreg_src_c, lreg_dest, instr_mod1) \
     TT_OP(0x94, (((imm12_math) << 12) + ((lreg_src_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPSHFT2_VALID(imm12_math, lreg_src_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_src_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPSHFT2(imm12_math, lreg_src_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPSHFT2(imm12_math, lreg_src_c, lreg_dest, instr_mod1)
-#define TTI_SFPSHFT2(imm12_math, lreg_src_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPSHFT2(imm12_math, lreg_src_c, lreg_dest, instr_mod1))
+#define TT_SFPSHFT2(imm12_math, lreg_src_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPSHFT2(imm12_math, lreg_src_c, lreg_dest, instr_mod1))
+#define TTI_SFPSHFT2(imm12_math, lreg_src_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPSHFT2(imm12_math, lreg_src_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) \
     TT_OP(0x72, (((lreg_ind) << 20) + ((instr_mod0) << 16) + ((sfpu_addr_mode) << 13) + ((dest_reg_addr) << 0)))
 #define TT_SFPSTORE_VALID(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) \
     (ckernel::is_valid(lreg_ind, 4) && ckernel::is_valid(instr_mod0, 4) && ckernel::is_valid(sfpu_addr_mode, 3) && ckernel::is_valid(dest_reg_addr, 13))
-#define TT_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) \
-    ckernel::instrn_buffer[0] = TT_OP_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr)
-#define TTI_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) INSTRUCTION_WORD(TT_OP_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr))
+#define TT_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr))
+#define TTI_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr))
 
 #define TT_OP_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1) \
     TT_OP(0x92, (((imm12_math) << 12) + ((lreg_src_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPSWAP_VALID(imm12_math, lreg_src_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_src_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1)
-#define TTI_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1))
+#define TT_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1))
+#define TTI_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPTRANSP(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     TT_OP(0x8c, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPTRANSP_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPTRANSP(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPTRANSP(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPTRANSP(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPTRANSP(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPTRANSP(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPTRANSP(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPTRANSP(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPTRANSP(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPXOR(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_OP(0x8d, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPXOR_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPXOR(imm12_math, lreg_c, lreg_dest, instr_mod1)  ckernel::instrn_buffer[0] = TT_OP_SFPXOR(imm12_math, lreg_c, lreg_dest, instr_mod1)
-#define TTI_SFPXOR(imm12_math, lreg_c, lreg_dest, instr_mod1) INSTRUCTION_WORD(TT_OP_SFPXOR(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPXOR(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPXOR(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TTI_SFPXOR(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPXOR(imm12_math, lreg_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
     TT_OP(0x8e, (((rnd_mode) << 21) + ((imm8_math) << 16) + ((lreg_src_b) << 12) + ((lreg_src_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFP_STOCH_RND_VALID(rnd_mode, imm8_math, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)                                                \
     (ckernel::is_valid(rnd_mode, 3) && ckernel::is_valid(imm8_math, 5) && ckernel::is_valid(lreg_src_b, 4) && ckernel::is_valid(lreg_src_c, 4) && \
      ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    ckernel::instrn_buffer[0] = TT_OP_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)
-#define TTI_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
-    INSTRUCTION_WORD(TT_OP_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1))
+#define TT_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TT(TT_OP_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1))
+#define TTI_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1))
 
 #define TT_OP_SHIFTDMAREG(OpBisConst, OpSel, ResultRegIndex, OpBRegIndex, OpARegIndex) \
     TT_OP(0x5c, (((OpBisConst) << 23) + ((OpSel) << 18) + ((ResultRegIndex) << 12) + ((OpBRegIndex) << 6) + ((OpARegIndex) << 0)))
