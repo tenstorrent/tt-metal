@@ -1622,7 +1622,7 @@
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache]
+  test_tags: [glm_5_3, runner, kv_cache, glm_5_3_disagg_prefill_1m_sc4]
   test_group: disagg_prefill
   skus:
     bh_sc4:
@@ -1723,7 +1723,7 @@
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache]
+  test_tags: [glm_5_3, runner, kv_cache, glm_5_3_disagg_prefill_1m_sc1]
   test_group: disagg_prefill
   skus:
     bh_sc1_high_power:
