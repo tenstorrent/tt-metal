@@ -990,6 +990,7 @@ manifest::Router ComputeMeshRouterBuilder::collect_manifest_router(const ChipRou
         .control_plane = fabric_context_.get_control_plane(),
         .stream_assignment = builder_context.get_stream_assignment(local_node_.mesh_id),
         .addresses_to_clear = addresses_to_clear,
+        .kernel_defines = kernel_defines(fabric_context_.is_2D_routing_enabled()),
         .named_ct_args_per_risc = {},
     };
     for (uint32_t risc_id = 0; risc_id < get_configured_risc_count(); ++risc_id) {

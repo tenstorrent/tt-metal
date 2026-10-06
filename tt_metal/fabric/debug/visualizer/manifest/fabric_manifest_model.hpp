@@ -8,12 +8,15 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include <hostdevcommon/fabric_common.h>
+#include <tt-metalium/kernel_types.hpp>
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
+#include "tt_metal/fabric/erisc_datamover_builder.hpp"
 
 // The fabric manifest's model. The collector fills in what the router builders know, and the writer
 // (write_fabric_manifest) adds what only ControlPlane and the cluster know (routing plane, peer, cross-host,
@@ -31,6 +34,61 @@ struct L1Region {
     std::string schema;
     // If true, the host zeroes the region before launch (get_fabric_router_addresses_to_clear()).
     bool cleared_by_host = false;
+};
+
+// Which register of a stream a stream ref reads.
+enum class StreamRegister : uint8_t {
+    // The increment-on-write credit or slot count.
+    BUF_SPACE_AVAILABLE,
+};
+
+// A stream register reference.
+struct StreamRef {
+    uint32_t stream_id = 0;
+    StreamRegister reg = StreamRegister::BUF_SPACE_AVAILABLE;
+    std::string schema;
+};
+
+// One of a router's L1 credit counter arrays (L1CreditCounters).
+enum class CreditCounterArray : uint8_t {
+    TO_SENDER_ACK,
+    TO_SENDER_COMPLETION,
+    RECEIVER_ACK,
+    RECEIVER_COMPLETION,
+};
+
+// One element of a credit counter array on the same router.
+struct CounterRef {
+    CreditCounterArray array = CreditCounterArray::TO_SENDER_ACK;
+    uint32_t index = 0;
+};
+
+// Credits are held in a stream register or in an element of an L1 counter array.
+using CreditRef = std::variant<StreamRef, CounterRef>;
+
+// A router on the same chip and routing plane, named by the direction it faces.
+struct SiblingRouterRef {
+    eth_chan_directions direction = eth_chan_directions::EAST;
+};
+
+// The chip's local worker, as the producer of a sender channel.
+struct LocalWorker {};
+
+// Who writes into a sender channel.
+using SenderChannelProducer = std::variant<LocalWorker, SiblingRouterRef>;
+
+// A NoC command buffer.
+enum class NocCmdBuf : uint32_t {
+    WR_CMD_BUF = FabricEriscDatamoverConfig::WR_CMD_BUF,
+    RD_CMD_BUF = FabricEriscDatamoverConfig::RD_CMD_BUF,
+    WR_REG_CMD_BUF = FabricEriscDatamoverConfig::WR_REG_CMD_BUF,
+    AT_CMD_BUF = FabricEriscDatamoverConfig::AT_CMD_BUF,
+};
+
+// The NoC and command buffer a write goes out on.
+struct NocWriteConfig {
+    tt::tt_metal::NOC noc = tt::tt_metal::NOC::NOC_0;
+    NocCmdBuf cmd_buf = NocCmdBuf::WR_CMD_BUF;
 };
 
 // A router's L1 credit counter arrays, shared by every VC that uses counter credits. The to_sender arrays are
@@ -65,6 +123,40 @@ struct RouterShape {
     bool vc0_bubble_flow_control = false;
 };
 
+// The credits a sender channel receives back from the peer's receiver.
+struct SenderChannelCredits {
+    // Only on VC0 with bubble flow control.
+    std::optional<CreditRef> acked;
+    CreditRef completed;
+};
+
+// The L1 a sender channel's producer uses to connect and to report where it writes.
+struct SenderChannelControlInfo {
+    L1Region connection;
+    L1Region conn_info;
+    L1Region buffer_index_sem;
+};
+
+// A sender channel that takes packets from its producer and sends them over Ethernet to the peer's receiver.
+struct SenderChannel {
+    // IDs of the ERISCs that run the channel's step.
+    std::vector<uint32_t> serviced_by;
+    // Null when nothing feeds the channel.
+    std::optional<SenderChannelProducer> producer;
+    bool is_injection_channel = false;
+    NocWriteConfig producer_credit_return;
+    L1Region ring_buffer;
+    StreamRef free_slots;
+    SenderChannelCredits credits;
+    SenderChannelControlInfo control_info;
+};
+
+// A router's channels.
+struct Channels {
+    // Indexed [vc][channel], over RouterShape's counts.
+    std::vector<std::vector<SenderChannel>> senders;
+};
+
 // Information about a router.
 struct Router {
     RouterIdentity identity;
@@ -72,6 +164,7 @@ struct Router {
     RouterShape shape;
     // Always reserved, although not always used. Whether a VC uses them is its mesh's credit_transport backing.
     L1CreditCounters credit_counters;
+    Channels channels;
 };
 
 // Information about a chip.
