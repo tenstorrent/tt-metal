@@ -18,6 +18,12 @@ def pytest_addoption(parser):
     )
     g.addoption("--qwen-host-ops", default="")
     g.addoption("--qwen-disable-wa", default="")
+    g.addoption(
+        "--qwen-allow-uncertified",
+        action="store_true",
+        default=False,
+        help="Allow host fallbacks not yet checked against the real op (bisecting only).",
+    )
     g.addoption("--qwen-quasar-config", action="store_true", default=False)
     g.addoption("--qwen-expect-grid", default=None)
     g.addoption("--qwen-run-dir", default="generated/qwen3_vl_quasar/adhoc")

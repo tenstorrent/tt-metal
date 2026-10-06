@@ -43,7 +43,7 @@ def test_qwen3_vl_e2e(mesh_device, qwen_run_config, monkeypatch, request):
     if not progress.hooks_active():
         notes.append("progress.log unavailable: ttnn fast runtime mode is on (set TTNN_CONFIG_OVERRIDES).")
     recorder = StageRecorder(progress)
-    session = OverrideSession(mesh_device, cfg.host_ops, cfg.disable_wa)
+    session = OverrideSession(mesh_device, cfg.host_ops, cfg.disable_wa, cfg.allow_uncertified)
     session.install(monkeypatch)
     with progress.installed():
         run_tt(cfg, preset, inputs, hf_model, goldens, mesh_device, recorder, monkeypatch)

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 """Named workarounds (and, for bisecting, host fallbacks) installed around ttnn ops for one test."""
+import inspect
 import math
 from collections import Counter
 from dataclasses import dataclass
@@ -165,21 +166,235 @@ WORKAROUNDS = [
 ]
 
 
+@dataclass(frozen=True)
+class HostFallback:
+    """Runs `target` on the host with torch (bisecting only: a run using one is DIAGNOSTIC, never PASS)."""
+
+    target: str
+    source: str  # "golden" (ttnn golden function), "graph_case" (qwen3_vl_ops reference) or "hand"
+    torch_fn: Callable  # (host args, host kwargs) -> tensor, list of tensors, or None when updating in place
+    inplace_arg: int | None = None  # index of the device tensor the op updates in place
+
+
+_GOLDENS: dict = {}  # target -> golden function, looked up on the real op before a fallback replaces it
+
+
+def golden_of(target):
+    import ttnn
+
+    if target not in _GOLDENS:
+        _GOLDENS[target] = ttnn.get_golden_function(getattr(*resolve(target)))
+    return _GOLDENS[target]
+
+
+def _golden(target, prep=lambda targs, tkwargs: (targs, tkwargs)):
+    def fn(targs, tkwargs):
+        g = golden_of(target)
+        targs, tkwargs = prep(targs, tkwargs)
+        params = inspect.signature(g).parameters
+        return g(*targs, **{k: v for k, v in tkwargs.items() if k in params})
+
+    return fn
+
+
+def _flat_affine(targs, tkwargs):
+    """Device norm weights are row-major [1, 1, dim / 32, 32]; the goldens want [dim]."""
+    dim = targs[0].shape[-1]
+    flat = lambda t: t.reshape(-1)[:dim] if isinstance(t, torch.Tensor) else t
+    targs = [targs[0], *map(flat, targs[1:])]
+    return targs, {k: flat(v) if k in ("weight", "bias") else v for k, v in tkwargs.items()}
+
+
+def _graph_case(ref_name, out_shapes):
+    def fn(targs, tkwargs):
+        from models.experimental.ops.quasar.tests.qwen3_vl_ops import graph_case as G
+
+        case = {
+            "kwargs": {k: {"v": v} for k, v in tkwargs.items()},
+            "outs": [{"shape": s} for s in out_shapes(targs, tkwargs)],
+        }
+        out = getattr(G, ref_name)({str(i): t for i, t in enumerate(targs)}, tkwargs, case)
+        if out is None:
+            raise RuntimeError(f"{ref_name} does not model these shapes")
+        return out
+
+    return fn
+
+
+def _head_dim(x, kw):
+    nh = kw["num_heads"]
+    return x.shape[-1] // (nh + 2 * kw.get("num_kv_heads", nh))
+
+
+def _qkv_shapes(targs, kw):
+    nh = kw["num_heads"]
+    nkv, hd, s = kw.get("num_kv_heads", nh), _head_dim(targs[0], kw), targs[0].shape[-2]
+    return [(1, nh, s, hd), (1, nkv, s, hd), (1, nkv, s, hd)]
+
+
+def _qkv_decode_shapes(targs, kw):
+    nh = kw["num_heads"]
+    nkv, hd, b = kw.get("num_kv_heads", nh), _head_dim(targs[0], kw), targs[0].shape[-2]
+    return [(1, b, nh, hd), (1, b, nkv, hd), (1, b, nkv, hd)]
+
+
+def _rope_llama(targs, kw):
+    """x * cos + (x @ T) * sin, with the 32x32 transformation matrix T repeated along the head dim."""
+    x, cos, sin, trans = targs[:4]
+    t = trans.reshape(-1, trans.shape[-2], trans.shape[-1])[0, :32, :32].float()
+    big = torch.block_diag(*([t] * (x.shape[-1] // 32)))
+    return x.float() * cos.float() + (x.float() @ big) * sin.float()
+
+
+def _paged_update(targs, kw):
+    """Write each user's new K/V row at its position: [1, batch, kv_heads, hd] -> cache[block, head, row, hd]."""
+    cache, upd = targs[0], targs[1]
+    idxs, pt = kw["update_idxs_tensor"], kw["page_table"]
+    bs = cache.shape[2]
+    for b, pos in enumerate(int(p) for p in idxs.reshape(-1).tolist()):
+        if pos < 0:
+            continue
+        cache[int(pt[b, pos // bs]), :, pos % bs, :] = upd[0, b, : cache.shape[1], :]
+
+
+def _paged_fill(targs, kw):
+    """Write a user's prefill K/V [1, kv_heads, seq, hd] into the blocks its page table names."""
+    cache, x = targs[0], targs[1]
+    pt = targs[2] if len(targs) > 2 else kw["page_table"]
+    b, bs = int(kw.get("batch_idx", 0)), cache.shape[2]
+    for s in range(x.shape[2]):
+        cache[int(pt[b, s // bs]), :, s % bs, :] = x[0, :, s, :]
+
+
+FALLBACKS = {
+    f.target: f
+    for f in [
+        HostFallback("ttnn.linear", "golden", _golden("ttnn.linear")),
+        HostFallback("ttnn.matmul", "golden", _golden("ttnn.matmul")),
+        HostFallback("ttnn.rms_norm", "golden", _golden("ttnn.rms_norm", _flat_affine)),
+        HostFallback("ttnn.layer_norm", "golden", _golden("ttnn.layer_norm", _flat_affine)),
+        HostFallback("ttnn.add", "golden", _golden("ttnn.add")),
+        HostFallback("ttnn.multiply", "golden", _golden("ttnn.multiply")),
+        HostFallback(
+            "ttnn.transformer.scaled_dot_product_attention",
+            "golden",
+            _golden("ttnn.transformer.scaled_dot_product_attention"),
+        ),
+        HostFallback(
+            "ttnn.transformer.chunked_scaled_dot_product_attention",
+            "golden",
+            _golden("ttnn.transformer.chunked_scaled_dot_product_attention"),
+        ),
+        HostFallback(
+            "ttnn.transformer.paged_scaled_dot_product_attention_decode",
+            "golden",
+            _golden("ttnn.transformer.paged_scaled_dot_product_attention_decode"),
+        ),
+        HostFallback("ttnn.experimental.minimal_matmul", "graph_case", _graph_case("_ref_matmul", lambda a, k: [()])),
+        HostFallback(
+            "ttnn.experimental.nlp_create_qkv_heads", "graph_case", _graph_case("_ref_create_qkv_heads", _qkv_shapes)
+        ),
+        HostFallback(
+            "ttnn.experimental.nlp_create_qkv_heads_decode",
+            "graph_case",
+            _graph_case("_ref_create_qkv_heads_decode", _qkv_decode_shapes),
+        ),
+        HostFallback(
+            "ttnn.experimental.nlp_concat_heads", "graph_case", _graph_case("_ref_concat_heads", lambda a, k: [()])
+        ),
+        HostFallback(
+            "ttnn.experimental.nlp_concat_heads_decode",
+            "graph_case",
+            _graph_case("_ref_concat_heads_decode", lambda a, k: [()]),
+        ),
+        HostFallback("ttnn.experimental.rotary_embedding_llama", "hand", _rope_llama),
+        HostFallback("ttnn.experimental.paged_update_cache", "hand", _paged_update, inplace_arg=0),
+        HostFallback("ttnn.experimental.paged_fill_cache", "hand", _paged_fill, inplace_arg=0),
+    ]
+}
+
+# target -> "<test id> @ <arch> <commit>", filled in from test_fallbacks.py runs against the real op on WH/BH.
+CERTIFIED: dict = {}
+
+
+def _short(target):
+    return target.rsplit(".", 1)[-1]
+
+
 class OverrideSession:
-    def __init__(self, mesh_device, host_ops, disable_wa):
+    def __init__(self, mesh_device, host_ops, disable_wa, allow_uncertified=False):
         self.mesh_device = mesh_device
         self.host_ops = tuple(host_ops)
         self.disable_wa = set(disable_wa)
+        self.allow_uncertified = allow_uncertified
         self.hits = Counter()
         self.host_ops_active = []
+
+    def _selected_fallbacks(self):
+        if self.host_ops == ("all",):
+            return list(FALLBACKS.values())
+        by_short = {_short(t): f for t, f in FALLBACKS.items()}
+        unknown = [n for n in self.host_ops if n not in FALLBACKS and n not in by_short]
+        if unknown:
+            raise KeyError(f"no host fallback for {unknown}; known: {sorted(by_short)}")
+        return [FALLBACKS.get(n) or by_short[n] for n in self.host_ops]
 
     def install(self, monkeypatch):
         unknown = self.disable_wa - {w.name for w in WORKAROUNDS}
         if unknown:
             raise KeyError(f"unknown workaround(s): {sorted(unknown)}")
+        fallbacks = self._selected_fallbacks()
+        uncertified = [f.target for f in fallbacks if f.target not in CERTIFIED]
+        if uncertified and not self.allow_uncertified:
+            raise RuntimeError(
+                f"host fallback(s) {uncertified} not certified against the real op (run test_fallbacks.py on WH/BH, "
+                "or pass --qwen-allow-uncertified)"
+            )
+        for fb in fallbacks:  # goldens hang off the real ops, so look them up before any wrapper replaces one
+            if fb.source == "golden":
+                golden_of(fb.target)
         for wa in WORKAROUNDS:
             if wa.name not in self.disable_wa:
                 self._install_workaround(monkeypatch, wa)
+        for fb in fallbacks:  # after the workarounds: a host op replaces the whole op
+            self._install_fallback(monkeypatch, fb)
+
+    def _install_fallback(self, monkeypatch, fb):
+        import ttnn
+
+        from models.experimental.ops.quasar.qwen3_vl.tests.e2e.recorder import to_host
+
+        parent, attr = resolve(fb.target)
+        self.host_ops_active.append(fb.target)
+        conv = lambda v: to_host(v) if isinstance(v, ttnn.Tensor) else v
+
+        def wrapper(*args, **kwargs):
+            self.hits[f"host:{fb.target}"] += 1
+            targs, tkw = [conv(a) for a in args], {k: conv(v) for k, v in kwargs.items()}
+            out = fb.torch_fn(targs, tkw)
+            if fb.inplace_arg is not None:
+                dev = args[fb.inplace_arg]
+                host = ttnn.from_torch(targs[fb.inplace_arg], dtype=dev.dtype, layout=dev.layout)
+                ttnn.copy_host_to_device_tensor(host, dev)
+                return None
+            ref = next(a for a in args if isinstance(a, ttnn.Tensor))
+            want = kwargs.get("memory_config")
+
+            def upload(t):
+                r = ttnn.from_torch(
+                    t.to(torch.bfloat16),
+                    dtype=kwargs.get("dtype") or ref.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if want is None or not want.is_sharded():
+                    return r
+                return ttnn.to_memory_config(r, want if want.shard_spec is not None else _with_shard_spec(r, want))
+
+            return [upload(t) for t in out] if isinstance(out, (list, tuple)) else upload(out)
+
+        monkeypatch.setattr(parent, attr, wrapper)
 
     def _install_workaround(self, monkeypatch, wa):
         parent, attr = resolve(wa.target)

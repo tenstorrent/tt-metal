@@ -33,6 +33,7 @@ class RunConfig:
     kv_blocks: int | None
     host_ops: tuple
     disable_wa: tuple
+    allow_uncertified: bool
     quasar_config: bool
     expect_grid: tuple | None
     run_dir: Path
@@ -50,6 +51,7 @@ class RunConfig:
             kv_blocks=None if kv is None else int(kv),
             host_ops=_csv(getoption("--qwen-host-ops")),
             disable_wa=_csv(getoption("--qwen-disable-wa")),
+            allow_uncertified=bool(getoption("--qwen-allow-uncertified")),
             quasar_config=bool(getoption("--qwen-quasar-config")),
             expect_grid=parse_grid(getoption("--qwen-expect-grid")),
             run_dir=Path(str(getoption("--qwen-run-dir"))),

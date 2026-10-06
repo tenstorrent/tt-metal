@@ -35,7 +35,7 @@ Script defaults: `--size tiny --vision-layers 2 --text-layers 2 --decode-steps 1
 | `--timeout S` | pytest timeout (WH/BH and emulator 14400, craq-sim 3600) |
 | `--ttsim wh\|bh`, `--grid 2x3\|native`, `--config quasar\|native` | `run_wh_bh.sh` only; `--config native` runs the unmodified bf8 config as a hardware control |
 | `--grid 2x3\|8x4` | `run_craq.sh` only |
-| `-- <args>` | passed to pytest, e.g. `-- --qwen-dump-stages` to save golden and TT stage tensors |
+| `-- <args>` | passed to pytest, e.g. `-- --qwen-dump-stages` to save golden and TT stage tensors, or `-- --qwen-allow-uncertified` to use host fallbacks not yet checked against the real op (`test_fallbacks.py`) |
 
 Exit codes: 0 PASS, 3 DIAGNOSTIC (some ops ran on the host), anything else FAIL or error.
 
