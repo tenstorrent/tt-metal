@@ -423,7 +423,7 @@ class DSV41PrefillLayer:
         x, pre_in = xs[0], pres[0]
         N, D = int(x.shape[2]), int(x.shape[3]) // 4
         n8 = N // T
-        assert self.pmoe.T == 8 * T, "column split needs DSV41_MOE_G=8"
+        assert self.umoe is not None or self.pmoe.T == 8 * T, "column split needs DSV41_MOE_G=8 (or the unified MoE)"
         mc, cc = L.mesh_config, L.ccl
         eps = L.eps
         pka, pkf = self._pk()
@@ -504,7 +504,7 @@ class DSV41PrefillLayer:
         """
         L, T = self.L, self.T
         n8 = len(xs)
-        assert self.pmoe.T == 8 * T, "column split needs DSV41_MOE_G=8"
+        assert self.umoe is not None or self.pmoe.T == 8 * T, "column split needs DSV41_MOE_G=8 (or the unified MoE)"
         mc, cc = L.mesh_config, L.ccl
         eps = L.eps
         _mark("start")
