@@ -42,6 +42,15 @@ void kernel_main() {
     dfb_sum_scaler_obj.wait_front(onetile);
 
     for (std::uint32_t n = 0; n < N; ++n) {
+        // SOFTMIN shift: use min(x) instead of max(x). A max-based shift is +inf for a row
+        // holding +inf, and exp(max(x) - x) then saturates the whole row (inf / inf = NaN, and the
+        // +inf lane itself is inf - inf = NaN) -- see #56371. Shifted by min(x) instead, a row that
+        // holds +inf still has a finite minimum, so the +inf lanes exponentiate to 0 and the finite
+        // lanes keep their relative weights -- that is torch's distribution. (A row whose minimum is
+        // itself -inf is the documented divergent case: the whole mass lands on that lane.)
+        // The padding lanes of the last tile are masked to +inf: a 0-masked pad (what the MAX path
+        // wants) would win the MIN on an all-positive row.
+#ifdef SOFTMAX
         // find max value
         if (Ht == 1) {
             mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(0, 0, /*pop0=*/0, /*popm=*/0);
@@ -64,6 +73,63 @@ void kernel_main() {
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::Accumulate::at(dfb::max, 1));  // iteration=1, reload from dfb::max
         }
+#else
+        // MIN is SFPU-only: a Fast fp32 MIN does not exist, so an fp32 reduce input needs
+        // ReduceFp32Mode::Accurate; bf16 ignores fp32_mode entirely. Deduce it from the compile-time
+        // formats of the buffers THIS reduce can read (unpack_src_format[] is a constexpr descriptor
+        // array, so it is usable as a template argument):
+        //   * dfb::in0 -- the leading tiles (the large kernels' phase 1 reduces them straight out of it);
+        //   * dfb::tmp -- the masked last tile; the factories declare TMP with intermed_data_format,
+        //                 which is Float32 whenever fp32_dest_acc_en is enabled, even for a bf16 tensor.
+        // Deriving the mode from dfb::in0 alone picks Fast for bf16 + fp32 accumulation and trips the
+        // MIN static_assert in reduce_helpers_compute.inl.
+        //   * dfb::x_minus_max -- the staged copy the reduce below actually reads when Wt/Ht > 1.
+        constexpr DataFormat kSoftminStagedFormat = static_cast<DataFormat>(unpack_src_format[dfb::x_minus_max]);
+        constexpr DataFormat kSoftminInFormat = static_cast<DataFormat>(unpack_src_format[dfb::in0]);
+        constexpr DataFormat kSoftminScratchFormat = static_cast<DataFormat>(unpack_src_format[dfb::tmp]);
+        constexpr ReduceFp32Mode kFp32Mode =
+            (kSoftminInFormat == DataFormat::Float32 || kSoftminScratchFormat == DataFormat::Float32 || kSoftminStagedFormat == DataFormat::Float32)
+                ? ReduceFp32Mode::Accurate
+                : ReduceFp32Mode::Fast;
+        // find min value
+        if (Ht == 1) {
+            mask_posinf_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(0, 0, /*pop0=*/0, /*popm=*/0);
+
+            ckl::reduce<
+                PoolType::MIN,
+                ReduceDim::REDUCE_COL,
+                dfb::tmp,
+                dfb::max_scaler,
+                dfb::max,
+                ckl::ReduceInputPolicy::WaitAndPopPerTile,
+                ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                kFp32Mode>(
+                ckl::ReduceInputBlockShape::single());
+        } else {
+            // Stage a masked copy of the whole reduce axis in dfb::x_minus_max (Ht entries: Ht - 1 plain copies
+            // plus the masked last tile, so the staging buffer has to be Ht deep; still free here)
+            // and reduce it in ONE call, instead of running a second reduce() over the masked tile and
+            // reloading the first one as an accumulator. The reload copies back a tile that the packer
+            // wrote with the reduce mask applied, so only the reduce lane is valid there and every
+            // other lane comes back as 0; an element-wise MIN fold would take those 0s as real input
+            // and clamp every row minimum to 0 whenever the row is all-positive. (The same reload is
+            // only accidentally right for MAX on non-negative data and for SUM, whose identity is 0.)
+            for (uint32_t i = 0; i < Ht - 1; ++i) {
+                copy_tile_to_dfb<dfb::in0, dfb::x_minus_max>(i, /*pop=*/0);
+            }
+            mask_posinf_tile_to_dfb<dfb::in0, dfb::mask, dfb::x_minus_max>(Ht - 1, 0, /*pop0=*/0, /*popm=*/0);
+            ckl::reduce<
+                PoolType::MIN,
+                ReduceDim::REDUCE_COL,
+                dfb::x_minus_max,
+                dfb::max_scaler,
+                dfb::max,
+                ckl::ReduceInputPolicy::WaitAndPopPerTile,
+                ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                kFp32Mode>(
+                ckl::ReduceInputBlockShape::col(Ht));
+        }
+#endif
 
         // compute x - max(x)
         ckl::sub<
