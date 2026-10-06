@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Semantic selections using device-derived chronology; no host offset readback."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG
@@ -27,6 +27,11 @@ class ChronologicalSelections:
     """
 
     _selection_records: ttnn.Tensor
+    # Index rows sliced out of the table, by (record, count). Every KDA layer of a chunk reads the same rows, so a
+    # table shared across layers slices each row once per chunk instead of once per layer. They live in DRAM: a
+    # shared table keeps them for the whole chunk, and long-lived L1 buffers clash with later programs' static
+    # circular buffers.
+    _indices_cache: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
     def select_outgoing_history(self, projected_qkv: ttnn.Tensor) -> ttnn.Tensor:
         """Three local tokens preceding the next physical rank's segment."""
@@ -67,15 +72,18 @@ class ChronologicalSelections:
         return self._select_block(candidates, _layout.FINAL_STATE)
 
     def _indices(self, record_index: int, count: int) -> ttnn.Tensor:
-        return ttnn.reshape(
-            ttnn.slice(
-                self._selection_records,
-                (record_index, 0),
-                (record_index + 1, count),
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            ),
-            (count,),
-        )
+        key = (record_index, count)
+        if key not in self._indices_cache:
+            self._indices_cache[key] = ttnn.reshape(
+                ttnn.slice(
+                    self._selection_records,
+                    (record_index, 0),
+                    (record_index + 1, count),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+                (count,),
+            )
+        return self._indices_cache[key]
 
     def _select_block(
         self, tensor: ttnn.Tensor, record_index: int, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
