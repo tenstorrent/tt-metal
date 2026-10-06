@@ -280,8 +280,11 @@ mock ignores the runner's silicon, so the N150 is only a host with the `/mnt/MLP
 the entry points the descriptor at the checked-in `tt-cluster-descriptors` 6U yaml, sets
 `HF_HOME=/mnt/MLPerf/huggingface` because the weight resolver searches `$HF_HOME/hub` (CI exports
 `HF_HUB_CACHE` only), and sets `MINIMAX_H3_DRAM_PROBE=1` so a failure comes with the per-owner
-attribution. Without the weights the test skips. A random-weights mode for the pipeline would lift
-the weights requirement and let the test run on the CPU-only fabric lane
+attribution. Locally a missing snapshot skips the test; the CI entry sets
+`MINIMAX_H3_REQUIRE_WEIGHTS=1` so a runner without the snapshot fails instead of going green (the
+first N150 runs on 2026-10-06 skipped: `/mnt/MLPerf/huggingface/hub` had no MiniMaxAI/MiniMax-H3, and
+ref2va needs transformer_ref + text_encoder + vae + audio_vae, about 140 GB). A random-weights mode
+for the pipeline would lift the weights requirement and let the test run on the CPU-only fabric lane
 (`.github/workflows/fabric-cpu-only-tests-impl.yaml`) instead.
 
 The first run of this test was itself a demonstration. It was written with the t2va meshes'
