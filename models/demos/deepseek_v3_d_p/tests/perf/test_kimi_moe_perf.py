@@ -104,12 +104,17 @@ class _MoEPerfCase:
 # 5,331,206 / 5,438,128 / 5,344,249 ns (jobs 108833542648, 108591989836, 108483307703), so this is a
 # 5.0% speedup against their median, not a short record window.
 #
+# Re-centred 2026-10-06 to 3,879,202 ns (Blaze run 37511163391 / job 112436803790), one sample,
+# 23.6% under the previous midpoint. Still 24 programs, and main reads the same: 3,805,970 ns in run
+# 37416411631 / job 112118127803, failing the old band too, so the drop landed on main. This test runs
+# TtMoe eagerly, so the routed-expert/combine overlap (traced only) is not part of it.
+#
 # K2.7-Code is architecturally identical to K2.6 (61 layers, 384 routed experts, same dims), so the
 # MoE shapes are unchanged; only the label moved.
 _K2_7 = _MoEPerfCase(
     label="kimi-k2.7",
     config=KimiK27Config,
-    expected_ns=5_077_713,
+    expected_ns=3_879_202,
     # 4%, not 3%: K2.7 runs FIRST in the merged job, so it absorbs the warm-up variability that K3,
     # running second on an already-warm device, does not -- five samples on the previous shape spanned
     # 7.12% peak to peak against K3's 0.44%. Do NOT tighten this to match K3; the asymmetry is a
