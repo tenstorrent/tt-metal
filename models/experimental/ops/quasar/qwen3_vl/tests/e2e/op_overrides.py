@@ -270,7 +270,6 @@ FALLBACKS = {
     f.target: f
     for f in [
         HostFallback("ttnn.linear", "golden", _golden("ttnn.linear")),
-        HostFallback("ttnn.matmul", "golden", _golden("ttnn.matmul")),
         HostFallback("ttnn.rms_norm", "golden", _golden("ttnn.rms_norm", _flat_affine)),
         HostFallback("ttnn.layer_norm", "golden", _golden("ttnn.layer_norm", _flat_affine)),
         HostFallback("ttnn.add", "golden", _golden("ttnn.add")),
@@ -279,11 +278,6 @@ FALLBACKS = {
             "ttnn.transformer.scaled_dot_product_attention",
             "golden",
             _golden("ttnn.transformer.scaled_dot_product_attention"),
-        ),
-        HostFallback(
-            "ttnn.transformer.chunked_scaled_dot_product_attention",
-            "golden",
-            _golden("ttnn.transformer.chunked_scaled_dot_product_attention"),
         ),
         HostFallback(
             "ttnn.transformer.paged_scaled_dot_product_attention_decode",
