@@ -64,6 +64,10 @@ SDPA chunk with zero rows (masked ``-inf``), and only then tilized.
 
 Every projection is a plain ``ttnn.linear`` with HiFi4/fp32 accumulation and DRAM-interleaved
 weights; this is the functional baseline the per-block optimization work starts from.
+
+Mask-free attention (``maskless=True``, see ``MASKLESS_PREFILL.md``). Sliding layers build no additive mask: they
+run the dense op's own ``is_causal`` + ``sliding_window_size`` over ``[real tail | chunk]``, the query front-padded
+so ``Sq == Sk``. CSA / HCA layers keep the masked SDPA (their entry visibility is not a token-causal relation).
 """
 
 from dataclasses import dataclass
@@ -135,12 +139,13 @@ class PrefillStaticBuffers:
     updates the buffers in place.
 
     * ``tail``      -- ROW_MAJOR bf16 ``[1, 1, sliding_window, Dh]``: the last window of roped K=V rows.
-    * ``entries``   -- ROW_MAJOR bf16 ``[1, 1, E, Dh]`` (HCA / CSA): a FIFO of compressed entries *anchored at
-      its end*: after ``n`` entries have been emitted, entry ``w`` sits in row ``E - n + w`` (a chunk drops the
-      oldest rows and appends its own at the end). SDPA is invariant to the order of its keys, so the mask
-      only has to name the same rows (:meth:`DeepSeekV4PrefillAttention.mask_tables_host`).
+    * ``entries``   -- ROW_MAJOR bf16 ``[1, 1, cap, Dh]`` (HCA / CSA): the compressed entries, *front-anchored* as
+      in decode's caches: entry ``w`` always sits in row ``w``, so after a chunk the valid rows are the prefix
+      ``[0, (start + T) / rate)``. A chunk writes its ``T / rate`` entries at rows ``start / rate + w`` (row ids
+      from the packet, ``PrefillStaticStep.entry_rows``) with ``indexed_fill``; rows past the prefix are stale
+      or zero and never visible (:meth:`DeepSeekV4PrefillAttention.mask_tables_host`).
     * ``prev_kv`` / ``prev_gate`` -- CSA's overlap window, exactly as in :class:`PrefillAttentionState`.
-    * ``idx_keys`` / ``idx_prev_kv`` / ``idx_prev_gate`` -- the lightning indexer's keys (same FIFO layout as
+    * ``idx_keys`` / ``idx_prev_kv`` / ``idx_prev_gate`` -- the lightning indexer's keys (same layout as
       ``entries``, width ``index_head_dim``) and its own overlap window, when the layer runs the indexer.
 
     Every chunk is ``C`` tokens, a prompt's last one padded at its end, so after it ``tail`` and the overlap
@@ -173,17 +178,22 @@ class PrefillStaticStep:
     ``rope[kind]`` = ``(cos, sin)`` ``[1, 1, T, rope_dim]`` for the chunk's tokens, ``entry_rope[rate]`` the same
     for the chunk's new compressed entries (positions ``start + w * rate``), ``masks[layer_type]`` the additive
     mask ``[1, 1, T, sliding_window + T + cap]`` (see :meth:`DeepSeekV4PrefillAttention.mask_tables_host`) and
-    ``caps[layer_type]`` the number of FIFO rows (``cap``) that layer type's SDPA reads (0 for sliding layers).
+    ``caps[layer_type]`` the number of entry rows (``cap``) that layer type's SDPA reads (0 for sliding layers).
     """
 
     rope: dict
     entry_rope: dict
     masks: dict
     caps: dict
-    # Lightning indexer (CSA only): the causal cut ``[1, 1, T, cap]`` over the FIFO rows (the mask's FIFO columns),
+    # Lightning indexer (CSA only): the causal cut ``[1, 1, T, cap]`` over the entry rows (the mask's entry columns),
     # and a persistent zero key pad ``[1, 1, kv_len, index_head_dim]`` the trace fills with those rows before scoring.
     index_cuts: Optional[dict] = None
     index_pads: Optional[dict] = None
+    # rate -> uint32 ROW_MAJOR ``[T / rate]``: the entry rows ``start / rate + w`` this chunk's entries are written to.
+    entry_rows: Optional[dict] = None
+    # Mask-free sliding layers: this step is the prompt's first chunk (its tail holds no real token). A trace bakes
+    # it in, so the traced prefill captures a separate first-chunk trace.
+    first_chunk: bool = False
 
 
 def _rot_transformation_mat() -> torch.Tensor:
@@ -240,8 +250,12 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         tp_size: int = 1,
         dense_csa: bool = False,
         lightning_indexer: bool = False,
+        maskless: bool = False,
     ):
         """Upload the layer's weights and constants to ``device``.
+
+        ``maskless`` runs a sliding layer without an additive mask (dense causal sliding-window SDPA, see the module
+        docstring); CSA / HCA layers ignore it.
 
         ``lightning_indexer`` runs the real lightning indexer on CSA layers (needs the ``compressor.indexer.*``
         weights): past ``index_topk`` compressed entries each query attends to the top-``index_topk`` entries by
@@ -362,6 +376,17 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         # axis so each rank's sinks line up with its query heads.
         sinks = host("sinks").reshape(1, self.num_heads, 1, 1) / self.scaling
         self.sinks = self._to_device(sinks, shard_dim=1)
+
+        self.maskless = bool(maskless) and self.is_sliding
+        self._q_pad = None  # [1, H_local, sliding_window, Dh] zeros, the mask-free sliding query's front pad
+        if self.maskless:
+            self._q_pad = ttnn.from_torch(
+                torch.zeros(1, self.local_num_heads, self.sliding_window, self.head_dim),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                mesh_mapper=self._replicate,
+            )
 
         self.trans_mat = self._to_device(_rot_transformation_mat())
 
@@ -744,9 +769,23 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         ``state.idx_keys`` must already hold this chunk's keys, so ``E = (seq_len + T) // rate`` (``state.seq_len``
         is the chunk's start).
         """
+        scores, cut = self._index_scores(latent, hidden, state, cos, sin)
+        k = min(self.index_topk, scores.shape[3])
+        theta = ttnn.min(ttnn.topk(scores, k=k, dim=-1, largest=True, sorted=True)[0], dim=-1, keepdim=True)
+        return ttnn.add(ttnn.log(ttnn.ge(scores, theta)), cut)
+
+    def _index_scores(
+        self,
+        latent: ttnn.Tensor,
+        hidden: ttnn.Tensor,
+        state: PrefillAttentionState,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """``(scores, cut)``: the indexer scores ``[1, 1, T, E]`` TILE with the causal cut already added, and the cut."""
         num_tokens, start = hidden.shape[2], state.seq_len
         num_entries = state.idx_keys.shape[2]
-        heads, dim = self.index_heads, self.index_head_dim
+        heads = self.index_heads
 
         q = self.i_q_b_proj(latent)
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -777,11 +816,7 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         entry = torch.arange(num_entries).view(1, -1)
         visible = ((start + torch.arange(num_tokens) + 1) // self.rate).view(-1, 1)
         cut = self._to_device(torch.where(entry < visible, 0.0, float("-inf")).reshape(1, 1, num_tokens, num_entries))
-        scores = ttnn.add(scores, cut)
-
-        k = min(self.index_topk, num_entries)
-        theta = ttnn.min(ttnn.topk(scores, k=k, dim=-1, largest=True, sorted=True)[0], dim=-1, keepdim=True)
-        return ttnn.add(ttnn.log(ttnn.ge(scores, theta)), cut)
+        return ttnn.add(scores, cut), cut
 
     def idx_keys_padded(self, state: PrefillAttentionState, rows: int) -> ttnn.Tensor:
         """The index keys as a TILE tensor ``[1, 1, rows, Di]``, zero rows appended up to ``rows``."""
@@ -842,6 +877,69 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         )
         # K = V, so V carried K's RoPE on its trailing slice: rotate it back by the same angle
         # the other way (sin -> -sin) at the query's position.
+        return self._rope(attn, cos, ttnn.neg(sin))
+
+    # ------------------------------------------------------------------ #
+    # mask-free attention
+    # ------------------------------------------------------------------ #
+    def _sliding_attend(self, q: ttnn.Tensor, window: ttnn.Tensor, real_tail: int) -> ttnn.Tensor:
+        """Mask-free sliding-window SDPA of ``q`` ``[1, H_local, T, Dh]`` over the ROW_MAJOR ``window`` ``[tail | chunk]``.
+
+        Only the last ``real_tail`` tail rows hold tokens (``min(start, sliding_window)``; the rest stand for
+        positions before 0), so the keys are those rows plus the chunk, and ``q`` is front-padded with as many zero
+        rows so ``Sq == Sk`` (which ``is_causal`` requires): query ``real_tail + i`` then sees exactly its window
+        through ``sliding_window_size``, and the pad rows' outputs are dropped. Returns ``[1, H_local, T, Dh]`` TILE.
+        """
+        sw = self.sliding_window
+        num_tokens = q.shape[2]
+        keys = ttnn.slice(window, [0, 0, sw - real_tail, 0], [1, 1, sw + num_tokens, self.head_dim])
+        keys = ttnn.to_layout(keys, ttnn.TILE_LAYOUT)
+        if real_tail:
+            pad = self._q_pad
+            if real_tail < sw:
+                pad = ttnn.slice(pad, [0, 0, 0, 0], [1, self.local_num_heads, real_tail, self.head_dim])
+            q = ttnn.concat([pad, q], dim=2)
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q,
+            keys,
+            keys,
+            is_causal=True,
+            sliding_window_size=sw,
+            scale=self.scaling,
+            attention_sink=self.sinks,
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
+                q_chunk_size=_SDPA_CHUNK,
+                k_chunk_size=_SDPA_CHUNK,
+                exp_approx_mode=False,
+            ),
+        )
+        ttnn.deallocate(keys)
+        if real_tail:
+            ttnn.deallocate(q)
+            full = attn
+            attn = ttnn.slice(
+                full, [0, 0, real_tail, 0], [1, self.local_num_heads, real_tail + num_tokens, self.head_dim]
+            )
+            ttnn.deallocate(full)
+        return attn
+
+    def _attend_maskless(
+        self,
+        q: ttnn.Tensor,
+        kv: ttnn.Tensor,
+        state: PrefillAttentionState,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """:meth:`_attend` for a mask-free sliding layer (:meth:`_sliding_attend`). Rolls the KV tail."""
+        num_tokens = q.shape[2]
+        sw = self.sliding_window
+        chunk_rm = ttnn.to_layout(kv, ttnn.ROW_MAJOR_LAYOUT)
+        tail = state.kv_tail if state.kv_tail is not None else self._zeros_rm(sw)
+        window = ttnn.concat([tail, chunk_rm], dim=2)  # [1, 1, sw + T, Dh]
+        state.kv_tail = ttnn.slice(window, [0, 0, num_tokens, 0], [1, 1, num_tokens + sw, self.head_dim])
+        attn = self._sliding_attend(q, window, min(state.seq_len, sw))
         return self._rope(attn, cos, ttnn.neg(sin))
 
     def _o_proj(self, attn: ttnn.Tensor) -> ttnn.Tensor:
@@ -917,11 +1015,13 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         q, latent = self._q_stem(hidden, cos, sin, return_latent=True)
         kv = self._kv_stem(hidden, cos, sin)
         entries = self._compress(hidden, state)
-        entry_sel = None
-        if self.use_indexer and entries.shape[2] > self.index_topk:
-            # Below index_topk entries top-k selects every visible entry (the plain causal mask); past it, select.
-            entry_sel = self._select_entries(latent, hidden, state, cos, sin)
-        attn = self._attend(q, kv, entries, state, cos, sin, entry_sel)
+        # Below index_topk entries top-k selects every visible entry (the plain causal set); past it, select.
+        selects = self.use_indexer and entries.shape[2] > self.index_topk
+        if self.maskless:
+            attn = self._attend_maskless(q, kv, state, cos, sin)
+        else:
+            entry_sel = self._select_entries(latent, hidden, state, cos, sin) if selects else None
+            attn = self._attend(q, kv, entries, state, cos, sin, entry_sel)
         out = self._o_proj(attn)
 
         state.seq_len += num_tokens
@@ -932,7 +1032,7 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
     # ------------------------------------------------------------------ #
     def new_static_buffers(self, chunk_size: int, entry_capacity: int = 0) -> PrefillStaticBuffers:
         """Persistent zeroed state for :meth:`forward_static` over ``chunk_size``-token chunks; ``entry_capacity``
-        rows of compressed FIFO.
+        front-anchored compressed entry rows.
 
         Allocated once, before any trace exists (allocating on a device that holds a trace is unsafe).
         """
@@ -969,22 +1069,20 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         return ttnn.from_torch(t, dtype=dtype, layout=layout, mesh_mapper=self._replicate)
 
     def mask_tables_host(self, num_tokens: int, cap: int) -> tuple[torch.Tensor, torch.Tensor]:
-        """``(static [T, K], threshold [K])`` fp32 with ``K = sliding_window + T + cap``: the traced chunk mask's constants.
+        """``(static [T, K], threshold [T, K])`` fp32 with ``K = sliding_window + T + cap``: the traced mask's constants.
 
         A traced chunk's additive mask is made on device from its start position (a multiple of ``ALIGNMENT``)
-        as ``static + (threshold > start) * NEG``. Key layout ``[tail | chunk | FIFO rows]``:
+        as ``static + (threshold > start) * NEG``. Key layout ``[tail | chunk | entry rows]``:
 
         * Window part (``sliding_window + T`` columns; column ``k`` is the token at absolute position
           ``start - sliding_window + k``): query ``i`` sees ``i < k <= i + sliding_window`` (``static``), and
           never a position before 0, i.e. column ``k`` is cut while ``sliding_window - k > start``.
-        * FIFO part: the last ``cap`` rows of the compressed buffer, in which the ``E = (start + T) // rate``
-          entries emitted after this chunk occupy the last ``E`` rows, entry ``w`` at row ``c = cap - E + w``;
-          query ``i`` sees entry ``w`` iff ``w < (start + i + 1) // rate``. With ``start`` a multiple of ``rate``
-          that is ``c - cap + T // rate < (i + 1) // rate`` (``static``), and row ``c`` holds an entry at all iff
-          ``c >= cap - E``, i.e. it is cut while ``(cap - c) * rate - T > start``.
+        * Entry part: the ``cap`` front-anchored entry rows, entry ``w`` in row ``w``. Query ``i`` sees it iff
+          ``w < start / rate + (i + 1) // rate``, i.e. it is cut while ``rate * (w - (i + 1) // rate) + 1 > start``
+          (``start`` is a multiple of ``rate``). That also cuts every row not written yet (``w >= E``).
 
         The thresholds are integers far below ``2**24``, so the fp32 compare on device is exact. The same columns,
-        sliced out of the mask, are the lightning indexer's causal cut over the FIFO rows.
+        sliced out of the mask, are the lightning indexer's causal cut over the entry rows.
         """
         sw = self.sliding_window
         window_cols = sw + num_tokens
@@ -992,13 +1090,12 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         key = torch.arange(window_cols).view(1, -1)
         static = torch.full((num_tokens, window_cols + cap), float("-inf"))
         static[:, :window_cols].masked_fill_((key <= query + sw) & (key > query), 0.0)
-        threshold = torch.empty(window_cols + cap)
-        threshold[:window_cols] = sw - torch.arange(window_cols)
+        threshold = torch.empty(num_tokens, window_cols + cap)
+        threshold[:, :window_cols] = (sw - key).float()
         if cap:
+            static[:, window_cols:] = 0.0
             row = torch.arange(cap).view(1, -1)
-            visible = ((torch.arange(num_tokens) + 1) // self.rate).view(-1, 1)
-            static[:, window_cols:].masked_fill_(row - cap + num_tokens // self.rate < visible, 0.0)
-            threshold[window_cols:] = (cap - torch.arange(cap)) * self.rate - num_tokens
+            threshold[:, window_cols:] = (self.rate * (row - (query + 1) // self.rate) + 1).float()
         return static, threshold
 
     def reset_static(self, bufs: PrefillStaticBuffers) -> None:
@@ -1008,7 +1105,7 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         host = self._static_reset_host
 
         def zeros(key: str, shape: tuple, dtype: ttnn.DataType, fill: float = 0.0) -> ttnn.Tensor:
-            # The entry FIFOs are sized to the prepared prompt, so a later prompt of another length (a new
+            # The entry buffers are sized to the prepared prompt, so a later prompt of another length (a new
             # traced plan on this same layer) needs its own host tensor.
             if host.get(key, (None, None))[0] != shape:
                 host[key] = (shape, self.host_tensor(torch.full(shape, fill), dtype, ttnn.ROW_MAJOR_LAYOUT))
@@ -1035,25 +1132,23 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         n, width = src.shape[2], src.shape[3]
         ttnn.experimental.slice_write(src, dst, [0, 0, first_row, 0], [1, 1, first_row + n, width], [1, 1, 1, 1])
 
-    def _fifo_append(self, buf: ttnn.Tensor, new: ttnn.Tensor, cap: int) -> ttnn.Tensor:
-        """Append ``new`` ``[1, 1, n, W]`` to the end-anchored FIFO ``buf`` and return the ``cap`` rows just written."""
-        n, width = new.shape[2], new.shape[3]
-        total = buf.shape[2]
-        if cap < n or cap > total:
-            raise ValueError(f"layer {self.layer_idx}: cap {cap} must be in [{n}, {total}]")
-        visible = new
-        if cap > n:  # drop the oldest ``n`` rows of the read window, append the new entries
-            old = ttnn.slice(buf, [0, 0, total - cap + n, 0], [1, 1, total, width])
-            visible = ttnn.concat([old, new], dim=2)
-            ttnn.deallocate(old)
-            ttnn.deallocate(new)
-        self._write_rows(visible, buf, total - cap)
-        return visible
+    def _write_entries(self, buf: ttnn.Tensor, new: ttnn.Tensor, rows: ttnn.Tensor, cap: int) -> None:
+        """Write ``new`` ``[1, 1, n, W]`` into rows ``rows`` (uint32 ``[n]``, on device) of ``buf``, in place.
+
+        The rows are data (they follow the chunk's start), so a fixed-offset ``slice_write`` cannot do this.
+        ``indexed_fill`` builds a new tensor, which is copied back into the persistent buffer.
+        """
+        if buf.shape[2] != cap:
+            raise ValueError(f"layer {self.layer_idx}: entry buffer has {buf.shape[2]} rows, step reads {cap}")
+        written = ttnn.indexed_fill(rows, buf, new, dim=2)
+        ttnn.deallocate(new)
+        ttnn.copy(written, buf)
+        ttnn.deallocate(written)
 
     def _compress_static(
         self, hidden: ttnn.Tensor, bufs: PrefillStaticBuffers, step: PrefillStaticStep
     ) -> Optional[ttnn.Tensor]:
-        """:meth:`_compress` over the persistent FIFO: returns the ``cap`` rows SDPA reads (ROW_MAJOR)."""
+        """:meth:`_compress` into the persistent entry rows: returns them (``bufs.entries``, all ``cap`` rows)."""
         if self.is_sliding:
             return None
         shim = PrefillAttentionState(csa_prev_kv=bufs.prev_kv, csa_prev_gate=bufs.prev_gate)
@@ -1062,21 +1157,20 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         else:
             pooled = self._pool_hca(hidden)
         new = self._finish_entries(pooled, tables=step.entry_rope[self.rate])
-        visible = self._fifo_append(bufs.entries, new, step.caps[self.layer_type])
+        self._write_entries(bufs.entries, new, step.entry_rows[self.rate], step.caps[self.layer_type])
         if self.is_csa:
             self._write_rows(shim.csa_prev_kv, bufs.prev_kv, 0)
             self._write_rows(shim.csa_prev_gate, bufs.prev_gate, 0)
             ttnn.deallocate(shim.csa_prev_kv)
             ttnn.deallocate(shim.csa_prev_gate)
-        return visible
+        return bufs.entries
 
     def _index_keys_static(self, hidden: ttnn.Tensor, bufs: PrefillStaticBuffers, step: PrefillStaticStep) -> None:
-        """Append this chunk's lightning-indexer keys to ``bufs.idx_keys`` (same FIFO order as the entries)."""
+        """Write this chunk's lightning-indexer keys into ``bufs.idx_keys`` (same rows as the entries)."""
         shim = PrefillAttentionState(idx_prev_kv=bufs.idx_prev_kv, idx_prev_gate=bufs.idx_prev_gate)
         pooled = self._pool_csa(hidden, shim, indexer=True, rows_out=(bufs.idx_ca_kv, bufs.idx_ca_gate))
         new = self._finish_entries(pooled, tables=step.entry_rope[self.rate], norm_weight=self.i_norm_weight)
-        visible = self._fifo_append(bufs.idx_keys, new, step.caps[self.layer_type])
-        ttnn.deallocate(visible)
+        self._write_entries(bufs.idx_keys, new, step.entry_rows[self.rate], step.caps[self.layer_type])
         self._write_rows(shim.idx_prev_kv, bufs.idx_prev_kv, 0)
         self._write_rows(shim.idx_prev_gate, bufs.idx_prev_gate, 0)
         ttnn.deallocate(shim.idx_prev_kv)
@@ -1091,15 +1185,29 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         cos: ttnn.Tensor,
         sin: ttnn.Tensor,
     ) -> ttnn.Tensor:
-        """Trace-safe :meth:`_select_entries`: additive TILE mask ``[1, 1, T, cap]`` over the FIFO rows.
+        """Trace-safe :meth:`_select_entries`: additive TILE mask ``[1, 1, T, cap]`` over the entry rows.
 
         The key pad and the causal cut are persistent (``step``); ``cap`` and ``T`` are fixed for the trace, so
         ``topk``'s ``k`` is too. A query with fewer than ``k`` visible entries keeps all of them, because the
         k-th score is then ``-inf`` and the causal cut is added back afterwards.
         """
+        scores, cut = self._index_scores_static(latent, hidden, bufs, step, cos, sin)
+        k = min(self.index_topk, scores.shape[3])
+        theta = ttnn.min(ttnn.topk(scores, k=k, dim=-1, largest=True, sorted=True)[0], dim=-1, keepdim=True)
+        return ttnn.add(ttnn.log(ttnn.ge(scores, theta)), cut)
+
+    def _index_scores_static(
+        self,
+        latent: ttnn.Tensor,
+        hidden: ttnn.Tensor,
+        bufs: PrefillStaticBuffers,
+        step: PrefillStaticStep,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Trace-safe :meth:`_index_scores` over the ``cap`` entry rows: ``(scores, cut)`` ``[1, 1, T, cap]``."""
         cap = step.caps[self.layer_type]
         num_tokens = hidden.shape[2]
-        dim = self.index_head_dim
         q = self.i_q_b_proj(latent)
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             q,
@@ -1111,10 +1219,8 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         q = self._rope(q, cos, sin)
         weights = ttnn.multiply(self.i_weights_proj(hidden), self.index_scale)
 
-        total = bufs.idx_keys.shape[2]
-        keys_rm = ttnn.slice(bufs.idx_keys, [0, 0, total - cap, 0], [1, 1, total, dim])
         pad = step.index_pads[self.layer_type]
-        self._write_rows(keys_rm, pad, 0)
+        self._write_rows(bufs.idx_keys, pad, 0)
         kv_len = pad.shape[2]
         keys = ttnn.to_layout(pad, ttnn.TILE_LAYOUT)
         logits = ttnn.experimental.indexer_score_dsa(
@@ -1128,10 +1234,7 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         )
         scores = ttnn.to_layout(ttnn.slice(logits, [0, 0, 0, 0], [1, 1, num_tokens, cap]), ttnn.TILE_LAYOUT)
         cut = step.index_cuts[self.layer_type]
-        scores = ttnn.add(scores, cut)
-        k = min(self.index_topk, cap)
-        theta = ttnn.min(ttnn.topk(scores, k=k, dim=-1, largest=True, sorted=True)[0], dim=-1, keepdim=True)
-        return ttnn.add(ttnn.log(ttnn.ge(scores, theta)), cut)
+        return ttnn.add(scores, cut), cut
 
     def _attend_static(
         self,
@@ -1147,6 +1250,11 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         """:meth:`_attend` with the tail rolled in place and the mask supplied by ``step``.
 
         ``entry_sel`` ``[1, 1, T, cap]`` (the lightning indexer) is added onto the mask's entry columns.
+        ``visible`` is the persistent ``bufs.entries``.
+
+        Mask-free sliding layers run :meth:`_sliding_attend` instead: over the chunk alone on the prompt's first
+        chunk (``step.first_chunk``), else over the whole window (a later chunk starts at least ``sliding_window``
+        in, since chunks are at least that long).
         """
         num_tokens = q.shape[2]
         sw = self.sliding_window
@@ -1158,12 +1266,18 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         self._write_rows(new_tail, bufs.tail, 0)
         ttnn.deallocate(new_tail)
 
+        if self.maskless:
+            if num_tokens < sw:
+                raise ValueError(f"mask-free traced chunks ({num_tokens}) must be at least sliding_window ({sw})")
+            attn = self._sliding_attend(q, window, 0 if step.first_chunk else sw)
+            ttnn.deallocate(window)
+            return self._rope(attn, cos, ttnn.neg(sin))
+
         if visible is None:
             kv_all = window
         else:
             kv_all = ttnn.concat([window, visible], dim=2)
             ttnn.deallocate(window)
-            ttnn.deallocate(visible)
         if kv_all.shape[2] % _SDPA_CHUNK:
             raise ValueError(f"traced SDPA keys ({kv_all.shape[2]}) must be a multiple of {_SDPA_CHUNK}")
         kv_all = ttnn.to_layout(kv_all, ttnn.TILE_LAYOUT)

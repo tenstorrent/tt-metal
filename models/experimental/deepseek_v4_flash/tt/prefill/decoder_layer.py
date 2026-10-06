@@ -125,12 +125,14 @@ class DeepSeekV4PrefillDecoderLayer(DeepSeekV4Module):
         tp_size: int = 1,
         dense_csa: bool = False,
         lightning_indexer: bool = False,
+        maskless: bool = False,
     ):
         """Build layer ``layer_idx``: attention, MoE, the two hyper-connections and the two ``[D]`` RMSNorms.
 
         ``dense_csa`` is forwarded to the attention (see :class:`~.attention.DeepSeekV4PrefillAttention`):
         CSA layers attend to every visible compressed entry instead of the indexer's top-k, which lifts the
-        2048-token limit at the price of not being the model's exact attention.
+        2048-token limit at the price of not being the model's exact attention. ``maskless`` (also forwarded)
+        attends through index lists instead of an additive mask.
 
         ``weight_dtype`` is the dtype of the attention projections and ``moe_weight_dtype`` that of the
         router gate and the shared expert; the routed experts keep whatever dtype ``experts`` was built
@@ -155,6 +157,7 @@ class DeepSeekV4PrefillDecoderLayer(DeepSeekV4Module):
             tp_size=tp_size,
             dense_csa=dense_csa,
             lightning_indexer=lightning_indexer,
+            maskless=maskless,
         )
 
         mlp_weights = _strip_prefix(weights, "mlp")
