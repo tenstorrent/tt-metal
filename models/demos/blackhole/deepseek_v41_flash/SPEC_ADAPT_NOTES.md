@@ -75,3 +75,10 @@ tools/adapt_run.sh <name> "DSV41_LAYERS=0-39 DSV41_SPEC=5 DSV41_SPEC_ADAPT=1 DSV
 python tools/spec_adapt_report.py /mnt/tt-data/ssinghal/dsv4-logs/spec_adapt_<name>_h<host>.log
 ```
 Logs: /mnt/tt-data/ssinghal/dsv4-logs/spec_adapt_{f8,f16,f32,g16,g32}_*_h*.log.
+
+## Which logs are final / exploratory
+Final result lines (40 layers, one spec pass per process, `cycle` policy): spec_adapt_f8_gsm_h34, f8_struct_h34, f8_isl4k_h40, f8_isl64k_h33, f16_gsm_h33, f16_struct_h40, f16_isl4k_h41 (W=4, 64 tok), g16_isl4k_h40 (W=1, 192 tok, preferred over f16_isl4k),
+f16_isl64k_h30, f32_gsm_h43, f32_struct_h41, f32_isl4k_h44 (W=4, 64 tok, window-position bias), g32_isl4k_h34 (W=1, 192 tok, preferred), g32_isl64k_h33 (B=32 at ISL 60k, still running when this was written: read its SPEC_RESULT_CYCLE lines; if the log has no result the run did not finish).
+`f32_gsm_h43` shows "FAILED" at the end only because `-k gsm8k_b32` matches TWO pytest items (the scenario id gsm8k_b32 is listed twice in SCENARIOS, the second is `gsm8k_b32_1`): the first item completed and printed all results (adapt/k1/k3, SPEC_CONF, exactness);
+the duplicate then re-ran the demo in the same process and died at `before begin_trace_capture` (TT_THROW SubDeviceManagerTracker ... remote-only MeshDevice, the same "second pass in one process" problem, hazard 2). The numbers in this file are from the first item.
+Exploratory only (4-layer smokes, not for numbers): smoke4*, e1..e10 logs (hang bisection: trace switch, re-prefill, early runner build, no-re-prefill control, plain-after-spec check). Stale hung jobs of those runs were killed (the last one on .35).
