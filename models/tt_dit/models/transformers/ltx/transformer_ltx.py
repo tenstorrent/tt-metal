@@ -83,6 +83,25 @@ def build_audio_masks(
     return tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full
 
 
+def build_a2v_attn_mask(
+    video_N: int, audio_N: int, audio_N_real: int, *, mesh_device: ttnn.MeshDevice, sp_axis: int
+) -> ttnn.Tensor | None:
+    """SDPA attn mask ``(1, 1, video_N, audio_N)`` barring video queries from padded audio keys.
+
+    Zeroing the padded audio rows before ``to_kv`` does NOT remove them as keys: ``to_kv`` has a
+    bias, so each zero row projects to the full-magnitude key ``RMSNorm(b_k)·γ_k`` and soaks up
+    ~35-40% of the softmax mass at the served shape. The reference never pads audio, so these
+    columns must be masked out. Sharded on the query dim like the SP-sharded video queries
+    (``video_N`` is the SP-padded length); ``None`` when no padding is needed.
+    """
+    if audio_N <= audio_N_real:
+        return None
+    # Column mask only (see build_audio_masks): every query row keeps its real keys, so no NaN.
+    mask = torch.zeros(1, 1, video_N, audio_N, dtype=torch.bfloat16)
+    mask[:, :, :, audio_N_real:] = float("-inf")
+    return bf16_tensor(mask, device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
+
+
 def build_video_pad_mask(
     video_N: int, video_N_real: int, *, mesh_device: ttnn.MeshDevice, sp_axis: int
 ) -> ttnn.Tensor | None:
@@ -367,6 +386,7 @@ class LTXTransformerBlock(Module):
         audio_attn_mask: ttnn.Tensor | None = None,
         audio_padding_mask: ttnn.Tensor | None = None,
         audio_padding_mask_full: ttnn.Tensor | None = None,
+        a2v_attn_mask: ttnn.Tensor | None = None,
         video_padding_mask: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         # Video modulation; `_p1` chunks carry +1 baked into the scale slot (see _prepare_torch_state).
@@ -488,8 +508,13 @@ class LTXTransformerBlock(Module):
                 audio_kv_a2v = self.ccl_manager.all_gather_persistent_buffer(
                     audio_kv_a2v, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
                 )
-            # Zero padded audio tokens before to_kv so they don't contribute to A->V cross-attention.
+            # Padded audio keys must be masked in the SDPA: to_kv's bias turns a zeroed row into a
+            # full-magnitude key (see build_a2v_attn_mask). The zeroing below only keeps the padded
+            # rows finite, so masked-out V can't leak NaN through 0*NaN.
             pad_mask_a2v = audio_padding_mask_full if audio_padding_mask_full is not None else audio_padding_mask
+            assert (pad_mask_a2v is None) == (
+                a2v_attn_mask is None
+            ), "padded audio needs a2v_attn_mask (build_a2v_attn_mask), else A->V attends to padded keys"
             if pad_mask_a2v is not None:
                 audio_kv_a2v = ttnn.multiply(audio_kv_a2v, pad_mask_a2v)
             a2v_output = self.audio_to_video_attn(
@@ -501,6 +526,7 @@ class LTXTransformerBlock(Module):
                 k_rope_cos=audio_cross_pe_cos_full,
                 k_rope_sin=audio_cross_pe_sin_full,
                 trans_mat=trans_mat,
+                attn_mask=a2v_attn_mask,
                 addcmul_residual=video_1BND,
                 addcmul_gate=v_ca_gate,
             )
@@ -800,6 +826,7 @@ class LTXTransformerModel(Module):
         audio_attn_mask: ttnn.Tensor | None = None,
         audio_padding_mask: ttnn.Tensor | None = None,
         audio_padding_mask_full: ttnn.Tensor | None = None,
+        a2v_attn_mask: ttnn.Tensor | None = None,
         video_padding_mask: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         """Host entry: upload torch latents/timestep, then run the device-only inner_step."""
@@ -852,6 +879,7 @@ class LTXTransformerModel(Module):
             audio_attn_mask=audio_attn_mask,
             audio_padding_mask=audio_padding_mask,
             audio_padding_mask_full=audio_padding_mask_full,
+            a2v_attn_mask=a2v_attn_mask,
             video_padding_mask=video_padding_mask,
         )
 
@@ -885,6 +913,7 @@ class LTXTransformerModel(Module):
         audio_attn_mask: ttnn.Tensor | None = None,
         audio_padding_mask: ttnn.Tensor | None = None,
         audio_padding_mask_full: ttnn.Tensor | None = None,
+        a2v_attn_mask: ttnn.Tensor | None = None,
         video_padding_mask: ttnn.Tensor | None = None,
         gather_output: bool = True,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -1035,6 +1064,7 @@ class LTXTransformerModel(Module):
                 audio_attn_mask=audio_attn_mask,
                 audio_padding_mask=audio_padding_mask,
                 audio_padding_mask_full=audio_padding_mask_full,
+                a2v_attn_mask=a2v_attn_mask,
                 video_padding_mask=video_padding_mask,
             )
             if self.has_audio:

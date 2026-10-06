@@ -20,11 +20,13 @@ from safetensors.torch import load_file
 from tracy import signpost
 
 import ttnn
+from models.tt_dit.models.transformers.ltx.attention_ltx import LTXAttention
 from models.tt_dit.models.transformers.ltx.quant_config import LtxQuantProfile
 from models.tt_dit.models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
 from models.tt_dit.models.transformers.ltx.transformer_ltx import (
     LTXTransformerBlock,
     LTXTransformerModel,
+    build_a2v_attn_mask,
     build_audio_masks,
     build_video_pad_mask,
 )
@@ -42,7 +44,7 @@ from models.tt_dit.utils.test import (
 )
 from models.tt_dit.utils.tracing import Tracer
 
-from .ltx_mesh_params import LTX_TRANSFORMER_MESH_PARAMS, _4x8sp1tp0nl2_ring_is_fsdp0
+from .ltx_mesh_params import LTX_ATTENTION_MESH_PARAMS, LTX_TRANSFORMER_MESH_PARAMS, _4x8sp1tp0nl2_ring_is_fsdp0
 
 # ---------------------------------------------------------------------------
 # LTX-2.3-22B distilled transformer configuration
@@ -816,6 +818,7 @@ def test_ltx_transformer_block(
             audio_N, audio_N_real, mesh_device=mesh_device, sp_axis=sp_axis
         )
         v_pad_sp = build_video_pad_mask(video_N, video_N_real, mesh_device=mesh_device, sp_axis=sp_axis)
+        a2v_mask = build_a2v_attn_mask(video_N, audio_N, audio_N_real, mesh_device=mesh_device, sp_axis=sp_axis)
 
         forward_kwargs.update(
             audio_1BND=bf16_tensor_2dshard(
@@ -852,6 +855,7 @@ def test_ltx_transformer_block(
             audio_attn_mask=a_attn_mask,
             audio_padding_mask=a_pad_sp,
             audio_padding_mask_full=a_pad_full,
+            a2v_attn_mask=a2v_mask,
             video_padding_mask=v_pad_sp,
         )
 
@@ -899,6 +903,141 @@ def test_ltx_transformer_block(
         logger.info(f"PASSED block PCC: video {tuple(tt_v_torch.shape)}")
     else:
         logger.info(f"PASSED block (no PCC): video {tuple(tt_v_torch.shape)}")
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    # + the served 4x8 ring (fused gate/AGMM path differs from line).
+    [*LTX_ATTENTION_MESH_PARAMS, _4x8sp1tp0nl2_ring_is_fsdp0],
+    indirect=["mesh_device", "device_params"],
+)
+def test_ltx_a2v_cross_attention_padded_audio(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    topology: ttnn.Topology,
+    is_fsdp: bool,
+) -> None:
+    """A→V cross-attention over SP-padded audio keys vs diffusers fed only the real audio tokens.
+
+    Mirrors the block's A2V call: audio context gathered over SP and TP-sharded, zeros in the
+    padded tail, full-length K cross-PE. The reference never pads audio. Zeroing the tail is not
+    enough (to_kv's bias makes each zero row a full-magnitude key), so this only passes with
+    build_a2v_attn_mask; the unmasked run is checked to fail, proving the oracle sees the ghost keys.
+    """
+    from diffusers.models.transformers.transformer_ltx2 import LTX2Attention
+
+    skip_if_unsupported_num_links(mesh_device, num_links)
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+
+    # Served audio length (153 f @ 25 fps -> 153 tokens) on a small video grid with SP padding.
+    F, H, W = 20, 4, 6
+    video_N_real = F * H * W
+    video_N = _sp_pad_len(video_N_real, sp_factor)
+    vps = VideoPixelShape(batch=1, frames=153, height=64, width=64, fps=25)
+    audio_N_real = AudioLatentShape.from_video_pixel_shape(vps).frames
+    audio_N = _sp_pad_len(audio_N_real, sp_factor)
+    assert audio_N > audio_N_real, "test needs padded audio"
+
+    torch_attn = LTX2Attention(
+        query_dim=DIM,
+        heads=NUM_HEADS,
+        kv_heads=NUM_HEADS,
+        dim_head=AUDIO_HEAD_DIM,
+        cross_attention_dim=AUDIO_DIM,
+        norm_eps=EPS,
+        rope_type="interleaved",
+        apply_gated_attention=True,
+    ).eval()
+
+    ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+    parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
+    tt_attn = LTXAttention(
+        dim=AUDIO_DIM,
+        num_heads=NUM_HEADS,
+        eps=EPS,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
+        is_self=False,
+        context_dim=AUDIO_DIM,
+        query_input_dim=DIM,
+        output_dim=DIM,
+        apply_gated_attention=True,
+    )
+    state = dict(torch_attn.state_dict())
+    for k in ("to_q.weight", "to_q.bias", "to_k.weight", "to_k.bias", "norm_q.weight", "norm_k.weight"):
+        state[k] = _diffusers_qk_to_split(state[k], NUM_HEADS, AUDIO_HEAD_DIM)
+    tt_attn.load_torch_state_dict({k: v.detach().clone() for k, v in state.items()})
+
+    torch.manual_seed(INPUT_SEED)
+    x = torch.randn(1, video_N_real, DIM)
+    a_ctx = torch.randn(1, audio_N_real, AUDIO_DIM)
+    vx_cos, vx_sin = _video_cross_pe_freqs(F, H, W, rope_type=LTXRopeType.INTERLEAVED)
+    ax_cos, ax_sin = _audio_cross_pe_freqs(audio_N, rope_type=LTXRopeType.INTERLEAVED)
+    with torch.no_grad():
+        torch_out = torch_attn(
+            x,
+            encoder_hidden_states=a_ctx,
+            query_rotary_emb=(vx_cos, vx_sin),
+            key_rotary_emb=(ax_cos[:, :audio_N_real], ax_sin[:, :audio_N_real]),
+        )
+
+    tt_x = bf16_tensor_2dshard(
+        _pad_seq_dim(x, video_N, dim=1).unsqueeze(0), device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3}
+    )
+    tt_ctx = bf16_tensor(
+        _pad_seq_dim(a_ctx, audio_N, dim=1).unsqueeze(0), device=mesh_device, mesh_axis=tp_axis, shard_dim=3
+    )
+    tt_vx_cos, tt_vx_sin = _tt_rope(
+        _video_cross_pe_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis, pad_to=video_N
+    )
+    tt_ax_cos, tt_ax_sin = _tt_rope_full(_audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, tp_axis=tp_axis)
+    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+    a2v_mask = build_a2v_attn_mask(video_N, audio_N, audio_N_real, mesh_device=mesh_device, sp_axis=sp_axis)
+
+    concat_dims = [None, None]
+    concat_dims[sp_axis] = 2
+    concat_dims[tp_axis] = 3
+
+    def run(attn_mask):
+        tt_out = tt_attn(
+            spatial_1BND=tt_x,
+            N=video_N_real,
+            prompt_1BLP=tt_ctx,
+            rope_cos=tt_vx_cos,
+            rope_sin=tt_vx_sin,
+            k_rope_cos=tt_ax_cos,
+            k_rope_sin=tt_ax_sin,
+            trans_mat=tt_trans_mat,
+            attn_mask=attn_mask,
+        )
+        out = ttnn.to_torch(
+            tt_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape)),
+        ).squeeze(0)
+        return out[:, :video_N_real, :]
+
+    def rel_rmse(out):
+        return ((out.double() - torch_out.double()).pow(2).mean().sqrt() / torch_out.double().std()).item()
+
+    tt_unmasked = run(None)
+    tt_masked = run(a2v_mask)
+    logger.info(
+        f"A2V audio {audio_N_real}/{audio_N} keys: rel_rmse masked {rel_rmse(tt_masked):.4f}, "
+        f"unmasked {rel_rmse(tt_unmasked):.4f}"
+    )
+
+    pcc = 0.988 if mesh_device.get_num_devices() > 8 else 0.999
+    rmse = 0.10 if mesh_device.get_num_devices() > 8 else 0.032
+    assert_quality(torch_out, tt_masked, pcc=pcc, relative_rmse=rmse)
+    # Oracle sensitivity: attending to the padded keys must fail the same gate. Only meaningful when
+    # the padding is a large share of the keys (sp>=4 pads 153 -> 256; sp=1 adds just 7).
+    if (audio_N - audio_N_real) / audio_N > 0.25:
+        assert rel_rmse(tt_unmasked) > 2 * rmse, "oracle did not detect A2V attention over padded audio keys"
+    logger.info("PASSED: A2V cross-attention masks padded audio keys")
 
 
 @pytest.mark.parametrize(
@@ -1975,6 +2114,7 @@ def _build_block_trace_setup(
             audio_N, audio_N_real, mesh_device=mesh_device, sp_axis=sp_axis
         )
         v_pad_sp = build_video_pad_mask(video_N, video_N_real, mesh_device=mesh_device, sp_axis=sp_axis)
+        a2v_mask = build_a2v_attn_mask(video_N, audio_N, audio_N_real, mesh_device=mesh_device, sp_axis=sp_axis)
 
         forward_kwargs.update(
             audio_1BND=bf16_tensor_2dshard(
@@ -2011,6 +2151,7 @@ def _build_block_trace_setup(
             audio_attn_mask=a_attn_mask,
             audio_padding_mask=a_pad_sp,
             audio_padding_mask_full=a_pad_full,
+            a2v_attn_mask=a2v_mask,
             video_padding_mask=v_pad_sp,
         )
     return tt_block, forward_kwargs, video_N_real, audio_N_real

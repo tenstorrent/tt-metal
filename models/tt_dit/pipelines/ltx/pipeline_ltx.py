@@ -29,6 +29,7 @@ from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_c
 from ...models.transformers.ltx.transformer_ltx import (
     LTXTransformerCheckpoint,
     LTXTransformerModel,
+    build_a2v_attn_mask,
     build_audio_masks,
     build_video_pad_mask,
 )
@@ -119,6 +120,7 @@ class LTXTransformerState:
         self._tt_audio_attn_mask = StateTensor()
         self._tt_audio_padding_mask = StateTensor()
         self._tt_audio_padding_mask_full = StateTensor()
+        self._tt_a2v_attn_mask = StateTensor()
         self._tt_video_padding_mask = StateTensor()
 
     def __getattr__(self, name: str) -> ttnn.Tensor | None:
@@ -1118,6 +1120,9 @@ class LTXPipeline:
             audio_N, audio_N_real, mesh_device=self.mesh_device, sp_axis=sp_axis
         )
         tt_v_pad_mask_sp = build_video_pad_mask(video_N, video_N_real, mesh_device=self.mesh_device, sp_axis=sp_axis)
+        tt_a2v_attn_mask = build_a2v_attn_mask(
+            video_N, audio_N, audio_N_real, mesh_device=self.mesh_device, sp_axis=sp_axis
+        )
 
         tt_vp = self._prepare_prompt(video_prompt_embeds)
         tt_ap = bf16_tensor(audio_prompt_embeds.unsqueeze(0), device=self.mesh_device)
@@ -1231,6 +1236,7 @@ class LTXPipeline:
                     audio_attn_mask=tt_attn_mask,
                     audio_padding_mask=tt_pad_mask_sp,
                     audio_padding_mask_full=tt_pad_mask_full,
+                    a2v_attn_mask=tt_a2v_attn_mask,
                     video_padding_mask=tt_v_pad_mask_sp,
                 )
                 vv = LTXTransformerModel.device_to_host(

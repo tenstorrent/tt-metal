@@ -17,7 +17,12 @@ from loguru import logger
 import ttnn
 
 from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
-from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel, build_audio_masks, build_video_pad_mask
+from ...models.transformers.ltx.transformer_ltx import (
+    LTXTransformerModel,
+    build_a2v_attn_mask,
+    build_audio_masks,
+    build_video_pad_mask,
+)
 from ...models.vae.vae_ltx import upsample_latent
 from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
@@ -293,6 +298,10 @@ class LTXDistilledPipeline(LTXPipeline):
         state._tt_audio_attn_mask.update(tt_attn_mask, False)
         state._tt_audio_padding_mask.update(tt_pad_mask_sp, False)
         state._tt_audio_padding_mask_full.update(tt_pad_mask_full, False)
+        state._tt_a2v_attn_mask.update(
+            build_a2v_attn_mask(video_N, audio_N, audio_N_real, mesh_device=self.mesh_device, sp_axis=sp_axis),
+            False,
+        )
         state._tt_video_padding_mask.update(
             build_video_pad_mask(video_N, video_N_real, mesh_device=self.mesh_device, sp_axis=sp_axis), False
         )
@@ -605,6 +614,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 audio_attn_mask=state.tt_audio_attn_mask,
                 audio_padding_mask=state.tt_audio_padding_mask,
                 audio_padding_mask_full=state.tt_audio_padding_mask_full,
+                a2v_attn_mask=state.tt_a2v_attn_mask,
                 video_padding_mask=state.tt_video_padding_mask,
                 gather_output=False,
                 traced=traced,
