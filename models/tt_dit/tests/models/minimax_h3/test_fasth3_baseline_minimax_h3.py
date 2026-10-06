@@ -6,8 +6,9 @@
 
 Env: BASE_SECONDS (10), BASE_HEIGHT/BASE_WIDTH (768/1344), BASE_UPSCALE ("1920x1080"; "" = none), BASE_STEPS (50), BASE_WARM_STEPS (2),
 BASE_SEEDS ("0"), BASE_FIRST / BASE_LAST (keyframe paths; BASE_LAST optional), BASE_PROMPT,
-BASE_VSA_SPARSITY (unset = dense), BASE_OUT (artifact root), BASE_LOAD_ONLY=1 (build the pipeline, filling
-TT_DIT_CACHE_DIR, and stop). Each seed writes mp4, latents, stills and a
+BASE_VSA_SPARSITY (unset = dense), BASE_OUT (artifact root).
+BASE_WARM_STEPS=0 skips the warmup: stage rows then include first-call program creation (JIT binaries still
+come from the on-disk cache), for clips whose warm+timed pair does not fit one broker job. Each seed writes mp4, latents, stills and a
 timings json as soon as it finishes, so a job cut short by the broker keeps what completed.
 """
 
@@ -79,23 +80,23 @@ def test_fasth3_fl2va_baseline(mesh_device, reset_seeds):
     pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights, vsa_config=vsa_config)
     gen_kwargs = dict(image=first, last_image=last, num_frames=num_frames, height=height, width=width)
     logger.info(f"BASELINE {tag}: pipeline built in {time.time() - t0:.1f}s")
-    if os.environ.get("BASE_LOAD_ONLY") == "1":
-        return
 
     # Programs are keyed on the padded length, not the step count, so a short warmup at the real
     # shape and keyframes compiles the same set a 50-step call runs.
-    t0 = time.time()
-    pipeline.warmup(prompt=prompt, num_inference_steps=warm_steps, **gen_kwargs)
-    logger.info(f"BASELINE {tag}: warmup ({warm_steps} steps) wall {time.time() - t0:.1f}s")
-    cold_rows = list(pipeline.last_timings)
-    warm_padded_len = pipeline.last_padded_len
+    cold_rows, warm_padded_len = [], None
+    if warm_steps:
+        t0 = time.time()
+        pipeline.warmup(prompt=prompt, num_inference_steps=warm_steps, **gen_kwargs)
+        logger.info(f"BASELINE {tag}: warmup ({warm_steps} steps) wall {time.time() - t0:.1f}s")
+        cold_rows = list(pipeline.last_timings)
+        warm_padded_len = pipeline.last_padded_len
 
     for seed in seeds:
         ttnn.synchronize_device(mesh_device)
         t0 = time.time()
         output = pipeline(prompt, seed=seed, num_inference_steps=steps, **gen_kwargs)
         gen_wall = time.time() - t0
-        assert pipeline.last_padded_len == warm_padded_len
+        assert warm_padded_len in (None, pipeline.last_padded_len)
         rows = list(pipeline.last_timings)
         up_frames = None
         if up_size is not None:
@@ -127,6 +128,7 @@ def test_fasth3_fl2va_baseline(mesh_device, reset_seeds):
             generate_wall_s=gen_wall,
             call_wall_s=wall,
             denoise_per_forward_s=denoise / max(steps - 1, 1),
+            warm_steps=warm_steps,
             warmup_rows=cold_rows,
         )
         logger.info(f"BASELINE {tag} seed={seed} total={total:.1f}s wall={wall:.1f}s rows={rows}")
