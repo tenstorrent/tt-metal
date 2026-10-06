@@ -201,6 +201,8 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     return result;
 }
 
+void init_gelu_bf16();
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void gelu_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -221,6 +223,9 @@ void gelu_init() {
         sfpu_reciprocal_init<false>();
     }
     // BF16 accurate mode: no init needed (correction polynomial has no reciprocal)
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+        init_gelu_bf16();
+    }
 }
 
 template <int ITERATIONS>
@@ -295,16 +300,8 @@ constexpr float GELU_ERF_DEN[17] = {  // even powers only (c1=0, c3=0, ..., c15=
 bool bf16_dest_gelu();
 template <int ITERATIONS>
 void calculate_gelu_bf16();
-void init_gelu_bf16();
 // Whether BF16 DEST runs the generated gelu kernel as one call over the whole tile.
 inline constexpr bool gelu_bf16_whole_tile = true;
-// Sets up the generated BF16 gelu kernel for the instance it serves.
-template <bool bf16_kernel>
-inline void gelu_bf16_tile_init() {
-    if constexpr (bf16_kernel) {
-        init_gelu_bf16();
-    }
-}
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu() {

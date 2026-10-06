@@ -17,7 +17,6 @@ namespace ckernel {
 template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(gelu, sfpu::gelu_init, (fast_and_approx, is_fp32_dest_acc_en)));
-    MATH(ckernel::sfpu::gelu_bf16_tile_init<!is_fp32_dest_acc_en>());
 }
 
 // clang-format off
