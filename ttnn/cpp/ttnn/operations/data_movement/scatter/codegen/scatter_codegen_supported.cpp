@@ -131,6 +131,15 @@ bool supported_by_codegen(
     if (rank <= 0) {
         return false;
     }
+    // A zero extent anywhere is a divisor somewhere downstream: a zero scatter axis makes a zero-byte
+    // stick page the CB sizing divides by (SIGFPE on the host, not an exception), a zero leading extent
+    // is baked into the page map the readers fold ordinals through, and a zero index/src stick makes a
+    // zero index/src chunk that never advances the RM readers' chunk loop. Native already owns the
+    // empty-tensor contract, so every zero-volume operand stays there.
+    if (input_tensor.logical_shape().volume() == 0 || index_tensor.logical_shape().volume() == 0 ||
+        src_tensor.logical_shape().volume() == 0) {
+        return false;
+    }
     if (ttnn::prim::scatter_page_rank(input_tensor.logical_shape(), layout == Layout::TILE) >
         ttnn::prim::kScatterMaxPageRank) {
         return false;
