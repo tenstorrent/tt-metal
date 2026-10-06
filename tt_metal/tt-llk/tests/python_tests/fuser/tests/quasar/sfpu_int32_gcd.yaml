@@ -1,0 +1,55 @@
+# Binary Int32 gcd(a, b) over the non-negative half of the kernel's 31-bit contract: zeros
+# (gcd(0, x) = x, gcd(0, 0) = 0), small values rich in shared factors and powers of two, values around
+# 2**30 and next to the 2**31 - 1 ceiling (including bit patterns above 0x7F800000, which are fp32
+# NaNs and so check that SFPSWAP compares as int32), consecutive Fibonacci numbers, and the operands
+# of the pairs that need all 30 binary-GCD steps ((3, 2147483645), (1073741821, 1073741827),
+# (715827883, 1431655765)). a and b are the two tiles of one [32, 64] operand (Int32 is unpacked
+# straight to Dest) and share its stimuli, so every pairing of the ranges and points can occur, but a
+# specific point pair only lands in a lane by chance; test_eltwise_binary_sfpu_quasar.py plants the
+# worst-case pairs deterministically.
+# The harness stores Int32 in L1 as sign-magnitude and the fuser builds the kernel with
+# SIGN_MAGNITUDE_FORMAT = false, so only non-negative operands are checked; negative operands (gcd
+# takes |a|, |b|) need a two's-complement Int32 option or a sign-magnitude knob in the fuser. The
+# test_eltwise_binary_sfpu_quasar.py harness covers them on both datapaths.
+#
+# Generated for the Quasar port of the gcd kernel, using only existing fuser features:
+# dest_acc is fixed per file (Int32 needs a 32-bit Dest), every input goes through the FPU datacopy
+# path, and stimuli are finite intervals and points (no inf, NaN, -0 or INT_MIN).
+# Special points sit outside the random ranges, so each is drawn about as often as a unit of range.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 64]
+    format: [Int32]
+    stimuli:
+      include:
+        - [0.0, 64.0]
+        - [1000.0, 1064.0]
+        - [1073741792.0, 1073741856.0]
+        - [2147483583.0, 2147483647.0]
+        - 3.0
+        - 1048576.0
+        - 805306368.0
+        - 715827883.0
+        - 1134903170.0
+        - 1431655765.0
+        - 1836311903.0
+        - 2139095041.0
+        - 2143289344.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Int32
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: true, block_size: [32, 64]}
+      - type: "BinarySfpu"
+        operation: [SfpuGcd]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+        indexes: {src0: 0, src1: 1, dest: 2}
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32], indexes: {dest: 2, out: 0}}
