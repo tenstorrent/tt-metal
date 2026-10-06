@@ -16,8 +16,8 @@
     cd tests/python_tests
     mkdir -p perf_data
     export TT_LLK_DISABLE_ASSERTS=1
-    pytest -q --override-ini=log_cli=false --compile-producer -n 10 -m perf --timeout=600 -k bcm_ perf_eltwise_binary_x.py
-    pytest -q --override-ini=log_cli=false --compile-consumer -m perf --timeout=600 -k bcm_ \
+    pytest -q --override-ini=log_cli=false --compile-producer -n 10 -m perf --timeout=600 --dump-perf-counters -k "bcm_bf16 and mulhifi4 and not block1" perf_eltwise_binary_x.py
+    pytest -q --override-ini=log_cli=false --compile-consumer -m perf --timeout=600 --dump-perf-counters -k "bcm_bf16 and mulhifi4 and not block1" \
       --junitxml=pytest-report-blackhole-1.xml perf_eltwise_binary_x.py || true
     find .. ../.. -name "perf_eltwise_binary_x*.csv" | while read -r f; do echo "=== $f"; cat "$f"; done
   skus:
