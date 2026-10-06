@@ -24,6 +24,7 @@ from helpers.ulp_sweep import (
     export_measured,
     finish_emit,
     flushed_inputs,
+    golden_input,
     known_nonfinite_lanes,
     measurable_mask,
     merge_measured,
@@ -428,6 +429,34 @@ def test_a_block_float_input_the_quantizer_flushes_is_the_flush_not_the_op():
 def _bf16_run(first: int, last: int) -> torch.Tensor:
     """The bf16 values ``first..last`` by bit pattern, in the sweep's sorted order."""
     return torch.arange(first, last + 1, dtype=torch.int16).view(torch.bfloat16)
+
+
+@pytest.mark.parametrize(
+    "fmt, dest_acc, keeps_sign",
+    [
+        # The unpack drops the sign of -0.0, so the golden is handed +0.0 too.
+        (DataFormat.Float16_b, DestAccumulation.No, False),
+        (DataFormat.Float16_b, DestAccumulation.Yes, False),
+        (DataFormat.Float16, DestAccumulation.Yes, False),
+        # Unpack-to-dest keeps it: a 32-bit input at dest_acc=Yes.
+        (DataFormat.Float32, DestAccumulation.Yes, True),
+        (DataFormat.Float32, DestAccumulation.No, False),
+        # The block quantizer models a block float's zero lane itself.
+        (DataFormat.Bfp8_b, DestAccumulation.No, True),
+    ],
+    ids=lambda v: getattr(v, "name", str(v)),
+)
+def test_the_golden_sees_the_zero_the_kernel_receives(fmt, dest_acc, keeps_sign):
+    """`signbit(-0.0)` is 1.0 against the kernel's 0.0 wherever the unpack drops the
+    sign: 16129 bf16 steps on one lane that is the unpack's, not the op's. Only the
+    zero moves; every other value reaches the golden as generated."""
+    dtype = torch.float32 if fmt.is_32_bit() else torch.bfloat16
+    src = torch.tensor([-0.0, 0.0, -1.5, 2.0**-100], dtype=dtype)
+    received = golden_input(src, fmt, dest_acc)
+    assert bool(torch.signbit(received[0])) is keeps_sign
+    assert not torch.signbit(received[1])
+    assert torch.equal(received, src)  # -0.0 == 0.0: the values themselves are kept
+    assert torch.equal(received[2:], src[2:])
 
 
 def test_a_block_float_lane_is_judged_where_the_quantizer_puts_it():
