@@ -15,12 +15,13 @@ import torch
 
 import ttnn
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
-from ttnn.operations.toy_scaled_add import toy_scaled_add as toy_scaled_add_generic
+from ttnn.operations.toy_scaled_add import toy_scaled_add_generic
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 IMPLEMENTATIONS = {
     "generic": toy_scaled_add_generic,  # Python program descriptor through ttnn.generic_op
+    "native": ttnn.toy_scaled_add,  # C++ device operation with descriptor program factories
 }
 
 TORCH_DTYPE = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}
