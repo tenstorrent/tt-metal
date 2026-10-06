@@ -8,22 +8,49 @@ import pytest
 import torch
 import ttnn
 
-_state = {"test": None, "hashes": {}, "outcome": {}}
+_state = {"test": None, "hashes": {}, "outcome": {}, "depth": 0}
 _orig_to_torch = ttnn.to_torch
+_orig_method = getattr(ttnn.Tensor, "to_torch", None)
 
 
-def _hashing_to_torch(*args, **kwargs):
-    t = _orig_to_torch(*args, **kwargs)
+def _record(t):
     try:
         b = t.detach().cpu().contiguous()
         h = hashlib.sha1(b.view(torch.uint8).numpy().tobytes()).hexdigest()[:16] + f":{tuple(b.shape)}:{b.dtype}"
     except Exception as e:  # noqa: BLE001
         h = f"unhashable:{type(e).__name__}"
     _state["hashes"].setdefault(_state["test"], []).append(h)
+
+
+def _hashing_to_torch(*args, **kwargs):
+    # only the outermost call is recorded (ttnn.to_torch may go through Tensor.to_torch)
+    _state["depth"] += 1
+    try:
+        t = _orig_to_torch(*args, **kwargs)
+    finally:
+        _state["depth"] -= 1
+    if _state["depth"] == 0:
+        _record(t)
+    return t
+
+
+def _hashing_method(self, *args, **kwargs):
+    _state["depth"] += 1
+    try:
+        t = _orig_method(self, *args, **kwargs)
+    finally:
+        _state["depth"] -= 1
+    if _state["depth"] == 0:
+        _record(t)
     return t
 
 
 ttnn.to_torch = _hashing_to_torch
+if _orig_method is not None:
+    try:
+        ttnn.Tensor.to_torch = _hashing_method
+    except (AttributeError, TypeError) as e:
+        print(f"eb_bits_plugin: Tensor.to_torch not wrapped ({e})")
 
 
 def pytest_runtest_setup(item):
