@@ -891,7 +891,9 @@ def pack_mxint8(
     - Out-of-range after rounding → saturate to ±127
 
     Block-scale special cases match MxFp encoding:
-    - All-NaN block → scale = 0xFF (unpacker yields zero block)
+    - All-NaN block → scale = 0xFF (unpacker NaNs the whole block: the gasket
+      sets its NaN flag from the block exponent alone for MxInt, since an
+      integer element cannot carry one)
     - Block with any Inf (else all-zero/Inf) → scale = 0xFE (max scale)
     """
     if use_srcs:
