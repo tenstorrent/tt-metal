@@ -665,30 +665,46 @@ else
 fi
 title="SDPA Pipelines — $BRANCH — $title_ts"
 
-# Autofix status lines for a failing pipeline, from the sibling fixer's ledger
-# (~/.sdpa-fix, optional — prints nothing when it is absent). One line per
-# draft PR / dry-run proposal / no-fix verdict on a still-open signature.
+# Autofix status, written INTO the failing pipeline's block: each note is
+# appended to the bullet of the failing test it is about (matched on the test
+# function name), e.g.
+#   • `runtime:test_x [wh_n150]` — device hang … — 📌 already fixed on main by #59127 (e5f9d3186e), not in this run yet
+# A tracked test that is not failing in the shown run gets no note at all;
+# the ✅ verified reply in the thread covers that case. Reads the sibling
+# fixer's ledger (~/.sdpa-fix); a missing ledger changes nothing.
 AUTOFIX_LEDGER="$HOME/.sdpa-fix/ledger.json"
-autofix_note() {
-  local display="$1" wf="" e
-  [[ -f "$AUTOFIX_LEDGER" ]] || return 0
+autofix_annotate() {
+  local display="$1" block="$2" wf="" e out
+  [[ -f "$AUTOFIX_LEDGER" ]] || { printf '%s' "$block"; return 0; }
   for e in "${PIPELINES[@]}"; do
     [[ "$(cut -d'|' -f2 <<<"$e")" == "$display" ]] && { wf="${e%%|*}"; break; }
   done
-  [[ -n "$wf" ]] || return 0
-  jq -r --arg w "$wf" --arg gh "https://github.com/$REPO" '
+  [[ -n "$wf" ]] || { printf '%s' "$block"; return 0; }
+  out=$(jq -r --arg w "$wf" --arg b "$block" --arg gh "https://github.com/$REPO" '
     def prlink: if . == null or . == "" then "" else "<\(.)|#\(split("/") | last)>" end;
-    def linkprs: gsub("#(?<n>[0-9]{4,6})"; "<\($gh)/pull/\(.n)|#\(.n)>");
-    [.sigs[] | select(.workflow == $w)
-     | if .state == "pr_open"   then "🛠️ draft PR \(.pr.url | prlink) — targeted CI running"
-       elif .state == "ci_passed" then "🛠️ draft PR \(.pr.url | prlink) — targeted CI ✅, awaiting your review"
-       elif .state == "ci_failed" then "🛠️ draft PR \(.pr.url | prlink) — targeted CI ❌, needs a human"
-       elif .state == "proposed_dryrun" then "🛠 autofix proposal (dry run): \(.verdict_title // "see proposals/")"
-       elif .state == "fixed_upstream" then "📌 already fixed on main: \((.reason // "") | linkprs) — awaiting a run that contains it"
-       elif .state == "merged" then "🟣 fix merged \(.pr.url | prlink) — awaiting a run that contains \((.fix_sha // "")[0:10])"
-       elif .state == "verified" then "✅ verified green after fix: `\(.test | sub(".*::"; ""))`"
-       elif .state == "no_fix" then "🛠 autofix: no safe fix for `\(.test | sub(".*::"; ""))`"
-       else empty end] | unique | .[]' "$AUTOFIX_LEDGER" 2>/dev/null || true
+    def commitlink($sha): if ($sha // "") == "" then "" else "<\($gh)/commit/\($sha)|\($sha[0:10])>" end;
+    def fixref: ((.reason // "") | (capture("#(?<n>[0-9]{4,6})") // {}) | .n) as $n
+                | ([ (if $n then "<\($gh)/pull/\($n)|#\($n)>" else empty end),
+                     (commitlink(.fix_sha) | select(. != "")) ] | join(" "));
+    [ .sigs[] | select(.workflow == $w)
+      | {f: (.test | split("::") | last | split("[") | first),
+         n: (if .state == "pr_open" then "🛠️ draft PR \(.pr.url | prlink), targeted CI running"
+             elif .state == "ci_passed" then "🛠️ draft PR \(.pr.url | prlink), targeted CI ✅, awaiting review"
+             elif .state == "ci_failed" then "🛠️ draft PR \(.pr.url | prlink), targeted CI ❌"
+             elif .state == "merged" then "🟣 fix \(.pr.url | prlink) merged, not in this run yet"
+             elif .state == "fixed_upstream" then "📌 already fixed on main by \(fixref), not in this run yet"
+             elif .state == "proposed_dryrun" then "🛠 autofix proposal (dry run): \(.verdict_title // "see proposals/")"
+             elif .state == "no_fix" then "🛠 no safe autofix"
+             else null end)}
+      | select(.n != null and (.f | length) > 3) ] as $notes
+    | $b | split("\n")
+    | map(if startswith("• ") then
+            (((capture("^• `(?<l>[^`]*)`") // {}) | .l) // "") as $l
+            | ([ $notes[] | . as $nt | select(($l | length) > 0 and ($l | contains($nt.f))) | .n ] | unique) as $m
+            | if ($m | length) > 0 then . + " — " + ($m | join(" · ")) else . end
+          else . end)
+    | join("\n")' "$AUTOFIX_LEDGER" 2>/dev/null) && [[ -n "$out" ]] || out="$block"
+  printf '%s' "$out"
 }
 
 # Split into success (collapse to one line) and failure (keep full block).
@@ -702,8 +718,7 @@ for b in "${blocks[@]}"; do
     success_names+=("$name${prog:+ ($prog)}")
   else
     name=$(printf '%s' "$first_line" | sed -E 's/^▸ \*([^*]+)\*.*/\1/')
-    note=$(autofix_note "$name")
-    failure_blocks+=("$b${note:+$'\n'$note}")
+    failure_blocks+=("$(autofix_annotate "$name" "$b")")
   fi
 done
 
