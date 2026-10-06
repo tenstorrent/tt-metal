@@ -9,41 +9,27 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
+
+#include <optional>
+#include <vector>
+
 namespace ttnn::experimental::prim {
 
 struct AllGatherMinimalMatmulAsyncProgramFactory {
-    struct shared_variables_t {
-        uint32_t num_cores;
-        std::vector<CoreCoord> cores;
-        tt::tt_metal::KernelHandle in0_sender_kernels_id;
-        tt::tt_metal::KernelHandle in0_receiver_fabric_kernels_id;
-        tt::tt_metal::KernelHandle in0_receiver_no_fabric_kernels_id;
-        tt::tt_metal::KernelHandle in1_sender_kernels_id;
-        tt::tt_metal::KernelHandle in1_receiver_kernels_id;
-        tt::tt_metal::KernelHandle compute_kernels_id{};
-        bool transpose_core_grid;
-        uint32_t in1_size;
-    };
-
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const AllGatherMinimalMatmulAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const AllGatherMinimalMatmulAsyncInputs& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
-
-    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-        const AllGatherMinimalMatmulAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coordinate,
-        const AllGatherMinimalMatmulAsyncInputs& tensor_args,
-        std::vector<Tensor>& output_tensor);
+        std::vector<Tensor>& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
     static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+        tt::tt_metal::Program& program,
         const AllGatherMinimalMatmulAsyncParams& operation_attributes,
         const AllGatherMinimalMatmulAsyncInputs& tensor_args,
-        std::vector<Tensor>& output_tensor);
+        std::vector<Tensor>& tensor_return_value,
+        std::optional<ttnn::MeshCoordinate> mesh_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim
