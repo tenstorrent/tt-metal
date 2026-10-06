@@ -239,7 +239,7 @@ def test_chain_affine_transforms_shape_accuracy(
         assert_accurate(golden, ttnn.to_torch(output), name=f"shape-sweep chained {name}", pcc_threshold=0.999)
 
 
-def test_chain_affine_transforms_is_device_deterministic(zero_actual_start, device: ttnn.Device) -> None:
+def test_chain_affine_transforms_is_accurate_and_deterministic(zero_actual_start, device: ttnn.Device) -> None:
     case = _SMALL_CASE
     host = _host_inputs(case.batch_heads, case.key_dim, case.value_dim, seed=1441)
     transforms_tt, initial_tt = _device_inputs(*host, device)

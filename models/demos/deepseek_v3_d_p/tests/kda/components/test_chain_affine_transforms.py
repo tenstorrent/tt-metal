@@ -18,21 +18,26 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
 pytestmark = run_for_blackhole()
 
 _ROWS, _HEADS, _KEY, _VALUE = 640, 24, 128, 128
-_GALAXY = pytest.param(
-    (8, 4),
-    torus_xy_device_params(trace_region_size=1 << 20),
-    marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-    id="SP8xTP4",
-)
-_LOUDBOX = pytest.param(
-    (2, 4),
-    fabric_1d_device_params(trace_region_size=1 << 20),
-    marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-    id="SP2xTP4",
-)
 
 
-@pytest.mark.parametrize("mesh_device,device_params", [_GALAXY, _LOUDBOX], indirect=True)
+def _meshes(**overrides):
+    return [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(**overrides),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="SP8xTP4",
+        ),
+        pytest.param(
+            (2, 4),
+            fabric_1d_device_params(**overrides),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="SP2xTP4",
+        ),
+    ]
+
+
+@pytest.mark.parametrize("mesh_device,device_params", _meshes(), indirect=True)
 # Only the rank holding the first token orders the chain; "split" checks that an offset within that rank is ignored.
 # Starts past the last rank wrap modulo the mesh, so every start applies to both meshes.
 @pytest.mark.parametrize(
@@ -118,11 +123,8 @@ def test_chain_affine_transforms_matches_reference(mesh_device, start):
         )
 
 
-@pytest.mark.parametrize(
-    "mesh_device,device_params",
-    [_GALAXY, _LOUDBOX],
-    indirect=True,
-)
+# Only this test captures a trace, and the default trace region is empty.
+@pytest.mark.parametrize("mesh_device,device_params", _meshes(trace_region_size=1 << 20), indirect=True)
 def test_chain_affine_transforms_trace_replay_follows_actual_start(mesh_device):
     """One capture serves every start: the chronology is derived on device from actual_start's contents."""
     generator = torch.Generator().manual_seed(0)
