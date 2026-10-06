@@ -7,6 +7,8 @@
 // kernel-config-buffer space. Must be defined before the compute API includes. Perf-neutral (init-time only).
 #define LLK_ZEROFLAG_OUTLINE 1
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 
 #define REDUCE_OP (PoolType::MAX)

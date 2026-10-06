@@ -5,6 +5,7 @@
 // Grouped-topk gate compute: activation -> add_bias -> per-group sort -> group top-k -> expert top-k ->
 // normalize -> scale. All stages live in the shared moe_gate_common_compute.hpp blocks, which are also
 // used by moe_hash_gate so the activation/normalize/scale logic exists in exactly one place.
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/device/kernels/compute/moe_gate_common_compute.hpp"
 
 void kernel_main() {

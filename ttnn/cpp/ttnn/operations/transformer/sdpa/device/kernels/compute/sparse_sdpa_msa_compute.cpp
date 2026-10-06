@@ -5,6 +5,7 @@
 // sparse_sdpa_msa compute: online softmax over selected pre-tiled K/V blocks. Each token tilizes Q, streams
 // selected blocks through QK and PV, combines running max/sum/output, then normalizes the final output.
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/tile_move_copy.h"

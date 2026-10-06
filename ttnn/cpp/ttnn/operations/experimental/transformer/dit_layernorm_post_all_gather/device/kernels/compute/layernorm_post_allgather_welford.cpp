@@ -7,6 +7,7 @@
  * Expects stats with two TILE columns per device (E(x**2), E(x)), applies LN with optional gamma/beta.
  */
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL

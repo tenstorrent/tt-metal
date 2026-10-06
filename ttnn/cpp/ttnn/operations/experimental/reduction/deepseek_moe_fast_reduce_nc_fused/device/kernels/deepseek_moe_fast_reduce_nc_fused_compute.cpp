@@ -20,6 +20,7 @@
 // After tile_regs_acquire(), dst0 is zero-initialized by hardware, so the
 // first MAC (expert 0) correctly seeds the accumulator.
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include "api/compute/bcast.h"
 #include "api/dataflow/circular_buffer.h"
 
@@ -53,8 +54,19 @@ void kernel_main() {
 
     // Override MATH init to enable acc_to_dest=1 (hardware accumulate mode)
     // This makes each mul_tiles_bcast_cols call do: dst0 += act * score  (MAC)
+    // On Blackhole, the hand-off mul_tiles_bcast_cols executes with.
+#if defined(ARCH_BLACKHOLE)
+    MATH((llk_math_eltwise_binary_init<
+          EltwiseBinaryType::ELWMUL,
+          BroadcastType::COL,
+          MATH_FIDELITY,
+          EltwiseBinaryReuseDestType::NONE,
+          ckernel::detail::bcast_src_dvalid<EltwiseBinaryType::ELWMUL>>(
+        compute_input_cb_id_0, compute_input_cb_id_1, 1 /*acc_to_dest*/)));
+#else
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
         compute_input_cb_id_0, compute_input_cb_id_1, 1 /*acc_to_dest*/)));
+#endif
 
     reconfig_data_format(compute_input_cb_id_0, compute_input_cb_id_1);
 

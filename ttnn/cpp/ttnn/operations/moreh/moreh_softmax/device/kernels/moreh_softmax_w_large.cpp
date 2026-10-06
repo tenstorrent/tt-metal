@@ -7,6 +7,8 @@
 // inline-asm "n" immediate in this larger fp32 TU and JIT aborts with "impossible constraint in 'asm'".
 // At O3 it folds and no source workaround is needed.
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"

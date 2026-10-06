@@ -5,6 +5,8 @@
 // Metal 2.0 fork of compute.cpp. Bound by MinimalMatmulDeviceOperation::ProgramFactory; the legacy
 // original beside it still serves the fused-CCL emitter (minimal_matmul_factory_helper_common).
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/tilize.h"
 #include "api/compute/matmul.h"

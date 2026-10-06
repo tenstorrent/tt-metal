@@ -12,6 +12,7 @@
  * file beside this one still serves consumers that have not migrated.
  */
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL

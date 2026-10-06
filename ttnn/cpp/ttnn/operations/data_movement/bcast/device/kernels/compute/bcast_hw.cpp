@@ -6,6 +6,7 @@
 // bind the fork; this file serves the consumers still on the legacy API. Until the last of them migrates
 // and this file is retired, changes here likely belong in the fork too.
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"

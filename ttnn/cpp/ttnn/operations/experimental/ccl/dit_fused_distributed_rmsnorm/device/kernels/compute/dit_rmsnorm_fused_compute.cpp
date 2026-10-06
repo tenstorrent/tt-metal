@@ -26,6 +26,8 @@
  * per-row reduce degenerates to a local reduce (stats_tiles_cols==1 for TP=1).
  */
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL

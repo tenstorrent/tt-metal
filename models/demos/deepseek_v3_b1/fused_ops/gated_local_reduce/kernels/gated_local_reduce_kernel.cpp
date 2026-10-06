@@ -12,6 +12,7 @@
 // BRISC: No-op
 // TRISC: Performs gated local reduce via composed LocalReduce ops + mul_tiles
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/local_reduce.hpp"

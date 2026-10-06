@@ -8,6 +8,7 @@
  *   E(x**2) is contained in a one tile wide tensor containing E(x**2) in the left most column.
  */
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL

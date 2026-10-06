@@ -11,6 +11,7 @@
 // The partial row-sum is finalized once on the last chunk (normalize_row_streaming). num_active_chunks==1
 // degenerates to a plain single-chunk softmax (no SALAD).
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/tile_move_copy.h"

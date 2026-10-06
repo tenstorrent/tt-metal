@@ -29,6 +29,7 @@
 //   * token_count_aware : delivered by the reader via the cb_loop_count mailbox (read_tile_value
 //                         distributes the UNPACK read to MATH/PACK so all three threads agree).
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 
 #include "api/compute/common.h"

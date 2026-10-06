@@ -6,6 +6,8 @@
 // gamma_beta_grad factories. Both bind the same resource names, so a change to this kernel's
 // binding vocabulary or argument schema has to land on both factories together.
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"

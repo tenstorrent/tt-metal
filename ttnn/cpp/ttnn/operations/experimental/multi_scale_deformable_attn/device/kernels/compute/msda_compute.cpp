@@ -24,6 +24,7 @@
 // that only col-0 broadcasts contribute, and on scalar=0 to zero out the
 // contribution of any stale input row.
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 
 #include "api/compute/common.h"

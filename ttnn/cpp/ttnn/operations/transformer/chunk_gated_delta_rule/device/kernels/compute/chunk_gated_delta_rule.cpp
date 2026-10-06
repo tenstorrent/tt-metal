@@ -16,6 +16,8 @@
 //   v_prime = w@S ; v_new = u - v_prime ; o = q_decay@S + intra@v_new
 //   S = S*exp(decay_last) + k_dec_t@v_new
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"

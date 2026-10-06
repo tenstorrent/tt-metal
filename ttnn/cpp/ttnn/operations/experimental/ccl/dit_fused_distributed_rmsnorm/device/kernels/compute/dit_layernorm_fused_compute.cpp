@@ -31,6 +31,8 @@
  * stats_gathered_cb the merged (mean, 1/std).
  */
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 #include <array>
 

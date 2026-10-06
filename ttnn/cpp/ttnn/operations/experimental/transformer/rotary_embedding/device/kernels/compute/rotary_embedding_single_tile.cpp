@@ -7,6 +7,8 @@
 // HF-style rotate_half via matmul_tiles, since the inter-tile half-swap used for
 // Wt >= 2 cannot express a sub-tile rotation.
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 
 #include "api/compute/common.h"

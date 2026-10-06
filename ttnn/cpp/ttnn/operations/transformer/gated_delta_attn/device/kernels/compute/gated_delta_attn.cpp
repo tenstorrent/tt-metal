@@ -19,6 +19,7 @@
 //
 // Compile-time args: Ct, Kt, Vt  (all must be 4 for chunk_size=key_dim=val_dim=128)
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
