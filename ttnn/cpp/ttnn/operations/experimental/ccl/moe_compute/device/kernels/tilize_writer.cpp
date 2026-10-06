@@ -116,6 +116,7 @@ void kernel_main() {
     // Alignment
     constexpr uint32_t l1_alignment = get_named_compile_time_arg_val("l1_alignment");
     constexpr uint32_t e_t_entry_size = get_named_compile_time_arg_val("e_t_entry_size");
+    static_assert(e_t_entry_size >= 2 * sizeof(uint32_t), "an e_t entry holds the token id and the k slot");
 
     // Number of pages
     [[maybe_unused]] constexpr uint32_t shared_cb_num_pages = get_named_compile_time_arg_val("shared_cb_num_pages");

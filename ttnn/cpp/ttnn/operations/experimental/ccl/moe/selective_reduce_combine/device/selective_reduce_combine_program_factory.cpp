@@ -483,6 +483,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto token_segment_buffer_size_bytes =
         *std::max_element(data_parallel_sizes_bytes.begin(), data_parallel_sizes_bytes.end());
 
+    // TODO (AFM) this is an ugly kludge until we can get GPT-OSS on the mainline op #43645
     uint32_t expert_token_segment_buffer_block_size_bytes;
     uint32_t buffer_size_bytes;
     if (double_buffer_source) {

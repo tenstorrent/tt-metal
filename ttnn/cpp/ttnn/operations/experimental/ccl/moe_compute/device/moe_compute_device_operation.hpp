@@ -62,7 +62,7 @@ std::vector<Tensor> moe_compute(
     const std::optional<uint32_t>& bh_ring_size = std::nullopt,
     const std::optional<uint32_t>& num_shared_experts_per_device = std::nullopt,
     bool local_combine = false,
-    bool zero_fill_non_owned_rows = true,
+    bool zero_fill_non_owned_rows = false,
     const std::optional<uint32_t>& prefill_rings = std::nullopt,
     bool enable_a2a_pipeline = false);
 

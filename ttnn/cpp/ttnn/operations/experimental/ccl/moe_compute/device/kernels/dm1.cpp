@@ -85,9 +85,8 @@ void kernel_main() {
     // LOCAL_OUTPUT (a cluster axis of extent 1): no combine kernels. Each token row slice this core
     // produces goes straight into the final [k, T, H] row-major output, page k * T + t, where (t, k)
     // are the expert's e_t entries (word 0 token id, word 1 k slot) that the tilize drain publishes
-    // before it releases the matmul cores; dm1 fetches one chunk's entries per chunk. The rows of
-    // experts this device does not hold are written as zero first (see the zero fill below), so
-    // every row of the output is what this op wrote.
+    // before it releases the matmul cores; dm1 fetches one chunk's entries per chunk. Only the rows
+    // of the experts this device holds are written by default; explicit zero_fill also clears other rows.
     constexpr bool local_output = get_named_compile_time_arg_val("local_output") == 1;
     // The matmul<->combine handshake exists only when combine kernels are built.
     constexpr bool has_combine = !compute_only && !local_output;

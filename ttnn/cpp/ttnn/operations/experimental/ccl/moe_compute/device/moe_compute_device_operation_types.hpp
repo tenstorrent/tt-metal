@@ -30,8 +30,8 @@ namespace ttnn::experimental::prim {
 //   final [k, T, H] row-major output (one token row per page: INTERLEAVED or HEIGHT_SHARDED,
 //   DRAM or L1). No fabric; the CCL options are accepted and unused. On a
 //   multi-device mesh the token set and its routing metadata must be replicated and every
-//   coordinate returns the partial of its own experts (their rows hold the results, every other
-//   row is written as zero), which the caller sums across the other axis. Returns 6 tensors like
+//   coordinate writes only the rows of its own experts, like the combine; a caller that sums the
+//   partials across the other axis passes a zeroed output tensor. Returns 6 tensors like
 //   FullCcl, but slot 4 (the staged matmul output) is not written: nothing is staged.
 //   `combine_params` only describes the output (k, tokens, hidden, memory config, axis).
 // - `ComputeOnly` bypasses the combine path: no combine cores allocated, no fabric setup,
@@ -67,11 +67,11 @@ struct MoEComputeParams {
     ttnn::experimental::prim::detail::MoEActivationFunction activation_type =
         ttnn::experimental::prim::detail::MoEActivationFunction::SILU;  // Default to SILU
 
-    // SingleCluster only: dm1 writes the rows of the experts this coordinate does not own as zero before its own
-    // rows (the "every row is what this op wrote" contract). Off, those rows keep the output buffer's previous
+    // SingleCluster only, explicit opt-in: dm1 writes the rows of experts this coordinate does not own as zero before
+    // its own rows (the "every row is what this op wrote" contract). Off, those rows keep the output buffer's previous
     // contents; a caller whose buffer is zero at allocation and only ever holds finite expert outputs, and whose
     // reduce multiplies unowned slots by an exact 0, skips k x T row writes per call.
-    bool zero_fill_non_owned_rows = true;
+    bool zero_fill_non_owned_rows = false;
 
     // SingleCluster only. 0: today's ring (the weight CB holds 3 blocks, dm0 re-streams an expert's slice from DRAM
     // for every 32-token chunk). 1: the replay ring: the weight CB holds one whole expert slice, dm0 reads it once

@@ -40,47 +40,6 @@ uint32_t feed_halves_for(uint32_t prefill_rings, bool enable_a2a_pipeline) {
     return moe_ring::rings::feed_halves(rings, enable_a2a_pipeline);
 }
 
-// SingleCluster: dm1 addresses the [k, T, H] output through a TensorAccessor built from the actual
-// buffer, one page per token row (2 x H bytes) plus the column offset of its slice. A row-major
-// tensor has one-row pages when it is INTERLEAVED or HEIGHT_SHARDED (tt_metal page_config.cpp,
-// get_page_shape_rm), DRAM or L1, so both work with the same kernel. WIDTH_SHARDED, BLOCK_SHARDED
-// and ND sharding give (1, shard width) pages: a row then spans several pages and a core's slice
-// would have to be split at the shard boundaries, which this path does not implement (the fused
-// combine writer addresses its output the same way and has the same limitation).
-void validate_local_output_memory_config(
-    const tt::tt_metal::MemoryConfig& memory_config, uint32_t num_rows, uint32_t hidden_size, const char* what) {
-    using tt::tt_metal::TensorMemoryLayout;
-    const auto layout = memory_config.memory_layout();
-    TT_FATAL(
-        layout == TensorMemoryLayout::INTERLEAVED || layout == TensorMemoryLayout::HEIGHT_SHARDED,
-        "moe_compute over a mesh axis of extent 1 writes each token row of the [k, T, H] output as one TensorAccessor "
-        "page and does not split a row across column pages, so the {} must be INTERLEAVED or HEIGHT_SHARDED "
-        "row-major (WIDTH_SHARDED, BLOCK_SHARDED and ND sharding need a column-page split that is not implemented on "
-        "this path, the same limitation as the combine writer); got {}",
-        what,
-        memory_config);
-    if (layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-        return;
-    }
-    const auto& shard_spec = memory_config.shard_spec();
-    TT_FATAL(shard_spec.has_value(), "the {} is HEIGHT_SHARDED without a shard spec: {}", what, memory_config);
-    TT_FATAL(
-        shard_spec->shape[1] == hidden_size,
-        "a height shard of the {} must hold whole token rows: shard width {} != hidden size {}",
-        what,
-        shard_spec->shape[1],
-        hidden_size);
-    const uint32_t shard_rows = shard_spec->shape[0];
-    const uint32_t num_shard_cores = shard_spec->grid.num_cores();
-    TT_FATAL(
-        shard_rows > 0 && num_shard_cores * shard_rows >= num_rows,
-        "the {} shard grid ({} cores x {} rows per shard) does not cover the k x T = {} token rows",
-        what,
-        num_shard_cores,
-        shard_rows,
-        num_rows);
-}
-
 }  // namespace detail
 MoEComputeDeviceOperation::program_factory_t MoEComputeDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
@@ -211,12 +170,11 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     //   kernels: dm1 writes the output). The cluster_axis has extent 1; on a multi-device mesh
     //   that leaves one partial per coordinate for the caller to reduce, so the token set and its
     //   routing metadata must be replicated (every coordinate sees the same tokens, indices,
-    //   scores and mapping). Rows of experts a coordinate does not own are written as zero, so
-    //   the partials sum directly. The output is written one token row
-    //   (2 x H bytes) at a time through a TensorAccessor page, so its memory config must give
-    //   one-row pages: row-major INTERLEAVED or HEIGHT_SHARDED with whole rows per shard (see
-    //   detail::validate_local_output_memory_config). The optional_output_tensor, when given, is
-    //   the buffer dm1 addresses (create_output_tensors returns it as slot 5).
+    //   scores and mapping). Only the rows of the experts a coordinate holds are written, as the
+    //   combine writes only the rows it receives. The output is written one token row (2 x H
+    //   bytes) at a time through a TensorAccessor page, the same addressing as the combine writer,
+    //   so it takes the combine's output memory config check. The optional_output_tensor, when
+    //   given, is the buffer dm1 addresses (create_output_tensors returns it as slot 5).
     // - FullCcl: combine_params must be set with local_combine=false (6 outputs, CCL path).
     auto* mesh_device = tensor_args.tilize_input_tensor.device();
     if (args.path == MoEComputePath::ComputeOnly) {
@@ -259,7 +217,8 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         }
         if (args.path == MoEComputePath::SingleDevice) {
             TT_FATAL(
-                args.combine_params->local_combine, "path=SingleDevice requires combine_params->local_combine to be true");
+                args.combine_params->local_combine,
+                "path=SingleDevice requires combine_params->local_combine to be true");
         } else if (args.path == MoEComputePath::SingleCluster) {
             // The CCL knobs are accepted and unused on this path; num_links keeps its range check.
             TT_FATAL(args.combine_params->num_links > 0, "num_links must be greater than 0");
@@ -281,7 +240,7 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
             const uint32_t num_output_rows =
                 args.combine_params->select_experts_k * args.combine_params->batch_size * args.combine_params->seq_size;
             const uint32_t output_hidden_size = tilize_input_shape[-1];
-            detail::validate_local_output_memory_config(
+            detail::validate_combine_output_memory_config(
                 output_memory_config, num_output_rows, output_hidden_size, "output memory config");
             if (tensor_args.optional_output_tensor.has_value()) {
                 const auto& out = *tensor_args.optional_output_tensor;
@@ -310,7 +269,7 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
                     out.memory_config(),
                     output_memory_config);
                 // The tensor's own (TensorSpec-populated) config is what dm1's accessor is built from.
-                detail::validate_local_output_memory_config(
+                detail::validate_combine_output_memory_config(
                     out.memory_config(), num_output_rows, output_hidden_size, "optional_output_tensor memory config");
             }
         } else {
@@ -532,6 +491,16 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
 
     TT_FATAL(args.combine_params.has_value(), "combine_params required when path is not ComputeOnly");
 
+    ttnn::experimental::prim::SelectiveReduceCombineTensors combine_tensor_args{
+        .dense_input_tensor = tilize_input_tensor,
+        .dense_activations_tensor = tilize_input_tensor,
+        .dense_token_maps_tensor = tilize_input_tensor,
+        .dense_token_counts_tensor = tilize_input_tensor,
+        .optional_output_tensor = std::nullopt,
+    };
+    const auto output_spec = ttnn::experimental::prim::SelectiveReduceCombineDeviceOperation::compute_output_specs(
+        args.combine_params.value(), combine_tensor_args);
+
     if (args.path == MoEComputePath::SingleCluster) {
         // No combine reads the routing on this path: output 1 is a one-page placeholder and output 2 the packed
         // token-list page (moe_ring::token_list) dm1 fetches one chunk at a time; neither scales L1 with the tokens.
@@ -547,32 +516,14 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
                      total_tokens, select_experts_k, experts_per_device, moe_ring::TOKENS_PER_CHUNK)}),
             TensorLayout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), ttnn::DRAM_MEMORY_CONFIG));
 
-        // Output 5: the final [k, T, H] row-major tensor that dm1 writes directly (T is the whole
-        // replicated token set: the axis has extent 1). Same shape the combine returns on that axis.
-        const auto& combine_params = *args.combine_params;
-        const auto local_output_spec = TensorSpec(
-            ttnn::Shape(
-                {combine_params.select_experts_k, combine_params.batch_size * combine_params.seq_size, hidden_size}),
-            TensorLayout(
-                tilize_input_tensor.dtype(), PageConfig(Layout::ROW_MAJOR), combine_params.output_memory_config));
         return {
             tilize_per_expert_total_tokens_spec,
             tilize_expert_activation_placeholder_spec,
             packed_token_list_spec,
             tilize_output_spec,
             matmul_output_spec,
-            local_output_spec};
+            output_spec};
     }
-
-    ttnn::experimental::prim::SelectiveReduceCombineTensors combine_tensor_args{
-        .dense_input_tensor = tilize_input_tensor,
-        .dense_activations_tensor = tilize_input_tensor,
-        .dense_token_maps_tensor = tilize_input_tensor,
-        .dense_token_counts_tensor = tilize_input_tensor,
-        .optional_output_tensor = std::nullopt,
-    };
-    const auto output_spec = ttnn::experimental::prim::SelectiveReduceCombineDeviceOperation::compute_output_specs(
-        args.combine_params.value(), combine_tensor_args);
 
     return {
         tilize_per_expert_total_tokens_spec,
@@ -732,9 +683,6 @@ std::vector<ttnn::Tensor> moe_compute(
     // These choices size output buffers. Reject unsupported configurations before
     // launch() calls create_output_tensors, which precedes cache-miss validation.
     const uint32_t resolved_prefill_rings = prefill_rings.value_or(0);
-    TT_FATAL(
-        zero_fill_non_owned_rows || local_output,
-        "zero_fill_non_owned_rows=False applies to the local output path only (a cluster_axis of extent 1)");
     TT_FATAL(
         resolved_prefill_rings == 0 || local_output,
         "prefill_rings applies to the local output path only (a cluster_axis of extent 1)");

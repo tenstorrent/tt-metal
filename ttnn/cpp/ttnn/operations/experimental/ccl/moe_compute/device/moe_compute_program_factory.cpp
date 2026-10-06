@@ -2048,7 +2048,8 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
                     TT_FATAL(
                         tensor_return_value.size() == 6 &&
                             matmul_runtime_args.size() == shared_variables.matmul_runtime_args_size,
-                        "path=SingleCluster expects 6 output tensors and exactly {} matmul runtime args (12 leading, the "
+                        "path=SingleCluster expects 6 output tensors and exactly {} matmul runtime args (12 leading, "
+                        "the "
                         "bank table, the two trailing addresses), got {} and {}",
                         shared_variables.matmul_runtime_args_size,
                         tensor_return_value.size(),
