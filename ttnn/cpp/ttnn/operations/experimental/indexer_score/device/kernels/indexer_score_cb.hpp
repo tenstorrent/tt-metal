@@ -18,7 +18,7 @@ enum CbArg : uint32_t {
     cb_q_arg,             // q head-group block: heads_per_group * QC * Dt tiles
     cb_k_arg,             // k chunk, double buffered
     cb_w_arg,             // resident gate (w) group: Hi * QC tiles
-    cb_mask_arg,          // [diag strict-upper -inf, full -inf], built once
+    cb_mask_arg,          // ratio partial causal masks + one full -inf mask, built once
     cb_qk_arg,            // act(q.kT) for a whole head group
     cb_acc_strip_arg,     // unit accumulator: QC x KC strip (untilize input)
     cb_out_strip_arg,     // untilized row-major strip output (block_size==0); tilized col-0 block-max (pool)
@@ -26,9 +26,6 @@ enum CbArg : uint32_t {
     cb_pool_scratch_arg,  // block-max-pool only: writer's one-tile row-assembly scratch; unused otherwise
     num_cb_args
 };
-
-// Two mask tiles in cb_mask: index 0 = diagonal strict-upper -inf, index 1 = full -inf.
-constexpr uint32_t num_mask_tiles = 2;
 
 // Per-direction multicast role, written by the factory into the reader's runtime args. Single-sourced
 // here so host and device can't drift on the encoding.
