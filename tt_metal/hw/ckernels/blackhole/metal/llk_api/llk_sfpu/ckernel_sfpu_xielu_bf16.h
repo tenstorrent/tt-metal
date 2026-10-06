@@ -11,7 +11,7 @@ struct XieluBf16Config {
     // Fit: degree-9 polynomial on [-7.0001, 2.06158e+19], 3 segments, max pure (continuous) ULP 0.5.
     static constexpr uint32_t kDegree[] = {1, 9, 2, 2};
     static constexpr uint32_t kLutBits[] = {
-        0xff7fffffu, 0xc0e00000u, 0xb58637bdu, 0x00800000u, 0x5f8f0d18u, 0xbf4ccccdu, 0xbe99999au, 0x00000000u,
+        0xff7fffffu, 0xc0e00000u, 0xb58637bdu, 0x00000001u, 0x5f8f0d18u, 0xbf4ccccdu, 0xbe99999au, 0x00000000u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0xb0ffd6d4u,
         0x3f000000u, 0x3eccd1ccu, 0x3e089a94u, 0x3d086efdu, 0x3bd662c9u, 0x3a83559fu, 0x38e90000u, 0x37010000u,
         0x34820000u, 0xb556bf8eu, 0xbe99999au, 0x3b0fa562u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,

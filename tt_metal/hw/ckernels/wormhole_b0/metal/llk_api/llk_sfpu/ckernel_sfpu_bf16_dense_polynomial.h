@@ -93,13 +93,27 @@ struct dense_polynomial_transport {
         eval_polynomial_transport<DEG>(segment_coefficients<BASE>{}, x, r);
     }
 
+    // A segment from the smallest positive subnormal owns x > 0. A float compare reads a subnormal
+    // x as 0, but TT-NN delivers subnormals to DEST unflushed, so the raw bits decide: -0 reads negative.
+    template <uint32_t SEG>
+    static constexpr bool positive_segment() {
+        return __builtin_bit_cast(uint32_t, Config::lut(SEG)) == 1u;
+    }
+
     template <uint32_t SEG>
     __attribute__((always_inline)) static inline void cascade_single(vFloat x, vFloat& r) {
         if constexpr (SEG < Config::kSegments) {
             vFloat tmp;
             eval_seg_single<SEG>(x, tmp);
-            v_if(x >= lut_fetch<SEG>()) { r = tmp; }
-            v_endif;
+            if constexpr (positive_segment<SEG>()) {
+                // Sign clear and nonzero, as two flag tests: a single x > 0 lets -0 through on the SFPU.
+                vInt bits = as<vInt>(x);
+                v_if(bits >= 0 && bits != 0) { r = tmp; }
+                v_endif;
+            } else {
+                v_if(x >= lut_fetch<SEG>()) { r = tmp; }
+                v_endif;
+            }
             cascade_single<SEG + 1>(x, r);
         }
     }
@@ -118,11 +132,20 @@ struct dense_polynomial_transport {
         if constexpr (SEG < Config::kSegments) {
             vFloat tmp1, tmp2;
             eval_seg_dual<SEG>(x1, x2, tmp1, tmp2);
-            vFloat b = lut_fetch<SEG>();
-            v_if(x1 >= b) { r1 = tmp1; }
-            v_endif;
-            v_if(x2 >= b) { r2 = tmp2; }
-            v_endif;
+            if constexpr (positive_segment<SEG>()) {
+                vInt bits1 = as<vInt>(x1);
+                vInt bits2 = as<vInt>(x2);
+                v_if(bits1 >= 0 && bits1 != 0) { r1 = tmp1; }
+                v_endif;
+                v_if(bits2 >= 0 && bits2 != 0) { r2 = tmp2; }
+                v_endif;
+            } else {
+                vFloat b = lut_fetch<SEG>();
+                v_if(x1 >= b) { r1 = tmp1; }
+                v_endif;
+                v_if(x2 >= b) { r2 = tmp2; }
+                v_endif;
+            }
             cascade_dual<SEG + 1>(x1, x2, r1, r2);
         }
     }
