@@ -29,7 +29,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
-from helpers.sfpu_accuracy_budget import accuracy_contract
+from helpers.sfpu_accuracy_budget import FLUSH_SUBNORMAL_OUTPUTS, accuracy_contract
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
     SHIFT_EDGE_AMOUNTS,
@@ -1077,6 +1077,92 @@ def test_eltwise_unary_sfpu_signbit(
         FastMode.No,
         input_dimensions,
         spec_A=spec_A,
+        gate_on_step_budget=True,
+    )
+
+
+# Both int32 extremes, both signs and zero. INT_MIN is deliverable because the words go in
+# as two's complement; StimuliSpec would clamp it to INT_MIN + 1, so the input is built here.
+_SIGNBIT_INT32_VALUES = [-(2**31), -100, -5, -1, 0, 1, 5, 100, 2**31 - 1]
+UINT32_MASK = 0xFFFFFFFF
+MAX_REPORTED_MISMATCHES = 8
+
+
+def test_eltwise_unary_sfpu_signbit_int32():
+    """signbit on Int32 returns bit 31 of every two's-complement input word as 0 or 1.
+
+    The values repeat over every lane rather than heading each face, so neighbouring rows
+    differ: a body run under another op's SFPLOADMACRO program stores a value derived from
+    the wrong row, and the exact compare catches it.
+    """
+    _skip_coverage_unsupported(MathOperation.Signbit)
+
+    formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [64, 64]
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    tile_cnt = num_elements // (TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1])
+    values = torch.tensor(_SIGNBIT_INT32_VALUES, dtype=torch.int32)
+    src_A = values.repeat(num_elements // values.numel() + 1)[:num_elements]
+
+    golden_tensor = get_golden_generator(UnarySFPUGolden)(
+        MathOperation.Signbit,
+        src_A,
+        formats.output_format,
+        dest_acc,
+        formats.input_format,
+        input_dimensions,
+    )
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=MathOperation.Signbit),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_A.clone(),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=tile_cnt,
+            twos_complement=True,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+    )
+
+    res_tensor = torch.tensor(configuration.run().result, dtype=torch.int64)
+    golden = golden_tensor.to(torch.int64)
+    assert res_tensor.shape == golden.shape, "Result and golden differ in length"
+    mismatch = torch.nonzero(res_tensor != golden).flatten()
+    assert mismatch.numel() == 0, (
+        f"{mismatch.numel()} of {golden.numel()} words differ from bit 31 of the input; first: "
+        + ", ".join(
+            f"[{i}] in {int(src_A[i])} got {int(res_tensor[i]) & UINT32_MASK:#x} want {int(golden[i])}"
+            for i in mismatch[:MAX_REPORTED_MISMATCHES].tolist()
+        )
     )
 
 
@@ -1091,32 +1177,67 @@ ISINF_ISNAN_MATHOPS = [
 ]
 
 
-# The predicates a bf16 input at dest_acc=Yes cannot answer. That unpack path delivers both
-# NaN and -inf to the LREG as +inf, and which predicates that breaks follows from it rather
-# than being a blanket property of the pipeline: is_nan reads 0 where the golden says 1,
-# is_neg_inf reads 0 where it says 1, and is_inf reads 1 where it says 0. The other two
-# survive precisely because +inf is what arrives -- is_pos_inf is untouched, and is_finite
-# agrees by luck of the mapping, since isfinite(+inf) and isfinite(NaN) are both 0.
+# The predicates a bf16 input at dest_acc=Yes cannot answer. That unpack path hands the
+# SFPU a NaN as the infinity of its own sign (measured on Wormhole with both NaN signs
+# driven: Identity writes +inf on every +NaN lane and -inf on every -NaN lane, while +inf
+# and -inf arrive intact), and which predicates that breaks follows from it rather than
+# being a blanket property of the pipeline: is_nan reads 0 on every NaN lane, is_inf 1,
+# is_pos_inf 1 on +NaN and is_neg_inf 1 on -NaN, where the golden says the opposite. Only
+# is_finite survives, being 0 for an infinity and a NaN alike. (A stimulus of one NaN sign
+# hides half of that: torch's bf16 cast gives 0xFFFF, and is_pos_inf then read clean.)
 #
-# Skipping the whole op list here withheld those two as well; they are swept now, so a
-# regression in the +inf path is caught on a bf16 input instead of only on Float32.
+# Skipping the whole op list here withheld is_finite as well; it is swept now, so a
+# regression in the inf path is caught on a bf16 input instead of only on Float32.
 _ISINF_ISNAN_BF16_DEST_UNSUPPORTED = [
     MathOperation.Isinf,
     MathOperation.Isneginf,
     MathOperation.Isnan,
+    MathOperation.Isposinf,
 ]
+
+
+def isinf_isnan_skip_reason(formats, mathop, dest_acc):
+    """Why the isinf/isnan sweep skips this variant, or ``None``. The driver and the
+    exact-op guard in test_sfpu_accuracy_budget.py both ask it, so the guard's
+    exclusions cannot drift from the skip."""
+    if (
+        formats.input_format == DataFormat.Float16_b
+        and dest_acc == DestAccumulation.Yes
+        and mathop in _ISINF_ISNAN_BF16_DEST_UNSUPPORTED
+    ):
+        return (
+            "bf16->fp32 dest unpack delivers a NaN as the infinity of its sign, so "
+            "this predicate cannot be evaluated on this pipeline"
+        )
+    return None
+
+
+#: A positive quiet NaN's bit pattern in each stimulus dtype, as the signed integer view
+#: of that width. The NaNs are written as bits because neither a cast nor a negation says
+#: which sign the kernel is fed: torch's fp32 -> bfloat16 cast canonicalises every NaN to
+#: 0xFFFF, sign set, and bfloat16 arithmetic drops a NaN's sign.
+_QUIET_NAN_BITS = {
+    torch.bfloat16: (torch.int16, 0x7FC0),
+    torch.float32: (torch.int32, 0x7FC00000),
+}
 
 
 def _isinf_isnan_stimuli_spec():
     def dist(size, dtype, generator):
-        # Finite ramp in [-5, 5] with regular +inf / -inf / nan injected so every
-        # face carries all special classes plus finite values.
+        # Finite ramp in [-5, 5] with regular +inf / -inf / NaN injected so every
+        # face carries all special classes plus finite values. The NaN lanes alternate
+        # +NaN and -NaN: the bf16 -> 32-bit Dest unpack turns a NaN into the infinity of
+        # its sign, so one sign alone would hide what half the predicates see.
         idx = torch.arange(size, dtype=torch.float32)
-        x = (idx % 11) - 5.0
+        x = ((idx % 11) - 5.0).to(dtype)
         x[0::7] = float("inf")
         x[1::7] = float("-inf")
-        x[2::7] = float("nan")
-        return x.to(dtype)
+        int_dtype, positive_nan = _QUIET_NAN_BITS[dtype]
+        sign_bit = 1 << (torch.iinfo(int_dtype).bits - 1)
+        bits = x.view(int_dtype)
+        bits[2::14] = positive_nan
+        bits[9::14] = positive_nan - sign_bit  # the same pattern with the sign bit set
+        return x
 
     return StimuliSpec(distribution=dist, seed=0)
 
@@ -1137,18 +1258,12 @@ def test_eltwise_unary_sfpu_isinf_isnan(
 ):
     _skip_bh_unless_fp32(formats, dest_acc)
 
-    # bf16->fp32 dest unpack (non-32-bit input + dest_acc=Yes) delivers NaN and -inf as
-    # +inf, which only the three predicates below can see; the rest are swept here.
+    # bf16->fp32 dest unpack (non-32-bit input + dest_acc=Yes) delivers a NaN as the
+    # infinity of its sign, which every predicate but is_finite can see; it is swept here.
     # See _ISINF_ISNAN_BF16_DEST_UNSUPPORTED.
-    if (
-        formats.input_format == DataFormat.Float16_b
-        and dest_acc == DestAccumulation.Yes
-        and mathop in _ISINF_ISNAN_BF16_DEST_UNSUPPORTED
-    ):
-        pytest.skip(
-            reason="bf16->fp32 dest unpack delivers NaN and -inf as +inf, so this "
-            "predicate cannot be evaluated on this pipeline"
-        )
+    reason = isinf_isnan_skip_reason(formats, mathop, dest_acc)
+    if reason:
+        pytest.skip(reason=reason)
 
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
@@ -1159,6 +1274,7 @@ def test_eltwise_unary_sfpu_isinf_isnan(
         FastMode.No,
         input_dimensions,
         spec_A=_isinf_isnan_stimuli_spec(),
+        gate_on_step_budget=True,
     )
 
 
@@ -1234,6 +1350,7 @@ def test_eltwise_unary_sfpu_threshold(
         FastMode.No,
         input_dimensions,
         spec_A=_threshold_op_stimuli_spec(mathop),
+        gate_on_step_budget=True,
     )
 
 
@@ -1250,7 +1367,11 @@ def eltwise_unary_sfpu(
     relu_min_int_threshold=None,
     relu_max_threshold=None,
     twos_complement=False,
+    gate_on_step_budget=False,
 ):
+    """*gate_on_step_budget* is for a caller whose hand-built stimulus the op's step
+    budget was measured on (``MEASURED_ON_SWEEP`` in test_sfpu_accuracy_budget.py): it
+    gates on the whole contract rather than only its tolerance arm."""
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
 
@@ -1369,10 +1490,12 @@ def eltwise_unary_sfpu(
     # CUSTOM_TOLERANCES used to be read in the test bodies; keeping it in the driver
     # means all eight call sites pick it up at once, and a change is a registry edit.
     #
-    # Tolerance only, deliberately. A step budget measured over every value the format
-    # has -- which is what the nightly sweep measures -- is much wider than one measured
+    # Tolerance only by default. A step budget measured over every value the format has
+    # -- which is what the exhaustive sweep measures -- is much wider than one measured
     # over this driver's sampled domain, so enforcing it here would replace a gate that
-    # binds with one that does not. The budgets are enforced where they were measured.
+    # binds with one that does not. The budgets are enforced where they were measured:
+    # the signbit, isinf/isnan and threshold sweeps' predicates were measured on these
+    # very stimuli, so those three pass gate_on_step_budget.
     contract = accuracy_contract(
         mathop,
         output_format=formats.output_format,
@@ -1385,7 +1508,11 @@ def eltwise_unary_sfpu(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **contract.tolerance_kwargs(),
+        **(
+            contract.passed_test_kwargs(flush_subnormals=FLUSH_SUBNORMAL_OUTPUTS)
+            if gate_on_step_budget
+            else contract.tolerance_kwargs()
+        ),
     ), "Assert against golden failed"
 
     # For callers that want a stricter gate than the op's tolerance (an exact-bits check on
@@ -1528,8 +1655,9 @@ def _special_class(value):
 def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
     if TestConfig.CHIP_ARCH in _BF16_STOCK_BOARDS.get(mathop, ()):
         pytest.skip(f"{mathop.name} keeps the stock kernel on {TestConfig.CHIP_ARCH}")
-    from helpers.ulp import ulp_distance
-    from helpers.ulp_sweep import measurable_mask, nonfinite_failures, sweep_spec
+    from helpers.sfpu_accuracy_budget import Metric, accuracy_contract
+    from helpers.ulp import nonfinite_mismatches, ulp_distance
+    from helpers.ulp_sweep import flushed_inputs, measurable_mask, sweep_spec
 
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     dest_acc = DestAccumulation.No
@@ -1541,11 +1669,15 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
         input_dimensions_B=dimensions,
         spec_A=sweep_spec(),
     )
-    # The sweep pads with +0 and drops -0. The specials go in that padding, under the
-    # edge sweep's gates for what the golden defines and the pipeline delivers.
+    # The sweep pads with +0. The specials go in that padding, under the edge sweep's
+    # gates for what the golden defines and the pipeline delivers.
     specials = [0.0]
     if negative_zero_delivered(formats.input_format, dest_acc):
         specials.append(-0.0)
+    else:
+        # The kernel reads an undelivered -0 as +0, so the golden must too: rsqrt(-0)
+        # is -inf, which the +0 the pipeline delivers can never return.
+        src_A[(src_A == 0) & torch.signbit(src_A.float())] = 0.0
     nonfinite = mathop in SPECIALS_READY_OPS and specials_safe(
         formats.input_format, formats.output_format, dest_acc
     )
@@ -1598,7 +1730,13 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
     result = torch.tensor(
         configuration.run().result, dtype=format_dict[formats.output_format]
     )
-    failures = nonfinite_failures(src_A, golden, result, formats.input_format)
+    # Every lane whose input the unpack does not flush must agree with the golden about
+    # being NaN or infinite. Stricter than ulp_sweep.nonfinite_failures, which also excuses
+    # a NaN golden, a store saturating past the output's range and inputs outside the op's
+    # claim: a kernel replacing stock's on every BF16 input is held to the golden there too.
+    failures = nonfinite_mismatches(golden, result) & ~flushed_inputs(
+        src_A, formats.input_format
+    )
     assert (
         not failures.any()
     ), f"{mathop.name}: {int(failures.sum())} lanes disagree on finiteness"
@@ -1626,3 +1764,22 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
     assert passed_test(
         golden, result, formats.output_format, max_ulp=max_ulp, mask=mask
     ), f"{mathop.name}: {over} lanes over the {max_ulp}-ULP budget"
+    # The step budget helpers/sfpu_accuracy_budget.yaml declares for this cell, where it
+    # declares one for this board, judged as test_unary_sfpu_ulp.py judges it.
+    contract = accuracy_contract(
+        mathop,
+        output_format=formats.output_format,
+        input_format=formats.input_format,
+        approx_mode=approx_mode,
+        dest_acc=dest_acc,
+        arch=TestConfig.CHIP_ARCH,
+    )
+    if contract.metric == Metric.ULP:
+        assert passed_test(
+            golden,
+            result,
+            formats.output_format,
+            mask=mask,
+            flush_subnormals=True,
+            **contract.passed_test_kwargs(),
+        ), f"{mathop.name}: over the {contract.max_ulp}-step budget of helpers/sfpu_accuracy_budget.yaml"
