@@ -366,11 +366,22 @@ def _schedule(chunk_tokens: int, schedule: str) -> tuple[int, ...]:
     }[schedule]
 
 
-def gdn_case_spec(model: str, layout: str, schedule: str, weights: str = SYNTHETIC, inputs: str = RANDN) -> GDNCaseSpec:
+def gdn_case_spec(
+    model: str,
+    layout: str,
+    schedule: str,
+    weights: str = SYNTHETIC,
+    inputs: str = RANDN,
+    galaxy_rank: int = 0,
+) -> GDNCaseSpec:
+    """Spec of one cell; a per-rank-heads layout runs Galaxy TP rank ``galaxy_rank``'s K heads and their V heads."""
     mesh_shape, tensor_parallel_axis, chunk_tokens, rank_heads = LAYOUTS[layout]
     key_heads = GDN_MODELS[model].config().num_key_heads
     if rank_heads and key_heads % GALAXY_TENSOR_PARALLEL_SIZE:
         raise ValueError(f"{model}: {key_heads} K heads do not split into Galaxy TP{GALAXY_TENSOR_PARALLEL_SIZE} ranks")
+    if not 0 <= galaxy_rank < GALAXY_TENSOR_PARALLEL_SIZE or (galaxy_rank and not rank_heads):
+        raise ValueError(f"galaxy_rank {galaxy_rank} needs a per-rank-heads layout and 0 <= rank < 4, got {layout}")
+    rank_key_heads = key_heads // GALAXY_TENSOR_PARALLEL_SIZE
     return GDNCaseSpec(
         model=model,
         weights=weights,
@@ -378,9 +389,18 @@ def gdn_case_spec(model: str, layout: str, schedule: str, weights: str = SYNTHET
         tensor_parallel_axis=tensor_parallel_axis,
         chunk_tokens=chunk_tokens,
         chunk_valid_tokens=_schedule(chunk_tokens, schedule),
-        key_head_slice=(0, key_heads // GALAXY_TENSOR_PARALLEL_SIZE) if rank_heads else None,
+        key_head_slice=(galaxy_rank * rank_key_heads, (galaxy_rank + 1) * rank_key_heads) if rank_heads else None,
         inputs=inputs,
     )
+
+
+# Galaxy TP rank whose layer-0 heads real text drives into both decay bands, per model: the extra LB-B real-text
+# cells run it next to rank 0 so the 8-rank composition at 5120 tokens also covers the weak-band and full-forgetting
+# heads (measured by the prepare step's GDN_DECAY_EXPOSURE on the full-head LB-A text case, Pride and Prejudice
+# tokens [0, 3840); V head j reads K head j // (Hv / Hk)):
+# * qwen38_27b: rank 2 (K heads 8-11, V heads 24-35) holds mostly-weak V heads 27, 28 and the only strong head 32
+#   (max |G_last| 226); rank 0 holds neither band (max 58, no weak chunk).
+TEXT_EXPOSED_GALAXY_RANK = {"qwen38_27b": 2}
 
 
 _REGISTERED_SPECS = (
@@ -394,16 +414,22 @@ _REGISTERED_SPECS = (
         for inputs in (RANDN, TEXT)
         for schedule in SCHEDULES
     ),
+    # Real text on the decay-exposed Galaxy rank's heads at LB-B.
+    *(
+        gdn_case_spec(model, "LB-B", schedule, REAL, TEXT, rank)
+        for model, rank in TEXT_EXPOSED_GALAXY_RANK.items()
+        for schedule in SCHEDULES
+    ),
 )
 GDN_CASES: dict[str, GDNCaseSpec] = {spec.name: spec for spec in _REGISTERED_SPECS}
 assert len(GDN_CASES) == len(_REGISTERED_SPECS), "duplicate GDN case names"
 
 
 def registered_gdn_case(
-    model: str, layout: str, schedule: str, weights: str = SYNTHETIC, inputs: str = RANDN
+    model: str, layout: str, schedule: str, weights: str = SYNTHETIC, inputs: str = RANDN, galaxy_rank: int = 0
 ) -> GDNCaseSpec:
     """Return the registered spec; unregistered cases cannot be prepared, so they are rejected."""
-    spec = gdn_case_spec(model, layout, schedule, weights, inputs)
+    spec = gdn_case_spec(model, layout, schedule, weights, inputs, galaxy_rank)
     if spec.name not in GDN_CASES:
         raise KeyError(f"GDN case {spec.name} is not registered in tests/gdn/cases.py::GDN_CASES")
     return GDN_CASES[spec.name]

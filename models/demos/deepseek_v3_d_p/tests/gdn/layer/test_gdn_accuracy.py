@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_d_p.tests.gdn.cases import (
     GDN_MODELS,
     LAYOUTS,
     SCHEDULES,
+    TEXT_EXPOSED_GALAXY_RANK,
     GDNTestCase,
     build_gdn_case,
     make_gdn_device_case,
@@ -50,10 +51,27 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import acc
 pytestmark = [run_for_blackhole(), pytest.mark.timeout(1800)]
 
 
-# (weights, inputs): synthetic weights on seeded random inputs for every model and layout; real layer-0 weights on
+# (weights, inputs): besides synthetic weights on seeded random inputs (every model and layout), real layer-0 weights on
 # random inputs and on real text (tests/gdn/text_input.py) at the LoudBox layouts. Real weights are local only.
-_SYNTHETIC = (("synthetic", "randn"),)
 _REAL = (("real", "randn"), ("real", "text"))
+
+
+def _cells() -> list[tuple[str, str, str, str, int]]:
+    """(model, layout, weights, inputs, Galaxy rank) of every registered accuracy cell."""
+    cells = []
+    for model in GDN_MODELS:
+        for layout in LAYOUTS:
+            cells.append((model, layout, "synthetic", "randn", 0))
+            if model in QWEN_GDN_MODELS and layout in ("LB-A", "LB-B"):
+                cells.extend((model, layout, weights, inputs, 0) for weights, inputs in _REAL)
+    cells.extend((model, "LB-B", "real", "text", rank) for model, rank in TEXT_EXPOSED_GALAXY_RANK.items())
+    return cells
+
+
+def _cell_id(model: str, layout: str, weights: str, inputs: str, rank: int) -> str:
+    if weights == "synthetic":
+        return f"{model}-{layout}-synthetic"
+    return f"{model}-{layout}-real-{inputs}" + (f"-rank{rank}" if rank else "")
 
 
 def _params() -> list:
@@ -65,14 +83,11 @@ def _params() -> list:
             layout,
             weights,
             inputs,
+            rank,
             schedule,
-            id=f"{model}-{layout}-synthetic-{schedule}"
-            if weights == "synthetic"
-            else f"{model}-{layout}-real-{inputs}-{schedule}",
+            id=f"{_cell_id(model, layout, weights, inputs, rank)}-{schedule}",
         )
-        for model in GDN_MODELS
-        for layout in LAYOUTS
-        for weights, inputs in _SYNTHETIC + (_REAL if model in QWEN_GDN_MODELS and layout in ("LB-A", "LB-B") else ())
+        for model, layout, weights, inputs, rank in _cells()
         for schedule in SCHEDULES
     ]
 
@@ -108,7 +123,7 @@ def _run_schedule(
 
 
 @pytest.mark.parametrize(
-    "mesh_device,device_params,model,layout,weights,inputs,schedule",
+    "mesh_device,device_params,model,layout,weights,inputs,galaxy_rank,schedule",
     _params(),
     indirect=["mesh_device", "device_params"],
 )
@@ -119,9 +134,10 @@ def test_gdn_layer_accuracy(
     layout: str,
     weights: str,
     inputs: str,
+    galaxy_rank: int,
     schedule: str,
 ) -> None:
-    spec = registered_gdn_case(model, layout, schedule, weights, inputs)
+    spec = registered_gdn_case(model, layout, schedule, weights, inputs, galaxy_rank)
     mesh_device = layout_mesh(mesh_device, spec.mesh_shape)
     case = build_gdn_case(spec)
     references = cpu_references(case)
@@ -214,6 +230,7 @@ def test_gdn_layer_accuracy(
                 "min_pcc": min(row["pcc"] for row in rows),
                 "weights": weights,
                 "inputs": inputs,
+                "key_head_slice": spec.key_head_slice,
                 "max_output_rel_rmse": max(row["rel_rmse"] for row in rows if row["tensor"] == "output"),
                 "max_output_rel_linf": max(row["rel_linf"] for row in rows if row["tensor"] == "output"),
                 "max_recurrent_rel_linf": max(row["rel_linf"] for row in recurrent_rows),
