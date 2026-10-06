@@ -34,6 +34,7 @@ for v in main optin optin main; do
   timeout -s INT -k 60 ${EB_RUN_LIMIT:-2400} python3 -m tracy -r -p --no-web-server -o "$OUT" -m pytest -p eb_prof_plugin "${SEL[@]}" -p no:cacheprovider -o timeout_method=thread -q -rfEs "$@" > $O/log_${run}_$v.txt 2>&1
   echo "--- run $run $v rc=$?: $(grep -E 'passed|failed|skipped|error' $O/log_${run}_$v.txt | tail -1)"
   grep -E "^(FAILED|ERROR)" $O/log_${run}_$v.txt | cut -c1-200 | head -10
+  grep -q -E 'passed|failed|skipped|error' $O/log_${run}_$v.txt || tail -15 $O/log_${run}_$v.txt | cut -c1-200
 done
 restore
 python3 /work/tests/eb_r3_ci/prof_reduce.py $O set 2>&1
