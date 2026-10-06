@@ -105,8 +105,10 @@ The pre-P/D ladder now mirrors Kimi's test semantics:
    PCC `>=0.999` for all eight layers.
 3. That consumer leg also compares the first proposal, accepted prefix, and
    short speculative sequence with a separately staged torch DFlash run over
-   the same true-prefill features. The prefill-by-decode result remains the
-   additional producer-compatibility control described above.
+   the same true-prefill features. Proposal tokens must be in the corresponding
+   torch top-32 candidate set (the BF8-tolerant argmax criterion); the target
+   continuation and accepted prefix remain exact. The prefill-by-decode result
+   remains the additional producer-compatibility control described above.
 
 The SC1 model-store paths used by CI are:
 
