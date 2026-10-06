@@ -874,6 +874,8 @@ def test_glm_prefill_block(
         # single-block test: layer_num=1 so the sparse single-shot cache write (update_padded_kv_cache,
         # num_layers=layer_num) gets a valid count, not the None default.
         layer_num=1,
+        # the config enables fusion only for chunked prefill, so this single-shot block opts in explicitly
+        use_fused_rmsnorm=True,
     )
     kvpe_cache = init_mla_kv_cache(
         cache_format=MlaKvCacheFormat.BF16_RM,

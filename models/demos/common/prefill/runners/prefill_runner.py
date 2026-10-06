@@ -32,6 +32,7 @@ from models.demos.common.prefill.runners.runner_utils import (
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_rows as d2d_rows_for
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_width as d2d_width
 from models.demos.common.prefill.runners.runner_utils import make_h2d_spec, num_mtp_tokens, open_mesh_device
+from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
 
 
 def _apply_manifest_env():
@@ -74,6 +75,7 @@ def d2d_worker_cores(mesh_device) -> ttnn.CoreRange:
 LAYER_ACK_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_LAYER_ACK_FIFO_BYTES", 4 * 1024))
 
 SHUTDOWN_METADATA_WORD = -1
+WARMUP_METADATA_WORD = -2
 
 H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()])
 
@@ -206,8 +208,13 @@ def mtp_provided_levels(mtp_tokens, meta: dict) -> int:
     if meta["actual_end"] < meta["actual_start"] + CHUNK_SIZE:
         return 0
     assert mtp_tokens is not None, "MTP is on but no lookahead tensor arrived with this chunk"
-    last_chip = ttnn.get_device_tensors(mtp_tokens)[-1]
-    ids = ttnn.to_torch(last_chip).view(torch.int32).flatten()
+    lookahead = mtp_lookahead_positions(meta["actual_start"], _sp, CHUNK_SIZE // _sp, meta["actual_end"], MTP_LEVELS)
+    chips = [c for c, slots in enumerate(lookahead) if slots[0] == meta["actual_end"]]
+    assert len(chips) == 1, f"expected one chip whose lookahead starts at {meta['actual_end']}, got {chips}"
+    device_tensors = ttnn.get_device_tensors(mtp_tokens)
+    assert len(device_tensors) == _sp * _tp, f"got {len(device_tensors)} device tensors for a {_sp}x{_tp} mesh"
+    # H2D_MAPPER_CONFIG shards SP over mesh axis 0 and device tensors are row-major, so chip c is device c * _tp
+    ids = ttnn.to_torch(device_tensors[chips[0] * _tp]).view(torch.int32).flatten()
     assert ids.numel() >= MTP_LEVELS, f"lookahead row is {ids.numel()} ids, need at least {MTP_LEVELS}"
     provided = 0
     for tok in ids[:MTP_LEVELS].tolist():
@@ -222,6 +229,14 @@ def _is_shutdown_sentinel(meta: dict) -> bool:
         meta["slot_id"] == SHUTDOWN_METADATA_WORD
         and meta["actual_start"] == SHUTDOWN_METADATA_WORD
         and meta["actual_end"] == SHUTDOWN_METADATA_WORD
+    )
+
+
+def _is_warmup_sentinel(meta: dict) -> bool:
+    return (
+        meta["slot_id"] == WARMUP_METADATA_WORD
+        and meta["actual_start"] == WARMUP_METADATA_WORD
+        and meta["actual_end"] == WARMUP_METADATA_WORD
     )
 
 
@@ -350,6 +365,21 @@ def _forward_shutdown(d2d_out, rank: int, d2d_rows: int, d2d_width: int, planes:
     logger.info(f"[pp rank {rank}] forwarded SHUTDOWN sentinel to rank {rank + 1}")
 
 
+def _forward_send_warmup(runtime, d2d_out, rank: int) -> None:
+    """Compile the traced send before this rank's capture; the next rank drops the record."""
+    get_inputs = getattr(runtime, "send_warmup_inputs", None)
+    inputs = get_inputs((WARMUP_METADATA_WORD,) * 3) if get_inputs is not None and not MTP_LEVELS else None
+    if inputs is None:
+        return
+    activation, md_tensor = inputs
+    ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2d_out, activation, metadata=md_tensor)
+    d2d_out.release_fabric_links()
+    d2d_out.wait_for_fabric_links()
+    ttnn.deallocate(activation)
+    ttnn.deallocate(md_tensor)
+    logger.info(f"[pp rank {rank}] forwarded send warm-up record to rank {rank + 1}")
+
+
 def _lease_reclaim(d2d_in, d2d_out) -> None:
     if d2d_in is not None:
         d2d_in.wait_for_fabric_links()
@@ -425,7 +455,7 @@ def _compute_and_send(
             out,
             rank,
             meta,
-            deallocate=(not runtime.config.use_trace) or runtime.config.dflash_enabled,
+            deallocate=not runtime.config.use_trace,
             metadata_msg=forward_md,
         )
     if d2d_out is not None:
@@ -455,6 +485,7 @@ def run_request_loop(
     d2d_in=None,
     d2d_out=None,
     d2h_service=None,
+    before_first_chunk=None,
 ) -> None:
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
@@ -483,6 +514,15 @@ def run_request_loop(
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, d2d_rows, d2d_width, outbound_planes)
             break
+        warmup = _is_warmup_sentinel(meta)
+        if warmup:
+            ttnn.deallocate(inp)
+            ttnn.deallocate(metadata_msg)
+        if before_first_chunk is not None:
+            before_first_chunk()
+            before_first_chunk = None
+        if warmup:
+            continue
         t = _compute_and_send(
             runtime,
             kv_caches,
@@ -950,7 +990,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             f"(no migration worker); prefill_producer can import them"
         )
 
-    if getattr(runtime, "capture_trace", None) and runtime.config.use_trace:
+    def _capture_trace() -> None:
+        if d2d_out is not None:
+            _forward_send_warmup(runtime, d2d_out, rank)
         runtime.capture_trace(kv_caches)
         if use_d2h and layer_ack_service is not None:
             n_warm = getattr(runtime, "warmup_ack_count", lambda: 0)()
@@ -959,6 +1001,10 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             if n_warm:
                 logger.info(f"[migration] drained {n_warm} D2H warm-up ack records from the trace capture")
             layer_ack_service.start()
+
+    # Capture after the first record so the socket programs are compiled first; on non-first ranks
+    # that record is the upstream warm-up.
+    traced = bool(getattr(runtime, "capture_trace", None)) and runtime.config.use_trace
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
@@ -975,6 +1021,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             d2d_in=d2d_in,
             d2d_out=d2d_out,
             d2h_service=d2h_service,
+            before_first_chunk=_capture_trace if traced else None,
         )
     finally:
         import gc
