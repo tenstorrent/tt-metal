@@ -21,6 +21,7 @@ file(
     sdpa_decode/device/kernels/*.hpp
     gated_delta_attn/device/kernels/*.cpp
     chunk_gated_delta_rule/device/kernels/*.cpp
+    chunk_gated_delta_rule/device/kernels/*.hpp
     fused_recurrent_gated_delta_rule/device/kernels/*.cpp
 )
 target_sources(

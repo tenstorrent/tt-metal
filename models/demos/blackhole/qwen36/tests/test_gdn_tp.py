@@ -4,6 +4,7 @@
 Run:
     MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
       pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
+The prefill conv-path tests at the end (test_conv_paths_*, test_kda_*) use random data and need no checkpoint.
 """
 import os
 
@@ -21,15 +22,23 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     model_path,
     parametrize_batch,
     parametrize_mesh_tp,
+    random_gdn_state_dict,
     replicate_to_device,
     shard_to_device,
     tp_composer,
 )
-from models.demos.blackhole.qwen36.tt.gdn.tp import TPGatedDeltaNet, load_gdn_weights_tp
-from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.blackhole.qwen36.tt.gdn.tp import (
+    TPGatedDeltaNet,
+    kda_channel_chunk_size,
+    kda_conv_prefill,
+    kda_pack_gather,
+    load_gdn_weights_tp,
+)
+from models.demos.blackhole.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE, Qwen36ModelArgs
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_decode_ttnn,
 )
+from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 
 
 @torch.no_grad()
@@ -836,3 +845,458 @@ def test_gdn_out_agmm_deterministic_under_device_skew(mesh_device, monkeypatch, 
             f"device {late} late: {bad.numel()} output rows differ from the synchronized reference "
             f"(first {bad[:8].tolist()}): the out-projection gather overwrote data the late device still used"
         )
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("T", [256, 2048], ids=lambda t: f"T{t}")
+def test_gdn_tp_prefill_fused_vs_phased_bit_exact(mesh_device, T, reset_seeds, ensure_gc):
+    """Layer-level test for the fused prep->scan op: TPGatedDeltaNet.forward_prefill with real weights,
+    run with a phased and a fused program config on the same tokens.
+    """
+    os.environ.setdefault("HF_MODEL", model_path())
+    if mesh_device.get_num_devices() == 1:
+        pytest.skip("TP-only")
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=4096)
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    gdn = TPGatedDeltaNet(mesh_device, args, load_gdn_weights_tp(mesh_device, sd, args), TT_CCL(mesh_device))
+    composer = tp_composer(mesh_device)
+    x_tt = shard_to_device(mesh_device, torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16), dim=-1)
+
+    def run(program_config):
+        gdn.gdn_program_config = program_config
+        gdn.reset_state()
+        o = gdn.forward_prefill(x_tt)
+        out = ttnn.to_torch(o, mesh_composer=composer)[0, 0].float().clone()
+        ttnn.deallocate(o)
+        return out
+
+    phased = run(ttnn.ChunkGdnPhasedProgramConfig())
+    phased_again = run(ttnn.ChunkGdnPhasedProgramConfig())
+    n_phased = mesh_device.num_program_cache_entries()
+    fused = run(ttnn.ChunkGdnFusedProgramConfig())
+    n_fused = mesh_device.num_program_cache_entries()
+    assert torch.equal(phased, phased_again), "phased layer output is not deterministic"
+    assert n_fused > n_phased, "the fused program config compiled no new program: the fused prim did not run"
+    d = (phased - fused).abs()
+    assert torch.equal(phased, fused), (
+        f"T={T}: fused layer output differs from phased (max|d|={d.max().item():.3e}, "
+        f"first differing row {int(torch.nonzero(d.sum(-1))[0])})"
+    )
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "l1_small_size": GDN_CONV1D_L1_SMALL_SIZE,
+            "trace_region_size": 268435456,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 4), id="1x4")], indirect=True)
+@pytest.mark.parametrize("weights", ["checkpoint", "random"])
+def test_gdn_tp_prefill_trace_replay(mesh_device, weights, reset_seeds, ensure_gc, request):
+    """Chunk-outer prefill through ONE captured trace equals the eager chunks, bit for bit.
+
+    Three 2048-token chunks with the persistent carry (_stable_state), first eagerly, then as the
+    model's chunked prefill runs them: state zeroed in place, one forward_prefill captured, the trace
+    replayed three times with each chunk ttnn.copy'd into the persistent input buffer and the baked
+    output read back. Catches anything on the prefill path that allocates or writes from the host
+    inside the trace (constants must be built by reset_state) or whose programs differ per chunk.
+    The property needs no trained weights: the `random` variant runs wherever HF_MODEL holds the
+    model's config.json, the `checkpoint` variant where the layer's safetensors are too.
+    """
+    os.environ.setdefault("HF_MODEL", model_path())
+    T, n_chunks = 2048, 3
+    mesh = mesh_device
+    args = Qwen36ModelArgs(mesh, max_batch_size=1, max_seq_len=T * n_chunks)
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    sd = load_gdn_layer(args.CKPT_DIR, li) if weights == "checkpoint" else random_gdn_state_dict(args, seed=li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh)
+    tw = load_gdn_weights_tp(mesh, sd, args)
+    gdn = TPGatedDeltaNet(mesh, args, tw, tt_ccl)
+    logger.info(f"conv impl={gdn._conv_impl} kda={gdn._gdn_kda_conv} layer={li}")
+    gdn._stable_state = True
+    gdn.reset_state()  # persistent state and the prefill constants, before any capture
+    x = torch.randn(1, 1, T * n_chunks, args.dim, dtype=torch.bfloat16)
+    chunks = [x[:, :, c * T : (c + 1) * T, :] for c in range(n_chunks)]
+    comp = tp_composer(mesh)
+
+    # Persistent K-sharded input buffer (its address is baked into the trace); chunks are copied in.
+    x_buf = shard_to_device(mesh, chunks[0], dim=-1)
+
+    def load_chunk(c):
+        src = shard_to_device(mesh, chunks[c], dim=-1)
+        ttnn.copy(src, x_buf)
+        ttnn.deallocate(src)
+
+    eager = []
+    for c in range(n_chunks):
+        load_chunk(c)
+        out = gdn.forward_prefill(x_buf, chunk_size=args.gdn_chunk_size)
+        eager.append(ttnn.to_torch(out, mesh_composer=comp).float())
+        ttnn.deallocate(out)
+    ttnn.synchronize_device(mesh)
+
+    gdn.reset_state_inplace()
+    ttnn.synchronize_device(mesh)
+    tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+    out_t = gdn.forward_prefill(x_buf, chunk_size=args.gdn_chunk_size)
+    ttnn.end_trace_capture(mesh, tid, cq_id=0)
+    replay = []
+    for c in range(n_chunks):
+        load_chunk(c)
+        ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
+        replay.append(ttnn.to_torch(out_t, mesh_composer=comp).float())
+    ttnn.release_trace(mesh, tid)
+
+    for c in range(n_chunks):
+        eq = torch.equal(eager[c], replay[c])
+        _, pcc = comp_pcc(eager[c], replay[c])
+        logger.info(f"chunk {c}: trace replay == eager: {eq}; pcc {pcc}")
+        assert eq, f"chunk {c}: trace replay differs from eager (pcc {pcc})"
+    logger.info("PASSED: traced chunk-outer GDN prefill matches eager on every chunk")
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Prefill conv paths (the KDA fused op and the FIR) against one torch reference. Random data, no checkpoint;
+# data is replicated to every device of the mesh and asserted on device 0.
+# ---------------------------------------------------------------------------------------------------------------
+
+CONV_K = 4  # conv kernel width; the carry holds K-1 = 3 rows
+CONV_PCC_VS_REF = 0.999
+# The first K-1 rows are the only ones that read the carry, and 3 rows in 2048 do not move a whole-chunk PCC (a
+# dropped carry still scores 0.9996), so their max-abs error is held to a multiple of the other rows' (measured:
+# 0.016 vs 0.045 with the carry, 2.45 without).
+CARRY_ROWS_HEADROOM = 4
+
+# (T, kd, vd, fir) per device: the 27B TP-4 production shape (C = 2560), the 35B-A3B TP-4 shape (C = 2048), the 9B
+# single-device shape (C = 8192; the KDA op only: the FIR's shifted copies do not fit L1 next to the L1 qkv) and a
+# small one (C = 192).
+CONV_SHAPES = [
+    pytest.param(2048, 512, 1536, True, id="T2048-kd512-vd1536"),
+    pytest.param(2048, 512, 1024, True, id="T2048-kd512-vd1024"),
+    pytest.param(2048, 2048, 4096, False, id="T2048-kd2048-vd4096"),
+    pytest.param(64, 64, 64, True, id="T64-kd64-vd64"),
+]
+
+
+def _ref_conv(x, hist, w):
+    """Depthwise causal conv + SiLU in fp32: silu(sum_j w[:, j] * xpad[t + j]) with the K-1 history rows
+    prepended, so tap j multiplies input row t - 3 + j. x [1,T,C], hist [1,3,C] bf16; w [C,K] bf16."""
+    T = x.shape[1]
+    xp = torch.cat([hist.float(), x.float()], dim=1)  # [1, K-1+T, C]
+    return F.silu(sum(w[:, j].float() * xp[:, j : j + T, :] for j in range(CONV_K)))
+
+
+def _split_qkv(t, kd, vd):
+    return t[..., :kd], t[..., kd : 2 * kd], t[..., 2 * kd :]
+
+
+def _dev0(t):
+    """Device 0's copy of a replicated mesh tensor, as a torch tensor."""
+    return ttnn.to_torch(ttnn.get_device_tensors(t)[0])
+
+
+def _pcc(golden, calculated):
+    return comp_pcc(golden, calculated)[1]
+
+
+def _random_inputs(T, C, seed):
+    torch.manual_seed(seed)
+    x = torch.randn(1, T, C).to(torch.bfloat16)
+    hist = torch.randn(1, CONV_K - 1, C).to(torch.bfloat16)  # nonzero carry: exercises the history rows
+    w = (torch.randn(C, CONV_K) * 0.3).to(torch.bfloat16)  # taps [C, CONV_K]; tap j multiplies row t-3+j
+    return x, hist, w
+
+
+def _to_l1(mesh, x):
+    """qkv as the layer hands it to the conv: bf16 TILE in L1, replicated."""
+    return ttnn.from_torch(
+        x,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+
+def _taps(mesh, w):
+    """The KDA / FIR tap contract: four [1, 1, C] bf16 TILE tensors in kernel-position order."""
+    C = w.shape[0]
+    return [replicate_to_device(mesh, w[:, j].reshape(1, 1, C).contiguous()) for j in range(CONV_K)]
+
+
+def _actual_start(mesh):
+    return ttnn.from_torch(
+        torch.tensor([0], dtype=torch.int64),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+    )
+
+
+def _slice3(conv, T, kd, vd):
+    """q | k | v column split of a [1, T, C] conv output (the non-fused paths' epilogue)."""
+    C = 2 * kd + vd
+    q = ttnn.slice(conv, (0, 0, 0), (1, T, kd))
+    k = ttnn.slice(conv, (0, 0, kd), (1, T, 2 * kd))
+    v = ttnn.slice(conv, (0, 0, 2 * kd), (1, T, C))
+    ttnn.deallocate(conv)
+    return q, k, v
+
+
+def _check_contract(name, q, k, v, new_state, T, kd, vd, x):
+    """Output contract shared by every path: q/k/v [1,T,kd|kd|vd] and new_state [1,3,C], all TILE in DRAM;
+    new_state is bit-exactly the last K-1 rows of the bf16 input."""
+    C = 2 * kd + vd
+    for label, t, shape in (
+        ("q", q, (1, T, kd)),
+        ("k", k, (1, T, kd)),
+        ("v", v, (1, T, vd)),
+        ("new_state", new_state, (1, 3, C)),
+    ):
+        assert tuple(t.shape) == shape, f"{name} {label}: shape {tuple(t.shape)} != {shape}"
+        assert t.layout == ttnn.TILE_LAYOUT, f"{name} {label}: layout {t.layout}"
+        assert t.memory_config().buffer_type == ttnn.BufferType.DRAM, f"{name} {label}: {t.memory_config()}"
+    assert torch.equal(
+        _dev0(new_state), x[:, T - (CONV_K - 1) :, :]
+    ), f"{name}: new_state != last {CONV_K - 1} input rows"
+
+
+def _compare(name, got, ref):
+    """PCC (asserted) and max-abs (logged) of q/k/v against the reference triple, and the carry-dependent rows
+    (the first K-1) held to CARRY_ROWS_HEADROOM x the max-abs of the other rows. got/ref: fp32 torch."""
+    pccs = [_pcc(r, g) for r, g in zip(ref, got)]
+    mads = [(g - r).abs().max().item() for r, g in zip(ref, got)]
+    head = max((g[:, : CONV_K - 1] - r[:, : CONV_K - 1]).abs().max().item() for r, g in zip(ref, got))
+    tail = max((g[:, CONV_K - 1 :] - r[:, CONV_K - 1 :]).abs().max().item() for r, g in zip(ref, got))
+    logger.info(
+        f"{name:7s}: pcc q/k/v {pccs[0]:.6f} {pccs[1]:.6f} {pccs[2]:.6f} | max-abs q/k/v "
+        f"{mads[0]:.3e} {mads[1]:.3e} {mads[2]:.3e} | carry rows {head:.3e} vs rest {tail:.3e}"
+    )
+    for label, p in zip("qkv", pccs):
+        assert p >= CONV_PCC_VS_REF, f"{name} {label}: pcc {p:.6f} < {CONV_PCC_VS_REF}"
+    assert (
+        head <= CARRY_ROWS_HEADROOM * tail
+    ), f"{name}: carry rows max-abs {head:.3e} > {CARRY_ROWS_HEADROOM} x the other rows' {tail:.3e}"
+    return pccs, mads
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("T, kd, vd, fir", CONV_SHAPES)
+def test_conv_paths_match_reference(mesh_device, T, kd, vd, fir, reset_seeds, ensure_gc, request):
+    """The KDA fused op and the FIR (where it fits) on the same L1 qkv and the same nonzero TILE carry: each
+    within PCC of the fp32 reference, the carry rows included, and both honour the same output contract."""
+    mesh = mesh_device
+    C = 2 * kd + vd
+    x, hist, w = _random_inputs(T, C, seed=223)
+    ref = [r.contiguous() for r in _split_qkv(_ref_conv(x, hist, w), kd, vd)]
+
+    qkv = _to_l1(mesh, x)
+    carry = replicate_to_device(mesh, hist)  # TILE DRAM, as the layer's conv_carry
+    taps = _taps(mesh, w)
+    start = _actual_start(mesh)
+
+    def run_kda():
+        return kda_conv_prefill(qkv, T, carry, taps, (kd, kd, vd), start)
+
+    def run_fir():
+        conv, ns = _causal_conv1d_fir(
+            qkv,
+            None,
+            None,
+            CONV_K,
+            mesh,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            conv_state=carry,
+            weight_taps=taps,
+            bias_dev=None,
+            valid_len=None,
+        )
+        return (*_slice3(conv, T, kd, vd), ns)
+
+    arms = [("kda", run_kda)] + ([("fir", run_fir)] if fir else [])
+    outs = {}
+    for name, fn in arms:
+        q, k, v, ns = fn()
+        _check_contract(name, q, k, v, ns, T, kd, vd, x)
+        outs[name] = [_dev0(t).float() for t in (q, k, v)]
+        for t in (q, k, v, ns):
+            ttnn.deallocate(t)
+        _compare(name, outs[name], ref)
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_kda_carry_across_chunks(mesh_device, reset_seeds, ensure_gc, request):
+    """Two consecutive T-row chunks through kda_conv_prefill: chunk 1 from an all-zero ROW_MAJOR history (the
+    layer's _kda_zero_history), chunk 2 from chunk 1's TILE new_state. Both must match the reference computed
+    over the concatenated 2T rows."""
+    mesh = mesh_device
+    T, kd, vd = 2048, 512, 1536
+    C = 2 * kd + vd
+    x, _, w = _random_inputs(2 * T, C, seed=224)
+    zeros = torch.zeros(1, CONV_K - 1, C, dtype=torch.bfloat16)
+    ref_full = _ref_conv(x, zeros, w)  # [1, 2T, C]
+
+    history = ttnn.from_torch(
+        zeros,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+    )
+    taps = _taps(mesh, w)
+    start = _actual_start(mesh)
+
+    for ci in range(2):
+        xc = x[:, ci * T : (ci + 1) * T, :]
+        qkv = _to_l1(mesh, xc)
+        q, k, v, ns = kda_conv_prefill(qkv, T, history, taps, (kd, kd, vd), start)
+        ttnn.deallocate(qkv)
+        _check_contract(f"kda chunk{ci}", q, k, v, ns, T, kd, vd, xc)
+        got = [_dev0(t).float() for t in (q, k, v)]
+        for t in (q, k, v):
+            ttnn.deallocate(t)
+        ref = [r.contiguous() for r in _split_qkv(ref_full[:, ci * T : (ci + 1) * T, :], kd, vd)]
+        _compare(f"chunk{ci}", got, ref)
+        history = ns  # TILE: chunk 2 takes the TILE -> ROW_MAJOR branch of kda_conv_prefill
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("T", [1, 4, 8, 12])
+def test_kda_conv_padded_rows_match_reference(mesh_device, T, reset_seeds, ensure_gc, request):
+    """The spec verify's conv (tp._verify_fullbatch): T non-tile-aligned tokens (seed T=1, verify T=K+1),
+    right-padded to 32 rows for the KDA op. The conv is causal, so rows [0, T) must match the reference
+    built from the T real rows alone; the padded tail is never read."""
+    mesh = mesh_device
+    kd, vd = 512, 1536  # 27B at TP4
+    C = 2 * kd + vd
+    x, hist, w = _random_inputs(T, C, seed=225)
+    ref = [r.contiguous() for r in _split_qkv(_ref_conv(x, hist, w), kd, vd)]
+
+    x_l1 = _to_l1(mesh, x)
+    qkv = ttnn.pad(x_l1, [(0, 0), (0, 32 - T), (0, 0)], 0.0)  # same pad call as the verify
+    ttnn.deallocate(x_l1)
+    carry = replicate_to_device(mesh, hist)  # TILE DRAM, like _conv_win_buf's slice
+    q, k, v, ns = kda_conv_prefill(qkv, 32, carry, _taps(mesh, w), (kd, kd, vd), _actual_start(mesh), emit_state=False)
+    assert ns is None, "emit_state=False must not return new_state"
+    for label, t, r in zip("qkv", (q, k, v), ref):
+        p = _pcc(r, _dev0(t).float()[:, :T])
+        logger.info(f"T={T} {label}: pcc {p:.6f}")
+        assert p >= CONV_PCC_VS_REF, f"T={T} {label}: pcc {p:.6f} < {CONV_PCC_VS_REF}"
+    for t in (qkv, q, k, v):
+        ttnn.deallocate(t)
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("B, T", [(1, 12), (2, 12), (4, 8), (8, 4), (2, 1), (4, 1), (8, 1)])
+def test_kda_conv_packed_matches_per_user(mesh_device, B, T, reset_seeds, ensure_gc, request):
+    """tp._kda_conv_packed's math: B users' [K-1 carry ; T tokens] windows end to end in ONE [1, B*L, C] KDA call
+    from a zero history, then a one-hot matmul keeping rows u*L + K-1 + j. Every kept row must be BIT-identical to
+    a per-user kda_conv_prefill call that takes user u's carry as its history (the KDA op is batch-1 only)."""
+    mesh = mesh_device
+    kd, vd = 512, 1536  # 27B at TP4
+    C = 2 * kd + vd
+    widths = (kd, kd, vd)
+    L = CONV_K - 1 + T
+    torch.manual_seed(226)
+    win = torch.randn(B, L, C).to(torch.bfloat16)  # user u's window: rows [0, K-1) carry, rows [K-1, L) tokens
+    w = (torch.randn(C, CONV_K) * 0.3).to(torch.bfloat16)
+    taps, start = _taps(mesh, w), _actual_start(mesh)
+    rep, dram = ttnn.ReplicateTensorToMesh(mesh), ttnn.DRAM_MEMORY_CONFIG
+
+    def to_dev(x, layout):
+        return ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=layout, device=mesh, mesh_mapper=rep)
+
+    # REFERENCE: one call per user, the carry as history, tokens right-padded to a tile multiple.
+    Tp = -(-T // 32) * 32
+    ref = ([], [], [])
+    for u in range(B):
+        tok = torch.zeros(1, Tp, C, dtype=torch.bfloat16)
+        tok[:, :T] = win[u : u + 1, CONV_K - 1 :]
+        qkv, hist = to_dev(tok, ttnn.TILE_LAYOUT), to_dev(win[u : u + 1, : CONV_K - 1], ttnn.ROW_MAJOR_LAYOUT)
+        out = kda_conv_prefill(qkv, Tp, hist, taps, widths, start, emit_state=False)[:3]
+        for acc, t in zip(ref, out):
+            acc.append(_dev0(t)[:, :T])
+        for t in (qkv, hist, *out):
+            ttnn.deallocate(t)
+    ref = [torch.cat(r, dim=1) for r in ref]  # [1, B*T, width], user-major
+
+    # PACKED: the same ops as TPGatedDeltaNet._kda_conv_packed.
+    Lp = -(-(B * L) // 32) * 32
+    zero_hist = to_dev(torch.zeros(1, CONV_K - 1, C, dtype=torch.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
+    E = to_dev(win, ttnn.TILE_LAYOUT)  # [B, L, C]
+    x = ttnn.reshape(ttnn.to_layout(E, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram), (1, B * L, C))
+    if Lp != B * L:
+        xp = ttnn.pad(x, [(0, 0), (0, Lp - B * L), (0, 0)], 0.0)
+        ttnn.deallocate(x)
+        x = xp
+    out = kda_conv_prefill(x, Lp, zero_hist, taps, widths, start, emit_state=False)[:3]
+    gather = to_dev(kda_pack_gather(B, T, CONV_K, Lp), ttnn.TILE_LAYOUT)
+    cfg = ttnn.init_device_compute_kernel_config(
+        mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
+    )
+    for label, t, r in zip("qkv", out, ref):
+        got = ttnn.matmul(gather, t, compute_kernel_config=cfg, memory_config=dram)
+        got_t = _dev0(got)
+        assert tuple(got_t.shape) == (1, B * T, r.shape[-1]), f"{label}: shape {tuple(got_t.shape)}"
+        diff = (got_t.float() - r.float()).abs().max().item()
+        logger.info(f"B={B} T={T} {label}: packed vs per-user max-abs {diff:.3e}")
+        assert torch.equal(got_t, r), f"B={B} T={T} {label}: packed != per-user (max-abs {diff:.3e})"
+        for d in (got, t):
+            ttnn.deallocate(d)
+    for t in (E, zero_hist, gather):
+        ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize(
+    "B, T, kc, cols",
+    [
+        (2, 4, 4, [3, 4, 5, 6, 10, 11, 12, 13]),
+        (
+            8,
+            4,
+            4,
+            [3, 4, 5, 6, 10, 11, 12, 13, 17, 18, 19, 20, 24, 25, 26, 27]
+            + [31, 32, 33, 34, 38, 39, 40, 41, 45, 46, 47, 48, 52, 53, 54, 55],
+        ),
+        (1, 12, 4, list(range(3, 15))),
+    ],
+)
+def test_kda_pack_gather_indices(B, T, kc, cols):
+    """kda_pack_gather (pure torch): output row u*T + j is one-hot at packed row u*(kc-1+T) + kc-1 + j."""
+    Lp = -(-(B * (kc - 1 + T)) // 32) * 32
+    g = kda_pack_gather(B, T, kc, Lp)
+    assert g.dtype == torch.bfloat16 and tuple(g.shape) == (1, B * T, Lp)
+    assert (g.sum(dim=-1) == 1).all() and torch.count_nonzero(g) == B * T, "each row must be one-hot"
+    assert g[0].argmax(dim=-1).tolist() == cols
+
+
+@pytest.mark.parametrize(
+    "channels, expected",
+    [(2560, 512), (1280, 320), (5120, 512), (96, 96), (64, 64)],
+)
+def test_kda_channel_chunk_size(channels, expected):
+    """Largest tile-aligned divisor of the channel count not above the cap (pure python)."""
+    assert kda_channel_chunk_size(channels) == expected
+
+
+def test_kda_channel_chunk_size_rejects_unaligned(expect_error):
+    with expect_error(ValueError, "no tile-aligned channel chunk divides 100"):
+        kda_channel_chunk_size(100)

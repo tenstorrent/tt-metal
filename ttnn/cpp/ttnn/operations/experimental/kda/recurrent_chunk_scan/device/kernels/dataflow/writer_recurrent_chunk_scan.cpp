@@ -14,10 +14,11 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-template <uint32_t Rows, uint32_t Vt, uint32_t VtFull, uint32_t PacketRows, typename Accessor>
+template <uint32_t Rows, uint32_t Vt, uint32_t VtFull, uint32_t PacketRows, bool Consume = true, typename Accessor>
 FORCE_INLINE void write_value_slice(
     const Accessor& accessor, DataflowBuffer& buffer, Noc& noc, uint32_t row_base, uint32_t value_block) {
     static_assert(PacketRows > 0 && Rows % PacketRows == 0);
+    static_assert(Consume || PacketRows == Rows, "Retained writes require one complete buffer packet");
     constexpr uint32_t packet_tiles = PacketRows * Vt;
     const uint32_t entry_size = buffer.get_entry_size();
     for (uint32_t packet = 0; packet < Rows; packet += PacketRows) {
@@ -34,7 +35,9 @@ FORCE_INLINE void write_value_slice(
             }
         }
         noc.async_write_barrier();
-        buffer.pop_front(packet_tiles);
+        if constexpr (Consume) {
+            buffer.pop_front(packet_tiles);
+        }
     }
 }
 
@@ -82,40 +85,58 @@ FORCE_INLINE void write_summary(
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t VtFull>
-FORCE_INLINE void write_recurrent(uint32_t head, uint32_t value_block, uint32_t num_chunks) {
+FORCE_INLINE void write_recurrent(
+    uint32_t head, uint32_t value_block, uint32_t num_chunks, uint32_t valid_chunks, uint32_t final_head) {
     const auto output_accessor = TensorAccessor(tensor::output);
     const auto final_state_accessor = TensorAccessor(tensor::final_state);
     DataflowBuffer output(dfb::output);
     DataflowBuffer final_state(dfb::final_state);
     Noc noc;
 
-    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+    for (uint32_t chunk = 0; chunk < valid_chunks; ++chunk) {
         const uint32_t row_base = (head * num_chunks + chunk) * Ct * VtFull;
         write_value_slice<Ct, Vt, VtFull, Ct>(output_accessor, output, noc, row_base, value_block);
     }
-    const uint32_t state_row_base = head * Kt * VtFull;
-    write_value_slice<Kt, Vt, VtFull, Kt>(final_state_accessor, final_state, noc, state_row_base, value_block);
+    // Preserve every valid group's state at its own index. Also publish the last
+    // valid state in the final physical slot used by the layer's carry selection.
+    if (final_head != head) {
+        write_value_slice<Kt, Vt, VtFull, Kt, false>(
+            final_state_accessor, final_state, noc, final_head * Kt * VtFull, value_block);
+    }
+    write_value_slice<Kt, Vt, VtFull, Kt>(final_state_accessor, final_state, noc, head * Kt * VtFull, value_block);
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Vt_full, uint32_t summary>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Vt_full, uint32_t summary, uint32_t has_actual_end>
 TT_KERNEL void writer(uint32_t head, uint32_t value_block, uint32_t num_chunks, uint32_t group) {
-    if constexpr (summary) {
-        uint32_t split_group = 0;
-        uint32_t split_in_group = 0;
-        bool local_split = false;
-        {
-            DataflowBuffer chronology(*dfb::get_token_if_present<"chronology_writer">());
-            chronology.wait_front(1);
-            auto topology =
-                kda_chronology::load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_read_ptr()));
-            chronology.pop_front(1);
-            const uint32_t groups = topology.local_rows / tt::constants::TILE_HEIGHT / num_chunks;
-            split_group = topology.split_group(groups);
-            split_in_group = topology.split_in_group(groups);
-            local_split = topology.local_split;
+    kda_chronology::Topology topology{};
+    uint32_t groups = 0;
+    uint32_t valid_chunks = num_chunks;
+    if constexpr (summary || has_actual_end) {
+        DataflowBuffer chronology(*dfb::get_token_if_present<"chronology_writer">());
+        chronology.wait_front(1);
+        topology = kda_chronology::load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_read_ptr()));
+        chronology.pop_front(1);
+        groups = topology.local_rows / tt::constants::TILE_HEIGHT / num_chunks;
+        valid_chunks = topology.valid_chunks(group, groups);
+        if (valid_chunks == 0) {
+            return;
         }
-        write_summary<Kt, Vt, Vt_full>(head, value_block, group, split_group, split_in_group, local_split);
+    }
+    if constexpr (summary) {
+        write_summary<Kt, Vt, Vt_full>(
+            head,
+            value_block,
+            group,
+            topology.split_group(groups),
+            topology.split_in_group(groups),
+            topology.has_valid_tail());
     } else {
-        write_recurrent<Ct, Kt, Vt, Vt_full>(head, value_block, num_chunks);
+        uint32_t final_head = head;
+        if constexpr (has_actual_end) {
+            if (group + 1 == topology.active_groups(groups)) {
+                final_head = head - group + groups - 1;
+            }
+        }
+        write_recurrent<Ct, Kt, Vt, Vt_full>(head, value_block, num_chunks, valid_chunks, final_head);
     }
 }

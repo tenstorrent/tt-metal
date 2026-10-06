@@ -439,7 +439,8 @@ def test_fused_verify_batched_matches_fla_naive(mesh_device, B, HV, T):
     p_s = pcc(st_dev, st_ref)
     per_user = [pcc(st_dev[b], st_ref[b]) for b in range(B)]
     logger.info(
-        f"[batched verify] B={B} HV={HV} T={T} PCC o={p_o:.6f} state={p_s:.6f} per-user={[f'{x:.5f}' for x in per_user]}"
+        f"[batched verify] B={B} HV={HV} T={T} PCC o={p_o:.6f} state={p_s:.6f} "
+        f"per-user={[f'{x:.5f}' for x in per_user]}"
     )
     assert p_o > 0.999, f"output PCC {p_o}"
     assert p_s > 0.999, f"state PCC {p_s}"

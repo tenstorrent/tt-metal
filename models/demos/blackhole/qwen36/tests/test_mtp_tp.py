@@ -41,7 +41,7 @@ from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_prefill
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.tt_transformers.tt.common import Mode
 
-from .test_factory import parametrize_mesh_tp
+from .test_factory import parametrize_batch, parametrize_mesh_tp
 
 
 @torch.no_grad()
@@ -193,3 +193,99 @@ def test_mtp_head_on_real_features(mesh_device, reset_seeds, request):
         f"device drafter accuracy {tt_hit}/{S} is materially below the fp32 reference {ref_hit}/{S} "
         "— device MTP fidelity is capping acceptance"
     )
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@parametrize_batch((1, 2, 4, 8))
+def test_mtp_sharded_argmax_matches_gathered(mesh_device, B, reset_seeds):
+    """Qwen36MTP._argmax_sharded on B rows == torch argmax == the gathered argmax_last (same ids).
+
+    No weights: a bare Qwen36MTP carrying just the attributes the sharded pick reads. The logits are
+    uploaded vocab-sharded in the layout the MTP LM head leaves them (ShardTensorToMesh on the last
+    dim, fp32 TILE), with hand-built ties and near-ties so the per-row tie-break and the fp32
+    exactness of the cross-device compare are both pinned:
+      row 0      identical max at a shard-0 and a shard-2 id      -> the shard-0 (lower) id
+      row 1      identical max twice inside the LAST shard        -> the lower id (and a last-shard win)
+      row 2      shard-1 max 30.0 vs shard-3 max 30.001           -> the shard-3 id (a TF32/bf16 reduce ties)
+      row B-1    unique max in the last shard (B >= 4)
+    """
+    from types import SimpleNamespace
+
+    from models.demos.blackhole.qwen36.tt.mtp import Qwen36MTP, argmax_last
+    from models.tt_transformers.tt.ccl import TT_CCL
+    from models.tt_transformers.tt.model_config import ModelArgs
+
+    nd = mesh_device.get_num_devices()
+    vocab = 248320
+    shard = vocab // nd
+
+    m = Qwen36MTP.__new__(Qwen36MTP)
+    m.device = m.mesh_device = mesh_device
+    m.num_devices = nd
+    m.tt_ccl = TT_CCL(mesh_device)
+    # ccl_topology depends only on the cluster type and num_devices: take the real args' own method.
+    m.args = SimpleNamespace(
+        vocab_size=vocab,
+        max_batch_size=B,
+        ccl_topology=lambda: ModelArgs.ccl_topology(SimpleNamespace(num_devices=nd)),
+    )
+    m._init_sharded_argmax(SimpleNamespace(_lmhead_vocab_sharded=True))
+    assert m._sharded_argmax and m._argmax_B == B
+    logger.info(f"B={B}: reshape [1,1,B,1]->[1,1,B] aliases its input: {m._argmax_out_alias}")
+
+    logits = torch.randn(1, 1, B, vocab, dtype=torch.float32)  # max of 248k normals is ~5
+    logits[0, 0, 0, 100] = logits[0, 0, 0, 2 * shard + 500] = 20.0
+    if B > 1:
+        logits[0, 0, 1, 3 * shard + 1000] = logits[0, 0, 1, 3 * shard + 40000] = 21.0
+    if B > 2:
+        logits[0, 0, 2, shard + 7] = 30.0
+        logits[0, 0, 2, 3 * shard + 9] = 30.001
+    if B > 3:
+        logits[0, 0, B - 1, vocab - 5] = 25.0
+    expected = torch.argmax(logits, dim=-1).reshape(-1)  # first occurrence == lowest id on ties
+    assert int(expected[0]) == 100
+    if B > 1:
+        assert int(expected[1]) == 3 * shard + 1000
+    if B > 2:
+        assert int(expected[2]) == 3 * shard + 9
+
+    sharded = ttnn.from_torch(
+        logits,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+    )
+    full = ttnn.from_torch(
+        logits,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    def ids(t):
+        assert tuple(t.shape) == (1, 1, B), f"expected [1,1,{B}], got {tuple(t.shape)}"
+        assert t.dtype == ttnn.uint32 and t.layout == ttnn.ROW_MAJOR_LAYOUT
+        per_dev = [ttnn.to_torch(d).reshape(-1)[:B].to(torch.int64) for d in ttnn.get_device_tensors(t)]
+        for d in per_dev[1:]:
+            assert torch.equal(d, per_dev[0]), "devices disagree on the picked ids"
+        return per_dev[0]
+
+    got = None
+    for it in range(2):  # twice: semaphore cycling, and the result must survive the call's own frees
+        out = m._argmax_sharded(sharded)
+        got = ids(out)
+        ttnn.deallocate(out)
+        assert torch.equal(got, expected), f"iter {it}: sharded {got.tolist()} != torch {expected.tolist()}"
+
+    ref_out = argmax_last(full)
+    ref = ids(ref_out)
+    assert torch.equal(got, ref), f"sharded {got.tolist()} != gathered argmax_last {ref.tolist()}"
+    logger.info(f"B={B}: sharded == gathered == torch: {got.tolist()}")
+
+    for t in (sharded, full, ref_out, m._shard_off, m._sel_lane):
+        ttnn.deallocate(t)

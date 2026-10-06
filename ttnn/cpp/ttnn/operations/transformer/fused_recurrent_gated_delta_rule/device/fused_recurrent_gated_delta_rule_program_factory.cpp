@@ -41,8 +41,6 @@ constexpr uint32_t sd = tt::CBIndex::c_10;        // [K,V]  decayed state (S*dec
 constexpr uint32_t vread = tt::CBIndex::c_11;     // [1,V]  k . S'
 constexpr uint32_t u = tt::CBIndex::c_12;         // [1,V]  beta*(v - vread)
 constexpr uint32_t kcol = tt::CBIndex::c_13;      // [K,1]  transpose(k)
-constexpr uint32_t supd = tt::CBIndex::c_14;      // [K,V]  k^T (x) u
-constexpr uint32_t delta = tt::CBIndex::c_15;     // [1,V]  v - vread
 constexpr uint32_t blkidx = tt::CBIndex::c_16;    // [BH]   uint32 scratch, ring mode only
 }  // namespace cb
 
@@ -104,8 +102,6 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     add_cb(cb::vread, Vt);
     add_cb(cb::u, Vt);
     add_cb(cb::kcol, Kt);
-    add_cb(cb::supd, kv);
-    add_cb(cb::delta, Vt);
     if (ring) {
         const tt::DataFormat idx_fmt = datatype_to_dataformat_converter(in.initial_state_block_idx->dtype());
         desc.cbs.push_back(CBDescriptor{

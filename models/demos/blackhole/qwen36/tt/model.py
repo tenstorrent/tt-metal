@@ -12,13 +12,39 @@ import os
 import torch
 from loguru import logger
 from tqdm import tqdm
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
+
+
+def spec_kv_write_conflicts(page_tables, positions, T, block_size, tile=32):
+    """Cross-user collisions of the grouped verify KV write. Call j writes candidate j of every
+    user (one user per core) to the 32-row cache tile (page_tables[u][pos // block_size],
+    (pos % block_size) // tile) at pos = positions[u] + j; two users on the same tile in the same
+    call race (read-modify-write, one update lost). Shared table entries that no call writes
+    (vLLM's null-block padding) are harmless. Users with a negative position are skipped.
+    Returns [(j, u_first, u_second, block, tile)], empty when the write is safe."""
+    rows = page_tables.tolist() if isinstance(page_tables, torch.Tensor) else [list(r) for r in page_tables]
+    conflicts = []
+    for j in range(T):
+        owner = {}  # (block, tile) -> first user that writes it in call j
+        for u, p in enumerate(positions):
+            if int(p) < 0:
+                continue
+            pos = int(p) + j
+            if pos // block_size >= len(rows[u]):
+                raise IndexError(f"user {u} writes position {pos}, past its {len(rows[u])}-block page table")
+            key = (int(rows[u][pos // block_size]), (pos % block_size) // tile)
+            first = owner.setdefault(key, u)
+            if first != u:
+                conflicts.append((j, first, u, *key))
+    return conflicts
 
 
 class Qwen36Model:
@@ -38,9 +64,10 @@ class Qwen36Model:
             self.tt_ccl = None
         self.configuration = args  # Generator reads model.configuration.max_seq_len
         self.sampling_dp = 1
-        # RoPE is host-recomputed each step, so refresh all decode trace inputs.
-        self._tt_vllm_always_refresh_decode_trace_inputs = True
-        # On-device sampling: allowlist 1x4/1x8 TP only — vocab/TP must fit Top-K's 64K shard limit (TP=2 does not).
+        # Rope is host-recomputed each step, so callers explicitly request a
+        # full input reload. Sampling does not alias the decode token input.
+        self._tt_supports_decode_token_feedback = False
+        # Reuses the vocab-sharded lm_head as the sampler's shard: needs divisible vocab; 64K = top-k limit.
         mesh_shape = tuple(int(dim) for dim in mesh_device.shape)
         self._supports_on_device_sampling = (
             mesh_shape in ((1, 4), (1, 8))
@@ -229,6 +256,28 @@ class Qwen36Model:
             self.mtp = Qwen36MTP(
                 mesh_device, args, state_dict, parent=self, tensor_cache_path=tensor_cache_path, tt_ccl=self.tt_ccl
             )
+        # Traced MTP draft chain (QWEN36_TRACED_DRAFT). Declared here so the spec loop can test
+        # `model._drf_trace_id is not None` without a getattr dance; everything is filled in by
+        # alloc_draft_buffers / capture_draft_trace and torn down by release_draft_trace.
+        self._drf_trace_id = None  # None => the eager SpeculativeDecoder._draft runs
+        self._drf_ids_out = None  # [1,K,B] uint32 (or a list of K [1,1,B]) — the trace's output
+        self._drf_K = None
+        self._drf_B = None  # users per chain (B rows per step); B = 1 is the single-user chain
+        self._drf_tok_alias = None  # does reshape([1,1,B] -> [B,1]) alias its input? (probed once, eagerly)
+        self._drf_pt = None  # BORROWED: the drafter's own constant page table
+        self._drf_h0_buf = None  # BORROWED: SpeculativeDecoder._hp_buf, the anchor hidden
+        self._drf_tok0_buf = None
+        self._drf_pos_buf = None
+        self._drf_cos_buf = None
+        self._drf_sin_buf = None
+        self._drf_ids_concat = False
+        self._drf_warmed = False  # alloc_draft_buffers + draft_warmup_eager ran for the handles above
+        # Release hooks for traces the SPEC DECODER cut against buffers this model owns (today: the
+        # reseed trace, which bakes in _vfy_rows_out and the MTP paged KV). capture_verify_trace and
+        # free_kv_caches run every one of them (via release_verify_trace), alongside the draft trace,
+        # so a caller that re-captures or frees never has to know which decoder is attached. Hooks
+        # register themselves at capture, de-register on release, and are idempotent.
+        self._spec_trace_release_hooks = []
 
     def init_vision_model(self, reference_visual=None, vision_args=None, dtype=ttnn.bfloat8_b, debug=False):
         """Build and attach the TT vision tower (DropInVisionTransformer).
@@ -510,7 +559,7 @@ class Qwen36Model:
             )
             # tt_all_gather defaults its CCL dtype to bfloat16 and TYPECASTS anything else on the
             # way in. That is load-bearing twice over: it would put the bf16 ties straight back, and
-            # the fp32 -> bf16 cast on this [1,1,1,vocab/tp] tensor actually returns garbage (the
+            # the fp32 -> bf16 cast on this [1,1,B,vocab/tp] tensor actually returns garbage (the
             # drafter's argmax came back with an out-of-range id). Gather at the head's own dtype.
             ccl_kw = dict(dtype=out_dtype)
         logits = ttnn.linear(x, self.lm_head_weight, **kw)
@@ -559,7 +608,8 @@ class Qwen36Model:
 
             os.environ["HF_MODEL"] = hf_model
 
-        # enable_mtp: None -> QWEN36_MTP env (default on); False -> no MTP head/weights/KV.
+        # enable_mtp: None -> QWEN36_MTP env if set, else on for dense / off for MoE checkpoints;
+        # False -> no MTP head/weights/KV.
         args = Qwen36ModelArgs(
             mesh_device=device,
             max_batch_size=max_batch_size,
@@ -1174,8 +1224,8 @@ class Qwen36Model:
     # (capture_prefill_trace_bucket) — it can be captured once and replayed, turning the loop's
     # dominant cost from host-launched-per-op (eager) to a single execute_trace. The GDN recurrent
     # path is trace-safe (persistent pad + fixed-address _stable_state buffers + a fixed per-token
-    # state ring); B*T is CONSTANT across replays (unlike variable-length prompts), so its GDN mask
-    # bakes into the trace.
+    # state ring); B*T is CONSTANT across replays (unlike variable-length prompts), so every shape
+    # in it bakes into the trace (there is no GDN mask: no padded rows).
     #
     # ROW LAYOUT (the one invariant the whole spec stack shares): B*T <= TILE_SIZE rows of ONE decode
     # tile, USER-MAJOR — row r = u*T + j carries user u's candidate j. Full attention sees every row
@@ -1286,7 +1336,7 @@ class Qwen36Model:
         # .float() cast per iteration). ttnn.argmax needs ROW_MAJOR input (a TILE tensor takes a
         # single-core internal untilize that is hopeless at this vocab width), so untilize first. No
         # 32-row pad: the multicore argmax is correct below a full tile of rows, and padding would
-        # multiply the bytes untilize and argmax touch (see SpeculativeDecoder._argmax_last).
+        # multiply the bytes untilize and argmax touch (see mtp.argmax_last).
         u = ttnn.untilize(logits, use_multicore=True)
         ids = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,B*T] uint32 ROW_MAJOR
         # `u` is NOT deallocated: it is handed back as the ROW_MAJOR logits copy. The sampling path
@@ -1298,13 +1348,60 @@ class Qwen36Model:
         T = self._vfy_T
         return torch.tensor([int(positions[u]) + j for u in range(self._vfy_B) for j in range(T)], dtype=torch.int32)
 
+    # Persistent device buffers derived from the per-user block tables, in the order
+    # _vfy_page_table_host returns their host forms.
+    _VFY_PT_BUFS = ("_vfy_kvpt_buf", "_vfy_kvpt_users", "_vfy_kvpt1_buf")
+
+    def _vfy_page_table_host(self, pt):
+        """Host forms (torch int32, same dtype/layout/shape as the device buffers) of the verify's
+        persistent page-table buffers, in _VFY_PT_BUFS order. ``pt``: int32 [B, nb], one row per user.
+
+        * per-ROW [B*T, nb]: row u*T+j is user u's block table (repeat_interleave, not repeat — the
+          rows are user-major); the per-row KV write and the legacy per-row SDPA read it.
+        * per-USER [B, nb]: row u = user u's blocks, for the grouped aliased KV write. Group j holds
+          rows {u*T + j}, one per user, so every group's table is this same one and one persistent
+          buffer serves all T groups (TPAttention._write_kv_aliased).
+        * per-GROUP [spec_sdpa_groups, nb]: the same tables with one row per CANDIDATE GROUP, for
+          the fused spec SDPA (spec_multi_pos_tiles), which splits each user's T candidates across
+          spec_sdpa_groups(T, B)/B batch rows and wants one aliased page-table row per group. Both
+          row-count forms are kept: the per-row KV write needs the row-count form (and must not
+          slice a narrower table full-span — a full-span ttnn.slice aliases its input), the SDPA
+          read needs this one.
+        """
+        T, B, G = self._vfy_T, self._vfy_B, self._vfy_spec_groups
+        pt = pt.to(torch.int32)
+        if G >= B and G % B == 0:
+            pt1 = pt.repeat_interleave(G // B, dim=0)
+        else:
+            pt1 = pt[:1].repeat(G, 1)  # fused path off: the buffer exists but is unread
+        return pt.repeat_interleave(T, dim=0).contiguous(), pt.contiguous(), pt1.contiguous()
+
+    def _vfy_check_kv_writes(self, pt, positions):
+        """Assert the grouped verify KV write has no same-tile, same-call collision between users
+        for block tables ``pt`` [B, nb] and first verify slots ``positions`` (spec_kv_write_conflicts)."""
+        bad = spec_kv_write_conflicts(pt, positions, self._vfy_T, self._vfy_block_size)
+        assert not bad, (
+            f"the grouped spec KV write needs distinct (block, 32-row tile) per user within each "
+            f"candidate call, but {len(bad)} collide; first (call j, user, user, block, tile): "
+            f"{bad[:4]}. Set QWEN36_SPEC_KV_GROUP_WRITE=0 to fall back to the per-row write."
+        )
+
     def release_verify_trace(self):
         """Drop the captured verify trace. No-op when nothing is captured.
 
         The trace bakes in the paged KV caches' addresses and every GDN layer's _spec_ring /
         _verify_win_buf, all of which allocate_kv_caches + prepare_spec_verify re-allocate, so it
-        must never outlive them: free_kv_caches calls this, and so does a re-capture.
+        must never outlive them: free_kv_caches calls this, and so does a re-capture. It also drops
+        every trace cut after it (the draft trace and the spec decoder's reseed trace).
         """
+        # Every trace cut AFTER this one bakes in buffers a re-capture re-allocates, so it goes
+        # first: the draft trace (keep_buffers=True: its four inputs are independent of the verify
+        # trace, and their programs were compiled against exactly those specs before ANY capture)
+        # and the spec decoder's own traces (the reseed trace bakes in _vfy_rows_out). Iterate over
+        # a COPY: the hooks de-register themselves.
+        self.release_draft_trace(keep_buffers=True)
+        for _release in list(self._spec_trace_release_hooks):
+            _release()
         if getattr(self, "_vfy_trace_id", None) is not None:
             ttnn.release_trace(self.mesh_device, self._vfy_trace_id)
             self._vfy_trace_id = None
@@ -1314,8 +1411,8 @@ class Qwen36Model:
         (T = len([pending] + drafts) per user, B = max_batch_size users). Replay with verify_traced.
         GDN state is CARRIED (not reset): the trace advances a per-token ring in place and the host
         points the next replay at each user's accepted slot (mi) instead of copying anything back.
-        ``page_tables``: torch int32 [B, num_blocks], one row per user — staged ONCE here (a spec
-        request keeps its blocks for its whole generation, so verify_traced never re-stages them).
+        ``page_tables``: torch int32 [B, num_blocks], one row per user — staged here; verify_traced
+        keeps them unless it is handed a new ``page_tables`` (continuous batching).
         ``warm_positions``: B absolute positions the two throwaway warmup/capture passes write KV at.
         Capture happens AFTER prompt prefill (so those programs cannot clobber the parked trace), so
         point the writes PAST each user's prompt frontier; the first real verify overwrites them.
@@ -1375,57 +1472,34 @@ class Qwen36Model:
         self._vfy_kvpos_buf = ttnn.from_torch(
             warm, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep
         )
-        # Per-ROW page table: row u*T+j is user u's block table (repeat_interleave, not repeat — the
-        # rows are user-major). The blocks belong to the request for its whole generation, so unlike
-        # the single-user path this is written once, here, and never re-staged.
-        self._vfy_kvpt_buf = ttnn.from_torch(
-            pt.repeat_interleave(T, dim=0).contiguous(),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=dev,
-            mesh_mapper=rep,
-        )
-        # ...and the PER-USER form [B, nb] (row u = user u's blocks), for the grouped aliased KV
-        # write. The write goes out per candidate index j over the rows {u*T + j}, which are one row
-        # per user, so every group's page table is this same table and one persistent buffer serves
-        # all T groups (TPAttention._write_kv_aliased). Allocated HERE, before the warmup, so its
-        # address bakes into the trace like every other verify input; never re-staged.
-        #
-        # The grouped write is legal only because rows of DIFFERENT users never share a 32-row cache
-        # tile. A group holds one row per user, so the sufficient condition is that no block belongs
-        # to two users (a repeat WITHIN one user's row is fine — that user has one row per group).
-        # Check it once, on host, while the tables are still torch: a shared block would put two
-        # cores on one read-modify-write and silently drop the loser.
-        _kv_grouped = B > 1 and T > 1 and KV_GROUP_WRITE_OK
+        # The grouped aliased KV write (TPAttention._write_kv_aliased) goes out per candidate index j
+        # over the rows {u*T + j}, one row per user, one user per core; each core read-modify-writes
+        # the 32-row cache tile (page_table[u][pos // block_size], (pos % block_size) // 32) at
+        # pos = positions[u] + j. It is legal as long as no two users write the SAME (block, tile)
+        # in the SAME call — NOT as long as the whole table rows are disjoint: a vLLM block table
+        # pads its unused columns (and padding rows) with the null block 0, which no call writes.
+        # Checked here for the capture's warm passes and again on every replay (verify_traced), in
+        # host python while the tables are still torch: a shared tile would put two cores on one
+        # read-modify-write and silently drop the loser.
+        self._vfy_pt_host = pt.clone()
+        self._vfy_block_size = get_block_size(self._paged_kv_caches)
+        self._vfy_kv_grouped = B > 1 and T > 1 and KV_GROUP_WRITE_OK
+        _kv_grouped = self._vfy_kv_grouped
         if _kv_grouped:
-            _seen = {}
-            for _u in range(B):
-                for _b in {int(v) for v in pt[_u].tolist()}:
-                    _prev = _seen.setdefault(_b, _u)
-                    assert _prev == _u, (
-                        f"the grouped spec KV write needs per-user block tables that do not overlap, "
-                        f"but block {_b} is named by both user {_prev} and user {_u}. Set "
-                        f"QWEN36_SPEC_KV_GROUP_WRITE=0 to fall back to the per-row write."
-                    )
-        self._vfy_kvpt_users = ttnn.from_torch(
-            pt.contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep
-        )
-        # ...plus the SAME tables with one row per CANDIDATE GROUP, for the fused spec SDPA
-        # (spec_multi_pos_tiles), which splits each user's T candidates across
-        # spec_sdpa_groups(T, B)/B batch rows and wants one aliased page-table row per group. Both
-        # tables are built here: the per-row KV write needs the row-count form (and must not slice a
-        # narrower table full-span — a full-span ttnn.slice aliases its input), the SDPA read needs
-        # this one.
+            self._vfy_check_kv_writes(pt, warm_positions)
+        # The three persistent page-table buffers (_VFY_PT_BUFS), built on host by
+        # _vfy_page_table_host — see there for what each form is for. Allocated HERE, before the
+        # warmup, so their addresses bake into the trace like every other verify input;
+        # verify_traced(page_tables=...) re-stages them in place.
         _att0 = next(layer.attention for layer in self.layers if layer.is_full_attention)
         _spec_groups = int(_att0.spec_sdpa_groups(T, B))
         self._vfy_spec_groups = _spec_groups
-        if _spec_groups >= B and _spec_groups % B == 0:
-            pt1 = pt.repeat_interleave(_spec_groups // B, dim=0)
-        else:
-            pt1 = pt[:1].repeat(_spec_groups, 1)  # fused path off: the buffer exists but is unread
-        self._vfy_kvpt1_buf = ttnn.from_torch(
-            pt1.contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep
-        )
+        for _name, _host in zip(self._VFY_PT_BUFS, self._vfy_page_table_host(pt)):
+            setattr(
+                self,
+                _name,
+                ttnn.from_torch(_host, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep),
+            )
         # RoPE tables. Hybrid verify feeds the DECODE attention kernel, whose cos/sin are
         # [1, rows, 1, rope_dim] (one rotation per ROW at that row's own position) — not the prefill
         # [1, 1, S, rope_dim] table. Same host math the plain decode step uses, so the two paths'
@@ -1522,7 +1596,411 @@ class Qwen36Model:
             f"successfully! verify SDPA: {_how}; verify KV write: {_kvw}"
         )
 
-    def verify_traced(self, tokens, positions, mi_prev, read_logits=False):
+    # --------------------------------------------------------------------- #
+    # Traced MTP draft chain (QWEN36_TRACED_DRAFT) — "Plan A"
+    #
+    # SpeculativeDecoder._draft dispatches the WHOLE K-step drafter chain from python every
+    # iteration: K x (embedding, two pre-fc gather-norms, fc, a full attention block, the head norm,
+    # an fp32 151k LM head + its vocab all-gather, untilize, argmax). Nothing about that sequence
+    # varies with the iteration — every tensor in it is fixed-shape for a given (K, B) — so it
+    # captures as ONE trace and replays once per speculative iteration, exactly like the verify /
+    # reseed traces already do for the other two phases. The chain carries B users as B
+    # rows per step (B = 1 is today's single-user chain). Only the host dispatch goes away: the device work
+    # and the drafter KV writes are identical, and the cos/sin the chain consumes are byte-identical
+    # to what rot_mats_decode builds eagerly (_rope_tp_cos_sin_decode_torch adds rope_delta itself,
+    # where ttnn_mtp_decode_forward adds it at its rot_mats_decode call site — same numbers).
+    #
+    # What makes it capturable, input by input:
+    #   * step-0 hidden  — SpeculativeDecoder._hp_buf, the persistent anchor buffer _set_anchor
+    #     refills IN PLACE at the end of every iteration, so its address is stationary. Borrowed
+    #     here, never allocated or freed here.
+    #   * step-0 token   — a [B,1] uint32 buffer staged per replay.
+    #   * positions      — one [K*B] int32 buffer, STEP-MAJOR (element k*B+u is user u's position at
+    #     step k), sliced per step (the position is a runtime-arg TENSOR for both
+    #     paged_update_cache and the decode SDPA, so replaying at a different absolute position
+    #     does not recompile anything).
+    #   * cos/sin        — one [1,K*B,1,rope_head_dim] table each (same row order), sliced per step.
+    #   * page table     — the drafter's own constant mtp_pt, borrowed.
+    # The K steps chain on device (hidden and token both stay on device between steps), which the
+    # eager _draft already does; the trace additionally removes the per-step python.
+    # --------------------------------------------------------------------- #
+    def _draft_slice_k(self, k):
+        """(pos, cos, sin, sliced) for draft chain step ``k``, cut out of the persistent tables.
+
+        The tables are step-major with B rows per step, so step k is rows [k*B, (k+1)*B).
+        A FULL-SPAN ttnn.slice returns an ALIAS of its input, which must never be deallocated, so at
+        K == 1 the tables ARE the step-0 inputs and no slice is issued (``sliced`` False says so).
+        SliceDeviceOperation folds slice_start / slice_end into its program hash, so every k is its
+        own program and all 3K of them have to be compiled by the eager warm pass BEFORE any
+        begin_trace_capture — see draft_warmup_eager.
+        """
+        if self._drf_K == 1:
+            return self._drf_pos_buf, self._drf_cos_buf, self._drf_sin_buf, False
+        B = self._drf_B
+        rd = self.args.rope_head_dim
+        # [K*B] int32 ROW_MAJOR -> [B]: at B = 1 the same 1-D position slice TPAttention.forward_decode
+        # issues per row on the aliased-KV-write path, so the shape is a proven one.
+        pos_k = ttnn.slice(self._drf_pos_buf, (k * B,), ((k + 1) * B,))
+        # [1,K*B,1,rd] TILE -> [1,B,1,rd]: the two tiled dims (-2,-1) stay full-span, so this is a
+        # whole-tile copy and never a sub-tile read.
+        cos_k = ttnn.slice(self._drf_cos_buf, (0, k * B, 0, 0), (1, (k + 1) * B, 1, rd))
+        sin_k = ttnn.slice(self._drf_sin_buf, (0, k * B, 0, 0), (1, (k + 1) * B, 1, rd))
+        return pos_k, cos_k, sin_k, True
+
+    def _draft_body(self):
+        """The whole K-step MTP draft chain as one device-op sequence: the trace body.
+
+        Reads ONLY fixed-address tensors (the five _drf_* handles plus the MTP page table and the
+        drafter's paged KV), so it is capturable; every intermediate is deallocated here, which is
+        legal inside a capture because the device was opened with trace_region_size > 0.
+        Returns the K drafted ids as [1,K,B] uint32 ROW_MAJOR, or — when the on-device id concat is
+        unavailable (see _probe_draft_id_concat, which answers False at K == 1) — the raw list of
+        K [1,1,B] tensors.
+        """
+        K, B = self._drf_K, self._drf_B
+        alias = self._drf_tok_alias  # reshape([1,1,B] -> [B,1]) is a metadata view of idx (always at B = 1)
+        h, tok = self._drf_h0_buf, self._drf_tok0_buf
+        ids, toks = [], []
+        for k in range(K):
+            pos_k, cos_k, sin_k, sliced = self._draft_slice_k(k)
+            # Exactly the call ttnn_mtp_decode_forward makes (sharded_lm_head=False, need_logits=True,
+            # alias_kv_write left at its False default: the B rows are independent users, so there
+            # is nothing to alias), with the four host-built inputs replaced by device slices of the
+            # persistent tables.
+            logits, h_next = self.mtp.forward_decode(
+                h,
+                tok,
+                pos_k,
+                cos_k,
+                sin_k,
+                self._drf_pt,
+                sharded_lm_head=False,
+                need_logits=True,
+            )
+            if sliced:
+                for t in (pos_k, cos_k, sin_k):
+                    ttnn.deallocate(t)
+            if not alias and tok is not self._drf_tok0_buf:
+                ttnn.deallocate(tok)  # a COPY of the previous idx, consumed by the step above
+            # The eager _draft's own pick, through the same dispatcher (SpeculativeDecoder.
+            # _draft_argmax calls it too), so QWEN36_DRAFT_SHARDED_ARGMAX switches both at once.
+            # Under the flag `logits` is THIS device's [1,1,B,vocab/tp] fp32 shard (forward_decode
+            # skipped the vocab all-gather) and the pick is two 32-lane all-gathers plus int32 mask
+            # arithmetic; every op in it is fixed-shape with no host readback and its two constants
+            # were allocated in Qwen36MTP.__init__, so it captures exactly like the gathered form.
+            idx = draft_argmax(self.mtp, logits)  # [1,1,B] uint32 ROW_MAJOR
+            ttnn.deallocate(logits)
+            if h is not self._drf_h0_buf:
+                ttnn.deallocate(h)
+            h = h_next
+            ids.append(idx)
+            if alias:
+                # [1,1,B] -> [B,1] keeps the page intact, so ttnn.reshape returns a metadata ALIAS at
+                # the same buffer address (always the case at B = 1): `tok` and `idx` are two handles
+                # on ONE buffer and must be deallocated exactly once between them. The eager _draft
+                # frees the reshape handle; so does this, after the concat has copied the ids out.
+                tok = ttnn.reshape(idx, (B, 1))
+                if self._drf_ids_concat:  # only the concat path frees them; the list path returns `ids`
+                    toks.append(tok)
+            elif k < K - 1:
+                # A COPY (probed in alloc_draft_buffers): freed above, right after the step that
+                # consumes it, while `idx` stays owned by `ids`. The last step's has no consumer.
+                tok = ttnn.reshape(idx, (B, 1))
+        assert h is not self._drf_h0_buf, "draft chain produced no new hidden"
+        ttnn.deallocate(h)
+        if not self._drf_ids_concat:
+            return ids
+        out = ttnn.concat(ids, dim=-2)  # [1,K,B] uint32 ROW_MAJOR
+        for t in toks if alias else ids:  # alias: toks are views of `ids`; copy: `ids` are the buffers
+            ttnn.deallocate(t)  # one deallocate per underlying buffer
+        return out
+
+    def _probe_draft_id_concat(self, K):
+        """Can the K argmax ids be gathered on device into ONE [1,K,B] readback?
+
+        ttnn.concat REFUSES a ROW_MAJOR concat on the LAST dim whose per-tensor row bytes are not
+        buffer-aligned ("Current concat implementation requires aligned last dim when concatting on
+        last dim") — and a [1,1,B] uint32 id row is 4*B bytes. Hence dim=-2, which carries no such
+        guard. It is still a 4B-byte-page row-major concat, so probe it once HERE, eagerly, where a
+        validation throw is recoverable and cannot land inside a capture. The probe doubles as the
+        program warm-up: same K, same dim, same input specs as the real body.
+        False costs nothing but correctness-neutral host time — draft_traced then reads K
+        [1,1,B] tensors back, which is exactly what the eager _draft already does.
+        """
+        if K == 1:
+            return False
+        dev = self.device
+        rep = ttnn.ReplicateTensorToMesh(dev)
+        probe, ok = [], False
+        try:
+            # Appended one at a time (not a comprehension) so a throw part-way still leaves every
+            # allocated probe on the list the finally below frees.
+            for _ in range(K):
+                probe.append(
+                    ttnn.from_torch(
+                        torch.zeros(1, 1, self._drf_B, dtype=torch.int32),
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=dev,
+                        mesh_mapper=rep,
+                    )
+                )
+            out = ttnn.concat(probe, dim=-2)
+            ttnn.deallocate(out)
+            ok = True
+        except Exception as e:  # noqa: BLE001 - any validation refusal means "use the list form"
+            logger.info(f"[spec] traced draft: on-device id concat unavailable ({e}); reading {K} ids separately")
+        finally:
+            for t in probe:
+                ttnn.deallocate(t)
+        ttnn.synchronize_device(dev)
+        return ok
+
+    def _log_trace_region(self, when):
+        """Log the trace region's running total in the spec log's style.
+
+        Purely informational, and the one number that explains a failed capture: a device opened
+        with too small a trace_region_size runs out here, not at replay. Called by both spec
+        captures (the reseed one from SpeculativeDecoder) on either side of their capture window.
+        """
+        try:
+            _mv = ttnn.get_memory_view(self.device, ttnn.BufferType.TRACE)
+            _mb = _mv.total_bytes_allocated_per_bank * _mv.num_banks / 1e6
+            logger.info(f"[spec] trace region {when}: {_mb:.1f} MB")
+        except Exception as e:  # noqa: BLE001 - purely informational
+            logger.info(f"[spec] trace region usage unavailable ({when}): {e}")
+
+    def alloc_draft_buffers(self, K, mtp_pt, h0_buf, warm_positions):
+        """Allocate the traced draft chain's persistent inputs and resolve its id-readback form.
+
+        Call this (and draft_warmup_eager) BEFORE the first begin_trace_capture. The buffers'
+        ADDRESSES are what capture_draft_trace bakes in, and every program the body issues — the 3K
+        offset-specific slices and the K-input concat included — has to compile while nothing is
+        parked: a program that first compiles with a trace parked lands its kernel binaries in memory
+        the replayed trace writes over.
+
+        ``h0_buf`` is the step-0 hidden [1,1,B,dim/tp]: SpeculativeDecoder._hp_buf, the persistent
+        anchor buffer the loop refills in place. ``mtp_pt`` is the drafter's own constant page table
+        [B, blocks]. Both are BORROWED — never allocated and never freed here or by
+        release_draft_trace.
+        ``warm_positions``: B ints (B >= 1), each user's absolute position the eager warm passes
+        write drafter KV at, for warm_positions[u] .. warm_positions[u]+K-1. Point them at the
+        loop's own first anchors so the first real draft overwrites every one of those slots (see
+        SpeculativeDecoder._draft_warmup). B = 1 is today's single-user chain.
+        """
+        assert self.mtp is not None, "MTP head not built (has_mtp/config?)"
+        assert int(K) >= 1, f"draft chain needs K >= 1, got {K}"
+        warm_positions = [int(w) for w in warm_positions]
+        B = len(warm_positions)
+        assert B >= 1, "draft chain needs at least one user (warm_positions is empty)"
+        assert B == mtp_pt.shape[0], f"draft page table has {mtp_pt.shape[0]} rows, but {B} warm positions were given"
+        assert B == h0_buf.shape[-2], f"anchor hidden has {h0_buf.shape[-2]} rows, but {B} warm positions were given"
+        self.release_draft_trace()
+        dev = self.device
+        rep = ttnn.ReplicateTensorToMesh(dev)
+        K = int(K)
+        self._drf_K = K
+        self._drf_B = B
+        self._drf_pt = mtp_pt
+        self._drf_h0_buf = h0_buf
+        # Step-0 token: [B,1] uint32 ROW_MAJOR, the shape Qwen36MTP.forward_decode's embedding wants
+        # (and the shape the chain's own reshape(idx, (B,1)) produces for steps 1..K-1).
+        self._drf_tok0_buf = ttnn.from_torch(
+            torch.zeros(B, 1, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=dev,
+            mesh_mapper=rep,
+        )
+
+        # Does reshape([1,1,B] -> [B,1]) alias its input or copy it? It decides who frees what in
+        # _draft_body, so settle it once HERE, eagerly, never inside a capture. (B = 1: an alias.)
+        def _addr(t):
+            try:
+                return t.buffer_address()
+            except Exception:  # noqa: BLE001 - mesh tensors may only expose it per device
+                return ttnn.get_device_tensors(t)[0].buffer_address()
+
+        _p = ttnn.from_torch(
+            torch.zeros(1, 1, B, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=dev,
+            mesh_mapper=rep,
+        )
+        _r = ttnn.reshape(_p, (B, 1))
+        self._drf_tok_alias = _addr(_r) == _addr(_p)
+        ttnn.deallocate(_p)  # an alias shares the buffer, so this frees it for both handles
+        if not self._drf_tok_alias:
+            ttnn.deallocate(_r)
+        logger.info(
+            f"[spec] traced draft: reshape([1,1,{B}] -> [{B},1]) "
+            f"{'aliases' if self._drf_tok_alias else 'copies'} (B={B})"
+        )
+        # One [K*B] position table, STEP-MAJOR (element k*B+u = warm_positions[u] + k), sliced per
+        # step. Doubles as the paged_update_cache write index and the decode SDPA's cur_pos, both of
+        # which read it as a runtime arg.
+        pos = torch.tensor([w + k for k in range(K) for w in warm_positions], dtype=torch.int32)
+        self._drf_pos_buf = ttnn.from_torch(
+            pos,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=dev,
+            mesh_mapper=rep,
+        )
+        # Per-ROW decode rope [1,K*B,1,rd], same row order as `pos`: row k*B+u is byte-identical to
+        # what rot_mats_decode(position=warm_positions[u]+k) builds inside ttnn_mtp_decode_forward
+        # (this helper adds rope_delta itself; that call site adds it to the position it passes).
+        cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(pos)
+        self._drf_cos_buf = ttnn.from_torch(
+            cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
+        )
+        self._drf_sin_buf = ttnn.from_torch(
+            sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
+        )
+        self._drf_ids_concat = self._probe_draft_id_concat(K)
+        self._drf_warmed = False  # draft_warmup_eager still has to run against these buffers
+
+    def draft_warmup_eager(self):
+        """Run the traced chain's body ONCE eagerly, to compile every program in it.
+
+        Must happen BEFORE the first begin_trace_capture — the same rule _reseed_warmup follows —
+        because capture_draft_trace is necessarily the LAST of the captures (it is a trace, and
+        captures do not nest), so a compile inside its own warm pass would happen with the verify
+        and reseed traces already parked.
+        Side effect: throwaway drafter KV at warm_positions[u]..warm_positions[u]+K-1 for every user
+        u, which the first real draft overwrites slot for slot. That includes the drafter's argmax
+        pick in whichever form QWEN36_DRAFT_SHARDED_ARGMAX selected: _draft_body goes through
+        mtp.draft_argmax, so the sharded sequence's ops compile here as well
+        (SpeculativeDecoder._draft_warmup already ran them once outside the chain).
+        """
+        assert self._drf_K is not None, "call alloc_draft_buffers first"
+        w = self._draft_body()
+        for t in w if isinstance(w, list) else [w]:
+            ttnn.deallocate(t)
+        ttnn.synchronize_device(self.device)
+        self._drf_warmed = True  # capture_draft_trace refuses to capture without this
+
+    def capture_draft_trace(self, K, mtp_pt, h0_buf):
+        """Capture the K-step MTP draft chain as ONE trace; replay it with draft_traced.
+
+        Ordering: LAST (capture order is verify -> reseed -> draft), after capture_verify_trace and
+        the reseed capture. Allocates nothing and warms nothing: by this point two traces are parked,
+        so a program that first compiles here — or a buffer that first appears here — lands in memory
+        the replays write over. alloc_draft_buffers + draft_warmup_eager have to have run already, against
+        exactly this (K, B, anchor, page table); SpeculativeDecoder._draft_warmup is where they do.
+        Re-capture reuses those buffers: a verify re-capture drops the draft TRACE but not them.
+        """
+        dev = self.device
+        assert (
+            self._drf_warmed
+            and self._drf_K == int(K)
+            and self._drf_B == h0_buf.shape[-2]
+            and self._drf_h0_buf is h0_buf
+            and self._drf_pt is mtp_pt
+        ), (
+            f"traced draft not warmed for this (K={K}, B={h0_buf.shape[-2]}, anchor, page table): "
+            "alloc_draft_buffers + draft_warmup_eager must run before ANY begin_trace_capture (see "
+            "SpeculativeDecoder._draft_warmup)"
+        )
+        self.release_draft_trace(keep_buffers=True)
+        # Three traces end up in the trace region (verify, reseed, draft); if the device
+        # was opened with too small a trace_region_size, this capture is where it shows up.
+        self._log_trace_region("before the draft capture")
+        ttnn.synchronize_device(dev)
+        self._drf_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
+        # The ids outlive the capture window on purpose: the replay rewrites that exact address and
+        # draft_traced reads them out before any other trace runs, so they are not a leak.
+        with trace_allocation_tracker.corruptible_allocation_scope(dev):
+            self._drf_ids_out = self._draft_body()
+        ttnn.end_trace_capture(dev, self._drf_trace_id, cq_id=0)
+        self._log_trace_region("after the draft capture")
+        logger.info(
+            f"Draft trace (K={self._drf_K}, B={self._drf_B}) captured successfully! "
+            f"ids={'concat [1,K,B]' if self._drf_ids_concat else f'{self._drf_K} separate readbacks'}"
+        )
+
+    def draft_traced(self, pending, p):
+        """Replay the captured draft chain; returns ``drafts[u][k]``, B lists of K drafted ids.
+
+        ``pending``: B ints, each user's own next token (the step-0 token). ``p``: B ints, each
+        user's anchor position (step k writes drafter KV at p[u] + k). B = 1 is today's single-user
+        chain. Identical device work and identical drafter KV writes to SpeculativeDecoder._draft;
+        the host side drops to four copy_host_to_device_tensor stages plus one execute_trace. The
+        step-0 HIDDEN is not staged: the trace baked in the decoder's persistent anchor buffer, which
+        _set_anchor refilled in place at the end of the previous iteration (the loop asserts the
+        anchor it drafts from IS that buffer).
+        """
+        assert getattr(self, "_drf_trace_id", None) is not None, "call capture_draft_trace first"
+        dev = self.device
+        K, B = self._drf_K, self._drf_B
+        assert len(pending) == B and len(p) == B, f"draft chain is B={B}; got {len(pending)} tokens, {len(p)} positions"
+        rep = ttnn.ReplicateTensorToMesh(dev)
+        _h = ttnn.from_torch(
+            torch.tensor([[int(t)] for t in pending], dtype=torch.int32),  # [B, 1]
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=None,
+            mesh_mapper=rep,
+        )
+        ttnn.copy_host_to_device_tensor(_h, self._drf_tok0_buf)
+        pos = torch.tensor([int(pu) + k for k in range(K) for pu in p], dtype=torch.int32)  # [K*B], step-major
+        _h = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
+        ttnn.copy_host_to_device_tensor(_h, self._drf_pos_buf)
+        cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(pos)
+        _h = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
+        ttnn.copy_host_to_device_tensor(_h, self._drf_cos_buf)
+        _h = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
+        ttnn.copy_host_to_device_tensor(_h, self._drf_sin_buf)
+        ttnn.execute_trace(dev, self._drf_trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(dev)
+        # Replicated ids (the chain argmaxed the vocab-gathered, therefore replicated, logits): one
+        # replica is the whole answer, and it is K*B uint32 instead of K*B x vocab floats. Its own
+        # readback rather than SpeculativeDecoder._id_to_host: the concat form is one [1,K,B] tensor,
+        # so all K*B ids come back in a SINGLE to_torch (the list form is that helper, K times).
+        out = self._drf_ids_out
+        if isinstance(out, list):  # K tensors [1,1,B]: arr[k][u] = step k of user u
+            arr = [ttnn.to_torch(ttnn.get_device_tensors(t)[0]).reshape(-1)[:B] for t in out]
+        else:  # [1,K,B] flattens step-major, so [K, B] rows are steps
+            arr = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).reshape(-1)[: K * B].reshape(K, B)
+        return [[int(arr[k][u]) for k in range(K)] for u in range(B)]
+
+    def release_draft_trace(self, keep_buffers=False):
+        """Drop the captured draft trace, and unless ``keep_buffers`` its persistent inputs too.
+
+        The trace bakes in the drafter's paged KV, the MTP page table, the caller's anchor buffer and
+        the four input buffers below, so it must not outlive any of them: released next to
+        release_verify_trace (before a verify re-capture, and in free_kv_caches) and at the end of
+        SpeculativeDecoder.generate, where the anchor buffer is freed. ``_drf_h0_buf`` / ``_drf_pt``
+        are BORROWED and never deallocated here. ``keep_buffers=True`` is for the verify re-capture,
+        which invalidates the draft trace's place in the trace region but not the buffers the
+        pre-capture warm-up compiled its programs against (so it leaves ``_drf_warmed`` set; a full
+        release clears it, and capture_draft_trace refuses to capture without it).
+        """
+        if getattr(self, "_drf_trace_id", None) is not None:
+            ttnn.release_trace(self.device, self._drf_trace_id)
+        self._drf_trace_id = None
+        out = getattr(self, "_drf_ids_out", None)
+        if out is not None:
+            for t in out if isinstance(out, list) else [out]:
+                ttnn.deallocate(t)
+        self._drf_ids_out = None
+        if keep_buffers:
+            return
+        for _name in ("_drf_tok0_buf", "_drf_pos_buf", "_drf_cos_buf", "_drf_sin_buf"):
+            _t = getattr(self, _name, None)
+            if _t is not None:
+                ttnn.deallocate(_t)
+            setattr(self, _name, None)
+        self._drf_h0_buf = None
+        self._drf_pt = None
+        self._drf_K = None
+        self._drf_B = None
+        self._drf_tok_alias = None
+        self._drf_ids_concat = False
+        self._drf_warmed = False
+
+    def verify_traced(self, tokens, positions, mi_prev, read_logits=False, page_tables=None):
         """Replay the captured verify trace for B users x T candidates.
 
         ``tokens``: B lists of T ids ([pending] + drafts per user). ``positions``: B ints, user u's
@@ -1538,6 +2016,15 @@ class Qwen36Model:
         already pays for) with no cast; the TILE tensor would cost a host untilize and the sampler
         converts to float32 lazily per row.
 
+        ``page_tables``: int32 [B, num_blocks] block tables (array-like; 1-D only for B == 1), one
+        row per user. When given, every persistent page-table buffer is re-staged for this replay
+        (same convention as the B=1 ``page_table`` of the single-user verify): the columns are
+        clipped or padded with block 0 (vLLM's null block) to the captured width. None keeps the
+        tables staged last (at capture or by the previous call). Whether or not tables are passed,
+        a grouped KV write that would put two users on the same (block, 32-row tile) in the same
+        call raises AssertionError before anything is staged. NOT covered: the MTP drafter's own
+        table (``SpeculativeDecoder.mtp_pt``) is a separate buffer this argument does not touch.
+
         ``feed_rows`` is the trace's OWN output buffer: do not deallocate it, and be done with it
         before the next replay (the spec loop reads its anchor rows and reseeds the drafter, both
         within the iteration).
@@ -1552,6 +2039,29 @@ class Qwen36Model:
         assert len(positions) == B and len(mi_prev) == B, "one position and one mi per user"
         dev = self.device
         rep = ttnn.ReplicateTensorToMesh(dev)
+
+        # Page tables: normalise to the captured width (clip, or pad with the null block 0) and check
+        # the grouped KV write BEFORE staging anything, so a refused replay leaves the device alone.
+        pt = self._vfy_pt_host
+        if page_tables is not None:
+            pt = page_tables if isinstance(page_tables, torch.Tensor) else torch.as_tensor(page_tables)
+            assert pt.dim() == 2 or (pt.dim() == 1 and B == 1), "page_tables must be [B, nb] (1-D only for B == 1)"
+            pt = pt.reshape(1, -1) if pt.dim() == 1 else pt
+            assert pt.shape[0] == B, f"page_tables has {pt.shape[0]} rows, expected {B} users"
+            W = int(self._vfy_pt_host.shape[1])
+            pt = pt.to(torch.int32)[:, :W]
+            if pt.shape[1] < W:
+                pt = torch.cat([pt, torch.zeros(B, W - pt.shape[1], dtype=torch.int32)], dim=1)
+            pt = pt.contiguous()
+        if self._vfy_kv_grouped:
+            self._vfy_check_kv_writes(pt, positions)
+        if page_tables is not None:
+            for _name, _host in zip(self._VFY_PT_BUFS, self._vfy_page_table_host(pt)):
+                _h = ttnn.from_torch(
+                    _host, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep
+                )
+                ttnn.copy_host_to_device_tensor(_h, getattr(self, _name))
+            self._vfy_pt_host = pt
 
         # Stage per-replay inputs into the persistent buffers (addresses preserved). Row-major flatten
         # of the B x T token lists IS the user-major row order.
@@ -1587,8 +2097,6 @@ class Qwen36Model:
             mesh_mapper=rep,
         )
         ttnn.copy_host_to_device_tensor(_h, self._vfy_conv_sel)
-        # Page tables are NOT re-staged: capture_verify_trace wrote both forms once, and a spec
-        # request holds its blocks for the whole generation.
 
         ttnn.execute_trace(dev, self._vfy_trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(dev)
@@ -1674,7 +2182,8 @@ class Qwen36Model:
 
         WHY NOT A PLAIN DECODE STEP. The seed is where the GDN state the whole generation resumes
         from is written, and the decode path builds its conv differently from the verify: a K-tap
-        shift-register MAC versus the native depthwise conv1d over a [B,K,C] window. The two are
+        shift-register MAC versus the packed KDA conv over each user's [K, C] window (gdn
+        _kda_conv_packed). The two are
         not bit-equal, so a decode-formulated seed hands the loop a state its own formulation would
         never have produced, and greedy near-ties fork off the trajectory the verify would have
         taken (measured at K=11 on a 128-token prompt: 2.500/3 accepted -> 1.824/3, 75 -> 41 tok/s).
@@ -3624,8 +4133,12 @@ class Qwen36Model:
         """Release KV caches + GDN state for a fresh generation run."""
         # The verify trace baked in the paged KV caches freed below and the GDN spec buffers that
         # the next allocate_kv_caches -> reset_state drops, so it cannot survive this. Before the
-        # early-out: the trace must go even when the GDN marker is already clear.
+        # early-out: the trace must go even when the GDN marker is already clear. release_verify_trace
+        # also drops the draft trace (keeping its input buffers) and runs the spec decoder's release
+        # hooks (the reseed trace); the full draft release below then frees those inputs too, since
+        # the draft trace writes the MTP paged KV this frees.
         self.release_verify_trace()
+        self.release_draft_trace()
         if self._deltanet_external_states is None:
             return
         if getattr(self, "_chunked_trace_id", None) is not None:

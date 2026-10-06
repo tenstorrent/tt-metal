@@ -325,6 +325,176 @@ def test_spec_batched_determinism(mesh_device, batch):
 
 
 @run_for_blackhole()
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("batch", [2, 8])
+@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_spec_batched_traced_matches_eager(mesh_device, batch, monkeypatch):
+    """The B-user traced draft chain and traced reseed replay the eager path, token for token.
+
+    Runs the same prompts twice on one model, once with QWEN36_TRACED_DRAFT=1 / QWEN36_TRACED_RESEED=1
+    and once with both 0 (the flags are read in SpeculativeDecoder.__init__, so each run builds a
+    fresh decoder), and requires every user's output and the iters / total_drafted / total_accepted
+    counters to be equal: the traces issue the same device ops as the python dispatch, so neither
+    the trajectory nor the acceptance history may move (the B=1 version is test_spec_determinism.py).
+    """
+    if not _MULTI:
+        pytest.skip("spec decode is the TP path; run with MESH_DEVICE=P150x4")
+    from transformers import AutoTokenizer
+
+    from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
+
+    B, K = batch, SPEC_K[batch]
+    device = mesh_device
+    device.enable_program_cache()
+    model = _build_model(device, B)
+    tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
+    prompts = _batch_prompts(B, tokenizer)
+    page_tables, kv_shape = _batched_kv(model, B, K, prompts)
+
+    results = {}  # mode -> (per-user outputs, (total_accepted, iters, total_drafted))
+    for mode in ("1", "0"):
+        monkeypatch.setenv("QWEN36_TRACED_DRAFT", mode)
+        monkeypatch.setenv("QWEN36_TRACED_RESEED", mode)
+        _fresh_kv(model, kv_shape, B)
+        dec = SpeculativeDecoder(model, page_tables, draft_len=K)
+        outs = dec.generate(prompts, MAX_NEW)
+        results[mode] = (outs, (dec.total_accepted, dec.iters, dec.total_drafted))
+        logger.info(
+            f"[spec-batched-trace] B={B} {'traced' if mode == '1' else 'eager'}: accepted={dec.total_accepted} "
+            f"iters={dec.iters} drafted={dec.total_drafted}"
+        )
+    _release(model)
+
+    (traced, t_cnt), (eager, e_cnt) = results["1"], results["0"]
+    for outs in (traced, eager):
+        assert len(outs) == B, f"expected {B} output rows, got {len(outs)}"
+        for u in range(B):
+            assert len(outs[u]) == MAX_NEW, f"user {u} produced {len(outs[u])} tokens, wanted {MAX_NEW}"
+    for u in range(B):
+        div = next((i for i in range(MAX_NEW) if traced[u][i] != eager[u][i]), None)
+        assert div is None, (
+            f"B={B} user {u}: traced draft/reseed diverged from eager at token {div}.\n"
+            f"traced={traced[u]}\neager ={eager[u]}"
+        )
+    assert t_cnt == e_cnt, (
+        f"B={B}: (total_accepted, iters, total_drafted) traced {t_cnt} != eager {e_cnt} — identical "
+        f"tokens with different acceptance means the traced path rejected at a different depth"
+    )
+    logger.info(
+        f"[spec-batched-trace] B={B}: traced == eager for all {B} users, "
+        f"accepted={t_cnt[0]} iters={t_cnt[1]} drafted={t_cnt[2]}"
+    )
+
+
+def _spec_run(model, kv_shape, B, K, prompts, page_tables):
+    """One fresh-KV batched spec generation: (per-user outputs, (accepted, iters, drafted))."""
+    from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
+
+    _fresh_kv(model, kv_shape, B)
+    dec = SpeculativeDecoder(model, page_tables, draft_len=K)
+    outs = dec.generate(prompts, MAX_NEW)
+    return outs, (dec.total_accepted, dec.iters, dec.total_drafted)
+
+
+def _assert_same_runs(a, b, B, tag):
+    """Per-user outputs token-identical and the acceptance counters equal."""
+    (a_outs, a_cnt), (b_outs, b_cnt) = a, b
+    for outs in (a_outs, b_outs):
+        assert len(outs) == B, f"{tag}: expected {B} output rows, got {len(outs)}"
+        for u in range(B):
+            assert len(outs[u]) == MAX_NEW, f"{tag}: user {u} produced {len(outs[u])} tokens, wanted {MAX_NEW}"
+    for u in range(B):
+        div = next((i for i in range(MAX_NEW) if a_outs[u][i] != b_outs[u][i]), None)
+        assert div is None, f"{tag}: user {u} diverged at token {div}.\nrun A={a_outs[u]}\nrun B={b_outs[u]}"
+    assert a_cnt == b_cnt, f"{tag}: (total_accepted, iters, total_drafted) {a_cnt} != {b_cnt}"
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_spec_batched_null_block_padding(mesh_device):
+    """vLLM-style block tables (unused columns = the null block 0) change nothing.
+
+    Run 1 uses the standard disjoint per-user tables; run 2 zeroes every column past the blocks a
+    user can reach, so both rows share block 0 in their tails. The grouped verify KV write only
+    needs distinct (block, 32-row tile) per user within each candidate call, which still holds
+    (nothing writes the tails), so outputs and counters must be identical. The old whole-row
+    disjointness assertion rejected run 2 at capture.
+    """
+    if not _MULTI:
+        pytest.skip("spec decode is the TP path; run with MESH_DEVICE=P150x4")
+    from transformers import AutoTokenizer
+
+    B = 2
+    K = SPEC_K[B]
+    device = mesh_device
+    device.enable_program_cache()
+    model = _build_model(device, B)
+    tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
+    prompts = _batch_prompts(B, tokenizer)
+    page_tables, kv_shape = _batched_kv(model, B, K, prompts)
+
+    padded = page_tables.clone()
+    nb = padded.shape[1]
+    for u in range(B):
+        needed = -(-(len(prompts[u]) + MAX_NEW + 2 * (K + 1) + 1) // BLOCK_SIZE) + 1
+        padded[u, min(needed, nb) :] = 0
+    assert nb > max(-(-(len(p) + MAX_NEW + 2 * (K + 1) + 1) // BLOCK_SIZE) + 1 for p in prompts), "no tail to pad"
+    assert (padded[:, -1] == 0).all(), "both rows must share the null block in their tails"
+
+    plain = _spec_run(model, kv_shape, B, K, prompts, page_tables)
+    nullpad = _spec_run(model, kv_shape, B, K, prompts, padded)
+    _release(model)
+    _assert_same_runs(plain, nullpad, B, f"B={B} null-block padding")
+    logger.info(f"[spec-batched-null] B={B}: null-block-padded tables == standard tables, counters {plain[1]}")
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_spec_batched_verify_restage_page_tables(mesh_device, monkeypatch):
+    """Re-staging the page tables on every verify replay (continuous batching) changes nothing.
+
+    A wrapper makes every Qwen36Model.verify_traced call pass ``page_tables=`` (a copy of the run's
+    own tables, so the staged contents are identical): outputs and counters must match a normal run
+    that stages the tables only at capture.
+    """
+    if not _MULTI:
+        pytest.skip("spec decode is the TP path; run with MESH_DEVICE=P150x4")
+    from transformers import AutoTokenizer
+
+    B = 2
+    K = SPEC_K[B]
+    device = mesh_device
+    device.enable_program_cache()
+    model = _build_model(device, B)
+    tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
+    prompts = _batch_prompts(B, tokenizer)
+    page_tables, kv_shape = _batched_kv(model, B, K, prompts)
+
+    normal = _spec_run(model, kv_shape, B, K, prompts, page_tables)
+
+    calls = []
+    orig = Qwen36Model.verify_traced
+
+    def restaging(self, tokens, positions, mi_prev, read_logits=False, **_):
+        calls.append(1)
+        return orig(self, tokens, positions, mi_prev, read_logits=read_logits, page_tables=page_tables.clone())
+
+    with monkeypatch.context() as m:
+        m.setattr(Qwen36Model, "verify_traced", restaging)
+        restaged = _spec_run(model, kv_shape, B, K, prompts, page_tables)
+    _release(model)
+
+    assert calls, "the restaging verify_traced wrapper was never called"
+    _assert_same_runs(normal, restaged, B, f"B={B} restaged page tables")
+    logger.info(f"[spec-batched-restage] B={B}: {len(calls)} restaged replays == normal run, counters {normal[1]}")
+
+
+@run_for_blackhole()
 @pytest.mark.timeout(3600)  # two full model loads (B=4 users, then the B=1 reference)
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)

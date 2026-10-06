@@ -24,8 +24,10 @@ import time
 
 import torch
 from loguru import logger
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
+from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
 from models.demos.blackhole.qwen36.tt.spec_sampling import SpecSampler, SpecSamplingParams
 
 # Prompt length above which the reseed goes back to the per-slot loop; see generate().
@@ -76,7 +78,7 @@ class SpeculativeDecoder:
         self.vocab = model.args.vocab_size
         # K=3 is the conservative library default, kept for callers that pass no draft_len (the
         # correctness tests). The fully-batched GDN verify made verify cost ~flat in K (2.3 ms per
-        # candidate — see TTGatedDeltaNetTP._verify_fullbatch in gdn/tp.py), so the demo passes the
+        # candidate — see TPGatedDeltaNet._verify_fullbatch in gdn/tp.py), so the demo passes the
         # ISL-aware policy instead.
         # Demo policy (text_demo.py): greedy K=11 up to a 4k prompt and K=7 above it; K=7 under
         # sampling, then capped by the batch (B*T <= 32). T = K+1 must match an entry of
@@ -106,6 +108,13 @@ class SpeculativeDecoder:
         self._tn = 0  # iterations folded into _tsum
         self.stop_tokens = set(stop_tokens or [])
         self.mtp = model.mtp
+        # QWEN36_DRAFT_SHARDED_ARGMAX (resolved once in Qwen36MTP.__init__, which also allocates the
+        # two persistent constants the pick needs): the drafter keeps its vocab-sharded fp32 logits
+        # and picks the winning token on device (Qwen36MTP._argmax_sharded) instead of all-gathering
+        # the full 248320-wide fp32 row and argmaxing the replica. The dispatch itself lives in
+        # mtp.draft_argmax, which the traced chain calls too; this is cached only so the summary
+        # line can report which form the run actually took.
+        self._sharded_argmax = bool(getattr(self.mtp, "_sharded_argmax", False))
         # The MTP layer keeps its own paged KV cache with its own page table; same [B, nb] rows as
         # the base. `mtp_pt` is the batched form the B-row draft and the B*T-row reseed consume;
         # `mtp_pt_rows[u]` is user u's single row, for the eager per-user calls (prompt warm, the
@@ -165,6 +174,33 @@ class SpeculativeDecoder:
         self._p_draft_n = 0
         # Batched or eager reseed, decided in generate() from the prompt length (see the note there).
         self._batched_reseed = True
+        # QWEN36_TRACED_RESEED=1 replays the BATCHED reseed from a captured trace instead of
+        # dispatching its programs from host every iteration. Same device work and the same KV
+        # writes; only the host dispatch goes away. On by default now: the 3-knob A/B (P150x4,
+        # Qwen3.8-27B, B=1 greedy) gave +3.2-10.6% tok/s across all 8 demo ISLs, acceptance
+        # unchanged — QWEN36_TRACED_RESEED=0 opts out; the eager batched reseed stays the fallback,
+        # and the eager per-slot loop stays the fallback past EAGER_RESEED_PROMPT_LEN (there is no
+        # trace for a shape that varies with m).
+        self._traced_reseed = bool(int(os.environ.get("QWEN36_TRACED_RESEED", "1")))
+        # Declared here so the loop can test `self._rsd_trace_id is not None` without a getattr
+        # dance; filled in by alloc_reseed_buffers / _capture_reseed_trace and torn down by
+        # _release_reseed_trace (the same convention model.py follows for the _drf_* handles).
+        self._rsd_trace_id = None  # set by _capture_reseed_trace; None => the eager reseed runs
+        self._rsd_R = None  # captured row count (B * (K+1))
+        self._rsd_h_out = None  # the trace's output hidden, rewritten at that address per replay
+        self._rsd_tok = None
+        self._rsd_pos = None
+        self._rsd_pt = None
+        self._rsd_cos = None
+        self._rsd_sin = None
+        # QWEN36_TRACED_DRAFT=1 replays the WHOLE K-step drafter chain from one captured trace
+        # (Qwen36Model.capture_draft_trace / draft_traced) instead of dispatching its K x ~dozens of
+        # programs from python every iteration. Same device work, same drafter KV writes, same
+        # cos/sin values, so the drafts are the ones _draft would have produced; only the host
+        # dispatch goes away. On by default now: the 3-knob A/B (P150x4, Qwen3.8-27B, B=1 greedy)
+        # gave +3.2-10.6% tok/s across all 8 demo ISLs, acceptance unchanged — QWEN36_TRACED_DRAFT=0
+        # opts out; `_draft` stays the fallback and is what runs whenever the capture did not happen.
+        self._traced_draft = bool(int(os.environ.get("QWEN36_TRACED_DRAFT", "1")))
         # The batched reseed's scratch block (its padding rows' KV sink) is the MTP cache's extra LAST
         # block, index = cache block count - 1 (_allocate_mtp_kv_cache allocates one block past the
         # sequence's own). It is derived from the CACHE in generate(), never from the page table's
@@ -206,8 +242,11 @@ class SpeculativeDecoder:
         costs nothing beyond the wider tile. The chain stays ON DEVICE: host argmax of 151k-vocab
         logits between steps is a round-trip; device argmax feeds the next step and defers readback
         to K*B small ids at the end. Each step is an fp32 LM head, then untilize + ttnn.argmax
-        (``_argmax_last``); under sampling that argmax is the deterministic proposal (the delta at
-        that id). Returns ``drafts[u][k]``, B lists of K ids."""
+        (``_draft_argmax``); under sampling that argmax is the deterministic proposal (the delta at
+        that id). Under QWEN36_DRAFT_SHARDED_ARGMAX (on by default) the LM head stops at its own
+        vocab shard and ``_draft_argmax`` routes to Qwen36MTP._argmax_sharded, which returns the
+        same ids (one per row) from two 32-lane gathers. Returns ``drafts[u][k]``, B lists of K
+        ids."""
         B = self.B
         tok_tt = ttnn.from_torch(
             torch.tensor([[int(t)] for t in pending], dtype=torch.int32),  # [B, 1]
@@ -220,7 +259,7 @@ class SpeculativeDecoder:
         h = anchor_hidden
         for k in range(self.K):
             logits, h_next = self.model.ttnn_mtp_decode_forward(h, tok_tt, [pu + k for pu in p], self.mtp_pt)
-            idx = self._argmax_last(logits)  # [1,1,B] uint32 ROW_MAJOR
+            idx = self._draft_argmax(logits)  # [1,1,B] uint32 ROW_MAJOR
             ttnn.deallocate(logits)
             tok_tt = ttnn.reshape(idx, (B, 1))
             owned_tok.append(tok_tt)
@@ -242,31 +281,51 @@ class SpeculativeDecoder:
         The first real ``_draft`` happens after capture_verify_trace, and the logits-producing
         drafter path has programs nothing earlier in generate() has run: head_norm in DECODE
         (gather-then-norm), the LM head and its vocab all-gather, the argmax pick, and the
-        mesh_partition that re-fractures mtp.norm's output for the next chain step. A program that
+        mesh_partition that re-fractures mtp.norm's output for the next chain step. Under
+        QWEN36_DRAFT_SHARDED_ARGMAX that pick is the whole _argmax_sharded sequence — two extra
+        CCLs, the shard max reduce and the int32 mask arithmetic — and it compiles here for the same
+        reason, which is why this routes through _draft_argmax and not argmax_last. A program that
         first compiles while a trace is parked lands its kernel binaries in memory the replayed
         trace writes over, so they must compile here. Side effect: writes each user's drafter KV at
         slot p_u from (H_{p_u}, pending_u) — the same write draft step 0 repeats on the first real
-        iteration, so it is inert. The drafted ids are discarded."""
+        iteration, so it is inert. The drafted ids are discarded.
+
+        Under QWEN36_TRACED_DRAFT this ALSO allocates the traced chain's persistent inputs and runs
+        the whole K-step body once eagerly. capture_draft_trace is necessarily the LAST of the three
+        captures (verify, reseed, draft) because captures do not nest, so its own warm pass would
+        run with the verify and reseed traces already parked — exactly the hazard this method exists
+        to avoid. Everything the chain needs, including the 3K offset-specific slices and the
+        K-input id concat, therefore has to compile HERE, before any begin_trace_capture."""
         logits, h = self.model.ttnn_mtp_decode_forward(Hp, [int(t) for t in pending], list(p), self.mtp_pt)
-        idx = self._argmax_last(logits)
+        idx = self._draft_argmax(logits)
         for t in (logits, idx, h):
             ttnn.deallocate(t)
         ttnn.synchronize_device(self.mesh)
+        if self._traced_draft:
+            # The trace bakes in the step-0 hidden by ADDRESS, and the only hidden the loop ever
+            # drafts from is the persistent anchor buffer (_anchor_warmup allocated it, in generate()).
+            assert Hp is self._hp_buf, "the traced draft chain bakes in the persistent anchor buffer"
+            # warm positions == p[u]. The two eager warm passes (this one and capture_draft_trace's)
+            # write each user's drafter KV at p[u]..p[u]+K-1, which is EXACTLY the span the first real
+            # draft overwrites step for step, so nothing they write survives into the loop. Every one
+            # of those slots is past the drafter's prompt-warm frontier (p[u]-1 == Tp[u]-1, written by
+            # _warm_mtp_last), and p[u]+K-1 sits below the high-water slot the capacity assert in
+            # generate() already bounds (Tp[u] + K + max(1, max_new-1)), so no widening is needed.
+            self.model.alloc_draft_buffers(self.K, self.mtp_pt, Hp, list(p))
+            self.model.draft_warmup_eager()
 
-    def _argmax_last(self, logits):
-        """argmax over the vocab dim for B rows -> [1,1,B] uint32 ROW_MAJOR.
+    def _draft_argmax(self, logits):
+        """Drafter logits [1,1,B,vocab] -> [1,1,B] uint32 ROW_MAJOR ids (mtp.draft_argmax).
 
-        ttnn.argmax needs ROW_MAJOR input: a TILE tensor takes a single-core internal-untilize path
-        that is catastrophically slow on a 151k-wide vocab. So untilize multicore, then argmax.
-        Used to pad B -> 32 rows on the belief that multicore argmax is row-parallel and returns
-        garbage below a full tile. It does not: the unpadded argmax returns byte-identical ids, and
-        [1,1,B,vocab] is ALREADY a full tile physically, so padding to 32 logical rows made untilize
-        and argmax move ~32/B the bytes they need. The pad is gone.
+        Shared with the traced chain's own pick (Qwen36Model._draft_body) so the two run the same
+        ops and QWEN36_DRAFT_SHARDED_ARGMAX flips both at once; this method exists so _draft and
+        _draft_warmup reach it through one call site. Neither form frees ``logits``.
+        The gathered form used to pad B -> 32 rows on the belief that multicore argmax is
+        row-parallel and returns garbage below a full tile. It does not: the unpadded argmax returns
+        byte-identical ids, and [1,1,B,vocab] is ALREADY a full tile physically, so padding to 32
+        logical rows made untilize and argmax move ~32/B the bytes they need. The pad is gone.
         """
-        u = ttnn.untilize(logits, use_multicore=True)
-        out = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,B] uint32 RM
-        ttnn.deallocate(u)
-        return out
+        return draft_argmax(self.mtp, logits)
 
     def _id_to_host(self, id_tt):
         """[*, B] uint32 device ids -> list of B python ints. Reads only the device-0 replica: the
@@ -344,6 +403,34 @@ class SpeculativeDecoder:
                 ttnn.deallocate(h_next)
                 self.mtp_extra_steps += 1
 
+    def _reseed_host_inputs(self, prev_p, committed, scratch_only=False):
+        """Host (tok, pos, pt, cos, sin) for the B*T-row batched reseed.
+
+        Row u*T+i is user u's slot prev_p[u]+1+i, carrying token committed[u][1+i], for i < m_u
+        (= len(committed[u]) - 1). Every other row is PADDING: token 0 at position 0, so the
+        discarded SDPA read is one slot deep, with every page-table entry on the scratch block so
+        its KV write never touches a sequence. ``scratch_only=True`` makes EVERY row padding
+        (warmup). Shared by the eager batched reseed and the traced replay, so the two stage
+        identical inputs.
+        """
+        T = self.K + 1
+        R = self.B * T
+        nb = self.page_tables.shape[-1]
+        tok = torch.zeros(R, 1, dtype=torch.int32)
+        pos = torch.zeros(R, dtype=torch.int32)
+        pt = torch.full((R, nb), int(self._reseed_scratch_block), dtype=torch.int32)
+        for u in range(self.B):
+            m = 0 if scratch_only else len(committed[u]) - 1
+            assert m <= T, f"reseed {m} slots into a {T}-row group"
+            if m == 0:
+                continue
+            r0 = u * T
+            tok[r0 : r0 + m, 0] = torch.tensor([int(t) for t in committed[u][1 : 1 + m]], dtype=torch.int32)
+            pos[r0 : r0 + m] = torch.arange(prev_p[u] + 1, prev_p[u] + 1 + m, dtype=torch.int32)
+            pt[r0 : r0 + m, :] = self.page_tables[u]
+        cos_t, sin_t = self.model._rope_tp_cos_sin_decode_torch(pos)
+        return tok, pos, pt, cos_t, sin_t
+
     def _reseed_mtp_batched(self, prev_p, vfeed, committed, scratch_only=False):
         """``_reseed_mtp`` as ONE fixed-shape drafter forward over all B*T verify rows.
 
@@ -366,19 +453,7 @@ class SpeculativeDecoder:
         if not scratch_only and not any(lens):
             return
         mesh, rep = self.mesh, ttnn.ReplicateTensorToMesh(self.mesh)
-        nb = self.page_tables.shape[-1]
-        tok = torch.zeros(R, 1, dtype=torch.int32)
-        pos = torch.zeros(R, dtype=torch.int32)
-        pt = torch.full((R, nb), int(self._reseed_scratch_block), dtype=torch.int32)
-        for u, m in enumerate(lens):
-            assert m <= T, f"reseed {m} slots into a {T}-row group"
-            if m == 0:
-                continue
-            r0 = u * T
-            tok[r0 : r0 + m, 0] = torch.tensor([int(t) for t in committed[u][1 : 1 + m]], dtype=torch.int32)
-            pos[r0 : r0 + m] = torch.arange(prev_p[u] + 1, prev_p[u] + 1 + m, dtype=torch.int32)
-            pt[r0 : r0 + m, :] = self.page_tables[u]
-        cos_t, sin_t = self.model._rope_tp_cos_sin_decode_torch(pos)
+        tok, pos, pt, cos_t, sin_t = self._reseed_host_inputs(prev_p, committed, scratch_only)
         tok_tt = ttnn.from_torch(tok, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep)
         pos_tt = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep)
         pt_tt = ttnn.from_torch(pt, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep)
@@ -404,7 +479,8 @@ class SpeculativeDecoder:
         The batched reseed is a shape the loop has never run (B*T decode rows over the MTP layer),
         and a program that first compiles while the verify trace is parked lands its kernel binaries
         in memory the replayed trace writes over. Every row here targets the scratch block, so the
-        throwaway forward touches no real KV.
+        throwaway forward touches no real KV. Under QWEN36_TRACED_RESEED this is also where the
+        trace's persistent inputs are allocated (alloc_reseed_buffers) — same reason, same deadline.
         """
         z = ttnn.zeros(
             [1, 1, rows, dim_frac],
@@ -419,6 +495,175 @@ class SpeculativeDecoder:
         self.mtp_extra_steps -= 1  # warmup is not a loop cost
         ttnn.synchronize_device(self.mesh)
         ttnn.deallocate(z)
+        if self._traced_reseed and self._batched_reseed:
+            self.alloc_reseed_buffers(rows)
+
+    def alloc_reseed_buffers(self, R):
+        """Allocate the traced reseed's persistent inputs, sized for R = B*T rows.
+
+        Call this BEFORE any begin_trace_capture (_reseed_warmup does): the buffers' ADDRESSES are
+        what _capture_reseed_trace bakes in, and an allocation made once a trace is parked can land
+        in memory the replay writes over. Initialised to the WARMUP content — every page-table row
+        at the scratch block, every position 0 — so the warm passes that follow touch no real KV.
+        """
+        self._release_reseed_trace()
+        mesh, rep = self.mesh, ttnn.ReplicateTensorToMesh(self.mesh)
+        nb = self.page_tables.shape[-1]
+        self._rsd_R = R
+        self._rsd_tok = ttnn.from_torch(
+            torch.zeros(R, 1, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            mesh_mapper=rep,
+        )
+        self._rsd_pos = ttnn.from_torch(
+            torch.zeros(R, dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            mesh_mapper=rep,
+        )
+        self._rsd_pt = ttnn.from_torch(
+            torch.full((R, nb), int(self._reseed_scratch_block), dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            mesh_mapper=rep,
+        )
+        cos_t, sin_t = self.model._rope_tp_cos_sin_decode_torch(torch.zeros(R, dtype=torch.int32))
+        self._rsd_cos = ttnn.from_torch(
+            cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep
+        )
+        self._rsd_sin = ttnn.from_torch(
+            sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep
+        )
+        # No per-m prebuilt host page tables: with B users the table depends on all B accepted counts, so
+        # _reseed_traced stages it per iteration.
+
+    def _capture_reseed_trace(self, vhidden):
+        """Capture ONE trace of the batched reseed, replayed by _reseed_traced (QWEN36_TRACED_RESEED).
+
+        The batched reseed is already a single forward, but python re-dispatches its programs every
+        iteration. Nothing about it actually varies: B*T rows always, the padding rows always name
+        the scratch block, and only the CONTENTS of (tok, pos, pt, cos, sin) change with the
+        per-user accepted counts. And ``vhidden`` is the verify trace's OWN persistent row buffer
+        (verify_traced hands back _vfy_rows_out), so its address is stationary and can be baked in
+        like any other trace input. That makes the whole forward capturable.
+
+        Ordering: AFTER capture_verify_trace (``vhidden`` is allocated by that capture). Allocates
+        no persistent buffer and compiles nothing — alloc_reseed_buffers put the five inputs in
+        place and _reseed_warmup ran this exact shape eagerly, both before ANY begin_trace_capture —
+        so the warm pass below is a program-cache hit; a compile with a trace parked lands kernel
+        binaries in memory the replay writes over.
+        """
+        mesh = self.mesh
+        R = vhidden.shape[-2]
+        assert self._rsd_tok is not None and self._rsd_R == R, (
+            f"traced reseed not allocated for R={R} rows: alloc_reseed_buffers must run before ANY "
+            "begin_trace_capture (see _reseed_warmup)"
+        )
+        self._release_reseed_trace(keep_buffers=True)
+
+        def _body(hidden):
+            _, h = self.mtp.forward_decode(
+                hidden,
+                self._rsd_tok,
+                self._rsd_pos,
+                self._rsd_cos,
+                self._rsd_sin,
+                self._rsd_pt,
+                need_logits=False,
+                alias_kv_write=True,
+                spec_n_users=self.B,
+            )
+            return h
+
+        # Warm OUTSIDE the trace (cache hit, see the docstring) against a THROWAWAY hidden, exactly
+        # as _reseed_warmup does — the persistent inputs still hold their warmup content, so this
+        # touches no real KV — then capture against the real `vhidden`, whose address is the one the
+        # loop passes.
+        z = ttnn.zeros(
+            [1, 1, R, vhidden.shape[-1]],
+            device=mesh,
+            dtype=vhidden.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        h = _body(z)
+        ttnn.deallocate(h)
+        ttnn.synchronize_device(mesh)
+        ttnn.deallocate(z)
+        self.model._log_trace_region("before the reseed capture")
+        self._rsd_trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
+        # The output handle outlives the capture window on purpose: the replay rewrites that exact
+        # address every iteration and nothing reads it in between, so it is not a leak.
+        with trace_allocation_tracker.corruptible_allocation_scope(mesh):
+            self._rsd_h_out = _body(vhidden)
+        ttnn.end_trace_capture(mesh, self._rsd_trace_id, cq_id=0)
+        self.model._log_trace_region("after the reseed capture")
+        # model.py owns two of the three things this trace baked in (the verify rows, the MTP KV), so
+        # it has to be able to drop the trace itself — capture_verify_trace and free_kv_caches run
+        # every registered hook from model.release_verify_trace.
+        if self._release_reseed_trace not in self.model._spec_trace_release_hooks:
+            self.model._spec_trace_release_hooks.append(self._release_reseed_trace)
+        logger.info(f"Reseed trace (B={self.B} users x T={self.K + 1} = {R} rows) captured successfully!")
+
+    def _reseed_traced(self, prev_p, committed):
+        """``_reseed_mtp_batched`` as a REPLAY of the trace _capture_reseed_trace cut.
+
+        Identical device work and identical KV writes; the host side drops to five
+        copy_host_to_device_tensor stages (the page table is built per iteration now: with B users
+        it depends on every user's accepted count) plus one execute_trace. No ``vfeed`` argument:
+        the trace baked in the verify trace's persistent row buffer, which is the only tensor the
+        loop ever passes. No sync — the reseed's result is never read on host, and the next phase's
+        own fence orders it.
+        """
+        if all(len(c) - 1 == 0 for c in committed):
+            return
+        tok, pos, pt, cos_t, sin_t = self._reseed_host_inputs(prev_p, committed)
+        rep = ttnn.ReplicateTensorToMesh(self.mesh)
+        for x, buf, dtype, layout in (
+            (tok, self._rsd_tok, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+            (pos, self._rsd_pos, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+            (pt, self._rsd_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+            (cos_t, self._rsd_cos, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+            (sin_t, self._rsd_sin, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        ):
+            _h = ttnn.from_torch(x, dtype=dtype, layout=layout, device=None, mesh_mapper=rep)
+            ttnn.copy_host_to_device_tensor(_h, buf)
+        ttnn.execute_trace(self.mesh, self._rsd_trace_id, cq_id=0, blocking=False)
+        self.mtp_extra_steps += 1
+
+    def _release_reseed_trace(self, keep_buffers=False):
+        """Drop the reseed trace, and unless ``keep_buffers`` its persistent buffers too.
+
+        The trace bakes in the verify trace's row buffer, the MTP paged KV and its own five input
+        buffers, so it must not outlive any of them: released at the top and in the teardown of
+        generate(), where the anchor buffer is freed and the next allocate_kv_caches /
+        capture_verify_trace can reuse those addresses, and — because model.py owns two of those
+        three — from model._spec_trace_release_hooks, which capture_verify_trace and free_kv_caches
+        run from model.release_verify_trace. IDEMPOTENT: every one of those paths may call it any
+        number of times, in any order. ``keep_buffers=True`` is the re-capture case, against buffers
+        alloc_reseed_buffers already put in place (release_draft_trace offers the same contract for
+        the same reason).
+        """
+        if self._rsd_trace_id is not None:
+            ttnn.release_trace(self.mesh, self._rsd_trace_id)
+        self._rsd_trace_id = None
+        if self._rsd_h_out is not None:
+            ttnn.deallocate(self._rsd_h_out)
+        self._rsd_h_out = None
+        if keep_buffers:
+            return
+        if self._release_reseed_trace in self.model._spec_trace_release_hooks:
+            self.model._spec_trace_release_hooks.remove(self._release_reseed_trace)
+        for _name in ("_rsd_tok", "_rsd_pos", "_rsd_pt", "_rsd_cos", "_rsd_sin"):
+            _t = getattr(self, _name, None)
+            if _t is not None:
+                ttnn.deallocate(_t)
+            setattr(self, _name, None)
+        self._rsd_R = None
 
     # --------------------------------------------------------------------- #
     # Accept
@@ -611,8 +856,11 @@ class SpeculativeDecoder:
         ``model.verify_traced`` runs execute_trace + synchronize_device and only THEN pulls the ids
         (and, when read_verify_logits is set, the logits) back via
         ``ttnn.to_torch(ttnn.get_device_tensors(...)[0])``, so hooking ``ttnn.get_device_tensors``
-        for the duration of the call marks the device/host boundary without editing model.py. The
-        trailing sync flushes anything that follows the readback into the readback bucket. Returns
+        for the duration of the call marks the device/host boundary without editing model.py.
+        ``model.draft_traced`` reads its ids back through that same function, so the draft phase has
+        to stay OUTSIDE this hook's scope or it would set the mark — it does: the loop drafts before
+        this call and the hook is installed and removed inside it. The trailing sync flushes anything
+        that follows the readback into the readback bucket. Returns
         (vids, vfeed, vlogits, device_seconds, readback_seconds).
         """
         orig = ttnn.get_device_tensors
@@ -698,6 +946,12 @@ class SpeculativeDecoder:
         SpeculativeDecoder._gen_calls += 1
         self._gen_id = SpeculativeDecoder._gen_calls
         _t_start = time.perf_counter()
+        # No trace captured by a PREVIOUS generate on this decoder may survive into this one: both
+        # bake in buffers this run re-allocates (the verify rows, the MTP KV, the anchor). Idempotent
+        # when there is nothing to drop. keep_buffers on the draft side — its four inputs are freed
+        # by the alloc_draft_buffers _draft_warmup runs below, which re-cuts them for this anchor.
+        self._release_reseed_trace()
+        model.release_draft_trace(keep_buffers=True)
 
         # Per-user host state. p[u] is the ANCHOR slot (the verify window starts at p[u]+1); mi[u]
         # is the accepted-prefix index the NEXT replay commits; out_sets[u] is the GENERATED ids so
@@ -735,7 +989,8 @@ class SpeculativeDecoder:
             )
         logger.info(
             f"[spec] gen={self._gen_id} users={B} T_prompt={Tp} K={self.K} rows={B * T} "
-            f"reseed={'eager' if eager_reseed else 'batched'} max_new={max_new_tokens} {_samp}"
+            f"reseed={'eager' if eager_reseed else 'batched'} max_new={max_new_tokens} {_samp} "
+            f"flags(draft={int(self._traced_draft)},reseed={int(self._traced_reseed)})"
         )
 
         # Capacity check, per user: bounded by the SPECULATIVE high-water slot, not the returned-token
@@ -825,215 +1080,263 @@ class SpeculativeDecoder:
         for u in range(B):
             pending[u] = self._pick_token(Lp[u], torch.tensor([first[u]], dtype=torch.int64))
 
-        # Anchor buffers + the one-hot matmul that refills them, compiled while nothing is traced.
-        # The warmup writes zeros into _hp_buf, so the real seed rows are copied in AFTERWARDS.
-        self._anchor_warmup(Hp_rows.shape[-1], Hp_rows.dtype)
-        ttnn.copy(Hp_rows, self._hp_buf)
-        ttnn.deallocate(Hp_rows)  # seed_spec_step hands the caller a fresh spec_feed_rows tensor
-        Hp = self._hp_buf
+        try:
+            # Anchor buffers + the one-hot matmul that refills them, compiled while nothing is traced.
+            # The warmup writes zeros into _hp_buf, so the real seed rows are copied in AFTERWARDS.
+            self._anchor_warmup(Hp_rows.shape[-1], Hp_rows.dtype)
+            ttnn.copy(Hp_rows, self._hp_buf)
+            ttnn.deallocate(Hp_rows)  # seed_spec_step hands the caller a fresh spec_feed_rows tensor
+            Hp = self._hp_buf
 
-        # Reseed scratch = the MTP cache's extra LAST block, derived from the cache (D1). Never the
-        # page tables' width: a vLLM block table is [B, blocks_per_request] of physical block ids,
-        # so its width is not the block count and a width-derived index aliases a live block. No
-        # user's table may name the scratch block, so the largest entry over the WHOLE table stays
-        # below it.
-        self._reseed_scratch_block = int(self.mtp.attention.paged_k.shape[0]) - 1
-        assert int(self.page_tables.max()) < self._reseed_scratch_block, (
-            f"page tables name block {int(self.page_tables.max())}, but the MTP cache's scratch block is "
-            f"{self._reseed_scratch_block}; the MTP cache needs one block past every block the tables use"
-        )
+            # Reseed scratch = the MTP cache's extra LAST block, derived from the cache (D1). Never the
+            # page tables' width: a vLLM block table is [B, blocks_per_request] of physical block ids,
+            # so its width is not the block count and a width-derived index aliases a live block. No
+            # user's table may name the scratch block, so the largest entry over the WHOLE table stays
+            # below it.
+            self._reseed_scratch_block = int(self.mtp.attention.paged_k.shape[0]) - 1
+            assert int(self.page_tables.max()) < self._reseed_scratch_block, (
+                f"page tables name block {int(self.page_tables.max())}, but the MTP cache's scratch block is "
+                f"{self._reseed_scratch_block}; the MTP cache needs one block past every block the tables use"
+            )
 
-        # Batched-reseed warmup: compiles the B*T-row drafter forward while nothing is traced yet.
-        if self._batched_reseed:
-            self._reseed_warmup(B * T, Hp.shape[-1], Hp.dtype)
-        # Draft warmup: the logits-producing drafter step (head norm, fp32 LM head, untilize, argmax,
-        # plus the chain's mesh_partition) has not run yet, and its first real run is AFTER the
-        # capture below. Compile it now; its one KV write per user (slot p[u] from (H_p, pending)) is
-        # what draft step 0 repeats.
-        self._draft_warmup(pending, Hp, p)
+            # Batched-reseed warmup: compiles the B*T-row drafter forward while nothing is traced yet.
+            if self._batched_reseed:
+                self._reseed_warmup(B * T, Hp.shape[-1], Hp.dtype)
+            # Draft warmup: the logits-producing drafter step (head norm, fp32 LM head, untilize, argmax,
+            # plus the chain's mesh_partition) has not run yet, and its first real run is AFTER the
+            # capture below. Compile it now; its one KV write per user (slot p[u] from (H_p, pending)) is
+            # what draft step 0 repeats.
+            self._draft_warmup(pending, Hp, p)
 
-        # One-time verify-trace capture (replayed every iteration), done AFTER prefill + MTP warm +
-        # seed so every program those paths need is already compiled: a compile that happens once the
-        # trace is parked clobbers it. ``warm_positions`` is each user's ABSOLUTE first verify slot
-        # (p[u]+1 — the same convention verify_traced's ``positions`` uses), so the two throwaway
-        # passes write junk KV past the seed's slot, where the first real verify overwrites it.
-        # Counts toward TTFT, not decode_time.
-        if not self._vfy_captured:
-            model.capture_verify_trace(self.page_tables, T, warm_positions=[pu + 1 for pu in p], decode_cfg=True)
-            self._vfy_captured = True
-        # Hand the GDN layers' live state to the spec ring (token slot 0) and their live conv window
-        # to E_prev, so the first replay's mi_prev = 0 names exactly the seeded state. MUST come
-        # AFTER the capture, both ways round: the ring and E_prev are allocated by the
-        # prepare_spec_verify that capture_verify_trace runs, and capture's two throwaway passes
-        # scribble both (there is no snapshot/restore any more — this IS the restore). The live
-        # rec_state and conv window the seed forward left behind are untouched by those passes, so
-        # they are still the truth to seed from; the seed also leaves the K taps in step with the
-        # window, which is what keeps this call on the same sync_conv_win branch the throwaway
-        # seed_spec_state inside capture_verify_trace already compiled.
-        for dn in self._gdn:
-            dn.seed_spec_state()
-        ttnn.synchronize_device(self.mesh)
-        self.prefill_time = time.perf_counter() - _t_start  # TTFT: prefill + MTP warm + seed
-        _t_decode = time.perf_counter()
+            # One-time verify-trace capture (replayed every iteration), done AFTER prefill + MTP warm +
+            # seed so every program those paths need is already compiled: a compile that happens once the
+            # trace is parked clobbers it. ``warm_positions`` is each user's ABSOLUTE first verify slot
+            # (p[u]+1 — the same convention verify_traced's ``positions`` uses), so the two throwaway
+            # passes write junk KV past the seed's slot, where the first real verify overwrites it.
+            # Counts toward TTFT, not decode_time.
+            if not self._vfy_captured:
+                model.capture_verify_trace(self.page_tables, T, warm_positions=[pu + 1 for pu in p], decode_cfg=True)
+                self._vfy_captured = True
+            # Hand the GDN layers' live state to the spec ring (token slot 0) and their live conv window
+            # to E_prev, so the first replay's mi_prev = 0 names exactly the seeded state. MUST come
+            # AFTER the capture, both ways round: the ring and E_prev are allocated by the
+            # prepare_spec_verify that capture_verify_trace runs, and capture's two throwaway passes
+            # scribble both (there is no snapshot/restore any more — this IS the restore). The live
+            # rec_state and conv window the seed forward left behind are untouched by those passes, so
+            # they are still the truth to seed from; the seed also leaves the K taps in step with the
+            # window, which is what keeps this call on the same sync_conv_win branch the throwaway
+            # seed_spec_state inside capture_verify_trace already compiled.
+            for dn in self._gdn:
+                dn.seed_spec_state()
+            # Reseed trace, cut against the verify trace's persistent row buffer. Second of the three
+            # captures: its body reads _vfy_rows_out (allocated by capture_verify_trace) and its
+            # programs were compiled by _reseed_warmup above, before any begin_trace_capture.
+            if self._traced_reseed and self._batched_reseed:
+                self._capture_reseed_trace(model._vfy_rows_out)
+            # Draft trace, LAST of the three captures. Its body reads the persistent anchor buffer
+            # (_hp_buf, allocated by _anchor_warmup) plus the four _drf_* input buffers, and every
+            # program in it was compiled by _draft_warmup above, before ANY begin_trace_capture, which
+            # is what lets this capture happen with two traces already parked.
+            if self._traced_draft:
+                model.capture_draft_trace(self.K, self.mtp_pt, self._hp_buf)
+            # Whether each phase actually ends up traced: the env flag AND a capture that took.
+            _rsd_on = self._traced_reseed and self._rsd_trace_id is not None
+            _drf_on = self._traced_draft and model._drf_trace_id is not None
+            logger.info(
+                f"[spec] reseed={'traced' if _rsd_on else 'eager'} "
+                f"draft={'traced' if _drf_on else 'eager'} "
+                f"argmax={'sharded' if self._sharded_argmax else 'gathered'}"
+            )
+            ttnn.synchronize_device(self.mesh)
+            self.prefill_time = time.perf_counter() - _t_start  # TTFT: prefill + MTP warm + seed
+            _t_decode = time.perf_counter()
 
-        # Every user runs every iteration: the verify is one fixed B*T-row replay, so a user that has
-        # already stopped still occupies its T rows. Those rows are FROZEN. A done user keeps its p
-        # and its pending for ever, so each later iteration replays the very same T tokens at the
-        # very same T positions; its accept result is thrown away (forced m = 0, committed =
-        # [pending], mi = 0), it contributes no reseed row, and it feeds no statistic. Its attention
-        # KV, its drafter KV and its GDN ring writes therefore keep landing on slots it already
-        # owns instead of marching up the cache — which is what makes the capacity bound above
-        # tight and batch-size independent. Those repeated writes do fill the finished user's own
-        # drafter KV and GDN ring with repeat-token junk (the reseed no longer repairs the slots
-        # the draft step overwrites); nothing reads either again. The loop ends when every user is
-        # done. At B == 1 this is unchanged: the single user freezing ends the loop.
-        while any(not d for d in done):
-            # LIVE = not yet frozen at the START of this iteration. A user that finishes INSIDE this
-            # iteration is live here, and its accept decision and committed tokens are real work.
-            live = [not d for d in done]
-            n_live = sum(live)
-            _tm = self._tick() if self._timing else 0.0
-            drafts = self._draft(pending, Hp, p)
-            _t_draft = self._tick() if self._timing else 0.0
-
-            # The replay commits the PREVIOUS iteration's accepted prefix (mi) as it goes: GDN reads
-            # each user's initial state from its own accepted ring slot. committed_u = [pending_u] +
-            # drafts_u[:m_u].
-            vtok = [[pending[u]] + drafts[u] for u in range(B)]
-            vpos = [pu + 1 for pu in p]
-            if self._timing:
-                vids, vfeed, vlogits, _s_verify, _s_read = self._verify_split(vtok, vpos, mi)
-                _t_verify = time.perf_counter()
-            else:
-                vids, vfeed, vlogits = self._verify(vtok, vpos, mi)
-
-            # Per-user acceptance over that user's T-row slice. Greedy compares IDS, so it walks the
-            # trace's on-device argmax. Sampling runs rejection sampling over the [T, vocab] host
-            # logits and IGNORES vids (still produced by the trace), drawing the emitted token
-            # itself — that token is the user's next `pending`.
-            prev_p = list(p)
-            committed = []
-            next_pending = list(pending)
-            for u in range(B):
-                if not live[u]:
-                    # FROZEN. Its T rows ran (the row count is baked into the trace) but nothing
-                    # they produced is used: no accept test at all, so `_accept_sample` is never
-                    # called for it and the shared RNG stream advances for LIVE users only; no
-                    # histogram entry; m = 0; and a commit of just its unchanging `pending`, whose
-                    # len - 1 == 0 makes it contribute NO reseed row (the batched reseed pads its
-                    # group with scratch-block rows). mi = 0 keeps its GDN state-block index and
-                    # conv-window offset in range on the next replay, and keeps
-                    # QWEN36_SPEC_CHECK_ANCHOR's one-hot assertion pointed at a real feed row.
-                    committed.append([pending[u]])
-                    mi[u] = 0
-                    continue
-                row_ids = vids[u * T : (u + 1) * T]
-                if self.sampler is None:
-                    m = self._accept_greedy(drafts[u], row_ids)
-                    sampled_tok = None
+            # Every user runs every iteration: the verify is one fixed B*T-row replay, so a user that has
+            # already stopped still occupies its T rows. Those rows are FROZEN. A done user keeps its p
+            # and its pending for ever, so each later iteration replays the very same T tokens at the
+            # very same T positions; its accept result is thrown away (forced m = 0, committed =
+            # [pending], mi = 0), it contributes no reseed row, and it feeds no statistic. Its attention
+            # KV, its drafter KV and its GDN ring writes therefore keep landing on slots it already
+            # owns instead of marching up the cache — which is what makes the capacity bound above
+            # tight and batch-size independent. Those repeated writes do fill the finished user's own
+            # drafter KV and GDN ring with repeat-token junk (the reseed no longer repairs the slots
+            # the draft step overwrites); nothing reads either again. The loop ends when every user is
+            # done. At B == 1 this is unchanged: the single user freezing ends the loop.
+            while any(not d for d in done):
+                # LIVE = not yet frozen at the START of this iteration. A user that finishes INSIDE this
+                # iteration is live here, and its accept decision and committed tokens are real work.
+                live = [not d for d in done]
+                n_live = sum(live)
+                _tm = self._tick() if self._timing else 0.0
+                # Traced chain (QWEN36_TRACED_DRAFT) or the eager per-step dispatch. The traced call
+                # takes no hidden: it baked in _hp_buf, which IS `Hp` and which _set_anchor refilled in
+                # place at the end of the previous iteration. Both sit inside the same _tick() bracket,
+                # so the timing line's `draft` phase covers the replay + the id readback either way.
+                if _drf_on:
+                    drafts = model.draft_traced(pending, p)
                 else:
-                    # Presence-penalty set for this user's FIRST row: its output so far plus its
-                    # `pending`, which the row follows (the sampler adds drafts[:j] for the deeper
-                    # rows). Built only when the request asks for a penalty; trivial for the <= 500
-                    # tokens a run generates.
-                    penalize_base = (
-                        torch.tensor(sorted(out_sets[u] | {pending[u]}), dtype=torch.int64)
-                        if self.sampler.params.presence_penalty > 0
-                        else None
+                    drafts = self._draft(pending, Hp, p)
+                _t_draft = self._tick() if self._timing else 0.0
+
+                # The replay commits the PREVIOUS iteration's accepted prefix (mi) as it goes: GDN reads
+                # each user's initial state from its own accepted ring slot. committed_u = [pending_u] +
+                # drafts_u[:m_u].
+                vtok = [[pending[u]] + drafts[u] for u in range(B)]
+                vpos = [pu + 1 for pu in p]
+                if self._timing:
+                    vids, vfeed, vlogits, _s_verify, _s_read = self._verify_split(vtok, vpos, mi)
+                    _t_verify = time.perf_counter()
+                else:
+                    vids, vfeed, vlogits = self._verify(vtok, vpos, mi)
+
+                # Per-user acceptance over that user's T-row slice. Greedy compares IDS, so it walks the
+                # trace's on-device argmax. Sampling runs rejection sampling over the [T, vocab] host
+                # logits and IGNORES vids (still produced by the trace), drawing the emitted token
+                # itself — that token is the user's next `pending`.
+                prev_p = list(p)
+                committed = []
+                next_pending = list(pending)
+                for u in range(B):
+                    if not live[u]:
+                        # FROZEN. Its T rows ran (the row count is baked into the trace) but nothing
+                        # they produced is used: no accept test at all, so `_accept_sample` is never
+                        # called for it and the shared RNG stream advances for LIVE users only; no
+                        # histogram entry; m = 0; and a commit of just its unchanging `pending`, whose
+                        # len - 1 == 0 makes it contribute NO reseed row (the batched reseed pads its
+                        # group with scratch-block rows). mi = 0 keeps its GDN state-block index and
+                        # conv-window offset in range on the next replay, and keeps
+                        # QWEN36_SPEC_CHECK_ANCHOR's one-hot assertion pointed at a real feed row.
+                        committed.append([pending[u]])
+                        mi[u] = 0
+                        continue
+                    row_ids = vids[u * T : (u + 1) * T]
+                    if self.sampler is None:
+                        m = self._accept_greedy(drafts[u], row_ids)
+                        sampled_tok = None
+                    else:
+                        # Presence-penalty set for this user's FIRST row: its output so far plus its
+                        # `pending`, which the row follows (the sampler adds drafts[:j] for the deeper
+                        # rows). Built only when the request asks for a penalty; trivial for the <= 500
+                        # tokens a run generates.
+                        penalize_base = (
+                            torch.tensor(sorted(out_sets[u] | {pending[u]}), dtype=torch.int64)
+                            if self.sampler.params.presence_penalty > 0
+                            else None
+                        )
+                        m, sampled_tok = self._accept_sample(drafts[u], vlogits[u * T : (u + 1) * T], penalize_base)
+                    com = [pending[u]] + drafts[u][:m]
+                    # The accept test can accept drafts PAST a stop token, so emit only through the first
+                    # one. anchor/reseed/p all follow the shortened prefix, since they derive from `com` /
+                    # `mi[u]` below; acceptance stats deliberately keep the full `m`.
+                    _stop_i = next((i for i, t in enumerate(com) if t in self.stop_tokens), None)
+                    if _stop_i is not None:
+                        com = com[: _stop_i + 1]
+                    committed.append(com)
+                    mi[u] = len(com) - 1  # accepted-prefix's last token index in this user's window
+                    # The next anchor's own next token: greedy takes the base's argmax at the accepted-
+                    # prefix's last row, sampling the token its accept step already drew from that row.
+                    next_pending[u] = row_ids[mi[u]] if self.sampler is None else sampled_tok
+                    self.total_accepted += m
+                _t_accept = time.perf_counter() if self._timing else 0.0  # host-only: no fence needed
+
+                # The new anchor hidden is each user's accepted-prefix row of the verify feed, gathered
+                # into the SAME persistent buffer the drafter already read this iteration (see
+                # _anchor_warmup: a fresh per-iteration clone here is what a parked trace can alias).
+                self._set_anchor(vfeed, mi)
+                _t_anchor = self._tick() if self._timing else 0.0
+
+                # MTP KV maintenance over the slots just committed, in ONE drafter forward over all B*T
+                # verify rows (row u*T+i is user u's base hidden at slot prev_p[u]+1+i, paired with the
+                # token at slot+1). vfeed is the verify trace's own persistent output row buffer, so it is
+                # not freed here — the next replay overwrites it in place.
+                if _rsd_on:
+                    # The trace baked in the verify trace's own row buffer, so the loop's must BE it.
+                    assert vfeed is model._vfy_rows_out, "traced reseed needs the verify trace's own rows"
+                    self._reseed_traced(prev_p, committed)
+                else:
+                    _rfn = self._reseed_mtp_batched if self._batched_reseed else self._reseed_mtp
+                    _rfn(prev_p, vfeed, committed)
+                _t_reseed = self._tick() if self._timing else 0.0
+
+                for u in range(B):
+                    if not live[u]:
+                        continue  # frozen before this iteration: p, pending and out are already final
+                    out[u].extend(committed[u])
+                    out_sets[u].update(committed[u])
+                    if committed[u][-1] in self.stop_tokens or len(out[u]) >= max_new_tokens:
+                        # FREEZE, leaving p and pending at their PRE-commit values. The rows this user
+                        # replays from now on then re-cover exactly the slots this iteration just wrote,
+                        # so its high-water slot stays p + T and the tight capacity bound above holds.
+                        # The tokens are already in `out`; nothing reads this user's KV, its drafter
+                        # cache or its GDN state again.
+                        done[u] = True
+                        continue
+                    p[u] += len(committed[u])
+                    pending[u] = next_pending[u]
+                    assert p[u] == prev_p[u] + len(committed[u])
+                if self._timing:
+                    # `other` = the deallocates and the host bookkeeping around the phases above.
+                    self._log_iter_timing(
+                        {
+                            "draft": _t_draft - _tm,
+                            "verify": _s_verify,
+                            "readback": _s_read,
+                            "accept": _t_accept - _t_verify,
+                            "anchor": _t_anchor - _t_accept,
+                            "reseed": _t_reseed - _t_anchor,
+                            "total": self._tick() - _tm,  # fenced, so nothing leaks into the next iter
+                        }
                     )
-                    m, sampled_tok = self._accept_sample(drafts[u], vlogits[u * T : (u + 1) * T], penalize_base)
-                com = [pending[u]] + drafts[u][:m]
-                # The accept test can accept drafts PAST a stop token, so emit only through the first
-                # one. anchor/reseed/p all follow the shortened prefix, since they derive from `com` /
-                # `mi[u]` below; acceptance stats deliberately keep the full `m`.
-                _stop_i = next((i for i, t in enumerate(com) if t in self.stop_tokens), None)
-                if _stop_i is not None:
-                    com = com[: _stop_i + 1]
-                committed.append(com)
-                mi[u] = len(com) - 1  # accepted-prefix's last token index in this user's window
-                # The next anchor's own next token: greedy takes the base's argmax at the accepted-
-                # prefix's last row, sampling the token its accept step already drew from that row.
-                next_pending[u] = row_ids[mi[u]] if self.sampler is None else sampled_tok
-                self.total_accepted += m
-            _t_accept = time.perf_counter() if self._timing else 0.0  # host-only: no fence needed
+                self.iters += 1
+                # LIVE users only. A frozen user's drafts and accept result are discarded, so counting
+                # it would dilute every rate with work that produced no token. `iters` stays the raw
+                # loop-iteration count (each one costs a full replay however many users are live).
+                self.user_iters += n_live
+                self.total_drafted += n_live * self.K
 
-            # The new anchor hidden is each user's accepted-prefix row of the verify feed, gathered
-            # into the SAME persistent buffer the drafter already read this iteration (see
-            # _anchor_warmup: a fresh per-iteration clone here is what a parked trace can alias).
-            self._set_anchor(vfeed, mi)
-            _t_anchor = self._tick() if self._timing else 0.0
+            # The loop's own wall-clock. Everything below (trace release, materialize_spec_state,
+            # sync_conv_taps, buffer frees) is one-off teardown, not decode, so it stays outside the
+            # timed window (the same boundary origin/main uses).
+            ttnn.synchronize_device(self.mesh)
+            self.decode_time = time.perf_counter() - _t_decode  # spec loop wall-clock (excludes prefill)
 
-            # MTP KV maintenance over the slots just committed, in ONE drafter forward over all B*T
-            # verify rows (row u*T+i is user u's base hidden at slot prev_p[u]+1+i, paired with the
-            # token at slot+1). vfeed is the verify trace's own persistent output row buffer, so it is
-            # not freed here — the next replay overwrites it in place.
-            _rfn = self._reseed_mtp_batched if self._batched_reseed else self._reseed_mtp
-            _rfn(prev_p, vfeed, committed)
-            _t_reseed = self._tick() if self._timing else 0.0
-
-            for u in range(B):
-                if not live[u]:
-                    continue  # frozen before this iteration: p, pending and out are already final
-                out[u].extend(committed[u])
-                out_sets[u].update(committed[u])
-                if committed[u][-1] in self.stop_tokens or len(out[u]) >= max_new_tokens:
-                    # FREEZE, leaving p and pending at their PRE-commit values. The rows this user
-                    # replays from now on then re-cover exactly the slots this iteration just wrote,
-                    # so its high-water slot stays p + T and the tight capacity bound above holds.
-                    # The tokens are already in `out`; nothing reads this user's KV, its drafter
-                    # cache or its GDN state again.
-                    done[u] = True
-                    continue
-                p[u] += len(committed[u])
-                pending[u] = next_pending[u]
-                assert p[u] == prev_p[u] + len(committed[u])
-            if self._timing:
-                # `other` = the deallocates and the host bookkeeping around the phases above.
-                self._log_iter_timing(
-                    {
-                        "draft": _t_draft - _tm,
-                        "verify": _s_verify,
-                        "readback": _s_read,
-                        "accept": _t_accept - _t_verify,
-                        "anchor": _t_anchor - _t_accept,
-                        "reseed": _t_reseed - _t_anchor,
-                        "total": self._tick() - _tm,  # fenced, so nothing leaks into the next iter
-                    }
-                )
-            self.iters += 1
-            # LIVE users only. A frozen user's drafts and accept result are discarded, so counting
-            # it would dilute every rate with work that produced no token. `iters` stays the raw
-            # loop-iteration count (each one costs a full replay however many users are live).
-            self.user_iters += n_live
-            self.total_drafted += n_live * self.K
-
-        # RELEASE THE VERIFY TRACE FIRST. materialize_spec_state slices the ring and the conv window
-        # at offsets that depend on mi, and SliceDeviceOperation hashes slice_start/slice_end — so
-        # every distinct mi is its OWN program, and there is no way to warm them all before the
-        # capture (sync_conv_taps' concat/copy/reshape chain is the same story). A program that
-        # first compiles while a trace is parked lands its kernel binaries in memory the trace
-        # occupies. The loop is over and the trace is never replayed again in this generate(), so
-        # dropping it makes those compiles safe; _vfy_captured goes back to False so a later
-        # generate() on this decoder re-captures instead of replaying a released id.
-        self.model.release_verify_trace()
-        self._vfy_captured = False
-        # Roll each user's durable GDN state out of the spec ring at its last accepted index, and
-        # bring the K per-tap conv buffers back in step, so whatever runs next on this model (an
-        # eager decode, a state snapshot) reads live state. One-off, outside the timed loop.
-        # It runs for EVERY user, FROZEN ones included: a frozen user's mi is 0 and its ring slot 0
-        # holds the drifted state its discarded rows produced, so what lands in its rec_state is
-        # junk. That is fine here — its output is already final, GDN state is per-user so the junk
-        # cannot reach a live user, and the next generate() re-prefills every user before anything
-        # reads GDN state — but a finished user's post-loop GDN state is NOT resumable.
-        for dn in self._gdn:
-            dn.materialize_spec_state(mi)
-            dn.sync_conv_taps()
-        ttnn.deallocate(self._hp_buf)  # == Hp; the persistent anchor buffer, one per generate
-        self._hp_buf = None
-        ttnn.deallocate(self._anchor_sel)
-        self._anchor_sel = None
+            # RELEASE THE VERIFY TRACE FIRST. materialize_spec_state slices the ring and the conv window
+            # at offsets that depend on mi, and SliceDeviceOperation hashes slice_start/slice_end — so
+            # every distinct mi is its OWN program, and there is no way to warm them all before the
+            # capture (sync_conv_taps' concat/copy/reshape chain is the same story). A program that
+            # first compiles while a trace is parked lands its kernel binaries in memory the trace
+            # occupies. The loop is over and the trace is never replayed again in this generate(), so
+            # dropping it makes those compiles safe; _vfy_captured goes back to False so a later
+            # generate() on this decoder re-captures instead of replaying a released id.
+            self.model.release_verify_trace()
+            self._vfy_captured = False
+            # Roll each user's durable GDN state out of the spec ring at its last accepted index, and
+            # bring the K per-tap conv buffers back in step, so whatever runs next on this model (an
+            # eager decode, a state snapshot) reads live state. One-off, outside the timed loop.
+            # It runs for EVERY user, FROZEN ones included: a frozen user's mi is 0 and its ring slot 0
+            # holds the drifted state its discarded rows produced, so what lands in its rec_state is
+            # junk. That is fine here — its output is already final, GDN state is per-user so the junk
+            # cannot reach a live user, and the next generate() re-prefills every user before anything
+            # reads GDN state — but a finished user's post-loop GDN state is NOT resumable.
+            for dn in self._gdn:
+                dn.materialize_spec_state(mi)
+                dn.sync_conv_taps()
+        finally:
+            # Every exit — all users done, or an exception out of any phase — goes through the same
+            # teardown. release_verify_trace is idempotent and also drops the draft and reseed traces,
+            # so a normal exit already did it here; an exception did not, and no trace may outlive the
+            # anchor buffer or the MTP KV it baked in.
+            self.model.release_verify_trace()
+            self._vfy_captured = False
+            model.release_draft_trace()  # full release: its input buffers too
+            self._release_reseed_trace()
+            if self._hp_buf is not None:
+                ttnn.deallocate(self._hp_buf)  # == Hp; the anchor buffer, one per generate
+                self._hp_buf = None
+            if self._anchor_sel is not None:
+                ttnn.deallocate(self._anchor_sel)
+                self._anchor_sel = None
         ttnn.synchronize_device(self.mesh)
-        self.decode_time = time.perf_counter() - _t_decode  # spec loop wall-clock (excludes prefill)
         self._log_mean_timing()
         res = [o[:max_new_tokens] for o in out]
         return res[0] if flat_in else res

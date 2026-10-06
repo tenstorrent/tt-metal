@@ -39,6 +39,13 @@ MAX_NEW = 48
 # layers 3 and 7 plus GDN layers, and the MTP head is built regardless of n_layers.
 _N_LAYERS = int(os.environ.get("QWEN36_SPEC_TEST_N_LAYERS", "0")) or None
 
+# (prompt_len, traced) -> (tokens, accept_rate, counters) from the first run of that mode. The traced
+# draft chain (QWEN36_TRACED_DRAFT) and the traced reseed (QWEN36_TRACED_RESEED) replay exactly the
+# device ops the eager dispatch issues, so the two modes must agree token for token and counter for
+# counter. Whichever parametrization runs first records; the other compares (selecting one mode alone
+# still runs its own determinism checks, it just has nothing to compare against).
+_MODE_RESULTS = {}
+
 
 def _prompt_of_len(target, tokenizer):
     """Exactly `target` token ids, deterministically. _get_prompt already repeats-and-clips the
@@ -54,15 +61,23 @@ def _prompt_of_len(target, tokenizer):
 
 # 128 is BLOCK_SIZE-aligned; 130 is not (130 % 64 == 2) and exercises the unaligned-anchor seed KV write.
 @run_for_blackhole()
+@pytest.mark.parametrize("traced", [False, True], ids=["eager", "traced"])
 @pytest.mark.parametrize("prompt_len", [128, 130])
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_spec_decode_is_deterministic(mesh_device, prompt_len):
+def test_spec_decode_is_deterministic(mesh_device, prompt_len, traced, monkeypatch):
     if not _MULTI:
         pytest.skip("spec decode is the TP path; run with MESH_DEVICE=P150x4")
     from transformers import AutoTokenizer
 
     from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
+
+    # Both flags are read ONCE, in SpeculativeDecoder.__init__, so they have to be set before the
+    # decoder is built. traced=True replays the drafter chain and the reseed from captured traces
+    # instead of dispatching their programs from python: same device work, so the trajectory must not
+    # move — within the mode (determinism) or against the eager mode (the comparison at the end).
+    monkeypatch.setenv("QWEN36_TRACED_DRAFT", "1" if traced else "0")
+    monkeypatch.setenv("QWEN36_TRACED_RESEED", "1" if traced else "0")
 
     device = mesh_device
     device.enable_program_cache()
@@ -81,14 +96,18 @@ def test_spec_decode_is_deterministic(mesh_device, prompt_len):
     # (SpeculativeDecoder asserts it rather than flipping the flag itself).
     model.set_gdn_fused_decode(True)
 
-    outs, accepts = [], []
+    outs, accepts, counters = [], [], []
     for r in range(RUNS):
         model.free_kv_caches()
         model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=1)
         dec = SpeculativeDecoder(model, pt)
         outs.append(dec.generate(prompt_ids, MAX_NEW))
         accepts.append(dec.accept_rate())
-        logger.info(f"[determinism] prompt_len={prompt_len} run {r}: accept={accepts[-1]:.3f}/{dec.K}")
+        # The SHAPE of acceptance, not just its mean: two runs can average the same rate while
+        # rejecting at different depths. mtp_extra_steps catches a reseed that ran a different
+        # number of times.
+        counters.append((list(dec.accept_hist), list(dec.depth_hits), dec.mtp_extra_steps))
+        logger.info(f"[determinism] prompt_len={prompt_len} traced={traced} run {r}: accept={accepts[-1]:.3f}/{dec.K}")
         model.free_kv_caches()
 
     for r in range(1, RUNS):
@@ -101,7 +120,36 @@ def test_spec_decode_is_deterministic(mesh_device, prompt_len):
     assert (
         len(set(f"{a:.6f}" for a in accepts)) == 1
     ), f"acceptance varied across runs (prompt_len={prompt_len}): {accepts}"
-    logger.info(f"[determinism] prompt_len={prompt_len}: {RUNS} runs identical, accept={accepts[0]:.3f}")
+    logger.info(
+        f"[determinism] prompt_len={prompt_len} traced={traced}: {RUNS} runs identical, accept={accepts[0]:.3f}"
+    )
+
+    # Traced vs eager: the captured chain/reseed issue the ops the eager path dispatches, so the two
+    # modes must agree on the tokens AND on every acceptance counter.
+    _MODE_RESULTS[(prompt_len, traced)] = (outs[0], accepts[0], counters[0])
+    other = _MODE_RESULTS.get((prompt_len, not traced))
+    if other is None:
+        logger.info(
+            f"[determinism] prompt_len={prompt_len}: no {'eager' if traced else 'traced'} run recorded, "
+            f"traced/eager comparison skipped"
+        )
+        return
+    o_out, o_rate, o_counters = other
+    div = next((i for i in range(min(len(outs[0]), len(o_out))) if outs[0][i] != o_out[i]), None)
+    assert outs[0] == o_out, (
+        f"traced and eager diverged at token {div} (prompt_len={prompt_len}) — a captured trace must "
+        f"replay exactly what the eager dispatch issues.\n"
+        f"this(traced={traced})={outs[0]}\nother(traced={not traced})={o_out}"
+    )
+    assert f"{accepts[0]:.6f}" == f"{o_rate:.6f}", (
+        f"traced and eager emitted identical tokens but acceptance differs ({accepts[0]} vs {o_rate}, "
+        f"prompt_len={prompt_len}) — the drafts themselves moved."
+    )
+    assert counters[0] == o_counters, (
+        f"traced and eager disagree on (accept_hist, depth_hits, mtp_extra_steps) at "
+        f"prompt_len={prompt_len}: {counters[0]} vs {o_counters}"
+    )
+    logger.info(f"[determinism] prompt_len={prompt_len}: traced == eager, accept={accepts[0]:.3f}")
 
 
 @run_for_blackhole()

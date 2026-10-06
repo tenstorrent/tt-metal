@@ -11,12 +11,16 @@ against an independent naive construction. No device, no ttnn ops — pure torch
 Run:
     pytest models/demos/blackhole/qwen36/tests/test_spec_batch_helpers.py -q
 """
+
 import itertools
+import types
 
 import pytest
 import torch
 
+from models.demos.blackhole.qwen36.demo.text_demo import _spec_batch_decision, _spec_batch_draft_len
 from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_state_blk_idx
+from models.demos.blackhole.qwen36.tt.model import spec_kv_write_conflicts
 
 # (B, T) pairs the demo actually packs into the 32-row decode tile: B*T <= 32, T = K+1.
 SHAPES = [(1, 12), (1, 8), (2, 12), (2, 8), (4, 8), (4, 4), (8, 4), (16, 2), (3, 5)]
@@ -208,3 +212,74 @@ def test_full_acceptance_is_the_identity_tail(B, T):
         # which the previous iteration filled with its own last kc-1 new inputs.
         torch.testing.assert_close(E_new[u, : kc - 1], E_prev[u, T : T + kc - 1], rtol=0, atol=0)
         torch.testing.assert_close(E_new[u, kc - 1 :], qkv_new[u], rtol=0, atol=0)
+
+
+# --------------------------------------------------------------------------- #
+# auto spec policy (demo/text_demo.py): K >= 3, so B <= 8 in the 32-row verify tile
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("sampling", [None, object()])
+@pytest.mark.parametrize("T", [128, 4096, 8192])
+@pytest.mark.parametrize("batch", range(1, 9))
+def test_spec_batch_draft_len_floor(monkeypatch, batch, T, sampling):
+    monkeypatch.delenv("QWEN36_SPEC_DRAFT_LEN", raising=False)
+    K, _ = _spec_batch_draft_len(batch, T, sampling)
+    assert K >= 3 and batch * (K + 1) <= 32 and K in (11, 7, 3)
+    if T == 128 and sampling is None:
+        assert K == {1: 11, 2: 11, 3: 7, 4: 7, 5: 3, 6: 3, 7: 3, 8: 3}[batch]
+
+
+def test_spec_batch_decision_max_batch(monkeypatch):
+    for name in (
+        "QWEN36_SPEC",
+        "QWEN35_TEMP",
+        "QWEN35_REP_PENALTY",
+        "QWEN35_NO_REPEAT_NGRAM",
+        "QWEN35_PRESENCE_PENALTY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    model = types.SimpleNamespace(
+        args=types.SimpleNamespace(gdn_nv_tp=12),
+        mtp=object(),
+        mesh_device=types.SimpleNamespace(compute_with_storage_grid_size=lambda: types.SimpleNamespace(x=11, y=10)),
+    )
+    for batch in range(1, 9):
+        assert _spec_batch_decision(model, batch)[0] is True, batch
+    for batch in (9, 12, 16, 32):
+        assert _spec_batch_decision(model, batch)[0] is False, batch
+
+
+# --------------------------------------------------------------------------- #
+# grouped verify KV write: which cross-user (block, tile) collisions are real
+# --------------------------------------------------------------------------- #
+def test_spec_kv_write_conflicts(expect_error):
+    BS, T = 64, 2
+    # (a) vLLM-like: B=4, nb=8, user u owns blocks [1+2u, 2+2u], every other column is the null
+    # block 0. Whole rows overlap (all share 0), but no call writes block 0 -> safe.
+    vllm = torch.zeros(4, 8, dtype=torch.int32)
+    for u in range(4):
+        vllm[u, :2] = torch.tensor([1 + 2 * u, 2 + 2 * u])
+    assert set(vllm[0].tolist()) & set(vllm[1].tolist()) == {0}  # the old whole-row check would reject it
+    assert spec_kv_write_conflicts(vllm, [3, 60, 64 + 3, 100], 8, BS) == []
+
+    # (b) same block AND same 32-row tile in call j=0 only: user 0 writes 31, 32; user 1 writes 20, 21.
+    shared = [[5, 6], [5, 7]]
+    assert spec_kv_write_conflicts(shared, [31, 20], T, BS) == [(0, 0, 1, 5, 0)]
+    # a third user on the same tile is reported against the first writer in that call
+    third = spec_kv_write_conflicts(shared + [[5, 8]], [31, 20, 1], T, BS)
+    assert third == [(0, 0, 1, 5, 0), (0, 0, 2, 5, 0), (1, 1, 2, 5, 0)]
+
+    # (c) same block, different tiles -> no race
+    assert spec_kv_write_conflicts(shared, [3, 40], T, BS) == []
+
+    # (d) negative position = user not writing this replay
+    assert spec_kv_write_conflicts(shared, [3, -1], T, BS) == []
+    assert spec_kv_write_conflicts(shared + [[5, 8]], [-1, 3, 7], T, BS) == [(0, 1, 2, 5, 0), (1, 1, 2, 5, 0)]
+
+    # (e) the SAME tile reached in DIFFERENT calls is not a race: user 0 writes 31 (tile 0), 32
+    # (tile 1); user 1 writes 63 (tile 1), 64 (block 6). Tile (5, 1) is hit by user 0 in call 1 and
+    # by user 1 in call 0, but never by two users in one call.
+    assert spec_kv_write_conflicts([[5, 6], [5, 6]], [31, 63], T, BS) == []
+
+    # a write past the page table is an error, not a silent skip
+    with expect_error(IndexError, "past its 2-block page table"):
+        spec_kv_write_conflicts(shared, [3, 127], T, BS)

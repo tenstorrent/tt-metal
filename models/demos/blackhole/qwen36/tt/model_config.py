@@ -90,13 +90,18 @@ class Qwen36ModelArgs(ModelArgs):
         # MTP (multi-token prediction) head. Every Qwen3.5/3.6 checkpoint ships a single-layer
         # MTP head (mtp.*) that reuses the main embedding + LM head; it is the speculative-decode
         # drafter. mtp_use_dedicated_embeddings=False means it shares tok_embeddings.
-        # Loading the head is ON by default whenever the checkpoint has one (it is the production
-        # decode path). Opt out with enable_mtp=False or QWEN36_MTP=0 to skip its weights, KV cache
-        # and construction entirely (plain decode only).
+        # Loading the head is ON by default for dense checkpoints that ship one (it is the production
+        # decode path) and OFF for MoE until validated. QWEN36_MTP=1/0 forces it either way;
+        # enable_mtp=False skips its weights, KV cache and construction entirely (plain decode only).
         self.mtp_num_hidden_layers = getattr(text_config, "mtp_num_hidden_layers", 0)
         self.mtp_use_dedicated_embeddings = getattr(text_config, "mtp_use_dedicated_embeddings", False)
         if enable_mtp is None:
-            enable_mtp = os.environ.get("QWEN36_MTP", "1") != "0"
+            env = os.environ.get("QWEN36_MTP")
+            if env is not None:
+                enable_mtp = env != "0"
+            else:
+                # MTP spec decode is validated on the dense checkpoints only; MoE (35B-A3B) stays off unless forced.
+                enable_mtp = (getattr(text_config, "num_experts", 0) or 0) == 0
         self.has_mtp = self.mtp_num_hidden_layers > 0 and bool(enable_mtp)
         if self.has_mtp:
             assert (
@@ -150,6 +155,7 @@ class Qwen36ModelArgs(ModelArgs):
         self.gdn_dk = self.linear_key_head_dim
         self.gdn_nv = self.linear_num_value_heads
         self.gdn_dv = self.linear_value_head_dim
+        self.gdn_program_config = None
         self.gdn_conv_kernel_size = self.linear_conv_kernel_dim
         self.gdn_key_dim = self.linear_q_dim  # q and k equal
         self.gdn_value_dim = self.linear_v_dim
@@ -168,10 +174,6 @@ class Qwen36ModelArgs(ModelArgs):
         self.gdn_nk_tp = self.gdn_nk // tp
         self.gdn_nv_tp = self.gdn_nv // tp
         self.gdn_qkv_dim_tp = self.gdn_qkv_dim // tp
-        # Native depthwise conv1d (prefill) keeps all qkv_dim_tp channels resident per core (L1_FULL);
-        # the 35B-A3B channel count overflows L1 on BH. Split the conv over N channel chunks (exact —
-        # depthwise is per-channel-independent) so each call fits. 27B (chunks=1) is unchanged.
-        self.gdn_conv_channel_chunks = 2 if self.moe_num_experts > 0 else 1
         self.gdn_z_dim_tp = self.gdn_z_dim // tp
         self.gdn_qkvz_dim_tp = (self.gdn_qkv_dim + self.gdn_z_dim) // tp
         # Per-device width of the [qkv|z|a|b] fused in-projection: folding the tiny a/b (decay/beta)

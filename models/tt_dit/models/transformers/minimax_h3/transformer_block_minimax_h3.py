@@ -66,9 +66,12 @@ class MiniMaxH3TransformerBlock(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        kv_gather_capacity: int | None = None,
+        use_persistent_ccl_buffers: bool = True,
     ) -> None:
         super().__init__()
 
+        self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
         self.hidden_size = hidden_size
         self.ffn_dim = ffn_dim
         self.time_embed_dim = time_embed_dim
@@ -102,6 +105,8 @@ class MiniMaxH3TransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
+            kv_gather_capacity=kv_gather_capacity,
+            use_persistent_ccl_buffers=use_persistent_ccl_buffers,
         )
         self.norm2 = DistributedRMSNorm(
             embedding_dim=hidden_size,
@@ -296,10 +301,18 @@ class MiniMaxH3TransformerBlock(Module):
         # step of the first request -- long after warmup reports the model loaded.
         ff1_block_size = agmm_block_size(*self._ff1_kn, normed.padded_shape[-2])
         ff2_shape = (normed.shape[2], self.ffn_dim // self.tp_factor, self.hidden_size)
-        if self.tp_factor > 1 and self.ccl_manager.topology == ttnn.Topology.Ring and has_mmrs_config(*ff2_shape):
+        # The grid is what decides whether a swept blocking or a rule pick can be resolved at all,
+        # so it has to reach the gate: without it every tile-aligned M looked servable, and Wormhole
+        # took the fused path 50x per denoise step straight onto the warned fallback config.
+        core_grid = self.mesh_device.compute_with_storage_grid_size()
+        if (
+            self.tp_factor > 1
+            and self.ccl_manager.topology == ttnn.Topology.Ring
+            and has_mmrs_config(*ff2_shape, core_grid)
+        ):
             # M is only known here (it tracks the packed sequence length), so the blocking is
             # registered at the point of use rather than at construction. Idempotent and cheap.
-            register_mmrs_config(*ff2_shape)
+            register_mmrs_config(*ff2_shape, core_grid)
             return self.ff.forward_fused_addcmul(
                 normed,
                 residual,
@@ -308,6 +321,7 @@ class MiniMaxH3TransformerBlock(Module):
                 parallel_config=self.parallel_config if self.use_fused_agmm else None,
                 default_block_size=ff1_block_size,
                 force_transpose=False,
+                use_persistent_buffer=self.use_persistent_ccl_buffers,
             )
         ff_out = self.ff(
             normed,
@@ -315,5 +329,6 @@ class MiniMaxH3TransformerBlock(Module):
             parallel_config=self.parallel_config if self.use_fused_agmm else None,
             default_block_size=ff1_block_size,
             force_transpose=False,
+            use_persistent_buffer=self.use_persistent_ccl_buffers,
         )
         return ttnn.addcmul(residual, ff_out, modulation(_GATE_MLP))
