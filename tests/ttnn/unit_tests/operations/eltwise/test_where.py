@@ -289,8 +289,6 @@ def test_ttnn_where_nan(device):
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [32])
 @pytest.mark.parametrize(
-    # bfloat16 is covered exhaustively by test_ternary_category1_bfloat16.py::test_where_ttt,
-    # whose checkerboard predicate is this same alternating layout.
     "tor_dtype, ttnn_dtype",
     [(torch.float32, ttnn.float32), (torch.int32, ttnn.int32)],
 )

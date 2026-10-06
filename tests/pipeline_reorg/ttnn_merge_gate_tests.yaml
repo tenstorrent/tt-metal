@@ -62,8 +62,8 @@
 # dispatching, a reader stride that goes wrong, a scalar path that stops being taken, an op that
 # stops being registered at all.
 #
-# Selection is by test name rather than by whole file, so it stays small as those files grow.
-# Two things are being covered:
+# Selection is by test name except for the category files, which are taken whole. Three things
+# are being covered:
 #
 # 1. Broadcast and scalar machinery, in depth:
 #   subtile ......................... the test_binary_subtile_*_bcast cases: no bcast, row, col,
@@ -76,82 +76,37 @@
 #
 # 2. One basic case per op, across the op families, so that an op dropping out of dispatch is
 #    caught here rather than in nightly sanity:
-#   unary ........................... relu, relu6, sigmoid, tanh, gelu, silu, neg, log2, log1p,
-#                                     sin. mish, tril and triu were selected here until their
-#                                     tests were renamed and moved out of test_composite.py; the
-#                                     three selectors matched nothing from then on, so this gate
-#                                     has no mish/tril/triu coverage today. Restoring it means
-#                                     test_unary.py::test_unary_mish (already collected here) and
-#                                     test_unary_category6_bfloat16.py::test_tril_triu_ops (not in
-#                                     the list above).
-#   binary .......................... left/right shift, atan2, nextafter, ldexp, logaddexp,
-#                                     logaddexp2, xlogy, arithmetic operator overloads
-#                                     (logical and/or/xor, relational and bias_gelu moved to
-#                                     item 3)
+#   unary ........................... relu, relu6, sigmoid, tanh, gelu, silu, neg, log2, log1p, sin
+#   binary .......................... left/right shift, atan2, nextafter, arithmetic operator
+#                                     overloads
 #   div family (whole file) ......... fp32 remainder/fmod, div_no_nan scalar memory-config
-#                                     plumbing, int32 div paths, output-dtype and mixed-dtype
-#                                     paths (bf16 fmod/remainder moved out, see item 3)
-#   ternary ......................... moved to item 3
+#                                     plumbing, int32 div paths, output-dtype and mixed-dtype paths
 #
-# 3. Checks from the category test files, standing in for basic-case coverage this gate used
-#    to get for free from tests since deleted upstream:
-#   test_floor_div (category5) ...... replaces the deleted test_binary_floor_div_ttnn; a full
-#                                     2048x2048 sweep
-#   test_modulo_ops (+ scalar/shapes,
-#     category5) .................... replaces the deleted test_binary_fmod_bf16,
-#                                     test_remainder_scalar, test_fmod_scalar; runs a (64, 32)
-#                                     tile plus a handful of fixed shapes, not a full sweep
-#   test_logical_ops (+ scalar,
-#     category3) .................... logical_and/or/xor (and their inplace variants), t-t and
-#                                     t-s; replaces the test_binary_logical_and__ttnn /
-#                                     _or__ttnn / _xor_ttnn selectors, all three dead here since
-#                                     #57637 moved this coverage to test_binary_category3_bfloat16.py
-#   relational, via the whole-file
-#     category2 term ................ eq/ne/lt/le/gt/ge, t-t and t-s. This replaced the
-#                                     test_binary_relational_ttnn / _scalar_ttnn selectors, which
-#                                     ran 6 ops over 4 random ranges and 2 shapes in bf16 with no
-#                                     inplace variants and no special values. category2 runs the
-#                                     same 6 ops plus their 6 inplace variants over the stratified
-#                                     grid incl. +-0, +-inf and NaN, asserted exact, so the older
-#                                     selectors were strictly weaker. Dropping them took
-#                                     test_relational.py out of the file list entirely -- its
-#                                     fp32/int32 tests were never in this selection.
-#   bias_gelu, via the whole-file
-#     category4 term ................ replaced the test_bias_gelu selector, which additionally
-#                                     pulled 6 duplicate cases out of test_binary_composite.py.
-#   test_ternary_category1_bfloat16
-#     (whole file) .................. mac, lerp, addcmul, addcdiv and where; replaces the deleted
-#                                     test_mac_ttnn, test_lerp_ttnn, test_ternary_addcmul_ttnn and
-#                                     test_ternary_addcdiv_ttnn selectors, all four dead here since
-#                                     #53613 removed those tests. Those four were PCC and 1-2 ULP
-#                                     checks on random data and cost ~2s; this is the full 256^3
-#                                     stratified bf16 grid per op with its exception stages
-#                                     asserted, and costs ~21s here. The whole file is taken, as
-#                                     for binary category1/2/4 above -- it is one self-contained
-#                                     sweep, not a file with a cheap part worth separating out.
-#   test_floor_div/test_modulo_ops together add ~2s of test time on top of this job's own device
-#   bring-up (measured in isolation), since the divide/remainder/fmod kernels are already warm
-#   from the rest of this selection; test_logical_ops (+ scalar) adds ~7s on its own (60 cases,
-#   full pairwise/broadcast bf16 grids) -- more than the other two but still a rounding error
-#   against the ~60s this job runs at locally, and it restores dispatch-liveness coverage for
-#   three ops the gate had silently lost.
+# 3. Stratified bfloat16 grids from the category files:
+#   binary category1 (whole file) ... add, sub, rsub, multiply, divide and their inplace variants,
+#                                     addalpha, subalpha
+#   binary category2 (whole file) ... eq, ne, lt, le, gt, ge and their inplace variants, t-t and
+#                                     t-s; minimum, maximum; isclose
+#   binary category4 (whole file) ... ldexp, logaddexp, logaddexp2, squared_difference, xlogy,
+#                                     hypot, bias_gelu, prelu, and their tensor-scalar forms
+#   test_logical_ops (category3) .... logical_and/or/xor and their inplace variants, t-t and t-s
+#   test_floor_div (category5) ...... floor_div over a full 2048x2048 sweep
+#   test_modulo_ops (category5) ..... fmod and remainder, over a (64, 32) tile plus a handful of
+#                                     fixed shapes rather than a full sweep
+#   ternary category1 (whole file) .. mac, lerp, addcmul, addcdiv and where, over the full 256^3
+#                                     grid per op with its exception stages asserted
 #
-# Deliberately excluded: the heavy sweeps inside those same files (isclose, celu, inverse trig,
+# Deliberately excluded: the heavy sweeps inside those same files (celu, inverse trig,
 # fill, div-scalar dtype matrices, clamp/clip) -- they are accuracy and dtype coverage, they cost
 # minutes even with warm kernels, and they belong in the nightly eltwise groups where they already
 # run.
 #
-# 1393 tests selected locally on an N300 with a warm kernel cache -- 1366 pass, 19 skip, 8 xfail,
-# 60-62s of pytest (this entry is merge-queue-gated, so it hasn't run in CI on this branch; treat
-# this as a floor, not the real number, until it has). The same selection with
-# test_ternary_category1_bfloat16 dropped runs in 43-46s, so that one file accounts for roughly
-# 21s of the total; subtile is the next largest at 6.4s and nothing else reaches 2.5s. The whole
-# selection is 41.6s of call time, the rest being device bring-up and per-test setup, so pruning
-# further would be a clarity win rather than a time one. On a cold cache it takes 282s at 18% JIT
-# cache hits;
-# the whole spread is kernel compilation, and this job runs with enable-kernel-ccache against the
-# shared Redis backend, so it sits at the warm end. One pytest invocation on purpose: device
-# bring-up is ~7s, so splitting this into per-file entries would cost more than the tests do.
+# 1393 tests selected -- 1366 pass, 19 skip, 8 xfail. 172s of pytest on wh_n300_civ2 in CI; 60s
+# locally on an N300 with a warm kernel cache and 282s on a cold one, the spread being kernel
+# compilation. test_ternary_category1_bfloat16 is ~21s of that and subtile ~6s; nothing else
+# reaches 2.5s. One pytest invocation on purpose: device bring-up is ~7s, so splitting this into
+# per-file entries would cost more than the tests do.
+#
 # Hardware only. Blackhole eltwise coverage in the merge gate comes from the tt-nn-validation-basic
 # gtest suite (tests/ttnn/unit_tests/gtests/test_eltwise.cpp), which runs on bh_p150b_civ2_viommu
 # as well as wh_n150_civ2.
@@ -175,7 +130,7 @@
     tests/ttnn/unit_tests/operations/eltwise/test_ternary_category1_bfloat16.py
     -k "(subtile or where_bcast or program_cache_different_broadcast_shapes
     or test_where_tss or test_where_tst or test_where_tts
-    or test_gelu or test_silu or test_01_volume_sin
+    or test_gelu or test_silu or test_01_volume_sin or test_unary_mish
     or test_div_ops or test_binary_scalar
     or test_binary_atan2_ttnn or test_floor_div or test_modulo_ops
     or test_logical_ops or test_binary_nextafter_ttnn
