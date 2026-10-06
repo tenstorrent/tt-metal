@@ -278,6 +278,31 @@ void reduce_block_fp32_sfpu(uint32_t local_cb, uint32_t remote_cb, uint32_t acc_
         if (!from_local) {
             src_obj.wait_front(num_tiles);
         }
+#if defined(ARCH_BLACKHOLE)
+        // Two tiles per DEST section: the inits run once per pair and each operand's pair takes one DEST slot handshake.
+        for (uint32_t i = 0; i < num_tiles; i += 2) {
+            const uint32_t n = (num_tiles - i) < 2 ? 1 : 2;
+            tile_regs_acquire();
+            copy_init(src_cb);
+            copy_block(src_cb, 0, 0, n);
+            copy_init(remote_cb);
+            copy_block(remote_cb, 0, 2, n);
+            add_binary_tile_init();
+            for (uint32_t k = 0; k < n; ++k) {
+                add_binary_tile(k, 2 + k, k);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            src_obj.pop_front(n);
+            remote_cb_obj.pop_front(n);
+            dst_obj.reserve_back(n);
+            for (uint32_t k = 0; k < n; ++k) {
+                pack_tile(k, dst_cb);
+            }
+            dst_obj.push_back(n);
+            tile_regs_release();
+        }
+#else
         for (uint32_t i = 0; i < num_tiles; ++i) {
             tile_regs_acquire();
             copy_init(src_cb);
@@ -295,6 +320,7 @@ void reduce_block_fp32_sfpu(uint32_t local_cb, uint32_t remote_cb, uint32_t acc_
             dst_obj.push_back(1);
             tile_regs_release();
         }
+#endif
     }
 }
 
@@ -312,6 +338,32 @@ void add_bias_inplace_sfpu(uint32_t inout_cb, uint32_t bias_cb) {
     constexpr uint32_t DST_OPERAND = 1;
     inout_cb_obj.wait_front(rows * cols);
     bias_cb_obj.wait_front(cols);
+#if defined(ARCH_BLACKHOLE)
+    // Two output tiles per DEST section: the three inits and the output pair's DEST slot handshake run once per pair.
+    for (uint32_t t = 0; t < rows * cols; t += 2) {
+        const uint32_t n = (rows * cols - t) < 2 ? 1 : 2;
+        tile_regs_acquire();
+        copy_init(inout_cb);
+        copy_block(inout_cb, 0, 0, n);
+        unary_bcast_init<BroadcastType::ROW>(bias_cb);
+        for (uint32_t k = 0; k < n; ++k) {
+            unary_bcast<BroadcastType::ROW>(bias_cb, (t + k) % cols, 2 + k);
+        }
+        add_binary_tile_init();
+        for (uint32_t k = 0; k < n; ++k) {
+            add_binary_tile(k, 2 + k, k);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        inout_cb_obj.pop_front(n);
+        inout_cb_obj.reserve_back(n);
+        for (uint32_t k = 0; k < n; ++k) {
+            pack_tile(k, inout_cb);
+        }
+        inout_cb_obj.push_back(n);
+        tile_regs_release();
+    }
+#else
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t j = 0; j < cols; ++j) {
             tile_regs_acquire();
@@ -330,6 +382,7 @@ void add_bias_inplace_sfpu(uint32_t inout_cb, uint32_t bias_cb) {
             tile_regs_release();
         }
     }
+#endif
     // Deliberately no bias pop: the caller pops it once per C_out block, matching add_bias_inplace.
 }
 
