@@ -24,6 +24,34 @@ class Generator:
     def m(self):
         return self.model[0]
 
+    def reconfigure(
+        self, max_batch_size, max_seq_len, paged_attention_config=None, layer_ids=None, kv_dtype=None, log=print
+    ):
+        """Switch the model of this generator to another batch size / max context (same weights, see ``Model.reconfigure``). Drops the speculative runner
+        (build it again with ``enable_spec``) and every host-side reference to the old pool. -> the new model args."""
+        import ttnn
+        from models.demos.blackhole.deepseek_v41_flash.tt.common import reconfigure_tt_model
+
+        def drop_spec():
+            sp = self.__dict__.pop("spec", None)
+            if sp is not None:
+                sp.release()
+
+        args, _, _, _ = reconfigure_tt_model(
+            self.m,
+            self.mesh_device,
+            max_batch_size,
+            max_seq_len,
+            paged_attention_config,
+            layer_ids,
+            kv_dtype if kv_dtype is not None else ttnn.bfloat16,
+            log=log,
+            generator_hooks=(drop_spec,),
+        )
+        self.model_args = [args]
+        self.prev_page_table = None
+        return args
+
     def auto_chunk(self, max_len, budget_tokens_per_row=None):
         """Chunk of tokens per user so that users_per_row * chunk <= the per-row token budget of one prefill pass (activation memory). The streams of a
         chunk are fp32 [32,1,4,5120] tiles (4 -> 32 row padding): ~80 MiB/bank per 1024 tokens/row for the captured chunk + ~55 MiB eager compile peak, so the

@@ -41,7 +41,9 @@ def rope_freqs(layer_id: int, max_seq_len: int = 256):
     )
 
 
-def load_layer(layer_id: int, with_moe: bool = True, max_seq_len: int = 256, with_indexer: bool = False):
+def load_layer(
+    layer_id: int, with_moe: bool = True, max_seq_len: int = 256, with_indexer: bool = False, load_experts: bool = True
+):
     sh = _Shards()
     p = f"layers.{layer_id}."
     meta = layer_meta(layer_id)
@@ -90,5 +92,5 @@ def load_layer(layer_id: int, with_moe: bool = True, max_seq_len: int = 256, wit
         if meta["is_kv_source"]:  # index-key owners
             out["indexer"].update(wk=sh.get(ip + "wk.weight").float(), k_norm=sh.get(ip + "k_norm.weight").float())
     if with_moe:
-        out["moe"] = load_moe_layer(layer_id)
+        out["moe"] = load_moe_layer(layer_id, load_experts=load_experts)
     return out

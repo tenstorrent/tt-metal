@@ -148,10 +148,12 @@ class _MappedTable:
 class HostEngramRows:
     """Token ids -> the rows each Engram layer reads, [B, 1, Kin] bf16 (24 rows of the table per token and layer)."""
 
-    def __init__(self, layer_ids=(1, 14), max_batch_size=16, max_seq_len=256):
+    def __init__(self, layer_ids=(1, 14), max_batch_size=16, max_seq_len=256, tables=None):
+        """``tables``: the ``_MappedTable``s of an earlier instance (the ~100 GB per layer tables in host RAM do not depend on the batch size): shared instead of re-read.
+        The hash state (token history cache) is sized by the batch / sequence length and is always new."""
         self.engram = HostEngram(layer_ids, max_batch_size, max_seq_len)
         sh = _Shards()
-        self.tables = {lid: _MappedTable(sh, lid) for lid in layer_ids}
+        self.tables = tables if tables is not None else {lid: _MappedTable(sh, lid) for lid in layer_ids}
 
     def prefetch(self, **kw):
         """Warm the page cache for all tables (see ``_MappedTable.prefetch``)."""
