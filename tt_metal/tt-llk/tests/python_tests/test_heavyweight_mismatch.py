@@ -19,12 +19,14 @@ from helpers.golden_generator.heavyweight.mismatch import describe_mismatch
 from helpers.utils import _MXFP_COMPARE_PARAMS, _mxfp_block_aware_compare
 
 N = 64
-SUMMARY = re.compile(r"(\d+) / (\d+) datums differ(?:, of which (\d+) exceed)?")
+SUMMARY = re.compile(
+    r"(\d+) / (\d+) datums differ(?:, of which (\d+) (?:exceed|are outside))?"
+)
 
 
 def _summary(golden, actual, output_format=DataFormat.MxFp8R):
     report = describe_mismatch(golden, actual, output_format=output_format)
-    differ, total, over = SUMMARY.search(report).groups()
+    differ, _, over = SUMMARY.search(report).groups()
     return report, int(differ), None if over is None else int(over)
 
 
@@ -57,8 +59,10 @@ def test_matching_non_finites_agree(value):
 
 
 def test_a_non_mx_format_counts_non_finite_mismatches_too():
+    """A NaN golden against a finite device value is a failure, not just a
+    difference: isclose rejects it and the both-NaN carve-out does not apply."""
     _, differ, over = _summary(*_pair(NAN, 1.0), output_format=DataFormat.Float16_b)
-    assert (differ, over) == (1, None)
+    assert (differ, over) == (1, 1)
 
 
 @pytest.mark.parametrize(
@@ -81,3 +85,32 @@ def test_the_failure_count_matches_the_comparator(output_format):
     )
     _, _, over = _summary(golden, actual, output_format)
     assert over == int((~valid).sum())
+
+
+# ---------------------------------------------------------------------------
+# The no-lattice branch: Float16/Float16_b, which is what the device tests use
+
+
+def test_a_format_without_a_lattice_counts_the_datums_that_actually_fail():
+    """Differing is not failing. `passed_test` judges these formats with
+    torch.isclose at the format's tolerance, so the report has to count the
+    same thing or the top of its table reads as the cause when it is noise."""
+    golden = torch.ones(N, dtype=torch.bfloat16)
+    actual = golden.clone()
+    actual[0] = 2.0  # outside atol=0.05
+    actual[1] = 1.0 + 2**-7  # one bf16 ULP: differs, but passes
+    report, differ, over = _summary(golden, actual, output_format=DataFormat.Float16_b)
+    assert (differ, over) == (2, 1)
+    assert "atol=0.05" in report and "rtol=0.05" in report
+    assert "threshold 0.99" in report
+
+
+def test_the_no_lattice_branch_says_the_ranking_can_mislead():
+    """With rtol in play a large passing datum can outrank a small failing one,
+    so the report says so rather than letting the order imply a verdict."""
+    golden = torch.ones(N, dtype=torch.bfloat16)
+    actual = golden.clone()
+    actual[0] = 1.5
+    report, _, _ = _summary(golden, actual, output_format=DataFormat.Float16_b)
+    assert "by absolute error" in report
+    assert "can outrank" in report
