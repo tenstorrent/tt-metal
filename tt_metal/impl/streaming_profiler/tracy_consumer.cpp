@@ -51,13 +51,16 @@ uint32_t lane_thread(const experimental::streaming_profiler::Core& core) {
 TracyConsumer::TracyConsumer() : anchor_tracy_(tracy::Profiler::GetTime()), srcloc_table_(kSrclocTableInitial) {}
 
 void TracyConsumer::operator()(const Batch& batch) {
-    for (const experimental::streaming_profiler::Zone& zone : batch.zones()) {
+    using experimental::streaming_profiler::Event;
+    using experimental::streaming_profiler::TimestampedData;
+    using experimental::streaming_profiler::Zone;
+    for (const Zone& zone : batch.records<Zone>()) {
         push_zone(zone.core(), zone.site().name, zone.start_host_cycles(), zone.end_host_cycles());
     }
-    for (const experimental::streaming_profiler::TimestampedData& data : batch.timestamped_data()) {
+    for (const TimestampedData& data : batch.records<TimestampedData>()) {
         push_marker(data.core(), data.site().name, data.host_cycles(), data.runtime_id(), data.payload());
     }
-    for (const experimental::streaming_profiler::Event& event : batch.events()) {
+    for (const Event& event : batch.records<Event>()) {
         push_marker(event.core(), event.site().name, event.host_cycles(), event.runtime_id(), {});
     }
 }

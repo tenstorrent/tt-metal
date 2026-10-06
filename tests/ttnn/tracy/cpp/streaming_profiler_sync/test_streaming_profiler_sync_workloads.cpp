@@ -158,10 +158,10 @@ int run() {
     std::map<ChipId, std::vector<Clock::time_point>> starts;
     uint64_t dropped_bytes = 0;
     auto registration = streaming_profiler::RegisterCallback(
-        [&](const streaming_profiler::Batch<streaming_profiler::RecordType::Zones>& batch) {
+        [&](const streaming_profiler::Batch<streaming_profiler::Zone>& batch) {
             dropped_bytes += batch.dropped_bytes();
-            for (const streaming_profiler::Zone& zone : batch.zones()) {
-                if (std::string_view(zone.site().name) == "HOST_RX") {
+            for (const streaming_profiler::Zone& zone : batch.records<streaming_profiler::Zone>()) {
+                if (zone.site().name == "HOST_RX") {
                     starts[zone.core().chip_id].push_back(zone.start_time());
                 }
             }
@@ -170,7 +170,7 @@ int run() {
     std::atomic<uint32_t> once_calls{0};
     streaming_profiler::Callback once;
     once = streaming_profiler::RegisterCallback(
-        [&](const streaming_profiler::Batch<streaming_profiler::RecordType::Zones>&) {
+        [&](const streaming_profiler::Batch<streaming_profiler::Zone>&) {
             if (once_calls++ == 0) {
                 once.reset();
             }
@@ -422,44 +422,13 @@ double noc_span_cycles(const CoreArrivals& by_core, const CoreRange& cores, uint
            (std::reduce(ns_per_cycle.begin(), ns_per_cycle.end()) / static_cast<double>(rounds));
 }
 
-// Collects every run's arrivals by the run's runtime id. Records reach the host by the capture's end, so verify() runs
-// after the mesh has closed.
-class Check {
-public:
-    Check() :
-        registration_(streaming_profiler::RegisterCallback(
-            [this](const streaming_profiler::Batch<streaming_profiler::RecordType::Zones>& batch) {
-                dropped_bytes_ += batch.dropped_bytes();
-                dropped_bytes_ += batch.dropped_bytes();
-                dropped_bytes_ += batch.dropped_bytes();
-                for (const streaming_profiler::Zone& zone : batch.zones()) {
-                    if (std::string_view(zone.site().name) != "MC_RX") {
-                        continue;
-                    }
-                    const streaming_profiler::Core core = zone.core();
-                    by_run_[zone.runtime_id()].push_back(Arrival{
-                        .tsc = zone.start_tsc(),
-                        .cycles = static_cast<int64_t>(zone.start_device_cycles()),
-                        .chip = static_cast<uint16_t>(core.chip_id),
-                        .logical_x = static_cast<uint8_t>(core.logical.x),
-                        .logical_y = static_cast<uint8_t>(core.logical.y),
-                        .physical_x = static_cast<uint8_t>(core.physical.x),
-                        .physical_y = static_cast<uint8_t>(core.physical.y)});
-                }
-            },
-            "multicast")) {}
-    Check(const Check&) = delete;
-    Check& operator=(const Check&) = delete;
-
-    void run(distributed::MeshDevice& mesh, std::string_view name) {
-        cores_ = worker_grid(mesh);
-        num_chips_ = mesh.get_devices().size();
-        const WorkerL1 worker_l1 = reserve_worker_l1(mesh);
-        std::vector<FlagCore> cores;
-        for (IDevice* device : mesh.get_devices()) {
-            for (const CoreCoord& core : cores_) {
-                cores.push_back({device, core});
-            }
+void run(distributed::MeshDevice& mesh, uint32_t runtime_id) {
+    const CoreRange cores = worker_grid(mesh);
+    const WorkerL1 worker_l1 = reserve_worker_l1(mesh);
+    std::vector<FlagCore> flag_cores;
+    for (IDevice* device : mesh.get_devices()) {
+        for (const CoreCoord& core : cores) {
+            flag_cores.push_back({device, core});
         }
     }
     clear_flags(worker_l1, flag_cores);
@@ -674,45 +643,23 @@ uint32_t check_timeline(const std::vector<Pair>& pairs, ZonesByCore& by_core) {
     return failures;
 }
 
-// Like multicast::Check, for the PP_TX and PP_RX zones.
-class Check {
-public:
-    Check() :
-        registration_(streaming_profiler::RegisterCallback(
-            [this](const streaming_profiler::Batch<streaming_profiler::RecordType::Zones>& batch) {
-                dropped_bytes_ += batch.dropped_bytes();
-                dropped_bytes_ += batch.dropped_bytes();
-                dropped_bytes_ += batch.dropped_bytes();
-                for (const streaming_profiler::Zone& zone : batch.zones()) {
-                    const std::string_view name = zone.site().name;
-                    if (name == "PP_TX" || name == "PP_RX") {
-                        CoreZones& zones = by_run_[zone.runtime_id()][{zone.core().chip_id, zone.core().logical}];
-                        (name == "PP_TX" ? zones.tx : zones.rx)++;
-                        if (zones.timed.size() < 2 * kTimedRounds) {
-                            zones.timed.push_back({zone.start_device_cycles(), zone.start_time(), name == "PP_TX"});
-                        }
-                    }
-                }
-            },
-            "pingpong")) {}
-    Check(const Check&) = delete;
-    Check& operator=(const Check&) = delete;
+struct Run {
+    std::vector<Pair> pairs;
+    uint32_t passes = 0;
+};
 
-    // Needs the mesh opened with 2D fabric.
-    void run(distributed::MeshDevice& mesh_device, std::string_view name) {
-        Chips chips;
-        for (const auto& coord : distributed::MeshCoordinateRange(mesh_device.shape())) {
-            IDevice* device = mesh_device.get_device(coord);
-            chips.emplace(device->id(), Chip{coord, device, mesh_device.get_fabric_node_id(coord)});
-        }
-        const auto runtime_id = static_cast<uint32_t>(runs_.size() + 1);
-        Run& result = runs_.emplace_back(
-            Run{.name = std::string(name), .runtime_id = runtime_id, .pairs = find_pairs(mesh_device, chips)});
-        TT_FATAL(!result.pairs.empty(), "no fabric-linked chip pairs");
-        std::vector<FlagCore> flag_cores;
-        for (const Pair& pair : result.pairs) {
-            flag_cores.push_back({chips.at(pair.chip_a).device, pair.core_a});
-            flag_cores.push_back({chips.at(pair.chip_b).device, pair.core_b});
+Run run(distributed::MeshDevice& mesh_device, uint32_t runtime_id) {
+    Chips chips;
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device.shape())) {
+        IDevice* device = mesh_device.get_device(coord);
+        chips.emplace(device->id(), Chip{coord, device, mesh_device.get_fabric_node_id(coord)});
+    }
+    Run result{.pairs = find_pairs(mesh_device, chips)};
+    TT_FATAL(!result.pairs.empty(), "no fabric-linked chip pairs");
+    std::vector<FlagCore> flag_cores;
+    for (const Pair& pair : result.pairs) {
+        for (const End& end : pair) {
+            flag_cores.push_back({chips.at(end.chip).device, end.core});
         }
     }
     const WorkerL1 worker_l1 = reserve_worker_l1(mesh_device);

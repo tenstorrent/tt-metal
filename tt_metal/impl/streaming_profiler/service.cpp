@@ -85,7 +85,7 @@ StreamDecoder::Out out_in(uint8_t* buffer) {
 
 struct Service::Consumer {
     std::string name;
-    experimental::streaming_profiler::RecordType types{};
+    uint32_t types = 0;
     BatchCallback callback;
     experimental::streaming_profiler::detail::CallbackId id;
     std::thread thread;
@@ -124,7 +124,7 @@ void Service::wait_acks(std::unique_lock<std::mutex>& lk) {
 }
 
 experimental::streaming_profiler::detail::CallbackId Service::add_consumer(
-    std::string name, experimental::streaming_profiler::RecordType types, BatchCallback callback) {
+    std::string name, uint32_t types, BatchCallback callback) {
     TT_FATAL(
         t_consumer_id == experimental::streaming_profiler::detail::CallbackId{},
         "streaming profiler: add_consumer must not be called from a consumer callback");
@@ -402,14 +402,14 @@ private:
         const StreamDecoder::Out out = out_in(parked.buffer.get());
         const StreamDecoder::Produced& produced = parked.produced;
         place(attached, dev, out, produced);
+        using experimental::streaming_profiler::Event;
+        using experimental::streaming_profiler::TimestampedData;
+        using experimental::streaming_profiler::Zone;
         const experimental::streaming_profiler::detail::BatchData batch{
-            .zones = std::launder(reinterpret_cast<const experimental::streaming_profiler::Zone*>(out.zones)),
-            .zone_count = produced.zones,
-            .timestamped_data =
-                std::launder(reinterpret_cast<const experimental::streaming_profiler::TimestampedData*>(out.data)),
-            .timestamped_data_count = produced.data,
-            .events = std::launder(reinterpret_cast<const experimental::streaming_profiler::Event*>(out.events)),
-            .event_count = produced.events,
+            .records =
+                {std::span(std::launder(reinterpret_cast<const Zone*>(out.zones)), produced.zones),
+                 std::span(std::launder(reinterpret_cast<const TimestampedData*>(out.data)), produced.data),
+                 std::span(std::launder(reinterpret_cast<const Event*>(out.events)), produced.events)},
             .dropped_bytes = std::exchange(dropped_since_callback_, 0),
             .stall_count = produced.stalls};
         try {
@@ -429,11 +429,12 @@ private:
         const ClockMap& map = attached.receiver->clock_map();
         ClockMap::Reader& reader = attached.reader;
         using namespace profiler;
-        // A memmove onto itself compiles to nothing and implicitly creates the zones, events and data-record array
-        // already in these bytes.
+        // A memmove onto itself compiles to nothing and implicitly creates the zones, events, data-record array and
+        // payload values already in these bytes.
         std::memmove(out.zones, out.zones, size_t{produced.zones} * kSpscZoneBytes);
         std::memmove(out.events, out.events, size_t{produced.events} * kSpscEventBytes);
         std::memmove(out.data, out.data, size_t{produced.data} * kSpscDataBytes);
+        std::memmove(out.values, out.values, size_t{produced.values} * sizeof(uint64_t));
         const auto wall_of = [](const uint64_t* record) {
             return static_cast<int64_t>(record[kSpscQwTimestamp] + record[kSpscQwTsc]);
         };
@@ -454,7 +455,8 @@ private:
         }
         for (uint32_t i = 0; i < produced.data; i++) {
             uint8_t* const record = out.data + size_t{i} * kSpscDataBytes;
-            construct_timestamped_data(record, host_tsc(record));
+            construct_timestamped_data(record);
+            reinterpret_cast<uint64_t*>(record)[kSpscQwTsc] = static_cast<uint64_t>(host_tsc(record));
         }
     }
 

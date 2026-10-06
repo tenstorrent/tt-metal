@@ -14,13 +14,14 @@
 namespace tt::tt_metal::streaming_profiler {
 
 using experimental::streaming_profiler::Processor;
+using experimental::streaming_profiler::Zone;
 
 OpsCsvConsumer::OpsCsvConsumer(const std::string& path) : file_(std::fopen(path.c_str(), "w")) {
     TT_FATAL(file_ != nullptr, "streaming profiler: cannot open {} for the ops CSV", path);
 }
 
 void OpsCsvConsumer::operator()(const Batch& batch) {
-    for (const auto& zone : batch.zones()) {
+    for (const auto& zone : batch.records<Zone>()) {
         if (zone.runtime_id() == 0 || !zone.site().name.ends_with("-KERNEL")) {
             continue;
         }

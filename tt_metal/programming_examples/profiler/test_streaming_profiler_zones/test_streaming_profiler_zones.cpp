@@ -71,11 +71,13 @@ int main(int argc, char** argv) {
         std::atomic<uint64_t> zones{0}, points{0}, stalls{0};
     } totals;
     using experimental::streaming_profiler::Batch;
-    using experimental::streaming_profiler::RecordType;
+    using experimental::streaming_profiler::Event;
+    using experimental::streaming_profiler::TimestampedData;
+    using experimental::streaming_profiler::Zone;
     auto callback = experimental::streaming_profiler::RegisterCallback(
-        [&](const Batch<RecordType::All>& batch) {
-            totals.zones += batch.zones().size();
-            totals.points += batch.events().size() + std::ranges::distance(batch.timestamped_data());
+        [&](const Batch<Zone, TimestampedData, Event>& batch) {
+            totals.zones += batch.records<Zone>().size();
+            totals.points += batch.records<Event>().size() + batch.records<TimestampedData>().size();
             totals.stalls += batch.stall_count();
         },
         "zones-example");

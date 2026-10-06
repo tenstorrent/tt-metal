@@ -21,7 +21,7 @@ namespace tt::tt_metal::streaming_profiler {
 // op again under the same runtime id, so each execution is numbered by its order on each RISC.
 class OpsCsvConsumer {
 public:
-    using Batch = experimental::streaming_profiler::Batch<experimental::streaming_profiler::RecordType::Zones>;
+    using Batch = experimental::streaming_profiler::Batch<experimental::streaming_profiler::Zone>;
     explicit OpsCsvConsumer(const std::string& path);
     void operator()(const Batch& batch);
     // Writes the CSV file. It must not run at the same time as operator(), which adds the rows.

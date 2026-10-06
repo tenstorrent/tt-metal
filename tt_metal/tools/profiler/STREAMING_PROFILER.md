@@ -28,8 +28,8 @@ Host callback — a zone arrives as one record, whole, when it closes. The publi
 register a callable taking the `Batch` of the record types you want:
 
 ```cpp
-Callback zones = RegisterCallback([](const Batch<RecordType::Zones>& batch) {
-    for (const Zone& zone : batch.zones()) {
+Callback zones = RegisterCallback([](const Batch<Zone>& batch) {
+    for (const Zone& zone : batch.records<Zone>()) {
         fmt::print("{}: {} ns on chip {} core ({},{}) {} (op {})\n",
             zone.site().name,  // "compute"
             zone.duration().count(), zone.core().chip_id, zone.core().logical.x, zone.core().logical.y,
@@ -61,8 +61,8 @@ for (uint32_t it = 0; it < N_ITERS; it++) {
 Host callback — a `TimestampedData` record arrives assembled, its payload as a span of uint64 words:
 
 ```cpp
-Callback data = RegisterCallback([](const Batch<RecordType::TimestampedData>& batch) {
-    for (const TimestampedData& record : batch.timestamped_data()) {
+Callback data = RegisterCallback([](const Batch<TimestampedData>& batch) {
+    for (const TimestampedData& record : batch.records<TimestampedData>()) {
         fmt::print("{} @ {}: value={}\n",
             record.site().name,  // "BYTES-MOVED"
             record.time().time_since_epoch().count(), record.payload()[0]);
@@ -89,8 +89,8 @@ for (uint32_t it = 0; it < N_ITERS; it++) {
 Host callback — an `Event` is a name and a time, nothing else:
 
 ```cpp
-Callback events = RegisterCallback([](const Batch<RecordType::Events>& batch) {
-    for (const Event& event : batch.events()) {
+Callback events = RegisterCallback([](const Batch<Event>& batch) {
+    for (const Event& event : batch.records<Event>()) {
         fmt::print("{} @ {} on core ({},{})\n",
             event.site().name, event.time().time_since_epoch().count(),  // "LOOP-START" @ host time
             event.core().logical.x, event.core().logical.y);

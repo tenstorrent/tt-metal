@@ -182,7 +182,7 @@ public:
 
     // Adds a consumer that receives records of `types` through `callback`, and returns its id.
     experimental::streaming_profiler::detail::CallbackId add_consumer(
-        std::string name, experimental::streaming_profiler::RecordType types, BatchCallback callback);
+        std::string name, uint32_t types, BatchCallback callback);
     // Removes the consumer. It returns once the callback can no longer run, or at once if the callback removes itself.
     void remove_consumer(experimental::streaming_profiler::detail::CallbackId id);
 

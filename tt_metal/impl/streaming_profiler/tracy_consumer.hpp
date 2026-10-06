@@ -22,7 +22,10 @@ namespace tt::tt_metal::streaming_profiler {
 // It must be used from one thread only.
 class TracyConsumer {
 public:
-    using Batch = experimental::streaming_profiler::Batch<experimental::streaming_profiler::RecordType::All>;
+    using Batch = experimental::streaming_profiler::Batch<
+        experimental::streaming_profiler::Zone,
+        experimental::streaming_profiler::TimestampedData,
+        experimental::streaming_profiler::Event>;
 
     TracyConsumer();
     TracyConsumer(const TracyConsumer&) = delete;
