@@ -136,6 +136,13 @@ class WanResidualUpBlock2D(VaeUpBlock):
             WanDupUp2D(in_channels=in_channels, out_channels=out_channels, factor=2) if upsample else None
         )
 
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if self.upsampler is not None:
+            rename_substate(state, "upsampler.resample.1", "upsampler.conv")
+            pop_substate(state, "upsampler.time_conv")
+
+        super()._prepare_torch_state(state)
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if self.avg_shortcut is None:
             return super().forward(x)
@@ -177,6 +184,13 @@ class WanResidualDownBlock2D(VaeDownBlock):
                 msg = "without downsampling, the shortcut is the identity and cannot change the channel count"
                 raise ValueError(msg)
             self.avg_shortcut = None
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if self.downsampler is not None:
+            rename_substate(state, "downsampler.resample.1", "downsampler.conv")
+            pop_substate(state, "downsampler.time_conv")
+
+        super()._prepare_torch_state(state)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         shortcut = self.avg_shortcut.forward(x) if self.avg_shortcut is not None else x
@@ -238,15 +252,6 @@ class WanVaeDecoder2D(Module):
         rename_substate(state, "decoder", "")
 
         state["conv_norm_out.gamma"] = state.pop("norm_out.gamma")
-
-        # ``WanResidualUpBlock`` stores its upsampler as ``upsampler.resample[1]`` (a Sequential) plus
-        # an optional ``upsampler.time_conv`` for the temporal-upsample variant. The 2D decoder uses
-        # ``upsampler.conv`` and skips temporal, so rename the spatial conv and drop the time conv.
-        for key in list(state.keys()):
-            if ".upsampler.resample.1." in key:
-                state[key.replace(".upsampler.resample.1.", ".upsampler.conv.")] = state.pop(key)
-            elif ".upsampler.time_conv." in key:
-                del state[key]
 
         _slice_causal_convs(state)
         _convert_mid_block_attention(state, prefix="mid_block.attentions.0.")
@@ -344,14 +349,6 @@ class WanVaeEncoder2D(Module):
         pop_substate(state, "decoder")
         pop_substate(state, "post_quant_conv")
         rename_substate(state, "encoder", "")
-
-        # ``WanResample`` stores the downsampler's spatial conv as ``resample[1]``, after the zero
-        # padding, plus a ``time_conv`` that a single frame never reaches.
-        for key in list(state.keys()):
-            if ".downsampler.resample.1." in key:
-                state[key.replace(".downsampler.resample.1.", ".downsampler.conv.")] = state.pop(key)
-            elif ".downsampler.time_conv." in key:
-                del state[key]
 
         _slice_causal_convs(state)
         _convert_mid_block_attention(state, prefix="mid_block.attentions.0.")
