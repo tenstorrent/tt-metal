@@ -20,6 +20,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.nomic_embed_text_v2_moe.tt.attention import TtNomicBertAttention
 from models.experimental.nomic_embed_text_v2_moe.tt.common import LayerNormParameters
+from models.experimental.nomic_embed_text_v2_moe.tt.experts import StackedBuffers
 from models.experimental.nomic_embed_text_v2_moe.tt.mlp import TtNomicBertMLP
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from models.experimental.nomic_embed_text_v2_moe.tt.moe import TtNomicMoELayer
@@ -32,14 +33,26 @@ class TtNomicBertBlock(LightweightModule):
     placement predicate belongs to the config rather than the block.
     """
 
-    def __init__(self, device, config, tt_config, state_dict, state_dict_prefix, moe: bool):
+    def __init__(
+        self,
+        device,
+        config,
+        tt_config,
+        state_dict,
+        state_dict_prefix,
+        moe: bool,
+        buffers: StackedBuffers | None = None,
+    ):
         super().__init__()
         self.tt_config = tt_config
         self.epsilon = config.layer_norm_epsilon
 
         self.attn = TtNomicBertAttention(device, config, tt_config, state_dict, f"{state_dict_prefix}attn.")
-        ffn = TtNomicMoELayer if moe else TtNomicBertMLP
-        self.mlp = ffn(device, config, tt_config, state_dict, f"{state_dict_prefix}mlp.")
+        prefix = f"{state_dict_prefix}mlp."
+        if moe:
+            self.mlp = TtNomicMoELayer(device, config, tt_config, state_dict, prefix, buffers=buffers)
+        else:
+            self.mlp = TtNomicBertMLP(device, config, tt_config, state_dict, prefix)
 
         def norm(name):
             return LayerNormParameters(

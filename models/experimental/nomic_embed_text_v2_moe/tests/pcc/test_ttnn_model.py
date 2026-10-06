@@ -160,7 +160,7 @@ def test_a_batch_that_chunks_the_expert_token_axis(config, reference_model, tt_m
 
     Same gates as the single-pass shapes. The split changes the arithmetic, since each pass
     picks its own layout and K blocks: 4096 + 512 transposed at 9x512, 4096 transposed + 128
-    token-major at 6x704. test_chunking_the_token_axis_does_not_change_the_answer bounds that at
+    stacked at 6x704. test_chunking_the_token_axis_does_not_change_the_answer bounds that at
     module level; this one exists for the shape, so a regression in the pass limit is caught end
     to end.
     """

@@ -17,10 +17,10 @@ text attend to another: PCC 0.71 against per-sequence attention, a wrong answer 
 less precise one. Pooling also reduces along S, and has to produce one mean per text rather
 than one per batch.
 
-The MoE matmuls force the opposite. sparse_matmul takes the tokens as one (1, 1, T, H) operand
-against the (1, E, H, F) weights, and a transposed pass multiplies the stacked weight by one
-(1, 1, H, T) x^T. The spare dim at position 1 is what the expert axis expands into and what
-fast_reduce_nc collapses again.
+The MoE matmuls force the opposite. A stacked pass takes the tokens as one (1, 1, T, H) operand
+against every expert's weights side by side, and a transposed pass multiplies the stacked weight
+by one (1, 1, H, T) x^T. There the spare dim at position 1 is what the expert axis expands into
+and what fast_reduce_nc collapses again.
 
 So tt/moe.py flattens on entry and unflattens on exit, which is where the reference does its own
 x.view(-1, H), and nothing else in the encoder reshapes: ttnn.linear, ttnn.layer_norm and
@@ -29,7 +29,8 @@ trip to the six MoE layers, 12 reshapes rather than the 24 a flat-everywhere con
 need around attention.
 
 Sub-blocks take other shapes internally, (B, A, S, D) head-split, (1, B*A, S, D) for rotary and
-(1, E, T, F) across the experts, each produced and consumed by the op that owns it.
+(1, 1, T, E*F) or (1, E, H, T) across the experts, each produced and consumed by the op that owns
+it.
 
 The flat form keeps tokens batch-major, matching the reference's own x.view(-1, H), so the
 router's per-token weights stay aligned with the expert outputs.
@@ -107,6 +108,25 @@ def pack_expert_weights(
         w1.view(*expert_shape).transpose(1, 2).unsqueeze(0).contiguous(),
         w2.view(*expert_shape).unsqueeze(0).contiguous(),
     )
+
+
+def block_spread(rows: int, width: int) -> torch.Tensor:
+    """(rows, rows * width) 0/1 matrix, row r one on columns r*width .. (r+1)*width.
+
+    A matmul by it repeats each of a row's values width times, one non-zero term a sum: exact.
+    """
+    return torch.eye(rows).repeat_interleave(width, dim=-1)
+
+
+def stack_expert_columns(per_expert: torch.Tensor) -> torch.Tensor:
+    """(1, E, R, C) per-expert slabs -> (1, 1, R, E*C), expert e in columns e*C .. (e+1)*C.
+
+    The slabs sit side by side along the last axis, so a bfloat8_b conversion groups the same 16
+    values per exponent as it does in the per-expert tensor, C being a multiple of 16: both forms
+    hold the same quantized weights.
+    """
+    _, experts, rows, cols = per_expert.shape
+    return per_expert[0].permute(1, 0, 2).reshape(1, 1, rows, experts * cols).contiguous()
 
 
 def additive_attention_mask(
@@ -255,14 +275,16 @@ class LayerNormParameters:
 
     def for_input(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """(weight, bias) for a layer norm over x, (B, 1, S, W)."""
-        batch, _, seqlen, _ = x.shape
-        return self.row_major if batch * ttnn.core.divup(seqlen, ttnn.TILE_SIZE) > SMALL_M_TILES else self.tiled
+        m_tiles = x.shape[0] * ttnn.core.divup(x.shape[-2], ttnn.TILE_SIZE)
+        return self.row_major if m_tiles > SMALL_M_TILES else self.tiled
 
 
 def flatten_tokens(x: ttnn.Tensor) -> ttnn.Tensor:
-    """(B, 1, S, H) -> (1, 1, B*S, H), batch-major."""
-    batch, _, seqlen, hidden = x.shape
-    return ttnn.reshape(x, (1, 1, batch * seqlen, hidden))
+    """(B, 1, S, H) -> (1, 1, B*S, H), batch-major. At B = 1 that is x itself, and the call is skipped."""
+    batch = x.shape[0]
+    if batch == 1:
+        return x
+    return ttnn.reshape(x, (1, 1, batch * x.shape[-2], x.shape[-1]))
 
 
 def unflatten_tokens(x: ttnn.Tensor, batch: int, seqlen: int) -> ttnn.Tensor:
@@ -270,8 +292,10 @@ def unflatten_tokens(x: ttnn.Tensor, batch: int, seqlen: int) -> ttnn.Tensor:
 
     Where the reshape copies (B > 1, S off the tile grid) it leaves the tile padding of the copy
     unwritten, up to 4e37 measured. Nothing reads that padding into a logical value; RotaryTables
-    has why that holds for q and k.
+    has why that holds for q and k. At B = 1 there is nothing to reshape.
     """
+    if batch == 1:
+        return x
     return ttnn.reshape(x, (batch, 1, seqlen, x.shape[-1]))
 
 
