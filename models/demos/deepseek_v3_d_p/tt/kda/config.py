@@ -33,10 +33,11 @@ class KDARecurrenceProgramConfig:
     # Exact number of chunks per group. Construction validates divisibility and
     # worker capacity; execution never silently changes an explicit configuration.
     summary_group_chunks: int = 20
-    # HiFi4: the prefix matmul reads the complement-form transition E = A - I through SrcB, which keeps only 7
-    # significant bits at HiFi2; that truncation measured 1.2% state error on long-memory channels (|G_last| = 1e-3
-    # per chunk) over 10240 chunks, 0.3% at HiFi4 (tt_metal_tracker-g1b.7, test_weak_decay_chain).
-    affine_prefix_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
+    # HiFi3: the prefix matmul reads the complement-form transition E = A - I through SrcB, which keeps only 7
+    # significant bits at HiFi2; that truncation measured 1.26% state error on long-memory channels (|G_last| = 1e-3
+    # per chunk) over 10240 chunks. HiFi3 adds the SrcB low-bit phase and matches HiFi4 (worst class 0.42% both;
+    # tt_metal_tracker-g1b.7, tt_metal_tracker-g1b.4.15, test_weak_decay_chain T5).
+    affine_prefix_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi3
     scan_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
 
     def __post_init__(self) -> None:
