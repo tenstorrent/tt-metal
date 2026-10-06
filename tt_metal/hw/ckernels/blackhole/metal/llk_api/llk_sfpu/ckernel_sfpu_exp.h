@@ -561,7 +561,10 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
         if constexpr (ITERATIONS == 32) {
             _exp_approx_clamped_sanitise_pass_(std::make_integer_sequence<int, 32>{});
             _exp_approx_clamped_exp_pass_(std::make_integer_sequence<int, 32>{});
-            // Let the final exponential macro complete before the caller's next SFPU instruction.
+            // The last macro stores four instructions after its LOADMACRO; drain it before the caller's next SFPU op.
+            TTI_SFPNOP;
+            TTI_SFPNOP;
+            TTI_SFPNOP;
             TTI_SFPNOP;
             return;
         }
