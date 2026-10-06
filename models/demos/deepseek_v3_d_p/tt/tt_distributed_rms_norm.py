@@ -187,7 +187,7 @@ class TtDistributedRmsNorm(LightweightModule):
         self.stats_memcfg = stats_memcfg
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
-        self._gathered_stats = None
+        self._gathered_stats = {}  # persistent high_bw_all_gather output per stats shape
 
         logger.debug(f"Initializing TtDistributedRmsNorm with emb_dim={emb_dim}, epsilon={epsilon}")
         logger.debug(f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}")
@@ -294,10 +294,12 @@ class TtDistributedRmsNorm(LightweightModule):
         if use_high_bw_all_gather:
             # high_bw_all_gather writes into a caller-provided DRAM tensor, so allocate its
             # fixed-shape output once and reuse it across forwards.
-            if self._gathered_stats is None:
+            # One buffer per input row count: the same norm serves a prefill chunk and a decode tile.
+            key = tuple(tt_stats.shape)
+            if key not in self._gathered_stats:
                 gathered_shape = list(tt_stats.shape)
                 gathered_shape[3] *= self.mesh_device.shape[self.cluster_axis]
-                self._gathered_stats = ttnn.empty(
+                self._gathered_stats[key] = ttnn.empty(
                     gathered_shape,
                     dtype=tt_stats.dtype,
                     layout=tt_stats.layout,
@@ -307,7 +309,7 @@ class TtDistributedRmsNorm(LightweightModule):
             tt_gathered_stats = ttnn.experimental.high_bw_all_gather(
                 tt_stats,
                 dim=3,
-                output_tensor=self._gathered_stats,
+                output_tensor=self._gathered_stats[key],
                 cluster_axis=self.cluster_axis,
                 num_links=self.num_links,
             )

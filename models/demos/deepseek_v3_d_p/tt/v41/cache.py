@@ -364,6 +364,34 @@ class V41PrefillState:
                 rows = ttnn.slice(rows, [0, 0, 0, 0], [1, 1, count, rows.shape[3]])
             self._write_rows(cache, self._encode(rows, fmt), offset)
 
+    def write_window_rows(self, layer: int, rows):
+        """Decode (``tt/v41/decode.py``): place ``layer``'s carry at rows [0, WINDOW_SLOT) and ``rows`` ``[1, 1, n,
+        d]`` (the token's window KV on every row, the same on every chip; logical values of
+        ``layer_kv_format(layer)``) at WINDOW_SLOT, so row WINDOW_SLOT is the token's and
+        ``update_window_carry(layer, 1)`` is the ring shift. Returns the tensor its attention reads."""
+        dst = self.kv_tensor(layer)
+        self._write_rows(dst, self.window_carry[layer], 0)
+        self._write_rows(dst, self._encode(rows, self.layer_kv_format(layer)), WINDOW_SLOT)
+        return dst
+
+    def write_compressed_row(self, source: int, kv_rows, index_k_rows, j: int):
+        """Decode: compressed row ``j`` of ``source`` from row 0 of ``kv_rows`` ``[1, 1, n, d]`` (logical values of the
+        source's format) and ``index_k_rows`` ``[1, 1, n, index_head_dim]`` (the same on every chip)."""
+        ratio = self.config.compress_ratio(source)
+        for cache, rows, offset, fmt in (
+            (self.kv[source], kv_rows, self.geometry.kv_row_of_compressed(j), self.kv_format(ratio)),
+            (self.index_k[source], index_k_rows, j, MlaKvCacheFormat.BF16_RM),
+        ):
+            rows = self._encode(rows, fmt)
+            self._write_rows(cache, ttnn.slice(rows, [0, 0, 0, 0], [1, 1, 1, rows.shape[3]]), offset)
+
+    def copy_compressed_row(self, source: int, src: int, dst: int):
+        """Decode: copy compressed row ``src`` of ``source`` (KV and index key, as stored) to row ``dst``."""
+        for cache, offset in ((self.kv[source], self.geometry.kv_row_of_compressed(0)), (self.index_k[source], 0)):
+            row = ttnn.slice(cache, [0, 0, offset + src, 0], [1, 1, offset + src + 1, cache.shape[3]])
+            self._write_rows(cache, row, offset + dst)
+            ttnn.deallocate(row)
+
     def update_window_carry(self, layer: int, length: int):
         """After ``layer``'s attention: its carry becomes the last WINDOW_SLOT rows ending at the chunk's
         last valid token (rows [length, length + WINDOW_SLOT) of the window region)."""
