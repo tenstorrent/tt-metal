@@ -630,15 +630,55 @@ def test_dsv41_demo_session(mesh_device, device_params):
     DSV41_SESSION=gsm8k_b16,prefill_128_b16,same_prompt_b16 pytest demo/text_demo.py -k session"""
     ids = os.environ.get("DSV41_SESSION", "prefill_128_b16,gsm8k_b16").split(",")
     byid = {s.id: s for s in SCENARIOS}
-    modes = [
+    omodes = [
         i.partition("@")[2] for i in ids
     ]  # optional prefill-optimisation mode per scenario: id@m (baseline) / @P / @R / @E (see tests/test_prefill_scen_device.py)
     ids = [i.partition("@")[0] for i in ids]
     chosen = [byid[i] for i in ids]
     build_len = max(s.values[3] for s in chosen)
     cache = {}
-    for s, mode in zip(chosen, modes):
+    modes = [
+        m for m in os.environ.get("DSV41_PF_ASYNC_LIST", "").split(",") if m
+    ]  # per-scenario DSV41_PF_ASYNC (A/B in one process)
+    rowtok = [
+        m for m in os.environ.get("DSV41_ROWTOK_LIST", "").split(",") if m
+    ]  # per-scenario DSV41_PREFILL_ROW_TOKENS (chunk-size sweep in one process)
+    umoes = [m for m in os.environ.get("DSV41_PF_UMOE_LIST", "").split(",") if m]
+    ab = os.environ.get(
+        "DSV41_PFA_AB"
+    )  # "flagsA|flagsB|...": prefill-tuning flags (tt/pf_tune.py, KEY=val joined by ",") of scenario i, cycling; "-" = baseline. Same build, same host: a paired A/B
+    for si, (s, mode) in enumerate(zip(chosen, omodes)):
         prompts, bs, rep, msl, mgt, pp, sp, dtr, ptr, pch, wu, ins, eos = s.values
+        if modes:
+            os.environ["DSV41_PF_ASYNC"] = modes[si % len(modes)]
+        if rowtok:
+            os.environ["DSV41_PREFILL_ROW_TOKENS"] = rowtok[si % len(rowtok)]
+        if ab:
+            spec = ab.split("|")[si % len(ab.split("|"))]
+            for k in [k for k in os.environ if k.startswith("DSV41_PFA_") and k != "DSV41_PFA_AB"]:
+                del os.environ[k]
+            os.environ["DSV41_PREFILL_OPT"] = (
+                "1" if "OPT" in spec.split(",") else "0"
+            )  # umbrella flag (tt/pf_tune.py): token OPT
+            for kv in spec.split(","):
+                if kv not in ("-", "OPT"):
+                    os.environ[kv.split("=", 1)[0]] = kv.split("=", 1)[1]
+            for _, (_, m, _) in cache.items():  # new capture of the chunk trace with the new flags
+                if getattr(m, "prefill_model", None) is not None:
+                    m.prefill_model.teardown_dyn()
+            logger.info(f"=== PFA_AB scenario {si} {s.id}: flags '{spec}' ===")
+        if (
+            umoes
+        ):  # per-scenario DSV41_PF_UMOE_LIST: 1 = unified prefill MoE (build with DSV41_PREFILL_MOE=unified), 0 = the moe_compute prefill path, same build
+            for _, (_, m, _) in cache.items():
+                pm_ = getattr(m, "prefill_model", None)
+                if pm_ is None:
+                    continue
+                pm_.teardown_dyn()
+                for _, pl_ in pm_.layers:
+                    if not hasattr(pl_, "_umoe_saved"):
+                        pl_._umoe_saved = pl_.umoe
+                    pl_.umoe = pl_._umoe_saved if umoes[si % len(umoes)] == "1" else None
         if mode:
             os.environ["DSV41_PF_MHC"] = "packed" if set(mode) & set("PREQ") else "0"
             os.environ["DSV41_PF_ROUTE_OWN"] = "1" if set(mode) & set("RE") else "0"
@@ -650,12 +690,13 @@ def test_dsv41_demo_session(mesh_device, device_params):
                     pm_.dyn_out = None
                     pm_.head_out = []
         logger.info(
-            f"=== session scenario {s.id} ==="
+            f"=== session scenario {s.id} (DSV41_PF_ASYNC={os.environ.get('DSV41_PF_ASYNC')}, ROW_TOKENS={os.environ.get('DSV41_PREFILL_ROW_TOKENS')}"
             + (
                 f" MODE {mode}: PF_MHC={os.environ['DSV41_PF_MHC']} ROUTE_OWN={os.environ['DSV41_PF_ROUTE_OWN']} ENGRAM_OWN={os.environ['DSV41_PF_ENGRAM_OWN']}"
                 if mode
                 else ""
             )
+            + ") ==="
         )
         os.environ["DSV41_RAGGED"] = "1" if s.id.endswith("_ragged") else "2" if s.id.endswith("_ragged_u4") else "0"
         _run_demo(
