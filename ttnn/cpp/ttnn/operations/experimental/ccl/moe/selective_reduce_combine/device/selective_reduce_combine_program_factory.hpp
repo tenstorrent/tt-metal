@@ -63,7 +63,7 @@ struct SelectiveReduceCombineProgramArtifacts {
     tt::tt_metal::CBHandle data_cb_handle{};
     std::vector<tt::tt_metal::CoreCoord> cores;
     // Owned by the artifacts for the standalone UnifiedSelectReduce op. nullopt for the
-    // fused moe_compute FullLocal path (writer compiles out init/final barrier handling),
+    // fused moe_compute SingleDevice path (writer compiles out init/final barrier handling),
     // in which case the kernel runtime args carry a placeholder address of 0.
     std::optional<GlobalSemaphore> init_semaphore;
     std::optional<GlobalSemaphore> cross_device_semaphore;
@@ -105,7 +105,7 @@ private:
 // Builder function that creates kernels and returns artifacts.
 // `init_semaphore` / `cross_device_semaphore` are passed as optionals: the builder uses their
 // addresses (0 when nullopt) for writer kernel runtime args, and stores them in the returned
-// artifacts for ownership. nullopt is used by the fused moe_compute FullLocal path, whose
+// artifacts for ownership. nullopt is used by the fused moe_compute SingleDevice path, whose
 // writer compiles out all init/final barrier handling.
 SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_artifacts(
     tt::tt_metal::Program& program,
@@ -122,7 +122,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const std::optional<std::vector<CoreCoord>>& compute_cores_by_ring_id = std::nullopt);
 
 // Runtime argument override function. Semaphore kernel runtime-arg slots are written as
-// raw addresses; pass 0 for the fused moe_compute FullLocal path (unused by the writer).
+// raw addresses; pass 0 for the fused moe_compute SingleDevice path (unused by the writer).
 void selective_reduce_combine_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
     tt::tt_metal::KernelHandle reader_kernel_id,

@@ -27,7 +27,7 @@ namespace detail {
 constexpr auto TOKEN_SIZE = 32;  // This does not mean we only support 32 tokens, just hardcoding the shared buffer size
 constexpr auto DOUBLE_BUFFER_SIZE = 2;
 
-// LocalOutput: dm1 addresses the [k, T, H] output through a TensorAccessor built from the actual
+// SingleCluster: dm1 addresses the [k, T, H] output through a TensorAccessor built from the actual
 // buffer, one page per token row (2 x H bytes) plus the column offset of its slice. A row-major
 // tensor has one-row pages when it is INTERLEAVED or HEIGHT_SHARDED (tt_metal page_config.cpp,
 // get_page_shape_rm), DRAM or L1, so both work with the same kernel. WIDTH_SHARDED, BLOCK_SHARDED
@@ -164,9 +164,9 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
 
     // Mode-specific validation of combine_params and optional_output_tensor.
     // - ComputeOnly: no combine_params, no optional_output_tensor (5 outputs).
-    // - FullLocal: combine_params must be set with local_combine=true; only on a 1x1 mesh;
+    // - SingleDevice: combine_params must be set with local_combine=true; only on a 1x1 mesh;
     //   optional_output_tensor is allowed as the combine output sink (6 outputs, no CCL).
-    // - LocalOutput: combine_params describes the final [k, T, H] output (6 outputs, no combine
+    // - SingleCluster: combine_params describes the final [k, T, H] output (6 outputs, no combine
     //   kernels: dm1 writes the output). The cluster_axis has extent 1; on a multi-device mesh
     //   that leaves one partial per coordinate for the caller to reduce, so the token set and its
     //   routing metadata must be replicated (every coordinate sees the same tokens, indices,
@@ -191,19 +191,20 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
             "cluster_axis {} is out of range for a mesh with {} axes",
             args.combine_params->axis,
             mesh_shape.dims());
-        if (args.path == MoEComputePath::FullLocal) {
+        if (args.path == MoEComputePath::SingleDevice) {
             TT_FATAL(
                 mesh_device->num_devices() == 1,
-                "path=FullLocal is only supported on a 1x1 mesh, got num_devices={}",
+                "path=SingleDevice is only supported on a 1x1 mesh, got num_devices={}",
                 mesh_device->num_devices());
             TT_FATAL(
-                args.combine_params->local_combine, "path=FullLocal requires combine_params->local_combine to be true");
-        } else if (args.path == MoEComputePath::LocalOutput) {
+                args.combine_params->local_combine,
+                "path=SingleDevice requires combine_params->local_combine to be true");
+        } else if (args.path == MoEComputePath::SingleCluster) {
             // The CCL knobs are accepted and unused on this path; num_links keeps its range check.
             TT_FATAL(args.combine_params->num_links > 0, "num_links must be greater than 0");
             TT_FATAL(
                 mesh_shape[args.combine_params->axis] == 1,
-                "path=LocalOutput requires cluster_axis {} to have extent 1, got {}",
+                "path=SingleCluster requires cluster_axis {} to have extent 1, got {}",
                 args.combine_params->axis,
                 mesh_shape[args.combine_params->axis]);
             // The local output is one partial per mesh coordinate that the caller sums, so a shared
@@ -282,7 +283,7 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(args.combine_params->axis < 2, "cluster_axis must be 0 or 1");
             TT_FATAL(
                 mesh_shape[args.combine_params->axis] > 1,
-                "path=FullCcl requires a cluster_axis of extent > 1; an axis of extent 1 takes the LocalOutput path");
+                "path=FullCcl requires a cluster_axis of extent > 1; an axis of extent 1 takes the SingleCluster path");
         }
     }
 
@@ -490,7 +491,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
 
     TT_FATAL(args.combine_params.has_value(), "combine_params required when path is not ComputeOnly");
 
-    if (args.path == MoEComputePath::LocalOutput) {
+    if (args.path == MoEComputePath::SingleCluster) {
         // Output 5: the final [k, T, H] row-major tensor that dm1 writes directly (T is the whole
         // replicated token set: the axis has extent 1). Same shape the combine returns on that axis.
         const auto& combine_params = *args.combine_params;
@@ -530,9 +531,9 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
 MoEComputeDeviceOperation::topology_return_value_t MoEComputeDeviceOperation::compute_output_topologies(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto* mesh_device = tensor_args.tilize_input_tensor.device();
-    const bool local_output_on_mesh = args.path == MoEComputePath::LocalOutput && mesh_device->num_devices() > 1;
+    const bool local_output_on_mesh = args.path == MoEComputePath::SingleCluster && mesh_device->num_devices() > 1;
     if (!local_output_on_mesh) {
-        // Keep the default topology inference for ComputeOnly, FullLocal, FullCcl and a 1x1 LocalOutput.
+        // Keep the default topology inference for ComputeOnly, SingleDevice, FullCcl and a 1x1 SingleCluster.
         return {};
     }
 
@@ -639,9 +640,9 @@ std::vector<ttnn::Tensor> moe_compute(
 
     // Determine the MoE compute path from compute_only and cluster_axis.
     // - ComputeOnly: compute_only=true, cluster_axis must be None, no CCL options.
-    // - FullLocal: compute_only=false, cluster_axis=None, only valid on a 1x1 mesh. No CCL
+    // - SingleDevice: compute_only=false, cluster_axis=None, only valid on a 1x1 mesh. No CCL
     //   options; combine runs as a local reduction with no fabric.
-    // - LocalOutput: compute_only=false, cluster_axis names an axis of extent 1. Nothing to
+    // - SingleCluster: compute_only=false, cluster_axis names an axis of extent 1. Nothing to
     //   combine: dm1 writes the final output, the fabric is not consulted and the CCL options
     //   are accepted and unused.
     // - FullCcl: compute_only=false, cluster_axis names an axis of extent > 1. CCL options apply.
@@ -654,9 +655,9 @@ std::vector<ttnn::Tensor> moe_compute(
             *cluster_axis,
             mesh_shape.dims());
     }
-    const bool full_local = !compute_only && !cluster_axis.has_value();
-    const bool local_output = !compute_only && cluster_axis.has_value() && mesh_shape[*cluster_axis] == 1;
-    if (full_local) {
+    const bool single_device = !compute_only && !cluster_axis.has_value();
+    const bool single_cluster = !compute_only && cluster_axis.has_value() && mesh_shape[*cluster_axis] == 1;
+    if (single_device) {
         TT_FATAL(
             num_devices == 1,
             "moe_compute(compute_only=false, cluster_axis=None) is only supported on a 1x1 mesh, "
@@ -677,7 +678,7 @@ std::vector<ttnn::Tensor> moe_compute(
         TT_FATAL(
             !optional_output_tensor.has_value(),
             "moe_compute(compute_only=true) requires optional_output_tensor to be std::nullopt");
-    } else if (full_local) {
+    } else if (single_device) {
         TT_FATAL(!topology.has_value(), "moe_compute(cluster_axis=None) requires topology to be std::nullopt");
         TT_FATAL(!num_links.has_value(), "moe_compute(cluster_axis=None) requires num_links to be std::nullopt");
         TT_FATAL(
@@ -699,7 +700,7 @@ std::vector<ttnn::Tensor> moe_compute(
         ring_n);
 
     std::optional<ttnn::experimental::prim::SelectiveReduceCombineParams> combine_params;
-    if (full_local) {
+    if (single_device) {
         // Local combine: no fabric, no mux, no cross-device semaphore. axis=0 names an axis of
         // extent 1 on the 1x1 mesh, which the combine program factory builds as the local
         // combine (and mesh_shape[1-axis]=1 for shared_expert_tp_factor).
@@ -719,11 +720,11 @@ std::vector<ttnn::Tensor> moe_compute(
             .optional_cross_device_semaphore = std::nullopt,
             .local_combine = true};
     } else if (!compute_only) {
-        // An axis of extent 1 has nothing to combine (LocalOutput: dm1 writes the final output), so
+        // An axis of extent 1 has nothing to combine (SingleCluster: dm1 writes the final output), so
         // skip link discovery and the fabric topology lookup, both of which need an initialized
         // fabric context that a mesh opened without a fabric config lacks. Explicit CCL options are
         // accepted and unused there; num_links is still checked > 0 below.
-        const bool axis_has_neighbours = !local_output;
+        const bool axis_has_neighbours = !single_cluster;
         // The local output leaves one partial per mesh coordinate that the caller sums, so a
         // shared expert would be counted once per coordinate.
         TT_FATAL(
@@ -758,14 +759,14 @@ std::vector<ttnn::Tensor> moe_compute(
             "If the fabric default is Torus/Mesh, pass topology=ttnn.Topology.Linear or "
             "ttnn.Topology.Ring explicitly to ttnn.experimental.moe_compute.",
             resolved_topology);
-        // LocalOutput: slot 5 is the caller's optional_output_tensor when one is given, so an unset
+        // SingleCluster: slot 5 is the caller's optional_output_tensor when one is given, so an unset
         // output_memory_config takes that tensor's config instead of a DRAM default that would
         // describe a buffer it does not match; when both are given the device op requires them to
         // agree. FullCcl keeps the DRAM default (the combine's own validation applies there).
         const ttnn::MemoryConfig resolved_output_memory_config =
-            output_memory_config.has_value()                       ? *output_memory_config
-            : (local_output && optional_output_tensor.has_value()) ? optional_output_tensor->memory_config()
-                                                                   : ttnn::DRAM_MEMORY_CONFIG;
+            output_memory_config.has_value()                         ? *output_memory_config
+            : (single_cluster && optional_output_tensor.has_value()) ? optional_output_tensor->memory_config()
+                                                                     : ttnn::DRAM_MEMORY_CONFIG;
         combine_params = ttnn::experimental::prim::SelectiveReduceCombineParams{
             .hidden_size = hidden_size,
             .batch_size = 1,
@@ -791,10 +792,10 @@ std::vector<ttnn::Tensor> moe_compute(
             .has_bias = has_bias,
             .num_token_parallel_cores = num_token_parallel_cores,
             .num_data_parallel_cores = num_data_parallel_cores,
-            .path = compute_only   ? experimental::prim::MoEComputePath::ComputeOnly
-                    : full_local   ? experimental::prim::MoEComputePath::FullLocal
-                    : local_output ? experimental::prim::MoEComputePath::LocalOutput
-                                   : experimental::prim::MoEComputePath::FullCcl,
+            .path = compute_only     ? experimental::prim::MoEComputePath::ComputeOnly
+                    : single_device  ? experimental::prim::MoEComputePath::SingleDevice
+                    : single_cluster ? experimental::prim::MoEComputePath::SingleCluster
+                                     : experimental::prim::MoEComputePath::FullCcl,
             .bh_ring_size = ring_n,
             .combine_params = combine_params,
             .activation_type = activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU)},
