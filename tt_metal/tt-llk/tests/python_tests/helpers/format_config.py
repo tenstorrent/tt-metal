@@ -241,6 +241,18 @@ E8M0_BIAS = 127
 E8M0_NAN_CODE = 0xFF
 E8M0_INF_CODE = 0xFE
 
+
+#: Unbiased exponent limits of the 8-bit-exponent register (TF32 / Float16_b)
+#: that the unpacker lands MX data in. That register has no subnormals, so a
+#: decoded value saturates to +/-Inf at or above the ceiling and flushes to
+#: +/-0 at or below the floor.
+#:
+#: The floor shares its magnitude with :data:`E8M0_BIAS` and is a different
+#: quantity: this is the register's smallest representable exponent, not a
+#: block scale's bias.
+REG_EXP_SATURATE_AT = 128
+REG_EXP_FLUSH_AT = -127
+
 # Map of MX formats to their maximum normal values
 # Per OCP MX Specification:
 # - E5M2 (MxFp8R): Max normal = ± 2^15 × 1.75 = ± 57,344

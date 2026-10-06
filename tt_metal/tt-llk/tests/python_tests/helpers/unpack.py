@@ -12,6 +12,8 @@ from helpers.format_config import (
     MX_FORMAT_BLOCK_SIZE,
     MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN,
     MXFP8_SRCS_SLICE_PACKED_BYTE_LEN,
+    REG_EXP_FLUSH_AT,
+    REG_EXP_SATURATE_AT,
     DataFormat,
 )
 
@@ -495,12 +497,12 @@ def _apply_gasket_range(scaled_blocks, nan_blocks):
     _, exponents = np.frexp(np.where(finite_nonzero, scaled_blocks, 1.0))
     unbiased = exponents - 1  # value = mantissa * 2^exponent, mantissa in [0.5, 1)
     scaled_blocks = np.where(
-        finite_nonzero & (unbiased >= 128),
+        finite_nonzero & (unbiased >= REG_EXP_SATURATE_AT),
         np.copysign(np.inf, scaled_blocks),
         scaled_blocks,
     )
     scaled_blocks = np.where(
-        finite_nonzero & (unbiased <= -127),
+        finite_nonzero & (unbiased <= REG_EXP_FLUSH_AT),
         np.copysign(0.0, scaled_blocks),
         scaled_blocks,
     )
