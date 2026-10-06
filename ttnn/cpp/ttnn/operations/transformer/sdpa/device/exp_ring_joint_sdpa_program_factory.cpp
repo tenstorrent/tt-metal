@@ -2024,7 +2024,7 @@ namespace ttnn::prim {
 
 namespace {
 
-// Legacy exp-ring compute (precision unset or FAST): host-chosen subblocks, the exp-ring CB layout and the
+// Legacy exp-ring compute (precision unset): host-chosen subblocks, the exp-ring CB layout and the
 // state FIFO / scratch accumulator paths.
 class LegacyExpRingJointCompute final : public exp_ring_joint_sdpa::ComputeVariant {
 public:

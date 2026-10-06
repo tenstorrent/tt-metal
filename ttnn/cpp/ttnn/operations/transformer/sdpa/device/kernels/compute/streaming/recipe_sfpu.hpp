@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "fp32_state_sfpu.hpp"
-// SFPU exponentials for the FP32-state recipes (BALANCED, ACCURATE); STANDARD and LOW_PRECISION use the
+// SFPU exponentials for the FP32-state recipes (BALANCED, ACCURATE); STANDARD and FAST use the
 // standard approximate exp.
 //
 // Correction: c = exp(scale * (m_old - m_new)) with the accurate FP32 exp (calculate_sdpa_exp_correction).

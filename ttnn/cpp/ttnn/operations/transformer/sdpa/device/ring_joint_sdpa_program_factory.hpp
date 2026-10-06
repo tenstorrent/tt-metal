@@ -61,7 +61,7 @@ struct RingJointSDPAMeshWorkloadFactory {
 
 static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<RingJointSDPAMeshWorkloadFactory>);
 
-// Named precision recipes B-E (args.precision set and not FAST): recipe-owned compute, reader and writer
+// Named precision recipes B-E (args.precision set): recipe-owned compute, reader and writer
 // kernels on the shared ring transport (ring_joint_sdpa_program_builder.hpp).
 struct RingJointSDPARecipeProgramFactory {
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
