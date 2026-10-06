@@ -59,6 +59,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_FACES,
     RAND_RANGE,
+    RAND_SEED,
     TEST_FACE_DIMS,
     TILE_COUNT,
     TYPECAST_FORMATS,
@@ -1561,7 +1562,8 @@ def test_typecast_fp32_to_uint16_edge_cases_quasar(dest_sync):
 # [from, from + scale], the sample is uniform (mean, spread, histogram), every lane and every
 # row gets its own draw, and scale == 0 yields a constant tile. The input tile is filled with
 # a value outside every tested interval, so an element the kernel failed to write fails the
-# range check.
+# range check. test_rand_seed_quasar checks the seed itself: same seed, same tile; another
+# seed, another tile; and the all-ones lock-up seed is repaired.
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True, repr=False)
 class RandCase:
@@ -1577,7 +1579,7 @@ class RandCase:
 _RAND_FLOAT_FORMATS = (DataFormat.Float16, DataFormat.Float32, DataFormat.Float16_b)
 
 # A scale whose fp32 exponent is <= 31 cannot absorb the 2^-31 normalization, so the kernel
-# records its per-row-normalize body (SFPMULI) instead of the folded one.
+# replays its body with a per-row SFPMULI instead of the folded one.
 _RAND_PER_ROW_NORMALIZE_SCALE = 2.0**-96
 
 RAND_CASES = (
@@ -1593,10 +1595,31 @@ RAND_CASES = (
     RandCase("zero_scale", 1.5, 0.0, _RAND_FLOAT_FORMATS),
 )
 
+# rand does not depend on Dest sync, and 4 tiles fit one Dest section in every mode, so every
+# case runs one shape and one sync mode.
+_RAND_DEST_SYNC = DestSync.Half
+_RAND_DIMS = [64, 64]
+
 # Written to Dest before rand runs; outside every RandCase interval.
 _RAND_UNWRITTEN_SENTINEL = -100.0
 
+_RAND_DEFAULT_SEED = 0x12345678
+
+# Uniformity thresholds.
+_RAND_MEAN_SIGMAS = 6.0  # mean within this many standard errors of the midpoint
+_RAND_STD_REL_TOL = (
+    0.15  # sample standard deviation within this fraction of the uniform one
+)
 _RAND_HISTOGRAM_BINS = 8
+_RAND_HISTOGRAM_MIN_FRACTION = 0.5  # every bin holds [0.5, 1.5] x its expected count
+_RAND_HISTOGRAM_MAX_FRACTION = 1.5
+_RAND_FP32_MIN_DISTINCT_FRACTION = 0.95  # Float32 output: nearly every draw distinct
+_RAND_NARROW_MIN_DISTINCT = 64  # 16-bit output: at least this many distinct values
+_RAND_ROW_MIN_DISTINCT_DIVISOR = 2  # a face row holds >= FACE_C_DIM / 2 distinct values
+_RAND_COL_MIN_DISTINCT_DIVISOR = (
+    4  # a face column holds >= face rows / 4 distinct values
+)
+_RAND_MAX_SERIAL_CORRELATION = 0.2
 
 
 def _fp32_bits(value: float) -> int:
@@ -1604,20 +1627,13 @@ def _fp32_bits(value: float) -> int:
 
 
 def generate_rand_combinations():
-    """unit sweeps dest-sync and tile count; the other cases pin DestSync.Half and 4 tiles."""
+    """Every RandCase over its formats, at one Dest sync mode and shape."""
     combinations = []
     for case in RAND_CASES:
         for variant in generate_quasar_sfpu_format_variants(
             MathOperation.Rand, input_output_formats(list(case.formats))
         ):
-            if case.name == "unit":
-                sync_dims = [
-                    (sync, dims) for sync in DEST_SYNC_MODES for dims in TENSOR_DIMS
-                ]
-            else:
-                sync_dims = [(DestSync.Half, [64, 64])]
-            for dest_sync, dims in sync_dims:
-                combinations.append((case, variant, dest_sync, runtime(dims)))
+            combinations.append((case, variant, _RAND_DEST_SYNC, runtime(_RAND_DIMS)))
     return combinations
 
 
@@ -1661,10 +1677,11 @@ def _check_rand_properties(values: torch.Tensor, case: RandCase, output_format):
         )
         return
 
-    # Mean within 6 sigma of the midpoint, plus one output ulp for the truncating 16-bit store.
+    # Mean within _RAND_MEAN_SIGMAS standard errors of the midpoint, plus one output ulp for the
+    # truncating 16-bit store.
     sigma = case.scale / math.sqrt(12.0)
     mean = float(values.mean())
-    mean_tol = 6.0 * sigma / math.sqrt(n) + _rand_output_ulp(
+    mean_tol = _RAND_MEAN_SIGMAS * sigma / math.sqrt(n) + _rand_output_ulp(
         max(abs(lo), abs(hi)), output_format
     )
     assert (
@@ -1673,52 +1690,67 @@ def _check_rand_properties(values: torch.Tensor, case: RandCase, output_format):
 
     std = float(values.std())
     assert (
-        abs(std - sigma) <= 0.15 * sigma
-    ), f"standard deviation {std} is not within 15% of the uniform {sigma}"
+        abs(std - sigma) <= _RAND_STD_REL_TOL * sigma
+    ), f"standard deviation {std} is not within {_RAND_STD_REL_TOL:.0%} of the uniform {sigma}"
 
     counts = torch.histc(values, bins=_RAND_HISTOGRAM_BINS, min=lo, max=hi)
     expected = n / _RAND_HISTOGRAM_BINS
     assert torch.all(
-        (counts >= 0.5 * expected) & (counts <= 1.5 * expected)
+        (counts >= _RAND_HISTOGRAM_MIN_FRACTION * expected)
+        & (counts <= _RAND_HISTOGRAM_MAX_FRACTION * expected)
     ), f"histogram over [{lo}, {hi}] is not uniform: {counts.tolist()} (expected ~{expected})"
 
     distinct = torch.unique(values).numel()
-    min_distinct = int(0.95 * n) if output_format == DataFormat.Float32 else 64
+    min_distinct = (
+        int(_RAND_FP32_MIN_DISTINCT_FRACTION * n)
+        if output_format == DataFormat.Float32
+        else _RAND_NARROW_MIN_DISTINCT
+    )
     assert (
         distinct >= min_distinct
     ), f"only {distinct} distinct values in {n} draws (need >= {min_distinct})"
 
-    # Face rows: each row of a 16x16 face is one PRNG step across 16 lanes.
-    face_rows = values.reshape(-1, MAX_FACE_R_DIM)
+    # One PRNG step covers a row pair: the 32 SFPU lanes span 2 face rows x FACE_C_DIM columns,
+    # and the kernel steps Dest by 2 rows. So a face row's 16 values are 16 different lanes, and
+    # a face column's values come from 2 lanes over successive PRNG steps.
+    face_rows = values.reshape(-1, FACE_C_DIM)
     row_distinct = torch.tensor([torch.unique(r).numel() for r in face_rows])
-    assert torch.all(row_distinct >= MAX_FACE_R_DIM // 2), (
+    row_min = FACE_C_DIM // _RAND_ROW_MIN_DISTINCT_DIVISOR
+    assert torch.all(row_distinct >= row_min), (
         f"lanes are not independent: a face row holds only {int(row_distinct.min())} "
-        f"distinct values of {MAX_FACE_R_DIM}"
+        f"distinct values of {FACE_C_DIM}"
     )
-    lane_distinct = torch.tensor([torch.unique(c).numel() for c in face_rows.T])
-    assert torch.all(lane_distinct >= face_rows.shape[0] // 4), (
-        f"the PRNG does not advance per row: a lane holds only "
-        f"{int(lane_distinct.min())} distinct values over {face_rows.shape[0]} rows"
+    col_distinct = torch.tensor([torch.unique(c).numel() for c in face_rows.T])
+    col_min = face_rows.shape[0] // _RAND_COL_MIN_DISTINCT_DIVISOR
+    assert torch.all(col_distinct >= col_min), (
+        f"the PRNG does not advance per row pair: a face column holds only "
+        f"{int(col_distinct.min())} distinct values over {face_rows.shape[0]} rows"
     )
     distinct_rows = torch.unique(face_rows, dim=0).shape[0]
     assert (
         distinct_rows == face_rows.shape[0]
     ), f"{face_rows.shape[0] - distinct_rows} face rows repeat an earlier row"
 
-    lane_corr = _serial_correlation(face_rows.flatten())
-    row_corr = _serial_correlation(face_rows.T.flatten())
+    along_row_corr = _serial_correlation(face_rows.flatten())
+    along_col_corr = _serial_correlation(face_rows.T.flatten())
     assert (
-        abs(lane_corr) < 0.2 and abs(row_corr) < 0.2
-    ), f"adjacent draws are correlated: lane-to-lane {lane_corr:.3f}, row-to-row {row_corr:.3f}"
+        abs(along_row_corr) < _RAND_MAX_SERIAL_CORRELATION
+        and abs(along_col_corr) < _RAND_MAX_SERIAL_CORRELATION
+    ), (
+        f"adjacent draws are correlated: along a row {along_row_corr:.3f}, "
+        f"along a column {along_col_corr:.3f}"
+    )
 
 
-@pytest.mark.quasar
-@parametrize(rand_case_formats_sync_dims=generate_rand_combinations())
-def test_rand_quasar(rand_case_formats_sync_dims):
-    """Property-based check of the Quasar rand SFPU op over both recorded bodies and scale == 0."""
-    case, format_variant, dest_sync, input_dimensions = rand_case_formats_sync_dims[0]
+def _rand_config(
+    case: RandCase,
+    format_variant: QuasarSfpuVariant,
+    dest_sync: DestSync,
+    input_dimensions,
+    seed: int = _RAND_DEFAULT_SEED,
+):
+    """Build (without running) the eltwise-unary rand configuration for one case and seed."""
     formats = format_variant.formats
-
     input_torch_format = format_dict[formats.input_format]
     element_count = input_dimensions[0] * input_dimensions[1]
     tile_count = element_count // (DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM)
@@ -1750,6 +1782,7 @@ def test_rand_quasar(rand_case_formats_sync_dims):
                     rand_from_bits=_fp32_bits(case.from_value),
                     rand_scale_bits=_fp32_bits(case.scale),
                 ),
+                RAND_SEED(seed=seed),
             ],
             "runtimes": [
                 TILE_COUNT(tile_count),
@@ -1773,15 +1806,92 @@ def test_rand_quasar(rand_case_formats_sync_dims):
             "dest_acc": format_variant.dest_acc,
         },
     )
-
     format_variant.apply_formats(configuration.formats_config)
+    return configuration
 
+
+def _run_rand(configuration, format_variant: QuasarSfpuVariant, element_count: int):
     res_from_L1 = configuration.run().result
-    values = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format]).to(
-        torch.float64
-    )
+    values = torch.tensor(
+        res_from_L1, dtype=format_dict[format_variant.formats.output_format]
+    ).to(torch.float64)
     assert (
         values.numel() == element_count
     ), f"result has {values.numel()} elements, expected {element_count}"
+    return values
 
-    _check_rand_properties(values, case, formats.output_format)
+
+@pytest.mark.quasar
+@parametrize(rand_case_formats_sync_dims=generate_rand_combinations())
+def test_rand_quasar(rand_case_formats_sync_dims):
+    """Property-based check of the Quasar rand SFPU op over both replayed bodies and scale == 0."""
+    case, format_variant, dest_sync, input_dimensions = rand_case_formats_sync_dims[0]
+    configuration = _rand_config(case, format_variant, dest_sync, input_dimensions)
+    values = _run_rand(
+        configuration, format_variant, input_dimensions[0] * input_dimensions[1]
+    )
+    _check_rand_properties(values, case, format_variant.formats.output_format)
+
+
+_RAND_OTHER_SEED = 0x9E3779B9
+_RAND_LOCKUP_SEED = 0xFFFFFFFF  # the XNOR LFSR lock-up state init_rand repairs
+_RAND_LOCKUP_REPAIR_SEED = 0xFFFFFFFE  # what init_rand replaces it with
+_RAND_MIN_DIFFERENT_FRACTION = 0.9  # two seeds must disagree on nearly every element
+
+
+def _rand_seed_variant() -> QuasarSfpuVariant:
+    """Float32 in, Float32 Dest, Float32 out: every PRNG bit the kernel keeps reaches L1."""
+    return next(
+        v
+        for v in generate_quasar_sfpu_format_variants(
+            MathOperation.Rand, input_output_formats([DataFormat.Float32])
+        )
+        if v.dest_acc == DestAccumulation.Yes
+    )
+
+
+@pytest.mark.quasar
+def test_rand_seed_quasar():
+    """The seed takes effect: same seed repeats bit-for-bit, another seed differs, lock-up is repaired."""
+    case = RAND_CASES[0]
+    format_variant = _rand_seed_variant()
+    element_count = _RAND_DIMS[0] * _RAND_DIMS[1]
+    seeds = (
+        _RAND_DEFAULT_SEED,
+        _RAND_OTHER_SEED,
+        _RAND_LOCKUP_SEED,
+        _RAND_LOCKUP_REPAIR_SEED,
+    )
+    configs = {
+        seed: _rand_config(case, format_variant, _RAND_DEST_SYNC, _RAND_DIMS, seed)
+        for seed in seeds
+    }
+    # compile-producer skips on run(), so prepare every ELF first.
+    for configuration in configs.values():
+        configuration.prepare()
+
+    # Run the default seed, then another seed, then the default seed again: an unseeded PRNG
+    # would carry on from where the other seed's run left it rather than repeat run one.
+    first = _run_rand(configs[_RAND_DEFAULT_SEED], format_variant, element_count)
+    other = _run_rand(configs[_RAND_OTHER_SEED], format_variant, element_count)
+    again = _run_rand(configs[_RAND_DEFAULT_SEED], format_variant, element_count)
+    lockup = _run_rand(configs[_RAND_LOCKUP_SEED], format_variant, element_count)
+    repair = _run_rand(configs[_RAND_LOCKUP_REPAIR_SEED], format_variant, element_count)
+
+    for values in (first, other, lockup):
+        _check_rand_properties(values, case, format_variant.formats.output_format)
+
+    mismatched = (first != again).nonzero().flatten()
+    assert mismatched.numel() == 0, (
+        f"the same seed gave a different tile in {mismatched.numel()} of {element_count} "
+        f"elements; first at {mismatched[:8].tolist()}"
+    )
+    different = int((first != other).sum())
+    assert different >= _RAND_MIN_DIFFERENT_FRACTION * element_count, (
+        f"seeds {_RAND_DEFAULT_SEED:#x} and {_RAND_OTHER_SEED:#x} agree on "
+        f"{element_count - different} of {element_count} elements"
+    )
+    assert torch.equal(lockup, repair), (
+        f"seed {_RAND_LOCKUP_SEED:#x} must be repaired to {_RAND_LOCKUP_REPAIR_SEED:#x}, "
+        f"but their tiles differ in {int((lockup != repair).sum())} elements"
+    )

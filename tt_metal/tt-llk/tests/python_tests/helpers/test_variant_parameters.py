@@ -343,6 +343,20 @@ class RAND_RANGE(TemplateParameter):
 
 
 @dataclass
+class RAND_SEED(TemplateParameter):
+    """PRNG seed the rand SFPU op's init writes, as a uint32.
+
+    Emitted as a macro so the shared SFPU dispatcher keeps its default seed in every
+    build that does not pass this parameter.
+    """
+
+    seed: int = 0x12345678
+
+    def convert_to_cpp(self) -> str:
+        return f"#define RAND_SEED {self.seed:#010x}u"
+
+
+@dataclass
 class SFPU_RELU_MIN_INT_THRESHOLD(TemplateParameter):
     """Integer threshold for relu_min's vInt branch, as a two's-complement uint32.
 
