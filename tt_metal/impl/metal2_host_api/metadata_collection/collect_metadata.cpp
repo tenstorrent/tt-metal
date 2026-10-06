@@ -89,7 +89,7 @@ void CollectResourceUsers(const ProgramSpec& spec, CollectedSpecData& collected)
     }
 
     // dfb_endpoints invariant: every local DFB has an entry. (The cross-node equivalent is in
-    // PostCollectionValidate.)
+    // ValidateProgramMisc.)
     for (const auto& dfb : spec.dataflow_buffers) {
         TT_FATAL(
             collected.dfb_endpoints.contains(dfb.unique_id),

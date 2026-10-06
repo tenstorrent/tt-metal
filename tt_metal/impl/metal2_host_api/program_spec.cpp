@@ -31,7 +31,6 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 
     // Step 1b: Validate semantic rules (can be skipped for trusted inputs)
     if (!skip_validation) {
-        PostCollectionValidate(spec, collected);
         ValidateProgramSpec(spec, collected, metal_ctx, *mesh_device.allocator());
     }
 
