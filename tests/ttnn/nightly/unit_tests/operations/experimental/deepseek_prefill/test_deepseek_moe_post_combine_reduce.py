@@ -9,7 +9,8 @@ Validates correctness against:
 - PyTorch reference (weighted sum across experts)
 - Old implementation from tt_moe.py (to_layout + mul + sum)
 
-Tests structured data, random data, sparse weights, and non-local expert skipping.
+Tests structured data, random data, sparse weights, non-local expert skipping, and that inactive
+(non-local or zero-weight) slots are never read.
 Shape: [1, 640, 8, 7168] - DeepSeek-V3 dimensions.
 """
 
@@ -320,6 +321,65 @@ def test_skip_nonlocal_experts(device, config):
     )
     # Use the standard PCC threshold so this test validates non-local expert skipping.
     assert_pcc(result, ref, threshold=PCC_THRESHOLD, label="skip_nonlocal_no_init_zeros")
+
+
+@pytest.mark.parametrize("config", MODEL_PARAMS)
+def test_nonlocal_slots_not_read(device, config):
+    """Non-local slots hold NaN, as combine leaves them unwritten without init_zeros: the kernel must never
+    read them, and a token with no local slot must come out as exact zeros."""
+    torch.manual_seed(42)
+    emb_dim = config.EMB_SIZE
+    num_routed_experts = config.NUM_ROUTED_EXPERTS
+    local_expert_end = 64
+
+    indices = torch.stack([torch.randperm(num_routed_experts)[:NUM_EXPERTS] for _ in range(NUM_TOKENS)])
+    for t in range(0, NUM_TOKENS, 4):  # every 4th token routes only to non-local experts
+        indices[t] = torch.randperm(num_routed_experts - local_expert_end)[:NUM_EXPERTS] + local_expert_end
+    local = (indices < local_expert_end).unsqueeze(0)  # [1, T, K]
+    indices_tt = ttnn.from_torch(
+        indices.unsqueeze(0).to(torch.uint16),
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    table = torch.full((num_routed_experts,), -1, dtype=torch.int32)
+    table[:local_expert_end] = 0
+    dispatch_table_tt = ttnn.from_torch(
+        table, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    combine = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, emb_dim, dtype=torch.bfloat16)
+    combine[~local] = float("nan")
+    weights = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, 1, dtype=torch.bfloat16)
+
+    ref = pytorch_reference(torch.where(local.unsqueeze(-1), combine, torch.zeros_like(combine)), weights)
+    result = ttnn.to_torch(
+        new_implementation(to_device(combine, device), to_device(weights, device), indices_tt, dispatch_table_tt)
+    )
+    assert_pcc(result, ref, label="nonlocal_nan_not_read")
+    no_local = ~local.any(dim=-1)  # [1, T]
+    assert torch.all(result[no_local] == 0), "tokens without a local slot must be exact zeros"
+
+
+@pytest.mark.parametrize("config", MODEL_PARAMS)
+def test_zero_weight_slots_not_read(device, config):
+    """Weight path: slots with a +0 or -0 weight hold NaN and must never be read; a token whose weights are all
+    zero must come out as exact zeros."""
+    torch.manual_seed(42)
+    emb_dim = config.EMB_SIZE
+    active = torch.rand(1, NUM_TOKENS, NUM_EXPERTS) < 0.5
+    active[:, ::4, :] = False  # every 4th token has no active slot
+    weights = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, 1, dtype=torch.bfloat16)
+    signed_zero = torch.where(torch.rand(1, NUM_TOKENS, NUM_EXPERTS, 1) < 0.5, -0.0, 0.0).to(torch.bfloat16)
+    weights = torch.where(active.unsqueeze(-1), weights, signed_zero)
+    combine = torch.randn(1, NUM_TOKENS, NUM_EXPERTS, emb_dim, dtype=torch.bfloat16)
+    combine[~active] = float("nan")
+
+    ref = pytorch_reference(torch.where(active.unsqueeze(-1), combine, torch.zeros_like(combine)), weights)
+    result = ttnn.to_torch(new_implementation(to_device(combine, device), to_device(weights, device), None, None))
+    assert_pcc(result, ref, label="zero_weight_nan_not_read")
+    assert torch.all(result[:, ::4, :] == 0), "tokens without an active slot must be exact zeros"
 
 
 # ============================================================================

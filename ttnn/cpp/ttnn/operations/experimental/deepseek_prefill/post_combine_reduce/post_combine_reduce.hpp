@@ -21,24 +21,25 @@ namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce 
  *
  * With a single fused kernel that:
  * - Reads ROW_MAJOR combine output directly (no padding overhead)
+ * - Reads and multiplies only the active (token, slot) rows (saves ~75% of reads on TP4)
  * - Performs broadcast multiply + reduce in one pass
- * - Optionally skips non-local experts (saves ~75% compute on TP4)
  * - Outputs result ready for reduce_scatter
  *
  * Two expert-skip strategies are supported, selected by whether the optional
  * indices + expert_dispatch_table tensors are supplied:
  *
  *   DeepSeek path — BOTH indices and expert_dispatch_table provided:
- *     The kernel looks up each expert id in the dispatch table and skips any
- *     expert mapped to -1 (non-local to this dispatch group). This is required
- *     when the upstream combine op does NOT zero non-local expert outputs.
+ *     A slot is active when its expert id maps to a chip (not -1, non-local to
+ *     this dispatch group) in the dispatch table. Inactive slots are never read,
+ *     so the upstream combine op does not need to zero them.
  *
  *   GPT-OSS path — NEITHER indices nor expert_dispatch_table provided:
- *     The kernel skips experts whose routing weight is exactly zero. This
- *     requires the upstream router to have zeroed routing weights for
- *     non-local experts (which is cheaper than materialising a dispatch
- *     table when weights are already per-token).
+ *     A slot is active when its routing weight is non-zero. This requires the
+ *     upstream router to have zeroed routing weights for non-local experts
+ *     (which is cheaper than materialising a dispatch table when weights are
+ *     already per-token).
  *
+ *   A token with no active slot produces exact zeros.
  *   Supplying exactly one of the two raises a TT_FATAL.
  *
  * Input shapes:
