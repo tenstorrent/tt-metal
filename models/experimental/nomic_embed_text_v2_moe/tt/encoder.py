@@ -34,6 +34,9 @@ class TtNomicBertEncoder(LightweightModule):
         self.stacked_buffers = StackedBuffers()
         # The trailing dot is part of the prefix, as it is for every module here. Inserting the
         # separator instead would make "encoder." build "encoder..layers.0." and raise KeyError.
+        # The last block's output leaves the model and outlives the forward: in L1 it would sit
+        # under ops that plan L1 as free, so it goes to DRAM whatever its size.
+        last = config.num_hidden_layers - 1
         self.layers = [
             TtNomicBertBlock(
                 device,
@@ -43,6 +46,7 @@ class TtNomicBertEncoder(LightweightModule):
                 f"{state_dict_prefix}layers.{idx}.",
                 moe=config.is_moe_layer(idx),
                 buffers=self.stacked_buffers,
+                output_memory_config=ttnn.DRAM_MEMORY_CONFIG if idx == last else None,
             )
             for idx in range(config.num_hidden_layers)
         ]

@@ -17,7 +17,12 @@ import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.nomic_embed_text_v2_moe.tt.common import block_spread, to_device, transpose_linear_weight
+from models.experimental.nomic_embed_text_v2_moe.tt.common import (
+    activation_memory_config,
+    block_spread,
+    to_device,
+    transpose_linear_weight,
+)
 from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import router_program_config
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 
@@ -32,8 +37,8 @@ PADDING_LOGIT = -1e30
 # writing L1, 44.8 -> 42.9 us a MoE layer at 128 tokens and 49.6 -> 47.1 at 576, bit-identical up
 # to 4096. Above, DRAM: the scores alone take 221 KB of every bank at 94k tokens, and
 # router_program_config plans the matmul's buffers against the whole of L1, so they clashed. The
-# dense weights the experts take go to DRAM either way, and every intermediate is freed before the
-# experts run.
+# dense weights the experts take follow activation_memory_config instead, and every intermediate is
+# freed before the experts run.
 _L1_MAX_TOKENS = 4096
 
 
@@ -198,7 +203,7 @@ class TtNomicRouter(LightweightModule):
             probabilities,
             mask,
             dtype=activation_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=activation_memory_config(probabilities),
             sub_core_grids=self._tile_cores(probabilities),
         )
         ttnn.deallocate(mask)

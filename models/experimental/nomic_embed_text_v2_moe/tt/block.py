@@ -19,7 +19,7 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.nomic_embed_text_v2_moe.tt.attention import TtNomicBertAttention
-from models.experimental.nomic_embed_text_v2_moe.tt.common import LayerNormParameters
+from models.experimental.nomic_embed_text_v2_moe.tt.common import LayerNormParameters, activation_memory_config
 from models.experimental.nomic_embed_text_v2_moe.tt.experts import StackedBuffers
 from models.experimental.nomic_embed_text_v2_moe.tt.mlp import TtNomicBertMLP
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
@@ -31,6 +31,9 @@ class TtNomicBertBlock(LightweightModule):
 
     The FFN is dense or MoE depending on the layer index; the caller decides via moe, since the
     placement predicate belongs to the config rather than the block.
+
+    Both norms write where activation_memory_config puts an activation of their size, the output
+    where output_memory_config says when it is given.
     """
 
     def __init__(
@@ -42,10 +45,12 @@ class TtNomicBertBlock(LightweightModule):
         state_dict_prefix,
         moe: bool,
         buffers: StackedBuffers | None = None,
+        output_memory_config: ttnn.MemoryConfig | None = None,
     ):
         super().__init__()
         self.tt_config = tt_config
         self.epsilon = config.layer_norm_epsilon
+        self.output_memory_config = output_memory_config
 
         self.attn = TtNomicBertAttention(device, config, tt_config, state_dict, f"{state_dict_prefix}attn.")
         prefix = f"{state_dict_prefix}mlp."
@@ -64,9 +69,13 @@ class TtNomicBertBlock(LightweightModule):
 
         self.norm1, self.norm2 = norm("norm1"), norm("norm2")
 
-    def _norm(self, x: ttnn.Tensor, residual: ttnn.Tensor, parameters: LayerNormParameters) -> ttnn.Tensor:
-        # The attention and fc2 outputs may sit in L1 (dense_linear); the block's activations stay
-        # in DRAM.
+    def _norm(
+        self,
+        x: ttnn.Tensor,
+        residual: ttnn.Tensor,
+        parameters: LayerNormParameters,
+        memory_config: ttnn.MemoryConfig | None = None,
+    ) -> ttnn.Tensor:
         weight, bias = parameters.for_input(x)
         return ttnn.layer_norm(
             x,
@@ -74,7 +83,7 @@ class TtNomicBertBlock(LightweightModule):
             weight=weight,
             bias=bias,
             epsilon=self.epsilon,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=activation_memory_config(x) if memory_config is None else memory_config,
             compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.NORM),
         )
 
@@ -99,7 +108,7 @@ class TtNomicBertBlock(LightweightModule):
         ttnn.deallocate(attn_out)
 
         mlp_out = self.mlp(hidden)
-        out = self._norm(mlp_out, hidden, self.norm2)
+        out = self._norm(mlp_out, hidden, self.norm2, self.output_memory_config)
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(hidden)
         return out

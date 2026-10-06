@@ -70,6 +70,22 @@ def to_device(
     return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
 
 
+# Up to this many tile rows of M the residual stream (the block and embedding norms' outputs), the
+# stacked expert sum and the router's dense weights go to L1, where the next op reads them:
+# bit-identical, 20 to 36 us a forward from 1x32 to 1x320, the largest stacked pass.
+ACTIVATION_L1_MAX_TILES = 10
+
+
+def activation_memory_config(x: ttnn.Tensor) -> ttnn.MemoryConfig:
+    """L1 for an activation of at most ACTIVATION_L1_MAX_TILES tile rows of M, DRAM above.
+
+    M counts each sequence at its tile-padded length: B * ceil(S / 32) rows for (B, 1, S, W), and
+    ceil(T / 32) for the flat (1, 1, T, W).
+    """
+    m_tiles = x.shape[0] * ttnn.core.divup(x.shape[-2], ttnn.TILE_SIZE)
+    return ttnn.L1_MEMORY_CONFIG if m_tiles <= ACTIVATION_L1_MAX_TILES else ttnn.DRAM_MEMORY_CONFIG
+
+
 def transpose_linear_weight(weight: torch.Tensor) -> torch.Tensor:
     """Reorient an (out_features, in_features) checkpoint weight for ttnn.linear.
 

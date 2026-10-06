@@ -59,6 +59,7 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
+    activation_memory_config,
     block_spread,
     pack_expert_weights,
     stack_expert_columns,
@@ -252,7 +253,7 @@ class TtNomicExperts(LightweightModule):
             ),
             compute_kernel_config=compute_kernel_config,
             dtype=self.tt_config.activation_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=activation_memory_config(gated),
         )
 
     def transposed_w1(self, x: ttnn.Tensor, gelu: ttnn.GeluVariant | None = None) -> ttnn.Tensor:
