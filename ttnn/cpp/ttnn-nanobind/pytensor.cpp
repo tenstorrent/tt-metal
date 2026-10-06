@@ -477,6 +477,10 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
 void pytensor_module_types(nb::module_& mod) {
+    using CMAKE_UNIQUE_NAMESPACE::L1Pool;
+    using CMAKE_UNIQUE_NAMESPACE::L1PoolExtent;
+    using CMAKE_UNIQUE_NAMESPACE::L1PoolPlacement;
+    using CMAKE_UNIQUE_NAMESPACE::L1TensorGeometry;
     nb::class_<L1PoolExtent>(mod, "L1PoolExtent")
         .def(nb::init<distributed::MeshCoordinate, CoreCoord, DeviceAddr, DeviceAddr>())
         .def_rw("device_coord", &L1PoolExtent::device_coord)
@@ -542,9 +546,12 @@ void pytensor_module_types(nb::module_& mod) {
 }
 
 void pytensor_module(nb::module_& mod) {
+    using CMAKE_UNIQUE_NAMESPACE::L1Pool;
+    using CMAKE_UNIQUE_NAMESPACE::L1PoolExtent;
+    using CMAKE_UNIQUE_NAMESPACE::L1PoolPlacement;
     mod.def(
         "experimental_l1_tensor_geometry",
-        &l1_tensor_geometry,
+        &CMAKE_UNIQUE_NAMESPACE::l1_tensor_geometry,
         nb::arg("mesh_device").noconvert(),
         nb::arg("device_coord"),
         nb::arg("tensor_spec"),
