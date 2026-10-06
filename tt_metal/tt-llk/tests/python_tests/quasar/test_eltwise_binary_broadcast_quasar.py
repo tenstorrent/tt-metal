@@ -117,11 +117,13 @@ def skip_if_quasar_binary_broadcast_unsupported(
             f"32x32-only after reverting tiny-tile support (tile {list(tile_dimensions)}). "
             "See tenstorrent/tt-metal#57902"
         )
-    hardware_acc = math_fidelity != MathFidelity.LoFi
-    if bool(acc_to_dest) != hardware_acc:
+    # EN_DST_ACC is hard-wired to non-LoFi, so pairwise accumulation at LoFi
+    # cannot be requested. HiFi with acc_to_dest=False is still a single-tile
+    # multiply; odd tile counts have no True mode, and skipping them drops HiFi.
+    if bool(acc_to_dest) and math_fidelity == MathFidelity.LoFi:
         pytest.skip(
-            "Quasar eltwise binary broadcast enables dest accumulation only for "
-            f"non-LoFi fidelity (requested acc_to_dest={acc_to_dest}, "
+            "Quasar eltwise binary broadcast cannot accumulate into dest at LoFi "
+            f"(requested acc_to_dest={acc_to_dest}, "
             f"math_fidelity={math_fidelity.name}). See tenstorrent/tt-metal#57902"
         )
 
