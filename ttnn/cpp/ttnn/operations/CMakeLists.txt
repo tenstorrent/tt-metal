@@ -44,6 +44,7 @@ add_subdirectory(loss)
 add_subdirectory(prefetcher)
 add_subdirectory(rand)
 add_subdirectory(randn)
+add_subdirectory(toy_scaled_add)
 add_subdirectory(uniform)
 
 # Umbrella target for everything migrated into this file: ttnncpp links this
@@ -79,6 +80,7 @@ target_link_libraries(
         TTNN::Ops::Randn
         TTNN::Ops::Reduction
         TTNN::Ops::SlidingWindow
+        TTNN::Ops::ToyScaledAdd
         TTNN::Ops::Uniform
 )
 
@@ -120,5 +122,6 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Randn>
         $<TARGET_OBJECTS:TTNN::Ops::Reduction>
         $<TARGET_OBJECTS:TTNN::Ops::SlidingWindow>
+        $<TARGET_OBJECTS:TTNN::Ops::ToyScaledAdd>
         $<TARGET_OBJECTS:TTNN::Ops::Uniform>
 )
