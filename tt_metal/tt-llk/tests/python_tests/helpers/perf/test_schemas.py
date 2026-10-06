@@ -51,7 +51,6 @@ PERF_TEST_SCHEMAS = {
         "version": 1,
         "columns": [
             "c_dimm",
-            "chained",
             "dest_acc",
             "face_ct",
             "face_kt",

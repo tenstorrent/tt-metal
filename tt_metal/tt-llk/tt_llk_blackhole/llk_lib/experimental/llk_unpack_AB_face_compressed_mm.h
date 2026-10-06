@@ -277,9 +277,6 @@ inline void _llk_unpack_AB_face_compressed_mm_uninit_(const std::uint32_t unpA_n
  * @tparam ct_dim: Output width in tiles, 1 to 16.
  * @tparam finalize: For ct_dim == 1, leave both sources zeroed and valid so the math thread can merge its
  *                   split-accumulation partials, values = <true/false>
- * @tparam chained: The next unpack call is another face_compressed_mm execute, values = <true/false>. It waits for
- *                  this call's context release before it writes a context, so this call returns without waiting.
- *                  Any other unpack call after a chained call races this call's reads of the contexts.
  * @param base_address_b: SrcB base address, which is the activation CB's read pointer.
  * @param base_address_meta: L1 address of the meta buffer. This thread reads the weight base addresses and
  *                           the index words that follow the math metas.
@@ -287,7 +284,7 @@ inline void _llk_unpack_AB_face_compressed_mm_uninit_(const std::uint32_t unpA_n
  * @note Call @ref _llk_unpack_AB_face_compressed_mm_init_ first.
  * @note On the math thread, pair with @ref _llk_math_face_compressed_mm_.
  */
-template <std::uint32_t ct_dim = 1, bool finalize = true, bool chained = false>
+template <std::uint32_t ct_dim = 1, bool finalize = true>
 inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_b, const std::uint32_t base_address_meta, const std::uint32_t kt_dim)
 {
     static_assert(ct_dim >= 1 && ct_dim <= 16, "face_compressed_mm (unpack): ct_dim must be in [1, 16]");
@@ -446,10 +443,7 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
 
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 
-    if constexpr (!chained)
-    {
-        wait_for_next_context(1);
-    }
+    wait_for_next_context(1);
     reset_config_context();
 
     // Put the counters back the way init left them, ready for the next call: zero the Y counters the

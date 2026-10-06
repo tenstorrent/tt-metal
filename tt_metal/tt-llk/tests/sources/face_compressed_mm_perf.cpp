@@ -82,14 +82,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const std::uint32_t meta = reinterpret_cast<std::uint32_t>(META_L1);
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                if constexpr (CHAINED)
-                {
-                    if (loop + 1 < LOOP_FACTOR)
-                    {
-                        _llk_unpack_AB_face_compressed_mm_<CT_DIM, true /* finalize */, true /* chained */>(L1_ADDRESS(params.buffer_A[0]), meta, KT_DIM);
-                        continue;
-                    }
-                }
                 _llk_unpack_AB_face_compressed_mm_<CT_DIM, true /* finalize */>(L1_ADDRESS(params.buffer_A[0]), meta, KT_DIM);
             }
         }

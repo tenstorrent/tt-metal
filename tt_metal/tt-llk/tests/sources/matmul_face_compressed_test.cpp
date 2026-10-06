@@ -58,17 +58,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // An activation tile is 2 faces x in0_face_r_dim rows x 16 Float16_b datums = 4 * in0_face_r_dim 16-byte words.
     for (std::uint32_t call = 0; call < num_calls; call++)
     {
-        const std::uint32_t address_b = L1_ADDRESS(params.buffer_A[0]) + call * kt_per_call * 4 * params.in0_face_r_dim;
-        const std::uint32_t address_meta = params.buffer_C[0] + call * meta_bytes_per_call;
-        // Even calls with a successor skip their trailing context poll, so both ends of call run back to back.
-        if (call % 2 == 0 && call + 1 < num_calls)
-        {
-            _llk_unpack_AB_face_compressed_mm_<CT_DIM, true /* finalize */, true /* chained */>(address_b, address_meta, kt_per_call);
-        }
-        else
-        {
-            _llk_unpack_AB_face_compressed_mm_<CT_DIM, true /* finalize */>(address_b, address_meta, kt_per_call);
-        }
+        _llk_unpack_AB_face_compressed_mm_<CT_DIM, true /* finalize */>(
+            L1_ADDRESS(params.buffer_A[0]) + call * kt_per_call * 4 * params.in0_face_r_dim, params.buffer_C[0] + call * meta_bytes_per_call, kt_per_call);
         if constexpr (CUSTOM_MM_REARM)
         {
             // A -inf SrcA clear after every call, as a max-reduce between calls would; it waits for its bank.

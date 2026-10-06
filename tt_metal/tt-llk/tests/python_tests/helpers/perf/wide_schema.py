@@ -91,7 +91,6 @@ DB_SCHEMA = [
     Column("block_unpack", "bool", True, "configuration"),
     Column("broadcast_type", "string", True, "configuration"),
     Column("c_dimm", "int64", True, "configuration"),
-    Column("chained", "bool", True, "configuration"),
     Column("chunks_per_section", "int64", True, "configuration"),
     Column("clamp_negative", "bool", True, "configuration"),
     Column("clear_src", "bool", True, "configuration"),

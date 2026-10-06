@@ -79,7 +79,6 @@ class FACE_COMPRESSED_MM_META(TemplateParameter):
     face_pattern: str = "bfp4"
     face_kt: int = 2
     face_ct: int = 1
-    chained: bool = False
 
     def convert_to_cpp(self) -> str:
         words, nz_blocks, _ = build_meta(self.face_pattern, self.face_ct, self.face_kt)
@@ -88,7 +87,6 @@ class FACE_COMPRESSED_MM_META(TemplateParameter):
                 f"constexpr std::uint32_t META_WORDS = {len(words)};",
                 "#define META {" + ", ".join(f"0x{int(w):08x}u" for w in words) + "}",
                 "#define META_NZ_BLOCKS {" + ", ".join(str(n) for n in nz_blocks) + "}",
-                f"constexpr bool CHAINED = {str(self.chained).lower()};",
             ]
         )
 
@@ -107,8 +105,11 @@ CASES = [
 
 
 @pytest.mark.perf
-@parametrize(case=CASES, chained=[False, True])
-def test_perf_face_compressed_mm(perf_report, case, chained):
+@parametrize(case=CASES)
+def test_perf_face_compressed_mm(perf_report, case):
+    # A single parametrized argument arrives as a one-element tuple.
+    if len(case) == 1:
+        (case,) = case
     pattern, in0_face_r_dim, ct, kt = case
     _, _, packed_len = build_meta(pattern, ct, kt)
     configuration = PerfConfig(
@@ -121,9 +122,7 @@ def test_perf_face_compressed_mm(perf_report, case, chained):
         ],
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
-            FACE_COMPRESSED_MM_META(
-                face_pattern=pattern, face_kt=kt, face_ct=ct, chained=chained
-            ),
+            FACE_COMPRESSED_MM_META(face_pattern=pattern, face_kt=kt, face_ct=ct),
         ],
         runtimes=[
             NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),
