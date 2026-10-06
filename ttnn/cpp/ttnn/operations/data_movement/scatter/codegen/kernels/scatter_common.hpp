@@ -88,9 +88,12 @@ FORCE_INLINE void write_value_to_tile(
 
 // Public scatter reduction ABI.  ``reduction_mode`` is 0=replace, 1=add,
 // 2=multiply, 3=max/amax, 4=min/amin; ``value_kind`` is 1=float32,
-// 2=int32, 3=uint32, 4=uint16.
-// BF16 reduction is promoted to FP32 by the host composition so duplicate
-// updates round only once, matching tt-metal's dedicated BF16 factory.
+// 2=int32, 3=uint32, 4=uint16.  Kind 5 (bfloat16) exists on the host only:
+// a bf16 reduction is served by the dedicated ROW_MAJOR accumulator kernel
+// (scatter_reader_bf16_reduce_rm.cpp), which promotes to FP32 so duplicate
+// updates round only once. No case below handles kind 5 -- the fallthrough
+// would keep ``current_value`` and silently drop every update -- so the
+// generic readers static_assert that kind 5 never arrives with a reduction.
 FORCE_INLINE uint32_t scatter_reduce_value(
     const uint32_t current_value,
     const uint32_t source_value,
