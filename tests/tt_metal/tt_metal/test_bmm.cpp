@@ -426,6 +426,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TraceBmm) {
+    if (this->IsSlowDispatch()) {
+        GTEST_SKIP();
+    }
     auto& mesh_device = *devices_[0];
     const BmmParams p = single_node_bmm_params(mesh_device.arch());
     BmmTensors tensors = create_bmm_tensors(mesh_device, p);
