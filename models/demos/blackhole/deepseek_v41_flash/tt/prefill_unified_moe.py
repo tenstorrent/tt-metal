@@ -197,11 +197,18 @@ class DSV41UnifiedMoE:
     chunk (all tokens of the mesh row, replicated over the columns) and returns the per-column PARTIAL weighted sums [1,1,N,D] (tile, DRAM).
     """
 
-    def __init__(self, md, layer_id, weights=None, log=print):
+    def __init__(self, md, layer_id, weights=None, log=print, ring=None):
+        """ring: (w0_w1, w2) = the moe_compute decode weight tensors of the layer; the op then reads them in place (RING_WEIGHTS mode, 8 columns,
+        no second weight copy): the same tensor is passed EPC times in the gate/up/down lists."""
         self.md, self.layer_id = md, layer_id
-        self.gate_projs, self.up_projs, self.down_projs = (
-            weights if weights is not None else build_expert_weights(md, layer_id, log=log)
-        )
+        if ring is not None:
+            self.gate_projs = [ring[0]] * EPC
+            self.up_projs = [ring[0]] * EPC
+            self.down_projs = [ring[1]] * EPC
+        else:
+            self.gate_projs, self.up_projs, self.down_projs = (
+                weights if weights is not None else build_expert_weights(md, layer_id, log=log)
+            )
 
     def forward(self, x_rm, scores, indices, upto=99):
         """x_rm [1,N,D] bf16 ROW_MAJOR; scores [N,1,1,k] bf16 RM; indices [N,1,1,k] uint16 RM (the router outputs, N = tokens of this row)."""

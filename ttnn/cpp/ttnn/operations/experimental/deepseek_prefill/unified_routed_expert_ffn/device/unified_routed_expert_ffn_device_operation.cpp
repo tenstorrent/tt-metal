@@ -33,6 +33,15 @@ bool is_dram_interleaved(const ttnn::Tensor& t) {
 // the bandwidth (a core pinned to one bank saturates near 30 GB/s regardless of request size), so
 // one tile-row is the height to ship; the program factory pins the WIDTH, which is the part
 // correctness depends on.
+// RING_WEIGHTS mode: the weights are the moe_compute decode (ring) tensors w0_w1 [8, 1, E, G, R*32, 128] and w2 [8, 1,
+// E, GD, RD*32, 128] (DRAM HEIGHT_SHARDED, bfp8 TILE), passed as the SAME tensor repeated experts_per_chip times in the
+// three lists (gate and up both = w0_w1).
+bool is_ring_weights(const ttnn::Tensor& w) {
+    const auto& mem = w.memory_config();
+    return w.logical_shape().rank() == 6 && mem.buffer_type() == tt::tt_metal::BufferType::DRAM &&
+           mem.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED;
+}
+
 bool is_dram_nd_sharded_by_tile_rows(const ttnn::Tensor& t) {
     const auto& mem = t.memory_config();
     if (mem.buffer_type() != tt::tt_metal::BufferType::DRAM || !mem.created_with_nd_shard_spec()) {
@@ -105,19 +114,39 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     const auto& gate_shape = t.gate_projs[0].padded_shape();
     const auto& up_shape = t.up_projs[0].padded_shape();
     const auto& down_shape = t.down_projs[0].padded_shape();
-
-    TT_FATAL(
-        x_shape[-1] == gate_shape[-2] && x_shape[-1] == up_shape[-2],
-        "x's last dim {} must match gate/up's K dim ({}, {})",
-        x_shape[-1],
-        gate_shape[-2],
-        up_shape[-2]);
-    TT_FATAL(
-        gate_shape[-1] == up_shape[-1] && gate_shape[-1] == down_shape[-2],
-        "gate/up N ({}) must equal down K ({})",
-        gate_shape[-1],
-        down_shape[-2]);
-    TT_FATAL(down_shape[-1] == x_shape[-1], "down N ({}) must equal x K ({})", down_shape[-1], x_shape[-1]);
+    const bool ring = is_ring_weights(t.gate_projs[0]);
+    if (ring) {
+        TT_FATAL(
+            is_ring_weights(t.up_projs[0]) && is_ring_weights(t.down_projs[0]) &&
+                t.gate_projs[0].buffer()->address() == t.up_projs[0].buffer()->address() &&
+                t.gate_projs[0].dtype() == tt::tt_metal::DataType::BFLOAT8_B &&
+                t.down_projs[0].dtype() == tt::tt_metal::DataType::BFLOAT8_B &&
+                t.gate_projs[0].layout() == tt::tt_metal::Layout::TILE && gate_shape[0] == 8 && down_shape[0] == 8 &&
+                gate_shape[2] == op.experts_per_chip && down_shape[2] == op.experts_per_chip && gate_shape[-1] == 128 &&
+                down_shape[-1] == 128,
+            "ring weights: gate/up must be the decode w0_w1 tensor and down the decode w2 tensor (8 ring cores, E "
+            "experts, bfp8 TILE)");
+        TT_FATAL(
+            t.gate_projs[0]
+                    .device()
+                    ->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default)
+                    .size() == 8,
+            "ring weights mode needs 8 live DRAM banks (ring size 8)");
+    }
+    if (!ring) {
+        TT_FATAL(
+            x_shape[-1] == gate_shape[-2] && x_shape[-1] == up_shape[-2],
+            "x's last dim {} must match gate/up's K dim ({}, {})",
+            x_shape[-1],
+            gate_shape[-2],
+            up_shape[-2]);
+        TT_FATAL(
+            gate_shape[-1] == up_shape[-1] && gate_shape[-1] == down_shape[-2],
+            "gate/up N ({}) must equal down K ({})",
+            gate_shape[-1],
+            down_shape[-2]);
+        TT_FATAL(down_shape[-1] == x_shape[-1], "down N ({}) must equal x K ({})", down_shape[-1], x_shape[-1]);
+    }
 
     constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
     TT_FATAL(x_shape[-2] % TILE == 0, "x M ({}) must be tile-aligned", x_shape[-2]);
@@ -140,6 +169,10 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
                  {"down_proj", t.down_projs[e], t.down_projs[0]}}) {
             TT_FATAL(w.storage_type() == ttnn::StorageType::DEVICE, "{}[{}] must be on device", name, e);
             TT_FATAL(w.layout() == tt::tt_metal::Layout::TILE, "{}[{}] must be TILE layout", name, e);
+            if (ring) {
+                TT_FATAL(is_ring_weights(w), "{}[{}] must be a ring-layout decode weight tensor", name, e);
+                continue;
+            }
             TT_FATAL(
                 is_dram_interleaved(w) || is_dram_nd_sharded_by_tile_rows(w),
                 "{}[{}] must be DRAM-interleaved or DRAM ND-sharded with a tile-aligned shard, got {}",

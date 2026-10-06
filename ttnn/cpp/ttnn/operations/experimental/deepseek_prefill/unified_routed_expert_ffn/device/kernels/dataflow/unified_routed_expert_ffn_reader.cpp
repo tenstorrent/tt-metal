@@ -175,8 +175,18 @@ void kernel_main() {
     // value (the program factory pins them equal), down carries its own.
     constexpr uint32_t GU_SHARD_W = get_compile_time_arg_val(34);
     constexpr uint32_t D_SHARD_W = get_compile_time_arg_val(35);
-    using GuRuns = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
-    using DRuns = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
+    using GuRuns [[maybe_unused]] = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
+    using DRuns [[maybe_unused]] = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
+#ifdef RING_WEIGHTS
+    using Ring = unified_routed_expert_ffn::RingWeights<
+        experts_per_chip,
+        (per_core_N_gu + 1) / 2,
+        ((K_gate_tiles + 6) / 7) * 7,
+        per_core_N_d / 4,
+        ((K_down_tiles + 6) / 7) * 7,
+        GRID_X_NOC,
+        in0_block_w_d>;
+#endif
 
     constexpr uint32_t x_accessor_offset = 36;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
@@ -733,6 +743,18 @@ void kernel_main() {
                 const uint32_t gate_col_end =
                     (gate_col0 + per_core_N_gu < N_gate_tiles_full) ? gate_col0 + per_core_N_gu : N_gate_tiles_full;
                 for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+#ifdef RING_WEIGHTS
+                    Ring::read_gu(
+                        noc_read,
+                        gate_acc,
+                        0,
+                        local_expert_id,
+                        my_nt_gu,
+                        kb * in0_block_w_gu + k,
+                        gate_col_end - gate_col0,
+                        l1_w_gate,
+                        gate_tile_bytes);
+#else
                     GuRuns::read(
                         noc_read,
                         gate_acc,
@@ -742,6 +764,7 @@ void kernel_main() {
                         gate_col_end,
                         l1_w_gate,
                         gate_tile_bytes);
+#endif
                     l1_w_gate += per_core_N_gu * gate_tile_bytes;
                 }
                 // `up` slot. LEGACY: reader reads it on NoC 0. UP_SPLIT: writer
@@ -756,6 +779,18 @@ void kernel_main() {
                     // N-OOB hidden padding columns left unwritten: same rationale as the gate
                     // read above, and `up` shares gate's N split so it shares the bounds.
                     for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+#ifdef RING_WEIGHTS
+                        Ring::read_gu(
+                            noc_read,
+                            up_acc,
+                            1,
+                            local_expert_id,
+                            my_nt_gu,
+                            kb * in0_block_w_gu + k,
+                            gate_col_end - gate_col0,
+                            l1_w_up,
+                            up_tile_bytes);
+#else
                         GuRuns::read(
                             noc_read,
                             up_acc,
@@ -765,6 +800,7 @@ void kernel_main() {
                             gate_col_end,
                             l1_w_up,
                             up_tile_bytes);
+#endif
                         l1_w_up += per_core_N_gu * up_tile_bytes;
                     }
                 }
@@ -946,8 +982,12 @@ void kernel_main() {
                 for (uint32_t k = 0; k < down_split_k; ++k) {
                     const uint32_t row = kb * in0_block_w_d + k;
                     if (row < K_down_tiles) {
+#ifdef RING_WEIGHTS
+                        Ring::read_d(noc_read, down_acc, local_expert_id, my_nt_d, row, l1_w, down_tile_bytes);
+#else
                         DRuns::read(
                             noc_read, down_acc, row, N_down_tiles_full, down_col0, down_col_end, l1_w, down_tile_bytes);
+#endif
                     }
                     l1_w += per_core_N_d * down_tile_bytes;
                 }

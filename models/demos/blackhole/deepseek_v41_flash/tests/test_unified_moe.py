@@ -82,13 +82,39 @@ def test_unified_moe(mesh_device):
     w = mw.load_moe_layer(layer)
     blk = DSV41MoEBlock(md, w, batch_per_device=32, gate_bias_shift=0.0)
     blk.warmup()
+    dec_chk = (
+        os.environ.get("DSV41_UM_DECODE", "0") == "1"
+    )  # decode block (own moe_compute weights, T=32) before / after the ring-weights prefill ops
+    if dec_chk:
+        torch.manual_seed(1)
+        hj = ttnn.from_torch(
+            torch.randn(1, 1, 32, D).to(torch.bfloat16),
+            device=md,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+        )
+        hj_tok = ttnn.reshape(ttnn.to_layout(hj, ttnn.ROW_MAJOR_LAYOUT), [32, 1, 1, D])
+        dec_out0 = ttnn.to_torch(ttnn.get_device_tensors(blk.forward(hj, hj_tok))[0]).float()
+        dec_ms0 = chain_ms(md, lambda: ttnn.deallocate(blk.forward(hj, hj_tok)))
+        print(f"UM decode block T=32 before: {dec_ms0:.3f} ms", flush=True)
     pm = None
     if do_base:
         pm = DSV41PrefillMoE(blk, T=32, g=8)
         pm.warmup()
     t0 = time.time()
     shared = get_shared(md, N)
-    um = DSV41UnifiedMoE(md, layer)
+    ring_mode = os.environ.get(
+        "DSV41_UM_RING", "0"
+    )  # 1: unified op reads the decode ring weights in place; 2: also build the copy and compare
+    um_copy = None
+    if ring_mode == "0":
+        um = DSV41UnifiedMoE(md, layer)
+    else:
+        um = DSV41UnifiedMoE(md, layer, ring=(blk.decode.expert_state.tt_w0_w1, blk.decode.expert_state.tt_w2))
+        if ring_mode == "2":
+            um_copy = DSV41UnifiedMoE(md, layer)
     print(
         f"UM weights ready {time.time() - t0:.1f}s buffers: max_buf={shared.max_buf} max_per_expert={shared.max_per_expert}",
         flush=True,
@@ -198,6 +224,20 @@ def test_unified_moe(mesh_device):
             o = dev(own, r, c).float().reshape(N // 256, 32, D)
             for g in range(N // 256):
                 full_u[r, 256 * g + 32 * c : 256 * g + 32 * c + 32] = o[g]
+    if um_copy is not None:
+        own_c = moe_cols(um_copy, blk.gate, xod, mc, ccl)
+        ttnn.synchronize_device(md)
+        full_c = torch.zeros(ROWS, N, D)
+        for r in range(ROWS):
+            for c in range(COLS):
+                o = dev(own_c, r, c).float().reshape(N // 256, 32, D)
+                for g in range(N // 256):
+                    full_c[r, 256 * g + 32 * c : 256 * g + 32 * c + 32] = o[g]
+        for r in range(ROWS):
+            print(
+                f"UM row {r}: PCC ring-weights vs unified-copy {pcc(full_u[r], full_c[r]):.6f} max|d| {(full_u[r] - full_c[r]).abs().max():.4f}",
+                flush=True,
+            )
     sc, ix = route(blk.gate, xd, N)
     sc_h = torch.stack([dev(sc, r).float().reshape(N, TOPK) for r in range(ROWS)])
     ix_h = torch.stack([dev(ix, r).long().reshape(N, TOPK) for r in range(ROWS)])
@@ -290,3 +330,11 @@ def test_unified_moe(mesh_device):
                 f"UM time N={N}: baseline moe_compute path ({N // 256} calls of 256) {chain_ms(md, base):.3f} ms",
                 flush=True,
             )
+
+    if dec_chk:
+        dec_out1 = ttnn.to_torch(ttnn.get_device_tensors(blk.forward(hj, hj_tok))[0]).float()
+        dec_ms1 = chain_ms(md, lambda: ttnn.deallocate(blk.forward(hj, hj_tok)))
+        print(
+            f"UM decode block T=32 after: {dec_ms1:.3f} ms (before {dec_ms0:.3f}); output bit-identical: {bool(torch.equal(dec_out0, dec_out1))}",
+            flush=True,
+        )
