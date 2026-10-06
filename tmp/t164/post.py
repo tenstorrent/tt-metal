@@ -53,10 +53,12 @@ def parse(log: Path) -> dict:
                 g[st] = float(sm.group(1))
     flags = re.search(r"\[t164\] label=\S+ flags=(.*?) host=", text)
     wall = re.search(r"\[t164\] process wall (\d+) s", text)
+    jit = re.search(r"jit compiles (\d+)", text)
     return {
         "flags": flags.group(1) if flags else "",
         "exit": (re.findall(r"T164_EXIT\[\S+\]=(\d+)", text) or ["?"])[-1],
         "process_wall_s": int(wall.group(1)) if wall else None,
+        "jit_compiles": int(jit.group(1)) if jit else None,
         "gens": gens,
     }
 
@@ -110,8 +112,8 @@ def main():
     cols = ["Encoder", "Stage 1 denoise", "Latent upsample", "Stage 2 denoise", "VAE decode", "Audio decode", "export"]
     lines = [
         "| config | exit | gen1 e2e (s) | d vs base | gen2 e2e | encode | S1 | upsample | S2 | VAE | audio | export "
-        "| gen1 PCC (min) | gen1 PSNR (min) dB | gen2 PCC | gen2 PSNR | job wall (s) |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|---:|",
+        "| gen1 PCC (min) | gen1 PSNR (min) dB | gen2 PCC | gen2 PSNR | job wall (s) | JIT compiles |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|---:|---:|",
     ]
     for c in cfgs:
         base = "baseline5" if c.endswith("5") else "baseline"
@@ -126,7 +128,7 @@ def main():
             f"| {c} | {res[c]['exit']} | {g1.get('e2e', '')} | {d} | {g2.get('e2e', '')} | "
             + " | ".join(vals)
             + f" | {f(q1, 'pcc', 5)} ({f(q1, 'pcc_min', 5)}) | {f(q1, 'psnr', 2)} ({f(q1, 'psnr_min', 2)})"
-            + f" | {f(q2, 'pcc', 5)} | {f(q2, 'psnr', 2)} | {res[c]['process_wall_s'] or ''} |"
+            + f" | {f(q2, 'pcc', 5)} | {f(q2, 'psnr', 2)} | {res[c]['process_wall_s'] or ''} | {res[c]['jit_compiles']} |"
         )
     (root / f"summary_{tag}.md").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
