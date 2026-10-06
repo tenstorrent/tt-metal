@@ -42,6 +42,9 @@ void kernel_main() {
     constexpr uint32_t cb_index = get_compile_time_arg_val(2);
     constexpr uint32_t cb_src = get_compile_time_arg_val(3);
     constexpr uint32_t Wt_output = get_compile_time_arg_val(4);
+    // The host passes the INDEX tensor's geometry (Wt_index, idx_valid_*) for these; the names
+    // say src because the host slices src to the index's shape before dispatch, so the two
+    // tensors share tile geometry here.
     constexpr uint32_t Wt_src = get_compile_time_arg_val(5);
     constexpr uint32_t num_cores = get_compile_time_arg_val(6);
     constexpr uint32_t src_valid_h_last = get_compile_time_arg_val(7);

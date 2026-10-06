@@ -10,6 +10,9 @@
 // the element-level scatter. Both RISCs do DRAM ops concurrently.
 //
 // Multicore: strided row assignment, same as reader.
+//
+// Divergence from the prototype template: each batch ends with async_writes_flushed() and one
+// async_write_barrier() closes the kernel, instead of a barrier per batch.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"

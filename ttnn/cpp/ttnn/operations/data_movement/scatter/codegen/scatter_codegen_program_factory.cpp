@@ -729,9 +729,8 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryBf16ReduceRowMajor::
     reader_desc.core_ranges = split.core_range;
     reader_desc.compile_time_args = reader_ct;
     // packed_bf16_io stays off: the 2-lane packed load/store needs an even input_stick_elems (every
-    // page 32-byte aligned), which supported_by_codegen() does not currently require, and this
-    // reduction path already ships without dedicated coverage -- not worth an extra alignment gate for
-    // an unmeasured perf toggle. The scalar branch is always correct.
+    // page 32-byte aligned), which supported_by_codegen() does not guarantee; the scalar branch is
+    // correct for every width.
     reader_desc.named_compile_time_args = {
         {"reduction_mode", attributes.reduction_mode},
         {"packed_bf16_io", 0},
