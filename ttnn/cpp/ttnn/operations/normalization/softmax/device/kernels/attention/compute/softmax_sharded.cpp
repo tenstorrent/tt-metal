@@ -86,6 +86,23 @@ void kernel_main() {
     DataflowBuffer dfb_exps_obj(dfb::exps);
     DataflowBuffer dfb_x_obj(dfb_x_id);
 
+#ifdef ARCH_QUASAR
+    // in0 borrows the resident input shard and is bound to this kernel as both producer and consumer;
+    // nothing ever pushes it, which Gen1 tolerates (the per-row pops below only move a local read
+    // pointer) but underflows Quasar's tile counters. Post the whole shard once up front; dummy_pack is
+    // the no-write PACR that TEN-4746 requires between reserve_back and push_back (same idiom as
+    // rotary_embedding_llama_sharded.cpp).
+    {
+        DataflowBuffer dfb_in0_obj(dfb::in0);
+        dfb_in0_obj.reserve_back(block_h * block_w);
+        dummy_pack(dfb::in0);
+        dfb_in0_obj.push_back(block_h * block_w);
+        // The push lands on the pack thread; wait on the unpack thread so the first row's pop (the
+        // chains below wait on nothing) cannot overtake it.
+        dfb_in0_obj.wait_front(block_h * block_w);
+    }
+#endif
+
 #ifdef FUSED_SCALE_MASK
     constexpr auto mask_bcast = causal_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
     constexpr auto mask_wait = sharded_causal_mask ? ckl::WaitPolicy::None : ckl::WaitPolicy::Upfront;
