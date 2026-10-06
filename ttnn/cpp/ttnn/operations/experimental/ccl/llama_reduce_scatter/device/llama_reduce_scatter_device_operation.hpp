@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tt-metalium/program_descriptors.hpp>
+
 #include <variant>
 #include <optional>
 
@@ -78,6 +80,26 @@ struct LlamaReduceScatterDeviceOperation {
             tensor_return_value_t& tensor_return_value,
             tt::tt_metal::Program& program,
             const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler);
+        // ProgramDescriptor form of create_at_program_processing (see the .cpp). Returns where the reader and
+        // writer landed in `desc`; a Program built from it uses those indices as kernel handles.
+        struct descriptor_artifacts_t {
+            size_t reader_kernel_index = 0;
+            size_t writer_kernel_index = 0;
+        };
+        static descriptor_artifacts_t create_at_program_descriptor_processing(
+            const operation_attributes_t& operation_attributes,
+            const ttnn::MeshCoordinate& mesh_coordinate,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            tt::tt_metal::ProgramDescriptor& desc,
+            const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler);
+        // Cache-hit refresh for a Program built from create_at_program_descriptor_processing: writes the current
+        // cross-device semaphore address into runtime arg 0 of the reader and writer on every core.
+        static void apply_cross_device_semaphore(
+            tt::tt_metal::Program& program,
+            const descriptor_artifacts_t& artifacts,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args);
         static void override_runtime_arguments_per_program(
             const shared_variables_t& shared_variables,
             tt::tt_metal::Program& program,
