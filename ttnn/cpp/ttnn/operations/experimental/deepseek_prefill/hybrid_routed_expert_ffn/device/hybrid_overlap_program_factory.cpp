@@ -52,9 +52,12 @@ namespace {
 
 // The unified reader's view of where combine's walks open: expert_offsets' row for the ring chip diametrically
 // opposite this one, which both of combine's walk directions take first. Appended past every other argument.
+// The reader is the merged one when the fused pass runs and the unified half's own when it does not (threshold 0),
+// as for the writer in expert_done_writer_count; both are the unified reader that consumes these arguments.
 void append_far_run(tt::tt_metal::ProgramDescriptor& desc, tt::tt_metal::Buffer* expert_offsets, uint32_t dg_far) {
     auto reader = std::find_if(desc.kernels.begin(), desc.kernels.end(), [](const auto& k) {
-        return k.kernel_source.find("hybrid_reader.cpp") != std::string::npos;
+        return k.kernel_source.ends_with("hybrid_reader.cpp") ||
+               k.kernel_source.ends_with("unified_routed_expert_ffn_reader.cpp");
     });
     TT_FATAL(reader != desc.kernels.end(), "hybrid routed expert: the program carries no reader kernel");
     uint32_t base = 0;
