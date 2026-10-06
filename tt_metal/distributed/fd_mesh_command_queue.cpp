@@ -33,6 +33,8 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/data_collection.hpp"
+#include "dispatch/device_command.hpp"
+#include "dispatch/device_command_calculator.hpp"
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
 #include "mesh_config.hpp"
@@ -1372,6 +1374,134 @@ void FDMeshCommandQueue::enqueue_command_list(
     submit_replay_buffer(worker_descriptors, sub_device_ids, buffer);
     if (blocking) {
         this->finish_nolock();
+    }
+}
+
+void FDMeshCommandQueue::enqueue_command_list_patch(
+    const MeshBuffer& buffer, ttsl::Span<const MeshBufferPatch> patches) {
+    TTZoneScopedD(DISPATCH);
+    auto lock = lock_api_function_();
+    TT_FATAL(!trace_id_.has_value(), "Command-list patches are not supported during trace capture.");
+    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
+        this->get_target_device_type() == tt::TargetDevice::Emule) {
+        return;
+    }
+
+    auto& metal_ctx = mesh_device_->impl().metal_context();
+    const uint32_t page_size = buffer.page_size();
+
+    const uint32_t dram_alignment = metal_ctx.hal().get_alignment(HalMemType::DRAM);
+    const DeviceAddr buffer_size = buffer.device_local_size();
+    for (const auto& patch : patches) {
+        const uint32_t size_bytes = patch.data.size() * sizeof(uint32_t);
+        TT_ASSERT(
+            size_bytes > 0 && patch.offset % dram_alignment == 0 && size_bytes % dram_alignment == 0 &&
+                patch.offset / page_size == (patch.offset + size_bytes - 1) / page_size &&
+                patch.offset + size_bytes <= buffer_size,
+            "Command-list patch at offset {} of {} bytes must be DRAM-aligned and lie within one page of its buffer",
+            patch.offset,
+            size_bytes);
+    }
+
+    const uint32_t num_banks = mesh_device_->allocator()->get_num_banks(buffer.device_local_config().buffer_type);
+    const uint32_t max_command_size = metal_ctx.dispatch_mem_map().max_prefetch_command_size();
+    const uint32_t stall_size = [&] {
+        DeviceCommandCalculator calculator(metal_ctx);
+        calculator.add_dispatch_wait_with_prefetch_stall();
+        return calculator.write_offset_bytes();
+    }();
+
+    struct BankDestination {
+        uint32_t noc_xy = 0;
+        DeviceAddr base_address = 0;
+    };
+    std::vector<std::optional<BankDestination>> bank_destinations;
+    std::vector<std::reference_wrapper<const MeshBufferPatch>> device_patches;
+    in_use_ = true;
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        if (!mesh_device_->impl().is_local(coord)) {
+            continue;
+        }
+        device_patches.clear();
+        for (const auto& patch : patches) {
+            if (patch.device_range.contains(coord)) {
+                device_patches.push_back(std::cref(patch));
+            }
+        }
+        if (device_patches.empty()) {
+            continue;
+        }
+
+        IDevice& device = *mesh_device_->impl().get_device(coord);
+        const Buffer& device_buffer = *buffer.get_device_buffer(coord);
+        const DeviceAddr aligned_page_size = device_buffer.aligned_page_size();
+        auto& sysmem_manager = device.sysmem_manager();
+        bank_destinations.assign(num_banks, std::nullopt);
+
+        // Returns the NOC endpoint and address of a byte offset in the buffer, resolving each bank once per device.
+        auto dram_destination_of_offset = [&](uint32_t offset) -> std::pair<uint32_t, DeviceAddr> {
+            const uint32_t page = offset / page_size;
+            const uint32_t bank = page % num_banks;
+            auto& cached_destination = bank_destinations[bank];
+            if (!cached_destination.has_value()) {
+                const CoreCoord dram_core = device.virtual_core_from_logical_core(
+                    device.logical_core_from_dram_channel(device.allocator_impl()->get_dram_channel_from_bank_id(bank)),
+                    tt::CoreType::DRAM);
+                cached_destination = BankDestination{
+                    .noc_xy = device.get_noc_unicast_encoding(k_dispatch_downstream_noc, dram_core),
+                    .base_address = device_buffer.page_address(bank, 0)};
+            }
+            const BankDestination& bank_destination = cached_destination.value();
+            return {
+                bank_destination.noc_xy,
+                bank_destination.base_address + ((page / num_banks) * aligned_page_size) + (offset % page_size)};
+        };
+
+        // Writes device_patches[begin, end) as one fetch-queue entry.
+        auto enqueue_patch_batch = [&](size_t begin, size_t end, uint32_t write_bytes, bool append_stall) {
+            const uint32_t cmd_sequence_sizeB = write_bytes + (append_stall ? stall_size : 0);
+            void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, id_);
+            HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
+            for (size_t i = begin; i < end; ++i) {
+                const MeshBufferPatch& patch = device_patches[i].get();
+                const auto [noc_xy, address] = dram_destination_of_offset(patch.offset);
+                command_sequence.add_dispatch_write_linear<true, true>(
+                    0, noc_xy, address, patch.data.size() * sizeof(uint32_t), patch.data.data());
+            }
+            if (append_stall) {
+                // The prefetcher reads ahead of the dispatcher, so without this stall a later replay could fetch the
+                // command list before these writes land.
+                command_sequence.add_dispatch_wait_with_prefetch_stall(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, id_);
+            }
+            sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, id_);
+            sysmem_manager.fetch_queue_reserve_back(id_);
+            sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, id_);
+        };
+
+        // Pack writes into batches no larger than max_command_size. The last batch also carries the stall.
+        size_t batch_begin = 0;
+        uint32_t batch_bytes = 0;
+        for (size_t i = 0; i < device_patches.size(); ++i) {
+            const uint32_t bytes = [&] {
+                DeviceCommandCalculator calculator(metal_ctx);
+                calculator.add_dispatch_write_linear<true, true>(
+                    device_patches[i].get().data.size() * sizeof(uint32_t));
+                return calculator.write_offset_bytes();
+            }();
+            const bool batch_has_writes = i > batch_begin;
+            const bool write_overflows_batch = [&] {
+                const bool is_last_patch = i == device_patches.size() - 1;
+                const uint32_t required_stall_bytes = is_last_patch ? stall_size : 0;
+                return batch_bytes + bytes + required_stall_bytes > max_command_size;
+            }();
+            if (batch_has_writes && write_overflows_batch) {
+                enqueue_patch_batch(batch_begin, i, batch_bytes, /*append_stall=*/false);
+                batch_begin = i;
+                batch_bytes = 0;
+            }
+            batch_bytes += bytes;
+        }
+        enqueue_patch_batch(batch_begin, device_patches.size(), batch_bytes, /*append_stall=*/true);
     }
 }
 

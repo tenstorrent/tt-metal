@@ -35,6 +35,7 @@ target_sources(
         benchmark_thread_pool.cpp
         benchmark_distributed_host_buffer.cpp
         benchmark_hd_sockets.cpp
+        benchmark_command_list.cpp
         hd_socket_test_utils.cpp
 )
 
