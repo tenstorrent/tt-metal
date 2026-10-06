@@ -45,7 +45,12 @@ from .llk_params import (
     VectorMode,
 )
 from .matmul_sweep import validate_tile_dimensions
-from .sfpu_dispatch_constants import RELU_MAX_THRESHOLD
+from .sfpu_dispatch_constants import (
+    DROPOUT_PROBABILITY_MAX,
+    DROPOUT_SCALE,
+    DROPOUT_SEED,
+    RELU_MAX_THRESHOLD,
+)
 
 # Base parameter classes
 
@@ -412,20 +417,39 @@ class SFPU_SHIFT_AMOUNT(TemplateParameter):
 
 
 @dataclass
-class SFPU_DROPOUT_PROBABILITY(TemplateParameter):
-    """Drop probability for the Quasar dropout kernel, as ``p * INT_MAX`` (0 .. 0x7FFFFFFF).
+class SFPU_DROPOUT_PARAMS(TemplateParameter):
+    """Probability, seed and scale for the Quasar dropout kernel.
 
-    Emitted as a macro rather than a constexpr for the same reason as
+    Emitted as macros rather than constexprs for the same reason as
     :class:`SFPU_SHIFT_AMOUNT`: sfpu_operations_quasar.h selects on ``#ifdef``, the header is
-    shared by every unary test, and only the dedicated dropout tests set this. Unset means
-    p = 0, the deterministic ``x * scale`` the unified sweep checks.
+    shared by every unary test, and only the dedicated dropout tests set these. Unset means
+    p = 0 with the dispatcher's default seed and scale 2.0, the deterministic ``x * scale`` the
+    unified sweep checks.
+
+    ``probability`` is ``p * INT_MAX`` (0 .. DROPOUT_PROBABILITY_MAX); ``scale`` is emitted as
+    its exact fp32 bit pattern.
     """
 
-    dropout_probability: int = 0
+    probability: int = 0
+    seed: int = DROPOUT_SEED
+    scale: float = DROPOUT_SCALE
+
+    def __post_init__(self):
+        assert (
+            0 <= self.probability <= DROPOUT_PROBABILITY_MAX
+        ), f"dropout probability {self.probability:#x} outside 0 .. {DROPOUT_PROBABILITY_MAX:#x}"
+        assert (
+            0 <= self.seed <= 0xFFFFFFFF
+        ), f"dropout seed {self.seed:#x} is not 32-bit"
 
     def convert_to_cpp(self) -> str:
-        return (
-            f"#define SFPU_DROPOUT_PROBABILITY {self.dropout_probability & 0x7FFFFFFF}u"
+        scale_bits = struct.unpack("<I", struct.pack("<f", self.scale))[0]
+        return "\n".join(
+            (
+                f"#define SFPU_DROPOUT_PROBABILITY {self.probability:#010x}u",
+                f"#define SFPU_DROPOUT_SEED {self.seed:#010x}u",
+                f"#define SFPU_DROPOUT_SCALE_BITS {scale_bits:#010x}u",
+            )
         )
 
 

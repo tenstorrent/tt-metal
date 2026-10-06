@@ -152,17 +152,19 @@ using namespace ckernel::sfpu;
 template <auto>
 inline constexpr bool unhandled_op = false;
 
-// Dropout dispatch constants, shared with the golden (sfpu_dispatch_constants.py: DROPOUT_SCALE).
-// probability = p * INT_MAX; the default p = 0 keeps every datum, so the result is the deterministic
-// x * 2.0. Overridable via the SFPU_DROPOUT_PROBABILITY template parameter so the dedicated dropout
-// tests can drive the drop path.
-constexpr std::uint32_t kDropoutSeed = 0xDEADBEEFu;
+// Dropout dispatch constants, shared with the golden (sfpu_dispatch_constants.py: DROPOUT_SCALE,
+// DROPOUT_SEED). probability = p * INT_MAX; the default p = 0 keeps every datum, so the result is the
+// deterministic x * 2.0. The SFPU_DROPOUT_PARAMS template parameter overrides all three so the
+// dedicated dropout tests can drive the drop path, reseed, and use a non-trivial scale.
 #ifdef SFPU_DROPOUT_PROBABILITY
 constexpr std::uint32_t kDropoutProbability = SFPU_DROPOUT_PROBABILITY;
+constexpr std::uint32_t kDropoutSeed        = SFPU_DROPOUT_SEED;
+constexpr std::uint32_t kDropoutScaleBits   = SFPU_DROPOUT_SCALE_BITS;
 #else
 constexpr std::uint32_t kDropoutProbability = 0u;
+constexpr std::uint32_t kDropoutSeed        = 0xDEADBEEFu;
+constexpr std::uint32_t kDropoutScaleBits   = 0x40000000u; // scale = 2.0f
 #endif
-constexpr std::uint32_t kDropoutScaleBits = 0x40000000u; // scale = 2.0f
 
 /**
  * @brief Whether OPERATION is one of the six comparison-to-zero modes.
