@@ -9,6 +9,11 @@
 - 2026-10-06 03:02 UTC blx03 rebooted (broker power-cycle/glx_reset recovery, not our job; 8/32 chips off PCIe
   before it). Driver 79490 died before its first submit. Relaunched 03:15 UTC, pid 37098, after adding a
   health() check that waits while any other smarton job is running or queued (t133 job 251 was queued).
+- 2026-10-06 03:42:42 UTC blx03 rebooted again (broker recovery jobs 257-268: glx_reset health gates failed,
+  bridge-reset chips 8-15 (tray 2) failed, power-cycle with 32/32 chips off PCIe; device back for tenants 03:45 UTC).
+  No job of ours ran; t133 job 251 (project) completed at 03:45. Driver 37098 died. Relaunched 03:48 UTC, pid 21066
+  (old log driver.log.prev-reboot0342).
+- 141 (64,64,3,8,8): PASS, job 269 (03:48-03:50 UTC). 142 (64,64,3,16,4): job 270 submitted 03:50 UTC.
 - Next: read outcomes.txt, fill tt-project/t114/BUG.md, log drops (UTC, job id, chips) in the hand-off,
   then rm -rf /var/tmp/fasth3/t115/src on blx03.
 
