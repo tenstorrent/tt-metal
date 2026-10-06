@@ -39,6 +39,7 @@ _OPT = {
     "DSV41_PFA_SH_FID": "HiFi2",
     "DSV41_PFA_MM": "minimal",
     "DSV41_PFA_FP4": "fast",
+    "DSV41_PFA_ENGRAM_BATCH": "1",  # one T=256 Engram forward per 8-chunk group (bit-identical)
     "DSV41_PF_MHC": "packed",  # packed mHC carrier + own-chunk routing (tt/mhc_packed.py; DSV41_PF_ROUTE_OWN defaults to 1 with it)
 }
 
