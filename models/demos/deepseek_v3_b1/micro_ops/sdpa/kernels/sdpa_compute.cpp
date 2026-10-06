@@ -69,8 +69,8 @@ void kernel_main() {
             transpose_v,
             packed_tile_size,
             exp_approx_mode,
-            /*qk_signal_granularity=*/1,
-            /*exp_signal_granularity=*/1,
+            /*qk_signal_granularity=*/chunk_size,
+            /*exp_signal_granularity=*/chunk_size,
             output_granularity>(
             cb_q,
             cb_k,
