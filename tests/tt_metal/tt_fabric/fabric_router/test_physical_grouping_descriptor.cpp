@@ -2610,8 +2610,7 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_Dual8x2) {
     EXPECT_EQ(tray_ref_count, 2u) << "Should reference exactly 2 trays";
 }
 
-static size_t count_distinct_hosts_for_asics(
-    const tt::tt_metal::PhysicalSystemDescriptor& psd, const std::unordered_set<tt::tt_metal::PhysicalNodeId>& asics) {
+static size_t count_distinct_hosts_for_asics(const std::unordered_set<tt::tt_metal::PhysicalNodeId>& asics) {
     std::set<std::string> hosts;
     for (const auto& asic : asics) {
         hosts.insert(std::string(tt::tt_metal::cluster_id_view(asic)));
@@ -2668,7 +2667,7 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
     const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 1u) << "SAT joint placement should seat the single 4x4 mesh";
     EXPECT_EQ(placements.front().placement.asics.size(), 16u) << "the 4x4 seating should cover 16 ASICs";
-    EXPECT_EQ(count_distinct_hosts_for_asics(psd, placements.front().placement.asics), 1u)
+    EXPECT_EQ(count_distinct_hosts_for_asics(placements.front().placement.asics), 1u)
         << "host_topology [1,1] should land on a single host";
     EXPECT_EQ(placements.front().placement.mesh_node_to_asic_position.size(), 16u)
         << "Composed pinning should cover all 16 logical chips";

@@ -462,6 +462,21 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
     }
 }
 
+// Regolden copies land in the repo, where pre-commit's end-of-file-fixer demands a trailing newline;
+// the runtime YAML emitters don't write one, so a raw copy_file re-breaks every regoldened file.
+static void copy_golden_with_trailing_newline(const std::filesystem::path& src, const std::filesystem::path& dst) {
+    std::filesystem::copy_file(src, dst, std::filesystem::copy_options::overwrite_existing);
+    std::fstream f(dst, std::ios::in | std::ios::out | std::ios::binary | std::ios::ate);
+    if (f.tellg() > 0) {
+        f.seekg(-1, std::ios::end);
+        if (f.get() != '\n') {
+            f.clear();
+            f.seekp(0, std::ios::end);
+            f.put('\n');
+        }
+    }
+}
+
 void check_asic_mapping_against_golden(const std::string& test_name, const std::string& golden_name) {
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     // Skip golden file comparison only when not using mock (real devices); check against golden only in mock tests
@@ -513,7 +528,7 @@ void check_asic_mapping_against_golden(const std::string& test_name, const std::
         regolden_env != nullptr && regolden_env[0] != '\0') {
         if (rank == 0) {
             std::filesystem::create_directories(golden_file.parent_path());
-            std::filesystem::copy_file(generated_file, golden_file, std::filesystem::copy_options::overwrite_existing);
+            copy_golden_with_trailing_newline(generated_file, golden_file);
             log_info(tt::LogTest, "Regoldened {} -> {}", generated_file.string(), golden_file.string());
         }
         return;
@@ -647,7 +662,7 @@ void check_intermesh_port_assignment_against_golden(const std::string& golden_na
     if (const char* regolden_env = std::getenv("TT_METAL_REGOLDEN");
         regolden_env != nullptr && regolden_env[0] != '\0') {
         std::filesystem::create_directories(golden_file.parent_path());
-        std::filesystem::copy_file(combined_file, golden_file, std::filesystem::copy_options::overwrite_existing);
+        copy_golden_with_trailing_newline(combined_file, golden_file);
         log_info(tt::LogTest, "Regoldened {} -> {}", combined_file.string(), golden_file.string());
         return;
     }

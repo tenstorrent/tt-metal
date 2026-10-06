@@ -229,7 +229,7 @@ TEST_F(LinkHealthTest, SurvivingCablesStayHealthy) {
     unplug(*live_, *cable);
 
     LinkHealth health(*mapper_, *live_);
-    const auto downed = health.get_downed_links();
+    const auto& downed = health.get_downed_links();
 
     // Every other expected endpoint on the same chip is still present.
     const auto& record = downed.front();

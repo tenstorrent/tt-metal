@@ -1328,17 +1328,6 @@ std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_
     return mapping;
 }
 
-const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& resolve_fabric_node_id_to_mesh_rank(
-    const MeshGraphDescriptor& mesh_graph_descriptor,
-    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank,
-    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& storage) {
-    if (!fabric_node_id_to_mesh_rank.empty()) {
-        return fabric_node_id_to_mesh_rank;
-    }
-    storage = fabric_node_id_to_mesh_rank_from_mesh_graph(mesh_graph_descriptor);
-    return storage;
-}
-
 }  // namespace
 
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
@@ -1360,8 +1349,11 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) const {
     ValidGroupingsMap result;
     std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> ranks_from_mesh_graph;
+    if (fabric_node_id_to_mesh_rank.empty()) {
+        ranks_from_mesh_graph = fabric_node_id_to_mesh_rank_from_mesh_graph(mesh_graph_descriptor);
+    }
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& mesh_ranks =
-        resolve_fabric_node_id_to_mesh_rank(mesh_graph_descriptor, fabric_node_id_to_mesh_rank, ranks_from_mesh_graph);
+        fabric_node_id_to_mesh_rank.empty() ? ranks_from_mesh_graph : fabric_node_id_to_mesh_rank;
 
     std::optional<AdjacencyGraph<tt::tt_metal::PhysicalNodeId>> psd_physical_graph;
     if (physical_system_descriptor != nullptr) {
