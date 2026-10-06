@@ -292,9 +292,9 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
 }
 
 void FDMeshCommandQueue::populate_read_descriptor_queue() {
-    for (const auto* device : mesh_device_->get_devices()) {
+    for (auto device_id : mesh_device_->get_device_ids()) {
         read_descriptors_.emplace(
-            device->id(), std::make_unique<MultiProducerSingleConsumerQueue<CompletionReaderVariant>>());
+            device_id, std::make_unique<MultiProducerSingleConsumerQueue<CompletionReaderVariant>>());
     }
 }
 
@@ -351,7 +351,7 @@ void FDMeshCommandQueue::wait_for_outstanding_reads(std::unique_lock<std::mutex>
 
     const auto& rtoptions = MetalContext::instance(mesh_device_->impl().get_context_id()).rtoptions();
     if (rtoptions.get_watcher_enabled() && rtoptions.get_test_mode_enabled()) {
-        const ChipId device_id = mesh_device_->get_devices().at(0)->id();
+        const auto device_id = mesh_device_->get_device_ids().at(0);
         constexpr auto poll_interval = std::chrono::milliseconds(100);
         while (num_outstanding_reads_.load() != 0 && !thread_exception_state_.load()) {
             if (record_watcher_error_in_test_mode(device_id)) {
