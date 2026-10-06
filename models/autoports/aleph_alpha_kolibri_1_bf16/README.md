@@ -1,5 +1,17 @@
 # Kolibri-1-BF16 TTNN and vLLM serving
 
+> **About this branch.** This is the lean CI/serving import of the agentic
+> bring-up (tenstorrent/tt-agentic-bringup-qb2#73): `tt/`, `tests/`, the
+> selected precision config and the context contract. The stage evidence the
+> text below links under `doc/` (68 GB) is **not** on this branch; it lives in
+> the bring-up checkout and is summarized in the tracking issue. Two
+> deliberate deviations from the pipeline output: the served context is the
+> native **262,144** tokens, not the 1,048,576 quoted below (owner decision,
+> tt-agentic-bringup-qb2#78), and the checkpoint is read from a TTI-mounted
+> `MODEL_WEIGHTS_DIR`/`HF_MODEL` directory when present. Serving needs the
+> matching vllm-tt-plugin branch (model and `kolibri1` config registration,
+> `kolibri1` reasoning and tool parsers).
+
 **Primary vLLM P128/G128/N1, concurrency 1, server 1 slot: 204.635 ms TTFT and
 62.8327 decode tokens/s/user** on QB2/P300x2, 1×4 Blackhole, with the full
 1,048,576-token served context. The matched baseline is 219.746 ms and
