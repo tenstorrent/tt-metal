@@ -52,9 +52,13 @@ With DFlash speculative decoding (same run):
 | Input tokens | 128 | 1,024 | 2,048 | 4,096 | 8,192 |
 |---|---:|---:|---:|---:|---:|
 | Decode tok/s/user | 28.0 | 40.5 | 25.0 | 45.4 | 30.1 |
-| Speedup over normal decode | 1.5x | 2.2x | 1.4x | 2.5x | 1.7x |
+| Decode speedup over normal decode | 1.5x | 2.2x | 1.4x | 2.5x | 1.7x |
+| TTFT | 0.37 s | 2.57 s | 2.99 s | 9.61 s | 20.0 s |
+| TTFT change from normal decode | +0.14 s | +0.15 s | +0.18 s | +0.14 s | +0.16 s |
 
-DFlash's speedup depends on how much of the draft model's guess Laguna accepts, so it varies from prompt to prompt.
+DFlash only speeds up decode; the prompt is still processed by Laguna itself, so TTFT stays about the same (0.14-0.18 s
+slower). DFlash's decode speedup depends on how much of the draft model's guess Laguna accepts, so it varies from
+prompt to prompt.
 
 ## Quick start
 
