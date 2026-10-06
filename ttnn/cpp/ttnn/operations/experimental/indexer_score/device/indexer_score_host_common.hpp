@@ -62,15 +62,22 @@ inline DsaQkBatching dsa_qk_batching(uint32_t subblock_basis, uint32_t QC, uint3
 // Config for callers that leave program_config unspecified: every head resident, one q tile row per unit and
 // the widest k chunk whose buffers fit L1, which is the full strip path. One head at a time if nothing fits.
 inline IndexerScoreProgramConfig default_program_config(
-    uint32_t Hi, uint32_t Tt, uint32_t Dt, uint32_t q_tile_bytes, uint32_t k_tile_bytes, uint64_t l1_budget) {
+    uint32_t Hi,
+    uint32_t Tt,
+    uint32_t Dt,
+    uint32_t q_tile_bytes,
+    uint32_t k_tile_bytes,
+    uint64_t l1_budget,
+    uint32_t key_compression_ratio = 1) {
     constexpr uint64_t bf16_tile = 2048;
     for (uint32_t KC : {16u, 8u, 4u, 2u}) {
         if (KC > Tt) {
             continue;
         }
-        // The make_cb sizes of both factories at QC 1 and HB Hi with bf16 accumulation, plus an eighth of slack.
+        // The make_cb sizes of both factories at QC 1 and HB Hi with bf16 accumulation (the mask takes one tile
+        // more than the compression ratio), plus an eighth of slack.
         const uint64_t bytes = uint64_t(Hi) * Dt * q_tile_bytes + 2ull * KC * Dt * k_tile_bytes +
-                               (uint64_t(Hi) + 2 + uint64_t(KC) * Hi + 4ull * KC) * bf16_tile;
+                               (uint64_t(Hi) + key_compression_ratio + 1 + uint64_t(KC) * Hi + 4ull * KC) * bf16_tile;
         if (bytes + bytes / 8 <= l1_budget) {
             return {tt::constants::TILE_HEIGHT, KC * tt::constants::TILE_WIDTH, 0};
         }
