@@ -37,7 +37,7 @@ if a.reduced:
     env["KOLIBRI_VLLM_LAYERS"] = "[0,4]"
 else:
     env.pop("KOLIBRI_VLLM_LAYERS", None)
-length = 4096 if a.reduced else 1048576
+length = 4096 if a.reduced else 262144
 config = dict(
     trace_region_size=200000000,
     fabric_config="FABRIC_1D",
@@ -56,8 +56,6 @@ extra = [
     "10",
     "--override-generation-config",
     json.dumps({"top_k": 32}),
-    "--hf-overrides",
-    json.dumps({"max_position_embeddings": 1048576}),
 ]
 cmd = [
     sys.executable,

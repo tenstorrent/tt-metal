@@ -3,10 +3,14 @@
   "revision": "7a8f290e7858825c3cf5e4c447ba68345de9f1d3",
   "hf_advertised_context": 1048576,
   "model_card_extrapolated_context": 1048576,
-  "supported_context": 1048576,
+  "supported_context": 262144,
   "largest_tested_prefill_context": 1048576,
   "largest_tested_decode_context": 1048576,
-  "capability_reduction": null,
+  "capability_reduction": {
+    "released_context": 262144,
+    "validated_context": 1048576,
+    "reason": "Owner decision (tt-agentic-bringup-qb2#78, 2026-10-06): release at the native trained context (hf_config max_position_embeddings) instead of the model-card 1M extension. The 1M extension was validated only with a repeated-token workload; the HF max_position_embeddings override is no longer applied at serve time."
+  },
   "status": "passed",
   "layer_kinds": [
     "sliding_attention",

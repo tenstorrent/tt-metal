@@ -9,7 +9,7 @@ from safetensors import safe_open
 
 MODEL_ID = "Aleph-Alpha/Kolibri-1-BF16"
 REVISION = "7a8f290e7858825c3cf5e4c447ba68345de9f1d3"
-CONTEXT = 1048576
+CONTEXT = 262144  # native trained context; the 1M model-card extension is not served
 HF_SNAPSHOT = (
     Path(os.environ.get("HF_HOME", "/mnt/models/huggingface"))
     / "hub/models--Aleph-Alpha--Kolibri-1-BF16/snapshots"
