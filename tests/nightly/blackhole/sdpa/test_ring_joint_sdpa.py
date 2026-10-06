@@ -120,6 +120,7 @@ class ModelConfig:
     total_seq: int = None
     use_ring_mla: bool = False
     matmul_math_fidelity: object = None
+    nd_sharded_kv_cache: bool = False
 
 
 def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
@@ -1688,6 +1689,7 @@ def run_ring_joint_sdpa_chunked(
     do_check: bool = True,
     reuse_kv_buffer: bool = False,
     use_compact_single_chunk_q: bool = False,
+    nd_sharded_kv_cache: bool = False,
     fp32_dest_acc_en: bool = False,
     sliding_window_size: int = None,
     use_attention_sink: bool = False,
@@ -1720,6 +1722,9 @@ def run_ring_joint_sdpa_chunked(
     use_compact_single_chunk_q=True stores only the selected Q chunk. K/V remain
     full-sequence, deterministic nonzero inputs and follow the normal production
     cache-packing path. This mode is only supported without a correctness check.
+
+    nd_sharded_kv_cache=True uploads the K/V cache ND-sharded across DRAM banks, matching the
+    production cache layout; the gather buffer stays interleaved, as in production.
     """
     torch.manual_seed(CHUNKED_PREFILL_SEED)
 
@@ -2046,7 +2051,10 @@ def run_ring_joint_sdpa_chunked(
             ring_mla_kv_shard_dims[tp_axis] = 1
             ring_mla_persistent_shard_dims[tp_axis] = 1
 
-        def upload_kv(kv_host):
+        def upload_kv(kv_host, memory_config=None):
+            kwargs = {}
+            if memory_config is not None:
+                kwargs["memory_config"] = memory_config
             return ttnn.from_torch(
                 kv_host,
                 dtype=kv_dtype,
@@ -2055,6 +2063,7 @@ def run_ring_joint_sdpa_chunked(
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     mesh_device, mesh_shape=tuple(mesh_device.shape), dims=ring_mla_kv_shard_dims
                 ),
+                **kwargs,
             )
 
         def create_ring_mla_kv_buffer(seq_len, kv_buffer_batch):
@@ -2073,6 +2082,7 @@ def run_ring_joint_sdpa_chunked(
             f"sp_size={sp_size}, per-device Q seq_len={total_seq // sp_size}, "
             f"qk_configs={qk_configs}, "
             f"indexed_nd_sharded_kv_cache={indexed_nd_sharded_kv_cache}, "
+            f"nd_sharded_kv_cache={nd_sharded_kv_cache}, "
             f"persistent_buffer_mode={persistent_buffer_mode}"
         )
 
@@ -2087,8 +2097,9 @@ def run_ring_joint_sdpa_chunked(
         # stable shape hits one cached program.
         reuse_kv_stable_seq = (math.ceil(total_seq / chunk_size) + 1) * chunk_size
 
-        k_memory_config = nd_sharded_dram_memory_config(mesh_device, d_k) if indexed_nd_sharded_kv_cache else None
-        v_memory_config = nd_sharded_dram_memory_config(mesh_device, d_v) if indexed_nd_sharded_kv_cache else None
+        use_nd_sharded_kv = indexed_nd_sharded_kv_cache or nd_sharded_kv_cache
+        k_memory_config = nd_sharded_dram_memory_config(mesh_device, d_k) if use_nd_sharded_kv else None
+        v_memory_config = nd_sharded_dram_memory_config(mesh_device, d_v) if use_nd_sharded_kv else None
 
         def prepare_chunk_inputs(i):
             s, e = i * chunk_size, (i + 1) * chunk_size
@@ -2112,7 +2123,8 @@ def run_ring_joint_sdpa_chunked(
                     q_host, kv_host, *_ = build_kv_pad_rotation_mla_inputs(
                         K_full[:, :, :s, :], Q_chunk, K_chunk, s, sp_size, slab_rows
                     )
-                    return (s, e, b, None, upload_q(q_host), upload_kv(oversize(kv_host, nhk, d_k)), None)
+                    tt_kv = upload_kv(oversize(kv_host, nhk, d_k), memory_config=k_memory_config)
+                    return (s, e, b, None, upload_q(q_host), tt_kv, None)
 
                 q_host, k_host, v_host, *_ = build_kv_pad_rotation_inputs(
                     K_full[:, :, :s, :],
@@ -2130,8 +2142,8 @@ def run_ring_joint_sdpa_chunked(
                     b,
                     None,
                     upload_q(q_host),
-                    upload_k(oversize(k_host, nhk, d_k)),
-                    upload_v(oversize(v_host, nhv, d_v)),
+                    upload_k(oversize(k_host, nhk, d_k), memory_config=k_memory_config),
+                    upload_v(oversize(v_host, nhv, d_v), memory_config=v_memory_config),
                 )
 
             Q_chunk = Q_full if use_compact_single_chunk_q else Q_full[:, :, s:e, :].contiguous()
@@ -2153,7 +2165,7 @@ def run_ring_joint_sdpa_chunked(
                     kv_buffer_batch,
                     kv_cache_batch_idx_arg,
                     upload_q(Q_chunk),
-                    upload_kv(K_balanced),
+                    upload_kv(K_balanced, memory_config=k_memory_config),
                     None,
                 )
 
@@ -5860,6 +5872,7 @@ if MESH_CONFIG.is_galaxy:
             total_seq=GEMMA4_CHUNKED_TOTAL_SEQ,
             use_ring_mla=True,
             matmul_math_fidelity=ttnn.MathFidelity.LoFi,
+            nd_sharded_kv_cache=True,
         ),
         "gemma4_swa": ModelConfig(
             name="gemma4_swa",
@@ -5879,6 +5892,7 @@ if MESH_CONFIG.is_galaxy:
             scale=1.0,
             topology=Topology.Linear,
             total_seq=GEMMA4_CHUNKED_TOTAL_SEQ,
+            nd_sharded_kv_cache=True,
         ),
     }
 
@@ -7038,6 +7052,7 @@ def test_ring_joint_attention_chunked_perf_impl(model_name, qk_configs, chunk_si
         sliding_window_size=model.sliding_window_size,
         use_ring_mla=model.use_ring_mla,
         matmul_math_fidelity=model.matmul_math_fidelity,
+        nd_sharded_kv_cache=model.nd_sharded_kv_cache,
     )
 
 
@@ -7662,8 +7677,12 @@ def test_ring_joint_attention_minimax3_gqa_rotated_q_perf():
 
 GEMMA4_CHUNKED_PERF_CHECK_CONFIGS = [
     # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
-    ("gemma4_global", 96, 256, 8, 44.9, 0.25),
-    ("gemma4_swa", 128, 128, 8, 6.7, 0.25),
+    # Global: three-run median on a 4x8 Blackhole Galaxy with the ND-sharded K/V cache, 16.26 / 16.26 /
+    # 16.27 ms (43.73-43.78%); utilization uses the LoFi peak.
+    ("gemma4_global", 96, 256, 8, 43.77, 0.01),
+    # SWA: the ~0.45 ms duration and ~6% utilization are much smaller than global's, so small absolute
+    # run-to-run changes are large relative ones; the margin has to be higher.
+    ("gemma4_swa", 128, 128, 8, 5.81, 0.18),
 ]
 
 
@@ -7713,6 +7732,7 @@ def test_ring_joint_attention_gemma4_chunked_perf_check(
                     sliding_window_size=model.sliding_window_size,
                     use_ring_mla=model.use_ring_mla,
                     matmul_math_fidelity=model.matmul_math_fidelity,
+                    nd_sharded_kv_cache=model.nd_sharded_kv_cache,
                     runtime=runtime,
                 ),
             )
