@@ -10,7 +10,8 @@ relative RMSE and norm ratio, D5 worst V-head state error). The schedule then ru
 and once eagerly; both must reproduce the first replay bit for bit (R10 repetition, R11 trace == eager).
 
 Weights and inputs: synthetic weights on seeded random inputs for every model and layout; for the Qwen models at
-LB-A and LB-B also the real layer-0 weights on random inputs and on real text (R13; local only, never CI).
+LB-A and LB-B also the real layer-0 weights on random inputs and on real text (R13; local only, never CI), and real text
+at the 1x4 layouts of the comparison with the current GDN implementation (g1b.5.10, tests/gdn/compare/).
 Layouts and schedules: tests/gdn/cases.py. CPU references and weight caches come from the CPU preparation step
 (``python -m models.demos.deepseek_v3_d_p.tests.gdn.prepare --case <name>``); this test only loads them.
 """
@@ -26,6 +27,8 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.gdn.qwen_models import QWEN_GDN_MODELS
 from models.demos.deepseek_v3_d_p.tests.gdn.cases import (
+    CURRENT_IMPLEMENTATION_LAYOUTS,
+    CURRENT_IMPLEMENTATION_MODELS,
     GDN_MODELS,
     LAYOUTS,
     SCHEDULES,
@@ -64,6 +67,8 @@ def _cells() -> list[tuple[str, str, str, str, int]]:
             cells.append((model, layout, "synthetic", "randn", 0))
             if model in QWEN_GDN_MODELS and layout in ("LB-A", "LB-B"):
                 cells.extend((model, layout, weights, inputs, 0) for weights, inputs in _REAL)
+            if model in CURRENT_IMPLEMENTATION_MODELS and layout in CURRENT_IMPLEMENTATION_LAYOUTS:
+                cells.append((model, layout, "real", "text", 0))
     cells.extend((model, "LB-B", "real", "text", rank) for model, rank in TEXT_EXPOSED_GALAXY_RANK.items())
     return cells
 
