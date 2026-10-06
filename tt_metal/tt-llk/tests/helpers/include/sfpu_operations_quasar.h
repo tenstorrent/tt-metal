@@ -1254,7 +1254,7 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
 {
     if constexpr (BCAST_TYPE != BroadcastType::NONE)
     {
-        init_binary_bcast<BCAST_TYPE>();
+        init_binary_bcast<OP, BCAST_TYPE>();
     }
     else if constexpr (OP == BinaryOp::MUL)
     {
@@ -1375,7 +1375,9 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
  *         init step; atan2 uses it to select the LUT-only reciprocal path.
  * @tparam BCAST_TYPE Broadcast of src1: NONE for the plain binary op; COL or ROW
  *         broadcasts column 0 / row 0 of `src1_tile` over the whole tile for ADD / SUB / MUL
- *         (float only, one full-tile call). Must match the init step.
+ *         (float only, one full-tile call). Must match the init step. The broadcast path
+ *         requires dst_rounding_mode == Default (results are stored truncated) and a float
+ *         `math_format`; it ignores ITERATIONS and APPROXIMATION_MODE.
  * @param src0_tile,src1_tile,dst_tile Operand / result tile indices. COPY_DEST ignores
  *        `src1_tile` and writes `src0_tile` onto `dst_tile`.
  * @param math_format Dest encoding. Int32 vs float path for MUL and max/min; COPY_DEST
@@ -1396,6 +1398,8 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
 {
     if constexpr (BCAST_TYPE != BroadcastType::NONE)
     {
+        static_assert(dst_rounding_mode == ckernel::DstRoundingMode::Default, "binary_bcast does not implement NearestEven rounding");
+        LLK_ASSERT(math_format != DataFormat::Int32, "binary_bcast supports float formats only");
         SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_binary_bcast, (OP, BCAST_TYPE), src0_tile, src1_tile, dst_tile, VectorMode::None);
     }
     else if constexpr (OP == BinaryOp::ADD)

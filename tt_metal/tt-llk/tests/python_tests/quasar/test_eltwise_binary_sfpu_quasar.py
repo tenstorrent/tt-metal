@@ -505,6 +505,35 @@ _BCAST_OPS = [
     ("MUL", MathOperation.SfpuElwmul),
 ]
 _BCAST_TYPES = [BroadcastType.Column, BroadcastType.Row]
+# (0, 1, 1) writes the result over the bcast tile, so the ROW hoist and the per-band
+# COL bcast load must both land before that band's store.
+_BCAST_TILE_INDEX_VARIANTS = _TILE_INDEX_VARIANTS + [(0, 1, 1)]
+_BCAST_SPECIALS = [float("inf"), float("-inf"), float("nan")]
+
+
+def _inject_ignored_bcast_specials(src_A, src1_idx, broadcast_type):
+    """Write +-Inf / NaN into the src1 tile everywhere the broadcast ignores
+    (tile cols 1..31 for COL, rows 1..31 for ROW; tile layout is four 16x16
+    faces). The golden broadcasts them away, so any leak into the result (e.g.
+    0 * Inf = NaN from an arithmetic column mask) fails the comparison."""
+    flat = src_A.flatten().clone()
+    base = src1_idx * MAX_TILE_ELEMENTS
+    face_elems = 16 * 16
+    for face in range(MAX_NUM_FACES):
+        for r in range(16):
+            for c in range(16):
+                tile_r = (face // 2) * 16 + r
+                tile_c = (face % 2) * 16 + c
+                ignored = (
+                    tile_c != 0
+                    if broadcast_type == BroadcastType.Column
+                    else tile_r != 0
+                )
+                if ignored:
+                    flat[base + face * face_elems + r * 16 + c] = _BCAST_SPECIALS[
+                        (tile_r + tile_c) % len(_BCAST_SPECIALS)
+                    ]
+    return flat.reshape(src_A.shape)
 
 
 @pytest.mark.quasar
@@ -514,10 +543,13 @@ _BCAST_TYPES = [BroadcastType.Column, BroadcastType.Row]
 @pytest.mark.parametrize(
     "binary_op, mathop", _BCAST_OPS, ids=[op for op, _ in _BCAST_OPS]
 )
+@pytest.mark.parametrize(
+    "ignored_specials", [False, True], ids=["finite", "ignored_inf_nan"]
+)
 @parametrize(
     formats_dest_acc=_get_valid_float_formats_dest_acc(),
     implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
-    tile_indices=runtime(_TILE_INDEX_VARIANTS),
+    tile_indices=runtime(_BCAST_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_bcast_quasar(
     formats_dest_acc,
@@ -526,14 +558,25 @@ def test_eltwise_binary_sfpu_bcast_quasar(
     binary_op,
     mathop,
     broadcast_type,
+    ignored_specials,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU float ADD / SUB / MUL with src1 column or row broadcast."""
+    """Binary SFPU float ADD / SUB / MUL with src1 column or row broadcast.
+    ``ignored_specials`` fills the src1 cells the broadcast ignores with Inf/NaN."""
     format_variant = formats_dest_acc
+
+    def prepare_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop):
+        src_A, tile_cnt_A, src_B = _prepare_float_stimuli(
+            formats, input_dimensions, src0_idx, src1_idx, mathop
+        )
+        if ignored_specials:
+            src_A = _inject_ignored_bcast_specials(src_A, src1_idx, broadcast_type)
+        return src_A, tile_cnt_A, src_B
+
     _run_sfpu_binary_llk_golden(
         format_variant.formats,
         format_variant.dest_acc,
@@ -541,7 +584,7 @@ def test_eltwise_binary_sfpu_bcast_quasar(
         tile_indices,
         mathop,
         binary_op,
-        prepare_stimuli=_prepare_float_stimuli,
+        prepare_stimuli=prepare_stimuli,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,
