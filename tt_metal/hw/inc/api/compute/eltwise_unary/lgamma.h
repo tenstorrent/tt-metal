@@ -31,8 +31,18 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void lgamma_stirling_tile(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_lgamma_stirling,
+        (APPROX, is_fp32_dest_acc_en, 32),
+        idst,
+        VectorMode::None));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_lgamma_stirling, (APPROX, is_fp32_dest_acc_en), idst, VectorMode::RC));
+#endif
 }
 
 /**

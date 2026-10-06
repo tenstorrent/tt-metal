@@ -692,26 +692,39 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     return y;
 }
 
-// t = exp(a); cosh(a) = 0.5 * (t + 1/t)
+// t = exp(a); cosh(a) = 0.5 * (t + 1/t), one row of DEST
+template <bool is_fp32_dest_acc_en>
+sfpi_inline void _calculate_cosh_row_() {
+    sfpi::vFloat x = sfpi::dst_reg[0];
+    sfpi::vFloat a = sfpi::setsgn(x, 0);
+    sfpi::vFloat q = _sfpu_quarter_exp_abs_<is_fp32_dest_acc_en>(a);
+    sfpi::vFloat r = _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(q);
+    sfpi::vFloat y = q + q;
+    r *= 0.125f;
+    sfpi::vInt q_exp = sfpi::exexp(q);
+    v_if(q_exp < 24) { y += r; }
+    v_endif;
+
+    if constexpr (!is_fp32_dest_acc_en) {
+        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+    }
+
+    sfpi::dst_reg[0] = y;
+    sfpi::dst_reg++;
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosh() {
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat a = sfpi::setsgn(x, 0);
-        sfpi::vFloat q = _sfpu_quarter_exp_abs_<is_fp32_dest_acc_en>(a);
-        sfpi::vFloat r = _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(q);
-        sfpi::vFloat y = q + q;
-        r *= 0.125f;
-        sfpi::vInt q_exp = sfpi::exexp(q);
-        v_if(q_exp < 24) { y += r; }
-        v_endif;
-
-        if constexpr (!is_fp32_dest_acc_en) {
-            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+    if constexpr (is_fp32_dest_acc_en) {
+        // The 32-bit DEST row does not fit the replay buffer, so its loop stays rolled.
+        for (int d = 0; d < ITERATIONS; d++) {
+            _calculate_cosh_row_<is_fp32_dest_acc_en>();
         }
-
-        sfpi::dst_reg[0] = y;
-        sfpi::dst_reg++;
+    } else {
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            _calculate_cosh_row_<is_fp32_dest_acc_en>();
+        }
     }
 }
 

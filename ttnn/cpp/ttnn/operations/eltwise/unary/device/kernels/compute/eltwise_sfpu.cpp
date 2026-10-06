@@ -33,8 +33,16 @@ void kernel_main() {
 
         copy_tile(cb_input, 0, 0);
 
+#if defined(ARCH_BLACKHOLE) && defined(SFPU_OP_CHAIN_0_FUNC_0) && !defined(SFPU_OP_CHAIN_0_FUNC_1)
+        // A single op's init state outlives its calls, so only the first tile runs the init.
+        if (i == 0) {
+            SFPU_OP_CHAIN_0_INIT_0
+        }
+        SFPU_OP_CHAIN_0_FUNC_0
+#else
 #ifdef SFPU_OP_CHAIN_0
         SFPU_OP_CHAIN_0
+#endif
 #endif
 
         tile_regs_commit();
