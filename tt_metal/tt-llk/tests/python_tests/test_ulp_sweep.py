@@ -1063,6 +1063,34 @@ def test_effective_dest_acc_promotes_an_exponent_b_input_packed_to_float16(
     assert effective_dest_acc(DataFormat.Float16, DataFormat.Float16, No, arch) == No
 
 
+def test_effective_dest_acc_asks_for_the_chip_only_for_an_outlier(monkeypatch):
+    """Block sizing calls it for every variant; an ordinary combination cannot be
+    promoted, so it must not need a chip context to say so."""
+    import helpers.data_format_inference as inference
+
+    def no_chip():
+        raise AssertionError("looked up the chip for a combination it cannot promote")
+
+    monkeypatch.setattr(inference, "get_chip_architecture", no_chip)
+    for dest_acc in DestAccumulation:
+        assert (
+            inference.effective_dest_acc(
+                DataFormat.Float16, DataFormat.Float16, dest_acc
+            )
+            == dest_acc
+        )
+    assert (
+        inference.effective_dest_acc(
+            DataFormat.Float16_b, DataFormat.Float16, DestAccumulation.Yes
+        )
+        == DestAccumulation.Yes
+    )
+    with _refuses("looked up the chip", AssertionError):
+        inference.effective_dest_acc(
+            DataFormat.Float16_b, DataFormat.Float16, DestAccumulation.No
+        )
+
+
 def test_the_sweep_collects_every_keyed_op_whether_gating_or_emitting(monkeypatch):
     """The key line is the enrolment and the only place a measurement can land, so both
     runs take exactly the unary ops that have one. Gating used to take only the ops with
