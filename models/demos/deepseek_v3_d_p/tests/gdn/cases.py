@@ -402,7 +402,9 @@ def gdn_case_spec(
 #   (max |G_last| 226); rank 0 holds neither band (max 58, no weak chunk).
 # * qwen36_35b: rank 2 (K heads 8-11, V heads 16-23) holds full-forgetting heads 18, 19, 22 (max |G_last| 2930) and
 #   mostly-weak head 23; rank 0 holds weak heads 0, 6, 7 but its strongest head reaches only 162.
-TEXT_EXPOSED_GALAXY_RANK = {"qwen38_27b": 2, "qwen36_35b": 2}
+# * qwen38_2_4t: rank 3 (K heads 12-15, V heads 96-127) holds the only mostly-weak V heads 111, 113 and 11 strong
+#   heads; rank 0 holds the strongest head 9 (max |G_last| 7977) but no mostly-weak head (0.2 % weak chunks).
+TEXT_EXPOSED_GALAXY_RANK = {"qwen38_27b": 2, "qwen36_35b": 2, "qwen38_2_4t": 3}
 
 
 _REGISTERED_SPECS = (

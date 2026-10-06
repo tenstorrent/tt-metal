@@ -74,6 +74,30 @@ def _cell_id(model: str, layout: str, weights: str, inputs: str, rank: int) -> s
     return f"{model}-{layout}-real-{inputs}" + (f"-rank{rank}" if rank else "")
 
 
+_D5_NEAR_ZERO_HEAD = (
+    "tt_metal_tracker-g1b.5.18: D5 divides by the head's own expected state RMS; a full-forgetting head whose last "
+    "valid token has a tiny beta has an expected state of ~1e-6 (absolute error <= 4.5e-4)"
+)
+# Cells that fail a §6.3 gate for a cause tracked in its own bead (strict: a fix makes them XPASS and fail).
+_KNOWN_FAILURES = {
+    "qwen38_2_4t-LB-A-real-text-ragged": _D5_NEAR_ZERO_HEAD + " (V head 5, chunk 1)",
+    "qwen38_2_4t-LB-B-real-text-single": _D5_NEAR_ZERO_HEAD + " (V head 2)",
+    "qwen38_2_4t-LB-B-real-text-chained3": _D5_NEAR_ZERO_HEAD + " (V head 2)",
+    "qwen38_2_4t-LB-B-real-text-ragged": _D5_NEAR_ZERO_HEAD
+    + " (V head 2); tt_metal_tracker-g1b.5.17: long-memory V head 17 state rel RMSE 0.15, recurrent PCC 0.99846",
+    **{
+        f"qwen38_2_4t-LB-B-real-text-rank3-{schedule}": _D5_NEAR_ZERO_HEAD + " (local V head 22)"
+        for schedule in SCHEDULES
+    },
+}
+
+
+def _known_failure(cell: str) -> list:
+    if cell not in _KNOWN_FAILURES:
+        return []
+    return [pytest.mark.xfail(strict=True, raises=AssertionError, reason=_KNOWN_FAILURES[cell])]
+
+
 def _params() -> list:
     return [
         pytest.param(
@@ -86,6 +110,7 @@ def _params() -> list:
             rank,
             schedule,
             id=f"{_cell_id(model, layout, weights, inputs, rank)}-{schedule}",
+            marks=_known_failure(f"{_cell_id(model, layout, weights, inputs, rank)}-{schedule}"),
         )
         for model, layout, weights, inputs, rank in _cells()
         for schedule in SCHEDULES
@@ -139,6 +164,8 @@ def test_gdn_layer_accuracy(
 ) -> None:
     spec = registered_gdn_case(model, layout, schedule, weights, inputs, galaxy_rank)
     mesh_device = layout_mesh(mesh_device, spec.mesh_shape)
+    grid = mesh_device.compute_with_storage_grid_size()
+    compute_grid = (grid.x, grid.y)
     case = build_gdn_case(spec)
     references = cpu_references(case)
     layer = make_gdn_device_case(mesh_device, case)
@@ -227,6 +254,7 @@ def test_gdn_layer_accuracy(
                 "schedule": schedule,
                 "chunk_valid_tokens": list(spec.chunk_valid_tokens),
                 "value_heads_per_chip": case.config.num_value_heads // spec.mesh_shape[spec.tensor_parallel_axis],
+                "compute_grid": list(compute_grid),
                 "min_pcc": min(row["pcc"] for row in rows),
                 "weights": weights,
                 "inputs": inputs,
