@@ -28,7 +28,7 @@ namespace sfpu {
 // so the final multiply produces exact 0 or exact x at transitions.
 inline void hardmish_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void hardmish() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
@@ -36,7 +36,11 @@ inline void hardmish() {
 
         scale = sfpi::clamp(scale, 0.0f, 1.0f);
 
-        sfpi::dst_reg[0] = x * scale;
+        sfpi::vFloat result = x * scale;
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        }
+        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }
