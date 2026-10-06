@@ -333,6 +333,53 @@ void enumerate_core_rt_args(
     }
 }
 
+// The program-cache key resolves a sharded tensor's geometry from its TensorSpec, while the accessor uses
+// the Buffer's distribution in its compile-time args. These normally agree, but a view/reshape can keep its
+// parent's buffer under a new spec which causes the same shard spec to resolve to different banks. Reject it
+// here to avoid reusing a program built with wrong geometry and accessing the wrong pages.
+void require_buffer_matches_spec_geometry(const Tensor& tensor, const char* slot) {
+    const auto& buffer_distribution = tensor.buffer()->buffer_distribution_spec();
+    const auto sharding_args = tensor.tensor_spec().compute_buffer_sharding_args();
+    const auto& spec_distribution = sharding_args.buffer_distribution_spec();
+    if (buffer_distribution.has_value() && spec_distribution.has_value() &&
+        buffer_distribution->shard_shape_in_pages() == spec_distribution->shard_shape_in_pages() &&
+        buffer_distribution->cores() == spec_distribution->cores()) {
+        return;
+    }
+    const auto describe = [](const std::optional<tt::tt_metal::BufferDistributionSpec>& distribution) {
+        if (!distribution.has_value()) {
+            return std::string("no distribution");
+        }
+        std::string banks;
+        for (const auto& core : distribution->cores()) {
+            banks += (banks.empty() ? "" : ", ") + fmt::format("{}", core);
+        }
+        return fmt::format("shard shape in pages {}, banks [{}]", distribution->shard_shape_in_pages(), banks);
+    };
+    TT_THROW(
+        "Unary: the sharded {} tensor's buffer distribution ({}) differs from its TensorSpec distribution ({}); "
+        "Use a tensor whose buffer was allocated for its own spec.",
+        slot,
+        describe(buffer_distribution),
+        describe(spec_distribution));
+}
+
+// Validate the buffer distribution matches the TensorSpec for sharded tensors used by the accessor.
+// Needed on cache miss and hit since a view can match a cached program's spec while retaining a buffer with
+// different sharding. Only preallocated outputs needs this check.
+void require_accessor_geometry_matches_spec(
+    const UnaryDeviceOperation::tensor_args_t& tensor_args, const Tensor& output, bool has_sharding) {
+    if (has_sharding) {
+        return;
+    }
+    if (tensor_args.input.is_sharded()) {
+        require_buffer_matches_spec_geometry(tensor_args.input, "input");
+    }
+    if (output.is_sharded() && tensor_args.output_tensor.has_value()) {
+        require_buffer_matches_spec_geometry(output, "output");
+    }
+}
+
 }  // namespace
 
 tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_descriptor(
@@ -365,6 +412,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     const bool has_sharding = shard_specs.has_value();
     const bool src_sharded = has_sharding && input.is_sharded();
     const bool dst_sharded = has_sharding && output.is_sharded();
+    require_accessor_geometry_matches_spec(tensor_args, output, has_sharding);
 
     // For ROW_MAJOR interleaved: use tile_size CB pages and group/chunk rows.
     // For sharded ROW_MAJOR or TILE layout: CB page is always tile_size.
@@ -587,6 +635,7 @@ void UnaryDeviceOperation::ProgramFactory::override_runtime_arguments(
     const uint32_t dst_addr = output.buffer()->address();
     const bool has_sharding = shard_specs.has_value();
     const bool rm_interleaved = input.layout() == Layout::ROW_MAJOR && !has_sharding;
+    require_accessor_geometry_matches_spec(tensor_args, output, has_sharding);
 
     // A changed split can flip a core between noop and active, so write every slot create_descriptor
     // writes rather than only the ones that usually move -- otherwise a flipped core keeps stale args.
