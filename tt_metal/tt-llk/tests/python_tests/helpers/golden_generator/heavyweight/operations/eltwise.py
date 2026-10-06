@@ -12,7 +12,7 @@ from helpers.llk_params import MathFidelity, MathOperation
 
 from .chain import Chain, Registers
 from .fidelity import (
-    FIDELITY_PHASES,
+    fidelity_phases,
     flush_pre_carry_denormals,
     min_normal_exponent,
     operand_halves,
@@ -74,10 +74,7 @@ class EltwiseBinaryGolden(Golden):
         when a fidelity phase has already written Dest.
         """
         if self.models_fidelity:
-            # One accumulate per phase, each reading the *original* srcA/srcB.
-            # Feeding a phase the previous phase's masked operands zeroes every
-            # phase after the first, which silently turns fidelity into a no-op.
-            for phase in range(FIDELITY_PHASES[self.math_fidelity]):
+            for phase in fidelity_phases(self.math_fidelity):
                 chain.then(
                     self.src_to_dest(
                         cfg,

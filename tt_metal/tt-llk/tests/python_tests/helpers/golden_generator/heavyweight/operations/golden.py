@@ -19,7 +19,7 @@ architecture and call it with tensors.
     result = golden.run(stimuli, in_format, out_format)
 """
 
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import torch
@@ -30,6 +30,7 @@ from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES, MAX_TILE_ELEME
 from ..data_transfer_blocks.data_transfer_blocks import (
     DEST_32_BIT_FORMATS,
     DataTransferBlocks,
+    as_dest_acc,
 )
 from ..data_transfer_blocks.l1_codec import datums_per_tile
 from ..data_transfer_blocks.pack_effects import PackEdgeMask
@@ -59,7 +60,9 @@ class OpConfig:
     stoch_rnd: StochasticRounding = StochasticRounding.No
 
 
-def check_source_layout(tile_count: int, geometry: Dict) -> None:
+def check_source_layout(
+    tile_count: int, geometry: Dict, dense_layout: bool = False
+) -> None:
     """Refuse a stimuli layout this model cannot infer.
 
     ``pack_to_l1`` lays tiles out back to back, ``datums_per_tile`` apart. The
@@ -75,19 +78,33 @@ def check_source_layout(tile_count: int, geometry: Dict) -> None:
     there is a single tile and the stride never applies. For a smaller tile over
     several tiles the two read different source elements from tile 1 on, so the
     golden would quietly compute on data the device never saw. Which writer a
-    test used is not visible from here, so raise rather than pick one.
+    test used is not visible from here, so raise rather than pick one --
+    unless the caller settles it with `dense_layout`, which asserts the dense
+    writer was used and that back-to-back is therefore the right reading.
     """
     per_tile = datums_per_tile(**geometry)
-    if tile_count > 1 and per_tile != MAX_TILE_ELEMENTS:
+    if not dense_layout and tile_count > 1 and per_tile != MAX_TILE_ELEMENTS:
         raise ValueError(
             f"{tile_count} tiles of {per_tile} datums is ambiguous: this packs "
             f"tiles {per_tile} apart, but StimuliConfig.write_matrix strides the "
             f"source by {MAX_TILE_ELEMENTS} for any tile size, so the two agree "
             f"only at {MAX_TILE_ELEMENTS} datums per tile or on a single tile. "
-            f"Use use_dense_tile_dimensions=True in the StimuliConfig, which "
-            f"strides by the tile's own size, or hand over real L1 buffers with "
-            f"run_l1."
+            f"If the stimuli came from use_dense_tile_dimensions=True, which "
+            f"strides by the tile's own size, say so with dense_layout=True -- "
+            f"this cannot tell from the tensor alone. Otherwise hand over real "
+            f"L1 buffers with run_l1."
         )
+
+
+#: The only keywords ``run`` funnels into :class:`OpConfig` as surplus. Not
+#: "every OpConfig field": ``tiles_per_output`` and ``geometry`` are fields too,
+#: and letting them through here just moves the failure to the "multiple values"
+#: TypeError inside ``_make_config`` -- which is the error this check exists to
+#: replace. ``tiles_per_output=2``, an easy slip for ``num_tiles_per_output``,
+#: is exactly that case.
+PACK_EFFECT_KEYWORDS = frozenset(
+    {"relu_type", "relu_threshold", "edge_mask", "stoch_rnd"}
+)
 
 
 def check_pack_effects(pack_effects: Dict) -> Dict:
@@ -97,13 +114,13 @@ def check_pack_effects(pack_effects: Dict) -> Dict:
     argument surfaces as an OpConfig error naming a class the caller never
     mentioned. Checking here names the caller's own options instead.
     """
-    unknown = sorted(set(pack_effects) - {f.name for f in fields(OpConfig)})
+    unknown = sorted(set(pack_effects) - PACK_EFFECT_KEYWORDS)
     if unknown:
         raise TypeError(
-            f"run() got unexpected keyword argument(s) {unknown}. It takes "
-            f"dest_acc, dest_format, num_faces, face_r_dim, "
-            f"num_tiles_per_output, trace, and the pack effects relu_type, "
-            f"relu_threshold, edge_mask and stoch_rnd."
+            f"got unexpected keyword argument(s) {unknown}. The surplus "
+            f"keywords are the pack effects "
+            f"{sorted(PACK_EFFECT_KEYWORDS)}; everything else run() takes is "
+            f"an explicit parameter of its own."
         )
     return pack_effects
 
@@ -127,6 +144,10 @@ class Golden:
                 )
             blocks = self.blocks_class()
         self.blocks = blocks
+        # Set here so reading them before a run gives None rather than
+        # AttributeError -- mismatch.py reaches for both when a test fails.
+        self.last_chain: Optional[Chain] = None
+        self.last_dest_format: Optional[DataFormat] = None
 
     # ------------------------------------------------------------------
     # What an operation declares
@@ -149,11 +170,6 @@ class Golden:
     # The data-transfer blocks, as chainable steps
     # ------------------------------------------------------------------
 
-    #: Src registers an unpack step can target, and the block method for each.
-    #: The register name is the whole difference between the three public
-    #: methods below, so they share one builder -- the format-slot argument
-    #: order had to be corrected in two separate copies of the Dest feedback
-    #: pair for exactly this reason.
     def _default_src_format(self, cfg: OpConfig, index: int) -> DataFormat:
         """The src format the kernel unpacks input `index` into, when none is named.
 
@@ -181,7 +197,14 @@ class Golden:
         index: int,
         src_format: Optional[DataFormat],
     ) -> Step:
-        """One unpack step, L1 -> `register`."""
+        """One unpack step, L1 -> `register`.
+
+        The register name is the whole difference between :meth:`l1_to_srcA`
+        and :meth:`l1_to_srcB`, so they share this builder. :meth:`l1_to_srcS`
+        does not: SrcS has its own format rules. The Dest-feedback pair shares
+        :meth:`_dest_to_register` for the same reason -- the format-slot
+        argument order had to be corrected in two separate copies of it once.
+        """
         l1_format = cfg.in_formats[index]
         fmt = src_format or self._default_src_format(cfg, index)
         unpack = getattr(self.blocks, f"l1_to_{register}")
@@ -224,8 +247,12 @@ class Golden:
     ) -> Step:
         """Unpack the L1 buffer in `source` into srcA.
 
-        `src_format` overrides the storage format the unpacker lands it in;
-        ``None`` lets the architecture choose.
+        `src_format` overrides the storage format the unpacker lands it in.
+        ``None`` goes through :meth:`_default_src_format`, which is the
+        architecture's mapping *except* for a Float32/Tf32 input under a
+        Float16/Float16_b Dest, where the Dest format names the src family
+        instead -- the architecture's Tf32 default would keep values the
+        device's narrower src register clips.
         """
         return self._l1_to_register(cfg, "srcA", source, into, index, src_format)
 
@@ -239,8 +266,8 @@ class Golden:
     ) -> Step:
         """Unpack the L1 buffer in `source` into srcB.
 
-        `src_format` overrides the storage format the unpacker lands it in;
-        ``None`` lets the architecture choose.
+        `src_format` as on :meth:`l1_to_srcA`: ``None`` goes through
+        :meth:`_default_src_format`, not straight to the architecture mapping.
         """
         return self._l1_to_register(cfg, "srcB", source, into, index, src_format)
 
@@ -377,6 +404,39 @@ class Golden:
     # Running
     # ------------------------------------------------------------------
 
+    def _promote_dest_acc(
+        self,
+        in_format: DataFormat,
+        out_format: DataFormat,
+        dest_acc: Union[bool, DestAccumulation],
+    ) -> bool:
+        """`dest_acc` as the device ran it, not as the caller asked for it.
+
+        An 8-bit-exponent input that is not Float32, packed to Float16, is the
+        combination the hardware cannot do with a 16-bit Dest.
+        ``TestConfig.__init__`` turns ``dest_acc`` on for it on every
+        architecture except Quasar, which it names explicitly, so the device
+        runs a 32-bit Dest whatever the test's parameter said.
+
+        Mirrored rather than imported, the way the format tables in
+        ``data_transfer_blocks`` are: the rule lives in
+        ``data_format_inference.is_format_combination_outlier`` plus the
+        ``CHIP_ARCH != QUASAR`` guard beside it. Without mirroring it here the
+        golden models a Float16_b Dest against a device running fp32, which is
+        a real precision gap -- ``(1 + 2**-7) + 1.0`` packs to 2.0 here and
+        2.0078125 there -- presented as an arithmetic disagreement.
+        """
+        dest_acc = as_dest_acc(dest_acc)
+        if (
+            not dest_acc
+            and self.blocks.PROMOTES_OUTLIER_TO_32_BIT_DEST
+            and in_format.is_exponent_B()
+            and not in_format.is_float32()
+            and out_format is DataFormat.Float16
+        ):
+            return True
+        return dest_acc
+
     def _make_config(
         self,
         in_formats: Union[DataFormat, Sequence[DataFormat]],
@@ -398,10 +458,15 @@ class Golden:
 
         Returns the expanded `in_formats` alongside the config, since a single
         format given for several operands has to be broadcast before use.
+
+        Also applies the architecture's `dest_acc` promotion, so a caller may
+        pass the `dest_acc` its test asked for rather than the one
+        ``TestConfig`` quietly substituted -- see :meth:`_promote_dest_acc`.
         """
         if isinstance(in_formats, DataFormat):
             in_formats = [in_formats] * operands
         in_formats = list(in_formats)
+        dest_acc = self._promote_dest_acc(in_formats[0], out_format, dest_acc)
         cfg = OpConfig(
             in_formats=in_formats,
             out_format=out_format,
@@ -434,6 +499,7 @@ class Golden:
         num_faces: int = MAX_NUM_FACES,
         face_r_dim: int = MAX_FACE_R_DIM,
         num_tiles_per_output: int = 1,
+        dense_layout: bool = False,
         trace: Optional[List[StageRecord]] = None,
         **pack_effects,
     ) -> torch.Tensor:
@@ -474,12 +540,14 @@ class Golden:
             pack_effects=pack_effects,
         )
         if num_tiles_per_output > 1:
-            return self._run_blocked(stimuli, in_formats, cfg, trace)
+            return self._run_blocked(stimuli, in_formats, cfg, trace, dense_layout)
         # Lay the stimuli out in L1 the way the harness does, so the chain
         # reads the bytes the hardware read. Tiles go back to back here, which
         # matches the dense writer but not the default one -- see
         # check_source_layout for the cases that cannot agree.
-        check_source_layout(stimuli[0].numel() // datums_per_tile(**geometry), geometry)
+        check_source_layout(
+            stimuli[0].numel() // datums_per_tile(**geometry), geometry, dense_layout
+        )
         regs = Registers(
             **{
                 f"in{i}": self.blocks.pack_to_l1(t, f, **geometry)
@@ -487,7 +555,19 @@ class Golden:
             }
         )
         self.last_chain = self.build_chain(cfg)
-        self.last_dest_format = cfg.dest_format
+        # An operand the chain never reads is silent otherwise: every register
+        # it does read still holds a tile, so the run completes and answers
+        # from fewer operands than it was handed. run_l1 and _run_blocked both
+        # check this; without it here, run([a, b], ...) on a datacopy quietly
+        # ignores b while the same inputs through run_l1 raise.
+        ignored = self.last_chain.unread([self.source(i) for i in range(len(stimuli))])
+        if ignored:
+            raise ValueError(
+                f"{type(self).__name__} was given {len(stimuli)} operands but "
+                f"its chain never reads {ignored}, so they would be dropped "
+                f"and the result computed from the rest. Pass only the "
+                f"operands this operation takes."
+            )
         l1_out = self.last_chain.run(regs, result="out", trace=trace)
         return self.blocks.unpack_from_l1(l1_out, out_format, **geometry)
 
@@ -497,6 +577,7 @@ class Golden:
         in_formats: Sequence[DataFormat],
         cfg: OpConfig,
         trace: Optional[List[StageRecord]],
+        dense_layout: bool = False,
     ) -> torch.Tensor:
         """Run one chain per block of `cfg.tiles_per_output` input tiles.
 
@@ -512,10 +593,9 @@ class Golden:
                 f"{depth} tiles accumulated per Dest"
             )
 
-        check_source_layout(total_tiles, cfg.geometry)
+        check_source_layout(total_tiles, cfg.geometry, dense_layout)
         chain = self.build_chain(cfg)
         self.last_chain = chain
-        self.last_dest_format = cfg.dest_format
 
         # Staging a tile the chain never reads is silent: every register still
         # holds exactly one tile, so nothing raises and the op just answers from
@@ -569,7 +649,11 @@ class Golden:
         than silently ignored.
         """
         if isinstance(l1_buffers, Registers):
-            regs = l1_buffers
+            # Copied, not used in place: chain.run writes srcA/srcB/dest/out
+            # into it, so handing the same object to a second run_l1 -- a
+            # fidelity sweep over one set of inputs, say -- would fail unread
+            # with a spurious "never reads [out]".
+            regs = Registers(**{n: l1_buffers[n] for n in l1_buffers.names()})
         elif isinstance(l1_buffers, Mapping):
             regs = Registers(**l1_buffers)
         else:
@@ -593,5 +677,6 @@ class Golden:
             )
 
         self.last_chain = chain
+        # run_l1 takes a prebuilt cfg, so _make_config never ran for it.
         self.last_dest_format = cfg.dest_format
         return chain.run(regs, result="out", trace=trace)
