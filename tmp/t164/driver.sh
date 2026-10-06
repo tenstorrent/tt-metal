@@ -11,9 +11,10 @@ DATA=/home/smarton/fasth3/tt-metal/tt-project/data/g15
 CONFIGS=${CONFIGS:-$T/configs.txt}; TAG=${TAG:-pack}
 V=$DATA/t164/driver_$TAG; mkdir -p $V
 SL=/var/log/tt-device-broker/server.log; D=$V/driver.log; BOOT0=$(uptime -s)
-# Job 399 (same build, caches, default config) held the device 162 s; knob configs add in-window JIT
-# compiles for their changed kernels. Limits are measured time plus margin, under the 400 s reservation limit.
-TO_BASE=${TO_BASE:-360}; TO_KNOB=${TO_KNOB:-400}
+# Job 399 (same build, caches, default config, warm JIT) held the device ~180 s; limits are measured time +50%,
+# with room for in-place recompiles of kernels job 403 rebuilt from the t164 tree.
+# Knob configs add in-window JIT compiles for their changed kernels (unmeasured), so they get 400 s.
+TO_BASE=${TO_BASE:-330}; TO_KNOB=${TO_KNOB:-400}
 log() { echo "$(date -u '+%F %T') $*" >> $D; }
 done_() { log "T164_DRIVER_DONE $1 $2"; echo "$1 $2" > $V/DRIVER.done; exit 0; }
 now() { date -u '+%F %T'; }
