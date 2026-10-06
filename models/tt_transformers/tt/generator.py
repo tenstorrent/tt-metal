@@ -1895,7 +1895,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             Chunked prefill requires paged attention. There are some strange constraints which we must meet:
              - page_table, which is used in SDPA, must match batch size of inputs, which is 1. This is because SDPA
              checks that page table batch dim matches input batch dim. Therefore we must slice the page table for the current user.
-             - page_table must also have enough entries in each chunk, so it will be padded with zeros if necessary.
+             - page_table must also have enough entries in each chunk, so it will be padded with -1 if necessary.
+               This suppresses cache writes; input preparation replaces padding in the separate SDPA read table.
              - chunked_page_table is the slice of the page table for the current chunk. This is used by paged_fill_cache
              to keep it otherwise unaware that it is operating on a chunk.
              - due to the above point, we must always set user_id to 0 for chunked prefill.
@@ -1933,7 +1934,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 page_table_user = page_table_user[:, :needed_blocks]
             num_padding_blocks = needed_blocks - page_table_user.shape[1]
             page_table_user_padded = torch.cat(
-                [page_table_user, torch.zeros(1, num_padding_blocks, dtype=torch.int32)], dim=-1
+                [page_table_user, page_table_user.new_full((1, num_padding_blocks), -1)], dim=-1
             )
             CHUNK_USER_ID = 0
 
@@ -3897,6 +3898,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 padded_page_table[user, :] = page_table[i, :]
             return padded_page_table
         else:
+            # Scheduler rows can retain a previous request's block IDs beyond
+            # the current prompt. Padded prefill tokens must not write them.
+            owned_blocks = num_blocks_in_seq(prefill_len, block_size)
+            page_table = page_table[:, :owned_blocks]
             # Compatibility with VLLM warmup: prefill kernels run on the padded
             # prefill length (for example 32-token prompts become 128-token
             # kernels), so the page table must expose blocks for that padded
