@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 import torch
 
 import ttnn
-from models.demos.blackhole.deepseek_v41_flash.tt import pf_tune
+from models.demos.blackhole.deepseek_v41_flash.tt import moe_overlap, pf_tune
 from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d, recording, replay
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import clear_chunk_caches, pad_len
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active, unpack_streams
@@ -573,7 +573,10 @@ class DSV41PrefillModel:
     def teardown_dyn(self):
         """Release the chunk trace and the per-chunk buffers (a different chunk size / padded prompt length needs a new capture)."""
         if getattr(self, "dyn_trace", None) is not None:
-            ttnn.release_trace(self.md, self.dyn_trace)
+            if isinstance(self.dyn_trace, moe_overlap.SegTrace):
+                self.dyn_trace.release()
+            else:
+                ttnn.release_trace(self.md, self.dyn_trace)
         if getattr(self, "head_fused_trace", None) is not None:
             ttnn.release_trace(self.md, self.head_fused_trace)
             self.head_fused_trace = None
@@ -675,9 +678,20 @@ class DSV41PrefillModel:
             for _, pl in self.layers:
                 pl.pa.reset_dyn()  # before any capture only
             ttnn.synchronize_device(self.md)
-            self.dyn_trace = ttnn.begin_trace_capture(self.md, cq_id=0)
-            self.forward_device(bufs, S, 0, C, dyn=True)
-            ttnn.end_trace_capture(self.md, self.dyn_trace, cq_id=0)
+            if (
+                moe_overlap.enabled()
+            ):  # the shared expert / dispatch overlap switches sub-device managers: segmented trace
+                ov = moe_overlap.SDOverlap.get(self.md)
+                self.dyn_trace = moe_overlap.SegTrace(self.md)
+                ov.seg = self.dyn_trace
+                self.dyn_trace.begin()
+                self.forward_device(bufs, S, 0, C, dyn=True)
+                self.dyn_trace.end()
+                ov.seg = None
+            else:
+                self.dyn_trace = ttnn.begin_trace_capture(self.md, cq_id=0)
+                self.forward_device(bufs, S, 0, C, dyn=True)
+                ttnn.end_trace_capture(self.md, self.dyn_trace, cq_id=0)
             ttnn.synchronize_device(self.md)
             self.timing["compile_and_capture"] = time.perf_counter() - t0
         MODE = os.environ.get(
@@ -713,7 +727,10 @@ class DSV41PrefillModel:
                 del ops
                 t_u = time.perf_counter()
                 t1 = t_u
-            ttnn.execute_trace(self.md, self.dyn_trace, cq_id=0, blocking=False)
+            if isinstance(self.dyn_trace, moe_overlap.SegTrace):
+                self.dyn_trace.replay()
+            else:
+                ttnn.execute_trace(self.md, self.dyn_trace, cq_id=0, blocking=False)
             need = (not PF_ASYNC) or any(
                 getattr(hk, "needs_sync", lambda s0_, C_: True)(ci * C, C) for hk in self.post_replay_hooks
             )

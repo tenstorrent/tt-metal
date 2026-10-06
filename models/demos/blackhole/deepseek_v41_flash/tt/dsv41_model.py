@@ -172,6 +172,12 @@ class Model:
                     pls[-1][1].umoe = DSV41UnifiedMoE(
                         mesh_device, L, log=log, weights=None if keep is None else keep["umoe"].get(L)
                     )
+                from models.demos.blackhole.deepseek_v41_flash.tt import moe_overlap
+
+                if (
+                    moe_overlap.prep_enabled()
+                ):  # DSV41_MO_OVERLAP=1|prep: separate gate / up shared-expert weights for the sub-device matmuls
+                    moe_overlap.SDOverlap.get(mesh_device).split_weights(layer.shared)
             key = getattr(attn, "ratio", 0)
             if key not in self.step_groups:
                 self.step_groups[key] = DSV41StepState_paged(attn, max_ctx + 64, self.use_indexer)
