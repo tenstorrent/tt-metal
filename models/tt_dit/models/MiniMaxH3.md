@@ -8,6 +8,7 @@ Bringup is split by component. Each component has its own folder for team member
 models/tt_dit/
 ├── models/
 │   ├── MiniMaxH3.md                  # this file
+│   ├── MiniMaxH3_mock_oom.md         # reproducing OOMs on the mock device, no galaxy needed
 │   ├── transformers/minimax_h3/      # denoising transformer (block, attention, RoPE)
 │   ├── vae/minimax_h3/               # video VAE (AutoencoderKLMiniMaxH3)
 │   └── audio_vae/minimax_h3/         # audio VAE (AutoencoderKLMiniMaxH3Audio)
