@@ -161,8 +161,22 @@ def saturate_to_integer(
     return values.clamp(low, info.max).to(dtype)
 
 
-def flush_subnormals(values: torch.Tensor) -> torch.Tensor:
-    """Zero anything below `values`'s own smallest normal.
+class UnmodelledHardwareWarning(RuntimeWarning):
+    """A hardware behaviour this golden knowingly does not reproduce.
+
+    A ``RuntimeWarning`` subclass on purpose. ``pytest.ini`` sets
+    ``ignore::UserWarning`` for the whole suite, so a plain ``UserWarning``
+    reaches nobody running the tests -- and that is the only audience for a
+    warning whose message is "this answer is approximate". ``pytest.warns``
+    bypasses the filter, so the unit test would keep passing while the suite
+    stayed silent.
+    """
+
+
+def flush_subnormals(
+    values: torch.Tensor, dtype: Optional[torch.dtype] = None
+) -> torch.Tensor:
+    """Zero anything below the smallest normal of `dtype`, or of `values` itself.
 
     Neither the FPU nor the unpacker writes a denormal: a slot whose exponent
     field is zero has a zero mantissa too. Keeping the subnormal instead lets a
@@ -170,12 +184,15 @@ def flush_subnormals(values: torch.Tensor) -> torch.Tensor:
     the output lattice -- so a datum the device reports as 0 comes back as the
     output format's smallest representable value.
 
-    The threshold comes from the tensor's own dtype, so call this *after* the
-    narrowing cast. Flushing before the cast would have to be told which dtype
-    to use.
+    By default the threshold comes from the tensor's own dtype, which suits a
+    flush applied *after* the narrowing cast. Pass `dtype` to flush against a
+    narrower format while still holding the wide value -- needed wherever the
+    cast rounds, because rounding can carry the top of the subnormal range up
+    to the smallest normal and so past a flush applied afterwards.
     """
+    threshold = torch.finfo(dtype or values.dtype).smallest_normal
     return torch.where(
-        values.abs() < torch.finfo(values.dtype).smallest_normal,
+        values.abs() < threshold,
         torch.zeros_like(values),
         values,
     )
@@ -204,12 +221,6 @@ def as_dest_acc(dest_acc: Union[bool, DestAccumulation]) -> bool:
 class DataTransferBlocks(ABC):
     """Base for the per-architecture data-transfer blocks."""
 
-    #: L1 formats this architecture's unpacker can read.
-    #: L1 formats this architecture's unpacker can read. Empty in the base: a
-    #: subclass has to declare it, and that -- not any method -- is what makes
-    #: this class abstract in practice. An instance that reached here with the
-    #: empty set would reject every format, so :meth:`__init__` says so up
-    #: front instead of failing one call later.
     #: Legal ``L1 format -> src-register format`` pairs for this architecture's
     #: unpacker. Empty means the architecture is not modelled at this level of
     #: detail, and the weaker "is it a src storage format at all" check applies
@@ -223,12 +234,44 @@ class DataTransferBlocks(ABC):
     #: all" check applies instead.
     UNPACK_TO_DEST_FORMATS: ClassVar[Mapping[DataFormat, FrozenSet[DataFormat]]] = {}
 
+    #: L1 formats this architecture's unpacker can read. Empty in the base: a
+    #: subclass has to declare it, and that -- not any method -- is what makes
+    #: this class abstract in practice. An instance that reached here with the
+    #: empty set would reject every format, so :meth:`__init__` says so up
+    #: front instead of failing one call later.
     SUPPORTED_L1_FORMATS: ClassVar[FrozenSet[DataFormat]] = frozenset()
 
     #: Edge-mask polarity: whether a set bit in an edge-mask register masks the
     #: datum. False is Wormhole/Blackhole, where ``PCK_EDGE_OFFSET`` mask 0xFFFF
     #: passes a row through and 0x0 clears it; Quasar overrides it.
     EDGE_MASK_MASKED_WHEN_SET: ClassVar[bool] = False
+
+    #: Legal ``Dest format -> L1 format`` pairs for the packer, the pack-side
+    #: counterpart of :attr:`UNPACK_TO_SRC_FORMATS`. The packer converts on the
+    #: way out, but not between arbitrary pairs: a 32-bit Dest reaches the
+    #: narrow floats, a 16-bit float Dest does not reach Float32, and the
+    #: integer widths each reach only their own. Empty means unmodelled, and
+    #: only the weaker "can this architecture hold the L1 format, and can Dest
+    #: hold the Dest format" checks apply; it is not a claim that every pair is
+    #: legal.
+    PACK_TO_L1_FORMATS: ClassVar[Mapping[DataFormat, FrozenSet[DataFormat]]] = {}
+
+    #: Whether this architecture has a SrcS register at all. False in the base,
+    #: and only Quasar sets it: Wormhole and Blackhole have no SrcS, no
+    #: ``UNP_S`` unpacker and no ``_is_srcs_32bit_mode_`` -- every apparent
+    #: match in their headers is ``SrcSelector`` or ``UNP_SEL``. Without this
+    #: the SrcS blocks sit on the base class and answer for a register that
+    #: does not exist, returning full-fp32 "SrcS" values on Wormhole.
+    HAS_SRCS: ClassVar[bool] = False
+
+    #: Whether the harness promotes an exponent-B input with a Float16 output
+    #: to a 32-bit Dest. True here because ``TestConfig`` does exactly that on
+    #: every architecture except Quasar, which it names explicitly
+    #: (``is_format_combination_outlier`` + ``CHIP_ARCH != QUASAR``). The
+    #: combination therefore never runs with a 16-bit Dest on those devices, so
+    #: modelling it as one would compare a bf16 Dest against silicon running
+    #: fp32. Quasar clears it.
+    PROMOTES_OUTLIER_TO_32_BIT_DEST: ClassVar[bool] = True
 
     def __init__(self) -> None:
         if not self.SUPPORTED_L1_FORMATS:
@@ -268,6 +311,34 @@ class DataTransferBlocks(ABC):
         """Values visible in SrcB. SrcA and SrcB share the datum layout."""
         return self.l1_to_srcA(l1_bytes, l1_format, src_format, **geometry)
 
+    def _check_pack_pair(self, dest_format: DataFormat, l1_format: DataFormat) -> None:
+        """Refuse a ``Dest -> L1`` pair this architecture's packer cannot do.
+
+        The unpack side has :meth:`_is_valid_src_format` for the mirror of
+        this. Without it a Float32 Dest packed to Float16_b, or an Int32 Dest
+        packed to a float, returns bytes that decode to believable numbers for
+        a conversion the hardware refuses to perform.
+        """
+        if not self.PACK_TO_L1_FORMATS:
+            return
+        allowed = self.PACK_TO_L1_FORMATS.get(dest_format, frozenset())
+        if l1_format not in allowed:
+            raise ValueError(
+                f"{type(self).__name__} cannot pack a {dest_format} Dest to "
+                f"{l1_format}. From {dest_format} the packer reaches "
+                f"{sorted(str(f) for f in allowed) or 'nothing'}."
+            )
+
+    def _check_has_srcs(self) -> None:
+        if not self.HAS_SRCS:
+            raise ValueError(
+                f"{type(self).__name__} has no SrcS register, so there is no "
+                f"such transfer to model. SrcS is Quasar-only: Wormhole and "
+                f"Blackhole have no UNP_S unpacker and no "
+                f"_is_srcs_32bit_mode_. Use l1_to_srcA/l1_to_srcB, or "
+                f"l1_to_dest for the unpack-to-Dest path."
+            )
+
     def l1_to_srcS(
         self,
         l1_bytes: L1Buffer,
@@ -288,6 +359,7 @@ class DataTransferBlocks(ABC):
         under SrcA's a Float32 input would lose the 13 mantissa bits SrcS keeps.
         See :meth:`srcs_format`.
         """
+        self._check_has_srcs()
         self._check_supported(l1_format)
         dest_acc = as_dest_acc(dest_acc)
         if src_format is None:
@@ -457,6 +529,7 @@ class DataTransferBlocks(ABC):
         :func:`.pack_effects.is_deterministic`.
         """
         self._check_dest_format(dest_format)
+        self._check_pack_pair(dest_format, l1_format)
         if not is_deterministic(stoch_rnd):
             # The golden cannot follow a device-seeded random sequence, so say so
             # at the call site rather than hand back round-to-nearest bytes that
@@ -472,8 +545,10 @@ class DataTransferBlocks(ABC):
                 f"result, which hardware matches only in expectation: each datum "
                 f"may land one ULP of {l1_format} either side. Compare with PCC, "
                 f"not exactly.",
+                UnmodelledHardwareWarning,
                 stacklevel=2,
             )
+        self._check_outlier_promotion(dest_format, l1_format)
         # Normally already at Dest precision (src_to_dest wrote it there); this
         # is a no-op then, and a safety net for a caller that bypassed Dest.
         values = self._to_dest_storage(dest_values, dest_format)
@@ -644,6 +719,34 @@ class DataTransferBlocks(ABC):
             )
         return dest_format
 
+    def _check_outlier_promotion(
+        self, dest_format: DataFormat, l1_format: DataFormat
+    ) -> None:
+        """Refuse the 16-bit Dest the harness would have promoted away.
+
+        An exponent-B input packed to Float16 is the combination
+        ``is_format_combination_outlier`` names: the hardware cannot convert an
+        8-bit-exponent datum straight to Float16, so ``TestConfig`` turns
+        ``dest_acc`` on and runs a 32-bit Dest instead. A Float16_b Dest is the
+        tell, since that is what an exponent-B input resolves to without
+        accumulation.
+
+        Without this the golden models a bf16 Dest while the device ran fp32 --
+        a real precision difference, presented as an arithmetic disagreement.
+        """
+        if (
+            self.PROMOTES_OUTLIER_TO_32_BIT_DEST
+            and dest_format is DataFormat.Float16_b
+            and l1_format is DataFormat.Float16
+        ):
+            raise ValueError(
+                f"{type(self).__name__} never runs a {dest_format} Dest packed "
+                f"to {l1_format}: an 8-bit-exponent input with a Float16 output "
+                f"is the outlier TestConfig promotes to dest_acc=Yes, so the "
+                f"device uses a 32-bit Dest. Pass dest_acc=True and a Float32 "
+                f"dest_format to match it."
+            )
+
     def _check_dest_format(self, dest_format: DataFormat) -> None:
         if dest_format not in self.supported_dest_formats:
             raise ValueError(
@@ -752,10 +855,19 @@ class DataTransferBlocks(ABC):
           other float widens to Float32.
         * Otherwise a format lands as it would in SrcA.
 
-        Integer formats pass through unchanged. Mirrors the SrcS branch of
-        ``infer_unpack_out`` in :mod:`helpers.data_format_inference`, which is
-        what the harness programs.
+        Integer formats pass through unchanged, and that is a **deliberate
+        divergence** from ``infer_unpack_out`` in
+        :mod:`helpers.data_format_inference`, which the float cases above do
+        follow. Its SrcS branch returns Float32 for everything except
+        Float16/Float16_b once ``dest_acc`` is on, so an Int8 input is programmed
+        as a Float32 SrcS -- a conversion the unpacker does not perform, and one
+        that would make a golden report 1.0 where the device holds the integer
+        1. The blanket widening reads as a rule written for the float path;
+        integer SrcS with accumulation is not swept, so nothing has forced the
+        question. Left as-is here rather than copied, and noted so the next
+        reader does not "fix" the divergence by aligning with it.
         """
+        self._check_has_srcs()
         self._check_supported(l1_format)
         dest_acc = as_dest_acc(dest_acc)
         if l1_format.is_mx_format():
@@ -834,6 +946,26 @@ class DataTransferBlocks(ABC):
         # can actually do -- which is how an Int32 input reached SrcA.
         defaulted = src_format is None
         if defaulted:
+            # A wide float input does not determine the src family on its own,
+            # the same ambiguity dest_format_for refuses. With dest_acc off the
+            # device picks Float16 or Float16_b from the *output* format
+            # (infer_unpack_out), and both clip: Float16 saturates above 65504
+            # and flushes below 2**-14. Defaulting to Tf32 here would keep the
+            # full fp32 range and silently disagree with silicon at the edges.
+            # With dest_acc on the device really does use Tf32, so that case
+            # needs no caller input.
+            if l1_format in (
+                DataFormat.Float32,
+                DataFormat.Tf32,
+            ) and not as_dest_acc(geometry.get("dest_acc", False)):
+                raise ValueError(
+                    f"{l1_format} input with dest_acc off does not determine "
+                    f"the src register family: the unpacker lands it as "
+                    f"Float16 or Float16_b depending on the *output* format "
+                    f"(infer_unpack_out), and both clip where Tf32 would not. "
+                    f"Pass the src_format the harness configured, or "
+                    f"dest_acc=True, where the device uses Tf32."
+                )
             src_format = self.src_format(l1_format)
         if not self._is_valid_src_format(l1_format, src_format):
             if src_format is DataFormat.Float32:
@@ -887,7 +1019,14 @@ class DataTransferBlocks(ABC):
         rules, including the Float32 that SrcA/SrcB cannot hold, and is checked
         by :meth:`_is_valid_srcs_format` instead.
         """
-        if src_format is DataFormat.Float32:
+        # No 32-bit datum reaches SrcA/SrcB on any architecture modelled here,
+        # so this holds whether or not the pair table is populated. Wormhole's
+        # cunpack_common.h is explicit for the integers -- Int32's "SrcA/SrcB
+        # path: NOT possible (ISA doc explicitly states 'Not possible')", and
+        # UInt32 valid only when targeting Dest -- and without this the
+        # fallback's `src_format == l1_format` arm would hand back full int32
+        # values for a register that cannot hold them.
+        if src_format in (DataFormat.Float32, DataFormat.Int32, DataFormat.UInt32):
             return False
         if self.UNPACK_TO_SRC_FORMATS:
             return src_format in self.UNPACK_TO_SRC_FORMATS.get(l1_format, frozenset())
@@ -917,10 +1056,12 @@ class DataTransferBlocks(ABC):
             # 1+5+10 is IEEE fp16 exactly. Truncate first so the cast only has
             # to apply the range clamp -- casting straight to fp16 would round.
             truncated = DataTransferBlocks._truncate_src_mantissa(values)
-            narrowed = truncated.to(torch.float16)
             # The unpacker flushes to zero once the rebiased exponent hits 0,
-            # so fp16 subnormals never reach the register.
-            return flush_subnormals(narrowed)
+            # so fp16 subnormals never reach the register. Flush *before* the
+            # cast: the cast rounds to nearest, and the top subnormal band
+            # (within half an ulp of 2**-14) would round up to the smallest
+            # normal and sail through a flush applied afterwards.
+            return flush_subnormals(truncated, torch.float16).to(torch.float16)
         if src_format in (DataFormat.Float16_b, DataFormat.Tf32):
             # Float16_b is an alias for Tf32 here -- see SRC_STORAGE_FORMATS.
             return DataTransferBlocks._truncate_src_mantissa(values)

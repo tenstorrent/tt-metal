@@ -9,6 +9,7 @@ from .data_transfer_blocks import (
     SRC_STORAGE_FORMATS,
     DataTransferBlocks,
     L1Buffer,
+    UnmodelledHardwareWarning,
 )
 from .l1_codec import pack_to_l1, unpack_from_l1
 from .pack_effects import (
@@ -30,6 +31,7 @@ __all__ = [
     "DataTransferBlocks",
     "L1Buffer",
     "QuasarDataTransferBlocks",
+    "UnmodelledHardwareWarning",
     "WormholeDataTransferBlocks",
     "apply_pack_effects",
     "apply_relu",
