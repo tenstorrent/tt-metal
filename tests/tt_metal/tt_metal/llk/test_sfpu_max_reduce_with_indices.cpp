@@ -28,6 +28,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/arch.hpp>
 
+#include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
 #include "llk_device_fixture.hpp"
 #include "test_golden_impls.hpp"
@@ -451,11 +452,12 @@ constexpr FormatCase kFormatCases[] = {
 
 void run_all_formats(const std::shared_ptr<distributed::MeshDevice>& device, MaxReduceWithIndicesConfig config) {
     for (const auto& fc : kFormatCases) {
-        // Wormhole cannot unpack a UInt32 tile: ttsim flags the SrcA unpack as undefined behaviour,
-        // and requesting UnpackToDest for the operand leaves the unpack unchanged. compute_mpwi
-        // loads its 32-bit indices the same way.
-        if (device->arch() == tt::ARCH::WORMHOLE_B0 && fc.wide_indices) {
-            log_info(tt::LogTest, "Skipping 32-bit indices on Wormhole: UInt32 does not unpack");
+        // ttsim flags a Wormhole SrcA unpack of a UInt32 tile as undefined behaviour; Wormhole
+        // silicon handles it (compute_mpwi loads its 32-bit indices the same way, and pool's
+        // test_mpwi_32_bit_index covers that on hardware).
+        if (fc.wide_indices && device->arch() == tt::ARCH::WORMHOLE_B0 &&
+            MetalContext::instance().rtoptions().get_simulator_enabled()) {
+            log_info(tt::LogTest, "Skipping 32-bit indices on the Wormhole simulator: ttsim rejects a UInt32 unpack");
             continue;
         }
         config.values_format = fc.values_format;
