@@ -167,6 +167,7 @@ void _calculate_round_(const int decimals)
     const sfpi::vFloat coeff   = exp10i(decimals);
     const sfpi::vFloat inverse = exp10i(-decimals);
 
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; ++d)
     {
         sfpi::vFloat v      = sfpi::dst_reg[0];

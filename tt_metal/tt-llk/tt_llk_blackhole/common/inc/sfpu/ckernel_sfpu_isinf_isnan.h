@@ -15,6 +15,7 @@ template <SfpuType operation, bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_sfpu_isinf_isnan_()
 {
     // SFPU microcode
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
         sfpi::vFloat in  = sfpi::dst_reg[0];
