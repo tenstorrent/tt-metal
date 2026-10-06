@@ -172,8 +172,17 @@ async def cancel_job(job_id: str):
 @app.get("/v1/videos/generations/{job_id}/download", dependencies=PROTECTED)
 async def download(job_id: str):
     job = _require(job_id)
-    if job.status != "completed" or not job.path or not os.path.exists(job.path):
+    if job.status != "completed":
         raise HTTPException(409, f"job {job_id} is {job.status}")
+    if not job.path or not os.path.exists(job.path):
+        # The job table outlives the clips (H3_JOB_HISTORY > H3_OUT_KEEP), so a completed job whose
+        # file has been pruned is a real and reachable state. It is neither "unknown" (404) nor
+        # "not finished yet" (409), and answering either would be a lie about what happened.
+        raise HTTPException(
+            410,
+            f"the result for {job_id} was pruned (the last {CONFIG.out_keep} "
+            "clips are kept; raise H3_OUT_KEEP to keep more)",
+        )
     return FileResponse(job.path, media_type="video/mp4", filename=f"{job_id}.mp4")
 
 

@@ -29,7 +29,6 @@ import base64
 import binascii
 import hashlib
 import io
-import itertools
 import json
 import logging
 import os
@@ -131,7 +130,10 @@ class ImagePrompt(BaseModel):
         except (binascii.Error, ValueError) as exc:
             raise ValueError(f"image_prompts[{self.position}].image is not valid base64") from exc
         try:
-            return Image.open(io.BytesIO(raw))
+            # `Image.open` is lazy and only reads the header, so the decode is forced here: a
+            # truncated or corrupt body has to be a 422 on the request, not a failed job discovered
+            # on the worker thread minutes later.
+            return Image.open(io.BytesIO(raw)).convert("RGB")
         except Exception as exc:  # noqa: BLE001
             raise ValueError(f"image_prompts[{self.position}].image is not a readable PNG/JPEG") from exc
 
@@ -261,14 +263,10 @@ def normalize(req: GenerationRequest, cfg: ServerConfig) -> NormalizedRequest:
 # --------------------------------------------------------------------------- job
 
 
-_IDS = itertools.count(1)
-
-
 @dataclass
 class Job:
     req: NormalizedRequest
     id: str = field(default_factory=lambda: f"vid_{uuid.uuid4().hex[:20]}")
-    seq: int = field(default_factory=lambda: next(_IDS))
     status: str = "queued"
     phase: str = "queued"
     progress: float = 0.0
@@ -696,12 +694,35 @@ class H3Engine:
                     self.dead = detail
                     self.ready.clear()
                     self.log("device fault: engine marked dead (health -> 503)")
+                    self._fail_pending(detail)
                     break
             finally:
                 with self._lock:
                     self._current = None
         self.log("worker loop exited")
         self._close_mesh()
+
+    def _fail_pending(self, detail: str) -> None:
+        """Fail every job still in the queue. Called when the worker is about to stop serving.
+
+        Without this a client that submitted behind the request that killed the mesh polls a job
+        that is `queued` forever, and `tt-model`'s own health check is the only thing that ever says
+        so. `queue.Empty` ends the drain; `_jobs` is swept too, because a job can be in the table
+        and not yet in the queue for an instant.
+        """
+        while True:
+            try:
+                pending = self._q.get_nowait()
+            except queue.Empty:
+                break
+            if pending is not None and not pending.done.is_set():
+                pending.error = f"engine stopped before this job ran: {detail}"[:2000]
+                self._finish(pending, "failed")
+        with self._lock:
+            stranded = [j for j in self._jobs.values() if j.status == "queued" and not j.done.is_set()]
+        for job in stranded:
+            job.error = f"engine stopped before this job ran: {detail}"[:2000]
+            self._finish(job, "failed")
 
     def _finish(self, job: Job, status: str) -> None:
         job.status = status
@@ -800,9 +821,13 @@ class H3Engine:
             "frames_sha256": hashlib.sha256(frames.tobytes()).hexdigest(),
             "audio_sha256": hashlib.sha256(pcm.tobytes()).hexdigest(),
         }
+        # `total_s` is filled in by `_finish`, which has not run yet, so the wall is reported from
+        # `elapsed_s` and `total_s` is left out of the phase map -- printing the still-unset 0.0 made
+        # every completed job's log line claim the job took no time at all.
+        phases = {k: v for k, v in sorted(job.timings.items()) if k != "total_s"}
         self.log(
             f"job {job.id} done in {job.elapsed_s} s: {job.result['num_frames']} frames, "
-            f"{size} bytes, phases {json.dumps(job.timings, sort_keys=True)}"
+            f"{size} bytes, phases {json.dumps(phases)}"
         )
 
     def _prune_outputs(self) -> None:

@@ -413,6 +413,76 @@ def test_completed_clips_are_pruned_to_the_retention_limit(server_env, monkeypat
     assert len(list((server_env / "out").glob("vid_*.mp4"))) == 2
 
 
+# ---------------------------------------------------------------- regressions
+
+
+def test_a_pruned_result_is_410_and_not_a_lie_about_the_job(server_env, monkeypatch):
+    """The job table outlives the clips, so "completed" and "file gone" is a reachable pair.
+
+    It used to answer 409 "job … is completed", which contradicts itself in one sentence.
+    """
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("H3_OUT_KEEP", "1")
+    app_module = _fresh_app(monkeypatch)
+    body = {"prompt": "x", "width": 256, "height": 256, "num_frames": 22, "steps": 1}
+    with TestClient(app_module.app) as client:
+        first = _await(client, client.post("/v1/videos/generations", json=dict(body, seed=1)).json()["id"])
+        _await(client, client.post("/v1/videos/generations", json=dict(body, seed=2)).json()["id"])
+        assert first["status"] == "completed"
+        gone = client.get(f"/v1/videos/generations/{first['id']}/download")
+        assert gone.status_code == 410 and "pruned" in gone.json()["detail"]
+
+
+def test_a_device_fault_fails_the_jobs_behind_it_instead_of_stranding_them(server_env, monkeypatch):
+    """A worker that stops serving has to tell the queue; otherwise those clients poll forever."""
+    from fastapi.testclient import TestClient
+
+    app_module = _fresh_app(monkeypatch, frame_delay=0.2)
+    engine = app_module.ENGINE
+    monkeypatch.setattr(
+        engine, "_generate", lambda req, job: (_ for _ in ()).throw(RuntimeError("TT_THROW: device timeout"))
+    )
+    body = {"prompt": "x", "width": 256, "height": 256, "num_frames": 22, "steps": 4}
+    with TestClient(app_module.app) as client:
+        ids = [client.post("/v1/videos/generations", json=dict(body, seed=k)).json()["id"] for k in range(3)]
+        finals = [_await(client, job_id, timeout=30) for job_id in ids]
+        assert [f["status"] for f in finals] == ["failed"] * 3, finals
+        assert "device timeout" in finals[0]["error"]
+        assert "engine stopped before this job ran" in finals[2]["error"]
+        assert client.get("/v1/health").status_code == 503
+
+
+def test_an_image_that_is_valid_base64_but_not_an_image_is_422(client):
+    """`Image.open` only reads the header lazily, so the decode is forced during validation."""
+    import base64
+
+    payload = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64).decode()
+    body = {"prompt": "x", "image_prompts": [{"image": payload, "position": "first"}]}
+    assert client.post("/v1/videos/generations", json=body).status_code == 422
+
+
+def test_the_done_line_reports_the_time_the_job_actually_took(server_env, monkeypatch):
+    """`total_s` is written by `_finish`, after `_serve` logs, so the line used to print 0.0.
+
+    The engine's own `log` callable is the sink under test; `caplog` cannot see it, because
+    `app.py` calls `logging.basicConfig(force=True)` at import and that drops pytest's handler.
+    """
+    from fastapi.testclient import TestClient
+
+    app_module = _fresh_app(monkeypatch, frame_delay=0.05)
+    lines: list[str] = []
+    monkeypatch.setattr(app_module.ENGINE, "log", lines.append)
+    body = {"prompt": "x", "width": 256, "height": 256, "num_frames": 22, "steps": 4}
+    with TestClient(app_module.app) as client:
+        view = _await(client, client.post("/v1/videos/generations", json=body).json()["id"])
+    done = [line for line in lines if " done in " in line]
+    assert len(done) == 1, done
+    assert '"total_s": 0.0' not in done[0] and "total_s" not in done[0]
+    assert float(done[0].split(" done in ")[1].split(" s:")[0]) > 0.0
+    assert view["timings"]["total_s"] > 0.0
+
+
 # ---------------------------------------------------------------- helpers
 
 
