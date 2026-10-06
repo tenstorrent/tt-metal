@@ -252,6 +252,10 @@ def _run_demo(
     spec_k = int(
         os.environ.get("DSV41_SPEC", "0")
     )  # speculative decoding: k drafts per round (DSpark drafter), 0 = off
+    if spec_k and os.environ.get("DSV41_SPEC_EARLY") == "1" and not hasattr(generator, "spec"):
+        # build the spec runner(s) BEFORE any prefill / decode trace exists: persistent tensors allocated after a captured trace can sit on that trace's scratch memory and
+        # are overwritten by its replays (a later prefill then hangs the spec traces)
+        generator.enable_spec(spec_k)
     profiler.end("generator_setup")
 
     if isinstance(input_prompts, list) and len(input_prompts) == 1:
@@ -492,8 +496,32 @@ def _run_demo(
                     pi > 0
                 ):  # fresh prefill (the previous spec pass advanced the state); spec traces are released first (re-captured by seed) so the prefill replay cannot clobber them
                     generator.spec.release()
-                    first2, _ = generator.prefill_forward_text(input_tokens_prefill, **prefill_kw)
-                    first2 = first2.view(-1)
+                    if (
+                        os.environ.get("DSV41_SPEC_NOREPREFILL") != "1"
+                    ):  # (diagnostic switch: stale state, to see whether the prefill is what hangs the spec compile pass)
+                        first2, _ = generator.prefill_forward_text(input_tokens_prefill, **prefill_kw)
+                        first2 = first2.view(-1)
+                        if (
+                            os.environ.get("DSV41_SPEC_AFTER_PLAIN") == "1"
+                        ):  # diagnostic: is the prefill-after-spec state poisoned? 6 eager plain decode steps vs the first plain stream
+                            cp_, ot_, ok_ = torch.tensor(decoding_pos), first2.clone(), 0
+                            seq_ = [[] for _ in range(padded_batch)]
+                            for _s in range(6):
+                                ot_, _ = generator.decode_forward(
+                                    ot_,
+                                    cp_,
+                                    enable_trace=False,
+                                    sampling_params=device_sampling_params,
+                                    reload_inputs=True,
+                                )
+                                cp_ = cp_ + 1
+                                for u_ in range(padded_batch):
+                                    seq_[u_].append(int(ot_[u_]))
+                            ok_ = sum(int(seq_[u_] == plain_gen[u_][1:7]) for u_ in range(batch_size))
+                            logger.info(
+                                f"REPREFILL_PLAIN_CHECK: {ok_}/{batch_size} users reproduce the first plain stream (6 tokens); first token ok {int((first2[:batch_size] == prefilled_token[:batch_size]).sum())}/{batch_size}; user0 {seq_[0]} vs {plain_gen[0][1:7]}"
+                            )
+                            raise SystemExit("REPREFILL_PLAIN_CHECK done")
                 if pol is not None:
                     generator.spec.policy = pol
                 eos = tokenizer.eos_token_id if stop_at_eos else None
@@ -540,6 +568,25 @@ def _run_demo(
                     f"SPEC exactness vs the plain greedy stream of this run: {ident}/{batch_size} users identical, first divergence per user {first_div}; first token spec==plain: "
                     f"{int((first2[:batch_size] == prefilled_token[:batch_size]).sum())}/{batch_size}; spec wall incl. seeding {t_sp:.1f} s"
                 )
+                for q_, v_ in st.get("by_policy", {}).items() if str(pol).startswith("cycle:") else []:
+                    logger.info(
+                        "SPEC_RESULT_CYCLE "
+                        + json.dumps(
+                            {
+                                "scenario": os.environ.get("DSV41_CUR_SCENARIO", ""),
+                                "B": batch_size,
+                                "policy": q_,
+                                "rounds": v_["rounds"],
+                                "accepted_per_round": round(v_["accepted_per_round"], 4),
+                                "tok_per_round": round(v_["tok_per_round"], 4),
+                                "round_ms": round(v_["round_ms"], 2),
+                                "spec_tok_s_user": round(v_["tok_s_user"], 2),
+                                "plain_tok_s_user": round(tok_s_plain, 2),
+                                "speedup": round(v_["tok_s_user"] / tok_s_plain, 3),
+                                "k_hist": v_["k_hist"],
+                            }
+                        )
+                    )
                 logger.info(
                     "SPEC_RESULT "
                     + json.dumps(

@@ -477,11 +477,20 @@ class AdaptiveSpec:
         self.gaps = [[] for _ in range(B)]
         done = torch.zeros(B, dtype=torch.bool) if active is None else ~torch.as_tensor(active)
         walls, emitted, ms, ks_used, exp_tok = [], [], [], [], []
+        cyc = None  # 'cycle:adapt+k1+k3+k5:4' = interleave the policies in windows of 4 rounds on the SAME stream (no re-prefill: A/B within one pass)
+        if self.policy.startswith("cycle:"):
+            _, names, win = self.policy.split(":")
+            cyc = ([x for x in names.split("+")], int(win))
+        base_policy = self.policy
+        by = {}  # policy -> dict(rounds, wall, emitted, pairs, acc, ks)
         cal = []  # (user, k, conf[5], m): drafts of this round's block vs outcome
         top = self.m.max_ctx - self.n - 1
         while not bool(done.all()):
+            if cyc is not None:
+                self.policy = cyc[0][(len(walls) // cyc[1]) % len(cyc[0])]
             k = self.choose(conf, ~done)
             r, n = self.runners[k], k + 1
+            cur_pol = self.policy
             exp_tok.append(self.expected_tokens(conf, ~done)[k])
             if len(walls) < 3:
                 self.log(
@@ -494,6 +503,7 @@ class AdaptiveSpec:
             w = (time.perf_counter() - t) * 1e3
             walls.append(w)
             ks_used.append(k)
+            e0 = len(emitted)
             self.times[k] = 0.8 * self.times[k] + 0.2 * w if k in self.times else w
             v2 = torch.cat(
                 [
@@ -525,6 +535,14 @@ class AdaptiveSpec:
                     conf[b] = newconf[b]
                 if len(gen[b]) >= max_new or int(base[b]) > top:
                     done[b] = True
+            st_ = by.setdefault(cur_pol, {"rounds": 0, "wall": 0.0, "emitted": 0, "pairs": 0, "acc": 0, "ks": {}})
+            st_["rounds"] += 1
+            st_["wall"] += w
+            st_["emitted"] += sum(emitted[e0:])
+            st_["acc"] += sum(ms[e0:])
+            st_["pairs"] += len(emitted) - e0
+            st_["ks"][k] = st_["ks"].get(k, 0) + 1
+        self.policy = base_policy
         self.cal_records = cal
         mt = torch.tensor(ms)
         tot_ms = sum(walls)
@@ -541,6 +559,18 @@ class AdaptiveSpec:
             "mean_expected_tokens": sum(exp_tok) / max(len(exp_tok), 1),
         }
         stats["tok_s_user"] = 1e3 * stats["tok_per_round"] / stats["round_ms"] if walls else float("nan")
+        stats["by_policy"] = {
+            q: {
+                "rounds": v["rounds"],
+                "round_ms": v["wall"] / max(v["rounds"], 1),
+                "tok_per_round": v["emitted"] / max(v["pairs"], 1),
+                "accepted_per_round": v["acc"] / max(v["pairs"], 1),
+                "k_hist": v["ks"],
+            }
+            for q, v in by.items()
+        }
+        for v in stats["by_policy"].values():
+            v["tok_s_user"] = 1e3 * v["tok_per_round"] / v["round_ms"]
         return gen, stats
 
     def conf_report(self):
