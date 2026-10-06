@@ -5,15 +5,11 @@
 between the steps (random prompts, few layers by default, DSV41_LAYERS=0-3). Checks, with the SAME model object:
 
   (a) the decode STATE of the running users (pool pages + window rings, ratio-2 compressor state ``prev_cs``, decode index keys) is bit-identical before / after every
-      interleaved prefill window (hard assert) and the decode logits of the running users of the interleaved run agree with an uninterrupted run (teacher forced, PCC),
+      interleaved prefill window, and the tokens AND logits of the running users are bit-identical to an uninterrupted run (teacher forced with the same tokens),
   (b) the first token / logits of the new user prefilled in chunks between decode steps are bit-identical to the same prompt prefilled in ONE call, and the joint decode
-      steps after it joined agree with the uninterrupted run,
+      steps after it joined are bit-identical to the uninterrupted run,
   (c) (DSV41_IL_LEGACY=1) the first-token logits of every user vs the whole-batch ``prefill_forward`` (the original traced path),
   (d) the time of an interleaved chunk step vs a decode step.
-
-Note on bit-identity of DECODE logits: the traced decode of this model is not bit-reproducible across runs that differ in what ran on the device before it (eager vs traced
-decode differ at PCC ~0.99, and the first decode after ANY other trace replay differs from the steady-state step at the same level, with or without masking: it depends on
-stale DRAM content), so decode logits are compared teacher-forced at that noise level and the state is compared bit-exactly.
 
     DSV41_LAYERS=0-3 pytest models/demos/blackhole/deepseek_v41_flash/tests/test_interleave_device.py -s
 Env: DSV41_IL_U (users per row, 4), DSV41_IL_ISL (1536), DSV41_IL_CHUNK (512), DSV41_IL_STEPS (8), DSV41_IL_NEWLEN (new user's prompt length, default ISL).
@@ -36,7 +32,9 @@ STEPS = int(os.environ.get("DSV41_IL_STEPS", "8"))
 POST = int(os.environ.get("DSV41_IL_POST", "4"))
 NEWLEN = int(os.environ.get("DSV41_IL_NEWLEN", str(ISL)))
 LAYERS = os.environ.get("DSV41_LAYERS", "0-3")
-PCC_MIN = float(os.environ.get("DSV41_IL_PCC_MIN", "0.97"))
+PCC_MIN = float(
+    os.environ.get("DSV41_IL_PCC_MIN", "0.99999")
+)  # (bit-identical logits have PCC 1.0; the host PCC of identical vectors prints as 1.00006)
 
 
 def pcc(a, b):
@@ -141,11 +139,22 @@ def test_interleaved_prefill(mesh_device):
             rows_.update(range(base, base + m.pool.ring_rows))
         return rows_
 
+    def same(x, y):
+        """bit-level equality that treats NaN == NaN (uninitialised cache entries can hold NaN patterns)"""
+        x, y = x.float(), y.float()
+        return bool(((x == y) | (x.isnan() & y.isnan())).all())
+
     def diff_state(tag, s0, s1):
         bad = []
         for r in range(m.rows):
             a_, b_ = s0["pool"][r].reshape(-1, 512), s1["pool"][r].reshape(-1, 512)
-            ne = (a_ != b_).any(dim=1).nonzero().reshape(-1).tolist()
+            ne = (
+                (~((a_.float() == b_.float()) | (a_.float().isnan() & b_.float().isnan())))
+                .any(dim=1)
+                .nonzero()
+                .reshape(-1)
+                .tolist()
+            )
             skip = new_user_rows(r)
             ne = [x for x in ne if x not in skip]
             if ne:
@@ -153,13 +162,13 @@ def test_interleaved_prefill(mesh_device):
         for L, lst in s0["prev_cs"].items():
             for r in range(m.rows):
                 a_, b_ = lst[r].reshape(-1, 1024), s1["prev_cs"][L][r].reshape(-1, 1024)
-                du = [u for u in range(U) if not torch.equal(a_[u], b_[u]) and r * U + u != new]
+                du = [u for u in range(U) if not same(a_[u], b_[u]) and r * U + u != new]
                 if du:
                     bad.append(f"prev_cs L{L} row {r}: users {du} changed")
         for L, lst in s0["k"].items():
             for r in range(m.rows):
                 a_, b_ = lst[r], s1["k"][L][r]
-                du = [u for u in range(U) if not torch.equal(a_[u], b_[u]) and r * U + u != new]
+                du = [u for u in range(U) if not same(a_[u], b_[u]) and r * U + u != new]
                 if du:
                     bad.append(f"index keys L{L} row {r}: users {du} changed")
         log(f"STATE {tag}: " + ("decode state of the running users untouched" if not bad else "; ".join(bad)))
@@ -372,4 +381,10 @@ def test_interleaved_prefill(mesh_device):
 
     assert not state_bad, f"the decode state of running users changed during an interleaved prefill: {state_bad[:3]}"
     assert new_same, "chunked prefill of the new user differs from the one-call prefill"
-    assert worst >= PCC_MIN, f"decode logits of the interleaved run deviate: worst PCC {worst:.4f} < {PCC_MIN}"
+    assert worst >= PCC_MIN, f"decode logits of the interleaved run deviate: worst PCC {worst:.6f} < {PCC_MIN}"
+    assert all(
+        torch.equal(A["logs"][k], Bres["logs"][k]) for k in range(STEPS)
+    ), "decode logits of the running users are not bit-identical to the uninterrupted run"
+    assert all(
+        torch.equal(A["joint"][k], Bres["joint"][k]) for k in range(POST)
+    ), "joint decode logits after the new user joined are not bit-identical to the uninterrupted run"

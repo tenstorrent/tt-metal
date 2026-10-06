@@ -691,29 +691,41 @@ class Model:
     def _export_user_keys(self, ix, k_cache, i_src, u_dst, rows_sel, off, n):
         """Hand-off of the index keys of the users held by prefill slot ``i_src`` of the mesh rows ``rows_sel`` (decode user ``u_dst`` of each of those rows) only: slab
         slots [off, off + n) of the prefill key FIFO -> decode key slab entries [0, n). The other mesh rows keep their decode keys (they hold a decoding user at in-row
-        index u_dst): selected on the device with a per-row mask, so a row that is not part of the hand-off rewrites its own keys unchanged (bfp8 -> bf16 -> bfp8 is exact).
+        index u_dst): selected on the device with a per-row mask (bfp8 -> bf16 -> bfp8 is exact).
+        The decode key slab ``k_cache`` is referenced by the CAPTURED decode trace, so it must be updated IN PLACE: ``ttnn.experimental.slice_write`` re-allocates the
+        tensor (its buffer address changes: the decode trace would keep reading / writing the freed old buffer, and the new one is clobbered by the next replay of
+        another trace), so the whole slab is rebuilt from its parts (a few MB per device) and copied into the existing buffer with ``ttnn.copy``.
         """
-        IDIM = ix.keys.shape[3]
+        IDIM, NA, UD = ix.keys.shape[3], k_cache.shape[2], k_cache.shape[0]
         new = ttnn.slice(ix.keys, [i_src, 0, off, 0], [i_src + 1, 1, off + n, IDIM])
+        old_all = k_cache if k_cache.dtype == ttnn.bfloat16 else ttnn.typecast(k_cache, ttnn.bfloat16)
+        old_u = ttnn.slice(old_all, [u_dst, 0, 0, 0], [u_dst + 1, 1, NA, IDIM])
         if len(rows_sel) < self.rows:
-            old = ttnn.slice(k_cache, [u_dst, 0, 0, 0], [u_dst + 1, 1, n, IDIM])
-            if old.dtype != ttnn.bfloat16:
-                old = ttnn.typecast(old, ttnn.bfloat16)
             m = torch.zeros(self.rows, 1, 1, 1)
             m[list(rows_sel)] = 1.0
             mask = ttnn.from_torch(
                 m, device=self.md, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mp()
             )
-            new = ttnn.where(mask, new, old)
+            new = ttnn.where(mask, new, ttnn.slice(old_u, [0, 0, 0, 0], [1, 1, n, IDIM]))
             ttnn.deallocate(mask)
-            ttnn.deallocate(old)
-        if k_cache.dtype != ttnn.bfloat16:
-            new = ttnn.typecast(new, k_cache.dtype)
-        ttnn.experimental.slice_write(new, k_cache, [u_dst, 0, 0, 0], [u_dst + 1, 1, n, IDIM], [1, 1, 1, 1])
-        if not (
-            self.Up == 1 and off == 0 and n == ix.keys.shape[2] and new.dtype == ix.keys.dtype
-        ):  # a full-range slice may alias the FIFO
-            ttnn.deallocate(new)
+        blk = ttnn.concat([new, ttnn.slice(old_u, [0, 0, n, 0], [1, 1, NA, IDIM])], dim=2) if n < NA else new
+        parts = []
+        if u_dst > 0:
+            parts.append(ttnn.slice(old_all, [0, 0, 0, 0], [u_dst, 1, NA, IDIM]))
+        parts.append(blk)
+        if u_dst < UD - 1:
+            parts.append(ttnn.slice(old_all, [u_dst + 1, 0, 0, 0], [UD, 1, NA, IDIM]))
+        full = ttnn.concat(parts, dim=0) if len(parts) > 1 else blk
+        out = full if k_cache.dtype == ttnn.bfloat16 else ttnn.typecast(full, k_cache.dtype)
+        ttnn.copy(out, k_cache)
+        if out is not full:  # (typecast output)
+            ttnn.deallocate(out)
+        if len(parts) > 1:  # (concat output; with a single part ``full`` IS ``blk``)
+            ttnn.deallocate(full)
+        if n < NA:  # (concat output; else ``blk`` is the slice ``new`` of the prefill key FIFO, which may alias it)
+            ttnn.deallocate(blk)
+        if old_all is not k_cache:
+            ttnn.deallocate(old_all)
 
     def _export_keys_users(self, users, ends, s_end, slot_of):
         """Index-key hand-off (prefill key FIFOs -> decode key slabs) of the users whose prompt ended inside the window that ended at ``s_end``;
@@ -812,10 +824,6 @@ class Model:
             pm.post_replay_hooks.append(self._post_chunk)
             self._hooks_set = pm
         pm.timing = {}
-        if os.environ.get("DSV41_IL_DEC_FIRST", "0") == "1" and self.trace_id is None and pm.dyn_trace is None:
-            z = torch.zeros(B, dtype=torch.long)
-            self._capture_decode(z, z)  # decode trace BEFORE the prefill trace (nothing is live yet)
-            self.trace_id_first = self.trace_id
         if pm.capture_dyn(
             C, S_pad
         ):  # (re)captured: the carried state of every user is gone, the decode trace shares the freed DRAM

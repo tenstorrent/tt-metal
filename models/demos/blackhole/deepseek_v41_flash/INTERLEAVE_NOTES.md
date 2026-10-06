@@ -20,9 +20,18 @@ costs the compute of U x C tokens per row, whatever the number of users that hav
 | **decode index-key slabs `dec.k_cache` [U,1,n_alloc,128]** (key owners 2/8/14/20) | `Model._export_index_keys` after every prefill | slab shape is per user, but the export was ONE `slice_write` of the WHOLE prefill key slab | **overwrote the keys of every user of the row (live decoders got filler keys)**: this is the reason the adapter re-prefilled all live users from their token history whenever the indexer was on (contexts > 512 / 1024) | per-user, per-mesh-row masked export (`_export_user_keys`): only the finishing users' rows are rewritten (bfp8->bf16->bfp8 of the others is exact) |
 | prefill carried state: window halo [U,1,128,512], dense latent FIFO `lat_buf`, sparse kv table `PrefillKV` latent rows, prefill key FIFO `ix.keys` | per layer, persistent, shifted by one chunk per replay | per user (slot u of the row), prefill-private (the decode never reads it) | every replay shifted / overwrote the state of ALL users with filler compute: a prompt could not be resumed after any replay it did not take part in | `DSV41_PF_UMASK=1`: all writes of this state are gated in-trace by a persistent [U,1,1,1] per-row user mask (`ttnn.where`, exact selection), refreshed before each replay |
 | decode padding rows | decode feeds every user each step; "idle" users get token 0 at position 0 | per user | position 0 of a user that is mid-prefill would overwrite its ring row 0, its layer-20 latent 0 and its Engram history of the first token; `prev_cs` of any user is rewritten by every decode step | parked position: a user that is being prefilled in chunks is fed token 0 at `end` (its first not-yet-written position; benign: rewritten by the next chunk / the first real decode step). `prev_cs` only matters from the last prefill chunk to the first decode step, and the plugin runs only prefill steps in between |
-| decode trace | `Model.trace_id`, released by the adapter before EVERY prefill (shared DRAM, "persistent tensors created after a capture land on the freed intermediates") | global | recaptured by the next decode (seconds) | never released while the prefill trace is stable: every persistent tensor (sink indices, masks, dyn context) is allocated before the first capture; released only when the prefill trace is re-captured (new chunk / S_pad) |
+| decode trace | `Model.trace_id`, released by the adapter before EVERY prefill (shared DRAM, "persistent tensors created after a capture land on the freed intermediates") | global | recaptured by the next decode (seconds) | never released while the prefill trace is stable: every persistent tensor (sink indices, masks, dyn context) is allocated before the first capture; released only when the prefill trace is re-captured (new chunk / S_pad). **A persistent tensor that a captured trace references must never be re-allocated**: `ttnn.experimental.slice_write` is NOT in place (the tensor gets a new buffer address, the old one is freed; measured with `buffer_address()`), which is exactly why the old code had to release the decode trace after every prefill (``export_keys`` rewrites the decode key slab with it). The interleaved export therefore rebuilds the slab from its parts and `ttnn.copy`s it into the existing buffer. |
 | prefill trace shape | traced for fixed (C, S_pad); latent / key FIFOs have length S_pad / ratio | global | S_pad bucket growth re-captures (and invalidates every carried state) | S_pad is monotonic per process: set `DSV41_VLLM_S_PAD=<max prompt>` to avoid re-captures |
 | position of the replay (s0) | RoPE / masks / FIFO `off` / sink index tensors | global to a replay | users at different offsets cannot share a replay | a call with continuations at different offsets runs one window sequence per distinct start (state is protected by the mask) |
+
+### What the device tests found (and fixed) on the way
+1. `slice_write` into the decode index-key slab re-allocated it: with the decode trace kept alive the trace kept using the freed buffer and the new buffer was overwritten by the
+   next replay of the prefill trace (symptom: the decode logits of the running users deviated at noise level (PCC 0.99) after the first interleaved window, and the whole
+   key slab read back as zeros / NaN). Fixed in `Model._export_user_keys` (in-place `ttnn.copy` of the rebuilt slab). After the fix decode logits are bit-identical.
+2. Adapter bug found by the adapter-level device test: a continuation chunk arriving in a logical slot that still belongs to a running request must not be claimed; the test
+   now uses only free slots (the plugin never hands out an occupied one).
+3. The old adapter admitted only the active users into the page allocator (`admit_users(active=...)`): `pool.ensure` raised KeyError for never-admitted users at the first
+   decode. All users now stay admitted with one page.
 
 ## 2. Design
 
@@ -37,10 +46,14 @@ costs the compute of U x C tokens per row, whatever the number of users that hav
   `start_pos` its start; `tokens` hold the prompt from position 0. The plugin re-picks the state slot of a partly prefilled request every step, so a continuation is
   recognised by its token prefix (`vllm_state.PrefillTracker`) and the slot map is re-bound to its model user (`SlotTable.bind`). A continuation that cannot be resumed is recomputed
   from 0. The first token of an intermediate chunk is meaningless (the plugin discards it, and forces host sampling for such a step).
-* Cost of a chunk step: a replay processes U x C tokens per row whatever the number of new users (the other users are masked fillers, not skipped). Measured in
-  the device test; the efficient unit is a window that carries prefill work for as many new users as possible (the adapter passes all rows of a step into one call; rows with
-  the same start share the replays). A smaller U for the prefill trace (a second set of prefill objects with U_p = 1 + a user map in the sink) would cut the filler cost by U
-  but is not implemented.
+* Cost of a chunk step. With the default `DSV41_PREFILL_UP` = U a replay processes U x C tokens per mesh row whatever the number of new users (the other users are masked fillers,
+  not skipped). `DSV41_PREFILL_UP=Up` (< U) builds the prefill trace (attention / sparse tables / hand-off sink / head / Engram inputs) for Up users per mesh row instead:
+  a replay then costs Up x C row-tokens; a new request takes a free **prefill slot** of its mesh row (`Model._slot_alloc`; its carried prefill state lives in the slot until it
+  finishes or another prompt of that row evicts it, an evicted continuation is recomputed from position 0), the hand-off sink writes slot i of row r into the pool / `prev_cs` /
+  decode index keys of the decode user it holds (`PagedStateSink.set_map`: ring / latent index tensors and one-hot prev_cs masks per slot), users of the same mesh row beyond Up
+  are processed in further waves, and the adapter spreads concurrent new requests over the mesh rows (`SlotTable.claim_balanced`: it swaps the model users of free logical slots,
+  which is invisible to the plugin). The whole-batch `prefill_forward` is routed through the same machinery when Up < U. Up = 1 means 4 concurrent prompts (one per mesh row) per
+  replay at no filler cost, independent of the batch size (the trace does not depend on U any more), and a smaller prefill scratch (halo, latent / key FIFOs: x Up / U).
 
 ## 3. Limits
 
