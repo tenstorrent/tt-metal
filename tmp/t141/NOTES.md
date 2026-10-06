@@ -15,6 +15,9 @@ Drops seen:
 - 2026-10-06 02:19:44 UTC, broker job 212 (smarton, task t136, not ours), chips 8-15 (tray 2, incl. chip 12)
   left the PCIe bus. Our first submit (job 216, 02:20:19) raced the recovery; withdrawn 02:20:46 (never ran).
   Driver fixed to re-check health before every submit attempt; relaunched 02:21:16.
+- Same incident continued: tray-2 bridge-resets 214/215/219 failed, health-gate 217 failed, broker power-cycled the
+  box (job 220, 02:26:22 boot) -> killed our waiting driver (no job of ours was running). Startup health gate passed
+  02:29:19 (32 chips, fabric OK). Driver relaunched 02:29 -> broker job 224 running since 02:30:09.
 
 Next (after DONE e2e 0):
 1. scp run.log + mp4/png to tt-project/t-e2e/t141/ on g15blx02 (gzip run.log).
