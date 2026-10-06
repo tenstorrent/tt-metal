@@ -1387,6 +1387,7 @@ class TestConfig:
             OPTIONS_COMPILE += "-DTT_METAL_TTSIM "
         if TestConfig.TEST_TARGET.run_simulator:
             OPTIONS_COMPILE += "-DLLK_SIMULATOR "
+        OPTIONS_COMPILE += f"-DLLK_TRISC_BP_OFF={int(os.environ.get('REPRO_TRISC_BP_OFF', '0'))} "  # experiment
         OPTIONS_COMPILE += f"-DLLK_PACK_INIT_NOPS={int(os.environ.get('REPRO_PACK_NOPS', '0'))} "  # experiment
 
         NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE

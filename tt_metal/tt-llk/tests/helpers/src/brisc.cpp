@@ -68,6 +68,10 @@ void reset_state(std::uint32_t& counter)
 int main()
 {
     disable_branch_prediction();
+#if defined(LLK_TRISC_BP_OFF) && LLK_TRISC_BP_OFF > 0
+    // Experiment: turn off the branch predictor of the TRISCs in the mask (bit 0 = TRISC0).
+    ckernel::get_cfg_pointer()[DISABLE_RISC_BP_Disable_trisc_ADDR32] |= (LLK_TRISC_BP_OFF << DISABLE_RISC_BP_Disable_trisc_SHAMT);
+#endif
 
     std::uint32_t counter = 0;
 
