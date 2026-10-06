@@ -62,6 +62,11 @@ log "tree $W HEAD $cur status: $(git -C $W status --porcelain -uno | head -5 | t
 [ "$cur" = "$BUILT" ] || done_ tree_moved 1
 grep -q "SETUP134_DONE rc=0" ~/fasth3/t134-setup.log || done_ build 1
 if [ -n "$WATCH_JOB" ]; then JOB=$WATCH_JOB; T0=$WATCH_T0; log "watch-only JOB=$JOB since $T0"; watch_job w; rc=$?
+elif [ "$RERUN" = 1 ]; then  # relaunch after drop 1 killed the earlier driver: this is attempt 2
+  log "RERUN=1: attempt 2 after an earlier drop"
+  submit || done_ submit $?; watch_job 2; rc=$?
+  [ $rc = 9 ] && { log "second drop in a row: config skipped"; done_ e2e_drop2 9; }
+  done_ e2e $rc
 else submit || done_ submit $?; watch_job 1; rc=$?
 fi
 if [ $rc = 9 ]; then
