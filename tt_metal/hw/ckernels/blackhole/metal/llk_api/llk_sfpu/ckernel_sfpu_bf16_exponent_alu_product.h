@@ -19,8 +19,6 @@ inline void init_exponent_alu_product() {
 template <class Config, int Iterations = 32>
 inline void calculate_exponent_alu_product() {
     static_assert(Iterations == 32, "selected product requires whole-tile ownership");
-    {
-        sfpi::product_bounded_bh<Config, ADDR_MOD_7, ADDR_MOD_6>();
-    }
+    sfpi::product_bounded_bh<Config, ADDR_MOD_7, ADDR_MOD_6>();
 }
 }  // namespace ckernel::sfpu::bf16
