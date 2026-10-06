@@ -193,6 +193,10 @@ class LinearAttentionSkeleton:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+        # None keeps the op default (BF16 DST, BF16 tap-sum carry).
+        self.convolution_compute_config = (
+            self.kda_compute_config if program_config.fp32_convolution_accumulation else None
+        )
         self.recurrence = KDARecurrence(
             mesh_device,
             program_config.recurrence,
@@ -346,6 +350,7 @@ class LinearAttentionSkeleton:
             sequence_parallel_axis=self.sequence_parallel_axis,
             predecessor_carry=predecessor,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.convolution_compute_config,
         )
         return q, k, v, new_state
 

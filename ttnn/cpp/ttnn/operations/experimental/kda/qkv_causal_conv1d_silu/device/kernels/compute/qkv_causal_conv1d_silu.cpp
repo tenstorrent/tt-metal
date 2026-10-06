@@ -10,7 +10,9 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
-template <uint32_t block_ct, uint32_t num_blocks>
+// fp32_partial: the running tap sum is carried in an FP32 DFB (fp32_dest_acc_en), so the packer switches between the
+// partial and the output formats.
+template <uint32_t block_ct, uint32_t num_blocks, uint32_t fp32_partial>
 TT_KERNEL void compute(uint32_t wi_count) {
     // Kimi-K3 uses a fixed four-tap causal convolution, with three preceding rows supplied by history.
     constexpr uint32_t tap_count = 4;
@@ -40,6 +42,10 @@ TT_KERNEL void compute(uint32_t wi_count) {
 
             reconfig_data_format_srca(dfb::act_tile);
             reconfig_data_format_srcb(dfb::weights);
+            if constexpr (fp32_partial) {
+                // The tilize above leaves the packer configured for the activation format.
+                pack_reconfig_data_format(destination_dfb);
+            }
             if (tap == 0) {
                 mul_bcast_rows_init(dfb::act_tile, dfb::weights);
             }
@@ -56,11 +62,20 @@ TT_KERNEL void compute(uint32_t wi_count) {
                 mul_tiles_bcast_rows(dfb::act_tile, dfb::weights, ct, tap * block_ct + ct, 0);
 
                 if (tap != 0) {
-                    reconfig_data_format_srca(dfb::partial);
+                    if constexpr (fp32_partial) {
+                        // SrcB receives the FP32 product from DST; give it the carry's 19-bit format, not BF16.
+                        reconfig_data_format(dfb::partial, dfb::partial);
+                    } else {
+                        reconfig_data_format_srca(dfb::partial);
+                    }
                     add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb::partial);
                     add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb::partial, 0, 0);
                     // The partial add binds srcA to the accumulator; restore activation for the next multiply.
-                    reconfig_data_format_srca(dfb::act_tile);
+                    if constexpr (fp32_partial) {
+                        reconfig_data_format(dfb::act_tile, dfb::weights);
+                    } else {
+                        reconfig_data_format_srca(dfb::act_tile);
+                    }
                 }
                 if (is_final_tap) {
                     silu_tile(0);

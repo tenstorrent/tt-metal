@@ -61,7 +61,11 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
-                Compute-kernel configuration.
+                Compute-kernel configuration. The default (``fp32_dest_acc_en``
+                false) carries the running tap sum in BF16; with
+                ``fp32_dest_acc_en`` it is carried in FP32 and the result is
+                rounded to BF16 once, after SiLU. Use FP32 accumulation when the
+                taps cancel large activations into small pre-activations.
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: New TILE-layout BFLOAT16

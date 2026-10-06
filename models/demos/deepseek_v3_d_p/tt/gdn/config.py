@@ -21,7 +21,8 @@ def gdn_program_config(
     SP > 1 forces the grouped recurrence; two groups of 10 chunks at 640 rows (G = 2) measured 150 us faster than
     one group of 20 at 32 heads on LoudBox (tt_metal_tracker-g1b.5.13; layer-level check g1b.5.15). One SP rank uses
     the direct scan, which beats every grouped schedule at 32 heads (208 us, g1b.5.13). The other fields follow the
-    Kimi-K3 production numerics; the tuned projection schedules were measured at K3 shapes only, so they stay off.
+    Kimi-K3 production numerics except the FP32 q/k/v convolution accumulation; the tuned projection schedules were
+    measured at K3 shapes only, so they stay off.
     """
     if sequence_parallel_size <= 0:
         raise ValueError(f"sequence_parallel_size must be positive, got {sequence_parallel_size}")
@@ -46,4 +47,7 @@ def gdn_program_config(
         gated_rms_output_dtype=ttnn.bfloat16,
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         tuned_projection_matmuls=False,
+        # A BF16 tap-sum carry perturbed a near-orthogonal q/k pair into a 0.70 output error on 2.4T real text
+        # (tt_metal_tracker-g1b.5.19); FP32 accumulation lowers GDN output and state error in every matrix cell.
+        fp32_convolution_accumulation=True,
     )
