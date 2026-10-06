@@ -219,6 +219,12 @@ struct MatmulFusedOpSignaler {
         tt::tt_metal::Program& program,
         const tt::tt_metal::distributed::MeshDevice* device,
         int privilaged_index = 0);
+    void init_llama_rs_cores_rs(const tt::tt_metal::CoreRangeSet& rs_cores, tt::tt_metal::ProgramDescriptor& desc);
+    void init_llama_rs_cores_mm(
+        const tt::tt_metal::CoreRangeSet& matmul_cores,
+        tt::tt_metal::ProgramDescriptor& desc,
+        const tt::tt_metal::distributed::MeshDevice* device,
+        int privilaged_index = 0);
     // Get the rt values
     // Write the semaphore ID
     void push_llama_rs_rt_args_for_rs(std::vector<uint32_t>& out_rt_args) const;

@@ -79,6 +79,22 @@ struct LlamaReduceScatterDeviceOperation {
             tensor_return_value_t& tensor_return_value,
             tt::tt_metal::Program& program,
             const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler);
+        struct descriptor_artifacts_t {
+            uint32_t reader_kernel_index = kReaderKernelIdx;
+            uint32_t writer_kernel_index = kWriterKernelIdx;
+        };
+        static descriptor_artifacts_t create_at_program_descriptor_processing(
+            const operation_attributes_t& operation_attributes,
+            const ttnn::MeshCoordinate& mesh_coordinate,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            tt::tt_metal::ProgramDescriptor& desc,
+            const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler);
+        static void apply_cross_device_semaphore(
+            tt::tt_metal::Program& program,
+            const descriptor_artifacts_t& artifacts,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args);
         static void override_runtime_arguments_per_program(
             const shared_variables_t& shared_variables,
             tt::tt_metal::Program& program,
