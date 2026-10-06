@@ -114,3 +114,10 @@ Implemented:
   81 traces split at the load / clear points. Single layer: output bit-identical (MoE partial `torch.equal`), shared-expert PCC 1.0000; section 7.74 -> 6.39 ms (N=4096 random),
   15.51 -> 14.16 (real tokens), 5.01 -> 4.34 (N=2048), 3.54 -> 3.38 (N=512).
 In-process A/B session modes: `DSV41_SESSION=id@a,id@b,id@c,id@a` with `DSV41_MODE_A/B/C="K=V,K=V"` (tools/mo_run40.sh).
+Real-token N=4096 (hot experts): dispatch/combine `Topology.Ring` over the 4 rows (DSV41_UNI_TOPO=ring, identical output): MoE section 14.10 -> 12.14 ms; with shared||dispatch 12.19 ms
+(vs 15.51 sequential), plus the batched router -0.54 ms.
+40 layers, prefill only, in-process A/B (a = unflagged, b = batched router, c = b + shared||dispatch, d = c + ring), replay device time per call / TTFT, first tokens identical in all modes:
+| scenario | a | b | c | d |
+| isl4k_b16 (3720) | 9.61 s / 10.70 s | 9.53 / 10.53 | 9.31 / 10.37 | 9.20 / 10.29 (second session: a 9.61-9.50 / 10.64) |
+| isl8k_b4 (7443) | 4.75 s / 6.18 s | 4.71 / 6.70* | 4.60 / 6.02 | not run |
+(* host-side noise; replay time is the comparable number.) 6-layer traced chunk logits: bit-identical to the unflagged run for c and d.
