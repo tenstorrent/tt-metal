@@ -104,6 +104,8 @@ get_padded_slice_runtime_args_rm_sharded_output(
     [[maybe_unused]] uint32_t num_cores_channels =
         ttnn::operations::experimental::detail::get_num_cores_channels_from_sharded_tensor(output_tensor);
     int input_page_size = input_shape[-1] * input_tensor.element_size();
+    // Sliced last-dim width. The reader base already includes the slice's start offset.
+    const int slice_row_size_bytes = static_cast<int>(actual_output_shape[-1] * input_tensor.element_size());
     [[maybe_unused]] uint32_t input_row_size_bytes =
         tt::div_up(input_shape[-1], num_cores_channels) * input_tensor.element_size();
 
@@ -203,7 +205,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
         }
 
         int this_input_row_size_bytes =
-            std::max(std::min<int>(output_row_size_bytes, input_page_size - width_offset), 0);
+            std::max(std::min<int>(output_row_size_bytes, slice_row_size_bytes - width_offset), 0);
         uint32_t this_core_num_sticks = num_sticks_per_core;
         if (this_input_row_size_bytes == 0) {
             this_core_num_sticks = 0;
@@ -274,8 +276,8 @@ ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
     bool pad_output_row = false;
     log_debug(tt::LogOp, "Input Shape {}, Padded Shape : {}", a.logical_shape(), a.padded_shape());
 
-    uint32_t input_row_size_bytes = a.logical_shape()[-1] * a.element_size();
-    input_row_size_bytes = input_row_size_bytes / num_cores_channels;
+    uint32_t slice_row_size_bytes = actual_output_shape[-1] * a.element_size();
+    slice_row_size_bytes = slice_row_size_bytes / num_cores_channels;
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -317,7 +319,7 @@ ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
 
     desc.cbs.push_back(make_slice_cb_descriptor(
         output_cb_index, total_cores, output_cb_page_size, num_output_sticks_per_core, cb_data_format, dst_buffer));
-    if (output_row_size_bytes > input_row_size_bytes) {
+    if (output_row_size_bytes > slice_row_size_bytes) {
         pad_output_row = true;
         desc.cbs.push_back(
             make_slice_cb_descriptor(temp_pad_cb_index, total_cores, output_row_size_bytes, 1, cb_data_format));

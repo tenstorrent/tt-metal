@@ -15,11 +15,15 @@
 namespace tt::tt_fabric {
 
 FabricBuilder::FabricBuilder(
-    tt::tt_metal::IDevice* device, tt::tt_metal::Program& program, FabricContext& fabric_context) :
+    tt::tt_metal::IDevice* device,
+    tt::tt_metal::Program& program,
+    FabricContext& fabric_context,
+    CoreType dispatch_core_type) :
     device_(device),
     program_(program),
     fabric_context_(fabric_context),
     builder_context_(fabric_context.get_builder_context()),
+    dispatch_core_type_(dispatch_core_type),
     local_node_(fabric_context.get_control_plane().get_fabric_node_id_from_physical_chip_id(device->id())),
     wrap_around_mesh_(fabric_context_.is_wrap_around_mesh(local_node_.mesh_id)) {
     // Determine if this device has tunneling dispatch
@@ -101,8 +105,8 @@ void FabricBuilder::create_routers() {
             cluster.register_sim_fabric_endpoint_direction(
                 device_->id(), eth_chan, control_plane.routing_direction_to_eth_direction(direction));
 
-            auto router_builder =
-                FabricRouterBuilder::create(fabric_context_, device_, program_, local_node_, location);
+            auto router_builder = FabricRouterBuilder::create(
+                fabric_context_, dispatch_core_type_, device_, program_, local_node_, location);
             routers_.insert({eth_chan, std::move(router_builder)});
         }
     }
@@ -254,7 +258,10 @@ void FabricBuilder::compile_kernels_for_missing_directions() {
     const auto& missing_directions = tensix_config.get_missing_directions(device_->id());
 
     for (const auto& [routing_plane_id, missing_dir] : missing_directions) {
-        log_warning(
+        // Routine step of UDM's core-budget fallback (see fabric_tensix_builder.cpp), not an
+        // error -- every device in UDM mode with fewer mux cores than directions logs this once
+        // per missing direction, so it belongs at debug rather than warning.
+        log_debug(
             tt::LogMetal,
             "Building missing direction tensix builder for fabric_node {}, routing_plane {}, direction {}",
             local_node_,
