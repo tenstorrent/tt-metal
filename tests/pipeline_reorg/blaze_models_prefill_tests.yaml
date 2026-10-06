@@ -96,7 +96,7 @@
         set -e
         export OMP_NUM_THREADS=$(nproc)
         uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k2_7 and torus-xy-8x4 and ((maxedge-1u and cpu and no_determinism) or (plain-5k and func and with_determinism and scalar))" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k2_7 and torus-xy-8x4 and ((maxedge-1u and cpu and no_determinism) or (plain-5k and func and with_determinism and scalar and sp_only))" -vvv --tb=short
       '
     )
 
@@ -178,7 +178,7 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       export DS_PREFILL_REUSE_MODEL=1
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi_k2_7 and torus-xy-8x4 and L61 and mid15k and (notrace or traced)" -xvs --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi_k2_7 and torus-xy-8x4 and L61 and mid15k and (notrace or traced) and sp_only" -xvs --tb=short
     '
   test_type: kimi_chunked_accuracy_suite
   test_tags: [kimi_k2_7, transformer, kimi_chunked_padded]
@@ -385,7 +385,7 @@
         set -e
         export OMP_NUM_THREADS=$(nproc)
         uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k3 and torus-xy-8x4 and scalar and ((maxedge-1u and cpu and no_determinism) or (plain-5k and func and with_determinism))" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k3 and torus-xy-8x4 and scalar and ((maxedge-1u and cpu and no_determinism) or (plain-5k and func and with_determinism and sp_only))" -vvv --tb=short
       '
     )
 
@@ -395,7 +395,7 @@
       timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k3 and production-50k+5k and trace and torus-xy-8x4 and scalar and no_determinism" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k3 and production-50k+5k and trace and torus-xy-8x4 and scalar and no_determinism and sp_only" -vvv --tb=short
       '
     )
 
@@ -520,7 +520,7 @@
       export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
       timeout -k 2m 90m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_chunked_prefill.py -k "L24" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_chunked_prefill.py -k "L24 and sp_only" -vvv --tb=short
       '
     )
 
@@ -1130,7 +1130,7 @@
 
       timeout -k 2m 44m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "mistral4 and cpu and scalar and no_determinism and torus-xy-8x4" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "mistral4 and cpu and scalar and no_determinism and torus-xy-8x4 and sp_only" -vvv --tb=short
       '
     ) || rc=$?
     section_end "$rc"

@@ -107,6 +107,8 @@ class TtKimiK3Transformer(LightweightModule):
         padding_side: str = "right",
         sparse_kv_cache_format=None,
         mtp_predictor=None,
+        # KV dedup for the MLA layers only; must match the KVPE cache allocation.
+        tp_shard_kv: Optional[bool] = None,
         **block_kwargs,
     ):
         super().__init__()
@@ -260,6 +262,7 @@ class TtKimiK3Transformer(LightweightModule):
                 kv_only=kv_only_last_layer and is_last,
                 is_balanced=is_balanced,
                 first_layer_idx=first_layer_idx,
+                tp_shard_kv=tp_shard_kv,
             )
             if not self.schedule.local_is_mla(local_idx):
                 kda_layers[layer_idx] = attention.kda

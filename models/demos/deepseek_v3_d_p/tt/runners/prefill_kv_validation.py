@@ -242,18 +242,19 @@ def kv_cache_pcc_check(
     from tests.ttnn.utils_for_testing import comp_pcc
 
     cfg = pipeline.config
-    # Assumes TP-REPLICATED twice over: `_to_host` keeps one TP column, and blockcyclic_positions
-    # un-rotates with an SP-only period.
     from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import is_tp_deduped_kv_cache
 
     assert not resolve_has_indexer(pipeline.hf_config), (
-        "kv_cache_pcc_check has no TP-sharded reconstruction: it keeps one TP column and un-rotates with an "
-        "SP-only block-cyclic period, and every sparse/DSA model TP-dedups. Validate such a cache with the "
-        "mock-migration producer read-back (PREFILL_MOCK_MIGRATION=1) instead of PREFILL_STANDALONE_PCC / "
-        "PREFILL_VALIDATE_MIGRATION."
+        "kv_cache_pcc_check checks the KVPE cache only, so a sparse/DSA model's index-key cache would go "
+        "unchecked. Validate such a cache with the mock-migration producer read-back "
+        "(PREFILL_MOCK_MIGRATION=1) instead of PREFILL_STANDALONE_PCC / PREFILL_VALIDATE_MIGRATION."
     )
     mesh_device = pipeline.mesh_device
     sp = cfg.sp_factor
+    tp = cfg.tp_factor
+    # Deduped: every (row, col) chip holds a distinct stripe, so reassemble in linear chip order.
+    kv_dedup = is_tp_deduped_kv_cache(kvpe_cache.storage, cfg.mesh_shape)
     chunk_size = cfg.chunk_size
     num_layers = cfg.num_layers
     seq_len_cache = cfg.max_seq_len
@@ -299,11 +300,17 @@ def kv_cache_pcc_check(
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
 
     def _to_host(tensor):
-        return ttnn.to_torch(tensor, mesh_composer=composer)[:, :1]
+        host = ttnn.to_torch(tensor, mesh_composer=composer)  # [slots, tp, seq_len_cache / tp, row]
+        if not kv_dedup:
+            return host[:, :1]  # TP-replicated: any one column is a full replica
+        local = host.shape[2] // sp  # rows per chip
+        return torch.cat(
+            [host[:, t : t + 1, s * local : (s + 1) * local] for s in range(sp) for t in range(tp)], dim=2
+        )  # [slots, 1, seq_len_cache, row] in linear chip order
 
     cache_full = kvpe_cache.unpack_host(_to_host(kvpe_cache.storage)).to(torch.float32)
 
-    p = blockcyclic_positions(sp, chunk_size, seq_len_cache)
+    p = blockcyclic_positions(sp * tp if kv_dedup else sp, chunk_size, seq_len_cache)
     logger.info(f"[kv-pcc] device KV cache vs golden kv_post_transform (slot={slot_id}, per layer):")
     min_pcc = 1.0
     failures = []

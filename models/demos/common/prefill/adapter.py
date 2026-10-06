@@ -69,6 +69,8 @@ class PrefillRunParams:
     weight_cache_path: Optional[Path]
     sp_axis: int = 0
     tp_axis: int = 1
+    # Dense KV dedup (PREFILL_TP_SHARD_KV); sparse models always dedup and ignore it.
+    tp_shard_kv: bool = False
     # Explicit semantic cache format selected by model/module configuration. Scaled FP8 is a packed
     # mixed-format row, so it must not be represented or inferred as a bare tensor dtype.
     sparse_kv_cache_format: Optional[object] = None
@@ -141,6 +143,8 @@ class PrefillModelAdapter(ABC):
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
     supports_mtp: bool = False
+    # Opt-in: allocate_kv_cache and build_runtime honor params.tp_shard_kv (the runner asserts).
+    supports_tp_shard_kv: bool = False
 
     def cache_kind(self, config_id: int) -> str:
         """What migration-table config ``config_id`` holds. Generic consumers understand ``"kvpe"`` and

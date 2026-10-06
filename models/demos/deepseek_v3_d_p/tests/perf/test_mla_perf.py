@@ -17,7 +17,7 @@ from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 # MLA_START signpost, so only the single forward is timed.
 _CHUNKED_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill"
 _CMD_CHUNKED_8X4 = (
-    f"pytest {_CHUNKED_TEST_PATH} -k 'deep-50k+5k and k2_7 and func and torus-xy-8x4' --wrapper-invocation"
+    f"pytest {_CHUNKED_TEST_PATH} -k 'deep-50k+5k and k2_7 and func and torus-xy-8x4 and sp_only' --wrapper-invocation"
 )
 
 
@@ -47,7 +47,8 @@ def _require_certified_torus_xy():
 # axis came in with 3d3c65f985b (#51624), predating both K3 commits. Fix is to pin 'and scalar'
 # there too and keep 7_118_649; left alone here so this change doesn't touch another CI baseline.
 _CMD_K3_CHUNKED_8X4 = (
-    f"pytest {_CHUNKED_TEST_PATH} " "-k 'deep-50k+5k and k3 and func and torus-xy-8x4 and scalar' --wrapper-invocation"
+    f"pytest {_CHUNKED_TEST_PATH} "
+    "-k 'deep-50k+5k and k3 and func and torus-xy-8x4 and scalar and sp_only' --wrapper-invocation"
 )
 
 
