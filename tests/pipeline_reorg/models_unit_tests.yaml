@@ -1211,6 +1211,7 @@
     # so the watcher's first poll reads an invalid watcher.enable and aborts the process at mesh open.
     unset TT_METAL_WATCHER
     export HF_HOME=/mnt/MLPerf/huggingface  # the H3 weight resolver searches $HF_HOME/hub, not HF_HUB_CACHE
+    export MINIMAX_H3_REQUIRE_WEIGHTS=1  # a runner without the MiniMaxAI/MiniMax-H3 snapshot fails here instead of skipping green
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
     export MINIMAX_H3_DRAM_PROBE=1  # per-owner DRAM attribution at each checkpoint, read at import
     pytest --timeout 7200 -s models/tt_dit/tests/models/minimax_h3/test_mock_oom_minimax_h3.py
