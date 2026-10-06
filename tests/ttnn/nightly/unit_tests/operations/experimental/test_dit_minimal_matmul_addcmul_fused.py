@@ -115,13 +115,14 @@ def run_dit_minimal_matmul_addcmul_fused_test(
 
 @pytest.mark.parametrize("use_bias", [True, False], ids=["with_bias", "no_bias"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
-def test_dit_minimal_matmul_addcmul_fused_basic(device, use_bias, dtype):
-    """Basic functionality test with small shapes."""
+@pytest.mark.parametrize("M, N", [(256, 1024), (1024, 256)], ids=["in1_reader", "in0_reader"])
+def test_dit_minimal_matmul_addcmul_fused_basic(device, use_bias, dtype, M, N):
+    """Distinct ternary bindings must compile in both reader kernels (M > N transposes the grid)."""
     check_result = run_dit_minimal_matmul_addcmul_fused_test(
         device=device,
-        M=256,
+        M=M,
         K=512,
-        N=1024,
+        N=N,
         scalar=1.0,
         dtype=dtype,
         use_bias=use_bias,
