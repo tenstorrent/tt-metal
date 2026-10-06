@@ -533,22 +533,30 @@ class TtMoe(LightweightModule):
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
 
-        # Overlapping is the default wherever the op exists -- only Blackhole has it -- and the mesh's fabric can
-        # carry combine_fabric2d's packet. A mesh opened with the model's own payload (EMB_SIZE) runs the routed
-        # expert then combine instead; moe_fabric_payload_size is what opens it with room for the overlap.
+        # Overlapping is the default wherever the op can run: only Blackhole has it, combine_fabric2d relays tokens
+        # around a ring so the 2D fabric must wrap along mesh axis 0, and each token is one fabric packet so the payload
+        # must fit it. A mesh opened with the model's own payload (EMB_SIZE), or on a fabric that does not wrap,
+        # runs the routed expert then combine instead; moe_fabric_payload_size opens one with room for the overlap.
         overlap_payload = combine_overlap_payload_size(self.routed_emb_dim)
         fabric_payload = ttnn.get_tt_fabric_max_payload_size_bytes() if is_blackhole() else 0
+        ring_axis_wraps = ttnn.get_fabric_config() in (
+            ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        )
+        overlap_fits = is_blackhole() and ring_axis_wraps and fabric_payload >= overlap_payload
         if overlap_routed_expert_with_combine is None:
-            overlap_routed_expert_with_combine = is_blackhole() and fabric_payload >= overlap_payload
-        elif overlap_routed_expert_with_combine and fabric_payload < overlap_payload:
+            overlap_routed_expert_with_combine = overlap_fits
+        elif overlap_routed_expert_with_combine and not overlap_fits:
             raise ValueError(
-                f"overlap_routed_expert_with_combine needs a Blackhole fabric payload of at least {overlap_payload} B "
-                f"(a bf16 token plus combine_fabric2d's routing tail), got {fabric_payload} B; open the mesh with "
-                f"moe_fabric_payload_size"
+                f"overlap_routed_expert_with_combine needs Blackhole, a 2D fabric that wraps along mesh axis 0 (got "
+                f"{'a ring' if ring_axis_wraps else 'no ring'}), and a fabric payload of at least {overlap_payload} B "
+                f"for a bf16 token plus combine_fabric2d's routing tail (got {fabric_payload} B); open the mesh with "
+                f"moe_fabric_payload_size on a torus"
             )
         logger.info(
             f"TtMoe: routed expert overlapped with combine_fabric2d: {overlap_routed_expert_with_combine} "
-            f"(fabric payload {fabric_payload} B, overlap needs {overlap_payload} B)"
+            f"(axis 0 {'ring' if ring_axis_wraps else 'linear'}, fabric payload {fabric_payload} B, overlap needs "
+            f"{overlap_payload} B)"
         )
         # combine_fabric2d relays tokens between the chips of one ring, so each chip needs its own dispatch
         # group's rows of the table -- one row per ring chip -- and no other group's. Combine runs on mesh axis
