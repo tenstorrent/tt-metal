@@ -86,6 +86,13 @@ def random_camera_features(batch_size, generator=None, spatial_shapes=SPATIAL_SH
     return features.view(NUM_CAMS, batch_size, EMBED_DIMS, -1).permute(0, 3, 1, 2).contiguous()
 
 
+def camera_rows(value):
+    """The reference's camera features ``(num_cams, num_keys, bs, C)`` as the TTNN encoder takes
+    them, ``(bs * num_cams, num_keys, C)``."""
+    num_cams, num_keys, bs, channels = value.shape
+    return value.permute(2, 0, 1, 3).reshape(bs * num_cams, num_keys, channels).contiguous()
+
+
 def random_bev(bev_shape, batch_size, generator=None):
     """A unit-variance BEV map ``(bev_h * bev_w, bs, C)``, smooth over ``FEATURE_CELLS`` cells,
     as the encoder's output is; the previous frame's BEV for the self-attention tests."""

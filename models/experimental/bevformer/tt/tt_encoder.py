@@ -3,8 +3,8 @@
 
 """TTNN port of BEVFormer's encoder (``reference/encoder.py``).
 
-The layers run batch-first, ``(bs, num_query, embed_dims)``; the camera features stay as the
-reference takes them, ``(num_cams, num_keys, bs, embed_dims)``. Parameters come from
+The layers run batch-first, ``(bs, num_query, embed_dims)``; the camera features are
+``(bs * num_cams, num_keys, embed_dims)``, each sample's cameras in turn, as the FPN emits them. Parameters come from
 ``model_preprocessing.create_bevformer_encoder_parameters``.
 
 Camera geometry depends on the cameras only, not on the activations: once per frame,
@@ -154,7 +154,7 @@ class TTBEVFormerEncoder:
 
     def __call__(self, bev_query, value, bev_pos, plan, prev_bev=None, shift=None):
         """``bev_query``, ``bev_pos`` and ``prev_bev`` (already rotated to the current frame, or
-        None) ``(bs, num_query, C)``; ``value`` ``(num_cams, num_keys, bs, C)``; ``plan`` from
+        None) ``(bs, num_query, C)``; ``value`` ``(bs * num_cams, num_keys, C)``; ``plan`` from
         :meth:`prepare_frame`; ``shift`` the ego translation in BEV fractions, a float32 ROW_MAJOR
         ``(bs, 1, 1, 2)`` device tensor. Returns ``(bs, num_query, C)``."""
         bs, num_query, embed_dims = bev_query.shape
