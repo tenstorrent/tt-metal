@@ -2300,6 +2300,7 @@ class UnarySFPUGolden:
     def __init__(self):
         self.ops = {
             MathOperation.Abs: self._abs,
+            MathOperation.AbsInt32: self._abs,
             MathOperation.EqualZero: self._equal_zero,
             MathOperation.NotEqualZero: self._not_equal_zero,
             MathOperation.LessThanZero: self._less_than_zero,
@@ -2450,6 +2451,7 @@ class UnarySFPUGolden:
             MathOperation.UnaryBitwiseXor,
             MathOperation.RsubScalarInt32,
             MathOperation.RemainderUint32,
+            MathOperation.AbsInt32,
             # identity also runs on floats; an integer input takes the bit-exact vUInt copy.
             MathOperation.Identity,
             # relu_min is the one op here that is not integer-*only*: sfpu_operations.h
@@ -2457,6 +2459,9 @@ class UnarySFPUGolden:
             # the vFloat branch otherwise, so the same MathOperation needs an exact
             # integer golden as well as the float one. See _relu_min.
             MathOperation.ReluMin,
+            # signbit on Int32 runs calculate_signbit_int32, which writes bit 31 as the integer
+            # 0 or 1 rather than the float 0.0 or 1.0. See _signbit.
+            MathOperation.Signbit,
         }
         # Fixed dispatch constants shared with sfpu_operations.h: unary shift by 3
         # bits, integer unary max/min against the scalar 1000.
@@ -2834,6 +2839,9 @@ class UnarySFPUGolden:
         return 1.0 if x != 0.0 else 0.0
 
     def _signbit(self, x):
+        if isinstance(x, int):
+            # Integer dst: bit 31 of the two's-complement word, as the integer 0 or 1.
+            return 1 if x < 0 else 0
         # Mirrors the kernel: logical-shift the fp32 bit pattern right by 31,
         # i.e. return 1.0 iff the sign bit is set (negative, incl. -0.0).
         return 1.0 if math.copysign(1.0, x) < 0.0 else 0.0
@@ -5409,6 +5417,26 @@ class TopKGolden:
         )
 
         return result
+
+
+@register_golden
+class MaxPoolWithIndicesGolden:
+    """Column-wise arg-max over the first ``num_rows`` rows of a values tile, carrying an
+    indices tile in lockstep (SFPU ``calculate_max_pool_with_indices``).
+
+    Operates on logical (untilized) 32x32 tiles. Returns ``(values_row, indices_row, argmax_row)``:
+    the per-column maximum, the index-tile entry at the row that held it, and that row.
+    On a tie any row holding the maximum is a valid result, so callers must check tied
+    columns by value rather than against ``indices_row``.
+    """
+
+    def __call__(self, values, indices, num_rows, data_format):
+        torch_format = format_dict[data_format]
+        values = values.reshape(32, 32)[:num_rows].to(torch.float32)
+        indices = indices.reshape(32, 32)[:num_rows]
+        values_row, argmax_row = torch.max(values, dim=0)
+        indices_row = indices.gather(0, argmax_row.unsqueeze(0)).squeeze(0)
+        return values_row.to(torch_format), indices_row.to(torch_format), argmax_row
 
 
 @register_golden
