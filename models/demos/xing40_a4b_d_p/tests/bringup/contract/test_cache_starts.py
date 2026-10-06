@@ -4,12 +4,13 @@
 """Serving contract, part test: the KV cache written at every start tt-d-gen sends (serving_contract.md, "Attention
 and cache writes").
 
-Layers 0 and 1 of the device model (hooks.device_model) run the server's chunk plan (server_rules.chunk_plan) for:
+Layers 0 and 1 of the device model (hooks.device_model) run the server's chunk plan (server_rules.chunk_plan) for the
+serving geometry's cases (server_rules.SCENARIOS; chunk 2048 / max_seq 4096 shown, 5120 / 56320 in brackets):
 
-  cold_mid_end     a fresh 8017-token prompt: (0, 5120), (5120, 8017); the second chunk ends mid-record
-  follow_up_block  a follow-up turn over a 2944-token resident prefix (46 blocks of 64, the shipped kv_block_size):
-                   (2944, 8064), (8064, 9000): every chunk starts off the SP period and crosses a 1280-row slab
-  follow_up_tile   a 32-aligned start (kv_block_size 32 is legal, backend_runtime.cpp:66-69): (1312, 6432), (6432, 7001)
+  cold_mid_end     a fresh 3017 [8017]-token prompt: (0, 2048), (2048, 3017); the second chunk ends mid-record
+  follow_up_block  a follow-up turn over a 1344 [2944]-token resident prefix (blocks of 64, the shipped kv_block_size):
+                   (1344, 3000): the chunk starts off the SP period and crosses a 512 [1280]-row slab
+  follow_up_tile   a 32-aligned start (kv_block_size 32 is legal, backend_runtime.cpp:66-69): (1312, 3001)
 
 Pass: rows below actual_start bit-identical to what the state held, rows [start, end) vs the golden kv_latent with the
 server's per-channel PCC (kv_dump_compare.tensor_pcc, nope / pe) >= max(server 0.93, spec state 0.97), the pad rows of
@@ -25,11 +26,7 @@ from models.demos.xing40_a4b_d_p.tests.bringup.contract import server_rules as R
 S = spec()
 pytestmark = device_timeout(S)
 
-CASES = {
-    "cold_mid_end": (0, 8017),
-    "follow_up_block": (2944, 9000),
-    "follow_up_tile": (1312, 7001),
-}
+CASES = R.scenario()["cache_starts"]  # name -> (resident, prompt)
 
 
 @mesh_parametrize

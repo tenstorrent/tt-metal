@@ -24,6 +24,8 @@ from pathlib import Path
 
 import numpy as np
 
+from models.demos.xing40_a4b_d_p.tt.settings import settings
+
 # ---------------------------------------------------------------- constants (server)
 PAD_ID = 0xFFFFFFFF  # engine/include/engine/runtime/types.hpp:20
 TILE = 32  # engine/include/engine/runtime/types.hpp:22 TILE_ALIGNMENT
@@ -34,12 +36,61 @@ NOPE_SPLIT = 512  # kv_dump_compare.py:41 (nope = dims 0:512, pe = 512:576)
 PREFILL_GOLDEN_PCC = 0.93  # launch_harness validation.py PCC_DEFAULTS["prefill-golden-pcc"]
 LAST_BLOCK_PCC = 0.99  # launch_harness README "KV validation": last KV block PCC floor
 
-# ---------------------------------------------------------------- this model's serving geometry (spec.yaml)
-CHUNK = 5120  # spec target.chunk
-MAX_SEQ = 56320  # spec target.seq (11 chunks)
-SP, TP = 4, 2  # spec box.mesh [4, 2]: SP over axis 0, TP over axis 1
-W = CHUNK // SP  # 1280 tokens per SP row per chunk
+# ---------------------------------------------------------------- this model's serving geometry (tt/settings.py)
+CHUNK = settings.get("SERVE_CHUNK")  # 2048 for the frozen decode (5120 = the bring-up target)
+MAX_SEQ = settings.get("SERVE_MAX_SEQ")  # 4096 (56320 = the bring-up target, 11 chunks)
+SLOTS = settings.get("SERVE_SLOTS")  # 1: the deployment's max_slots = PREFILL_NUM_USERS
+assert MAX_SEQ % CHUNK == 0 and CHUNK % TILE == 0, (CHUNK, MAX_SEQ)
+
+
+def _mesh() -> tuple[int, int]:
+    """spec box.mesh (the BRINGUP_SPEC one, else this model's own spec.yaml): SP over axis 0, TP over axis 1."""
+    from models.demos.common.bringup.core.spec import Spec
+
+    try:
+        from models.demos.common.bringup.reference.golden import load_spec
+
+        s = load_spec()
+    except (Exception, SystemExit):
+        s = Spec.load(Path(__file__).resolve().parents[3] / "bringup" / "spec.yaml")
+    rows, cols = s.mesh
+    return int(rows), int(cols)
+
+
+SP, TP = _mesh()  # 4, 2 on the LoudBox
+W = CHUNK // SP  # tokens per SP row per chunk (512 at chunk 2048 on 4x2)
 NUM_LAYERS = 40  # spec num_layers (MTP layer 40 never served)
+
+# The contract tests' prompts, one set per serving geometry (CHUNK, MAX_SEQ); each case's chunk plan comes from
+# chunk_plan / interleave below (the server's rules), check_scenario asserts the shape every test relies on.
+#   cache_starts   test_cache_starts: (resident, prompt) of a cold chunk ending mid-record, a 64-aligned follow-up
+#                  and a 32-aligned one, each crossing an SP slab
+#   pulled_back    test_pulled_back_chunk: (resident, prompt) whose plan ends with a chunk moved back to
+#                  MAX_SEQ - CHUNK over rows the chunk before it wrote
+#   turn1, b       test_runner_contract's engine case: slot A's first prompt (one chunk, mid-record end; its follow-up
+#                  to MAX_SEQ remounts and ends pulled back) and slot B's cold prompt (fewer chunks than A's follow-up,
+#                  so the two interleave and A finishes last)
+#   producer       the producer fallback's turns per slot (slot 0: turn1, then a pulled-back follow-up)
+#   acks           test_adapter_acks' turns per slot (slot 0: one chunk, then a follow-up from its reused prefix;
+#                  slot 1: cold, more than one chunk)
+SCENARIOS = {
+    (5120, 56320): {
+        "cache_starts": {"cold_mid_end": (0, 8017), "follow_up_block": (2944, 9000), "follow_up_tile": (1312, 7001)},
+        "pulled_back": (2944, 56000),
+        "turn1": 3000,
+        "b": 12345,
+        "producer": {0: [3000, 56000], 1: [12345, 20000]},
+        "acks": {0: [3000, 9000], 1: [6000]},
+    },
+    (2048, 4096): {
+        "cache_starts": {"cold_mid_end": (0, 3017), "follow_up_block": (1344, 3000), "follow_up_tile": (1312, 3001)},
+        "pulled_back": (960, 4000),
+        "turn1": 1000,
+        "b": 1500,
+        "producer": {0: [1000, 4000], 1: [1500, 3500]},
+        "acks": {0: [1000, 3500], 1: [3000]},
+    },
+}
 
 # Where the server's code lives (the serving-contract agent read it there).
 DGEN_MAIN_SHA = "93e77b802999fdb4303e61195373fdfd76f48b3c"
@@ -74,12 +125,13 @@ def follow_up_resident(prev_end: int, prompt_len: int, kv_block_size: int = KV_B
     return matched  # 0 = cold admit
 
 
-def chunk_plan(prompt_len: int, resident: int = 0, chunk: int = CHUNK, max_seq: int = MAX_SEQ) -> list[tuple]:
+def chunk_plan(prompt_len: int, resident: int = 0, chunk: int | None = None, max_seq: int | None = None) -> list[tuple]:
     """The (actual_start, actual_end) of every chunk of one request.
 
     backend_runtime.cpp:841-850 setup_slot_for_prefill (base = align_down_to_tile(resident), n_chunks) and
     prefill_writer.cpp:51-82 (lo = base + i * chunk; the last chunk pulled back to max_seq - chunk when its padded end
     passes max_seq, workaround tt-d-gen #430; actual_end = min(lo + chunk, prompt_len))."""
+    chunk, max_seq = chunk or CHUNK, max_seq or MAX_SEQ
     assert 0 < prompt_len <= max_seq, "admit(): prompt length exceeds max_seq_len (backend_runtime.cpp:168)"
     base = align_down(resident, TILE)
     n = max(1, -(-(prompt_len - base) // chunk))
@@ -193,9 +245,53 @@ def self_check() -> None:
                 fill[d] += 1
             got = ring_sdpa_reshuffle(nat, (start // w_) % sp_, start % w_, sp_, w_)
             assert np.array_equal(got, want), f"ring_sdpa_reshuffle port wrong at sp={sp_} w={w_} start={start}"
-    assert chunk_plan(56000, 2944)[-1] == (51200, 56000) and len(chunk_plan(56000, 2944)) == 11
-    assert chunk_plan(52000)[-1] == (51200, 52000) and chunk_plan(3000) == [(0, 3000)]
+    big = {"chunk": 5120, "max_seq": 56320}
+    assert chunk_plan(56000, 2944, **big)[-1] == (51200, 56000) and len(chunk_plan(56000, 2944, **big)) == 11
+    assert chunk_plan(52000, **big)[-1] == (51200, 52000) and chunk_plan(3000, **big) == [(0, 3000)]
+    small = {"chunk": 2048, "max_seq": 4096}
+    assert chunk_plan(4000, 960, **small) == [(960, 3008), (2048, 4000)] and chunk_plan(4000, 2944, **small) == [
+        (2048, 4000)
+    ]
     assert follow_up_resident(3000, 56000) == 2944 and follow_up_resident(12345, 20000) == 12288
+    check_scenario()
+
+
+def scenario() -> dict:
+    """This geometry's contract-test prompts (SCENARIOS)."""
+    if (CHUNK, MAX_SEQ) not in SCENARIOS:
+        raise KeyError(
+            f"no contract scenario for chunk {CHUNK} / max_seq {MAX_SEQ} (XING_SERVE_CHUNK / XING_SERVE_MAX_SEQ); add "
+            f"one to server_rules.SCENARIOS (have {sorted(SCENARIOS)})"
+        )
+    return SCENARIOS[(CHUNK, MAX_SEQ)]
+
+
+def follow_up(prev_end: int, prompt_len: int) -> tuple[int, list[tuple]]:
+    """(resident, chunk plan) of a follow-up turn on the slot whose last turn ended at prev_end."""
+    res = follow_up_resident(prev_end, prompt_len)
+    return res, chunk_plan(prompt_len, res)
+
+
+def check_scenario() -> None:
+    """The shape each contract test relies on, for this geometry's scenario."""
+    sc = scenario()
+    for name, (res, n) in sc["cache_starts"].items():
+        assert res % TILE == 0 and n <= MAX_SEQ and chunk_plan(n, res)[-1][1] == n, (name, res, n)
+    res, n = sc["pulled_back"]
+    plan = chunk_plan(n, res)
+    assert len(plan) >= 2 and plan[-1][0] == MAX_SEQ - CHUNK < plan[-2][1], ("pulled_back", plan)
+    a = chunk_plan(sc["turn1"])
+    _, a2 = follow_up(sc["turn1"], MAX_SEQ)
+    b = chunk_plan(sc["b"])
+    assert len(a) == 1 and sc["turn1"] % TILE, ("turn1: one chunk, mid-record end", a)
+    assert len(a2) >= 2 and a2[-1][0] == MAX_SEQ - CHUNK < a2[-2][1], ("follow-up to MAX_SEQ ends pulled back", a2)
+    assert len(b) < len(a2), ("b: fewer chunks than a's follow-up, so a finishes last", b, a2)
+    t0 = sc["producer"][0]
+    assert len(chunk_plan(t0[0])) == 1 and len(follow_up(*t0)[1]) >= 2, ("producer slot 0", t0)
+    for key in ("producer", "acks"):
+        assert max(n for turns in sc[key].values() for n in turns) <= MAX_SEQ, (key, sc[key])
+    t0, t1 = sc["acks"][0], sc["acks"][1]
+    assert len(chunk_plan(t0[0])) == 1 and follow_up_resident(*t0) > 0 and len(chunk_plan(t1[0])) > 1, sc["acks"]
 
 
 # ---------------------------------------------------------------- the server's own KV checks (loaded, not copied)
@@ -264,10 +360,15 @@ def record_name(slot: int, layer: int, pos: int) -> str:
 
 # ---------------------------------------------------------------- golden
 def golden():
-    """The bring-up's s56320 golden: tokens [56320] and per-layer kv_latent [56320, 576] (spec state.tensors)."""
+    """The bring-up golden of this serving geometry (the ladder rung with seq MAX_SEQ in chunks of CHUNK: s4096 at
+    4096 / 2048, s56320 at 56320 / 5120): tokens [MAX_SEQ] and per-layer kv_latent [MAX_SEQ, 576] (spec
+    state.tensors)."""
     from models.demos.common.bringup.reference.golden import Golden, load_spec
 
-    return Golden.for_rung(load_spec(), "s56320")
+    s = load_spec()
+    rungs = [r["name"] for r in s.get("ladder", []) if (r.get("seq"), r.get("chunk")) == (MAX_SEQ, CHUNK)]
+    assert rungs, f"no ladder rung with seq {MAX_SEQ} in chunks of {CHUNK} in {s.path}: no golden to check against"
+    return Golden.for_rung(s, rungs[0])
 
 
 def golden_kv(g, layer: int):

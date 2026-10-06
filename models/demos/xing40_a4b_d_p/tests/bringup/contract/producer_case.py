@@ -15,9 +15,12 @@ channel, shutdown sentinel) is the producer's own code:
   - acks: counted here, 40 per chunk (layers_per_chunk), and waited for before each snapshot
   - verify: off here (the parent test reads the dumps with the server's own comparer)
 
+Turns: server_rules.SCENARIOS "producer" for the serving geometry (chunk 2048 / max_seq 4096: slot 0 1000, then 4000
+from resident 960; slot 1 1500, then 3500).
 Snapshots, read through the exported table over UMD right after the chunk's acks (what the KV Manager ships then):
-  snap_s0_t0     slot 0 [0, 3000) every layer, after its first turn
-  snap_overlap   slot 0 [51200, 54144) every layer, after chunk (49024, 54144), before the pulled-back last chunk
+  snap_s0_t0     slot 0 [0, turn 1) every layer, after its first turn
+  snap_overlap   slot 0 [max_seq - chunk, end of the chunk before the last) every layer, after that chunk, before the
+                 pulled-back last chunk (2048 / 4096: [2048, 3008) after (960, 3008))
 """
 
 from __future__ import annotations
@@ -32,15 +35,19 @@ from pathlib import Path
 
 import numpy as np
 
+from models.demos.xing40_a4b_d_p.tests.bringup.contract import server_rules as _R
+
 # slot -> prompt lengths of its turns; XING_CONTRACT_TURNS (JSON {"slot": [len, ...]}) replaces them (the runner smoke)
 TURNS = (
     {int(k): [int(n) for n in v] for k, v in json.loads(os.environ["XING_CONTRACT_TURNS"]).items()}
     if os.environ.get("XING_CONTRACT_TURNS")
-    else {0: [3000, 56000], 1: [12345, 20000]}
+    else _R.scenario()["producer"]
 )
+_T1 = _R.scenario()["producer"][0][0]
+_BEFORE = _R.follow_up(*_R.scenario()["producer"][0])[1][-2]  # slot 0's chunk before its pulled-back last one
 SNAPSHOTS = {
-    "snap_s0_t0": {"after": (0, 0, 3000), "slot": 0, "lo": 0, "hi": 3000},
-    "snap_overlap": {"after": (0, 49024, 54144), "slot": 0, "lo": 51200, "hi": 54144},
+    "snap_s0_t0": {"after": (0, 0, _T1), "slot": 0, "lo": 0, "hi": _T1},
+    "snap_overlap": {"after": (0, *_BEFORE), "slot": 0, "lo": _R.MAX_SEQ - _R.CHUNK, "hi": _BEFORE[1]},
 }
 # A chunk of 40 layers takes seconds; no ack within this (env XING_CONTRACT_ACK_TIMEOUT_S) means the runtime sends none,
 # and every later wait is skipped so the run ends with that error instead of a timeout.
