@@ -99,19 +99,14 @@ ttnn::device_operation::ProgramArtifacts ScatterReduceBfloat16ProgramFactory::cr
     const KernelSpecName WRITER{"writer"};
 
     // The output DFB holds exactly one chunk page (num_entries = 1; entry_size is the 32-aligned
-    // chunk byte size). The data format is set even though this is a data-movement-only DFB,
-    // because the writer selects its C++ element type at compile time via get_dataformat(dfb::output).
-    auto make_dfb = [](const DFBSpecName& name, DataType dtype, uint32_t page_size_bytes) {
-        return DataflowBufferSpec{
-            .unique_id = name,
-            .entry_size = page_size_bytes,
-            .num_entries = 1,
-            .data_format_metadata = datatype_to_dataformat_converter(dtype),
-        };
-    };
-
+    // chunk byte size). It carries no data format: both kernels are data movement, and the writer gets
+    // the output element size as a compile-time arg.
     Group<DataflowBufferSpec> dataflow_buffers{
-        make_dfb(DST_DFB, output_tensor.dtype(), output_page_size_bytes),
+        DataflowBufferSpec{
+            .unique_id = DST_DFB,
+            .entry_size = output_page_size_bytes,
+            .num_entries = 1,
+        },
     };
 
     // The reader alone fills and reads INPUT/INDEX/SRC, each one 32-aligned chunk page, and the
@@ -179,6 +174,7 @@ ttnn::device_operation::ProgramArtifacts ScatterReduceBfloat16ProgramFactory::cr
         .compile_time_args =
             {
                 {"output_stick_size_bytes", output_stick_size_bytes},
+                {"output_element_size", output_datum_size},
             },
         .runtime_arg_schema =
             {
