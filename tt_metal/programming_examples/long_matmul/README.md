@@ -26,7 +26,7 @@ You can put printing statements inside the kernels to debug/instrument the code,
 ## Run
 
 ```bash
-./build/programming_examples/metal_example_long_matmul [M] [N] [K] [iterations] [fixed_tiles_per_core]
+./build/programming_examples/metal_example_long_matmul [M] [N] [K] [iterations] [fixed_blocks_per_core]
 ```
 
 *Defaults*: 256×256×512 (datums, not tiles), HiFi4, 100000 iterations, split mode.
@@ -35,7 +35,7 @@ You can put printing statements inside the kernels to debug/instrument the code,
 |---|---|
 | `M N K` | matmul shape in datums; each must be a multiple of 32 (tile size) |
 | `iterations` | how many times the whole `C = A x B` is repeated per grid |
-| `fixed_tiles_per_core` | `0` (default) = **split mode**: the same total work is divided across the active cores, so every grid does identical FLOPs and pJ/FLOP is directly comparable between grids. `N > 0` = **fixed mode**: every core does exactly `N` output blocks, so total work grows with the grid. |
+| `fixed_blocks_per_core` | `0` (default) = **split mode**: the same total work is divided across the active cores, so every grid does identical FLOPs and pJ/FLOP is directly comparable between grids. `N > 0` = **fixed mode**: every core does exactly `N` output blocks (one block is `LONG_MATMUL_BLOCK_M x LONG_MATMUL_BLOCK_N` tiles, 1x1 by default), so total work grows with the grid. |
 
 Examples:
 ```bash
@@ -140,7 +140,7 @@ fall to `(BLOCK_M + BLOCK_N) / (BLOCK_M * BLOCK_N)`: at 2x4 that is 0.75, a 2.67
 reduction, lifting intensity to ~42 FLOP/byte.
 
 Constraints: `BLOCK_M * BLOCK_N <= 8` (the destination register budget), and `Mt`, `Nt` must be
-divisible by `BLOCK_M`, `BLOCK_N`. In fixed mode `fixed_tiles_per_core` counts output *blocks*.
+divisible by `BLOCK_M`, `BLOCK_N`. In fixed mode `fixed_blocks_per_core` counts these blocks, not tiles.
 
 ```bash
 LONG_MATMUL_BLOCK_M=2 LONG_MATMUL_BLOCK_N=4 POWER_CASE=0 \

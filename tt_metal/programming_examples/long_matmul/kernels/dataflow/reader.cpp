@@ -53,6 +53,10 @@ void kernel_main() {
             const uint32_t col0 = block_col * kBlockN;  // first output tile column in the block
 
             for (uint32_t k = 0; k < Kt; k++) {
+                // When LONG_MATMUL_DISABLE_READER is set the reader keeps its full CB handshake --
+                // so compute still gets its tiles "delivered" every step and never deadlocks --
+                // but issues no DRAM traffic. Compute then runs on whatever stale data is already
+                // sitting in that L1 buffer, which is harmless: the app never verifies its output.
                 {
                     // Column slice of A: rows row0..row0+kBlockM-1 at inner index k.
                     cb_reserve_back(cb_id_in0, kBlockM);

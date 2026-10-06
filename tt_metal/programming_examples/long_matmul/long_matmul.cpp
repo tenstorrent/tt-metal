@@ -37,7 +37,7 @@ struct RunReport {
     uint32_t grid_x = 0;
     uint32_t grid_y = 0;
     uint32_t active_cores = 0;
-    std::string tiles_per_core;
+    std::string blocks_per_core;
     double elapsed_s = 0.0;
     double tflops = 0.0;
     double per_iter_ms = 0.0;
@@ -218,13 +218,16 @@ int main(int argc, char* argv[]) {
     uint32_t N = 256;
     uint32_t K = 512;
     uint32_t num_iterations = 100000;
-    uint32_t fixed_tiles_per_core = 0;  // 0 = split total work (default), >0 = each core does exactly this many tiles
+    // 0 = split total work (default), >0 = each core does exactly this many output blocks
+    uint32_t fixed_blocks_per_core = 0;
 
     if (argc >= 2) { M = std::stoul(argv[1]); }
     if (argc >= 3) { N = std::stoul(argv[2]); }
     if (argc >= 4) { K = std::stoul(argv[3]); }
     if (argc >= 5) { num_iterations = std::stoul(argv[4]); }
-    if (argc >= 6) { fixed_tiles_per_core = std::stoul(argv[5]); }
+    if (argc >= 6) {
+        fixed_blocks_per_core = std::stoul(argv[5]);
+    }
 
     TT_FATAL(M % TILE_HEIGHT == 0, "M ({}) must be divisible by TILE_HEIGHT ({})", M, TILE_HEIGHT);
     TT_FATAL(N % TILE_WIDTH == 0, "N ({}) must be divisible by TILE_WIDTH ({})", N, TILE_WIDTH);
@@ -243,8 +246,9 @@ int main(int argc, char* argv[]) {
     fmt::print("Matrix: M={} N={} K={} (tiles: {}x{}x{})\n", M, N, K, Mt, Nt, Kt);
     fmt::print("Output tiles: {}  |  Iterations: {}\n", total_output_tiles, num_iterations);
     fmt::print("Math fidelity: HiFi4  |  Data format: Float16_b\n");
-    if (fixed_tiles_per_core > 0) {
-        fmt::print("Mode: FIXED per-core ({} tiles/core) — total work scales with core count\n", fixed_tiles_per_core);
+    if (fixed_blocks_per_core > 0) {
+        fmt::print(
+            "Mode: FIXED per-core ({} blocks/core) — total work scales with core count\n", fixed_blocks_per_core);
     } else {
         fmt::print("Mode: SPLIT total work — tiles divided equally across cores\n");
     }
@@ -295,7 +299,7 @@ int main(int argc, char* argv[]) {
             power_cfg.op,
             block_m,
             block_n,
-            fixed_tiles_per_core > 0 ? fmt::format("fixed({})", fixed_tiles_per_core) : std::string("split"),
+            fixed_blocks_per_core > 0 ? fmt::format("fixed({})", fixed_blocks_per_core) : std::string("split"),
             M,
             N,
             K,
@@ -373,16 +377,17 @@ int main(int argc, char* argv[]) {
             uint32_t num_cores, work_per_core1, work_per_core2;
             CoreRangeSet all_cores, core_group_1, core_group_2;
 
-            if (fixed_tiles_per_core > 0) {
+            if (fixed_blocks_per_core > 0) {
                 TT_FATAL(
-                    fixed_tiles_per_core <= total_output_blocks,
-                    "fixed_tiles_per_core ({}) must not exceed total_output_blocks ({})",
-                    fixed_tiles_per_core, total_output_blocks);
+                    fixed_blocks_per_core <= total_output_blocks,
+                    "fixed_blocks_per_core ({}) must not exceed total_output_blocks ({})",
+                    fixed_blocks_per_core,
+                    total_output_blocks);
                 num_cores     = core_grid.x * core_grid.y;
                 all_cores     = CoreRangeSet({CoreRange({0, 0}, {core_grid.x - 1, core_grid.y - 1})});
                 core_group_1  = all_cores;
                 core_group_2  = CoreRangeSet();
-                work_per_core1 = fixed_tiles_per_core;
+                work_per_core1 = fixed_blocks_per_core;
                 work_per_core2 = 0;
             } else {
                 auto [nc, ac, cg1, cg2, wpc1, wpc2] = split_work_to_cores(core_grid, total_output_blocks);
@@ -502,9 +507,10 @@ int main(int argc, char* argv[]) {
                         // In fixed mode each core starts at a different offset so cores hit
                         // different DRAM addresses and don't serialise on the same bank. Both the
                         // offset and the reader/writer block index wrap at total_output_blocks.
-                        const uint32_t effective_offset = (fixed_tiles_per_core > 0)
-                            ? (core_linear_idx * fixed_tiles_per_core) % total_output_blocks
-                            : work_offset;
+                        const uint32_t effective_offset =
+                            (fixed_blocks_per_core > 0)
+                                ? (core_linear_idx * fixed_blocks_per_core) % total_output_blocks
+                                : work_offset;
 
                         tt_metal::SetRuntimeArgs(
                             program, reader_id, core,
@@ -522,7 +528,9 @@ int main(int argc, char* argv[]) {
                             program, compute_id, core,
                             {work_per_core, Kt, num_iterations});
 
-                        if (fixed_tiles_per_core == 0) work_offset += work_per_core;
+                        if (fixed_blocks_per_core == 0) {
+                            work_offset += work_per_core;
+                        }
                         ++core_linear_idx;
                     }
                 }
@@ -531,20 +539,17 @@ int main(int argc, char* argv[]) {
             distributed::EnqueueWriteMeshBuffer(cq, src0_dram, src0_vec, false);
             distributed::EnqueueWriteMeshBuffer(cq, src1_dram, src1_vec, false);
 
-            std::string tiles_per_core_str;
-            if (fixed_tiles_per_core > 0) {
-                tiles_per_core_str = std::to_string(fixed_tiles_per_core);
+            std::string blocks_per_core_str;
+            if (fixed_blocks_per_core > 0) {
+                blocks_per_core_str = std::to_string(fixed_blocks_per_core);
             } else {
-                tiles_per_core_str = std::to_string(work_per_core1);
+                blocks_per_core_str = std::to_string(work_per_core1);
                 if (work_per_core2 > 0) {
-                    tiles_per_core_str += " / " + std::to_string(work_per_core2);
+                    blocks_per_core_str += " / " + std::to_string(work_per_core2);
                 }
             }
 
-            fmt::print(
-                "Active cores: {}  |  Tiles/core: {}\n",
-                num_cores,
-                tiles_per_core_str);
+            fmt::print("Active cores: {}  |  Blocks/core: {}\n", num_cores, blocks_per_core_str);
 
             fmt::print(
                 "Running {} iterations of {}x{}x{} HiFi4 matmul on {} cores...\n",
@@ -591,10 +596,10 @@ int main(int argc, char* argv[]) {
             const double elapsed_s = std::chrono::duration<double>(t_end - t_start).count();
             // In fixed mode, actual FLOPs scale with num_cores (each core does the same work).
             // The unit of work per core is an output block of block_m * block_n tiles.
-            const double run_flops = (fixed_tiles_per_core > 0)
-                ? 2.0 * fixed_tiles_per_core * block_m * block_n * num_cores * Kt * TILE_HEIGHT * TILE_WIDTH *
-                      num_iterations
-                : total_flops;
+            const double run_flops = (fixed_blocks_per_core > 0)
+                                         ? 2.0 * fixed_blocks_per_core * block_m * block_n * num_cores * Kt *
+                                               TILE_HEIGHT * TILE_WIDTH * num_iterations
+                                         : total_flops;
             const double tflops = run_flops / elapsed_s / 1e12;
             const double per_iter_ms = elapsed_s * 1000.0 / static_cast<double>(num_iterations);
 
@@ -610,13 +615,12 @@ int main(int argc, char* argv[]) {
                 .grid_x = core_grid.x,
                 .grid_y = core_grid.y,
                 .active_cores = num_cores,
-                .tiles_per_core = tiles_per_core_str,
+                .blocks_per_core = blocks_per_core_str,
                 .elapsed_s = elapsed_s,
                 .tflops = tflops,
                 .per_iter_ms = per_iter_ms,
                 .start_time = start_time_str,
-                .end_time = end_time_str
-            });
+                .end_time = end_time_str});
         }
 
         fmt::print("\n\n========================================================================================================================\n");
@@ -626,7 +630,7 @@ int main(int argc, char* argv[]) {
             "{:>8} {:>12} {:>16} {:>16} {:>16} {:>18} {:>26} {:>26}\n",
             "Grid",
             "Cores",
-            "Tiles/Core",
+            "Blocks/Core",
             "Time [s]",
             "TFLOPS",
             "Per iter [ms]",
@@ -639,7 +643,7 @@ int main(int argc, char* argv[]) {
                 r.grid_x,
                 r.grid_y,
                 r.active_cores,
-                r.tiles_per_core,
+                r.blocks_per_core,
                 r.elapsed_s,
                 r.tflops,
                 r.per_iter_ms,
