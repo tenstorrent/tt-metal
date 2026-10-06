@@ -10,7 +10,6 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <random>
 #include <stdexcept>
 #include <vector>
 
@@ -18,6 +17,7 @@
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/binary_ops.hpp"
+#include "test_utils/random_data.hpp"
 
 namespace {
 
@@ -141,14 +141,6 @@ Conv3dReference compute_reference(
     return ref;
 }
 
-std::vector<float> uniform_vector(size_t size, float lo, float hi, uint32_t seed) {
-    std::mt19937 gen(seed);
-    std::uniform_real_distribution<float> dist(lo, hi);
-    std::vector<float> data(size);
-    std::generate(data.begin(), data.end(), [&]() { return dist(gen); });
-    return data;
-}
-
 ttnn::Tensor make_device_tensor(const std::vector<float>& data, const ttnn::Shape& shape, ttnn::Layout layout) {
     auto* device = &ttml::autograd::ctx().get_device();
     return ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(data, shape, device, layout);
@@ -226,10 +218,10 @@ void run_case(const Conv3dCase& c) {
     const ttnn::Shape bias_shape = c.bias_rank1 ? ttnn::Shape({c.C_out}) : ttnn::Shape({1U, 1U, 1U, c.C_out});
     const ttnn::Shape output_shape({c.N, out[0], out[1], out[2], c.C_out});
 
-    auto input_data = uniform_vector(input_shape.volume(), -1.F, 1.F, /*seed=*/1);
-    auto weight_data = uniform_vector(weight_shape.volume(), -0.5F, 0.5F, /*seed=*/2);
-    auto bias_data = uniform_vector(c.C_out, -1.F, 1.F, /*seed=*/3);
-    auto grad_output_data = uniform_vector(output_shape.volume(), -1.F, 1.F, /*seed=*/4);
+    auto input_data = ttml::test_utils::make_uniform_vector<float>(input_shape.volume(), -1.F, 1.F, /*seed=*/1);
+    auto weight_data = ttml::test_utils::make_uniform_vector<float>(weight_shape.volume(), -0.5F, 0.5F, /*seed=*/2);
+    auto bias_data = ttml::test_utils::make_uniform_vector<float>(c.C_out, -1.F, 1.F, /*seed=*/3);
+    auto grad_output_data = ttml::test_utils::make_uniform_vector<float>(output_shape.volume(), -1.F, 1.F, /*seed=*/4);
 
     auto input =
         ttml::autograd::create_tensor(make_device_tensor(input_data, input_shape, c.layout), c.input_requires_grad);
@@ -556,10 +548,17 @@ TEST_F(Conv3dOpTest, PreparedWeightsMatchOnTheFlyPreparation) {
     const ttnn::Shape output_shape({c.N, 4U, 5U, 6U, c.C_out});
 
     auto input = ttml::autograd::create_tensor(
-        make_device_tensor(uniform_vector(input_shape.volume(), -1.F, 1.F, 21), input_shape, c.layout), true);
+        make_device_tensor(
+            ttml::test_utils::make_uniform_vector<float>(input_shape.volume(), -1.F, 1.F, 21), input_shape, c.layout),
+        true);
     auto weight = ttml::autograd::create_tensor(
-        make_device_tensor(uniform_vector(weight_shape.volume(), -0.5F, 0.5F, 22), weight_shape, c.layout), true);
-    auto grad_output = make_device_tensor(uniform_vector(output_shape.volume(), -1.F, 1.F, 23), output_shape, c.layout);
+        make_device_tensor(
+            ttml::test_utils::make_uniform_vector<float>(weight_shape.volume(), -0.5F, 0.5F, 22),
+            weight_shape,
+            c.layout),
+        true);
+    auto grad_output = make_device_tensor(
+        ttml::test_utils::make_uniform_vector<float>(output_shape.volume(), -1.F, 1.F, 23), output_shape, c.layout);
 
     auto reference = ttml::ops::conv3d(input, weight, nullptr, c.stride, c.padding, c.dilation, c.groups);
     reference->set_grad(grad_output);
@@ -624,12 +623,18 @@ TEST_F(Conv3dOpTest, PreparedWeightsFromFloat32Storage) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     auto input = ttml::autograd::create_tensor(
-        make_device_tensor(uniform_vector(input_shape.volume(), -1.F, 1.F, 61), input_shape, c.layout), true);
+        make_device_tensor(
+            ttml::test_utils::make_uniform_vector<float>(input_shape.volume(), -1.F, 1.F, 61), input_shape, c.layout),
+        true);
     auto weight = ttml::autograd::create_tensor(
         ttml::core::from_vector<float, ttnn::DataType::FLOAT32>(
-            uniform_vector(weight_shape.volume(), -0.5F, 0.5F, 62), weight_shape, device, c.layout),
+            ttml::test_utils::make_uniform_vector<float>(weight_shape.volume(), -0.5F, 0.5F, 62),
+            weight_shape,
+            device,
+            c.layout),
         true);
-    auto grad_output = make_device_tensor(uniform_vector(output_shape.volume(), -1.F, 1.F, 63), output_shape, c.layout);
+    auto grad_output = make_device_tensor(
+        ttml::test_utils::make_uniform_vector<float>(output_shape.volume(), -1.F, 1.F, 63), output_shape, c.layout);
     ASSERT_EQ(weight->get_value(ttml::autograd::PreferredPrecision::FULL).dtype(), ttnn::DataType::FLOAT32);
     ASSERT_EQ(weight->get_value().dtype(), ttnn::DataType::BFLOAT16);
 
@@ -667,12 +672,12 @@ TEST_F(Conv3dOpTest, PreparedWeightsAreASnapshotOfTheWeight) {
     const ttnn::Shape input_shape({c.N, D, H, W, c.C_in});
     const ttnn::Shape weight_shape({c.C_out, c.C_in, kD, kH, kW});
 
-    auto input = ttml::autograd::create_tensor(
-        make_device_tensor(uniform_vector(input_shape.volume(), -1.F, 1.F, 51), input_shape, c.layout));
-    const auto old_weight =
-        make_device_tensor(uniform_vector(weight_shape.volume(), -0.5F, 0.5F, 52), weight_shape, c.layout);
-    const auto new_weight =
-        make_device_tensor(uniform_vector(weight_shape.volume(), -0.5F, 0.5F, 53), weight_shape, c.layout);
+    auto input = ttml::autograd::create_tensor(make_device_tensor(
+        ttml::test_utils::make_uniform_vector<float>(input_shape.volume(), -1.F, 1.F, 51), input_shape, c.layout));
+    const auto old_weight = make_device_tensor(
+        ttml::test_utils::make_uniform_vector<float>(weight_shape.volume(), -0.5F, 0.5F, 52), weight_shape, c.layout);
+    const auto new_weight = make_device_tensor(
+        ttml::test_utils::make_uniform_vector<float>(weight_shape.volume(), -0.5F, 0.5F, 53), weight_shape, c.layout);
 
     auto weight = ttml::autograd::create_tensor(old_weight);
     const auto prepared = ttml::ops::prepare_conv3d_weight(weight->get_value(), c.groups);
@@ -710,15 +715,26 @@ TEST_F(Conv3dOpTest, ProgramCacheStableAcrossSteps) {
 
     auto step = [&](uint32_t seed) {
         auto input = ttml::autograd::create_tensor(
-            make_device_tensor(uniform_vector(input_shape.volume(), -1.F, 1.F, seed), input_shape, c.layout), true);
+            make_device_tensor(
+                ttml::test_utils::make_uniform_vector<float>(input_shape.volume(), -1.F, 1.F, seed),
+                input_shape,
+                c.layout),
+            true);
         auto weight = ttml::autograd::create_tensor(
-            make_device_tensor(uniform_vector(weight_shape.volume(), -0.5F, 0.5F, seed + 1), weight_shape, c.layout),
+            make_device_tensor(
+                ttml::test_utils::make_uniform_vector<float>(weight_shape.volume(), -0.5F, 0.5F, seed + 1),
+                weight_shape,
+                c.layout),
             true);
         auto bias = ttml::autograd::create_tensor(
-            make_device_tensor(uniform_vector(c.C_out, -1.F, 1.F, seed + 2), bias_shape, c.layout), true);
+            make_device_tensor(
+                ttml::test_utils::make_uniform_vector<float>(c.C_out, -1.F, 1.F, seed + 2), bias_shape, c.layout),
+            true);
         auto result = ttml::ops::conv3d(input, weight, bias, c.stride, c.padding, c.dilation, c.groups);
-        result->set_grad(
-            make_device_tensor(uniform_vector(output_shape.volume(), -1.F, 1.F, seed + 3), output_shape, c.layout));
+        result->set_grad(make_device_tensor(
+            ttml::test_utils::make_uniform_vector<float>(output_shape.volume(), -1.F, 1.F, seed + 3),
+            output_shape,
+            c.layout));
         result->backward();
         ttml::autograd::ctx().reset_graph();
     };
@@ -740,10 +756,14 @@ TEST_F(Conv3dOpTest, GradientsAccumulateAcrossTwoUses) {
     const ttnn::Shape weight_shape({c.C_out, c.C_in, kD, kH, kW});
 
     auto input = ttml::autograd::create_tensor(
-        make_device_tensor(uniform_vector(input_shape.volume(), -1.F, 1.F, 11), input_shape, c.layout),
+        make_device_tensor(
+            ttml::test_utils::make_uniform_vector<float>(input_shape.volume(), -1.F, 1.F, 11), input_shape, c.layout),
         /*requires_grad=*/true);
     auto weight = ttml::autograd::create_tensor(
-        make_device_tensor(uniform_vector(weight_shape.volume(), -0.5F, 0.5F, 12), weight_shape, c.layout),
+        make_device_tensor(
+            ttml::test_utils::make_uniform_vector<float>(weight_shape.volume(), -0.5F, 0.5F, 12),
+            weight_shape,
+            c.layout),
         /*requires_grad=*/true);
 
     auto single = ttml::ops::conv3d(input, weight);
