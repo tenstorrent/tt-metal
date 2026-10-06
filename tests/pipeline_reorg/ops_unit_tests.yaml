@@ -589,6 +589,16 @@
   budget_type: unit
   category: ci_probe_prune_params
 
+- name: CI probe - K3 saturation on row-major input (blackhole)
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_single_routed_expert.py -v -k "k3_saturated" --timeout=600'
+  skus:
+    bh_p150b_civ2:
+      timeout: 15
+  owner_id: U0976495SLU # Nikola Ostojic
+  team: models
+  budget_type: unit
+  category: ci_probe_k3_rm
+
 - name: Disaggregated prefill op unit tests (QB2)
   cmd: |
     exit_code=0
