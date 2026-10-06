@@ -141,8 +141,18 @@ void kernel_main() {
     // narrower on a ragged one, where the compute kernel packs fewer tiles for that subblock --
     // waiting on the full width here would hang.
     constexpr uint32_t d_out_subblock_w_tail = get_compile_time_arg_val(32);
-    using GuRuns = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
-    using DRuns = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
+    using GuRuns [[maybe_unused]] = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
+    using DRuns [[maybe_unused]] = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
+#ifdef RING_WEIGHTS
+    using Ring = unified_routed_expert_ffn::RingWeights<
+        experts_per_chip,
+        (per_core_N_gu + 1) / 2,
+        ((K_gate_tiles + 6) / 7) * 7,
+        per_core_N_d / 4,
+        ((K_down_tiles + 6) / 7) * 7,
+        (N_gate_tiles_full + per_core_N_gu - 1) / per_core_N_gu,
+        in0_block_w_d>;
+#endif
 
     // This core's weight tile-column window, clipped to the tensor's real N. Both weight reads
     // below walk the same window on every K-row, so it is computed once.
@@ -288,6 +298,18 @@ void kernel_main() {
                         // a down K position the down matmul never reduces (the compute bounds
                         // its K-loop by real_k_tiles), so stale L1 is dropped.
                         for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+#ifdef RING_WEIGHTS
+                            Ring::read_gu(
+                                noc_up,
+                                up_acc,
+                                1,
+                                local_expert_id,
+                                my_nt_gu,
+                                kb * in0_block_w_gu + k,
+                                up_col_end - up_col0,
+                                l1_w_up,
+                                up_tile_bytes);
+#else
                             GuRuns::read(
                                 noc_up,
                                 up_acc,
@@ -297,6 +319,7 @@ void kernel_main() {
                                 up_col_end,
                                 l1_w_up,
                                 up_tile_bytes);
+#endif
                             l1_w_up += per_core_N_gu * up_tile_bytes;
                         }
                         noc_up.async_read_barrier();
@@ -395,6 +418,9 @@ void kernel_main() {
                         for (uint32_t k = down_split_k; k < in0_block_w_d; ++k) {
                             const uint32_t row = kb * in0_block_w_d + k;
                             if (row < K_down_tiles) {
+#ifdef RING_WEIGHTS
+                                Ring::read_d(noc_up, down_acc, local_expert_id, my_nt_d, row, l1_w, down_tile_bytes);
+#else
                                 DRuns::read(
                                     noc_up,
                                     down_acc,
@@ -404,6 +430,7 @@ void kernel_main() {
                                     down_col_end,
                                     l1_w,
                                     down_tile_bytes);
+#endif
                             }
                             l1_w += per_core_N_d * down_tile_bytes;
                         }

@@ -142,7 +142,13 @@ class Model:
             ):  # deepseek_prefill routed-expert pipeline (tt/prefill_unified_moe.py)
                 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_unified_moe import DSV41UnifiedMoE
 
-                pls[-1][1].umoe = DSV41UnifiedMoE(mesh_device, L, log=log)
+                if os.environ.get("DSV41_UNI_RING", "0") == "1":
+                    # ONE weight copy: the unified op reads the decode moe_compute (ring layout) expert weights in place (RING_WEIGHTS mode, needs the
+                    # private/updated _ttnncpp); decode and interleaved prefill share the same read-only buffers
+                    es = layer.moe.decode.expert_state
+                    pls[-1][1].umoe = DSV41UnifiedMoE(mesh_device, L, log=log, ring=(es.tt_w0_w1, es.tt_w2))
+                else:
+                    pls[-1][1].umoe = DSV41UnifiedMoE(mesh_device, L, log=log)
             key = getattr(attn, "ratio", 0)
             if key not in self.step_groups:
                 self.step_groups[key] = DSV41StepState_paged(attn, max_ctx + 64, self.use_indexer)
