@@ -7,16 +7,9 @@ import torch
 
 import ttnn
 from models.common.utility_functions import comp_allclose_and_pcc
-from tests.ttnn.unit_tests.operations.test_utils import (
-    TILE_HEIGHT,
-    TILE_WIDTH,
-    create_ttnn_tilized_tensor,
-    get_compute_kernel_options,
-)
+from tests.ttnn.unit_tests.operations.test_utils import create_ttnn_tilized_tensor, get_compute_kernel_options
 
 pytestmark = pytest.mark.use_module_device
-
-INPUT_SHAPE = [TILE_HEIGHT, TILE_WIDTH]
 
 
 def run_moreh_adam_test(
@@ -79,9 +72,7 @@ def run_moreh_adam_test(
 @pytest.mark.merge_gate
 def test_moreh_adam(device):
     torch.manual_seed(0)
-    run_moreh_adam_test(
-        [TILE_HEIGHT, TILE_WIDTH], lr=1e-1, betas=(0.5, 0.555), eps=1e-8, weight_decay=0.3, device=device
-    )
+    run_moreh_adam_test([32, 32], lr=1e-1, betas=(0.5, 0.555), eps=1e-8, weight_decay=0.3, device=device)
 
 
 @pytest.mark.merge_gate
@@ -102,7 +93,7 @@ def test_moreh_adam(device):
 def test_moreh_adam_corner_cases(lr, betas, weight_decay, amsgrad, step, fp32_dest_acc_en, param_atol, device):
     torch.manual_seed(0)
     run_moreh_adam_test(
-        INPUT_SHAPE,
+        [32, 32],
         lr=lr,
         betas=betas,
         eps=1e-8,
@@ -120,9 +111,9 @@ def test_moreh_adam_program_cache(device):
     torch.manual_seed(0)
     # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
     device.clear_program_cache()
-    run_moreh_adam_test(INPUT_SHAPE, lr=1e-1, betas=(0.5, 0.555), eps=1e-8, weight_decay=0.3, device=device)
+    run_moreh_adam_test([32, 32], lr=1e-1, betas=(0.5, 0.555), eps=1e-8, weight_decay=0.3, device=device)
     num_program_cache_entries = device.num_program_cache_entries()
     # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses.
-    tt_placeholder = create_ttnn_tilized_tensor(torch.zeros(INPUT_SHAPE), device, ttnn.bfloat16)
-    run_moreh_adam_test(INPUT_SHAPE, lr=1e-1, betas=(0.5, 0.555), eps=1e-8, weight_decay=0.3, device=device)
+    tt_placeholder = create_ttnn_tilized_tensor(torch.zeros([32, 32]), device, ttnn.bfloat16)
+    run_moreh_adam_test([32, 32], lr=1e-1, betas=(0.5, 0.555), eps=1e-8, weight_decay=0.3, device=device)
     assert device.num_program_cache_entries() == num_program_cache_entries
