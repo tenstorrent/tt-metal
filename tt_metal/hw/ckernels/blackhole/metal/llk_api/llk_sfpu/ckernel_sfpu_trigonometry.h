@@ -422,16 +422,8 @@ sfpi_inline sfpi::vFloat sfpu_atan_fp32(sfpi::vFloat x) {
 bool bf16_dest_atan();
 template <int ITERATIONS>
 void calculate_atan_bf16();
-void init_atan_bf16();
 // Whether BF16 DEST runs the generated atan kernel as one call over the whole tile.
 inline constexpr bool atan_bf16_whole_tile = true;
-// Sets up the generated BF16 atan kernel for the instance it serves.
-template <bool bf16_kernel>
-inline void atan_bf16_tile_init() {
-    if constexpr (bf16_kernel) {
-        init_atan_bf16();
-    }
-}
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_atan() {
@@ -880,8 +872,16 @@ void sinh_init() {
     }
 }
 
+void init_atan_bf16();
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void atan_init() {
+    if constexpr (!is_fp32_dest_acc_en) {
+        if (bf16_dest_atan()) {
+            init_atan_bf16();
+            return;
+        }
+    }
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (is_fp32_dest_acc_en) {
         sfpi::vConstFloatPrgm1 = 0x1.999384p-3f;

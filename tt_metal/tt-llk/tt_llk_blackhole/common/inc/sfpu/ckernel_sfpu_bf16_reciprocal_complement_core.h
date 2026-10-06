@@ -77,9 +77,7 @@ inline void reciprocal_complement_body()
     };
     ::ckernel::sfpu::bf16_sfpi::sfpswap(0, 3, 1, 1);
     ::ckernel::sfpu::bf16_sfpi::sfpmad(13, 1, 14, 2, 0);
-    {
-        reciprocal_complement_short_rung<Config, 0>();
-    }
+    reciprocal_complement_short_rung<Config, 0>();
     {
         ::ckernel::sfpu::bf16_sfpi::Region cc_region;
         ::ckernel::sfpu::bf16_sfpi::sfpsetcc(0, 0, 0, 0, cc_region);

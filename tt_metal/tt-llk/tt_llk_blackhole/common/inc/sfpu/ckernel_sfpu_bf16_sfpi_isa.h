@@ -83,11 +83,6 @@ struct Region
     }
 };
 
-[[gnu::always_inline]] inline void replay(std::uint32_t start, std::uint32_t length, std::uint32_t execute, std::uint32_t record)
-{
-    __builtin_rvtt_ttreplay(start, length, execute, record);
-}
-
 [[gnu::always_inline]] inline void sfpnop()
 {
     __builtin_rvtt_sfpnop();

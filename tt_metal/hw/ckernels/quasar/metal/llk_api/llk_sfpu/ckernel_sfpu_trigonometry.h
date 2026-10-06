@@ -418,9 +418,6 @@ sfpi_inline sfpi::vFloat sfpu_atan_fp32(sfpi::vFloat x) {
 
 // Whether BF16 DEST runs the generated atan kernel as one call over the whole tile.
 inline constexpr bool atan_bf16_whole_tile = false;
-// The stock atan kernel needs no BF16 setup.
-template <bool bf16_kernel>
-inline void atan_bf16_tile_init() {}
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_atan() {

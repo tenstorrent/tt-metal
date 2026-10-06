@@ -13,6 +13,10 @@
 #include "sfpu/ckernel_sfpu_bf16_sfpi_isa.h"
 
 namespace ckernel::sfpu::bf16_sfpi {
+[[gnu::always_inline]] inline void replay(
+    std::uint32_t start, std::uint32_t length, std::uint32_t execute, std::uint32_t record) {
+    __builtin_rvtt_ttreplay(start, length, execute, record);
+}
 [[gnu::always_inline]] inline void incrwc(std::uint32_t cr, std::uint32_t d, std::uint32_t b, std::uint32_t a) {
     __builtin_rvtt_ttincrwc(cr, d, b, a);
 }
