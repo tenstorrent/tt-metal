@@ -18,6 +18,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.sfpu_accuracy_budget import assert_within_contract_tolerance
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
     Operand,
@@ -37,9 +38,12 @@ from helpers.test_variant_parameters import (
     SFPU_TERNARY_OP,
     SFPU_TERNARY_SCALAR,
 )
-from helpers.utils import passed_test
 
 _SCALAR_VALUE = 2.0
+
+#: The approximation mode every test here compiles sfpu_ternary_test.cpp with, and so the
+#: one test_sfpu_ternary's contract names.
+_APPROX_MODE = ApproximationMode.No
 _SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", _SCALAR_VALUE))[0]
 
 
@@ -122,7 +126,7 @@ def _run_sfpu_ternary(
         templates=[
             SFPU_TERNARY_OP(mathop),
             SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(ApproximationMode.No),
+            APPROX_MODE(_APPROX_MODE),
             DISABLE_SRC_ZERO_FLAG(True),
             DEST_SYNC(),
         ],
@@ -156,9 +160,13 @@ def _run_sfpu_ternary(
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
-    assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
-    ), "Assert against golden failed"
+    # The op's declared accuracy contract for this exact variant, the same lookup the
+    # binary driver makes. No ternary op is enrolled yet, so every one of them resolves
+    # to today's per-format tolerance -- enrolling one is then a table edit. The mode the
+    # kernel compiled is passed: left unset, a row keyed `approx: "No"` would not match.
+    assert_within_contract_tolerance(
+        mathop, formats, dest_acc, golden_tensor, res_tensor, approx_mode=_APPROX_MODE
+    )
 
 
 @parametrize(
@@ -323,7 +331,7 @@ def test_ttnn_where(
         templates=[
             SFPU_TERNARY_OP(mathop),
             SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(ApproximationMode.No),
+            APPROX_MODE(_APPROX_MODE),
             DISABLE_SRC_ZERO_FLAG(True),
             DEST_SYNC(),
         ],
@@ -423,7 +431,7 @@ def test_ttnn_where_mcw(
         templates=[
             SFPU_TERNARY_OP(mathop),
             SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(ApproximationMode.No),
+            APPROX_MODE(_APPROX_MODE),
             DISABLE_SRC_ZERO_FLAG(True),
             DEST_SYNC(),
         ],

@@ -210,7 +210,7 @@ def test_sfpu_binop_scalar_values(formats, dest_acc, mathop, scalar):
 #
 # Still out of scope, and both need a per-op tolerance first -- the default bf16 tolerance is
 # only meaningful while the result stays in range: |scalar| > 8, and +/-tiny / +/-large on the
-# tensor operand. That is the pattern BINARY_CUSTOM_TOLERANCES uses for pow and xlogy.
+# tensor operand. That is the pattern sfpu_accuracy_budget.yaml uses for pow and xlogy.
 @pytest.mark.nightly
 @parametrize(
     formats=_SCALAR_FORMATS,
