@@ -264,6 +264,21 @@ def test_interleaved_prefill(mesh_device):
         f"worst PCC interleaved vs uninterrupted {worst:.5f}, noise baseline {noise:.5f}; state diffs {len(state_bad)}; new-user first token bit-identical to the one-call prefill {new_same}"
     )
 
+    # cross-process reference (e.g. the same prompts prefilled with DSV41_PREFILL_UP == users per row): first-token logits of every user
+    first_logits = {u: A["res"][u][1].clone() for u in run_users}
+    first_logits[new] = A["f_new"][1].clone()
+    if os.environ.get("DSV41_IL_SAVE"):
+        torch.save({"logits": first_logits, "Up": m.Up}, os.environ["DSV41_IL_SAVE"])
+        log(f"saved first-token logits to {os.environ['DSV41_IL_SAVE']}")
+    if os.environ.get("DSV41_IL_REF") and os.path.exists(os.environ["DSV41_IL_REF"]):
+        ref = torch.load(os.environ["DSV41_IL_REF"])
+        pcs = [pcc(ref["logits"][u], first_logits[u]) for u in sorted(first_logits)]
+        am = sum(int(ref["logits"][u].argmax()) == int(first_logits[u].argmax()) for u in first_logits)
+        log(
+            f"REF (Up={ref['Up']}) vs this run (Up={m.Up}): first-token logits min PCC {min(pcs):.6f}, argmax equal {am}/{len(first_logits)}"
+        )
+        assert min(pcs) > 0.995, "first-token logits differ from the reference run"
+
     if os.environ.get("DSV41_IL_LEGACY", "0") == "1":
         reset()
         full_lens = torch.tensor([lens[u] for u in range(B)])
@@ -275,6 +290,85 @@ def test_interleaved_prefill(mesh_device):
             f"(c) first-token logits interleaved-path vs legacy whole-batch prefill: min PCC {min(pcs):.6f}, argmax equal {sum(int(lg[u].argmax()) == int(r[u][0]) for u in range(B))}/{B}"
         )
         assert min(pcs) > 0.999
+
+    if os.environ.get("DSV41_IL_ADAPTER", "1") == "1":
+        # the vLLM adapter on top of the same model: new requests, a prompt split in chunks over several prefill steps (the plugin re-picks the state slot of the
+        # continuation every step), decode steps between the chunks (the prompt in progress is parked), then the joint decode
+        from types import SimpleNamespace
+
+        from models.demos.blackhole.deepseek_v41_flash.tt.generator import Generator
+        from models.demos.blackhole.deepseek_v41_flash.tt.generator_vllm import DeepseekV41ForCausalLM
+
+        os.environ.update(
+            {"DSV41_VLLM_INTERLEAVE": "1", "DSV41_VLLM_CHUNK": str(CHUNK), "DSV41_VLLM_S_PAD": str(S_pad)}
+        )
+        reset()
+        ad = DeepseekV41ForCausalLM(Generator([m], [args], md), B, max_ctx)
+        sp = SimpleNamespace(temperature=[0.0] * B, top_k=[1] * B, enable_log_probs=[False] * B)
+        n_run = len(run_users)
+        toks = torch.zeros(n_run, max(lens[u] for u in run_users), dtype=torch.int32)
+        for u in run_users:
+            toks[u, : lens[u]] = prompts[u, : lens[u]].to(torch.int32)
+        t0 = time.perf_counter()
+        lg = ad.prefill_forward(
+            toks, prompt_lens=[lens[u] for u in run_users], empty_slots=run_users, sampling_params=None
+        )
+        log(f"ADAPTER prefill of {n_run} requests (host sampling): {time.perf_counter() - t0:.2f} s")
+        first_ad = {u: int(lg[i].argmax()) for i, u in enumerate(run_users)}
+        assert [first_ad[u] for u in run_users] == [
+            int(A["res"][u][0]) for u in run_users
+        ], "adapter first tokens differ from the model-level prefill"
+        ad.release_request(
+            14
+        )  # a request finishes: its logical slot is free again (so that the new prompt can change its slot between the chunks)
+        run_ad = [u for u in run_users if u != 14]
+        pos_ad, cur = {u: lens[u] for u in run_ad}, {u: first_ad[u] for u in run_ad}
+        chunks_ad, f_ad = new_chunks(), None
+        free_slots = [15, 14, 15, 14, 15]
+        t_chunk, t_dec = [], []
+        for k in range(STEPS):
+            tk = torch.zeros(B, 1, dtype=torch.int32)
+            ps = torch.full((B,), -1, dtype=torch.long)
+            for u in run_ad:
+                tk[u, 0], ps[u] = cur[u], pos_ad[u]
+            t0 = time.perf_counter()
+            out = ad.decode_forward(tk, ps, sampling_params=sp)
+            t_dec.append(time.perf_counter() - t0)
+            for u in run_ad:
+                cur[u], pos_ad[u] = int(out[u, 0]), pos_ad[u] + 1
+            j = k // 2 if k % 2 == 1 else None
+            if j is not None and j < len(chunks_ad):
+                _, _, st_, e_ = chunks_ad[j]
+                t0 = time.perf_counter()
+                # a different free logical slot every step (15, 14, 15): the continuation is found by its token prefix
+                lg = ad.prefill_forward(
+                    prompts[new : new + 1, :e_].to(torch.int32),
+                    prompt_lens=[e_],
+                    start_pos=[st_],
+                    empty_slots=[free_slots[j]],
+                    sampling_params=None,
+                )
+                t_chunk.append(time.perf_counter() - t0)
+                if e_ == NEWLEN:
+                    f_ad = lg
+        assert f_ad is not None
+        log(
+            f"ADAPTER: decode step {1000 * sum(t_dec[1:]) / max(1, len(t_dec) - 1):.1f} ms, chunk steps {[round(t, 2) for t in t_chunk]} s; new user first token {int(f_ad[0].argmax())} (model level {int(A['f_new'][0])})"
+        )
+        assert (
+            int(f_ad[0].argmax()) == int(A["f_new"][0]) and pcc(f_ad[0, 0], A["f_new"][1]) > 0.9995
+        ), "adapter chunked prefill differs from the model-level one"
+        # joint decode through the adapter: the new request lives in the logical slot of its last chunk
+        last_slot = free_slots[len(chunks_ad) - 1]
+        tk = torch.zeros(B, 1, dtype=torch.int32)
+        ps = torch.full((B,), -1, dtype=torch.long)
+        for u in run_ad:
+            tk[u, 0], ps[u] = cur[u], pos_ad[u]
+        tk[last_slot, 0], ps[last_slot] = int(f_ad[0].argmax()), NEWLEN
+        out = ad.decode_forward(tk, ps, sampling_params=sp)
+        assert out.shape == (B, 1) and int(ad.inprog.parked().get(ad.slots.phys[last_slot], -1)) == -1
+        log(f"ADAPTER joint decode step ok: tokens of the new request {int(out[last_slot, 0])}")
+        os.environ["DSV41_VLLM_INTERLEAVE"] = "0"
 
     assert not state_bad, f"the decode state of running users changed during an interleaved prefill: {state_bad[:3]}"
     assert new_same, "chunked prefill of the new user differs from the one-call prefill"

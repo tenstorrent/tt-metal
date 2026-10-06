@@ -509,7 +509,7 @@ def test_chunked_prompt_over_several_steps_with_slot_change_and_parking(interlea
     assert m.calls[-1][0] == [(3, 1024, 1200)] and f.tolist() == [int(t.sum()) % 7]
     # now it decodes: it is no longer parked
     gen.decode_forward(
-        torch.tensor([[int(f[0])]] + [[0]] * 7, dtype=torch.int32),
+        torch.tensor([[0]] * 5 + [[int(f[0])]] + [[0]] * 2, dtype=torch.int32),
         torch.tensor([-1] * 5 + [1200, -1, -1]),
         sampling_params=GREEDY,
     )
@@ -548,3 +548,27 @@ def test_start_position_without_interleave_is_rejected(expect_error):
             empty_slots=[0],
             sampling_params=GREEDY,
         )
+
+
+def test_claim_balanced_spreads_new_requests_over_mesh_rows():
+    st = VS.SlotTable(8, 8)  # 2 users per mesh row would be rows 0..3 of users 0,1 | 2,3 | 4,5 | 6,7
+    load = {}
+    got = [st.claim_balanced(s, load, 2) for s in (0, 1, 2, 3)]
+    assert sorted(g // 2 for g in got) == [0, 1, 2, 3] and sorted(st.phys) == list(
+        range(8)
+    )  # four requests, four different rows
+    assert st.live == set(got)
+    st2 = VS.SlotTable(8, 8)
+    p = st2.claim_balanced(5, {0: 5, 1: 5, 2: 5, 3: 0}, 2)  # row 3 is the least loaded: the request lands there
+    assert p // 2 == 3 and sorted(st2.phys) == list(range(8)) and st2.phys[5] == p
+
+
+def test_interleaved_prefill_balances_rows_with_few_prefill_slots(interleave_gen):
+    gen, m = interleave_gen
+    m.U, m.Up = 2, 1
+    t1 = torch.arange(10, 2058, dtype=torch.int32).reshape(1, -1)
+    t2 = t1 + 7
+    gen.prefill_forward(t1[:, :512], prompt_lens=[512], start_pos=[0], empty_slots=[0], sampling_params=None)
+    gen.prefill_forward(t2[:, :512], prompt_lens=[512], start_pos=[0], empty_slots=[1], sampling_params=None)
+    users = [c[0][0][0] for c in m.calls]
+    assert users[0] // 2 != users[1] // 2  # the second concurrent prompt goes to another mesh row

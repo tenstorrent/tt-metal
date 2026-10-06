@@ -19,7 +19,15 @@ How the vLLM concepts map onto the model
     moves; ``tt/vllm_state.SlotTable`` keeps logical -> physical (model user) on the host.
   * Batch. The model decodes ``B = 4 x U`` users per step (U = ceil(max_num_seqs / 4), at most 32; max_num_seqs 128 -> U 32): the plugin pads its decode batch to
     max_num_seqs, the adapter pads further to a multiple of 4 and feeds unused users token 0 at position 0 (a decode step costs the same for any occupancy).
-  * Prefill. ``Model.prefill_forward`` prefills the whole B-user batch in traced chunks. For continuous batching the new requests are prefilled with ``active``
+  * Interleaved / chunked prefill (``DSV41_VLLM_INTERLEAVE=1``, opt-in; ``model_capabilities['supports_chunked_prefill']`` follows it; INTERLEAVE_NOTES.md). New requests
+    arrive while others decode: ``prefill_forward`` (``prompt_lens`` = END position of the scheduled chunk, ``start_pos`` its start, ``tokens`` the prompt from position 0)
+    runs ``Model.prefill_interleaved``: the prompt is computed in windows of one model chunk (``DSV41_VLLM_CHUNK``, a multiple of 128; set the vLLM chunk budget /
+    ``long_prefill_token_threshold`` to it) by replaying the captured chunk trace, with the other users masked: the decode state of the running requests (pool pages,
+    rings, ``prev_cs``, decode index keys) is untouched (bit-exact, device test) and nothing is recomputed. ``DSV41_PREFILL_UP`` (users per mesh row of the prefill trace,
+    default = users per row; 1 recommended for serving) shrinks the trace so that a chunk step costs Up x C instead of U x C row-tokens; the decode trace is not
+    released between steps; S_pad is fixed (``DSV41_VLLM_S_PAD`` = longest prompt, a larger one re-captures the traces); a request in prefill is parked at its end
+    position in the decode batch. Without the flag the older behaviour below applies.
+  * Prefill (flag off). ``Model.prefill_forward`` prefills the whole B-user batch in traced chunks. For continuous batching the new requests are prefilled with ``active``
     masking (``dsv41_model.Model.prefill_forward(active=...)``): the users that are decoding keep their pages / rings / compressor state / Engram history. The cost of
     a prefill call is that of ALL B users at the longest new prompt (the model computes filler rows for the others). While the decode indexer is on (contexts beyond
     512 / 1024 tokens) the index-key slabs are shared by the users of a mesh row, so a prefill while other requests are live re-prefills those from their token history
@@ -27,7 +35,7 @@ How the vLLM concepts map onto the model
   * Sampling. The model samples greedily on the device (mesh-wide argmax of the head, ``sample_on_device_mode all``). ``max_device_top_k = 1`` makes the plugin choose
     HOST sampling for any request with temperature > 0 and top_k != 1 (and for penalties, logit_bias, ...): prefill / decode then return the fp32 logits
     ([N, 1, vocab]) and the plugin samples them. This works but reads B x 129280 fp32 logits back each decode step (slow at large batch). Logprobs requests are not
-    supported (a clear error). Prefix caching, chunked prefill, async scheduling and speculative decoding (``DSV41_SPEC``) are off.
+    supported (a clear error). Prefix caching, async scheduling and speculative decoding (``DSV41_SPEC``) are off; chunked prefill is off unless DSV41_VLLM_INTERLEAVE=1.
   * Traces. Decode and prefill run traced. The decode trace is released before every prefill (prefill and decode traces share DRAM and the page table / state are
     rewritten) and recaptured by the first decode afterwards. One ISL range per process: a prefill with a longer S_pad than the captured one tears the prefill trace
     down and re-captures it (see ``vllm_state.s_pad_bucket``; a second, much longer ISL can run out of DRAM).
@@ -292,6 +300,11 @@ class DeepseekV41ForCausalLM:
         empty_slots = [int(s) for s in empty_slots]
         t0 = time.perf_counter()
         items, phys = [], []
+        U, Up = getattr(self.m, "U", None), getattr(self.m, "Up", None)
+        balanced = bool(U and Up and Up < U)  # few prefill slots per mesh row: spread concurrent prompts over the rows
+        load = {}
+        for p_ in self.inprog.users:
+            load[p_ // U if U else 0] = load.get(p_ // U if U else 0, 0) + 1
         for i in range(N):
             st, e, slot = starts[i], ends[i], empty_slots[i]
             if not 0 <= st < e:
@@ -310,7 +323,7 @@ class DeepseekV41ForCausalLM:
                     )
                     st = 0
             if p is None:
-                p = self.slots.claim([slot])[0]
+                p = self.slots.claim_balanced(slot, load, U) if balanced else self.slots.claim([slot])[0]
             items.append((p, toks[i], st, e))
             phys.append(p)
         if len(set(phys)) != N:

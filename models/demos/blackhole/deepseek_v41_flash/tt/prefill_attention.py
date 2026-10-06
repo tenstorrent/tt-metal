@@ -73,11 +73,12 @@ def pad_len(S, mult=64):
 
 
 class DSV41PrefillAttention:
-    def __init__(self, attn, attn_sink: torch.Tensor, q_chunk=128, k_chunk=128):
-        """attn: built DSV41Attention / DSV41CompressedAttention (decode); attn_sink: [64] host tensor of the layer."""
+    def __init__(self, attn, attn_sink: torch.Tensor, q_chunk=128, k_chunk=128, users=None):
+        """attn: built DSV41Attention / DSV41CompressedAttention (decode); attn_sink: [64] host tensor of the layer. ``users``: users per mesh row of the prefill
+        (default: the decode's; fewer = interleaved prefill of a few users per row, ``DSV41_PREFILL_UP``)."""
         self.a = attn
         self.md = attn.mesh_device
-        self.U = attn.T
+        self.U = users or attn.T
         self.compressed = isinstance(attn, DSV41CompressedAttention)
         self.ratio = attn.ratio if self.compressed else 0
         self.q_chunk, self.k_chunk = q_chunk, k_chunk
