@@ -528,6 +528,49 @@ def test_fused_msda_v2_bevformer_pillar_shape(device):
     _assert_close(_msda_reference(value, loc, attn, spatial_shapes), out)
 
 
+def test_fused_msda_program_cache_hit_readdresses(device):
+    """Same-spec calls share one cached program, so the second call's buffers are not the ones compiled in.
+
+    The factory pushes Buffer* runtime args and has no override_runtime_arguments. A hit replays that
+    program; only the framework's buffer bindings rewrite the addresses. Both allocations stay live and
+    carry different data: a stale address still points at the first call and cannot match the second
+    reference.
+    """
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    device.cache_entries_counter.reset()
+
+    spatial_shapes = [(8, 8)]
+    B, Q, H, L, P, D = 1, 32, 1, 1, 4, 32
+
+    def allocate(seed):
+        value, loc, attn = _random_case(B, Q, H, L, P, D, spatial_shapes, seed=seed)
+        tensors = (_to_device(value, device), _to_device(loc, device), _to_device(attn, device))
+        return tensors, _msda_reference(value, loc, attn, spatial_shapes)
+
+    (value1, loc1, attn1), ref1 = allocate(0)
+    (value2, loc2, attn2), ref2 = allocate(1)
+    assert value1.buffer_address() != value2.buffer_address()
+    assert loc1.buffer_address() != loc2.buffer_address()
+    assert attn1.buffer_address() != attn2.buffer_address()
+    assert (ref1 - ref2).abs().max().item() > 1e-2
+
+    def dispatch(value_t, loc_t, attn_t):
+        with device.cache_entries_counter.measure():
+            out_t = ttnn.experimental.fused_msda(value_t, loc_t, attn_t, spatial_shapes)
+        return out_t, ttnn.to_torch(out_t).to(torch.float32)
+
+    out1, got1 = dispatch(value1, loc1, attn1)
+    _assert_close(ref1, got1)
+    entries_after_miss = device.cache_entries_counter.total
+    assert entries_after_miss >= 1
+
+    out2, got2 = dispatch(value2, loc2, attn2)
+    _assert_close(ref2, got2)
+    assert device.cache_entries_counter.total == entries_after_miss
+    assert out1.buffer_address() != out2.buffer_address()
+
+
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
