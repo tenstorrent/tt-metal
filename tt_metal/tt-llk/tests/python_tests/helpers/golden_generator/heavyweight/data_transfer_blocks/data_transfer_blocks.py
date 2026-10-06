@@ -216,6 +216,13 @@ class DataTransferBlocks(ABC):
     #: instead; it is not a claim that everything is legal.
     UNPACK_TO_SRC_FORMATS: ClassVar[Mapping[DataFormat, FrozenSet[DataFormat]]] = {}
 
+    #: Legal ``L1 format -> Dest format`` pairs for the unpack-to-Dest path,
+    #: which is a different table from :attr:`UNPACK_TO_SRC_FORMATS`. Notably
+    #: the unpacker does not widen: a narrow input cannot land in a 32-bit
+    #: Dest. Empty means unmodelled, and the weaker "is it a Dest format at
+    #: all" check applies instead.
+    UNPACK_TO_DEST_FORMATS: ClassVar[Mapping[DataFormat, FrozenSet[DataFormat]]] = {}
+
     SUPPORTED_L1_FORMATS: ClassVar[FrozenSet[DataFormat]] = frozenset()
 
     #: Edge-mask polarity: whether a set bit in an edge-mask register masks the
@@ -300,7 +307,9 @@ class DataTransferBlocks(ABC):
         self,
         l1_bytes: L1Buffer,
         l1_format: DataFormat,
-        dest_format: DataFormat = DataFormat.Float32,
+        dest_format: Optional[DataFormat] = None,
+        *,
+        dest_acc: Union[bool, DestAccumulation] = False,
         **geometry,
     ) -> torch.Tensor:
         """Load an L1 buffer straight into Dest, bypassing the src registers.
@@ -310,8 +319,22 @@ class DataTransferBlocks(ABC):
         mantissa than the same buffer read through ``l1_to_srcA`` would.
         """
         self._check_supported(l1_format)
-        self._check_dest_format(dest_format)
+        dest_format = self.resolve_dest_format(dest_format, l1_format, dest_acc)
+        if self.UNPACK_TO_DEST_FORMATS:
+            legal = self.UNPACK_TO_DEST_FORMATS.get(l1_format, frozenset())
+            if dest_format not in legal:
+                raise ValueError(
+                    f"{type(self).__name__} cannot unpack {l1_format} into a "
+                    f"{dest_format} Dest. The unpacker does not widen, so a "
+                    f"narrow input has no 32-bit Dest target. Legal Dest "
+                    f"formats for it: {sorted(str(f) for f in legal)}."
+                )
         values = self.unpack_from_l1(l1_bytes, l1_format, **geometry)
+        # The unpacker truncates on this path -- there is no rounding stage in
+        # the unpack datapath, unlike the FPU's write to Dest that
+        # :meth:`src_to_dest` models. Narrowing with a plain cast would round.
+        if dest_format in (DataFormat.Float16_b, DataFormat.Tf32):
+            values = truncate_mantissa(values, BF16_MANT_BITS)
         return self._to_dest_storage(values, dest_format)
 
     def dest_to_srcA(
