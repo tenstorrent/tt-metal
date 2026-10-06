@@ -612,8 +612,8 @@ void pytensor_module(nb::module_& mod) {
             TT_FATAL(pool != nullptr && pool->mesh_device() != nullptr, "L1 pool is closed");
             auto mesh_buffer = experimental::per_core_allocation::create_l1_pool_view(
                 pool,
-                distributed::ReplicatedBufferConfig{.size = tensor_spec.compute_packed_buffer_size_bytes()},
-                distributed::DeviceLocalBufferConfig{
+                tt::tt_metal::distributed::ReplicatedBufferConfig{.size = tensor_spec.compute_packed_buffer_size_bytes()},
+                tt::tt_metal::distributed::DeviceLocalBufferConfig{
                     .page_size = tensor_spec.compute_page_size_bytes(),
                     .buffer_type = tensor_spec.memory_config().buffer_type(),
                     .sharding_args = tensor_spec.compute_buffer_sharding_args()},
