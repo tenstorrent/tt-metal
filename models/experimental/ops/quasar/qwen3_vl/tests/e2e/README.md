@@ -91,3 +91,4 @@ A hang shows up as the pytest timeout. The script prints the last lines of `prog
 |---|---|---|---|---|---|---|
 | ttsim WH | 8x8 | tiny | 2/2/1 | PASS (all stages >= 0.9993) | 9 min | `generated/qwen3_vl_quasar/dev/eleventh` |
 | ttsim WH | 2x1 | tiny | 2/2/1 | PASS (all stages >= 0.9985) | 10 min | `generated/qwen3_vl_quasar/wh_bh_wh_2x3_quasar/20261006T153843Z` |
+| WH N150 silicon | 8x9 | tiny | 2/2/1 | PASS (all stages >= 0.9993), with the #59510 fix commit | — | aus-wh-08 `wh_bh_hw_native_quasar/20261006T182734Z` |
