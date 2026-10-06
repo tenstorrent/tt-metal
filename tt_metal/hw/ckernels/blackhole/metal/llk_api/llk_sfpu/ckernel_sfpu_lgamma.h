@@ -109,6 +109,12 @@ inline void calculate_lgamma_stirling_fp32(
     constexpr float r2 = 0.0007936507f;   // 1/1260
     constexpr float r3 = -0.0005952380f;  // -1/1680
 
+    // Held across the rows: as literals in the loop each costs two SFPLOADI per row. Programmed per call, since another
+    // op's init can run between lgamma_stirling_init and this call; vConstFloatPrgm0 stays 2.0 for the reciprocal.
+    sfpi::vConstFloatPrgm1 = LOG_SQRT_2PI;
+    sfpi::vConstFloatPrgm2 = r0;
+    const sfpi::vFloat k_r1 = r1;
+
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat log_z = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
@@ -148,11 +154,12 @@ inline void calculate_lgamma_stirling_fp32(
         }
         v_else {
             // Stirling base + Bernoulli correction
-            res = ((z - 0.5f) * log_z - z + LOG_SQRT_2PI);
+            res = ((z - 0.5f) * log_z - z + sfpi::vConstFloatPrgm1);
             sfpi::vFloat inv_z = sfpu_reciprocal_iter<2>(z);
             sfpi::vFloat inv_z2 = (inv_z * inv_z);
             // Bernoulli correction: r0 + inv_z2 * (inv_z2 * (r2 + inv_z2 * r3) + r1);
-            sfpi::vFloat correction = PolynomialEvaluator::eval(inv_z2, r0, r1, r2, r3);
+            sfpi::vFloat correction =
+                PolynomialEvaluator::eval(inv_z2, sfpi::vFloat(sfpi::vConstFloatPrgm2), k_r1, r2, r3);
             res = res + inv_z * correction;
         }
         v_endif;
