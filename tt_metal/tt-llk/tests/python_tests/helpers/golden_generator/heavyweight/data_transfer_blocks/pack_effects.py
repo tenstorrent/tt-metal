@@ -67,6 +67,11 @@ class PackEdgeMask:
     masks: Sequence[int] = (0xFFFF,)
     select: Union[int, Sequence[int]] = 0
     mode: EdgeMaskMode = EdgeMaskMode.ZERO
+    #: Rows the selector pattern covers before it repeats, i.e. one tile's
+    #: worth. The packer reuses EDGE_MASK_SELECT_FACE0..3 for every tile, so a
+    #: multi-tile buffer applies the same pattern again rather than running off
+    #: the end of the list. ``None`` means the pattern is the whole list.
+    select_period: Optional[int] = None
 
     def __post_init__(self):
         if not 1 <= len(self.masks) <= EDGE_MASK_COUNT:
@@ -102,7 +107,14 @@ class PackEdgeMask:
             for word in face_select_words
             for row in range(MAX_FACE_R_DIM)
         ]
-        return cls(masks=masks, select=select, mode=mode)
+        # One word per face, so the pattern covers exactly one tile and repeats
+        # for the next -- which is what the packer does with these registers.
+        return cls(
+            masks=masks,
+            select=select,
+            mode=mode,
+            select_period=len(face_select_words) * MAX_FACE_R_DIM,
+        )
 
     def keep(self, count: int, *, masked_when_set: bool = False) -> torch.Tensor:
         """Bool tensor, True where datum *i* survives the mask.
@@ -120,8 +132,20 @@ class PackEdgeMask:
             selectors = [self.select] * rows
         else:
             selectors = list(self.select)
-            if len(selectors) < rows:
-                raise ValueError(f"select has {len(selectors)} entries for {rows} rows")
+            if self.select_period is None:
+                # A hand-built list is taken literally: too short is a mistake,
+                # not an invitation to repeat it.
+                if len(selectors) < rows:
+                    raise ValueError(
+                        f"select has {len(selectors)} entries for {rows} rows"
+                    )
+            elif self.select_period <= 0 or rows % self.select_period:
+                raise ValueError(
+                    f"select covers {self.select_period} rows, which does not "
+                    f"tile {rows} rows evenly"
+                )
+            else:
+                selectors = [selectors[row % self.select_period] for row in range(rows)]
         words = torch.tensor([self.masks[s] for s in selectors[:rows]])
         columns = torch.arange(EDGE_MASK_WIDTH)
         bit_set = ((words[:, None] >> columns) & 1).bool().reshape(-1)
