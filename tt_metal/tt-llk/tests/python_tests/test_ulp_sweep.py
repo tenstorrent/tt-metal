@@ -23,6 +23,7 @@ from helpers.ulp_sweep import (
     export_measured,
     finish_emit,
     flushed_inputs,
+    golden_input,
     measurable_mask,
     merge_measured,
     nonfinite_failures,

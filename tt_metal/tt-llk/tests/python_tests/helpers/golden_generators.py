@@ -2781,7 +2781,13 @@ class UnarySFPUGolden:
         than one carrying torch's own fp32 sinh/cosh error.
         """
         result = torch_fn(torch.tensor(x, dtype=torch.float64)).item()
-        if math.isinf(result) and not self.data_format.is_exponent_B():
+        if (
+            math.isinf(result)
+            and not self.data_format.is_exponent_B()
+            and get_chip_architecture() != ChipArchitecture.QUASAR
+        ):
+            # Wormhole / Blackhole return NaN for a Float16 infinity; Quasar keeps the infinity
+            # (measured on the emulator: rdiv(0) is +inf).
             return math.nan
         return result
 

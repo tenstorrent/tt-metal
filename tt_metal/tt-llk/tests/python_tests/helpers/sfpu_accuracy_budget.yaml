@@ -2119,7 +2119,7 @@ Isinf:  # 0 ULP, 6 variants / 24576 lanes, 2026-09-18
   - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-  - {in: Float16_b, dest: "Yes", metric: tolerance}  # not measured: this unpack delivers NaN and -inf to the LREG as +inf, so the predicate cannot be answered here; the isinf/isnan sweep skips the cell
+  - {in: Float16_b, dest: "Yes", metric: tolerance}  # not measured: this unpack hands the SFPU a NaN as -inf, so the predicate reads the -inf answer on NaN lanes; the isinf/isnan sweep skips the cell
 Isnan:  # 0 ULP, 6 variants / 24576 lanes, 2026-09-18
   - {out: Float32, max_ulp: 0}
   - {out: Float16_b, max_ulp: 0}
@@ -2129,7 +2129,7 @@ Isnan:  # 0 ULP, 6 variants / 24576 lanes, 2026-09-18
   - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-  - {in: Float16_b, dest: "Yes", metric: tolerance}  # not measured: this unpack delivers NaN and -inf to the LREG as +inf, so the predicate cannot be answered here; the isinf/isnan sweep skips the cell
+  - {in: Float16_b, dest: "Yes", metric: tolerance}  # not measured: this unpack hands the SFPU a NaN as -inf, so the predicate reads the -inf answer on NaN lanes; the isinf/isnan sweep skips the cell
 Isneginf:  # 0 ULP, 6 variants / 24576 lanes, 2026-09-18
   - {out: Float32, max_ulp: 0}
   - {out: Float16_b, max_ulp: 0}
@@ -2139,7 +2139,7 @@ Isneginf:  # 0 ULP, 6 variants / 24576 lanes, 2026-09-18
   - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-  - {in: Float16_b, dest: "Yes", metric: tolerance}  # not measured: this unpack delivers NaN and -inf to the LREG as +inf, so the predicate cannot be answered here; the isinf/isnan sweep skips the cell
+  - {in: Float16_b, dest: "Yes", metric: tolerance}  # not measured: this unpack hands the SFPU a NaN as -inf, so the predicate reads the -inf answer on NaN lanes; the isinf/isnan sweep skips the cell
 Isposinf:  # 0 ULP, 8 variants / 32768 lanes, 2026-09-18
   - {out: Float32, max_ulp: 0}
   - {out: Float16_b, max_ulp: 0}

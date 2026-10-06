@@ -1357,8 +1357,9 @@ def test_every_exact_op_is_driven_by_a_gate():
 
 #: Swept cells of an exact-by-construction op that the table holds on the tolerance
 #: metric, with what was measured there. Each would be a real deviation on an op that
-#: should be exact, with no cause established yet; the test below keeps the list from
-#: growing unnoticed, and fails when an entry is no longer needed. Empty today. Every
+#: should be exact, with no cause established yet;
+#: `test_every_swept_cell_of_an_exact_op_is_gated_or_waived` keeps the list from growing
+#: unnoticed, and fails when an entry is no longer needed. Empty today. Every
 #: class it used to hold was the sweep's, not the ops': Abs/Neg/Identity's 512-step
 #: Float16 cells were the metric keeping fp16 subnormals the pack does not reproduce;
 #: Floor/Ceil's Float32 -> Float16 dest_acc=No cells were the fp16 Dest's flush of the

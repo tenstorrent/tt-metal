@@ -204,6 +204,33 @@ def received_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor
     return received.reshape(src.shape)
 
 
+def golden_input(src: torch.Tensor, input_format: DataFormat, dest_acc) -> torch.Tensor:
+    """*src* as the golden should see it: with its zeros made +0.0 where the unpack
+    drops the sign, so the golden is computed on what the kernel receives.
+
+    The walk's one data zero is -0.0, and the kernel is handed +0.0 -- except on the
+    unpack-to-dest path, which keeps it (``negative_zero_delivered``, the same rule the
+    edge tests use rather than a second copy of it). Otherwise an op whose finite answer
+    depends on the sign of zero reads one lane as a whole-cell error that is the
+    unpack's, not the op's: ``signbit`` answers 1.0 against 0.0, 16129 bf16 steps. (A
+    pole's ``-inf`` against ``+inf``, ``rsqrt(-0)``, was never a failure here: the
+    singularity exclusion drops it.) The dedicated signed-zero tests in
+    test_eltwise_unary_sfpu.py hold that path to account.
+
+    Not for a block-float input: the golden quantizes that itself, and in the
+    shared-exponent-0 block the zero lane sits in, the forced hidden bit turns it into
+    -2**-127 as -0.0 and +2**-127 (~6e-39) as +0.0 -- neither of them zero, so
+    canonicalizing moved Ceil/Sqrt/Log/Rsqrt's Bfp8_b cells rather than fixing them.
+    """
+    from helpers.sfpu_domains import negative_zero_delivered
+
+    if stimuli_format_for(input_format) != input_format or negative_zero_delivered(
+        input_format, dest_acc
+    ):
+        return src
+    return torch.where(src == 0, torch.zeros_like(src), src)
+
+
 def _normal_input(
     src: torch.Tensor, input_format: DataFormat, output_format=None, dest_acc=None
 ) -> torch.Tensor:
@@ -470,6 +497,9 @@ def _known_lanes() -> Dict:
         high=65504.0,
         why="inf where the answer is x itself, in the top four fp16 values, on a 16-bit Dest",
     )
+    # The same top-of-fp16 window for an op that answers 65408 finite: #58607's lanes
+    # start one fp16 step above it, at 65440.
+    above_65408 = {**top_of_fp16, "low": 65440.0}
     _KNOWN_NONFINITE_LANES.update(
         {
             MathOperation.Celu: (KnownNonfiniteLanes(**top_of_fp16),),
@@ -480,9 +510,7 @@ def _known_lanes() -> Dict:
             MathOperation.GeluTanh: (KnownNonfiniteLanes(**top_of_fp16),),
             MathOperation.Mish: (KnownNonfiniteLanes(**top_of_fp16),),
             # Silu answers 65408 itself; #58607 lists only the three lanes above it.
-            MathOperation.Silu: (
-                KnownNonfiniteLanes(**{**top_of_fp16, "low": 65440.0}),
-            ),
+            MathOperation.Silu: (KnownNonfiniteLanes(**above_65408),),
             # The same band reached through the op: selu(x) = 1.0507 x, xielu(x) ~ x*x.
             MathOperation.Selu: (
                 KnownNonfiniteLanes(
