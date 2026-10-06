@@ -1136,3 +1136,36 @@ TEST_F(MeshWatcherFixture, QuasarTestWatcherSanitizeMultiDMRace) {
         },
         this->devices_[0]);
 }
+
+// A sanitize record that stays partially written across polls must be reported as corruption, not ignored.
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizePartialRecord) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().watcher_noc_sanitize_disabled()) {
+        GTEST_SKIP();
+    }
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture*, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord virtual_core = mesh_device->virtual_core_from_logical_core({0, 0}, CoreType::WORKER);
+            const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+            auto programmable_core_type = mesh_device->get_programmable_core_type(virtual_core);
+            auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
+            auto san = dev_msgs_factory.create<dev_msgs::debug_sanitize_addr_msg_t>();
+            uint64_t san_addr =
+                hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::WATCHER) +
+                dev_msgs_factory.offset_of<dev_msgs::watcher_msg_t>(dev_msgs::watcher_msg_t::Field::sanitize);
+            auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+            tt_cxy_pair target(mesh_device->get_device_ids()[0], virtual_core);
+
+            // Return code still OK but one field published: what a torn Quasar record looks like.
+            cluster.read_core(san.data(), san.size(), target, san_addr);
+            san.view().len() = 4;
+            cluster.write_core(san.data(), san.size(), target, san_addr);
+
+            std::string exception;
+            do {
+                exception = MetalContext::instance().watcher_server()->exception_message();
+            } while (exception.empty());
+            log_info(LogTest, "Reported error: {}", exception);
+            EXPECT_NE(exception.find("partially written record noc0"), std::string::npos);
+        },
+        this->devices_[0]);
+}

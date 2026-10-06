@@ -21,8 +21,8 @@ Training hyperparameters and optimization settings.
 | `seed` | int | 5489 | Random seed for reproducibility |
 | `model_save_interval` | int | 500 | Save model every N steps |
 | `batch_size` | int | 4 | Batch size for training |
-| `num_epochs` | int | 0 | Epoch cap; 0 = uncapped. A run stops at whichever of `num_epochs`/`max_steps` comes first |
-| `max_steps` | int | 5000 | Step cap. At least one of `max_steps`/`num_epochs` must be set |
+| `num_epochs` | int | 0 | Epoch cap; 0 = uncapped. One epoch is one pass over the corpus tokens: `ceil(num_epochs * corpus_tokens / (batch_size * gradient_accumulation_steps * seq_len))` optimizer steps. A run stops at whichever of `num_epochs`/`max_steps` comes first |
+| `max_steps` | int | 5000 | Step cap; 0 = uncapped. At least one of `max_steps`/`num_epochs` must be set |
 | `gradient_accumulation_steps` | int | 1 | Number of steps to accumulate gradients |
 | `model_config` | str | "" | Path to model configuration file |
 | `data_path` | str | "DATA_FOLDER/shakespeare.txt" | Path to training data |
@@ -31,9 +31,7 @@ Training hyperparameters and optimization settings.
 
 An epoch is one pass over the corpus's *tokens* — `corpus_tokens / (global_batch * seq_len)` steps.
 
-> **Runner differences.** Most configs run under both `examples/train/train.py` and `examples/nano_gpt`
-> (C++). Only `train.py` treats `max_steps: 0` as uncapped and raises when neither cap is set; the C++
-> runner requires `max_steps` and runs a single step at 0. The token-based epoch above is also `train.py`-only.
+Most configs run under both `examples/train/train.py` and the C++ `examples/nano_gpt` runner.
 
 ### LR Schedule Parameters
 Apply to `scheduler_type: warmup_linear`, and to `train.py` only — the C++ `nano_gpt` runner hardcodes
