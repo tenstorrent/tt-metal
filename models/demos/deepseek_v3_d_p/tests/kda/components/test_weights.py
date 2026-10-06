@@ -9,9 +9,10 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
+from models.demos.deepseek_v3_d_p.reference.kda.ops import kda_gate_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
-from models.demos.deepseek_v3_d_p.tt.kda.weights import load_kda_weights
+from models.demos.deepseek_v3_d_p.tt.kda.weights import _prepare_kda_host_weights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
@@ -127,8 +128,10 @@ def test_device_weight_placement(
             "tap": expected_tap,
         }
         for name, expected_tensor in expected.items():
+            # The decay gate scale and bias are FP32 on device (tt_metal_tracker-g1b.4.13); the rest is BF16.
+            dtype = torch.float32 if name in ("decay_scale", "decay_bias") else torch.bfloat16
             assert_equal(
-                expected_tensor.to(torch.bfloat16),
+                expected_tensor.to(dtype),
                 fields[name][physical_index],
                 name=f"{name} weight device {physical_index}",
             )
@@ -199,3 +202,44 @@ def test_tp_layer_with_nonsquare_state_matches_reference(mesh_device: ttnn.MeshD
         ("convolution state", golden_convolution, actual_convolution),
     ):
         assert_accurate(golden, actual, name=f"TP=8 {name}", pcc_threshold=0.999)
+
+
+def test_bounded_gate_folds_scale_into_projection_and_offset() -> None:
+    """The bounded gate's prepared weights reproduce lower_bound * sigmoid(A (f_b r + dt_bias)) (host only).
+
+    The device evaluates lower_bound * sigmoid(r @ decay_output_projection + decay_bias_flat), so the prepared
+    projection must carry A and the FP32 offset A * dt_bias; there is no separate scale (tt_metal_tracker-g1b.4.13).
+    """
+    config = KDAConfig(
+        hidden_size=64,
+        num_heads=4,
+        head_k_dim=32,
+        head_v_dim=32,
+        conv_kernel_size=4,
+        norm_eps=1e-5,
+        gate_lower_bound=-5.0,
+    )
+    state_dict = random_weights(config)
+    state_dict["A_log"] = torch.tensor([0.0, 0.5, 1.0, 1.5]).reshape(1, 1, -1, 1)  # A = 1, 1.65, 2.72, 4.48
+    prepared = _prepare_kda_host_weights(state_dict, config, 1)
+    assert prepared.decay_scale_flat is None
+    assert prepared.decay_bias_flat.dtype == torch.float32
+    rank = torch.randn(64, config.head_k_dim, generator=torch.Generator().manual_seed(3), dtype=torch.float64)
+    expected = kda_gate_reference(
+        (rank @ state_dict["f_b_proj.weight"].double().T).reshape(1, -1, config.num_heads, config.head_k_dim),
+        state_dict["A_log"],
+        state_dict["dt_bias"],
+        config.gate_lower_bound,
+        dtype=torch.float64,
+    ).reshape(64, config.q_dim)
+
+    def device_formula(projection: torch.Tensor, offset: torch.Tensor) -> torch.Tensor:
+        projection = projection.to(torch.bfloat16).double()  # the device stores the projection in BF16
+        return config.gate_lower_bound * torch.sigmoid(rank @ projection + offset.double().reshape(1, -1))
+
+    actual = device_formula(prepared.decay_output_projection, prepared.decay_bias_flat)
+    # BF16 rounding of A f_b perturbs each logit by <= 2^-8 |A f_b| |r|_1; far below the unfolded-weights error.
+    torch.testing.assert_close(actual, expected, atol=2e-2, rtol=0)
+    # Negative control: the unfolded projection and bias (scale dropped) must not match.
+    unfolded = device_formula(state_dict["f_b_proj.weight"].T, state_dict["dt_bias"])
+    assert (unfolded - expected).abs().max() > 0.1

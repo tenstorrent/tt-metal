@@ -17,7 +17,9 @@ from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kda.weights import normalize_kda_state_dict
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import FastCacheChecker
 
-_CACHE_SCHEMA_VERSION = 2
+# v3: bounded-gate configs fold exp(A_log) into decay_output_projection and store decay_bias_flat = A * dt_bias in
+# FP32; no decay_scale_flat (tt_metal_tracker-g1b.4.13).
+_CACHE_SCHEMA_VERSION = 3
 
 
 def _parallel_geometry(device: ttnn.Device | ttnn.MeshDevice, tensor_parallel_axis: int) -> tuple[tuple[int, int], int]:
@@ -30,15 +32,30 @@ def _parallel_geometry(device: ttnn.Device | ttnn.MeshDevice, tensor_parallel_ax
 
 
 def _cache_artifact_names(config: KDAConfig) -> tuple[str, ...]:
+    scale = () if config.gate_lower_bound is not None else ("decay_scale_flat",)
     fixed = (
         "input_projection_head_major",
         "decay_output_projection",
         "output_projection",
-        "decay_scale_flat",
+        *scale,
         "decay_bias_flat",
         "norm",
     )
     return fixed + tuple(f"conv_tap_{tap}" for tap in range(config.conv_kernel_size))
+
+
+# The decay gate's additive term (and the softplus scale) stay FP32: in BF16 they bias every token's sigmoid argument
+# by up to A * 2^-7 per channel, a systematic gate error that accumulates over each chunk (K3/GLM real text: mean dG/G
+# +0.9% / +1.6%, K3 layers.1 head 28 output error 0.106 x RMS; tt_metal_tracker-g1b.4.13). Every other weight is BF16.
+_FP32_ARTIFACTS = frozenset(("decay_scale_flat", "decay_bias_flat"))
+
+
+def _artifact_dtype(name: str) -> ttnn.DataType:
+    return ttnn.float32 if name in _FP32_ARTIFACTS else ttnn.bfloat16
+
+
+def _cache_file_suffix(name: str) -> str:
+    return f"_dtype_{_artifact_dtype(name).name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
 
 
 def _cache_stem(
@@ -61,7 +78,8 @@ class _KDAHostWeights:
     input_projection: torch.Tensor
     decay_output_projection: torch.Tensor
     output_projection: torch.Tensor
-    decay_scale_flat: torch.Tensor
+    # None for the bounded gate: its scale is folded into decay_output_projection and decay_bias_flat.
+    decay_scale_flat: torch.Tensor | None
     decay_bias_flat: torch.Tensor
     norm: torch.Tensor
     convolution_taps: tuple[torch.Tensor, ...]
@@ -72,7 +90,9 @@ class KDAWeights:
     input_projection: ttnn.Tensor
     decay_output_projection: ttnn.Tensor
     output_projection: ttnn.Tensor
-    decay_scale_flat: ttnn.Tensor
+    # Bounded gate (lower_bound * sigmoid(A (f_b r + dt_bias))): decay_output_projection holds A f_b, decay_bias_flat
+    # holds A dt_bias, and decay_scale_flat is None. Softplus gate: f_b, dt_bias, and the scale -A.
+    decay_scale_flat: ttnn.Tensor | None
     decay_bias_flat: ttnn.Tensor
     norm: ttnn.Tensor
     convolution_taps: tuple[ttnn.Tensor, ...]
@@ -99,7 +119,7 @@ class KDAWeights:
         mesh_shape = tuple(mesh_shape)
         for name in _cache_artifact_names(config):
             stem = _cache_stem(cache_name_prefix, name, config, mesh_shape, tensor_parallel_axis)
-            pattern = f"{stem}_dtype_{ttnn.bfloat16.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
+            pattern = f"{stem}{_cache_file_suffix(name)}"
             if not checker.pattern_exists(pattern, "KDA"):
                 return False
         return True
@@ -240,11 +260,19 @@ def _prepare_kda_host_weights(
         ).T
 
     decay_scale = state_dict["A_log"].float().exp()
-    if config.gate_lower_bound is None:
-        decay_scale = -decay_scale
-    decay_bias = state_dict["dt_bias"].reshape(1, 1, config.num_heads, config.head_k_dim)
     decay_scale_flat = decay_scale.expand(-1, -1, -1, config.head_k_dim).reshape(1, 1, config.q_dim)
-    decay_bias_flat = decay_bias.reshape(1, 1, config.q_dim)
+    decay_bias_flat = state_dict["dt_bias"].float().reshape(1, 1, config.q_dim)
+    decay_output_projection = state_dict["f_b_proj.weight"].T
+    if config.gate_lower_bound is not None:
+        # Fold the per-head scale into the projection columns and the bias, so the device evaluates
+        # lower_bound * sigmoid(r @ (A f_b)^T + A dt_bias) as one matmul and one fused add.
+        decay_output_projection = (decay_output_projection.float() * decay_scale_flat[0]).to(
+            decay_output_projection.dtype
+        )
+        decay_bias_flat = decay_scale_flat * decay_bias_flat
+        decay_scale_flat = None
+    else:
+        decay_scale_flat = -decay_scale_flat
 
     convolution_taps = []
     for tap in range(config.conv_kernel_size):
@@ -258,7 +286,7 @@ def _prepare_kda_host_weights(
 
     return _KDAHostWeights(
         input_projection=input_projection,
-        decay_output_projection=state_dict["f_b_proj.weight"].T,
+        decay_output_projection=decay_output_projection,
         output_projection=state_dict["o_proj.weight"].T,
         decay_scale_flat=decay_scale_flat,
         decay_bias_flat=decay_bias_flat,
@@ -306,14 +334,12 @@ def _materialize_kda_tensor(
     if host_tensor is None:
         if cache_file is None:
             raise ValueError("cache-only KDA weight loading requires tensor_cache_path")
-        serialized_cache_file = Path(
-            f"{cache_file}_dtype_{ttnn.bfloat16.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
-        )
+        serialized_cache_file = Path(f"{cache_file}{_cache_file_suffix(name)}")
         return ttnn.load_tensor(serialized_cache_file, device=device)
 
     return ttnn.as_tensor(
         host_tensor.contiguous(),
-        dtype=ttnn.bfloat16,
+        dtype=_artifact_dtype(name),
         layout=ttnn.TILE_LAYOUT,
         device=device if place_on_device else None,
         mesh_mapper=tensor_parallel_mesh_mapper(
@@ -383,7 +409,9 @@ def _materialize_kda_weights(
             shard_dim=-2,
             place_on_device=place_on_device,
         ),
-        "decay_scale_flat": _materialize_kda_tensor(
+        "decay_scale_flat": None
+        if config.gate_lower_bound is not None
+        else _materialize_kda_tensor(
             None if host_weights is None else host_weights.decay_scale_flat,
             "decay_scale_flat",
             device=device,
