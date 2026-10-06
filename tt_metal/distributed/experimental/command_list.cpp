@@ -40,7 +40,7 @@
 namespace tt::tt_metal::experimental {
 using namespace tt::tt_metal::distributed;
 
-namespace {
+namespace detail {
 
 struct CommandListData {
     MeshCoordinateRange device_range = MeshCoordinateRange(MeshShape(0, 0));
@@ -93,6 +93,10 @@ struct CommandListAssembly {
     CommandListDescriptor descriptor;
     std::vector<CommandListData> serialized_ranges;
 };
+
+}  // namespace detail
+
+namespace {
 
 void append_command_bytes(std::vector<uint32_t>& output, const void* data, uint32_t size_bytes) {
     TT_ASSERT(size_bytes % sizeof(uint32_t) == 0);
@@ -214,7 +218,7 @@ class CommandList::Impl {
 public:
     Impl(
         MeshDevice& mesh_device,
-        CommandListDescriptor descriptor,
+        detail::CommandListDescriptor descriptor,
         std::shared_ptr<MeshBuffer> command_buffer,
         std::vector<std::shared_ptr<MeshBuffer>> retained_binary_buffers,
         uint8_t cq_id,
@@ -231,7 +235,7 @@ private:
     void release_resources() noexcept;
 
     MeshDevice* mesh_device = nullptr;
-    CommandListDescriptor descriptor;
+    detail::CommandListDescriptor descriptor;
     std::shared_ptr<MeshBuffer> command_buffer;
     // Pins kernel-binary MeshBuffers referenced by the serialized commands.
     std::vector<std::shared_ptr<MeshBuffer>> retained_binary_buffers;
@@ -242,7 +246,7 @@ private:
 
 CommandList::Impl::Impl(
     MeshDevice& mesh_device,
-    CommandListDescriptor descriptor,
+    detail::CommandListDescriptor descriptor,
     std::shared_ptr<MeshBuffer> command_buffer,
     std::vector<std::shared_ptr<MeshBuffer>> retained_binary_buffers,
     uint8_t cq_id,
@@ -427,7 +431,7 @@ CommandListData CommandListBuilderImpl::serialize_range(
     for (uint32_t sub_device_idx = 0; sub_device_idx < mesh_device.num_sub_devices(); ++sub_device_idx) {
         const SubDeviceId sub_device{static_cast<uint8_t>(sub_device_idx)};
         // Multicast + unicast first, then multicast-only, then unicast-only.
-        for (const auto [multicast, unicast] :
+        for (const auto& [multicast, unicast] :
              {std::pair{true, true}, std::pair{true, false}, std::pair{false, true}}) {
             for (size_t i = 0; i < staged_nodes.size(); ++i) {
                 const auto& staged_node = staged_nodes[i];
