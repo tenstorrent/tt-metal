@@ -55,3 +55,17 @@ Both expert copies are fully sharded over all 32 chips (384 experts, 12 per chip
 measured: 0-3 layers 295.8 -> 523.2 MiB/bank). 40 layers: 2371 MiB/bank (decode) + 2274 MiB/bank (unified) vs ~3880 MiB/bank of DRAM. Re-sharding cannot help (already 1/32 per chip);
 only ONE shared copy (the unified op reading the decode ring layout, or moe_compute reading the unified layout: a kernel change) fits all 40 layers.
 DSV41_UNI_LAYERS=auto (DSV41_UNI_RESERVE_MIB, DSV41_UNI_MAX): hybrid, unified weights added after the model is built for as many layers as fit. tools/memtab_grid.py: grid DRAM headroom table.
+
+## ONE weight copy: the unified op reads the decode ring weights in place (DSV41_UNI_RING=1, pf_onecopy)
+`unified_routed_expert_moe` has a RING_WEIGHTS mode (selected by the weight tensors: rank-6 DRAM HEIGHT_SHARDED = the moe_compute `w0_w1` / `w2`, passed as the same tensor
+EPC times in the gate/up/down lists). Host: `unified_routed_expert_ffn_device_operation.cpp` (validation), `..._program_factory.cpp` (GRID_X = 8 = one N column per ring core /
+DRAM bank, per_core_N 9 (gate/up) and 20 (down), N inferred from the stored shapes, `RING_WEIGHTS` define). Kernels (JIT): `kernels/weight_runs.hpp` `RingWeights`
+(gate/up: per-tile scatter reads of page ((((c*E+e)*G+g)*R+k)*4+t), t = [gate n0, up n0, gate n1, up n1]; down: one 4-tile read per group, K rows of a core stored per 9-row chunk
+rotated by the core id, chunk ch at stored chunk (c - ch) mod 8). Needs 8 live DRAM banks (validated). Decode reads nothing different: the buffers are only read.
+Build: `tools/oc_build.sh` (private relink of only this op's unity TU against the main build's flags/objects into pf_onecopy_build/lib; run with LD_LIBRARY_PATH=<that>/lib, `tools/oc_run.sh`
+does it). Test: `DSV41_UM_RING=2 pytest tests/test_unified_moe.py` (1: ring only, 2: ring + the copy to compare), `DSV41_UM_DECODE=1` checks the decode block before/after.
+Layer 3 (real FFN inputs of the S=128 dump, N=512): PCC ring vs unified-copy 0.99985-0.99994, vs moe_compute baseline 0.99985-0.99987, vs torch 0.99981 (copy: 0.99976).
+Time per layer (router + gathers + experts + RS), per row N tokens: 512: ring 3.45 ms / copy 2.71 / moe_compute 6.29 (2 calls); 2048: 5.45 / 4.73; 4096: 8.52 / 7.72 / 38.5 (16 calls).
+Experts stage at 4096: 2.77 ms (copy 1.95; 64 instead of 88 cores). Decode block T=32 before/after the ring ops: 0.912 / 0.913 ms, output bit-identical.
+40 layers, no second copy, decode weights present (DSV41_UNI_RING=1, no NODECODE), scenario 4096:1024 U=4: first-token logits PCC vs the CPU dump 0.9614, argmax 16/16 (moe_compute baseline 0.9655, 16/16).
+Not done / ideas: DSV41_RING_GRID_Y=10 (80 cores) hangs; gate/up are single-tile reads (issue-bound at few tokens per expert, the 512 gap); 7-bank chips need uneven per-column N.
