@@ -3829,6 +3829,75 @@ def test_matmul_default_sharded_non_origin_single_core(device, memory_layout, m_
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+def _default_dram_in0_block_w(k_tiles, grid_x):
+    """K block, in tiles, that the default config takes for all-DRAM-interleaved operands on a grid_x-wide grid."""
+    if k_tiles % grid_x == 0:
+        return k_tiles // grid_x
+    return next(w for w in range(min(8, k_tiles), 0, -1) if k_tiles % w == 0)
+
+
+@pytest.mark.parametrize("weight_dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfloat8_b", "bfloat16"])
+@pytest.mark.parametrize("k_size", [896, 1056, 1120, 1792, 4096, 7168])
+def test_matmul_default_dram_in0_block_w(device, k_size, weight_dtype):
+    """All-DRAM-interleaved matmul with no program_config: Kt / grid_x is the K block when it divides Kt, else the
+    largest divisor of Kt up to 8 tiles.
+
+    The default used a single tile whenever the grid width did not divide Kt, which is most Kt on a 13-column
+    Blackhole grid. One output tile per core keeps L1 from shrinking the block. The explicit config below spells
+    out the expected default, together with the compute config the default picks (HiFi2 with packer L1
+    accumulation; an explicit program config alone would run LoFi), so running it must reuse the default's
+    program-cache entry, while a one-tile block must build a new program.
+    """
+    torch.manual_seed(0)
+    grid = device.compute_with_storage_grid_size()
+    m_size, n_size = 32 * grid.y, 32 * grid.x
+    expected = _default_dram_in0_block_w(k_size // 32, grid.x)
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True
+    )
+
+    def config(in0_block_w):
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=grid,
+            in0_block_w=in0_block_w,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=1,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+
+    torch_input_a = torch.randn(m_size, k_size, dtype=torch.bfloat16)
+    torch_input_b = torch.randn(k_size, n_size, dtype=torch.bfloat16) / k_size**0.5
+    input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, dtype=weight_dtype, device=device)
+    torch_output = torch_input_a.float() @ ttnn.to_torch(input_b).float()
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    try:
+        default_output = ttnn.to_torch(ttnn.matmul(input_a, input_b))
+        entries = device.num_program_cache_entries()
+
+        explicit_output = ttnn.to_torch(
+            ttnn.matmul(input_a, input_b, program_config=config(expected), compute_kernel_config=compute_kernel_config)
+        )
+        assert (
+            device.num_program_cache_entries() == entries
+        ), f"the default config for Kt={k_size // 32} on a {grid.x}-column grid is not in0_block_w={expected}"
+        assert torch.equal(default_output, explicit_output)
+
+        ttnn.matmul(input_a, input_b, program_config=config(1), compute_kernel_config=compute_kernel_config)
+        assert device.num_program_cache_entries() == entries + 1
+    finally:
+        device.disable_and_clear_program_cache()
+
+    assert_with_pcc(torch_output, default_output, pcc=0.999)
+
+
 def test_matmul_activation_with_sharded_input(device):
     # Create input tensors
     torch.manual_seed(0)
