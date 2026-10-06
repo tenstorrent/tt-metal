@@ -10,7 +10,7 @@
 // held across the two polynomial chains, and coefficients are immediates. The
 // constants the two log evaluations share (ln 2 and the leading two mantissa
 // coefficients) live in the programmable constant registers, which the caller's
-// reciprocal leaves free.
+// reciprocal leaves free. The op's init sets them: other ops' calls read those registers.
 
 template <class Config>
 inline void root_native_log_constants() {
@@ -111,14 +111,11 @@ inline __attribute__((always_inline)) vFloat root_native_log_eval(uint32_t row, 
 // Callers retain source-owned finalization, the encoded-input terminals and the reciprocal.
 template <class Config, class Finalize, class Encoded, class Reciprocal>
 inline void root_native_log_tile(Finalize finalize, Encoded encoded, Reciprocal reciprocal) {
-    root_native_log_constants<Config>();
     for (int d = 0; d < 32; d++) {
         vFloat y = root_native_log_eval<Config>(d, reciprocal);
         finalize(dst_reg[d], y);
         encoded(dst_reg[d].template mode<DataLayout::U16>(), y);
-        if constexpr (Config::kBf16) {
-            y = convert<vFloat16b>(y, RoundMode::Nearest);
-        }
+        y = convert<vFloat16b>(y, RoundMode::Nearest);
         dst_reg[d] = y;
     }
 }

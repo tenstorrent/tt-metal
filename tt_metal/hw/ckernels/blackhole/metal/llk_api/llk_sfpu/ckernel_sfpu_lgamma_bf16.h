@@ -38,9 +38,6 @@ struct LgammaBf16Config {
     static constexpr unsigned kSincDegree = 4u;
     static constexpr float kRoot = __builtin_bit_cast(float, 0x40000000u);
     static constexpr unsigned kRawNegativeNanClass = 2u;
-    static constexpr bool kEffectiveTerminals = true;
-    static constexpr bool kWordTerminals = false;
-    static constexpr bool kMirroredDomainActions = false;
     static constexpr bool kBf16 = true;
 
     // Typed domain actions.
@@ -74,5 +71,6 @@ template <int ITERATIONS = 8>
 inline void calculate_lgamma_bf16() {
     ckernel::sfpu::bf16::calculate_root_native_log<ckernel::sfpu::LgammaBf16Config, ITERATIONS>();
 }
+inline void init_lgamma_bf16() { ckernel::sfpu::bf16::init_root_native_log<ckernel::sfpu::LgammaBf16Config>(); }
 
 }  // namespace ckernel::sfpu

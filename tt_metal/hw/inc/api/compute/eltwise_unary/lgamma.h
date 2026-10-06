@@ -152,7 +152,10 @@ ALWI void lgamma_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void lgamma_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+ALWI void lgamma_tile_init() {
+    MATH(SFPU_UNARY_INIT(unused));
+    MATH(sfpu::init_lgamma_bf16());
+}
 
 #endif  // ARCH_BLACKHOLE
 

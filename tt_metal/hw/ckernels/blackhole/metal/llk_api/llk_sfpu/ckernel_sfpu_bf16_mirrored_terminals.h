@@ -125,26 +125,3 @@ inline void zero_class_terminal(vFloat input, vFloat& result) {
         v_endif;
     }
 }
-template <uint32_t Word, int Code>
-inline void encoded_word_terminal(vUInt raw_u16, vFloat& result, float constant = 0.0f) {
-    v_if(raw_u16 == vUInt(Word)) { result = target_raw_terminal_value<Code>(result, constant); }
-    v_endif;
-}
-template <int PositiveCode, int NegativeCode>
-inline void encoded_subnormal_terminal(
-    vUInt raw_u16, vFloat& result, float positive_constant = 0.0f, float negative_constant = 0.0f) {
-    vUInt exponent = raw_u16 & vUInt(0x00ffu);
-    vUInt mantissa = raw_u16 & vUInt(0x7f00u);
-    v_if((exponent == 0u) && (mantissa != 0u)) {
-        vUInt sign = raw_u16 & vUInt(0x8000u);
-        if constexpr (PositiveCode >= 0) {
-            v_if(sign == 0u) { result = target_raw_terminal_value<PositiveCode>(result, positive_constant); }
-            v_endif;
-        }
-        if constexpr (NegativeCode >= 0) {
-            v_if(sign != 0u) { result = target_raw_terminal_value<NegativeCode>(result, negative_constant); }
-            v_endif;
-        }
-    }
-    v_endif;
-}
