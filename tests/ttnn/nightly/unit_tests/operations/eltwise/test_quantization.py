@@ -805,17 +805,23 @@ def test_quantize_rounds_ties_to_even(device, input_dtype, out_dtype, zero_point
         (ttnn.int8, -3, -128, 127),
         (ttnn.uint8, 128, 0, 255),
         (ttnn.uint8, 127, 0, 255),
+        (ttnn.uint8, 0, 0, 255),
     ],
 )
-def test_requantize_rounds_ties_to_even(device, in_dtype, out_dtype, out_zero_point, q_min, q_max):
-    """s_in / s_out = 0.5 makes every odd q an exact tie. The fused path rounds q * 0.5 + z_out to nearest even."""
+@pytest.mark.parametrize("in_zero_point", [0, 1])
+def test_requantize_rounds_ties_to_even(device, in_dtype, out_dtype, out_zero_point, q_min, q_max, in_zero_point):
+    """A scale ratio of 0.5 produces exact ties when q - in_zero_point is odd; ties round to even."""
     q_tr = torch.arange(-128, 128, dtype=torch.int32).repeat(4).reshape(32, 32)
-    expected = torch.clamp(torch.round(q_tr.to(torch.float32) * 0.5 + out_zero_point), q_min, q_max).to(torch.int64)
+    expected = torch.clamp(
+        torch.round((q_tr.to(torch.float32) - in_zero_point) * 0.5 + out_zero_point), q_min, q_max
+    ).to(torch.int64)
 
     q_tt = ttnn.from_torch(
         q_tr if in_dtype == ttnn.int32 else q_tr.to(torch.int8), dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device
     )
-    result = ttnn.to_torch(ttnn.requantize(q_tt, 0.25, 0, 0.5, out_zero_point, dtype=out_dtype)).to(torch.int64)
+    result = ttnn.to_torch(ttnn.requantize(q_tt, 0.25, in_zero_point, 0.5, out_zero_point, dtype=out_dtype)).to(
+        torch.int64
+    )
     assert torch.equal(result, expected), f"{(result != expected).sum().item()} of {expected.numel()} differ"
 
 
