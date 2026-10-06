@@ -111,10 +111,9 @@
   budget_type: e2e
 
 - id: bh-galaxy-socket-pipeline
-  name: BH Galaxy Socket Pipeline Single Galaxy
+  name: BH Galaxy Socket Pipeline Single Galaxy Cross-Tray
   cmd: |
-    python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
-    tt-run --rank-binding bh_galaxy_split_4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
+    tt-run --bare --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_4stage_4x2_torus_pipeline.textproto --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
   skus:
     bh_galaxy:
       timeout: 10
