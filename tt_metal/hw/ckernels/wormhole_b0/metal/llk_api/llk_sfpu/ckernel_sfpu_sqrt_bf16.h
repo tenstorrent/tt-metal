@@ -8,7 +8,7 @@ struct SqrtBf16Config {
     static constexpr uint32_t kMagic = 0x5f1110a0u;
     static constexpr uint32_t kC1Bits = 0x401214c9u;
     static constexpr uint32_t kC2Bits = 0x40103626u;
-    static constexpr uint32_t kBodySlots = 29u;
+    static constexpr uint32_t kBodySlots = 26u;
 };
 }  // namespace ckernel::sfpu
 #include "ckernel_sfpu_bf16_newton_root.h"

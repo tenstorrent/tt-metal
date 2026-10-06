@@ -1505,8 +1505,44 @@ _BF16_STOCK_BOARDS = {
 }
 # Special input classes where the kernel returns its stock kernel's class instead of torch's.
 _BF16_STOCK_SPECIALS = {
-    MathOperation.Sqrt: {ChipArchitecture.WORMHOLE: ("neg_zero",)},
+    MathOperation.Sqrt: {
+        ChipArchitecture.WORMHOLE: (
+            "neg_subnormal",
+            "neg_zero",
+        )
+    },
 }
+
+
+# Ops whose BF16 setup runs from an init their stock instances share.
+_BF16_SETUP_OPS = [
+    MathOperation.Sqrt,
+]
+# Every instance of those ops on BF16 and FP32 data, approximate and accurate, either DEST.
+# The setup runs after the shared init, so an instance the BF16 kernel does not replace must
+# still pass the nightly sweep's own check.
+_BF16_SETUP_PARAMS = _sweep_params(
+    [
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+    ],
+    _BF16_SETUP_OPS,
+    [ApproximationMode.No, ApproximationMode.Yes],
+    STANDARD_DIMENSIONS,
+)
+
+
+@pytest.mark.parametrize(
+    ",".join(_UNARY_SWEEP_ARGNAMES),
+    _BF16_SETUP_PARAMS,
+    ids=[build_param_id(_UNARY_SWEEP_ARGNAMES, p) for p in _BF16_SETUP_PARAMS],
+)
+def test_eltwise_unary_sfpu_bf16_setup_keeps_stock(
+    formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions
+):
+    test_eltwise_unary_sfpu(
+        formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions
+    )
 
 
 def _special_class(value):
