@@ -601,7 +601,7 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 
     set_dst_write_addr<mutex_ADC>(tile_index);
 
-    program_packer_destination(address);
+    program_packer_destination<false>(address);
 
     ckernel::ckernel_template::run();
 
@@ -636,7 +636,7 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
 
     set_dst_write_addr(start_tile_index);
 
-    program_packer_destination(address);
+    program_packer_destination<false>(address);
 
     // MOP word bits 19:10: a non-zero outer loop length overrides the programmed one for this run only; bits 9:0 (inner loop) stay programmed.
     const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
