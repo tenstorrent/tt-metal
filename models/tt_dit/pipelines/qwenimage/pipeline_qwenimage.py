@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 import torch
@@ -15,29 +15,31 @@ from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from loguru import logger
 
 import ttnn
-from models.tt_dit.models.transformers.transformer_qwenimage import QwenImageCheckpoint
+from models.tt_dit.models.transformers.transformer_qwenimage import QwenImageCheckpoint, QwenImageTransformer
 from models.tt_dit.models.vae.vae_qwenimage import QwenImageVAEDecoderAdapter
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
-from models.tt_dit.pipelines.cfg import CFGCombiner, create_submeshes, distribute_cfg, submesh_shape
+from models.tt_dit.pipelines.cfg import CFGCombiner, create_submeshes, submesh_shape
 from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
 from models.tt_dit.pipelines.qwenimage.text_encoder import TextEncoder
 from models.tt_dit.solvers import EulerSolver, calculate_shift
 from models.tt_dit.utils import cache
-from models.tt_dit.utils.mesh import reshape_for_factor
-from models.tt_dit.utils.tensor import from_torch_to_devices
+from models.tt_dit.utils.tensor import from_torch, from_torch_to_devices
 from models.tt_dit.utils.tracing import Tracer
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from contextlib import AbstractContextManager
 
     from PIL import Image
 
 _VAE_SCALE_FACTOR = 8
 _LATENT_CHANNELS = 16
 _DEFAULT_CHECKPOINT = "Qwen/Qwen-Image"
+
+# The prompt lengths the text encoder and the transformer run at, counted after the template prefix
+# is dropped.
+_SEQUENCE_LENGTH_BUCKETS = (128, 256, 512)
 
 _PRESETS_WH: dict[tuple[int, ...], dict] = {
     (2, 4): {
@@ -48,7 +50,7 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "encoder_fsdp": None,
         "num_links": 1,
         "dynamic_load_encoder": True,
-        "dynamic_load_vae": True,
+        "dynamic_load_vae": False,
     },
     (4, 8): {
         "cfg": (2, 1),
@@ -120,6 +122,7 @@ class QwenImagePipelineConfig:
     height: int
     width: int
     cfg_enabled: bool
+    sequence_length_buckets: tuple[int, ...]
 
     dynamic_load_encoder: bool
     dynamic_load_vae: bool
@@ -141,6 +144,7 @@ class QwenImagePipelineConfig:
         height: int = 1024,
         width: int = 1024,
         cfg_enabled: bool = True,
+        sequence_length_buckets: Sequence[int] = _SEQUENCE_LENGTH_BUCKETS,
         dynamic_load_encoder: bool | None = None,
         dynamic_load_vae: bool | None = None,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
@@ -170,6 +174,7 @@ class QwenImagePipelineConfig:
             height=height,
             width=width,
             cfg_enabled=cfg_enabled,
+            sequence_length_buckets=tuple(sequence_length_buckets),
             dynamic_load_encoder=(
                 dynamic_load_encoder if dynamic_load_encoder is not None else preset["dynamic_load_encoder"]
             ),
@@ -215,11 +220,13 @@ class QwenImagePipeline(PipelineAPIMixin):
         self._parallel_config = config.dit_parallel_config
         self._sp_axis = config.dit_parallel_config.sequence_parallel.mesh_axis
         self._cfg_parallel = config.dit_parallel_config.cfg_parallel.factor != 1
-        self._encoder_tp = config.encoder_parallel_config.tensor_parallel
         self._height = config.height
         self._width = config.width
         self._cfg_enabled = config.cfg_enabled
-        self._use_torch_vae_decoder = config.use_torch_vae_decoder
+        self._sequence_length_buckets = config.sequence_length_buckets
+        # A dynamically loaded encoder loses its traces with its weights on every call, and
+        # capturing them again costs more than tracing saves.
+        self._trace_encoder = not config.dynamic_load_encoder or config.use_torch_text_encoder
 
         logger.info(f"Parallel config: {config.dit_parallel_config}")
         logger.info(f"Original mesh shape: {device.shape}")
@@ -233,35 +240,51 @@ class QwenImagePipeline(PipelineAPIMixin):
 
         scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(config.checkpoint_name, subfolder="scheduler")
         self._solvers = [EulerSolver(scheduler=scheduler) for _ in self._devices]
-        self._tracers = [Tracer(self._traced_step, device=d, prep_run=False) for d in self._devices]
+        # One tracer per submesh and prompt bucket.
+        self._tracers = {
+            (idx, bucket): Tracer(self._traced_step, device=d, prep_run=False)
+            for idx, d in enumerate(self._devices)
+            for bucket in config.sequence_length_buckets
+        }
         self._image_processor = VaeImageProcessor(vae_scale_factor=_VAE_SCALE_FACTOR * 2)
 
         logger.info("creating transformers...")
         self._checkpoint = QwenImageCheckpoint(config.checkpoint_name)
-        # Weight loading is deferred, see _load_transformer.
+        # Weight loading is deferred, see _swap_in.
         self._transformers = [
             self._checkpoint.build(ccl_manager=m, parallel_config=config.dit_parallel_config, is_fsdp=False)
             for m in self._ccl_managers
         ]
+        self._transformer_loaders = [
+            _TransformerLoader(
+                t,
+                checkpoint=self._checkpoint,
+                device=d,
+                parallel_config=config.dit_parallel_config,
+                tracers=[self._tracers[idx, bucket] for bucket in config.sequence_length_buckets],
+            )
+            for idx, (t, d) in enumerate(zip(self._transformers, self._devices, strict=True))
+        ]
 
         # The encoder is loaded before the transformers, for memory efficiency.
-        with self._reshape_encoder():
-            logger.info("creating text encoder...")
-            self._text_encoder = TextEncoder(
-                checkpoint_name=config.checkpoint_name,
-                device=self._devices[0],
-                ccl_manager=self._ccl_managers[0],
-                parallel_config=config.encoder_parallel_config,
-                use_torch=config.use_torch_text_encoder,
-            )
-        ttnn.synchronize_device(self._devices[0])
+        logger.info("creating text encoder...")
+        self._text_encoder = TextEncoder(
+            checkpoint_name=config.checkpoint_name,
+            device=self._devices[0],
+            ccl_manager=self._ccl_managers[0],
+            parallel_config=config.encoder_parallel_config,
+            sequence_length_buckets=config.sequence_length_buckets,
+            use_torch=config.use_torch_text_encoder,
+        )
 
-        # Without dynamic loading, the encoder submesh has room for its transformer too.
+        # Under dynamic loading, the first submesh holds the text encoder or its transformer, the
+        # last its transformer or the VAE decoder. Without it, or with a torch encoder, the first has
+        # room for its transformer from the start.
         if not config.dynamic_load_encoder or config.use_torch_text_encoder:
-            self._load_transformer(0)
+            self._swap_in(self._transformer_loaders[0])
 
         # The VAE submesh needs its transformer first, since denoising comes before decoding.
-        self._load_transformer(-1)
+        self._swap_in(self._transformer_loaders[-1])
 
         logger.info("creating VAE decoder...")
         self._vae = QwenImageVAEDecoderAdapter(
@@ -270,65 +293,49 @@ class QwenImagePipeline(PipelineAPIMixin):
             ccl_manager=self._ccl_managers[-1],
             use_torch=config.use_torch_vae_decoder,
         )
+
         if not config.dynamic_load_vae:
-            self._vae.reload_weights()
-        ttnn.synchronize_device(self._devices[-1])
+            self._swap_in(self._vae)
 
         logger.info("pipeline allocation run...")
-        self(prompts=[""], num_inference_steps=2, cfg_scale=2 if config.cfg_enabled else 1, traced=False)
+        self._warm_up(traced=False)
 
-    def _load_transformer(self, idx: int) -> None:
-        if self._transformers[idx].is_loaded():
-            return
-
-        logger.info("loading transformer weights to device...")
-        self._checkpoint.load(
-            self._transformers[idx],
-            mesh_device=self._devices[idx],
-            parallel_config=self._parallel_config,
-            is_fsdp=False,
+        # A transformer that dynamic loading evicts has its trace released with its weights, so a
+        # trace captured now would not survive the first call.
+        evicts_transformer = (config.dynamic_load_encoder and not config.use_torch_text_encoder) or (
+            config.dynamic_load_vae and not config.use_torch_vae_decoder
         )
-        ttnn.synchronize_device(self._devices[idx])
+        if not evicts_transformer:
+            logger.info("pipeline capture run...")
+            self._warm_up(traced=True)
 
-    def _deallocate_transformer(self, idx: int) -> None:
-        if not self._transformers[idx].is_loaded():
+    def _warm_up(self, *, traced: bool) -> None:
+        # Only the transformer is captured here. The text encoder and the VAE decoder are captured
+        # on their first traced call.
+        for bucket in sorted(self._sequence_length_buckets, reverse=True):
+            # Each "a " is one token, and the trailing space and the template suffix add six more, so
+            # this comes to two tokens short of the bucket, which the 32-token spacing keeps above
+            # the next-smaller one.
+            prompt = "a " * (bucket - 8)
+            self(
+                prompts=[prompt],
+                negative_prompts=[prompt],
+                num_inference_steps=2,
+                cfg_scale=2 if self._cfg_enabled else 1,
+                traced=traced,
+                encoder_traced=False,
+                vae_traced=False,
+            )
+
+    @staticmethod
+    def _swap_in(module: _Swappable, *, evict: _Swappable | None = None) -> None:
+        """Loads the weights of ``module``, first deallocating those of ``evict`` to make room."""
+        if module.is_loaded():
             return
 
-        logger.info("deallocating transformer weights to free memory...")
-        self._transformers[idx].deallocate_weights()
-        ttnn.synchronize_device(self._devices[idx])
-
-    def _prepare_encoder(self) -> None:
-        if self._text_encoder.encoder_loaded():
-            return
-
-        self._deallocate_transformer(0)
-        with self._reshape_encoder():
-            self._text_encoder.reload_encoder_weights()
-
-    def _prepare_transformers(self) -> None:
-        if not self._transformers[0].is_loaded():
-            self._text_encoder.deallocate_encoder_weights()
-            self._load_transformer(0)
-
-        if not self._transformers[-1].is_loaded():
-            if not self._use_torch_vae_decoder and self._vae.is_loaded():
-                logger.info("deallocating VAE decoder weights to free memory...")
-                self._vae.deallocate_weights()
-                ttnn.synchronize_device(self._devices[-1])
-            self._load_transformer(-1)
-
-    def _prepare_vae(self) -> None:
-        if self._vae.is_loaded():
-            return
-
-        self._deallocate_transformer(-1)
-        logger.info("loading VAE decoder weights to device...")
-        self._vae.reload_weights()
-        ttnn.synchronize_device(self._devices[-1])
-
-    def _reshape_encoder(self) -> AbstractContextManager[None]:
-        return reshape_for_factor(self._devices[0], self._encoder_tp)
+        if evict is not None:
+            evict.deallocate_weights()
+        module.reload_weights()
 
     def __call__(
         self,
@@ -339,7 +346,7 @@ class QwenImagePipeline(PipelineAPIMixin):
         seed: int = 0,
         num_images_per_prompt: int = 1,
         cfg_scale: float = 4.0,
-        traced: bool = False,
+        traced: bool = True,
         vae_traced: bool | None = False,
         encoder_traced: bool | None = None,
         on_event: PipelineEventCallback | None = None,
@@ -351,7 +358,7 @@ class QwenImagePipeline(PipelineAPIMixin):
             raise ValueError(msg)
 
         vae_traced = vae_traced if vae_traced is not None else traced
-        encoder_traced = encoder_traced if encoder_traced is not None else traced
+        encoder_traced = encoder_traced if encoder_traced is not None else traced and self._trace_encoder
         on_event = on_event if on_event is not None else null_callback
         negative_prompts = negative_prompts if negative_prompts is not None else [""] * prompt_count
 
@@ -366,21 +373,23 @@ class QwenImagePipeline(PipelineAPIMixin):
         on_event(SectionStart("total"))
 
         logger.info("encoding prompts...")
-        self._prepare_encoder()
+        self._swap_in(self._text_encoder, evict=self._transformer_loaders[0])
         on_event(SectionStart("encoder"))
-        with self._reshape_encoder():
-            torch_context, _ = self._text_encoder.encode_cfg(
-                prompts,
-                negative_prompts,
-                num_images_per_prompt=num_images_per_prompt,
-                cfg_enabled=self._cfg_enabled,
-                on_event=on_event,
-                traced=encoder_traced,
-            )
+        # One entry per submesh: the CFG pass it runs, or both passes batched on the only one.
+        torch_contexts = self._text_encoder.encode_cfg(
+            prompts,
+            negative_prompts,
+            num_images_per_prompt=num_images_per_prompt,
+            cfg_enabled=self._cfg_enabled,
+            batch_passes=not self._cfg_parallel,
+            on_event=on_event,
+            traced=encoder_traced,
+        )
         on_event(SectionEnd("encoder"))
-        prompt_sequence_length = torch_context.shape[1]
+        prompt_sequence_lengths = [c.shape[1] for c in torch_contexts]
 
-        self._prepare_transformers()
+        self._swap_in(self._transformer_loaders[0], evict=self._text_encoder)
+        self._swap_in(self._transformer_loaders[-1], evict=self._vae)
 
         logger.info("preparing timesteps...")
         mu = calculate_shift(latents_sequence_length, self._solvers[0].scheduler)
@@ -390,18 +399,19 @@ class QwenImagePipeline(PipelineAPIMixin):
         timesteps = self._solvers[0].timesteps
 
         logger.info("preparing inputs...")
-        context = distribute_cfg(torch_context, devices=self._devices)
+        context = [from_torch(c, device=d) for c, d in zip(torch_contexts, self._devices, strict=True)]
         latents = self._random_latents(batch_size=prompt_count * num_images_per_prompt, seed=seed)
         ropes = [
             self._checkpoint.rope_tables(
                 latents_height=latents_height,
                 latents_width=latents_width,
-                prompt_sequence_length=prompt_sequence_length,
+                prompt_sequence_length=length,
                 device=device,
                 sp_axis=self._sp_axis,
             )
-            for device in self._devices
+            for length, device in zip(prompt_sequence_lengths, self._devices, strict=True)
         ]
+        tracers = [self._tracers[idx, length] for idx, length in enumerate(prompt_sequence_lengths)]
 
         logger.info("denoising...")
         on_event(SectionStart("denoising"))
@@ -410,7 +420,7 @@ class QwenImagePipeline(PipelineAPIMixin):
             on_event(SectionStart(f"denoising_step_{step}"))
 
             velocity_preds = []
-            for idx, tracer in enumerate(self._tracers):
+            for idx, tracer in enumerate(tracers):
                 timestep = ttnn.full(
                     [1, 1],
                     fill_value=t,
@@ -429,7 +439,7 @@ class QwenImagePipeline(PipelineAPIMixin):
                         spatial_rope=spatial_rope if step == 0 else tracer.inputs["spatial_rope"],
                         prompt_rope=prompt_rope if step == 0 else tracer.inputs["prompt_rope"],
                         spatial_sequence_length=latents_sequence_length,
-                        prompt_sequence_length=prompt_sequence_length,
+                        prompt_sequence_length=prompt_sequence_lengths[idx],
                         traced=traced,
                         tracer_blocking_execution=False,
                     )
@@ -501,10 +511,71 @@ class QwenImagePipeline(PipelineAPIMixin):
             width=self._width // _VAE_SCALE_FACTOR,
         )
 
-        self._prepare_vae()
+        self._swap_in(self._vae, evict=self._transformer_loaders[-1])
         decoded_output = self._vae.decode(torch_latents, traced=traced)
 
         image = self._image_processor.postprocess(decoded_output, output_type="pt")
         assert isinstance(image, torch.Tensor)
 
         return self._image_processor.numpy_to_pil(self._image_processor.pt_to_numpy(image))
+
+
+class _Swappable(Protocol):
+    """A module whose device weights dynamic loading swaps in and out.
+
+    Both methods do nothing when the weights are already in the requested state, and both
+    synchronize the device before returning. Torch modules hold no device weights and always
+    report themselves as loaded.
+    """
+
+    def is_loaded(self) -> bool:
+        ...
+
+    def reload_weights(self) -> None:
+        ...
+
+    def deallocate_weights(self) -> None:
+        ...
+
+
+class _TransformerLoader:
+    """Loads and deallocates the weights of a transformer, releasing its traces with them."""
+
+    def __init__(
+        self,
+        transformer: QwenImageTransformer,
+        *,
+        checkpoint: QwenImageCheckpoint,
+        device: ttnn.MeshDevice,
+        parallel_config: DiTParallelConfig,
+        tracers: Sequence[Tracer],
+    ) -> None:
+        self._transformer = transformer
+        self._checkpoint = checkpoint
+        self._device = device
+        self._parallel_config = parallel_config
+        self._tracers = tracers
+
+    def is_loaded(self) -> bool:
+        return self._transformer.is_loaded()
+
+    def reload_weights(self) -> None:
+        if self._transformer.is_loaded():
+            return
+
+        logger.info("loading transformer weights to device...")
+        self._checkpoint.load(
+            self._transformer, mesh_device=self._device, parallel_config=self._parallel_config, is_fsdp=False
+        )
+        ttnn.synchronize_device(self._device)
+
+    def deallocate_weights(self) -> None:
+        if not self._transformer.is_loaded():
+            return
+
+        logger.info("deallocating transformer weights...")
+        # The traces would read the weights from their old addresses after a reload.
+        for tracer in self._tracers:
+            tracer.release_trace()
+        self._transformer.deallocate_weights()
+        ttnn.synchronize_device(self._device)

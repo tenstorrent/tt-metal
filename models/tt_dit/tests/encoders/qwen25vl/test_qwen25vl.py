@@ -22,18 +22,14 @@ import ttnn
 from models.tt_dit.encoders.qwen25vl import Qwen25VlCheckpoint
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
-from models.tt_dit.pipelines.qwenimage.text_encoder import (
-    PROMPT_DROP_IDX,
-    PROMPT_TEMPLATE,
-    SEQUENCE_LENGTH,
-    TextEncoder,
-)
+from models.tt_dit.pipelines.qwenimage.text_encoder import PROMPT_DROP_IDX, PROMPT_TEMPLATE, TextEncoder
 from models.tt_dit.utils import tensor
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.test import line_params_req_exact_devices
 
 CHECKPOINT = "Qwen/Qwen-Image"
 SUBFOLDER = "text_encoder"
+SEQUENCE_LENGTH_BUCKETS = (128, 256, 512)
 
 
 @pytest.mark.parametrize(
@@ -166,26 +162,31 @@ def test_qwen25vl_encoder_pair(*, mesh_device: ttnn.MeshDevice, submesh_shape: t
         device=submesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
+        sequence_length_buckets=SEQUENCE_LENGTH_BUCKETS,
         use_torch=False,
     )
+
+    logger.info("running TT model...")
+    [tt_embeds] = text_encoder.encode_cfg(
+        prompts,
+        prompts,
+        num_images_per_prompt=num_images_per_prompt,
+        cfg_enabled=False,
+        batch_passes=False,
+        traced=traced,
+    )
+    length = tt_embeds.shape[1]
+    assert length in SEQUENCE_LENGTH_BUCKETS
 
     logger.info("running torch model...")
     with torch.no_grad():
         embeds, mask = torch_pipeline.encode_prompt(
             prompts,
             num_images_per_prompt=num_images_per_prompt,
-            max_sequence_length=SEQUENCE_LENGTH,
+            max_sequence_length=max(SEQUENCE_LENGTH_BUCKETS),
         )
-        embeds = torch.nn.functional.pad(embeds, [0, 0, 0, SEQUENCE_LENGTH - embeds.shape[1]], value=0)
-        mask = torch.nn.functional.pad(mask, [0, SEQUENCE_LENGTH - mask.shape[1]], value=0)
+        embeds = torch.nn.functional.pad(embeds, [0, 0, 0, length - embeds.shape[1]], value=0)
+        mask = torch.nn.functional.pad(mask, [0, length - mask.shape[1]], value=0)
 
-    logger.info("running TT model...")
-    tt_embeds, tt_mask = text_encoder.encode_cfg(
-        prompts,
-        prompts,
-        num_images_per_prompt=num_images_per_prompt,
-        cfg_enabled=False,
-        traced=traced,
-    )
-    assert torch.equal(mask, tt_mask)
+    assert torch.all(tt_embeds[mask == 0] == 0), "padded positions must be zero"
     assert_quality(embeds, tt_embeds, pcc=0.988, relative_rmse=0.15)

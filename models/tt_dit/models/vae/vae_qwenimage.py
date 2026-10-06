@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import torch
 from diffusers.models.autoencoders.autoencoder_kl_qwenimage import AutoencoderKLQwenImage
+from loguru import logger
 
 import ttnn
 
@@ -155,13 +156,21 @@ class QwenImageVAEDecoderAdapter:
         return self._torch_vae is not None or self._decoder.is_loaded()
 
     def deallocate_weights(self) -> None:
-        if self._decoder is not None:
-            self._decoder.deallocate_weights()
+        if self._decoder is None or not self._decoder.is_loaded():
+            return
+
+        logger.info("deallocating VAE decoder weights...")
+        self._tracer.release_trace()
+        self._decoder.deallocate_weights()
+        ttnn.synchronize_device(self.device)
 
     def reload_weights(self) -> None:
         if self._decoder is None or self._decoder.is_loaded():
             return
+
+        logger.info("loading VAE decoder weights to device...")
         self._decoder.load_torch_state_dict(self._decoder_state_dict)
+        ttnn.synchronize_device(self.device)
 
     @torch.no_grad()
     def decode(self, latents: torch.Tensor, *, traced: bool) -> torch.Tensor:
