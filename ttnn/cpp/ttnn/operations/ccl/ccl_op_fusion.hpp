@@ -6,6 +6,10 @@
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <string>
+#include <variant>
+#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -141,6 +145,27 @@ uint32_t add_semaphore_descriptor(
     uint32_t initial_value = 0,
     tt::CoreType core_type = tt::CoreType::WORKER);
 
+// Appends to `desc` the KernelDescriptor equivalent of CreateKernel(program, kernel_source, cores, config) and returns
+// its index, which is also its kernel handle in a Program built from `desc`. Lets a Program& builder be translated to
+// a descriptor builder without rewriting each DataMovementConfig / ComputeConfig literal. Named compile-time args are
+// sorted so the descriptor (and its hash) does not depend on unordered_map iteration order.
+size_t add_kernel_descriptor(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const std::string& kernel_source,
+    const tt::tt_metal::CoreRangeSet& cores,
+    const std::variant<tt::tt_metal::DataMovementConfig, tt::tt_metal::ComputeConfig>& config);
+
+// The CBDescriptor equivalent of CreateCircularBuffer(program, cores, config): same total size and per-index data
+// format, page size, tile and face geometry, including remote (GlobalCircularBuffer) indices. A globally allocated CB
+// is backed by `tensor` (or `buffer`); a GlobalCircularBuffer-backed one by `global_cb`. Those are the objects the
+// legacy builder passed to set_globally_allocated_address / experimental::CreateCircularBuffer.
+tt::tt_metal::CBDescriptor make_cb_descriptor(
+    const tt::tt_metal::CircularBufferConfig& config,
+    const tt::tt_metal::CoreRangeSet& cores,
+    const tt::tt_metal::MeshTensor* tensor = nullptr,
+    tt::tt_metal::Buffer* buffer = nullptr,
+    const tt::tt_metal::experimental::GlobalCircularBuffer* global_cb = nullptr);
+
 enum class MatmulFusedOpSignalerType {
     ALL_GATHER,
     REDUCE_SCATTER,
@@ -222,6 +247,13 @@ struct MatmulFusedOpSignaler {
     void init_llama_rs_cores_mm(
         const tt::tt_metal::CoreRangeSet& matmul_cores,
         tt::tt_metal::Program& program,
+        const tt::tt_metal::IDevice* device,
+        int privilaged_index = 0);
+    // ProgramDescriptor forms of the two calls above (same state; the semaphores become SemaphoreDescriptors).
+    void init_llama_rs_cores_rs(const tt::tt_metal::CoreRangeSet& rs_cores, tt::tt_metal::ProgramDescriptor& desc);
+    void init_llama_rs_cores_mm(
+        const tt::tt_metal::CoreRangeSet& matmul_cores,
+        tt::tt_metal::ProgramDescriptor& desc,
         const tt::tt_metal::IDevice* device,
         int privilaged_index = 0);
     // Get the rt values
