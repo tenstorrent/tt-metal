@@ -70,6 +70,14 @@ std::shared_ptr<void> retain_l1_pool_owner(
     const distributed::MeshBuffer& mesh_buffer,
     const std::vector<distributed::MeshCoordinate>& device_coords);
 
+// Return the exact L1 ranges exposed by this MeshBuffer. Ordinary lockstep
+// owners reserve their address on every worker core; range-lockstep and
+// per-core owners cover only their allocated cores. Non-owning pool/view
+// buffers expose only their logical shard bytes, never the parent capacity.
+std::vector<L1PoolExtent> get_l1_pool_owner_extents(
+    const distributed::MeshBuffer& mesh_buffer,
+    const std::vector<distributed::MeshCoordinate>& device_coords);
+
 std::shared_ptr<distributed::MeshBuffer> create_l1_pool_view(
     const std::shared_ptr<L1Pool>& pool,
     const distributed::MeshBufferConfig& mesh_buffer_config,

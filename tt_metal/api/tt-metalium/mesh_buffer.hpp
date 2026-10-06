@@ -80,8 +80,12 @@ class MeshBuffer;
 // Forward declaration for experimental per-core allocation friend
 namespace tt::tt_metal::experimental::per_core_allocation {
 class L1Pool;
+struct L1PoolExtent;
 struct L1PoolPlacement;
 std::shared_ptr<void> retain_l1_pool_owner(
+    const tt::tt_metal::distributed::MeshBuffer&,
+    const std::vector<tt::tt_metal::distributed::MeshCoordinate>&);
+std::vector<L1PoolExtent> get_l1_pool_owner_extents(
     const tt::tt_metal::distributed::MeshBuffer&,
     const std::vector<tt::tt_metal::distributed::MeshCoordinate>&);
 std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_on_single_device(
@@ -222,6 +226,10 @@ private:
         const tt::tt_metal::distributed::DeviceLocalBufferConfig&,
         const std::vector<tt::tt_metal::experimental::per_core_allocation::L1PoolPlacement>&);
     friend std::shared_ptr<void> tt::tt_metal::experimental::per_core_allocation::retain_l1_pool_owner(
+        const tt::tt_metal::distributed::MeshBuffer&,
+        const std::vector<tt::tt_metal::distributed::MeshCoordinate>&);
+    friend std::vector<tt::tt_metal::experimental::per_core_allocation::L1PoolExtent>
+    tt::tt_metal::experimental::per_core_allocation::get_l1_pool_owner_extents(
         const tt::tt_metal::distributed::MeshBuffer&,
         const std::vector<tt::tt_metal::distributed::MeshCoordinate>&);
 };

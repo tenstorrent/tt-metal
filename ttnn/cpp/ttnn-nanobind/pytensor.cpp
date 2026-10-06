@@ -574,27 +574,9 @@ void pytensor_module(nb::module_& mod) {
                 auto pin = experimental::per_core_allocation::retain_l1_pool_owner(
                     tensor.device_storage().get_root_mesh_buffer(), owner_coords);
                 const auto& mesh_buffer = tensor.device_storage().get_mesh_buffer();
-                for (const auto& coord : tensor.device_storage().get_coords()) {
-                    auto* buffer = mesh_buffer.get_device_buffer(coord);
-                    TT_FATAL(is_sharded(buffer->buffer_layout()), "External pool owner must be sharded");
-                    std::vector<CoreCoord> cores;
-                    if (const auto& distribution = buffer->buffer_distribution_spec(); distribution.has_value()) {
-                        cores = distribution->cores_with_data();
-                    } else {
-                        const auto shard = buffer->shard_spec().tensor_shard_spec;
-                        cores = corerange_to_cores(
-                            shard.grid, std::nullopt, shard.orientation == ShardOrientation::ROW_MAJOR);
-                    }
-                    for (const auto& core : cores) {
-                        experimental::per_core_allocation::adopt_l1_pool_extent(
-                            pool,
-                            L1PoolExtent{
-                                coord,
-                                core,
-                                experimental::per_core_allocation::get_shard_base_address(*buffer, core),
-                                experimental::per_core_allocation::get_shard_allocation_size(*buffer)},
-                            pin);
-                    }
+                for (const auto& extent : experimental::per_core_allocation::get_l1_pool_owner_extents(
+                         mesh_buffer, owner_coords)) {
+                    experimental::per_core_allocation::adopt_l1_pool_extent(pool, extent, pin);
                 }
             }
             return pool;
@@ -603,6 +585,19 @@ void pytensor_module(nb::module_& mod) {
         nb::arg("extents"),
         nb::arg("external_tensors") = std::vector<Tensor>{},
         "Transactionally reserve exact L1 extents and optionally retain existing tensor storage.");
+
+    mod.def(
+        "experimental_l1_tensor_owned_extents",
+        [](const Tensor& tensor) {
+            TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "L1 owner extents require a device tensor");
+            TT_FATAL(tensor.memory_config().buffer_type() == BufferType::L1, "L1 owner extents require L1 storage");
+            std::vector<distributed::MeshCoordinate> coords(
+                tensor.device_storage().get_coords().begin(), tensor.device_storage().get_coords().end());
+            return experimental::per_core_allocation::get_l1_pool_owner_extents(
+                tensor.device_storage().get_mesh_buffer(), coords);
+        },
+        nb::arg("tensor"),
+        "Return exact per-device/core physical L1 ranges owned or retained by a tensor.");
 
     mod.def(
         "experimental_create_l1_pool_tensor",

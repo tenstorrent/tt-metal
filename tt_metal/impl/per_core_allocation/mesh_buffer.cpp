@@ -6,6 +6,7 @@
 #include "impl/buffers/buffer_impl.hpp"
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/allocator_state.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -13,6 +14,7 @@
 #include "impl/allocator/allocator.hpp"
 #include <algorithm>
 #include <limits>
+#include <tuple>
 #include <unordered_set>
 
 namespace tt::tt_metal::experimental::per_core_allocation {
@@ -59,6 +61,22 @@ std::vector<CoreCoord> shard_cores(const BufferShardingArgs& args) {
     TT_FATAL(args.shard_spec().has_value(), "L1 pool views require a sharded TensorSpec");
     const auto& spec = args.shard_spec()->tensor_shard_spec;
     return corerange_to_cores(spec.grid, std::nullopt, spec.orientation == ShardOrientation::ROW_MAJOR);
+}
+
+std::vector<CoreCoord> all_worker_cores(
+    const distributed::MeshDevice& mesh, const distributed::MeshCoordinate& coord) {
+    const auto& allocator = *mesh.impl().get_device(coord)->allocator_impl();
+    std::vector<CoreCoord> cores;
+    const uint32_t num_banks = allocator.get_num_banks(BufferType::L1);
+    cores.reserve(num_banks);
+    for (uint32_t bank_id = 0; bank_id < num_banks; ++bank_id) {
+        cores.push_back(allocator.get_logical_core_from_bank_id(bank_id));
+    }
+    std::sort(cores.begin(), cores.end(), [](const CoreCoord& left, const CoreCoord& right) {
+        return std::tie(left.y, left.x) < std::tie(right.y, right.x);
+    });
+    cores.erase(std::unique(cores.begin(), cores.end()), cores.end());
+    return cores;
 }
 
 }  // namespace
@@ -113,7 +131,7 @@ size_t adopt_l1_pool_extent(
     auto mesh = pool->mesh_device_;
     TT_FATAL(mesh != nullptr && mesh->impl().is_local(extent.device_coord), "External extent device must be local");
     const DeviceAddr alignment =
-        mesh->impl().get_device(extent.device_coord)->allocator_impl()->get_l1_allocation_alignment();
+        mesh->impl().get_device(extent.device_coord)->allocator_impl()->get_alignment(BufferType::L1);
     TT_FATAL(extent.size != 0, "External extent cannot be empty");
     TT_FATAL(extent.address % alignment == 0, "External extent address must be aligned");
     TT_FATAL(extent.size % alignment == 0, "External extent size must be aligned");
@@ -169,6 +187,48 @@ std::shared_ptr<void> retain_l1_pool_owner(
         }
     }
     return std::static_pointer_cast<void>(retained);
+}
+
+std::vector<L1PoolExtent> get_l1_pool_owner_extents(
+    const distributed::MeshBuffer& mesh_buffer,
+    const std::vector<distributed::MeshCoordinate>& device_coords) {
+    TT_FATAL(mesh_buffer.is_allocated(), "Cannot inspect deallocated MeshBuffer storage");
+    auto mesh = mesh_buffer.mesh_device_.lock();
+    TT_FATAL(mesh != nullptr, "Cannot inspect storage from a closed MeshDevice");
+
+    const bool owned = std::holds_alternative<distributed::MeshBuffer::OwnedBufferState>(mesh_buffer.state_);
+    const bool owner_pinned =
+        std::holds_alternative<distributed::MeshBuffer::OwnerPinnedViewState>(mesh_buffer.state_);
+    const bool externally_owned =
+        std::holds_alternative<distributed::MeshBuffer::ExternallyOwnedState>(mesh_buffer.state_);
+    TT_FATAL(owned || owner_pinned || externally_owned, "MeshBuffer has no live L1 owner state");
+
+    std::vector<L1PoolExtent> result;
+    for (const auto& coord : device_coords) {
+        TT_FATAL(mesh->impl().is_local(coord), "External pool owner device must be local");
+        const auto* buffer = mesh_buffer.get_device_buffer(coord);
+        TT_FATAL(buffer != nullptr && buffer->is_l1(), "External pool owner must be in L1");
+
+        const bool per_core = is_per_core_allocation(*buffer);
+        const bool range_lockstep =
+            tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(*buffer);
+        std::vector<CoreCoord> cores =
+            owned && !per_core && !range_lockstep ? all_worker_cores(*mesh, coord)
+                                                  : shard_cores(mesh_buffer.device_local_config_.sharding_args);
+
+        // A pool/view MeshBuffer does not own its containing allocation. Expose
+        // only the bytes its logical shards can touch; the retained owner pin
+        // keeps those bytes alive without granting neighboring pool capacity.
+        const DeviceAddr size = owner_pinned || (externally_owned && !buffer->impl().owns_data_)
+                                    ? buffer->aligned_size_per_bank()
+                                    : get_shard_allocation_size(*buffer);
+        for (const auto& core : cores) {
+            L1PoolExtent extent{coord, core, get_shard_base_address(*buffer, core), size};
+            extent.externally_owned = true;
+            result.push_back(std::move(extent));
+        }
+    }
+    return result;
 }
 
 std::shared_ptr<distributed::MeshBuffer> create_l1_pool_view(

@@ -8,7 +8,7 @@ import torch
 import ttnn
 
 
-def _single_core_spec(core, per_core=True, width=256):
+def _single_core_spec(core, per_core=True, width=256, range_lockstep=False):
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
     memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -17,6 +17,8 @@ def _single_core_spec(core, per_core=True, width=256):
     )
     if per_core:
         memory_config.experimental_set_per_core_allocation(True)
+    if range_lockstep:
+        memory_config.experimental_set_range_lockstep_allocation(True)
     return ttnn.TensorSpec([1, width], ttnn.uint8, ttnn.ROW_MAJOR_LAYOUT, memory_config)
 
 
@@ -125,7 +127,9 @@ def test_lockstep_pool_view_rejects_different_addresses(per_core_mesh_device):
 def test_l1_pool_adopts_and_retains_existing_tensor(per_core_mesh_device):
     coord = ttnn.MeshCoordinate(0, 0)
     core = ttnn.CoreCoord(0, 0)
+    receiver_core = ttnn.CoreCoord(1, 0)
     spec = _single_core_spec(core, per_core=False, width=16)
+    receiver_spec = _single_core_spec(receiver_core, per_core=False, width=16)
     geometry = ttnn.experimental_l1_tensor_geometry(per_core_mesh_device, coord, spec)
     value = torch.arange(16, dtype=torch.uint8).reshape(1, 16)
     owner = ttnn.from_torch(
@@ -137,18 +141,107 @@ def test_l1_pool_adopts_and_retains_existing_tensor(per_core_mesh_device):
         mesh_mapper=ttnn.ReplicateTensorToMesh(per_core_mesh_device),
     )
     pool = ttnn.experimental_reserve_l1_pool(per_core_mesh_device, [], external_tensors=[owner])
-    assert len(pool.extents) == 1
-    assert pool.extents[0].externally_owned
-    assert pool.extents[0].size == geometry.allocation_shard_size
+    grid = per_core_mesh_device.compute_with_storage_grid_size()
+    assert len(pool.extents) == grid.x * grid.y
+    assert all(extent.externally_owned for extent in pool.extents)
+    assert all(extent.size == geometry.allocation_shard_size for extent in pool.extents)
     assert geometry.aligned_shard_size <= geometry.allocation_shard_size
+    owner_index = next(
+        index for index, extent in enumerate(pool.extents) if extent.device_coord == coord and extent.core_coord == core
+    )
+    receiver_owner_index = next(
+        index
+        for index, extent in enumerate(pool.extents)
+        if extent.device_coord == coord and extent.core_coord == receiver_core
+    )
+    receiver_address = pool.extents[receiver_owner_index].address
+    receiver_size = pool.extents[receiver_owner_index].size
     view = ttnn.experimental_create_l1_pool_tensor(
-        pool, spec, [ttnn.L1PoolPlacement(coord, core, 0, 0)]
+        pool, spec, [ttnn.L1PoolPlacement(coord, core, owner_index, 0)]
+    )
+    receiver = ttnn.experimental_create_l1_pool_tensor(
+        pool,
+        receiver_spec,
+        [ttnn.L1PoolPlacement(coord, receiver_core, receiver_owner_index, 0)],
     )
     ttnn.deallocate(owner, force=True)
     del owner
     del pool
     gc.collect()
+    assert any(
+        start <= receiver_address and receiver_address + receiver_size <= end
+        for start, end in ttnn.experimental_get_l1_occupied_ranges(
+            per_core_mesh_device, coord, receiver_core
+        )
+    )
     torch.testing.assert_close(_read_single_device(view), value)
+    receiver_value = value + 32
+    ttnn.copy_host_to_device_tensor(ttnn.from_torch(receiver_value, dtype=ttnn.uint8), receiver)
+    torch.testing.assert_close(_read_single_device(receiver), receiver_value)
+    torch.testing.assert_close(_read_single_device(view), value)
+
+
+def test_l1_tensor_owned_extents_distinguish_global_range_and_pool_view(per_core_mesh_device):
+    coord = ttnn.MeshCoordinate(0, 0)
+    core = ttnn.CoreCoord(0, 0)
+    value = torch.arange(16, dtype=torch.uint8).reshape(1, 16)
+
+    global_spec = _single_core_spec(core, per_core=False, width=16)
+    global_owner = ttnn.from_torch(
+        value,
+        dtype=ttnn.uint8,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=per_core_mesh_device,
+        memory_config=global_spec.memory_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(per_core_mesh_device),
+    )
+    global_extents = ttnn.experimental_l1_tensor_owned_extents(global_owner)
+    grid = per_core_mesh_device.compute_with_storage_grid_size()
+    assert len(global_extents) == grid.x * grid.y
+    assert {(extent.core_coord.x, extent.core_coord.y) for extent in global_extents} == {
+        (x, y) for y in range(grid.y) for x in range(grid.x)
+    }
+    assert len({extent.address for extent in global_extents}) == 1
+
+    range_spec = _single_core_spec(core, per_core=False, width=16, range_lockstep=True)
+    range_owner = ttnn.from_torch(
+        value,
+        dtype=ttnn.uint8,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=per_core_mesh_device,
+        memory_config=range_spec.memory_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(per_core_mesh_device),
+    )
+    range_extents = ttnn.experimental_l1_tensor_owned_extents(range_owner)
+    assert len(range_extents) == 1
+    assert range_extents[0].core_coord == core
+
+    geometry = ttnn.experimental_l1_tensor_geometry(per_core_mesh_device, coord, global_spec)
+    owner_size = geometry.allocation_alignment
+    address = next(
+        start
+        for start, end in ttnn.experimental_get_l1_free_ranges(per_core_mesh_device, coord, core)
+        if end - start >= owner_size
+    )
+    pool = ttnn.experimental_reserve_l1_pool(
+        per_core_mesh_device, [ttnn.L1PoolExtent(coord, core, address, owner_size)]
+    )
+    view = ttnn.experimental_create_l1_pool_tensor(
+        pool,
+        global_spec,
+        [ttnn.L1PoolPlacement(coord, core, 0, geometry.aligned_shard_size)],
+    )
+    view_extents = ttnn.experimental_l1_tensor_owned_extents(view)
+    assert len(view_extents) == 1
+    assert view_extents[0].core_coord == core
+    assert view_extents[0].address == address + geometry.aligned_shard_size
+    assert view_extents[0].size == geometry.aligned_shard_size
+    assert view_extents[0].size < owner_size
+
+    adopted = ttnn.experimental_reserve_l1_pool(per_core_mesh_device, [], external_tensors=[view])
+    assert len(adopted.extents) == 1
+    assert adopted.extents[0].address == view_extents[0].address
+    assert adopted.extents[0].size == view_extents[0].size
 
 
 def test_l1_pool_reservation_failure_rolls_back(per_core_mesh_device):
