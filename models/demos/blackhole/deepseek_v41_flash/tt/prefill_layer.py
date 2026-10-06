@@ -356,7 +356,9 @@ class DSV41PrefillLayer:
 
     def forward(self, xs, pres, S, s0=0):
         if self.colsplit:
-            if pk_mhc_enabled():
+            if (
+                pk_mhc_enabled() and self.umoe is None
+            ):  # the packed carrier has no unified-MoE branch (DSV41_PREFILL_MOE=unified takes the plain column-split layer)
                 return self.forward_cols_pk(xs, pres, S, s0)
             return self.forward_cols(xs, pres, S, s0)
         xs, pres = unpack_streams(xs, pres)
