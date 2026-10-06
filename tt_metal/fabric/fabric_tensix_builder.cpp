@@ -11,8 +11,6 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "impl/context/metal_context.hpp"
-#include "impl/context/context_types.hpp"
-#include "llrt/core_descriptor.hpp"
 #include "fabric_context.hpp"
 #include "fabric_builder_context.hpp"
 #include "fabric_host_utils.hpp"
@@ -26,7 +24,7 @@ namespace tt::tt_fabric {
 namespace {
 bool device_has_dispatch_tunnel(const tt::Cluster& cluster, ChipId device_id) {
     auto mmio_device_id = cluster.get_associated_mmio_device(device_id);
-    auto tunnels_from_mmio = cluster.get_devices_controlled_by_mmio_device(mmio_device_id);
+    const auto& tunnels_from_mmio = cluster.get_devices_controlled_by_mmio_device(mmio_device_id);
     // results are inclusive of the mmio_device_id so they will never be zero
     TT_FATAL(!tunnels_from_mmio.empty(), "must have at least one mmio device");
     return (tunnels_from_mmio.size() - 1) > 0;
