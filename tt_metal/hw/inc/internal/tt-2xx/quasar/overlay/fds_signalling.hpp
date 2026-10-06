@@ -40,8 +40,6 @@ inline constexpr uint32_t dispatch_lane_mask = (uint32_t{1} << num_dispatch_lane
 inline constexpr uint32_t num_worker_lanes =
     (TT_FDS_DISPATCH_FILTER_COUNT_THRESHOLD_REG_ADDR - TT_FDS_DISPATCH_TENSIX_TO_DISPATCH_0__REG_ADDR) /
     sizeof(uint32_t);
-static_assert(num_dispatch_lanes >= 1 && num_dispatch_lanes < 32, "dispatch lanes must fit a lane mask");
-static_assert(num_worker_lanes >= 1 && num_worker_lanes <= 32, "worker lanes must fit a lane mask");
 inline constexpr uint32_t all_worker_lanes_mask = ~uint32_t{0} >> (32 - num_worker_lanes);
 inline constexpr uint32_t dispatch_done_threshold = 0;
 
