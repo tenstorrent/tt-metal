@@ -359,11 +359,44 @@ def _golden_function_acosh(grad_tensor, input_tensor, *args, device, **kwargs):
     input_tensor.retain_grad()
     pyt_y = torch.acosh(input_tensor)
     pyt_y.backward(gradient=grad_tensor)
-    # BF16 calls run a fused program that returns torch's NaN, which the BF16 pack stores as +inf.
-    return [torch.where(torch.isnan(input_tensor.grad), torch.inf, input_tensor.grad)]
+    return [
+        torch.nan_to_num(input_tensor.grad, nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf())
+    ]
 
 
-ttnn.attach_golden_function(ttnn.acosh_bw, golden_function=_golden_function_acosh)
+def _golden_function_acosh_bw_torch(grad_tensor, input_tensor, *args, device, **kwargs):
+    """Generated from activations/acosh_bw.json and torch 2.11's recorded results.
+
+    ``_golden_function_acosh`` disagrees with torch on 51,038 of the 65,536 BF16 inputs at grad = 1. For BF16 at
+    the parameters the spec covers, this returns torch's result: its own at its special inputs and the exact
+    1/sqrt(x^2 - 1) elsewhere, in float64, rounded once to BF16, with NaN as the BF16 pack stores it (+Inf).
+    Every other call keeps ``_golden_function_acosh``.
+    """
+    import math
+
+    import torch
+
+    if not (grad_tensor.dtype == torch.bfloat16 and input_tensor.dtype == torch.bfloat16 and not args):
+        return _golden_function_acosh(grad_tensor, input_tensor, *args, device=device, **kwargs)
+    x = input_tensor.detach().to(torch.float64)
+    with torch.no_grad():
+        result = 1 / torch.sqrt(x**2 - 1)
+    result = torch.where(x == math.inf, 0.0, result)
+    result = torch.where(x == -math.inf, 0.0, result)
+    result = torch.where((x == 0) & ~torch.signbit(x), math.nan, result)
+    result = torch.where((x == 0) & torch.signbit(x), math.nan, result)
+    result = torch.where(torch.isnan(x), math.nan, result)
+    result = grad_tensor.detach().to(torch.float64) * result
+    # float64 to BF16 in one rounding: to float32 by round-to-odd, then to nearest even.
+    f32 = result.to(torch.float32)
+    inexact = torch.isfinite(result) & (f32.to(torch.float64) != result)
+    bits = f32.view(torch.int32) - (inexact & (f32.to(torch.float64).abs() > result.abs())).to(torch.int32)
+    rounded = (bits | inexact.to(torch.int32)).view(torch.float32).to(torch.bfloat16)
+    rounded = torch.where(torch.isnan(rounded), torch.full_like(rounded, math.inf), rounded)
+    return [rounded]
+
+
+ttnn.attach_golden_function(ttnn.acosh_bw, golden_function=_golden_function_acosh_bw_torch)
 
 
 def _golden_function_atan(grad_tensor, input_tensor, *args, **kwargs):
