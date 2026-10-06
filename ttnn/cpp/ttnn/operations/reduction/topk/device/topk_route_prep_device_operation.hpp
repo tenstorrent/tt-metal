@@ -4,10 +4,13 @@
 
 #pragma once
 
+#include <optional>
 #include <variant>
-#include <vector>
+
+#include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 // topk_route_prep: PRIVATE prep op for ttnn.topk's large-k Blackhole routing composite
@@ -37,27 +40,20 @@ using spec_return_value_t = tt::tt_metal::TensorSpec;
 
 namespace program {
 
-struct TopkRoutePrepSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id{};
-    tt::tt_metal::KernelHandle compute_kernel_id{};
-    tt::tt_metal::KernelHandle writer_kernel_id{};
-    std::vector<CoreCoord> cores;
-};
-
 struct TopkRoutePrepProgramFactory {
-    using shared_variables_t = TopkRoutePrepSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 
+    // Cache-hit refresh. The custom hash omits logical rows and the padded row-tile count, and
+    // defining this hook disables binding patching, so addresses are written here too.
     static void override_runtime_arguments(
-        cached_program_t& cached_program,
+        tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace program
@@ -69,9 +65,6 @@ struct TopkRoutePrepDeviceOperation {
     using spec_return_value_t = topk_route_prep::spec_return_value_t;
 
     using program_factory_t = std::variant<program::TopkRoutePrepProgramFactory>;
-
-    static program_factory_t select_program_factory(
-        const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
 
     static void validate_on_program_cache_miss(const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_hit(const operation_attributes_t& attrs, const tensor_args_t& tensor_args);

@@ -41,11 +41,6 @@ void TopkRoutePrepDeviceOperation::validate_on_program_cache_miss(
     validate_runtime_args(attrs, tensor_args);
 }
 
-TopkRoutePrepDeviceOperation::program_factory_t TopkRoutePrepDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*attrs*/, const tensor_args_t& /*tensor_args*/) {
-    return program::TopkRoutePrepProgramFactory{};
-}
-
 ttsl::hash::hash_t TopkRoutePrepDeviceOperation::compute_program_hash(
     const operation_attributes_t& /*attrs*/, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;

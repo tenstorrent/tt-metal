@@ -30,8 +30,8 @@
 
 #include <algorithm>
 #include <bit>
-#include <map>
 #include <string>
+#include <vector>
 
 using namespace tt::constants;
 
@@ -41,6 +41,32 @@ namespace {
 
 constexpr uint32_t input_cb_index = tt::CBIndex::c_0;  // c_0: hardcoded in the reused reader
 constexpr uint32_t output_cb_index = tt::CBIndex::c_16;
+
+// Kernel indices follow create_descriptor's push_back order.
+constexpr uint32_t kReaderKernelIdx = 0;
+constexpr uint32_t kComputeKernelIdx = 1;
+constexpr uint32_t kWriterKernelIdx = 2;
+
+// Per-core runtime arg slots. Must match the emplace_runtime_args order below.
+namespace reader_arg {
+constexpr uint32_t SRC_ADDR = 0;
+constexpr uint32_t NTILES = 1;
+constexpr uint32_t START_ID = 2;
+}  // namespace reader_arg
+namespace compute_arg {
+constexpr uint32_t NBLOCKS = 0;
+constexpr uint32_t START_BLOCK = 1;
+constexpr uint32_t NBLOCKS_PER_ROW = 2;
+}  // namespace compute_arg
+namespace writer_arg {
+constexpr uint32_t DST_ADDR = 0;
+constexpr uint32_t NBLOCKS = 1;
+constexpr uint32_t START_BLOCK = 2;
+constexpr uint32_t NBLOCKS_PER_ROW = 3;
+constexpr uint32_t TILE_ROWS_PER_BATCH = 4;
+constexpr uint32_t LOGICAL_ROWS = 5;
+constexpr uint32_t LOGICAL_WIDTH = 6;
+}  // namespace writer_arg
 
 // 8 = bf16 half-sync DEST tile capacity (fp32_dest_acc_en=false, dst_full_sync_en=false —
 // the ComputeConfig below) and simultaneously pack_untilize's max block width in that mode.
@@ -83,147 +109,204 @@ uint32_t first_tile_of_block(const PrepWorkSplit& split, uint32_t b) {
     return (b / split.nblocks_per_row) * split.width_tiles + (b % split.nblocks_per_row) * split.bw_full;
 }
 
-// (Re)computes every runtime arg from the tensors. Called by create() and, on cache hits, by
-// override_runtime_arguments(); the program hash pins every structural input (core partition,
-// block widths, stick size), so only addresses and the logical R/W clamps can differ here.
-void set_runtime_args(
-    tt::tt_metal::Program& program,
-    const TopkRoutePrepSharedVariables& shared,
-    const Tensor& input,
-    const Tensor& output) {
-    const auto split = compute_work_split(input);
-    const auto grid = input.device()->compute_with_storage_grid_size();
-    const auto block_split = ttnn::split_blocks_for_tilize(CoreCoord(grid.x, grid.y), split.nblocks);
-
-    const uint32_t tile_rows_per_batch = input.padded_shape()[-2] / TILE_HEIGHT;
-    const uint32_t logical_rows = input.logical_shape()[-2];
-    const uint32_t logical_width = input.logical_shape()[-1];
-
+struct PrepCoreArgs {
+    CoreCoord core;
+    uint32_t ntiles = 0;
+    uint32_t start_tile = 0;
+    uint32_t nblocks_this_core = 0;
     uint32_t start_block = 0;
-    for (uint32_t i = 0; i < shared.cores.size(); ++i) {
-        const CoreCoord& core = shared.cores[i];
-        const bool is_cliff = block_split.nblocks_per_core_cliff > 0 && i + 1 == shared.cores.size();
+};
+
+// Per-core runtime layout. create_descriptor and override_runtime_arguments both call this so
+// the arg slots cannot drift. The program hash pins the block widths, the stick size, and the
+// core partition; logical rows and tile_rows_per_batch are not in that hash.
+struct PrepRuntimeLayout {
+    PrepWorkSplit split;
+    tt::tt_metal::CoreRangeSet all_cores;
+    std::vector<PrepCoreArgs> cores;
+    uint32_t tile_rows_per_batch = 0;
+    uint32_t logical_rows = 0;
+    uint32_t logical_width = 0;
+};
+
+PrepRuntimeLayout build_runtime_layout(const Tensor& input) {
+    PrepRuntimeLayout layout;
+    layout.split = compute_work_split(input);
+    const auto grid = input.device()->compute_with_storage_grid_size();
+    const auto block_split = ttnn::split_blocks_for_tilize(CoreCoord(grid.x, grid.y), layout.split.nblocks);
+    layout.all_cores = block_split.all_cores;
+    layout.tile_rows_per_batch = input.padded_shape()[-2] / TILE_HEIGHT;
+    layout.logical_rows = input.logical_shape()[-2];
+    layout.logical_width = input.logical_shape()[-1];
+
+    // split_blocks_for_tilize(CoreCoord, ...) places core i at (i % grid.x, i / grid.x), cliff
+    // last; enumerate in that exact order so the contiguous block partition lines up.
+    layout.cores.reserve(block_split.ncores);
+    uint32_t start_block = 0;
+    for (uint32_t i = 0; i < block_split.ncores; ++i) {
+        const bool is_cliff = block_split.nblocks_per_core_cliff > 0 && i + 1 == block_split.ncores;
         const uint32_t nblocks_this_core = is_cliff ? block_split.nblocks_per_core_cliff : block_split.nblocks_per_core;
+        const uint32_t start_tile = first_tile_of_block(layout.split, start_block);
         const uint32_t ntiles_this_core =
-            first_tile_of_block(split, start_block + nblocks_this_core) - first_tile_of_block(split, start_block);
-
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            shared.reader_kernel_id,
-            core,
-            {input.buffer()->address(),                  // src_addr
-             ntiles_this_core,                           // ntiles
-             first_tile_of_block(split, start_block)});  // start_id
-
-        tt::tt_metal::SetRuntimeArgs(
-            program, shared.compute_kernel_id, core, {nblocks_this_core, start_block, split.nblocks_per_row});
-
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            shared.writer_kernel_id,
-            core,
-            {output.buffer()->address(),  // dst_addr
-             nblocks_this_core,
-             start_block,
-             split.nblocks_per_row,
-             tile_rows_per_batch,
-             logical_rows,
-             logical_width});
-
+            first_tile_of_block(layout.split, start_block + nblocks_this_core) - start_tile;
+        layout.cores.push_back(PrepCoreArgs{
+            .core = CoreCoord{i % grid.x, i / grid.x},
+            .ntiles = ntiles_this_core,
+            .start_tile = start_tile,
+            .nblocks_this_core = nblocks_this_core,
+            .start_block = start_block,
+        });
         start_block += nblocks_this_core;
     }
+    return layout;
 }
 
 }  // namespace
 
-TopkRoutePrepProgramFactory::cached_program_t TopkRoutePrepProgramFactory::create(
+tt::tt_metal::ProgramDescriptor TopkRoutePrepProgramFactory::create_descriptor(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const auto& input = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
+    const auto layout = build_runtime_layout(input);
+    const auto& split = layout.split;
+    const auto& all_cores = layout.all_cores;
 
-    auto program = tt::tt_metal::CreateProgram();
-
-    const auto split = compute_work_split(input);
-    const auto grid = input.device()->compute_with_storage_grid_size();
-    const auto block_split = ttnn::split_blocks_for_tilize(CoreCoord(grid.x, grid.y), split.nblocks);
-    const auto& all_cores = block_split.all_cores;
+    auto* input_buffer = input.buffer();
+    auto* output_buffer = output.buffer();
+    TT_FATAL(input_buffer != nullptr, "topk_route_prep input tensor has no device buffer");
+    TT_FATAL(output_buffer != nullptr, "topk_route_prep output tensor has no device buffer");
 
     const uint32_t tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
 
+    tt::tt_metal::ProgramDescriptor desc;
+    desc.cbs.reserve(2);
+    desc.kernels.reserve(3);
+
     // Input CB: tile pages, double-buffered against one full block.
-    const auto input_cb_config = tt::tt_metal::CircularBufferConfig(
-                                     2 * split.bw_full * tile_bytes, {{input_cb_index, tt::DataFormat::Float16_b}})
-                                     .set_page_size(input_cb_index, tile_bytes);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, input_cb_config);
+    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+        .total_size = 2 * split.bw_full * tile_bytes,
+        .core_ranges = all_cores,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(input_cb_index),
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = tile_bytes,
+        }}},
+    });
 
     // Output CB: one page per BLOCK (uniform bw_full-sized pages so pack_untilize's contiguous
     // block write can never straddle the CB wrap; a bw_last block simply leaves the page tail
     // unused), double-buffered. Each page holds the untilized block: 32 sticks of bw*32 elements.
     const uint32_t output_page_bytes = split.bw_full * tile_bytes;
-    const auto output_cb_config =
-        tt::tt_metal::CircularBufferConfig(2 * output_page_bytes, {{output_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(output_cb_index, output_page_bytes);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+        .total_size = 2 * output_page_bytes,
+        .core_ranges = all_cores,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_cb_index),
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = output_page_bytes,
+        }}},
+    });
 
     // Reader: reused BY PATH, with the same compile args the untilize parallelize-column factory
     // passes (TensorAccessorArgs only; CB c_0 and its page size come from the CB interface).
     std::vector<uint32_t> reader_compile_args;
-    tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_args);
-    auto reader_kernel = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
+    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_args);
+    tt::tt_metal::KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp";
+    reader_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_args);
+    reader_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
 
     // Compute: fused clamp + pack_untilize. CLAMP_BITS is the fp32 bit pattern documented above.
-    std::map<std::string, std::string> compute_defines;
-    compute_defines["CLAMP_BITS"] = std::to_string(clamp_bits) + "u";
-    const std::vector<uint32_t> compute_compile_args = {split.bw_full, split.bw_last, input_cb_index, output_cb_index};
-    auto compute_kernel = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_route_prep_untilize_clamp.cpp",
-        all_cores,
-        tt::tt_metal::ComputeConfig{// bf16 half-sync: DEST holds 8 tiles == max_block_width_tiles above.
-                                    .fp32_dest_acc_en = false,
-                                    .dst_full_sync_en = false,
-                                    .compile_args = compute_compile_args,
-                                    .defines = compute_defines});
+    // bf16 half-sync: DEST holds 8 tiles == max_block_width_tiles above.
+    tt::tt_metal::KernelDescriptor compute_desc;
+    compute_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_route_prep_untilize_clamp.cpp";
+    compute_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = all_cores;
+    compute_desc.compile_time_args = {split.bw_full, split.bw_last, input_cb_index, output_cb_index};
+    compute_desc.defines = {{"CLAMP_BITS", std::to_string(clamp_bits) + "u"}};
+    compute_desc.config = tt::tt_metal::ComputeConfigDescriptor{
+        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+        .fp32_dest_acc_en = false,
+        .dst_full_sync_en = false,
+        .math_approx_mode = false,
+    };
 
     std::vector<uint32_t> writer_compile_args = {split.bw_full, split.bw_last, output_cb_index};
-    tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_args);
-    auto writer_kernel = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_topk_route_prep_stick_layout.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
+    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_args);
+    tt::tt_metal::KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_topk_route_prep_stick_layout.cpp";
+    writer_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_args);
+    writer_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
-    // split_blocks_for_tilize(CoreCoord, ...) places core i at (i % grid.x, i / grid.x), cliff
-    // last; enumerate in that exact order so the contiguous block partition lines up.
-    std::vector<CoreCoord> cores;
-    cores.reserve(block_split.ncores);
-    for (uint32_t i = 0; i < block_split.ncores; ++i) {
-        cores.push_back(CoreCoord{i % grid.x, i / grid.x});
+    for (const auto& core_args : layout.cores) {
+        const auto& core = core_args.core;
+        reader_desc.emplace_runtime_args(core, {input_buffer, core_args.ntiles, core_args.start_tile});
+        compute_desc.emplace_runtime_args(
+            core, {core_args.nblocks_this_core, core_args.start_block, split.nblocks_per_row});
+        writer_desc.emplace_runtime_args(
+            core,
+            {output_buffer,
+             core_args.nblocks_this_core,
+             core_args.start_block,
+             split.nblocks_per_row,
+             layout.tile_rows_per_batch,
+             layout.logical_rows,
+             layout.logical_width});
     }
 
-    TopkRoutePrepSharedVariables shared{
-        .reader_kernel_id = reader_kernel,
-        .compute_kernel_id = compute_kernel,
-        .writer_kernel_id = writer_kernel,
-        .cores = std::move(cores)};
-    set_runtime_args(program, shared, input, output);
-
-    return cached_program_t{std::move(program), std::move(shared)};
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(compute_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    return desc;
 }
 
 void TopkRoutePrepProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
+    tt::tt_metal::Program& program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    set_runtime_args(
-        cached_program.program, cached_program.shared_variables, tensor_args.input_tensor, tensor_return_value);
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    const auto& input = tensor_args.input_tensor;
+    const Tensor& output = tensor_return_value;
+    auto* input_buffer = input.buffer();
+    auto* output_buffer = output.buffer();
+    TT_FATAL(input_buffer != nullptr, "topk_route_prep input tensor has no device buffer");
+    TT_FATAL(output_buffer != nullptr, "topk_route_prep output tensor has no device buffer");
+
+    const auto layout = build_runtime_layout(input);
+    const uint32_t input_address = input_buffer->address();
+    const uint32_t output_address = output_buffer->address();
+
+    for (const auto& core_args : layout.cores) {
+        const auto& core = core_args.core;
+        auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx, core);
+        reader_args[reader_arg::SRC_ADDR] = input_address;
+        reader_args[reader_arg::NTILES] = core_args.ntiles;
+        reader_args[reader_arg::START_ID] = core_args.start_tile;
+
+        auto& compute_args = tt::tt_metal::GetRuntimeArgs(program, kComputeKernelIdx, core);
+        compute_args[compute_arg::NBLOCKS] = core_args.nblocks_this_core;
+        compute_args[compute_arg::START_BLOCK] = core_args.start_block;
+        compute_args[compute_arg::NBLOCKS_PER_ROW] = layout.split.nblocks_per_row;
+
+        auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx, core);
+        writer_args[writer_arg::DST_ADDR] = output_address;
+        writer_args[writer_arg::NBLOCKS] = core_args.nblocks_this_core;
+        writer_args[writer_arg::START_BLOCK] = core_args.start_block;
+        writer_args[writer_arg::NBLOCKS_PER_ROW] = layout.split.nblocks_per_row;
+        writer_args[writer_arg::TILE_ROWS_PER_BATCH] = layout.tile_rows_per_batch;
+        writer_args[writer_arg::LOGICAL_ROWS] = layout.logical_rows;
+        writer_args[writer_arg::LOGICAL_WIDTH] = layout.logical_width;
+    }
 }
 
 }  // namespace ttnn::operations::reduction::topk_route_prep::program
