@@ -16,3 +16,10 @@ Next after the marker: read summary, pick 1-2 best, write configs5.txt (baseline
 LTX_E2E_SEEDS=0,1,2,3,4 LTX_FRESH_PROMPTS=0 LTX_E2E_EXTRA_REPLAYS=0, default prompt = ref_dv145's), run
 TAG=seeds driver, then ltx_eval batch --vbench-ref vs ref_dv145 seeds, visual check, commit summary + stills
 on ttp/t164-eval-pack-g15, ttp push.
+
+## Run log
+- 2026-10-06 21:15 UTC: pack driver started (ttp detach t164-pack, driver pid 3478924; log/rc in
+  tt-project/state/runs/669/t164-pack.{log,rc}). Baseline = broker job 403, queued behind ltx-host 402.
+  ~/fasth3 94.7 GiB at start. Wake probe: `ttp detach --check .../runs/669/t164-pack.rc`.
+- If the driver dies while a job runs, wait for that job to end before relaunching (the skip check runs
+  before the wait, so a relaunch during a live job would submit a duplicate).
