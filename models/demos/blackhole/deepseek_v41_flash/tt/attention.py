@@ -317,7 +317,10 @@ class DSV41Attention:
 
     def _rope_rows(self, x, c, s, name="SW"):
         """x [..., 512] (any leading dims): x * C + (x @ P) * S with full-width tables broadcast over rows."""
-        if AF.flag("DSV41_ATTN_FUSED_ROPE", "1"):
+        # The fused rows-layout kernel rotates every row by the angle of table row 0 (tests/test_attn_fused_rope.py: "all users share row 0"): only valid when all rows
+        # share ONE position. Paged decode with per-user positions (ragged) and spec verify blocks (n rows at different positions, > 32 rows) need per-row angles:
+        # the unfused path is the default now; DSV41_ROPE_ROWS_FUSED=1 restores the fused kernel (uniform single-position decode only).
+        if AF.flag("DSV41_ATTN_FUSED_ROPE", "1") and AF.flag("DSV41_ROPE_ROWS_FUSED", "0"):
             return AF.rope_inplace(x, c, s, 1, rows_layout=True)
         return ttnn.addcmul(ttnn.multiply(x, c), self._lin(x, self.Pf, name), s)
 
