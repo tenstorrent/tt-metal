@@ -2,6 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""Parameter preprocessing for the ResNet101-DCN backbone and the FPN.
+
+Folds each BatchNorm into the conv before it, and records every conv's input
+shape from one reference forward. The DCN offset rows are reordered here to the
+(x, y) order the device deformable conv reads.
+"""
+
 from types import SimpleNamespace
 
 import torch

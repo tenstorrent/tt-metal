@@ -2,12 +2,39 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""Conv shared by the ResNet101-DCN backbone and the FPN.
+
+Weights are prepared once, in the constructor, for one interleaved DRAM input dtype
+and layout. A later call with a different input fails. A 1x1 stride-1 conv whose
+activation lives in DRAM runs as a matmul; a spatial conv there runs in a fixed
+number of width slices.
+"""
+
 import math
 
 import ttnn
 
 
 class TtnnConv2D:
+    """``conv`` carries the conv's geometry and its input's batch, height and width.
+
+    Most convs run through conv2d. ``input_dtype`` and ``input_layout`` describe the
+    interleaved DRAM tensor every call receives; conv2d lays its weights out for that
+    input, so they are prepared here against it and a forward does no host work, and a
+    call with a different input fails instead of running on mismatched weights.
+    With ``dram_activation``, a 1x1 stride-1 conv runs as ``ttnn.linear`` instead, which
+    takes any layout, sharding or dtype and ignores ``input_dtype`` and ``input_layout``;
+    a spatial conv keeps conv2d and runs in ``dram_conv_slices`` width slices.
+
+    ``dealloc_act`` lets conv2d free the L1-sharded copy it makes of a DRAM input once the
+    halo has read it; the DRAM input itself is never freed.
+
+    ``output_dtype`` is the dtype the conv emits, None for its input's. A spatial conv, on
+    conv2d's own path with packer_l1_acc off, keeps its partial sums between reduction blocks
+    in the output dtype; a 1x1 stride-1 conv runs as a matmul (conv2d lowers it, or
+    ``ttnn.linear`` above), which keeps them in fp32 with ``fp32_dest_acc_en``.
+    """
+
     def __init__(
         self,
         conv,
@@ -26,23 +53,6 @@ class TtnnConv2D:
         input_layout=ttnn.TILE_LAYOUT,
         output_dtype=None,
     ):
-        """``conv`` carries the conv's geometry and its input's batch, height and width.
-
-        Most convs run through conv2d. ``input_dtype`` and ``input_layout`` describe the
-        interleaved DRAM tensor every call receives; conv2d lays its weights out for that
-        input, so they are prepared here against it and a forward does no host work, and a
-        call with a different input fails instead of running on mismatched weights.
-        With ``dram_activation``, a 1x1 stride-1 conv runs as ``ttnn.linear`` instead, which
-        takes any layout, sharding or dtype and ignores ``input_dtype`` and ``input_layout``;
-        a spatial conv keeps conv2d and runs in ``dram_conv_slices`` width slices.
-
-        ``dealloc_act`` lets conv2d free the L1-sharded copy it makes of a DRAM input once the
-        halo has read it; the DRAM input itself is never freed.
-
-        ``output_dtype`` is the dtype the conv emits, None for its input's. A spatial conv, on
-        conv2d's own path with packer_l1_acc off, keeps its partial sums between reduction blocks
-        in the output dtype; a 1x1 stride-1 conv runs as a matmul (conv2d lowers it, or
-        ``ttnn.linear`` above), which keeps them in fp32 with ``fp32_dest_acc_en``."""
         self.dram_activation = dram_activation
         self.input_dtype = input_dtype
         self.input_layout = input_layout
