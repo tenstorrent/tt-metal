@@ -151,6 +151,21 @@ class GoldenTrace:
             )
         return self.decoder_output(layer - 1, start, end)
 
+    @property
+    def completion_token_ids(self) -> list[int]:
+        return self.metadata["completion_token_ids"]
+
+    def topk(self, kind: str) -> torch.Tensor:
+        """vLLM's next-token top-k, one row per prefill step: ``kind`` is indices, logprobs or logsumexp.
+
+        Row ``k`` is the prediction after the last token of step ``k``, i.e. position
+        ``max_num_batched_tokens * (k + 1) - 1``. The stream lives under ``topk/<kind>``, not under its
+        own name, so ``rows`` cannot read it. Indices come back int64.
+        """
+        stream = f"topk_{kind}"
+        out = read_sharded_rows(self.path / "topk" / kind, stream, 0, self.row_count(stream))
+        return out.to(torch.int64) if kind == "indices" else out
+
     def compressed_entries(self, layer: int, count: int | None = None) -> torch.Tensor:
         """The layer's compressed KV, ``[entries, kv_single_dim]``.
 
