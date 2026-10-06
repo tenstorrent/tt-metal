@@ -7,10 +7,15 @@ import ml_dtypes
 import numpy as np
 import torch
 from helpers.format_config import (
+    E8M0_BIAS,
+    E8M0_NAN_CODE,
     MX_FORMAT_BLOCK_SIZE,
     MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN,
     MXFP8_SRCS_SLICE_PACKED_BYTE_LEN,
+    REG_EXP_FLUSH_AT,
+    REG_EXP_SATURATE_AT,
     DataFormat,
+    e8m0_scale_factors,
 )
 
 from .llk_params import format_dict, format_tile_sizes
@@ -230,6 +235,16 @@ def _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces=4, face_r_dim=MAX_FACE_R_DI
 
     One E8M0 scale byte per 32-element block.
 
+    Two register-level effects are applied, both shared with the other MX
+    formats via ``_apply_gasket_range``:
+
+      - **Block scale 0xFF NaNs the whole block**, zeros included. (This used
+        to zero the block here; the hardware NaNs it, as ``unpack_mxfp4``
+        already did.)
+      - **No subnormals.** The gasket lands the result in an 8-bit-exponent
+        register, so a decoded value saturates to +/-Inf at unbiased exponent
+        >= 128 and flushes to +/-0 at <= -127.
+
     Args:
         packed_bytes: List of bytes in [all scales][all elements] format
         fp8_dtype: ml_dtypes dtype (float8_e5m2 or float8_e4m3fn)
@@ -252,15 +267,18 @@ def _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces=4, face_r_dim=MAX_FACE_R_DI
         num_scales, MX_FORMAT_BLOCK_SIZE
     )
 
-    # Vectorized scale decoding - decode all E8M0 scales at once
+    # Vectorized scale decoding - decode all E8M0 scales at once. float64 keeps
+    # element * 2^block_exp exact across the whole E8M0 range, so the range
+    # clamps below (not a float32 round) decide overflow and underflow.
     scales_array = np.frombuffer(bytes(scales_e8m0), dtype=np.uint8)
-    # Handle NaN case (255) and compute 2^(exponent) where exponent = value - 127
-    scale_factors = np.where(
-        scales_array == 255, 0.0, np.exp2(scales_array.astype(np.float32) - 127.0)
+    nan_blocks = scales_array == E8M0_NAN_CODE
+    block_exp_unbiased = scales_array.astype(np.int32) - E8M0_BIAS
+    scaled_blocks = (
+        fp8_blocks.astype(np.float64)
+        * np.exp2(block_exp_unbiased.astype(np.float64))[:, np.newaxis]
     )
 
-    # Scale blocks back to float32
-    scaled_blocks = fp8_blocks.astype(np.float32) * scale_factors[:, np.newaxis]
+    scaled_blocks = _apply_gasket_range(scaled_blocks, nan_blocks)
 
     # Flatten and convert to bfloat16 tensor
     return torch.tensor(scaled_blocks.flatten(), dtype=torch.bfloat16)
@@ -310,6 +328,10 @@ def unpack_mxfp8r(
     """
     Unpack MXFP8R format (E5M2 variant) to bfloat16 tensor.
 
+    A 0xFF block scale NaNs the whole block, and values outside the register's
+    exponent range saturate to +/-Inf or flush to +/-0 rather than becoming
+    subnormal -- see :func:`_unpack_mxfp8`.
+
     Args:
         packed_bytes: Packed MX data in FULLY SEPARATED layout [all_scales][all_elements]
         num_faces: Number of faces to unpack (1, 2, or 4). Defaults to 4.
@@ -336,6 +358,10 @@ def unpack_mxfp8p(
 ):
     """
     Unpack MXFP8P format (E4M3 variant) to bfloat16 tensor.
+
+    A 0xFF block scale NaNs the whole block, and values outside the register's
+    exponent range saturate to +/-Inf or flush to +/-0 rather than becoming
+    subnormal -- see :func:`_unpack_mxfp8`.
 
     Args:
         packed_bytes: Packed MX data in FULLY SEPARATED layout [all_scales][all_elements]
@@ -375,6 +401,10 @@ def unpack_mxfp4(
     Per Tensix hardware documentation:
       - Block exp = 0xFF (255): NaN block, all elements become NaN
       - Block exp = 0x00 (0): neutral-ish scale for zeros
+
+    The register has no subnormals, so a decoded value saturates to +/-Inf at
+    unbiased exponent >= 128 and flushes to +/-0 at <= -127 -- the same rule
+    MXFP8 uses, applied through the shared ``_apply_gasket_range``.
 
     Args:
         packed_bytes: Packed MX data in FULLY SEPARATED layout [all_scales][all_elements]
@@ -427,35 +457,59 @@ def unpack_mxfp4(
         .astype(np.float32)
     )
 
-    block_exp_unbiased = scales_u8.astype(np.int32) - 127  # E8M0 bias=127
-    scaled_blocks = fp4_f32 * np.exp2(block_exp_unbiased.astype(np.float32))[:, None]
-
-    # Extract 2-bit exponent field from E2M1 format
-    unit_exp_field = (
-        ((nibbles_u8 >> 1) & 0x3)
-        .astype(np.int32)[: num_blocks * block_size]
-        .reshape(num_blocks, block_size)
+    nan_blocks = scales_u8 == E8M0_NAN_CODE
+    block_exp_unbiased = scales_u8.astype(np.int32) - E8M0_BIAS
+    # float64 keeps element * 2^block_exp exact across the whole E8M0 range,
+    # as in _unpack_mxfp8, so the range clamp below (not a float32 overflow)
+    # decides Inf. In float32 a 0xFE scale with a +-6 element, which the packer
+    # emits for Inf-only blocks, overflows; so does the 0xFF NaN scale (2^128).
+    scaled_blocks = (
+        fp4_f32.astype(np.float64)
+        * np.exp2(block_exp_unbiased.astype(np.float64))[:, np.newaxis]
     )
 
-    # E2M1 unbiased exponent calculation (bias=1):
-    # - Normal values (exp_field != 0): unbiased = exp_field - 1
-    # - Subnormal values (exp_field == 0): unbiased = 0 (fixed at 1-bias)
-    unit_exp_unbiased = np.where(unit_exp_field == 0, 0, unit_exp_field - 1)
-    combined_unbiased = block_exp_unbiased[:, None] + unit_exp_unbiased
-
-    nan_blocks = scales_u8 == 0xFF
-    overflow_mask = (combined_unbiased >= 128) & ~nan_blocks[:, None]
-    underflow_mask = (combined_unbiased < -127) & ~nan_blocks[:, None]
-
-    if np.any(nan_blocks):
-        scaled_blocks[nan_blocks] = np.nan
-
-    scaled_blocks[overflow_mask] = np.where(
-        scaled_blocks[overflow_mask] >= 0.0, np.inf, -np.inf
-    )
-    scaled_blocks[underflow_mask] = 0.0
+    # Same range rule as MXFP8 -- the gasket treats both identically once the
+    # element is decoded, so the clamp is shared rather than recomputed from
+    # block_exp + element_exp, which misses subnormal elements.
+    scaled_blocks = _apply_gasket_range(scaled_blocks, nan_blocks)
 
     return torch.tensor(scaled_blocks.ravel(), dtype=torch.bfloat16)
+
+
+def _apply_gasket_range(scaled_blocks, nan_blocks):
+    """Clamp decoded MX values to what the gasket's register format can hold.
+
+    The gasket lands every MX format in an 8-bit-exponent register (TF32 /
+    Float16_b) that has no subnormals, so it forces Inf once the rebiased
+    exponent reaches 255 and zero once it drops to 0 -- in unbiased terms
+    ``>= 128`` and ``<= -127``. The rule is identical for MXFP8R, MXFP8P and
+    MXFP4; only the element decoding before it differs.
+
+    The exponent is taken from the decoded value itself rather than added up as
+    ``block_exp + element_exp``, because the hardware normalises a subnormal
+    element before rebiasing, subtracting its leading zeros. Summing the fields
+    instead puts a subnormal element one or more binades too high, so the flush
+    misses values that the device zeroes.
+
+    `nan_blocks` is applied last: a 0xFF block scale NaNs every datum of the
+    block, zeros included, and that outranks the range clamp.
+    """
+    finite_nonzero = np.isfinite(scaled_blocks) & (scaled_blocks != 0.0)
+    _, exponents = np.frexp(np.where(finite_nonzero, scaled_blocks, 1.0))
+    unbiased = exponents - 1  # value = mantissa * 2^exponent, mantissa in [0.5, 1)
+    scaled_blocks = np.where(
+        finite_nonzero & (unbiased >= REG_EXP_SATURATE_AT),
+        np.copysign(np.inf, scaled_blocks),
+        scaled_blocks,
+    )
+    scaled_blocks = np.where(
+        finite_nonzero & (unbiased <= REG_EXP_FLUSH_AT),
+        np.copysign(0.0, scaled_blocks),
+        scaled_blocks,
+    )
+    if np.any(nan_blocks):
+        scaled_blocks[nan_blocks] = np.nan
+    return scaled_blocks
 
 
 def _mxint_decode_blocks(scales_e8m0, int_blocks, elem_scale_divisor: float):
@@ -464,12 +518,19 @@ def _mxint_decode_blocks(scales_e8m0, int_blocks, elem_scale_divisor: float):
     (num_blocks, 32) int8 array of per-element values, return the decoded
     bfloat16 tensor. `elem_scale_divisor` is the format's implicit scale
     denominator (64 for MxInt8's 2^-6, 4 for MxInt4's 2^-2, 1 for MxInt2's
-    2^0). NaN scale (0xFF) zeros the block, matching MxFp unpack behavior.
+    2^0).
+
+    A 0xFF scale NaNs the whole block, zeros included, as the unpacker does and
+    as `_unpack_mxfp8` and `unpack_mxfp4` already do. The MxInt packer does
+    reach this: it coerces NaN *elements* to 0, but an all-NaN block still gets
+    scale 255, so the two are separate decisions and only the element one is a
+    coercion. No current stimulus builds an all-NaN block, so nothing exercises
+    it today.
     """
     scales_array = np.frombuffer(bytes(scales_e8m0), dtype=np.uint8)
-    scale_factors = np.where(
-        scales_array == 255, 0.0, np.exp2(scales_array.astype(np.float32) - 127.0)
-    )
+    # Same decode the packers use, NaN at 0xFF included -- multiplying by that
+    # NaN is what carries the rule through, so no separate overlay is needed.
+    scale_factors = e8m0_scale_factors(scales_array)
     decoded = int_blocks.astype(np.float32) * (
         scale_factors[:, np.newaxis] / elem_scale_divisor
     )

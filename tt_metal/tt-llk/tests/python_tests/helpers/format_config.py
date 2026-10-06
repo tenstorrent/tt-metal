@@ -228,6 +228,59 @@ class DataFormat(Enum):
 # Bare in mind that MX formats can have multiple contiguous scales with corresponding values after.
 MX_FORMAT_BLOCK_SIZE = 32
 
+#: E8M0 block-scale encoding, shared by every MX format: an 8-bit exponent with
+#: bias 127 and two reserved codes, 0xFF for a NaN block and 0xFE for a block
+#: that saturated to infinity.
+#:
+#: Use these names only for MX block scales. 127 is also the fp32 exponent bias
+#: and the BFP shared-exponent bias, and -127/128 also appear as a destination
+#: register's exponent floor and ceiling -- four different quantities that
+#: happen to share a number, which is why substituting the literal blindly is
+#: wrong.
+E8M0_BIAS = 127
+E8M0_NAN_CODE = 0xFF
+E8M0_INF_CODE = 0xFE
+
+
+#: Unbiased exponent limits of the 8-bit-exponent register (TF32 / Float16_b)
+#: that the unpacker lands MX data in. That register has no subnormals, so a
+#: decoded value saturates to +/-Inf at or above the ceiling and flushes to
+#: +/-0 at or below the floor.
+#:
+#: The floor shares its magnitude with :data:`E8M0_BIAS` and is a different
+#: quantity: this is the register's smallest representable exponent, not a
+#: block scale's bias.
+REG_EXP_SATURATE_AT = 128
+REG_EXP_FLUSH_AT = -127
+
+
+def e8m0_scale_factors(scales_e8m0_array):
+    """E8M0 scale codes decoded to float32 multipliers, NaN where the code is 0xFF.
+
+    0xFF is the reserved NaN scale rather than an exponent, so it decodes to NaN
+    and that NaN propagates into whatever the caller does with the block. Where
+    it ends up differs by format: MXFP8 keeps it in the element encoding (0x7E
+    for E5M2, 0x7F for E4M3), while MXFP4 and MxInt zero their elements --
+    fp4 has no NaN nibble and MxInt no NaN at all -- so for those the 0xFF
+    scale is the only surviving record that the block was NaN. Either way the
+    block reads back as NaN, because unpacking takes that from the scale.
+
+    A harmless code is substituted before exponentiating because ``exp2(128)``
+    overflows float32. Computing it and masking afterwards gives the same
+    numbers but raises a spurious overflow warning, which then has to be
+    suppressed at every call site.
+
+    Args:
+        scales_e8m0_array: (num_blocks,) array of E8M0 scale codes, 0..255
+
+    Returns:
+        (num_blocks,) float32 array of multipliers, NaN at the 0xFF entries
+    """
+    nan_scales = scales_e8m0_array == E8M0_NAN_CODE
+    safe_scales = np.where(nan_scales, E8M0_BIAS, scales_e8m0_array).astype(np.float32)
+    return np.where(nan_scales, np.nan, np.exp2(safe_scales - E8M0_BIAS))
+
+
 # Map of MX formats to their maximum normal values
 # Per OCP MX Specification:
 # - E5M2 (MxFp8R): Max normal = ± 2^15 × 1.75 = ± 57,344

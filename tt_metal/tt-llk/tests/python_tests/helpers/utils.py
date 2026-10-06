@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import os
 import shlex
 import subprocess
@@ -384,13 +385,11 @@ def _bfp_block_aware_compare(
     # so on ULP 0: the first has no finite lane to judge, and in the second every finite
     # lane is exactly 0, which `tiny_ok` accepts on absolute closeness below.
     nonzero = block_max > 0
-    # log2 in float64 so floor() lands on the same integer math.log2 gave per block;
-    # in float32 an exact power of two can come back a hair under and floor a step early.
     safe_max = torch.where(nonzero, block_max, torch.ones_like(block_max)).double()
     one_ulp = (
         torch.where(
             nonzero,
-            torch.exp2(torch.floor(torch.log2(safe_max)) - (mantissa_bits - 1)),
+            torch.exp2(floor_log2(safe_max) - (mantissa_bits - 1)),
             torch.zeros_like(safe_max),
         )
         .float()
@@ -459,7 +458,6 @@ def _mxint_block_aware_compare(
     """
 
     BLOCK = 32
-    TILE_SIZE = 1024
 
     g_flat = golden.float().flatten()
     r_flat = result.float().flatten()
@@ -495,7 +493,7 @@ def _mxint_block_aware_compare(
     amax_safe = torch.where(nonzero, block_amax, torch.ones_like(block_amax))
     scale_factor = torch.where(
         nonzero,
-        torch.exp2(torch.floor(torch.log2(amax_safe))),
+        torch.exp2(floor_log2(amax_safe)),
         torch.zeros_like(block_amax),
     )
     # Relative float32-rounding guard (~1 ULP at the block magnitude) instead of a
@@ -525,6 +523,70 @@ _MXFP_COMPARE_PARAMS = {
 }
 
 
+def floor_log2(values: torch.Tensor) -> torch.Tensor:
+    """``floor(log2(x))`` for positive `x`, computed exactly.
+
+    ``torch.log2`` on a float32 immediately below a power of two rounds up to
+    the exact integer, so ``floor`` lands a binade high. ``frexp`` returns the
+    exponent directly -- ``value = mantissa * 2^exp`` with the mantissa in
+    [0.5, 1), so the floor is ``exp - 1`` with no rounding involved.
+
+    The packers derive the E8M0 block scale this way, so the comparators have
+    to as well: disagreeing about a block's scale means disagreeing about its
+    tolerance, on exactly the datums a boundary-value test would use.
+    """
+    _, exponent = torch.frexp(values)
+    return (exponent - 1).to(values.dtype)
+
+
+def mxfp_local_step(
+    magnitude: torch.Tensor,
+    mantissa_bits: int,
+    element_max_normal: float,
+    element_min_subnormal: float,
+) -> torch.Tensor:
+    """The MX-float lattice step at each element, including the block's floor.
+
+    An MX-float element carries its own exponent above the block's E8M0 scale,
+    so the spacing between representable values follows the element's own
+    magnitude -- but only down to the point where the element format goes
+    subnormal, below which the spacing is constant at the scaled element
+    minimum. The normal-value formula alone *underestimates* the step there,
+    which makes zero and the smallest nonzero subnormal look many steps apart
+    when MX has them adjacent.
+
+    Used by :func:`_mxfp_block_aware_compare`, which decides pass/fail, and
+    public so a failure report can rank datums by the same step and never
+    disagree with the verdict about how far apart two values are.
+    """
+    n = magnitude.numel()
+    safe = magnitude > 0
+    exp = torch.zeros_like(magnitude)
+    exp[safe] = floor_log2(magnitude[safe])
+    local_ulp = torch.where(
+        safe, torch.pow(2.0, exp - mantissa_bits), torch.zeros_like(magnitude)
+    )
+
+    block_size = 32
+    block_max = torch.stack(
+        [
+            magnitude[start : start + block_size].max()
+            for start in range(0, n, block_size)
+        ]
+    )
+    has_nonzero = block_max > 0
+    # E8M0 = floor(log2(block_max)) - elem_exp_max_unbiased, and the element
+    # format's max unbiased exponent is floor(log2(element_max_normal))
+    # (15 for E5M2's 57344, 8 for E4M3's 448, 2 for E2M1's 6.0).
+    elem_exp_max_unbiased = math.floor(math.log2(element_max_normal))
+    scale_exp = torch.zeros_like(block_max)
+    scale_exp[has_nonzero] = floor_log2(block_max[has_nonzero]) - elem_exp_max_unbiased
+    block_min_ulp = (
+        torch.pow(2.0, scale_exp) * element_min_subnormal
+    ).repeat_interleave(block_size)[:n]
+    return torch.where(safe, torch.maximum(local_ulp, block_min_ulp), local_ulp)
+
+
 def _mxfp_block_aware_compare(
     golden: torch.Tensor,
     result: torch.Tensor,
@@ -549,6 +611,9 @@ def _mxfp_block_aware_compare(
     each 32-element block's E8M0 scale from its largest decoded value and clamp
     the local step to the scaled element-format minimum subnormal. This makes
     zero and the smallest nonzero subnormal adjacent values, as they are in MX.
+    The inferred scale uses the packer's own rule, floor(log2(block_max)) minus
+    the element format's max unbiased exponent, so the clamp sits on the lattice
+    the hardware actually wrote.
     """
     g = golden.float().flatten()
     r = result.float().flatten()
@@ -563,25 +628,9 @@ def _mxfp_block_aware_compare(
         torch.maximum(g.abs(), r.abs()), nan=0.0, posinf=0.0, neginf=0.0
     )
     safe = a > 0
-    exp = torch.zeros_like(a)
-    exp[safe] = torch.floor(torch.log2(a[safe]))
-    local_ulp = torch.where(
-        safe, torch.pow(2.0, exp - mantissa_bits), torch.zeros_like(a)
+    local_ulp = mxfp_local_step(
+        a, mantissa_bits, element_max_normal, element_min_subnormal
     )
-
-    block_size = 32
-    block_max = torch.stack(
-        [a[start : start + block_size].max() for start in range(0, n, block_size)]
-    )
-    has_nonzero = block_max > 0
-    scale_exp = torch.zeros_like(block_max)
-    scale_exp[has_nonzero] = torch.ceil(
-        torch.log2(block_max[has_nonzero] / element_max_normal)
-    )
-    block_min_ulp = (
-        torch.pow(2.0, scale_exp) * element_min_subnormal
-    ).repeat_interleave(block_size)[:n]
-    local_ulp = torch.where(safe, torch.maximum(local_ulp, block_min_ulp), local_ulp)
 
     diff = (g - r).abs()
     # Relative float32-rounding guard (~1 ULP at the comparison magnitude) instead of a
@@ -900,18 +949,6 @@ def passed_test(
             # appends to the persistent test_errors.log that CI uploads.
             logger.opt(lazy=True).debug("ULP budget exceeded — {}", _ulp_summary)
 
-    if output_data_format.is_mx_format():
-        # Every MX low-bit format is judged by its lattice-aware compare
-        # (MxFp* via _mxfp_block_aware_compare on the E2M1/E5M2/E4M3 float
-        # lattices), which accepts disagreements up to a few lattice steps. At
-        # power-of-2 block-max boundaries the golden (fp32 amax) and HW (lower-
-        # precision amax) can pick block exponents one spec-legal step apart
-        # (OCP MX: scale = largest pow2 <= amax) — The per-element lattice
-        # check is the principled correctness criterion here, so trust its
-        # verdict rather than re-gating on PCC (sign flips and gross multi-step
-        # jumps still fail the lattice-aware check).
-        return bool(is_within_tolerance)
-
     if print_errors and not _RECORD_TEST_ORDER:
         try:
             if not is_within_tolerance:
@@ -989,6 +1026,19 @@ def passed_test(
                     res_tensor[idx],
                     golden_tensor[idx],
                 )
+
+    # After the failure report, so MX failures print their tiles too.
+    if output_data_format.is_mx_format():
+        # Every MX low-bit format is judged by its lattice-aware compare
+        # (MxFp* via _mxfp_block_aware_compare on the E2M1/E5M2/E4M3 float
+        # lattices), which accepts disagreements up to a few lattice steps. At
+        # power-of-2 block-max boundaries the golden (fp32 amax) and HW (lower-
+        # precision amax) can pick block exponents one spec-legal step apart
+        # (OCP MX: scale = largest pow2 <= amax) — The per-element lattice
+        # check is the principled correctness criterion here, so trust its
+        # verdict rather than re-gating on PCC (sign flips and gross multi-step
+        # jumps still fail the lattice-aware check).
+        return bool(is_within_tolerance)
 
     if max_ulp is not None:
         # The empty-tensor refusal is up before the verdict, so nothing to re-check here.
