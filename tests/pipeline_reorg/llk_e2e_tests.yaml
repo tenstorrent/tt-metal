@@ -19,7 +19,7 @@
     pytest -q --override-ini=log_cli=false --compile-producer -n 10 -m perf --timeout=600 -k bcm_ perf_eltwise_binary_x.py
     pytest -q --override-ini=log_cli=false --compile-consumer -m perf --timeout=600 -k bcm_ \
       --junitxml=pytest-report-blackhole-1.xml perf_eltwise_binary_x.py || true
-    find .. -name "perf_eltwise_binary_x*.post.csv" | while read -r f; do echo "=== $f"; cat "$f"; done
+    find .. ../.. -name "perf_eltwise_binary_x*.csv" | while read -r f; do echo "=== $f"; cat "$f"; done
   skus:
     bh_p150b_civ2:
       timeout: 38
