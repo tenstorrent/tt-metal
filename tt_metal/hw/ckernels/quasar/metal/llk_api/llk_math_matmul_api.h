@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_math_common_api.h"
 #include "llk_math_matmul.h"
 
@@ -102,9 +103,8 @@ inline void llk_math_matmul_init(
 inline void llk_math_matmul_uninit(const std::uint32_t operandA, const std::uint32_t operandB) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
-    const bool deviated =
-        (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) ||
-        (static_cast<DataFormat>(get_operand_src_format(operandB_id)) == DataFormat::MxFp4);
+    const bool deviated = (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) ||
+                          (static_cast<DataFormat>(get_operand_src_format(operandB_id)) == DataFormat::MxFp4);
     if (!deviated) {
         return;
     }
