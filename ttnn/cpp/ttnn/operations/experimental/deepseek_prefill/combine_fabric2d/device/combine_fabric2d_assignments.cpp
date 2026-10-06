@@ -91,12 +91,12 @@ std::vector<std::pair<int32_t, int32_t>> chunks_in_forwarder_ref_frame(uint32_t 
 
 }  // namespace
 
-std::vector<cmbf2d::ChunkDescriptor> forwarding_chunks(
+std::vector<::cmbf2d::ChunkDescriptor> forwarding_chunks(
     StreamId stream, uint32_t my_dg_index, uint32_t ring_extent, uint32_t num_links) {
-    std::vector<cmbf2d::ChunkDescriptor> chunks;
+    std::vector<::cmbf2d::ChunkDescriptor> chunks;
     for (const auto& [src, dst] : chunks_in_forwarder_ref_frame(ring_extent)) {
-        const uint32_t origin = cmbf2d::ring_step(stream, my_dg_index, src, ring_extent);
-        chunks.push_back(cmbf2d::stream_chunk(
+        const uint32_t origin = ::cmbf2d::ring_step(stream, my_dg_index, src, ring_extent);
+        chunks.push_back(::cmbf2d::stream_chunk(
             stream, origin, static_cast<uint32_t>(dst - src), ring_extent, stream_count(num_links)));
     }
     return chunks;
@@ -120,8 +120,8 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
             auto& list = per_stream[stream];
 
             auto own = [&](uint32_t distance) {
-                const cmbf2d::ChunkDescriptor chunk =
-                    cmbf2d::stream_chunk(stream, my_dg_index, distance, extent, stream_count(num_links));
+                const ::cmbf2d::ChunkDescriptor chunk =
+                    ::cmbf2d::stream_chunk(stream, my_dg_index, distance, extent, stream_count(num_links));
                 list.push_back(Assignment{
                     .dst_chip_id = ring_chip_ids[chunk.dst_dg_index],
                     .dst_dg_index = chunk.dst_dg_index,

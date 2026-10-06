@@ -44,6 +44,12 @@ namespace HYB_NS {
 #define HYB_RT_BASE 0
 #endif
 
+#ifdef URE_FAR_EXT_OFF
+// Overlapped with combine: the chunk each expert's combine walks open on, appended to the counts table.
+#define URE_FIRST_CHUNK(counts_ptr, gid) ((counts_ptr)[URE_FAR_EXT_OFF / sizeof(uint32_t) + (gid)])
+#else
+#define URE_FIRST_CHUNK(counts_ptr, gid) 0u
+#endif
 void kernel_main() {
     // -------------------------- runtime args ------------------------------
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
@@ -329,13 +335,47 @@ void kernel_main() {
             noc_read.async_read(counts_acc, CoreLocalMem<uint32_t>(counts_l1), counts_page_size, {.page_id = 0}, {});
             noc_read.async_read(idx_acc, CoreLocalMem<uint32_t>(idx_l1), idx_page_size, {.page_id = 0}, {});
             noc_read.async_read_barrier();
+#ifdef URE_FAR_EXT_OFF
+            // Where combine's walks open on each expert: the furthest ring chip's run start, as a chunk index.
+            // Read once here and multicast with the counts, so all three kernels order their chunks alike.
+            // The arguments sit past every half's block, so they are read unshifted (::get_arg_val), as the
+            // expert-done hook reads its own.
+            {
+                const uint32_t off_page = ::get_arg_val<uint32_t>(URE_FAR_RT_BASE + 1);
+                const uint32_t dg_far = ::get_arg_val<uint32_t>(URE_FAR_RT_BASE + 2);
+                const InterleavedAddrGen<true> off_gen{
+                    .bank_base_address = ::get_arg_val<uint32_t>(URE_FAR_RT_BASE + 0), .page_size = off_page};
+                const uint32_t far_l1 = counts_l1 + URE_FAR_EXT_OFF;
+                const uint32_t start_tmp = cb_start_scratch_obj.get_write_ptr();
+                noc_async_read(get_noc_addr(dg_far, off_gen), far_l1, off_page);
+                noc_read.async_read(
+                    start_acc,
+                    CoreLocalMem<uint32_t>(start_tmp),
+                    start_acc.get_aligned_page_size(),
+                    {.page_id = 0},
+                    {});
+                noc_async_read_barrier();
+                noc_read.async_read_barrier();
+                invalidate_l1_cache();
+                volatile tt_l1_ptr uint32_t* far = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(far_l1);
+                const volatile tt_l1_ptr uint32_t* region = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_tmp);
+                for (uint32_t e = 0; e < off_page / sizeof(uint32_t); e++) {
+                    const uint32_t rel_rows = far[e] > region[e] ? (far[e] - region[e]) / 32 : 0;
+                    far[e] = rel_rows / chunk_M_max;
+                }
+            }
+#endif
             if (counts_num_receivers > 0) {
                 // linked=true so the valid-sem multicast is ordered behind both data
                 // multicasts on the same reserved path (as for the weight mcast).
                 noc.async_write_multicast(
                     CoreLocalMem<uint32_t>(counts_l1),
                     MulticastEndpoint{},
+#ifdef URE_FAR_EXT_OFF
+                    URE_FAR_EXT_OFF + ::get_arg_val<uint32_t>(URE_FAR_RT_BASE + 1),
+#else
                     counts_page_size,
+#endif
                     counts_num_receivers,
                     {.offset_bytes = 0},
                     {.noc_x_start = cb_nx_start,
@@ -526,7 +566,9 @@ void kernel_main() {
         // not the max-tokens-padded shape of the input. chunk_M_tiles / per_core_M
         // were picked from the count above; the row mapping is contiguous (core gy
         // owns rows [chunk*chunk_M + gy*per_core_M, + per_core_M)).
-        for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
+        for (uint32_t chunk_i = 0; chunk_i < effective_chunks; ++chunk_i) {
+            const uint32_t chunk =
+                adaptive_chunk::chunk_at(chunk_i, effective_chunks, URE_FIRST_CHUNK(counts_ptr, global_expert_id));
             // Per-chunk per_core_M: per_core_M_max for full chunks, a smaller divisor
             // for the tail. Chunk starts are UNIFORM at chunk*chunk_M_max (full chunks
             // are max_chunk; the tail is last, so its start is num_full*max_chunk too).

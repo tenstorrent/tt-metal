@@ -52,10 +52,14 @@
 #include "combine_fabric2d_reader_rt_args.hpp"
 #include "combine_fabric2d_group_walk.hpp"
 
-constexpr cmbf2d::ReaderCtArgs ct{};
+// `local_expert` throughout is a WALK STEP, not a slot id. Standalone the two coincide; overlapped the
+// step is the routed expert's threshold-split order and `expert_of` maps it through the id table. That one
+// function is the only place the order is decided.
+
+constexpr ::cmbf2d::ReaderCtArgs ct{};
 
 // Re-forwarding reads the token AND the two metadata words that follow it in the page.
-constexpr uint32_t fwd_read_bytes = ct.token_size_bytes + cmbf2d::FWD_EXTRA_BYTES;
+constexpr uint32_t fwd_read_bytes = ct.token_size_bytes + ::cmbf2d::FWD_EXTRA_BYTES;
 
 // Routing metadata is PREFETCHED a batch at a time into pads at the front of the control region. Pads,
 // not one buffer, because a DRAM read needs a 64-byte-aligned L1 destination on Blackhole
@@ -71,8 +75,8 @@ constexpr uint32_t fwd_read_bytes = ct.token_size_bytes + cmbf2d::FWD_EXTRA_BYTE
 // region could be tens of thousands of tokens, so a cap bounds L1 with no correctness risk. Reads are
 // issued back to back and awaited once, so one batch costs one DRAM latency, not `cap` of them.
 constexpr uint32_t meta_pads_addr = ct.control_addr;
-constexpr uint32_t META_READ_BYTES = cmbf2d::META_PAD_STRIDE;  // fill the whole pad; the record is shorter
-constexpr uint32_t control_tables_addr = ct.control_addr + ct.meta_prefetch_cap * cmbf2d::META_PAD_STRIDE;
+constexpr uint32_t META_READ_BYTES = ::cmbf2d::META_PAD_STRIDE;  // fill the whole pad; the record is shorter
+constexpr uint32_t control_tables_addr = ct.control_addr + ct.meta_prefetch_cap * ::cmbf2d::META_PAD_STRIDE;
 
 // Page of our region of the forwarding buffer. The same formula serves both directions: the stream index
 // is ours either way, only the chip differs, and the buffer's device-local address is uniform across the
@@ -96,21 +100,32 @@ constexpr uint32_t pad_at(uint32_t n, uint32_t i) { return ct.walks_down ? n - 1
 // the neighbour's forwarding buffer and re-sent from there.
 bool is_direct(uint32_t dst_chip_id) { return dst_chip_id == ct.nbr_chip_id; }
 
-volatile tt_l1_ptr cmbf2d::FwdMetadata* slot_metadata(uint32_t slot) {
-    return reinterpret_cast<volatile tt_l1_ptr cmbf2d::FwdMetadata*>(slot_addr_of(slot) + ct.token_size_bytes);
+volatile tt_l1_ptr ::cmbf2d::FwdMetadata* slot_metadata(uint32_t slot) {
+    return reinterpret_cast<volatile tt_l1_ptr ::cmbf2d::FwdMetadata*>(slot_addr_of(slot) + ct.token_size_bytes);
 }
 
 // The expert is not part of the descriptor: the same one serves every iteration of the outer expert loop,
 // which is what names the run.
-cmbf2d::ChunkDescriptor forwarding_chunk(uint32_t chunk) {
-    return cmbf2d::ChunkDescriptor::from_words(
-        &kernel_compile_time_args[ct.forwarding_chunk_base + chunk * cmbf2d::CHUNK_WORDS]);
+::cmbf2d::ChunkDescriptor forwarding_chunk(uint32_t chunk) {
+    return ::cmbf2d::ChunkDescriptor::from_words(
+        &kernel_compile_time_args[ct.forwarding_chunk_base + chunk * ::cmbf2d::CHUNK_WORDS]);
 }
 
-// Experts hosted by any chip on our ring. The dispatch group's experts are laid out in dispatch-group-index order, so
-// our own base locates every other chip's — which is what lets us size a chunk we neither produced nor receive.
+// The global expert chip `dg_index` handles at walk step `step`. Any chip of the ring, not just ours, which
+// is what lets us size a chunk we neither produced nor receive.
+#ifdef CMBF2D_OVERLAPPED
+// Overlapped, steps are the routed expert's threshold-split order, so the id comes from the table.
+uint32_t expert_of(const ::cmbf2d::ControlTables& ctl, uint32_t dg_index, uint32_t step) {
+    return ::cmbf2d::expert_at_step(ctl, dg_index, ct.experts_per_chip, ct.expert_threshold, step);
+}
+#else
+// Standalone, a step IS the local slot, and the group's experts are laid out in dispatch-group-index order,
+// so our own base locates every other chip's.
 constexpr uint32_t group_expert_base = ct.my_expert_base - ct.my_dg_index * ct.experts_per_chip;
-constexpr uint32_t expert_base(uint32_t dg_index) { return group_expert_base + dg_index * ct.experts_per_chip; }
+uint32_t expert_of(const ::cmbf2d::ControlTables&, uint32_t dg_index, uint32_t step) {
+    return group_expert_base + dg_index * ct.experts_per_chip + step;
+}
+#endif
 
 // Every DRAM buffer this kernel touches, so the phases take one argument instead of seven.
 struct Dram {
@@ -121,10 +136,13 @@ struct Dram {
     decltype(TensorAccessor(ct.dram_counts_args, uint32_t{})) counts;
     decltype(TensorAccessor(ct.dram_region_args, uint32_t{})) region;
     decltype(TensorAccessor(ct.dram_expert_offsets_args, uint32_t{})) expert_offsets;
+#ifdef CMBF2D_OVERLAPPED
+    decltype(TensorAccessor(ct.dram_expert_table_args, uint32_t{})) expert_table;
+#endif
 };
 
 Dram open_dram() {
-    const auto rt = cmbf2d::ReaderRtArgManager::get_rt_args();
+    const auto rt = ::cmbf2d::ReaderRtArgManager::get_rt_args();
     return Dram{
         TensorAccessor(ct.dram_in_args, rt.dram_in),
         TensorAccessor(ct.dram_out_args, rt.dram_out),
@@ -132,7 +150,12 @@ Dram open_dram() {
         TensorAccessor(ct.dram_meta_args, rt.dram_meta),
         TensorAccessor(ct.dram_counts_args, rt.dram_counts),
         TensorAccessor(ct.dram_region_args, rt.dram_region),
-        TensorAccessor(ct.dram_expert_offsets_args, rt.dram_expert_offsets)};
+        TensorAccessor(ct.dram_expert_offsets_args, rt.dram_expert_offsets)
+#ifdef CMBF2D_OVERLAPPED
+            ,
+        TensorAccessor(ct.dram_expert_table_args, rt.dram_expert_table)
+#endif
+    };
 }
 
 // Control tensors, read once. All three are one row per page of `num_routed_experts` uint32: expert_offsets
@@ -140,18 +163,36 @@ Dram open_dram() {
 // region_offsets are a single row each. A few kB in total, so the whole slice comes in rather than
 // cherry-picking this chip's columns — a strided gather of 4-byte words would cost more NoC transactions
 // than the bytes saved.
-cmbf2d::ControlTables read_control_tables(const Dram& dram) {
+::cmbf2d::ControlTables read_control_tables(const Dram& dram) {
     constexpr uint32_t row_bytes = ct.num_routed_experts * 4;
-    cmbf2d::ControlTables ctl{
+#ifdef CMBF2D_OVERLAPPED
+    constexpr uint32_t ids_addr =
+        control_tables_addr + ::cmbf2d::align_control((ct.dispatch_group_size + 2) * row_bytes);
+    constexpr uint32_t ids_stride = ::cmbf2d::expert_table_row_stride(ct.experts_per_chip);
+#endif
+    ::cmbf2d::ControlTables ctl{
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control_tables_addr),
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
             control_tables_addr + ct.dispatch_group_size * ct.num_routed_experts * 4),
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
             control_tables_addr + (ct.dispatch_group_size + 1) * ct.num_routed_experts * 4),
         ct.num_routed_experts,
-        ct.dispatch_group_size};
+        ct.dispatch_group_size,
+#ifdef CMBF2D_OVERLAPPED
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ids_addr),
+        ids_stride / 4,
+#endif
+    };
     for (uint32_t r = 0; r < ct.dispatch_group_size; r++) {
         noc_async_read(dram.expert_offsets.get_noc_addr(r), control_tables_addr + r * row_bytes, row_bytes);
+#ifdef CMBF2D_OVERLAPPED
+        // Without this the id table is uninitialised L1 and expert_at_step names a garbage expert, which
+        // walks garbage page ranges and never terminates.
+        noc_async_read(
+            dram.expert_table.get_noc_addr(ct.expert_table_page_base + r),
+            ids_addr + r * ids_stride,
+            ct.experts_per_chip * 4);
+#endif
     }
     noc_async_read(dram.counts.get_noc_addr(0), (uint32_t)ctl.counts, row_bytes);
     noc_async_read(dram.region.get_noc_addr(0), (uint32_t)ctl.region, row_bytes);
@@ -174,14 +215,14 @@ struct Untilized {
     static uint32_t owner(uint32_t batch) { return batch % ct.num_untilizers; }
 
     static uint64_t untilizer_noc(uint32_t j, uint32_t addr) {
-        const uint32_t w = ct.untilizer_base + j * cmbf2d::UNT_PEER_WORDS;
+        const uint32_t w = ct.untilizer_base + j * ::cmbf2d::UNT_PEER_WORDS;
         return get_noc_addr(kernel_compile_time_args[w + 0], kernel_compile_time_args[w + 1], addr);
     }
 
     // Where untilizer j's produced count sits on OUR core.
     static volatile tt_l1_ptr uint32_t* produced_by(uint32_t j) {
         return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-            kernel_compile_time_args[ct.untilizer_base + j * cmbf2d::UNT_PEER_WORDS + 2]);
+            ct.unt_produced_word(kernel_compile_time_args[ct.untilizer_base + j * ::cmbf2d::UNT_PEER_WORDS + 2]));
     }
 
     void release_through(uint32_t upto) {
@@ -190,14 +231,14 @@ struct Untilized {
             open = ~0u;
         }
         for (; released < upto; released++) {
-            noc_semaphore_inc(untilizer_noc(owner(released), ct.unt_freed_addr), 1);
+            noc_semaphore_inc(untilizer_noc(owner(released), ct.unt_freed_addr_value()), 1);
         }
     }
 
     // Where `page`'s row sits, blocking until the batch holding it has been staged. Hands back everything
     // before it FIRST: the producer reuses those slots to build this one, so holding them back would be
     // waiting on a core that is waiting on us.
-    uint64_t take(const cmbf2d::GroupWalk& walk, uint32_t page) {
+    uint64_t take(const ::cmbf2d::GroupWalk& walk, uint32_t page) {
         const uint32_t batch = expert_base + walk.batch_of(page);
         if (batch != open) {
             release_through(batch);
@@ -208,19 +249,19 @@ struct Untilized {
             }
             open = batch;
         }
-        const uint32_t row =
-            (batch / ct.num_untilizers % ct.unt_ring_batches) * cmbf2d::UNT_BATCH_ROWS + page % cmbf2d::UNT_BATCH_ROWS;
+        const uint32_t row = (batch / ct.num_untilizers % ct.unt_ring_batches) * ::cmbf2d::UNT_BATCH_ROWS +
+                             page % ::cmbf2d::UNT_BATCH_ROWS;
         return untilizer_noc(owner(batch), ct.unt_ring_addr + row * ct.token_size_bytes);
     }
 
-    void finish_expert(const cmbf2d::GroupWalk& walk) {
+    void finish_expert(const ::cmbf2d::GroupWalk& walk) {
         expert_base += walk.num_batches();
         release_through(expert_base);
     }
 
-    // End of stream. Every batch has been released, so each untilizer has stopped bumping and its count can
-    // go back to zero for the next launch -- but only once its last bump has actually landed, which is what
-    // the wait is for.
+    // End of stream. Every batch has been released, so each untilizer has stopped bumping. The wait is for
+    // its last bump to have LANDED: a late one would otherwise reach the next program's kernel-config
+    // region. Whether the count then needs zeroing depends on where it lives.
     void reset_counters() const {
         for (uint32_t j = 0; j < ct.num_untilizers; j++) {
             const uint32_t mine = expert_base > j ? (expert_base - j - 1) / ct.num_untilizers + 1 : 0;
@@ -229,7 +270,7 @@ struct Untilized {
             while (*produced < mine) {
                 invalidate_l1_cache();
             }
-            noc_semaphore_set(produced, 0);
+            ct.reset_produced_counter(produced);
         }
     }
 };
@@ -248,12 +289,12 @@ struct Untilized {
 // sender always has at least as many announced ones to drain, and `freed` keeps advancing.
 struct Reader {
     const Dram& dram;
-    cmbf2d::ControlTables ctl;
+    ::cmbf2d::ControlTables ctl;
 #if TILE
     Untilized untilized;
     // The group's production for the expert in progress. Rebuilt every iteration, identically on every core
     // of the group, which is what makes a batch index mean the same thing to all of them.
-    cmbf2d::GroupWalk walk{ct.walks_down != 0};
+    ::cmbf2d::GroupWalk walk{ct.walks_down != 0};
 #endif
 
     // Where page `p` of our region is read from: an untilizer's staging ring, or the buffer itself when the
@@ -279,7 +320,7 @@ struct Reader {
 
     void flush_publish() {
         if (pending_publish > 0) {
-            noc_semaphore_inc(get_noc_addr(ct.filled_addr), pending_publish);
+            noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(ct.filled_ptr())), pending_publish);
             pending_publish = 0;
         }
     }
@@ -287,7 +328,7 @@ struct Reader {
     // Claim one ring slot, blocking until the sender frees one. Publishes anything pending FIRST: never
     // make the sender wait on slots we are holding back, which would deadlock us against each other.
     uint32_t claim_slot() {
-        volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.freed_addr);
+        volatile tt_l1_ptr uint32_t* freed = ct.freed_ptr();
         invalidate_l1_cache();
         if (claimed - *freed >= ct.num_l1_slots) {
             flush_publish();
@@ -315,7 +356,7 @@ struct Reader {
     void prefetch_metadata(uint32_t lo, uint32_t hi) const {
         for (uint32_t p = lo; p < hi; p++) {
             noc_async_read(
-                dram.meta.get_noc_addr(p), meta_pads_addr + (p - lo) * cmbf2d::META_PAD_STRIDE, META_READ_BYTES);
+                dram.meta.get_noc_addr(p), meta_pads_addr + (p - lo) * ::cmbf2d::META_PAD_STRIDE, META_READ_BYTES);
         }
         noc_async_read_barrier();
     }
@@ -324,8 +365,8 @@ struct Reader {
     // chip's experts, narrowed to the share the two chips agreed on. Every term is readable on any chip of
     // the ring, which is what makes a chunk's length agree between the chip that writes it and the chip that
     // reads it without either telling the other.
-    uint32_t chunk_tokens(const cmbf2d::ChunkDescriptor& desc, uint32_t local_expert) const {
-        const uint32_t e = expert_base(desc.origin_dg_index) + local_expert;
+    uint32_t chunk_tokens(const ::cmbf2d::ChunkDescriptor& desc, uint32_t local_expert) const {
+        const uint32_t e = expert_of(ctl, desc.origin_dg_index, local_expert);
         const uint32_t begin = ctl.run_begin(desc.dst_dg_index, e);
         const uint32_t n = ctl.run_end(desc.dst_dg_index, e) - begin;
         return slice_begin(begin, n, desc.split_idx + 1, desc.split_count) -
@@ -335,8 +376,8 @@ struct Reader {
     // Point one slot at `page` of the downstream chip's region. The chunk's last page is marked so the
     // sender bumps that chip's arrival counter right there: that reader consumes a whole chunk before moving
     // on, so a tail left inside a partial bump batch would strand it.
-    void aim_at_downstream(volatile tt_l1_ptr cmbf2d::FwdMetadata* metadata, uint32_t page) const {
-        metadata->cmd = (page + 1 == out_chunk_end) ? cmbf2d::CMD_FORWARD_END : cmbf2d::CMD_FORWARD;
+    void aim_at_downstream(volatile tt_l1_ptr ::cmbf2d::FwdMetadata* metadata, uint32_t page) const {
+        metadata->cmd = (page + 1 == out_chunk_end) ? ::cmbf2d::CMD_FORWARD_END : ::cmbf2d::CMD_FORWARD;
         metadata->this_addr = dram.fwd.get_noc_addr(fwd_page(page));
     }
 
@@ -344,9 +385,9 @@ struct Reader {
     // both once per batch, so several reads are in flight together.
     void issue_token(uint32_t dst_chip_id, uint32_t in_page, uint32_t pad) {
         const uint32_t slot = claim_slot();
-        volatile tt_l1_ptr cmbf2d::FwdMetadata* metadata = slot_metadata(slot);
+        volatile tt_l1_ptr ::cmbf2d::FwdMetadata* metadata = slot_metadata(slot);
         volatile tt_l1_ptr uint32_t* meta =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_pads_addr + pad * cmbf2d::META_PAD_STRIDE);
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_pads_addr + pad * ::cmbf2d::META_PAD_STRIDE);
 
         noc_async_read(token_source(in_page), slot_addr_of(slot), ct.token_size_bytes);
         // Everything below runs while that read is in flight, which is the point of prefetching the metadata.
@@ -357,7 +398,7 @@ struct Reader {
         // because the output buffer's base address and interleaved bank mapping are uniform across the mesh.
         const uint64_t final_addr = dram.out.get_noc_addr(token_out_page);
         if (is_direct(dst_chip_id)) {
-            metadata->cmd = cmbf2d::CMD_FINAL_WRITE;
+            metadata->cmd = ::cmbf2d::CMD_FINAL_WRITE;
             metadata->this_addr = final_addr;
         } else {
             metadata->final_addr = final_addr;
@@ -398,16 +439,16 @@ struct Reader {
     // One own assignment for one local expert: what this chip owes ONE destination chip out of that
     // expert's region, narrowed to this sender's slice of the run.
     void do_own_assignment(uint32_t a, uint32_t local_expert) {
-        const uint32_t w = ct.assignment_base + a * cmbf2d::ASSIGNMENT_WORDS;
+        const uint32_t w = ct.assignment_base + a * ::cmbf2d::ASSIGNMENT_WORDS;
         const uint32_t dst_chip_id = kernel_compile_time_args[w + 0];
-        const cmbf2d::ChunkDescriptor desc{
+        const ::cmbf2d::ChunkDescriptor desc{
             ct.my_dg_index,
             kernel_compile_time_args[w + 1],
             kernel_compile_time_args[w + 2],
             kernel_compile_time_args[w + 3]};
         // Sized before the first page is placed, because the last page has to be recognisable when it comes.
         out_chunk_end = out_page + (is_direct(dst_chip_id) ? 0 : chunk_tokens(desc, local_expert));
-        const uint32_t e = ct.my_expert_base + local_expert;
+        const uint32_t e = expert_of(ctl, ct.my_dg_index, local_expert);
         const uint32_t begin = ctl.run_begin(desc.dst_dg_index, e);
         const uint32_t n = ctl.run_end(desc.dst_dg_index, e) - begin;
         stage_run_slice(
@@ -440,7 +481,7 @@ struct Reader {
             const uint32_t k = read_arrived_pages(remaining);
             const uint32_t first_slot = claimed - k;
             for (uint32_t j = 0; j < k; j++) {
-                volatile tt_l1_ptr cmbf2d::FwdMetadata* metadata = slot_metadata((first_slot + j) % ct.num_l1_slots);
+                volatile tt_l1_ptr ::cmbf2d::FwdMetadata* metadata = slot_metadata((first_slot + j) % ct.num_l1_slots);
                 if (!decided) {
                     reforward = (metadata->dst_chip != (uint64_t)ct.nbr_chip_id);
                     decided = true;
@@ -448,7 +489,7 @@ struct Reader {
                 if (reforward) {
                     aim_at_downstream(metadata, out_page++);
                 } else {
-                    metadata->cmd = cmbf2d::CMD_FINAL_WRITE;
+                    metadata->cmd = ::cmbf2d::CMD_FINAL_WRITE;
                     metadata->this_addr = metadata->final_addr;
                 }
             }
@@ -503,8 +544,8 @@ struct Reader {
     void run_schedule(uint32_t local_expert) {
         for (uint32_t si = 0; si < ct.schedule_len; si++) {
             const uint32_t entry = kernel_compile_time_args[ct.schedule_base + si];
-            if (entry & cmbf2d::SCHED_FWD) {
-                do_forward_chunk(entry & ~cmbf2d::SCHED_FWD, local_expert);
+            if (entry & ::cmbf2d::SCHED_FWD) {
+                do_forward_chunk(entry & ~::cmbf2d::SCHED_FWD, local_expert);
             } else {
                 do_own_assignment(entry, local_expert);
             }
@@ -527,7 +568,7 @@ struct Reader {
         // scribble in; claim_slot() is still what proves at least one slot is free before we take it, and
         // `published` does not move during this phase so it stays free. The CMD_END slot below reclaims it.
         const uint32_t slot_addr = slot_addr_of(claim_slot());
-        const uint32_t e = ct.my_expert_base + local_expert;
+        const uint32_t e = expert_of(ctl, ct.my_dg_index, local_expert);
         const uint32_t begin = ctl.run_begin(ct.my_dg_index, e);
         const uint32_t n = ctl.run_end(ct.my_dg_index, e) - begin;
         const uint32_t lo = slice_begin(begin, n, ct.my_stream, ct.local_split_count);
@@ -536,7 +577,7 @@ struct Reader {
             for (uint32_t i = 0; i < window; i++) {
                 const uint32_t pad = pad_at(window, i);
                 volatile tt_l1_ptr uint32_t* meta =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_pads_addr + pad * cmbf2d::META_PAD_STRIDE);
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_pads_addr + pad * ::cmbf2d::META_PAD_STRIDE);
                 const uint32_t out_page = meta[1] * ct.num_experts_per_tok + meta[2];
                 const uint64_t out_addr = dram.out.get_noc_addr(out_page);
                 noc_async_read(token_source(base + pad), slot_addr, ct.token_size_bytes);
@@ -561,9 +602,9 @@ struct Reader {
         for (uint32_t local_expert = 0; local_expert < ct.experts_per_chip; local_expert++) {
             for (uint32_t hops = 1; hops <= extent / 2; hops++) {
                 const uint32_t origin =
-                    cmbf2d::ring_step(ct.my_stream, ct.my_dg_index, -static_cast<int32_t>(hops), extent);
+                    ::cmbf2d::ring_step(ct.my_stream, ct.my_dg_index, -static_cast<int32_t>(hops), extent);
                 total += chunk_tokens(
-                    cmbf2d::stream_chunk(ct.my_stream, origin, hops, extent, ct.local_split_count), local_expert);
+                    ::cmbf2d::stream_chunk(ct.my_stream, origin, hops, extent, ct.local_split_count), local_expert);
             }
         }
         return total;
@@ -592,7 +633,7 @@ struct Reader {
 
     // End of stream. The sender cannot know the length up front, so it stops on this.
     void end_stream() {
-        slot_metadata(claim_slot())->cmd = cmbf2d::CMD_END;
+        slot_metadata(claim_slot())->cmd = ::cmbf2d::CMD_END;
         published++;
         pending_publish++;
         flush_publish();
@@ -600,6 +641,10 @@ struct Reader {
 };
 
 void kernel_main() {
+#ifdef CMBF2D_IDLE
+    // Measurement mode: the routed expert runs as overlapped, with no combine traffic beside it.
+    return;
+#endif
     const Dram dram = open_dram();
     Reader reader{dram, read_control_tables(dram)};
 
@@ -607,13 +652,15 @@ void kernel_main() {
     // e + 1 is touched.
     for (uint32_t local_expert = 0; local_expert < ct.experts_per_chip; local_expert++) {
 #if TILE
-        reader.walk = cmbf2d::group_walk(
+        reader.walk = ::cmbf2d::group_walk(
             reader.ctl,
             ct.walks_down != 0,
-            ct.my_expert_base + local_expert,
+            expert_of(reader.ctl, ct.my_dg_index, local_expert),
             ct.my_dg_index,
             ct.num_assignments,
-            [](uint32_t k) { return kernel_compile_time_args[ct.assignment_base + k * cmbf2d::ASSIGNMENT_WORDS + 1]; });
+            [](uint32_t k) {
+                return kernel_compile_time_args[ct.assignment_base + k * ::cmbf2d::ASSIGNMENT_WORDS + 1];
+            });
 #endif
         reader.run_schedule(local_expert);
         reader.run_local_phase(local_expert);

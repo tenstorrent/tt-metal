@@ -9,7 +9,9 @@
 #include <vector>
 
 #include "combine_fabric2d_placement.hpp"
-#include "kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
+// Only the chunk layout, NOT the whole kernel interface: the overlapped fork includes this header, and
+// its interface declares same-named helpers over the shared input struct that ADL would find too.
+#include "kernels/dataflow/combine_fabric2d_chunk.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
@@ -38,7 +40,7 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
     const std::vector<uint32_t>& ring_chip_ids, uint32_t my_dg_index, uint32_t num_links);
 
 // Chunks a stream forwards, in the order the upstream chip emits them into its region.
-std::vector<cmbf2d::ChunkDescriptor> forwarding_chunks(
+std::vector<combine_chunk::ChunkDescriptor> forwarding_chunks(
     StreamId stream, uint32_t my_dg_index, uint32_t ring_extent, uint32_t num_links);
 
 // Relay chunks a stream receives, which is also how many its upstream neighbour emits into this stream's

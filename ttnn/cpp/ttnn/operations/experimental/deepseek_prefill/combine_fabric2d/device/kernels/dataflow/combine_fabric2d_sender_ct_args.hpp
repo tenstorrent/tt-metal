@@ -24,8 +24,8 @@ struct SenderCtArgs {
     uint32_t pkt_hdr_drain_addr;
     uint32_t drain_sink_addr;
     uint32_t batch;
-    uint32_t filled_addr;
-    uint32_t freed_addr;
+    uint32_t filled_slot;
+    uint32_t freed_slot;
     uint32_t fwd_sem_noc_x;
     uint32_t fwd_sem_noc_y;
     uint32_t fwd_sem_addr;
@@ -51,8 +51,8 @@ struct SenderCtArgs {
         pkt_hdr_drain_addr(l1.pkt_hdr_drain),
         drain_sink_addr(l1.drain_sink),
         batch(BATCH),
-        filled_addr(plan.ring_filled_addr),
-        freed_addr(plan.ring_freed_addr),
+        filled_slot(plan.ring_filled_slot),
+        freed_slot(plan.ring_freed_slot),
         fwd_sem_noc_x(static_cast<uint32_t>(downstream.worker_virtual.x)),
         fwd_sem_noc_y(static_cast<uint32_t>(downstream.worker_virtual.y)),
         fwd_sem_addr(plan.fwd_arrived_addr),
@@ -70,8 +70,8 @@ struct SenderCtArgs {
             pkt_hdr_drain_addr,
             drain_sink_addr,
             batch,
-            filled_addr,
-            freed_addr,
+            filled_slot,
+            freed_slot,
             fwd_sem_noc_x,
             fwd_sem_noc_y,
             fwd_sem_addr,
@@ -89,12 +89,37 @@ struct SenderCtArgs {
         pkt_hdr_drain_addr(get_compile_time_arg_val(7)),
         drain_sink_addr(get_compile_time_arg_val(8)),
         batch(get_compile_time_arg_val(9)),
-        filled_addr(get_compile_time_arg_val(10)),
-        freed_addr(get_compile_time_arg_val(11)),
+        filled_slot(get_compile_time_arg_val(10)),
+        freed_slot(get_compile_time_arg_val(11)),
         fwd_sem_noc_x(get_compile_time_arg_val(12)),
         fwd_sem_noc_y(get_compile_time_arg_val(13)),
         fwd_sem_addr(get_compile_time_arg_val(14)),
         final_sem_addr(get_compile_time_arg_val(15)) {}
+
+    // What a ring-counter slot names depends on where the counters live. Overlapped, they are program
+    // semaphores the framework re-initialises every launch; alone, they are hand-placed L1 this kernel
+    // owns, so it must hand the next launch a zeroed pair. Zeroing is safe only at the very end: the
+    // reader's last act was publishing the CMD_END slot the sender has just drained.
+#ifdef CMBF2D_OVERLAPPED
+    volatile tt_l1_ptr uint32_t* filled_ptr() const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(filled_slot));
+    }
+    volatile tt_l1_ptr uint32_t* freed_ptr() const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(freed_slot));
+    }
+    void reset_ring_counters() const {}
+#else
+    volatile tt_l1_ptr uint32_t* filled_ptr() const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(filled_slot);
+    }
+    volatile tt_l1_ptr uint32_t* freed_ptr() const {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(freed_slot);
+    }
+    void reset_ring_counters() const {
+        noc_semaphore_set(filled_ptr(), 0);
+        noc_semaphore_set(freed_ptr(), 0);
+    }
+#endif
 #endif
 
     constexpr uint32_t slot_stride() const { return token_size_bytes + forwarding_metadata_size; }
