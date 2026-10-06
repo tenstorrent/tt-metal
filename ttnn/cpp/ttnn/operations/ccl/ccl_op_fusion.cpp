@@ -380,6 +380,51 @@ void MatmulFusedOpSignaler::init_fused_op(
     initialized_fused_op = true;
 }
 
+void MatmulFusedOpSignaler::init_fused_op(
+    ProgramDescriptor& desc,
+    const IDevice* device,
+    const CoreRange& matmul_workers,
+    const std::vector<CoreCoord>& matmul_worker_cores) {
+    // Create the sync semaphore for the matmul workers
+    if (matmul_worker_cores.size() > 1) {
+        this->matmul_worker_sync_semaphore = add_semaphore_descriptor(desc, CoreRangeSet(matmul_workers));
+    }
+
+    // Get the noc coords for the matmul workers
+    this->matmul_worker_cores_noc.clear();
+    this->matmul_worker_cores.clear();
+    for (const auto& core : matmul_worker_cores) {
+        this->matmul_worker_cores_noc.push_back(device->worker_core_from_logical_core(core));
+        this->matmul_worker_cores.push_back(core);
+    }
+    initialized_fused_op = true;
+}
+
+void MatmulFusedOpSignaler::init_fused_op(
+    ProgramDescriptor& desc,
+    const IDevice* device,
+    const CoreRangeSet& core_range_to_signal,
+    FusedOpSignalerMode fused_op_signaler_mode) {
+    this->fused_op_signaler_mode = fused_op_signaler_mode;
+
+    this->fused_op_receiver_cores_noc.clear();
+    for (const auto& range : core_range_to_signal.ranges()) {
+        for (const auto& core : grid_to_cores(range.start_coord, range.end_coord, true)) {
+            this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+        }
+    }
+    // Create the semaphores
+    const uint32_t num_semaphores = fused_op_type == MatmulFusedOpSignalerType::LLAMA_ALL_GATHER ? ring_size : 2;
+    for (uint32_t i = 0; i < num_semaphores; i++) {
+        this->fused_op_receiver_signal_semaphores.push_back(add_semaphore_descriptor(desc, core_range_to_signal));
+    }
+
+    // Set the number of fused op cores to signal
+    this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
+
+    initialized_fused_op = true;
+}
+
 void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
     std::vector<uint32_t>& out_rt_args, uint32_t curr_worker_in0_idx, uint32_t curr_worker_in1_idx) {
     TT_FATAL(initialized_fused_op && initialized_reduce_scatter, "MatmulFusedOpSignaler not initialized fully.");

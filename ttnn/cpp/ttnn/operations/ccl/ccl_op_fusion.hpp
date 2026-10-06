@@ -242,6 +242,19 @@ struct MatmulFusedOpSignaler {
         const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
 
+    // ProgramDescriptor forms of the two init_fused_op overloads above: the semaphores they create become
+    // SemaphoreDescriptors in `desc` (ids free on every core they cover); everything else is identical.
+    void init_fused_op(
+        tt::tt_metal::ProgramDescriptor& desc,
+        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::CoreRange& matmul_workers,
+        const std::vector<tt::tt_metal::CoreCoord>& matmul_worker_cores);
+    void init_fused_op(
+        tt::tt_metal::ProgramDescriptor& desc,
+        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::CoreRangeSet& core_range_to_signal,
+        FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
+
     bool is_all_gather() const;
     bool is_reduce_scatter() const;
     bool is_llama_reduce_scatter() const;
