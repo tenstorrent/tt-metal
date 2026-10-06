@@ -89,6 +89,7 @@ namespace compute_kernel_lib {
  * - INPUT_AND_OUTPUT: Reconfigure both (default, safest, largest perf impact).
  * Internal transitions to an accumulator, auxiliary mask or zero tile still
  * reconfigure as needed, then restore the reduction's operand state.
+ * Quasar output descriptor initialization is required independently of this mode.
  */
 // =============================================================================
 // Input Policy - control how input tiles are synchronized and consumed
@@ -483,10 +484,11 @@ inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
  *                       SFPU paths, which read no auxiliary tile.
  * @tparam output_dfb_id Output DataflowBuffer ID for reduced tiles (compile-time CB id)
  *                       The input/output formats are deduced from these CB ids
- *                       (unpack_src_format / pack_dst_format), so Int32 is routed to the SFPU path
- *                       automatically (Int32 has no FPU support). Other formats use FPU/GMPOOL
- *                       unless Accurate fp32 is requested. SFPU covers REDUCE_ROW/REDUCE_COL only;
- *                       fast-mode float/bf16 MIN is dispatched via reduce_{h,w}_neg.cpp.
+ *                       (unpack_src_format / pack_dst_format), so Int32 and bf16 MIN are routed to the
+ *                       SFPU path automatically (Int32 has no FPU support, the FPU has no MIN pool).
+ *                       Other formats use FPU/GMPOOL unless Accurate fp32 is requested. SFPU covers
+ *                       REDUCE_ROW/REDUCE_COL only; other fast-mode float MIN is dispatched via
+ *                       reduce_{h,w}_neg.cpp.
  * @tparam input_policy Input handling policy (default: WaitAndPopPerTile - streaming mode)
  * @tparam reconfig_mode Data format reconfiguration mode (default: INPUT_AND_OUTPUT)
  * @tparam fp32_mode Float32 precision mode (default: Fast). Accurate routes Float32 through the
@@ -506,7 +508,7 @@ inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
  * @param post_reduce_op Callback after each reduction (default: NoOp)
  * @param partial_mode Handling for a non-tile-aligned reduce dimension
  *        (default: ReducePartialMode::None).
- *        Not supported for REDUCE_SCALAR or any SFPU reduce path, including accurate Float32.
+ *        Not supported for REDUCE_SCALAR or any SFPU reduce path, including accurate Float32 and bf16 MIN.
  * @param auxiliary_tile_offset Start of this call's recipe in an auxiliary CB
  *        (default: 0 for standalone calls). AccumulateViaAdd
  *        requires a zero tile here, or immediately after the partial-axis mask.

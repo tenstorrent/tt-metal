@@ -303,6 +303,10 @@ ALWI void reduce_accumulate_via_add(
     if constexpr (reconfig_out) {
         pack_reconfig_data_format(output_dfb_id);
     }
+#ifdef ARCH_QUASAR
+    // Quasar binds the output descriptor at op init, even when buffer formats match.
+    ckernel::pack_init(output_dfb_id);
+#endif
     // Load the SFPU reduce macro only for calls that perform the within-tile collapse.
     // The later AVG scale initializes its scalar op when needed, but a caller's SFPU post_reduce_op should
     // still follow the normal contract and run its own <op>_tile_init.
@@ -325,11 +329,11 @@ ALWI void reduce_accumulate_via_add(
     PACK(ASSERT(is_valid_dfb_tile_page_size(output_dfb_id, (DataFormat)pack_dst_format[output_dfb_id])));
 #endif
     if constexpr (no_wait_p) {  // no wait/reserve to self-assert capacity: caller must have the block resident
-        ASSERT(get_dfb_num_pages(input_dfb_id) >= in_tiles);
+        UNPACK(ASSERT(get_dfb_num_pages(input_dfb_id) >= in_tiles));
     }
 
     // The auxiliary CB is never popped here. The layout is [mask, zero] for a
-    // partial axis and [zero] otherwise; an optional output mask follows them.
+    // partial axis and [zero] otherwise.
     const uint32_t zero_idx = auxiliary_tile_offset + (has_partial ? 1u : 0u);
     const uint32_t required_aux_tiles = zero_idx + 1u;
     if constexpr (has_accum) {
@@ -894,7 +898,7 @@ ALWI void reduce(
     ReducePartialMode partial_mode,
     uint32_t output_group,
     uint32_t auxiliary_tile_offset) {
-    // Int32 and Accurate fp32 route to the SFPU via is_sfpu_reduce_path<>(); others use FPU/GMPOOL.
+    // Int32, bf16 MIN and Accurate fp32 route to the SFPU via is_sfpu_reduce_path<>(); others use FPU/GMPOOL.
     constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[input_dfb_id]);
     constexpr bool has_auxiliary = auxiliary_dfb_id != REDUCE_NO_AUXILIARY_CB;
     // The unused native/mask branches are still instantiated on the additive
@@ -1084,6 +1088,10 @@ ALWI void reduce(
     if constexpr (reconfig_output(reconfig_mode)) {
         pack_reconfig_data_format(output_dfb_id);
     }
+#ifdef ARCH_QUASAR
+    // Format reconfiguration alone does not bind a different Quasar output buffer.
+    ckernel::pack_init(output_dfb_id);
+#endif
     // Initialization
     if constexpr (is_sfpu) {
         // The datacopy path into DEST; the one compute_kernel_hw_startup in kernel_main plus the
