@@ -19,9 +19,15 @@ Run 2 (2026-10-06 03:12 UTC): blx03 rebooted 03:02 and killed the first driver b
 1016c3aac47 (waits for every other smarton job, not only t136/t141; pair cutoff 30 min idle). blx03 pid 31022.
 If the probe wakes and the log has no DONE line, the driver died (reboot): relaunch it the same way; it resumes.
 
+Run 3 (2026-10-06 03:45 UTC): blx03 power-cycled 03:42 and killed driver pid 31022 again before any t140 job.
+Relaunched (same src ae7aaf3b1d2), blx03 pid 8381. The launcher's ssh hung after launch (killed by timeout after 2 min); driver unaffected.
+
 Drops logged:
 - 2026-10-06 02:17-02:19 UTC, blx03 job 212 (smarton, t136 run_ab.sh), chips 8-15 (tray 2) off PCIe, chip 15 UNHEALTHY;
   job 216 (t141) abandoned; resets 214/215 failed, health-gate 217 glx_reset; blx03 rebooted ~02:26 UTC. No t140 job was running.
 - 2026-10-06 ~03:02 UTC: blx03 rebooted (cause not seen; no t140 job running). Killed t140 driver pid 16601.
 - 2026-10-06 03:10 UTC: blx03 job 246 (smarton, t141 e2e) killed -9; chips 8-15 (tray 2) left the bus; broker post-job gate
   escalated to glx_reset. No t140 job running.
+- 2026-10-06 03:16-03:42 UTC: recovery from the job-246 drop failed: bridge-reset of chips 8-15 (tray 2) failed 4x
+  (broker jobs 254/256/258/260), the broker's galaxy-reset health gates failed (255/257/259/261), broker power-cycled the
+  galaxy (job 263, 03:42 UTC, 32/32 chips off). Killed t140 driver pid 31022. No t140 job was running.
