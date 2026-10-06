@@ -115,6 +115,91 @@ def test_sdpa_decode_fp32_dest_large_logits(device, k_chunk):
     assert_with_pcc(ref.permute(0, 2, 1, 3).float(), actual, 0.999)
 
 
+def _sdpa_decode_fp64_reference(q, k, v, cur_pos, scale, sink=None):
+    """Exact softmax attention in fp64 on bf16-exact inputs. q (B, nh, d), k/v (B, nkv, S, d)."""
+    batch, heads, _ = q.shape
+    group = heads // k.shape[1]
+    out = torch.zeros(q.shape, dtype=torch.float64)
+    for b in range(batch):
+        n = cur_pos[b] + 1
+        kk = k[b, :, :n].double().repeat_interleave(group, 0)
+        vv = v[b, :, :n].double().repeat_interleave(group, 0)
+        scores = torch.einsum("hd,hsd->hs", q[b].double(), kk) * scale
+        if sink is not None:
+            weights = torch.softmax(torch.cat([scores, sink.double().reshape(heads, 1)], 1), -1)[:, :-1]
+        else:
+            weights = torch.softmax(scores, -1)
+        out[b] = torch.einsum("hs,hsd->hd", weights, vv)
+    return out
+
+
+@pytest.mark.parametrize(
+    "batch, heads, kv_heads, head_dim, cache, cur_pos, k_chunk, causal, use_sink, max_nl2",
+    [
+        # Half-tile Q (<=16 heads, causal): P used the approximate exp even with exp_approx_mode=False.
+        (1, 8, 1, 128, 32768, 32000, 256, True, False, 0.008),
+        # Full-tile Q, many cores per head: bf16 (m, l, O) partials re-rounded at every tree-reduction round.
+        (1, 32, 8, 128, 16384, 16000, 128, True, False, 0.006),
+        (1, 32, 8, 128, 4096, 4095, 256, False, False, 0.005),
+        # Attention sink: BF16 sink CB combined with the fp32 running max/sum.
+        (4, 32, 4, 64, 4096, 4000, 256, True, True, 0.005),
+        (1, 8, 1, 64, 8192, 8000, 128, True, True, 0.008),
+    ],
+    ids=["half-tile-deep-tree", "full-tile-deep-tree", "non-causal", "sink-full-tile", "sink-half-tile"],
+)
+def test_sdpa_decode_fp32_intermediates_vs_fp64(
+    device, batch, heads, kv_heads, head_dim, cache, cur_pos, k_chunk, causal, use_sink, max_nl2
+):
+    """With fp32_dest_acc_en every softmax intermediate stays fp32 (QK/P, running max/sum, partial outputs and the
+    cross-core (m, l, O) partials), and exp_approx_mode=False is honored for half-tile Q. Checked against an fp64
+    softmax on bf16-exact inputs by normalized L2, which PCC alone does not resolve at this precision."""
+    torch.manual_seed(1234)
+    q = torch.randn(batch, heads, head_dim).bfloat16().float()
+    k = torch.randn(batch, kv_heads, cache, head_dim).bfloat16().float()
+    v = torch.randn(batch, kv_heads, cache, head_dim).bfloat16().float()
+    scale = head_dim**-0.5
+    positions = [cur_pos] * batch if causal else [cache - 1] * batch
+    sink = torch.randn(heads) * 4.0 if use_sink else None
+    ref = _sdpa_decode_fp64_reference(q, k, v, positions, scale, sink)
+
+    tq = ttnn.from_torch(q.reshape(1, batch, heads, head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tk = ttnn.from_torch(k, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tv = ttnn.from_torch(v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    kwargs = {"cur_pos": positions} if causal else {}
+    if use_sink:
+        # The kernel scales the sink with the scores, so it is passed unscaled (as GPT-OSS does).
+        sink_tile = torch.nn.functional.pad(sink.reshape(heads, 1) / scale, (0, ttnn.TILE_SIZE - 1))
+        kwargs["attention_sink"] = ttnn.from_torch(
+            sink_tile, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=0,
+        k_chunk_size=k_chunk,
+        exp_approx_mode=False,
+    )
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    out = ttnn.transformer.scaled_dot_product_attention_decode(
+        tq,
+        tk,
+        tv,
+        is_causal=causal,
+        scale=scale,
+        program_config=program_config,
+        compute_kernel_config=compute_config,
+        **kwargs,
+    )
+    actual = ttnn.to_torch(out)[0, :, :heads].double()
+    nl2 = float((actual - ref).norm() / ref.norm())
+    assert_with_pcc(ref.float(), actual.float(), 0.9999)
+    assert nl2 <= max_nl2, f"normalized L2 vs fp64 {nl2:.5f} > {max_nl2}"
+
+
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
