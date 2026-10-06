@@ -24,6 +24,8 @@ uniform across SP devices (no per-device offset needed). Causality is encoded en
 selection; sparse_sdpa_msa applies no token mask.
 """
 
+from loguru import logger
+
 import ttnn
 from models.demos.minimax_m3.utils.profiler_utils import zone
 
@@ -321,6 +323,26 @@ _FABRIC_2D_CONFIGS = (
     ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
 )
 
+# Route messages already logged by _gather_tp_sharded_index_k: once per process, not per layer x chunk.
+_logged_index_k_routes = set()
+
+
+def _log_index_k_route_once(is_2d, *, sp, tp, rows):
+    if is_2d in _logged_index_k_routes:
+        return
+    _logged_index_k_routes.add(is_2d)
+    fabric = ttnn.get_fabric_config()
+    if is_2d:
+        logger.info(f"[msa] index_k TP-dedup gather route: 2D full-mesh snake (fabric={fabric})")
+        return
+    logger.info(f"[msa] index_k TP-dedup gather route: 1D TP-then-SP (fabric={fabric})")
+    # The SP leg's extent is set by the slot capacity, not the written prefix (see the docstring above).
+    logger.warning(
+        f"[msa] index_k TP-dedup on 1D fabric: the SP leg moves ~(tp-1)/tp of the slot capacity "
+        f"({rows * sp * tp} tokens) per MSA layer per chunk, whatever the context length. Prefer a 2D fabric "
+        f"when max_seq_len is well above typical prompt lengths."
+    )
+
 
 def _gather_tp_sharded_index_k(
     index_k_cache, *, slot, mesh_config, ccl_manager, tp_axis, cached_len, chunk_local, block_size
@@ -350,7 +372,9 @@ def _gather_tp_sharded_index_k(
         "msa_cache_index_k_tp", (1, 1, rows * sp * tp, hd), index_k_cache.dtype
     )
 
-    if ttnn.get_fabric_config() in _FABRIC_2D_CONFIGS:
+    is_2d = ttnn.get_fabric_config() in _FABRIC_2D_CONFIGS
+    _log_index_k_route_once(is_2d, sp=sp, tp=tp, rows=rows)
+    if is_2d:
         return ttnn.experimental.high_bw_all_gather(
             index_k_cache,
             dim=2,

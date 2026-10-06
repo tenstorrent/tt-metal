@@ -274,6 +274,7 @@ def build_and_serialize_kv_chunk_table(
     logger.info(
         f"[migration] M3 KV chunk address table serialized to {path} "
         f"(configs={len(specs)} [{', '.join(s[0] for s in specs)}], stages={len(stage_layouts[0])}, "
-        f"layers={total_layers}, entries={table.total_entries()})"
+        f"layers={total_layers}, entries={table.total_entries()}, index_k="
+        f"{'TP-deduped (single-chip groups)' if index_k_tp_sharded else f'TP-replicated ({cols}-chip groups)'})"
     )
     return path
