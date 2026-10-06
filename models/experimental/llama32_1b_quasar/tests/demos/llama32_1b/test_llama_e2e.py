@@ -310,12 +310,13 @@ def _install_quasar_interleaved_matmul(monkeypatch, mesh_device):
     mm_core_grid = ttnn.CoreGrid(y=gy, x=gx)
 
     # Only shrink in0_block_w on the small-L1 (3 MB) variant, so the 4 MB flow stays byte-identical
-    # (in0_block_w=4). l1_size_per_core() is the soc descriptor's real per-core L1 (3 MB vs 4 MB); if it can't
-    # be queried, fail safe toward the smaller footprint (shrink).
+    # (in0_block_w=4). Detect via the L1 allocator capacity (get_memory_view is Python-bound;
+    # MeshDevice.l1_size_per_core() is NOT). 3 MB variant totals ~2.8-3.1 MB, 4 MB ~3.9-4.2 MB.
     try:
-        _small_l1 = 0 < int(mesh_device.l1_size_per_core()) < 4 * 1024 * 1024
+        _v = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1)
+        _small_l1 = 0 < int(_v.total_bytes_per_bank) * int(_v.num_banks) < 3_500_000
     except Exception:
-        _small_l1 = True
+        _small_l1 = False
 
     def _blk(v, sub, cap):
         # largest divisor of v that is a multiple of `sub` and <= cap

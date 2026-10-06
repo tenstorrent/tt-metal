@@ -613,11 +613,15 @@ def _build_lm_head(
     # clash -> hang); 2048-wide chunks need ~0.6 MB. The 4 MB part keeps 8192 (fewer chunks, faster). Gated
     # on the soc descriptor's real per-core L1 size, so no env var and the 4 MB flow is byte-identical.
     lm_max_cols = 8192
+    _total_l1 = -1
     try:
-        if 0 < int(mesh_device.l1_size_per_core()) < 4 * 1024 * 1024:
+        _v = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1)
+        _total_l1 = int(_v.total_bytes_per_bank) * int(_v.num_banks)
+        if 0 < _total_l1 < 3_500_000:  # 3 MB variant (~2.8-3.1 MB) vs 4 MB (~3.9-4.2 MB)
             lm_max_cols = 2048
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.warning(f"[llama-e2e][quasar] L1-size probe failed ({_e}); lm_head chunks stay 8192")
+    logger.info(f"[llama-e2e][quasar] lm_head chunk width = {lm_max_cols} (total L1/core = {_total_l1} bytes)")
     lm_splits, lm_split_sizes, lm_weights_memcfgs = weight_utils.build_lm_head_lazy_weights(
         mesh_device,
         lm_w,
