@@ -43,7 +43,7 @@ uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 // chunks cost more per row). Per variant, fitted to matched-chunk trace timings (single P150b,
 // 10 heads, 8192 x 8192, D128, full grid):
 // `c` from Q256/K512, `ck` from Q256/K256 (it also predicts Q320/K256 within 2%), `bw` from
-// Q128/K512. STANDARD and LOW_PRECISION refit 2026-10-02 on the reference-max state kernels (one Blackhole
+// Q128/K512. STANDARD and FAST refit 2026-10-02 on the reference-max state kernels (one Blackhole
 // Galaxy chip, same shapes; BFP4 stays compute-bound at Q128/K512, so its bw is kept).
 //
 // A core's makespan adds pipeline fill/drain the block roofline does not see (block_overhead): the
@@ -52,9 +52,8 @@ uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 // (per job, proportional to that block's keys). Both are negligible at long K (16+ K blocks per Q
 // chunk) and dominate short-K cross attention (one K block per Q chunk: LTX-2 text / A2V cross,
 // K32/K256), where the roofline alone ties every Q chunk that divides the heads evenly over the
-// cores and the tie went to the largest Q (e.g. FAST Q384/K32, 1.19x the best measured blocking).
-// Fitted on dense trace timings of 7 short/medium-K DiT shapes x FAST/STANDARD/BALANCED/
-// LOW_PRECISION(BFP8) over Q128-512 x K32-512 (bh-38, 1x2 mesh, 16 back-to-back ops per trace).
+// cores and the tie went to the largest Q (e.g. Q384/K32 with legacy numerics, 1.19x the best measured blocking).
+// Fitted on dense trace timings of 7 short/medium-K DiT shapes x the recipes, FAST with BFP8 K/V, over Q128-512 x K32-512 (bh-38, 1x2 mesh, 16 back-to-back ops per trace).
 constexpr double kQFillDrain = 12.0;  // x c x q_tiles x d_tiles / 4, once per core
 constexpr double kKFill = 0.5;        // x bw x (first K block's tiles) x d_tiles / 4, once per Q chunk
 struct BlockCostModel {
@@ -65,14 +64,13 @@ struct BlockCostModel {
 
 BlockCostModel block_cost_model(const PrecisionPolicy& policy) {
     switch (policy.selection.recipe) {
-        case Recipe::A: return {1.000, 1.49, 5.99};
         // Fused STANDARD chunks (refit 2026-10-05, dense 10 x 8192^2 D128 on one Blackhole chip).
         case Recipe::B: return {0.984, 2.20, 6.15};
         case Recipe::C: return {1.878, 3.58, 9.46};
         case Recipe::D: return {2.436, 3.14, 11.75};
         case Recipe::E:
             switch (policy.selection.kv_storage) {
-                // Fused LOW_PRECISION chunks (fitted 2026-10-04, dense 10 x 8192^2 D128 on one Blackhole chip).
+                // Fused FAST chunks (fitted 2026-10-04, dense 10 x 8192^2 D128 on one Blackhole chip).
                 case KVStorage::BF16: return {0.722, 2.83, 6.09};
                 case KVStorage::BFP8: return {0.648, 3.57, 3.86};
                 case KVStorage::BFP4: return {0.648, 3.62, 3.41};
@@ -91,7 +89,7 @@ struct RecipeBuild {
 
 // Compute slowdown not in the fitted model: narrower matmul subblocks.
 double subblock_penalty(uint32_t width) { return width >= 4 ? 1.0 : width == 2 ? 1.10 : 1.30; }
-// LOW_PRECISION's fused chunks pay their per-subblock pack-thread work (exp, P and row-sum packs) per QK subblock:
+// FAST's fused chunks pay their per-subblock pack-thread work (exp, P and row-sum packs) per QK subblock:
 // a width-2 QK subblock is 1.18x slower overall (1 core, BFP8: Q192/K960 2.55 vs K768 2.96, K1024 3.03 TF), and
 // width 1 runs the unfused kernel.
 double qk_subblock_penalty(const PrecisionPolicy& policy, uint32_t width) {
@@ -180,43 +178,6 @@ RecipeBuild recipe_build(const PrecisionPolicy& policy, uint32_t q_tiles, uint32
 // unconditionally, so this can only over-estimate.
 constexpr uint64_t kRingRecipeExtraBytes = 3 * kBf16Tile + kBf16Tile + 2 * 4096 + 16 + 64;
 
-// FAST (A) on ring keeps the legacy streaming ring layout (named_compute == false in
-// ring_joint_sdpa_program_factory.cpp), all BF16 tiles: Q x q_buffer_factor, K/V double buffered,
-// mask (<= 3), scale/identity/column identity, QK, out_im A/B, max/sum A/B, exp_max_diff, cb_out
-// (counted unshrunk), stats_in, prev_out, stats_out, reciprocal scratch, sum_out/sum_in, plus the
-// signal page and derived-geometry mailbox. Mirrors that factory while FAST keeps the legacy ring kernels.
-uint64_t legacy_ring_fast_bytes(uint32_t q, uint32_t k, uint32_t d, uint32_t q_buffer_factor) {
-    const uint64_t tiles = uint64_t{q} * d * q_buffer_factor + 4ull * k * d + 3 + 3 + uint64_t{q} * k +
-                           2ull * q * d + 4ull * q + q + uint64_t{q} * d + q + uint64_t{q} * d + q + 1 + 2ull * q;
-    return tiles * kBf16Tile + 16 + 64;
-}
-
-// FAST (A) on exp ring keeps the legacy exp-ring layout (named_compute == false in
-// exp_ring_joint_sdpa_program_factory.cpp): per-pass resident Q, or one streamed Q chunk when the
-// resident layout does not fit. Same table as MiniMax H3's `_exp_sdpa_l1_bytes`, which reproduces
-// the factory's 1,302,528 B at Q224/K512.
-uint64_t legacy_exp_ring_fast_bytes(uint32_t q, uint32_t k, uint32_t d, uint32_t passes, bool resident_q) {
-    const uint64_t tiles = uint64_t{resident_q ? passes : 1u} * q * d + 4ull * k * d + 7 + 2ull * passes * q +
-                           uint64_t{passes} * q * d + q + 16 + uint64_t{q} * k + 2ull * q * d + 4ull * q + q;
-    return tiles * kBf16Tile;
-}
-
-// Legacy exp-ring FAST needs its streaming compute path (the kernel static_asserts on it); mirrors
-// `use_streaming_compute` in exp_ring_joint_sdpa_program_factory.cpp at BF16 destination (8 tiles).
-bool legacy_exp_ring_streaming(uint32_t q, uint32_t k) {
-    constexpr uint32_t dst = 8;
-    constexpr std::array<std::pair<uint32_t, uint32_t>, 20> subblocks{{{2, 4}, {4, 2}, {1, 8}, {8, 1}, {1, 7},
-                                                                      {7, 1}, {2, 3}, {3, 2}, {1, 6}, {6, 1},
-                                                                      {1, 5}, {5, 1}, {2, 2}, {1, 4}, {4, 1},
-                                                                      {1, 3}, {3, 1}, {1, 2}, {2, 1}, {1, 1}}};
-    for (const auto& [h, w] : subblocks) {
-        if (h * w <= dst && q % h == 0 && k % w == 0) {
-            return h <= 2 && k % (dst / h) == 0 && q / h > 1;
-        }
-    }
-    return false;
-}
-
 using ProblemKey = std::tuple<
     uint8_t,
     uint8_t,
@@ -275,33 +236,21 @@ std::vector<uint32_t> tile_range(uint32_t fixed, uint32_t lo, uint32_t hi) {
 }  // namespace
 
 std::optional<std::string> recipe_geometry_rejection(
-    RecipeOp op, const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, uint32_t d_tiles) {
+    [[maybe_unused]] RecipeOp op,
+    [[maybe_unused]] const PrecisionPolicy& policy,
+    uint32_t q_tiles,
+    uint32_t k_tiles,
+    uint32_t d_tiles) {
     // The only statement of supported recipe geometry: the chooser consults it, and the ring / exp-ring
     // entry points and device operations validate through validate_recipe_geometry below. Dense/joint
     // also mirror it in recipe_dense_q_tiles / recipe_dense_k_tiles (sdpa_recipe.cpp).
     if (q_tiles == 0 || k_tiles == 0 || d_tiles == 0) {
         return std::string("recipes require tile-aligned, nonzero Q/K chunks and head dims");
     }
-    // B-E on every op: any tile-aligned Q chunk up to the recurrent-state arrays (32 tile rows), any
+    // Every recipe on every op: any tile-aligned Q chunk up to the recurrent-state arrays (32 tile rows), any
     // tile-aligned K chunk and head dim; L1 fit is recipe_l1_bytes.
     if (q_tiles > 32) {
         return fmt::format("Q chunk {} exceeds 1024 rows", q_tiles * kTile);
-    }
-    if (op == RecipeOp::Dense || op == RecipeOp::Joint || policy.selection.recipe != Recipe::A) {
-        return std::nullopt;
-    }
-    // FAST ring / exp ring keep the legacy ring kernels, which support only these geometries.
-    if (d_tiles != 2 && d_tiles != 4 && d_tiles != 8) {
-        return fmt::format("head dim {} is not 64, 128 or 256", d_tiles * kTile);
-    }
-    if (q_tiles < 4 || q_tiles > 10) {
-        return fmt::format("Q chunk {} is outside 128-320 rows", q_tiles * kTile);
-    }
-    if (k_tiles != 8 && k_tiles != 12 && k_tiles != 16) {
-        return fmt::format("K chunk {} is not 256, 384 or 512 rows", k_tiles * kTile);
-    }
-    if (op == RecipeOp::ExpRing && (k_tiles != 16 || d_tiles != 4)) {
-        return std::string("exp ring recipes require K512/D128");
     }
     return std::nullopt;
 }
@@ -331,10 +280,8 @@ void validate_recipe_geometry(
         rejection.value_or(""));
 }
 
-uint32_t recipe_mask_group_rows(const PrecisionPolicy& policy, uint32_t q_tiles) {
-    return policy.fp32_destination                    ? 1
-           : policy.selection.recipe == Recipe::A ? (q_tiles % 2 == 0 ? 2 : 1)
-                                                  : 2;
+uint32_t recipe_mask_group_rows(const PrecisionPolicy& policy, [[maybe_unused]] uint32_t q_tiles) {
+    return policy.fp32_destination ? 1 : 2;
 }
 
 RecipeL1Estimate recipe_l1_bytes(
@@ -346,7 +293,6 @@ RecipeL1Estimate recipe_l1_bytes(
     const RecipeL1Context& context) {
     const auto rejection = recipe_geometry_rejection(op, policy, q_tiles, k_tiles, d_tiles);
     TT_FATAL(!rejection, "Unsupported SDPA recipe geometry: {}", *rejection);
-    const bool fast = policy.selection.recipe == Recipe::A;
     const uint64_t q_slot = uint64_t{q_tiles} * d_tiles * kBf16Tile;
     // The factories' L1 fallback drops the fused chunks' CBs, except for an odd STANDARD Q chunk (recipe_drop_fused).
     auto droppable_fused = [&](uint32_t rows, const RecipeBuild& build) -> uint64_t {
@@ -364,22 +310,12 @@ RecipeL1Estimate recipe_l1_bytes(
             return {build.cb_bytes + 2 * mask_group, build.cb_bytes - droppable_fused(rows, build) + mask_group};
         }
         case RecipeOp::Ring: {
-            if (fast) {
-                const uint64_t bytes =
-                    legacy_ring_fast_bytes(q_tiles, k_tiles, d_tiles, context.q_blocks_per_worker > 1 ? 2 : 1);
-                return {bytes, bytes};
-            }
             const auto build = recipe_build(policy, q_tiles, k_tiles, d_tiles);
             const uint64_t bytes = build.cb_bytes + kRingRecipeExtraBytes;
             // The factory's fallbacks: drop the fused chunks' CBs, then single-slot Q.
             return {bytes, bytes - droppable_fused(q_tiles, build) - q_slot};
         }
         case RecipeOp::ExpRing: {
-            if (fast) {
-                return {
-                    legacy_exp_ring_fast_bytes(q_tiles, k_tiles, d_tiles, context.passes, true),
-                    legacy_exp_ring_fast_bytes(q_tiles, k_tiles, d_tiles, context.passes, false)};
-            }
             // The exp-ring factory keeps the recipe layout with a single Q slot, plus the 64 B live-length
             // mailbox of a device-tensor logical_n (counted unconditionally).
             const auto build = recipe_build(policy, q_tiles, k_tiles, d_tiles);
@@ -399,7 +335,7 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
     // A chunk longer than the sequence only adds padding; the default sizes stay in range.
     const bool dense = p.op == RecipeOp::Dense || p.op == RecipeOp::Joint;
     const uint32_t q_cap = std::min(kRecipeSearchMaxQTiles, std::max(div_up(p.q_rows + p.joint_q_rows, kTile), 10u));
-    // Padded K blocks are costed, so short K picks short chunks. Fused LOW_PRECISION amortizes its per-chunk
+    // Padded K blocks are costed, so short K picks short chunks. Fused FAST amortizes its per-chunk
     // work (saturation check, fold, PV pieces) over longer K chunks: up to K1024 when L1 allows.
     const uint32_t k_cap = p.policy.selection.recipe == Recipe::E ? 2 * kRecipeSearchMaxKTiles : kRecipeSearchMaxKTiles;
     const uint32_t q_floor = std::min(kRecipeSearchMinQTiles, div_up(p.q_rows + p.joint_q_rows, kTile));
@@ -428,9 +364,7 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
             any_fit = true;
             const uint32_t q_chunk = qt * kTile;
             const uint32_t k_chunk = kt * kTile;
-            // FAST ring / exp ring keep their legacy compute; everything else builds the recipe program.
-            const bool recipe_compute = dense || p.policy.selection.recipe != Recipe::A;
-            const RecipeBuild build = recipe_compute ? recipe_build(p.policy, qt, kt, p.d_tiles) : RecipeBuild{};
+            const RecipeBuild build = recipe_build(p.policy, qt, kt, p.d_tiles);
             const double block = block_cost(p.policy, qt, kt, p.d_tiles, build, dense);
             // K tiles of a Q chunk's first K/V block: the chunk, or the whole (primary) sequence when shorter.
             const uint32_t first_k_tiles = std::min(kt, std::max(1u, div_up(p.k_rows, kTile)));
@@ -471,7 +405,7 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
                     const uint32_t q_chunks = div_up(p.q_rows, q_chunk) + div_up(p.joint_q_rows, q_chunk);
                     const uint32_t jobs = div_up(batch_heads * q_chunks, cores);
                     const uint32_t k_blocks = p.ring_size * div_up(p.k_rows, k_chunk) + div_up(p.joint_k_rows, k_chunk);
-                    admit(jobs, k_blocks, p.grid, RecipeL1Context{.q_blocks_per_worker = jobs});
+                    admit(jobs, k_blocks, p.grid, RecipeL1Context{});
                     break;
                 }
                 case RecipeOp::ExpRing: {
@@ -504,11 +438,8 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
                         if (passes > 3) {
                             continue;
                         }
-                        if (p.policy.selection.recipe == Recipe::A && !legacy_exp_ring_streaming(qt, kt)) {
-                            continue;
-                        }
                         const CoreCoord grid(p.exp_mux_on_bottom_row ? cols : cols + 1, p.grid.y);
-                        admit(passes, k_blocks, grid, RecipeL1Context{.passes = passes});
+                        admit(passes, k_blocks, grid, RecipeL1Context{});
                         if (cols == 1) {
                             break;
                         }

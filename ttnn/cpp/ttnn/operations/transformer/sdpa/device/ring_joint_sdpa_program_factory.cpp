@@ -3678,7 +3678,7 @@ namespace ttnn::prim {
 
 namespace {
 
-// Legacy ring joint compute (precision unset or FAST): host-chosen subblocks, LSE / deferred-normalization
+// Legacy ring joint compute (precision unset): host-chosen subblocks, LSE / deferred-normalization
 // accumulator staging, CBs allocated from index 0.
 class LegacyRingJointCompute final : public ring_joint_sdpa::ComputeVariant {
 public:

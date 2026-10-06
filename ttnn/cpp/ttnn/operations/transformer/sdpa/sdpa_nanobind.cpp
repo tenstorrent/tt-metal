@@ -319,16 +319,15 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
 
 void bind_sdpa(nb::module_& mod) {
     nb::enum_<ttnn::transformer::SDPAPrecision>(mod, "SDPAPrecision")
-        .value("FAST", ttnn::transformer::SDPAPrecision::FAST)
         .value("STANDARD", ttnn::transformer::SDPAPrecision::STANDARD)
         .value("BALANCED", ttnn::transformer::SDPAPrecision::BALANCED)
         .value("ACCURATE", ttnn::transformer::SDPAPrecision::ACCURATE)
-        .value("LOW_PRECISION", ttnn::transformer::SDPAPrecision::LOW_PRECISION);
+        .value("FAST", ttnn::transformer::SDPAPrecision::FAST);
     ttnn::bind_function<"prepare_sdpa_input", "ttnn.transformer.">(
         mod,
-        R"doc(Round a BF16 tensor for LOW_PRECISION attention (out of place).
+        R"doc(Round a BF16 tensor for FAST attention (out of place).
 
-        LOW_PRECISION runs its matmuls at LoFi, which truncates operands to 5 (SrcA) / 7 (SrcB)
+        FAST runs its matmuls at LoFi, which truncates operands to 5 (SrcA) / 7 (SrcB)
         significant bits. Rounding the inputs first turns that truncation into round-to-nearest-even.
         SDPA never prepares or checks inputs; the caller applies this after its own Q transforms
         and before caching or communicating K/V.
@@ -373,7 +372,7 @@ void bind_sdpa(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
-            precision (ttnn.SDPAPrecision, optional): Named numerical recipe: FAST, STANDARD, BALANCED, ACCURATE or LOW_PRECISION. Omit for the legacy kernel. Cannot be combined with compute_kernel_config or exp_approx_mode=False. LOW_PRECISION expects inputs rounded by prepare_sdpa_input.
+            precision (ttnn.SDPAPrecision, optional): Named numerical recipe: FAST, STANDARD, BALANCED or ACCURATE. Omit for the legacy kernel. Cannot be combined with compute_kernel_config or exp_approx_mode=False. FAST expects inputs rounded by prepare_sdpa_input.
             attention_sink (ttnn.Tensor, optional): Defaults to `None`. [1 x nqh x 1 x 1]. Single attention sink value per head. The kernel will efficiently replicate this value across all query positions.
             cu_window_seqlens (ttnn.Tensor, optional): Defaults to `None`. 1D int32/uint32 ROW_MAJOR tensor of cumulative window boundaries [0, w1, w1+w2, ..., s]. When provided, computes block-diagonal (windowed) attention where each token attends only within its window; the mask is built on-device. Non-causal; mutually exclusive with attn_mask/is_causal/sliding_window_size.
             windowed_q_token_offset (int): Defaults to `0`. Windowed mode only. Global row index of Q row 0, for a Q holding a contiguous slice of a longer sequence: Q and the output are indexed locally while `cu_window_seqlens` and K/V stay global, so this locates the slice among the windows. Must be a multiple of TILE_HEIGHT, and `offset + Sq` must not exceed `Sk`. Use it to split the Q dimension across devices under sequence parallelism.
@@ -385,7 +384,7 @@ void bind_sdpa(nb::module_& mod) {
         attn_mask ([1|b, 1|nqh, s, s_kv], BF16/BFP8/BFP4, or FP32 for BALANCED/ACCURATE). Batch and
         GQA are supported; Q/K/V lengths and chunk sizes need not divide each other. Head dim and
         chunk sizes must be tile multiples, and the chunks must fit in L1. Inputs are tiled,
-        interleaved DRAM; Q and output are BF16. FAST-ACCURATE take BF16 K/V; LOW_PRECISION also
+        interleaved DRAM; Q and output are BF16. STANDARD-ACCURATE take BF16 K/V; FAST also
         accepts BFLOAT8_B/BFLOAT4_B K/V. Unsupported arguments raise; they never fall back.
 
         Returns:

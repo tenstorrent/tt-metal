@@ -1133,7 +1133,7 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
             joint_output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
         tt::tt_metal::TensorSpec(
             stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
-    if (args.precision && *args.precision != ttnn::transformer::SDPAPrecision::FAST) {
+    if (args.precision.has_value()) {
         const bool fp32 = *args.precision == ttnn::transformer::SDPAPrecision::BALANCED ||
                           *args.precision == ttnn::transformer::SDPAPrecision::ACCURATE;
         using State = sdpa::streaming::StateTransfer;
@@ -1161,7 +1161,7 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
 
 RingJointSDPADeviceOperation::program_factory_t RingJointSDPADeviceOperation::select_program_factory(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& /*tensor_args*/) {
-    if (args.precision && *args.precision != ttnn::transformer::SDPAPrecision::FAST) {
+    if (args.precision.has_value()) {
         return RingJointSDPARecipeMeshWorkloadFactory{};
     }
     return RingJointSDPAMeshWorkloadFactory{};
