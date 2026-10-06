@@ -28,6 +28,7 @@
 #include "llk_sfpu/ckernel_sfpu_comp.h"
 #include "llk_sfpu/ckernel_sfpu_cumsum.h"
 #include "llk_sfpu/ckernel_sfpu_digamma.h"
+#include "llk_sfpu/ckernel_sfpu_dropout.h"
 #include "llk_sfpu/ckernel_sfpu_elu.h"
 #include "llk_sfpu/ckernel_sfpu_ema.h"
 #include "llk_sfpu/ckernel_sfpu_erf.h"
@@ -157,6 +158,18 @@ inline constexpr bool unhandled_op = false;
 // Mirrored by EMA_ALPHA_BITS / EMA_BETA_BITS in helpers/sfpu_dispatch_constants.py.
 inline constexpr std::uint32_t kEmaAlphaBits = 0x3F19999Au; // 0.6f
 inline constexpr std::uint32_t kEmaBetaBits  = 0x3ECCCCCDu; // 0.4f
+
+// Dropout dispatch constants, shared with the golden (sfpu_dispatch_constants.py: DROPOUT_SCALE).
+// probability = p * INT_MAX; the default p = 0 keeps every datum, so the result is the deterministic
+// x * 2.0. Overridable via the SFPU_DROPOUT_PROBABILITY template parameter so the dedicated dropout
+// tests can drive the drop path.
+constexpr std::uint32_t kDropoutSeed = 0xDEADBEEFu;
+#ifdef SFPU_DROPOUT_PROBABILITY
+constexpr std::uint32_t kDropoutProbability = SFPU_DROPOUT_PROBABILITY;
+#else
+constexpr std::uint32_t kDropoutProbability = 0u;
+#endif
+constexpr std::uint32_t kDropoutScaleBits = 0x40000000u; // scale = 2.0f
 
 /**
  * @brief Whether OPERATION is one of the six comparison-to-zero modes.
@@ -489,6 +502,10 @@ void init_unary_sfpu_operation_quasar()
         // In place: the harness packs the tile it hands the functor (dst + 1 is in test_sfpu_ema_quasar.py).
         init_ema<0 /*OUT_TILE_DELTA*/>();
         ema_load_alpha_beta(kEmaAlphaBits, kEmaBetaBits);
+    }
+    else if constexpr (OPERATION == SfpuType::dropout)
+    {
+        dropout_init<APPROX>(kDropoutSeed);
     }
     // rsub_scalar_int32 is stateless: its compute API init is SFPU_UNARY_INIT(unused).
 }
@@ -839,6 +856,11 @@ void call_unary_sfpu_operation_quasar(
             ema_clear_previous_output();
         }
         SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, is_fp32_dest_acc_en, calculate_ema, dst_index, VectorMode::RC_custom);
+    }
+    else if constexpr (OPERATION == SfpuType::dropout)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC, is_fp32_dest_acc_en, calculate_dropout, (APPROX, ITERATIONS), dst_index, VectorMode::RC, kDropoutProbability, kDropoutScaleBits);
     }
     else if constexpr (OPERATION == SfpuType::floor)
     {
