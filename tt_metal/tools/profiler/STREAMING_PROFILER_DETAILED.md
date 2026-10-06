@@ -271,7 +271,7 @@ start and end together are complete information either way.
 
 ### 1.6 The call pattern
 
-The ops-CSV consumer in `tt_metal/impl/streaming_profiler/streaming_profiler_ops_csv.{hpp,cpp}` is the full working
+The ops-CSV consumer in `tt_metal/impl/streaming_profiler/ops_csv.{hpp,cpp}` is the full working
 reference.
 
 ```cpp
@@ -352,7 +352,7 @@ consumers — every consumer thread reads handles, has the receiver fetch the fr
 
 ### 2.2 The relay
 
-`tt_metal/tools/profiler/kernels/streaming_profiler_relay.cpp`. Resident on a DRAM bank's spare DRISC, it
+`tt_metal/impl/streaming_profiler/kernels/drisc_relay.cpp`. Resident on a DRAM bank's spare DRISC, it
 polls its slice of the worker SPSC rings, gathers live runs into wire frames, spools them in its own GDDR
 bank and pumps them to the host FIFO over a D2H socket.
 
@@ -362,9 +362,11 @@ bank and pumps them to the host FIFO over a D2H socket.
   a second core — the relay's own bank, its own DMA engine, no NoC read of another core's ring.
 - **Placement.** One relay per DRAM view, `boot_device` refusing two relays on one physical core (two DRAM
   views can resolve to the same NoC core, §N+40). The NIU has to be in stream mode to initiate NoC traffic
-  at all; all relays' NIUs are flipped in **one** launch of `kernels/drisc_niu_mode.cpp` before any relay is
-  resident (§N+34 — one launch per flip ran a `dram_barrier` across an already-stream-mode core and hung
-  the box).
+  at all, and that is boot state now: DRISC firmware puts every NIU that is no DRAM view's preferred
+  endpoint into stream mode and nothing changes it afterwards (`hw/inc/experimental/drisc_mode.h`). So the
+  profiler sets no modes — it checks the ones it needs, and turns capture off for a device whose relay core
+  is some other view's endpoint, because firmware holds such an NIU in NOC2AXI where the relay's reads
+  would never issue. §N+32/§N+34's bring-up hangs came from the flip launches this replaced.
 - **Launch.** `detail::LaunchProgram(..., force_slow_dispatch=true)`, outside the command queue: a
   DRAM-only program touches no fast-dispatch resource, so it stays resident across every workload, while
   going through the CQ would deadlock the first `Finish()`.
@@ -385,7 +387,7 @@ bank and pumps them to the host FIFO over a D2H socket.
   outstanding. A light workload that never reaches the occupancy bands is still shipped within ~50 ms
   (`kSpoolFreshCycles`), so host staleness is bounded.
 - **Teardown** talks to a relay through its stop word: 1 = quiesce (every wait holds while the last frames
-  drain, up to 1 s), 2 = kill switch (abandon waits, free the NIU). The relay publishes `0xD09E****` in its
+  drain, up to 1 s), and the relay returns once they are out. The relay publishes `0xD09E****` in its
   done word once its last page is out. Producers boot unarmed and are armed (`PROFILER_ARMED`) only on the
   cores a relay drains, once every relay is up; a path where a relay does not come up leaves them unarmed, so a
   missing relay can never wedge the workload (§N+24).
@@ -397,7 +399,7 @@ bank and pumps them to the host FIFO over a D2H socket.
 
 Host files live in `tt_metal/impl/streaming_profiler/`.
 
-- `streaming_profiler_device.{hpp,cpp}` — control plane: one `StreamingProfiler` per
+- `device_programs.{hpp,cpp}` — control plane: one `StreamingProfiler` per
   `MeshDevice`. Constructing it boots the relays on every eligible local Blackhole device and starts the
   receiver; destroying it (or `stop()`) quiesces the relays, drains the receiver, verifies capture
   completeness (every worker lane's tail against the receiver's consumed mirror) and leaves the resident
@@ -407,25 +409,25 @@ Host files live in `tt_metal/impl/streaming_profiler/`.
   minutes wrong for a DRAM core — §N+46) and **one shared frequency** for every context on the chip
   (per-core slopes are biased and fan the rows apart — §N+47/§N+48). Residual measured with a common
   trigger: 0.18 µs (§N+48); cross-domain offset constant to 0.1 ppm while both domains are active (§N+49).
-- `streaming_profiler_receiver.{hpp,cpp}` — ingest as in §2.1: the D2H FIFO is the ring. The ingest thread walks
+- `receiver.{hpp,cpp}` — ingest as in §2.1: the D2H FIFO is the ring. The ingest thread walks
   each frame's header in place, publishes a `frame_handle` (page offset and length) into the stream's
   `BroadcastRing<uint64_t>`, and returns the socket's credits at once; it copies nothing. A consumer reads handles and
   has the receiver `fetch` the frames' bytes out of the FIFO, keeping only those the device cannot have reached since:
   everything it has landed lies below `bytes_sent + SPSC_NOTIFY_CAP_BYTES`, the relay's notify cap, and a frame is
   overwritten only by writes one FIFO past it. Both losses are whole frames, counted in `Batch::dropped_bytes()`.
-  Decode lives in the consumers (`streaming_profiler_decode.hpp`, one `StreamDecoder` per consumer per stream): it
+  Decode lives in the consumers (`decode.hpp`, one `StreamDecoder` per consumer per stream): it
   recovers from a gap by reseeding lane state from the frame's control words (the producer's per-RISC state
   slots, written after its tail so a frame never carries a value its words do not) and re-anchoring at the next
   absolute zone. Decode is vectorized (AVX2 zone blocks, §N+54/§N+68) and memory-latency bound (§N+55–§N+57).
 - `spsc_marker_decode.hpp` (the decode single source of truth), `spsc_packet.h` (plain-C packet
   constants shared with the device's `ppfmt`), `hw/inc/hostdev/streaming_profiler_common.h` (span/frame
   geometry, pack-pad rule, `SPSC_SPAN_RAW_FLAG`).
-- Consumers: `streaming_profiler_service.{hpp,cpp}` (callbacks, one thread each, reading every attached
-  receiver's queues), `streaming_profiler_api.cpp` (the public `RegisterCallback`, the process-wide site table),
-  `streaming_profiler_consumer.hpp` (the internal record contract),
-  `streaming_profiler_decode.hpp` (the frame decoder),
-  `streaming_profiler_ops_csv`, `streaming_profiler_zone_csv`,
-  `streaming_profiler_tracy` (the Tracy sink; per-relay
+- Consumers: `service.{hpp,cpp}` (callbacks, one thread each, reading every attached
+  receiver's queues), `api.cpp` (the public `RegisterCallback`, the process-wide site table),
+  `capture_context.hpp` (the internal record contract),
+  `decode.hpp` (the frame decoder),
+  `ops_csv`, `zone_csv`,
+  `tracy_consumer` (the Tracy sink; per-relay
   anchors, k-way merge of a context's lanes by timestamp so Tracy's 2^31-tick unwrap heuristic never fires —
   §4.2).
 - Device producer: `kernel_profiler_streaming.hpp`, selected by `-DPROFILE_STREAMING`. Zone ids are 27-bit
@@ -471,13 +473,13 @@ Names in the historical text and what they are today:
 
 | in the text | today |
 |---|---|
-| `drisc_profiler_drain.cpp` (the filler/mover kernel, role by `kRole` compile arg), `drisc_profiler_filler.cpp` | `tt_metal/tools/profiler/kernels/streaming_profiler_relay.cpp` |
+| `drisc_profiler_drain.cpp` (the filler/mover kernel, role by `kRole` compile arg), `drisc_profiler_filler.cpp` | `tt_metal/impl/streaming_profiler/kernels/drisc_relay.cpp` |
 | `drisc_drain_common.hpp`, `test_kernels/misc/drisc_drain_frame.h`, the streaming constants that were in `profiler_common.h` | `tt_metal/hw/inc/hostdev/streaming_profiler_common.h` (the DRAM profiler keeps `profiler_common.h`) |
-| `perf_debug_profiler.{hpp,cpp}`, `PerfDebugProfiler` | `tt_metal/impl/streaming_profiler/streaming_profiler_device.{hpp,cpp}`, `streaming_profiler::Devices` |
-| `PerfDebugTracyHandler`, `perf_debug_tracy_handler` | `TracySink`, `streaming_profiler_tracy.{hpp,cpp}` |
-| the host "writer"/"decoder" threads, `D2HSocket::read()` memcpy path, receiver v2 | `streaming_profiler_receiver.{hpp,cpp}` |
+| `perf_debug_profiler.{hpp,cpp}`, `PerfDebugProfiler` | `tt_metal/impl/streaming_profiler/device_programs.{hpp,cpp}`, `streaming_profiler::Devices` |
+| `PerfDebugTracyHandler`, `perf_debug_tracy_handler` | `TracySink`, `tracy_consumer.{hpp,cpp}` |
+| the host "writer"/"decoder" threads, `D2HSocket::read()` memcpy path, receiver v2 | `receiver.{hpp,cpp}` |
 | host record ring of 24 B `Rec` (`BroadcastRing`, `RING_RECS`) | per-stream `BroadcastRing` of verbatim frames (`RING_MB`); records are decoded per consumer |
-| `drisc_niu_mode.cpp` | `tt_metal/tools/profiler/kernels/drisc_niu_mode.cpp` (same job) |
+| `drisc_niu_mode.cpp` | gone: DRISC firmware sets each NIU's mode once per boot (`hw/inc/experimental/drisc_mode.h`) |
 | `test_perf_debug_zones` | `tt_metal/programming_examples/profiler/test_streaming_profiler_zones` |
 | `TT_METAL_PERF_DEBUG_*` | `TT_METAL_STREAMING_PROFILER_*` — full table at the top of §6 |
 | `TT_METAL_STREAMING_PROFILER_{DRISC_ZONES,ROLE_RING_MB,SHIP_REPEAT}` as they appear in §3.1 and §3.3 | mechanical renames of `TT_METAL_PERF_DEBUG_*` knobs of the fillers/movers kernel; removed with it, no current equivalent |

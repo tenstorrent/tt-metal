@@ -90,6 +90,7 @@ def test_linear(
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("m_size", [384])
 @pytest.mark.parametrize("k_size", [1024])
@@ -410,6 +411,7 @@ def test_linear_fp32_acc(device, m_size, k_size, n_size):
     )
 
 
+@pytest.mark.merge_gate
 def test_bloom_ff2_linear(device):
     torch.manual_seed(0)
     torch_input_tensor = torch_random((8, 384, 4096), -0.1, 0.1, dtype=torch.float32)
@@ -512,6 +514,7 @@ def test_linear_by_passing_in_1D_systolic_array_program_config_and_optional_outo
     assert_with_pcc(optional_output_tensor, output_tensor, 0.997)
 
 
+@pytest.mark.merge_gate
 def test_linear_with_fp32_dest_acc_and_bias(device):
     torch.manual_seed(0)
     torch_input_tensor_a = torch.rand([64, 1, 256, 384])
@@ -648,7 +651,7 @@ def test_resnet50_linear(device):
         ((32, 2, 32), (32, 32), (1, 32)),  # 4D tensors with no bias
     ],
 )
-def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
+def test_vector_linear(device, shape_a, shape_b, shape_bias) -> None:
     """
     Test the compatibility of the torch and ttnn linear for the given operation and different
     tensor shapes.
@@ -659,28 +662,29 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
     torch_a = torch.randn(*shape_a, dtype=torch.bfloat16)
     torch_b = torch.randn(*shape_b, dtype=torch.bfloat16)
 
-    # For torch.linear, weight matrix is expected to be (out_features, in_features)
-    # but internally it's transposed during the operation
-    torch_weight = torch_b
-    if len(shape_b) >= 2:
-        torch_weight = torch.transpose(torch_weight, -1, -2)
-
     # Create bias tensor if shape_bias is not empty
     torch_bias = None
     ttnn_bias = None
     if shape_bias is not None:
-        torch_bias = torch.randn(*shape_bias, dtype=torch.bfloat16) if shape_bias != tuple() else torch.randn(())
+        torch_bias = (
+            torch.randn(*shape_bias, dtype=torch.bfloat16)
+            if shape_bias != tuple()
+            else torch.randn((), dtype=torch.bfloat16)
+        )
         ttnn_bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
     # Create ttnn tensors
     ttnn_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # Handle exceptions in torch
+    # ttnn.linear takes b as (in_features, out_features), so the reference is matmul + bias.
+    # torch.nn.functional.linear is not used because it rejects a 2D input with a 1D weight and a bias.
     torch_errored = False
     torch_error_msg = ""
     try:
-        torch_result = torch.nn.functional.linear(torch_a, torch_weight, torch_bias)
+        torch_result = torch.matmul(torch_a, torch_b)
+        if torch_bias is not None:
+            torch_result = torch_result + torch_bias
     except Exception as e:
         torch_errored = True
         torch_error_msg = str(e)
@@ -701,16 +705,14 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
         logger.info('[EXPECTED_ERROR END] RuntimeError message="Unsupported bias shape"')
 
     # Compare error behavior
-    if torch_errored != ttnn_errored:
-        return (
-            False,
-            f"mismatch in errors raised: torch: {torch_errored} ({torch_error_msg}), ttnn: {ttnn_errored} ({ttnn_error_msg})",
-        )
+    assert (
+        torch_errored == ttnn_errored
+    ), f"mismatch in errors raised: torch: {torch_errored} ({torch_error_msg}), ttnn: {ttnn_errored} ({ttnn_error_msg})"
 
     # Skip the rest of the test if an exception was raised in both
     if torch_errored:
         logger.warning(f"both torch and ttnn raised errors: torch: {torch_error_msg}, ttnn: {ttnn_error_msg}")
-        return (True, "")
+        return
 
     # Convert ttnn result to torch for comparison
     ttnn_result_torch = ttnn.to_torch(ttnn.from_device(ttnn_result))
@@ -733,9 +735,9 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
     # Allow some tolerance for numeric differences
     atol = rtol = 0.1
 
-    assert torch.allclose(torch_result, ttnn_result_torch, atol=atol, rtol=rtol, equal_nan=True), (
-        f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result_torch}",
-    )
+    assert torch.allclose(
+        torch_result, ttnn_result_torch, atol=atol, rtol=rtol, equal_nan=True
+    ), f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result_torch}"
 
 
 @pytest.mark.parametrize("in0_block_w", [1, 2, 4, 8])
@@ -1187,6 +1189,34 @@ def test_linear_bias_wrong_height_rejected_on_multicore_reuse_program_config(dev
 
     with expect_error(RuntimeError, r"padded second last dimension of bias, 32, not equal to expected bias height, 64"):
         ttnn.linear(in0, in1, bias=bias, program_config=program_config)
+
+
+def test_linear_narrow_bias_core_grid_activation(device):
+    """With core_grid, activation would normally be fused into the matmul kernel. A narrow bias is applied
+    via add(), so activation must run afterward to produce act(a @ b + bias)."""
+    torch.manual_seed(0)
+    a = torch.randn(32, 64, dtype=torch.bfloat16)
+    b = torch.randn(64, 64, dtype=torch.bfloat16)
+    # A large constant bias: PCC alone cannot catch the bug, since act(a @ b) + bias is mostly a shift.
+    bias = torch.tensor([4.0], dtype=torch.bfloat16)
+    expected = torch.relu(a @ b + bias)
+
+    result = ttnn.linear(
+        ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device),
+        ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device),
+        bias=ttnn.from_torch(bias, layout=ttnn.TILE_LAYOUT, device=device),
+        activation="relu",
+        core_grid=ttnn.CoreGrid(y=1, x=1),
+    )
+    assert_numeric_metrics(
+        expected,
+        ttnn.to_torch(result),
+        atol=1.0,
+        rtol=0.05,
+        frobenius_threshold=0.05,
+        pcc_threshold=0.99,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize("bias_rank", [0, 1, 2, 3, 4])

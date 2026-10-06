@@ -28,12 +28,11 @@ test_unary_category1). Out-of-domain inputs (x<0 for sqrt, x<=0 for log, etc.)
 are checked separately and must be non-finite.
 
 gelu's golden is computed in float64 (see test_gelu_accurate/test_gelu_fast):
-fp32's 1 + erf(x/sqrt(2)) suffers cancellation for |x| around 5-6. This
-initially produced a false ~171 ULP failure misattributed to a device kernel
-defect (issue #56616 should be revisited/closed as a misattribution). Even
-with float64, the far-negative tail's true result is so tiny that ULP stops
-being meaningful (per assert_with_ulp's own docstring) — those elements are
-checked via absolute tolerance instead (see GELU_TINY_GOLDEN_ABS).
+fp32's 1 + erf(x/sqrt(2)) suffers cancellation for |x| around 5-6. Even
+with float64, the far-negative tail's true result is so tiny that ULP
+stops being meaningful (per assert_with_ulp's own docstring) — those
+elements are checked via absolute tolerance instead (see
+GELU_TINY_GOLDEN_ABS).
 
 assert_allclose's rtol is scaled by actual_result (device output), not
 expected_result (golden), despite its docstring's stated formula — a
@@ -250,10 +249,7 @@ def test_gelu_accurate(device):
       subnormal that hardware DAZ/FTZ flushes to 0.
     - |golden| < GELU_TINY_GOLDEN_ABS (the far-negative cancellation tail,
       e.g. x~=-6.6): checked via absolute tolerance instead of ULP (see
-      GELU_TINY_GOLDEN_ABS above). Originally misdiagnosed as a device kernel
-      defect at a specific element (issue #56616) — see PR #56338 review
-      discussion; golden is computed in float64 to rule out torch's own fp32
-      cancellation as a separate source of error."""
+      GELU_TINY_GOLDEN_ABS and module docstring above)."""
     input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)  # all normals; specials→0
     tt_in = to_tt_tensor(input_tensor, device)
 

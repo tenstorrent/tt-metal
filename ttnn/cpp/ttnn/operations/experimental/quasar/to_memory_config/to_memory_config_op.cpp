@@ -11,6 +11,7 @@
 #include "ttnn/operations/experimental/quasar/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp"
 #include "ttnn/operations/experimental/quasar/reshard/device/reshard_device_operation.hpp"
 #include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/hal.hpp>
@@ -52,15 +53,14 @@ bool can_use_sharded_to_interleaved(
                                                  : 1;
         uint32_t num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
 
-        IDevice* device = input_tensor.device();
+        MeshDevice* device = input_tensor.device();
         uint32_t output_buffer_alignment = device->allocator()->get_alignment(output_mem_config.buffer_type());
         uint32_t aligned_output_page_size = tt::align(output_unit_size, output_buffer_alignment);
 
         // Input CB aliases the shard buffer (no extra L1). Output CB is additional.
         uint32_t total_cb_size = num_units_per_shard * aligned_output_page_size;
 
-        uint32_t max_l1_size =
-            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        uint32_t max_l1_size = operations::data_movement::get_max_l1_space(input_tensor);
 
         if (total_cb_size >= max_l1_size) {
             return false;
@@ -99,7 +99,7 @@ bool can_use_interleaved_to_sharded(
     bool convert_df = input_tensor.dtype() != resolved_dtype;
     bool dst_is_dram = output_mem_config.buffer_type() == BufferType::DRAM;
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
     uint32_t src_alignment = device->allocator()->get_alignment(input_tensor.memory_config().buffer_type());
     uint32_t dst_alignment = device->allocator()->get_alignment(output_mem_config.buffer_type());
     uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
@@ -138,10 +138,16 @@ bool can_use_interleaved_to_sharded(
         total_cb_size += num_units_per_shard * output_page_size;
     }
 
-    uint32_t max_l1_size =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    // Sharded L1 outputs allocate one shard per core before CB placement; reserve that space.
+    uint32_t pending_output_bytes_per_core = 0;
+    if (!dst_is_dram) {
+        uint32_t aligned_output_page_size = tt::align(output_unit_size, dst_alignment);
+        pending_output_bytes_per_core = num_units_per_shard * aligned_output_page_size;
+    }
 
-    return total_cb_size < max_l1_size;
+    uint32_t max_l1_size = operations::data_movement::get_max_l1_space(input_tensor);
+
+    return total_cb_size + pending_output_bytes_per_core < max_l1_size;
 }
 
 bool can_use_reshard(
@@ -183,7 +189,7 @@ bool can_use_reshard(
     // Same-width reshard (H→H) may allocate a scratch CB when page sizes are unaligned
     if (legacy_reshard && inp_mem_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
         out_mem_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        IDevice* device = input_tensor.device();
+        MeshDevice* device = input_tensor.device();
         auto inp_shard_spec = input_tensor.memory_config().shard_spec().value();
         auto out_shard_spec = output_mem_config.shard_spec().value();
 
@@ -212,8 +218,7 @@ bool can_use_reshard(
         bool unaligned = (remote_unit_size_padded != unit_size) || (local_unit_size_padded != unit_size);
         if (unaligned) {
             uint32_t scratch_cb_size = remote_units_per_shard * remote_unit_size_padded;
-            uint32_t max_l1_size =
-                device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+            uint32_t max_l1_size = operations::data_movement::get_max_l1_space(input_tensor);
             if (scratch_cb_size >= max_l1_size) {
                 return false;
             }
@@ -222,7 +227,7 @@ bool can_use_reshard(
 
     // ND reshard copy-pages path (both DRAM) allocates a 1-page CB
     if (!legacy_reshard && inp_buffer_type == BufferType::DRAM && out_buffer_type == BufferType::DRAM) {
-        IDevice* device = input_tensor.device();
+        MeshDevice* device = input_tensor.device();
         uint32_t input_alignment = device->allocator()->get_alignment(BufferType::DRAM);
         tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
@@ -234,8 +239,7 @@ bool can_use_reshard(
         }
         uint32_t aligned_page_size = tt::align(page_size, input_alignment);
 
-        uint32_t max_l1_size =
-            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        uint32_t max_l1_size = operations::data_movement::get_max_l1_space(input_tensor);
         if (aligned_page_size >= max_l1_size) {
             return false;
         }
@@ -259,6 +263,19 @@ Tensor to_memory_config(
         !output_tensor.has_value()) {
         return tensor;
     }
+
+    // Legacy 2D-grid BLOCK_SHARDED on DRAM is unsupported across ttnn (a 2D block core-grid collides
+    // on DRAM's 1D banks). Reject it at the dispatcher instead of silently falling through to the
+    // ttnn::copy fallback, which produces wrong data: quasar's interleaved_to_sharded declines it, so
+    // the dispatch lands on prim::copy, which has no such check. Block-shaped shards on DRAM are
+    // supported via an ND shard spec (ND_SHARDED), which is not caught here. Mirrors the core copy.
+    const auto is_dram_block_sharded = [](const std::optional<MemoryConfig>& mem_config) {
+        return mem_config.has_value() && mem_config->memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
+               mem_config->buffer_type() == BufferType::DRAM;
+    };
+    TT_FATAL(
+        !is_dram_block_sharded(original_memory_config) && !is_dram_block_sharded(memory_config),
+        "We don't support DRAM block sharding");
     std::vector<std::optional<Tensor>> optional_output_tensors;
     if (output_tensor.has_value()) {
         optional_output_tensors.push_back(output_tensor);

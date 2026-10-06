@@ -273,7 +273,7 @@ ProgramDescriptor build_ring_program_descriptor(
     make_cb(cb_q_arg, (stream_heads ? 2 : 1) * HB * QC * Dt, q_fmt, q_tile);
     make_cb(cb_k_arg, 2 * KC * Dt, k_fmt, k_tile);
     make_cb(cb_w_arg, Hi * QC, tt::DataFormat::Float16_b, bf16_tile);
-    make_cb(cb_mask_arg, num_mask_tiles, tt::DataFormat::Float16_b, bf16_tile);
+    make_cb(cb_mask_arg, args.key_compression_ratio + 1, tt::DataFormat::Float16_b, bf16_tile);
     // cb_qk stages the batched relu(q.kT) strip for the gate-mul phase.
     make_cb(cb_qk_arg, qk_col_batch * qk_batch_heads, acc_fmt, acc_tile);
     // cb_out_strip holds the untilized output, double-buffered (2*KC; no block-pool on the DSA path).
@@ -345,7 +345,7 @@ ProgramDescriptor build_ring_program_descriptor(
     sdpa_sig.initialized_fused_op = true;
 
     // Compile-time args (common dims + CB indices).
-    std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, /*block_tiles=*/0u};
+    std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, /*block_tiles=*/0u, args.key_compression_ratio};
     common_ct.insert(common_ct.end(), cb_id.begin(), cb_id.end());
 
     std::vector<uint32_t> reader_ct = common_ct;
@@ -409,9 +409,10 @@ ProgramDescriptor build_ring_program_descriptor(
     // Same predicate the host uses in device_causal_geometry(), so the reader picks the same causal
     // branch. NOT sp_axis alone: a fused full-mesh ring is rotation-exact without a named SP axis.
     reader_ct.push_back(has_meta && program::rotation_exact_sp_geometry(args) ? 1u : 0u);
-    // Key-stripe split, so the reader can recover the UNSPLIT sp/chunk_local that
-    // device_causal_geometry uses. Under KV dedup this is tp; 1 everywhere else.
-    reader_ct.push_back(has_meta ? args.key_stripe_split : 1u);
+    // Geometry split, so the reader can recover the sp/chunk_local that device_causal_geometry uses: the
+    // key-stripe split (tp under KV dedup) times the full-mesh query regrouping (mesh_cols on a fused
+    // full-mesh ring, see query_geometry_split). 1 everywhere else.
+    reader_ct.push_back(has_meta ? args.key_stripe_split * program::query_geometry_split(args) : 1u);
     tt::tt_metal::TensorAccessorArgs(has_meta ? *tensors.chunk_start_idx_tensor->buffer() : *q.buffer())
         .append_to(reader_ct);
     // Cache-slot select, same fixed-width discipline as the block above (one kernel binary serves both
@@ -420,12 +421,21 @@ ProgramDescriptor build_ring_program_descriptor(
     const bool has_slot_meta = tensors.has_cache_slot_metadata();
     const uint32_t local_slot_pages_ct = (k_local.logical_shape()[2] / tt::constants::TILE_HEIGHT) *
                                          (k_local.logical_shape()[3] / tt::constants::TILE_WIDTH);
-    reader_ct.push_back(has_slot_meta ? 1u : 0u);
+    // No presence flag: metadata mode is one flag, selected above. The slot index goes in
+    // UNCONDITIONALLY -- the kernel decides from the common arg's VALUE (0 = no slot to select), and a 0
+    // here would alias slot 0 (q's address, never 0) and read as "slot supplied".
     reader_ct.push_back(indexer_common::reader::SlotMetadata);
     reader_ct.push_back(has_slot_meta ? local_slot_pages_ct : 0u);
     reader_ct.push_back(has_slot_meta ? cb_meta_slot : 0u);
     reader_ct.push_back(has_slot_meta ? static_cast<uint32_t>(k_local.logical_shape()[0]) : 0u);
     tt::tt_metal::TensorAccessorArgs(has_slot_meta ? *tensors.cache_batch_idx_tensor->buffer() : *q.buffer())
+        .append_to(reader_ct);
+    const bool has_valid_end = tensors.has_valid_end_metadata();
+    // No presence flag: metadata mode is selected once, above. The slot index is pushed UNCONDITIONALLY
+    // -- the kernel decides from the common arg's VALUE (0 = uncapped), so a 0 here would alias slot 0
+    // (q's address, never 0) and read as "bound supplied".
+    reader_ct.push_back(static_cast<uint32_t>(indexer_common::reader::ValidEnd));
+    tt::tt_metal::TensorAccessorArgs(has_valid_end ? *tensors.valid_end_tensor->buffer() : *q.buffer())
         .append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = common_ct;
@@ -552,8 +562,11 @@ ProgramDescriptor build_ring_program_descriptor(
     } else {
         reader_common.push_back(0u);
     }
-    reader_common.push_back(tensor_rank);
-    reader_common.push_back(tp_index);
+    // The (SP rank, TP window) the reader's metadata causal geometry uses -- regrouped on a full mesh, exactly
+    // as device_causal_geometry does on the host.
+    const auto geometry_ranks = program::query_geometry_ranks(args, tensor_rank, tp_index);
+    reader_common.push_back(geometry_ranks.device_index);
+    reader_common.push_back(geometry_ranks.tp_index);
     if (has_slot_meta) {
         reader_common.push_back(tensors.cache_batch_idx_tensor->buffer());
     } else {
@@ -561,6 +574,13 @@ ProgramDescriptor build_ring_program_descriptor(
     }
     reader_common.push_back(args.index_cache_num_layers);
     reader_common.push_back(args.index_cache_layer_idx);
+    // ValidEnd: pushed unconditionally to hold the enum position, 0 when uncapped. Bound as a buffer so
+    // the descriptor refreshes its address on every dispatch -- a stale one would clamp kv_len to garbage.
+    if (has_valid_end) {
+        reader_common.push_back(tensors.valid_end_tensor->buffer());
+    } else {
+        reader_common.push_back(0u);
+    }
     reader_common.append(shard_order);
     reader_common.append(fused_rt);
     append_multicast_axes(reader_common, phys);

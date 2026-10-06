@@ -62,10 +62,35 @@ def _load_kv_pt_trace(pt_path: str) -> dict:
     return cached
 
 
-def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int) -> "torch.Tensor":
+def _load_sharded_rows(layer_dir: Path, key: str, start: int, total_len: int) -> "torch.Tensor":
+    import torch
+    from safetensors import safe_open
+
+    end = start + total_len
+    rows = []
+    for shard in sorted(layer_dir.glob("rows_*.safetensors"), key=lambda p: int(p.stem.split("_")[1])):
+        first, last = (int(x) for x in shard.stem.split("_")[1:3])
+        if last <= start or first >= end:
+            continue
+        with safe_open(shard, framework="pt") as f:
+            t = f.get_tensor(key)
+        rows.append(t[max(start - first, 0) : min(end - first, t.shape[0])])
+    if not rows:
+        raise FileNotFoundError(f"{layer_dir} holds no shard covering rows [{start},{end})")
+    out = torch.cat(rows, dim=0).to(torch.float32)
+    if out.shape[0] != total_len:
+        raise FileNotFoundError(f"{layer_dir} shards cover only {out.shape[0]} of rows [{start},{end})")
+    return out
+
+
+def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int, start: int = 0) -> "torch.Tensor":
     """[total_len, 576] golden kv_post_transform for one layer, format-agnostic:
     - DeepSeek: a single kv_cache/layer_N.safetensors holding the full tensor.
     - Kimi (vllm): kv_cache/layer_N/rows_<start>_<end>.safetensors shards, concatenated by start row.
+
+    `start` skips that many golden rows first. A head+tail capture stores the two windows back to
+    back, so its tail begins at the head length rather than at the prompt position it represents:
+    reaching it needs a row offset, not a longer read.
     """
     import torch
     from safetensors import safe_open
@@ -74,21 +99,25 @@ def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int) -> "torch.Te
     single = Path(trace_dir) / "kv_cache" / f"layer_{layer_idx}.safetensors"
     if single.exists():
         with safe_open(single, framework="pt") as f:
-            return f.get_slice(key)[:total_len].to(torch.float32)
-    layer_dir = Path(trace_dir) / "kv_cache" / f"layer_{layer_idx}"
-    shards = sorted(layer_dir.glob("rows_*.safetensors"), key=lambda p: int(p.stem.split("_")[1]))
-    rows, have = [], 0
-    for shard in shards:
-        with safe_open(shard, framework="pt") as f:
-            t = f.get_tensor(key)
-        rows.append(t)
-        have += t.shape[0]
-        if have >= total_len:
-            break
-    return torch.cat(rows, dim=0)[:total_len].to(torch.float32)
+            return f.get_slice(key)[start : start + total_len].to(torch.float32)
+    return _load_sharded_rows(Path(trace_dir) / "kv_cache" / f"layer_{layer_idx}", key, start, total_len)
 
 
-def index_golden_present(trace_dir) -> bool:
+def kvpe_golden_present(trace_dir, layer_idx: int) -> bool:
+    """True when ``trace_dir`` carries a KVPE golden for this layer.
+
+    A hybrid stack writes a KV slab on only some layers, so its golden holds only those: Kimi-K3's 1M
+    trace ships 24 files for a 93-layer model. A reader walking every layer has to tell "no reference
+    for this layer" apart from "reference missing", and both the single-file and the sharded (vllm)
+    layouts have to be checked -- the same two reads ``_load_golden_kv_post`` does.
+    """
+    root = Path(trace_dir) / "kv_cache"
+    if (root / f"layer_{layer_idx}.safetensors").exists():
+        return True
+    return any((root / f"layer_{layer_idx}").glob("rows_*.safetensors"))
+
+
+def index_golden_present(trace_dir, layer_idx: int | None = None) -> bool:
     """True when ``trace_dir`` carries the indexer-key golden that ``_load_golden_index_k`` reads.
 
     Some vLLM dumps store only ``dsa/dsa_topk_indices_layer_*``, so a trace can hold a valid KVPE golden
@@ -98,29 +127,77 @@ def index_golden_present(trace_dir) -> bool:
     from pathlib import Path
 
     dsa_dir = Path(trace_dir) / "dsa"
-    return dsa_dir.is_dir() and any(dsa_dir.glob("indexer_k_layer_*"))
+    pattern = "indexer_k_layer_*" if layer_idx is None else f"indexer_k_layer_{layer_idx}"
+    return dsa_dir.is_dir() and any(dsa_dir.glob(pattern))
 
 
-def _load_golden_index_k(trace_dir, layer_idx: int, total_len: int) -> "torch.Tensor":
+def _rebase_index_k_rope(golden_ik: "torch.Tensor", hf_config) -> "torch.Tensor":
+    """A half-split-roped indexer-key golden re-based onto the device's interleaved rope pairing.
+
+    GLM-5.3 is rope-asymmetric: MLA ropes k_pe half-split while the DSA indexer ropes interleaved, so
+    a uniformly-roped trace has to be un-roped, re-paired and re-roped -- not column-permuted.
+    """
+    from models.demos.deepseek_v3_d_p.tt.mla.rope import get_cos_sin_matrix
+
+    rope_dim = hf_config.qk_rope_head_dim
+    n, width = golden_ik.shape[0], golden_ik.shape[-1]
+    assert rope_dim % 2 == 0 and width >= rope_dim, f"index key [{n}, {width}] has no {rope_dim}-wide rope half"
+    pe, nope = golden_ik[:, :rope_dim].float(), golden_ik[:, rope_dim:]
+
+    def tables(interleave):
+        cos, sin = get_cos_sin_matrix(hf_config, interleave=interleave, num_positions=n)
+        assert cos.shape[-1] == rope_dim, f"rope table is {cos.shape[-1]} wide, expected {rope_dim}"
+        return cos[0, 0].float(), sin[0, 0].float()
+
+    def rot_half_split(x):  # rotate_half: [a, b] -> [-b, a]
+        h = rope_dim // 2
+        return torch.cat([-x[:, h:], x[:, :h]], dim=-1)
+
+    def rot_interleaved(x):  # [x0, x1, x2, ..] -> [-x1, x0, -x3, ..]
+        y = x.reshape(n, rope_dim // 2, 2)
+        return torch.stack([-y[:, :, 1], y[:, :, 0]], dim=-1).reshape(n, rope_dim)
+
+    cos_hs, sin_hs = tables(False)
+    cos_il, sin_il = tables(True)
+    pre = pe * cos_hs - rot_half_split(pe) * sin_hs
+    fixed = pre * cos_il + rot_interleaved(pre) * sin_il
+
+    before, after = pe.norm(dim=-1), fixed.norm(dim=-1)
+    assert torch.allclose(
+        before, after, rtol=1e-4, atol=1e-4
+    ), f"re-basing changed the rope half's norm by up to {(before - after).abs().max():.3e}: not a rotation"
+    return torch.cat([fixed.to(golden_ik.dtype), nope], dim=-1)
+
+
+def _load_golden_index_k(
+    trace_dir,
+    layer_idx: int,
+    total_len: int,
+    start: int = 0,
+    *,
+    rope_layout: str = "interleaved",
+    hf_config=None,
+) -> "torch.Tensor":
     """[total_len, index_head_dim] golden indexer key for one layer, from the vLLM trace's row-sharded
     dsa/indexer_k_layer_N/rows_<start>_<end>.safetensors shards (concatenated by start row). Mirrors
-    _load_golden_kv_post but reads the dsa/ subdir and the indexer_k_layer_N key."""
-    from pathlib import Path
-
-    from safetensors import safe_open
-
+    _load_golden_kv_post but reads the dsa/ subdir and the indexer_k_layer_N key. ``rope_layout`` is
+    the pairing the TRACE stored; ``interleaved`` is the device's own, ``half_split`` is re-based."""
     key = f"indexer_k_layer_{layer_idx}"
-    layer_dir = Path(trace_dir) / "dsa" / key
-    shards = sorted(layer_dir.glob("rows_*.safetensors"), key=lambda p: int(p.stem.split("_")[1]))
-    rows, have = [], 0
-    for shard in shards:
-        with safe_open(shard, framework="pt") as f:
-            t = f.get_tensor(key)
-        rows.append(t)
-        have += t.shape[0]
-        if have >= total_len:
-            break
-    return torch.cat(rows, dim=0)[:total_len].to(torch.float32)
+    golden = _load_sharded_rows(Path(trace_dir) / "dsa" / key, key, start, total_len)
+    if rope_layout == "interleaved":
+        return golden
+    if rope_layout != "half_split":
+        raise ValueError(f"unknown index rope layout {rope_layout!r} (expected 'interleaved' or 'half_split')")
+    if start:
+        raise NotImplementedError(
+            f"{key}: a {rope_layout!r} golden cannot be read at start={start}. Re-basing rotates by "
+            f"absolute position, and the rope table is built from position 0, so a windowed read would "
+            f"be re-based by the wrong angles. Score this layer from row 0, or capture the trace with "
+            f"the device's interleaved pairing."
+        )
+    if hf_config is None:
+        hf_config = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL)).load_hf_config()
+    return _rebase_index_k_rope(golden, hf_config)
 
 
 def kv_cache_pcc_check(

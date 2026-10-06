@@ -448,17 +448,6 @@ _OP_DOMAIN_REGISTRY: Dict[
             distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=100.0
         )
     ),
-    # rsqrt_compat (legacy reciprocal-root): domain x > 0. Keep the range a bit
-    # tighter than accurate rsqrt — the compat approximation loses accuracy at the
-    # extreme small-input end (rsqrt -> very large).
-    MathOperation.RsqrtCompat: OperandSpecs(
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.LOG_UNIFORM, low=1e-2, high=100.0
-        )
-    ),
-    # reciprocal_compat (legacy exponent-difference reciprocal): same domain as the
-    # accurate Reciprocal -- everything except the pole, both signs.
-    MathOperation.ReciprocalCompat: _reciprocal_spec,
     # expm1_cw (component-wise expm1): same safe range as the standalone expm1.
     MathOperation.Expm1Cw: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
@@ -765,8 +754,9 @@ _OP_DOMAIN_REGISTRY: Dict[
     #
     # Bounded by accuracy rather than representable range: a**b evaluates as
     # exp(b * ln a), and the relative error is roughly flat in the operands, so the bounds
-    # pair with the rtol in BINARY_CUSTOM_TOLERANCES. A <= 16 is left out because it drives
-    # |a**b| to Float16's ceiling, which would make this an overflow test.
+    # pair with the rtol SfpuElwpow declares in sfpu_accuracy_budget.yaml. A <= 16 is
+    # left out because it drives |a**b| to Float16's ceiling, which would make this an
+    # overflow test.
     MathOperation.SfpuElwpow: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=8.0),
         spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=4.0),
@@ -776,12 +766,40 @@ _OP_DOMAIN_REGISTRY: Dict[
     #
     # x's ceiling is an absolute-accuracy bound: the error is dominated by
     # x * abs_err(ln y) and so grows with x while a fixed atol does not, which is what pairs
-    # it with the atol in BINARY_CUSTOM_TOLERANCES. Most of that error is output
-    # quantization rather than the kernel. y keeps its full log-uniform span.
+    # it with the atol SfpuXlogy declares in sfpu_accuracy_budget.yaml. Most of that error
+    # is output quantization rather than the kernel. y keeps its full log-uniform span.
     MathOperation.SfpuXlogy: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=8.0),
         spec_B=StimuliSpec(
             distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=10.0
+        ),
+    ),
+    # logaddexp: finite for any finite pair, so the sweep deliberately crosses the
+    # exp() overflow boundary (|x| > 88.7) where the naive log(exp(a) + exp(b))
+    # composition returns +/-inf. Independent +/-200 draws land ~10% of positions
+    # with |a - b| < 20 — the band where the log1p(exp(-|a-b|)) correction is
+    # non-negligible — and the rest exercise the max-dominated path at magnitudes
+    # the composed form cannot survive. +/-200 stays representable in fp16.
+    MathOperation.SfpuLogaddexp: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+        spec_B=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+    ),
+    # logaddexp2: same shape, tighter boundary. The composed log2(2**a + 2**b) form
+    # overflows past |x| > 127 rather than 88.7, so the same +/-200 draw crosses it
+    # with room to spare: 33.2% of positions have max(a, b) past 127. The
+    # log2(1 + 2**-|a - b|) correction is worth more than half an ulp of the result
+    # on 1.3% of positions, against 0.7% for logaddexp -- a band 1.85x wider,
+    # because 2**-|a - b| decays more slowly than e**-|a - b|.
+    MathOperation.SfpuLogaddexp2: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+        spec_B=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
         ),
     ),
     MathOperation.SfpuAddTopRow: OperandSpecs(
@@ -1066,6 +1084,8 @@ _SFPU_BINARY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.SfpuElwpow,
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuXlogy,
+        MathOperation.SfpuLogaddexp,
+        MathOperation.SfpuLogaddexp2,
         MathOperation.SfpuElwLeftShift,
         MathOperation.SfpuElwRightShift,
         MathOperation.SfpuElwLogicalRightShift,
@@ -1115,7 +1135,6 @@ _SFPU_UNDEFINED_RANGES: Dict[
 ] = {
     # ── Unary: only spec_A has a hole ────────────────────────────────────────
     MathOperation.Reciprocal: {Operand.A: [(-1e-6, 1e-6)]},
-    MathOperation.ReciprocalCompat: {Operand.A: [(-1e-6, 1e-6)]},
     MathOperation.Log: {Operand.A: [(-float("inf"), 1e-6)]},
     MathOperation.Sqrt: {Operand.A: [(-float("inf"), 0.0)]},
     MathOperation.Atanh: {
@@ -1436,8 +1455,6 @@ _OP_SINGULARITIES: Dict[
     MathOperation.Sqrt: {Operand.A: ((0.0, _ABOVE),)},
     MathOperation.SqrtCustom: {Operand.A: ((0.0, _ABOVE),)},
     MathOperation.Rsqrt: {Operand.A: ((0.0, _ABOVE),)},
-    MathOperation.RsqrtCompat: {Operand.A: ((0.0, _ABOVE),)},
-    MathOperation.ReciprocalCompat: {Operand.A: ((0.0, _BOTH),)},
     # Inverse functions defined only on (-1, 1) or [-1, 1]: the interior is the defined
     # side, so -1 is probed upward and +1 downward.
     MathOperation.Atanh: {Operand.A: ((-1.0, _ABOVE), (1.0, _BELOW))},
@@ -1986,7 +2003,7 @@ SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
 #
 # Log stays out: the kernel clamps a non-finite input to the format maximum and logs that, so
 # every special comes back finite where the golden gives inf or NaN. Kernel behaviour with no
-# ISA ruling, so the right outcome needs an owner -- as does RsqrtCompat(0).
+# ISA ruling, so the right outcome needs an owner.
 
 
 def _dest_acc_flag(dest_acc: Union[bool, Enum]) -> bool:
@@ -2230,13 +2247,15 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # Composition through a reciprocal / log / exp. Each builds its result from a primitive
         # the ISA specifies only inside a stated finite range, so what the composition does with
         # a non-finite input is an LLK decision rather than an ISA one, and one answer decides
-        # all six.
+        # all eight.
         MathOperation.SfpuElwdiv,  # reciprocal + Newton-Raphson
         MathOperation.SfpuXlogy,  # x * log(y)
         MathOperation.SfpuElwpow,  # exp(b * ln a)
         MathOperation.SfpuBinaryFmod,  # quotient via reciprocal
         MathOperation.SfpuBinaryRemainder,  # as fmod
         MathOperation.SfpuAtan2,  # ratio plus a format-specific polynomial; 2 cells, not 4
+        MathOperation.SfpuLogaddexp,  # max(a, b) + log1p(exp(-|a - b|))
+        MathOperation.SfpuLogaddexp2,  # as logaddexp, correction scaled by log2(e)
         # Compare-against-zero on an operand that may be a NaN: calculate_mask lowers to
         # SFPSETCC, which is unspecified for a negative zero or a NaN. The same thing that
         # holds Sign and Heaviside out of the unary gate.

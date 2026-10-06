@@ -182,8 +182,8 @@ std::unordered_set<CoreCoord> claimed_service_cores(const IDevice* device) {
         return claimed;
     }
     if (const auto* mesh = dynamic_cast<const distributed::MeshDevice*>(device)) {
-        for (const IDevice* chip : mesh->get_devices()) {
-            const auto chip_claimed = service_cores.claimed_cores(chip->id());
+        for (auto chip_id : mesh->get_device_ids()) {
+            const auto chip_claimed = service_cores.claimed_cores(chip_id);
             claimed.insert(chip_claimed.begin(), chip_claimed.end());
         }
     } else {
@@ -591,7 +591,7 @@ std::shared_ptr<Buffer> BufferImpl::create(
     buffer->impl().allocation_status_ = BufferImpl::AllocationStatus::ALLOCATED;
 
     // Explicit-address (non-owning) buffers skip allocate_impl(), so register their
-    // extent here (removed in deallocate()): per-core for L1 (SANITIZER_CHECKS.md §4),
+    // extent here (removed in deallocate()): per-core for L1,
     // full size for DRAM — mirroring the allocate_impl() registration.
     if (is_emule_device(device) && buffer->impl().size_ != 0) {
         if (buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL) {
@@ -677,7 +677,7 @@ void BufferImpl::allocate_impl(Buffer& self) {
 
         if (is_emule_device(device_)) {
             if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
-                // Per-core footprint, not the aggregate size_ (spans all banks). See SANITIZER_CHECKS.md §4.
+                // Per-core footprint, not the aggregate size_ (spans all banks).
                 tt::tt_metal::emule::LiveL1Ranges::add(
                     device_->id(),
                     static_cast<uint32_t>(address_),
@@ -910,7 +910,7 @@ DeviceAddr ShardSpecBuffer::num_pages() const {
 namespace ttsl::json {
 tt::tt_metal::ShardSpec from_json_t<tt::tt_metal::ShardSpec>::operator()(const nlohmann::json& json_object) const {
     return tt::tt_metal::ShardSpec{
-        from_json<CoreRangeSet>(json_object.at("grid")),
+        from_json<tt::tt_metal::CoreRangeSet>(json_object.at("grid")),
         from_json<std::array<uint32_t, 2>>(json_object.at("shape")),
         from_json<tt::tt_metal::ShardOrientation>(json_object.at("orientation")),
     };

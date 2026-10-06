@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Reader for indexer_score (DMA bottleneck). Walks this core's (group-phase x k-band) rectangle: per
-// group pushes resident w + (if all heads fit) q, per band pushes the k chunk. Builds the [diag, full]
-// -inf mask tiles once, plus a 1.0 reduce-scaler when block-max-pooling. G-agnostic.
+// group pushes resident w + (if all heads fit) q, per band pushes the k chunk. Builds the [per-residue
+// causal, full] -inf mask tiles once, plus a 1.0 reduce-scaler when block-max-pooling. G-agnostic.
 //
 // Banded-product multicast: a grid ROW shares q/w (q-mcast), a COLUMN shares the k-band (k-mcast). role
 // sender reads DRAM + mcasts; receiver takes the L1->L1 copy; none is a plain DRAM read. q/w (row) and k
@@ -92,7 +92,11 @@ FORCE_INLINE constexpr uint32_t tensor_rank_from_transport_rank(uint32_t transpo
 // different hunks -- and reads an unrelated word as the metadata flag, so re-check it whenever main
 // grows the block-cyclic block.
 constexpr uint32_t meta_ct_base = bc_ct_base + 11;
-constexpr bool chunk_start_from_metadata = get_compile_time_arg_val(meta_ct_base) != 0;
+// THE metadata-mode selector for this kernel. One flag, not one per metadata argument: the host
+// validates the metadata tensors as a group (validate_metadata_mode), so inside this mode every
+// metadata read is legal. valid_end stays optional WITHIN the mode via its address (0 = uncapped),
+// which costs one runtime compare instead of a second program variant.
+constexpr bool metadata_mode = get_compile_time_arg_val(meta_ct_base) != 0;
 constexpr uint32_t meta_rt_base = get_compile_time_arg_val(meta_ct_base + 1);
 constexpr uint32_t cb_meta_derived = get_compile_time_arg_val(meta_ct_base + 2);
 constexpr uint32_t cb_meta_writer = get_compile_time_arg_val(meta_ct_base + 3);
@@ -112,14 +116,23 @@ constexpr auto meta_args = TensorAccessorArgs<meta_ct_base + 7>();
 // factories always push it (zero-filled, with a placeholder accessor, when off), so every index here is
 // valid unconditionally and no guarded-index trick is needed.
 constexpr uint32_t slot_ct_base = meta_args.next_compile_time_args_offset();
-constexpr bool cache_slot_from_metadata = get_compile_time_arg_val(slot_ct_base) != 0;
-constexpr uint32_t slot_rt_base = get_compile_time_arg_val(slot_ct_base + 1);      // RT slot of this block
-constexpr uint32_t slot_local_pages = get_compile_time_arg_val(slot_ct_base + 2);  // pages per cache slot
-constexpr uint32_t cb_meta_slot = get_compile_time_arg_val(slot_ct_base + 3);      // NoC landing slot
+// No presence flag: metadata mode is ONE flag (above), and the slot is optional WITHIN it -- the host
+// zeroes this block's common-arg address when there is no slot to select, so presence is a runtime
+// compare rather than a second program variant. Same discipline as valid_end.
+constexpr uint32_t slot_rt_base = get_compile_time_arg_val(slot_ct_base + 0);      // RT slot of this block
+constexpr uint32_t slot_local_pages = get_compile_time_arg_val(slot_ct_base + 1);  // pages per cache slot
+constexpr uint32_t cb_meta_slot = get_compile_time_arg_val(slot_ct_base + 2);      // NoC landing slot
 // Slot count of the local cache (k_local batch dim), so the on-device recomposition can be bounded the
 // same way the AG reader bounds the identical word. Shape-derived, hence already hashed.
-constexpr uint32_t slot_cache_extent = get_compile_time_arg_val(slot_ct_base + 4);
-constexpr auto slot_meta_args = TensorAccessorArgs<slot_ct_base + 5>();
+constexpr uint32_t slot_cache_extent = get_compile_time_arg_val(slot_ct_base + 3);
+constexpr auto slot_meta_args = TensorAccessorArgs<slot_ct_base + 4>();
+// Real-token end (actual_end), same fixed-width discipline again: both factories always push
+// flag + rt base + a placeholder accessor, so these indices are valid unconditionally. When present the
+// derived kv_len below is capped at ceil32(valid_end), which is exactly the scalar path's
+// min(end_pos, ceil32(actual_end)); absent, the bound stays the padded-window end.
+constexpr uint32_t vend_ct_base = slot_meta_args.next_compile_time_args_offset();
+constexpr uint32_t vend_rt_base = get_compile_time_arg_val(vend_ct_base);
+constexpr auto vend_args = TensorAccessorArgs<vend_ct_base + 1>();
 
 // Thin alias over the shared block-cyclic invP map (tt::block_cyclic, block_cyclic_remap.hpp): identity for
 // contiguous K, invP for the per-SP-shard block-cyclic layout. One name shared between the non-fused reader and
@@ -191,11 +204,55 @@ inline void read_block_or_mcast(Noc noc, uint32_t ntiles, uint32_t bytes, const 
     cb.push_back(ntiles);
 }
 
+/** -inf over columns [first_masked, 16) of ONE face row, in 32-bit stores (low half = even column).
+ *  Word-granular on purpose: this fill sits at the head of run(), before any q/k read, so its cost is
+ *  serial startup on every core -- an element-at-a-time loop here cost ~4 us/dispatch, which the short
+ *  perf-band shapes (minimax_m3, glm5_tp1) cannot amortize. */
+inline void mask_face_row_suffix(
+    volatile tt_l1_ptr uint32_t* ptr, uint32_t face_base_words, uint32_t face_row, uint32_t first_masked) {
+    constexpr uint32_t words_per_face_row = tt::constants::FACE_WIDTH / 2;
+    if (first_masked >= tt::constants::FACE_WIDTH) {
+        return;
+    }
+    const uint32_t row_base = face_base_words + face_row * words_per_face_row;
+    uint32_t word = first_masked / 2;
+    if (first_masked % 2 != 0) {
+        ptr[row_base + word] = 0xFF800000u;  // low half = column first_masked-1, still valid (zero)
+        ++word;
+    }
+    for (; word < words_per_face_row; ++word) {
+        ptr[row_base + word] = 0xFF80FF80u;
+    }
+}
+
+/** Build one partial causal mask for each compressed-key residue represented by a query tile. */
+inline void fill_compressed_causal_mask_tile(Noc noc, uint32_t tile_id) {
+    fill_tile_zeros<bf16_tile_bytes>(noc, cb_mask, tile_id);
+    CircularBuffer cb(cb_mask);
+    volatile tt_l1_ptr uint32_t* ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * bf16_tile_bytes);
+    constexpr uint32_t face_h = tt::constants::FACE_HEIGHT;
+    constexpr uint32_t face_w = tt::constants::FACE_WIDTH;
+    constexpr uint32_t face_words = (face_h * face_w) / 2;
+    const uint32_t residue = tile_id * (tt::constants::TILE_WIDTH / key_compression_ratio);
+    for (uint32_t row = 0; row < tt::constants::TILE_HEIGHT; ++row) {
+        const uint32_t first_masked = residue + (row + 1) / key_compression_ratio;
+        // A tile row spans the left face (columns 0-15) and its right neighbour (columns 16-31).
+        const uint32_t left_face = (row / face_h) * 2;
+        const uint32_t face_row = row % face_h;
+        mask_face_row_suffix(ptr, left_face * face_words, face_row, first_masked);
+        mask_face_row_suffix(
+            ptr, (left_face + 1) * face_words, face_row, first_masked > face_w ? first_masked - face_w : 0);
+    }
+}
+
 inline void build_mask_tiles(Noc noc) {
     CircularBuffer cb(cb_mask);
     cb.reserve_back(num_mask_tiles);
-    fill_causal_diagonal_tile_bf16<bf16_tile_bytes>(noc, cb_mask, /*tile_id=*/0);  // diagonal strict-upper -inf
-    fill_neginf_tile<bf16_tile_bytes>(cb_mask, /*tile_id=*/1);                     // full -inf
+    for (uint32_t tile_id = 0; tile_id < key_compression_ratio; ++tile_id) {
+        fill_compressed_causal_mask_tile(noc, tile_id);
+    }
+    fill_neginf_tile<bf16_tile_bytes>(cb_mask, /*tile_id=*/key_compression_ratio);
     cb.push_back(num_mask_tiles);
 }
 
@@ -444,7 +501,10 @@ struct FusedRingGate {
     // Metadata is common to every reader core; only the schedule lane is per-core.
     // `local_offset_override` is the reader-derived slot base on the metadata path (0 elsewhere); it
     // replaces the runtime argument, which a replay would have frozen at the captured slot.
-    FusedRingGate(const RingSDPAOpReceiver& recv, uint32_t local_offset_override = 0) :
+    // `slot_override_active` is passed explicitly rather than inferred from the override being non-zero:
+    // slot 0 is a legitimate slot whose offset is 0, and it must still replace the runtime argument.
+    FusedRingGate(
+        const RingSDPAOpReceiver& recv, uint32_t local_offset_override = 0, bool slot_override_active = false) :
         // TENSOR rank, not the transport rank: on a full-mesh ring the two differ by the snake mapping,
         // and both the slot recomposition and the causal geometry are defined over tensor ranks.
         ring_index(tensor_rank_from_transport_rank(recv.seq.ring_index)),
@@ -457,7 +517,7 @@ struct FusedRingGate {
         shard_dir{},
         shard_half_val{},
         shard_val{} {
-        if constexpr (cache_slot_from_metadata) {
+        if (slot_override_active) {
             local_batch_page_offset = local_offset_override;
         }
         RingIdSequencer s = recv.seq;  // fresh copy (received={0,0}); replay to index (dir,val) by shard id
@@ -760,7 +820,7 @@ void kernel_main() {
         }
     };
 
-    if constexpr (fused_ring_enabled && chunk_start_from_metadata) {
+    if constexpr (fused_ring_enabled && metadata_mode) {
         // Derive causal values before the blocking ring receiver so compute can consume them independently.
         // The factory supplies meta_rt_base to keep this layout coupled to the runtime-argument builder.
         CircularBuffer cb_derived(cb_meta_derived);
@@ -780,14 +840,14 @@ void kernel_main() {
         constexpr uint32_t chunk_global_tiles = bc_sp * bc_chunk_local;
         ASSERT(
             chunk_start_idx % iscore::kCausalTileWidth == 0 &&
-            chunk_start_idx / iscore::kCausalTileWidth < k_len_tiles);
+            chunk_start_idx / iscore::kCausalTileWidth < k_len_tiles * key_compression_ratio);
         // Undo the key-stripe split so this matches device_causal_geometry's (unsplit) arguments exactly.
         // Identity when key_stripe_split == 1, which is every non-dedup path.
         // Guard the divisor: the non-fused factory zero-fills this block (it rejects the metadata path),
         // and `bc_sp / 0` is an ill-formed constant expression even in a discarded branch.
         constexpr uint32_t geom_split = meta_key_stripe_split != 0 ? meta_key_stripe_split : 1;
         constexpr uint32_t geom_sp = bc_sp / geom_split;
-        constexpr uint32_t geom_chunk_local_elems = bc_chunk_local * 32 * geom_split;
+        constexpr uint32_t geom_chunk_local_elems = bc_chunk_local * 32 * geom_split * key_compression_ratio;
         const auto geom = ttnn::operations::experimental::indexer_score::causal_geometry_tiles(
             chunk_start_idx,
             block_cyclic,
@@ -797,8 +857,30 @@ void kernel_main() {
             get_common_arg_val<uint32_t>(meta_rt_base + 1),  // device_index
             get_common_arg_val<uint32_t>(meta_rt_base + 2),  // tp_index
             meta_Sq);
-        // Derive kv_len from the same position used for causal geometry.
-        const uint32_t derived_kv_len_tiles = chunk_start_idx / 32 + chunk_global_tiles;
+        // Derive kv_len from the same position used for causal geometry. Round compressed history up to a
+        // whole K tile; any padded rows in that boundary tile remain future-masked by the exact causal mask.
+        uint32_t derived_kv_len_tiles =
+            (chunk_start_idx + 32 * key_compression_ratio - 1) / (32 * key_compression_ratio) + chunk_global_tiles;
+        // Cap at the REAL token end when the host supplied it. Uncapped, this is the padded-window end, so
+        // on a partial chunk the score covers columns this request never wrote: harmless for real query
+        // rows (those keys sit at s > t and the causal edge masks them) but NOT for pad rows, whose top-k
+        // then differs from the scalar path's. Reading actual_end here reproduces the scalar bound exactly,
+        // and narrows the scored extent at the same time. ceil to the 32-row write grid, matching
+        // write_k's clamp and the scalar path's own rounding. Tokens equal cache rows only at ratio 1,
+        // which validate_chunk_start_metadata enforces on this path.
+        // 0 = no bound supplied (full chunk): the host zeroes this slot rather than compiling a second
+        // variant, so presence costs a compare here instead of a program hash split.
+        const uint32_t valid_end_addr = get_common_arg_val<uint32_t>(vend_rt_base);
+        if (valid_end_addr != 0) {
+            // derived_l1 is reused as the NoC landing slot: chunk_start_idx has already been consumed into
+            // a local above, and the four mailbox words are not written until below, so the page is free.
+            const uint32_t valid_end =
+                trace_metadata::read_metadata_scalar_u32(noc, vend_args, valid_end_addr, derived_l1);
+            const uint32_t valid_end_tiles = (valid_end + 31) / 32;
+            if (valid_end_tiles < derived_kv_len_tiles) {
+                derived_kv_len_tiles = valid_end_tiles;
+            }
+        }
         kv_len_tiles = derived_kv_len_tiles < k_len_tiles ? derived_kv_len_tiles : k_len_tiles;
 
         const IndexerScoreMetadataBounds bounds{
@@ -841,18 +923,21 @@ void kernel_main() {
         // the slot live at capture time (capture warms user 0). Recompose it here from the on-device user
         // id, mirroring TtIndexer's host formula.
         uint32_t local_slot_offset = 0;
-        if constexpr (cache_slot_from_metadata) {
+        // 0 = no slot to select (the deduped path hands the op a rebuilt batch-1 slab).
+        const uint32_t slot_addr = get_common_arg_val<uint32_t>(slot_rt_base + 0);
+        const bool slot_active = slot_addr != 0;
+        if (slot_active) {
             CircularBuffer cb_slot(cb_meta_slot);
             cb_slot.reserve_back(1);
-            const uint32_t user_id = trace_metadata::read_metadata_scalar_u32(
-                noc, slot_meta_args, get_common_arg_val<uint32_t>(slot_rt_base + 0), cb_slot.get_write_ptr());
+            const uint32_t user_id =
+                trace_metadata::read_metadata_scalar_u32(noc, slot_meta_args, slot_addr, cb_slot.get_write_ptr());
             const uint32_t num_layers = get_common_arg_val<uint32_t>(slot_rt_base + 1);
             const uint32_t layer_idx = get_common_arg_val<uint32_t>(slot_rt_base + 2);
             local_slot_offset =
                 trace_metadata::bounded_cache_batch_idx(user_id, num_layers, layer_idx, slot_cache_extent) *
                 slot_local_pages;
         }
-        const FusedRingGate gate(fused_recv, local_slot_offset);
+        const FusedRingGate gate(fused_recv, local_slot_offset, slot_active);
         run(&gate);
     } else {
         run(nullptr);

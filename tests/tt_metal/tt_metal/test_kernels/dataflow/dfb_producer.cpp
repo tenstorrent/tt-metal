@@ -8,6 +8,7 @@
 #include "api/debug/dprint.h"
 #include "experimental/kernel_args.h"
 #include "api/kernel_thread_globals.h"
+#include "dev_mem_map.h"
 
 void kernel_main() {
     constexpr uint32_t num_entries_per_producer = get_arg(args::num_entries_per_producer);
@@ -32,7 +33,6 @@ void kernel_main() {
         if (page_id >= chunk_offset + entries_per_core) {
             break;
         }
-        // DPRINT("producer tile id {} page id {}\n", tile_id, page_id);
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
             noc.async_read<NocOptions::TXN_ID>(tensor_accessor, dfb, {.page_id = page_id}, {});
@@ -44,7 +44,5 @@ void kernel_main() {
             dfb.push_back(1);
         }
     }
-    // DPRINT("PFW\n");
     dfb.finish();
-    // DPRINT("PFD\n");
 }

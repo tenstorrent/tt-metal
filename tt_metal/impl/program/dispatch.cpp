@@ -4,6 +4,7 @@
 
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/impl/program/dispatch.hpp"
+#include "tt_metal/impl/program/sub_device_setup_batch.hpp"
 
 #include <mesh_workload.hpp>
 #include <cstddef>
@@ -312,8 +313,8 @@ uint32_t finalize_cbs(
     uint32_t& cb_size,
     uint32_t& local_cb_size) {
     uint32_t max_local_end_index = 0;
-    uint32_t max_cbs = metal_ctx.hal().get_arch_num_circular_buffers();
-    uint32_t min_remote_start_index = max_cbs;
+    uint32_t max_dfbs = metal_ctx.hal().get_num_dataflow_buffers();
+    uint32_t min_remote_start_index = max_dfbs;
 
     for (auto& kg : kernel_groups) {
         auto kernel_config = kg->launch_msg.view().kernel_config();
@@ -332,7 +333,7 @@ uint32_t finalize_cbs(
         kernel_config.remote_cb_offset() = remote_cb_offset;
     }
     uint32_t remote_cb_size =
-        (max_cbs - min_remote_start_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+        (max_dfbs - min_remote_start_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     uint32_t total_cb_size = local_cb_size + remote_cb_size;
     cb_offset = base_offset;
     cb_size = total_cb_size;
@@ -549,11 +550,17 @@ std::vector<uint32_t> build_prefetcher_pipe_config_payload(
             num_program_slots);
         const uint32_t base =
             REMOTE_DFB_REGION_HEADER_WORDS + participant.prefetcher_pipe_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
+        // A slot is reserved from geometry and bound to a live pipe later
+        TT_FATAL(
+            participant.pipe != nullptr,
+            "PrefetcherPipe slot {} is not bound to a PrefetcherPipe object; supply a PrefetcherPipeArgument for "
+            "every PrefetcherPipeParameter via SetProgramRunArgs before enqueueing the program",
+            participant.prefetcher_pipe_id);
         // P is a pipe-lifetime property read at build time, not a participant field: a relay or
-        // later Attach may arm lanes after this record was added. Packing it here (rather than
-        // poking the persistent page) keeps it ordered with this program in the command queue.
-        const uint32_t num_credit_lanes =
-            program.get_prefetcher_pipe_attachment(participant.prefetcher_pipe_id).num_credit_lanes();
+        // later Attach (possibly in another program) may arm lanes after this record was added.
+        // Packing it here (rather than poking the persistent page) keeps it ordered with this
+        // program in the command queue.
+        const uint32_t num_credit_lanes = participant.pipe->num_credit_lanes();
         payload[base + 0] = participant.config_page_addr;
         payload[base + 1] = participant.entry_size;
         payload[base + 2] = pack_prefetcher_pipe_slot_relay_word(participant.relay_dfb_id, num_credit_lanes);
@@ -601,8 +608,9 @@ uint32_t finalize_kernel_bins(
     uint32_t& kernel_text_offset,
     uint32_t& kernel_text_size) {
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
-    // Mock/emulated devices don't have real binaries, skip finalization
-    if (metal_ctx.get_cluster().is_mock_or_emulated()) {
+    // Emule and Quasar mock don't have real binaries, skip finalization.
+    const auto target = metal_ctx.get_cluster().get_target_device_type();
+    if (target == tt::TargetDevice::Emule || (target == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR)) {
         kernel_text_offset = base_offset;
         kernel_text_size = 0;
         return base_offset;
@@ -738,16 +746,16 @@ void repoint_rta_data_into_command_stream(
         auto& data = kernel_rta_pairs[j];
         uint32_t* data_in_sequence = reinterpret_cast<uint32_t*>(base + offset) + count_word_offset;
         // rt_args_data points to args; data.second.get().data() points to count when watcher enabled.
-        if (data.first.get().rt_args_data == (data.second.get().data() + count_word_offset)) {
-            data.first.get().rt_args_data = data_in_sequence;
+        auto& rta = data.first.get();
+        if (rta.data() == (data.second.get().data() + count_word_offset)) {
+            rta = RuntimeArgsData{data_in_sequence, rta.size()};
         } else {
             TT_ASSERT(
-                data.first.get().rt_args_data ==
+                rta.data() ==
                 (reinterpret_cast<const uint32_t*>(std::get<0>(kernel_data_and_sizes[j])) + count_word_offset));
-            rta_updates.emplace_back(
-                data.first.get().rt_args_data, data_in_sequence, data.first.get().rt_args_count * sizeof(uint32_t));
+            rta_updates.emplace_back(rta.data(), data_in_sequence, rta.size() * sizeof(uint32_t));
         }
-        offset += (data.first.get().rt_args_count + count_word_offset) * sizeof(uint32_t);
+        offset += (rta.size() + count_word_offset) * sizeof(uint32_t);
     }
 }
 
@@ -1014,6 +1022,8 @@ struct Transfer {
     std::vector<std::shared_ptr<CircularBufferImpl>> cbs;
     // Keep track of what DFBs contributed to this transfer for the same purpose.
     std::vector<std::shared_ptr<experimental::dfb::detail::DataflowBufferImpl>> dfbs;
+    // Logical core the DFB config was serialized for, so it can be re-serialized at trace capture.
+    CoreCoord dfb_logical_core;
     // RTAs must be updated from data every time update_program_dispatch_commmands is called.
     RuntimeArgsData* rta_data = nullptr;
     // If set, this transfer materializes one host-only CrossNode page into its
@@ -1197,7 +1207,7 @@ BatchedTransfers assemble_runtime_args_commands(
                                     // Back up pointer to include count word for dispatch
                                     // Device expects [count | args...] layout for watcher bounds checking
                                     unique_rt_data_and_sizes.back().emplace_back(
-                                        kernel->runtime_args_data(core_coord).rt_args_data - count_word_offset,
+                                        kernel->runtime_args_data(core_coord).data() - count_word_offset,
                                         runtime_args_data.size() * sizeof(uint32_t),
                                         kg->rta_sizes[idx]);
                                 }
@@ -1525,7 +1535,7 @@ public:
         ProgramImpl& program,
         BatchedTransfers& batched_transfers) {
         const auto& hal = metal_ctx.hal();
-        uint32_t max_cbs = hal.get_arch_num_circular_buffers();
+        uint32_t max_dfbs = hal.get_num_dataflow_buffers();
         uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
 
         auto cb_config_coreranges = program.circular_buffers_unique_coreranges();
@@ -1534,7 +1544,7 @@ public:
         const auto& kernel_groups = program.get_kernel_groups(index);
         for (const auto& kernel_group : kernel_groups) {
             const auto kernel_config = kernel_group->launch_msg.view().kernel_config();
-            if (kernel_config.min_remote_cb_start_index() >= max_cbs) {
+            if (kernel_config.min_remote_cb_start_index() >= max_dfbs) {
                 continue;
             }
             // Firmware scans remote CB configs down through min_remote_cb_start_index. Include cores with no CBs so
@@ -1566,11 +1576,11 @@ public:
                     }
                     const auto kernel_config = kernel_group->launch_msg.view().kernel_config();
                     const uint32_t min_remote_cb_start_index = kernel_config.min_remote_cb_start_index();
-                    if (min_remote_cb_start_index < max_cbs) {
+                    if (min_remote_cb_start_index < max_dfbs) {
                         max_index = std::max(
                             max_index,
-                            remote_offset_index +
-                                (max_cbs - min_remote_cb_start_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
+                            remote_offset_index + (max_dfbs - min_remote_cb_start_index) *
+                                                      UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                     }
                 }
                 const auto& circular_buffers_on_corerange = program.circular_buffers_on_corerange(core_range);
@@ -1590,7 +1600,7 @@ public:
                     for (const auto& buffer_index : cb->remote_buffer_indices()) {
                         const uint32_t base_index =
                             remote_offset_index +
-                            ((max_cbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
+                            ((max_dfbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                         cb_config_payload[base_index] = cb->config_address();
                         cb_config_payload[base_index + 1] = cb->page_size(buffer_index);
                         max_index = std::max(max_index, base_index + UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
@@ -1688,7 +1698,8 @@ public:
             batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] = std::vector<Transfer>{
                 {.start = start_addr,
                  .data = ttsl::Span<const uint8_t>(payload.data(), max_byte_end),
-                 .dfbs = dfbs_on_corerange}};
+                 .dfbs = dfbs_on_corerange,
+                 .dfb_logical_core = logical_representative}};
             i++;
         }
     }
@@ -2291,8 +2302,11 @@ public:
                         reinterpret_cast<uint32_t*>(data_collection_location[j]));
                 }
                 if (!transfer.dfbs.empty()) {
-                    program_command_sequence.dataflow_buffers_on_core_ranges.push_back(std::move(transfer.dfbs));
-                    program_command_sequence.dfb_configs_payloads.push_back(data_collection_location[j]);
+                    program_command_sequence.dfb_config_updates.push_back(
+                        {std::move(transfer.dfbs),
+                         transfer.dfb_logical_core,
+                         data_collection_location[j],
+                         static_cast<uint32_t>(transfer.data.size())});
                 }
                 if (transfer.cross_node_config.has_value()) {
                     const auto& [logical_core, remote_dfb_id] = *transfer.cross_node_config;
@@ -2306,16 +2320,17 @@ public:
                     // When watcher enabled, transfer.data contains [count | args...]
                     // rt_args_data points to args location (data + offset)
                     // rta_updates only copy args (count already written during initial copy)
-                    if (reinterpret_cast<uint8_t*>(transfer.rta_data->rt_args_data) ==
+                    if (reinterpret_cast<uint8_t*>(transfer.rta_data->data()) ==
                         (transfer.data.data() + count_word_byte_offset)) {
-                        // rt_args_data points to the original vector. Update it so later modifications directly modify
-                        // the command stream.
-                        transfer.rta_data->rt_args_data =
-                            reinterpret_cast<uint32_t*>(data_collection_location[j] + count_word_byte_offset);
+                        // View still aliases the original vector. Retarget it so later modifications write the
+                        // command stream.
+                        *transfer.rta_data = RuntimeArgsData{
+                            reinterpret_cast<uint32_t*>(data_collection_location[j] + count_word_byte_offset),
+                            transfer.rta_data->size()};
                     } else {
-                        // rt_args_data points into the command stream. Setup a copy from that other location.
+                        // View already points into a command stream. Copy from that location.
                         program_command_sequence.rta_updates.push_back(ProgramCommandSequence::RtaUpdate{
-                            transfer.rta_data->rt_args_data,
+                            transfer.rta_data->data(),
                             data_collection_location[j] + count_word_byte_offset,
                             static_cast<uint32_t>(transfer.data.size() - count_word_byte_offset)});
                     }
@@ -2719,7 +2734,7 @@ void assemble_device_commands(
     local_cb_updates.clear();
     remote_cb_updates.clear();
     const auto& hal = metal_ctx.hal();
-    const uint32_t max_cbs = hal.get_arch_num_circular_buffers();
+    const uint32_t max_dfbs = hal.get_num_dataflow_buffers();
     const uint32_t tensix_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     const uint32_t remote_offset_index = program.get_program_config(tensix_index).local_cb_size / sizeof(uint32_t);
     for (size_t range_index = 0; range_index < program_command_sequence.circular_buffers_on_core_ranges.size();
@@ -2730,14 +2745,16 @@ void assemble_device_commands(
                 local_cb_updates.push_back(
                     {circular_buffer.get(),
                      payload + UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index,
-                     buffer_index});
+                     buffer_index,
+                     circular_buffer->config_generation()});
             }
             for (const uint32_t buffer_index : circular_buffer->remote_buffer_indices()) {
                 remote_cb_updates.push_back(
                     {circular_buffer.get(),
                      payload + remote_offset_index +
-                         (max_cbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG,
-                     buffer_index});
+                         (max_dfbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG,
+                     buffer_index,
+                     circular_buffer->config_generation()});
             }
         }
     }
@@ -2975,6 +2992,32 @@ void reserve_space_in_kernel_config_buffer(
         std::make_move_iterator(reservation.second.begin()), std::make_move_iterator(reservation.second.end() - 2));
 }
 
+void update_circular_buffer_configs(ProgramCommandSequence& cached_program_command_sequence) {
+    // Update CB configs through destinations cached when the command sequence was assembled. The values
+    // themselves stay owned by the CircularBuffer, whose page_size()/num_pages() carry the divisibility
+    // and 16-bit page-count checks.
+    for (auto& update : cached_program_command_sequence.local_cb_config_updates) {
+        CircularBufferImpl& circular_buffer = *update.circular_buffer;
+        if (update.last_config_generation == circular_buffer.config_generation()) {
+            continue;
+        }
+        update.dst[0] = circular_buffer.address();
+        update.dst[1] = circular_buffer.size();
+        update.dst[2] = circular_buffer.num_pages(update.buffer_index);
+        update.dst[3] = circular_buffer.page_size(update.buffer_index);
+        update.last_config_generation = circular_buffer.config_generation();
+    }
+    for (auto& update : cached_program_command_sequence.remote_cb_config_updates) {
+        CircularBufferImpl& circular_buffer = *update.circular_buffer;
+        if (update.last_config_generation == circular_buffer.config_generation()) {
+            continue;
+        }
+        update.dst[0] = circular_buffer.config_address();
+        update.dst[1] = circular_buffer.page_size(update.buffer_index);
+        update.last_config_generation = circular_buffer.config_generation();
+    }
+}
+
 void update_program_dispatch_commands(
     ProgramImpl& program,
     ProgramCommandSequence& cached_program_command_sequence,
@@ -3050,38 +3093,20 @@ void update_program_dispatch_commands(
             sizeof(uint32_t));
     }
 
-    // Update CB configs through destinations cached when the command sequence was assembled. The values
-    // themselves stay owned by the CircularBuffer, whose page_size()/num_pages() carry the divisibility
-    // and 16-bit page-count checks.
-    for (const auto& update : cached_program_command_sequence.local_cb_config_updates) {
-        CircularBufferImpl& circular_buffer = *update.circular_buffer;
-        update.dst[0] = circular_buffer.address();
-        update.dst[1] = circular_buffer.size();
-        update.dst[2] = circular_buffer.num_pages(update.buffer_index);
-        update.dst[3] = circular_buffer.page_size(update.buffer_index);
-    }
-    for (const auto& update : cached_program_command_sequence.remote_cb_config_updates) {
-        CircularBufferImpl& circular_buffer = *update.circular_buffer;
-        update.dst[0] = circular_buffer.config_address();
-        update.dst[1] = circular_buffer.page_size(update.buffer_index);
-    }
+    update_circular_buffer_configs(cached_program_command_sequence);
 
-    {
-        uint32_t dfb_i = 0;
-        for (const auto& dfbs_on_core_range : cached_program_command_sequence.dataflow_buffers_on_core_ranges) {
-            uint8_t* dfb_config_payload = cached_program_command_sequence.dfb_configs_payloads[dfb_i];
-            if (!hal.has_tile_counter_registers()) {
-                // WH/BH: overwrite the 4 uint32 words for each DFB slot in-place.
-                for (const auto& dfb : dfbs_on_core_range) {
-                    uint32_t base_index = dfb->device_slot * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
-                    uint32_t* words = reinterpret_cast<uint32_t*>(dfb_config_payload) + base_index;
-                    words[0] = dfb->uniform_alloc_addr();
-                    words[1] = dfb->config.entry_size * dfb->config.num_entries;
-                    words[2] = dfb->config.num_entries;
-                    words[3] = dfb->config.entry_size;
-                }
+    if (!hal.has_tile_counter_registers()) {
+        // WH/BH: overwrite the 4 uint32 words for each DFB slot in-place.
+        for (const ProgramCommandSequence::DataflowBufferConfigUpdate& update :
+             cached_program_command_sequence.dfb_config_updates) {
+            for (const auto& dfb : update.dataflow_buffers) {
+                uint32_t base_index = dfb->device_slot * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
+                uint32_t* words = reinterpret_cast<uint32_t*>(update.dst) + base_index;
+                words[0] = dfb->uniform_alloc_addr();
+                words[1] = dfb->config.entry_size * dfb->config.num_entries;
+                words[2] = dfb->config.num_entries;
+                words[3] = dfb->config.entry_size;
             }
-            dfb_i++;
         }
     }
 
@@ -3279,20 +3304,12 @@ void update_traced_program_dispatch_commands(
         i++;
     }
     // Update DFB Configs
-    TT_ASSERT(
-        trace_node.dfb_configs_payloads.size() ==
-        cached_program_command_sequence.dataflow_buffers_on_core_ranges.size());
-    {
-        uint32_t dfb_i = 0;
-        for ([[maybe_unused]] const auto& dfbs_on_core_range :
-             cached_program_command_sequence.dataflow_buffers_on_core_ranges) {
-            uint8_t* dfb_config_payload = cached_program_command_sequence.dfb_configs_payloads[dfb_i];
-            std::memcpy(
-                dfb_config_payload,
-                trace_node.dfb_configs_payloads[dfb_i].data(),
-                trace_node.dfb_configs_payloads[dfb_i].size());
-            dfb_i++;
-        }
+    TT_ASSERT(trace_node.dfb_configs_payloads.size() == cached_program_command_sequence.dfb_config_updates.size());
+    for (size_t dfb_i = 0; dfb_i < trace_node.dfb_configs_payloads.size(); dfb_i++) {
+        std::memcpy(
+            cached_program_command_sequence.dfb_config_updates[dfb_i].dst,
+            trace_node.dfb_configs_payloads[dfb_i].data(),
+            trace_node.dfb_configs_payloads[dfb_i].size());
     }
     // Refresh the launch-time writes to the dedicated CrossNode config Buffers from the
     // capture-time snapshot (see create_trace_node), matching the non-trace path above.
@@ -3406,6 +3423,96 @@ void update_traced_program_dispatch_commands(
     }
 }
 
+namespace {
+template <typename ProcessChunk>
+void for_each_program_command_sequence_chunk_impl(
+    const ProgramCommandSequence& program_command_sequence,
+    bool stall_first,
+    bool stall_before_program,
+    bool send_binary,
+    const ProcessChunk& process_chunk) {
+    auto process_commands = [&](const auto& commands) {
+        if (commands.size_bytes() != 0) {
+            process_chunk(commands.data(), commands.size_bytes());
+        }
+    };
+
+    // Write the preamble
+    process_commands(program_command_sequence.preamble_command_sequence);
+
+    const auto curr_stall_seq_idx = program_command_sequence.current_stall_seq_idx;
+    if (stall_first) {
+        // Must stall before writing kernel config data
+        process_commands(program_command_sequence.stall_command_sequences[curr_stall_seq_idx]);
+    }
+
+    // TODO: We can pack multiple RT args into one fetch q entry
+    for (const auto& cmds : program_command_sequence.runtime_args_command_sequences) {
+        process_commands(cmds);
+    }
+
+    // Write the program config buffer
+    process_commands(program_command_sequence.program_config_buffer_command_sequence);
+
+    // Need to stall before writing the program binary?
+    if (stall_before_program) {
+        // Didn't stall before kernel config data, stall before remaining commands
+        process_commands(program_command_sequence.stall_command_sequences[curr_stall_seq_idx]);
+    }
+
+    if (send_binary) {
+        // Write the program binary
+        if (program_command_sequence.prefetcher_cache_used) {
+            process_commands(program_command_sequence.program_binary_setup_prefetcher_cache_command);
+        }
+        process_commands(program_command_sequence.program_binary_command_sequence);
+    } else {
+        // Write the wait barrier before writing launch messages.
+        process_commands(program_command_sequence.wait_barrier_command_sequence);
+    }
+
+    // Write the launch message
+    process_commands(program_command_sequence.launch_msg_command_sequence);
+
+    // Write the go signal
+    process_commands(program_command_sequence.go_msg_command_sequence);
+}
+}  // namespace
+
+void for_each_program_command_sequence_chunk(
+    const ProgramCommandSequence& program_command_sequence,
+    bool stall_first,
+    bool stall_before_program,
+    bool send_binary,
+    const std::function<void(const void*, uint32_t)>& process_chunk) {
+    for_each_program_command_sequence_chunk_impl(
+        program_command_sequence, stall_first, stall_before_program, send_binary, process_chunk);
+}
+
+void pack_program_command_sequence(
+    const ProgramCommandSequence& program_command_sequence,
+    bool stall_first,
+    bool stall_before_program,
+    bool send_binary,
+    vector_aligned<uint32_t>& packed) {
+    const auto size = program_command_sequence.get_one_shot_fetch_size(stall_first, stall_before_program, send_binary);
+    packed.resize(size / sizeof(uint32_t));
+    uint32_t offset = 0;
+    for_each_program_command_sequence_chunk_impl(
+        program_command_sequence,
+        stall_first,
+        stall_before_program,
+        send_binary,
+        [&](const void* data, uint32_t bytes) {
+            TT_FATAL(offset + bytes <= size, "Packed command exceeds reserved size");
+            if (bytes) {
+                std::memcpy(reinterpret_cast<uint8_t*>(packed.data()) + offset, data, bytes);
+                offset += bytes;
+            }
+        });
+    TT_FATAL(offset == size, "Packed command size mismatch: {} vs {}", offset, size);
+}
+
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
     SystemMemoryManager& manager,
@@ -3436,7 +3543,7 @@ void write_program_command_sequence(
     }
     uint32_t one_shot_write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
 
-    auto write_data_to_cq = [&](void* data, uint32_t size_bytes) {
+    auto write_data_to_cq = [&](const void* data, uint32_t size_bytes) {
         if (!size_bytes) {
             return;
         }
@@ -3454,63 +3561,8 @@ void write_program_command_sequence(
         }
     };
 
-    // Write the preamble
-    write_data_to_cq(
-        program_command_sequence.preamble_command_sequence.data(),
-        program_command_sequence.preamble_command_sequence.size_bytes());
-
-    const auto curr_stall_seq_idx = program_command_sequence.current_stall_seq_idx;
-    if (stall_first) {
-        // Must stall before writing kernel config data
-        write_data_to_cq(
-            program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
-            program_command_sequence.stall_command_sequences[curr_stall_seq_idx].size_bytes());
-    }
-
-    // TODO: We can pack multiple RT args into one fetch q entry
-    for (const auto& cmds : program_command_sequence.runtime_args_command_sequences) {
-        write_data_to_cq(cmds.data(), cmds.size_bytes());
-    }
-
-    // Write the program config buffer
-    write_data_to_cq(
-        program_command_sequence.program_config_buffer_command_sequence.data(),
-        program_command_sequence.program_config_buffer_command_sequence.size_bytes());
-
-    // Need to stall before writing the program binary?
-    if (stall_before_program) {
-        // Didn't stall before kernel config data, stall before remaining commands
-        write_data_to_cq(
-            program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
-            program_command_sequence.stall_command_sequences[curr_stall_seq_idx].size_bytes());
-    }
-
-    if (send_binary) {
-        // Write the program binary
-        if (program_command_sequence.prefetcher_cache_used) {
-            write_data_to_cq(
-                program_command_sequence.program_binary_setup_prefetcher_cache_command.data(),
-                program_command_sequence.program_binary_setup_prefetcher_cache_command.size_bytes());
-        }
-        write_data_to_cq(
-            program_command_sequence.program_binary_command_sequence.data(),
-            program_command_sequence.program_binary_command_sequence.size_bytes());
-    } else {
-        // Write the wait barrier before writing launch messages.
-        write_data_to_cq(
-            program_command_sequence.wait_barrier_command_sequence.data(),
-            program_command_sequence.wait_barrier_command_sequence.size_bytes());
-    }
-
-    // Write the launch message
-    write_data_to_cq(
-        program_command_sequence.launch_msg_command_sequence.data(),
-        program_command_sequence.launch_msg_command_sequence.size_bytes());
-
-    // Write the go signal
-    write_data_to_cq(
-        program_command_sequence.go_msg_command_sequence.data(),
-        program_command_sequence.go_msg_command_sequence.size_bytes());
+    for_each_program_command_sequence_chunk_impl(
+        program_command_sequence, stall_first, stall_before_program, send_binary, write_data_to_cq);
 
     if (one_shot) {
         manager.issue_queue_push_back(one_shot_fetch_size, command_queue_id);
@@ -3543,12 +3595,12 @@ TraceNode create_trace_node(
     std::vector<std::vector<uint32_t>> all_cb_configs_payloads;
     all_cb_configs_payloads.reserve(cached_program_command_sequence.circular_buffers_on_core_ranges.size());
     const auto& hal = metal_ctx.hal();
-    uint32_t max_cbs = hal.get_arch_num_circular_buffers();
+    uint32_t max_dfbs = hal.get_num_dataflow_buffers();
     uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
     for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
         all_cb_configs_payloads.push_back(
-            std::vector<uint32_t>(max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG));
+            std::vector<uint32_t>(max_dfbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG));
         auto& cb_config_payload = all_cb_configs_payloads.back();
         uint32_t first_unused_index = 0;
         for (const std::shared_ptr<CircularBufferImpl>& cb : cbs_on_core_range) {
@@ -3566,7 +3618,7 @@ TraceNode create_trace_node(
                 first_unused_index = std::max(first_unused_index, base_index + 4);
             }
             for (const auto& buffer_index : cb->remote_buffer_indices()) {
-                const uint32_t base_index = remote_offset_index + ((max_cbs - 1 - buffer_index) *
+                const uint32_t base_index = remote_offset_index + ((max_dfbs - 1 - buffer_index) *
                                                                    UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                 cb_config_payload[base_index] = cb->config_address();
                 cb_config_payload[base_index + 1] = cb->page_size(buffer_index);
@@ -3576,28 +3628,22 @@ TraceNode create_trace_node(
         cb_config_payload.resize(first_unused_index);
     }
 
+    const uint32_t dfb_size = program.get_program_config(index).dfb_size;
     std::vector<std::vector<uint8_t>> all_dfb_configs_payloads;
-    if (!hal.has_tile_counter_registers()) {
-        all_dfb_configs_payloads.reserve(cached_program_command_sequence.dataflow_buffers_on_core_ranges.size());
-        for (const auto& dfbs_on_core_range : cached_program_command_sequence.dataflow_buffers_on_core_ranges) {
-            std::vector<uint8_t> dfb_config_payload(
-                max_cbs * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t), 0);
-            size_t first_unused_byte = 0;
-            for (const auto& dfb : dfbs_on_core_range) {
-                size_t base_index =
-                    static_cast<size_t>(dfb->device_slot) * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG;
-                size_t byte_offset = base_index * sizeof(uint32_t);
-                uint32_t* words = reinterpret_cast<uint32_t*>(dfb_config_payload.data()) + base_index;
-                words[0] = dfb->uniform_alloc_addr();
-                words[1] = dfb->config.entry_size * dfb->config.num_entries;
-                words[2] = dfb->config.num_entries;
-                words[3] = dfb->config.entry_size;
-                first_unused_byte = std::max(
-                    first_unused_byte, byte_offset + UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t));
-            }
-            dfb_config_payload.resize(first_unused_byte);
-            all_dfb_configs_payloads.push_back(std::move(dfb_config_payload));
-        }
+    all_dfb_configs_payloads.reserve(cached_program_command_sequence.dfb_config_updates.size());
+    for (const ProgramCommandSequence::DataflowBufferConfigUpdate& update :
+         cached_program_command_sequence.dfb_config_updates) {
+        std::vector<uint8_t> dfb_config_payload(dfb_size, 0);
+        const size_t bytes_written = tt::tt_metal::experimental::dfb::detail::serialize_dfb_config_for_core(
+            update.logical_core, update.dataflow_buffers, dfb_config_payload);
+        TT_FATAL(
+            bytes_written == update.size,
+            "DFB config for core {} serialized to {} bytes at trace capture, but the command holds {} bytes",
+            update.logical_core.str(),
+            bytes_written,
+            update.size);
+        dfb_config_payload.resize(bytes_written);
+        all_dfb_configs_payloads.push_back(std::move(dfb_config_payload));
     }
 
     // Snapshot the CrossNodeDFB host config pages so the traced launch replays the binding
@@ -3688,7 +3734,8 @@ void reset_worker_dispatch_state_on_device(
     uint8_t cq_id,
     CoreCoord dispatch_core,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
-    bool reset_launch_msg_state) {
+    bool reset_launch_msg_state,
+    ttsl::Span<const vector_aligned<uint32_t>> setup_commands) {
     auto num_sub_devices = mesh_device->num_sub_devices();
 
     MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
@@ -3708,7 +3755,11 @@ void reset_worker_dispatch_state_on_device(
         calculator.add_dispatch_wait();
     }
 
-    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
+    const uint32_t reset_size = calculator.write_offset_bytes();
+    const uint32_t first_setup_size = setup_commands.empty() ? 0 : setup_commands.front().size() * sizeof(uint32_t);
+    const bool combine_setup = setup_batch::can_combine_setup(
+        reset_size, first_setup_size, metal_ctx.dispatch_mem_map().max_prefetch_command_size());
+    const uint32_t cmd_sequence_sizeB = reset_size + (combine_setup ? first_setup_size : 0);
 
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
@@ -3766,16 +3817,27 @@ void reset_worker_dispatch_state_on_device(
             expected_num_workers,
             cq_id);
     }
+    TT_ASSERT(command_sequence.write_offset_bytes() == reset_size);
+    if (combine_setup && first_setup_size != 0) {
+        manager.cq_write(
+            setup_commands.front().data(), first_setup_size, manager.get_issue_queue_write_ptr(cq_id) + reset_size);
+    }
     manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
     manager.fetch_queue_reserve_back(cq_id);
     manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
+    for (size_t i = combine_setup && !setup_commands.empty() ? 1 : 0; i < setup_commands.size(); ++i) {
+        const auto& batch = setup_commands[i];
+        const uint32_t size = batch.size() * sizeof(uint32_t);
+        manager.issue_queue_reserve(size, cq_id);
+        manager.cq_write(batch.data(), size, manager.get_issue_queue_write_ptr(cq_id));
+        manager.issue_queue_push_back(size, cq_id);
+        manager.fetch_queue_reserve_back(cq_id);
+        manager.fetch_queue_write(size, cq_id);
+    }
 }
 
-void set_num_worker_sems_on_dispatch(
-    SystemMemoryManager& manager,
-    uint8_t cq_id,
-    uint32_t num_worker_sems,
-    ttsl::Span<const uint32_t> workers_per_sub_device) {
+static HostMemDeviceCommand build_set_num_worker_sems_on_dispatch(
+    SystemMemoryManager& manager, uint32_t num_worker_sems, ttsl::Span<const uint32_t> workers_per_sub_device) {
     TT_ASSERT(num_worker_sems <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     TT_ASSERT(workers_per_sub_device.size() == num_worker_sems);
     MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
@@ -3785,8 +3847,7 @@ void set_num_worker_sems_on_dispatch(
     }
     calculator.add_dispatch_set_sub_device_worker_counts(num_worker_sems);
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
-    void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
-    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
+    HostMemDeviceCommand command_sequence(metal_ctx, cmd_sequence_sizeB);
     if (metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()) {
         command_sequence.add_dispatch_set_num_worker_sems(num_worker_sems, DispatcherSelect::DISPATCH_SUBORDINATE);
         command_sequence.add_dispatch_set_sub_device_worker_counts(
@@ -3795,26 +3856,46 @@ void set_num_worker_sems_on_dispatch(
         command_sequence.add_dispatch_set_sub_device_worker_counts(
             workers_per_sub_device, DispatcherSelect::DISPATCH_MASTER);
     }
-    manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
-    manager.fetch_queue_reserve_back(cq_id);
-    manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
+    TT_ASSERT(command_sequence.write_offset_bytes() == command_sequence.size_bytes());
+    return command_sequence;
 }
 
-void set_go_signal_noc_data_on_dispatch(
-    const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id) {
+static HostMemDeviceCommand build_set_go_signal_noc_data_on_dispatch(
+    const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager) {
     MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
     tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     calculator.add_dispatch_set_go_signal_noc_data(go_signal_noc_data.size());
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
-    void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
-    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
+    HostMemDeviceCommand command_sequence(metal_ctx, cmd_sequence_sizeB);
     DispatcherSelect dispatcher_for_go_signal = metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()
                                                     ? DispatcherSelect::DISPATCH_SUBORDINATE
                                                     : DispatcherSelect::DISPATCH_MASTER;
     command_sequence.add_dispatch_set_go_signal_noc_data(go_signal_noc_data, dispatcher_for_go_signal);
-    manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
+    TT_ASSERT(command_sequence.write_offset_bytes() == command_sequence.size_bytes());
+    return command_sequence;
+}
+
+static void submit_setup_commands(SystemMemoryManager& manager, uint8_t cq_id, const void* data, uint32_t size) {
+    manager.issue_queue_reserve(size, cq_id);
+    manager.cq_write(data, size, manager.get_issue_queue_write_ptr(cq_id));
+    manager.issue_queue_push_back(size, cq_id);
     manager.fetch_queue_reserve_back(cq_id);
-    manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
+    manager.fetch_queue_write(size, cq_id);
+}
+
+void set_num_worker_sems_on_dispatch(
+    SystemMemoryManager& manager,
+    uint8_t cq_id,
+    uint32_t num_worker_sems,
+    ttsl::Span<const uint32_t> workers_per_sub_device) {
+    auto commands = build_set_num_worker_sems_on_dispatch(manager, num_worker_sems, workers_per_sub_device);
+    submit_setup_commands(manager, cq_id, commands.data(), commands.size_bytes());
+}
+
+void set_go_signal_noc_data_on_dispatch(
+    const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id) {
+    auto commands = build_set_go_signal_noc_data_on_dispatch(go_signal_noc_data, manager);
+    submit_setup_commands(manager, cq_id, commands.data(), commands.size_bytes());
 }
 
 // Wait for number of workers to complete and then reset the counter on the device
@@ -3875,11 +3956,8 @@ static_assert(
     DispatchSettings::DISPATCH_MESSAGE_ENTRIES + 1 == dev_msgs::go_message_num_entries,
     "Max number of dispatch message entries + 1 must be equal to the number of go message entries");
 
-void set_core_go_message_mapping_on_device(
-    Device* device,
-    const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
-    SystemMemoryManager& manager,
-    uint8_t cq_id) {
+static HostMemDeviceCommand build_set_core_go_message_mapping_on_device(
+    Device* device, const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping, uint8_t cq_id) {
     MetalContext& metal_ctx = MetalContext::instance(device->get_context_id());
     tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     uint32_t go_msg_size = metal_ctx.hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
@@ -3919,8 +3997,7 @@ void set_core_go_message_mapping_on_device(
     calculator.add_dispatch_wait();
 
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
-    void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
-    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
+    HostMemDeviceCommand command_sequence(metal_ctx, cmd_sequence_sizeB);
 
     const auto& compute_grid_size = device->compute_with_storage_grid_size();
 
@@ -3974,9 +4051,33 @@ void set_core_go_message_mapping_on_device(
     // Ensure go message index is received before writing out data for the next program.
     command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, cq_id);
     TT_ASSERT(command_sequence.size_bytes() == command_sequence.write_offset_bytes());
-    manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
-    manager.fetch_queue_reserve_back(cq_id);
-    manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
+    return command_sequence;
+}
+
+std::vector<vector_aligned<uint32_t>> build_sub_device_setup_commands(
+    Device* device,
+    uint8_t cq_id,
+    ttsl::Span<const uint32_t> workers_per_sub_device,
+    const vector_aligned<uint32_t>& go_signal_noc_data,
+    const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
+    bool reset_launch_msg_state) {
+    auto& manager = device->sysmem_manager();
+    const auto max_size =
+        MetalContext::instance(device->get_context_id()).dispatch_mem_map().max_prefetch_command_size();
+    std::vector<vector_aligned<uint32_t>> batches;
+    auto append = [&](const HostMemDeviceCommand& commands) {
+        setup_batch::append_setup_commands(
+            batches,
+            ttsl::Span<const uint32_t>(
+                static_cast<const uint32_t*>(commands.data()), commands.size_bytes() / sizeof(uint32_t)),
+            max_size);
+    };
+    append(build_set_num_worker_sems_on_dispatch(manager, workers_per_sub_device.size(), workers_per_sub_device));
+    append(build_set_go_signal_noc_data_on_dispatch(go_signal_noc_data, manager));
+    if (reset_launch_msg_state) {
+        append(build_set_core_go_message_mapping_on_device(device, core_go_message_mapping, cq_id));
+    }
+    return batches;
 }
 
 }  // namespace program_dispatch

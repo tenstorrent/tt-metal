@@ -321,9 +321,15 @@ def test_production_shapes_are_correct(mesh_device, C, K, stride, T_pad):
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("device_params", SINGLE_DEVICE_PARAMS, indirect=True)
 def test_unknown_shape_probes_and_is_correct(mesh_device, quiet_warnings):
-    """A channel count no table has (96) goes through the trial chain and still comes out right."""
-    plan = _run_and_check(mesh_device, 96, 7, 1, 166, cache={})
-    assert plan[0] in applicable_formulations(96) + ["mac"]
+    """A channel count no table has goes through the trial chain and still comes out right.
+
+    Pick the width against the live table rather than hardcoding one: a sweep that tables a width
+    (the LTX vocoder rows tabled 96 for the BH 12x10 grid) must not turn this into a table-hit test.
+    """
+    rows = tfc._FORMULATIONS.get(tap_device_key(mesh_device), {})
+    C = next(c for c in (96, 40, 56, 72, 104, 120, 136) if (c, 7, 1) not in rows)
+    plan = _run_and_check(mesh_device, C, 7, 1, 166, cache={})
+    assert plan[0] in applicable_formulations(C) + ["mac"]
     assert any("no table row" in w for w in quiet_warnings)
 
 
