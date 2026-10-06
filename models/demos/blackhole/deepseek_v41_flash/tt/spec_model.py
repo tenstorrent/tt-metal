@@ -531,12 +531,15 @@ class AdaptiveSpec:
         by = {}  # policy -> dict(rounds, wall, emitted, pairs, acc, ks)
         cal = []  # (user, k, conf[5], m): drafts of this round's block vs outcome
         top = self.m.max_ctx - self.n - 1
+        last_pol = self.policy
         stale, since_probe, nprobe = False, 0, 0  # stale: the drafts / confidence in X5 / conf belong to an earlier position (after no-draft k = 0 rounds)
         while not bool(done.all()):
             if cyc is not None:
                 self.policy = cyc[0][(len(walls) // cyc[1]) % len(cyc[0])]
             probing = False
-            if stale and self.policy != "k0" and since_probe >= self.probe_every:
+            probe_due = since_probe >= self.probe_every or self.policy not in ("adapt", "k0") or self.policy != last_pol
+            last_pol = self.policy
+            if stale and self.policy != "k0" and probe_due:
                 k, probing = 0, True  # refresh drafts + confidence with a drafting k = 0 round, then let the scheduler decide again
             elif stale:
                 k = 0
