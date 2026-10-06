@@ -515,6 +515,28 @@ def test_a_selector_shorter_than_the_rows_is_refused():
         PackEdgeMask(masks=(0xFFFF,), select=[0]).apply(torch.ones(32))
 
 
+@pytest.mark.parametrize("faces", [4, 2])
+def test_face_select_words_repeat_for_every_tile(faces):
+    """The packer reuses EDGE_MASK_SELECT_FACE0..3 for each tile it packs.
+
+    The register set describes one tile, so a multi-tile pack applies the same
+    pattern again rather than running off the end of the selector list.
+    """
+    rows_per_tile = faces * 16
+    word = sum(1 << (2 * row) for row in range(16))  # every row picks mask 1
+    mask = PackEdgeMask.from_face_select_words((0x0000, 0xFFFF), [word] * faces)
+    assert mask.select_period == rows_per_tile
+
+    kept = mask.keep(2 * rows_per_tile * 16).reshape(2 * rows_per_tile, 16)[:, 0]
+    assert kept[:rows_per_tile].tolist() == kept[rows_per_tile:].tolist()
+
+
+def test_a_period_that_does_not_tile_the_rows_is_refused():
+    mask = PackEdgeMask.from_face_select_words((0xFFFF,), [0x0000] * 4)
+    with pytest.raises(ValueError, match="tile"):
+        mask.keep(100 * 16)
+
+
 def test_data_that_is_not_whole_rows_is_refused():
     with pytest.raises(ValueError, match="rows"):
         PackEdgeMask(masks=(0xFFFF,)).apply(torch.ones(20))
