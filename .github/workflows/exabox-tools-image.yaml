@@ -3,6 +3,10 @@ name: Build and publish exabox-tools image
 # Builds and publishes ghcr.io/tenstorrent/tt-metal/exabox-tools (recover.sh,
 # run_cluster_validation, fabric system health check). See dockerfile/exabox_tools/Dockerfile.
 #
+# The image also ships tt-syseng-diag (tt-bh-glx-cluster-debug, for the health check's QSFP
+# phase). It is a release asset of the private tenstorrent/tt-syseng-diag-packages repo, which
+# GITHUB_TOKEN cannot read, so the download needs the TT_SYSENG_DIAG_PACKAGES_TOKEN secret.
+#
 # Separate from upstream-tests.yaml so the image can be rebuilt when that workflow is red.
 # Manual dispatch only, no schedule or push trigger: every new image is a multi-GB pull on
 # each host that runs a job, so it is built when someone wants one.
@@ -21,6 +25,11 @@ on:
         type: boolean
         default: false
         description: Make latest - also tag this build as exabox-tools:latest
+      diag-pkg-version:
+        required: false
+        type: string
+        default: v0.0.1
+        description: tt-syseng-diag release tag to install (tenstorrent/tt-syseng-diag-packages)
 
 concurrency:
   group: exabox-tools-image-${{ github.ref }}
@@ -28,6 +37,7 @@ concurrency:
 
 env:
   EXABOX_TOOLS_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/exabox-tools
+  DIAG_PKG_REPO: tenstorrent/tt-syseng-diag-packages
 
 jobs:
   check-harbor:
@@ -59,6 +69,26 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+      - name: Download tt-syseng-diag package
+        env:
+          GH_TOKEN: ${{ secrets.TT_SYSENG_DIAG_PACKAGES_TOKEN }}
+          DIAG_PKG_VERSION: ${{ inputs.diag-pkg-version }}
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::TT_SYSENG_DIAG_PACKAGES_TOKEN is not set; it needs read access to ${DIAG_PKG_REPO} releases."
+            exit 1
+          fi
+          if [ -z "${DIAG_PKG_VERSION}" ]; then
+            echo "::error::diag-pkg-version is empty."
+            exit 1
+          fi
+          mkdir -p _tt-syseng-diag
+          cd _tt-syseng-diag
+          gh release download "${DIAG_PKG_VERSION}" -R "${DIAG_PKG_REPO}" \
+            -p "tt-syseng-diag_*.deb" -p "tt-syseng-diag_*.deb.sha256"
+          sha256sum -c tt-syseng-diag_*.deb.sha256
+          test "$(find . -maxdepth 1 -name 'tt-syseng-diag_*.deb' | wc -l)" -eq 1
+          ls -hal
       - name: Download build artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -109,14 +139,19 @@ jobs:
             TT_METAL_DEV_IMAGE=${{ needs.build-artifact.outputs.dev-docker-image }}
             TT_METAL_COMMIT_SHA=${{ github.sha }}
             IMAGE_VERSION=${{ steps.tags.outputs.suffix }}
+            TT_SYSENG_DIAG_VERSION=${{ inputs.diag-pkg-version }}
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Summary
+        env:
+          DIAG_PKG_VERSION: ${{ inputs.diag-pkg-version }}
         run: |
           {
             echo "## exabox-tools image"
             echo
             echo "Commit: \`${{ github.sha }}\` (\`${{ github.ref_name }}\`)"
+            echo
+            echo "tt-syseng-diag: \`${DIAG_PKG_VERSION}\` from \`${DIAG_PKG_REPO}\`"
             echo
             echo '```'
             echo "${{ steps.tags.outputs.tags }}"
