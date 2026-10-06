@@ -36,6 +36,13 @@ def tsa_grid_bias(reference_points, num_heads, num_points, dtype):
 
 
 class TTTemporalSelfAttention:
+    """Temporal self-attention over one ``(bev_h, bev_w)`` BEV map (one level), sampled twice per
+    sample: once in the previous BEV, once in the current queries.
+
+    The parameters must come from ``create_temporal_self_attention_parameters``, whose Linears
+    emit queue-major channels; the reference module's head-major ones would split wrongly.
+    """
+
     def __init__(
         self,
         params,
@@ -68,10 +75,14 @@ class TTTemporalSelfAttention:
         """Scale the offset Linear by ``2 / [bev_w, bev_h]``: dividing by the map size and the
         ``[0, 1] -> [-1, 1]`` rescale are one constant per channel, (x, y) alternating."""
         out_features = sampling_offsets.weight.shape[-1]
-        assert out_features == self.num_bev_queue * self.num_heads * self.num_points * 2
+        assert out_features == self.num_bev_queue * self.num_heads * self.num_points * 2, (
+            f"sampling_offsets width {out_features}: expected one BEV level, "
+            f"{self.num_bev_queue} maps x {self.num_heads} heads x {self.num_points} points x (x, y)"
+        )
         scale = torch.tensor([2.0 / self.bev_w, 2.0 / self.bev_h]).repeat(out_features // 2).reshape(1, out_features)
         scale = ttnn.from_torch(scale, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
 
+        # Kept in the grid's dtype: the Linear emits the grid, so a float32 grid needs float32 weights.
         def fold(tensor):
             folded = ttnn.mul(ttnn.typecast(tensor, ttnn.float32), scale)
             return folded if self.grid_dtype == ttnn.float32 else ttnn.typecast(folded, tensor.dtype)

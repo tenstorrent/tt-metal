@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.bevformer.reference.encoder import BEVFormerEncoder
+from models.experimental.bevformer.reference.point_sampling_3d_2d import bev_reference_points
 from models.experimental.bevformer.tests.backbone_common import assert_pcc
 from models.experimental.bevformer.tests.encoder_common import (
     BEV_SHAPES,
@@ -16,7 +16,7 @@ from models.experimental.bevformer.tests.encoder_common import (
     random_encoder_inputs,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_temporal_self_attention_parameters
-from models.experimental.bevformer.tt.tt_encoder import GRID_DTYPE
+from models.experimental.bevformer.tt.tt_common import GRID_DTYPE
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import fp32_grid_sample_config
 from models.experimental.bevformer.tt.tt_temporal_self_attention import TTTemporalSelfAttention, tsa_grid_bias
 
@@ -48,7 +48,7 @@ def test_temporal_self_attention(device, reset_seeds, name, bev_shape, batch_siz
     query, pos = inputs["bev_query"].permute(1, 0, 2), inputs["bev_pos"].permute(1, 0, 2)
     num_query = bev_h * bev_w
 
-    ref_2d = BEVFormerEncoder.reference_points_2d(bev_h, bev_w, batch_size)
+    ref_2d = bev_reference_points(bev_h, bev_w, batch_size)
     if with_previous_bev:
         previous = random_bev(bev_shape, batch_size, torch.Generator().manual_seed(1)).permute(1, 0, 2)
         value = torch.stack([previous, query], 1).reshape(batch_size * 2, num_query, -1)
@@ -87,6 +87,6 @@ def test_temporal_self_attention(device, reset_seeds, name, bev_shape, batch_siz
     tt_output = ttnn.to_torch(tt_output).float().reshape(torch_output.shape)
     # comp_pcc zeroes NaN and Inf before correlating, so they must be ruled out here.
     assert torch.isfinite(tt_output).all(), "non-finite values in the self-attention output"
-    assert_pcc(torch_output, tt_output, 0.99)
+    assert_pcc(torch_output, tt_output, 0.999)
     # The attended part alone: the residual would carry the PCC on its own.
-    assert_pcc(torch_output - query, tt_output - query, 0.99)
+    assert_pcc(torch_output - query, tt_output - query, 0.999)

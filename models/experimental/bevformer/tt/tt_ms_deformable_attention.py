@@ -170,6 +170,7 @@ class TTMSDeformableAttention:
         grid_dtype=None,
         grid_sample_compute_config=None,
         residual=True,
+        output_proj=True,
     ):
         """
         Initialize TTNN Multi-Scale Deformable Attention module.
@@ -197,8 +198,9 @@ class TTMSDeformableAttention:
                 bfloat16).
             grid_sample_compute_config: Passed to grid_sample; see
                 :func:`multi_scale_deformable_attn_ttnn`.
-            residual: Add ``identity`` to the output. BEVFormer's ``MSDeformableAttention3D``
-                (spatial cross-attention) has neither this shortcut nor an output projection.
+            residual: Add ``identity`` to the output.
+            output_proj: Apply ``params.output_proj``. BEVFormer's ``MSDeformableAttention3D``
+                (spatial cross-attention) has neither this projection nor the shortcut.
 
         Raises:
             ValueError: If the configuration or spatial shapes are invalid.
@@ -238,6 +240,11 @@ class TTMSDeformableAttention:
         self.grid_dtype = grid_dtype
         self.grid_sample_compute_config = grid_sample_compute_config
         self.residual = residual
+        self.output_proj = output_proj
+        has_output_proj = getattr(params, "output_proj", None) is not None
+        assert (
+            has_output_proj == output_proj
+        ), f"output_proj={output_proj}, but params {'have' if has_output_proj else 'lack'} one"
 
     def _fold_grid_scale(self, spatial_shapes):
         """Pre-scale the ``sampling_offsets`` Linear by ``2 / [W, H]`` per level.
@@ -250,7 +257,7 @@ class TTMSDeformableAttention:
         The factor of two is the ``[0, 1] -> [-1, 1]`` grid rescale, folded into the same
         constant by splitting it off the reference points:
         ``2 * (ref + off) - 1 == (2 * ref - 1) + 2 * off``. The offset half lives here, the
-        reference half in :meth:`_grid_bias`, which leaves one add at runtime.
+        reference half in :meth:`grid_bias_for`, which leaves one add at runtime.
 
         One ``(1, out)`` row scales weight and bias alike, because the Linear emits
         channels ordered (head, level, point, xy) and preprocessing stores the weight as
@@ -295,7 +302,7 @@ class TTMSDeformableAttention:
         self.params.sampling_offsets = None
         return folded_weight, folded_bias
 
-    def _grid_bias(self, reference_points, depth_levels):
+    def grid_bias_for(self, reference_points, depth_levels):
         """``2 * ref - 1``, laid out in the ``sampling_offsets`` Linear's channel order.
 
         The reference half of the fold in :meth:`_fold_grid_scale`. The Linear emits channels
@@ -330,6 +337,7 @@ class TTMSDeformableAttention:
         query_pos=None,
         key_padding_mask=None,
         reference_points=None,
+        grid_bias=None,
         **kwargs,
     ):
         """
@@ -342,6 +350,8 @@ class TTMSDeformableAttention:
             query_pos: [bs, num_queries, embed_dims] Query positional encoding
             key_padding_mask: [bs, num_keys] Padding mask for keys
             reference_points: [bs, num_queries, num_points_in_pillar, 2] Reference points
+            grid_bias: :meth:`grid_bias_for` of ``reference_points``, when the caller reuses the same
+                points across calls; computed here otherwise.
 
         Returns:
             output: [bs, num_queries, embed_dims]
@@ -434,7 +444,9 @@ class TTMSDeformableAttention:
         if reference_points.shape[-1] == 2:
             # One ROW_MAJOR add finishes the grid: the bias carries `2 * ref - 1` and the Linear
             # already carries `2 / [W, H]`, so no rescale follows.
-            sampling_grids = ttnn.add(sampling_offsets, self._grid_bias(reference_points, D))
+            if grid_bias is None:
+                grid_bias = self.grid_bias_for(reference_points, D)
+            sampling_grids = ttnn.add(sampling_offsets, grid_bias)
             sampling_grids = ttnn.reshape(
                 sampling_grids, (bs, num_queries, self.num_heads, self.num_levels, self.num_points, 2)
             )
@@ -455,7 +467,7 @@ class TTMSDeformableAttention:
             logger.info("MSDA Core Attention Complete")
 
         # Apply output projection
-        if hasattr(self.params, "output_proj"):
+        if self.output_proj:
             output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
             output = ttnn.linear(output, self.params.output_proj.weight, bias=self.params.output_proj.bias)
 
