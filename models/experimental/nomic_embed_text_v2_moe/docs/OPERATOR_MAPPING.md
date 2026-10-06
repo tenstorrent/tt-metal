@@ -85,12 +85,16 @@ projections run `minimal_matmul`, three of them into L1, and measure 0.999991 to
 
 | aten | TTNN | PCC | max-abs |
 |---|---|---|---|
-| `_softmax` | `ttnn.softmax`, HiFi4 + fp32 dest acc | 1.000000 | 1.53e-03 |
-| `topk` | `ttnn.topk`, k=2 over 8, fp32 | exact indices | 0 |
-| dense routing weights | `ttnn.zeros_like` + `ttnn.scatter` | 0.999998 | 1.95e-03 |
+| `_softmax` | `ttnn.softmax`, HiFi4 + fp32 dest acc, over 64 scored columns | 1.000000 | 1.53e-03 |
+| `topk` | `ttnn.topk`, k=2 over the 64, fp32 | exact indices | 0 |
+| dense routing weights | `ttnn.matmul` 0/1 one-hot of the indices, `ttnn.eq`, `ttnn.multiply` | 0.999998 | 1.95e-03 |
 
-The last row has no aten counterpart: it implements `NomicRouter.dense_weights`, which the trace
-never reached because that forward took the ragged path. The inventory's own `zeros_like` and
+The router matmul scores 64 columns, the 8 experts and 56 at -1e30, so that `ttnn.topk` has
+nothing to pad; softmax turns the 56 into exact zeros and leaves the experts' probabilities
+bit-identical to an 8-wide softmax. The dense row is bit-identical to `ttnn.scatter` of the top-k
+values into zeros (`test_one_hot_reproduces_the_scatter`), at 27 against 126 us a MoE layer at
+8x512. It has no aten counterpart: it implements `NomicRouter.dense_weights`, which the trace never
+reached because that forward took the ragged path. The inventory's own `zeros_like` and
 `scatter_` belong to that path and are eliminated (section 2).
 
 ### Experts
@@ -150,7 +154,9 @@ All 42 inventory rows are accounted for by this table and section 1, over 41 dis
 | `ttnn.layer_norm` | `residual_input_tensor=` fuses the post-norm residual add. All 24 encoder norms use it. |
 | `ttnn.embedding` | Index tensor must be `uint32` in `ROW_MAJOR`; `layout=` selects the output layout. `padding_idx=` does not zero the row on this path, so it is neither a hazard nor a safeguard. |
 | `ttnn.transformer.scaled_dot_product_attention` | `is_causal` defaults to `True`; torch's defaults to `False`. Omitting it on this encoder applies a decoder mask and drops PCC to 0.44. |
-| `ttnn.topk` | Returns `(values, indices)`; index dtype follows the input, `uint32` from fp32 and `uint16` from bf16. Both feed `ttnn.scatter` directly. |
+| `ttnn.topk` | Returns `(values, indices)`; index dtype follows the input, `uint32` from fp32 and `uint16` from bf16. Widens a last dim under 64 to 64 with -inf before its device op, on one core for fp32: 95 us at 4096 rows of 8. |
+| `ttnn.linear` | A fused bias rounds every fp32 output, not only the biased ones: a zero bias on the router's 8 experts moved their logits by up to 3e-3. The router adds its padding row with its own `ttnn.add`, which is exact. |
+| `ttnn.slice` | A column at a non-tile-aligned offset goes through untilize, a row-major slice and tilize: 49 us for column 1 of a `(4096, 2)` top-k output, against 2 to 5 us at offset 0. |
 | `ttnn.experimental.fast_reduce_nc` | Replaces `sum` over dim 0, 1 or both, keeping the reduced dim at size 1. Left to allocate its output, returns the **tile-padded** row count: `T=74` gives 96 rows, the trailing 22 zero. `tt/experts.py` passes an output of the logical shape instead. `ttnn.sum` reaches the same PCC without the quirk. |
 | `ttnn.experimental.rotary_embedding_hf` | Prefill mode needs a leading batch of 1, so `(B, A, S, D)` is folded to `(1, B*A, S, D)`. cos/sin are `(1, 1, S, D)` and broadcast over heads. |
 | `ttnn.experimental.nlp_create_qkv_heads` | Takes `(B, 1, S, 3H)` and returns all three heads at once. `transpose_k_heads=False`, since SDPA wants K as `(B, A, S, D)`. |

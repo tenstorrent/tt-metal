@@ -1506,6 +1506,7 @@ _BF16_STOCK_SPECIALS = {
     MathOperation.Exp2: {ChipArchitecture.WORMHOLE: ("neg_nan",)},
 }
 
+
 # Ops whose BF16 setup runs from an init their stock instances share.
 _BF16_SETUP_OPS = [
     MathOperation.Exp2,

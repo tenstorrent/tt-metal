@@ -38,8 +38,9 @@ inline void calculate_exp2()
     TTI_REPLAY(0, replay_slots, 1, 1);
     sfpi::exp2_paired_body<Config::kDegree, true, kExpHold>();
     // The complete primitive already owns the target special classes.
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, kExpHold, 0);
-    TTI_SFPSTORE(p_sfpu::LREG3, 0, kExpAdvance, 2);
+    // ADDR_MOD_6 keeps stock's dest += 2, which other unary SFPU ops read, so each store advances.
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, kExpAdvance, 0);
+    TTI_SFPSTORE(p_sfpu::LREG3, 0, kExpAdvance, 0);
 #pragma GCC unroll 4
     for (int pair = 1; pair < Iterations / 2; ++pair)
     {

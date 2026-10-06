@@ -14,7 +14,7 @@ inline void init_exp2() {
     sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, Config::kMultiplierBits);
     sfpi::vConstFloatPrgm1 = __builtin_bit_cast(float, Config::kScaledCoefficientBits[Config::kDegree]);
     sfpi::vConstFloatPrgm2 = __builtin_bit_cast(float, Config::kScaledCoefficientBits[Config::kDegree - 1]);
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 }  // namespace ckernel::sfpu::bf16
