@@ -22,7 +22,7 @@ Branch layout: bring-up branch `ssinghal/<model>` (integration); one branch + wo
 
 | # | Track | Needs | Open skill | Merge gate (all must hold, numbers in the log with commit + log path) |
 |---|---|---|---|---|
-| 0 | Reference + dumps | HF code/config | tt-model-reference | single-layer oracle per layer type matches HF; short CPU chain (4-8 layers or one of each type) matches HF; no full-model CPU run needed (streamed, 527 GB RAM); per-layer dumps for a real prompt exist, hashed in LOG |
+| 0 | Reference + dumps | HF code/config | tt-model-reference | single-layer oracle per layer type matches HF; short CPU chain (4-8 layers or one of each type) matches HF; no full-model CPU run needed (stream layer by layer; host RAM 566 GB); per-layer dumps for a real prompt exist, hashed in LOG |
 | 1 | Attention module(s), one per layer type | 0 | tt-moe-correctness (PCC section) | each layer type PCC >= 0.999 vs dump on real activations, several shapes (S, batch) incl. the extremes |
 | 2 | MoE module: router, experts, dispatch/combine | 0 | tt-moe-correctness | router expert-set match >= 99% on real tokens; layer PCC >= 0.999; no dropped tokens (capacity check); determinism test passes |
 | 3 | Layer + chain assembly (N layers, then all) | 1, 2 | tt-moe-correctness | chained PCC vs the CPU prefix chain with noise floor; first token sane on real prompts; GSM8K gate (required, n/threshold in scorecard) and determinism pass |
@@ -57,4 +57,4 @@ baseline is merged (a perf agent without a correctness gate produced wrong claim
 
 ## Where things live (DSV4 reference implementation, copy patterns, not code blindly)
 `tt/` model code, `tests/` device tests, `reference/` CPU oracle + dump scripts, `tools/` launchers, `demo/text_demo.py` scenario table,
-`*_NOTES.md` per-feature notes. Kit tools (if present in your branch): `models/common/bringup_kit/` (see `tt-bringup-log`, `tt-lab-ops`).
+`*_NOTES.md` per-feature notes. Kit tools: `models/common/bringup_kit/` (README; see `tt-bringup-log`, `tt-lab-ops`). Define "done" per model as a scorecard: `scorecard.py template --model <m> --layer-types ... > bringup/<m>/scorecard.json`.

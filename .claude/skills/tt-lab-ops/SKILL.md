@@ -6,22 +6,23 @@ description: Run device jobs safely on the shared Blackhole Galaxy hosts - host 
 # Lab operations (shared hosts, shared NFS, many agents)
 
 Last validated against commit: <none yet>
-Evidence: `bringup/GUIDE_dsv4_lessons.md`. Intended kit tools (branch `ssinghal/bringup-tools`, `models/common/bringup_kit/`; check they exist, else
-use the DSV4 originals in `models/demos/blackhole/deepseek_v41_flash/tools/`): `launch.py` (locked, detached, watched launch), `host_health.py`,
-`hangwatch.py`, `results.py` (parse logs into LOG entries), `status_report.py`.
+Evidence: `bringup/GUIDE_dsv4_lessons.md`. Kit tools in `models/common/bringup_kit/` (README there): `launch.py` (pinned commit, locked, detached, watched launch),
+`host_health.py` (pre-flight; bad hosts in `bad_hosts.txt`), `hangwatch.py`, `results.py` (parse demo logs), `status_report.py`. Use them instead of hand-rolled ssh/nohup.
+Not hardware-validated yet: `host_health.py --canary`, and the tt-smi reset step of hangwatch (check the reset rc in the log and run a smoke test after).
+The DSV4 originals (`tools/devrun.sh`, `grid.py`) live only in the DSV4 repo `/mnt/tt-data/ssinghal/tests/tt-metal` (read-only for you).
 
 ## 0. Hard rules
-1. One device job per host. All device runs go through the flock wrapper on `/tmp/dsv4_dev.lock` (pattern: `tools/devrun.sh`, `tools/mkwt.sh`);
-   make a variant pointing `TT_METAL_HOME`/`PYTHONPATH` at YOUR worktree. `TT_METAL_CACHE=/mnt/tt-data/ssinghal/tt-metal-cache/h<host digits>`.
-2. Never edit, check out, commit in, or rebuild the main tree `/mnt/tt-data/ssinghal/tests/tt-metal` (benchmarks run from it). Work in your own worktree on your own branch.
+1. One device job per host. All device runs go through the flock on `/tmp/dsv4_dev.lock`; `launch.py` does this and points `TT_METAL_HOME`/`PYTHONPATH` at YOUR worktree. `TT_METAL_CACHE=/mnt/tt-data/ssinghal/tt-metal-cache/h<host digits>`.
+2. Two trees are off limits for edits: the DSV4 repo `/mnt/tt-data/ssinghal/tests/tt-metal` (its benchmarks and spec-decode agents run from it; a stray write to its `ttnn/ttnn/_ttnn.so` once broke every job there), and the integration checkout of the MiMo area `/mnt/tt-data/ssinghal/mimo/tt-metal` while a job runs from it. Work in your own worktree on your own branch. Never run build/install/cp commands whose output path is relative to a tree you do not own; check `pwd` first.
 3. Never kill, reset or "clean up" a process or device you did not start. Not even a suspected duplicate: ask the coordinator/owner (an agent once killed a believed duplicate that held a build slot). Kill only your own pid; log it.
-4. Check the host first: `pgrep -af python_env | grep -v grep`, `flock -n /tmp/dsv4_dev.lock true && echo idle`. Hosts: 10.82.97.{30..35,40..48} (ssh by last octet). Bad: .31 faulty (wrong first tokens in some mesh rows; discard its numbers), .42 hangs at the first device op (check `tt-smi`, triage before use). Update this list in LOG when it changes.
+4. Check the host first: `pgrep -af python_env | grep -v grep`, `flock -n /tmp/dsv4_dev.lock true && echo idle`. Hosts: 10.82.97.{30..35,40..48} (ssh by last octet; .36-.39 unreachable). Authoritative bad list: `models/common/bringup_kit/bad_hosts.txt`. Bad: .31 faulty (wrong first tokens in some mesh rows; discard its numbers), .42 hangs at the first device op (check `tt-smi`, triage before use). Update this list in LOG when it changes.
 5. Every number you report carries commit + host + log path + shape (layers, batch, ISL) + flags (`tt-bringup-log`). Always run ALL layers for an end-to-end number (`DSV41_LAYERS`-style variable set explicitly, no leftover env vars from a previous shell: `env | grep DSV41`).
 
 ## 1. Worktree for a track
 ```
-git -C /mnt/tt-data/ssinghal/tests/tt-metal worktree add /mnt/tt-data/ssinghal/wt/<WT> -b <BRANCH> <base>
-# link ignored build artifacts like wt/vllm_dsv4: runtime, build, build_Release, python_env, .cpmcache, tt_metal/pre-compiled, ttnn/ttnn.egg-info -> main tree; give it its own generated/
+git -C /mnt/tt-data/ssinghal/mimo/tt-metal worktree add /mnt/tt-data/ssinghal/mimo/wt/<WT> -b <BRANCH> <base>
+# link ignored build artifacts (the DSV4 wt/vllm_dsv4 pattern): runtime, build, build_Release, python_env, .cpmcache, tt_metal/pre-compiled, ttnn/ttnn.egg-info, ttnn/ttnn/_ttnn.so -> the MiMo clone (symlinks, never copies; verify with ls -l); give it its own generated/
+# copy tt/build_slots.py from the DSV4 package when the model needs build slots (it is git-ignored there)
 ```
 Worktree creation on NFS takes minutes: run it in the background. Logs: `/mnt/tt-data/ssinghal/<model>-logs/<track>_<what>.log` (own prefix only).
 
@@ -30,7 +31,7 @@ Worktree creation on NFS takes minutes: run it in the background. Logs: `/mnt/tt
 * One process per scenario class: spec-decode scenarios, different batch sizes and different ISLs run in separate processes unless the session driver
   supports `reconfigure` (then check DRAM/L1 is identical after reconfigure back; see `RECONFIGURE_NOTES.md`). Two ISLs in one process leaked DRAM until fixed: cheap two-ISL check first.
 * Build before benchmark: a full build takes 25-90 min (NFS, ~640 GB read). Develop with 2-4 layers; do ONE long session per candidate with several scenarios.
-* Build slots [L-slots]: `tt/build_slots.py` flock slots on NFS, `DSV41_BUILD_SLOTS` (default 5; the grid used 10), `DSV41_BUILD_STAGGER_S` minutes between build starts, builds with < 9 layers skip the cap. A silent log with "slots busy, waiting" is not a hang.
+* Build slots [L-slots]: the model's `tt/build_slots.py` (copy from DSV4) flock slots on NFS, `<PREFIX>BUILD_SLOTS` (default 5; the DSV4 grid used 10), `<PREFIX>BUILD_STAGGER_S` seconds between build starts (480 default), builds with < 9 layers skip the cap; `launch.py --slot-prefix` sets both. MiMo is 173 GB (DSV4 640 GB), loads are about 4x cheaper. A silent log with "slots busy, waiting" is not a hang.
 * Do not leave `sleep`/`until` shell loops behind; use Monitor-style waits and end them when the job ends.
 
 ## 3. Hang watchdog and triage

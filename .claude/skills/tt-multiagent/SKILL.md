@@ -12,7 +12,7 @@ Evidence: `bringup/GUIDE_dsv4_lessons.md`. Related: `tt-moe-bringup` (tracks and
 1. Take tracks and gates from `tt-moe-bringup`. Parallel only where files and hosts do not collide: reference, attention, MoE first; assembly after; perf only on a merged correct baseline.
 2. One brief per agent (file under `bringup/<model>/briefs/<track>.md`): goal, pass criterion and merge gate, branch, worktree, host(s), time box, files it may touch, files it must not touch,
    what to read first, how to log, final report format. Shared rules go in one common brief file all agents read.
-3. Branches/worktrees (create in background; NFS is slow): `git -C <main> worktree add /mnt/tt-data/ssinghal/wt/<WT> -b ssinghal/<model>-<track> ssinghal/<model>`.
+3. Branches/worktrees (create in background; NFS is slow): `git -C /mnt/tt-data/ssinghal/mimo/tt-metal worktree add /mnt/tt-data/ssinghal/mimo/wt/<WT> -b ssinghal/<model>-<track> ssinghal/<model>`.
 4. Do not start more agents than idle hosts + 1. Six agents on four hosts and one lock meant measurement agents queued behind long runs for hours. Cheap CPU-only tracks (reference, dumps, static analysis) are fine as extras.
 5. Each agent needs an early cheap deliverable (a 4-layer or unit-level result) in < 3 h; long runs only after it.
 
@@ -21,7 +21,7 @@ Assign hosts in the brief (`tt-lab-ops` bad-host list applies). Hold rule when h
 reproductions, (3) perf A/B, (4) exploratory. Agents on lower priority wait (poll every 20 min, give up after 3 h and report). Never preempt by killing: ask the owner.
 
 ## 3. Monitoring cadence
-Every 20-30 min while jobs run: `status_report.py` (intended; else per host `pgrep`, last line and age of each log, flock holder). Flag: log silent > the phase threshold,
+Every 20-30 min while jobs run: `models/common/bringup_kit/status_report.py --all --logs bringup/*/LOG.md --branches <branches>` (else per host `pgrep`, last line and age of each log, flock holder). Flag: log silent > the phase threshold,
 slot-wait vs hang (check for "waiting for slot"), duplicate processes, agents idle without result, a host with unexpected holders. Report to the human at most every few hours or on events.
 
 Status report format (short): per agent - track, branch@commit, host, job (log path, age, phase), last result with LOG id, blocker; then merge queue, hosts table (idle/busy/bad), open decisions for the human, risks.

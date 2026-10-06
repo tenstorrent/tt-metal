@@ -515,3 +515,36 @@ def test_status_parse_and_slots(tmp_path):
     (tmp_path / "slot0.lock").write_text("")
     (tmp_path / "slot1.lock").write_text("")
     assert status_report.slot_occupancy(str(tmp_path)) == (0, 2)
+
+
+def test_launch_refuses_bad_host():
+    import subprocess
+    import sys
+
+    kit = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    wt = os.path.dirname(os.path.dirname(os.path.dirname(kit)))
+    head = subprocess.check_output(["git", "-C", wt, "rev-parse", "--short=11", "HEAD"], text=True).strip()
+    r = subprocess.run(
+        [
+            sys.executable,
+            os.path.join(kit, "launch.py"),
+            "--worktree",
+            wt,
+            "--commit",
+            head,
+            "--host",
+            "31",
+            "--log",
+            "/tmp/never.log",
+            "--dry-run",
+            "--",
+            "true",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if "worktree dirty" in r.stderr:
+        import pytest
+
+        pytest.skip("tree dirty: the bad-host check runs after the clean-tree check")
+    assert r.returncode != 0 and "bad_hosts" in r.stderr

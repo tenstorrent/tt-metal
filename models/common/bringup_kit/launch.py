@@ -22,6 +22,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import kitlib  # noqa: E402
+from host_health import load_bad  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOCK = os.environ.get("KIT_DEVICE_LOCK", "/tmp/dsv4_dev.lock")  # one device job per host; override only in tests
@@ -107,6 +108,7 @@ def main(argv=None):
     p.add_argument(
         "--ignore-dirty", action="append", default=[], help="path prefix allowed to be dirty, repeatable (e.g. tools/)"
     )
+    p.add_argument("--allow-bad-host", action="store_true", help="launch even if the host is listed in bad_hosts.txt")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("command", nargs=argparse.REMAINDER, help="after --")
     a = p.parse_args(argv)
@@ -121,6 +123,9 @@ def main(argv=None):
     a.log = os.path.abspath(a.log)
     a.python_env = a.python_env or os.path.join(a.worktree, "python_env")
     check_tree(a.worktree, a.commit, a.ignore_dirty)
+    bad = load_bad(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bad_hosts.txt"))
+    if a.host.split(".")[-1] in bad and not a.allow_bad_host:
+        kitlib.die(f"host {a.host} is in bad_hosts.txt: {bad[a.host.split('.')[-1]]} (--allow-bad-host to override)")
     script = build_script(a, kitlib.head(a.worktree))
     if a.dry_run:
         print(script)
