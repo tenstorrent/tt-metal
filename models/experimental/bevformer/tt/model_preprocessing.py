@@ -335,7 +335,7 @@ def create_bevformer_encoder_parameters(encoder, device, dtype=DEFAULT_DTYPE):
 
 
 def create_perception_transformer_parameters(transformer, device, dtype=DEFAULT_DTYPE):
-    """``reference.perception_transformer.PerceptionTransformer`` as TTPerceptionTransformer takes
+    """``reference.perception_transformer.PerceptionTransformer`` as TtPerceptionTransformer takes
     it: the encoder's parameters, the CAN-bus MLP, and per FPN level the camera embeddings plus the
     level's embedding, ``(1, num_cams, 1, C)``."""
     mlp = transformer.can_bus_mlp

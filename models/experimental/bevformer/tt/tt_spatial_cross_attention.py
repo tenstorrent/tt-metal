@@ -107,10 +107,10 @@ def _plan_dtypes(num_queries, grid_dtype):
 
 
 def full_capacity(num_queries):
-    """The capacity that fits any rig: every query, tile-aligned. The deformable attention then runs
-    on every query for every camera; with nuScenes' rig the busiest camera sees about a quarter of
-    the base grid, which the default capacity sizes to. On the base grid the encoder's deformable
-    attention then needs more DRAM than a device has."""
+    """Every query, tile-aligned: no rig can see more. The deformable attention then runs on every
+    query for every camera, which fits the tiny grid but not the base one: at 200x200 the encoder
+    fails to allocate its sampling buffers, one of them 3.9 GB. On the base grid use a bound for the
+    rig; with nuScenes' rig the busiest camera sees about a quarter of the grid."""
     return -(-num_queries // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
 
@@ -129,8 +129,8 @@ def build_rebatch_plan(
             right edge moves in steps of 2^-8, 0.8 px on the 200-wide first FPN level.
         capacity: Rows per camera. By default the most queries any camera sees in this frame,
             tile-aligned, which fits this frame only: a plan refilled by :func:`update_rebatch_plan`
-            needs a capacity that covers every later frame, a bound for the rig or
-            :func:`full_capacity`.
+            needs a capacity that covers every later frame: a bound for the rig, or
+            :func:`full_capacity` on grids smaller than the base one.
     """
     num_cams, bs, num_queries, depth = bev_mask.shape
     if capacity is None:
@@ -235,9 +235,10 @@ class TTSpatialCrossAttention:
 
     def __call__(self, query, value, frame):
         """``query`` bfloat16 ``(bs, num_queries, C)``, ``value`` ``(bs * num_cams, num_keys, C)``
-        (each sample's cameras in turn), ``frame`` from :meth:`frame_inputs`. Returns ``(bs, num_queries, C)``. Deformable attention
-        scores no key: two Linears on the query predict where to sample and with what weight. No
-        positional encoding enters: upstream's encoder adds it in the self-attention only."""
+        (each sample's cameras in turn), ``frame`` from :meth:`frame_inputs`. Returns
+        ``(bs, num_queries, C)``. Deformable attention scores no key: two Linears on the query predict
+        where to sample and with what weight. No positional encoding enters: upstream's encoder adds
+        it in the self-attention only."""
         plan = frame.plan
         bs, num_queries, embed_dims = query.shape
         assert (bs, num_queries) == (
