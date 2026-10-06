@@ -36,6 +36,32 @@ on real weights and real-text activations:
   softmax              HiFi4 with fp32 accumulation, both halves required: max-abs is 2.7e-2 to
                        3.0e-2 stock, 5.4e-3 to 6.8e-3 with HiFi4 alone, 1.4e-3 to 1.9e-3 with
                        both, against the router's 5e-3 budget.
+  SDPA                 HiFi3 with fp32 accumulation. With the chunks and placement of
+                       tt/attention.py a call takes 115 us at 8x512 against 1098 us before. HiFi3
+                       matches HiFi4's error to every digit measured and is 9% faster. A bfloat16
+                       destination selects SDPA's streaming kernel, 30% faster a call, 0.4 ms a
+                       forward at 8x512; with the tanh GELU it moved 5 of 32 encoder draws past the
+                       pooled gate of test_ttnn_encoder.py against 1. Most of the error is the
+                       approximate exp (8x the bfloat16 floor); exp_approx_mode=False takes it to
+                       1.5x for 3x the time.
+  attention mask       none for a batch without padding: a dense mask doubled SDPA's time at
+                       8x512, read once per query chunk of every head. A padded batch's is
+                       bfloat4_b, which holds 0 and dtype-min exactly: the same output as bfloat16
+                       to the bit, 131 against 203 us on a padded 8x512 batch on the streaming
+                       kernel. On the fp32 one a bfloat16 mask does not fit beside a 256 x 512
+                       score block.
+  GELU                 tanh, for the dense FFN and the experts. It is within 4.7e-4 of exact erf,
+                       a thirtieth of bfloat16's rounding, and 18% faster: 1353 against 1645 us
+                       for the experts at 8x512, 171 against 208 for the dense FFN. On fc1 above
+                       32 tile rows of M and on the transposed expert w1 it is fused into the
+                       matmul, whose 2D multicast program applies it from the packer beside the
+                       math (tt/matmul_config.py, gelu_on_packer): w1 and its GELU take 1630 us at
+                       8x512 against 786 + 1353, fc1 and its GELU 260 against 132 + 171. The LUT,
+                       fused into minimal_matmul, costs 75 us over the w1 where the tanh form now
+                       costs 844, 4.6 ms a forward at 8x512, but it triples the random-id tail (108
+                       of 512 draws over 5e-3 against 37) and fails five tests, two of
+                       test_ttnn_model.py at 2x37 and three of test_ttnn_encoder.py at 2x128; it is
+                       a TtModelConfig switch away (expert_gelu).
 
 None of the reduced-precision choices above moved retrieval nDCG beyond run-to-run noise. These
 were measured and left off:
@@ -67,9 +93,8 @@ WEIGHT_DTYPE = ttnn.bfloat16
 
 # The one path kept at higher precision: the router's softmax feeds a top-2 selection, so a
 # near-tie decided by rounding changes which experts a token visits. Rounding the probabilities
-# to bfloat16 before the topk reroutes 0.34% to 0.59% of tokens. ttnn.scatter rejects float32 so a cast
-# is unavoidable, but ttnn.topk takes fp32 and its uint32 index feeds the scatter unchanged, so
-# only the two selected weights are cast, after the selection.
+# to bfloat16 before the topk reroutes 0.34% to 0.59% of tokens. ttnn.topk takes fp32, so only the
+# two selected weights are cast, after the selection, for the bfloat16 gate the experts consume.
 ROUTER_DTYPE = ttnn.float32
 
 # The (1, E, T, F) expert intermediate: the w1 output, the GELU and the w2 input. See the module
@@ -79,6 +104,15 @@ EXPERT_INTERMEDIATE_DTYPE = ttnn.bfloat8_b
 # The w2 output of a transposed expert pass, the gate that weights it and their product. See the
 # module docstring.
 EXPERT_OUTPUT_DTYPE = ttnn.bfloat8_b
+
+# The additive attention mask of a padded batch. Its values are 0 and dtype-min, which bfloat4_b
+# holds exactly, and SDPA reads one mask chunk per query chunk of every head. See the module
+# docstring.
+ATTENTION_MASK_DTYPE = ttnn.bfloat4_b
+
+# The GELU of the dense FFN and of the experts. See the module docstring.
+DENSE_GELU = ttnn.GeluVariant.Tanh
+EXPERT_GELU = ttnn.GeluVariant.Tanh
 
 LAYOUT = ttnn.TILE_LAYOUT
 MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
@@ -132,8 +166,23 @@ _MATMUL_WEIGHT_DTYPE = {
 }
 
 
+# fp32 accumulation selects SDPA's older kernel; a bfloat16 destination its streaming one. See the
+# module docstring.
+_SDPA_FIDELITY = ttnn.MathFidelity.HiFi3
+_SDPA_FP32_DEST_ACC = True
+_SDPA_MATH_APPROX = False
+
+
 def _compute_config(arch, group: OpGroup) -> ttnn.DeviceComputeKernelConfig:
     """math_approx_mode is off everywhere because it selects cheaper SFPU polynomials."""
+    if group is OpGroup.SDPA:
+        return ttnn.init_device_compute_kernel_config(
+            arch,
+            math_fidelity=_SDPA_FIDELITY,
+            math_approx_mode=_SDPA_MATH_APPROX,
+            fp32_dest_acc_en=_SDPA_FP32_DEST_ACC,
+            packer_l1_acc=False,
+        )
     is_matmul = group in MATMUL_GROUPS
     fidelity = _MATMUL_FIDELITY.get(group, ttnn.MathFidelity.HiFi3) if is_matmul else ttnn.MathFidelity.HiFi4
     return ttnn.init_device_compute_kernel_config(
@@ -166,6 +215,10 @@ class TtModelConfig:
     router_dtype: ttnn.DataType = ROUTER_DTYPE
     expert_intermediate_dtype: ttnn.DataType = EXPERT_INTERMEDIATE_DTYPE
     expert_output_dtype: ttnn.DataType = EXPERT_OUTPUT_DTYPE
+    attention_mask_dtype: ttnn.DataType = ATTENTION_MASK_DTYPE
+    dense_gelu: ttnn.GeluVariant = DENSE_GELU
+    expert_gelu: ttnn.GeluVariant = EXPERT_GELU
+    attention_l1: bool = True  # the head tensors and SDPA's output in L1 where they fit, tt/attention.py
     layout: ttnn.Layout = LAYOUT
 
     def compute_kernel_config(self, group: OpGroup) -> ttnn.DeviceComputeKernelConfig:
