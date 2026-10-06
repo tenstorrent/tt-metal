@@ -817,6 +817,28 @@ class Qwen38TTNNGenericHead:
         self.active = False
 
 
+class _TTNNConstantField:
+    """Preserve native-valued metadata without retaining module constants."""
+
+    def __init__(self, constant_name: str) -> None:
+        self.constant_name = constant_name
+
+    def __set_name__(self, owner, name: str) -> None:
+        self.storage_name = f"_{name}"
+
+    def __get__(self, instance, owner=None):
+        if instance is None:
+            raise AttributeError(self.storage_name)
+        if getattr(instance, self.storage_name + "_is_constant"):
+            return getattr(ttnn, self.constant_name)
+        return getattr(instance, self.storage_name)
+
+    def __set__(self, instance, value) -> None:
+        is_constant = value is getattr(ttnn, self.constant_name)
+        object.__setattr__(instance, self.storage_name, None if is_constant else value)
+        object.__setattr__(instance, self.storage_name + "_is_constant", is_constant)
+
+
 @dataclass(frozen=True)
 class Qwen38TTNNGenericHandoff:
     """Metadata contract of one tensor HEAD writes and TAIL reads."""
@@ -825,9 +847,9 @@ class Qwen38TTNNGenericHandoff:
     attribute: str
     shape: tuple[int, ...]
     padded_shape: tuple[int, ...]
-    dtype: Any
-    layout: Any
-    memory_config: Any
+    dtype: Any = _TTNNConstantField("bfloat16")
+    layout: Any = _TTNNConstantField("TILE_LAYOUT")
+    memory_config: Any = _TTNNConstantField("DRAM_MEMORY_CONFIG")
 
     def describe(self, tensor=None) -> str:
         """The contract's fields, of ``tensor`` when given, for actual-vs-expected error text."""

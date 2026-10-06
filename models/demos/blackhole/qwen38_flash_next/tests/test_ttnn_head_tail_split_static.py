@@ -14,8 +14,12 @@ TAIL trace keyed ``(part, residue, regime)``.
 
 from __future__ import annotations
 
+import copy
+import gc
 import inspect
+import weakref
 from contextlib import contextmanager
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -471,3 +475,34 @@ def test_capture_api_signature_is_the_runner_contract() -> None:
         "state",
         "return_logits",
     )
+
+
+def test_handoff_does_not_retain_module_constants(monkeypatch) -> None:
+    class Constant:
+        pass
+
+    names = ("bfloat16", "TILE_LAYOUT", "DRAM_MEMORY_CONFIG")
+    constants = [Constant() for _ in names]
+    references = [weakref.ref(value) for value in constants]
+    for name, value in zip(names, constants):
+        monkeypatch.setattr(ttnn, name, value)
+    handoff = model_module.Qwen38TTNNGenericHandoff("test", "residual", (1, 4, 1, 640), (1, 4, 32, 640), *constants)
+    # Direct assignment avoids the monkeypatch undo stack retaining test values.
+    replacements = [Constant() for _ in names]
+    for name, value in zip(names, replacements):
+        setattr(ttnn, name, value)
+    del constants
+    gc.collect()
+    assert all(reference() is None for reference in references)
+    assert (handoff.dtype, handoff.layout, handoff.memory_config) == tuple(replacements)
+
+
+def test_handoff_copy_replace_and_custom_metadata() -> None:
+    (handoff,) = GENERIC_HEAD_HANDOFF
+    for duplicate in (copy.deepcopy(handoff), replace(handoff)):
+        assert duplicate.dtype is ttnn.bfloat16
+        assert duplicate.layout is ttnn.TILE_LAYOUT
+        assert duplicate.memory_config is ttnn.DRAM_MEMORY_CONFIG
+        assert duplicate.describe() == handoff.describe()
+    custom = object()
+    assert replace(handoff, memory_config=custom).memory_config is custom
