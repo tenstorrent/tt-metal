@@ -36,11 +36,10 @@ inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
         pack_dst_format[output_id], face_r_dim, num_faces, pack_src_format[output_id]);
 }
 
-template <bool is_fp32_dest_acc_en = false>
 inline void llk_pack_fast_tilize_reinit_unit_dim(const std::uint32_t pack_output, const std::uint32_t new_unit_dim) {
     SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(pack_output);
-    _llk_pack_fast_tilize_reinit_unit_dim_<is_fp32_dest_acc_en>(pack_dst_format[output_id], new_unit_dim);
+    _llk_pack_fast_tilize_reinit_unit_dim_(pack_dst_format[output_id], new_unit_dim);
 }
 
 template <bool is_fp32_dest_acc_en>
