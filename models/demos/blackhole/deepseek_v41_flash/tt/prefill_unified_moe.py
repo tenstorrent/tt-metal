@@ -94,12 +94,14 @@ class UnifiedMoEShared:
             os.environ.get("DSV41_UNI_LINKS", "2")
         )  # fabric links of dispatch / combine / offset_cumsum (2 available per row hop)
         self.workers = int(os.environ.get("DSV41_UNI_WORKERS", "2"))  # worker cores per sender of the dispatch op
-        self.topology = (
-            ttnn.Topology.Ring if os.environ.get("DSV41_UNI_TOPO", "linear") == "ring" else ttnn.Topology.Linear
-        )  # dispatch / combine over the 4 rows (ring: wrap link of the column)
         self.l1_small = (
             os.environ.get("DSV41_UNI_L1SMALL", "1") == "1"
         )  # global semaphores of the CCL ops in L1_SMALL (device opened with l1_small_size > 0)
+
+
+def row_topology():
+    """dispatch / combine topology over the 4 rows (DSV41_UNI_TOPO=ring: use the column's wrap link; read per call so A/B modes can switch it)"""
+    return ttnn.Topology.Ring if os.environ.get("DSV41_UNI_TOPO", "linear") == "ring" else ttnn.Topology.Linear
 
 
 def get_shared(md, n_tokens):
@@ -274,7 +276,7 @@ class DSV41UnifiedMoE:
             max_dispatch_buffer_token_size=sh.max_buf,
             cluster_axis=0,
             num_links=sh.num_links,
-            topology=sh.topology,
+            topology=row_topology(),
             fp8_output=False,
             subdevice_id=ov.d_id if ov is not None else None,
             num_workers_per_sender=sh.workers,
@@ -341,7 +343,7 @@ class DSV41UnifiedMoE:
             seq_len_per_chip=N,
             cluster_axis=0,
             num_links=sh.num_links,
-            topology=sh.topology,
+            topology=row_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             init_zeros=False,
             use_fp8_combine=False,

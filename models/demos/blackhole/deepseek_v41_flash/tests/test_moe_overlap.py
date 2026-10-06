@@ -198,8 +198,8 @@ def test_moe_overlap(mesh_device):
         # dispatch / combine topology over the 4 rows: Linear (default) vs Ring (wrap link); outputs compared bit-for-bit
         base_part = um.forward(x_rm, sc_all, ix_all)
         ttnn.synchronize_device(md)
-        for tp_name, tp in (("ring", ttnn.Topology.Ring), ("linear", ttnn.Topology.Linear)):
-            shd.topology = tp
+        for tp_name in ("ring", "linear"):
+            os.environ["DSV41_UNI_TOPO"] = tp_name
 
             def fk():
                 ttnn.deallocate(um.forward(x_rm, sc_all, ix_all))
@@ -214,7 +214,7 @@ def test_moe_overlap(mesh_device):
                 )
             except Exception as e:  # noqa
                 print(f"MO topology {tp_name} failed: {str(e)[:200]}", flush=True)
-        shd.topology = ttnn.Topology.Linear
+        os.environ["DSV41_UNI_TOPO"] = "linear"
     for m in modes:
         T(f"reduce mode {m}", lambda m=m: ttnn.deallocate(reduce_scatter_tokens(part, ccl, mode=m, free=False)))
     T(
