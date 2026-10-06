@@ -68,6 +68,12 @@ void reset_state(std::uint32_t& counter)
 int main()
 {
     disable_branch_prediction();
+    // Experiment: the pack TRISC's branch predictor off (DISABLE_RISC_BP_Disable_trisc bit 2); written every boot.
+    {
+        volatile std::uint32_t* cfg = ckernel::get_cfg_pointer();
+        cfg[DISABLE_RISC_BP_Disable_trisc_ADDR32] = (cfg[DISABLE_RISC_BP_Disable_trisc_ADDR32] & ~DISABLE_RISC_BP_Disable_trisc_MASK) |
+                                                    (4u << DISABLE_RISC_BP_Disable_trisc_SHAMT);
+    }
 
     std::uint32_t counter = 0;
 
