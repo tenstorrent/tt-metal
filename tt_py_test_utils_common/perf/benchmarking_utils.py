@@ -203,11 +203,23 @@ class BenchmarkData:
 
             pkl_data = pickle.dumps(partial_benchmark_run)
 
+            # run_start_ts is second resolution, so two saves in the same second (for example
+            # report_vision_fps immediately followed by prep_perf_report) would otherwise
+            # overwrite the first partial. Keep the unsuffixed name for the first file so
+            # existing single-save paths and renames stay stable.
             filename = os.path.join(self.output_folder, f"partial_run_{run_start_ts}.pkl")
             parent_dir = os.path.dirname(filename)
             if parent_dir != "":
                 # exist_ok=True avoids a race when parallel MPI ranks create the directory concurrently
                 os.makedirs(parent_dir, exist_ok=True)
+            if os.path.exists(filename):
+                suffix = 2
+                while True:
+                    candidate = os.path.join(self.output_folder, f"partial_run_{run_start_ts}_{suffix}.pkl")
+                    if not os.path.exists(candidate):
+                        filename = candidate
+                        break
+                    suffix += 1
             with open(filename, "wb") as f:
                 f.write(pkl_data)
             logger.info(f"Run and measurement data saved to {filename}")

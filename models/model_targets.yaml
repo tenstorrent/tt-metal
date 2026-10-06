@@ -206,10 +206,16 @@ targets:
             owner_id: U053W15B6JF # Djordje Ivanovic
             team: models
   falcon-7b:
-    aliases: ["falcon-7b"]
+    aliases: ["falcon-7b", "falcon-7b-instruct"]
     skus:
       wh_n150:
         entries:
+          - status: active
+            enforce_perf: false
+            perf: {}
+            accuracy: {}
+            owner_id: U08JFM3CFA4 # Gongyu Wang
+            team: models
           - batch_size: 32
             seq_len: 128
             status: active
@@ -410,14 +416,14 @@ targets:
         entries:
           - batch_size: null
             seq_len: null
-            status: TODO
+            status: active
             perf: {}
             accuracy: {}
       p300x2:
         entries:
           - batch_size: 1
             seq_len: null
-            status: TODO
+            status: active
             perf: {}
             accuracy: {}
             owner_id: U08TJ70UFRT # Harry Andrews
@@ -431,14 +437,14 @@ targets:
         entries:
           - batch_size: 1
             seq_len: null
-            status: TODO
+            status: active
             perf: {}
             accuracy: {}
       p300x2:
         entries:
           - batch_size: null
             seq_len: null
-            status: TODO
+            status: active
             perf: {}
             accuracy: {}
   gemma-4-e2b:
@@ -448,7 +454,7 @@ targets:
         entries:
           - batch_size: 1
             seq_len: null
-            status: TODO
+            status: active
             perf: {}
             accuracy: {}
             owner_id: U08TJ70UFRT # Harry Andrews
@@ -458,7 +464,7 @@ targets:
         entries:
           - batch_size: null
             seq_len: null
-            status: TODO
+            status: active
             perf: {}
             accuracy: {}
   gemma-4-e4b:
@@ -475,14 +481,14 @@ targets:
         entries:
           - batch_size: null
             seq_len: null
-            status: TODO
+            status: active
             perf: {}
             accuracy: {}
       p300x2:
         entries:
           - batch_size: null
             seq_len: null
-            status: TODO
+            status: active
             perf: {}
             accuracy: {}
   gpt-oss-120b:
@@ -1044,6 +1050,12 @@ targets:
               prefill_t_s_tolerance: 0.2
               decode_t_s_tolerance: 0.2
               decode_t_s_u_tolerance: 0.2
+            accuracy: {}
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+          - status: active
+            enforce_perf: false
+            perf: {}
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
@@ -1970,7 +1982,7 @@ targets:
             owner_id: U088413NP0Q # Ashai Reddy
             team: models
   shallow-unet:
-    aliases: ["shallow-unet", "unet-shallow"]
+    aliases: ["shallow-unet", "unet-shallow", "unet-shallow-trace-2cq-same-io"]
     skus:
       bh_p150:
         entries:
@@ -2046,7 +2058,7 @@ targets:
             owner_id: U087HGJ455E # Sudhanshu Singhal
             team: shield
   panoptic-deeplab:
-    aliases: ["panoptic-deeplab"]
+    aliases: ["panoptic-deeplab", "panoptic-deeplab-traced", "deeplab-v3-plus", "deeplab-v3-plus-traced"]
     skus:
       bh_p150b_civ2:
         entries:
@@ -2094,7 +2106,7 @@ targets:
             owner_id: U0ATR08RCQ0 # James Lee
             team: models
   wan-2.2-t2v:
-    aliases: ["wan-2.2-t2v"]
+    aliases: ["wan-2.2-t2v", "wan2.2"]
     skus:
       bh_quietbox_2:
         entries:
