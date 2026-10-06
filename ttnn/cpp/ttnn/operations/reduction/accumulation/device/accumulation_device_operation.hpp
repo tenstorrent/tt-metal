@@ -35,7 +35,17 @@ struct AccumulationDeviceOperation {
             "ttnn/cpp/ttnn/operations/reduction/accumulation/device/kernels/dataflow/"
             "accumulation_writer.cpp"};
 
+        // Scans along one of the two tile axes (H or W) in place; see is_tile_axis_accumulation.
+        static constexpr const char* TILE_AXIS_COMPUTE_KERNEL_PATH =
+            "ttnn/cpp/ttnn/operations/reduction/accumulation/device/kernels/compute/"
+            "accumulation_tile_axis_compute.cpp";
+
         static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+
+        static ttnn::device_operation::ProgramArtifacts create_tile_axis_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -53,6 +63,12 @@ struct AccumulationDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
+
+// True when the accumulation can run along `dim` without first permuting it to dim 0: `dim` is
+// one of the two tile axes (H or W) and the scan is a forward bf16 cumsum on 32x32 tiles. Every
+// other combination still goes through the permute (#24824 tracks the rest).
+bool is_tile_axis_accumulation(
+    const Tensor& input_tensor, int32_t dim, DataType output_dtype, bool flip, AccumulationOp op);
 
 ttnn::Tensor accumulation(
     const Tensor& input_tensor,

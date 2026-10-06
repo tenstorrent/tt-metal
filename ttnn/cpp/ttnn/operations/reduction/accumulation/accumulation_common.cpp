@@ -14,7 +14,9 @@ Tensor preprocess_input_tensor(
     const int32_t& cum_axis,
     permutation_t& permutation,
     int32_t& accumulation_axis,
-    std::optional<DataType>& dtype) {
+    std::optional<DataType>& dtype,
+    bool reverse_order,
+    ttnn::prim::AccumulationOp op) {
     Tensor processed_tensor = input_tensor;
     const auto& input_dtype = input_tensor.dtype();
     if (dtype.has_value() && (input_dtype != *dtype)) {
@@ -40,6 +42,16 @@ Tensor preprocess_input_tensor(
             final_cum_axis += (FOUR_DIMENSIONS - input_rank);
         }
 
+        // A scan the tile-axis kernel supports runs along H or W in place. Moving H or W to dim 0
+        // would pad every remaining element out to its own row or tile: 32x the memory, and 1024x
+        // for a 1D tensor (#23264).
+        if (ttnn::prim::is_tile_axis_accumulation(
+                processed_tensor, final_cum_axis, processed_tensor.dtype(), reverse_order, op)) {
+            permutation.clear();
+            accumulation_axis = final_cum_axis;
+            return processed_tensor;
+        }
+
         // Create permutation that just swaps cumulation axis with the first dim
         permutation = std::decay_t<decltype(permutation)>(final_rank);
         std::iota(permutation.begin(), permutation.end(), FIRST_DIMENSION);
@@ -63,7 +75,10 @@ Tensor postprocess_output_tensor(
     Tensor processed_tensor = output_tensor;
 
     if (original_rank - dim < FOUR_DIMENSIONS) {
-        processed_tensor = ttnn::permute(processed_tensor, permutation, processed_tensor.memory_config());
+        // An empty permutation means the scan ran along a tile axis in place.
+        if (!permutation.empty()) {
+            processed_tensor = ttnn::permute(processed_tensor, permutation, processed_tensor.memory_config());
+        }
         if (original_rank < FOUR_DIMENSIONS) {
             processed_tensor = ttnn::reshape(processed_tensor, original_shape);
         }
@@ -124,7 +139,8 @@ Tensor accumulation_invoke(
     Tensor wip_tensor = input_tensor;
     ttsl::SmallVector<int64_t> permutation;
     int32_t accumulation_axis;
-    wip_tensor = common::preprocess_input_tensor(wip_tensor, cum_axis, permutation, accumulation_axis, dtype);
+    wip_tensor =
+        common::preprocess_input_tensor(wip_tensor, cum_axis, permutation, accumulation_axis, dtype, reverse_order, op);
     wip_tensor = ttnn::prim::accumulation(
         wip_tensor,
         accumulation_axis,

@@ -30,6 +30,7 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/reduction/accumulation/cumprod/cumprod.hpp"
 #include "ttnn/operations/reduction/accumulation/cumsum/cumsum.hpp"
+#include "ttnn/operations/reduction/accumulation/device/accumulation_device_operation.hpp"
 #include "ttnn/operations/reduction/accumulation/ema/ema.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
@@ -905,7 +906,7 @@ TEST_F(ReductionSmoke, ProdLastDim) {
 
 TEST_F(ReductionSmoke, CumsumLastDim) {
     auto& device = *device_;
-    // rank - dim < 4 takes the reshape + permute-to-dim-0 path.
+    // bf16 along W: scans the tiles in place, without permuting W to dim 0.
     constexpr int h = 32, w = 64;
     const auto input = ttnn::ones(ttnn::Shape{1, 1, h, w}, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
     const auto output = ttnn::cumsum(input, -1);
@@ -931,6 +932,39 @@ TEST_F(ReductionSmoke, CumsumDim0NoPermute) {
             ASSERT_EQ(static_cast<float>(result[p * h * w + i]), static_cast<float>(p + 1)) << "plane " << p;
         }
     }
+}
+
+TEST_F(ReductionSmoke, AccumulationValidationNormalizesNegativeDim) {
+    auto& device = *device_;
+    // ttnn::prim::accumulation normalizes dim before launching, but validation must not rely on that:
+    // the program factory normalizes too, so a negative tile-axis dim the in-place kernel can't run
+    // (here fp32) has to be rejected, not routed to that kernel.
+    using Op = ttnn::prim::AccumulationDeviceOperation;
+    const ttnn::Shape shape{1, 1, 32, 64};
+    const auto make_attrs = [](int32_t dim, DataType dtype, const Tensor& input) {
+        return Op::operation_attributes_t{
+            .dim = dim,
+            .dtype = dtype,
+            .output_memory_config = input.memory_config(),
+            .flip = false,
+            .op = ttnn::prim::AccumulationOp::CUMSUM};
+    };
+
+    const auto fp32_input = ttnn::ones(shape, DataType::FLOAT32, ttnn::TILE_LAYOUT, device);
+    EXPECT_THROW(
+        Op::validate_on_program_cache_miss(
+            make_attrs(-1, DataType::FLOAT32, fp32_input), Op::tensor_args_t{fp32_input, std::nullopt}),
+        std::exception);
+    // Out of range after normalization.
+    EXPECT_THROW(
+        Op::validate_on_program_cache_miss(
+            make_attrs(-5, DataType::FLOAT32, fp32_input), Op::tensor_args_t{fp32_input, std::nullopt}),
+        std::exception);
+
+    // The same negative dim on bf16 is a supported tile-axis scan.
+    const auto bf16_input = ttnn::ones(shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+    EXPECT_NO_THROW(Op::validate_on_program_cache_miss(
+        make_attrs(-1, DataType::BFLOAT16, bf16_input), Op::tensor_args_t{bf16_input, std::nullopt}));
 }
 
 TEST_F(ReductionSmoke, CumsumInt32) {
