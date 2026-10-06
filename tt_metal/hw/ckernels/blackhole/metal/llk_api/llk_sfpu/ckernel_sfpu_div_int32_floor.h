@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
@@ -16,9 +15,9 @@ namespace ckernel::sfpu {
 // (false) rounding mode should be used.
 template <bool floor>
 sfpi_inline void calculate_div_int32_body(
-    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    constexpr uint dst_tile_size_sfpi = 32;
 
     sfpi::vInt b_orig = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
@@ -146,7 +145,7 @@ sfpi_inline void calculate_div_int32_body(
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 sfpi_inline void calculate_div_int32_floor(
-    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_div_int32_body<true>(dst_index_in0, dst_index_in1, dst_index_out);
@@ -156,7 +155,7 @@ sfpi_inline void calculate_div_int32_floor(
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 sfpi_inline void calculate_div_int32_trunc(
-    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_div_int32_body<false>(dst_index_in0, dst_index_in1, dst_index_out);
