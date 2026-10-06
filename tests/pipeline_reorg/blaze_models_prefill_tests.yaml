@@ -1131,9 +1131,9 @@
   fabric_profile: 1d
   cmd: |
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-cache/scratch/huggingface
     export HF_MODEL=google/gemma-4-31B-it
-    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    export TT_CACHE_PATH=/mnt/weka/model-cache/scratch/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
@@ -1161,10 +1161,10 @@
     export TT_METAL_HOME=/home/user/tt-metal
     export PYTHONPATH="$TT_METAL_HOME" PYTHONUNBUFFERED=1
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-cache/scratch/huggingface
     export HF_MODEL=google/gemma-4-31B-it
-    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
-    export PREFILL_TRACE_DIR=/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135
+    export TT_CACHE_PATH=/mnt/weka/model-cache/scratch/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/huggingface/gpu_traces/gemma4_d_p/gutenberg-135
     export OMP_NUM_THREADS=16 MKL_NUM_THREADS=16
     mpirun --bind-to none --pernode --tag-output \
       python3 -m pytest \
