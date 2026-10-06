@@ -29,7 +29,9 @@ weights:
     - "audio_scheduler/*"
 
 source:
-  tt_metal: /home/jashan/tt-metal-h3
+  # Your checkout of this branch. The local-checkout form is hermetic: it packages exactly the
+  # tree you validated. `{repo, ref}` is the other accepted form if you want a clone instead.
+  tt_metal: ~/tt-metal-h3
   # Allowlist — exactly what ships. Derived by IMPORTING the app and the pipeline and reading
   # sys.modules, not by grepping: models/tt_dit uses relative imports, so a `models\.` grep sees
   # almost nothing. Directory entries rather than the 66 individual files, because several modules
