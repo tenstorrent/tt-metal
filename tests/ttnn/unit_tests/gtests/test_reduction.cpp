@@ -981,7 +981,7 @@ TEST(ReduceHostPlanner, RejectsUnsupportedBackendRequests) {
         ReduceFp32Mode mode;
     };
     const Case cases[] = {
-        {DataType::BFLOAT16, ReduceOpMath::MIN, ReduceOpDim::W, ReduceFp32Mode::Fast},
+        {DataType::BFLOAT16, ReduceOpMath::MIN, ReduceOpDim::HW, ReduceFp32Mode::Fast},
         {DataType::FLOAT32, ReduceOpMath::MIN, ReduceOpDim::H, ReduceFp32Mode::Fast},
         {DataType::INT32, ReduceOpMath::AVG, ReduceOpDim::W, ReduceFp32Mode::Fast},
         {DataType::INT32, ReduceOpMath::SUM, ReduceOpDim::HW, ReduceFp32Mode::Fast},
@@ -1013,6 +1013,37 @@ TEST(ReduceHostPlanner, RejectsUnsupportedBackendRequests) {
                 input, test.math, test.dim, 1.0F, test.mode, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop};
             EXPECT_ANY_THROW(make_reduce_sequence_plan({{0U, config}}, {1U, 3U, 2U}, hardware));
         }
+    }
+}
+
+TEST(ReduceHostPlanner, Bfloat16MinUsesTheSfpuExceptOnQuasar) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    auto input = local_reduce_block(Shape{64, 16 * 32}, DataType::BFLOAT16);
+    input.allow_empty_auxiliary = true;
+    for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
+        for (const auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE}) {
+            const auto plan = make_reduce_plan(
+                input,
+                ReduceOpMath::MIN,
+                dim,
+                std::nullopt,
+                ReduceFp32Mode::Fast,
+                {arch, false, false},
+                compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
+            EXPECT_EQ(plan.algorithm, compute_kernel_lib::ReduceAlgorithm::ReduceTile);
+            EXPECT_TRUE(plan.auxiliary_tiles.empty());
+            // The SFPU keeps one of the eight half-sync DEST tiles for itself.
+            EXPECT_EQ(plan.chunk.output_tiles, dim == ReduceOpDim::H ? 7U : 1U);
+        }
+        EXPECT_ANY_THROW(make_reduce_plan(
+            input,
+            ReduceOpMath::MIN,
+            dim,
+            std::nullopt,
+            ReduceFp32Mode::Fast,
+            {tt::ARCH::QUASAR, false, false},
+            compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop));
     }
 }
 

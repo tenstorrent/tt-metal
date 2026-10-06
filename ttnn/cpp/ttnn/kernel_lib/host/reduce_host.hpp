@@ -314,8 +314,8 @@ private:
 // Plan one local tiled reduction using the requested input policy. The planner
 // reports buffer requirements; the factory owns allocation and L1 fit checks.
 // Tilization and row-major staging belong to the caller.
-// INT32 and accurate FLOAT32 use SFPU SUM/MAX/MIN along W or H on non-Quasar
-// devices. Accurate FLOAT32 AVG must be lowered to SUM plus its normalization
+// INT32 and accurate FLOAT32 use SFPU SUM/MAX/MIN, and BFLOAT16 MIN uses SFPU MIN,
+// along W or H on non-Quasar devices. Accurate FLOAT32 AVG must be lowered to SUM plus its normalization
 // scalar; SFPU HW reductions must be split into W and H. Tiled SFPU calls require
 // a tile-aligned reduction axis: callers with partial inputs must identity-pad
 // that axis and describe the padded view.
