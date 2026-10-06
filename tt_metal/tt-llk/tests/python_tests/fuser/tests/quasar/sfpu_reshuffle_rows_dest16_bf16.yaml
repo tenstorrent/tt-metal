@@ -23,6 +23,8 @@ operands:
   - name: "sfpu_out"
     dims: [32, 32]
     format: Float16_b
+    atol: 0.0  # every partial sum is exact, so any lost, doubled or misplaced row must fail
+    rtol: 0.0
 
 operations:
   - math:
