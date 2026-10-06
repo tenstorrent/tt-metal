@@ -1796,15 +1796,13 @@ def import_graph(
     for _, _, tid, _ in output_tensors_batch:
         referenced_tids.add(_tid_int(tid))
 
-    filtered_tensors = []
-    for t in tensors_batch:
-        tid_int = _tid_int(t.tensor_id)
-        if t.device_id is None:
-            if tid_int in referenced_tids:
-                filtered_tensors.append(t)
-        else:
-            filtered_tensors.append(t)
-    tensors_batch = filtered_tensors
+    # A device tensor without a buffer has no device_id either, so storage_type decides; captures
+    # predating it fall back to device_id.
+    tensors_batch = [
+        t
+        for t in tensors_batch
+        if t.storage_type == "DEVICE" or t.device_id is not None or _tid_int(t.tensor_id) in referenced_tids
+    ]
 
     # Ensure py_io tensor IDs that don't have C++ graph entries get created.
     # When enable_logging=True, Python's set_output_tensor_id_decorator assigns
@@ -2006,18 +2004,8 @@ def _comparison_record_to_row(record: dict, rank: int = 0) -> tuple:
 
 
 def _tensor_record_to_row(tensor: dict, rank: int = 0) -> _TensorRow:
-    return _TensorRow(
-        tensor_id=int(tensor["tensor_id"]),
-        shape=tensor.get("shape"),
-        dtype=tensor.get("dtype"),
-        layout=tensor.get("layout"),
-        memory_config=tensor.get("memory_config"),
-        device_id=tensor.get("device_id"),
-        address=tensor.get("address"),
-        buffer_type=tensor.get("buffer_type"),
-        rank=rank,
-        storage_type=tensor.get("storage_type"),
-    )
+    # Same fields as a captured tensor node, so sidecars predating storage_type get the same inference
+    return _tensor_row_from_params(int(tensor["tensor_id"]), tensor, rank)
 
 
 def import_tensor_comparison_records(cursor: sqlite3.Cursor, comparison_data: dict, rank: int = 0) -> dict:
