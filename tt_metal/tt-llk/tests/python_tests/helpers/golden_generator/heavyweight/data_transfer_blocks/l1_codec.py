@@ -44,6 +44,7 @@ from helpers.tile_constants import (
     FACE_C_DIM,
     MAX_FACE_R_DIM,
     MAX_NUM_FACES,
+    MAX_NUM_FACES_C_DIM,
     calculate_tile_size_bytes,
 )
 from helpers.unpack import unpack_res_tiles
@@ -97,7 +98,7 @@ def tile_dimensions_for(num_faces: int, face_r_dim: int) -> list:
     Faces tile the 32-datum row before they stack, so up to two sit side by
     side and the rest go underneath: 1 face is 16 wide, 2 or more are 32.
     """
-    faces_c = min(num_faces, 2)
+    faces_c = min(num_faces, MAX_NUM_FACES_C_DIM)
     return [(num_faces // faces_c) * face_r_dim, faces_c * FACE_C_DIM]
 
 
