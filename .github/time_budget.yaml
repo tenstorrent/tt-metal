@@ -402,13 +402,13 @@ models:
     wh_llmbox: 90
     wh_galaxy: 80
     wh_llmbox_perf: 58
-    wh_n150: 205  # +130 Minimax H3 Ref2VA Memory Test (mock device, host JIT bound)
+    wh_n150: 75
     wh_n150_civ2: 12
     wh_n300: 43
     bh_p150: 30
     bh_p150b_civ2: 8  # VibeVoice-1.5B (PR #51447)
     bh_p300: 30
-    bh_quietbox_2: 25
+    bh_quietbox_2: 225  # +200 Minimax H3 Ref2VA Memory Test (mock device: snapshot download + host JIT)
   integration:
     wh_llmbox: 0
   device_perf:

@@ -275,17 +275,19 @@ still allocated at the end of the walk); the full warmup costs the compile-only 
 10 min warm and 55 min cold per the table above.
 
 The test matrix entry is `tests/pipeline_reorg/models_unit_tests.yaml` ("Minimax H3 Ref2VA Memory
-Test", model `minimax-h3`, `wh_n150`, tier 3, 130 min for a cold kernel cache on a cloud VM). The
-mock ignores the runner's silicon, so the N150 is only a host with the `/mnt/MLPerf` weights mount;
-the entry points the descriptor at the checked-in `tt-cluster-descriptors` 6U yaml, sets
-`HF_HOME=/mnt/MLPerf/huggingface` because the weight resolver searches `$HF_HOME/hub` (CI exports
-`HF_HUB_CACHE` only), and sets `MINIMAX_H3_DRAM_PROBE=1` so a failure comes with the per-owner
-attribution. Locally a missing snapshot skips the test; the CI entry sets
-`MINIMAX_H3_REQUIRE_WEIGHTS=1` so a runner without the snapshot fails instead of going green (the
-first N150 runs on 2026-10-06 skipped: `/mnt/MLPerf/huggingface/hub` had no MiniMaxAI/MiniMax-H3, and
-ref2va needs transformer_ref + text_encoder + vae + audio_vae, about 140 GB). A random-weights mode
-for the pipeline would lift the weights requirement and let the test run on the CPU-only fabric lane
-(`.github/workflows/fabric-cpu-only-tests-impl.yaml`) instead.
+Test", model `minimax-h3`, `bh_quietbox_2`, tier 3, 200 min). The mock ignores the runner's silicon,
+so the SKU is chosen for its weights mount: the quietbox runners map the YYZ4 HuggingFace tree to
+`/mnt/MLPerf/huggingface`. The entry points the descriptor at the checked-in `tt-cluster-descriptors`
+6U yaml, unsets `TT_METAL_WATCHER` (every CI job exports it, and on the mock the watcher's reads come
+back 0 and it aborts at mesh open), sets `HF_HOME=/mnt/MLPerf/huggingface` because the weight resolver
+searches `$HF_HOME/hub` (CI exports `HF_HUB_CACHE` only), allows the resolver to download the ~140 GB
+ref2va snapshot (transformer_ref, text_encoder, vae, audio_vae) into that mount when it is absent
+(`TT_DIT_ALLOW_HF_DOWNLOAD=1`, `HF_HUB_OFFLINE` unset; the populating run must be dispatched with
+`mlperf-read-only=false`), fails instead of skipping when the snapshot can neither be found nor fetched
+(`MINIMAX_H3_REQUIRE_WEIGHTS=1`; the first N150 attempts on 2026-10-06 skipped green because the N150
+VMs' `/mnt/MLPerf` had no snapshot), and sets `MINIMAX_H3_DRAM_PROBE=1` so a failure comes with the
+per-owner attribution. A random-weights mode for the pipeline would lift the weights requirement and
+let the test run on the CPU-only fabric lane (`.github/workflows/fabric-cpu-only-tests-impl.yaml`).
 
 The first run of this test was itself a demonstration. It was written with the t2va meshes'
 `l1_small_size=65536`, and 23 s after the mesh opened the vision tower's windowed SDPA failed with
