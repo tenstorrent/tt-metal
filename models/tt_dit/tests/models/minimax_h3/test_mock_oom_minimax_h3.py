@@ -63,7 +63,7 @@ pytestmark = pytest.mark.skipif(
 # Same L1_SMALL the ref2va gates open with (test_pipeline_ref2va_minimax_h3.MESHES, test_performance_minimax_h3
 # `_REF2VA_L1_SMALL`): ref2va's taps=3 video encoder clashes with a larger pool. The mock reproduces that clash
 # too: at 65536 the vision tower's windowed SDPA fails its static circular-buffer check 23 s after the mesh opens.
-_L1_SMALL = 16384
+_L1_SMALL = 65536  # DEMO: the t2va pool; the vision tower windowed SDPA clashes with it on ref2va
 MESHES = [
     pytest.param(shape, {**params, "l1_small_size": _L1_SMALL}, id=param.id, marks=param.marks)
     for param in [MESH_4X8_RING_WH]
