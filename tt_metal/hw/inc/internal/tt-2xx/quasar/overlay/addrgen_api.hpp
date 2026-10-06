@@ -413,7 +413,10 @@ inline __attribute__((always_inline)) uint64_t peek_src_addrgen() {
  */
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t pop_src_addrgen() {
-    return __builtin_riscv_ttrocc_addrgen_pop_src(ADDRGEN);
+    // Not __builtin_riscv_ttrocc_addrgen_pop_src(): that builtin sets xs1 with rs1 = x0, i.e. a pop amount of 0,
+    // and the address generator does not advance by one on 0 (seen on emu-quasar-2x3: the next address jumped by an
+    // arbitrary number of steps). The ROCC macro this replaced passed 1 explicitly; do the same.
+    return __builtin_riscv_ttrocc_addrgen_pop_x_src(ADDRGEN, 1);
 }
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t pop_src_addrgen(uint64_t pop_amount) {
@@ -438,7 +441,10 @@ inline __attribute__((always_inline)) uint64_t peek_dest_addrgen() {
  */
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t pop_dest_addrgen() {
-    return __builtin_riscv_ttrocc_addrgen_pop_dest(ADDRGEN);
+    // Not __builtin_riscv_ttrocc_addrgen_pop_dest(): that builtin sets xs1 with rs1 = x0, i.e. a pop amount of 0,
+    // and the address generator does not advance by one on 0 (seen on emu-quasar-2x3: the next address jumped by an
+    // arbitrary number of steps). The ROCC macro this replaced passed 1 explicitly; do the same.
+    return __builtin_riscv_ttrocc_addrgen_pop_x_dest(ADDRGEN, 1);
 }
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t pop_dest_addrgen(uint64_t pop_amount) {
