@@ -497,7 +497,12 @@ class DataTransferBlocks(ABC):
         """
         self._check_dest_format(dest_format)
         if current is not None:
-            values = current.float() + values.float()
+            # An integer Dest accumulates exactly on the device. float32 holds
+            # integers only to 2^24, so a Dest value past that loses its low
+            # bits here, before the narrow -- 16777217 + 1 would come back as
+            # 16777216. float64 covers Int32's whole range exactly.
+            wide = torch.float64 if dest_format.is_integer() else torch.float32
+            values = current.to(wide) + values.to(wide)
         return self._to_dest_storage(values, dest_format)
 
     def dest_format_for(
