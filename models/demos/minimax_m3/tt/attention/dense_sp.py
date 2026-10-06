@@ -13,8 +13,8 @@ over the ring), so there is no explicit AllGather here:
 
 Grouped V (cache stays n_kv heads, 1/chip at TP=4 — NO inflation). No balancing / zigzag for chunked
 prefill (is_balanced=False). Validated op-level by tests/unit/test_ring_joint_cache_read_sp_vs_ref.py; this
-is that mechanism as a callable model forward. Perf config q_chunk=128 / k_chunk=512 (the
-minimax3_gqa_causal_perf configuration in tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py).
+is that mechanism as a callable model forward. The model runs it at q_chunk=128 / k_chunk=1024, HiFi2
+(attention/prefill.py).
 """
 
 import ttnn

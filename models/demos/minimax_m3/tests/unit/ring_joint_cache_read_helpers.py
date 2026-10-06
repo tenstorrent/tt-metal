@@ -64,7 +64,7 @@ def sdpa_configs(mesh_device):
     prog = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),
         q_chunk_size=128,
-        k_chunk_size=512,
+        k_chunk_size=1024,
         exp_approx_mode=False,
     )
     kcfg = ttnn.WormholeComputeKernelConfig(

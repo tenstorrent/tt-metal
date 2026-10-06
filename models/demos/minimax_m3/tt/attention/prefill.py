@@ -238,7 +238,8 @@ def attention_forward(
         sp_prog = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),  # carve the CCL column
             q_chunk_size=128,
-            k_chunk_size=512,
+            # k1024 halves the softmax steps; the no-cache path's bf16 K/V CBs only fit k512 in L1.
+            k_chunk_size=1024 if kv_cache is not None else 512,
             exp_approx_mode=False,  # Pavle's minimax3_gqa_causal_perf
         )
         # HiFi2: the call is math-bound at q128; K and V sit in SrcA and keep full precision.
