@@ -211,7 +211,7 @@ public:
         hc.grid_width = grid_width_;
         hc.page_bytes = page_;
         hc.ring_pages = ring_pages_;
-        HostRegion& region = mesh_->impl().host_region();
+        HostRegion& region = *mesh_->impl().host_region();
         std::string err;
         try {
             region_base_ = region.reserved_base(kReservedCores);
@@ -246,7 +246,7 @@ public:
     // Unpin before the leg's destructor puts anonymous pages back over the arenas.
     void TearDown(benchmark::State& state) override {
         (void)state;
-        HostRegion& region = mesh_->impl().host_region();
+        HostRegion& region = *mesh_->impl().host_region();
         if (region.is_provisioned()) {
             region.release();
         }
