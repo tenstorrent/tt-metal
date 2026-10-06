@@ -52,9 +52,7 @@ class MiniMaxM3Config:
     in the DeepSeek config); the rest document M3's dimensions for readers."""
 
     EMB_SIZE = 6144  # hidden_size
-    # Max fabric packet payload: one bf16 token plus combine_fabric2d's 64 B routing tail, which it sends
-    # in a single packet. Mirrors the DeepSeekV3Config convention.
-    FABRIC_PAYLOAD_SIZE = 2 * EMB_SIZE + 64
+    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload (mirrors DeepSeekV3Config convention)
     NUM_LAYERS = 60
     NUM_ATTENTION_HEADS = 64
     NUM_KEY_VALUE_HEADS = 4

@@ -91,6 +91,4 @@ class GptOss20BConfig:
     QUANT_METHOD = "mxfp4"
 
     # Implementation-specific, not from the HF model config
-    # Max fabric packet payload: one bf16 token plus combine_fabric2d's 64 B routing tail, which it sends
-    # in a single packet. Must stay in sync with migration code.
-    FABRIC_PAYLOAD_SIZE = 2 * EMB_SIZE + 64
+    FABRIC_PAYLOAD_SIZE = EMB_SIZE
