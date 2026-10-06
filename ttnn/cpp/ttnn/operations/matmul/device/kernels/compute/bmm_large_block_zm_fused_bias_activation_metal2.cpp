@@ -273,6 +273,12 @@ void kernel_main() {
     constexpr uint32_t last_subblock_w_valid = out_subblock_w;
 #endif
     constexpr bool last_subblock_padded = last_subblock_w_valid < out_subblock_w;
+#ifdef ARCH_QUASAR
+    // Quasar's matmul LLK bakes ct_dim/rt_dim into the unpack/math MOPs at matmul_block_init; the
+    // narrowed matmul_block call below (effective_subblock_w < out_subblock_w) desynchronizes the
+    // src-register handshake and hangs. The factory must not pad per_core_N_compute on Quasar.
+    static_assert(!last_subblock_padded, "a narrowed last in1 subblock (padded per_core_N) is not supported on Quasar");
+#endif
 
 #ifdef SFPU_ACTIVATION
     constexpr KernelActivation activation_type = static_cast<KernelActivation>(get_arg(args::activation_type));
