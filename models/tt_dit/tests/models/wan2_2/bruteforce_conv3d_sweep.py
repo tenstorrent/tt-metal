@@ -730,6 +730,10 @@ def run_sweep(
     # -- Sweep --
     results = []
     best_blk = None
+    # SWEEP_CHECK_ALL=1 (correctness runs): time every blocking without the speed gates and check the
+    # output of the last one that ran against the table blocking, even when it is slower.
+    check_all = os.environ.get("SWEEP_CHECK_ALL") == "1"
+    last_ok_blk = None
     t_start = time.time()
     ok_count = 0
     fail_count = 0
@@ -747,7 +751,7 @@ def run_sweep(
             args = (device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, stride, padding, ckc, conv_kwargs)
 
             # Skip T>1 if the same spatial with T=1 was already way off best.
-            if t_blk > 1 and best_us < float("inf"):
+            if not check_all and t_blk > 1 and best_us < float("inf"):
                 t1_us = t1_baseline.get((cin, cout, h_blk, w_blk))
                 if t1_us is not None and t1_us > best_us * PROBE_THRESHOLD:
                     fail_count += 1
@@ -758,7 +762,7 @@ def run_sweep(
             # measurement. Trace-based so it is directly comparable to best_us.
             probe_us = _trace_us(args, TRACE_PROBE_ITERS, executes=1)
 
-            if best_us < float("inf") and probe_us > best_us * PROBE_THRESHOLD:
+            if not check_all and best_us < float("inf") and probe_us > best_us * PROBE_THRESHOLD:
                 fail_count += 1
                 results.append({"blocking": [cin, cout, t_blk, h_blk, w_blk], "us": probe_us, "status": "slow"})
                 continue
@@ -766,6 +770,7 @@ def run_sweep(
             # Precise trace-based measurement.
             us = _trace_us(args, trace_iters)
             ok_count += 1
+            last_ok_blk = (cin, cout, t_blk, h_blk, w_blk)
 
             if t_blk == 1:
                 t1_baseline[(cin, cout, h_blk, w_blk)] = us
@@ -789,8 +794,9 @@ def run_sweep(
             results.append({"blocking": [cin, cout, t_blk, h_blk, w_blk], "us": None, "status": "fail"})
 
     output_check = None
-    if halo is not None and best_blk is not None and tbl_args is not None:
-        cin, cout, t_blk, h_blk, w_blk = best_blk
+    check_blk = last_ok_blk if check_all else best_blk
+    if halo is not None and check_blk is not None and tbl_args is not None:
+        cin, cout, t_blk, h_blk, w_blk = check_blk
         best_args = (
             device,
             tt_input,
