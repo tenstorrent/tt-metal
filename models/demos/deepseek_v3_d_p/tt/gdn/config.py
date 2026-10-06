@@ -47,7 +47,4 @@ def gdn_program_config(
         gated_rms_output_dtype=ttnn.bfloat16,
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         tuned_projection_matmuls=False,
-        # A BF16 tap-sum carry perturbed a near-orthogonal q/k pair into a 0.70 output error on 2.4T real text
-        # (tt_metal_tracker-g1b.5.19); FP32 accumulation lowers GDN output and state error in every matrix cell.
-        fp32_convolution_accumulation=True,
     )

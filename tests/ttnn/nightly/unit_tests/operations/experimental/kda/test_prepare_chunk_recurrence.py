@@ -634,27 +634,15 @@ def _per_channel_gate_inputs(gate_case: str) -> tuple[torch.Tensor, ...]:
     return q, k, v, g, beta
 
 
-_FRACTIONAL_GATE_XFAIL = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="k_dec_t = k*exp(G_last/2 - G)*exp(G_last/2) loses precision when its anchored exponent arguments carry "
-    "fractional bits (|G_last| ~ 80-130): last-token k_dec_t peak error ~8-9e-3 > 3e-3 (tt_metal_tracker-g1b.7)",
-)
-
-
 # K3/GLM per-channel gates inside the supported range [-5, 0] (tt_metal_tracker-g1b.7, test T2). Unlike the
 # constant gates of the strong-decay test (exact in TF32), fractional gates exercise the precision of the prep's
 # exponent arguments. Peak gates are the strong-decay test's. The real-weight cases use the checkpoint's gate
-# weights with synthetic hidden states and the two most strongly decaying heads of the layer.
+# weights with synthetic hidden states and the two most strongly decaying heads of the layer. uniform-5 and
+# glm-layer0 own k_dec_t's suffix-sum exponent: the anchored form k*exp(G_last/2 - G)*exp(G_last/2) failed them with
+# last-token peak errors 9.0e-3 / 8.3e-3 > 3e-3; the suffix form gives 3.9e-4 / 3.6e-4 (tt_metal_tracker-g1b.4.18).
 @pytest.mark.parametrize(
     "gate_case",
-    [
-        pytest.param("uniform-5", id="uniform-5", marks=_FRACTIONAL_GATE_XFAIL),
-        pytest.param("const-5", id="const-5"),
-        pytest.param("mixed-5-weak", id="mixed-5-weak"),
-        pytest.param("k3-layer1", id="k3-layer1"),
-        pytest.param("glm-layer0", id="glm-layer0", marks=_FRACTIONAL_GATE_XFAIL),
-    ],
+    [pytest.param(case, id=case) for case in ("uniform-5", "const-5", "mixed-5-weak", "k3-layer1", "glm-layer0")],
 )
 def test_prepare_chunk_recurrence_per_channel_gate_range(device: ttnn.Device, gate_case: str) -> None:
     host_inputs = _per_channel_gate_inputs(gate_case)
