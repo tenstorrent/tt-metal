@@ -462,27 +462,33 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
  * @tparam BType: Broadcast type, must be NONE.
  * @tparam acc_to_dest: Must be false.
  * @tparam binary_reuse_dest: Must be NONE.
- * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums); taken per tile.
+ * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums): with a 32-bit DEST, four-face tiles take one DEST
+ *         slot handshake per block; otherwise the per tile calls.
+ * @tparam is_fp32_dest_acc_en: DEST holds 32-bit datums; the math thread's block call must receive the same value.
  * @param address: L1 address of the first tile of the block (16 B units).
  * @param num_tiles: Number of consecutive tiles, at least 1.
  * @param tile_stride_16B: Distance between the starts of consecutive tiles in L1 (16 B units), the operand's page size.
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @param num_faces: Faces per tile, the value the init received through its tensor shape.
- * @note Call @ref _llk_unpack_A_init_ with matching template args and transpose_of_faces 0 before this function.
+ * @param face_r_dim: Rows per face.
+ * @note Call @ref _llk_unpack_A_init_ with matching template args and transpose_of_faces 0 before this function. On the unpack to
+ *       dest path the math thread takes the same block through @ref _llk_math_eltwise_unary_datacopy_block_.
  */
 template <
     BroadcastType BType                          = BroadcastType::NONE,
     bool acc_to_dest                             = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest                          = false>
+    bool unpack_to_dest                          = false,
+    bool is_fp32_dest_acc_en                     = false>
 inline void _llk_unpack_A_block_(
     const std::uint32_t address,
     const std::uint32_t num_tiles,
     const std::uint32_t tile_stride_16B,
     const std::uint32_t unpack_src_format = 0,
     const std::uint32_t unpack_dst_format = 0,
-    const std::uint32_t num_faces         = 4)
+    const std::uint32_t num_faces         = 4,
+    const std::uint32_t face_r_dim        = FACE_R_DIM)
 {
     static_assert(
         BType == BroadcastType::NONE && !acc_to_dest && binary_reuse_dest == EltwiseBinaryReuseDestType::NONE,
@@ -492,13 +498,36 @@ inline void _llk_unpack_A_block_(
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
     LLK_ASSERT(is_valid_L1_address(address + (num_tiles - 1) * tile_stride_16B), "L1 address of the last tile must be in valid L1 memory region");
 
-    // Unpack to dest takes the per tile calls.
     if (should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format))
     {
+        // Four-face tiles lie back to back in L1 and in DEST: one DEST slot handshake for the block, the MOP once per tile, its Z
+        // counters walking from tile to tile. A 16-bit DEST and other face counts take the per tile calls.
+        if (!is_fp32_dest_acc_en || num_faces != 4)
+        {
+            for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
+            {
+                _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(address + tile * tile_stride_16B, unpack_src_format, unpack_dst_format);
+            }
+            return;
+        }
+        LLK_ASSERT(tile_stride_16B == face_r_dim * 16, "The unpack to dest block needs four-face 32-bit tiles back to back in L1");
+
+        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // Clear z/w start counters
+        volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
+        wait_for_next_context(2);
+        cfg[(unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
+        semaphore_post(semaphore::UNPACK_SYNC);
+        set_dst_write_addr(unp_cfg_context, unpack_dst_format);
+        wait_for_dest_available();
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+#pragma GCC unroll 0
         for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
         {
-            _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(address + tile * tile_stride_16B, unpack_src_format, unpack_dst_format);
+            ckernel::ckernel_template::run();
         }
+        t6_semaphore_get(semaphore::UNPACK_SYNC);
+        unpack_to_dest_tile_done(unp_cfg_context, unpack_dst_format);
+        switch_config_context(unp_cfg_context);
         return;
     }
 

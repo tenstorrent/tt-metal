@@ -83,6 +83,18 @@ inline void llk_math_eltwise_unary_datacopy_block(
         StateDiscard<std::uint32_t>(start_dst_index),
         StateDiscard<std::uint32_t>(ntiles)));
 
+    // Unpack to dest of three or more four-face 32-bit tiles into a 32-bit DEST: one handshake per block, as llk_unpack_A_block
+    // decides it on the unpack thread.
+    if constexpr (DST_ACCUM_MODE && unpack_to_dest && type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE) {
+        if (ntiles > 2 && is_32bit_input(unpack_src_format[operand_id], unpack_dst_format[operand_id]) &&
+            get_operand_num_faces(operand_id) == 4) {
+            LLK_ASSERT((start_dst_index + ntiles <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
+            _llk_math_eltwise_unary_datacopy_block_<type, DST_SYNC_MODE, DST_ACCUM_MODE, src_b_bcast_type, unpack_to_dest>(
+                start_dst_index, ntiles, unpack_src_format[operand_id], unpack_dst_format[operand_id], 4);
+            return;
+        }
+    }
+
     for (std::uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
         LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
 

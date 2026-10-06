@@ -92,7 +92,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const std::uint32_t tile_stride_16B = (buffer_A[1] - buffer_A[0]) >> 4;
                     for (int block_num = 0; block_num < NUM_BLOCKS; ++block_num)
                     {
-                        _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                        _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest, is_fp32_dest_acc_en>(
                             L1_ADDRESS(buffer_A[block_num * NUM_TILES_IN_BLOCK]),
                             NUM_TILES_IN_BLOCK,
                             tile_stride_16B,
@@ -193,6 +193,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (int block_num = 0; block_num < NUM_BLOCKS; ++block_num)
                     {
+#if UNPACK_BLOCK && defined(ARCH_BLACKHOLE)
+                        _llk_math_eltwise_unary_datacopy_block_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                            DST_INDEX, NUM_TILES_IN_BLOCK, formats.math, formats.math, num_faces);
+#else
                         for (std::uint32_t tile_num = 0; tile_num < NUM_TILES_IN_BLOCK; ++tile_num)
                         {
                             _llk_math_eltwise_unary_datacopy_wrapper_<
@@ -202,6 +206,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 BroadcastType::NONE,
                                 unpack_to_dest>(DST_INDEX + tile_num, formats.math, formats.math, num_faces);
                         }
+#endif
                     }
                 }
             }
@@ -243,17 +248,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (int block_num = 0; block_num < NUM_BLOCKS; ++block_num)
                 {
                     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-                    for (std::uint32_t tile_num = 0; tile_num < NUM_TILES_IN_BLOCK; ++tile_num)
+#if UNPACK_BLOCK && defined(ARCH_BLACKHOLE)
+                    if constexpr (unpack_to_dest)
                     {
-                        LLK_ASSERT(
-                            (DST_INDEX + tile_num < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                            "tile_num exceeds max dest tiles");
-                        _llk_math_eltwise_unary_datacopy_wrapper_<
-                            DataCopyType::A2D,
-                            DstSync::SyncHalf,
-                            is_fp32_dest_acc_en,
-                            BroadcastType::NONE,
-                            unpack_to_dest>(DST_INDEX + tile_num, formats.math, formats.math, num_faces);
+                        _llk_math_eltwise_unary_datacopy_block_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                            DST_INDEX, NUM_TILES_IN_BLOCK, formats.math, formats.math, num_faces);
+                    }
+                    else
+#endif
+                    {
+                        for (std::uint32_t tile_num = 0; tile_num < NUM_TILES_IN_BLOCK; ++tile_num)
+                        {
+                            LLK_ASSERT(
+                                (DST_INDEX + tile_num < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                                "tile_num exceeds max dest tiles");
+                            _llk_math_eltwise_unary_datacopy_wrapper_<
+                                DataCopyType::A2D,
+                                DstSync::SyncHalf,
+                                is_fp32_dest_acc_en,
+                                BroadcastType::NONE,
+                                unpack_to_dest>(DST_INDEX + tile_num, formats.math, formats.math, num_faces);
+                        }
                     }
                     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }

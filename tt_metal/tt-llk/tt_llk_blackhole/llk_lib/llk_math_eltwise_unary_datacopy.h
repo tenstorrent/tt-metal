@@ -324,6 +324,69 @@ inline void _llk_math_eltwise_unary_datacopy_(
 }
 
 /**
+ * @brief Copy a block of tiles into consecutive DEST slots; on the unpack-to-dest path with a 32-bit DEST a block of four-face 32-bit
+ *        tiles is one DEST slot handshake with the unpack thread instead of one per tile.
+ *
+ * @tparam type: Datacopy direction, values = <A2D/B2D>
+ * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
+ * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
+ * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @tparam unpack_to_dest: Unpack writes directly to dest (vs. via source registers).
+ * @param start_dst_index: DEST index of the first tile.
+ * @param num_tiles: Number of tiles, written to start_dst_index onwards.
+ * @param src_format: Source data format (DataFormat enum underlying value).
+ * @param dst_format: Destination data format (DataFormat enum underlying value).
+ * @param num_faces: Number of faces in the tile (must be 1, 2, or 4).
+ * @note The unpack thread must feed the same block with @ref _llk_unpack_A_block_ (same tile count, face count and
+ *       is_fp32_dest_acc_en).
+ */
+template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
+inline void _llk_math_eltwise_unary_datacopy_block_(
+    const std::uint32_t start_dst_index,
+    const std::uint32_t num_tiles,
+    const std::uint32_t src_format,
+    const std::uint32_t dst_format,
+    const std::uint32_t num_faces = 4)
+{
+    static_assert(
+        !unpack_to_dest || (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE), "_llk_unpack_A_block_ pairs with the plain A2D copy only");
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    if constexpr (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE && unpack_to_dest && is_fp32_dest_acc_en)
+    {
+        if (is_32bit_input(src_format, dst_format) && num_faces == 4)
+        {
+            // One DEST slot post for the block: the unpacker writes the tiles back to back from the first slot's address.
+            math_unpack_to_dest_math_ready();
+            math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(start_dst_index);
+            math::math_unpack_to_dest_tile_ready();
+
+            // budabackend#2730 zero flag clear, per face of every tile (see _llk_math_eltwise_unary_datacopy_)
+            const std::uint32_t dst_format_masked = masked_data_format(dst_format);
+            const int clear_fp32                  = static_cast<int>(
+                dst_format_masked == (std::uint32_t)DataFormat::Float32 || dst_format_masked == (std::uint32_t)DataFormat::Int32 ||
+                dst_format_masked == (std::uint32_t)DataFormat::UInt32);
+            const std::uint32_t tiles_per_bank = clear_fp32 ? 4 : 8;
+#pragma GCC unroll 0
+            for (std::uint32_t tile = 0; tile < num_tiles; tile++)
+            {
+                const std::uint32_t local_tile = (start_dst_index + tile) & (tiles_per_bank - 1);
+#pragma GCC unroll 0
+                for (std::uint32_t i = 0; i < num_faces; i++)
+                {
+                    TT_ZEROACC(p_zeroacc::CLR_16, clear_fp32, 1 /*clear zero flags*/, ADDR_MOD_3, get_dest_index_in_faces(local_tile, i));
+                }
+            }
+            return;
+        }
+    }
+    for (std::uint32_t tile = 0; tile < num_tiles; tile++)
+    {
+        _llk_math_eltwise_unary_datacopy_<type, Dst, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
+            start_dst_index + tile, src_format, dst_format, num_faces);
+    }
+}
+
+/**
  * @brief Program the address-mod slots for a datacopy: single-row and 8-row (or 4-row for UInt16) dest/source steps.
  *
  * The increment pattern depends on the datacopy direction (A2D walks SrcA, B2D walks SrcB) and broadcast type;
