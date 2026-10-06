@@ -30,7 +30,11 @@ from ttexalens.tt_exalens_lib import (
 
 from . import device as device_module
 from . import golden_generators as golden_generators_module
-from .chip_architecture import ChipArchitecture, get_chip_architecture
+from .chip_architecture import (
+    ChipArchitecture,
+    get_chip_architecture,
+    quasar_arch_variant,
+)
 from .data_format_inference import data_formats, is_format_combination_outlier
 from .device import (
     CHIP_DEFAULT_BOOT_MODES,
@@ -126,7 +130,9 @@ class TestConfig:
     ARCH_DEFINE: ClassVar[str]
     ARCH_LLK_ROOT: ClassVar[str]
     ARCH: ClassVar[str]
-    ARCH_SPECIFIC_OPTIONS: ClassVar[str] = ""
+    QUASAR_VECTOR_MARCH: ClassVar[str] = (
+        "-march=rv32im_zmmul_zaamo_zve32x_zvl128b_xtttensixqsr_xttzbkb"
+    )
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
 
@@ -362,6 +368,11 @@ class TestConfig:
                 )
 
     @staticmethod
+    def _quasar_variant_suffix() -> str:
+        variant = quasar_arch_variant()
+        return f"-{variant}" if variant else ""
+
+    @staticmethod
     def resolve_artefacts_path() -> Path:
         """Use $RUNNER_TEMP/tt-llk-build in GHA, else tempfile.gettempdir()/tt-llk-build."""
         runner_temp = os.environ.get("RUNNER_TEMP")
@@ -397,11 +408,15 @@ class TestConfig:
             (TestConfig.TOOL_PATH / "riscv-tt-elf-gcov-tool").absolute()
         )
 
-        TestConfig.SHARED_DIR = TestConfig.ARTEFACTS_DIR / "shared"
+        # A Quasar IP variant compiles the shared objects differently, so it gets its own directory.
+        variant_suffix = TestConfig._quasar_variant_suffix()
+        TestConfig.SHARED_DIR = TestConfig.ARTEFACTS_DIR / f"shared{variant_suffix}"
         TestConfig.SHARED_OBJ_DIR = TestConfig.SHARED_DIR / "obj"
         TestConfig.SHARED_ELF_DIR = TestConfig.SHARED_DIR / "elf"
         # Profiler builds need separate shared artefacts (trisc.cpp compiles differently with -DLLK_PROFILER)
-        TestConfig.PROFILER_SHARED_DIR = TestConfig.ARTEFACTS_DIR / "shared-profiler"
+        TestConfig.PROFILER_SHARED_DIR = (
+            TestConfig.ARTEFACTS_DIR / f"shared-profiler{variant_suffix}"
+        )
         TestConfig.PROFILER_SHARED_OBJ_DIR = TestConfig.PROFILER_SHARED_DIR / "obj"
         TestConfig.PROFILER_SHARED_ELF_DIR = TestConfig.PROFILER_SHARED_DIR / "elf"
         TestConfig.COVERAGE_INFO_DIR = TestConfig.ARTEFACTS_DIR / "coverage_info"
@@ -709,14 +724,22 @@ class TestConfig:
         Headers are spelled ``"ckernel.h"``, ``"experimental/foo.h"``,
         ``"cfg.h"``, ``"sfpu/..."`` — the same four roots ``setup_compilation_options``
         already adds for the in-tree copy.
+
+        For a ``tt_llk_quasar`` tree, prepend the selected variant's header root.
         """
         root = Path(arch_root)
-        return [
+        roots = [
             root / "llk_lib",
             root / "llk_lib" / "hal",
             root / "common" / "inc",
             root / "common" / "inc" / "sfpu",
         ]
+        if root.name == "tt_llk_quasar":
+            variant = quasar_arch_variant()
+            if variant:
+                # First, so the variant's headers shadow the base Quasar ones.
+                roots.insert(0, root / "arch" / variant)
+        return roots
 
     @staticmethod
     def add_include_dirs(*dirs, prepend: bool = True) -> None:
@@ -907,6 +930,7 @@ class TestConfig:
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
         requires_device_print: bool = False,
+        requires_vector_ext: bool = False,
         expected_nondeterministic: bool = False,
         include_dirs: list = None,
         src_include_dirs: list = None,
@@ -962,6 +986,7 @@ class TestConfig:
         self.compile_time_formats = compile_time_formats
         self.dest_acc = dest_acc
         self.requires_device_print = requires_device_print
+        self.requires_vector_ext = requires_vector_ext
         self.expected_nondeterministic = expected_nondeterministic
         # Per-variant header ``-I`` dirs land in ``local_options_compile`` (last
         # ``-I`` group), so they win over ``add_include_dirs`` and in-tree
@@ -1073,6 +1098,11 @@ class TestConfig:
         ):
             raise RuntimeError(
                 "You can't build profiler and coverage build at the same time, profiling tests will fail."
+            )
+
+        if self.requires_vector_ext and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
+            raise RuntimeError(
+                "requires_vector_ext=True is currently supported for Quasar-only"
             )
 
     def generate_runtime_args_struct(self):
@@ -1361,6 +1391,10 @@ class TestConfig:
 
         if self.profiler_build == ProfilerBuild.Yes:
             OPTIONS_COMPILE += "-DLLK_PROFILER "
+            # Marker ids hash __FILE__; strip the checkout location so they do not depend on it.
+            llk_roots = {TestConfig.LLK_ROOT, TestConfig.LLK_ROOT.resolve()}
+            for root in sorted(llk_roots):
+                OPTIONS_COMPILE += f"{shlex.quote(f'-fmacro-prefix-map={root}/=')} "
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
@@ -1709,6 +1743,11 @@ class TestConfig:
                 if not self.compile_time_formats:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"
 
+                # Only TRISC0 has the vector unit on Quasar. The flag is after
+                # ARCH_COMPUTE so it overrides the march implied by -mcpu.
+                if self.requires_vector_ext and name == "unpack":
+                    optional_kernel_flags += f" {TestConfig.QUASAR_VECTOR_MARCH}"
+
                 # EXPERIMENT: enable -DPERF_COUNTERS_COMPILED on TRISC.
                 # Quasar is intentionally excluded: it adds a 4th compute thread
                 # (SFPU) and the entry/exit barrier in `counters.h` posts a fixed
@@ -1752,7 +1791,6 @@ class TestConfig:
                 compile_command = TestConfig._argv(
                     [TestConfig.GXX],
                     TestConfig.ARCH_COMPUTE,
-                    TestConfig.ARCH_SPECIFIC_OPTIONS,
                     TestConfig.OPTIONS_ALL,
                     [f"-I{TestConfig.TESTS_WORKING_DIR}"],
                     src_include_prepend,
