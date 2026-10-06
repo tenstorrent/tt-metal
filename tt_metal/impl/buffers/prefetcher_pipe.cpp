@@ -277,7 +277,7 @@ void PrefetcherPipeSpaceImpl::write_page(const CoreRangeSet& cores, const std::v
             if (range.size() == 1) {
                 auto page_copy = page;
                 TT_FATAL(
-                    detail::WriteToDeviceL1(target_device, range.start_coord, config_address_, page_copy),
+                    tt::tt_metal::detail::WriteToDeviceL1(target_device, range.start_coord, config_address_, page_copy),
                     "Failed to write PrefetcherPipe config page to core {} on device {}",
                     range.start_coord.str(),
                     target_device->id());
