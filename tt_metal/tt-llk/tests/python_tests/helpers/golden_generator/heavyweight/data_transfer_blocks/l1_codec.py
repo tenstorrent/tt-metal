@@ -142,6 +142,7 @@ def pack_to_l1(
     face_r_dim: int = MAX_FACE_R_DIM,
     use_srcs: bool = False,
     dest_acc: bool = False,
+    twos_complement: bool = False,
 ) -> List[int]:
     """Lay `tensor` out in L1 as `l1_format`, returning the bytes.
 
@@ -153,6 +154,12 @@ def pack_to_l1(
     reads it back. `tile_count` defaults to what the tensor holds at this
     geometry, which must be a whole number of tiles; pass it explicitly to pack
     a prefix.
+
+    `twos_complement` matches the flag on :func:`unpack_from_l1`: the integer
+    packers write sign-magnitude by default and two's complement when it is
+    set, which is the layout the SFPU tests configure. Without it this side
+    could not produce the L1 the other side knows how to read. Formats whose
+    packer does not declare it ignore it, via :func:`_call_accepted`.
     """
     packer = PACKERS.get(l1_format)
     if packer is None:
@@ -190,6 +197,7 @@ def pack_to_l1(
             face_r_dim=face_r_dim,
             use_srcs=use_srcs,
             dest_acc=dest_acc,
+            twos_complement=twos_complement,
         )
         packed.extend(tile_bytes)
     return packed
@@ -247,7 +255,21 @@ def unpack_from_l1(
             l1_format, num_faces, face_r_dim, use_srcs, dest_acc
         )
     if tile_count is None:
-        tile_count = max(1, len(packed) // tile_stride_bytes)
+        # A partial trailing tile means the stride and the buffer disagree, and
+        # rounding it away decodes plausible values from a wrong layout -- a
+        # 1280-byte SrcS MX tile read at the 1152-byte stride would come back
+        # as one tile with no complaint. pack_to_l1 refuses a partial tile on
+        # the way in; refuse it on the way out too.
+        tile_count, remainder = divmod(len(packed), tile_stride_bytes)
+        if remainder or not tile_count:
+            raise ValueError(
+                f"{len(packed)} bytes is not a whole number of "
+                f"{tile_stride_bytes}-byte {l1_format} tiles at "
+                f"num_faces={num_faces}, face_r_dim={face_r_dim}, "
+                f"use_srcs={use_srcs}, dest_acc={dest_acc}. Pass "
+                f"tile_stride_bytes if the buffer uses a different stride, or "
+                f"tile_count to read a prefix."
+            )
     return unpack_res_tiles(
         packed,
         l1_format,
