@@ -1193,6 +1193,29 @@ PER_ROW_QUALITY_RULE = (
 )
 _PER_ROW_RULE_SLOT = "<PER_ROW_QUALITY_RULE>"
 
+# The hidden state the FIRST stage hands every later stage (a backbone's prefill, an encoder's
+# output) is held TIGHTER than the PCC target, on two axes. PCC alone let a systematic level error
+# through: a weight-format lever on a text-to-speech port inflated the residual stream's few massive
+# channels, the final norm then scaled every other channel down about 1 %, the state read PCC 0.991
+# against a 0.99 target with |tt|/|ref| 0.9895, every downstream check (teacher-forced onto the
+# pipeline's own trajectory) stayed green, and the speech came out quieter with words lost. The norm
+# ratio is what separates that from a faithful port (0.9994 once the lever was undone).
+_BACKBONE_PCC_FLOOR = 0.995  # min over rows
+_BACKBONE_NORM_TOL = 0.005  # |tt|/|ref| within this fraction of 1
+
+# Written ONCE and read by the builder's checklist (_TT_ONLY_CONTRACT), item 6 of OUTPUT CORRECTNESS.
+BACKBONE_FIDELITY_RULE = (
+    "For the hidden state the first stage hands every later stage (the backbone's prefill or the "
+    "encoder's output), assert against the reference BOTH a PCC floor of %.3f (minimum over rows, "
+    "above the target the other stages hold) AND a norm ratio |tt|/|ref| within %.1f%% of 1. A "
+    "systematic level error in that state passes the PCC target: a weight-format lever inflated the "
+    "residual stream's few massive channels, the final norm scaled every other channel down, and "
+    "every downstream check, teacher-forced onto the pipeline's own trajectory, stayed green while "
+    "the output lost level and words. The ratio catches it; the PCC floor alone does not."
+    % (_BACKBONE_PCC_FLOOR, 100.0 * _BACKBONE_NORM_TOL)
+)
+_BACKBONE_RULE_SLOT = "<BACKBONE_FIDELITY_RULE>"
+
 
 def _identifier_mentions(identifier: str, token: str) -> bool:
     """True when `identifier` names `token` -- as the whole name or one underscore-separated part.
@@ -2284,6 +2307,9 @@ OUTPUT CORRECTNESS (what the PCC/correctness test must ASSERT, not report):
      inventing absolute numbers.
      <PER_ROW_QUALITY_RULE>
 
+  6. HOLD THE FIRST STAGE'S HIDDEN STATE TIGHTER THAN THE PCC TARGET.
+     <BACKBONE_FIDELITY_RULE>
+
 ALLOWED HF USAGE (SETUP / REFERENCE ONLY — NOT the forward path):
   1. hf_model.config.<X> / hf_model.generation_config.<X> — pure attribute reads
   2. weight extraction at build time: hf_model.<X>.<Y>.weight / .bias
@@ -2299,6 +2325,13 @@ ALLOWED HF USAGE (SETUP / REFERENCE ONLY — NOT the forward path):
 _TT_ONLY_CONTRACT = _TT_ONLY_CONTRACT.replace(
     "     " + _PER_ROW_RULE_SLOT,
     textwrap.fill(PER_ROW_QUALITY_RULE, width=78, initial_indent="     ", subsequent_indent="     "),
+)
+# Item 6's sentence likewise (its hyphenated words stay whole, so the wrapped text reads back as the constant).
+_TT_ONLY_CONTRACT = _TT_ONLY_CONTRACT.replace(
+    "     " + _BACKBONE_RULE_SLOT,
+    textwrap.fill(
+        BACKBONE_FIDELITY_RULE, width=78, initial_indent="     ", subsequent_indent="     ", break_on_hyphens=False
+    ),
 )
 
 

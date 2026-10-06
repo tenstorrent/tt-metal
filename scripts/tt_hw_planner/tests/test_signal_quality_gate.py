@@ -163,3 +163,40 @@ def test_the_per_row_rule_reaches_the_rendered_builder_prompt(tmp_path: Path, mo
     monkeypatch.setattr(E, "_required_heads_block", lambda model_id, all_tasks: "")
     prompt = E._build_agent_prompt(model_id="some/model", demo_dir=tmp_path, pcc=0.99)
     assert _one_line(E.PER_ROW_QUALITY_RULE) in _one_line(prompt)
+
+
+# --------------------------------------------------------------------------------------------
+# the first stage's hidden state is held tighter than the PCC target, from one constant
+# --------------------------------------------------------------------------------------------
+
+
+def test_the_backbone_rule_holds_both_axes_from_its_constants() -> None:
+    """A PCC floor above the target AND a norm-ratio tolerance, with the numbers coming from the
+    named constants rather than being retyped; it says why PCC alone is not enough."""
+    rule = E.BACKBONE_FIDELITY_RULE
+    assert "first stage hands every later stage" in rule
+    assert ("PCC floor of %.3f" % E._BACKBONE_PCC_FLOOR) in rule
+    assert ("within %.1f%% of 1" % (100.0 * E._BACKBONE_NORM_TOL)) in rule
+    assert E._BACKBONE_PCC_FLOOR > 0.99, "the floor must sit above the default PCC target"
+    assert "the PCC floor alone does not" in rule
+
+
+def test_the_builder_s_checklist_carries_the_backbone_rule_as_item_6() -> None:
+    """It is spliced in from the one constant (wrapped), its slot is gone, and it sits inside OUTPUT
+    CORRECTNESS after the per-row rule and before the HF-usage section."""
+    contract = E._TT_ONLY_CONTRACT
+    assert E._BACKBONE_RULE_SLOT not in contract, "the backbone slot was never filled"
+    assert _one_line(E.BACKBONE_FIDELITY_RULE) in _one_line(contract)
+    item = contract.index("HOLD THE FIRST STAGE'S HIDDEN STATE TIGHTER THAN THE PCC TARGET")
+    assert contract.index("PER ROW") < item < contract.index("ALLOWED HF USAGE")
+
+
+def test_the_backbone_rule_is_written_once() -> None:
+    src = Path(E.__file__).read_text()
+    assert src.count("norm ratio |tt|/|ref| within") == 1
+
+
+def test_the_backbone_rule_reaches_the_rendered_builder_prompt(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(E, "_required_heads_block", lambda model_id, all_tasks: "")
+    prompt = E._build_agent_prompt(model_id="some/model", demo_dir=tmp_path, pcc=0.99)
+    assert _one_line(E.BACKBONE_FIDELITY_RULE) in _one_line(prompt)
