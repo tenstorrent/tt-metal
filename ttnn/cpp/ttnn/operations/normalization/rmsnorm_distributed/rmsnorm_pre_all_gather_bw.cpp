@@ -33,7 +33,7 @@ Tensor rms_norm_pre_all_gather_bw(
     auto local_sum = ttnn::sum(
         bw::x_times_gained(input_tensor, output_grad, rms, weight),
         /*dim_arg=*/3,
-        /*keep_dim=*/true,
+        /*keepdim=*/true,
         out_memory_config,
         kernel_config);
     return bw::to_stats_layout(local_sum);

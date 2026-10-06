@@ -46,7 +46,7 @@ Tensor x_times_gained(
 // Pad to one tile column, value in column 0, matching rms_norm_pre_all_gather.
 Tensor to_stats_layout(const Tensor& tensor);
 
-void validate_output_memory_config(const MemoryConfig& memory_config, std::string_view op_name);
+void validate_output_memory_config(const tt::tt_metal::MemoryConfig& memory_config, std::string_view op_name);
 
 // Returns {input_grad, weight_grad}; weight_grad is nullopt when weight is unset.
 // `scale` is E[x * g] over the full row. input_grad takes `memory_config`; weight_grad follows
@@ -57,7 +57,7 @@ std::vector<std::optional<Tensor>> apply_backward(
     const Tensor& rms,
     const Tensor& scale,
     const std::optional<const Tensor>& weight,
-    const MemoryConfig& memory_config,
+    const tt::tt_metal::MemoryConfig& memory_config,
     const DeviceComputeKernelConfig& compute_kernel_config);
 
 }  // namespace ttnn::operations::normalization::rmsnorm_distributed_bw
