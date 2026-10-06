@@ -82,8 +82,8 @@ def _build_shim() -> tuple[type, dict]:
     def _lines(node: ast.AST) -> str:
         return "".join(src_lines[node.lineno - 1 : node.end_lineno])
 
-    p2l = _lines(_top("pixel_to_latent_frame"))
-    methods = ("warmup_buffers", "_prealloc_trace_io", "generate")
+    p2l = _lines(_top("pixel_to_latent_frame")) + "\n\n" + _lines(_top("_env_on"))
+    methods = ("warmup_buffers", "_prealloc_trace_io", "generate", "_assert_trace_family_warmed")
     method_blocks = [_lines(_method(n)) for n in methods]
 
     shim_src = (
@@ -235,6 +235,41 @@ def test_warmup_encoders_off_skips_ref_encoders(monkeypatch):
     obj = _make_warmup_pipe()
     obj.warmup_buffers(num_frames=17, height=64, width=64, stages=("s1_ref", "s2_ref"), ref_num_frames=17)
     obj._warmup_ref_encode.assert_not_called()
+
+
+@pytest.mark.parametrize("t2v_only", [False, True])
+def test_warmup_t2v_only_skips_i2v_families(monkeypatch, t2v_only):
+    monkeypatch.delenv("LTX_ITER_FAST", raising=False)
+    monkeypatch.delenv("LTX_KF_APPEND_TOKEN", raising=False)
+    monkeypatch.setenv("LTX_WARMUP_T2V_ONLY", "1" if t2v_only else "0")
+    obj = _make_warmup_pipe()
+    obj.transformer = SimpleNamespace(image_conditioning=True)
+    obj.warmup_buffers(num_frames=17, height=64, width=64, capture_traced=True)
+
+    pre = {c.args[0] for c in obj._prealloc_trace_io.call_args_list}
+    # The per-token warmup passes the base key plus a frame-0 pin; _denoise_no_guidance adds _i2v.
+    denoised = {
+        c.kwargs["trace_key"] for c in obj._denoise_no_guidance.call_args_list if not c.kwargs.get("image_conds")
+    }
+    pinned = {c.kwargs["trace_key"] for c in obj._denoise_no_guidance.call_args_list if c.kwargs.get("image_conds")}
+    assert {"s1", "s2"} <= pre and {"s1", "s2"} <= denoised, "the scalar family is always warmed"
+    if t2v_only:
+        assert not ({"s1_i2v", "s2_i2v"} & pre) and not pinned, "LTX_WARMUP_T2V_ONLY=1 must skip the i2v family"
+    else:
+        assert {"s1_i2v", "s2_i2v"} <= pre and {"s1", "s2"} <= pinned, "default warmup captures the i2v family"
+    assert obj._warmup_t2v_only is t2v_only
+
+
+def test_t2v_only_worker_refuses_uncaptured_i2v_family(expect_error):
+    Pipe, _ns = _build_shim()
+    obj = Pipe()
+    obj._trace_state = {"s1": object(), "s2": object()}
+    obj._assert_trace_family_warmed("s1_i2v", traced=True)  # default warmup: no refusal
+    obj._warmup_t2v_only = True
+    obj._assert_trace_family_warmed("s1", traced=True)
+    obj._assert_trace_family_warmed("s1_i2v", traced=False)  # eager gens never capture
+    with expect_error(RuntimeError, r"LTX_WARMUP_T2V_ONLY"):
+        obj._assert_trace_family_warmed("s1_i2v", traced=True)
 
 
 def test_warmup_ref_denoise_uses_grid_initial_latent(monkeypatch):
