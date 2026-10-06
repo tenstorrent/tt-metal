@@ -458,6 +458,15 @@ def sfpu_binary(
     # variant near its tolerance fail unreproducibly.
     torch.manual_seed(0)
 
+    # On Blackhole the harness runs the Int32 add and sub in two's complement, as
+    # add_int_tile and sub_int_tile do, so their operands are encoded that way too.
+    if (
+        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and formats.input_format == DataFormat.Int32
+        and mathop in (MathOperation.SfpuElwadd, MathOperation.SfpuElwsub)
+    ):
+        twos_complement = True
+
     # FP32 destination tiles occupy twice the register space. Keep four full destination
     # blocks for those formats and four blocks of eight tiles for the remaining formats.
     if input_dimensions is None:
@@ -1089,10 +1098,11 @@ def test_eltwise_binary_sfpu_int_arith_across_zero(formats, dest_acc, mathop):
     this file reaches.
 
     Unlike test_eltwise_binary_sfpu_int_comparison_across_zero above, this one keeps the
-    sign-magnitude default rather than passing twos_complement=True. These kernels are
-    sign-magnitude end to end -- operands in, result out -- so two's-complement stimuli are
-    read back with the sign bit as a magnitude bit and every negative lane diverges. The
-    comparison ops can take either encoding on the way out only because they emit 0 or 1.
+    sign-magnitude default rather than passing twos_complement=True. On Wormhole these kernels
+    are sign-magnitude end to end -- operands in, result out -- so two's-complement stimuli are
+    read back with the sign bit as a magnitude bit and every negative lane diverges. On
+    Blackhole the harness runs them in two's complement and sfpu_binary switches the stimuli.
+    The comparison ops can take either encoding on the way out only because they emit 0 or 1.
     """
     spec_A, spec_B = _int_arith_negative_spec()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
@@ -1112,9 +1122,10 @@ def test_eltwise_binary_sfpu_int_arith_wide_signed(formats, dest_acc, mathop):
     defect usually takes -- goes unseen.
 
     Bounds are +-2**29 so neither the sum nor the difference can leave the +-(2**31 - 1) that
-    sign-magnitude Dst represents. A and B draw distinct values because the paired face walk
-    advances one shared RNG stream across faces, not because of the per-spec seed, which
-    generate_face ignores whenever an external generator is supplied.
+    sign-magnitude Dst represents (Wormhole; Blackhole runs them in two's complement). A and B
+    draw distinct values because the paired face walk advances one shared RNG stream across
+    faces, not because of the per-spec seed, which generate_face ignores whenever an external
+    generator is supplied.
     """
     bound = float(2**29)
     spec_A = StimuliSpec(

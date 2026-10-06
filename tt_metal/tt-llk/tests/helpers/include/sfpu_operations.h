@@ -1650,7 +1650,12 @@ void call_binary_sfpu_operation_init()
     }
     else if constexpr (BINOP == BinaryOp::POW)
     {
+#if defined(ARCH_BLACKHOLE)
+        // The init of calculate_sfpu_binary_pow, the body power_binary_tile runs.
+        SFPU_BINARY_INIT_FN(power, sfpu_binary_pow_init, (APPROXIMATION_MODE));
+#else
         SFPU_BINARY_INIT_FN(power, sfpu_binary_init, (APPROXIMATION_MODE, BINOP));
+#endif
     }
     else if constexpr (BINOP == BinaryOp::ADD_TOP_ROW)
     {
@@ -1905,17 +1910,38 @@ void call_binary_sfpu_operation(
             dst_index_out,
             vector_mode);
     }
+#if defined(ARCH_BLACKHOLE)
+    else if constexpr (BINOP == BinaryOp::POW)
+    {
+        // The body power_binary_tile runs; the generic loop's POW arm has no compute API caller.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_binary_pow,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+#endif
     else if constexpr (
         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::XLOGY ||
         BINOP == BinaryOp::POW)
     {
+#if defined(ARCH_BLACKHOLE)
+        // Two's complement in DEST, as add_int_tile and sub_int_tile pass.
+        constexpr bool int32_sign_magnitude = false;
+#else
+        constexpr bool int32_sign_magnitude = true;
+#endif
         if constexpr (BINOP == BinaryOp::ADD && MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
         {
             SFPU_BINARY_CALL(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 _add_int_,
-                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, true /* SIGN_MAGNITUDE_FORMAT */),
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, int32_sign_magnitude),
                 dst_index_in0,
                 dst_index_in1,
                 dst_index_out,
@@ -1930,7 +1956,7 @@ void call_binary_sfpu_operation(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 _sub_int_,
-                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, true /* SIGN_MAGNITUDE_FORMAT */),
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, int32_sign_magnitude),
                 dst_index_in0,
                 dst_index_in1,
                 dst_index_out,
