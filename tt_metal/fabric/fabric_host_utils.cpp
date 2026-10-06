@@ -53,6 +53,16 @@ HostName hostname_for_mapping_export(const HostName& hostname, bool mock_enabled
     return hostname.substr(0, pos);
 }
 
+// yaml-cpp does not terminate a document. Files copied into the repo as goldens are rejected by
+// pre-commit's end-of-file-fixer without a trailing newline.
+void write_yaml_document(std::ostream& out, const YAML::Emitter& emitter) {
+    const char* text = emitter.c_str();
+    out << text;
+    if (emitter.size() == 0 || text[emitter.size() - 1] != '\n') {
+        out << '\n';
+    }
+}
+
 }  // namespace
 
 bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
@@ -323,7 +333,7 @@ void serialize_asic_to_fabric_node_mapping_to_file(
     emitter << YAML::EndSeq;
     emitter << YAML::EndMap;
     emitter << YAML::EndMap;
-    out_file << emitter.c_str();
+    write_yaml_document(out_file, emitter);
     out_file.close();
 
     log_debug(tt::LogFabric, "Serialized ASIC to Fabric node ID mapping to file: {}", output_file_path.string());
@@ -394,7 +404,7 @@ void serialize_intermesh_port_assignment_to_file(
     }
     emitter << YAML::EndMap;
     emitter << YAML::EndMap;
-    out_file << emitter.c_str();
+    write_yaml_document(out_file, emitter);
     out_file.close();
 
     log_debug(tt::LogFabric, "Serialized inter-mesh port assignment to file: {}", output_file_path.string());

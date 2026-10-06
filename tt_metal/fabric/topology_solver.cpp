@@ -127,9 +127,6 @@ std::map<MeshId, AdjacencyGraph<tt::tt_metal::PhysicalNodeId>> build_adjacency_g
     const std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>& physical_node_id_to_mesh_rank) {
     std::map<MeshId, AdjacencyGraph<tt::tt_metal::PhysicalNodeId>> adjacency_map;
 
-    // The graph is keyed on addresses; the descriptor answers questions about its own ASIC labels.
-    const auto node_index = tt::tt_metal::build_physical_node_id_index(physical_system_descriptor);
-
     // Build a set of nodes for each mesh based on mesh rank mapping
     std::map<MeshId, std::unordered_set<tt::tt_metal::PhysicalNodeId>> mesh_nodes;
     for (const auto& [mesh_id, node_map] : physical_node_id_to_mesh_rank) {
@@ -143,19 +140,19 @@ std::map<MeshId, AdjacencyGraph<tt::tt_metal::PhysicalNodeId>> build_adjacency_g
                                        const std::unordered_set<tt::tt_metal::PhysicalNodeId>& mesh_node_ids) {
             std::vector<tt::tt_metal::PhysicalNodeId> adjacents;
 
-            const auto asic_it = node_index.node_id_to_asic_id.find(node_id);
-            if (asic_it == node_index.node_id_to_asic_id.end()) {
+            const auto asic_id_opt = physical_system_descriptor.find_asic_id(node_id);
+            if (!asic_id_opt.has_value()) {
                 // The rank map named an address the descriptor does not describe; it has no edges.
                 return adjacents;
             }
-            const tt::tt_metal::AsicID asic_id = asic_it->second;
+            const tt::tt_metal::AsicID asic_id = *asic_id_opt;
 
             for (const auto& neighbor : physical_system_descriptor.get_asic_neighbors(asic_id)) {
                 // Skip self-connections
                 if (neighbor == asic_id) {
                     continue;
                 }
-                const auto neighbor_node_id = node_index.asic_id_to_node_id.at(neighbor);
+                const auto neighbor_node_id = physical_system_descriptor.get_physical_node_id(neighbor);
                 // Make sure that the neighbor is in the mesh
                 if (mesh_node_ids.contains(neighbor_node_id)) {
                     // Add each neighbor multiple times based on number of ethernet connections

@@ -50,6 +50,7 @@ PhysicalSystemDescriptor::PhysicalSystemDescriptor(const std::string& mock_proto
     target_device_type_ = proto_desc.get_target_device_type();
     system_graph_ = std::move(proto_desc.get_system_graph());
     asic_descriptors_ = std::move(proto_desc.get_asic_descriptors());
+    node_id_to_asic_id_ = std::move(proto_desc.node_id_to_asic_id_);
     host_to_mobo_name_ = std::move(proto_desc.get_host_mobo_name_map());
     host_to_rank_ = std::move(proto_desc.get_host_to_rank_map());
     exit_node_connection_table_ = std::move(proto_desc.get_exit_node_connection_table());
@@ -67,6 +68,7 @@ PhysicalSystemDescriptor::PhysicalSystemDescriptor(const tt::fabric::proto::Phys
     target_device_type_ = proto_desc.get_target_device_type();
     system_graph_ = std::move(proto_desc.get_system_graph());
     asic_descriptors_ = std::move(proto_desc.get_asic_descriptors());
+    node_id_to_asic_id_ = std::move(proto_desc.node_id_to_asic_id_);
     host_to_mobo_name_ = std::move(proto_desc.get_host_mobo_name_map());
     host_to_rank_ = std::move(proto_desc.get_host_to_rank_map());
     exit_node_connection_table_ = std::move(proto_desc.get_exit_node_connection_table());
@@ -89,6 +91,7 @@ void PhysicalSystemDescriptor::clear() {
     system_graph_.asic_connectivity_graph.clear();
     system_graph_.host_connectivity_graph.clear();
     asic_descriptors_.clear();
+    node_id_to_asic_id_.clear();
     host_to_mobo_name_.clear();
     host_to_rank_.clear();
     exit_node_connection_table_.clear();
@@ -108,7 +111,7 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
         system_graph_.host_connectivity_graph[host_name] = std::move(host_connectivity);
     }
     for (auto& [asic_id, asic_desc] : other.get_asic_descriptors()) {
-        asic_descriptors_[asic_id] = std::move(asic_desc);
+        add_asic_descriptor(asic_id, std::move(asic_desc));
     }
     for (auto& [host_name, mobo_name] : other.get_host_mobo_name_map()) {
         host_to_mobo_name_[host_name] = std::move(mobo_name);
@@ -478,6 +481,53 @@ std::string PhysicalSystemDescriptor::get_hostname_for_rank(uint32_t rank) const
 std::string PhysicalSystemDescriptor::get_host_name_for_asic(AsicID asic_id) const {
     TT_FATAL(asic_descriptors_.contains(asic_id), "No ASIC descriptor found for asic_id {}", asic_id);
     return asic_descriptors_.at(asic_id).host_name;
+}
+
+void PhysicalSystemDescriptor::add_asic_descriptor(AsicID asic_id, ASICDescriptor descriptor) {
+    if (is_unset(descriptor.physical_node_id)) {
+        descriptor.physical_node_id =
+            make_physical_node_id(descriptor.host_name, descriptor.tray_id, descriptor.asic_location);
+    }
+    if (const auto existing = asic_descriptors_.find(asic_id); existing != asic_descriptors_.end()) {
+        node_id_to_asic_id_.erase(existing->second.physical_node_id);
+    }
+    const auto [it, inserted] = node_id_to_asic_id_.emplace(descriptor.physical_node_id, asic_id);
+    TT_FATAL(
+        inserted,
+        "Two ASICs in the physical system descriptor share the address {}: ids {} and {}. An address names one "
+        "chip, so this would merge them into a single topology node.",
+        descriptor.physical_node_id,
+        it->second,
+        asic_id);
+    asic_descriptors_[asic_id] = std::move(descriptor);
+}
+
+std::optional<AsicID> PhysicalSystemDescriptor::find_asic_id(const PhysicalNodeId& node_id) const {
+    const auto it = node_id_to_asic_id_.find(node_id);
+    if (it == node_id_to_asic_id_.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+AsicID PhysicalSystemDescriptor::get_asic_id(const PhysicalNodeId& node_id) const {
+    const auto asic_id = find_asic_id(node_id);
+    TT_FATAL(asic_id.has_value(), "No ASIC at address {}", node_id);
+    return *asic_id;
+}
+
+std::optional<PhysicalNodeId> PhysicalSystemDescriptor::find_physical_node_id(AsicID asic_id) const {
+    const auto it = asic_descriptors_.find(asic_id);
+    if (it == asic_descriptors_.end() || is_unset(it->second.physical_node_id)) {
+        return std::nullopt;
+    }
+    return it->second.physical_node_id;
+}
+
+PhysicalNodeId PhysicalSystemDescriptor::get_physical_node_id(AsicID asic_id) const {
+    const auto node_id = find_physical_node_id(asic_id);
+    TT_FATAL(node_id.has_value(), "No ASIC descriptor found for asic_id {}", asic_id);
+    return *node_id;
 }
 
 UID PhysicalSystemDescriptor::get_u_id(const std::string& /*hostname*/) {

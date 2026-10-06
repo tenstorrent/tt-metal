@@ -46,7 +46,7 @@ protected:
 
 void fill_hosts_from_psd(TopologyMappingConfig& config, const tt::tt_metal::PhysicalSystemDescriptor& psd) {
     for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
-        config.hostname_to_asics[desc.host_name].insert(tt::tt_metal::node_id_from_asic_descriptor(desc));
+        config.hostname_to_asics[desc.host_name].insert(desc.physical_node_id);
     }
 }
 
@@ -54,7 +54,7 @@ std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> unset_a
     const tt::tt_metal::PhysicalSystemDescriptor& psd, MeshId mesh = MeshId{0}) {
     std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> ranks;
     for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
-        ranks[mesh][tt::tt_metal::node_id_from_asic_descriptor(desc)] = ::tt::tt_fabric::MESH_HOST_RANK_UNSET;
+        ranks[mesh][desc.physical_node_id] = ::tt::tt_fabric::MESH_HOST_RANK_UNSET;
     }
     return ranks;
 }
@@ -155,10 +155,9 @@ groupings {
 // what makes the expectations readable. Translate back through the descriptor to keep them that way.
 std::vector<std::set<uint64_t>> mapped_asic_footprints(
     const TopologyMappingResult& mapping, const tt::tt_metal::PhysicalSystemDescriptor& psd) {
-    const auto node_index = tt::tt_metal::build_physical_node_id_index(psd);
     std::map<MeshId, std::set<uint64_t>> per_mesh;
     for (const auto& [fabric_node, asic] : mapping.fabric_node_to_physical) {
-        per_mesh[fabric_node.mesh_id].insert(*node_index.node_id_to_asic_id.at(asic));
+        per_mesh[fabric_node.mesh_id].insert(*psd.get_asic_id(asic));
     }
     std::vector<std::set<uint64_t>> footprints;
     footprints.reserve(per_mesh.size());
@@ -229,8 +228,7 @@ TopologyMappingResult map_sp4_blitz_pipeline(const std::filesystem::path& mgd_pa
     }
     if (!config.pinnings.empty()) {
         for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
-            config.asic_positions[tt::tt_metal::node_id_from_asic_descriptor(desc)] =
-                std::make_pair(desc.tray_id, desc.asic_location);
+            config.asic_positions[desc.physical_node_id] = std::make_pair(desc.tray_id, desc.asic_location);
         }
     }
     for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
@@ -535,12 +533,11 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         EXPECT_EQ(mapping.fabric_node_to_physical.size(), 2u);
         verify_bidirectional_consistency(mapping);
 
-        const auto node_index = tt::tt_metal::build_physical_node_id_index(psd);
         const auto footprints = mapped_asic_footprints(mapping, psd);
         ASSERT_EQ(footprints.size(), 1u);
         for (const uint64_t asic_id : footprints.front()) {
-            EXPECT_TRUE(config.placement_asic_allowlist.contains(
-                node_index.asic_id_to_node_id.at(tt::tt_metal::AsicID{asic_id})))
+            EXPECT_TRUE(
+                config.placement_asic_allowlist.contains(psd.get_physical_node_id(tt::tt_metal::AsicID{asic_id})))
                 << "mesh seated off the local host " << local_host << " (ASIC " << asic_id << ")";
         }
     }

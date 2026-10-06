@@ -268,7 +268,6 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     system_graph.host_connectivity_graph = proto_to_host_topology(proto_desc.system_graph());
 
     // Convert ASIC descriptors
-    auto& asic_descriptors = descriptor->get_asic_descriptors();
     for (const auto& proto_asic_map : proto_desc.asic_descriptors()) {
         AsicID asic_id{proto_asic_map.asic_id()};
         ASICDescriptor asic_desc;
@@ -284,8 +283,10 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
         asic_desc.umd_unique_id =
             proto_asic_desc.has_umd_unique_id() ? proto_asic_desc.umd_unique_id() : static_cast<ChipId>(-1);
         asic_desc.host_name = proto_asic_desc.host_name();
+        asic_desc.physical_node_id =
+            make_physical_node_id(asic_desc.host_name, asic_desc.tray_id, asic_desc.asic_location);
 
-        asic_descriptors[asic_id] = asic_desc;
+        descriptor->add_asic_descriptor(asic_id, std::move(asic_desc));
     }
 
     // Convert host to mobo name map

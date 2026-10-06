@@ -133,7 +133,7 @@ MultiMeshSolutionEnumerator make_topology_mapping_enumerator(
 
     // Keyed by address, matching the physical graph the solver is handed.
     for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
-        config.hostname_to_asics[desc.host_name].insert(tt::tt_metal::node_id_from_asic_descriptor(desc));
+        config.hostname_to_asics[desc.host_name].insert(desc.physical_node_id);
     }
 
     std::vector<MultiMeshMappingPart> parts(mesh_graph_descriptors.size());
@@ -257,9 +257,6 @@ std::vector<RankBindingConfig> extract_rank_bindings(
     // mesh_id -> hostname -> mesh_host_rank -> AsicGrouping
     std::map<int, std::map<std::string, std::map<int, AsicGrouping>>> mesh_host_asics;
 
-    // The solver returned addresses; the descriptor is still queried by its own ASIC labels.
-    const auto node_index = tt::tt_metal::build_physical_node_id_index(psd);
-
     for (const auto& [fabric_node_id, physical_node_id] : mapping_result.fabric_node_to_physical) {
         const MeshId mesh_id_local = fabric_node_id.mesh_id;
         tt::ChipId chip_id_from_fabric_node = static_cast<tt::ChipId>(fabric_node_id.chip_id);
@@ -278,7 +275,7 @@ std::vector<RankBindingConfig> extract_rank_bindings(
 
         // Emit the hostname exactly as the descriptor spells it, not the canonical form carried in the
         // node id: this string goes into the generated rank bindings, which name real hosts.
-        const AsicID asic_id = node_index.node_id_to_asic_id.at(physical_node_id);
+        const AsicID asic_id = psd.get_asic_id(physical_node_id);
         std::string hostname = psd.get_host_name_for_asic(asic_id);
         tt::ChipId chip_id = psd.get_umd_unique_id(asic_id);
 

@@ -447,9 +447,6 @@ void TopologyMapper::initialize_chip_topology_mapping_map() {
     const auto my_rank = static_cast<int>(*distributed_context_.get().rank());
 #endif
 
-    // Address -> UMD identity, for the two payload fields the solve does not produce.
-    const auto live_index = tt::tt_metal::build_physical_node_id_index(live_descriptor_);
-
     // Create MappedChipInfo entry for each ASIC
     for (const auto& [asic_id, asic_descriptor] : asic_descriptors) {
         // Fill with available information
@@ -457,17 +454,14 @@ void TopologyMapper::initialize_chip_topology_mapping_map() {
         MappedChipInfo info;
         // The address, which is what every physical table here is keyed on. It comes from the
         // descriptor's position fields, so it is the same on the factory and the discovered path.
-        info.physical_node_id = tt::tt_metal::node_id_from_asic_descriptor(asic_descriptor);
+        info.physical_node_id = asic_descriptor.physical_node_id;
         info.asic_id = asic_id;
         // The UMD identity of this chip, resolved by address rather than carried over from the
         // descriptor's own label. On the discovered path the two are the same value and this is an
         // identity; on the factory path the label is file order and means nothing to UMD, so the
         // address is the only way across.
-        {
-            const auto live_asic = live_index.node_id_to_asic_id.find(info.physical_node_id);
-            if (live_asic != live_index.node_id_to_asic_id.end()) {
-                info.asic_id = live_asic->second;
-            }
+        if (const auto live_asic = live_descriptor_.find_asic_id(info.physical_node_id); live_asic.has_value()) {
+            info.asic_id = *live_asic;
         }
         info.hostname = asic_descriptor.host_name;
         info.mpi_rank = (!info.hostname.empty())
@@ -589,7 +583,7 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
         // Hostname grouping and discovery ASIC positions (pinnings + logical-mesh-0 anchor preferences).
         // Keyed by address, matching the physical graph the solver is about to be handed.
         for (const auto& [asic_id, desc] : physical_system_descriptor_.get_asic_descriptors()) {
-            const auto node_id = tt::tt_metal::node_id_from_asic_descriptor(desc);
+            const auto node_id = desc.physical_node_id;
             config.hostname_to_asics[desc.host_name].insert(node_id);
             config.asic_positions[node_id] = std::make_pair(desc.tray_id, desc.asic_location);
         }
@@ -609,8 +603,8 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
         if (generate_mapping_locally_ && physical_system_descriptor_.get_all_hostnames().size() > 1) {
             for (const auto& local_asic :
                  physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name())) {
-                config.placement_asic_allowlist.insert(tt::tt_metal::node_id_from_asic_descriptor(
-                    physical_system_descriptor_.get_asic_descriptors().at(local_asic)));
+                config.placement_asic_allowlist.insert(
+                    physical_system_descriptor_.get_asic_descriptors().at(local_asic).physical_node_id);
             }
         }
         const auto mapping_result = pgd.has_value()
@@ -712,12 +706,11 @@ TopologyMapper::build_physical_node_id_to_mesh_rank_mapping() {
         auto mpi_rank = static_cast<int>(*host_rank);
 
         // Get asics on current host
-        const auto node_index = tt::tt_metal::build_physical_node_id_index(physical_system_descriptor_);
         auto asics =
             physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name());
         for (const auto& mesh_id : mesh_graph_.get_all_mesh_ids()) {
             for (const auto& asic : asics) {
-                mapping[mesh_id][node_index.asic_id_to_node_id.at(asic)] = host_rank;
+                mapping[mesh_id][physical_system_descriptor_.get_physical_node_id(asic)] = host_rank;
                 mesh_host_rank_to_mpi_rank_[std::make_pair(mesh_id, host_rank)] = mpi_rank;
             }
         }
@@ -780,7 +773,6 @@ TopologyMapper::build_physical_node_id_to_mesh_rank_mapping() {
     }
 
     // Step 4: For each MPI rank in the gathered data, assign mesh host rank to ASICs
-    const auto node_index = tt::tt_metal::build_physical_node_id_index(physical_system_descriptor_);
     for (const auto& [gathered_mpi_rank, mesh_bindings] : mpi_rank_to_mesh_bindings) {
         // Get the hostname for this MPI rank
         auto host_it = mpi_rank_to_host.find(gathered_mpi_rank);
@@ -796,7 +788,7 @@ TopologyMapper::build_physical_node_id_to_mesh_rank_mapping() {
             // Use the host_rank directly from the gathered data (which comes from local_mesh_binding_.host_rank)
             // This is the mesh host rank set via TT_MESH_HOST_RANK environment variable
             for (const auto& asic : asics) {
-                mapping[mesh_id][node_index.asic_id_to_node_id.at(asic)] = host_rank;
+                mapping[mesh_id][physical_system_descriptor_.get_physical_node_id(asic)] = host_rank;
             }
         }
     }
@@ -1756,7 +1748,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> physical_node_id_to_mesh_rank;
     physical_node_id_to_mesh_rank[MeshId{0}] = std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>();
     for (const auto& [asic_id, desc] : physical_system_descriptor.get_asic_descriptors()) {
-        physical_node_id_to_mesh_rank[MeshId{0}][tt::tt_metal::node_id_from_asic_descriptor(desc)] = MeshHostRankId{0};
+        physical_node_id_to_mesh_rank[MeshId{0}][desc.physical_node_id] = MeshHostRankId{0};
     }
 
     auto physical_adjacency_matrix = tt::tt_fabric::build_adjacency_graph_physical(
