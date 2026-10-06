@@ -45,12 +45,10 @@ class Qwen38ForCausalLM:
     _PREFIX_SNAPSHOTS = MAX_PREFIX_SNAPSHOTS // 2
 
     model_capabilities = {
-        # The 48 GDN layers summarise one slot's tokens sequentially, so a cached prefix is only
-        # servable where a snapshot holds that summary. Staying False until a prefill can be made
-        # to stop on a block boundary: without that, a snapshot is nameable only when the prompt
-        # happens to be a multiple of the page size, and prefix caching would cost bookkeeping
-        # for almost no hits.
-        "supports_prefix_caching": False,
+        # The 48 GDN layers summarise one slot's tokens sequentially, so a cached prefix is
+        # servable only where a snapshot holds that summary. The caller caps hits to those,
+        # and asks a prefill to stop on a block boundary so there is something to hold.
+        "supports_prefix_caching": True,
         "recurrent_prefix_snapshots": _PREFIX_SNAPSHOTS,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
@@ -90,6 +88,7 @@ class Qwen38ForCausalLM:
         self.cache = None
         self._sampling_key = None
         self._decode_bound = False
+        self._prefix_snapshots = {}
         self._last_device_sampling = None
         self.prefill_startup_warmup = os.getenv("QWEN_PREFILL_STARTUP_WARMUP", "0") == "1"
         # A served step costs more than this entry point does. Timing decode_forward from the
@@ -261,6 +260,42 @@ class Qwen38ForCausalLM:
     def free_recurrent_prefix(self, handle):
         self.generator.free_slot_state(handle)
 
+    def take_prefix_snapshots(self):
+        """Row -> ``(tokens, handle)`` for snapshots the last prefill took, cleared on read."""
+        taken, self._prefix_snapshots = self._prefix_snapshots, {}
+        return taken
+
+    def _snapshot_at_boundary(self, tokens, table, kv_cache, starts, ends, slots, rows, block):
+        """Stop the named rows on a block boundary, keep the state there, return the new starts.
+
+        A snapshot is only nameable at a block boundary, because that is where the caller's
+        content hashes fall, and recurrent state is sequential: once a prefill has run past a
+        boundary there is no way back to it. So the boundary becomes a stopping point rather
+        than something to look for afterwards, and the prompt's last partial block is left for
+        the sampling pass that follows.
+
+        The boundary is strictly below ``end`` so that pass always has tokens to run.
+        """
+        starts = list(starts)
+        for row in rows:
+            boundary = (ends[row] - 1) // block * block
+            if boundary <= starts[row]:
+                # Nothing whole beyond what this slot already holds.
+                continue
+            self.generator.prefill_forward(
+                tokens[row : row + 1, starts[row] : boundary],
+                page_table=table,
+                kv_cache=kv_cache,
+                prompt_lens=[boundary - starts[row]],
+                start_pos=[starts[row]],
+                slots=[slots[row]],
+            )
+            handle = self.generator.save_slot_state(slots[row])
+            if handle is not None:
+                self._prefix_snapshots[row] = (boundary, handle)
+            starts[row] = boundary
+        return starts
+
     def prefill_forward(
         self,
         tokens,
@@ -270,6 +305,8 @@ class Qwen38ForCausalLM:
         start_pos=None,
         sampling_params=None,
         empty_slots=None,
+        snapshot_rows=None,
+        snapshot_block=0,
         **kwargs,
     ):
         self._cache(kv_cache)
@@ -280,6 +317,12 @@ class Qwen38ForCausalLM:
         fresh = [slot for slot, start in zip(slots, starts) if start == 0]
         if fresh:
             self.generator.reset_recurrent_slots(fresh)
+        # After the reset, so a fresh slot's snapshot summarises this prompt and not the last
+        # request to hold the slot.
+        if snapshot_rows and snapshot_block:
+            starts = self._snapshot_at_boundary(
+                tokens, table, kv_cache, starts, ends, slots, snapshot_rows, snapshot_block
+            )
         device_sampling = self._sampling(sampling_params, reset=True, output_positions=ends)
         if device_sampling:
             tokens_out = self.generator.serving_prefill_tokens(

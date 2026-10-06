@@ -92,7 +92,7 @@ for capacity in 1 8 16; do
         --hf-overrides '{"architectures":["TTQwen38ForCausalLM"]}' \
         --host 127.0.0.1 --port 8000 --block-size 32 --max-num-seqs "$capacity" \
         --max-model-len 262144 --max-num-batched-tokens 262144 --max-logprobs -1 \
-        --async-scheduling --no-enable-prefix-caching --no-enable-chunked-prefill \
+        --async-scheduling --enable-prefix-caching --no-enable-chunked-prefill \
         --no-enable-log-requests --no-enable-log-outputs \
         --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-auto-tool-choice \
         --additional-config "$tt_config" > "$logs/qwen38_server_$capacity.log" 2>&1 &
