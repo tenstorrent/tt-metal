@@ -12,6 +12,11 @@ Box: blx01 (g15blx01), everything under /var/tmp/fasth3/t170 (nothing under blx0
 
 ## Run log
 - 2026-10-06 22:35 UTC: driver started on blx01 (pid 203047). Baseline = broker job 665.
+- 22:39 UTC: baseline job 665 OK: process wall 184 s (warmup 85.5 s), 0 JIT compiles, gen#0 34.258 s,
+  gen#1 6.017 s, gen#2 6.041 s. Knob limit -> 396 s.
+- Wake probe: ssh blx01 test -e DRIVER.done, or the driver pid is gone (reboot/power-cycle kills it: then
+  relaunch with ADOPT=<label>:<job> for a job still queued/running in the broker, PRIOR_DROP=<label> if it dropped).
+- Phase-2 scoring on g15: tmp/t170/score_g15.sh <labels...> (detach), marker data/g15/t170/SCORE.done.
 
 ## Next (after DRIVER.done)
 - scp the mp4s of baseline5/<cfg>5 (and baseline + winner) to g15 tt-project/data/g15/t170/ (mp4s only),
