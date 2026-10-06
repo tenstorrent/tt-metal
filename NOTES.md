@@ -30,3 +30,13 @@ Next (one run):
 - Both rc files are 0 (runs/645/t158-stage.rc, t158-build2.rc). `du -sh ~/fasth3` = 96G (<100). /home 1.5T free.
 - Not started: prewarm. prewarm_and_submit.sh needs a capture stage that is itself a device job (cold cache), so the
   prewarm + driver flow needs a standard run to wire up (driver.sh submits run_e2e.sh directly with -t 600).
+
+## Standard wake 2026-10-06 (run 654)
+- Job 099 compiled 2569 kernels in-window (process wall 530 s), so a cold cache does not fit the 600 s cap in one job.
+- driver.sh now: capture-only job (TT_METAL_KERNEL_PREWARM=1 TT_METAL_KERNEL_CAPTURE_ONLY=1, OUT=data/g15/capture)
+  -> off-device build_Release/tools/kernel_prewarm into data/g15/tt-metal-cache (log data/g15/driver/prewarm.log)
+  -> disk check (<100 GB) -> real job (bash tmp/t158/run_e2e.sh, -t 600). Each job is followed by the broker/kernel
+  drop check. Job ids in data/g15/driver/job_id_{capture,run}; marker data/g15/driver/DRIVER.done.
+- Started with `ttp detach t158-driver` (run dir state/runs/654).
+Next: on DRIVER.done "0 ...": stage table from data/g15/out/run.log, ltx_eval vs ref_dv145 seed 0 and vs t138 gen#1,
+still frame, write state/ready/g15blx02.READY. On 9: log the drop (broker_slice/drop_evidence), rerun once.
