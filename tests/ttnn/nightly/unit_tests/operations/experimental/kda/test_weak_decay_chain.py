@@ -113,9 +113,10 @@ def test_recurrent_chunk_scan_weak_decay_chain(device: ttnn.Device) -> None:
 def test_grouped_summary_prefix_weak_decay_chain(device: ttnn.Device) -> None:
     """T5: summaries (A - I), the group prefix and the grouped scan chained over 64 calls of 8 x 20 chunks.
 
-    Production fidelities (KDARecurrenceProgramConfig): summary HiFi4, affine prefix HiFi4, scan HiFi2. A HiFi2
-    prefix truncates E to 7 significant bits in the matmul (SrcB) and measured 1.2% state error, norm ratio 1.012,
-    for the |G_last| = 1e-3 class (HiFi4: 0.3%; .build-logs/w2-t5-fidelity-20261005-174819.log on linear-g1b.7).
+    Production fidelities (KDARecurrenceProgramConfig): summary HiFi4, affine prefix HiFi3, scan HiFi2. A HiFi2
+    prefix truncates E to 7 significant bits in the matmul (SrcB) and measured 1.26% state error, norm ratio 1.012,
+    for the |G_last| = 1e-3 class; HiFi3 and HiFi4 both measured 0.33% / 0.32% for that class, 0.42% worst class
+    (tt_metal_tracker-g1b.7; tt_metal_tracker-g1b.4.15 .build-logs/g1b.4.15/device-e3-t5probe-20261006-001731.log).
     """
     groups, group_chunks, calls = 8, 20, 64
     protocol = _chain_protocol(groups, group_chunks, seed=4501)
@@ -132,7 +133,7 @@ def test_grouped_summary_prefix_weak_decay_chain(device: ttnn.Device) -> None:
         torch.tensor([0], dtype=torch.int64), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
     )
     summary_config = _compute_config(device, ttnn.MathFidelity.HiFi4)
-    prefix_config = _compute_config(device, ttnn.MathFidelity.HiFi4)
+    prefix_config = _compute_config(device, ttnn.MathFidelity.HiFi3)
     scan_config = _compute_config(device, ttnn.MathFidelity.HiFi2)
     output = None
     for _ in range(calls):
