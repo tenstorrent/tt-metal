@@ -16,45 +16,6 @@ constexpr uint32_t ONE_PAGE = 1;
 // supported reduction methods for scatter to be applied for source values coming from recurring indices
 enum class ScatterReductionType : uint8_t { INVALID, ADD, MULTIPLY, AMIN, AMAX };
 
-// choose the right C++ POD type at compile-time
-template <DataFormat df>
-struct df_to_std {
-    using std_type = void;
-};
-
-template <>
-struct df_to_std<DataFormat::Float32> {
-    using std_type = float;
-};
-
-template <>
-struct df_to_std<DataFormat::Float16_b> {
-    using std_type = uint16_t;
-};
-
-template <>
-struct df_to_std<DataFormat::Int32> {
-    using std_type = uint32_t;
-};
-
-template <>
-struct df_to_std<DataFormat::UInt32> {
-    using std_type = uint32_t;
-};
-
-template <>
-struct df_to_std<DataFormat::UInt16> {
-    using std_type = uint16_t;
-};
-
-template <>
-struct df_to_std<DataFormat::UInt8> {
-    using std_type = uint8_t;
-};
-
-template <DataFormat df>
-using std_type_t = typename df_to_std<df>::std_type;
-
 // choose the C++ type an element is viewed as from its byte size (arch-independent, unlike DataFormat codes)
 template <uint32_t element_size, bool is_fp32 = false>
 struct element_size_to_std {
