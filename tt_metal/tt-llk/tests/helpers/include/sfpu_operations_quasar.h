@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <array>
 #include <cstdint>
 
 #include "ckernel.h"
@@ -81,7 +80,6 @@
 #include "llk_sfpu/ckernel_sfpu_unary_comp.h"
 #include "llk_sfpu/ckernel_sfpu_unary_power.h"
 #include "llk_sfpu/ckernel_sfpu_unary_shift.h"
-#include "llk_sfpu/ckernel_sfpu_welfords.h"
 #include "llk_sfpu/ckernel_sfpu_xielu.h"
 #include "sfpu/ckernel_sfpu_fill.h"
 #include "sfpu/ckernel_sfpu_sigmoid.h"
@@ -493,11 +491,6 @@ void init_unary_sfpu_operation_quasar()
         ema_load_alpha_beta(kEmaAlphaBits, kEmaBetaBits);
     }
     // rsub_scalar_int32 is stateless: its compute API init is SFPU_UNARY_INIT(unused).
-    else if constexpr (OPERATION == SfpuType::welfords)
-    {
-        welfords_init();
-        welfords_clear_previous_mean_and_m2();
-    }
 }
 
 /**
@@ -846,22 +839,6 @@ void call_unary_sfpu_operation_quasar(
             ema_clear_previous_output();
         }
         SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, is_fp32_dest_acc_en, calculate_ema, dst_index, VectorMode::RC_custom);
-    }
-    else if constexpr (OPERATION == SfpuType::welfords)
-    {
-        // Whole-tile op: folds all 32 tile rows into the running per-column state in LREG4/LREG5,
-        // so it runs once per tile (RC_custom); Dest is left unchanged.
-        SFPU_UNARY_CALL(
-            DST_SYNC,
-            is_fp32_dest_acc_en,
-            calculate_welfords,
-            (false /* PARTIAL_TILE */, 0 /* RECIPROCAL_SIZE */),
-            dst_index,
-            VectorMode::RC_custom,
-            0u /* start_idx */,
-            std::array<std::uint32_t, 0> {},
-            0u /* start_row */,
-            TILE_R_DIM /* num_rows */);
     }
     else if constexpr (OPERATION == SfpuType::floor)
     {
