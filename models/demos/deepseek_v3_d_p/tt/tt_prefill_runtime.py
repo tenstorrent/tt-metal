@@ -585,6 +585,7 @@ class TtPrefillRuntime:
             self.config.mesh_shape,
             self.config.sp_axis,
             num_mtp_tokens=self._num_mtp_tokens(),
+            num_levels=self.config.mtp_levels,
         )
 
     def compile(self, kv_caches: MlaKvCaches) -> None:
