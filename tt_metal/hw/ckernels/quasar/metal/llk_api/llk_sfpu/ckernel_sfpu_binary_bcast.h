@@ -83,8 +83,14 @@ constexpr std::uint32_t BCAST_COL_OP_REPLAY_SLOT = BCAST_COL_FOLD_REPLAY_SLOT + 
 constexpr std::uint32_t BCAST_COL_OP_REPLAY_LEN = 5;
 constexpr std::uint32_t BCAST_ROW_OP_REPLAY_SLOT = 0;
 constexpr std::uint32_t BCAST_ROW_OP_REPLAY_LEN = 6;
-static_assert(BCAST_COL_OP_REPLAY_SLOT + BCAST_COL_OP_REPLAY_LEN <= BCAST_REPLAY_DEPTH, "COL replay bodies must fit");
-static_assert(BCAST_ROW_OP_REPLAY_SLOT + BCAST_ROW_OP_REPLAY_LEN <= BCAST_REPLAY_DEPTH, "ROW replay body must fit");
+// Replay slots [0, *_SLOTS_USED) of bank 0 that init records; the init_binary_bcast doc quotes these
+constexpr std::uint32_t BCAST_COL_REPLAY_SLOTS_USED = BCAST_COL_OP_REPLAY_SLOT + BCAST_COL_OP_REPLAY_LEN;
+constexpr std::uint32_t BCAST_ROW_REPLAY_SLOTS_USED = BCAST_ROW_OP_REPLAY_SLOT + BCAST_ROW_OP_REPLAY_LEN;
+static_assert(BCAST_COL_REPLAY_SLOTS_USED <= BCAST_REPLAY_DEPTH, "COL replay bodies must fit");
+static_assert(BCAST_ROW_REPLAY_SLOTS_USED <= BCAST_REPLAY_DEPTH, "ROW replay body must fit");
+static_assert(
+    BCAST_COL_REPLAY_SLOTS_USED == 14 && BCAST_ROW_REPLAY_SLOTS_USED == 6,
+    "update the replay-slot ranges in the init_binary_bcast doc");
 
 // Issue LEN instructions recorded at SLOT of the math thread's replay buffer
 template <std::uint32_t SLOT, std::uint32_t LEN>
@@ -224,8 +230,9 @@ inline void binary_bcast_row_band_(const std::uint32_t data_addr, const std::uin
  * @tparam BCAST_DIM: Broadcast axis, values = <COL/ROW>
  * @note Call @ref _llk_math_eltwise_sfpu_init_ before this, and @ref calculate_binary_bcast with the
  *       same BINOP and BCAST_DIM after it.
- * @note Re-run this before resuming binary_bcast after any op that records into replay bank 0 slots
- *       0..16 on the math thread or (COL) writes LREG6 - including a ROW binary_bcast call.
+ * @note Re-run this before resuming binary_bcast after any op that records into the math thread's
+ *       replay bank 0 slots it uses - 0..13 for COL (BCAST_COL_REPLAY_SLOTS_USED), 0..5 for ROW
+ *       (BCAST_ROW_REPLAY_SLOTS_USED) - or, for COL, writes LREG6 (a ROW binary_bcast call does both).
  */
 template <BinaryOp BINOP, BroadcastType BCAST_DIM>
 inline void init_binary_bcast() {
