@@ -4,10 +4,10 @@
 
 // One kernel that reads three tensors and writes one, page by page: per page p, reads page p of src0..src2 into L1,
 // then writes src0's page to dst0. Reads walk on the address generators' source sides and writes on their destination
-// sides, so the three read walks compete for two source slots (the third is parked and restored) while the write walk
-// keeps its destination slot and never restores.
+// sides: two of the three read walks get the two source sides (first use keeps them) and the third uses software, while
+// the write walk has a destination side to itself.
 //
-// Named RTAs: num_pages, scratch_addr (L1: three page-sized buffers), report_addr (9 stats words, see
+// Named RTAs: num_pages, scratch_addr (L1: three page-sized buffers), report_addr (12 stats words, see
 // ta_reader_to_dfb.cpp)
 
 #include "api/core_local_mem.h"
@@ -79,6 +79,9 @@ void kernel_main() {
     report[7] = tensor_accessor::detail::transfer_stats.write_seeks;
     report[8] = tensor_accessor::detail::transfer_stats.write_restores;
     report[9] = unused_stack_bytes();
+    report[10] = tensor_accessor::detail::transfer_stats.fallbacks;
+    report[11] = tensor_accessor::detail::transfer_stats.write_fallbacks;
+    report[12] = tensor_accessor::detail::transfer_stats.pushes;
 #else
     (void)report_addr;
 #endif

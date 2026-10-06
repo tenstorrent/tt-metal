@@ -41,6 +41,14 @@ inline constexpr bool noc_zero_l1_endpoint_v = false;
 template <typename T>
 inline constexpr bool is_scratchpad_v = false;
 
+// Can T's remote address come from an address generator that pushes it into the command buffer (Quasar tensor
+// endpoints; api/tensor/noc_traits.h)? Then noc_traits_t<T> has may_push, src/dst_addr_or_cmd_buf, in_cmd_buf, and
+// read / write, which issue a transfer whose remote address is already in the command buffer.
+template <typename T, typename = void>
+inline constexpr bool noc_may_push_v = false;
+template <typename T>
+inline constexpr bool noc_may_push_v<T, std::void_t<decltype(noc_traits_t<T>::may_push)>> = noc_traits_t<T>::may_push;
+
 /**
  * @brief Compile-time bit-flags that control optional NoC transaction behaviours.
  *
@@ -126,9 +134,9 @@ private:
     friend struct noc_traits_t<MulticastEndpoint>;
 
     // Every NoC transfer path -- the generic async_read/async_write, their DFB overloads, the *_with_state and
-    // multicast variants -- takes its endpoint addresses from these helpers, so this is where op-to-op R/W inference
-    // notes a bound tensor: a source is read, a destination written (api/dataflow/buf_rw_note.h). The notes are
-    // section data only: no instructions.
+    // multicast variants -- takes its endpoint addresses from these helpers (or their *_or_cmd_buf siblings below), so
+    // this is where op-to-op R/W inference notes a bound tensor: a source is read, a destination written
+    // (api/dataflow/buf_rw_note.h). The notes are section data only: no instructions.
     template <AddressType address_type, typename Src>
     auto get_src_ptr(const Src& src, const src_args_t<Src>& src_args) const {
         tt_buf_rw::note_if_bound<tt_buf_rw::READ, Src>();
@@ -140,6 +148,14 @@ private:
         }
     }
 
+    // The remote address of a source whose address generator may push it into the read command buffer instead
+    // (noc_may_push_v): the address, or the traits' marker that it is already there. Notes the read like get_src_ptr.
+    template <typename Src>
+    uint64_t get_src_ptr_or_cmd_buf(const Src& src, const src_args_t<Src>& src_args) const {
+        tt_buf_rw::note_if_bound<tt_buf_rw::READ, Src>();
+        return noc_traits_t<Src>::src_addr_or_cmd_buf(src, *this, src_args);
+    }
+
     template <AddressType address_type, typename Dst>
     auto get_dst_ptr(const Dst& dst, const dst_args_t<Dst>& dst_args) const {
         tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, Dst>();
@@ -149,6 +165,13 @@ private:
         } else {
             return addr_underlying_t<address_type>{addr};
         }
+    }
+
+    // get_src_ptr_or_cmd_buf for a destination (the write command buffer). Notes the write like get_dst_ptr.
+    template <typename Dst>
+    uint64_t get_dst_ptr_or_cmd_buf(const Dst& dst, const dst_args_t<Dst>& dst_args) const {
+        tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, Dst>();
+        return noc_traits_t<Dst>::dst_addr_or_cmd_buf(dst, *this, dst_args);
     }
 
     template <AddressType address_type, typename Dst>
@@ -211,12 +234,23 @@ public:
         const uint32_t req_vc = has_flag(opts, NocOptions::CUSTOM_VC)
                                     ? static_cast<uint32_t>(noc_opts.vc)
                                     : NOC_UNICAST_WRITE_VC;
-        noc_async_read<max_page_size, enable_noc_tracing>(
-            get_src_ptr<AddressType::NOC>(src, src_args),
-            get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
-            size_bytes,
-            noc_id_,
-            req_vc);
+        if constexpr (noc_may_push_v<Src>) {
+            // The source address may already be in the read command buffer (pushed by the address generator).
+            const uint64_t src_noc_addr = get_src_ptr_or_cmd_buf(src, src_args);
+            const uint32_t dst_addr = get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args);
+            if (noc_traits_t<Src>::in_cmd_buf(src_noc_addr)) {
+                noc_traits_t<Src>::read(dst_addr, size_bytes, noc_id_, req_vc);
+            } else {
+                noc_async_read<max_page_size, enable_noc_tracing>(src_noc_addr, dst_addr, size_bytes, noc_id_, req_vc);
+            }
+        } else {
+            noc_async_read<max_page_size, enable_noc_tracing>(
+                get_src_ptr<AddressType::NOC>(src, src_args),
+                get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
+                size_bytes,
+                noc_id_,
+                req_vc);
+        }
     }
 
     /**
@@ -394,12 +428,25 @@ public:
             const uint32_t vc = has_flag(opts, NocOptions::CUSTOM_VC)
                                     ? static_cast<uint32_t>(noc_opts.vc)
                                     : NOC_UNICAST_WRITE_VC;
-            noc_async_write<max_page_size, enable_noc_tracing, posted>(
-                get_src_ptr<AddressType::LOCAL_L1>(src, src_args),
-                get_dst_ptr<AddressType::NOC>(dst, dst_args),
-                size_bytes,
-                noc_id_,
-                vc);
+            if constexpr (noc_may_push_v<Dst>) {
+                // The destination address may already be in the write command buffer (pushed by the address
+                // generator).
+                const uint64_t dst_noc_addr = get_dst_ptr_or_cmd_buf(dst, dst_args);
+                const uint32_t src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
+                if (noc_traits_t<Dst>::in_cmd_buf(dst_noc_addr)) {
+                    noc_traits_t<Dst>::template write<posted>(src_addr, size_bytes, noc_id_, vc);
+                } else {
+                    noc_async_write<max_page_size, enable_noc_tracing, posted>(
+                        src_addr, dst_noc_addr, size_bytes, noc_id_, vc);
+                }
+            } else {
+                noc_async_write<max_page_size, enable_noc_tracing, posted>(
+                    get_src_ptr<AddressType::LOCAL_L1>(src, src_args),
+                    get_dst_ptr<AddressType::NOC>(dst, dst_args),
+                    size_bytes,
+                    noc_id_,
+                    vc);
+            }
         }
     }
 

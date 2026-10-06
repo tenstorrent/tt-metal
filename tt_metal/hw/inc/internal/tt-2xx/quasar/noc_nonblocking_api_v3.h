@@ -159,7 +159,9 @@ inline __attribute__((always_inline)) void noc_restore_default_atomic_ret_addr(u
 // Expects overlay_cmd_buff_init to have set on OVERLAY_RD_CMD_BUF:
 //   MISC = CMD_BUF_MISC_READ
 //   TR_ID / WR_SENT_TR_ID / TR_ACK_TR_ID = NOC_OVERLAY_TRID_STATIC (0)
-template <uint8_t noc_mode = DM_DEDICATED_NOC>
+//
+// src_in_cmd_buf: the address generator already pushed the source address into SRC_ADDR (src_addr is ignored).
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool src_in_cmd_buf = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -173,8 +175,10 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, read_req_vc);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_OVERLAY_RD_RESP_VC);
-    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, src_addr);
+    if constexpr (!src_in_cmd_buf) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, src_addr);
+    }
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, noc_v3_local_operand(dest_addr));
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
@@ -199,7 +203,13 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
     ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, len_bytes, read_req_vc);
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool update_counter = true>
+// dest_in_cmd_buf: the address generator already pushed the destination address into DEST_ADDR (dest_addr is ignored;
+// unicast only).
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    bool use_trid = false,
+    bool update_counter = true,
+    bool dest_in_cmd_buf = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -249,8 +259,10 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
 
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, noc_v3_local_operand(src_addr));
-    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, dest_addr);
+    if constexpr (!dest_in_cmd_buf) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, dest_addr);
+    }
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, len_bytes);
     if (mcast) {

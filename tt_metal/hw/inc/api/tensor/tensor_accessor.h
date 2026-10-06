@@ -704,7 +704,7 @@ enum class TransferDir : uint8_t { Read = 0, Write = 1 };
 // Defined in api/tensor/transfer_noc_addr.h (included by api/tensor/noc_traits.h, the NoC transfer path). Declared
 // here so the wrapper below can erase it alongside get_noc_addr; a kernel that hands a wrapper to the NoC APIs has
 // included noc_traits.h, so the definition is in its translation unit.
-template <TransferDir Dir, typename Accessor>
+template <TransferDir Dir, bool MayPush = false, typename Accessor>
 inline uint64_t transfer_noc_addr(const Accessor& accessor, uint32_t page_id, uint32_t offset, uint8_t noc);
 }  // namespace tensor_accessor
 

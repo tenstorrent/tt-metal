@@ -74,10 +74,11 @@ constexpr auto kFillKernel =
 // software TensorAccessor addresses.
 constexpr auto kDisableAddrgenDefine = "TT_TA_ADDRGEN_DISABLE";
 // Test instrumentation: each tensor-side kernel counts how its transfer addresses were produced and writes
-// {hw, sw_ineligible, sw_unsupported, seeks, transfers issued, skips, restores, write seeks, write restores} to its
-// report_addr RTA. See TransferStats in transfer_noc_addr.h.
+// {hw, sw_ineligible, sw_unsupported, seeks, transfers issued, skips, restores, write seeks, write restores,
+//  unused stack bytes, fallbacks, write fallbacks, pushes} to its report_addr RTA. See TransferStats in
+//  transfer_noc_addr.h.
 constexpr auto kAddrgenStatsDefine = "TT_TA_ADDRGEN_STATS";
-constexpr uint32_t kNumStatsWords = 10;  // word 9: stack bytes the kernel never used (ta_multi/mixed/reader)
+constexpr uint32_t kNumStatsWords = 13;  // word 9: stack bytes the kernel never used (ta_multi/mixed/reader)
 constexpr uint32_t kStatsStride = 64;    // bytes reserved per kernel's report
 static_assert(kNumStatsWords * sizeof(uint32_t) <= kStatsStride);
 
@@ -394,7 +395,8 @@ std::shared_ptr<distributed::MeshBuffer> make_l1_region(distributed::MeshDevice&
     return distributed::MeshBuffer::create(replicated, local, &device);
 }
 
-// Checks one tensor-side kernel's {hw, sw_ineligible, sw_unsupported, seeks, transfers, skips, restores} report.
+// Checks one tensor-side kernel's {hw, sw_ineligible, sw_unsupported, seeks, transfers, skips, restores, ...,
+// fallbacks} report.
 void expect_transfer_stats(
     const std::string& kernel,
     const std::vector<uint32_t>& stats,
@@ -402,7 +404,8 @@ void expect_transfer_stats(
     uint32_t pages,
     IterMode iter_mode,
     bool addrgen_allowed,
-    bool interleaved_walkable) {
+    bool interleaved_walkable,
+    std::optional<uint32_t> expected_fallbacks = std::nullopt) {
     ASSERT_EQ(stats.size(), static_cast<size_t>(kNumStatsWords));
     ASSERT_NE(stats[0], 0xDEADBEEFu) << kernel << " never wrote its transfer stats";
     const uint32_t hw = stats[0];
@@ -412,16 +415,22 @@ void expect_transfer_stats(
     const uint32_t transfers = stats[4];
     const uint32_t skips = stats[5];
     const uint32_t restores = stats[6];
+    const uint32_t fallbacks = stats[10];
+    const uint32_t pushes = stats[12];
     if (stats[9] != 0xDEADBEEFu) {
         log_info(tt::LogTest, "{}: {} bytes of stack never used", kernel, stats[9]);
     }
     const std::string counts = fmt::format(
-        "{}: hw {} ({} seeks, {} skips, {} restores), sw_ineligible {}, sw_unsupported {} of {} transfers",
+        "{}: hw {} ({} pushed, {} seeks, {} skips, {} restores), sw fallbacks {}, sw_ineligible {}, sw_unsupported {} "
+        "of "
+        "{} transfers",
         kernel,
         hw,
+        pushes,
         seeks,
         skips,
         restores,
+        fallbacks,
         ineligible,
         unsupported,
         transfers);
@@ -433,18 +442,42 @@ void expect_transfer_stats(
         EXPECT_EQ(transfers, pages) << counts;
     }
     pages = transfers;
-    ASSERT_EQ(hw + ineligible + unsupported, pages) << counts << " -- some transfer bypassed transfer_noc_addr";
+    ASSERT_EQ(hw + ineligible + unsupported + fallbacks, pages)
+        << counts << " -- some transfer bypassed transfer_noc_addr";
     if (!addrgen_allowed || !att_enabled() || !has_hw_recipe(lc)) {
         EXPECT_EQ(unsupported, pages) << counts << " -- expected the software path only";
         return;
     }
     EXPECT_EQ(unsupported, 0u) << counts << " -- layout has a HW recipe but the transfer path didn't try it";
-    // Walkability is a property of the device, so a kernel is all-HW or all-fallback, never mixed.
+    // Software fallbacks by walk policy. With one tensor per kernel the walk always has a side, so the only fallbacks
+    // are requests that break the stream: every mode walks in order except Strided, whose jump back from the even pages
+    // to page 1 goes to software once (the next request continues at the stride and re-takes the hardware). Kernels
+    // with more tensors than sides pass the exact count.
+    if (expected_fallbacks.has_value()) {
+        EXPECT_EQ(fallbacks, *expected_fallbacks) << counts;
+    } else {
+        EXPECT_LE(fallbacks, iter_mode == IterMode::Strided ? 2u : 0u) << counts;
+    }
+    pages -= fallbacks;
+    // Walkability is a property of the device, so a kernel is all-HW or all-ineligible, never mixed.
     EXPECT_TRUE(hw == pages || ineligible == pages) << counts;
     EXPECT_LE(seeks, hw) << counts;
     EXPECT_LE(skips, hw) << counts;
     if (hw > 0) {
         EXPECT_GE(seeks, 1u) << counts << " -- a walk must be programmed before its first pop";
+    }
+    // Push: a hit on the direction's first side writes the address straight into the command buffer. Every endpoint
+    // but ShardView (base + offset) and the type-erased wrapper can take it.
+    const bool push_endpoint = iter_mode != IterMode::ShardView && iter_mode != IterMode::Wrapper;
+    if (!push_endpoint) {
+        EXPECT_EQ(pushes, 0u) << counts << " -- this endpoint never takes a pushed address";
+    } else if (!expected_fallbacks.has_value()) {
+        // One tensor per direction (callers with more pass expected_fallbacks): its walk keeps the push side, so every
+        // transfer that is neither the walk's (re)programming nor a hardware skip is pushed.
+        EXPECT_EQ(pushes + seeks + skips, hw) << counts << " -- every in-order hit should push";
+    } else {
+        // Several tensors per direction: hits on the second side and reloads pop.
+        EXPECT_LE(pushes + seeks, hw) << counts;
     }
     // Only the interleaved recipe depends on the device's bank tables (host-checked, see interleaved_banks_walkable);
     // sharded layouts always have a recipe.
@@ -1365,9 +1398,12 @@ INSTANTIATE_TEST_SUITE_P(
 // ============================================================================
 //
 // ta_multi_reader_to_dfb reads page p of src0, src1, src2 round-robin; ta_multi_writer_from_dfb writes dst0..2 the same
-// way. Each core has 3 walks for 2 address generators, so after warm-up every transfer finds its walk parked. With
-// spill/restore (default) that is a register restore and the software seeks stay what one tensor alone would need;
-// built with TT_TA_ADDRGEN_NO_SPILL an evicted walk is dropped, so every transfer is a software seek.
+// way. A direction has two address-generator sides for three walks:
+//   - Spill (default): the walk that needs a side spills the least recently used one and reloads itself if it was
+//     parked, so after the first three transfers every transfer reloads a parked walk; each walk is seeked only as it
+//     would be alone (the run-time stand-in for compiler-placed spill/reload).
+//   - NoSpill (TT_TA_ADDRGEN_NO_SPILL): first use is sticky, so tensors 0 and 1 use the hardware and every transfer of
+//     tensor 2 uses software.
 namespace contention {
 
 constexpr uint32_t kNumTensors = 3;
@@ -1375,6 +1411,8 @@ constexpr auto kMultiReader =
     "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/ta_multi_reader_to_dfb.cpp";
 constexpr auto kMultiWriter =
     "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/ta_multi_writer_from_dfb.cpp";
+
+constexpr uint32_t kNumHwTensors = 2;  // address-generator sides per direction
 
 struct Param {
     std::string layout;         // a layout_cases() name
@@ -1527,6 +1565,8 @@ TEST_P(TensorAccessorAddrgenContention, ThreeTensorsTwoAddrgens) {
           std::pair<std::string, uint32_t>{"writer", consumer_report}}) {
         std::vector<uint32_t> stats;
         slow_dispatch::ReadFromL1(device, node, report_addr, kNumStatsWords * sizeof(uint32_t), stats);
+        const bool walkable =
+            lc.memory_layout != TensorMemoryLayout::INTERLEAVED || interleaved_banks_walkable(device, lc.buffer_type);
         expect_transfer_stats(
             kernel,
             stats,
@@ -1534,17 +1574,18 @@ TEST_P(TensorAccessorAddrgenContention, ThreeTensorsTwoAddrgens) {
             transfers,
             IterMode::PageIdLoop,
             /*addrgen_allowed=*/true,
-            interleaved_banks_walkable(device, lc.buffer_type));
-        const uint32_t seeks = stats[3];
-        const uint32_t restores = stats[6];
-        if (p.spill) {
-            // Each walk is seeked as it would be alone; every transfer after the first three restores a parked walk.
-            EXPECT_EQ(seeks, contention::kNumTensors * p.seeks_per_tensor) << kernel;
-            EXPECT_EQ(restores, transfers - contention::kNumTensors) << kernel;
-        } else {
-            // Round-robin over 3 walks with 2 address generators evicts the walk needed next: every transfer seeks.
-            EXPECT_EQ(seeks, transfers) << kernel;
-            EXPECT_EQ(restores, 0u) << kernel;
+            interleaved_banks_walkable(device, lc.buffer_type),
+            /*expected_fallbacks=*/walkable && !p.spill ? pages : 0u);  // NoSpill: the third tensor, every page
+        if (walkable) {
+            const uint32_t seeks = stats[3];
+            const uint32_t restores = stats[6];
+            if (p.spill) {
+                EXPECT_EQ(seeks, contention::kNumTensors * p.seeks_per_tensor) << kernel;
+                EXPECT_EQ(restores, transfers - contention::kNumTensors) << kernel;
+            } else {
+                EXPECT_EQ(seeks, contention::kNumHwTensors * p.seeks_per_tensor) << kernel;
+                EXPECT_EQ(restores, 0u) << kernel;
+            }
         }
     }
 
@@ -1577,10 +1618,9 @@ INSTANTIATE_TEST_SUITE_P(
 //
 // ta_mixed_reader_writer reads three tensors and writes one, page by page. Reads walk on the address generators'
 // source sides and writes on their destination sides, so:
-//   - the three read walks share two source slots: 3 seeks, then every read after the first three restores a parked
-//   walk;
-//   - the write walk keeps its destination slot: 1 seek and no restores, however the reads behave.
-// (With one shared pool of slots, the reads would evict the write walk too.)
+//   - the three read walks share two source sides: each is seeked once, then every read after the first three reloads
+//     a parked walk (spilling the least recently used one);
+//   - the write walk has a destination side to itself: seeked once and never spilled, however the reads behave.
 // Sources and destinations may have different layouts (even different memories: an L1-sharded source with a DRAM
 // destination walks two different ATT windows on the two sides of one address generator). The copied page size and
 // page count must match.
@@ -1721,19 +1761,18 @@ TEST_P(TensorAccessorAddrgenMixed, ReadsAndWritesDoNotCompete) {
         transfers,
         IterMode::PageIdLoop,
         /*addrgen_allowed=*/true,
-        interleaved_banks_walkable(device, lc.buffer_type));
+        interleaved_banks_walkable(device, lc.buffer_type),
+        /*expected_fallbacks=*/0u);  // several tensors per direction: the reads share their sides by reloading
     EXPECT_EQ(stats[0], transfers) << "every read and write address from the HW AddrGen (both layouts walkable here)";
     const uint32_t seeks = stats[3];
     const uint32_t restores = stats[6];
     const uint32_t write_seeks = stats[7];
     const uint32_t write_restores = stats[8];
-    const uint32_t read_seeks = seeks - write_seeks;
-    const uint32_t read_restores = restores - write_restores;
     EXPECT_EQ(write_seeks, kNumDst * param.seeks_per_dst)
-        << "each write walk seeks once and keeps its destination slot";
-    EXPECT_EQ(write_restores, 0u) << "reads must not evict writes";
-    EXPECT_EQ(read_seeks, kNumSrc * param.seeks_per_src);
-    EXPECT_EQ(read_restores, kNumSrc * pages - kNumSrc) << "three read walks share two source slots";
+        << "each write walk seeks once and keeps its destination side";
+    EXPECT_EQ(write_restores, 0u) << "reads must not spill writes";
+    EXPECT_EQ(seeks - write_seeks, kNumSrc * param.seeks_per_src);
+    EXPECT_EQ(restores - write_restores, kNumSrc * pages - kNumSrc) << "three read walks share two source sides";
 
     // Every tensor is a distinct record, reads and writes separate (dst0/dst1 never appear as read).
     const ll_api::BufRwInfo rw = query_buf_rw(workload, device, "mixed");
@@ -2346,5 +2385,440 @@ INSTANTIATE_TEST_SUITE_P(
     AddrgenLoopProbe,
     ::testing::ValuesIn(loop_probe::configs()),
     [](const ::testing::TestParamInfo<loop_probe::Config>& info) { return info.param.name; });
+
+// Repro for the HW team (addrgen_rdreg_hazard.cpp): back-to-back address-generator register reads (rd_reg) hang,
+// fenced ones don't. One test per read pattern so a hang takes down only its own process; run them one at a time
+// (each hang holds the emulator until its session times out). Manual only, not in the regression yaml.
+namespace rdreg_hazard {
+
+struct Mode {
+    const char* name;
+    uint32_t mode;
+};
+
+}  // namespace rdreg_hazard
+
+class AddrgenRdRegHazard : public QuasarMeshDeviceSingleCardFixture,
+                           public ::testing::WithParamInterface<rdreg_hazard::Mode> {};
+
+TEST_P(AddrgenRdRegHazard, ReadsPosition) {
+    namespace m2 = experimental;
+    const auto& m = GetParam();
+    auto& device = *devices_.at(0);
+    const m2::NodeCoord node{0, 0};
+    constexpr uint32_t kNumPops = 3;
+    constexpr uint32_t kReportWords = 8;
+    auto report = unit_tests::dm::ta_addrgen::make_l1_region(device, kReportWords * sizeof(uint32_t));
+    std::vector<uint32_t> report_init(kReportWords, 0xDEADBEEF);
+    slow_dispatch::WriteToL1(device, node, report->address(), report_init);
+
+    m2::KernelSpec kernel{
+        .unique_id = m2::KernelSpecName{"probe"},
+        .source = std::filesystem::path{"tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/"
+                                        "addrgen_rdreg_hazard.cpp"},
+        .num_threads = 1,
+        .compile_time_args = {{"mode", m.mode}, {"num_pops", kNumPops}},
+        .runtime_arg_schema = {.runtime_arg_names = {"report_addr"}},
+        .hw_config = m2::DataMovementHardwareConfig{},
+    };
+    m2::ProgramSpec spec{
+        .name = "addrgen_rdreg_hazard",
+        .kernels = {kernel},
+        .work_units = {m2::test_helpers::MakeMinimalWorkUnit("wu", node, {"probe"})},
+    };
+    Program program = m2::MakeProgramFromSpec(device, spec);
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        {.kernel = m2::KernelSpecName{"probe"},
+         .runtime_arg_values =
+             m2::MakeRuntimeArgsForSingleNode(node, {{"report_addr", static_cast<uint32_t>(report->address())}})}};
+    m2::SetProgramRunArgs(program, params);
+    LaunchProgram(device, std::move(program));
+
+    std::vector<uint32_t> r;
+    ASSERT_TRUE(slow_dispatch::ReadFromL1(device, node, report->address(), kReportWords * sizeof(uint32_t), r));
+    ASSERT_EQ(r[6], 0x600DD00Du) << m.name << ": kernel never finished";
+    auto word = [&](uint32_t i) { return (static_cast<uint64_t>(r[2 * i + 1]) << 32) | r[2 * i]; };
+    // Two banks, bank inner, inner stride 0x40: three pops leave the walk at bank 1, inner address 0x40, outer 0.
+    log_info(
+        tt::LogTest,
+        "addrgen rd_reg {}: bank_current {} inner_address 0x{:x} outer_address 0x{:x}",
+        m.name,
+        word(0),
+        word(1),
+        word(2));
+    EXPECT_EQ(word(0), 1u) << m.name;
+    EXPECT_EQ(word(1), 0x40u) << m.name;
+    EXPECT_EQ(word(2), 0u) << m.name;
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Patterns,
+    AddrgenRdRegHazard,
+    ::testing::Values(
+        rdreg_hazard::Mode{"FenceEach", 0},
+        rdreg_hazard::Mode{"BackToBack", 1},
+        rdreg_hazard::Mode{"FenceAfter", 2},
+        rdreg_hazard::Mode{"FenceBefore", 3}),
+    [](const ::testing::TestParamInfo<rdreg_hazard::Mode>& info) { return std::string(info.param.name); });
+
+// Transfer-address microbenchmark (ta_perf_reader.cpp): the same kernel built with the address-generator path and
+// with the software path (TT_TA_ADDRGEN_DISABLE), timed with rdcycle over page-id orders taken from ttnn kernels.
+// Reports cycles per transfer; no timing pass/fail. Manual run only (not in the regression yaml): see the
+// emulator notes on keeping each process under the 3-minute session.
+namespace perf {
+
+constexpr auto kKernel =
+    "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/ta_perf_reader.cpp";
+constexpr uint32_t kMaxTensors = 5;
+constexpr uint32_t kNumPages = 128;  // per tensor; 5 tensors x 128 x 2 KB fits the 2x3 emulator's two L1 banks
+constexpr uint32_t kWidth = 16;      // pages per row, for BLOCKED / STRIDE_BACK
+constexpr uint32_t kRun = 4;         // BLOCKED run length
+constexpr uint32_t kReportWords = 22;
+enum Pattern : uint32_t { SEQ = 0, BLOCKED = 1, STRIDE_BACK = 2, RANDOM = 3 };
+enum class Path { Hw, Sw, HwStats };
+
+struct Param {
+    std::string pattern_name;
+    uint32_t pattern;
+    uint32_t num_tensors;
+    BufferType buffer_type;
+    uint32_t page_bytes;
+    Path path;
+};
+
+std::string path_name(Path p) { return p == Path::Hw ? "Hw" : p == Path::Sw ? "Sw" : "HwStats"; }
+
+std::string param_name(const Param& p) {
+    return fmt::format(
+        "{}_{}_{}B_{}",
+        p.pattern_name,
+        p.buffer_type == BufferType::L1 ? "L1" : "Dram",
+        p.page_bytes,
+        path_name(p.path));
+}
+
+void PrintTo(const Param& p, std::ostream* os) { *os << param_name(p); }
+
+std::vector<Param> params() {
+    struct PatternCase {
+        const char* name;
+        uint32_t pattern;
+        uint32_t num_tensors;
+    };
+    const PatternCase patterns[] = {
+        {"Seq1", SEQ, 1},
+        {"Seq2", SEQ, 2},
+        {"Seq3", SEQ, 3},
+        {"Seq5", SEQ, 5},
+        {"Blocked", BLOCKED, 1},
+        {"StrideBack", STRIDE_BACK, 1},
+        {"Random", RANDOM, 1},
+    };
+    std::vector<Param> out;
+    for (const auto& pc : patterns) {
+        for (BufferType bt : {BufferType::L1, BufferType::DRAM}) {
+            for (uint32_t page_bytes : {2048u, 64u}) {
+                for (Path path : {Path::Hw, Path::Sw, Path::HwStats}) {
+                    out.push_back({pc.name, pc.pattern, pc.num_tensors, bt, page_bytes, path});
+                }
+            }
+        }
+    }
+    return out;
+}
+
+}  // namespace perf
+
+// Identity L1 bank order, so interleaved L1 is on the address-generator path (it is walkable once L1 bank i is the
+// i-th worker in row-major order, as the default allocator order will be with ATT).
+class TensorAccessorAddrgenPerf : public IdentityL1RemapFixture, public ::testing::WithParamInterface<perf::Param> {};
+
+TEST_P(TensorAccessorAddrgenPerf, CyclesPerTransfer) {
+    using namespace unit_tests::dm::ta_addrgen;
+    const auto& p = GetParam();
+    auto& device = *devices_.at(0);
+    if (!att_enabled()) {
+        GTEST_SKIP() << "needs TT_METAL_NOC_ATT (the address-generator path is ATT-only)";
+    }
+    const m2::NodeCoord node{0, 0};
+    const LayoutCase lc{
+        .name = perf::param_name(p),
+        .buffer_type = p.buffer_type,
+        .layout = Layout::ROW_MAJOR,
+        .dtype = DataType::UINT32,
+        .rows = perf::kNumPages,
+        .cols = p.page_bytes / static_cast<uint32_t>(sizeof(uint32_t)),
+    };
+    const TensorSpec tensor_spec = make_tensor_spec(lc);
+    std::vector<MeshTensor> tensors;
+    for (uint32_t t = 0; t < perf::kMaxTensors; ++t) {
+        tensors.push_back(MeshTensor::allocate_on_device(device, tensor_spec));
+    }
+
+    m2::KernelSpec kernel{
+        .unique_id = m2::KernelSpecName{"perf"},
+        .source = std::filesystem::path{perf::kKernel},
+        .num_threads = 1,
+        .compile_time_args =
+            {{"pattern", p.pattern},
+             {"num_tensors", p.num_tensors},
+             {"num_pages", perf::kNumPages},
+             {"width", perf::kWidth},
+             {"run", perf::kRun},
+             {"num_transfers", perf::kNumPages}},
+        .runtime_arg_schema = {.runtime_arg_names = {"report_addr"}},
+        .hw_config = m2::DataMovementHardwareConfig{},
+    };
+    kernel.scratchpad_bindings.push_back(m2::KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = m2::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    for (uint32_t t = 0; t < perf::kMaxTensors; ++t) {
+        const std::string name = "src" + std::to_string(t);
+        m2::test_helpers::BindTensorParameterToKernel(kernel, name, name);
+    }
+    for (const auto& [define, value] : addrgen_bringup_defines(device)) {
+        kernel.compiler_options.defines.emplace(define, value);
+    }
+    if (p.path == perf::Path::Sw) {
+        kernel.compiler_options.defines.emplace(kDisableAddrgenDefine, "1");
+    }
+    if (p.path == perf::Path::HwStats) {
+        kernel.compiler_options.defines.emplace(kAddrgenStatsDefine, "1");
+    }
+
+    m2::ProgramSpec spec{
+        .name = "ta_addrgen_perf",
+        .kernels = {kernel},
+        .scratchpads = {m2::ScratchpadSpec{.unique_id = m2::ScratchpadSpecName{"pad"}, .size_per_node = p.page_bytes}},
+        .work_units = {m2::test_helpers::MakeMinimalWorkUnit("wu", node, {"perf"})},
+    };
+    for (uint32_t t = 0; t < perf::kMaxTensors; ++t) {
+        spec.tensor_parameters.push_back(
+            {.unique_id = m2::TensorParamName{"src" + std::to_string(t)}, .spec = tensor_spec});
+    }
+    Program program = m2::MakeProgramFromSpec(device, spec);
+
+    constexpr uint32_t kReportBytes = perf::kReportWords * sizeof(uint32_t);
+    auto report = make_l1_region(device, kReportBytes);
+    const uint32_t report_addr = static_cast<uint32_t>(report->address());
+    std::vector<uint32_t> report_init(perf::kReportWords, 0xDEADBEEF);
+    slow_dispatch::WriteToL1(device, node, report_addr, report_init);
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        {.kernel = m2::KernelSpecName{"perf"},
+         .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"report_addr", report_addr}})}};
+    for (uint32_t t = 0; t < perf::kMaxTensors; ++t) {
+        params.tensor_args.emplace(m2::TensorParamName{"src" + std::to_string(t)}, std::cref(tensors[t]));
+    }
+    m2::SetProgramRunArgs(program, params);
+    auto workload = LaunchProgram(device, std::move(program));
+
+    std::vector<uint32_t> r;
+    ASSERT_TRUE(slow_dispatch::ReadFromL1(device, node, report_addr, kReportBytes, r));
+    ASSERT_EQ(r.size(), perf::kReportWords);
+    const uint32_t transfers = r[8];
+    ASSERT_EQ(transfers, perf::kNumPages * p.num_tensors) << "kernel never wrote its report";
+    auto section = [&](uint32_t s) { return (static_cast<uint64_t>(r[2 * s + 1]) << 32) | r[2 * s]; };
+    auto per_transfer = [&](uint32_t s) {
+        return (static_cast<double>(section(s)) - static_cast<double>(section(0))) / transfers;
+    };
+    // One parseable line per case: addrgen_perf,<case>,<pattern>,<tensors>,<mem>,<page B>,<path>,<ids>,<addr>,<read>,
+    // <batched> (the last three in cycles per transfer, the ids section subtracted; ids in total cycles).
+    log_info(
+        tt::LogTest,
+        "addrgen_perf,{},{},{},{},{},{},{},{:.1f},{:.1f},{:.1f}",
+        perf::param_name(p),
+        p.pattern_name,
+        p.num_tensors,
+        p.buffer_type == BufferType::L1 ? "L1" : "DRAM",
+        p.page_bytes,
+        perf::path_name(p.path),
+        section(0),
+        per_transfer(1),
+        per_transfer(2),
+        per_transfer(3));
+    if (p.path == perf::Path::HwStats) {
+        const uint32_t hw = r[10], inel = r[11], unsup = r[12], seeks = r[13], skips = r[14], restores = r[15],
+                       fallbacks = r[16], pushes = r[21];
+        log_info(
+            tt::LogTest,
+            "addrgen_perf_stats,{},hw={},sw_ineligible={},sw_unsupported={},seeks={},skips={},restores={},fallbacks={},"
+            "pushes={}",
+            perf::param_name(p),
+            hw,
+            inel,
+            unsup,
+            seeks,
+            skips,
+            restores,
+            fallbacks,
+            pushes);
+        if (restores > 0) {
+            // Where a reload's cycles go (summed in the kernel, averaged here).
+            log_info(
+                tt::LogTest,
+                "addrgen_perf_reload,{},per_reload_cycles: save={:.1f} swap={:.1f} restore={:.1f} serve={:.1f}",
+                perf::param_name(p),
+                static_cast<double>(r[17]) / restores,
+                static_cast<double>(r[18]) / restores,
+                static_cast<double>(r[19]) / restores,
+                static_cast<double>(r[20]) / restores);
+        }
+        // Three sections go through transfer_noc_addr (addr, read, batched).
+        EXPECT_EQ(hw + inel + fallbacks, 3 * transfers);
+        EXPECT_EQ(unsup, 0u);
+        // Only the two read sections issue through Noc::async_read, which can take a pushed address.
+        EXPECT_LE(pushes, 2 * transfers);
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Perf,
+    TensorAccessorAddrgenPerf,
+    ::testing::ValuesIn(perf::params()),
+    [](const ::testing::TestParamInfo<perf::Param>& info) { return perf::param_name(info.param); });
+
+// Raw address-generator cost breakdown (addrgen_raw_perf.cpp): pop, push and issue costs without the walker, against
+// the software address and the walker as shipped. Also checks that pushed addresses read the right pages. Manual run.
+namespace raw_perf {
+
+constexpr auto kKernel =
+    "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/addrgen_raw_perf.cpp";
+constexpr uint32_t kNumPages = 128;
+constexpr uint32_t kNumSections = 16;
+constexpr uint32_t kReportWords = 2 * kNumSections + 7;
+constexpr const char* kSectionNames[kNumSections] = {
+    "loop",
+    "pop",
+    "pop_issue",
+    "sw_issue",
+    "push",
+    "push_issue",
+    "push_issue_barrier",
+    "sw_issue_barrier",
+    "walker",
+    "walker_push",
+    "push_v3",
+    "walker_push_v3",
+    "noc_api",
+    "walker_pop_v3",
+    "push_x",
+    "push_x_v3"};
+
+struct Param {
+    BufferType buffer_type;
+    uint32_t page_bytes;
+};
+
+std::string param_name(const Param& p) {
+    return fmt::format("{}_{}B", p.buffer_type == BufferType::L1 ? "L1" : "Dram", p.page_bytes);
+}
+
+void PrintTo(const Param& p, std::ostream* os) { *os << param_name(p); }
+
+}  // namespace raw_perf
+
+class AddrgenRawPerf : public IdentityL1RemapFixture, public ::testing::WithParamInterface<raw_perf::Param> {};
+
+TEST_P(AddrgenRawPerf, Breakdown) {
+    using namespace unit_tests::dm::ta_addrgen;
+    const auto& p = GetParam();
+    auto& device = *devices_.at(0);
+    if (!att_enabled()) {
+        GTEST_SKIP() << "needs TT_METAL_NOC_ATT (the address generator emits ATT addresses)";
+    }
+    if (!interleaved_banks_walkable(device, p.buffer_type)) {
+        GTEST_SKIP() << "interleaved banks are not walkable by one BankingConfig on this device";
+    }
+    const m2::NodeCoord node{0, 0};
+    const LayoutCase lc{
+        .name = raw_perf::param_name(p),
+        .buffer_type = p.buffer_type,
+        .layout = Layout::ROW_MAJOR,
+        .dtype = DataType::UINT32,
+        .rows = raw_perf::kNumPages,
+        .cols = p.page_bytes / static_cast<uint32_t>(sizeof(uint32_t)),
+    };
+    const TensorSpec tensor_spec = make_tensor_spec(lc);
+    MeshTensor tensor = MeshTensor::allocate_on_device(device, tensor_spec);
+    const uint32_t words_per_page = p.page_bytes / sizeof(uint32_t);
+    std::vector<uint32_t> data(raw_perf::kNumPages * words_per_page);
+    for (uint32_t i = 0; i < data.size(); ++i) {
+        data[i] = i % words_per_page == 0 ? i / words_per_page : 0xA5A50000u | (i & 0xFFFF);  // word 0 = page id
+    }
+    slow_dispatch::WriteToBuffer(tensor.mesh_buffer(), data);
+
+    m2::KernelSpec kernel{
+        .unique_id = m2::KernelSpecName{"raw"},
+        .source = std::filesystem::path{raw_perf::kKernel},
+        .num_threads = 1,
+        .runtime_arg_schema = {.runtime_arg_names = {"report_addr"}},
+        .hw_config = m2::DataMovementHardwareConfig{},
+    };
+    kernel.scratchpad_bindings.push_back(m2::KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = m2::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    m2::test_helpers::BindTensorParameterToKernel(kernel, "src0", "src0");
+    m2::ProgramSpec spec{
+        .name = "addrgen_raw_perf",
+        .kernels = {kernel},
+        .scratchpads = {m2::ScratchpadSpec{
+            .unique_id = m2::ScratchpadSpecName{"pad"}, .size_per_node = raw_perf::kNumPages * p.page_bytes}},
+        .work_units = {m2::test_helpers::MakeMinimalWorkUnit("wu", node, {"raw"})},
+    };
+    spec.tensor_parameters.push_back({.unique_id = m2::TensorParamName{"src0"}, .spec = tensor_spec});
+    Program program = m2::MakeProgramFromSpec(device, spec);
+
+    constexpr uint32_t kReportBytes = raw_perf::kReportWords * sizeof(uint32_t);
+    auto report = make_l1_region(device, kReportBytes);
+    const uint32_t report_addr = static_cast<uint32_t>(report->address());
+    std::vector<uint32_t> report_init(raw_perf::kReportWords, 0xDEADBEEF);
+    slow_dispatch::WriteToL1(device, node, report_addr, report_init);
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        {.kernel = m2::KernelSpecName{"raw"},
+         .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"report_addr", report_addr}})}};
+    params.tensor_args.emplace(m2::TensorParamName{"src0"}, std::cref(tensor));
+    m2::SetProgramRunArgs(program, params);
+    auto workload = LaunchProgram(device, std::move(program));
+
+    std::vector<uint32_t> r;
+    ASSERT_TRUE(slow_dispatch::ReadFromL1(device, node, report_addr, kReportBytes, r));
+    ASSERT_EQ(r.size(), raw_perf::kReportWords);
+    const uint32_t* checks = &r[2 * raw_perf::kNumSections];
+    ASSERT_EQ(checks[3], raw_perf::kNumPages) << "kernel never wrote its report";
+    auto section = [&](uint32_t s) { return (static_cast<uint64_t>(r[2 * s + 1]) << 32) | r[2 * s]; };
+    std::string line = fmt::format("addrgen_raw_perf,{}", raw_perf::param_name(p));
+    for (uint32_t s = 0; s < raw_perf::kNumSections; ++s) {
+        const double per =
+            (static_cast<double>(section(s)) - (s == 0 ? 0.0 : static_cast<double>(section(0)))) / raw_perf::kNumPages;
+        line += fmt::format(",{}={:.1f}", raw_perf::kSectionNames[s], per);
+    }
+    line += fmt::format(
+        ",pop_mismatch={},push_x_mismatch={},push_mismatch={},noc_api_mismatch={},walker_pushes={}",
+        checks[0],
+        checks[1],
+        checks[2],
+        checks[5],
+        checks[6]);
+    log_info(tt::LogTest, "{}", line);
+    EXPECT_EQ(checks[0], 0u) << "folded walk's pops differ from get_noc_addr()";
+    EXPECT_EQ(checks[1], 0u) << "pages read through push with a skip of 0 (PUSH_SRC_POP_X(cmdbuf, 0)) are wrong";
+    EXPECT_EQ(checks[2], 0u) << "pages read through the count-less push builtin are wrong";
+    EXPECT_EQ(checks[5], 0u) << "pages read through Noc::async_read (the push path) are wrong";
+    // A sequential walk that starts over re-seeks once (popped); every other request is a hit and pushes.
+    EXPECT_EQ(checks[6], raw_perf::kNumPages - 1) << "the walker should push every hit";
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Raw,
+    AddrgenRawPerf,
+    ::testing::Values(
+        raw_perf::Param{BufferType::L1, 64},
+        raw_perf::Param{BufferType::L1, 2048},
+        raw_perf::Param{BufferType::DRAM, 64},
+        raw_perf::Param{BufferType::DRAM, 2048}),
+    [](const ::testing::TestParamInfo<raw_perf::Param>& info) { return raw_perf::param_name(info.param); });
 
 }  // namespace tt::tt_metal

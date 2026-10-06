@@ -15,9 +15,9 @@
 //                  0 = explicit reserve_back / async_read / barrier / push_back
 // Named RTAs:
 //   start_page, num_pages,
-//   report_addr: L1 address for 9 words {hw, sw_ineligible, sw_unsupported, seeks,
-//                transfers issued, skips, restores,
-//                write seeks, write restores} -- how each transfer address was
+//   report_addr: L1 address for 13 words {hw, sw_ineligible, sw_unsupported, seeks,
+//                transfers issued, skips, restores, write seeks, write restores,
+//                unused stack bytes, fallbacks, write fallbacks, pushes} -- how each transfer address was
 //                produced (TT_TA_ADDRGEN_STATS builds only; see api/tensor/transfer_noc_addr.h)
 
 #include "api/dataflow/dataflow_buffer.h"
@@ -147,6 +147,9 @@ void kernel_main() {
     report[7] = tensor_accessor::detail::transfer_stats.write_seeks;
     report[8] = tensor_accessor::detail::transfer_stats.write_restores;
     report[9] = unused_stack_bytes();
+    report[10] = tensor_accessor::detail::transfer_stats.fallbacks;
+    report[11] = tensor_accessor::detail::transfer_stats.write_fallbacks;
+    report[12] = tensor_accessor::detail::transfer_stats.pushes;
 #else
     (void)report_addr;
     (void)transfers;

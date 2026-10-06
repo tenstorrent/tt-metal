@@ -20,6 +20,7 @@
 #error "tensor_accessor_addrgen.h requires the ATT address backend (NOC_ATT_ENABLED); see address_generators.md"
 #endif
 
+#include <cstddef>
 #include <cstdint>
 #include <type_traits>
 
@@ -39,15 +40,12 @@ constexpr const noc_att::Window& interleaved_window() {
     return noc_att::map_window(ACTIVE_ATT_MAP, IsDram ? noc_att::WindowClass::Dram : noc_att::WindowClass::Worker);
 }
 
-// The bank shift lives in a MISC register shared by an address generator's two sides, and a walk's registers are
-// restored into whichever slot is free, so every walk on a core must use the same shift. DRAM and worker windows do on
-// the current maps (26); a map where they differ would need per-slot bookkeeping here.
+// The bank shift (where the bank number goes in the address) lives in a MISC field shared by an address generator's two
+// sides. Maps can give DRAM and worker windows different shifts (grendel_qsr1: 33 and 24), so the walks below only put
+// two walks on one generator when their shifts agree (shift_fits).
 namespace att_check {
 constexpr const noc_att::Window& dram = noc_att::map_window(ACTIVE_ATT_MAP, noc_att::WindowClass::Dram);
 constexpr const noc_att::Window& worker = noc_att::map_window(ACTIVE_ATT_MAP, noc_att::WindowClass::Worker);
-static_assert(
-    noc_att::is_no_window(dram) || noc_att::is_no_window(worker) || dram.endpoint_shift == worker.endpoint_shift,
-    "walks share one bank shift per address generator; DRAM and worker windows must use the same endpoint_shift");
 }  // namespace att_check
 
 // ATT selector of interleaved bank `bank`, resolved exactly as the software path resolves it (DRAM bank ->
@@ -117,147 +115,187 @@ inline __attribute__((always_inline)) uint64_t pop_src_noc_addr_interleaved() {
 }
 
 // ============================================================================
-// Walkers behind tensor_accessor::transfer_noc_addr() (api/tensor/transfer_noc_addr.h)
+// Walks behind tensor_accessor::transfer_noc_addr() (api/tensor/transfer_noc_addr.h)
 // ============================================================================
 //
-// A walker is one address-generator source side programmed to walk one accessor's pages in page-id order. Each DM
-// core has two: the source side of addrgen_0 and of addrgen_1. (Using one side per addrgen gives each walker its own
-// MISC register -- bank_offset in MISC is shared by an addrgen's two sides, see addrgen_api.hpp.) Transfer addresses
-// are popped back to the RISC-V and handed to the ordinary NoC APIs, never pushed into a command buffer, so which
-// command buffer an addrgen is paired with doesn't matter here.
+// Design and costs: addrgen_walker.md (next to this header), section 6.
 //
-// A walker remembers which accessor it walks, the index the hardware is positioned at, and the index where its current
-// programming stops being valid (run_end). A transfer at or ahead of the hardware inside the run pops, skipping forward
-// in hardware over any gap and following a repeating stride (pop_index). Only a transfer behind the hardware (a
-// re-read, a backward jump, two streams alternating on one accessor) or past the run re-seeks in software -- correct,
-// just not the fast path. A third accessor evicts the least recently used walker.
+// The address generator produces the next address of a programmed pattern; the NoC APIs ask for the address of page p.
+// A "walk" bridges the two for one tensor (one binding, one direction, one kind of index) while the tensor is accessed
+// as a stream: the hardware serves the walk's pages in order, and anything else uses the software address.
 //
-// Recipes:
+// Sides: each address generator has a source and a destination side, so a DM core has four. A read walks on a source
+// side and a write on a destination side, two sides per direction.
+//
+// More walks in one direction than sides (default): spill and reload. A walk that needs a side when both are taken
+// spills the least recently used one -- its position is read back (3 register reads) and parked with its programming --
+// and a parked walk that comes back is reloaded the same way (programming + position written back, no software seek).
+// With two sides per direction, least recently used is "not the side used last", so one byte per direction tracks it.
+// This is the run-time stand-in for spill and reload placed by the compiler (addrgen_compiler_interface.md), which
+// knows which tensor comes back next; LRU can only guess, and round-robin over more tensors than sides reloads every
+// transfer. TT_TA_ADDRGEN_NO_SPILL: first use is sticky instead -- a side's first walk keeps it and the extra walks use
+// software.
+//   side 0: addrgen_1 source  (reads)    side 2: addrgen_0 destination (writes)
+//   side 1: addrgen_0 source  (reads)    side 3: addrgen_1 destination (writes)
+// Sides 0 and 2 come first because they are the ones that can later push straight into the command buffers the NoC
+// APIs read and write with (addrgen N feeds command buffer N; reads use command buffer 1, writes command buffer 0).
+//
+// State: one small SideState per side, thread-local at a fixed address, so each check is an independent load (no
+// chain through records). The walk's identity is a compile-time key (binding id + kind), so finding the walk is one
+// compare per side of the direction.
+//
+// Per request for index i on the walk's side (serve()):
+//   i == next, inside the run          -> pop (the hit path)
+//   next < i, inside the run, small gap -> skip forward in hardware, then pop; a gap that repeats becomes the stride
+//   i == next at the end of the run     -> re-seek (sharded runs; still the same stream)
+//   anything else (behind, large jump)  -> if the walk was streaming (its last request was a hit): re-seek now,
+//                                          keeping the stride. Otherwise software for this
+//                                          transfer, and the hardware is re-taken as soon as a request continues at the
+//                                          walk's stride or repeats the last miss's gap
+//
+// The ATT window bits are part of every walk's programming (the outer loop starts at window.compare), so each pop is
+// the complete NoC address.
+//
+// Recipes (plan_*: where page i lives, as a programming and how many indices it covers):
 //   Interleaved: one programming walks the whole tensor. BANK_INNER cycles the bank every page and the inner loop
 //     advances one page per bank wrap, as InterleavedAddrGen computes in software. Needs the device's interleaved
 //     banks to be an ascending stride-1 ATT selector run with no per-bank offset (interleaved_walkable).
 //   Sharded, cross-bank (plan_cross_bank): when the shards along the innermost split dimension sit on banks with
 //     ascending stride-1 selectors at the same bank-local address, one BANK_MIDDLE programming walks a segment in one
 //     shard, the same segment in the next shard's bank, ..., then steps the outer loop to the next row (or, for a
-//     split outermost dimension such as HEIGHT / round-robin, to the next shard slot in each bank). A WIDTH tensor or
-//     a BLOCK shard band is then one seek, not one per page.
-//   Sharded, fallback (any rank, any distribution, DRAM or L1): software resolves the requested page's address and
-//     the length of the run of following page ids that are contiguous in that same bank (contiguous_run); the
-//     address generator walks the run with a single-bank BankingConfig and a page-stride inner loop.
-//   shard_pages() and ShardView have their own walker kinds (WalkKind) -- see their sections at the end.
+//     split outermost dimension such as HEIGHT / round-robin, to the next shard slot in each bank).
+//   Sharded, fallback (any rank, any distribution, DRAM or L1): software resolves the page's address and the length of
+//     the run of following page ids that are contiguous in that same bank (contiguous_run); the address generator
+//     walks the run with a single-bank BankingConfig and a page-stride inner loop.
+//   shard_pages() and ShardView have their own walk kinds (WalkKind) -- see their sections at the end.
 //
 // Must be included after api/tensor/tensor_accessor.h (it is, via transfer_noc_addr.h).
 
-template <typename T>
-struct is_tensor_accessor : std::false_type {};
+// Outer-loop end bound. The outer loop starts at the ATT window's compare bits, so its end must exceed every window's
+// compare (grendel_qsr1 has one at bit 48, the inner sentinel).
+inline constexpr uint64_t kOuterEndSentinel = uint64_t{1} << 62;
+namespace att_check {
+static_assert(
+    (noc_att::is_no_window(dram) || dram.compare < kOuterEndSentinel) &&
+        (noc_att::is_no_window(worker) || worker.compare < kOuterEndSentinel),
+    "an ATT window's compare bits must stay below the outer loop's end, or the walk wraps and loses them");
+}  // namespace att_check
+
+// Metal 2.0 TensorAccessors (built from a binding token) have a hardware recipe: their binding id is a compile-time
+// constant in their type, which is the walk's identity. Accessors without one use software.
+template <typename T, typename = void>
+struct bound_tensor_accessor : std::false_type {};
 template <typename DSpecT>
-struct is_tensor_accessor<TensorAccessor<DSpecT>> : std::true_type {};
+struct bound_tensor_accessor<TensorAccessor<DSpecT>, void>
+    : std::bool_constant<DSpecT::binding_id != tensor_accessor::NO_BINDING_ID> {};
 
-// Layouts with a hardware recipe: every TensorAccessor (interleaved and sharded).
 template <typename Accessor>
-inline constexpr bool has_hw_recipe = is_tensor_accessor<Accessor>::value;
+inline constexpr bool has_hw_recipe = bound_tensor_accessor<Accessor>::value;
 
-// What a walker steps through. One accessor can have a walker of each kind and direction; they're separate walks.
-enum class WalkKind : uint8_t {
-    Pages,       // global page ids (TensorAccessor / PageView / wrapper / pages())
-    ShardBases,  // shard ids -> each shard's base address (ShardView)
-    ShardPages,  // pages of one shard in storage order (shard_pages())
+// What a walk steps through. One tensor can have a walk of each kind and direction; they're separate walks.
+enum class WalkKind : uint32_t {
+    Pages = 0,       // global page ids (TensorAccessor / PageView / wrapper / pages())
+    ShardBases = 1,  // shard ids -> each shard's base address (ShardView)
+    ShardPages = 2,  // pages of one shard in storage order (shard_pages())
 };
+
+// Walk identity: binding id and kind. Never 0 (0 = free side).
+template <typename Accessor, WalkKind Kind>
+inline constexpr uint32_t walk_key = 0x80000000u | (Accessor::DSpec::binding_id << 2) | static_cast<uint32_t>(Kind);
 
 using tensor_accessor::TransferDir;
 
-// Hardware slots: each address generator has a source and a destination side, so a DM core has four. A read walks on a
-// source side and a write on a destination side, so reads and writes never compete for slots:
-//   slot = side * 2 + generator:  reads -> 0, 1 (source sides)   writes -> 2, 3 (destination sides)
-inline constexpr uint32_t kNumSlots = 4;
-inline constexpr uint32_t kSlotsPerDir = 2;
-constexpr uint32_t slot_generator(uint32_t slot) { return slot & 1u; }
-constexpr overlay::Side slot_side(uint32_t slot) { return slot >> 1 ? overlay::Side::Dest : overlay::Side::Src; }
-constexpr uint32_t first_slot(TransferDir dir) { return dir == TransferDir::Write ? kSlotsPerDir : 0; }
+inline constexpr uint32_t kNumSides = 4;
+constexpr uint32_t first_side(TransferDir dir) { return dir == TransferDir::Write ? 2u : 0u; }
+template <uint32_t S>
+inline constexpr overlay::AddrGen side_generator = (S == 0 || S == 3) ? overlay::ADDRGEN_1 : overlay::ADDRGEN_0;
+template <uint32_t S>
+inline constexpr overlay::Side side_of = S < 2 ? overlay::Side::Src : overlay::Side::Dest;
+// The other side of the same address generator: 0 <-> 3 (addrgen_1), 1 <-> 2 (addrgen_0).
+constexpr uint32_t sibling_side(uint32_t s) { return 3u - s; }
 
-// Walker records, 80 bytes each: 8-byte fields first, small ones last. They are thread-local, and thread-local storage
-// shares a DM core's 8 KB with its stack -- see the budget below.
-struct Walker {
-    uint64_t hi_bits = 0;    // window compare bits OR'd onto every pop (the addrgen produces selector | local)
-    uint64_t last_addr = 0;  // ShardBases: the base popped for `shard` (ShardView transfers repeat it with offsets)
-    uint32_t key = 0;        // which accessor this walks (walk_key); 0 = free record
-    uint32_t bank_base = 0;  // guards against a new accessor reusing a dead one's address
-    uint32_t page_size = 0;
-    uint32_t next = 0;        // index the hardware is positioned at: page id, shard id, or page-in-shard (by kind)
-    uint32_t run_end = 0;     // first index the current programming does not cover
-    uint32_t last = 0;        // index of the previous pop (stride learning, see pop_index)
-    uint32_t last_delta = 0;  // last - the pop before it (0 = none yet)
-    uint32_t shard = 0;       // ShardPages: the shard being walked. ShardBases: the shard whose base was popped last
-    uint32_t last_use = 0;    // LRU stamp
-    // The walk's programming minus its start position (WalkProgram), kept so a spill only has to read back the
-    // position (overlay::save_position_addrgen) and a restore writes the rest from here. Narrowed to fit the record:
-    // bank-local strides and ends fit 32 bits and the bank registers are 8 bits; a programming that doesn't fit is
-    // not restorable and is dropped instead of parked. The outer loop's end is always kInnerEndSentinel.
-    uint32_t inner_stride = 0;
-    uint32_t inner_end = 0;  // 0 = kInnerEndSentinel
-    uint32_t outer_stride = 0;
-    uint8_t bank_first = 0;  // BANK_BASE: first bank's endpoint id
-    uint8_t bank_size = 0;
-    uint8_t bank_skip = 0;
-    uint8_t bank_shift = 0;
-    uint8_t bank_order = 0;
-    bool restorable = false;
-    WalkKind kind = WalkKind::Pages;
-    TransferDir dir = TransferDir::Read;
-    bool has_prev = false;  // `last` is valid
-    bool has_base = false;  // ShardBases: last_addr is valid
-    uint8_t slot1 = 0;      // 1 + hardware slot the walk occupies; 0 = not resident
-    uint8_t parked1 = 0;    // 1 + entry of parked_pos holding the walk's position; 0 = none
-    bool resident() const { return slot1 != 0; }
-    uint32_t slot() const { return slot1 - 1u; }
+// A walk's bank shift: its memory's ATT window (an accessor's tensor is in DRAM or in L1, a compile-time property, and
+// every recipe below resolves its addresses in that window).
+template <typename Accessor>
+inline constexpr uint32_t walk_shift = interleaved_window<Accessor::DSpec::is_dram>().endpoint_shift;
+
+// A forward gap of up to this many indices is skipped in hardware (one discarding pop, about one cycle per address);
+// a larger jump uses software and re-takes the hardware when the stream continues.
+inline constexpr uint32_t kMaxSkip = 64;
+
+// One walk: on a side (sides[]) or parked (parked[]). All zero = free: thread_local zero-initialized storage (.tbss)
+// starts fresh for every kernel launch.
+struct SideState {
+    uint64_t last_addr;  // ShardBases: the base popped for `shard` (ShardView transfers repeat it with offsets)
+    uint32_t owner;      // walk_key of the walk; 0 = free
+    uint32_t next;       // index the hardware produces on the next pop
+    uint32_t stride;     // indices the hardware advances per pop
+    uint32_t run_end;    // first index the current programming does not cover
+    uint32_t last;       // index of the previous request on this walk
+    uint32_t last_gap;   // gap of the last request that wasn't a hit (a hit's gap is the stride; see serve())
+    uint32_t miss_gap;   // gap of the last request served in software (a repeat re-takes the hardware)
+    uint32_t shard;      // ShardPages: the shard being walked. ShardBases: the shard of last_addr
+    // The walk's programming minus its start position, kept so a spilled walk can be reloaded: a spill reads back only
+    // the position (overlay::save_position_addrgen). Narrowed to fit: bank-local strides and ends fit 32 bits and the
+    // bank registers are 8 bits; a programming that doesn't fit is not restorable and is dropped instead of parked.
+    // The outer loop's end is always kOuterEndSentinel.
+    uint32_t inner_stride;
+    uint32_t inner_end;  // 0 = kInnerEndSentinel
+    uint32_t outer_stride;
+    uint8_t bank_base;
+    uint8_t bank_size;
+    uint8_t bank_skip;
+    uint8_t bank_shift;
+    uint8_t bank_order;
+    uint8_t has_base;    // ShardBases: last_addr is valid
+    uint8_t restorable;  // the programming fits the fields above
+    uint8_t streaming;   // the last request was a hit: the next index of the current programming
 };
-
-// More walks than slots are kept as records; when a walk loses its slot its position is parked and its registers are
-// written back (programming from the record, position from the pool) when it is next used, instead of re-seeking in
-// software. Parked positions live in a small shared pool (not in the records), since at most a couple of walks are
-// parked at a time; if the pool is full the walk is simply forgotten and
-// re-seeks if used again. TT_TA_ADDRGEN_NO_SPILL parks nothing (an evicted walk is forgotten), for comparison.
-inline constexpr uint32_t kNumWalks = 4;  // e.g. two tensors read and two written, or three read
+static_assert(sizeof(SideState) == 64 && sizeof(SideState) % sizeof(uint64_t) == 0);
+struct ParkedWalk {
+    SideState walk;
+    overlay::AddrgenPosition pos;
+};
 #if defined(TT_TA_ADDRGEN_NO_SPILL)
 inline constexpr uint32_t kNumParked = 0;
 #else
-inline constexpr uint32_t kNumParked = 2;
+// One parked walk: three walks in a direction (two on sides, one parked). A walk spilled while the pool is full is
+// forgotten and re-seeks when it comes back.
+inline constexpr uint32_t kNumParked = 1;
 #endif
-inline constexpr uint32_t kParkedStorage = kNumParked > 0 ? kNumParked : 1;
+static_assert(offsetof(SideState, owner) % 8 == 0 && offsetof(SideState, next) == offsetof(SideState, owner) + 4);
+static_assert(offsetof(SideState, stride) % 8 == 0 && offsetof(SideState, run_end) == offsetof(SideState, stride) + 4);
+inline thread_local SideState sides[kNumSides];
 
-// All walker state is zero-initialized on purpose: it is thread_local, and only zero-initialized TLS (.tbss) is known
-// to start fresh for every kernel launch. A nonzero initializer (.tdata) let a previous kernel's walks leak into the
-// next.
-inline thread_local Walker walkers[kNumWalks];
-inline thread_local overlay::AddrgenPosition parked_pos[kParkedStorage];
-inline thread_local uint8_t parked_owner1[kParkedStorage];  // 1 + walk record parked there; 0 = free
-inline thread_local uint8_t slot_walk1[kNumSlots];          // 1 + walk record occupying each slot; 0 = free
-inline thread_local uint8_t generator_ready[2];             // this kernel already reset generator g
-inline thread_local uint32_t walker_clock;
+// owner/next and stride/run_end are adjacent, 8-byte aligned 32-bit pairs: read each pair with one load
+// (low word = the first field).
+inline __attribute__((always_inline)) uint64_t load_pair(const uint32_t& first) {
+    using word = const uint64_t __attribute__((may_alias));
+    return *reinterpret_cast<word*>(&first);
+}
+inline thread_local ParkedWalk parked[kNumParked > 0 ? kNumParked : 1];
+inline thread_local uint8_t last_side[2];        // per direction: the side used last (the other one is the LRU)
+inline thread_local uint8_t generator_ready[2];  // this kernel already reset generator g
 
-// A DM core's 8 KB of thread-local storage + stack already holds ~6.6 KB of DFB/CB interface state. At 640 bytes of
-// walker state the sharded path overflowed the remaining stack and hung; ~380 bytes (this) runs the whole suite.
-inline constexpr uint32_t kWalkerTlsBytes = sizeof(walkers) + sizeof(parked_pos) + sizeof(parked_owner1) +
-                                            sizeof(slot_walk1) + sizeof(generator_ready) + sizeof(walker_clock);
-static_assert(kWalkerTlsBytes <= 400, "walker state eats into the DM stack (TLS and stack share 8 KB); keep it small");
-
-// Walk identity. An accessor built from a Metal 2.0 binding token carries its binding id in its type (Paul's
-// DistributionSpec BindingId -- a base-address runtime-arg offset, so small), a compile-time constant that also makes
-// copies of the accessor (e.g. the one an iterator holds) share one walk. Other accessors are identified by address
-// (an L1 address, so it fits 32 bits and never has the top bit set).
-template <typename Accessor>
-inline uint32_t walk_key(const Accessor& acc) {
-    if constexpr (Accessor::DSpec::binding_id != tensor_accessor::NO_BINDING_ID) {
-        return (uint32_t{1} << 31) | Accessor::DSpec::binding_id;
-    } else {
-        return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&acc));
-    }
+// Whether a walk with bank shift `shift` can go on side s: the other side of its generator, which shares the shift
+// field, is free or uses the same shift. (Programming s writes the shared field, so a mismatch would silently move the
+// other walk's bank number to the wrong bits.)
+inline bool shift_fits(uint32_t s, uint32_t shift) {
+    const SideState& other = sides[sibling_side(s)];
+    return other.owner == 0 || other.bank_shift == shift;
 }
 
-// One programming of a walker's source side. Loop semantics (checked by AddrgenLoopProbe): the inner loop counts from
-// inner_start in steps of inner_stride and wraps to 0 at inner_end; each wrap carries into the next loop out (the bank
-// loop under BANK_MIDDLE, the outer loop under BANK_INNER once the banks wrap). The outer loop keeps outer_start as
-// its base and adds outer_stride per carry. Address = inner + outer + (bank << endpoint_shift).
+// A DM core's 8 KB of thread-local storage + stack already holds ~6.6 KB of DFB/CB interface state. At 640 bytes of
+// walker state the sharded path overflowed the remaining stack and hung; ~380 bytes ran the whole suite.
+inline constexpr uint32_t kWalkerTlsBytes =
+    sizeof(sides) + sizeof(parked) + sizeof(last_side) + sizeof(generator_ready);
+static_assert(kWalkerTlsBytes <= 400, "walk state shares the DM core's thread-local storage and stack; keep it small");
+
+// One programming of a side. Loop semantics (checked by AddrgenLoopProbe): the inner loop counts from inner_start in
+// steps of inner_stride and wraps to 0 at inner_end; each wrap carries into the next loop out (the bank loop under
+// BANK_MIDDLE, the outer loop under BANK_INNER once the banks wrap). The outer loop keeps outer_start as its base and
+// adds outer_stride per carry. Address = inner + outer + (bank << endpoint_shift); outer_start includes the ATT
+// window's compare bits, so the address is the complete NoC address.
 struct WalkProgram {
     overlay::BankingConfig banking;
     uint64_t inner_stride = 0;  // one page (page walks) or one shard (shard-base walks)
@@ -267,27 +305,15 @@ struct WalkProgram {
     uint64_t outer_stride = 0;
 };
 
-// Run f(generator, side) for a slot: the generator and side are immediates in each RoCC instruction (template arguments
-// here), so a slot chosen at run time dispatches to one of four instantiations.
-template <typename F>
-inline __attribute__((always_inline)) auto with_slot(uint32_t slot, F&& f) {
-    using overlay::AddrGen;
-    using overlay::Side;
-    switch (slot) {
-        case 0:
-            return f(std::integral_constant<AddrGen, overlay::ADDRGEN_0>{}, std::integral_constant<Side, Side::Src>{});
-        case 1:
-            return f(std::integral_constant<AddrGen, overlay::ADDRGEN_1>{}, std::integral_constant<Side, Side::Src>{});
-        case 2:
-            return f(std::integral_constant<AddrGen, overlay::ADDRGEN_0>{}, std::integral_constant<Side, Side::Dest>{});
-        default:
-            return f(std::integral_constant<AddrGen, overlay::ADDRGEN_1>{}, std::integral_constant<Side, Side::Dest>{});
-    }
-}
+// A seek's result: the programming that makes the next pop index i, and the first index it does not cover.
+struct Seek {
+    WalkProgram prog;
+    uint32_t run_end = UINT32_MAX;
+};
 
 // A generator is reset once, the first time this kernel uses either of its sides, to clear whatever an earlier kernel
 // left (face size and the like, which no walk programs). Never again: a reset clears both sides, and the other side may
-// hold a live walk. Every register a walk depends on is written when it is programmed or restored.
+// hold a live walk. Every register a walk depends on is written when it is programmed.
 template <overlay::AddrGen G>
 inline __attribute__((always_inline)) void ensure_generator_reset() {
     if (!generator_ready[G]) {
@@ -296,146 +322,105 @@ inline __attribute__((always_inline)) void ensure_generator_reset() {
     }
 }
 
-// Program a walk into its slot and record the programming for restore_slot. Every field is written each time, so
-// nothing from a previous programming (of this or another recipe) leaks in.
-inline void program_walker(Walker& w, const WalkProgram& prog) {
+// Program side S and record the programming in its state (for a later reload). Every register is written each time, so
+// nothing from a previous programming leaks in.
+template <uint32_t S>
+inline void program_side(const WalkProgram& prog) {
+    constexpr overlay::AddrGen G = side_generator<S>;
+    constexpr overlay::Side D = side_of<S>;
+    SideState& s = sides[S];
     const overlay::BankingConfig& b = prog.banking;
-    w.inner_stride = static_cast<uint32_t>(prog.inner_stride);
-    w.inner_end = prog.inner_end == kInnerEndSentinel ? 0 : static_cast<uint32_t>(prog.inner_end);
-    w.outer_stride = static_cast<uint32_t>(prog.outer_stride);
-    w.bank_first = static_cast<uint8_t>(b.base);
-    w.bank_size = static_cast<uint8_t>(b.size);
-    w.bank_skip = static_cast<uint8_t>(b.skip);
-    w.bank_shift = static_cast<uint8_t>(b.endpoint_id_shift);
-    w.bank_order = static_cast<uint8_t>(b.bank_order);
-    w.restorable = (prog.inner_stride >> 32) == 0 && (prog.outer_stride >> 32) == 0 &&
+    s.inner_stride = static_cast<uint32_t>(prog.inner_stride);
+    s.inner_end = prog.inner_end == kInnerEndSentinel ? 0 : static_cast<uint32_t>(prog.inner_end);
+    s.outer_stride = static_cast<uint32_t>(prog.outer_stride);
+    s.bank_base = static_cast<uint8_t>(b.base);
+    s.bank_size = static_cast<uint8_t>(b.size);
+    s.bank_skip = static_cast<uint8_t>(b.skip);
+    s.bank_shift = static_cast<uint8_t>(b.endpoint_id_shift);
+    s.bank_order = static_cast<uint8_t>(b.bank_order);
+    s.restorable = (prog.inner_stride >> 32) == 0 && (prog.outer_stride >> 32) == 0 &&
                    (prog.inner_end == kInnerEndSentinel || (prog.inner_end != 0 && (prog.inner_end >> 32) == 0)) &&
                    ((b.base | b.size | b.skip | b.endpoint_id_shift) >> 8) == 0;
-    with_slot(w.slot(), [&](auto g, auto side) {
-        constexpr overlay::AddrGen G = decltype(g)::value;
-        constexpr overlay::Side S = decltype(side)::value;
-        ensure_generator_reset<G>();
-        overlay::setup_banking_addrgen<G, S>(prog.banking);
-        overlay::setup_inner_loop_addrgen<G, S>(prog.inner_stride, prog.inner_end, prog.inner_start);
-        overlay::setup_outer_loop_addrgen<G, S>(prog.outer_stride, kInnerEndSentinel, prog.outer_start);
-    });
+    ensure_generator_reset<G>();
+    overlay::setup_banking_addrgen<G, D>(prog.banking);
+    overlay::setup_inner_loop_addrgen<G, D>(prog.inner_stride, prog.inner_end, prog.inner_start);
+    overlay::setup_outer_loop_addrgen<G, D>(prog.outer_stride, kOuterEndSentinel, prog.outer_start);
 }
 
-// Returns the walker's current address and advances it by `amount` addresses (the hardware's skip; 1 = next).
-inline uint64_t pop_walker(uint32_t slot, uint32_t amount) {
-    return with_slot(slot, [&](auto g, auto side) {
-        return overlay::pop_addrgen<decltype(g)::value, decltype(side)::value>(amount);
-    });
+// Returns the side's current address and advances it by `amount` addresses (1 = next).
+template <uint32_t S>
+inline __attribute__((always_inline)) uint64_t pop_side(uint32_t amount) {
+    return overlay::pop_addrgen<side_generator<S>, side_of<S>>(amount);
 }
 
-// What one transfer cost the walker, for the test instrumentation (TransferStats in transfer_noc_addr.h).
-struct PopInfo {
-    bool seeked = false;    // the walk was (re)programmed in software
-    bool skipped = false;   // the hardware skipped forward over untransferred indices
-    bool restored = false;  // a parked walk was written back into an address generator
-};
+// Push: the sides whose generator feeds the command buffer the NoC API issues that direction on can hand the address
+// straight to it instead of returning it. Side 0 is generator 1's source side, which writes the read command buffer's
+// (1) SRC_ADDR; side 2 is generator 0's destination side, which writes the write command buffer's (0) DEST_ADDR. Sides
+// 1 and 3 feed the other direction's buffer, so they always pop.
+template <uint32_t S>
+inline constexpr bool is_push_side = S == 0 || S == 2;
+static_assert(side_generator<0> == overlay::ADDRGEN_1 && side_of<0> == overlay::Side::Src);
+static_assert(side_generator<2> == overlay::ADDRGEN_0 && side_of<2> == overlay::Side::Dest);
 
-inline void save_slot(uint32_t slot, overlay::AddrgenPosition& out) {
-    with_slot(slot, [&](auto g, auto side) {
-        overlay::save_position_addrgen<decltype(g)::value, decltype(side)::value>(out);
-    });
+// Returned instead of an address when the walker pushed it into the command buffer: no NoC address has bit 63 set.
+inline constexpr uint64_t kAddrInCmdBuf = ~0ull;
+
+// Writes side S's current address into its command buffer and advances it by `amount` addresses. The push's skip
+// count is in addition to its own advance of one (unlike pop's), hence amount - 1.
+template <uint32_t S>
+inline __attribute__((always_inline)) void push_side(uint32_t amount) {
+    static_assert(is_push_side<S>);
+    if constexpr (S == 0) {
+        __builtin_riscv_ttrocc_addrgen_push_src_pop_x(overlay::ADDRGEN_1, amount - 1);
+    } else {
+        __builtin_riscv_ttrocc_addrgen_push_dest_pop_x(overlay::ADDRGEN_0, amount - 1);
+    }
 }
 
-// Write walk w back into `slot`: its programming from the record, its position from `pos`.
-inline void restore_slot(uint32_t slot, const Walker& w, const overlay::AddrgenPosition& pos) {
+// Spill: read side S's position back (its programming is already in sides[S]).
+template <uint32_t S>
+inline void save_side(overlay::AddrgenPosition& pos) {
+    overlay::save_position_addrgen<side_generator<S>, side_of<S>>(pos);
+}
+
+// Reload: write the programming in sides[S] and position `pos` into side S; the walk continues exactly where it
+// stopped.
+template <uint32_t S>
+inline void restore_side(const overlay::AddrgenPosition& pos) {
+    const SideState& s = sides[S];
     const overlay::AddrgenProgram prog{
         .banking =
             {
-                .endpoint_id_shift = w.bank_shift,
-                .size = w.bank_size,
-                .skip = w.bank_skip,
-                .base = w.bank_first,
-                .bank_order = static_cast<overlay::bank_order_e>(w.bank_order),
+                .endpoint_id_shift = s.bank_shift,
+                .size = s.bank_size,
+                .skip = s.bank_skip,
+                .base = s.bank_base,
+                .bank_order = static_cast<overlay::bank_order_e>(s.bank_order),
             },
-        .inner_stride = w.inner_stride,
-        .inner_end = w.inner_end == 0 ? kInnerEndSentinel : w.inner_end,
-        .outer_stride = w.outer_stride,
-        .outer_end = kInnerEndSentinel,
+        .inner_stride = s.inner_stride,
+        .inner_end = s.inner_end == 0 ? kInnerEndSentinel : s.inner_end,
+        .outer_stride = s.outer_stride,
+        .outer_end = kOuterEndSentinel,
     };
-    with_slot(slot, [&](auto g, auto side) {
-        overlay::restore_addrgen<decltype(g)::value, decltype(side)::value>(prog, pos);
-    });
+    ensure_generator_reset<side_generator<S>>();
+    overlay::restore_addrgen<side_generator<S>, side_of<S>>(prog, pos);
 }
 
-// Forget a walk entirely: free its slot and parked registers.
-inline void drop_walk(uint32_t wi) {
-    Walker& w = walkers[wi];
-    if (w.resident()) {
-        slot_walk1[w.slot()] = 0;
-    }
-    if (w.parked1 != 0) {
-        parked_owner1[w.parked1 - 1] = 0;
-    }
-    w = Walker{};
-}
-
-// Take the walk occupying `slot` off the hardware: park its position (or forget it if there is no room to, or if its
-// programming didn't fit the record).
-inline void spill_slot(uint32_t slot) {
-    if (slot_walk1[slot] == 0) {
-        return;
-    }
-    const uint32_t wi = slot_walk1[slot] - 1;
-    if (!walkers[wi].restorable) {
-        drop_walk(wi);
-        return;
-    }
-    uint32_t entry = kNumParked;
-    for (uint32_t i = 0; i < kNumParked; ++i) {
-        if (parked_owner1[i] == 0) {
-            entry = i;
-            break;
-        }
-    }
-    if (entry == kNumParked) {
-        drop_walk(wi);
-        return;
-    }
-    save_slot(slot, parked_pos[entry]);
-    parked_owner1[entry] = static_cast<uint8_t>(wi + 1);
-    Walker& w = walkers[wi];
-    w.parked1 = static_cast<uint8_t>(entry + 1);
-    w.slot1 = 0;
-    slot_walk1[slot] = 0;
-}
-
-// Slot for a walk that needs one in direction `dir`: a free one, else the one whose walk was used least recently.
-inline uint32_t take_slot(TransferDir dir) {
-    const uint32_t first = first_slot(dir);
-    for (uint32_t slot = first; slot < first + kSlotsPerDir; ++slot) {
-        if (slot_walk1[slot] == 0) {
-            return slot;
-        }
-    }
-    const uint32_t pick =
-        walkers[slot_walk1[first + 1] - 1].last_use < walkers[slot_walk1[first] - 1].last_use ? first + 1 : first;
-    spill_slot(pick);
-    return pick;
-}
-
-// Pops index `index` from walker `slot`, positioned at w.next <= index (< w.run_end). A forward gap is skipped in
-// hardware -- one pop that discards index - w.next addresses -- instead of re-seeking. Once the kernel's stride has
-// repeated (index - last == the previous delta), each pop also advances by that stride, so a steady strided walk (every
-// Nth page, e.g. work split across DMs) costs one pop per transfer and discards nothing. A stride is only trusted after
-// it repeats, so one jump (a block edge) doesn't make the next sequential access land behind the hardware.
-inline uint64_t pop_index(Walker& w, uint32_t slot, uint32_t index, PopInfo& info) {
-    info.skipped = index > w.next;
-    if (info.skipped) {
-        (void)pop_walker(slot, index - w.next);
-    }
-    const uint32_t delta = (w.has_prev && index > w.last) ? index - w.last : 0;
-    const uint32_t step = (delta != 0 && delta == w.last_delta) ? delta : 1;
-    w.last_delta = delta;
-    w.last = index;
-    w.has_prev = true;
-    w.next = index + step;
-    return w.hi_bits | pop_walker(slot, step);
-}
+// What one transfer cost, for the test instrumentation (TransferStats and the address trace in transfer_noc_addr.h).
+// Empty in other builds, so nothing is written for it on the hit path.
+#if defined(TT_TA_ADDRGEN_STATS) || defined(TT_TA_ADDRGEN_TRACE)
+struct PopInfo {
+    bool seeked = false;    // the walk was (re)programmed in software
+    bool skipped = false;   // the hardware skipped forward over untransferred indices
+    bool restored = false;  // a parked walk was reloaded into a side (and the side's walk spilled, if it had one)
+    bool fallback = false;  // served in software: no side for the walk (NO_SPILL), or the request broke the stream
+    bool pushed = false;    // the address went straight into the command buffer (kAddrInCmdBuf)
+};
+#define TT_TA_NOTE(info, field) ((info).field = true)
+#else
+struct PopInfo {};
+#define TT_TA_NOTE(info, field) ((void)(info))
+#endif
 
 // The seek routines below are the slow path, and they are deliberately not inlined. Every tensor binding is its own
 // type (Paul's BindingId), so each accessor gets its own copy of these; inlined, the copies' locals (plans, programs)
@@ -443,27 +428,29 @@ inline uint64_t pop_index(Walker& w, uint32_t slot, uint32_t index, PopInfo& inf
 // frame that way, on a DM core whose stack has ~1 KB. As calls, only one seek's locals exist at a time.
 #define TT_TA_SEEK_NOINLINE __attribute__((noinline))
 
-// Interleaved seek: the next pop is page `page_id`; the programming covers every later page.
+// Interleaved: the next pop is page `page_id`; the programming covers every later page.
 template <bool IsDram>
-TT_TA_SEEK_NOINLINE inline void seek_interleaved(Walker& w, uint32_t page_id) {
+TT_TA_SEEK_NOINLINE inline Seek plan_interleaved(uint32_t bank_base, uint32_t page_size, uint32_t page_id) {
     constexpr uint32_t num_banks = IsDram ? NUM_DRAM_BANKS : NUM_L1_BANKS;
     const noc_att::Window& window = interleaved_window<IsDram>();
-    const WalkProgram prog{
-        .banking =
+    return Seek{
+        .prog =
             {
-                .endpoint_id_shift = window.endpoint_shift,
-                .size = num_banks,
-                .skip = 1,
-                .base = interleaved_bank_selector<IsDram>(0),
-                .current = page_id % num_banks,  // relative to base (see configure_addrgen_src_interleaved)
-                .bank_order = overlay::BANK_INNER,
+                .banking =
+                    {
+                        .endpoint_id_shift = window.endpoint_shift,
+                        .size = num_banks,
+                        .skip = 1,
+                        .base = interleaved_bank_selector<IsDram>(0),
+                        .current = page_id % num_banks,  // relative to base (see configure_addrgen_src_interleaved)
+                        .bank_order = overlay::BANK_INNER,
+                    },
+                .inner_stride = page_size,
+                .inner_start = bank_base + static_cast<uint64_t>(page_id / num_banks) * page_size,
+                .outer_start = window.compare,
             },
-        .inner_stride = w.page_size,
-        .inner_start = w.bank_base + static_cast<uint64_t>(page_id / num_banks) * w.page_size,
+        .run_end = UINT32_MAX,
     };
-    program_walker(w, prog);
-    w.run_end = UINT32_MAX;
-    w.hi_bits = window.compare;
 }
 
 // Number of page ids starting at `page_id` whose pages sit back to back (one aligned page apart) in the bank that
@@ -492,28 +479,24 @@ inline uint32_t contiguous_run(const Accessor& acc, uint32_t page_id) {
     return 1;  // unreachable: i == 0 always returns
 }
 
-// Program a walk that starts at full NoC address `addr` and steps `stride` bytes within that one bank. Returns the
-// window bits to OR onto each pop (the addrgen produces only selector << endpoint_shift | local).
-TT_TA_SEEK_NOINLINE inline uint64_t seek_single_bank(Walker& w, uint64_t addr, uint64_t stride) {
+// A walk that starts at full NoC address `addr` and steps `stride` bytes within that one bank.
+TT_TA_SEEK_NOINLINE inline WalkProgram plan_single_bank(uint64_t addr, uint64_t stride) {
     const noc_att::Window& window =
         noc_att::map_window(ACTIVE_ATT_MAP, noc_att::matching_window_class(ACTIVE_ATT_MAP, addr));
-    const uint32_t selector = window.selector(addr);
-    const uint64_t local = window.local_address(addr);
-    const WalkProgram prog{
+    return WalkProgram{
         .banking =
             {
                 .endpoint_id_shift = window.endpoint_shift,
                 .size = 1,
                 .skip = 1,
-                .base = selector,
+                .base = window.selector(addr),
                 .current = 0,
                 .bank_order = overlay::BANK_INNER,
             },
         .inner_stride = stride,
-        .inner_start = local,
+        .inner_start = window.local_address(addr),
+        .outer_start = window.compare,
     };
-    program_walker(w, prog);
-    return addr & ~(local | (static_cast<uint64_t>(selector) << window.endpoint_shift));
 }
 
 // Geometry of `page_id` in a sharded accessor, in pages. k is the innermost dimension whose shard doesn't span the
@@ -577,17 +560,11 @@ inline uint32_t rows_left_in_band(const Accessor& acc, const ShardedPosition& po
     return 1;  // k == 0: the band is a single row
 }
 
-struct CrossBankPlan {
-    WalkProgram prog;  // inner: within a segment; outer: bank-local row (k >= 1) or slot (k == 0) address
-    uint64_t hi_bits;
-    uint32_t run;  // pages this programming covers from page_id
-};
-
 // Whether the shards of page_id's band can be walked by one BANK_MIDDLE programming: >= 2 whole shards along k, on
 // banks with ascending stride-1 selectors in one ATT window, all at the same bank-local address for the same row.
 // k == 0 (e.g. HEIGHT, round-robin): the band is every shard, and a bank wrap moves to the next slot in each bank.
 template <typename Accessor>
-inline bool plan_cross_bank(const Accessor& acc, uint32_t page_id, uint8_t noc, CrossBankPlan& plan) {
+inline bool plan_cross_bank(const Accessor& acc, uint32_t page_id, uint8_t noc, Seek& seek) {
     const ShardedPosition pos = sharded_position(acc, page_id);
     if (pos.k < 0 || pos.extent_k % pos.shard_k != 0) {
         return false;  // single shard, or a ragged last shard along k (its segment is shorter)
@@ -610,11 +587,9 @@ inline bool plan_cross_bank(const Accessor& acc, uint32_t page_id, uint8_t noc, 
         noc_att::map_window(ACTIVE_ATT_MAP, noc_att::matching_window_class(ACTIVE_ATT_MAP, addr0));
     const uint32_t selector0 = window.selector(addr0);
     const uint64_t local0 = window.local_address(addr0);
-    const uint64_t hi_bits = addr0 & ~(local0 | (static_cast<uint64_t>(selector0) << window.endpoint_shift));
     for (uint32_t j = 1; j < band_banks; ++j) {
         const uint64_t addr = acc.get_noc_addr(band_origin + j * segment, 0, noc);
-        if (window.local_address(addr) != local0 || window.selector(addr) != selector0 + j ||
-            (addr & ~(local0 | (static_cast<uint64_t>(selector0 + j) << window.endpoint_shift))) != hi_bits) {
+        if (window.local_address(addr) != local0 || window.selector(addr) != selector0 + j || !window.matches(addr)) {
             return false;
         }
     }
@@ -631,7 +606,7 @@ inline bool plan_cross_bank(const Accessor& acc, uint32_t page_id, uint8_t noc, 
         }
         outer_start += static_cast<uint64_t>(shard_j / band_banks) * segment * page_size;
     }
-    plan.prog.banking = overlay::BankingConfig{
+    seek.prog.banking = overlay::BankingConfig{
         .endpoint_id_shift = window.endpoint_shift,
         .size = band_banks,
         .skip = 1,
@@ -639,128 +614,371 @@ inline bool plan_cross_bank(const Accessor& acc, uint32_t page_id, uint8_t noc, 
         .current = shard_j % band_banks,
         .bank_order = overlay::BANK_MIDDLE,
     };
-    plan.prog.inner_stride = page_size;
-    plan.prog.inner_start =
+    seek.prog.inner_stride = page_size;
+    seek.prog.inner_start =
         static_cast<uint64_t>((pos.coord_k % pos.shard_k) * pos.inner_volume + pos.inner_flat) * page_size;
-    plan.prog.inner_end = static_cast<uint64_t>(segment) * page_size;
-    plan.prog.outer_start = outer_start;
-    plan.prog.outer_stride = static_cast<uint64_t>(segment) * page_size;
-    plan.hi_bits = hi_bits;
+    seek.prog.inner_end = static_cast<uint64_t>(segment) * page_size;
+    seek.prog.outer_start = window.compare + outer_start;
+    seek.prog.outer_stride = static_cast<uint64_t>(segment) * page_size;
     const uint32_t row_pages = pos.extent_k * pos.inner_volume;
-    plan.run = pos.k == 0 ? acc.dspec().tensor_volume() - page_id
-                          : rows_left_in_band(acc, pos) * row_pages - (page_id - row_start);
+    seek.run_end = page_id + (pos.k == 0 ? acc.dspec().tensor_volume() - page_id
+                                         : rows_left_in_band(acc, pos) * row_pages - (page_id - row_start));
     return true;
 }
 
-// Sharded seek. Prefer one BANK_MIDDLE programming across the shards of page_id's band (plan_cross_bank); otherwise
-// resolve page_id in software and let the address generator walk its contiguous run in that one bank.
+// Sharded: prefer one BANK_MIDDLE programming across the shards of page_id's band (plan_cross_bank); otherwise resolve
+// page_id in software and let the address generator walk its contiguous run in that one bank.
 template <typename Accessor>
-TT_TA_SEEK_NOINLINE inline void seek_sharded(const Accessor& acc, Walker& w, uint32_t page_id, uint8_t noc) {
-    CrossBankPlan plan;
-    if (plan_cross_bank(acc, page_id, noc, plan)) {
-        program_walker(w, plan.prog);
-        w.run_end = page_id + plan.run;
-        w.hi_bits = plan.hi_bits;
-        return;
+TT_TA_SEEK_NOINLINE inline Seek plan_sharded(const Accessor& acc, uint32_t page_id, uint8_t noc) {
+    Seek seek;
+    if (plan_cross_bank(acc, page_id, noc, seek)) {
+        return seek;
     }
-    w.hi_bits = seek_single_bank(w, acc.get_noc_addr(page_id, 0, noc), w.page_size);
-    w.run_end = page_id + contiguous_run(acc, page_id);
+    seek.prog = plan_single_bank(acc.get_noc_addr(page_id, 0, noc), acc.get_aligned_page_size());
+    seek.run_end = page_id + contiguous_run(acc, page_id);
+    return seek;
 }
 
-// Find this accessor's walk in direction `dir` and make sure it occupies a hardware slot. Returns the walk.
-//   - resident: nothing to do;
-//   - parked: take a slot (parking that slot's walk) and write the walk back -- no software seek;
-//   - new (or forgotten): take a free record, else discard the least recently used one; `claimed` tells the caller to
-//     seek.
-inline Walker& acquire_walker(
+// Re-seek side S's walk so that index i is the next pop, advancing `stride` per pop, and pop it.
+template <uint32_t S, typename Planner>
+TT_TA_SEEK_NOINLINE inline uint64_t reseek(
+    SideState& s, uint32_t i, uint32_t stride, const void* pc, uint32_t pa, uint8_t pn, PopInfo& info) {
+    const Seek seek = Planner::plan(pc, pa, pn, i);
+    program_side<S>(seek.prog);
+    s.run_end = seek.run_end;
+    s.stride = stride;
+    s.last_gap = stride;
+    s.miss_gap = 0;
+    s.last = i;
+    s.next = i + stride;
+    s.streaming = 0;  // a fresh programming: streaming again once a request continues it
+    TT_TA_NOTE(info, seeked);
+    return pop_side<S>(stride);
+}
+
+// Request index i from side S, whose walk this is: every case (see the policy at the top). True with the address when
+// the hardware serves it; false when the request uses software. serve() handles the hit inline and calls this for the
+// rest.
+//
+// The previous request: `last` is only stored off the hit path. While the walk is streaming (its last request was a
+// hit), the previous request is next - stride.
+template <uint32_t S, typename Planner>
+TT_TA_SEEK_NOINLINE inline bool serve_slow(
+    uint32_t i, const void* pc, uint32_t pa, uint8_t pn, uint64_t& out, PopInfo& info) {
+    SideState& s = sides[S];
+    const uint32_t last = s.streaming ? s.next - s.stride : s.last;
+    if (i == s.next && i < s.run_end) {
+        s.next = i + s.stride;
+        s.streaming = 1;
+        out = pop_side<S>(s.stride);
+        return true;
+    }
+    if (i > s.next && i < s.run_end && i - s.next <= kMaxSkip) {
+        // Ahead: skip forward in hardware. The step after this one is the request gap if the previous request had the
+        // same gap (a steady stride, e.g. every Nth page), else 1 -- so a jump (a block edge, a new row) doesn't put
+        // the hardware past the next sequential request. A skip doesn't count as streaming: random access skips by
+        // luck.
+        const uint32_t gap = i - last;
+        const uint32_t prev_gap = s.streaming ? s.stride : s.last_gap;  // the previous request's gap
+        const uint32_t step = gap == prev_gap ? gap : 1;
+        (void)pop_side<S>(i - s.next);
+        s.last_gap = gap;
+        s.stride = step;
+        s.last = i;
+        s.next = i + step;
+        s.streaming = 0;
+        TT_TA_NOTE(info, skipped);
+        out = pop_side<S>(step);
+        return true;
+    }
+    if (i == s.next) {
+        out = reseek<S, Planner>(
+            s, i, s.stride, pc, pa, pn, info);  // past the end of the run: the next run of the same stream
+        return true;
+    }
+    // Behind, or a large jump. A walk that was streaming re-seeks right away, keeping its stride: the jump back to the
+    // next block, column or pass of a regular pattern. A walk whose previous request also missed uses software for this
+    // one -- random access -- and re-takes the hardware once the access continues at the walk's stride, or repeats the
+    // gap of the previous software request.
+    const uint32_t gap = i > last ? i - last : 0;
+    const bool continues = gap != 0 && (gap == s.stride || gap == s.miss_gap);
+    if (s.streaming || continues) {
+        out = reseek<S, Planner>(s, i, continues ? gap : s.stride, pc, pa, pn, info);
+        return true;
+    }
+    s.miss_gap = gap;
+    s.last = i;
+    TT_TA_NOTE(info, fallback);
+    return false;
+}
+
+// The hit path: i is the walk's next index (`next`, already loaded with the owner) and inside the current programming.
+// One paired load (stride, run end), one store (next), the pop; `streaming` is written only when it changes. Endless:
+// the programming covers every later index (interleaved), so there is no run end to check. Anything else goes to
+// serve_slow(). push: the caller can take the address in the command buffer, so a push side pushes it instead of
+// popping it (out = kAddrInCmdBuf); only hits push, the slow path always returns the address.
+template <uint32_t S, bool Endless, typename Planner>
+inline __attribute__((always_inline)) bool serve(
+    uint32_t i, uint32_t next, const void* pc, uint32_t pa, uint8_t pn, bool push, uint64_t& out, PopInfo& info) {
+    if (__builtin_expect(i == next, 1)) {
+        SideState& s = sides[S];
+        const uint64_t stride_end = load_pair(s.stride);
+        const uint32_t stride = static_cast<uint32_t>(stride_end);
+        if (__builtin_expect(Endless || i < static_cast<uint32_t>(stride_end >> 32), 1)) {
+            s.next = i + stride;
+            if (__builtin_expect(!s.streaming, 0)) {
+                s.streaming = 1;
+            }
+            if constexpr (is_push_side<S>) {
+                if (push) {
+                    push_side<S>(stride);
+                    out = kAddrInCmdBuf;
+                    TT_TA_NOTE(info, pushed);
+                    return true;
+                }
+            }
+            out = pop_side<S>(stride);
+            return true;
+        }
+    }
+    return serve_slow<S, Planner>(i, pc, pa, pn, out, info);
+}
+
+// Test instrumentation (TT_TA_ADDRGEN_STATS builds): cycles per step of a reload, see TransferStats.
+#if defined(TT_TA_ADDRGEN_STATS)
+#define TT_TA_RELOAD_MARK(t) \
+    uint64_t t;              \
+    asm volatile("rdcycle %0" : "=r"(t))
+#define TT_TA_RELOAD_ACCUMULATE(t0, t1, t2, t3, t4)                                                        \
+    do {                                                                                                   \
+        ::tensor_accessor::detail::transfer_stats.reload_save_cycles += static_cast<uint32_t>(t1 - t0);    \
+        ::tensor_accessor::detail::transfer_stats.reload_swap_cycles += static_cast<uint32_t>(t2 - t1);    \
+        ::tensor_accessor::detail::transfer_stats.reload_restore_cycles += static_cast<uint32_t>(t3 - t2); \
+        ::tensor_accessor::detail::transfer_stats.reload_serve_cycles += static_cast<uint32_t>(t4 - t3);   \
+    } while (0)
+#else
+#define TT_TA_RELOAD_MARK(t) ((void)0)
+#define TT_TA_RELOAD_ACCUMULATE(t0, t1, t2, t3, t4) ((void)0)
+#endif
+
+// Exchange two walk states in place, 8 bytes at a time (no temporary walk on the stack).
+inline void swap_walks(SideState& a, SideState& b) {
+    using word = uint64_t __attribute__((may_alias));
+    word* wa = reinterpret_cast<word*>(&a);
+    word* wb = reinterpret_cast<word*>(&b);
+    for (uint32_t k = 0; k < sizeof(SideState) / sizeof(word); ++k) {
+        const word t = wa[k];
+        wa[k] = wb[k];
+        wb[k] = t;
+    }
+}
+
+template <uint32_t S, typename Planner>
+TT_TA_SEEK_NOINLINE inline bool take_side(
+    uint32_t key, uint32_t i, const void* pc, uint32_t pa, uint8_t pn, uint64_t& out, PopInfo& info) {
+    SideState& s = sides[S];
+    const bool spill = kNumParked > 0 && s.owner != 0 && s.restorable;
+    for (uint32_t p = 0; p < kNumParked; ++p) {
+        if (parked[p].walk.owner == key) {
+            // Reload: the side's walk and the parked one trade places -- the side's position is read back, the parked
+            // walk's programming and position written in, and the side's walk parked where the other one was.
+            TT_TA_RELOAD_MARK(t0);
+            overlay::AddrgenPosition spilled;
+            if (spill) {
+                save_side<S>(spilled);
+            }
+            TT_TA_RELOAD_MARK(t1);
+            swap_walks(s, parked[p].walk);
+            TT_TA_RELOAD_MARK(t2);
+            restore_side<S>(parked[p].pos);
+            TT_TA_RELOAD_MARK(t3);
+            if (spill) {
+                parked[p].pos = spilled;
+            } else {
+                parked[p].walk.owner = 0;  // the side's walk can't be restored (or there was none): forget it
+            }
+            TT_TA_NOTE(info, restored);
+            const bool served = serve_slow<S, Planner>(i, pc, pa, pn, out, info);
+            TT_TA_RELOAD_MARK(t4);
+            TT_TA_RELOAD_ACCUMULATE(t0, t1, t2, t3, t4);
+            return served;
+        }
+    }
+    // Claim: park the side's walk in a free entry (or forget it when there is none), then seek to i.
+    if (spill) {
+        for (uint32_t p = 0; p < kNumParked; ++p) {
+            if (parked[p].walk.owner == 0) {
+                save_side<S>(parked[p].pos);
+                parked[p].walk = s;
+                break;
+            }
+        }
+    }
+    s = SideState{};
+    s.owner = key;
+    out = reseek<S, Planner>(s, i, 1, pc, pa, pn, info);
+    return true;
+}
+
+// The walk isn't on a side of its direction: take a free side, else the least recently used one (spilling its walk;
+// TT_TA_ADDRGEN_NO_SPILL: software instead), only where the other side of the generator fits its bank shift.
+template <TransferDir Dir, typename Planner>
+TT_TA_SEEK_NOINLINE inline bool walk_slow(
     uint32_t key,
-    TransferDir dir,
-    WalkKind kind,
-    uint32_t bank_base,
-    uint32_t page_size,
-    bool& claimed,
-    PopInfo& info) {
-    uint32_t victim = 0;  // first free record, else the least recently used
-    bool have_free = false;
-    for (uint32_t wi = 0; wi < kNumWalks; ++wi) {
-        Walker& w = walkers[wi];
-        if (w.key == key && w.dir == dir && w.kind == kind && w.bank_base == bank_base && w.page_size == page_size) {
-            claimed = false;
-            if (!w.resident()) {
-                // Whatever loses its slot to this walk is parked in another entry, or forgotten if the pool is full;
-                // this walk's own entry stays put until its registers are written back (no stack copy of them).
-                const uint32_t slot = take_slot(dir);
-                restore_slot(slot, w, parked_pos[w.parked1 - 1]);
-                parked_owner1[w.parked1 - 1] = 0;
-                w.parked1 = 0;
-                w.slot1 = static_cast<uint8_t>(slot + 1);
-                slot_walk1[slot] = static_cast<uint8_t>(wi + 1);
-                info.restored = true;
-            }
-            return w;
-        }
-        if (!have_free) {
-            if (w.key == 0) {
-                victim = wi;
-                have_free = true;
-            } else if (wi == 0 || w.last_use < walkers[victim].last_use) {
-                victim = wi;
-            }
-        }
+    uint32_t shift,
+    uint32_t i,
+    const void* pc,
+    uint32_t pa,
+    uint8_t pn,
+    uint64_t& out,
+    PopInfo& info,
+    uint32_t& side) {
+    constexpr uint32_t A = first_side(Dir);
+    constexpr uint32_t B = A + 1;
+    constexpr uint32_t d = Dir == TransferDir::Write ? 1u : 0u;
+    const bool fits_a = shift_fits(A, shift);
+    const bool fits_b = shift_fits(B, shift);
+    uint32_t target = kNumSides;
+    if (sides[A].owner == 0 && fits_a) {
+        target = A;
+    } else if (sides[B].owner == 0 && fits_b) {
+        target = B;
+    } else if (kNumParked > 0) {
+        // Spill: the least recently used side (the one not used last) if it fits, else the other one.
+        const uint32_t lru = last_side[d] == A ? B : A;
+        const uint32_t mru = lru == A ? B : A;
+        const bool fits_lru = lru == A ? fits_a : fits_b;
+        const bool fits_mru = mru == A ? fits_a : fits_b;
+        target = fits_lru ? lru : (fits_mru ? mru : kNumSides);
     }
-    if (!have_free) {
-        drop_walk(victim);
+    if (target == kNumSides) {
+        side = kNumSides;
+        TT_TA_NOTE(info, fallback);
+        return false;
     }
-    const uint32_t slot = take_slot(dir);
-    Walker& w = walkers[victim];
-    w = Walker{};
-    w.key = key;
-    w.dir = dir;
-    w.kind = kind;
-    w.bank_base = bank_base;
-    w.page_size = page_size;
-    w.slot1 = static_cast<uint8_t>(slot + 1);
-    slot_walk1[slot] = static_cast<uint8_t>(victim + 1);
-    claimed = true;
-    return w;
+    side = target;
+    last_side[d] = target;
+    return target == A ? take_side<A, Planner>(key, i, pc, pa, pn, out, info)
+                       : take_side<B, Planner>(key, i, pc, pa, pn, out, info);
 }
 
-// Hardware transfer address of `page_id` (+ offset) for an accessor with a hardware recipe. Returns false (and leaves
-// `out` untouched) when this device's tables don't fit the recipe; the caller then uses the software address.
-template <TransferDir Dir, typename Accessor>
+// Record side S as the direction's most recently used (the LRU choice for spills); written only when it changes, and
+// not at all without spills.
+template <uint32_t d, uint32_t S>
+inline __attribute__((always_inline)) void touch_side() {
+    if constexpr (kNumParked > 0) {
+        if (__builtin_expect(last_side[d] != S, 0)) {
+            last_side[d] = S;
+        }
+    }
+}
+
+// Serve index i of the walk `key` (bank shift `shift`) in direction Dir. The hit path: one paired load (owner, next)
+// per side of the direction, then serve(). Everything else -- taking a side, spilling, reloading -- is walk_slow().
+// `Planner::plan(pc, pa, pn, i)` returns the Seek that makes i the next pop; it is only called off the hit path, so the
+// hit path just forwards its plain arguments in registers. Endless: the walk's programming
+// covers every later index (interleaved). Returns the side used (or kNumSides when the request uses software) through
+// `side`. push: see serve(); the direction's first side is its push side.
+template <TransferDir Dir, bool Endless, typename Planner>
+inline __attribute__((always_inline)) bool walk(
+    uint32_t key,
+    uint32_t shift,
+    uint32_t i,
+    const void* pc,
+    uint32_t pa,
+    uint8_t pn,
+    bool push,
+    uint64_t& out,
+    PopInfo& info,
+    uint32_t& side) {
+    constexpr uint32_t A = first_side(Dir);
+    constexpr uint32_t B = A + 1;
+    constexpr uint32_t d = Dir == TransferDir::Write ? 1u : 0u;
+    static_assert(is_push_side<A> && !is_push_side<B>);
+    const uint64_t a = load_pair(sides[A].owner);
+    if (__builtin_expect(static_cast<uint32_t>(a) == key, 1)) {
+        side = A;
+        touch_side<d, A>();
+        return serve<A, Endless, Planner>(i, static_cast<uint32_t>(a >> 32), pc, pa, pn, push, out, info);
+    }
+    const uint64_t b = load_pair(sides[B].owner);
+    if (static_cast<uint32_t>(b) == key) {
+        side = B;
+        touch_side<d, B>();
+        return serve<B, Endless, Planner>(i, static_cast<uint32_t>(b >> 32), pc, pa, pn, false, out, info);
+    }
+    return walk_slow<Dir, Planner>(key, shift, i, pc, pa, pn, out, info, side);
+}
+
+// The planners: stateless types whose plan() rebuilds the Seek from plain arguments -- the accessor (pc), one extra
+// word (pa: the shard id for shard_pages()) and the NoC id (pn). The hit path only forwards these registers; plan()
+// runs in the cold functions.
+template <typename Accessor>
+struct PagesPlanner {
+    static Seek plan(const void* pc, uint32_t, uint8_t noc, uint32_t i) {
+        const Accessor& acc = *static_cast<const Accessor*>(pc);
+        if constexpr (Accessor::DSpec::is_interleaved) {
+            return plan_interleaved<Accessor::DSpec::is_dram>(
+                acc.get_bank_base_address(), acc.get_aligned_page_size(), i);
+        } else {
+            return plan_sharded(acc, i, noc);
+        }
+    }
+};
+
+template <typename Accessor>
+struct ShardPagesPlanner {
+    static Seek plan(const void* pc, uint32_t shard_id, uint8_t noc, uint32_t i) {
+        const Accessor& acc = *static_cast<const Accessor*>(pc);
+        const uint32_t page_size = acc.get_aligned_page_size();
+        return Seek{
+            .prog = plan_single_bank(acc.get_shard_noc_addr(shard_id, i * page_size, noc), page_size),
+            .run_end = static_cast<uint32_t>(acc.dspec().shard_volume()),
+        };
+    }
+};
+
+// Hardware transfer address of `page_id` (+ offset). Returns false (and leaves `out` untouched) when the request uses
+// software: this device's tables don't fit the recipe, or the walk policy sends it there (PopInfo.fallback, in
+// instrumented builds).
+// MayPush: the caller issues on the direction's command buffer and accepts kAddrInCmdBuf (only for offset 0: a pushed
+// address can't have the offset added).
+template <TransferDir Dir, bool MayPush = false, typename Accessor>
 inline bool try_transfer_noc_addr(
     const Accessor& acc, uint32_t page_id, uint32_t offset, uint8_t noc, uint64_t& out, PopInfo& info) {
     static_assert(has_hw_recipe<Accessor>);
     constexpr bool is_interleaved = Accessor::DSpec::is_interleaved;
     if constexpr (is_interleaved) {
+        // False only on a device or ATT map whose interleaved banks aren't one ascending selector run (the host then
+        // builds the kernel with TT_TA_ADDRGEN_INTERLEAVED_{DRAM,L1}_SW); with row-major L1 banks it holds for L1.
         if constexpr (!interleaved_walkable<Accessor::DSpec::is_dram>) {
             return false;
         }
     }
-    bool claimed = false;
-    Walker& w = acquire_walker(
-        walk_key(acc), Dir, WalkKind::Pages, acc.get_bank_base_address(), acc.get_aligned_page_size(), claimed, info);
-    const uint32_t slot = w.slot();
-    // Only a page behind the hardware, or past what the programming covers, needs software; a page ahead is skipped to.
-    info.seeked = claimed || page_id < w.next || page_id >= w.run_end;
-    if (info.seeked) {
-        if constexpr (is_interleaved) {
-            seek_interleaved<Accessor::DSpec::is_dram>(w, page_id);
-        } else {
-            seek_sharded(acc, w, page_id, noc);
-        }
-        w.next = page_id;
+    uint32_t side;
+    if (!walk<Dir, is_interleaved, PagesPlanner<Accessor>>(
+            walk_key<Accessor, WalkKind::Pages>,
+            walk_shift<Accessor>,
+            page_id,
+            &acc,
+            0,
+            noc,
+            MayPush && offset == 0,
+            out,
+            info,
+            side)) {
+        return false;
     }
-    w.last_use = ++walker_clock;
-    out = pop_index(w, slot, page_id, info) + offset;
+    out += offset;
     return true;
 }
 
 // ---- shard_pages(): pages of one shard, in storage order ----
 //
 // A shard's pages are consecutive in its bank (bank_page_offset = shard_in_bank * shard_volume + page_in_shard), so
-// one single-bank walk covers the whole shard. Padding pages the iterator skips are skipped in hardware too.
-template <TransferDir Dir, typename Accessor>
+// one single-bank walk covers the whole shard. A new shard starts a new run (re-seek). Padding pages the iterator
+// skips are skipped in hardware.
+template <TransferDir Dir, bool MayPush = false, typename Accessor>
 inline bool try_transfer_shard_page_noc_addr(
     const Accessor& acc,
     uint32_t shard_id,
@@ -770,21 +988,29 @@ inline bool try_transfer_shard_page_noc_addr(
     uint64_t& out,
     PopInfo& info) {
     static_assert(has_hw_recipe<Accessor> && !Accessor::DSpec::is_interleaved);
-    bool claimed = false;
-    const uint32_t page_size = acc.get_aligned_page_size();
-    Walker& w =
-        acquire_walker(walk_key(acc), Dir, WalkKind::ShardPages, acc.get_bank_base_address(), page_size, claimed, info);
-    const uint32_t slot = w.slot();
-    info.seeked = claimed || w.shard != shard_id || page_in_shard < w.next || page_in_shard >= w.run_end;
-    if (info.seeked) {
-        w.hi_bits = seek_single_bank(w, acc.get_shard_noc_addr(shard_id, page_in_shard * page_size, noc), page_size);
-        w.shard = shard_id;
-        w.run_end = acc.dspec().shard_volume();
-        w.next = page_in_shard;
-        w.has_prev = false;  // a new shard's page indices restart
+    constexpr uint32_t key = walk_key<Accessor, WalkKind::ShardPages>;
+    // Another shard: its page indices restart, so it's a new run. Make the request look like the run's start, on a side
+    // or parked (a reloaded walk must not skip ahead inside the old shard's run).
+    auto new_run = [&](SideState& w) {
+        if (w.owner == key && w.shard != shard_id) {
+            w.shard = shard_id;
+            w.next = page_in_shard;
+            w.run_end = 0;  // forces the re-seek path in serve()
+        }
+    };
+    constexpr uint32_t A = first_side(Dir);
+    new_run(sides[A]);
+    new_run(sides[A + 1]);
+    for (uint32_t p = 0; p < kNumParked; ++p) {
+        new_run(parked[p].walk);
     }
-    w.last_use = ++walker_clock;
-    out = pop_index(w, slot, page_in_shard, info) + offset;
+    uint32_t side;
+    if (!walk<Dir, false, ShardPagesPlanner<Accessor>>(
+            key, walk_shift<Accessor>, page_in_shard, &acc, shard_id, noc, MayPush && offset == 0, out, info, side)) {
+        return false;
+    }
+    sides[side].shard = shard_id;
+    out += offset;
     return true;
 }
 
@@ -798,92 +1024,86 @@ inline bool try_transfer_shard_page_noc_addr(
 // A ShardView transfer usually moves part of a shard (an offset into it), so consecutive transfers often name the same
 // shard; those reuse the base popped for it instead of popping again.
 template <typename Accessor>
-TT_TA_SEEK_NOINLINE inline bool plan_shard_bases(
-    const Accessor& acc, uint32_t shard_id, uint8_t noc, WalkProgram& prog, uint64_t& hi_bits) {
+TT_TA_SEEK_NOINLINE inline Seek plan_shard_bases(const Accessor& acc, uint32_t shard_id, uint8_t noc) {
     const auto& ds = acc.dspec();
     const uint32_t num_shards = ds.num_shards();
     const uint32_t num_banks = ds.num_banks();
     const uint32_t banks = num_shards < num_banks ? num_shards : num_banks;
-    if (banks < 2) {
-        return false;
-    }
     const uint64_t shard_bytes = static_cast<uint64_t>(ds.shard_volume()) * acc.get_aligned_page_size();
+    const Seek single{
+        .prog = plan_single_bank(acc.get_shard_noc_addr(shard_id, 0, noc), shard_bytes),
+        .run_end = shard_id + 1,
+    };
+    if (banks < 2) {
+        return single;
+    }
     const uint64_t addr0 = acc.get_shard_noc_addr(0, 0, noc);
     const noc_att::Window& window =
         noc_att::map_window(ACTIVE_ATT_MAP, noc_att::matching_window_class(ACTIVE_ATT_MAP, addr0));
     const uint32_t selector0 = window.selector(addr0);
     const uint64_t local0 = window.local_address(addr0);
-    hi_bits = addr0 & ~(local0 | (static_cast<uint64_t>(selector0) << window.endpoint_shift));
     for (uint32_t j = 1; j < banks; ++j) {
         const uint64_t addr = acc.get_shard_noc_addr(j, 0, noc);
-        if (window.local_address(addr) != local0 || window.selector(addr) != selector0 + j ||
-            (addr & ~(local0 | (static_cast<uint64_t>(selector0 + j) << window.endpoint_shift))) != hi_bits) {
-            return false;
+        if (window.local_address(addr) != local0 || window.selector(addr) != selector0 + j || !window.matches(addr)) {
+            return single;
         }
     }
     if (num_shards > banks) {
         // Shard `banks` must wrap back to the first bank, one shard further in (round-robin, not shard-contiguous).
         const uint64_t wrap = acc.get_shard_noc_addr(banks, 0, noc);
         if (window.selector(wrap) != selector0 || window.local_address(wrap) != local0 + shard_bytes) {
-            return false;
+            return single;
         }
     }
-    prog = WalkProgram{
-        .banking =
+    return Seek{
+        .prog =
             {
-                .endpoint_id_shift = window.endpoint_shift,
-                .size = banks,
-                .skip = 1,
-                .base = selector0,
-                .current = shard_id % banks,
-                .bank_order = overlay::BANK_INNER,
+                .banking =
+                    {
+                        .endpoint_id_shift = window.endpoint_shift,
+                        .size = banks,
+                        .skip = 1,
+                        .base = selector0,
+                        .current = shard_id % banks,
+                        .bank_order = overlay::BANK_INNER,
+                    },
+                .inner_stride = shard_bytes,
+                .inner_start = local0 + (shard_id / banks) * shard_bytes,
+                .outer_start = window.compare,
             },
-        .inner_stride = shard_bytes,
-        .inner_start = local0 + (shard_id / banks) * shard_bytes,
+        .run_end = num_shards,
     };
-    return true;
 }
+
+template <typename Accessor>
+struct ShardBasesPlanner {
+    static Seek plan(const void* pc, uint32_t, uint8_t noc, uint32_t i) {
+        return plan_shard_bases(*static_cast<const Accessor*>(pc), i, noc);
+    }
+};
 
 template <TransferDir Dir, typename Accessor>
 inline bool try_transfer_shard_noc_addr(
     const Accessor& acc, uint32_t shard_id, uint32_t offset, uint8_t noc, uint64_t& out, PopInfo& info) {
     static_assert(has_hw_recipe<Accessor> && !Accessor::DSpec::is_interleaved);
-    bool claimed = false;
-    Walker& w = acquire_walker(
-        walk_key(acc),
-        Dir,
-        WalkKind::ShardBases,
-        acc.get_bank_base_address(),
-        acc.get_aligned_page_size(),
-        claimed,
-        info);
-    const uint32_t slot = w.slot();
-    w.last_use = ++walker_clock;
-    if (!claimed && w.has_base && w.shard == shard_id) {
-        out = w.last_addr + offset;
-        return true;
-    }
-    info.seeked = claimed || shard_id < w.next || shard_id >= w.run_end;
-    if (info.seeked) {
-        WalkProgram prog;
-        uint64_t hi_bits = 0;
-        if (plan_shard_bases(acc, shard_id, noc, prog, hi_bits)) {
-            program_walker(w, prog);
-            w.hi_bits = hi_bits;
-            w.run_end = acc.dspec().num_shards();
-        } else {
-            w.hi_bits = seek_single_bank(
-                w,
-                acc.get_shard_noc_addr(shard_id, 0, noc),
-                static_cast<uint64_t>(acc.dspec().shard_volume()) * acc.get_aligned_page_size());
-            w.run_end = shard_id + 1;
+    constexpr uint32_t key = walk_key<Accessor, WalkKind::ShardBases>;
+    constexpr uint32_t A = first_side(Dir);
+    for (uint32_t s = A; s < A + 2; ++s) {
+        if (sides[s].owner == key && sides[s].has_base && sides[s].shard == shard_id) {
+            out = sides[s].last_addr + offset;
+            return true;
         }
-        w.next = shard_id;
     }
-    w.shard = shard_id;
-    w.has_base = true;
-    w.last_addr = pop_index(w, slot, shard_id, info);
-    out = w.last_addr + offset;
+    uint32_t side;
+    uint64_t base;
+    if (!walk<Dir, false, ShardBasesPlanner<Accessor>>(
+            key, walk_shift<Accessor>, shard_id, &acc, 0, noc, false, base, info, side)) {
+        return false;
+    }
+    sides[side].shard = shard_id;
+    sides[side].has_base = 1;
+    sides[side].last_addr = base;
+    out = base + offset;
     return true;
 }
 
