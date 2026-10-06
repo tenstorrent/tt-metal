@@ -9,6 +9,7 @@ from helpers.format_config import DataFormat
 
 from ..data_transfer_blocks import MX_FORMATS, DataTransferBlocks
 
+_NARROW_FLOAT_DEST = frozenset({DataFormat.Float16, DataFormat.Float16_b})
 _TO_SRC_FLOAT = frozenset({DataFormat.Tf32, DataFormat.Float16, DataFormat.Float16_b})
 
 
@@ -60,6 +61,24 @@ class QuasarDataTransferBlocks(DataTransferBlocks):
         DataFormat.Float16: _TO_SRC_FLOAT,
         DataFormat.Float16_b: _TO_SRC_FLOAT,
         DataFormat.Fp8_e4m3: _TO_SRC_FLOAT,
+        DataFormat.Int16: frozenset({DataFormat.Int16}),
+        DataFormat.Int8: frozenset({DataFormat.Int8}),
+        DataFormat.UInt8: frozenset({DataFormat.UInt8}),
+    }
+
+    #: The unpack-to-Dest table. Narrower than the src one in the way that
+    #: matters: the unpacker does not widen, so a narrow input has no Float32
+    #: Dest target, and an integer input stays in its own width. Mirrors
+    #: ``constraints._QUASAR_UNPACK_TO_DEST_FORMATS``; see the note above about
+    #: why it is kept separately.
+    UNPACK_TO_DEST_FORMATS: ClassVar[Mapping[DataFormat, FrozenSet[DataFormat]]] = {
+        **{f: _NARROW_FLOAT_DEST for f in MX_FORMATS},
+        DataFormat.Float32: frozenset({DataFormat.Float32}) | _NARROW_FLOAT_DEST,
+        DataFormat.Tf32: frozenset({DataFormat.Float32}) | _NARROW_FLOAT_DEST,
+        DataFormat.Float16: _NARROW_FLOAT_DEST,
+        DataFormat.Float16_b: _NARROW_FLOAT_DEST,
+        DataFormat.Fp8_e4m3: _NARROW_FLOAT_DEST,
+        DataFormat.Int32: frozenset({DataFormat.Int32}),
         DataFormat.Int16: frozenset({DataFormat.Int16}),
         DataFormat.Int8: frozenset({DataFormat.Int8}),
         DataFormat.UInt8: frozenset({DataFormat.UInt8}),
