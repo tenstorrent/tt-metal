@@ -1,0 +1,2766 @@
+{
+  "model_id": "Aleph-Alpha/Kolibri-1-BF16",
+  "revision": "7a8f290e7858825c3cf5e4c447ba68345de9f1d3",
+  "hf_advertised_context": 1048576,
+  "model_card_extrapolated_context": 1048576,
+  "supported_context": 1048576,
+  "largest_tested_prefill_context": 1048576,
+  "largest_tested_decode_context": 1048576,
+  "capability_reduction": null,
+  "status": "passed",
+  "layer_kinds": [
+    "sliding_attention",
+    "full_attention"
+  ],
+  "sliding_window": 513,
+  "per_layer_kind": {
+    "sliding_attention": {
+      "prefill": 1048576,
+      "decode": 1048576,
+      "evidence": "functional_decoder/context_0.json",
+      "status": "final_policy_passed"
+    },
+    "full_attention": {
+      "prefill": 1048576,
+      "decode": 1048576,
+      "evidence": "functional_decoder/context_4.json",
+      "status": "final_policy_passed"
+    }
+  },
+  "hf_config_max_position_embeddings": 262144,
+  "native_trained_context": 262144,
+  "extension_hf_override": {
+    "max_position_embeddings": 1048576
+  },
+  "advertised_context_source": "functional_decoder/reference/hf_capability_source.json",
+  "fused_decoder_validation": {
+    "supported_context": 1048576,
+    "capability_reduction": null,
+    "cache_dtype": "bfloat16",
+    "cache_layout": "TILE DRAM [physical_pages,4,32,128]",
+    "physical_page_tokens": 32,
+    "logical_prefill_planner_ast_equal": true,
+    "complete_streaming_evidence_inherited_from": "functional_decoder/context_<0|4>.json",
+    "stage_checks": [
+      "fused_decoder/context_edges_0.json",
+      "fused_decoder/context_edges_4.json"
+    ],
+    "stage_check_scope": "Full-capacity allocation with final weights and temporary buffers; HF-seeded prefix; selected fused prefill chunks, nonaligned tails, and traced decode at context boundaries. Not a second complete streaming sweep.",
+    "weight_layout_change": "Packed sparse decode weights plus separate dedicated prefill expert weights; routed expert storage 5.625 GiB, maximum-context KV remains 2 GiB.",
+    "prefill_temporary": "At physical chunk128: expanded activation240 MiB plus expert output240 MiB; shape adaptation avoids shared dedicated-op bounds defect."
+  },
+  "optimized_decoder_validation": {
+    "status": "passed",
+    "supported_context": 1048576,
+    "capability_reduction": null,
+    "cache_dtype": "bfloat8_b selected; bfloat16 remains accepted",
+    "cache_layout": "TILE DRAM [physical_pages,4,32,128]",
+    "physical_page_tokens": 32,
+    "cache_bytes_at_supported_context": 1140850688,
+    "cache_bytes_bfloat16": 2147483648,
+    "expert_weight_bytes": 1698693120,
+    "weight_layout_change": "BFP4 packed indexed-sparse decode weights and separate BFP4 prefill expert weights; DRAM-sharded and interleaved copies of dense projections",
+    "residual_layout": "BF16 L1 width-sharded for decode; logical batch stays 1..32",
+    "prefill_temporary": "For selected physical chunk4096, grouped capacity36480 rows: each BF16 dispatch/expert buffer 186777600 bytes; device-resident metadata/counts/offsets; no dense 384-by-token expert output",
+    "complete_streaming_evidence_inherited_from": "functional_decoder/context_<0|4>.json",
+    "stage_check_scope": "Full-capacity allocation and selected large-chunk temporary warmup; every KV prefix row computed by optimized QKV/norm/RoPE/cache fill; selected complete decoder boundary chunks, nonaligned tails and traced decode against independent HF K/V. Not a second complete all-token attention/MoE streaming sweep.",
+    "physical_page_table_contract": "INT32 row width is a multiple of8 entries (32bytes), all mapped pages valid; selected SDPA K tile must divide physical cache/table capacity. Logical sequence length is unrestricted.",
+    "prefill_mask_constants": {
+      "layout": "readonly BF16 row-major DRAM",
+      "rows": 4096,
+      "widths": [
+        384,
+        6
+      ],
+      "logical_bytes": 3194880,
+      "physical_allocation": "Includes device alignment; tested with complete maximum-context allocation"
+    },
+    "sdpa_precision": "LoFi/FP16/approx-exp except full prefill beyond65536 bound: HiFi2/FP32/approx-exp. Public plans supply an absolute context bound; direct streaming calls default to physical capacity.",
+    "bf16_long_decode": "K256/32 requested cores per head; K512 exceeds L1 for BF16. BFP8 keeps K512.",
+    "stage_checks": [
+      "optimized_decoder/context_edges_0.json",
+      "optimized_decoder/context_edges_4.json",
+      "optimized_decoder/bf16_context_edges_0.json",
+      "optimized_decoder/bf16_context_edges_4.json"
+    ],
+    "public_precision_boundary_checks": [
+      65536,
+      65664
+    ]
+  },
+  "multichip_decoder_plan": {
+    "status": "passed",
+    "target_mesh": [
+      1,
+      4
+    ],
+    "hardware": "QB2 P300x2 Blackhole",
+    "supported_context": 1048576,
+    "capability_reduction": null,
+    "cache_dtype": "bfloat8_b",
+    "physical_page_tokens": 32,
+    "local_cache_layout": "[physical_pages,1,32,128]",
+    "full_attention_cache_bytes_per_device_per_layer": 285212672,
+    "sliding_cache_tokens": 4608,
+    "sliding_cache_bytes_per_device_per_layer": 1253376,
+    "sliding_mapping": "Each request repeats absolute-page mapping with period144 pages, permitting permutations; constructor sliding_cache_tokens=4608, cache writes use modulo, attention/RoPE use absolute positions.",
+    "expert_weight_bytes_per_device_per_layer_per_bank": 212336640,
+    "expert_banks": 2,
+    "expert_weight_bytes_per_device_full_stack": 21233664000,
+    "kv_bytes_per_device_full_stack": 2902261760,
+    "dense_norm_router_weight_budget_bytes": 1048576000,
+    "embedding_and_lm_head_budget_bytes": 1073741824,
+    "reserved_trace_activation_ccl_bytes": 2147483648,
+    "physical_dram_bytes_per_device": 34359738368,
+    "planned_bytes_per_device": 28405727232,
+    "planned_headroom_bytes": 5954011136,
+    "embedding_and_lm_head_assumption": "Conservative replicated BF16 embedding128000x2560 plus TP4 FP32 logits weight2560x32000:983040000 bytes; rounded to1GiB. No full-model implementation.",
+    "dense_and_setup_assumption": "20MiB per layer covers duplicated padded dense projections, replicated router, all norm variants, bias, mask constants and metadata.",
+    "shared_l1_collective_workspace_bytes": 1310720,
+    "workspace_contract": "One CollectiveWorkspace shared by serialized CQ0 layer stack;65,536 L1 bytes/core on5x4 workers, plus shared semaphore state.",
+    "capacity_evidence": [
+      "context_0.json",
+      "context_4.json",
+      "stack.json"
+    ],
+    "reservation_probe_bytes_per_device": 26306674688,
+    "allocator_available_dram_bytes_per_device": 34168704000,
+    "validation_scope": "Actual final decoder weights+KV and4096-token temporary warmup execute while196 replicated128MiB buffers reserve the other stack budget, conservatively double-counting tested layer. Complete optimized TTNN prefix K/V and selected full-decoder boundary chunks, nonaligned tail and traced decode; no full-model implementation."
+  },
+  "optimized_multichip_decoder": {
+    "status": "validated",
+    "target_mesh": [
+      1,
+      4
+    ],
+    "hardware": "QB2 P300x2 Blackhole",
+    "supported_context": 1048576,
+    "capability_reduction": null,
+    "cache_dtype": "bfloat8_b",
+    "physical_page_tokens": 32,
+    "local_cache_layout": "[physical_pages,1,32,128]",
+    "full_attention_cache_bytes_per_device_per_layer": 285212672,
+    "sliding_cache_tokens": 8704,
+    "sliding_cache_bytes_per_device_per_layer": 2367488,
+    "sliding_mapping": "Default8192-token chunk uses8704-token/272-page circular period; each request repeats its own page permutation. Smaller existing circular pools remain supported by internal chunk clamping to period-512.",
+    "expert_weight_bytes_per_device_per_layer_per_bank": 212336640,
+    "expert_banks": 2,
+    "expert_weight_bytes_per_device_full_stack": 21233664000,
+    "kv_bytes_per_device_full_stack": 2946826240,
+    "dense_norm_router_weight_budget_bytes": 1258291200,
+    "embedding_and_lm_head_budget_bytes": 1073741824,
+    "reserved_trace_activation_ccl_bytes": 2147483648,
+    "physical_dram_bytes_per_device": 34359738368,
+    "planned_bytes_per_device": 28660006912,
+    "planned_headroom_bytes": 5699731456,
+    "embedding_and_lm_head_assumption": "Conservative replicated BF16 embedding128000x2560 plus TP4 FP32 logits weight2560x32000:983040000 bytes; rounded to1GiB. No full-model implementation.",
+    "dense_and_setup_assumption": "24MiB/layer covers duplicated local dense weights, original384-column router, additional1024-column BFP4 decode router and FP32 selection bias (1,605,632 extra bytes/layer), norm/bias,6.39MB mask constants, triangular prefix matrix and metadata; maximum-context reservation check uses this enlarged budget.",
+    "shared_l1_collective_workspace_bytes": 1310720,
+    "workspace_contract": "One CollectiveWorkspace shared by serialized CQ0 layer stack;65,536 L1 bytes/core on5x4 workers, plus shared semaphore state.",
+    "capacity_evidence": [
+      "context_0.json",
+      "context_4.json",
+      "stack.json"
+    ],
+    "reservation_probe_bytes_per_device": 26575110144,
+    "allocator_available_dram_bytes_per_device": 34168704000,
+    "validation_scope": "Final weights, local KV and8192-token temporary warmup with full-stack DRAM reservations; all1M prefix KV rows computed by TTNN; selected complete boundary chunks including8192 and nonaligned17-token tail; traced final-position replay. No full-model execution.",
+    "prefill_physical_chunk": 8192,
+    "prefill_grouped_capacity_rows": 61056,
+    "prefill_activation_buffer_bytes": 312606720,
+    "prefill_mask_constant_bytes": 6389760,
+    "prefill_communication_dtype": "bfloat8_b for physical M>32; BF16 direct reduction for small tails",
+    "decode_communication_dtype": "bfloat16",
+    "validation_results": {
+      "0": {
+        "capacity": 1048576,
+        "physical_cache_tokens": 8704,
+        "reservation_bytes": 26575110144,
+        "largest_physical_chunk": 8192,
+        "trace_replays": 6,
+        "source_sha256": "b7f297f846569f161ae892a1777fb3bae3e91dea15d49be4ef3653e130921296",
+        "minimum_pcc": 0.9999590516090393
+      },
+      "4": {
+        "capacity": 1048576,
+        "physical_cache_tokens": 1048576,
+        "reservation_bytes": 26575110144,
+        "largest_physical_chunk": 8192,
+        "trace_replays": 6,
+        "source_sha256": "b7f297f846569f161ae892a1777fb3bae3e91dea15d49be4ef3653e130921296",
+        "minimum_pcc": 0.9991524815559387
+      }
+    },
+    "semaphore_scope": "All 11x10 compute cores, matching collective worker planning; 14 global semaphore words per core (12 RS/AG/barrier handles plus 2 direct all-reduce handles).",
+    "decode_router_extra_bytes_per_device_per_layer": 1605632
+  },
+  "full_model": {
+    "status": "validated",
+    "supported_context": 1048576,
+    "capability_reduction": null,
+    "layer_counts": {
+      "sliding_attention": 40,
+      "full_attention": 10
+    },
+    "batch_for_context_plan": 1,
+    "target_mesh": [
+      1,
+      4
+    ],
+    "physical_dram_bytes_per_device": 34359738368,
+    "allocator_available_dram_bytes_per_device": 33978715136,
+    "cache_page_tokens": 32,
+    "full_attention_cache_tokens": 1048576,
+    "sliding_ring_tokens": 8704,
+    "cache_dtype": "bfloat8_b",
+    "prefill_fill_dtype": "bfloat8_b",
+    "decode_update_dtype": "bfloat16",
+    "validation": "All 50 actual layers, full persistent weights, BFP8 cache and 8192-token prefill preparation. Public generator computes every row of a 1,048,543-token nonaligned prefix, then emits 34 tokens through consumed position 1,048,575. Tracking enabled with program-cache tracking and no allocation exemptions. Actual allocator values are after complete preparation/capture; the successful full-prefix run also exercises temporary allocations.",
+    "external_cache_contract": "Caller supplies an allocated CacheState at construction, before preparation/capture. Stable bindings are retained through requests. Generator reset zeros the bound cache without freeing it.",
+    "residual_layout": "Stage5 replicated BF16, L1 width-sharded5x4 per chip; no inter-layer conversion",
+    "per_device_tensor_payload_bytes": {
+      "decoder_weights_and_setup": 22266329600,
+      "embedding_bf16": 655360000,
+      "other_persistent_state": 4540508,
+      "vocab_sharded_lm_head_fp32": 330301440,
+      "shared_cos_sin_lookup_bf16": 536870912,
+      "full_stack_kv_bfp8": 2946826240,
+      "prefill_buffers": 6944060
+    },
+    "per_device_tensor_payload_total_bytes": 26747172760,
+    "measured_allocator_dram_bytes_per_device": 26800908288,
+    "measured_allocator_free_dram_bytes_per_device": 7177806848,
+    "allocator_overhead_bytes_per_device": 53735528,
+    "trace_region_reserved_bytes_per_device": 200015872,
+    "trace_allocated_bytes_per_device": 17940480,
+    "l1_allocated_bytes_per_device": 7483520,
+    "shared_l1_collective_workspace_bytes": 1310720,
+    "largest_tested_full_stack_logical_prefill": 1048543,
+    "largest_tested_full_stack_context": 1048576,
+    "batch_coverage": {
+      "batch1_context": 1048576,
+      "batch32_context_per_slot": 8192,
+      "batch32_mixed_logical_prefill": [
+        65,
+        97,
+        129
+      ],
+      "batch32_inactive_slots": [
+        31
+      ],
+      "limitation": "Batch32 evidence uses 8192 tokens per slot; simultaneous one-million-token caches for all 32 slots are not claimed. The full-context capability is batch1."
+    },
+    "evidence": [
+      "full_model/full_validation_final.json",
+      "full_model/full_validation_final.log"
+    ],
+    "initial_conservative_plan": {
+      "per_device_bytes": {
+        "expert_weights_two_banks": 21233664000,
+        "dense_norm_router_setup_budget": 1258291200,
+        "embedding_bf16": 655360000,
+        "vocab_sharded_lm_head_fp32": 327680000,
+        "full_stack_kv_bfp8": 2946826240,
+        "shared_cos_sin_lookup_bf16": 536870912,
+        "prefill_token_rope_input_buffers": 5630592,
+        "page_tables_and_positions_budget": 8388608,
+        "reserved_trace_activation_ccl": 2147483648
+      },
+      "planned_bytes_per_device": 29120195200,
+      "planned_headroom_bytes": 5048508800,
+      "allocator_basis": "Earlier 10 MB trace region; superseded by measured 200 MB trace-region configuration above."
+    },
+    "runtime_source_sha256": {
+      "tt/generator.py": "4219f5e50c1ed19264d33f498528bf381bcaf50aed865b282ab37147aca5449b",
+      "tt/model.py": "fd15a7e3bef4f5fce692edcc13ef9cf8cbc100fd603d8044f705b4148ef5918f",
+      "tt/multichip_decoder.py": "b7f297f846569f161ae892a1777fb3bae3e91dea15d49be4ef3653e130921296"
+    },
+    "measured_batch32_dram_bytes_per_device": 27410052096,
+    "lm_head_packing": "TP4 FP32; two logical16000 / physical16128 vocabulary pieces per rank, DRAM width-sharded over8 banks; common LMHead1D trims each piece before concat."
+  },
+  "optimized_full_model": {
+    "status": "validated",
+    "supported_context": 1048576,
+    "capability_reduction": null,
+    "target_mesh": [
+      1,
+      4
+    ],
+    "additional_prefill_output_payload_bytes_per_device": 55869440,
+    "prefill_trace_signatures": [
+      32,
+      128,
+      512,
+      2048,
+      8192
+    ],
+    "prefill_trace_contract": "256-aligned chunk start and absolute physical end<=65536; other prepared signatures retain eager execution without restricting logical lengths",
+    "cache_policy": "unchanged Stage6 BFP8 local-head cache,32-token pages,8704-token sliding ring",
+    "runtime_source_sha256": {
+      "tt/model.py": "f56e2945e03bb2b29d5db0fb734ce8ae4de10b60eb02c86b2d8266c5763d0aaf",
+      "tt/generator.py": "9fc490c09ae0e13b25530b0e28efd17dd3ff79e3587c43c8a72d91a0ea88f1a6",
+      "tt/multichip_decoder.py": "b7f297f846569f161ae892a1777fb3bae3e91dea15d49be4ef3653e130921296"
+    },
+    "measured_allocator_dram_bytes_per_device": 26856761344,
+    "measured_allocator_free_dram_bytes_per_device": 7121953792,
+    "trace_region_reserved_bytes_per_device": 200015872,
+    "trace_allocated_bytes_per_device": 121225216,
+    "l1_allocated_bytes_per_device": 7483520,
+    "batch32_capacity": 8192,
+    "measured_batch32_dram_bytes_per_device": 27465905152,
+    "validation": "All50 layers at1M configured capacity with all8 traces prepared/captured;8193 logical prefix plus34 generated tokens,33-token maximum-context suffix address test, repeated logits, mixed fixed slots, inactive rows andB32/8192. Allocation tracking enabled including program cache, no exemptions. Complete1,048,543-token prefix execution remains inherited from unchanged decoder/Stage6; new prefill trace branch validated against eager around all affected boundaries.",
+    "evidence": [
+      "optimized_full_model/final_tracked.json",
+      "optimized_full_model/prefill_probe.json",
+      "optimized_full_model/trace_contract_b32.json"
+    ],
+    "inherited_full_prefix_evidence": "full_model/full_validation_final.json",
+    "per_device_tensor_payload_total_bytes": 26804352920,
+    "formatted_runtime_source_sha256": {
+      "tt/fused_decoder.py": "257185eaf1fd43a2a4de9aac3a8089350f9e6911219bed5fa128701fd0f2c415",
+      "tt/multichip_decoder.py": "b7f297f846569f161ae892a1777fb3bae3e91dea15d49be4ef3653e130921296",
+      "tt/__init__.py": "6c6ec57de9f82ef42d82760f144a4571cb16b3cd6de33aaa7aa9fd65e8ab1fa1",
+      "tt/optimized_decoder.py": "70b7420508b0c24ae02228e4886e3733b3fefd2ee7e084997de52caa1c08a6c4",
+      "tt/generator.py": "10839dfde7dd1385fa3b44f94357894ceb5e80162ffeb2aa5cd428a06b0faa62",
+      "tt/checkpoint.py": "e696be0a2af57caaaec15062b36d6875e3e3439e1789a0eb658c2eac4ba5f11d",
+      "tt/functional_decoder.py": "76b77485bc566ac6c905677ae56ea56ee577472a67c03f5e2eb5d8ad337f82ae",
+      "tt/model.py": "3895db9adfb18fca67fd3203de35028be4976f05674124091cc0cede0baae577"
+    },
+    "format_equivalence": "optimized_full_model/format_equivalence.json (pre-commit-only formatting/import sorting; runtime bodies unchanged)"
+  },
+  "active_runtime_stage": "datatype_sweep",
+  "active_precision_config": "datatype_sweep/selected_precision_config.json",
+  "datatype_sweep": {
+    "status": "validated",
+    "selected_config_id": "head_bfp8_hifi2_logits_bf16_kv_bf16",
+    "selected_precision_config": "datatype_sweep/selected_precision_config.json",
+    "selected_precision_sha256": "454c69f7f4cf4d49ef566d93f1ef1586e9715a4b8bfcf70c0d641b32e4dde1ff",
+    "supported_context": 1048576,
+    "model_max_context": 1048576,
+    "capability_reduction": null,
+    "target_mesh": [
+      1,
+      4
+    ],
+    "batch_for_max_context": 1,
+    "kv_cache_dtype": "bfloat16",
+    "prefill_fill_dtype": "bfloat16",
+    "decode_update_dtype": "bfloat16",
+    "full_attention_layers": 10,
+    "sliding_attention_layers": 40,
+    "full_attention_cache_tokens": 1048576,
+    "sliding_ring_tokens": 8704,
+    "cache_page_tokens": 32,
+    "cache_bytes_per_device": 5546967040,
+    "allocator": {
+      "dram": {
+        "num_banks": 8,
+        "total_bytes_per_bank": 4247339392,
+        "total_bytes_allocated_per_bank": 3651501312,
+        "total_bytes_free_per_bank": 595838080,
+        "largest_contiguous_bytes_free_per_bank": 595800192,
+        "allocated_bytes": 29212010496
+      },
+      "l1": {
+        "num_banks": 110,
+        "total_bytes_per_bank": 1461248,
+        "total_bytes_allocated_per_bank": 68032,
+        "total_bytes_free_per_bank": 1393216,
+        "largest_contiguous_bytes_free_per_bank": 1341248,
+        "allocated_bytes": 7483520
+      },
+      "trace": {
+        "num_banks": 8,
+        "total_bytes_per_bank": 25001984,
+        "total_bytes_allocated_per_bank": 14997504,
+        "total_bytes_free_per_bank": 10004480,
+        "largest_contiguous_bytes_free_per_bank": 10004480,
+        "allocated_bytes": 119980032
+      }
+    },
+    "candidate_capacity_evidence": {
+      "head_bfp4_lofi": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3321605376,
+            "total_bytes_free_per_bank": 925734016,
+            "largest_contiguous_bytes_free_per_bank": 925696128,
+            "allocated_bytes": 26572843008
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp4_lofi/result.json"
+      },
+      "kv_bfp4": {
+        "kv_cache_dtype": "bfloat4_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 1560084480,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3183752448,
+            "total_bytes_free_per_bank": 1063586944,
+            "largest_contiguous_bytes_free_per_bank": 1063235712,
+            "allocated_bytes": 25470019584
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/kv_bfp4/result.json"
+      },
+      "expert_gate_up_bfp8_hifi2_chunk2048": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 4104785088,
+            "total_bytes_free_per_bank": 142554304,
+            "largest_contiguous_bytes_free_per_bank": 142507648,
+            "allocated_bytes": 32838280704
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 67712,
+            "total_bytes_free_per_bank": 1393536,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7448320
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 11868160,
+            "total_bytes_free_per_bank": 13133824,
+            "largest_contiguous_bytes_free_per_bank": 13133824,
+            "allocated_bytes": 94945280
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/expert_gate_up_bfp8_hifi2_chunk2048/result.json"
+      },
+      "dense_bfp8_lofi": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3416487168,
+            "total_bytes_free_per_bank": 830852224,
+            "largest_contiguous_bytes_free_per_bank": 830807680,
+            "allocated_bytes": 27331897344
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/dense_bfp8_lofi/result.json"
+      },
+      "baseline_bfp4_lofi": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3357095168,
+            "total_bytes_free_per_bank": 890244224,
+            "largest_contiguous_bytes_free_per_bank": 890199680,
+            "allocated_bytes": 26856761344
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/baseline_bfp4_lofi/result.json"
+      },
+      "head_bfp8_lofi_kv_bf16": {
+        "kv_cache_dtype": "bfloat16",
+        "context": 1048576,
+        "cache_bytes_per_device": 5546967040,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3652621568,
+            "total_bytes_free_per_bank": 594717824,
+            "largest_contiguous_bytes_free_per_bank": 594656384,
+            "allocated_bytes": 29220972544
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 14997504,
+            "total_bytes_free_per_bank": 10004480,
+            "largest_contiguous_bytes_free_per_bank": 10004480,
+            "allocated_bytes": 119980032
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp8_lofi_kv_bf16/result.json"
+      },
+      "head_bfp4_hifi2_logits_bf16_kv_bfp4": {
+        "kv_cache_dtype": "bfloat4_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 1560084480,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3148856576,
+            "total_bytes_free_per_bank": 1098482816,
+            "largest_contiguous_bytes_free_per_bank": 1098425472,
+            "allocated_bytes": 25190852608
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp4_hifi2_logits_bf16_kv_bfp4/result.json"
+      },
+      "router_bfp8_hifi2": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3368359168,
+            "total_bytes_free_per_bank": 878980224,
+            "largest_contiguous_bytes_free_per_bank": 878935680,
+            "allocated_bytes": 26946873344
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/router_bfp8_hifi2/result.json"
+      },
+      "head_bfp8_hifi2_logits_bf16": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3326514432,
+            "total_bytes_free_per_bank": 920824960,
+            "largest_contiguous_bytes_free_per_bank": 920784000,
+            "allocated_bytes": 26612115456
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp8_hifi2_logits_bf16/result.json"
+      },
+      "head_bfp4_hifi2_logits_bf16": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3321361664,
+            "total_bytes_free_per_bank": 925977728,
+            "largest_contiguous_bytes_free_per_bank": 925933696,
+            "allocated_bytes": 26570893312
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp4_hifi2_logits_bf16/result.json"
+      },
+      "kv_bf16": {
+        "kv_cache_dtype": "bfloat16",
+        "context": 1048576,
+        "cache_bytes_per_device": 5546967040,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3682086144,
+            "total_bytes_free_per_bank": 565253248,
+            "largest_contiguous_bytes_free_per_bank": 563681408,
+            "allocated_bytes": 29456689152
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 14997504,
+            "total_bytes_free_per_bank": 10004480,
+            "largest_contiguous_bytes_free_per_bank": 10004480,
+            "allocated_bytes": 119980032
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/kv_bf16/result.json"
+      },
+      "head_bfp4_lofi_kv_bfp4": {
+        "kv_cache_dtype": "bfloat4_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 1560084480,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3149108480,
+            "total_bytes_free_per_bank": 1098230912,
+            "largest_contiguous_bytes_free_per_bank": 1098187904,
+            "allocated_bytes": 25192867840
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp4_lofi_kv_bfp4/result.json"
+      },
+      "head_bf16_hifi4": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3336451328,
+            "total_bytes_free_per_bank": 910888064,
+            "largest_contiguous_bytes_free_per_bank": 910850176,
+            "allocated_bytes": 26691610624
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bf16_hifi4/result.json"
+      },
+      "expert_down_bfp8_lofi": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3750311168,
+            "total_bytes_free_per_bank": 497028224,
+            "largest_contiguous_bytes_free_per_bank": 496983680,
+            "allocated_bytes": 30002489344
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/expert_down_bfp8_lofi/result.json"
+      },
+      "head_bfp4_lofi_logits_bf16_kv_bf16": {
+        "kv_cache_dtype": "bfloat16",
+        "context": 1048576,
+        "cache_bytes_per_device": 5546967040,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3647212800,
+            "total_bytes_free_per_bank": 600126592,
+            "largest_contiguous_bytes_free_per_bank": 600074368,
+            "allocated_bytes": 29177702400
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 14997504,
+            "total_bytes_free_per_bank": 10004480,
+            "largest_contiguous_bytes_free_per_bank": 10004480,
+            "allocated_bytes": 119980032
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp4_lofi_logits_bf16_kv_bf16/result.json"
+      },
+      "head_bfp8_hifi2": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3326766336,
+            "total_bytes_free_per_bank": 920573056,
+            "largest_contiguous_bytes_free_per_bank": 920535168,
+            "allocated_bytes": 26614130688
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp8_hifi2/result.json"
+      },
+      "head_bfp4_hifi2": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3321605376,
+            "total_bytes_free_per_bank": 925734016,
+            "largest_contiguous_bytes_free_per_bank": 925696128,
+            "allocated_bytes": 26572843008
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp4_hifi2/result.json"
+      },
+      "router_bfp8_lofi": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3368359168,
+            "total_bytes_free_per_bank": 878980224,
+            "largest_contiguous_bytes_free_per_bank": 878935680,
+            "allocated_bytes": 26946873344
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/router_bfp8_lofi/result.json"
+      },
+      "head_bfp8_lofi_kv_bfp4": {
+        "kv_cache_dtype": "bfloat4_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 1560084480,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3153876224,
+            "total_bytes_free_per_bank": 1093463168,
+            "largest_contiguous_bytes_free_per_bank": 1093359744,
+            "allocated_bytes": 25231009792
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp8_lofi_kv_bfp4/result.json"
+      },
+      "ccl_bfp8": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3357099264,
+            "total_bytes_free_per_bank": 890240128,
+            "largest_contiguous_bytes_free_per_bank": 890195584,
+            "allocated_bytes": 26856794112
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 37312,
+            "total_bytes_free_per_bank": 1423936,
+            "largest_contiguous_bytes_free_per_bank": 1371968,
+            "allocated_bytes": 4104320
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15218688,
+            "total_bytes_free_per_bank": 9783296,
+            "largest_contiguous_bytes_free_per_bank": 9783296,
+            "allocated_bytes": 121749504
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/ccl_bfp8/result.json"
+      },
+      "expert_gate_up_bfp8_lofi_chunk2048": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 4104785088,
+            "total_bytes_free_per_bank": 142554304,
+            "largest_contiguous_bytes_free_per_bank": 142507648,
+            "allocated_bytes": 32838280704
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 67712,
+            "total_bytes_free_per_bank": 1393536,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7448320
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 11868160,
+            "total_bytes_free_per_bank": 13133824,
+            "largest_contiguous_bytes_free_per_bank": 13133824,
+            "allocated_bytes": 94945280
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/expert_gate_up_bfp8_lofi_chunk2048/result.json"
+      },
+      "bfp4_hifi2": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3357095168,
+            "total_bytes_free_per_bank": 890244224,
+            "largest_contiguous_bytes_free_per_bank": 890199680,
+            "allocated_bytes": 26856761344
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/bfp4_hifi2/result.json"
+      },
+      "expert_down_bfp8_hifi2": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3750311168,
+            "total_bytes_free_per_bank": 497028224,
+            "largest_contiguous_bytes_free_per_bank": 496983680,
+            "allocated_bytes": 30002489344
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/expert_down_bfp8_hifi2/result.json"
+      },
+      "residual_bfp8": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3353831808,
+            "total_bytes_free_per_bank": 893507584,
+            "largest_contiguous_bytes_free_per_bank": 893463040,
+            "allocated_bytes": 26830654464
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15382528,
+            "total_bytes_free_per_bank": 9619456,
+            "largest_contiguous_bytes_free_per_bank": 9619456,
+            "allocated_bytes": 123060224
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/residual_bfp8/result.json"
+      },
+      "accuracy_dense_bf16_hifi4": {
+        "kv_cache_dtype": "bfloat16",
+        "context": 1048576,
+        "cache_bytes_per_device": 5546967040,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3885248768,
+            "total_bytes_free_per_bank": 362090624,
+            "largest_contiguous_bytes_free_per_bank": 359910016,
+            "allocated_bytes": 31081990144
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 14989312,
+            "total_bytes_free_per_bank": 10012672,
+            "largest_contiguous_bytes_free_per_bank": 10012672,
+            "allocated_bytes": 119914496
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/accuracy_dense_bf16_hifi4/result.json"
+      },
+      "head_bfp8_hifi2_logits_bf16_kv_bfp4": {
+        "kv_cache_dtype": "bfloat4_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 1560084480,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3154009344,
+            "total_bytes_free_per_bank": 1093330048,
+            "largest_contiguous_bytes_free_per_bank": 1093292160,
+            "allocated_bytes": 25232074752
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp8_hifi2_logits_bf16_kv_bfp4/result.json"
+      },
+      "head_bfp8_hifi2_logits_bf16_kv_bf16": {
+        "kv_cache_dtype": "bfloat16",
+        "context": 1048576,
+        "cache_bytes_per_device": 5546967040,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3652369664,
+            "total_bytes_free_per_bank": 594969728,
+            "largest_contiguous_bytes_free_per_bank": 594911360,
+            "allocated_bytes": 29218957312
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 14997504,
+            "total_bytes_free_per_bank": 10004480,
+            "largest_contiguous_bytes_free_per_bank": 10004480,
+            "allocated_bytes": 119980032
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp8_hifi2_logits_bf16_kv_bf16/result.json"
+      },
+      "head_bfp4_lofi_kv_bf16": {
+        "kv_cache_dtype": "bfloat16",
+        "context": 1048576,
+        "cache_bytes_per_device": 5546967040,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3647468800,
+            "total_bytes_free_per_bank": 599870592,
+            "largest_contiguous_bytes_free_per_bank": 599818368,
+            "allocated_bytes": 29179750400
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 14997504,
+            "total_bytes_free_per_bank": 10004480,
+            "largest_contiguous_bytes_free_per_bank": 10004480,
+            "allocated_bytes": 119980032
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp4_lofi_kv_bf16/result.json"
+      },
+      "head_bfp8_lofi_logits_bf16_kv_bfp4": {
+        "kv_cache_dtype": "bfloat4_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 1560084480,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3154005248,
+            "total_bytes_free_per_bank": 1093334144,
+            "largest_contiguous_bytes_free_per_bank": 1093296256,
+            "allocated_bytes": 25232041984
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp8_lofi_logits_bf16_kv_bfp4/result.json"
+      },
+      "head_bfp4_lofi_logits_bf16": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3321357568,
+            "total_bytes_free_per_bank": 925981824,
+            "largest_contiguous_bytes_free_per_bank": 925926528,
+            "allocated_bytes": 26570860544
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp4_lofi_logits_bf16/result.json"
+      },
+      "head_bfp4_lofi_logits_bf16_kv_bfp4": {
+        "kv_cache_dtype": "bfloat4_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 1560084480,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3148852480,
+            "total_bytes_free_per_bank": 1098486912,
+            "largest_contiguous_bytes_free_per_bank": 1098429568,
+            "allocated_bytes": 25190819840
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp4_lofi_logits_bf16_kv_bfp4/result.json"
+      },
+      "head_bfp8_hifi2_kv_bfp4": {
+        "kv_cache_dtype": "bfloat4_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 1560084480,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3154265344,
+            "total_bytes_free_per_bank": 1093074048,
+            "largest_contiguous_bytes_free_per_bank": 1093036160,
+            "allocated_bytes": 25234122752
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp8_hifi2_kv_bfp4/result.json"
+      },
+      "head_bfp4_hifi2_kv_bfp4": {
+        "kv_cache_dtype": "bfloat4_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 1560084480,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3149112576,
+            "total_bytes_free_per_bank": 1098226816,
+            "largest_contiguous_bytes_free_per_bank": 1098183808,
+            "allocated_bytes": 25192900608
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp4_hifi2_kv_bfp4/result.json"
+      },
+      "projection_activation_bfp8": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3357119744,
+            "total_bytes_free_per_bank": 890219648,
+            "largest_contiguous_bytes_free_per_bank": 890175104,
+            "allocated_bytes": 26856957952
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1390400,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15579136,
+            "total_bytes_free_per_bank": 9422848,
+            "largest_contiguous_bytes_free_per_bank": 9422848,
+            "allocated_bytes": 124633088
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/projection_activation_bfp8/result.json"
+      },
+      "head_bfp8_lofi_logits_bf16_kv_bf16": {
+        "kv_cache_dtype": "bfloat16",
+        "context": 1048576,
+        "cache_bytes_per_device": 5546967040,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3652365568,
+            "total_bytes_free_per_bank": 594973824,
+            "largest_contiguous_bytes_free_per_bank": 594915456,
+            "allocated_bytes": 29218924544
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 14997504,
+            "total_bytes_free_per_bank": 10004480,
+            "largest_contiguous_bytes_free_per_bank": 10004480,
+            "allocated_bytes": 119980032
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp8_lofi_logits_bf16_kv_bf16/result.json"
+      },
+      "head_bfp8_lofi": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3326766336,
+            "total_bytes_free_per_bank": 920573056,
+            "largest_contiguous_bytes_free_per_bank": 920535168,
+            "allocated_bytes": 26614130688
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp8_lofi/result.json"
+      },
+      "expert_activation_bfp8": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3357099264,
+            "total_bytes_free_per_bank": 890240128,
+            "largest_contiguous_bytes_free_per_bank": 890195584,
+            "allocated_bytes": 26856794112
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15177728,
+            "total_bytes_free_per_bank": 9824256,
+            "largest_contiguous_bytes_free_per_bank": 9824256,
+            "allocated_bytes": 121421824
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/expert_activation_bfp8/result.json"
+      },
+      "head_bfp4_hifi2_kv_bf16": {
+        "kv_cache_dtype": "bfloat16",
+        "context": 1048576,
+        "cache_bytes_per_device": 5546967040,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3647472896,
+            "total_bytes_free_per_bank": 599866496,
+            "largest_contiguous_bytes_free_per_bank": 599814272,
+            "allocated_bytes": 29179783168
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 14997504,
+            "total_bytes_free_per_bank": 10004480,
+            "largest_contiguous_bytes_free_per_bank": 10004480,
+            "allocated_bytes": 119980032
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp4_hifi2_kv_bf16/result.json"
+      },
+      "dense_bfp8_hifi2": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3416487168,
+            "total_bytes_free_per_bank": 830852224,
+            "largest_contiguous_bytes_free_per_bank": 830807680,
+            "allocated_bytes": 27331897344
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/dense_bfp8_hifi2/result.json"
+      },
+      "head_bfp8_hifi2_kv_bf16": {
+        "kv_cache_dtype": "bfloat16",
+        "context": 1048576,
+        "cache_bytes_per_device": 5546967040,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3652625664,
+            "total_bytes_free_per_bank": 594713728,
+            "largest_contiguous_bytes_free_per_bank": 594655360,
+            "allocated_bytes": 29221005312
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 14997504,
+            "total_bytes_free_per_bank": 10004480,
+            "largest_contiguous_bytes_free_per_bank": 10004480,
+            "allocated_bytes": 119980032
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp8_hifi2_kv_bf16/result.json"
+      },
+      "head_bfp8_lofi_logits_bf16": {
+        "kv_cache_dtype": "bfloat8_b",
+        "context": 1048576,
+        "cache_bytes_per_device": 2946826240,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3326510336,
+            "total_bytes_free_per_bank": 920829056,
+            "largest_contiguous_bytes_free_per_bank": 920791168,
+            "allocated_bytes": 26612082688
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 15153152,
+            "total_bytes_free_per_bank": 9848832,
+            "largest_contiguous_bytes_free_per_bank": 9848832,
+            "allocated_bytes": 121225216
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp8_lofi_logits_bf16/result.json"
+      },
+      "head_bfp4_hifi2_logits_bf16_kv_bf16": {
+        "kv_cache_dtype": "bfloat16",
+        "context": 1048576,
+        "cache_bytes_per_device": 5546967040,
+        "allocator": {
+          "dram": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 4247339392,
+            "total_bytes_allocated_per_bank": 3647216896,
+            "total_bytes_free_per_bank": 600122496,
+            "largest_contiguous_bytes_free_per_bank": 600070272,
+            "allocated_bytes": 29177735168
+          },
+          "l1": {
+            "num_banks": 110,
+            "total_bytes_per_bank": 1461248,
+            "total_bytes_allocated_per_bank": 68032,
+            "total_bytes_free_per_bank": 1393216,
+            "largest_contiguous_bytes_free_per_bank": 1341248,
+            "allocated_bytes": 7483520
+          },
+          "trace": {
+            "num_banks": 8,
+            "total_bytes_per_bank": 25001984,
+            "total_bytes_allocated_per_bank": 14997504,
+            "total_bytes_free_per_bank": 10004480,
+            "largest_contiguous_bytes_free_per_bank": 10004480,
+            "allocated_bytes": 119980032
+          }
+        },
+        "status": "pass",
+        "evidence": "datatype_sweep/candidates/head_bfp4_hifi2_logits_bf16_kv_bf16/result.json"
+      }
+    },
+    "runtime_default_context": 1048576,
+    "validation": {
+      "non_aligned_checks": [
+        {
+          "length": 31,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            14372,
+            6268,
+            46,
+            543
+          ]
+        },
+        {
+          "length": 32,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            14372,
+            6268,
+            46,
+            543
+          ]
+        },
+        {
+          "length": 33,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            46,
+            543,
+            3143,
+            5858
+          ]
+        },
+        {
+          "length": 34,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            286,
+            3096,
+            941,
+            5190
+          ]
+        },
+        {
+          "length": 127,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            116,
+            36,
+            2608,
+            7770
+          ]
+        },
+        {
+          "length": 128,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            36,
+            1584,
+            7770,
+            622
+          ]
+        },
+        {
+          "length": 129,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            2608,
+            7770,
+            622,
+            262
+          ]
+        },
+        {
+          "length": 130,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            7770,
+            622,
+            262,
+            32
+          ]
+        },
+        {
+          "length": 511,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            50,
+            3955,
+            286,
+            32
+          ]
+        },
+        {
+          "length": 512,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            3955,
+            286,
+            32,
+            50
+          ]
+        },
+        {
+          "length": 513,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            286,
+            32,
+            50,
+            52
+          ]
+        },
+        {
+          "length": 514,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            32,
+            50,
+            52,
+            2608
+          ]
+        },
+        {
+          "length": 2047,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            25485,
+            4257,
+            2331,
+            44
+          ]
+        },
+        {
+          "length": 2048,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            4257,
+            2331,
+            44,
+            262
+          ]
+        },
+        {
+          "length": 2049,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            2331,
+            44,
+            262,
+            3452
+          ]
+        },
+        {
+          "length": 2050,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            44,
+            262,
+            3452,
+            11308
+          ]
+        },
+        {
+          "length": 8191,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            11308,
+            970,
+            32,
+            50
+          ]
+        },
+        {
+          "length": 8192,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            970,
+            32,
+            50,
+            3955
+          ]
+        },
+        {
+          "length": 8193,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            32,
+            50,
+            3955,
+            286
+          ]
+        },
+        {
+          "length": 8194,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            50,
+            3955,
+            286,
+            32
+          ]
+        },
+        {
+          "length": 8209,
+          "eager_traced_equal": true,
+          "exact_logits_equal": true,
+          "tokens": [
+            262,
+            14366,
+            4777,
+            46
+          ]
+        }
+      ],
+      "input_kind": "Pinned AIME24 prompt prefix repeated to requested length; capability input, not a quality prompt",
+      "max_address_probe": {
+        "start": 1048543,
+        "length": 33,
+        "initialized_prefix": false,
+        "tokens": [
+          42
+        ]
+      },
+      "capacity": 1048576
+    },
+    "full_prefix_validation": {
+      "length": 1048543,
+      "ids": [
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42
+      ],
+      "last_consumed_position": 1048575,
+      "seconds": 571.8691429830214,
+      "initialized_full_prefix": true,
+      "native_next_positions": {
+        "kv": [
+          1048576
+        ],
+        "rope": [
+          1048576
+        ]
+      },
+      "input_kind": "Repeated token42 capacity workload; not a quality prompt"
+    },
+    "batch32_validation": {
+      "capacity": 8192,
+      "layer_count": 50,
+      "prompt_lengths": [
+        65,
+        97,
+        129,
+        65,
+        97,
+        129,
+        65,
+        97,
+        129,
+        65,
+        97,
+        129,
+        65,
+        97,
+        129,
+        65,
+        97,
+        129,
+        65,
+        97,
+        129,
+        65,
+        97,
+        129,
+        65,
+        97,
+        129,
+        65,
+        97,
+        129,
+        65,
+        0
+      ],
+      "first": [
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        115
+      ],
+      "repeat": [
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        42,
+        115
+      ],
+      "b1_token_match": true,
+      "equal_slot_logits": true,
+      "repeated_all_slot_logits_exact": true,
+      "all_slot_logits_finite": true,
+      "feedback_without_host_refresh": true,
+      "allocator": {
+        "dram": {
+          "num_banks": 8,
+          "total_bytes_per_bank": 4247339392,
+          "total_bytes_allocated_per_bank": 3795836544,
+          "total_bytes_free_per_bank": 451502848,
+          "largest_contiguous_bytes_free_per_bank": 451446912,
+          "allocated_bytes": 30366692352
+        },
+        "l1": {
+          "num_banks": 110,
+          "total_bytes_per_bank": 1461248,
+          "total_bytes_allocated_per_bank": 68032,
+          "total_bytes_free_per_bank": 1393216,
+          "largest_contiguous_bytes_free_per_bank": 1341248,
+          "allocated_bytes": 7483520
+        },
+        "trace": {
+          "num_banks": 8,
+          "total_bytes_per_bank": 25001984,
+          "total_bytes_allocated_per_bank": 15928320,
+          "total_bytes_free_per_bank": 9073664,
+          "largest_contiguous_bytes_free_per_bank": 9073664,
+          "allocated_bytes": 127426560
+        }
+      },
+      "trace_ids": {
+        "decode": "MeshTraceId(8)",
+        "split": "MeshTraceId(9)",
+        "argmax": "MeshTraceId(10)",
+        "prefill_32": "MeshTraceId(11)",
+        "prefill_128": "MeshTraceId(12)",
+        "prefill_512": "MeshTraceId(13)",
+        "prefill_2048": "MeshTraceId(14)",
+        "prefill_8192": "MeshTraceId(15)"
+      },
+      "runtime_summary": {
+        "layers": [
+          {
+            "layer": 0,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 1,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 2,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 3,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 4,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 5,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 6,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 7,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 8,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 9,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 10,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 11,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 12,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 13,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 14,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 15,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 16,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 17,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 18,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 19,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 20,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 21,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 22,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 23,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 24,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 25,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 26,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 27,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 28,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 29,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 30,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 31,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 32,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 33,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 34,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 35,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 36,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 37,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 38,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 39,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 40,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 41,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 42,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 43,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 44,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 45,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 46,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 47,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 48,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          },
+          {
+            "layer": 49,
+            "kv_cache_dtypes": [
+              "DataType.BFLOAT16",
+              "DataType.BFLOAT16"
+            ]
+          }
+        ],
+        "config": {
+          "schema_version": 1,
+          "config_id": "head_bfp8_hifi2_logits_bf16_kv_bf16",
+          "mesh_policy": {
+            "safe_compute_fidelity": "HiFi4",
+            "projection_activation_dtype": "bfloat16",
+            "expert_activation_dtype": "bfloat16",
+            "expert_gate_up_dtype": "bfloat4_b",
+            "expert_down_dtype": "bfloat4_b",
+            "expert_fidelity": "LoFi",
+            "expert_fp32": false,
+            "sparse_grid": [
+              8,
+              1
+            ],
+            "sparse_down_grid": [
+              10,
+              8
+            ],
+            "sparse_gate_k": 80,
+            "sparse_down_k": 4,
+            "sparse_subblock": 1,
+            "expert_l1": false,
+            "static_nnz": false,
+            "indexed_experts": true,
+            "padded_topk": false,
+            "decode_topk_width": 1024,
+            "packed_decode_router": true,
+            "router_grid": [
+              4,
+              3
+            ],
+            "router_k": 80,
+            "router_dtype": "bfloat4_b",
+            "router_fidelity": "LoFi",
+            "router_choice_bf16": true,
+            "router_score_bf16": true,
+            "decode_k_chunk": 128,
+            "decode_long_k_chunk": 512,
+            "decode_sliding_long_k_chunk": 256,
+            "decode_long_cores_per_head": 64,
+            "sdpa_fidelity": "LoFi",
+            "sdpa_fp32": false,
+            "sdpa_exp_approx": true,
+            "prefill_long_fidelity": "HiFi2",
+            "prefill_long_fp32": true,
+            "decode_cores_per_head": 8,
+            "attention_dtype": "bfloat4_b",
+            "shared_dtype": "bfloat4_b",
+            "attention_fidelity": "LoFi",
+            "shared_fidelity": "LoFi",
+            "projection_fp32": [
+              false,
+              false,
+              false,
+              false
+            ],
+            "projection_cores": [
+              4,
+              8,
+              4,
+              2
+            ],
+            "projection_k": [
+              20,
+              6,
+              20,
+              2
+            ],
+            "projection_readers": [
+              1,
+              2,
+              1,
+              2
+            ],
+            "residual_grid": [
+              5,
+              4
+            ],
+            "prefill_projection_grid": [
+              10,
+              8
+            ],
+            "prefill_projection_k": 4,
+            "prefill_large_projection_k": 16,
+            "prefill_large_output_m": 2,
+            "prefill_large_kind": "minimal",
+            "prefill_large_minimal_n": 4,
+            "prefill_sdpa_grid": [
+              11,
+              10
+            ],
+            "prefill_q_chunk": 256,
+            "prefill_k_chunk": 256,
+            "prefill_chunk_size": 8192,
+            "prefill_grouped_min": 32,
+            "prefill_expert_dtype": "bfloat4_b",
+            "prefill_expert_fidelity": "LoFi",
+            "prefill_expert_grid": [
+              4,
+              4
+            ],
+            "grouped_prefill": true,
+            "prefix_matmul": true,
+            "prefill_prefix_cores": 6,
+            "fused_norm_gamma": true,
+            "residual_layout": "replicated",
+            "ccl_dtype": "bfloat16",
+            "prefill_ccl_dtype": "bfloat8_b",
+            "num_links": 2,
+            "fused_qkv": false,
+            "fused_wo": false,
+            "ccl_mode": "direct"
+          },
+          "layer_exceptions": {},
+          "runtime": {
+            "kv_cache_dtype": "bfloat16",
+            "residual_dtype": "bfloat16",
+            "activation_dtype": "bfloat16",
+            "embedding_dtype": "bfloat16",
+            "norm_dtype": "bfloat16",
+            "head_weight_dtype": "bfloat8_b",
+            "head_output_dtype": "bfloat16",
+            "head_fidelity": "HiFi2",
+            "head_fp32": true,
+            "norm_fidelity": "HiFi4",
+            "sampling_logits_dtype": "bfloat16",
+            "sampling_parameter_dtype": "bfloat16",
+            "sampling_index_dtype": "uint32",
+            "max_context": 1048576
+          }
+        },
+        "active_experts_per_token": 6,
+        "expert_count": 384,
+        "head_weights": [
+          "DataType.BFLOAT8_B",
+          "DataType.BFLOAT8_B"
+        ],
+        "head_fidelity": "MathFidelity.HiFi2",
+        "head_fp32": true,
+        "head_output_dtype": "DataType.BFLOAT16",
+        "embedding_dtype": "DataType.BFLOAT16",
+        "final_norm_dtype": "DataType.BFLOAT16",
+        "logits_dtype": "DataType.BFLOAT16",
+        "tokens_dtype": "DataType.UINT32",
+        "topk_parameter_dtype": "DataType.UINT32",
+        "prefill_token_dtypes": {
+          "32": "DataType.UINT32",
+          "128": "DataType.UINT32",
+          "512": "DataType.UINT32",
+          "2048": "DataType.UINT32",
+          "8192": "DataType.UINT32"
+        },
+        "parameter_dtypes": [
+          "DataType.BFLOAT16",
+          "DataType.BFLOAT16"
+        ],
+        "prefill_output_dtypes": {
+          "32": "DataType.BFLOAT16",
+          "128": "DataType.BFLOAT16",
+          "512": "DataType.BFLOAT16",
+          "2048": "DataType.BFLOAT16",
+          "8192": "DataType.BFLOAT16"
+        },
+        "ccl_buffer_dtypes": [
+          "DataType.BFLOAT16",
+          "DataType.BFLOAT16"
+        ],
+        "prefill_buckets": [
+          32,
+          128,
+          512,
+          2048,
+          8192
+        ],
+        "capacity": 8192,
+        "mesh": [
+          1,
+          4
+        ]
+      }
+    },
+    "evidence": [
+      "datatype_sweep/selected_default/result.json"
+    ],
+    "inherited_full_prefix_evidence": "full_model/full_validation_final.json",
+    "qualification": "Fresh selected-config all50-layer execution of every row of a1,048,543-token non-aligned prefix followed by34 generated tokens through the last valid address. Capacity test, not long-context language-quality scoring."
+  },
+  "optimized_vllm": {
+    "supported_context": 1048576,
+    "served_max_model_len": 1048576,
+    "capability_reduction": null,
+    "device_allocation_change": null,
+    "host_prefill_snapshot_bytes_upper_bound": 32879848,
+    "host_snapshot_contract": "At most one INT32 token row, full page-table row and chunk page-table row per existing physical bucket/layer binding; no per-request or per-position cache. Four-byte INT32 storage: sum(4*n + 50*(131072 + 4*n/32) for n in [32,128,512,2048,8192]) = 32879848 bytes, plus bounded Python metadata. No new device allocation; selected KV/cache/trace shapes unchanged.",
+    "validation_status": "Full-context B1/B32 serving and tracked mixed-shape validation passed; no device allocation or context changes",
+    "evidence": [
+      "optimized_vllm/runtime_contract.json",
+      "../readiness_vllm/opt-tracked-b32-trace-report.json"
+    ]
+  }
+}

@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "config_id": "head_bfp8_hifi2_logits_bf16_kv_bf16",
+  "mesh_policy": {
+    "safe_compute_fidelity": "HiFi4",
+    "projection_activation_dtype": "bfloat16",
+    "expert_activation_dtype": "bfloat16",
+    "expert_gate_up_dtype": "bfloat4_b",
+    "expert_down_dtype": "bfloat4_b",
+    "expert_fidelity": "LoFi",
+    "expert_fp32": false,
+    "sparse_grid": [
+      8,
+      1
+    ],
+    "sparse_down_grid": [
+      10,
+      8
+    ],
+    "sparse_gate_k": 80,
+    "sparse_down_k": 4,
+    "sparse_subblock": 1,
+    "expert_l1": false,
+    "static_nnz": false,
+    "indexed_experts": true,
+    "padded_topk": false,
+    "decode_topk_width": 1024,
+    "packed_decode_router": true,
+    "router_grid": [
+      4,
+      3
+    ],
+    "router_k": 80,
+    "router_dtype": "bfloat4_b",
+    "router_fidelity": "LoFi",
+    "router_choice_bf16": true,
+    "router_score_bf16": true,
+    "decode_k_chunk": 128,
+    "decode_long_k_chunk": 512,
+    "decode_sliding_long_k_chunk": 256,
+    "decode_long_cores_per_head": 64,
+    "sdpa_fidelity": "LoFi",
+    "sdpa_fp32": false,
+    "sdpa_exp_approx": true,
+    "prefill_long_fidelity": "HiFi2",
+    "prefill_long_fp32": true,
+    "decode_cores_per_head": 8,
+    "attention_dtype": "bfloat4_b",
+    "shared_dtype": "bfloat4_b",
+    "attention_fidelity": "LoFi",
+    "shared_fidelity": "LoFi",
+    "projection_fp32": [
+      false,
+      false,
+      false,
+      false
+    ],
+    "projection_cores": [
+      4,
+      8,
+      4,
+      2
+    ],
+    "projection_k": [
+      20,
+      6,
+      20,
+      2
+    ],
+    "projection_readers": [
+      1,
+      2,
+      1,
+      2
+    ],
+    "residual_grid": [
+      5,
+      4
+    ],
+    "prefill_projection_grid": [
+      10,
+      8
+    ],
+    "prefill_projection_k": 4,
+    "prefill_large_projection_k": 16,
+    "prefill_large_output_m": 2,
+    "prefill_large_kind": "minimal",
+    "prefill_large_minimal_n": 4,
+    "prefill_sdpa_grid": [
+      11,
+      10
+    ],
+    "prefill_q_chunk": 256,
+    "prefill_k_chunk": 256,
+    "prefill_chunk_size": 8192,
+    "prefill_grouped_min": 32,
+    "prefill_expert_dtype": "bfloat4_b",
+    "prefill_expert_fidelity": "LoFi",
+    "prefill_expert_grid": [
+      4,
+      4
+    ],
+    "grouped_prefill": true,
+    "prefix_matmul": true,
+    "prefill_prefix_cores": 6,
+    "fused_norm_gamma": true,
+    "residual_layout": "replicated",
+    "ccl_dtype": "bfloat16",
+    "prefill_ccl_dtype": "bfloat8_b",
+    "num_links": 2,
+    "fused_qkv": false,
+    "fused_wo": false,
+    "ccl_mode": "direct"
+  },
+  "layer_exceptions": {},
+  "runtime": {
+    "kv_cache_dtype": "bfloat16",
+    "residual_dtype": "bfloat16",
+    "activation_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "head_weight_dtype": "bfloat8_b",
+    "head_output_dtype": "bfloat16",
+    "head_fidelity": "HiFi2",
+    "head_fp32": true,
+    "norm_fidelity": "HiFi4",
+    "sampling_logits_dtype": "bfloat16",
+    "sampling_parameter_dtype": "bfloat16",
+    "sampling_index_dtype": "uint32",
+    "max_context": 1048576
+  }
+}
