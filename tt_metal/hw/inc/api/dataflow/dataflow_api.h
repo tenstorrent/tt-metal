@@ -2603,7 +2603,9 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
 template <bool posted = false>
 FORCE_INLINE void noc_semaphore_inc(
     uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC, 0, addr, 0, vc, posted, noc_id);
+#ifdef RECORD_NOC_ATOMIC_INCREMENT_WITH_ADDR
+    RECORD_NOC_ATOMIC_INCREMENT_WITH_ADDR(NocEventType::SEMAPHORE_INC, addr, vc, posted, noc_id);
+#endif
     SYNC_SIGNAL_NOC_ADDR("SYNC-SEM-SET-REMOTE", addr, noc_id);
 
     WAYPOINT("NSIW");
@@ -2648,7 +2650,9 @@ FORCE_INLINE void noc_semaphore_inc(
 template <bool posted = false>
 FORCE_INLINE void noc_semaphore_inc_multicast(
     uint64_t addr, uint32_t incr, uint32_t num_dests, uint8_t noc_id = noc_index, uint8_t vc = NOC_MULTICAST_WRITE_VC) {
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC_MULTICAST, 0, addr, 0, vc, posted, noc_id);
+#ifdef RECORD_NOC_ATOMIC_INCREMENT_WITH_ADDR
+    RECORD_NOC_ATOMIC_INCREMENT_WITH_ADDR(NocEventType::SEMAPHORE_INC_MULTICAST, addr, vc, posted, noc_id);
+#endif
     SYNC_SIGNAL_NOC_ADDR("SYNC-SEM-SET-REMOTE", addr, noc_id);
 
     WAYPOINT("NIMW");

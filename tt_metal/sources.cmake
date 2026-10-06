@@ -87,6 +87,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/mock_device/mock_device.hpp
     api/tt-metalium/experimental/noc_estimator/noc_estimator.hpp
     api/tt-metalium/experimental/noc_estimator/types.hpp
+    api/tt-metalium/experimental/noc_debugging.hpp
     api/tt-metalium/experimental/offline_kernel_compile.hpp
     api/tt-metalium/experimental/per_core_allocation/allocator_mode.hpp
     api/tt-metalium/experimental/per_core_allocation/buffer.hpp

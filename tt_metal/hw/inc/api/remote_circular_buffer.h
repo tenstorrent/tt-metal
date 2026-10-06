@@ -60,6 +60,10 @@ FORCE_INLINE void update_pages_sent(
         *pages_sent_ptr += aligned_page_adjustment;
         uint64_t remote_ack_ptr_addr = noc_address_backend::worker_address(
             remote_noc_xy_ptr[0], remote_noc_xy_ptr[1], remote_pages_sent_addr, noc);
+#ifdef RECORD_NOC_ATOMIC_INCREMENT_WITH_ADDR
+        RECORD_NOC_ATOMIC_INCREMENT_WITH_ADDR(
+            NocEventType::ATOMIC_INC, remote_ack_ptr_addr, NOC_UNICAST_WRITE_VC, posted, noc);
+#endif
         noc_fast_atomic_increment<nm>(
             noc,
             cmd_buf,
@@ -96,6 +100,10 @@ FORCE_INLINE void update_pages_acked(
     // local == remote) and the DRISC-side slot for DRAM-sender GCB.
     uint64_t remote_ack_ptr_addr =
         get_noc_addr(sender_noc_x, sender_noc_y, receiver_cb_interface.remote_pages_acked_ptr, noc);
+#ifdef RECORD_NOC_ATOMIC_INCREMENT_WITH_ADDR
+    RECORD_NOC_ATOMIC_INCREMENT_WITH_ADDR(
+        NocEventType::ATOMIC_INC, remote_ack_ptr_addr, NOC_UNICAST_WRITE_VC, posted, noc);
+#endif
     noc_fast_atomic_increment<nm>(
         noc,
         cmd_buf,

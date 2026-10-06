@@ -1218,6 +1218,8 @@ private:
                 noc_address_backend::worker_address(xy[0], xy[1], remote_sent_ptr(iface, receiver_idx, 0), noc);
             *sent_ptr += total_units;
             advance_wr_offset(iface, receiver_idx, total_units);
+            RECORD_NOC_ATOMIC_INCREMENT_WITH_ADDR(
+                NocEventType::ATOMIC_INC, remote_sent_noc_addr, NOC_UNICAST_WRITE_VC, posted, noc);
             noc_fast_atomic_increment<nm>(
                 noc,
                 cmd_buf,
@@ -1257,6 +1259,8 @@ private:
             *local_sent_ptr(iface, receiver_idx, lane) += counts[lane];
             const uint64_t remote_sent_noc_addr =
                 noc_address_backend::worker_address(xy[0], xy[1], remote_sent_ptr(iface, receiver_idx, lane), noc);
+            RECORD_NOC_ATOMIC_INCREMENT_WITH_ADDR(
+                NocEventType::ATOMIC_INC, remote_sent_noc_addr, NOC_UNICAST_WRITE_VC, posted, noc);
             noc_fast_atomic_increment<nm>(
                 noc,
                 cmd_buf,
@@ -1293,6 +1297,8 @@ private:
 
         *sent_ptr += adjustment;
         advance_wr_offset(iface, receiver_idx, adjustment);
+        RECORD_NOC_ATOMIC_INCREMENT_WITH_ADDR(
+            NocEventType::ATOMIC_INC, remote_sent_noc_addr, NOC_UNICAST_WRITE_VC, posted, noc);
         noc_fast_atomic_increment<nm>(
             noc,
             cmd_buf,

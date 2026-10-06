@@ -14,12 +14,20 @@ void kernel_main() {
     const uint64_t sem_noc_addr =
         get_noc_multicast_addr(MCAST_START_X, MCAST_START_Y, MCAST_END_X, MCAST_END_Y, DST_ADDR);
     for (uint32_t i = 0; i < NUM_ITERATIONS; ++i) {
+#if defined(USE_POSTED)
+        noc_semaphore_inc_multicast<true>(sem_noc_addr, 1, NUM_DEST_CORES);
+#else
         noc_semaphore_inc_multicast(sem_noc_addr, 1, NUM_DEST_CORES);
+#endif
     }
 #else
     const uint64_t sem_noc_addr = get_noc_addr(OTHER_CORE_X, OTHER_CORE_Y, DST_ADDR);
     for (uint32_t i = 0; i < NUM_ITERATIONS; ++i) {
+#if defined(USE_POSTED)
+        noc_semaphore_inc<true>(sem_noc_addr, 1);
+#else
         noc_semaphore_inc(sem_noc_addr, 1);
+#endif
     }
 #endif
 

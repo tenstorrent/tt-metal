@@ -93,10 +93,9 @@ struct NocFullBarrierEvent {
     uint8_t noc;
 };
 
-// A remote atomic increment (noc_semaphore_inc / noc_semaphore_inc_multicast). Unlike a write it carries no source
-// buffer (the increment value is immediate) and does not advance the NIU write counter, so the source-reuse and
-// counter-monotonicity checks do not apply. Only a non-posted increment must be flushed before kernel end. For a
-// multicast increment dst_x/dst_y are the rectangle start and mcast_end_dst_x/y the end.
+// A remote atomic increment. Unlike a write it carries no source buffer and does not advance the NIU write counter.
+// Only a non-posted increment must be drained before the operation boundary. For a multicast increment dst_x/dst_y
+// are the rectangle start and mcast_end_dst_x/y the end.
 struct NocSemaphoreIncEvent {
     uint64_t dst_addr;
     int8_t src_x;
@@ -106,6 +105,7 @@ struct NocSemaphoreIncEvent {
     bool posted;
     uint8_t noc;
     bool is_mcast;
+    bool is_semaphore;
     int8_t mcast_end_dst_x;
     int8_t mcast_end_dst_y;
 };
@@ -151,6 +151,7 @@ enum class NOCDebugIssueBaseType : uint8_t {
     WRITE_FLUSH_BARRIER,
     READ_BARRIER,
     UNFLUSHED_WRITE_AT_END,
+    UNFLUSHED_ATOMIC_AT_END,
     WRITE_TO_LOCKED_CORE_LOCAL_MEM,
     WRITE_TO_LOCKED_CB,
     WRITE_TO_LOCKED_DFB,
@@ -250,8 +251,10 @@ public:
 
     // Small snapshot of host-side state, for tests/diagnostics that check memory stays bounded.
     struct StateSummary {
-        size_t issues = 0;          // total distinct issues recorded across cores+processors
-        size_t pending_events = 0;  // size of the not-yet-processed pending_events_ queue
+        size_t issues = 0;                   // total distinct issues recorded across cores+processors
+        size_t unflushed_atomic_issues = 0;  // distinct atomic-exit issues across cores+processors
+        size_t observed_atomic_events = 0;   // non-posted and posted atomic increment events processed
+        size_t pending_events = 0;           // size of the not-yet-processed pending_events_ queue
     };
     StateSummary get_state_summary() const;
 
@@ -299,10 +302,13 @@ private:
         std::array<std::unordered_map<uint64_t, PendingWriteInfo>, MAX_NOCS> posted_writes_pending{};
         std::array<std::unordered_map<uint64_t, PendingWriteInfo>, MAX_NOCS> nonposted_writes_pending{};
 
-        // Pending non-posted atomic increments (semaphore inc) not yet flushed for each NOC (dst_addr -> info).
-        // Kept separate from writes because on device atomics use their own counter: they are released by an
-        // atomic/full barrier, never by a write barrier.
-        std::array<std::unordered_map<uint64_t, PendingWriteInfo>, MAX_NOCS> atomics_pending{};
+        // Pending non-posted atomic increments, tracked for each processor and NOC (dst_addr -> info). Kept
+        // separate from writes because atomics use their own counter. An atomic or full barrier on any processor
+        // releases all pending atomics for the same core and NOC.
+        std::array<std::array<std::unordered_map<uint64_t, PendingWriteInfo>, MAX_NOCS>, MAX_PROCESSORS>
+            atomics_pending{};
+
+        size_t observed_atomic_events = 0;
 
         // Captures if any read or write has occurred yet for each NOC
         std::array<bool, MAX_NOCS> any_reads{};

@@ -5,6 +5,7 @@
 #include "ttnn-nanobind/device.hpp"
 
 #include <tt-metalium/device_types.hpp>
+#include <tt-metalium/experimental/noc_debugging.hpp>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -668,6 +669,29 @@ void device_module(nb::module_& m_device) {
         | device           | Device to read profiling data of | ttnn.Device           |             | Yes      |
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
+
+    m_device.def(
+        "_get_noc_debug_state",
+        [](MeshDevice* mesh_device) {
+            const auto summary = tt::tt_metal::experimental::GetNocDebugStateSummary(*mesh_device);
+            nb::dict result;
+            result["enabled"] = summary.enabled;
+            result["collector_ready"] = summary.collector_ready;
+            result["includes_dispatch_cores"] = summary.includes_dispatch_cores;
+            result["issues"] = summary.issues;
+            result["unflushed_atomic_issues"] = summary.unflushed_atomic_issues;
+            result["observed_atomic_events"] = summary.observed_atomic_events;
+            result["pending_events"] = summary.pending_events;
+            return result;
+        },
+        nb::arg("device"),
+        "Return the private NoC debug state summary used by tests.");
+
+    m_device.def(
+        "_reset_noc_debug_state",
+        [](MeshDevice* mesh_device) { tt::tt_metal::experimental::ResetNocDebugState(*mesh_device); },
+        nb::arg("device"),
+        "Reset the private NoC debug state used by tests.");
 
     m_device.def(
         "get_arch_name",

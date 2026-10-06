@@ -1130,6 +1130,7 @@ __attribute__((noinline)) void trace_only_init() {
 #define RECORD_NOC_EVENT_WITH_ADDR(type, local_addr, noc_addr, num_bytes, vc, posted, noc)
 #define RECORD_NOC_EVENT_WITH_ID(type, local_addr, noc_id, addrgen, offset, num_bytes, vc, posted, noc)
 #define RECORD_NOC_EVENT(type, posted, noc)
+#define RECORD_NOC_ATOMIC_INCREMENT_WITH_ADDR(type, noc_addr, vc, posted, noc)
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)
 
 // null macros when noc debugging is disabled

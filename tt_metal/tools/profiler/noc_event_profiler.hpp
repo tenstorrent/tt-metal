@@ -208,6 +208,47 @@ FORCE_INLINE void recordNocEventWithAddr(
         recordNocEvent<noc_event_type, posted>(decoded_x, decoded_y, num_bytes, vc, noc, 0, 0);
     }
 }
+
+template <KernelProfilerNocEventMetadata::NocEventType noc_event_type, bool posted, typename NocAddrU64>
+FORCE_INLINE void recordNocAtomicIncrementWithEffectiveMode(NocAddrU64 noc_addr, int8_t vc, uint8_t noc) {
+    static_assert(std::is_same_v<NocAddrU64, uint64_t>);
+    if constexpr (noc_event_type == KernelProfilerNocEventMetadata::NocEventType::SEMAPHORE_INC_MULTICAST) {
+        auto [mcast_dst_start_x, mcast_dst_start_y, mcast_dst_end_x, mcast_dst_end_y] =
+            decode_noc_addr_to_multicast_coord(noc_addr);
+        recordMulticastNocEvent<noc_event_type, posted>(
+            mcast_dst_start_x,
+            mcast_dst_start_y,
+            mcast_dst_end_x,
+            mcast_dst_end_y,
+            0,
+            vc,
+            noc,
+            0,
+            noc_addr);
+    } else {
+        recordNocEventWithAddr<noc_event_type, posted>(0, noc_addr, 0, vc, noc);
+    }
+}
+
+template <KernelProfilerNocEventMetadata::NocEventType noc_event_type, typename NocAddrU64>
+FORCE_INLINE void recordNocAtomicIncrementWithAddr(
+    NocAddrU64 noc_addr, int8_t vc, bool requested_posted, uint8_t noc) {
+    bool effective_posted = requested_posted;
+#if defined(ARCH_BLACKHOLE)
+    effective_posted = false;
+#elif defined(ARCH_WORMHOLE)
+    if constexpr (noc_event_type == KernelProfilerNocEventMetadata::NocEventType::SEMAPHORE_INC_MULTICAST) {
+        effective_posted = false;
+    }
+#elif defined(ARCH_QUASAR) && defined(NOC_API_V1)
+    effective_posted = false;
+#endif
+    if (effective_posted) {
+        recordNocAtomicIncrementWithEffectiveMode<noc_event_type, true>(noc_addr, vc, noc);
+    } else {
+        recordNocAtomicIncrementWithEffectiveMode<noc_event_type, false>(noc_addr, vc, noc);
+    }
+}
 }  // namespace noc_event_profiler
 
 #define RECORD_NOC_EVENT_WITH_ADDR_IMPL_(event_type, local_addr, noc_addr, num_bytes, vc, posted, noc)                \
@@ -269,6 +310,15 @@ FORCE_INLINE void recordNocEventWithAddr(
         }                                                                  \
     }
 
+#define RECORD_NOC_ATOMIC_INCREMENT_WITH_ADDR(event_type, noc_addr, vc, posted, noc) \
+    {                                                                                   \
+        using NocEventType = KernelProfilerNocEventMetadata::NocEventType;               \
+        if constexpr (noc_event_profiler::shouldRecordEvent(event_type)) {               \
+            noc_event_profiler::recordNocAtomicIncrementWithAddr<event_type>(            \
+                noc_addr, vc, posted, noc);                                               \
+        }                                                                                \
+    }
+
 // preemptive quick push if transitioning from unlinked state to linked state
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)         \
     {                                                           \
@@ -281,6 +331,7 @@ FORCE_INLINE void recordNocEventWithAddr(
 #define RECORD_NOC_EVENT_WITH_ADDR(type, local_addr, noc_addr, num_bytes, vc, posted, noc)
 #define RECORD_NOC_EVENT_WITH_ID(type, local_addr, noc_id, addrgen, offset, num_bytes, vc, posted, noc)
 #define RECORD_NOC_EVENT(type, posted, noc)
+#define RECORD_NOC_ATOMIC_INCREMENT_WITH_ADDR(type, noc_addr, vc, posted, noc)
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)
 
 #endif

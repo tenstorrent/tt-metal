@@ -19,6 +19,7 @@ namespace {
 
 constexpr size_t CHIP_ID = 0;
 constexpr int PROCESSOR_ID = 0;
+constexpr int OTHER_PROCESSOR_ID = 1;
 constexpr int8_t CORE_X = 1;
 constexpr int8_t CORE_Y = 1;
 
@@ -67,6 +68,55 @@ TEST(NOCDebugCounterWrap, StalledCounterIsFlagged) { EXPECT_TRUE(flags_missing_b
 
 TEST(NOCDebugCounterWrap, ApparentJumpOverHalfTheCounterRangeIsFlagged) {
     EXPECT_TRUE(flags_missing_barrier(100, 4090));
+}
+
+NocSemaphoreIncEvent make_nonposted_atomic() {
+    NocSemaphoreIncEvent atomic{};
+    atomic.dst_addr = 0x40000;
+    atomic.src_x = CORE_X;
+    atomic.src_y = CORE_Y;
+    atomic.dst_x = CORE_X;
+    atomic.dst_y = CORE_Y;
+    atomic.posted = false;
+    atomic.noc = 0;
+    atomic.is_semaphore = true;
+    return atomic;
+}
+
+TEST(NOCDebugAtomicTracking, SameAddressAtomicsAreAttributedToEachProcessor) {
+    NOCDebugState state;
+    const auto atomic = make_nonposted_atomic();
+
+    state.push_event(CHIP_ID, /*timestamp=*/1, PROCESSOR_ID, atomic);
+    state.push_event(CHIP_ID, /*timestamp=*/2, OTHER_PROCESSOR_ID, atomic);
+    state.process_accumulated_events_all_chips();
+    state.finish_cores();
+
+    const tt_cxy_pair core{CHIP_ID, {static_cast<size_t>(CORE_X), static_cast<size_t>(CORE_Y)}};
+    EXPECT_TRUE(state.get_issues(core, PROCESSOR_ID).has_base_issue(NOCDebugIssueBaseType::UNFLUSHED_ATOMIC_AT_END));
+    EXPECT_TRUE(
+        state.get_issues(core, OTHER_PROCESSOR_ID).has_base_issue(NOCDebugIssueBaseType::UNFLUSHED_ATOMIC_AT_END));
+}
+
+TEST(NOCDebugAtomicTracking, OneBarrierDrainsSharedCoreNocAtomics) {
+    NOCDebugState state;
+    const auto atomic = make_nonposted_atomic();
+
+    state.push_event(CHIP_ID, /*timestamp=*/1, PROCESSOR_ID, atomic);
+    state.push_event(CHIP_ID, /*timestamp=*/2, OTHER_PROCESSOR_ID, atomic);
+    state.push_event(
+        CHIP_ID,
+        /*timestamp=*/3,
+        PROCESSOR_ID,
+        NocAtomicBarrierEvent{.src_x = CORE_X, .src_y = CORE_Y, .noc = 0});
+    state.process_accumulated_events_all_chips();
+    state.finish_cores();
+
+    const tt_cxy_pair core{CHIP_ID, {static_cast<size_t>(CORE_X), static_cast<size_t>(CORE_Y)}};
+    EXPECT_FALSE(
+        state.get_issues(core, PROCESSOR_ID).has_base_issue(NOCDebugIssueBaseType::UNFLUSHED_ATOMIC_AT_END));
+    EXPECT_FALSE(
+        state.get_issues(core, OTHER_PROCESSOR_ID).has_base_issue(NOCDebugIssueBaseType::UNFLUSHED_ATOMIC_AT_END));
 }
 
 }  // namespace

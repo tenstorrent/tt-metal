@@ -11,14 +11,49 @@
 
 #include <fmt/base.h>
 #include <fmt/ranges.h>
+#include <tt-metalium/experimental/noc_debugging.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include "context/context_types.hpp"
+#include "context/metal_context.hpp"
 #include "tt_metal/third_party/umd/device/api/umd/device/types/xy_pair.hpp"
 #include "tt_stl/assert.hpp"
 #include "hostdev/profiler_common.h"
 
 namespace tt::tt_metal {
+
+namespace experimental {
+
+NocDebugStateSummary GetNocDebugStateSummary(distributed::MeshDevice& mesh_device) {
+    auto& context = MetalContext::instance(extract_context_id(&mesh_device));
+    NocDebugStateSummary result{
+        .enabled = context.rtoptions().get_experimental_noc_debug_dump_enabled(),
+        .collector_ready = context.profiler_state_manager() != nullptr,
+        .includes_dispatch_cores = context.rtoptions().get_profiler_do_dispatch_cores(),
+    };
+    if (const auto& state = context.noc_debug_state()) {
+        const auto summary = state->get_state_summary();
+        result.issues = summary.issues;
+        result.unflushed_atomic_issues = summary.unflushed_atomic_issues;
+        result.observed_atomic_events = summary.observed_atomic_events;
+        result.pending_events = summary.pending_events;
+    }
+    return result;
+}
+
+void ResetNocDebugState(distributed::MeshDevice& mesh_device) {
+    auto& context = MetalContext::instance(extract_context_id(&mesh_device));
+    TT_FATAL(
+        context.rtoptions().get_experimental_noc_debug_dump_enabled(),
+        "NoC debug dump is disabled. Set TT_METAL_NOC_DEBUG_DUMP=1 before the process starts.");
+    auto& state = context.noc_debug_state();
+    TT_FATAL(state != nullptr, "NoC debug state is unavailable.");
+    state->reset_state();
+}
+
+}  // namespace experimental
 
 namespace detail {
 
@@ -328,7 +363,9 @@ void NOCDebugState::handle_full_barrier_event(
     state.reads_not_flushed[noc_id].clear();
     state.posted_writes_pending[noc_id].clear();
     state.nonposted_writes_pending[noc_id].clear();
-    state.atomics_pending[noc_id].clear();
+    for (auto& processor_atomics : state.atomics_pending) {
+        processor_atomics[noc_id].clear();
+    }
 }
 
 void NOCDebugState::handle_semaphore_inc_event(
@@ -336,12 +373,14 @@ void NOCDebugState::handle_semaphore_inc_event(
     CoreDebugState& state = get_state(core);
     uint8_t noc_id = event.noc;
     update_latest_risc_timestamp(core, processor_id, timestamp);
+    ++state.observed_atomic_events;
 
     // An atomic increment carries no source buffer and does not advance the NIU write counter, so neither the
     // source-reuse nor the counter-monotonicity check applies. Only a non-posted increment expects an ack and must
     // be flushed (via an atomic/full barrier) before kernel end; a posted increment is fire-and-forget.
     if (!event.posted) {
-        state.atomics_pending[noc_id][event.dst_addr] = {processor_id, /*is_semaphore=*/true, event.is_mcast};
+        state.atomics_pending[processor_id][noc_id][event.dst_addr] = {
+            processor_id, event.is_semaphore, event.is_mcast};
     }
 }
 
@@ -352,8 +391,11 @@ void NOCDebugState::handle_atomic_barrier_event(
     update_latest_risc_timestamp(core, processor_id, timestamp);
 
     // An atomic barrier waits only for outstanding atomics (separate NIU counter from writes), so it clears the
-    // atomics pending set and leaves reads/writes untouched.
-    state.atomics_pending[noc_id].clear();
+    // atomics pending sets and leaves reads/writes untouched. Dynamic NOC atomics share an acknowledgement count
+    // across the two data-movement processors. Dedicated NOC programs assign them different NOCs.
+    for (auto& processor_atomics : state.atomics_pending) {
+        processor_atomics[noc_id].clear();
+    }
 }
 
 void NOCDebugState::handle_scoped_lock_event(
@@ -399,6 +441,9 @@ void NOCDebugState::finish_cores() {
     const auto get_unflushed_write_issue_type = [](const NOCDebugState::PendingWriteInfo& info) {
         return NOCDebugIssueType(NOCDebugIssueBaseType::UNFLUSHED_WRITE_AT_END, info.is_mcast, info.is_semaphore);
     };
+    const auto get_unflushed_atomic_issue_type = [](const NOCDebugState::PendingWriteInfo& info) {
+        return NOCDebugIssueType(NOCDebugIssueBaseType::UNFLUSHED_ATOMIC_AT_END, info.is_mcast, info.is_semaphore);
+    };
 
     for (auto& [core, state] : cores) {
         for (size_t noc_id = 0; noc_id < CoreDebugState::MAX_NOCS; ++noc_id) {
@@ -409,9 +454,11 @@ void NOCDebugState::finish_cores() {
             for (const auto& [addr, info] : state.nonposted_writes_pending[noc_id]) {
                 state.issue[info.processor_id].set_issue(get_unflushed_write_issue_type(info));
             }
-            // Non-posted atomics (semaphore incs) left outstanding at kernel end (no atomic/full barrier).
-            for (const auto& [addr, info] : state.atomics_pending[noc_id]) {
-                state.issue[info.processor_id].set_issue(get_unflushed_write_issue_type(info));
+            // Non-posted atomics left outstanding at kernel end (no atomic/full barrier on the issuing processor).
+            for (size_t processor_id = 0; processor_id < CoreDebugState::MAX_PROCESSORS; ++processor_id) {
+                for (const auto& [addr, info] : state.atomics_pending[processor_id][noc_id]) {
+                    state.issue[info.processor_id].set_issue(get_unflushed_atomic_issue_type(info));
+                }
             }
         }
     }
@@ -424,25 +471,26 @@ NOCDebugIssue NOCDebugState::get_issues(tt_cxy_pair core, int processor_id) cons
 }
 
 void NOCDebugState::reset_state() {
-    {
-        std::lock_guard<std::mutex> lock{pending_events_mutex_};
-        pending_events_.clear();
-    }
-    std::unique_lock<std::mutex> lock{cores_mutex};
+    std::unique_lock<std::mutex> cores_lock{cores_mutex};
+    std::lock_guard<std::mutex> pending_events_lock{pending_events_mutex_};
+    pending_events_.clear();
     cores.clear();
 }
 
 NOCDebugState::StateSummary NOCDebugState::get_state_summary() const {
     StateSummary summary;
-    {
-        std::lock_guard<std::mutex> lock{pending_events_mutex_};
-        summary.pending_events = pending_events_.size();
-    }
-    std::unique_lock<std::mutex> lock{cores_mutex};
+    std::unique_lock<std::mutex> cores_lock{cores_mutex};
+    std::lock_guard<std::mutex> pending_events_lock{pending_events_mutex_};
+    summary.pending_events = pending_events_.size();
     // Iterate the map directly (do NOT use get_state, which would insert empty entries).
     for (const auto& [core, state] : cores) {
+        summary.observed_atomic_events += state.observed_atomic_events;
         for (size_t processor_id = 0; processor_id < CoreDebugState::MAX_PROCESSORS; ++processor_id) {
             summary.issues += state.issue[processor_id].issues.size();
+            summary.unflushed_atomic_issues +=
+                state.issue[processor_id]
+                    .get_issues_by_base(NOCDebugIssueBaseType::UNFLUSHED_ATOMIC_AT_END)
+                    .size();
         }
     }
     return summary;
@@ -477,7 +525,9 @@ std::string NOCDebugState::get_issue_description(const NOCDebugIssueType& issue_
     }
 
     std::string desc;
-    if (issue_type.is_semaphore) {
+    if (issue_type.base_type == NOCDebugIssueBaseType::UNFLUSHED_ATOMIC_AT_END && !issue_type.is_semaphore) {
+        desc = "atomic";
+    } else if (issue_type.is_semaphore) {
         desc = "semaphore";
     } else {
         desc = "write";
@@ -497,6 +547,7 @@ void NOCDebugState::print_aggregated_errors() const {
     struct CoreIssues {
         std::vector<std::string> write_barrier_issues;
         std::vector<std::string> unflushed_write_issues;  // at end of kernel
+        std::vector<std::string> unflushed_atomic_issues;
         std::vector<std::string> locked_buffer_issues;
         std::vector<std::string> unlocked_dfb_issues;
         bool has_read_barrier = false;
@@ -522,6 +573,8 @@ void NOCDebugState::print_aggregated_errors() const {
                     core_issues.has_read_barrier = true;
                 } else if (issue_type.base_type == NOCDebugIssueBaseType::UNFLUSHED_WRITE_AT_END) {
                     core_issues.unflushed_write_issues.push_back(get_issue_description(issue_type));
+                } else if (issue_type.base_type == NOCDebugIssueBaseType::UNFLUSHED_ATOMIC_AT_END) {
+                    core_issues.unflushed_atomic_issues.push_back(get_issue_description(issue_type));
                 } else if (issue_type.base_type == NOCDebugIssueBaseType::WRITE_TO_UNLOCKED_DFB) {
                     core_issues.unlocked_dfb_issues.push_back(get_issue_description(issue_type));
                 } else if (detail::locked_buffer_type_name(issue_type.base_type) != nullptr) {
@@ -581,6 +634,20 @@ void NOCDebugState::print_aggregated_errors() const {
                 issues_str += core_issues.unflushed_write_issues[i];
             }
             log_error(tt::LogMetal, "  {} [{}]", core_key, issues_str);
+        }
+    }
+
+    for (const auto& [core_key, core_issues] : issues_by_core) {
+        if (!core_issues.unflushed_atomic_issues.empty()) {
+            log_error(
+                tt::LogMetal,
+                "Unflushed non-posted atomics at the profiler-read boundary (missing atomic or full barrier):");
+            break;
+        }
+    }
+    for (const auto& [core_key, core_issues] : issues_by_core) {
+        if (!core_issues.unflushed_atomic_issues.empty()) {
+            log_error(tt::LogMetal, "  {} [{}]", core_key, fmt::join(core_issues.unflushed_atomic_issues, ", "));
         }
     }
 
