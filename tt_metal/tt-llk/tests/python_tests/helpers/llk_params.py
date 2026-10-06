@@ -80,8 +80,6 @@ class MathOperation(Enum):
     # Whole-tile column-wise cumulative sum; not element-wise, so its golden works on the
     # tilized tensor rather than per datum.
     Cumsum = OpSpec("cumsum", MathOpType.SFPU_UNARY)
-    # Whole-tile per-column running mean/M2 (Welford); state spans tiles, so it needs a dedicated test.
-    Welfords = OpSpec("welfords", MathOpType.SFPU_UNARY)
     Elu = OpSpec("elu", MathOpType.SFPU_UNARY)
     Exp = OpSpec("exponential", MathOpType.SFPU_UNARY)
     Exp2 = OpSpec("exp2", MathOpType.SFPU_UNARY)
