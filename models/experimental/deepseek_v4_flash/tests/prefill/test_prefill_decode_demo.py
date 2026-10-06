@@ -18,8 +18,10 @@ ring / compressed KV / CSA overlap window / paged HCA pool that decode fills its
   tokens, so the CSA lightning indexer is on; it runs inside the prefill traces.
 
 The prefill is traced and pipelined, as in ``test_full_model_prefill_demo.py``
-(:class:`~models.experimental.deepseek_v4_flash.tt.model.TracedPrefill`): one trace per stage replayed for every
-chunk, the replays posted ahead from a thread, each chunk's packet pushed over an H2D socket, the streams handed on
+(:class:`~models.experimental.deepseek_v4_flash.tt.model.TracedPrefill`): per stage, one trace per position tier
+(tier 0 is a prompt's first chunk; each later tier reads ``DEEPSEEK_V4_PREFILL_TIER_FACTOR`` times as many entry rows
+as the one before, so a chunk's cost follows its position, not ``max_len``) replayed for every chunk of its tier,
+the replays posted ahead from a thread, each chunk's packet pushed over an H2D socket, the streams handed on
 over device-to-device sockets and the logits streamed back over a D2H socket, so the 8 stages work on 8 consecutive
 chunks at once. Every prompt's prefill perf table and summary (that demo's) are logged after its prefill, and a
 closing table covers every prompt's prefill and decode.
@@ -40,8 +42,8 @@ embedding table and ``lm_head``. Both are captured once, then every prompt alter
    (:meth:`DeepSeekV4PrefillModel.compile_traced_prefill`); not timed;
 4. decode capture, then prefill capture: decode's L1 tensors uploaded again
    (:meth:`DeepSeekV4Model.restore_prefetch_buffers`) and one throw-away decode step run, which captures the decode
-   traces; then those L1 tensors parked once more while prefill captures one trace per stage
-   (:meth:`DeepSeekV4PrefillModel.capture_traced_prefill`), and put back at the addresses the decode traces
+   traces; then those L1 tensors parked once more while prefill captures its traces, one per stage and position
+   tier (:meth:`DeepSeekV4PrefillModel.capture_traced_prefill`), and put back at the addresses the decode traces
    recorded (checked). They sat under prefill's capture, so they are copied to the host
    (:meth:`DeepSeekV4Model.snapshot_resident_state`);
 5. per prompt, prefill execute: its 128-aligned part prefilled by replaying the prefill traces (timed), then
@@ -75,9 +77,14 @@ runs), ``DEEPSEEK_V4_MAX_NEW_TOKENS`` (16384: thinking mode needs room for the r
 ``DEEPSEEK_V4_E2E_MAX_INPUT`` (0 = off: keep only a prompt's first N tokens),
 ``DEEPSEEK_V4_E2E_COMPARE`` (1: also run each prompt through decode only, before its prefill, and compare the
 next-token logits),
-``DEEPSEEK_V4_TRACE_REGION_SIZE`` (bytes to reserve for the captured traces -- the 8 prefill stage traces and
-decode's together; unset keeps the ttnn default -- set it, e.g. 500000000, if a capture reports the trace region too
-small), ``DEEPSEEK_V4_L1_SMALL_SIZE`` (bytes of L1_SMALL for the CCL semaphores, 4096 by default).
+``DEEPSEEK_V4_PREFILL_TIER_FACTOR`` (4: how much longer each prefill position tier is than the one before; 1 = the
+first chunk plus one full-``max_len`` trace, the pre-tier behaviour; fewer tiers mean fewer traces),
+``DEEPSEEK_V4_PREFILL_MAX_LEN`` (prefill buffer / tier sizing, rounded down to 128; defaults to the longest prompt's
+aligned length. A longer prompt prefills only its first ``DEEPSEEK_V4_PREFILL_MAX_LEN`` tokens and replays the rest
+through decode; a larger value only enlarges the buffers),
+``DEEPSEEK_V4_TRACE_REGION_SIZE`` (bytes to reserve for the captured traces -- the prefill stage traces, one per
+stage and position tier, and decode's together; unset keeps the ttnn default -- set it, e.g. 500000000, if a capture
+reports the trace region too small), ``DEEPSEEK_V4_L1_SMALL_SIZE`` (bytes of L1_SMALL for the CCL semaphores, 4096 by default).
 LongBench: ``DEEPSEEK_V4_LONGBENCH`` (the question file), ``DEEPSEEK_V4_LONGBENCH_MAX_TOKENS`` (65536, capped below 1M,
 the DSv4 max context: in ``test_prefill_decode_demo`` a question whose prompt plus the new tokens is longer is skipped
 and another drawn; in the known-correct test it fails the test), ``DEEPSEEK_V4_LONGBENCH_INDICES`` (comma-separated
@@ -418,6 +425,9 @@ def _run(
         indexer_on = os.environ["DEEPSEEK_V4_PREFILL_INDEXER"] == "1"
     else:
         indexer_on = bool(lightning_indexer)
+    # DEEPSEEK_V4_PREFILL_MAX_LEN (0 = unset): the prefill buffer / trace size. It caps what a prompt prefills (the
+    # excess goes through decode, as in demo/server.py) and sizes the buffers even when every prompt is shorter.
+    prefill_max_len = _env_int("DEEPSEEK_V4_PREFILL_MAX_LEN", 0) // ALIGNMENT * ALIGNMENT
     results = []
     for prompt in prompts:
         real_len = len(prompt.ids)
@@ -428,6 +438,8 @@ def _run(
                 "DEEPSEEK_V4_MAX_NEW_TOKENS)"
             )
         aligned = real_len // ALIGNMENT * ALIGNMENT
+        if prefill_max_len:
+            aligned = min(aligned, prefill_max_len)
         results.append(_Result(prompt.name, real_len, aligned, expected=prompt.expected))
         logger.info(
             f"{prompt.name}: {real_len} tokens = {aligned} prefilled ({math.ceil(aligned / chunk_size)} chunk(s) of up "
@@ -482,7 +494,7 @@ def _run(
     bias_slots = None
     build_seconds = prepare_seconds = 0.0
     num_stages = len(dict.fromkeys(placement))
-    max_len = _env_int("DEEPSEEK_V4_PREFILL_MAX_LEN", 0) // ALIGNMENT * ALIGNMENT or max(r.prefilled for r in results)
+    max_len = prefill_max_len or max(r.prefilled for r in results)
     # Prefill gathers its RoPE rows for every position up to ``max_len``; decode's table only spans its own ``max_seq``.
     prefill_rope = rope if max_len <= max_seq else _build_rope(config, max_len)
     if max_len:
@@ -535,7 +547,9 @@ def _run(
 
     # --- prefill capture: decode's L1 tensors parked again, and put back where the decode traces expect them --- #
     if prefill is not None:
-        progress.step("[4/6] prefill capture: one trace per stage (decode's L1 tensors parked meanwhile)")
+        progress.step(
+            "[4/6] prefill capture: one trace per stage and position tier (decode's L1 tensors parked meanwhile)"
+        )
         t0 = time.perf_counter()
         decode.release_prefetch_buffers()
         prefill.capture_traced_prefill()

@@ -178,7 +178,10 @@ class PrefillStaticStep:
     ``rope[kind]`` = ``(cos, sin)`` ``[1, 1, T, rope_dim]`` for the chunk's tokens, ``entry_rope[rate]`` the same
     for the chunk's new compressed entries (positions ``start + w * rate``), ``masks[layer_type]`` the additive
     mask ``[1, 1, T, sliding_window + T + cap]`` (see :meth:`DeepSeekV4PrefillAttention.mask_tables_host`) and
-    ``caps[layer_type]`` the number of entry rows (``cap``) that layer type's SDPA reads (0 for sliding layers).
+    ``caps[layer_type]`` the number of entry rows (``cap``) that layer type's SDPA reads (0 for sliding layers). The
+    entry buffers are front-anchored, so ``cap`` may be below their size: a trace reads and writes only their first
+    ``cap`` rows, enough for every chunk of its position tier (``TracedPrefill``), and ``masks`` / ``index_cuts`` /
+    ``index_pads`` are sized to it.
     """
 
     rope: dict
@@ -1112,14 +1115,15 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
             return host[key][1]
 
         ttnn.copy_host_to_device_tensor(zeros("tail", tuple(bufs.tail.shape), ttnn.bfloat16), bufs.tail)
-        if bufs.entries is not None:
-            ttnn.copy_host_to_device_tensor(zeros("entries", tuple(bufs.entries.shape), ttnn.bfloat16), bufs.entries)
+        # ``entries`` and ``idx_keys`` are *not* rewound: they are front-anchored, so a run only reads rows below the
+        # ones it has written (every other row is cut by the mask / the indexer's causal cut, and what a previous
+        # prompt left there is finite), and only the prompt's own rows are exported. Zeroing them would write
+        # ``O(max_len)`` bytes from the host per prompt, however short the prompt.
         if bufs.prev_kv is not None:
             shape = tuple(bufs.prev_kv.shape)
             ttnn.copy_host_to_device_tensor(zeros("prev_kv", shape, ttnn.float32), bufs.prev_kv)
             ttnn.copy_host_to_device_tensor(zeros("prev_gate", shape, ttnn.float32, _NO_WINDOW_GATE), bufs.prev_gate)
         if bufs.idx_keys is not None:
-            ttnn.copy_host_to_device_tensor(zeros("idx_keys", tuple(bufs.idx_keys.shape), ttnn.bfloat16), bufs.idx_keys)
             shape = tuple(bufs.idx_prev_kv.shape)
             ttnn.copy_host_to_device_tensor(zeros("idx_prev_kv", shape, ttnn.float32), bufs.idx_prev_kv)
             ttnn.copy_host_to_device_tensor(
@@ -1137,13 +1141,36 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
 
         The rows are data (they follow the chunk's start), so a fixed-offset ``slice_write`` cannot do this.
         ``indexed_fill`` builds a new tensor, which is copied back into the persistent buffer.
+
+        ``cap`` is the number of rows the step reads (its position tier, see :class:`~..model.TracedPrefill`),
+        at most the buffer's. The buffer is front-anchored, so a tier below the buffer's size only ever touches the
+        first ``cap`` rows (every row this chunk writes is below ``cap``): the fill and the copy back then cost
+        ``O(cap)``, not ``O(buffer)``.
         """
-        if buf.shape[2] != cap:
-            raise ValueError(f"layer {self.layer_idx}: entry buffer has {buf.shape[2]} rows, step reads {cap}")
-        written = ttnn.indexed_fill(rows, buf, new, dim=2)
+        total = buf.shape[2]
+        if cap > total:
+            raise ValueError(f"layer {self.layer_idx}: entry buffer has {total} rows, step reads {cap}")
+        if cap == total:
+            written = ttnn.indexed_fill(rows, buf, new, dim=2)
+            ttnn.deallocate(new)
+            ttnn.copy(written, buf)
+            ttnn.deallocate(written)
+            return
+        head = ttnn.slice(buf, [0, 0, 0, 0], [1, 1, cap, buf.shape[3]])  # a copy: cap < total
+        written = ttnn.indexed_fill(rows, head, new, dim=2)
+        ttnn.deallocate(head)
         ttnn.deallocate(new)
-        ttnn.copy(written, buf)
+        self._write_rows(written, buf, 0)
         ttnn.deallocate(written)
+
+    @staticmethod
+    def _entry_prefix(buf: ttnn.Tensor, cap: int) -> tuple[ttnn.Tensor, bool]:
+        """``(rows, owned)``: the first ``cap`` rows of the front-anchored entry buffer ``buf``.
+
+        The buffer itself when ``cap`` covers it (``owned`` is False: never free it), else a copy (``owned``)."""
+        if cap >= buf.shape[2]:
+            return buf, False
+        return ttnn.slice(buf, [0, 0, 0, 0], [1, 1, cap, buf.shape[3]]), True
 
     def _compress_static(
         self, hidden: ttnn.Tensor, bufs: PrefillStaticBuffers, step: PrefillStaticStep
@@ -1220,7 +1247,10 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         weights = ttnn.multiply(self.i_weights_proj(hidden), self.index_scale)
 
         pad = step.index_pads[self.layer_type]
-        self._write_rows(bufs.idx_keys, pad, 0)
+        keys_rm, owned = self._entry_prefix(bufs.idx_keys, cap)
+        self._write_rows(keys_rm, pad, 0)
+        if owned:
+            ttnn.deallocate(keys_rm)
         kv_len = pad.shape[2]
         keys = ttnn.to_layout(pad, ttnn.TILE_LAYOUT)
         logits = ttnn.experimental.indexer_score_dsa(
@@ -1276,8 +1306,11 @@ class DeepSeekV4PrefillAttention(DeepSeekV4Module):
         if visible is None:
             kv_all = window
         else:
-            kv_all = ttnn.concat([window, visible], dim=2)
+            rows, owned = self._entry_prefix(visible, step.caps[self.layer_type])  # the tier's rows only
+            kv_all = ttnn.concat([window, rows], dim=2)
             ttnn.deallocate(window)
+            if owned:
+                ttnn.deallocate(rows)
         if kv_all.shape[2] % _SDPA_CHUNK:
             raise ValueError(f"traced SDPA keys ({kv_all.shape[2]}) must be a multiple of {_SDPA_CHUNK}")
         kv_all = ttnn.to_layout(kv_all, ttnn.TILE_LAYOUT)

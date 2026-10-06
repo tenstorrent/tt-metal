@@ -3866,9 +3866,15 @@ class DeepSeekV4PrefillModel(DeepSeekV4Module):
 #   (:meth:`~.prefill.attention.DeepSeekV4PrefillAttention.mask_tables_host`); mask-free sliding layers need none,
 #   but attend differently on a prompt's first chunk, so their stages capture a second trace for it. Nothing is
 #   allocated between captures: allocating on a device that holds a trace is unsafe.
-# * One shape. Every chunk is ``C = chunk_size`` tokens, and every layer reads its *whole* entry buffer: the SDPA key axis
-#   is ``sliding_window + C + capacity``, the rows not yet filled masked out. So one trace per stage serves every
-#   chunk of every prompt of up to ``max_len`` tokens, at the price of attending over the masked rows early on.
+# * One shape per position tier. Every chunk is ``C = chunk_size`` tokens, and a layer reads the first ``cap`` rows of
+#   its entry buffer: the SDPA key axis is ``sliding_window + C + cap``, the rows not yet filled masked out. The
+#   buffers are front-anchored, so a chunk only ever reaches the rows below ``(start + C) / rate`` and a trace with a
+#   smaller ``cap`` is correct for every chunk below some index. The chunks are therefore split into *tiers* by
+#   index (:meth:`TracedPrefill._plan_tiers`): tier 0 is the first chunk alone, and each later tier covers
+#   ``factor`` times as many chunks as the one before, up to ``max_len``. One trace per stage and tier, each with
+#   the ``cap`` of its last chunk, so a chunk's cost follows its position (to within a factor of ``factor``)
+#   rather than ``max_len``. ``DEEPSEEK_V4_PREFILL_TIER_FACTOR`` (default 4; below 2 there are just two tiers: the
+#   first chunk and the rest at full ``max_len`` size) sets the factor; every tier costs a trace per stage.
 # * Padding. A prompt's last chunk is padded at its end (with repeats of its own tokens). Attention is causal, so
 #   no real token sees the padding; what the padding does leave behind is the state after it, the head's last
 #   token and the entry rows past the prompt's, so the packet names the chunk's last real token (the head picks it), the last
@@ -3891,6 +3897,11 @@ _PREFILL_PKT_FIFO_PACKETS = 1
 
 def _round_up(n: int, multiple: int) -> int:
     return -(-n // multiple) * multiple
+
+
+def _prefill_tier_factor() -> int:
+    """``DEEPSEEK_V4_PREFILL_TIER_FACTOR``: how much longer each traced-prefill position tier is than the last."""
+    return int(os.environ.get("DEEPSEEK_V4_PREFILL_TIER_FACTOR", "4"))
 
 
 @dataclass
@@ -3918,8 +3929,10 @@ class _Stage:
     io: Optional[_StageIO] = None
     recv: object = None  # receiver socket from the previous stage
     send: object = None  # sender socket to the next stage
-    trace: Optional[int] = None
-    first_trace: Optional[int] = None  # the prompt's first chunk, when a mask-free sliding layer is on the stage
+    # Position tiers (:meth:`TracedPrefill._plan_tiers`) whose traces would be identical on this stage share one:
+    # ``tier_sigs[tier]`` names the trace of a tier and ``traces`` maps it to the captured trace id.
+    tier_sigs: list = field(default_factory=list)
+    traces: dict = field(default_factory=dict)
 
 
 class TracedPrefill:
@@ -3932,7 +3945,9 @@ class TracedPrefill:
         self.compiled = False
         self.stages: list[_Stage] = []
         self.buffers: dict = {}
-        self._entry_capacity: dict = {}  # layer type -> entry rows, every one of which each chunk reads
+        self._entry_capacity: dict = {}  # layer type -> rows of the entry buffers (what the longest prompt needs)
+        self._tiers: list[int] = []  # tier -> the chunk count it ends at (see _plan_tiers)
+        self._tier_caps: list[dict] = []  # tier -> layer type -> entry rows its trace reads
         self._max_len = 0
         self._prompt_len = 0  # the last run's prompt length
         self._chunk_size = 0
@@ -3950,6 +3965,61 @@ class TracedPrefill:
     def _plan_chunks(prompt_len: int, chunk_size: int) -> list[tuple[int, int]]:
         """``[(start, real tokens)]``: full chunks, then the remainder (padded to ``chunk_size`` when it runs)."""
         return [(s, min(chunk_size, prompt_len - s)) for s in range(0, prompt_len, chunk_size)]
+
+    @staticmethod
+    def _plan_tiers(num_chunks: int, factor: int) -> list[int]:
+        """Chunk-count boundaries of the position tiers: tier ``i`` serves chunks ``[tiers[i - 1], tiers[i])``.
+
+        Tier 0 is the first chunk alone (``[1]``): the smallest reads, and the one chunk whose sliding window holds
+        no real tail. Then every tier is ``factor`` times as long as the one before it, the last ending at
+        ``num_chunks``: ``num_chunks = 64, factor = 4`` gives ``[1, 4, 16, 64]``. A ``factor`` below 2 gives just
+        ``[1, num_chunks]``: the first chunk, and every other chunk at the size of the longest prompt.
+        """
+        tiers = [1]
+        if factor >= 2:
+            bound = factor
+            while bound < num_chunks:
+                tiers.append(bound)
+                bound *= factor
+        if num_chunks > 1:
+            tiers.append(num_chunks)
+        return tiers
+
+    def _caps_at(self, chunks: int, chunk_size: int) -> dict:
+        """Layer type -> entry rows a trace for the first ``chunks`` chunks reads: those the last of them reaches,
+        ``chunks * C / rate``, rounded up to ``ALIGNMENT`` (the key axis must stay a multiple of the SDPA chunk) and
+        capped at the buffers' size."""
+        return {
+            lt: min(full, _round_up(max(chunks * chunk_size // self.config.compress_rates[lt], 1), ALIGNMENT))
+            for lt, full in self._entry_capacity.items()
+        }
+
+    def _tier_of(self, chunk: int) -> int:
+        """The tier that serves chunk number ``chunk`` of a prompt."""
+        for tier, bound in enumerate(self._tiers):
+            if chunk < bound:
+                return tier
+        raise ValueError(f"chunk {chunk} is past the prepared {self._tiers[-1]} chunks")
+
+    def _tier_sig(self, stage: _Stage, tier: int) -> tuple:
+        """What distinguishes the trace of ``tier`` on ``stage``: the entry rows its layers read, and whether it is
+        the first chunk's (only a mask-free sliding layer attends differently there). Tiers with equal signatures
+        run the same ops over the same shapes, so they share one trace."""
+        caps = self._tier_caps[tier]
+        return (
+            tuple(sorted((lt, caps.get(lt, 0)) for lt in stage.types)),
+            tier == 0 and self._first_chunk_trace(stage),
+        )
+
+    def _distinct_tiers(self) -> list[int]:
+        """The tiers that differ on at least one stage from every earlier one (the ones to compile)."""
+        seen, out = set(), []
+        for tier in range(len(self._tiers)):
+            key = tuple(stage.tier_sigs[tier] for stage in self.stages)
+            if key not in seen:
+                seen.add(key)
+                out.append(tier)
+        return out
 
     def _rates(self, stage: _Stage) -> list[int]:
         """The compress rates of the stage's CSA / HCA layers."""
@@ -4024,6 +4094,10 @@ class TracedPrefill:
         }
         self.stages = self._group_stages()
         self._layout_packet(chunk_size)
+        self._tiers = self._plan_tiers(padded // chunk_size, _prefill_tier_factor())
+        self._tier_caps = [self._caps_at(chunks, chunk_size) for chunks in self._tiers]
+        for stage in self.stages:
+            stage.tier_sigs = [self._tier_sig(stage, tier) for tier in range(len(self._tiers))]
 
         for li, layer in enumerate(model.layers):
             lt = config.layer_types[li]
@@ -4097,8 +4171,10 @@ class TracedPrefill:
                 attn._to_device(threshold.reshape(1, 1, t, -1), dtype=ttnn.float32),
             )
             if indexed:
+                # One pad per distinct tier cap, each its own tensor: a pad's rows past its cap stay zero for ever.
                 # chunk_start_idx (= cap) must sit strictly inside the key pad; pad past the chunk too.
-                index_pads[lt] = attn._zeros_rm(_round_up(cap + t, 64), attn.index_head_dim)
+                for tier_cap in sorted({caps.get(lt, 0) for caps in self._tier_caps}):
+                    index_pads[(lt, tier_cap)] = attn._zeros_rm(_round_up(tier_cap + t, 64), attn.index_head_dim)
         ramp = None
         if stage.last:
             ramp = ttnn.from_torch(
@@ -4145,13 +4221,15 @@ class TracedPrefill:
         self._out_socket.set_page_size(self._out_plan[1] * 2)
 
     # ------------------------------------------------------------------ the traced body
-    def _step_inputs(self, stage: _Stage, pkt: ttnn.Tensor, first_chunk: bool = False) -> tuple:
+    def _step_inputs(self, stage: _Stage, pkt: ttnn.Tensor, tier: int = 0) -> tuple:
         """``(ids, step, made)``: the chunk's ``[1, C]`` uint32 ids and :class:`PrefillStaticStep`, built on device
         from the packet ``pkt``, and every tensor made here (for the caller to free once the layers have run).
-        ``first_chunk`` builds the first-chunk trace's step (see :meth:`_first_chunk_trace`)."""
+        ``tier`` is the position tier the step is for: it sets how many entry rows each layer reads, and tier 0
+        builds the first-chunk step (see :meth:`_first_chunk_trace`)."""
         t = c = self._chunk_size
         io = stage.io
-        caps = {lt: self._entry_capacity.get(lt, 0) for lt in stage.types}
+        first_chunk = tier == 0
+        caps = {lt: self._tier_caps[tier].get(lt, 0) for lt in stage.types}
         sw = self.config.sliding_window
         made: list = []
 
@@ -4192,13 +4270,19 @@ class TracedPrefill:
                 continue
             cap = caps[lt]
             static, threshold = io.masks[lt]
+            if cap < self._entry_capacity.get(lt, 0):
+                # The tables cover the full buffers; this tier reads the first ``cap`` rows, so its key axis is the
+                # first ``sw + t + cap`` columns.
+                cols = [1, 1, t, sw + t + cap]
+                static = keep(ttnn.slice(static, [0, 0, 0, 0], cols))
+                threshold = keep(ttnn.slice(threshold, [0, 0, 0, 0], cols))
             cut = ttnn.typecast(ttnn.multiply(ttnn.gt(threshold, start_f), _MASK_NEG), ttnn.bfloat16)
             masks[lt] = keep(ttnn.add(static, cut))  # [1, 1, T, K] + the [1, 1, T, K] start-dependent cut
             ttnn.deallocate(cut)
             if lt == COMPRESSED_SPARSE_ATTENTION and self._representative(stage, lt).use_indexer:
                 # The indexer's causal cut over the entry rows is the mask's entry columns.
                 index_cuts[lt] = keep(ttnn.slice(masks[lt], [0, 0, 0, sw + t], [1, 1, t, sw + t + cap]))
-                index_pads[lt] = io.index_pads[lt]
+                index_pads[lt] = io.index_pads[(lt, cap)]
         step = PrefillStaticStep(
             rope=rope,
             entry_rope=entry_rope,
@@ -4229,8 +4313,8 @@ class TracedPrefill:
         """
         return any(self.model.layers[li].self_attn.maskless for li in stage.layers)
 
-    def _stage_forward(self, stage: _Stage, first_chunk: bool = False) -> None:
-        """One stage over one chunk: receive, embed (first stage), the stage's layers, send on.
+    def _stage_forward(self, stage: _Stage, tier: int = 0) -> None:
+        """One stage over one chunk of position tier ``tier``: receive, embed (first stage), the stage's layers, send on.
 
         Stage 0 receives the packet from the host (H2D) and broadcasts it over its TP ranks; a later stage receives
         the streams and the packet from the stage before it (D2D, in the order they are sent). The last stage runs
@@ -4252,7 +4336,7 @@ class TracedPrefill:
         else:
             ttnn.experimental.recv_direct_async(io.streams_in, stage.recv)
             ttnn.experimental.recv_direct_async(stage.pkt, stage.recv)
-        ids, step, made = self._step_inputs(stage, pkt, first_chunk)
+        ids, step, made = self._step_inputs(stage, pkt, tier)
         streams = model.embed(ids) if stage.first else ttnn.to_layout(io.streams_in, ttnn.TILE_LAYOUT)
         for li in stage.layers:
             out = model.layers[li].forward_static(streams, self.buffers[li], step, ids)
@@ -4328,21 +4412,21 @@ class TracedPrefill:
         model._note("traced prefill: allocating persistent buffers and sockets", important=True)
         self._allocate(max_len, chunk_size)
         self._stop_prefetcher()
-        first_traces = sum(self._first_chunk_trace(stage) for stage in self.stages)
+        tiers = self._distinct_tiers()
         logger.info(
-            f"[traced-prefill] prompts of up to {max_len} tokens in chunks of {chunk_size}: one trace x "
-            f"{len(self.stages)} stage(s) (+{first_traces} first-chunk); entry buffers {self._entry_capacity}; "
-            f"packet {self._pkt_page_bytes} B"
+            f"[traced-prefill] prompts of up to {max_len} tokens in chunks of {chunk_size}: {len(tiers)} position "
+            f"tier(s) x {len(self.stages)} stage(s), chunk counts {self._tiers}; "
+            f"entry rows per tier {self._tier_caps}; buffers {self._entry_capacity}; packet {self._pkt_page_bytes} B"
         )
 
         # Pass 1: the compile run, while no trace exists (a compile run allocates freely). It executes, so it takes
         # a packet and sends logits, drained here. Every stage is issued before the read, since a stage's send parks
-        # until the next stage posts its receive. The first-chunk variant, if any stage has one, compiles too.
-        for first_chunk in (False, True) if first_traces else (False,):
+        # until the next stage posts its receive. Every tier that differs on some stage compiles.
+        for tier in tiers:
             self._pkt_socket.write_tensor(self._packet(torch.zeros(chunk_size, dtype=torch.long), 0))
             for stage in self.stages:
-                model._note(f"traced prefill: compiling stage {stage.index}", important=True)
-                self._stage_forward(stage, first_chunk and self._first_chunk_trace(stage))
+                model._note(f"traced prefill: compiling stage {stage.index} (tier {tier})", important=True)
+                self._stage_forward(stage, tier)
             self._read_logits()
         for stage in self.stages:
             ttnn.synchronize_device(stage.device)
@@ -4359,15 +4443,14 @@ class TracedPrefill:
         self._stop_prefetcher()
         for stage in self.stages:
             model._note(f"traced prefill: capturing stage {stage.index}", important=True)
-            for first_chunk in (False, True) if self._first_chunk_trace(stage) else (False,):
+            for tier, sig in enumerate(stage.tier_sigs):
+                if sig in stage.traces:  # an earlier tier runs the very same ops over the same shapes
+                    continue
                 tid = ttnn.begin_trace_capture(stage.device, cq_id=0)
                 with _trace_capture_guard():
-                    self._stage_forward(stage, first_chunk)
+                    self._stage_forward(stage, tier)
                 ttnn.end_trace_capture(stage.device, tid, cq_id=0)
-                if first_chunk:
-                    stage.first_trace = tid
-                else:
-                    stage.trace = tid
+                stage.traces[sig] = tid
         self.prepared = True
         model._note("traced prefill: ready", important=True)
 
@@ -4393,10 +4476,9 @@ class TracedPrefill:
         """Release the stage traces and close the sockets; the model cannot replay until :meth:`prepare` runs again."""
         for stage in self.stages:
             ttnn.synchronize_device(stage.device)
-            for tid in (stage.trace, stage.first_trace):
-                if tid is not None:
-                    ttnn.release_trace(stage.device, tid)
-            stage.trace = stage.first_trace = None
+            for tid in stage.traces.values():
+                ttnn.release_trace(stage.device, tid)
+            stage.traces = {}
             stage.send = stage.recv = None
         self._pkt_socket = self._out_socket = None
         self.prepared = self.compiled = False
@@ -4405,8 +4487,9 @@ class TracedPrefill:
         """Replay-thread body: post every stage's trace for each queued chunk index, until ``None`` arrives."""
         try:
             for index in iter(chunks.get, None):
+                tier = self._tier_of(index)
                 for stage in self.stages:
-                    tid = stage.first_trace if index == 0 and stage.first_trace is not None else stage.trace
+                    tid = stage.traces[stage.tier_sigs[tier]]
                     ttnn.execute_trace(stage.device, tid, cq_id=0, blocking=False)
         except Exception:
             logger.exception("[traced-prefill] replay thread failed; the host will wait on the sockets forever")
