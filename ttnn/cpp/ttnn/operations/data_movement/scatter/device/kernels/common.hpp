@@ -9,6 +9,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
 
 constexpr uint32_t ONE_PAGE = 1;
 
@@ -53,6 +54,35 @@ struct df_to_std<DataFormat::UInt8> {
 
 template <DataFormat df>
 using std_type_t = typename df_to_std<df>::std_type;
+
+// choose the C++ type an element is viewed as from its byte size (arch-independent, unlike DataFormat codes)
+template <uint32_t element_size, bool is_fp32 = false>
+struct element_size_to_std {
+    using std_type = void;
+};
+
+template <>
+struct element_size_to_std<1, false> {
+    using std_type = uint8_t;
+};
+
+template <>
+struct element_size_to_std<2, false> {
+    using std_type = uint16_t;
+};
+
+template <>
+struct element_size_to_std<4, false> {
+    using std_type = uint32_t;
+};
+
+template <>
+struct element_size_to_std<4, true> {
+    using std_type = float;
+};
+
+template <uint32_t element_size, bool is_fp32 = false>
+using element_type_t = typename element_size_to_std<element_size, is_fp32>::std_type;
 
 template <int32_t N>
 FORCE_INLINE std::array<uint32_t, N> make_strides(const std::array<uint32_t, N>& dims) {
@@ -122,28 +152,23 @@ std::array<uint32_t, N> make_shape_array_from_runtime_args(const uint32_t& C) {
 }
 
 // this function is supposed to load either a whole stick or part of it
-template <typename AddrGen>
-FORCE_INLINE void load_to_dfb(
+template <typename T, typename AddrGen>
+FORCE_INLINE void load_to_scratchpad(
     Noc noc,
-    const uint32_t& dfb_id,
+    const Scratchpad<T>& scratchpad,
     const AddrGen& addr_gtor,
     const uint32_t& offset_bytes,
     const uint32_t& chunk_size_bytes,
     const uint32_t& stick_id) {
-    DataflowBuffer dfb_exp(dfb_id);
-    dfb_exp.reserve_back(ONE_PAGE);
     const uint64_t source_noc_address = addr_gtor.get_noc_addr(stick_id) + offset_bytes;
-    const uint32_t l1_write_address = dfb_exp.get_write_ptr();
 
     noc.async_read(
         PrecomposedUnicastEndpoint{},
-        CoreLocalMem<uint32_t>(l1_write_address),
+        scratchpad,
         chunk_size_bytes,
         {.noc_addr = source_noc_address},
         {.offset_bytes = 0});
     noc.async_read_barrier();
-
-    dfb_exp.push_back(ONE_PAGE);
 }
 
 // this function is supposed to write either a whole stick or part of it (76800 elements)
