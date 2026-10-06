@@ -337,11 +337,11 @@ inline void perform_reduce_col_sum_avg() {
 // Horizontal (cross-column) reduction of the two 4-row accumulators
 // ============================================================================
 // The 8 SFPU column slices exchange data only through SFPSHFT2 (SUBVEC_SHFLROR1), which rotates VC right by
-// one lane within each 8-lane sub-vector and writes VD; VD may differ from VC. Each horizontal reduce folds
-// the per-column partials in LREG0 / LREG4 into the full 8-column result, replicated in every column, with a
-// 3-stage butterfly (rotate by 4, 2, 1; fold after each stage) that uses LREG1 / LREG5 as rotate registers.
-// The first rotate of each stage reads the accumulator directly, so it is never copied first, and the result
-// lands in every column, so no trailing "move to column 0" is needed before the store.
+// one lane within each 8-lane sub-vector and writes VD; VD may differ from VC. horizontal_reduce (the float sum,
+// whose pairing is kept) folds the per-column partials in LREG0 / LREG4 into the full 8-column result, replicated
+// in every column, with a 3-stage butterfly (rotate by 4, 2, 1; fold after each stage) that uses LREG1 / LREG5 as
+// rotate registers. horizontal_reduce_merged (integer sum, MAX, MIN) shares the last two stages between the two
+// accumulators and leaves the result in column 0 only, the column every store and cross-tile pass reads.
 //
 // The two pairs are interleaved instruction by instruction. On Blackhole an SFPSHFT2 or SFPSWAP auto-stalls
 // the next cycle (only SFPNOP issues), so this hides no latency, but it keeps every consumer two
@@ -409,14 +409,6 @@ inline void horizontal_reduce_add() {
     }
 }
 
-/**
- * @brief Fold the rotated copies into the accumulators by compare-and-swap: LREG0 and LREG4 keep the
- *        extreme (MAX by default, MIN with SFPCONFIG bit 8 set) of each column pair.
- */
-inline void horizontal_reduce_swap() {
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
-    TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);
-}
 
 /**
  * @brief Horizontal SUM of the two accumulators: 20 instructions (14 SFPSHFT2 + 6 adds), inline, once per
@@ -442,20 +434,63 @@ inline void horizontal_reduce() {
 }
 
 /**
- * @brief Horizontal MAX/MIN of the two accumulators: 20 instructions (14 SFPSHFT2 + 6 SFPSWAP), inline, once
- *        per 8-row group, for the float / UInt32 / UInt16 row MAX/MIN kernels. horizontal_reduce with
- *        compare-and-swap in place of add; the direction is whatever SFPCONFIG bit 8 says at issue time.
- *
- * In: LREG0 / LREG4 = per-column extremes of the two 4-row groups. Out: LREG0 / LREG4 = the 8-column extreme
- * in every column. Clobbers LREG1 / LREG5 only. Writes no replay slot.
+ * @brief Moves the odd lanes of SRC into DST. LReg[15] holds twice the lane index, so its bit 1 shifted to the sign
+ *        marks the odd lanes of every 8-lane row. Clobbers TMP; leaves every lane enabled.
  */
-inline void horizontal_reduce_max() {
-    horizontal_reduce_rotate<4 /*shift*/>();
-    horizontal_reduce_swap();
-    horizontal_reduce_rotate<2 /*shift*/>();
-    horizontal_reduce_swap();
-    horizontal_reduce_rotate<1 /*shift*/>();
-    horizontal_reduce_swap();
+template <std::uint32_t SRC, std::uint32_t DST, std::uint32_t TMP>
+inline void merge_odd_lanes() {
+    TTI_SFPSHFT(30, p_sfpu::LTILEID, TMP, 5 /* ARG_IMM | ARG_IMM_USE_VC: TMP = LReg[15] << 30 */);
+    TTI_SFPSETCC(0, TMP, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+    TTI_SFPMOV(0, SRC, DST, 0);
+    TTI_SFPENCC(0, 0, 0, 0);
+}
+
+struct RowFoldIntAdd {
+    template <std::uint32_t ACC, std::uint32_t SRC>
+    static inline void apply() {
+        TTI_SFPIADD(0, SRC, ACC, 4);
+    }
+};
+
+// SFPSWAP leaves the extreme selected by SFPCONFIG bit 8 (MAX by default, MIN when set) in ACC.
+struct RowFoldSwap {
+    template <std::uint32_t ACC, std::uint32_t SRC>
+    static inline void apply() {
+        TTI_SFPSWAP(0, ACC, SRC, 1);
+    }
+};
+
+/**
+ * @brief Horizontal reduce of the two accumulators of an 8-row group with one shared butterfly: 9 SFPSHFT2, 4 folds.
+ *
+ * After the first rotate and fold, the odd lanes of an accumulator hold the pairs (0,1), (2,3), (4,5), (6,7) and the
+ * even lanes the pairs (7,0), (1,2), (3,4), (5,6). LREG4 takes the odd lanes of LREG0, and the rotate-by-2 and
+ * rotate-by-4 stages run once for both: LREG4 ends with group B's total in its even lanes and group A's in its odd
+ * lanes, and a last rotate brings A's total to lane 0 of LREG0. Only column 0 of each row holds the result.
+ *
+ * In: LREG0 / LREG4 = per-column partials of the two 4-row groups. Out: column 0 of LREG0 / LREG4. Clobbers
+ * LREG1, LREG2, LREG5. The fold must be associative and commutative (integer add, extreme), so the result equals
+ * horizontal_reduce's whatever the pairing; the float sum keeps horizontal_reduce.
+ */
+template <typename Fold>
+inline void horizontal_reduce_merged() {
+    TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    Fold::template apply<p_sfpu::LREG0, p_sfpu::LREG1>();
+    Fold::template apply<p_sfpu::LREG4, p_sfpu::LREG5>();
+    merge_odd_lanes<p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LREG2>();
+
+    TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    Fold::template apply<p_sfpu::LREG4, p_sfpu::LREG5>();
+
+    TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    Fold::template apply<p_sfpu::LREG4, p_sfpu::LREG5>();
+
+    TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG0, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
 }
 
 /**
@@ -468,7 +503,7 @@ inline void horizontal_reduce_max() {
  * 1. Load 4 rows from left face (even cols) and 4 rows from right face (odd cols) into LREG0-3
  * 2. Load the next 4 rows into LREG4-7
  * 3. Use vertical SFPSWAP to reduce LREG pairs down (keeping max between left/right face columns)
- * 4. Use horizontal_reduce_max to fold the 8 SFPU columns; every column then holds the row max
+ * 4. Use horizontal_reduce_merged to fold the 8 SFPU columns; column 0 then holds the row max
  * 5. Store the per-row max, reading column 0
  *
  * On the LOADMACRO path the four compare-and-swaps with a freshly loaded register run inside SFPLOADMACRO sequences
@@ -565,7 +600,7 @@ inline void perform_reduce_row_max_tile(std::uint32_t tile_row_offset, std::uint
                 TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);
             }
 
-            horizontal_reduce_max();
+            horizontal_reduce_merged<RowFoldSwap>();
 
             // result_store_mode is mode 9 (SFPSTORE_MOD0_FMT_LO16) only when this per-tile store is the
             // final, packer-visible result (single column tile); otherwise it is intermediate and stays
@@ -643,7 +678,7 @@ inline void perform_reduce_row_max_int32_tile(
             TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);  // group B max in LREG4
 
             // Consolidate the 8 SFPU columns into column 0 (operates on LREG0/LREG1 and LREG4/LREG5).
-            horizontal_reduce_max();
+            horizontal_reduce_merged<RowFoldSwap>();
 
             // Cast the sign-magnitude winners back to two's-complement only for the final, packer-visible
             // store (single column tile). Intermediate stores (block_ct_dim > 1) stay in sign-magnitude;
@@ -815,7 +850,7 @@ inline void set_manual_col_swap_direction() {
  * accumulates the per-tile column-0 extrema across tiles using compare-and-swap into
  * tile 0's column 0.
  *
- * MAX and MIN share the entire compare-and-swap machinery (per-tile reduce, horizontal_reduce_max,
+ * MAX and MIN share the entire compare-and-swap machinery (per-tile reduce, horizontal_reduce_merged,
  * max_first_columns_across_tiles, and the Int32 two's-complement<->sign-magnitude casts); the only
  * difference is the SFPSWAP comparator direction, set once here via SFPCONFIG bit 8 (0 = MAX,
  * 1 = MIN). The representation seen by SFPSWAP (float, or sign-magnitude for Int32 after the explicit
@@ -951,7 +986,11 @@ inline void perform_reduce_row_sum_tile(
 
             // Horizontal reduction, inline (see the horizontal-reduce section): every column of LREG0 / LREG4
             // then holds its 4-row group's full row sum.
-            horizontal_reduce<is_integer_mode>();
+            if constexpr (is_integer_mode) {
+                horizontal_reduce_merged<RowFoldIntAdd>();
+            } else {
+                horizontal_reduce<is_integer_mode>();
+            }
 
             // For a single-column-tile AVG the per-tile sum is already the full row sum, so divide it
             // here (float-only path; row AVG is restricted to float formats). When block_ct_dim > 1 the
@@ -1598,33 +1637,12 @@ inline void _emit_int32_signed_cswap_() {
     TTI_SFPENCC(0, 0, 0, 0);
 }
 
-/**
- * @brief Signed-Int32 horizontal MAX/MIN: 44 instructions (14 SFPSHFT2 + 6 x 5-instruction signed
- *        compare-and-swap), inline, once per 8-row group.
- *
- * The horizontal_reduce_max() butterfly with the two's-complement signed compare-and-swap in place of SFPSWAP,
- * so INT32_MIN is handled. The rotates are interleaved as there; the two pairs' compare-and-swaps run
- * sequentially because each manages its own condition codes (SFPSETCC / SFPENCC). Every compare-and-swap ends
- * in SFPENCC, so all lanes are enabled at each rotate.
- *
- * Same contract as horizontal_reduce_max(); condition codes are left enabled.
- */
-inline void horizontal_reduce_max_int32() {
-    // Stage 1: rotate by 4 and compare -> 8 values become 4 duplicated pair extrema.
-    horizontal_reduce_rotate<4 /*shift*/>();
-    _emit_int32_signed_cswap_<p_sfpu::LREG0, p_sfpu::LREG1>();
-    _emit_int32_signed_cswap_<p_sfpu::LREG4, p_sfpu::LREG5>();
-
-    // Stage 2: rotate by 2 and compare -> pair extrema become duplicated quad extrema.
-    horizontal_reduce_rotate<2 /*shift*/>();
-    _emit_int32_signed_cswap_<p_sfpu::LREG0, p_sfpu::LREG1>();
-    _emit_int32_signed_cswap_<p_sfpu::LREG4, p_sfpu::LREG5>();
-
-    // Stage 3: rotate by 1 and compare -> the full 8-column extreme in every column.
-    horizontal_reduce_rotate<1 /*shift*/>();
-    _emit_int32_signed_cswap_<p_sfpu::LREG0, p_sfpu::LREG1>();
-    _emit_int32_signed_cswap_<p_sfpu::LREG4, p_sfpu::LREG5>();
-}
+struct RowFoldInt32Signed {
+    template <std::uint32_t ACC, std::uint32_t SRC>
+    static inline void apply() {
+        _emit_int32_signed_cswap_<ACC, SRC>();
+    }
+};
 
 /**
  * @brief Signed-Int32 per-tile row MAX/MIN reduction. Mirrors perform_reduce_row_max_tile but loads
@@ -1681,7 +1699,7 @@ inline void perform_reduce_row_max_tile_int32(std::uint32_t tile_row_offset, std
             _emit_int32_signed_cswap_<p_sfpu::LREG4, p_sfpu::LREG5>();
 
             // Horizontal reduce: consolidate 8 SFPU columns into column 0.
-            horizontal_reduce_max_int32();
+            horizontal_reduce_merged<RowFoldInt32Signed>();
 
             TT_SFPSTORE(
                 p_sfpu::LREG0, result_store_mode, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_first);
@@ -1731,8 +1749,8 @@ inline void max_first_columns_across_tiles_int32_signed(std::uint32_t tile_row_b
 
 /**
  * @brief Signed-Int32 row MAX/MIN reduction across a block of tiles. Mirrors perform_reduce_row_max_min
- *        but routes through the signed-Int32 per-tile and cross-tile helpers (horizontal_reduce_max_int32
- *        is fully inline, no recorded buffer). Correct over the full Int32 range.
+ *        but routes through the signed-Int32 per-tile and cross-tile helpers (the horizontal reduce is fully
+ *        inline, no recorded buffer). Correct over the full Int32 range.
  */
 template <PoolType pool_type>
 inline void perform_reduce_row_max_min_int32(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim) {
