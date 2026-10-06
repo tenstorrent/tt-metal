@@ -216,3 +216,35 @@ inline void llk_pack_untilize(
         block_c_index,
         tile_dst_rt_offset);
 }
+
+/**
+ * llk_pack_untilize for one block that starts at tile column first_col of the output row instead of at
+ * block_c_index * block_ct_dim, for a row split into blocks of different widths. The pack untilize init must be for
+ * the same block_ct_dim and full_ct_dim.
+ *
+ * @tparam block_ct_dim Width of the block in tiles.
+ * @tparam full_ct_dim  Width of the output row in tiles.
+ * @param  output       Output circular buffer / operand index.
+ * @param  first_col    Tile column of the output row where the block starts.
+ */
+template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
+inline void llk_pack_untilize_at_col(std::uint32_t output, const std::uint32_t first_col) {
+    const std::uint32_t output_id = get_output_id(output);
+    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
+    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const std::uint32_t col_offset =
+        SCALE_DATUM_SIZE(
+            pack_dst_format[output_id], first_col * ((num_faces > 2) ? num_faces / 2 : num_faces) * FACE_C_DIM) /
+        16;
+
+    llk_pack_untilize_impl<block_ct_dim, full_ct_dim>(
+        1 /* block_rt_dim */,
+        get_local_cb_interface(output_id).fifo_wr_ptr - 1 + col_offset,
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        full_ct_dim * get_local_cb_interface(output_id).fifo_page_size,
+        face_r_dim,
+        num_faces,
+        0 /* block_c_index */,
+        0 /* tile_dst_rt_offset */);
+}

@@ -7,6 +7,7 @@
 #include "api/compute/common.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/pack_untilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "api/dataflow/circular_buffer.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -59,6 +60,11 @@ void kernel_main() {
     constexpr uint32_t block_ct_dim = get_compile_time_arg_val(9);
     constexpr uint32_t cb_counter_total_pages = get_compile_time_arg_val(10);
     constexpr uint32_t num_blocks = full_ct_dim / block_ct_dim;
+    // An Fp8_e4m3 row with no divisor between 2 and 8 is split into blocks of different widths (tt-metal#59140).
+    constexpr bool fp8_row_split =
+        compute_kernel_lib::untilize_fp8_row_split<block_ct_dim, full_ct_dim, cb_untilize_id>();
+    constexpr uint32_t init_block_ct_dim =
+        fp8_row_split ? compute_kernel_lib::Fp8UntilizeRowSplit<full_ct_dim>::first_block_ct_dim : block_ct_dim;
     // read_batch_size doubles as tile_height: one tile-row of input -> read_batch_size element rows.
     constexpr uint32_t tile_height = read_batch_size;
     constexpr uint32_t tiles_per_batch = full_ct_dim;
@@ -75,7 +81,7 @@ void kernel_main() {
     (void)num_untilizer_cores;
 
     compute_kernel_hw_startup(cb_in_id, cb_untilize_id);
-    pack_untilize_init<block_ct_dim, full_ct_dim>(cb_in_id, cb_untilize_id);
+    pack_untilize_init<init_block_ct_dim, full_ct_dim>(cb_in_id, cb_untilize_id);
 
     // Wait for the owning sender's expert-token-count multicast.  reader_untilize on this same
     // core pushes the counter CB once after counter_ready_sem fires, so cb_wait_front here
@@ -116,13 +122,17 @@ void kernel_main() {
         // writer_untilize exactly so the c_0 / c_2 producer-consumer protocol stays in lockstep.
         for (uint32_t batch_idx = untilizer_global_pos; batch_idx < actual_batches; batch_idx += total_untilizers) {
             cb_untilize.reserve_back(read_batch_size);
-            for (uint32_t block = 0; block < num_blocks; block++) {
-                cb_in.wait_front(block_ct_dim);
-                {
-                    // DeviceZoneScopedN("UNTILIZING");
-                    pack_untilize_block<block_ct_dim, full_ct_dim>(cb_in_id, 1, cb_untilize_id, block);
+            if constexpr (fp8_row_split) {
+                compute_kernel_lib::untilize_fp8_split_row<full_ct_dim>(cb_in, cb_in_id, cb_untilize_id);
+            } else {
+                for (uint32_t block = 0; block < num_blocks; block++) {
+                    cb_in.wait_front(block_ct_dim);
+                    {
+                        // DeviceZoneScopedN("UNTILIZING");
+                        pack_untilize_block<block_ct_dim, full_ct_dim>(cb_in_id, 1, cb_untilize_id, block);
+                    }
+                    cb_in.pop_front(block_ct_dim);
                 }
-                cb_in.pop_front(block_ct_dim);
             }
             cb_untilize.push_back(read_batch_size);
         }

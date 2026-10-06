@@ -737,11 +737,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     while (full_ct_dim % block_ct_dim != 0) {
         --block_ct_dim;
     }
-    TT_FATAL(
-        !operation_attributes.use_fp8_combine || block_ct_dim > 1 || full_ct_dim == 1,
-        "use_fp8_combine untilizes in blocks of two or more tiles, and hidden_size / 32 = {} has no divisor between 2 "
-        "and 8 (tt-metal#59140)",
-        full_ct_dim);
 
     {
         // c_1 on untilizer cores: receives the expert_token_counts multicast from the owning sender.

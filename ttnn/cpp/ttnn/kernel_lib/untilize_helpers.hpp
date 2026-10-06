@@ -69,6 +69,33 @@ ALWI void untilize_init();
 template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb>
 ALWI void untilize_uninit();
 
+// An Fp8_e4m3 output cannot be packed in one-tile blocks of a wider row (tt-metal#59140): each row of such a block is
+// a 32-datum L1 stream, and an Fp8_e4m3 stream reaches L1 in 64-byte units, so 32 bytes of zeros land on the next
+// block. On Blackhole a row that the even split leaves in one-tile blocks is packed in blocks of up to max_block_ct_dim
+// tiles and one or two narrower blocks of two or more tiles instead.
+template <uint32_t full_ct_dim, uint32_t max_block_ct_dim = (DEST_AUTO_LIMIT < 8 ? DEST_AUTO_LIMIT : 8)>
+struct Fp8UntilizeRowSplit {
+    static constexpr uint32_t max_block = max_block_ct_dim;
+    static constexpr uint32_t remainder = full_ct_dim % max_block_ct_dim;
+    // A one-tile remainder joins the last full block, and the two are split as evenly as possible.
+    static constexpr uint32_t num_full_blocks = full_ct_dim / max_block_ct_dim - (remainder == 1 ? 1 : 0);
+    static constexpr uint32_t tail_0 = remainder == 1 ? (max_block_ct_dim + 2) / 2 : remainder;
+    static constexpr uint32_t tail_1 = remainder == 1 ? (max_block_ct_dim + 1) / 2 : 0;
+    // The pack untilize init the row starts and ends with.
+    static constexpr uint32_t first_block_ct_dim = num_full_blocks > 0 ? max_block_ct_dim : tail_0;
+};
+
+// True when untilizing rows of full_ct_dim tiles in blocks of block_ct_dim to an Fp8_e4m3 output_dfb would leave
+// one-tile blocks of a wider row; such rows go through untilize_fp8_split_row.
+template <uint32_t block_ct_dim, uint32_t full_ct_dim, uint32_t output_dfb>
+constexpr bool untilize_fp8_row_split();
+
+// Untilizes one row of full_ct_dim tiles in the blocks of Fp8UntilizeRowSplit, reading the input a tile at a time.
+// The pack side must be initialized for Fp8UntilizeRowSplit<full_ct_dim>::first_block_ct_dim and full_ct_dim; the
+// call re-inits it for the narrower blocks and restores that init at the end of the row.
+template <uint32_t full_ct_dim, bool wait_for_input = true, typename InputBuffer>
+ALWI void untilize_fp8_split_row(InputBuffer& in, uint32_t input_dfb, uint32_t output_dfb);
+
 /**
  * Untilize: convert tiled data back to row-major format (reverse of tilize).
  *

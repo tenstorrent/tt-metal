@@ -320,7 +320,7 @@ inline void _llk_pack_untilize_split_row_mop_config_(const std::uint32_t face_r_
  * (one L1 output row) in a GPR for the execute calls.
  *
  * @tparam block_ct_dim: Number of input tiles per block.
- * @tparam full_ct_dim: Total number of input tiles across all blocks (must be divisible by block_ct_dim).
+ * @tparam full_ct_dim: Number of tiles in the output row; a row may be split into blocks of different widths.
  * @tparam narrow_row: True when packing fewer than TILE_C_DIM datums per row.
  * @tparam row_num_datums: Number of datums per output row when narrow_row is set.
  * @tparam dense: True to pack two tiles into one dest region; requires num_faces == 2 and even block_ct_dim.
@@ -343,7 +343,7 @@ inline void _llk_pack_untilize_init_(
     static_assert(block_ct_dim <= (dense ? 16 : 8), "block_ct_dim must be <= 8 when not dense, <= 16 when dense");
     static_assert(!dense || (block_ct_dim % 2 == 0), "block_ct_dim must be even when dense");
     static_assert(!dense || (!narrow_row), "narrow_row must be false when dense");
-    static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
+    static_assert(block_ct_dim <= full_ct_dim, "a block cannot be wider than its row");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(!dense || (num_faces == 2), "num_faces must be 2 when dense");
     LLK_ASSERT(num_faces < 4 || face_r_dim == FACE_R_DIM, "four faces need full face rows");
@@ -479,14 +479,14 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
     static_assert(block_ct_dim <= (dense ? 16 : 8), "block_ct_dim must be <= 8 when not dense, <= 16 when dense");
     static_assert(!dense || (block_ct_dim % 2 == 0), "block_ct_dim must be even when dense");
     static_assert(!dense || (!narrow_row), "narrow_row must be false when dense");
-    static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
+    static_assert(block_ct_dim <= full_ct_dim, "a block cannot be wider than its row");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(!dense || (num_faces == 2), "num_faces must be 2 when dense");
 
     /*
     full_ct_dim represents the number of input tiles.
-    For input widths greater than 8 tiles, input is split into blocks of equal sizes,
-    each block the size of block_ct_dim. This function is called for each block.
+    For input widths greater than 8 tiles, input is split into blocks, each block the size of block_ct_dim;
+    a row may also be split into blocks of different widths. This function is called for each block.
     */
     // program_packer_untilized_destination<block_ct_dim, full_ct_dim, diagonal>(address, pack_dst_format);
     program_packer_destination(address);
