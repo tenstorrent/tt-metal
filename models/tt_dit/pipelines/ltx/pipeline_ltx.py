@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import math
 import os
+import time
 from dataclasses import dataclass, field
 
 import torch
@@ -45,6 +46,13 @@ from ...utils.progress import Watchdog
 from ...utils.tensor import bf16_tensor
 from ...utils.tracing import StateTensor
 from ...utils.video import Audio
+from .prompt_enhancer import (
+    ENHANCER_SEED,
+    DevicePromptEnhancer,
+    PromptEnhancer,
+    apply_prompt_enhancer,
+    bind_prompt_enhancer_mesh,
+)
 
 LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
 
@@ -240,6 +248,8 @@ class LTXPipeline:
         lora_enabled: bool = False,
         lora_cache_capacity: int = 2,
         image_conditioning: bool | None = None,
+        prompt_enhancer: PromptEnhancer | None = None,
+        enhancer_seed: int = ENHANCER_SEED,
     ):
         # Host affinity, explicit (not an import side effect): in a process re-execed by
         # ``reexec_pinned_before_torch`` this only caps torch's pool to the narrowed mask; otherwise it narrows
@@ -297,6 +307,11 @@ class LTXPipeline:
 
         self.is_fsdp = is_fsdp
         self.dynamic_load = dynamic_load
+        if isinstance(prompt_enhancer, DevicePromptEnhancer) and self.dynamic_load:
+            raise NotImplementedError(
+                "device prompt enhancer is Galaxy-only (static residency): under dynamic_load the DiT page-in "
+                "would evict it, so it is not supported on that path"
+            )
         self._init_num_frames = num_frames
         self._init_height = height
         self._init_width = width
@@ -316,6 +331,27 @@ class LTXPipeline:
         if self._traced and not self.dynamic_load and self.DEFERS_ENCODE_TRACE:
             self.gemma_encoder_pair.defer_trace_capture()
         self.gemma_path: str | None = self.gemma_encoder_pair.gemma_path
+        # The rewrite is what the encoder tokenizes, and that tokenizer truncates silently at its fixed
+        # window; bound the rewrite here so an over-long enhancer is a construction error, not lost text.
+        if prompt_enhancer is not None:
+            assert prompt_enhancer.max_new_tokens <= self.gemma_encoder_pair.sequence_length, (
+                f"prompt enhancer may emit {prompt_enhancer.max_new_tokens} tokens; "
+                f"the encoder window is {self.gemma_encoder_pair.sequence_length}"
+            )
+        self.prompt_enhancer = prompt_enhancer
+        # The rewrite seed is pipeline state, not the video seed: one prompt then maps to one rewrite
+        # however many video seeds are drawn from it (the reference fixes it too).
+        self.enhancer_seed = int(enhancer_seed)
+        # The last rewrite, keyed by what it is a function of (enhancer, mode, seed, raw prompt), so a
+        # seed sweep over one prompt rewrites it once rather than once per video.
+        self._last_rewrite: tuple[tuple, str] | None = None
+        # A device enhancer shares this pipeline's handle: a sibling submesh over the same chips has its
+        # own allocator and aliases this one's DRAM. One built without a mesh binds to the submesh here,
+        # together with the fabric topology its collectives have to use.
+        bind_prompt_enhancer_mesh(prompt_enhancer, self.mesh_device, ccl_topology=self.ccl_manager.topology)
+        # The rewrite the last ``generate`` actually encoded; None when no enhancer ran. Callers
+        # (serving, A/B tooling) need the text alongside the video.
+        self.last_enhanced_prompt: str | None = None
 
         self.transformer: LTXTransformerModel | None = None
         self.transformer_states: list[TransformerState] = []
@@ -769,6 +805,43 @@ class LTXPipeline:
         os.makedirs(embed_cache_dir, exist_ok=True)
         key = hashlib.md5(("device||" + "||".join(prompts)).encode()).hexdigest()
         return os.path.join(embed_cache_dir, f"{key}.device.pt")
+
+    def _enhance_prompt(self, prompt: str, *, image_path: str | None, timings: list[tuple[str, float]]) -> str:
+        """Rewrite the raw prompt before it is hashed or encoded. Identity without an enhancer, so the
+        embedding-cache key and the warmup encode (which calls ``encode_prompts`` directly) are unaffected.
+
+        A seeded rewrite is a pure function of (enhancer, mode, seed, prompt), so the previous request's
+        rewrite is reused when that key repeats; a new prompt always runs the rewriter. A prompt the
+        rewriter cannot take (too long, empty rewrite) goes through raw, and ``last_enhanced_prompt`` is
+        None for it."""
+        if self.prompt_enhancer is None:
+            self.last_enhanced_prompt = None
+            return prompt
+        mode = "i2v" if image_path else "t2v"
+        key = (self.prompt_enhancer.name, mode, self.enhancer_seed, prompt)
+        t0 = time.time()
+        if self._last_rewrite is not None and self._last_rewrite[0] == key:
+            enhanced = self._last_rewrite[1]
+            label = "Prompt enhance (reused)"
+        else:
+            enhanced = apply_prompt_enhancer(
+                self.prompt_enhancer, prompt, image_path=image_path, mode=mode, seed=self.enhancer_seed
+            )
+            self._last_rewrite = (key, enhanced)
+            label = "Prompt enhance"
+        timings.append((label, time.time() - t0))
+        self.last_enhanced_prompt = enhanced if enhanced != prompt else None
+        return enhanced
+
+    def _warmup_prompt_enhancer(self) -> None:
+        """Load the enhancer and compile its kernels so the first request does not pay for them. A device
+        enhancer stays resident from here on, so this has to run before any trace is captured."""
+        if self.prompt_enhancer is None:
+            return
+        t0 = time.time()
+        logger.info(f"warmup prompt enhancer: {self.prompt_enhancer.name}")
+        self.prompt_enhancer.warmup()
+        logger.info(f"warmup prompt enhancer done in {time.time() - t0:.1f}s")
 
     def encode_prompts(
         self, prompts: list[str], *, use_cache: bool = True

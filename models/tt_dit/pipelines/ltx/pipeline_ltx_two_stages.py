@@ -76,6 +76,10 @@ class LTXTwoStagesPipeline(LTXPipeline):
 
         s1_h, s1_w = height // 2, width // 2
 
+        # The enhancer runs first in generate(), so it warms first: a device enhancer stays resident, and
+        # its weights have to land before any trace is captured.
+        self._warmup_prompt_enhancer()
+
         # I2V: compile the encoder at both stage resolutions before the DiT loads (it is
         # coresident-excluded with the transformer, mirroring the generate() ordering).
         if self.vae_encoder is not None and os.environ.get("LTX_I2V_IMAGE"):
@@ -215,6 +219,8 @@ class LTXTwoStagesPipeline(LTXPipeline):
 
         total_t0 = time.time()
         timings: list[tuple[str, float]] = []
+
+        prompt = self._enhance_prompt(prompt, image_path=images[0][0] if images else None, timings=timings)
 
         # Both stages reuse the same context. Gemma is coresident-excluded with the
         # DiT/VAE; load it only on a cache miss.

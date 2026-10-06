@@ -34,6 +34,10 @@ class LTXOneStagePipeline(LTXPipeline):
         t0 = time.time()
         logger.info(f"warmup (AV): {num_frames}f@{height}x{width}, {num_inference_steps} steps")
 
+        # The enhancer runs first in generate(), so it warms first: a device enhancer stays resident, and
+        # its weights have to land before any trace is captured.
+        self._warmup_prompt_enhancer()
+
         # Zeros at the real shapes compile the shape-driven call_av kernels without loading
         # the encoder, which would coresident-evict the DiT.
         v_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.video_dim)
@@ -94,6 +98,8 @@ class LTXOneStagePipeline(LTXPipeline):
 
         total_t0 = time.time()
         timings: list[tuple[str, float]] = []
+
+        prompt = self._enhance_prompt(prompt, image_path=None, timings=timings)
 
         t0 = time.time()
         # Gemma is coresident-excluded with the DiT/VAE; load it only on a cache miss.

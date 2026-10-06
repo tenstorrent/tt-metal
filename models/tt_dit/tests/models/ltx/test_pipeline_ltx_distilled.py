@@ -20,6 +20,7 @@ from loguru import logger
 import ttnn
 from models.tt_dit.models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
 from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline
+from models.tt_dit.pipelines.ltx.prompt_enhancer import build_prompt_enhancer
 from models.tt_dit.utils.ltx import (
     DEFAULT_LTX_PROMPT,
     STEADY_STATE_LTX_PROMPT,
@@ -145,6 +146,7 @@ def test_pipeline_distilled(
         width=width,
         fps=fps,
         image_conditioning=bool(image_path),
+        prompt_enhancer=build_prompt_enhancer(os.environ.get("LTX_PROMPT_ENHANCER")),
     )
 
     prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
@@ -177,6 +179,10 @@ def test_pipeline_distilled(
             fps=fps,
         )
         logger.info(f"Saved video to: {output_filename}")
+        # The video was conditioned on the rewrite, not the raw prompt, so that is the text to record.
+        enhanced = pipeline.last_enhanced_prompt
+        if enhanced is not None:
+            logger.info(f"Enhanced prompt: {enhanced!r}")
         print_ltx_timing_table(
             pipeline,
             label="LTX DISTILLED",
@@ -188,7 +194,7 @@ def test_pipeline_distilled(
             tp_axis=tp_axis,
             topology=topology,
             output_path=output_filename,
-            prompt=prompt,
+            prompt=enhanced or prompt,
         )
 
     vbench_thresholds_by_height = {

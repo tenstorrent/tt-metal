@@ -145,6 +145,10 @@ class LTXDistilledPipeline(LTXPipeline):
         # Warm the encoder before any capture so its connector workspace isn't in a trace's
         # activation region (zeroed on replay). dynamic_load reloads per request → warms last.
         if self._traced and not self.dynamic_load:
+            # The resident encoder captures its encode trace on this first encode, and a replay clobbers
+            # any persistent buffer allocated after that capture: the enhancer's weights and KV cache
+            # have to be resident before the encoder ever encodes.
+            self._warmup_prompt_enhancer()
             self.gemma_encoder_pair.ensure_loaded()
             self.encode_prompts(["warmup"], use_cache=False)
 
@@ -219,6 +223,9 @@ class LTXDistilledPipeline(LTXPipeline):
         # use_cache=False forces a real encode so the Gemma/connector kernels compile. traced-static
         # already warmed before capture (above); dynamic_load / untraced warm last.
         if self.dynamic_load or not self._traced:
+            # Same ordering constraint as above: the encoder trace is captured on the first resident encode
+            # regardless of whether the DiT is traced.
+            self._warmup_prompt_enhancer()
             self.gemma_encoder_pair.ensure_loaded()
             self.encode_prompts(["warmup"], use_cache=False)
 
@@ -678,6 +685,8 @@ class LTXDistilledPipeline(LTXPipeline):
 
         # (label, seconds) rows counted toward the total; prepares and export excluded.
         timings: list[tuple[str, float]] = []
+
+        prompt = self._enhance_prompt(prompt, image_path=images[0][0] if images else None, timings=timings)
 
         t0 = time.time()
         # A served request encodes a prompt nothing has seen, so a cache hit would drop the encoder
