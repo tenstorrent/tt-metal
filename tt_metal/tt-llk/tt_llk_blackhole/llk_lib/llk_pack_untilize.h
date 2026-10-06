@@ -228,6 +228,88 @@ inline void _llk_pack_untilize_mop_config_(
 }
 
 /**
+ * @brief Build and program the untilize MOP of a narrow row wider than a face (FACE_C_DIM < row_num_datums < TILE_C_DIM).
+ *
+ * A packer interface reads x_end + 1 consecutive Dest datums, so one interface cannot reach past the left face's row.
+ * Each tile row is the left face's 16 datums on interface 0, then the rest of the row from the right face on interface 1
+ * with x_end lowered for that PACR, in the same L1 stream. The sequences of a tile, of a row's last tile and of a pass's
+ * last tile are replays.
+ *
+ * @tparam block_ct_dim: Number of input tiles per block.
+ * @tparam row_num_datums: Datums per output row of a tile.
+ * @param face_r_dim: Number of rows per face.
+ * @param row_ends_stream: True to close every row with Last.
+ * @param l1_row_step_by_cfg: True to advance the L1 destination address per row with CFGSHIFTMASK.
+ * @note ADDR_MOD_3 must hold no increments, and the packer x_end must be FACE_C_DIM - 1 before the MOP runs.
+ */
+template <std::uint32_t block_ct_dim, std::uint32_t row_num_datums>
+inline void _llk_pack_untilize_split_row_mop_config_(const std::uint32_t face_r_dim, const bool row_ends_stream, const bool l1_row_step_by_cfg)
+{
+    static_assert((row_num_datums > FACE_C_DIM) && (row_num_datums < TILE_C_DIM), "a split row is wider than a face and narrower than a tile");
+    constexpr std::uint32_t seq_len   = 4;
+    constexpr std::uint32_t seq_start = ckernel::packer::replay_buf_offset + 2; // after the row step replay
+    constexpr std::uint32_t right_intf = 0b0010;
+    const std::uint32_t row_close_addr_mod = row_ends_stream ? ADDR_MOD_1 : ADDR_MOD_2;
+
+    load_replay_buf(
+        seq_start,
+        3 * seq_len,
+        [row_close_addr_mod, row_ends_stream]
+        {
+            const std::uint32_t right_addr_mod[3] = {ADDR_MOD_0, row_close_addr_mod, row_close_addr_mod};
+            const std::uint32_t right_last[3]     = {0, row_ends_stream ? 1u : 0u, 1};
+            for (std::uint32_t i = 0; i < 3; i++)
+            {
+                TTI_PACR(
+                    p_pacr::CFG_CTXT_0,
+                    p_pacr::NO_ROW_PAD_ZERO,
+                    p_pacr::DST_ACCESS_STRIDED_MODE,
+                    ADDR_MOD_3,
+                    p_pacr::ADDR_CNT_CTXT_0,
+                    0,
+                    p_pacr::SINGLE_INTF_ACTIVE,
+                    0,
+                    0,
+                    p_pacr::NO_CTXT_CTRL,
+                    0,
+                    0);
+                TTI_SETADCXX(p_setadc::PAC, row_num_datums - FACE_C_DIM - 1, 0x0);
+                TT_PACR(
+                    p_pacr::CFG_CTXT_0,
+                    p_pacr::NO_ROW_PAD_ZERO,
+                    p_pacr::DST_ACCESS_STRIDED_MODE,
+                    right_addr_mod[i],
+                    p_pacr::ADDR_CNT_CTXT_0,
+                    0,
+                    right_intf,
+                    0,
+                    0,
+                    p_pacr::NO_CTXT_CTRL,
+                    0,
+                    right_last[i]);
+                TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+            }
+        });
+
+    ckernel::ckernel_template tmp(face_r_dim, block_ct_dim, lltt::replay_insn(seq_start, seq_len));
+    tmp.set_last_inner_loop_instr(lltt::replay_insn(seq_start + seq_len, seq_len));
+    tmp.set_last_outer_loop_instr(lltt::replay_insn(seq_start + 2 * seq_len, seq_len));
+    if (l1_row_step_by_cfg)
+    {
+        load_replay_buf(
+            ckernel::packer::replay_buf_offset,
+            2,
+            []
+            {
+                TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+                TTI_NOP;
+            });
+        tmp.set_end_op(lltt::replay_insn(ckernel::packer::replay_buf_offset, 2));
+    }
+    tmp.program();
+}
+
+/**
  * @brief Initialize the packer for an untilize pack op.
  *
  * Configures ADDR_MODs and the untilize MOP, programs the Z stride to one tile and keeps the channel 1 Y stride
@@ -285,11 +367,13 @@ inline void _llk_pack_untilize_init_(
     const bool row_ends_stream = !l1_rows_contiguous || ((datum_size_in_bytes(pack_src_format) == 4) && !eight_bit_out);
     constexpr bool odd_block_form = !l1_rows_contiguous && (block_ct_dim % 2 == 1) && (block_ct_dim > 1) && !narrow_row && !dense;
     const bool first_tile_stream  = odd_block_form && eight_bit_out;
+    constexpr bool split_row      = narrow_row && (row_num_datums > FACE_C_DIM);
+    LLK_ASSERT(!split_row || (num_faces > 1), "a narrow row wider than a face needs the right faces");
     // The channel 1 Y stride field is 16 bits, and the packer keeps the channel 1 offset only within 256 KiB.
     const std::uint32_t rows_per_call = face_r_dim * ((num_faces > 2) ? 2 : 1);
     // 32-bit rows of three tiles are paced, and in the block form step L1 by CFGSHIFTMASK: packed back to back they
     // cost an unpacker writing Dest more L1 cycles than they save.
-    const bool pace = (datum_size_in_bytes(pack_src_format) == 4) && (block_ct_dim == 3) && !eight_bit_out;
+    const bool pace = (datum_size_in_bytes(pack_src_format) == 4) && (block_ct_dim == 3) && !eight_bit_out && !split_row;
     const bool l1_row_step_by_cfg =
         row_ends_stream &&
         ((pace && !l1_rows_contiguous) || (output_addr_offset > (PCK0_ADDR_CTRL_XY_REG_1_Ystride_MASK >> PCK0_ADDR_CTRL_XY_REG_1_Ystride_SHAMT)) ||
@@ -297,7 +381,12 @@ inline void _llk_pack_untilize_init_(
 
     _llk_pack_untilize_configure_addrmod_();
 
-    if (first_tile_stream)
+    if constexpr (split_row)
+    {
+        addr_mod_pack_t {}.set(ADDR_MOD_3);
+        _llk_pack_untilize_split_row_mop_config_<block_ct_dim, row_num_datums>(face_r_dim, row_ends_stream, l1_row_step_by_cfg);
+    }
+    else if (first_tile_stream)
     {
         if constexpr (odd_block_form)
         {
@@ -346,7 +435,7 @@ inline void _llk_pack_untilize_init_(
     // Program packer to pack out the correct number of datums per row
     if constexpr (narrow_row)
     {
-        TTI_SETADCXX(p_setadc::PAC, row_num_datums - 1, 0x0);
+        TTI_SETADCXX(p_setadc::PAC, (split_row ? FACE_C_DIM : row_num_datums) - 1, 0x0);
     }
     else
     {
