@@ -91,6 +91,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/hybrid_routed_expert_ffn/hybrid_routed_expert_ffn_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/practice_routed_expert/practice_routed_expert_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
 #include "ttnn/operations/experimental/high_bw_all_gather/high_bw_all_gather_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
@@ -180,6 +181,7 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::detail::bind_outbound_socket_service_sync(mod);
     deepseek_prefill::mhc_split_sinkhorn::detail::bind_experimental_mhc_split_sinkhorn_operation(mod);
     deepseek_prefill::detail::bind_post_combine_reduce(mod);
+    deepseek_prefill::detail::bind_practice_routed_expert(mod);
     deepseek_prefill::moe_grouped_topk::detail::bind_moe_grouped_topk(mod);
     deepseek_prefill::moe_hash_gate::detail::bind_moe_hash_gate(mod);
     deepseek_prefill::attn_res_gather_softmax::detail::bind_attn_res_gather_softmax(mod);
