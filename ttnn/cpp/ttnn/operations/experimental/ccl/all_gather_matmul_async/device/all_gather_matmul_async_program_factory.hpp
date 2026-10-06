@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_device_operation_types.hpp"
-#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
+#include "ttnn/operations/experimental/matmul/ccl_fusion/device/ccl_fusion_mcast_2d.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -18,7 +18,7 @@ namespace ttnn::experimental::prim {
 struct AllGatherMatmulAsyncSharedVariables {
     std::variant<
         std::monostate,
-        ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t,
+        ttnn::prim::ccl_fusion::Mcast2DSharedVariables,
         ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t>
         matmul_shared_variables;
     AllGatherProgramArtifacts all_gather_async_shared_variables;
