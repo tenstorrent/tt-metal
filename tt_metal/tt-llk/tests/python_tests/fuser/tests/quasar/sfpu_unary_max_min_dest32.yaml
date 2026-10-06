@@ -1,0 +1,52 @@
+# Unary max/min against a scalar (UnaryMax / UnaryMin) on Quasar. The fuser cannot set the scalar,
+# so the kernel runs with the dispatcher default 0.0 (UNARY_MAX_MIN_VALUE, sfpu_operations_quasar.h);
+# the scalar sweep (negative scalars, both-negative pairs) lives in test_eltwise_unary_sfpu_quasar.py.
+# Input: [-8, 8] with both signs on either side of the scalar, plus -65000, -100, -2, -1, -0.5, -1e-4,
+# 0, 1e-4, 0.5, 1, 2, 100 and 65000 (exact ties at the scalar and values just around it).
+#
+# Uses only existing fuser features: dest_acc is fixed per file (hence the _dest16 / _dest32 pair),
+# every float input goes through the FPU datacopy path, and stimuli are finite intervals and points
+# (no inf, NaN, -0 or denormals). Special points sit outside the random ranges, so each is drawn
+# about as often as a unit of range.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Float16_b, Float16, Float32]
+    stimuli:
+      include:
+        - [-8.0, -2.01]
+        - [-1.99, -0.51]
+        - [-0.49, -0.001]
+        - [0.001, 0.49]
+        - [0.51, 1.99]
+        - [2.01, 8.0]
+        - -65000.0
+        - -100.0
+        - -2.0
+        - -1.0
+        - -0.5
+        - -0.0001
+        - 0.0
+        - 0.0001
+        - 0.5
+        - 1.0
+        - 2.0
+        - 100.0
+        - 65000.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float32
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32]}
+      - type: "UnarySfpu"
+        operation: [UnaryMax, UnaryMin]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32]}
