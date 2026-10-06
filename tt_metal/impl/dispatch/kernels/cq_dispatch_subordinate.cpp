@@ -178,6 +178,10 @@ volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
     reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
 static bool rt_profiler_enabled = false;
+// NOC address of record_wr_idx on the RT-profiler core, rebuilt in the command loop whenever the host changes
+// realtime_profiler_core_noc_xy, so a publish reads no L1 for it. The host writes the address before the core.
+static uint32_t rt_profiler_noc_xy = 0;
+static uint64_t rt_profiler_remote_wr_idx_noc_addr = 0;
 
 static uint32_t num_pages_acquired = 0;
 // Counts go signals handed over by dispatch_d, regardless of their transport.
@@ -398,19 +402,57 @@ void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id,
     WAYPOINT("NWID");
 }
 
+// Only called while rt_profiler_enabled, i.e. with a valid rt_profiler_remote_wr_idx_noc_addr.
 FORCE_INLINE
-void signal_realtime_profiler_and_switch(volatile tt_l1_ptr realtime_profiler_msg_t* msg) {
-    RealtimeProfilerState current_state = static_cast<RealtimeProfilerState>(msg->realtime_profiler_state);
-    bool used_buffer_a = (current_state == REALTIME_PROFILER_STATE_PUSH_B);
+void write_realtime_profiler_remote_wr_idx(uint32_t value) {
+    dispatch_s_noc_inline_dw_write(rt_profiler_remote_wr_idx_noc_addr, value, my_noc_index);
+}
 
-    RealtimeProfilerState new_state = used_buffer_a ? REALTIME_PROFILER_STATE_PUSH_A : REALTIME_PROFILER_STATE_PUSH_B;
-    msg->realtime_profiler_state = new_state;
+// dispatch_s's own copies of the record ring indices, kept in local memory to stay off L1 on the fast path.
+// rt_record_wr_idx mirrors msg->record_wr_idx (this kernel is its only writer). rt_record_rd_idx is the last
+// record_rd_idx read back; the BRISC only moves it forward, so slots it already freed stay free.
+uint32_t rt_record_wr_idx = 0;
+uint32_t rt_record_rd_idx = 0;
 
-    if (msg->realtime_profiler_core_noc_xy != 0) {
-        uint64_t realtime_profiler_addr =
-            get_noc_addr_helper(msg->realtime_profiler_core_noc_xy, msg->realtime_profiler_remote_state_addr);
-        dispatch_s_noc_inline_dw_write(realtime_profiler_addr, static_cast<uint32_t>(new_state), my_noc_index);
+FORCE_INLINE
+bool realtime_profiler_record_ring_full(uint32_t next_wr_idx) {
+    return ((next_wr_idx - rt_record_rd_idx) & REALTIME_PROFILER_RECORD_WR_IDX_MASK) >= REALTIME_PROFILER_RECORD_SLOTS;
+}
+
+// Publish the open record slot to the RT-profiler BRISC and open the next one (record ring protocol in
+// realtime_profiler_msgs.h). Lossless: while every other slot is still unread, wait rather than reuse one.
+// A slot's stale end time is fixed up by the BRISC (see realtime_profiler_read_and_enqueue), not here.
+FORCE_INLINE
+void publish_realtime_profiler_record(volatile tt_l1_ptr realtime_profiler_msg_t* msg) {
+    const uint32_t next_wr_idx = (rt_record_wr_idx + 1) & REALTIME_PROFILER_RECORD_WR_IDX_MASK;
+    // The next slot was last used by record (next_wr_idx - SLOTS); it is free once the BRISC has read that.
+    // Only re-read record_rd_idx when the cached copy says the ring is full. A stale read only overstates the
+    // fill level, so the unfenced first read is safe.
+    if (realtime_profiler_record_ring_full(next_wr_idx)) {
+        rt_record_rd_idx = msg->record_rd_idx;
+        if (realtime_profiler_record_ring_full(next_wr_idx)) {
+            msg->record_full_wait_count = msg->record_full_wait_count + 1;
+            volatile tt_reg_ptr uint32_t* wall_clock =
+                reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+            const uint32_t wait_start = wall_clock[WALL_CLOCK_LOW_INDEX];
+            WAYPOINT("RPFW");
+            do {
+                invalidate_l1_cache();
+                rt_record_rd_idx = msg->record_rd_idx;
+            } while (realtime_profiler_record_ring_full(next_wr_idx));
+            WAYPOINT("RPFD");
+            // Report the wait in-band on the record about to be published; the BRISC turns it into a
+            // dispatch-stall marker for the host. 0 means "no wait", so a wait is never stored as 0.
+            const uint32_t wait_cycles = wall_clock[WALL_CLOCK_LOW_INDEX] - wait_start;
+            msg->records[rt_record_wr_idx & (REALTIME_PROFILER_RECORD_SLOTS - 1)].kernel_end.header =
+                wait_cycles != 0 ? wait_cycles : 1;
+        }
     }
+    // Move the local writers (this kernel and the compute helper) to the new slot before the BRISC can
+    // start reading the old one.
+    rt_record_wr_idx = next_wr_idx;
+    msg->record_wr_idx = next_wr_idx;
+    write_realtime_profiler_remote_wr_idx(next_wr_idx);
 }
 
 FORCE_INLINE
@@ -866,7 +908,13 @@ void kernel_main() {
 #endif
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
-        rt_profiler_enabled = (rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
+        const uint32_t rt_noc_xy = rt_profiler_msg->realtime_profiler_core_noc_xy;
+        rt_profiler_enabled = (rt_noc_xy != 0);
+        if (rt_noc_xy != rt_profiler_noc_xy) {
+            rt_profiler_noc_xy = rt_noc_xy;
+            rt_profiler_remote_wr_idx_noc_addr =
+                get_noc_addr_helper(rt_noc_xy, rt_profiler_msg->realtime_profiler_remote_wr_idx_addr);
+        }
         uint32_t popped_pid = 0;
         if (rt_profiler_enabled) {
             record_realtime_timestamp(rt_profiler_msg, true);
@@ -928,20 +976,15 @@ void kernel_main() {
             case CQ_DISPATCH_CMD_TERMINATE:
                 DPRINT("CQ_DISPATCH_CMD_TERMINATE\n");
                 if (rt_profiler_enabled) {
-                    signal_realtime_profiler_and_switch(rt_profiler_msg);
+                    // Publish the last record and terminate in one write, so the BRISC drains every
+                    // record before it exits. No slot is opened, so no wait for space is needed.
+                    const uint32_t final_wr_idx = (rt_record_wr_idx + 1) & REALTIME_PROFILER_RECORD_WR_IDX_MASK;
+                    write_realtime_profiler_remote_wr_idx(final_wr_idx | REALTIME_PROFILER_RECORD_WR_IDX_TERMINATE);
                     noc_async_writes_flushed();
-                    for (volatile uint32_t delay = 0; delay < 5000; delay++) {
-                    }
                 }
 
+                // Stops the local compute helper.
                 rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_TERMINATE;
-                if (rt_profiler_enabled) {
-                    uint64_t realtime_profiler_terminate_addr = get_noc_addr_helper(
-                        rt_profiler_msg->realtime_profiler_core_noc_xy,
-                        rt_profiler_msg->realtime_profiler_remote_state_addr);
-                    dispatch_s_noc_inline_dw_write(
-                        realtime_profiler_terminate_addr, REALTIME_PROFILER_STATE_TERMINATE, my_noc_index);
-                }
                 if constexpr (telemetry_enabled) {
                     dispatch_telemetry_control->compute_terminate = 1;
                 }
@@ -963,7 +1006,7 @@ void kernel_main() {
         total_pages_acquired++;
 
         if (!done && rt_profiler_enabled) {
-            signal_realtime_profiler_and_switch(rt_profiler_msg);
+            publish_realtime_profiler_record(rt_profiler_msg);
         }
     }
     // Confirm expected number of pages, spinning here is a leak
