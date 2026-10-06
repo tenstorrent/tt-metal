@@ -176,3 +176,31 @@ def point_sampling_3d_to_2d(
     bev_mask = bev_mask.permute(2, 1, 3, 0, 4).squeeze(-1)  # [num_cams, B, num_queries, D]
 
     return reference_points_cam, bev_mask
+
+
+def bev_reference_points(
+    bev_h: int, bev_w: int, batch_size: int = 1, dtype: torch.dtype = torch.float32
+) -> torch.Tensor:
+    """BEV cell centres ``[bs, bev_h * bev_w, 1, 2]`` in [0, 1], as (x, y), x along ``bev_w``: the
+    temporal self-attention's reference points."""
+    ref_y, ref_x = torch.meshgrid(
+        torch.linspace(0.5, bev_h - 0.5, bev_h, dtype=dtype),
+        torch.linspace(0.5, bev_w - 0.5, bev_w, dtype=dtype),
+        indexing="ij",
+    )
+    ref_2d = torch.stack((ref_x.reshape(-1)[None] / bev_w, ref_y.reshape(-1)[None] / bev_h), -1)
+    return ref_2d.repeat(batch_size, 1, 1).unsqueeze(2)
+
+
+def camera_geometry(
+    img_metas: List[dict], bev_h: int, bev_w: int, num_points_in_pillar: int, pc_range: List[float]
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """One frame's pillar points in every camera, in float32 as upstream's ``point_sampling``:
+    ``reference_points_cam`` ``[num_cams, bs, bev_h * bev_w, num_points_in_pillar, 2]`` in normalized
+    image coordinates, and ``bev_mask`` ``[num_cams, bs, bev_h * bev_w, num_points_in_pillar]``, whether
+    each point lands in front of the camera and inside its image. Shared by the reference encoder and
+    the TTNN one, which builds its rebatch plan from it."""
+    lidar2img = torch.stack([torch.as_tensor(meta["lidar2img"], dtype=torch.float32) for meta in img_metas])
+    z_cfg = dict(num_points=num_points_in_pillar, start=pc_range[2], end=pc_range[5])
+    reference_points_3d = generate_reference_points(bev_h, bev_w, z_cfg, batch_size=len(img_metas))
+    return point_sampling_3d_to_2d(reference_points_3d, pc_range, lidar2img, img_metas=img_metas)

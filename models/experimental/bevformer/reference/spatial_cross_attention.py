@@ -91,6 +91,9 @@ class MSDeformableAttention3D(nn.Module):
 
 
 class SpatialCrossAttention(nn.Module):
+    """Cross-attention from the BEV queries into the cameras that see them, through
+    ``MSDeformableAttention3D``, averaged over those cameras and projected."""
+
     def __init__(self, embed_dims=256, num_cams=6, num_heads=8, num_levels=4, num_points=8):
         super().__init__()
         self.embed_dims = embed_dims

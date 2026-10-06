@@ -30,7 +30,8 @@ from models.experimental.bevformer.config.decoder_config import (
     CODE_Z,
 )
 from models.experimental.bevformer.tt.tt_common import SCORE_DTYPE, layer_norm
-from models.experimental.bevformer.tt.tt_decoder import GRID_DTYPE, TtDetectionTransformerDecoder
+from models.experimental.bevformer.tt.tt_common import GRID_DTYPE
+from models.experimental.bevformer.tt.tt_decoder import TtDetectionTransformerDecoder
 
 # TtBEVFormerHead rebuilds the box code by concatenating its parts in channel order:
 # CODE_XY | CODE_WL | CODE_Z | CODE_H onward to CODE_SIZE, the rest in order.

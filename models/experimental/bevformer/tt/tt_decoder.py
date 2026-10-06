@@ -24,10 +24,8 @@ import math
 
 import ttnn
 from models.experimental.bevformer.config.decoder_config import CODE_XY, CODE_Z
-from models.experimental.bevformer.tt.tt_common import layer_norm
+from models.experimental.bevformer.tt.tt_common import GRID_DTYPE, layer_norm
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention, fp32_grid_sample_config
-
-GRID_DTYPE = ttnn.float32
 
 
 INVERSE_SIGMOID_EPS = 1e-5

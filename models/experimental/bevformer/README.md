@@ -11,7 +11,7 @@ The BEVFormer Encoder consists of several key components:
 - **Spatial Cross-Attention**: Projects multi-camera features into BEV space using multi-scale deformable attention
 - **Temporal Self-Attention**: Models temporal dependencies between consecutive frames using deformable attention
 - **Multi-Scale Deformable Attention**: Core attention mechanism that samples features at multiple scales and locations
-- **Point Sampling (3D to 2D)**: Projects 3D reference points to 2D camera coordinates for spatial attention
+- **Point Sampling (3D to 2D)**: Projects 3D reference points to 2D camera coordinates for spatial attention; the encoder does it on the host in float32, once per frame
 - **BEVFormer Layer**: Single transformer layer combining spatial and temporal attention with feed-forward network
 - **BEVFormer Encoder**: Multi-layer encoder processing BEV queries through transformer layers
 
@@ -39,8 +39,9 @@ It runs 6 cameras at 1600x900, padded to 1600x928. Weights are prepared in the c
 self-attention (`tt/tt_temporal_self_attention.py`), spatial cross-attention into the cameras
 (`tt/tt_spatial_cross_attention.py`) and an FFN, each followed by a LayerNorm, over one query per
 cell of the 200x200 BEV grid. The reference (`reference/encoder.py`) follows upstream's modules
-and parameter names, so the checkpoint's `pts_bbox_head.transformer.encoder` loads into it
-unchanged, and matches upstream's code bit for bit on CPU.
+(`projects/mmdet3d_plugin/bevformer/modules/` in fundamentalvision/BEVFormer) and parameter names,
+so the checkpoint's `pts_bbox_head.transformer.encoder` loads into it unchanged; it was checked
+against upstream's modules, run on CPU with the checkpoint's weights.
 
 - The temporal self-attention samples both the previous BEV, aligned to the current frame and
   shifted by the ego motion, and the current queries, from offsets that read both, and averages
@@ -49,10 +50,19 @@ unchanged, and matches upstream's code bit for bit on CPU.
   attends to the four FPN levels there with 8 points split over the pillar's 4 heights.
 - `prepare_frame(img_metas)` projects the pillars into the cameras and builds the
   cross-attention's rebatch plan once per frame, on the host in float32 as upstream does: the
-  geometry depends on the cameras only, and in bfloat16 the projected points are off by up to a
-  quarter of the image. The forward then runs on device only.
+  geometry depends on the cameras only, and in bfloat16 the projection's homogeneous divide loses
+  the points' precision. The forward then runs on device only and can be traced.
+- The plan's device buffers have a fixed capacity per camera. `prepare_frame(img_metas, plan=plan)`
+  refills them in place for the next frame, so a trace captured with the plan replays on every
+  later frame; give the first `prepare_frame` a `capacity` that covers every rig it will see.
+  `tests/perf/test_encoder_perf.py` captures the forward as a trace, which fails on any host read
+  or write, and replays it on the next frame.
+- As upstream, with batch size above 1 every sample gathers the queries the first sample's cameras
+  see, and the temporal self-attention reads `value[:bs]`; both are exact at batch size 1, which
+  BEVFormer runs.
 - The sampling grids are float32, as in the decoder.
-- Parameters come from `tt/model_preprocessing.py` (`create_bevformer_encoder_parameters`).
+- Parameters come from `tt/model_preprocessing.py` (`create_bevformer_encoder_parameters`) and are
+  single use: building an encoder consumes the cross-attentions' sampling-offset weights.
 
 ### Detection Decoder
 
@@ -221,12 +231,11 @@ pytest models/experimental/bevformer/tests/pcc/test_nms_free_coder.py
 Tests the six-layer encoder over two consecutive frames.
 
 **What it tests:**
-- The base (200x200) BEV grid with six layers and with one, the tiny (50x50) grid with batch size
-  2, and a non-square 50x100 grid
+- The base (200x200) BEV grid with six layers and with one, the tiny (50x50) grid with batch sizes
+  1 and 2, and a non-square 50x100 grid
 - Two frames: the first without a previous BEV, the second with each side's own first-frame output
   as its previous BEV and an ego shift, so the device's error is carried forward as in the
-  detector; PCC 0.99 on both frames' outputs
-- A traced run: capture proves the forward has no host reads or writes
+  detector; PCC 0.997 on both frames' outputs
 
 It uses seeded random weights (`tests/encoder_common.py`): upstream's offset-grid init with random
 weights on top, scaled to the offset spread and attention-logit spread the BEVFormer-base
@@ -244,7 +253,7 @@ pytest models/experimental/bevformer/tests/pcc/test_encoder.py
 #### test_temporal_self_attention.py
 Tests the temporal self-attention alone: the first frame (the queries stacked with themselves) and
 a later one (a smooth previous BEV stacked with the queries, shifted reference points), on the
-tiny, base and non-square grids and with batch size 2. PCC 0.99 on the output and on the attended
+tiny, base and non-square grids and with batch size 2. PCC 0.999 on the output and on the attended
 part alone, without the residual.
 
 **Usage:**
@@ -253,9 +262,11 @@ pytest models/experimental/bevformer/tests/pcc/test_temporal_self_attention.py
 ```
 
 #### test_spatial_cross_attention.py
-Tests the spatial cross-attention alone, with the rebatch plan `prepare_frame` builds, on the tiny,
-base and non-square grids and with batch size 2. PCC 0.99 on the output and on the attended part
-alone.
+Tests the spatial cross-attention alone, with a rebatch plan from `build_rebatch_plan`, on the
+tiny, base and non-square grids, CARLA's rig, batch size 2 with the second sample's rig turned, a
+frame no camera sees (an empty plan) and a frame that fills the plan exactly. PCC 0.999 on the
+output and on the attended part alone. `test_rebatch_plan_update` refills a plan in place for
+another rig.
 
 **Usage:**
 ```bash
@@ -319,17 +330,16 @@ All tests generate:
 
 ## Configuration
 
-The model supports flexible configuration through dataclass-based config objects:
+The encoder, decoder and head take plain constructor arguments; their defaults are BEVFormer-base's:
 
-- **AttentionConfig**: Base configuration for attention modules
-- **DeformableAttentionConfig**: Multi-scale deformable attention parameters
-- **SpatialCrossAttentionConfig**: Spatial attention with camera setup
-- **TemporalSelfAttentionConfig**: Temporal attention with memory configuration
+- Encoder (`reference/encoder.py`): six layers, `embed_dims` 256, 8 heads, 4 FPN levels, the spatial
+  cross-attention's `num_points=8` over `num_points_in_pillar=4` heights, the temporal
+  self-attention's `tsa_num_points=4`, FFN 512, six cameras.
+- `pc_range` (`config/head_config.py`): [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0], the nuScenes range
+  the BEV grid, the encoder's pillars and the head's boxes share.
+- The backbone and FPN's memory and precision settings live in `config/backbone_config.py`, the
+  decoder's and head's constants in `config/decoder_config.py` and `config/head_config.py`.
 
-Default configurations are provided for common datasets like nuScenes with typical parameters:
-- embed_dims: 256
-- num_heads: 8
-- num_levels: 4
-- num_points: 4
-- num_cams: 6
-- pc_range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0] (nuScenes default)
+`config/encoder_config/` holds dataset presets (camera rigs, image sizes, point-cloud ranges) and the
+deformable-attention model sizes the multi-scale deformable attention and point-sampling tests use;
+the encoder tests take only its camera rigs.

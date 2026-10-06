@@ -18,7 +18,7 @@ from models.experimental.bevformer.tt.model_preprocessing_decoder import (
     create_decoder_parameters,
     create_reg_branch_parameters,
 )
-from models.experimental.bevformer.tt.tt_decoder import GRID_DTYPE
+from models.experimental.bevformer.tt.tt_common import GRID_DTYPE
 
 
 def _cls_branch_parameters(branch, device, dtype):

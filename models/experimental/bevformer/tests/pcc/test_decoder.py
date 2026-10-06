@@ -20,7 +20,8 @@ from models.experimental.bevformer.tt.model_preprocessing_decoder import (
     create_decoder_parameters,
     create_reg_branch_parameters,
 )
-from models.experimental.bevformer.tt.tt_decoder import GRID_DTYPE, TtDetectionTransformerDecoder
+from models.experimental.bevformer.tt.tt_common import GRID_DTYPE
+from models.experimental.bevformer.tt.tt_decoder import TtDetectionTransformerDecoder
 
 CASES = [
     # (name, bev_shape, batch_size, traced, batch_first)
