@@ -21,7 +21,6 @@ const CoreCoord kGrid{11, 10};
 const CoreCoord kRingWorkerGrid{10, 10};  // last column reserved for the CCL
 
 const std::array kSelections{
-    RecipeSelection{Recipe::A},
     RecipeSelection{Recipe::B},
     RecipeSelection{Recipe::C},
     RecipeSelection{Recipe::D},
@@ -168,10 +167,6 @@ TEST(SDPARecipeBlocking, ExpRingChoicesUseAtMostThreePasses) {
             const auto choice = choose_recipe_blocking(p);
             ASSERT_TRUE(choice.has_value());
             expect_valid(p, *choice);
-            // FAST keeps the legacy exp ring kernels (K512 only).
-            if (selection.recipe == Recipe::A) {
-                EXPECT_EQ(choice->k_chunk_size, 512u);
-            }
             EXPECT_EQ(choice->grid.y, kGrid.y);
             const uint32_t columns = choice->grid.x - 1;  // one fabric MUX column
             const uint32_t chunks = (s.local + choice->q_chunk_size - 1) / choice->q_chunk_size;

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// STANDARD's and LOW_PRECISION's fused K chunk (sdpa_fused_chunk). Included by recipe_streaming.hpp after the helpers it uses
+// STANDARD's and FAST's fused K chunk (sdpa_fused_chunk). Included by recipe_streaming.hpp after the helpers it uses
 // (reduce_c_row_group, sub_exp_block_bcast_cols, normalize_row_streaming, blocked_matmul_and_pack) and before
 // sdpa_inner_loop_step, which dispatches to it.
 //
@@ -20,7 +20,7 @@
 
 #ifdef SDPA_RECIPE_FUSED_ACTIVE
 /**
- * Fused STANDARD / LOW_PRECISION K chunk (every chunk after a Q chunk's first). The reference max m_ref is already
+ * Fused STANDARD / FAST K chunk (every chunk after a Q chunk's first). The reference max m_ref is already
  * known, so the row max is not needed before the exp:
  *   - QK accumulates s - m_ref straight into DEST through one extra inner step, [Q | M] x [K^T ; -e0]
  *     (M: the reference-max tile, m_ref in column 0; -e0 in K's format). The pack thread takes the fast exp
@@ -118,7 +118,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     AccumulatorHalf& prev, AccumulatorHalf& cur, bool is_last_iter, bool release_q) {
     constexpr uint32_t KT = Sk_chunk_t;
     // Rows per group. Dense STANDARD (math-bound) runs a short Q chunk in one-row groups, so the lagged QK / check /
-    // PV pipeline has enough groups to overlap (1 core Q128: 1.93 -> 2.03 TF). LOW_PRECISION is pack-bound and keeps
+    // PV pipeline has enough groups to overlap (1 core Q128: 1.93 -> 2.03 TF). FAST is pack-bound and keeps
     // two-row groups (one-row groups double its per-group pack work), and so do the ring kernels (H3 4x8 ring
     // block: one-row groups were 1-4% slower).
 #if defined(SDPA_RECIPE_LOFI) || defined(SDPA_RECIPE_RING)
@@ -220,10 +220,10 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
 
     // QK matmul setup is kept across back-to-back subblocks of the same height (the m step's replay ends
     // with the counter reset, so it leaves nothing behind), and in STANDARD so is the P pack setup (format,
-    // row width, ReLU; LOW_PRECISION's exp ring builds have no room for it); every other step calls leave_qk.
+    // row width, ReLU; FAST's exp ring builds have no room for it); every other step calls leave_qk.
     uint32_t qk_setup_h = 0;
 #ifdef SDPA_RECIPE_LOFI
-    // A plain statement: lambda calls from the -Os cold steps cost code, and LOW_PRECISION's exp ring builds sit
+    // A plain statement: lambda calls from the -Os cold steps cost code, and FAST's exp ring builds sit
     // at the kernel config buffer limit.
 #define SDPA_FUSED_LEAVE_QK() (qk_setup_h = 0)
 #else
@@ -261,7 +261,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         // its image once here, and only its inner 0-15 half (the rest multiplies zeros).
         UNPACK((llk_unpack_AB_matmul(prev.max, neg_unit_cb, row0, 0, sbw, h, 1)));
 #ifdef SDPA_RECIPE_LOFI
-        // A LoFi image has no halves; this keeps LOW_PRECISION's matmul instantiations (and code size) as they were.
+        // A LoFi image has no halves; this keeps FAST's matmul instantiations (and code size) as they were.
         constexpr bool m_inner_half = false;
 #else
         constexpr bool m_inner_half = true;
@@ -318,14 +318,14 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     };
 
     // Saturation check of groups [g0, g0 + n): max over their chunk row-sum tiles, into the one-tile check CB.
-    // STANDARD (math-bound) reduces columns only, LOW_PRECISION (pack-bound) to a scalar; read_check takes the max.
+    // STANDARD (math-bound) reduces columns only, FAST (pack-bound) to a scalar; read_check takes the max.
 #ifdef SDPA_RECIPE_LOFI
     constexpr ReduceDim check_dim = ReduceDim::REDUCE_SCALAR;
 #else
     constexpr ReduceDim check_dim = ReduceDim::REDUCE_COL;
 #endif
     // Check unit size (groups per check). STANDARD is math-bound, so halving the checks' fixed cost pays;
-    // LOW_PRECISION checks every group.
+    // FAST checks every group.
 #ifdef SDPA_RECIPE_LOFI
     constexpr uint32_t CG = 1;
 #else

@@ -18,9 +18,8 @@ namespace {
 namespace exp_recipes = ttnn::operations::transformer::sdpa::detail;
 namespace exp_ring_cbs = ttnn::operations::transformer::sdpa::exp_ring;
 
-// Named precision recipes B/C/D/E on exp ring joint SDPA: the shared streaming recipe keeps one recurrent
-// state per pass resident in L1 across the ring (pass-outer, ring-inner). FAST keeps the exp-ring compute
-// with the recipe's fidelity/approximation (set by the entry point).
+// Named precision recipes on exp ring joint SDPA: the shared streaming recipe keeps one recurrent
+// state per pass resident in L1 across the ring (pass-outer, ring-inner).
 class RecipeExpRingJointCompute final : public exp_ring_joint_sdpa::ComputeVariant {
 public:
     exp_ring_joint_sdpa::KernelSources kernel_sources() const override {
@@ -34,8 +33,8 @@ public:
     void configure(
         const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args, bool fp32_dest_acc_en) override {
         TT_FATAL(
-            args.precision && *args.precision != ttnn::transformer::SDPAPrecision::FAST,
-            "The exp ring recipe program factory serves the named recipes B-E; FAST uses the exp ring compute");
+            args.precision.has_value(),
+            "The exp ring recipe program factory serves the named recipes");
         policy_ = exp_recipes::resolve_precision_policy(
             exp_recipes::select_recipe(*args.precision, tensor_args.input_k.dtype()));
         TT_FATAL(

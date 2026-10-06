@@ -17,9 +17,9 @@ namespace ttnn::transformer {
 
 // Explicit numerical recipes. Omit precision to preserve the legacy API's
 // independent compute/program controls and broader platform/feature support.
-enum class SDPAPrecision : uint8_t { FAST, STANDARD, BALANCED, ACCURATE, LOW_PRECISION };
+enum class SDPAPrecision : uint8_t { STANDARD, BALANCED, ACCURATE, FAST };
 
-// Out-of-place rounding for LOW_PRECISION inputs: Q to 7 significant bits, K/V to 5 (BF16/BFP8) or onto
+// Out-of-place rounding for FAST inputs: Q to 7 significant bits, K/V to 5 (BF16/BFP8) or onto
 // the BFP4 grid. SDPA never prepares inputs itself; the caller applies this after its own Q transforms and
 // before caching or communicating K/V. A plain cast to BFP8/BFP4 is not equivalent.
 ttnn::Tensor prepare_sdpa_input(const ttnn::Tensor& input, bool is_query, DataType dtype = DataType::BFLOAT16);

@@ -10,12 +10,12 @@
 
 namespace ttnn::operations::transformer::sdpa::detail {
 
-// Recipe A-E is SDPAPrecision FAST, STANDARD, BALANCED, ACCURATE, LOW_PRECISION.
-enum class Recipe : uint8_t { A, B, C, D, E };
+// Recipe B-E is SDPAPrecision STANDARD, BALANCED, ACCURATE, FAST.
+enum class Recipe : uint8_t { B, C, D, E };
 enum class KVStorage : uint8_t { BF16, BFP8, BFP4 };
 // Online-softmax running state (row max, row sum, output accumulator) between K chunks.
 // ReferenceMaxFP32: BF16 scores against a reference row max, O and l accumulated in FP32 in L1.
-enum class RecurrentState : uint8_t { BF16, ReferenceMaxFP32, FP32 };
+enum class RecurrentState : uint8_t { ReferenceMaxFP32, FP32 };
 
 struct RecipeSelection {
     Recipe recipe;
@@ -37,10 +37,9 @@ struct PrecisionPolicy {
 constexpr PrecisionPolicy resolve_precision_policy(RecipeSelection selection) {
     using Fidelity = tt::tt_metal::MathFidelity;
     if (selection.recipe != Recipe::E && selection.kv_storage != KVStorage::BF16) {
-        TT_THROW("Only LOW_PRECISION accepts BFP8/BFP4 K/V; other SDPA recipes require BF16 K/V");
+        TT_THROW("Only FAST accepts BFP8/BFP4 K/V; other SDPA recipes require BF16 K/V");
     }
     switch (selection.recipe) {
-        case Recipe::A: return {selection, Fidelity::HiFi2, false, RecurrentState::BF16};
         case Recipe::B: return {selection, Fidelity::HiFi2, false, RecurrentState::ReferenceMaxFP32};
         case Recipe::C: return {selection, Fidelity::HiFi2, true, RecurrentState::FP32};
         case Recipe::D: return {selection, Fidelity::HiFi4, true, RecurrentState::FP32};

@@ -21,14 +21,14 @@ RecipeSelection select_recipe(ttnn::transformer::SDPAPrecision precision, DataTy
 uint32_t recipe_dense_q_tiles(const std::optional<SDPAProgramConfig>& program_config);
 uint32_t recipe_dense_k_tiles(const std::optional<SDPAProgramConfig>& program_config);
 
-// Q tile rows the compute kernel processes per chunk. The fused STANDARD / LOW_PRECISION kernels compute an odd
+// Q tile rows the compute kernel processes per chunk. The fused STANDARD / FAST kernels compute an odd
 // chunk as is, ending with a single-row group, which lets the chooser balance Q chunks over the grid (Wan2.2
 // 720p ring: Q288, 330 chunks on 110 cores). STANDARD's unfused kernel (one-tile-wide QK subblocks, attn_mask)
 // does not fit the kernel config buffer with that second group path, so there an odd chunk is padded with one
 // zero row (read as zeros, output dropped).
 uint32_t recipe_compute_q_tiles(const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, bool masked = false);
 
-// Fused STANDARD / LOW_PRECISION chunks add CBs 29-31 (recipe_compute_program). A layout whose fused CBs do not
+// Fused STANDARD / FAST chunks add CBs 29-31 (recipe_compute_program). A layout whose fused CBs do not
 // fit L1 drops them and the SDPA_RECIPE_FUSED define, so the kernel runs every K chunk on the reduce path.
 // An odd STANDARD Q chunk keeps them (its unfused kernel cannot build the single-row group; recipe_compute_q_tiles).
 // Returns the bytes freed (0 when nothing was dropped).

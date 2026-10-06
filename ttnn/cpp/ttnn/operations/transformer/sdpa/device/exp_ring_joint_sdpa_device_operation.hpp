@@ -26,7 +26,7 @@ struct ExpRingJointSDPADeviceOperation {
     using program_factory_t =
         std::variant<ExpRingJointSDPAMeshWorkloadFactory, ExpRingJointSDPARecipeMeshWorkloadFactory>;
 
-    // Named recipes B-E run on the recipe factory; precision unset or FAST keeps the exp-ring factory.
+    // Named recipes run on the recipe factory; precision unset keeps the exp-ring factory.
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);

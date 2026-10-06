@@ -19,26 +19,24 @@ pytestmark = pytest.mark.skipif(
     reason="SDPA precision recipes run on Blackhole hardware (the simulator disables SFPLOADMACRO)",
 )
 
-# Recipe and K/V storage. LOW_PRECISION inputs go through prepare_sdpa_input.
+# Recipe and K/V storage. FAST inputs go through prepare_sdpa_input.
 VARIANTS = {
-    "fast": (ttnn.SDPAPrecision.FAST, ttnn.bfloat16),
     "standard": (ttnn.SDPAPrecision.STANDARD, ttnn.bfloat16),
     "balanced": (ttnn.SDPAPrecision.BALANCED, ttnn.bfloat16),
     "accurate": (ttnn.SDPAPrecision.ACCURATE, ttnn.bfloat16),
-    "low_precision_bf16": (ttnn.SDPAPrecision.LOW_PRECISION, ttnn.bfloat16),
-    "low_precision_bfp8": (ttnn.SDPAPrecision.LOW_PRECISION, ttnn.bfloat8_b),
-    "low_precision_bfp4": (ttnn.SDPAPrecision.LOW_PRECISION, ttnn.bfloat4_b),
+    "fast_bf16": (ttnn.SDPAPrecision.FAST, ttnn.bfloat16),
+    "fast_bfp8": (ttnn.SDPAPrecision.FAST, ttnn.bfloat8_b),
+    "fast_bfp4": (ttnn.SDPAPrecision.FAST, ttnn.bfloat4_b),
 }
 # Relative L2 error bound (%) vs FP64 attention on the BF16 inputs, for normally distributed inputs and
 # K up to a few thousand.
 L2_PCT_BOUND = {
-    "fast": 3.5,
     "standard": 3.5,
     "balanced": 0.8,
     "accurate": 0.6,
-    "low_precision_bf16": 4.2,
-    "low_precision_bfp8": 4.4,
-    "low_precision_bfp4": 23.0,
+    "fast_bf16": 4.2,
+    "fast_bfp8": 4.4,
+    "fast_bfp4": 23.0,
 }
 
 
@@ -67,7 +65,7 @@ def to_device(device, x, dtype=ttnn.bfloat16):
 def inputs_for(device, variant, q, k, v):
     precision, kv_dtype = VARIANTS[variant]
     tq, tk, tv = (to_device(device, x) for x in (q, k, v))
-    if precision == ttnn.SDPAPrecision.LOW_PRECISION:
+    if precision == ttnn.SDPAPrecision.FAST:
         tq = ttnn.transformer.prepare_sdpa_input(tq, is_query=True)
         tk, tv = (ttnn.transformer.prepare_sdpa_input(x, is_query=False, dtype=kv_dtype) for x in (tk, tv))
     return tq, tk, tv
@@ -117,9 +115,9 @@ def test_sdpa_recipe_accuracy(device, variant, shape):
     assert l2_pct(actual, reference(q, k, v)) < L2_PCT_BOUND[variant]
 
 
-# Long K with small logits: FAST's BF16 running state swamps (about 3.9%), STANDARD's FP32 state does not
-# (about 1.7%). The bounds encode that ordering.
-LONG_K_BOUND = {**L2_PCT_BOUND, "fast": 5.0, "standard": 2.2, "low_precision_bf16": 2.6, "low_precision_bfp8": 2.7}
+# Long K with small logits: a BF16 running state would swamp (the legacy kernel: about 3.9%); STANDARD's FP32
+# state does not (about 1.7%).
+LONG_K_BOUND = {**L2_PCT_BOUND, "standard": 2.2, "fast_bf16": 2.6, "fast_bfp8": 2.7}
 
 
 @pytest.mark.parametrize("variant", VARIANTS)
@@ -132,7 +130,7 @@ def test_sdpa_recipe_long_k(device, variant):
 
 # Rising row maxima: on alternating pairs of tile rows, a later K chunk holds two groups of keys scoring about
 # 28 and 25 above the first chunk's maximum (natural-log units of the scaled scores), far past the
-# reference-max headroom. Every recipe must rescale those rows; LOW_PRECISION's fused chunks must redo their row
+# reference-max headroom. Every recipe must rescale those rows; FAST's fused chunks must redo their row
 # groups next to kept ones. Without the redo the fast exp saturates both groups to the same P and the 16:1 weight
 # ratio collapses. One channel carries the spike with exactly representable values, so K's rounding does not
 # move it.
@@ -191,7 +189,7 @@ def test_joint_sdpa_recipe(device, variant):
     [(1, 10, 4096, 4096, 128, 0), (1, 8, 4864, 256, 128, 0), (1, 8, 1024, 1024, 256, 0), (1, 4, 1000, 1000, 128, 77)],
     ids=["self_attention", "short_k_cross", "d256", "joint"],
 )
-@pytest.mark.parametrize("variant", ["fast", "standard", "balanced", "accurate", "low_precision_bfp8"])
+@pytest.mark.parametrize("variant", ["standard", "balanced", "accurate", "fast_bfp8"])
 def test_sdpa_recipe_op_selected_blocking(device, variant, shape):
     """Chunk sizes left to the op (no program_config, or zero chunk sizes)."""
     b, nh, sq, sk, d, joint = shape
@@ -218,20 +216,7 @@ def test_sdpa_recipe_op_selected_blocking(device, variant, shape):
     assert l2_pct(actual, expected) < L2_PCT_BOUND[variant]
 
 
-@pytest.mark.parametrize("k_length", [512, 1536, 32768])
-def test_sdpa_fast_matches_legacy(device, k_length):
-    """FAST is the legacy streaming kernel: bit-identical to precision=None at the same chunks."""
-    q, k, v = randn(1, 5, 768, 128, seed=17), randn(1, 5, k_length, 128, seed=18), randn(1, 5, k_length, 128, seed=19)
-    tensors = [to_device(device, x) for x in (q, k, v)]
-    cfg = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=(5, 2), q_chunk_size=256, k_chunk_size=512)
-    legacy = ttnn.transformer.scaled_dot_product_attention(*tensors, is_causal=False, program_config=cfg)
-    fast = ttnn.transformer.scaled_dot_product_attention(
-        *tensors, is_causal=False, program_config=cfg, precision=ttnn.SDPAPrecision.FAST
-    )
-    assert torch.equal(ttnn.to_torch(fast), ttnn.to_torch(legacy))
-
-
-@pytest.mark.parametrize("variant", ["fast", "standard", "accurate", "low_precision_bfp8"])
+@pytest.mark.parametrize("variant", ["standard", "accurate", "fast_bfp8"])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 4194304}], indirect=True)
 def test_sdpa_recipe_program_cache_and_trace(device, variant):
     device.enable_program_cache()
@@ -269,7 +254,7 @@ def test_sdpa_recipe_program_cache_and_trace(device, variant):
         "exp_approx_mode_false",
         "sub_core_grids",
         "non_default_scale",
-        "packed_kv_for_fast",
+        "packed_kv_for_bf16_recipe",
         "padded_head_dim",
         "l1_output",
         "mask_shape",
@@ -297,8 +282,8 @@ def test_sdpa_recipe_rejects_unsupported(expect_error, device, invalid):
         cfg["sub_core_grids"] = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
     elif invalid == "non_default_scale":
         kwargs["scale"] = 0.5
-    elif invalid == "packed_kv_for_fast":
-        kwargs["precision"] = ttnn.SDPAPrecision.FAST
+    elif invalid == "packed_kv_for_bf16_recipe":
+        kwargs["precision"] = ttnn.SDPAPrecision.STANDARD
         tensors[1] = to_device(device, k, ttnn.bfloat8_b)
     elif invalid == "l1_output":
         kwargs["memory_config"] = ttnn.L1_MEMORY_CONFIG

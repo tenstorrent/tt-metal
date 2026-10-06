@@ -131,7 +131,7 @@ def test_exp_ring_joint_sdpa_recipe(exp_ring_mesh, variant, case):
         assert l2_pct(got, expected(chip)) < L2_PCT_BOUND[variant], f"chip {chip}"
 
 
-@pytest.mark.parametrize("variant", ["standard", "balanced", "low_precision_bfp4"])
+@pytest.mark.parametrize("variant", ["standard", "balanced", "fast_bfp4"])
 def test_exp_ring_joint_sdpa_recipe_device_lengths(exp_ring_mesh, variant):
     mesh, semaphores = exp_ring_mesh
     inputs, joints, backing, _, kwargs, _, _ = exp_ring_case(mesh, variant, "subtile_logical_n")
@@ -157,7 +157,7 @@ def test_exp_ring_joint_sdpa_recipe_device_lengths(exp_ring_mesh, variant):
         ttnn.release_trace(mesh, trace)
 
 
-@pytest.mark.parametrize("variant", ["fast", "standard", "balanced", "low_precision_bfp8"])
+@pytest.mark.parametrize("variant", ["standard", "balanced", "fast_bfp8"])
 def test_exp_ring_joint_sdpa_recipe_op_selected_blocking(exp_ring_mesh, variant):
     """Q chunk of 0: the op chooses it (and may narrow the SDPA grid width)."""
     mesh, semaphores = exp_ring_mesh

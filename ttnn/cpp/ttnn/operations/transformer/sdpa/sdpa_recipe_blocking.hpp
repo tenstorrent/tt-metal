@@ -56,8 +56,6 @@ inline bool recipe_geometry_supported(
 
 // Schedule facts that change the circular-buffer layout.
 struct RecipeL1Context {
-    uint32_t q_blocks_per_worker = 2;  // ring: most Q chunks one worker owns (1 lets FAST single-buffer Q)
-    uint32_t passes = 1;               // exp ring: head-segments per core row (FAST keeps one Q per pass)
     uint32_t mask_page_bytes = 0;      // dense: attn_mask tile bytes (0 = no mask)
 };
 
@@ -66,8 +64,8 @@ struct RecipeL1Context {
 uint32_t recipe_mask_group_rows(const PrecisionPolicy& policy, uint32_t q_tiles);
 
 // Circular-buffer bytes per core. `preferred` is the op's first-choice layout; `minimum` is the
-// smallest layout the op falls back to when `preferred` does not fit (ring: single-slot Q;
-// FAST exp ring: streamed Q). A geometry fits iff minimum <= available.
+// smallest layout the op falls back to when `preferred` does not fit (ring: single-slot Q, without the fused
+// chunks' CBs). A geometry fits iff minimum <= available.
 struct RecipeL1Estimate {
     uint64_t preferred = 0;
     uint64_t minimum = 0;
@@ -85,7 +83,7 @@ RecipeL1Estimate recipe_l1_bytes(
 // Everything the chooser needs, independent of tensors and devices (host-testable).
 struct RecipeBlockingProblem {
     RecipeOp op = RecipeOp::Dense;
-    PrecisionPolicy policy = resolve_precision_policy({Recipe::A});
+    PrecisionPolicy policy = resolve_precision_policy({Recipe::B});
     uint32_t batch = 1;
     uint32_t q_heads = 1;
     // Dense/joint: padded rows of the primary and joint segments. Ring/exp ring: the local (per
