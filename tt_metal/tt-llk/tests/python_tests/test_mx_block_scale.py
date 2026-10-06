@@ -26,6 +26,7 @@ from helpers.pack import (
     pack_mxint4,
     pack_mxint8,
 )
+from helpers.utils import floor_log2
 
 # One 32-datum block: 1 face of 2 rows x 16 columns.
 PACK_GEOMETRY = dict(num_faces=1, face_r_dim=2)
@@ -121,3 +122,73 @@ def test_mxint8_just_below_one_eighth():
     # -0.0625 / 2^-4 * 64 = -64.
     assert packed[FIRST_ELEMENT_BYTE + 1] == 0xC0
     assert packed[FIRST_ELEMENT_BYTE + 2 : FIRST_ELEMENT_BYTE + BLOCK_SIZE] == [0] * 30
+
+
+# ---------------------------------------------------------------------------
+# Special blocks: NaN, Inf and all-zero take reserved or derived scales. These
+# bytes changed when MXFP8 moved onto the shared derivation, and nothing pinned
+# them -- the device sweep cannot, because --compile-producer never reaches the
+# packer and the compile-consumer sweep never generates a whole block of NaN.
+# ---------------------------------------------------------------------------
+
+E8M0_NAN = 0xFF
+E8M0_INF = 0xFE
+
+
+def _pack_values(fmt, values):
+    """Pack one block holding `values` verbatim."""
+    packer, _, _ = FORMATS[fmt]
+    return packer(torch.tensor(values, dtype=torch.float32), **PACK_GEOMETRY)
+
+
+@pytest.mark.parametrize("fmt", list(FORMATS), ids=lambda f: f.name)
+def test_an_all_nan_block_takes_the_reserved_nan_scale(fmt):
+    """Every datum NaN is the one case the 0xFF scale encodes."""
+    assert _pack_values(fmt, [float("nan")] * BLOCK_SIZE)[0] == E8M0_NAN
+
+
+@pytest.mark.parametrize(
+    "values",
+    [[float("inf")] * BLOCK_SIZE, [float("inf")] + [0.0] * (BLOCK_SIZE - 1)],
+    ids=["all_inf", "inf_and_zeros"],
+)
+@pytest.mark.parametrize("fmt", list(FORMATS), ids=lambda f: f.name)
+def test_a_block_of_only_inf_and_zero_takes_the_inf_scale(fmt, values):
+    """0xFE is reserved for a block that holds an Inf and nothing finite."""
+    assert _pack_values(fmt, values)[0] == E8M0_INF
+
+
+@pytest.mark.parametrize("fmt", list(FORMATS), ids=lambda f: f.name)
+def test_non_finite_datums_do_not_drive_the_scale(fmt):
+    """A NaN or Inf alongside finite data is excluded from the max-exponent tree,
+    so the scale follows the finite amax -- here 3.0, floor(log2) = 1."""
+    values = [float("nan"), float("inf")] + [3.0] * (BLOCK_SIZE - 2)
+    assert _pack_values(fmt, values)[0] == _expected_scale(fmt, 1)
+
+
+@pytest.mark.parametrize("fmt", list(FORMATS), ids=lambda f: f.name)
+def test_an_all_zero_block_takes_the_zero_exponent_scale(fmt):
+    """amax of 0 gives shared exponent 0, not the reserved codes and not a
+    neutral 127 -- the element format's max exponent is still subtracted."""
+    assert _pack_values(fmt, [0.0] * BLOCK_SIZE)[0] == _expected_scale(fmt, 0)
+
+
+# ---------------------------------------------------------------------------
+# The comparator derives the same block scale, and has to agree with the packer
+# or it judges a block against the wrong tolerance.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("k", EXPONENTS)
+def test_the_comparator_takes_the_same_binade_just_below_a_power_of_two(k):
+    """floor_log2 is what both sides use; np.log2 rounds up here and floor(log2)
+    would return k, putting the comparator a binade above the packer."""
+    amax = torch.tensor([float(np.nextafter(np.float32(2.0**k), np.float32(0.0)))])
+    assert int(floor_log2(amax).item()) == k - 1
+
+
+@pytest.mark.parametrize("k", EXPONENTS)
+def test_the_comparator_takes_its_own_binade_mid_range(k):
+    """Control: a value well inside a binade is unambiguous either way."""
+    amax = torch.tensor([float(np.float32(1.9) * np.float32(2.0**k))])
+    assert int(floor_log2(amax).item()) == k
