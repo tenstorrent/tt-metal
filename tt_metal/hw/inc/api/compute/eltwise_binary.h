@@ -27,6 +27,16 @@ constexpr SrcDvalid BINARY_SRC_DVALID = (ELTWISE_BINARY_PER_TILE_HANDOFF) ? SrcD
 #else
 constexpr SrcDvalid BINARY_SRC_DVALID = SrcDvalid::PerFace;
 #endif
+// ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true gives the per-tile hand-off to the dest-reuse forms alone.
+#if defined(ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE)
+constexpr SrcDvalid BINARY_REUSE_SRC_DVALID =
+    (ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE) ? SrcDvalid::PerTile : BINARY_SRC_DVALID;
+#else
+constexpr SrcDvalid BINARY_REUSE_SRC_DVALID = BINARY_SRC_DVALID;
+#endif
+template <EltwiseBinaryReuseDestType reuse_dest>
+constexpr SrcDvalid binary_src_dvalid =
+    reuse_dest == EltwiseBinaryReuseDestType::NONE ? BINARY_SRC_DVALID : BINARY_REUSE_SRC_DVALID;
 #ifdef TRISC_UNPACK
 ALWI void binary_unpack_AB_init(std::uint32_t icb0, std::uint32_t icb1) {
     llk_unpack_AB_init<BroadcastType::NONE, BINARY_SRC_DVALID>(icb0, icb1, Transpose::None);
@@ -34,7 +44,7 @@ ALWI void binary_unpack_AB_init(std::uint32_t icb0, std::uint32_t icb1) {
 
 template <bool acc_to_dest, EltwiseBinaryReuseDestType reuse_dest>
 ALWI void binary_unpack_A_init(std::uint32_t icb) {
-    llk_unpack_A_init<BroadcastType::NONE, acc_to_dest, reuse_dest, false /* unpack_to_dest */, BINARY_SRC_DVALID>(
+    llk_unpack_A_init<BroadcastType::NONE, acc_to_dest, reuse_dest, false /* unpack_to_dest */, binary_src_dvalid<reuse_dest>>(
         false, false, icb);
 }
 #endif  // TRISC_UNPACK
@@ -42,8 +52,12 @@ ALWI void binary_unpack_A_init(std::uint32_t icb) {
 #ifdef TRISC_MATH
 template <EltwiseBinaryType eltwise_binary_type, MathFidelity math_fidelity, EltwiseBinaryReuseDestType reuse_dest>
 ALWI void binary_math_init(std::uint32_t icb0, std::uint32_t icb1, std::uint32_t acc_to_dest) {
-    llk_math_eltwise_binary_init<eltwise_binary_type, BroadcastType::NONE, math_fidelity, reuse_dest, BINARY_SRC_DVALID>(
-        icb0, icb1, acc_to_dest);
+    llk_math_eltwise_binary_init<
+        eltwise_binary_type,
+        BroadcastType::NONE,
+        math_fidelity,
+        reuse_dest,
+        binary_src_dvalid<reuse_dest>>(icb0, icb1, acc_to_dest);
 }
 
 template <
@@ -58,7 +72,7 @@ ALWI void binary_math(std::uint32_t icb0, std::uint32_t icb1, std::uint32_t idst
         is_fp32_dest_acc_en,
         math_fidelity,
         reuse_dest,
-        BINARY_SRC_DVALID>(icb0, icb1, idst, true /* clear_fp32_dst_acc */);
+        binary_src_dvalid<reuse_dest>>(icb0, icb1, idst, true /* clear_fp32_dst_acc */);
 }
 #endif  // TRISC_MATH
 }  // namespace detail
