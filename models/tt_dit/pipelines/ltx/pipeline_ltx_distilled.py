@@ -492,6 +492,13 @@ class LTXDistilledPipeline(LTXPipeline):
         # per-token family (frame-0 gens); a scalar-only transformer has just the scalar family.
         kf_per_token = image_capable and bool(kf_anchors)
         i2v_families = image_capable and not kf_anchors and not skip_dit_warmup
+        # LTX_WARMUP_T2V_ONLY=1: a worker that only ever serves plain t2v skips the per-token
+        # family (~39 s of 4x8 warmup). A pinned gen on such a worker then refuses instead of
+        # capturing at gen time (deferred capture is the blank-video bug).
+        self._warmup_t2v_only = i2v_families and _env_on("LTX_WARMUP_T2V_ONLY")
+        if self._warmup_t2v_only:
+            logger.info("  LTX_WARMUP_T2V_ONLY=1: skipping the s1_i2v/s2_i2v trace families")
+            i2v_families = False
 
         if self._traced:
 
@@ -951,6 +958,20 @@ class LTXDistilledPipeline(LTXPipeline):
             return trace_key
         return f"{trace_key}_i2v"
 
+    def _assert_trace_family_warmed(self, trace_key, traced):
+        """Refuse a traced per-token gen whose family a T2V-only warmup skipped."""
+        if (
+            traced
+            and getattr(self, "_warmup_t2v_only", False)
+            and trace_key is not None
+            and trace_key.endswith("_i2v")
+            and trace_key not in self._trace_state
+        ):
+            raise RuntimeError(
+                f"trace family {trace_key} was not captured: warmup ran with LTX_WARMUP_T2V_ONLY=1, "
+                "so this worker serves plain t2v only (unset it to serve image-conditioned gens)"
+            )
+
     def _prealloc_trace_io(self, trace_key, *, num_frames, height, width, ref_num_frames=0):
         """Allocate a stage's persistent trace inputs (constants, latent buffers, masks) up front,
         before any capture. A ttnn trace bakes absolute tensor addresses; activations allocated
@@ -1193,6 +1214,7 @@ class LTXDistilledPipeline(LTXPipeline):
         # worker takes the scalar-AdaLN path, which is a different graph, so it owns its own trace family.
         needs_video_ts = getattr(self.transformer, "image_conditioning", False) and image_cond
         trace_key = self._trace_variant_key(trace_key, needs_video_ts)
+        self._assert_trace_family_warmed(trace_key, traced)
         logger.info(f"  conditioning path: {'per-token' if needs_video_ts else 'scalar'} (trace family {trace_key})")
         # AdaLN's 2-value timestep pair (in the step loop) carries one pinned noise level, so the
         # modulation uses a single shared strength; the per-token pin/denoise_mask below still honors
