@@ -29,7 +29,6 @@ FORCE_INLINE uint32_t out_tile_index(uint32_t i, uint32_t j, uint32_t row_tiles)
 #endif
 }
 
-#ifdef DYNAMIC_M
 // Perf isolation. MM_SKIP_IN removes the input DRAM reads AND the relay mcast (only injector
 // cores read, so the two are one pipeline); MM_SKIP_OUT removes the output DRAM write.
 // MM_SKIP_DM is both. Every DFB and semaphore op is kept, so none of these can deadlock.
@@ -45,6 +44,7 @@ constexpr bool kMmNoIn = true;
 constexpr bool kMmNoIn = false;
 #endif
 
+#ifdef DYNAMIC_M
 template <typename AccessorT>
 FORCE_INLINE uint32_t read_scalar_u32(const AccessorT& accessor, uint32_t l1_addr) {
     Noc noc;
