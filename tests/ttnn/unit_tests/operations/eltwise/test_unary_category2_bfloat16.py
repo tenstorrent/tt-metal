@@ -226,13 +226,12 @@ def test_silu_swish_ops(device, ttnn_op):
 def test_softsign(device):
     """Exhaustive normal bfloat16 coverage for softsign = x / (1 + |x|).
 
-    Blackhole computes this via reciprocal(1 + |x|); near bf16_max
+    The SFPU computes this via reciprocal(1 + |x|); near bf16_max
     (|x| > ~8.5e37) that intermediate underflows and flushes to 0 instead
-    of the correct ±1 saturation, so beyond the threshold it must FTZ to 0.
-    Wormhole's BF16 kernel saturates to torch's ±1 for |x| >= 512, so there
-    the near-max band must equal the golden. At the exact threshold
-    Blackhole's rounding gives either outcome, so that one boundary
-    magnitude accepts both. Both are verified explicitly.
+    of the correct ±1 saturation. At the exact threshold, that rounding is
+    architecture-dependent (WH: correct ±1, BH: flushed 0), so only that
+    one boundary magnitude accepts either outcome; everything beyond it
+    must FTZ to 0. Both are verified explicitly.
 
     ULP ≤ 2 covers the remaining "FTZ-safe" domain. A whole-domain PCC
     would not constrain the reciprocal path at all here, since the ~46%
@@ -251,12 +250,15 @@ def test_softsign(device):
 
     ftz_threshold = 1.0 / SMALLEST_NORMAL_BF16 - 1.0
     abs_input = input_tensor.abs().float()
+    # Deep-subnormal band: unambiguous FTZ to 0 on every architecture.
     near_max = abs_input > ftz_threshold
     if ttnn.device.is_wormhole_b0(device):
-        # The BF16 kernel saturates to torch's ±1 here.
-        assert torch.equal(result[near_max], golden[near_max]), "near-bf16_max band must saturate to ±1"
+        # Wormhole's BF16 kernel returns torch's result on this band, where the stock kernel
+        # flushes to 0; it is checked as the BF16 pack stores it.
+        expected = golden[near_max]
+        tiny = torch.finfo(torch.bfloat16).tiny
+        assert_equal(torch.where(expected.abs() < tiny, torch.zeros_like(expected), expected), result[near_max])
     else:
-        # Deep-subnormal reciprocal: unambiguous FTZ to 0.
         assert_ftz_band(result, near_max, "near-bf16_max FTZ band")
 
     # Boundary magnitude (|x| == ftz_threshold exactly): normal/subnormal

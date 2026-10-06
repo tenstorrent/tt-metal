@@ -19,7 +19,6 @@ inline void calculate_abs_denominator()
     // The suffix is recorded with the core, so each row is one replay.
     constexpr std::uint32_t slots = Config::kBodySlots + sfpi::abs_denominator_wh_suffix_slots<Config::kLateRound, raw>();
     static_assert(slots <= 32);
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     TTI_REPLAY(0, slots, 1, 1);
     sfpi::abs_denominator_wh_core<Config::kBoundExponent, Config::kLateRound, ADDR_MOD_3, raw>();
     sfpi::abs_denominator_wh_suffix<Config::kLateRound, ADDR_MOD_2, raw>();

@@ -726,8 +726,8 @@ def test_bessel_ops(device, ttnn_op, low, high):
 def test_softsign_with_sqrt_in_sfpu_chain(device, generated_first):
     """softsign in one SFPU chain with stock sqrt, both orders.
 
-    Stock sqrt after softsign must match its own standalone run bit for bit; softsign after
-    sqrt must match torch on sqrt's device result, which the chain keeps in DEST.
+    Each chain step runs the kernel its own TT-NN op runs, and the second op stores exactly what it
+    stores standalone on the first op's device result, which the chain keeps in DEST.
     """
     generated = (ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTSIGN), lambda tensor: ttnn.softsign(tensor))
     stock = (ttnn.UnaryWithParam(ttnn.UnaryOpType.SQRT), lambda tensor: ttnn.sqrt(tensor))
@@ -735,21 +735,62 @@ def test_softsign_with_sqrt_in_sfpu_chain(device, generated_first):
     input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
     tt_in = to_tt_tensor(input_tensor, device)
 
-    result = ttnn.to_torch(ttnn.unary_chain(tt_in, [first[0], second[0]]))
-    middle = ttnn.to_torch(first[1](tt_in))
-    checked = torch.isfinite(middle) & (middle.abs() > SMALLEST_NORMAL_BF16)
-    if generated_first:
-        expected = ttnn.to_torch(second[1](to_tt_tensor(middle, device)))
-    else:
-        expected = ttnn.get_golden_function(ttnn.softsign)(middle, device=device)
-    checked &= torch.isfinite(expected) & (expected.abs() > SMALLEST_NORMAL_BF16)
-    assert checked.sum() > 1024
+    def words(tensor):
+        return ttnn.to_torch(tensor).view(torch.int16)
 
-    if generated_first:
-        # Exactly the stock op's own result, which itself meets torch as its suites require.
-        assert torch.equal(result[checked], expected[checked].to(result.dtype))
-        golden = ttnn.get_golden_function(ttnn.sqrt)(middle, device=device)
-        torch_checked = checked & torch.isfinite(golden) & (golden.abs() > SMALLEST_NORMAL_BF16)
-        assert_with_ulp(expected_result=golden[torch_checked], actual_result=result[torch_checked], ulp_threshold=2)
-    else:
-        assert_with_ulp(expected_result=expected[checked], actual_result=result[checked], ulp_threshold=1)
+    for step, standalone in (generated, stock):
+        assert torch.equal(
+            words(ttnn.unary_chain(tt_in, [step])), words(standalone(tt_in))
+        ), f"{step} is not its op's kernel"
+
+    result = words(ttnn.unary_chain(tt_in, [first[0], second[0]]))
+    middle = ttnn.to_torch(first[1](tt_in))
+    expected = words(second[1](to_tt_tensor(middle, device)))
+    # A finite normal first result sits in DEST exactly as stored, so both runs feed the second op the same input.
+    checked = torch.isfinite(middle) & (middle.abs() >= SMALLEST_NORMAL_BF16)
+    assert checked.sum() >= 64
+    mismatched = checked & (result != expected)
+    assert not mismatched.any(), (
+        f"{int(mismatched.sum())} of {int(checked.sum())} lanes differ from the standalone second op, "
+        f"first at its input {middle[mismatched][0].item()!r}"
+    )
+
+
+def test_softsign_bf16_unflushed_zero_and_subnormal_inputs(device):
+    """TT-NN's copy into DEST keeps -0 and subnormal BF16 inputs, which the LLK sweep's unpack delivers as +0.
+
+    Each such input and +0 must store torch's result: its class as the BF16 pack stores it (NaN as
+    +inf, -0 as +0, a subnormal result as 0) and a finite result within 1 ULP of torch's float64
+    value. STOCK lists, per board, the inputs where the kernel stores its stock kernel's word
+    instead, as {word: [(first input, last input), ...]} over the input bits.
+    """
+    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
+    if board not in ("wormhole_b0",):
+        pytest.skip(f"ttnn.softsign keeps its stock kernel on {board}")
+    STOCK = {}
+    words = torch.cat([torch.arange(0x80), torch.arange(0x8000, 0x8080)]).to(torch.int16)
+    x = words.view(torch.bfloat16).repeat(4).reshape(1, 1, 32, 32)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tiny = torch.finfo(torch.bfloat16).tiny
+
+    def stored(t):
+        t = t.to(torch.bfloat16).to(torch.float64).flatten()
+        t = torch.where(torch.isnan(t), torch.full_like(t, float("inf")), t)
+        return torch.where(t.abs() < tiny, torch.zeros_like(t), t)
+
+    actual = stored(ttnn.to_torch(ttnn.softsign(tt_x)))
+    x64 = x.flatten().to(torch.float64)
+    reference = ttnn.get_golden_function(ttnn.softsign)(x64).to(torch.float64).flatten()
+    rounded = stored(reference)
+    spacing = 2.0 ** (torch.floor(torch.log2(reference.abs().clamp(min=tiny))) - 7)
+    close = torch.isfinite(reference) & (actual != 0) & ((actual - reference).abs() < spacing)
+    ok = (actual == rounded) | close
+    bits = words.repeat(4).to(torch.int32) & 0xFFFF
+    for word, ranges in STOCK.get(board, {}).items():
+        value = stored(torch.tensor([word], dtype=torch.int32).to(torch.int16).view(torch.bfloat16))
+        for first, last in ranges:
+            ok |= (bits >= first) & (bits <= last) & (actual == value)
+    assert ok.all(), (
+        f"{(~ok).sum().item()} of {ok.numel()} inputs off torch and stock; first input 0x{bits[~ok][0].item():04x} "
+        f"stored {actual[~ok][0].item()!r}, torch {reference[~ok][0].item()!r}"
+    )
