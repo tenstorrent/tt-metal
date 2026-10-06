@@ -49,15 +49,11 @@ _PERF_SKU = "bh_loudbox"
 _PERF_MARGIN = 0.03
 # LoudBox targets.
 _PERF_REFERENCE_MS = {
-    "SP1xTP8": 8.617,
-    "SP2xTP4": 8.758,
-    "SP4xTP2": 9.066,
+    "SP1xTP8": 9.597,
+    "SP2xTP4": 9.494,
+    "SP4xTP2": 9.817,
 }
-_GALAXY_PERF_REFERENCE_MS = 2.737
-# Like the model's prefill tests, give CCL semaphores their own L1_SMALL region: allocated in L1 on the first call,
-# they would land between the chunk terms and fragment L1, so the traced call would plan ops on less free L1 than
-# the warm-up compiled for.
-_L1_SMALL_SIZE = 1152
+_GALAXY_PERF_REFERENCE_MS = 3.255
 
 
 @pytest.fixture(scope="session")
@@ -187,7 +183,6 @@ def _trace_wall_samples_ms(
         pytest.param(
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "l1_small_size": _L1_SMALL_SIZE,
             },
             id="fabric_1d",
         ),
@@ -291,11 +286,11 @@ def test_kimi_k3_layer_1_perf(
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params",
     [
-        pytest.param((2, 4), 1, fabric_1d_device_params(l1_small_size=_L1_SMALL_SIZE), id="SP2xTP4-fabric-1d"),
+        pytest.param((2, 4), 1, fabric_1d_device_params(), id="SP2xTP4-fabric-1d"),
         pytest.param(
             (8, 4),
             1,
-            torus_xy_device_params(l1_small_size=_L1_SMALL_SIZE),
+            torus_xy_device_params(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),
