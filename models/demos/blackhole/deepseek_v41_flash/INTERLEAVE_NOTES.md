@@ -55,8 +55,25 @@ costs the compute of U x C tokens per row, whatever the number of users that hav
   which is invisible to the plugin). The whole-batch `prefill_forward` is routed through the same machinery when Up < U. Up = 1 means 4 concurrent prompts (one per mesh row) per
   replay at no filler cost, independent of the batch size (the trace does not depend on U any more), and a smaller prefill scratch (halo, latent / key FIFOs: x Up / U).
 
-## 3. Limits
+## 3. Serving recipe (tt-inference-server / vllm-tt-plugin)
 
-* New user chunk steps cost U x C row-tokens (see measurements in the final report); ITL of running users grows by one chunk step per interleaved prefill step.
-* Continuations at unaligned chunk ends are recomputed from 0 (set `--max-num-batched-tokens` and `long_prefill_token_threshold` to the model chunk).
-* Longest ISL / S_pad: bounded by the same DRAM budget as the existing prefill (the user mask adds temporaries of the size of one FIFO inside the trace).
+Environment of the server process (the capability is read when the bundle module is imported, so it must be set before the plugin loads it):
+
+    DSV41_VLLM_INTERLEAVE=1        # supports_chunked_prefill + interleaved prefill; default OFF (the older whole-batch / re-prefill behaviour)
+    DSV41_PREFILL_UP=1             # prefill slots per mesh row (1: 4 prompts per replay, one per mesh row); default = users per row
+    DSV41_VLLM_CHUNK=512           # tokens per user per prefill window (multiple of 128)
+    DSV41_VLLM_S_PAD=<longest prompt rounded up to the chunk>   # fixed trace shape; a longer prompt re-captures the traces (and recomputes the prompts in flight)
+    vLLM: --max-num-batched-tokens 2048 (= 4 mesh rows x chunk) --long-prefill-token-threshold 512 (= chunk) --enable-chunked-prefill, block_size 128
+
+Every prefill step of the plugin then carries up to 4 prompt chunks (one per mesh row) that share one replay (`Up` x `chunk` row-tokens = chunk x 1.1 ms/row-token x layers
+fraction), the plugin's decode-interleave policy (`decode_interleave_prefill_steps` / `decode_interleave_decode_steps`) alternates decode steps in between.
+
+## 4. Limits
+
+* Chunks must end on a multiple of the model chunk (`DSV41_VLLM_CHUNK`) to be resumable; any other continuation is recomputed from position 0 (always correct, never fast).
+* A chunk step costs one replay of Up x chunk row-tokens (measured below) plus ~0.1 s of host work (Engram gather, uploads, head read-back, key export) whatever the number of
+  decoding users; the decode steps of the running requests wait for it (the plugin never mixes prefill and decode in a step).
+* More concurrent prompts in progress than Up per mesh row: the surplus is evicted / recomputed (correct, slow); the adapter spreads new requests over the rows.
+* The index keys (decode indexer on, contexts > 512 / 1024) are exported per window end (the last window of every call), so a call that ends mid-prompt exports keys that the
+  next call rewrites.
+* S_pad is fixed per process (DRAM): a longer prompt than the traced S_pad re-captures the prefill trace (and drops the decode trace).
