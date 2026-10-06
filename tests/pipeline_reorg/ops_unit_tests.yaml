@@ -545,6 +545,50 @@
   budget_type: e2e
   category: dp_op_unit_tests
 
+- name: CI probe - test_reduce (LB)
+  cmd: pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_reduce.py -vvv --tb=short -m "not extended_model"
+  skus:
+    bh_loudbox:
+      timeout: 10
+  owner_id: U0976495SLU # Nikola Ostojic
+  team: models
+  budget_type: e2e
+  category: ci_probe_prune_params
+
+- name: CI probe - test_reduce (QB2)
+  cmd: pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_reduce.py -vvv --tb=short
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U0976495SLU # Nikola Ostojic
+  team: models
+  budget_type: e2e
+  category: ci_probe_prune_params
+
+- name: CI probe - grouped_topk + single_routed_expert (blackhole)
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_grouped_topk.py tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_single_routed_expert.py -v -k "not performance" -m "not requires_host_iommu" --timeout=600'
+  skus:
+    bh_p100:
+      timeout: 30
+    bh_p150b_civ2:
+      timeout: 30
+  owner_id: U0976495SLU # Nikola Ostojic
+  team: models
+  budget_type: unit
+  category: ci_probe_prune_params
+
+- name: CI probe - single_routed_expert (wormhole)
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_single_routed_expert.py -v -k "not performance" -m "not requires_host_iommu" --timeout=600'
+  skus:
+    wh_n150_civ2:
+      timeout: 30
+    wh_n300_civ2:
+      timeout: 30
+  owner_id: U0976495SLU # Nikola Ostojic
+  team: models
+  budget_type: unit
+  category: ci_probe_prune_params
+
 - name: Disaggregated prefill op unit tests (QB2)
   cmd: |
     exit_code=0

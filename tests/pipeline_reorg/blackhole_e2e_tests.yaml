@@ -212,14 +212,13 @@
   cmd: |
     exit_code=0
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/huggingface/hub/models--deepseek-ai--DeepSeek-R1-0528
-    # Dispatch/combine perf remains disabled pending issue #47287.
-    pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py::test_deepseek_v3_moe_perf_loudbox -vvv --tb=short || exit_code=$?
+    # CI probe: only the block-loop rows the parameter-pruning PR touched (accuracy selector + perf wrapper).
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "fabric2d-mesh-2x4-2link and layer0 and device" -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_2x4" -vvv --tb=short || exit_code=$?
-    KDA_PERF_SKU=bh_loudbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP2xTP4" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 35
+      timeout: 60
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: models
   budget_type: e2e
