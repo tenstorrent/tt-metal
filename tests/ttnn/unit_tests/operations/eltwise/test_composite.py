@@ -270,3 +270,42 @@ def test_unary_composite_clamp_int_ttnn(input_shapes, min_val, max_val, device, 
         golden_tensor = golden_function(in_data1, min, max)
         comp_pass = compare_pcc([output_tensor], [golden_tensor])
         assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    ((torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)),
+    ids=("float32", "bfloat16"),
+)
+@pytest.mark.parametrize("fill", (float("-inf"), float("inf")), ids=("neg_inf", "pos_inf"))
+@pytest.mark.parametrize("diagonal", (0, 1, -1))
+@pytest.mark.parametrize("op", ("tril", "triu"))
+def test_unary_composite_trilu_non_finite_ttnn(input_shapes, torch_dtype, ttnn_dtype, fill, diagonal, op, device):
+    # The masked-out triangle is defined as zero. For float32 the old multiply ran on the SFPU
+    # with fp32 dest, where inf * 0 is NaN, so the masked triangle came back NaN. bfloat16 is
+    # kept as a regression guard: its SFPU multiply already forces x * 0 = 0, so it passed
+    # before the fix and must keep passing.
+    #
+    # The other tril/triu tests never feed a non-finite value: test_unary_category6_bfloat16.py
+    # samples bf16 without special values, and test_tril_triu_integer_dtype.py draws its float
+    # cases from [-4, 4) and its integer cases from arange.
+    in_data = torch.full(input_shapes, fill, dtype=torch_dtype)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = getattr(ttnn, op)(input_tensor, diagonal=diagonal)
+    assert output.dtype == ttnn_dtype, f"{op} on {ttnn_dtype} returned {output.dtype}"
+
+    output_tensor = ttnn.to_torch(output)
+    # torch directly, with diagonal positional: the generic golden wrapper drops keyword args.
+    golden_tensor = getattr(torch, op)(in_data, diagonal)
+
+    n_nan = int(torch.isnan(output_tensor).sum())
+    assert n_nan == 0, f"{op}({fill}) [{torch_dtype}] returned {n_nan} NaN of {output_tensor.numel()}"
+    assert torch.equal(output_tensor, golden_tensor)
