@@ -21,10 +21,10 @@ namespace ttnn::experimental::prim {
 // Mode selector for the moe_compute op.
 // - `FullCcl` runs the production multi-device pipeline (matmul + fused
 //   selective_reduce_combine over fabric). Requires a cluster_axis of extent > 1; CCL options apply.
-// - `FullLocal` runs independent fused pipelines (matmul + local combine) with no
+// - `SingleDevice` runs independent fused pipelines (matmul + local combine) with no
 //   CCL/fabric (local_combine=true). It supports 1x1 and a degenerate axis of a 1xN/Nx1 mesh.
 //   Returns 6 tensors like FullCcl; a caller using EP across the other axis reduces the partials.
-// - `LocalOutput` runs on a cluster_axis of extent 1 (a 1x1 mesh with an explicit axis, or axis
+// - `SingleCluster` runs on a cluster_axis of extent 1 (a 1x1 mesh with an explicit axis, or axis
 //   0 of a 1xN expert-parallel mesh): there is nothing to combine, so no combine kernels are
 //   built and moe_compute's own writer (dm1) writes each expert's token rows straight into the
 //   final [k, T, H] row-major output (one token row per page: INTERLEAVED or HEIGHT_SHARDED,
@@ -36,7 +36,7 @@ namespace ttnn::experimental::prim {
 //   `combine_params` only describes the output (k, tokens, hidden, memory config, axis).
 // - `ComputeOnly` bypasses the combine path: no combine cores allocated, no fabric setup,
 //   no global semaphores; op emits 5 tensors instead of 6 (matmul_output is the final output).
-enum class MoEComputePath : uint8_t { FullCcl = 0, FullLocal = 2, ComputeOnly = 1, LocalOutput = 3 };
+enum class MoEComputePath : uint8_t { FullCcl = 0, SingleDevice = 2, ComputeOnly = 1, SingleCluster = 3 };
 
 struct MoEComputeParams {
     // MoE compute attributes
@@ -67,13 +67,13 @@ struct MoEComputeParams {
     ttnn::experimental::prim::detail::MoEActivationFunction activation_type =
         ttnn::experimental::prim::detail::MoEActivationFunction::SILU;  // Default to SILU
 
-    // LocalOutput only: dm1 writes the rows of the experts this coordinate does not own as zero before its own
+    // SingleCluster only: dm1 writes the rows of the experts this coordinate does not own as zero before its own
     // rows (the "every row is what this op wrote" contract). Off, those rows keep the output buffer's previous
     // contents; a caller whose buffer is zero at allocation and only ever holds finite expert outputs, and whose
     // reduce multiplies unowned slots by an exact 0, skips k x T row writes per call.
     bool zero_fill_non_owned_rows = true;
 
-    // LocalOutput only. 0: today's ring (the weight CB holds 3 blocks, dm0 re-streams an expert's slice from DRAM
+    // SingleCluster only. 0: today's ring (the weight CB holds 3 blocks, dm0 re-streams an expert's slice from DRAM
     // for every 32-token chunk). 1: the replay ring: the weight CB holds one whole expert slice, dm0 reads it once
     // per expert and re-presents it to compute for every further chunk without moving a byte. The compute kernel
     // and its arithmetic are the same, so the pages are the same. Values 2 and 3 distribute chunks across that

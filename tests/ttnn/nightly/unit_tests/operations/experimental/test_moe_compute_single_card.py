@@ -12,7 +12,7 @@ non-owned rows are zero; the mesh_device fixture skips them on a single card.
 This test exercises both paths of `ttnn.experimental.moe_compute` on a single device:
   - `compute_only=True`: bypasses the fused selective_reduce_combine stage entirely.
     Returns 5 tensors; matmul_output (slot 4) is the final output.
-  - `compute_only=False` (FullLocal): runs the fused local combine stage without CCL/fabric.
+  - `compute_only=False` (SingleDevice): runs the fused local combine stage without CCL/fabric.
     Returns 6 tensors; combine_output (slot 5) is the final output.
 
 It is the hermetic dev/regression net for the MoE compute kernels (tilize + matmul +
@@ -23,7 +23,7 @@ Validation points (all using the 6U helpers verbatim — no logic duplication):
   - Output 1 (expert_activation)
   - Output 2 (e_t)
   - Output 4 (matmul_output) — final output in compute_only mode
-  - Output 5 (combine_output) — final output in FullLocal mode, validated only when
+  - Output 5 (combine_output) — final output in SingleDevice mode, validated only when
     compute_only=False
 """
 
@@ -179,7 +179,7 @@ def _run_moe_compute_single_card_test(
 ):
     """
     Single-card MoE compute test body. The op is called with cluster_axis=op_cluster_axis:
-    None (the 1x1 FullLocal path, fused local combine) or 0, an axis of extent 1 on every mesh
+    None (the 1x1 SingleDevice path, fused local combine) or 0, an axis of extent 1 on every mesh
     shape used here. With an explicit axis the op takes its local output path: no combine
     kernels, dm1 writes the final [k, T, H] tensor directly, and the fabric is never consulted
     (this fixture never enables one).
@@ -486,7 +486,7 @@ def _run_moe_compute_single_card_test(
             optional_cross_device_semaphore=ttnn.create_global_semaphore(mesh_device, combine_core_range_set, 0),
         )
     else:
-        # cluster_axis=None: required for compute_only and for the implicit 1x1 FullLocal call,
+        # cluster_axis=None: required for compute_only and for the implicit 1x1 SingleDevice call,
         # and topology/num_links/mux/semaphore must be None there. cluster_axis=0 names an axis
         # of extent 1 (1x1 or 1xN): the fabric path with no neighbours, run as a local combine at
         # every mesh coordinate; the CCL arguments may be None.
@@ -599,7 +599,7 @@ def _run_moe_compute_single_card_test(
     # ===================================================================
     # TRIPWIRE: output count must match the mode.
     # - compute_only=True: 5 tensors (matmul_output is the final output, no combine).
-    # - compute_only=False (FullLocal): 6 tensors (slot 5 = combine output).
+    # - compute_only=False (SingleDevice): 6 tensors (slot 5 = combine output).
     # ===================================================================
     expected_n = 5 if compute_only else 6
     assert (
@@ -624,7 +624,7 @@ def _run_moe_compute_single_card_test(
             e_t_output_tensor,
             tilize_output_tensor,  # slot 3
             matmul_output_tensor,  # slot 4
-            combine_output_tensor,  # slot 5 -- final output in FullLocal
+            combine_output_tensor,  # slot 5 -- final output in SingleDevice
         ) = outputs
 
     # Move outputs to DRAM for validation (host readback).
@@ -766,7 +766,7 @@ def _run_moe_compute_single_card_test(
         )
 
         # Exercise the cached-program path with a fresh optional output tensor. This catches stale
-        # FullLocal combine runtime arguments, especially output addresses patched on cache hit.
+        # SingleDevice combine runtime arguments, especially output addresses patched on cache hit.
         deallocate_l1_moe_compute_outputs(outputs)
         ttnn.deallocate(tt_combine_output_tensor)
         ttnn.synchronize_device(mesh_device)
@@ -1248,7 +1248,7 @@ def test_moe_compute_single_card_nontile_tokens_sweep(mesh_device, mesh_shape, c
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_single_card_full_local_b1(mesh_device, mesh_shape):
-    """Regression for tt-metal#52371: B=1 dense token-map stride in FullLocal mode."""
+    """Regression for tt-metal#52371: B=1 dense token-map stride in SingleDevice mode."""
     hidden_size = 2048
     ring_n = effective_matmul_ring_size(mesh_device)
     _run_moe_compute_single_card_test(

@@ -55,7 +55,7 @@ struct MoEComputeMeshWorkloadFactory {
         // Combine global semaphores (empty in ComputeOnly mode)
         std::vector<GlobalSemaphore> combine_global_semaphores;
 
-        // Path used to build this workload (FullCcl/FullLocal = combine kernels built; ComputeOnly = bypassed).
+        // Path used to build this workload (FullCcl/SingleDevice = combine kernels built; ComputeOnly = bypassed).
         MoEComputePath path = MoEComputePath::FullCcl;
 
         // The ring kernels' runtime-argument count: 12 leading args, dm0's bank table, and (LocalOutput) the two

@@ -406,7 +406,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     using namespace tt::tt_fabric;
     using namespace ttnn::ccl;
 
-    // 0 when the caller has no semaphore (fused moe_compute FullLocal path: the writer
+    // 0 when the caller has no semaphore (fused moe_compute SingleDevice path: the writer
     // compiles out all init/final barrier handling under LOCAL_COMBINE).
     const uint32_t init_semaphore_addr = init_semaphore.has_value() ? init_semaphore->address() : 0;
     const uint32_t cross_device_semaphore_addr =

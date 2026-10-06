@@ -361,7 +361,7 @@ void kernel_main() {
     // When compute_only=1, the fused selective_reduce_combine path is bypassed and no combine
     // kernels run on combine cores. Skip the metadata-ready signal to combine cores.
     constexpr bool compute_only = get_named_compile_time_arg_val("compute_only") == 1;
-    // When local_output=1 (moe_compute LocalOutput) there are no combine kernels either: no activation rows are
+    // When local_output=1 (moe_compute SingleCluster) there are no combine kernels either: no activation rows are
     // built and the expert -> token lists are packed (moe_ring::token_list) from per-RISC pair lists (NCRISC c_9,
     // BRISC c_10; the non-drain cores' lists staged on the drain in c_12) by the drain, which publishes the page
     // before releasing the matmul cores: dm1 reads it for its output rows.
