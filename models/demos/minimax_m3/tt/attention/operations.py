@@ -55,16 +55,17 @@ def apply_rope(tensor, rope_mats, transformation_mat, is_decode_mode: bool, kv_a
     head and passes the rest through unchanged. We detect the rotary width from
     the cos matrix (``rope_mats[0]`` is built at rotary_dim width in
     model.create_rope_setup). When rotary_dim == head_dim this is a plain full
-    rotation (the rotary_embedding_llama op always rotates its full last dim, so
-    we slice the head into rotate / pass-through parts ourselves).
+    rotation.
 
-    Two inner ops (the partial-rotary slice/concat wrapper is identical for both):
+    Two inner ops:
       * default (``kv_actual_global`` is None): ``rotary_embedding_llama`` with a per-chunk cos/sin
-        already sliced to this chunk's positions (decode + the non-cache prefill paths).
+        already sliced to this chunk's positions (decode + the non-cache prefill paths). It always
+        rotates its full last dim, so a partial rotary slices the head into rotate / pass-through parts.
       * indexed (``kv_actual_global`` set): ``rotary_embedding_indexed`` — ``rope_mats`` carry the
         WHOLE-cache, block-cyclic-reordered, SP-sharded cos/sin (built once), and the op derives this
         chunk's per-chip start row on-device from ``kv_actual_global`` + the device's ``cluster_axis``
-        coordinate (same block-cyclic math as the KV-cache writer). No per-chunk host reshard.
+        coordinate (same block-cyclic math as the KV-cache writer). No per-chunk host reshard. The op
+        rotates the first ``rotary_dim`` channels and copies the rest itself.
 
     Args:
         tensor: Input tensor (Q or K), shape [..., head_dim]
@@ -80,16 +81,18 @@ def apply_rope(tensor, rope_mats, transformation_mat, is_decode_mode: bool, kv_a
     rotary_dim = rope_mats[0].shape[-1]
     head_dim = tensor.shape[-1]
 
+    if kv_actual_global is not None:
+        return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+            tensor,
+            rope_mats[0],
+            rope_mats[1],
+            transformation_mat,
+            kv_actual_global=kv_actual_global,
+            cluster_axis=cluster_axis,
+            rotary_dim=rotary_dim if rotary_dim < head_dim else None,
+        )
+
     def _rotate(t):
-        if kv_actual_global is not None:
-            return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
-                t,
-                rope_mats[0],
-                rope_mats[1],
-                transformation_mat,
-                kv_actual_global=kv_actual_global,
-                cluster_axis=cluster_axis,
-            )
         return ttnn.experimental.rotary_embedding_llama(
             t, rope_mats[0], rope_mats[1], transformation_mat, is_decode_mode=is_decode_mode
         )
