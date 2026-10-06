@@ -16,7 +16,7 @@
    "out_dtype": "bfloat8_b",
    "precomputed_adaln": true,
    "profile": "bf8_weights_bf8_out",
-   "profile_note": "this block records the STAGE 05 storage sweep, whose winner was bf8_weights_bf8_out. Stage 06 then changed the ARITHMETIC (fp32 destination accumulate off) on the same storage, which is a different profile NAME for the same cached tensorbins, so the served p150.dit_quant_profile is bf8_weights_bf8_out_nofp32acc and this block's `profile` is not the served one. Flagged by the third stage-review as an internal contradiction; it is a provenance-versus-served distinction and it is now labelled rather than silently divergent.",
+   "profile_note": "this block records the STAGE 05 storage sweep, whose winner was bf8_weights_bf8_out. Stage 06 then changed the ARITHMETIC (fp32 destination accumulate off) on the same storage, which is a different profile NAME for the same cached tensorbins, so the served p150.dit_quant_profile is bf8_weights_bf8_out_nofp32acc and this block's `profile` is not the served one. The two names are a provenance-versus-served distinction rather than a contradiction: this block records what the storage sweep chose, and p150.dit_quant_profile records what the server actually loads.",
    "qkv_dtype": "bfloat8_b",
    "why": "the only alternative measured (bf4_ff) is not faster and costs CLIP; see rejected[]"
   },
