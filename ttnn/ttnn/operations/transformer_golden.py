@@ -15,7 +15,6 @@ from typing import Optional
 
 from ttnn.decorators import set_golden_comparison_config
 
-
 # Head dims (k_dim, v_dim) are supplied by each test, not baked in here. MASKED_INDEX is the op's sentinel.
 MASKED_INDEX = 0xFFFFFFFF  # sentinel: a masked slot (scores -inf, contributes 0); a contiguous tail per row
 SENTINEL = -1  # masked/invalid block id; contiguous tail per (group, query) row
@@ -1493,40 +1492,52 @@ def recurrent_gated_delta_rule(
     initial_state=None,
     output_final_state: bool = False,
     use_qk_l2norm: bool = False,
+    *,
+    output_per_token_state: bool = False,
+    dtype=None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
-    Token-by-token recurrent gated delta rule. Used for decode (T=1).
+    Token-by-token recurrent gated delta rule (FLA's naive_recurrent_gated_delta_rule, same argument order).
+    Used for decode (T = 1) and speculative verify (T = K + 1).
 
     For each timestep t:
-      1. Decay the state:  h = h * exp(g_t)
+      1. Decay the state:  h = h * exp(g_t)      (g_t a scalar per head, or a vector over K when g has rank 4: KDA)
       2. Read from state:  v_read = sum_k(h * k_t)
       3. Compute delta:    delta = (v_t - v_read) * beta_t
       4. Write to state:   h = h + outer(k_t, delta)
-      5. Query state:      o_t = h @ q_t
+      5. Query state:      o_t = h @ q_t          (the post-update state)
 
     Args:
-        q: [B, T, H, K] query
+        q: [B, T, H, K] query; H may divide HV (GQA: value head hv reads key head hv // (HV // H))
         k: [B, T, H, K] key
-        v: [B, T, H, V] value
-        beta: [B, T, H] write strength (sigmoid output)
-        g: [B, T, H] log-space decay gate
-        scale: attention scale factor, defaults to 1/sqrt(K)
-        initial_state: [B, H, K, V] previous recurrent state
+        v: [B, T, HV, V] value
+        beta: [B, T, HV] write strength (sigmoid output)
+        g: [B, T, HV] log-space decay gate, or [B, T, HV, K] per-key log decays (KDA)
+        scale: query scale, defaults to 1/sqrt(K); applied after the optional L2 norm
+        initial_state: [B, HV, K, V] previous recurrent state
         output_final_state: whether to return the final state
-        use_qk_l2norm: apply L2 normalization to q, k
+        use_qk_l2norm: apply l2_norm (eps 1e-6 inside the root) to q and k, in the compute dtype
+        output_per_token_state: return the state after every token, [B, T, HV, K, V], instead of the final state
+        dtype: compute dtype, torch.float32 by default (torch.float64 for a high-precision reference)
 
     Returns:
-        output: [B, T, H, V]
-        final_state: [B, H, K, V] or None
+        output: [B, T, HV, V]
+        state: [B, HV, K, V] (output_final_state), [B, T, HV, K, V] (output_per_token_state), else None
     """
     import torch
 
+    dtype = torch.float32 if dtype is None else dtype
     if use_qk_l2norm:
-        q = l2_norm(q, dim=-1)
-        k = l2_norm(k, dim=-1)
+        q = l2_norm(q.to(dtype), dim=-1)
+        k = l2_norm(k.to(dtype), dim=-1)
+    num_value_heads = v.shape[2]
+    if q.shape[2] != num_value_heads:
+        groups = num_value_heads // q.shape[2]
+        q = q.repeat_interleave(groups, dim=2)
+        k = k.repeat_interleave(groups, dim=2)
 
-    # Transpose to [B, H, T, D] for head-first processing
-    q, k, v, beta, g = [x.transpose(1, 2).contiguous().to(torch.float32) for x in (q, k, v, beta, g)]
+    # Transpose to [B, H, T, ...] for head-first processing
+    q, k, v, beta, g = [x.transpose(1, 2).contiguous().to(dtype) for x in (q, k, v, beta, g)]
 
     B, H, T, K = k.shape
     V = v.shape[-1]
@@ -1535,10 +1546,12 @@ def recurrent_gated_delta_rule(
         scale = K**-0.5
     q = q * scale
 
-    o = torch.zeros(B, H, T, V, device=v.device, dtype=v.dtype)
-    h = torch.zeros(B, H, K, V, device=v.device, dtype=v.dtype)
+    o = torch.zeros(B, H, T, V, device=v.device, dtype=dtype)
+    h = torch.zeros(B, H, K, V, device=v.device, dtype=dtype)
     if initial_state is not None:
-        h = initial_state.to(torch.float32)
+        h = initial_state.to(dtype)
+    states = torch.zeros(B, T, H, K, V, device=v.device, dtype=dtype) if output_per_token_state else None
+    per_key_decay = g.dim() == 4  # [B, H, T, K]
 
     for i in range(T):
         b_q = q[:, :, i]  # [B, H, K]
@@ -1547,7 +1560,8 @@ def recurrent_gated_delta_rule(
         b_beta = beta[:, :, i]  # [B, H]
 
         # 1. Decay the state
-        h = h.clone() * g[:, :, i].exp()[..., None, None]
+        decay = g[:, :, i].exp()
+        h = h.clone() * (decay[..., :, None] if per_key_decay else decay[..., None, None])
 
         # 2. Read from state: contract over K dimension
         b_v = b_v - (h.clone() * b_k[..., None]).sum(-2)
@@ -1560,12 +1574,19 @@ def recurrent_gated_delta_rule(
 
         # 5. Query the state
         o[:, :, i] = torch.einsum("bhd,bhdm->bhm", b_q, h)
+        if states is not None:
+            states[:, i] = h
 
-    final_state = h if output_final_state else None
+    if output_per_token_state:
+        state = states
+    elif output_final_state:
+        state = h
+    else:
+        state = None
 
     # Transpose back to [B, T, H, V]
     o = o.transpose(1, 2).contiguous()
-    return o, final_state
+    return o, state
 
 
 def chunk_gated_delta_rule(
@@ -1738,6 +1759,36 @@ def chunk_gated_delta_rule_golden(
     if output_head_major:
         output = output.permute(0, 2, 1, 3).reshape(-1, output.shape[1], output.shape[-1])
     return output, final_state
+
+
+def fused_recurrent_gated_delta_rule_golden(
+    q,
+    k,
+    v,
+    g,
+    beta,
+    *,
+    scale=None,
+    initial_state=None,
+    output_final_state=False,
+    output_per_token_state=False,
+    use_qk_l2norm=False,
+    **_,
+):
+    """Golden of ttnn.transformer.fused_recurrent_gated_delta_rule: the op's argument order (q, k, v, g, beta) over the
+    FLA-ordered recurrence (q, k, v, beta, g). Returns (o, state); state is None unless a state output is requested."""
+    return recurrent_gated_delta_rule(
+        q,
+        k,
+        v,
+        beta,
+        g,
+        scale=scale,
+        initial_state=initial_state,
+        output_final_state=output_final_state or output_per_token_state,
+        use_qk_l2norm=use_qk_l2norm,
+        output_per_token_state=output_per_token_state,
+    )
 
 
 def gated_delta_attn_seq_golden(
