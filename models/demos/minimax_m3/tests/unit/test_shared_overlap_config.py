@@ -333,7 +333,7 @@ def test_forward_overlap_per_call(monkeypatch):
 @pytest.mark.parametrize("fail_in", ["dispatch", "shared", "load"])
 def test_forward_window_clears_on_error(monkeypatch, fail_in, expect_error):
     """Once load() succeeded, clear() runs exactly once even when dispatch or the shared expert raises, and no
-    keep-alive tensor is freed before it."""
+    keep-alive tensor is freed before it; all of them are freed after it."""
     moe, log = _moe_with_recorder(monkeypatch, overlap=True)
 
     def boom(*a, **k):
@@ -362,4 +362,6 @@ def test_forward_window_clears_on_error(monkeypatch, fail_in, expect_error):
         (cl,) = _names(log, "clear")
         assert lo < _names(log, fail_in)[0] < cl
         assert not any(e[0] == "free" for e in log[lo:cl])
+        freed = [e[1] for e in log[cl:] if e[0] == "free"]
+        assert freed == (["x", "shared_act"] if fail_in == "shared" else ["x"]), freed
     assert not _names(log, "experts")

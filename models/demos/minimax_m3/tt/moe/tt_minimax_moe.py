@@ -303,11 +303,12 @@ class TtMiniMaxMoE(LightweightModule):
                 with zone("shared_expert"):
                     shared_partial = shared_fn(overlap.shared_sub_device if overlap is not None else None, keep_alive)
         finally:
+            # The join point: clearing the manager waits on both sub-devices' workers before resetting.
             if loaded:
                 overlap.clear()
-        if shared_fn is not None:
-            for t in keep_alive:
-                ttnn.deallocate(t)
+            if shared_fn is not None:
+                for t in keep_alive:
+                    ttnn.deallocate(t)
 
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
