@@ -1851,15 +1851,30 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         if do_log:
             tok_s_u = self._perf_decode_tokens / self._perf_decode_s if self._perf_decode_s > 0 else 0.0
             ms_tok = (self._perf_decode_s / self._perf_decode_tokens) * 1000.0 if self._perf_decode_tokens else 0.0
-            logger.info(
-                "[gemma4-vllm-perf] decode tok/s/user={:.2f} | ms/token={:.2f} | "
-                "tokens={} | bounded_sliding={} | decode_batch={}",
-                tok_s_u,
-                ms_tok,
-                self._perf_decode_tokens,
-                self._bounded_sliding_kv_cache,
-                getattr(self, "_prev_decode_batch", None),
-            )
+            # Without the device sync the timer only covers the host's submit of
+            # the step (async decode returns before the device finishes), which
+            # reads like a 10x throughput; it is not a decode rate. Keep that
+            # variant at DEBUG and say so; the synced measurement stays at INFO.
+            if should_sync:
+                logger.info(
+                    "[gemma4-vllm-perf] decode tok/s/user={:.2f} | ms/token={:.2f} | "
+                    "tokens={} | bounded_sliding={} | decode_batch={}",
+                    tok_s_u,
+                    ms_tok,
+                    self._perf_decode_tokens,
+                    self._bounded_sliding_kv_cache,
+                    getattr(self, "_prev_decode_batch", None),
+                )
+            else:
+                logger.debug(
+                    "[gemma4-vllm-perf] decode submit (host time, not a decode rate; "
+                    "GEMMA4_VLLM_DECODE_SYNC_EVERY=log measures) ms/submit={:.2f} | "
+                    "tokens={} | bounded_sliding={} | decode_batch={}",
+                    ms_tok,
+                    self._perf_decode_tokens,
+                    self._bounded_sliding_kv_cache,
+                    getattr(self, "_prev_decode_batch", None),
+                )
         return out
 
     @property
