@@ -89,8 +89,8 @@ inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
 }
 
 /**
- * @brief Record the replay body for one streamed tile of a matmul row: the THCON wait of a narrow advance, the UNPACR
- *        group, the base address advance of that unpacker and the NOP that covers the config write.
+ * @brief Record the replay body for one streamed tile of a matmul row: the UNPACR group, the base address advance of that
+ *        unpacker and the NOP that covers the config write.
  *
  * A narrow operand (8 bits per datum or less) advances with one CFGSHIFTMASK that adds SCRATCH_SEC0_val to CFG_REG; the
  * other formats read CFG_REG into a GPR, add STRIDE_GPR and write it back, as before this change. Under kernel broadcast
@@ -106,10 +106,6 @@ inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
 template <std::uint32_t SRC, std::uint32_t CFG_REG, std::uint32_t STRIDE_GPR, bool ADVANCE>
 inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face, const bool narrow)
 {
-    if (ADVANCE && narrow)
-    {
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON); // THCON writes the stride GPR, and on Blackhole a WRCFG can pass that write
-    }
     if (partial_face)
     {
         TTI_UNPACR_NOP(SRC, 0, 0, 0 /*Set Dvalid*/, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
@@ -137,6 +133,7 @@ inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face, con
     {
         // SCRATCH_SEC0_val = STRIDE_GPR, then CFG_REG += SCRATCH_SEC0_val (0b011 = add, 32-bit mask, scratch_sel 0): the stride is
         // read from the GPR every tile as before, without the RDCFG and ADDDMAREG round trip
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON); // THCON writes the stride GPR, and on Blackhole a WRCFG can pass that write
         TTI_WRCFG(STRIDE_GPR, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
         TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0, CFG_REG);
     }
@@ -178,7 +175,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
     const bool stream_partial_face = reuse_a ? unpA_partial_face : unpB_partial_face;
     LLK_ASSERT_BLOCK(unpack_matmul_init_reuse_a = reuse_a);
     // two copies of the streamed tile body, one per config context: the UNPACR group (4 instructions for a partial face,
-    // 1 otherwise), the address advance and its THCON wait (3 instructions for a narrow format, 4 otherwise) and the NOP
+    // 1 otherwise), the address advance (3 instructions for a narrow format, 4 otherwise) and the NOP
     const std::uint32_t replay_buf_run_len  = (stream_partial_face ? 4 : 1) + (stream_narrow ? 3 : 4) + 1;
     const std::uint32_t replay_buf_prog_len = 2 * replay_buf_run_len;
 
