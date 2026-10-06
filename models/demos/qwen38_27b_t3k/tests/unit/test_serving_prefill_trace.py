@@ -71,6 +71,8 @@ class ServingPrefillTraceTests(unittest.TestCase):
                 "bind_cache",
                 "_prefill_trace_logits",
                 "reset_recurrent_slots",
+                "_begin_prefix",
+                "_end_prefix",
             ],
             self.ops,
         )
@@ -79,6 +81,7 @@ class ServingPrefillTraceTests(unittest.TestCase):
             cache=SimpleNamespace(batch_size=4, capacity=8192, num_pages=1024, layers=[]),
             model=SimpleNamespace(config=SimpleNamespace(vocab_size=250000)),
             page_table=SimpleNamespace(shape=(4, 256)),
+            _slot_prefix_len=[0] * 4,
             tokens=object(),
             positions=object(),
             rope_indices=object(),
@@ -96,6 +99,8 @@ class ServingPrefillTraceTests(unittest.TestCase):
         self.gen._refresh_table = lambda table: self.events.append(("table", table))
         self.gen._sampling_step = lambda output: self.events.append(("sample", output))
         self.gen._release_traces = MethodType(self.methods["_release_traces"], self.gen)
+        self.gen._begin_prefix = MethodType(self.methods["_begin_prefix"], self.gen)
+        self.gen._end_prefix = MethodType(self.methods["_end_prefix"], self.gen)
         self.gen._prepare_serving_prefill_sampling = MethodType(
             self.methods["_prepare_serving_prefill_sampling"], self.gen
         )
@@ -116,6 +121,11 @@ class ServingPrefillTraceTests(unittest.TestCase):
 
     def request(self, tokens=None, *, ends=(3,), starts=(0,), slots=(0,), cache=None):
         tokens = torch.arange(max(ends)).repeat(len(ends), 1) if tokens is None else tokens
+        # A row with a nonzero start is a later chunk of a request that already advanced this
+        # slot, so the slot has to hold that prefix for the continuity gate to see a valid chunk.
+        for start, slot in zip(starts, slots):
+            if 0 <= slot < len(self.gen._slot_prefix_len):
+                self.gen._slot_prefix_len[slot] = start
         return self.serving(
             tokens,
             page_table=self.gen.page_table,
