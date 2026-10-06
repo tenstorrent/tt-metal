@@ -344,7 +344,7 @@ public:
     static constexpr size_t WAKE_FANOUT = 4;
 
     ParallelJob(const std::function<void(size_t)>& fn, size_t num_calls) :
-        fn_(fn), claims_(num_calls), executor_of_call_(num_calls) {
+        fn_(fn), claims_(num_calls), participant_of_call_(num_calls) {
         remaining_.add(static_cast<int64_t>(num_calls));
     }
 
@@ -355,8 +355,9 @@ public:
     ~ParallelJob() = default;
 
     void assign(size_t call, NumaAwareExecutor* executor) {
-        executor_of_call_[call] = executor;
-        if (std::find(participants_.begin(), participants_.end(), executor) == participants_.end()) {
+        auto participant = std::find(participants_.begin(), participants_.end(), executor);
+        participant_of_call_[call] = participant - participants_.begin();
+        if (participant == participants_.end()) {
             participants_.push_back(executor);
         }
     }
@@ -371,28 +372,30 @@ public:
         if (!remaining_.finished()) {
             const size_t node = std::find(participants_.begin(), participants_.end(), executor) - participants_.begin();
             for_each_child(node, [this](size_t child) { wake_subtree(child); });
-            for (size_t call = 0; call < executor_of_call_.size(); call++) {
-                if (executor_of_call_[call] == executor) {
-                    run_if_unclaimed(call);
-                }
-            }
+            run_if_unclaimed(node);
         }
         release();
     }
 
-    void run_if_unclaimed(size_t call) noexcept {
-        if (claims_[call].claimed.exchange(true, std::memory_order_acq_rel)) {
+    // Runs all calls of participant `node` in order, so that calls for one worker never overlap.
+    void run_if_unclaimed(size_t node) noexcept {
+        if (claims_[node].claimed.exchange(true, std::memory_order_acq_rel)) {
             return;
         }
-        try {
-            fn_(call);
-        } catch (...) {
-            std::lock_guard lock(exception_mutex_);
-            if (!exception_) {
-                exception_ = std::current_exception();
+        for (size_t call = 0; call < participant_of_call_.size(); call++) {
+            if (participant_of_call_[call] != node) {
+                continue;
             }
+            try {
+                fn_(call);
+            } catch (...) {
+                std::lock_guard lock(exception_mutex_);
+                if (!exception_) {
+                    exception_ = std::current_exception();
+                }
+            }
+            remaining_.done();
         }
-        remaining_.done();
     }
 
     // Caller: waits for every call, returns the first exception, and drops the caller's reference.
@@ -419,14 +422,11 @@ private:
         }
     }
 
-    // Wakes `node`, or its children in its place if the caller already claimed all of its calls.
+    // Wakes `node`, or its children in its place if the caller already claimed it.
     void wake_subtree(size_t node) noexcept {
-        for (size_t call = 0; call < executor_of_call_.size(); call++) {
-            if (executor_of_call_[call] == participants_[node] &&
-                !claims_[call].claimed.load(std::memory_order_relaxed)) {
-                participants_[node]->wake();
-                return;
-            }
+        if (!claims_[node].claimed.load(std::memory_order_relaxed)) {
+            participants_[node]->wake();
+            return;
         }
         for_each_child(node, [this](size_t child) { wake_subtree(child); });
     }
@@ -437,8 +437,9 @@ private:
 
     // Valid until the caller returns, which happens only after every claimed call has finished.
     const std::function<void(size_t)>& fn_;
+    // Indexed by participant; sized for the worst case of one participant per call.
     std::vector<Claim> claims_;
-    std::vector<NumaAwareExecutor*> executor_of_call_;
+    std::vector<size_t> participant_of_call_;
     // Wake tree in heap order: the caller wakes [0], and [i] wakes [i * WAKE_FANOUT + 1 .. (i + 1) * WAKE_FANOUT].
     std::vector<NumaAwareExecutor*> participants_;
     Completion remaining_;
@@ -573,10 +574,10 @@ public:
         for (size_t position = 1; position < participants.size(); position++) {
             participants[position]->offer(job);
         }
-        // The workers are woken first to last, so take calls from the back. The caller runs every call no worker
-        // has claimed, so the job finishes even if some workers are never woken.
-        for (size_t call = device_ids.size(); call-- > 0;) {
-            job->run_if_unclaimed(call);
+        // The workers are woken first to last, so take participants from the back. The caller runs the calls of
+        // every participant no worker has claimed, so the job finishes even if some workers are never woken.
+        for (size_t node = participants.size(); node-- > 0;) {
+            job->run_if_unclaimed(node);
         }
         if (auto exception = job->finish()) {
             std::rethrow_exception(exception);
