@@ -15,6 +15,7 @@ from types import MethodType, SimpleNamespace
 from unittest.mock import patch
 
 METHODS = (
+    "remap_recurrent_slots",
     "save_slot_state",
     "restore_slot_state",
     "free_slot_state",
@@ -128,6 +129,19 @@ class PrefixSnapshotTests(unittest.TestCase):
         self.assertEqual(first[3], "clone(conv0[0])")
         self.assertEqual(first[1], "conv0[1]")
         self.assertEqual(len(parts), 2 * self.LAYERS)
+
+    def test_a_remap_carries_each_slot_prefix_with_the_row_it_describes(self):
+        # remap_recurrent_slots rebuilds row j from old row order[j]; the length each row stands
+        # for has to travel the same way or the continuity gate judges the wrong request.
+        self.gen._slot_prefix_len = [10, 20, 30, 40]
+        self.gen._release_traces = lambda **kw: None
+        self.gen.remap_recurrent_slots([2, 0, 3, 1])
+        self.assertEqual(self.gen._slot_prefix_len, [30, 10, 40, 20])
+
+    def test_an_identity_remap_leaves_the_prefix_lengths_alone(self):
+        self.gen._slot_prefix_len = [10, 20, 30, 40]
+        self.gen.remap_recurrent_slots([0, 1, 2, 3])
+        self.assertEqual(self.gen._slot_prefix_len, [10, 20, 30, 40])
 
     def test_a_freed_handle_can_no_longer_be_restored(self):
         self.gen._slot_prefix_len[0] = 64
