@@ -20,6 +20,7 @@ enum class DispatchCoreAxis;
 
 namespace distributed {
 class MeshDevice;
+class MeshDeviceImpl;
 }  // namespace distributed
 
 namespace experimental {
@@ -79,8 +80,11 @@ private:
         void operator()(DispatchContext* p) const { delete p; }
     };
     friend struct Deleter;
-    // Internal query used by MeshDeviceImpl (tt_metal/distributed/dispatch_context_internal.hpp); not public API.
-    friend bool is_manual_fast_dispatch_session_active();
+
+    // True between a successful initialize_fast_dispatch and the matching terminate_fast_dispatch.
+    // Not public API: only MeshDeviceImpl reads it, to refuse sub-device manager loads during a session.
+    bool is_fast_dispatch_session_active() const;
+    friend class distributed::MeshDeviceImpl;
 
     // Drops the host-side fast-dispatch state created before the L1 preflight refused, so the
     // mesh is back in Slow Dispatch. Touches Device internals, hence a member.
