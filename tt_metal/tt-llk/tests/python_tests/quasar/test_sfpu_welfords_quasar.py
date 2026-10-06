@@ -85,11 +85,17 @@ class Scenario:
     def validate(self):
         assert self.tile_count % self.block == 0, "tile_count must be whole blocks"
         assert self.final_dst + 1 < self.block, "finalize tiles must fit in one block"
-        assert self.start_row + self.num_rows <= TILE_DIM
+        assert (
+            self.start_row + self.num_rows <= TILE_DIM
+        ), "partial row window [start_row, start_row + num_rows) must fit in one tile"
         if self.save_restore:
-            assert 0 < self.save_after_tiles < self.tile_count
+            assert (
+                0 < self.save_after_tiles < self.tile_count
+            ), "save point must fall strictly inside the tile stream"
             # The save lands in the current block, so both state tiles must already be folded.
-            assert self.state_dst + 1 < self.save_after_tiles % self.block
+            assert (
+                self.state_dst + 1 < self.save_after_tiles % self.block
+            ), "both saved-state tiles must already be folded in the current Dest block"
 
     def final_tile(self):
         """Result tile holding the finalize mean (the variance is the next one)."""

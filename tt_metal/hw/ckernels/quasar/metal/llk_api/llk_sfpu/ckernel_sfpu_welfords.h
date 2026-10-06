@@ -340,7 +340,9 @@ inline void calculate_welfords(
         if (num_rows == 0) {
             return;
         }
-        LLK_ASSERT(start_row + num_rows <= TILE_R_DIM, "welfords: partial row window runs past the tile");
+        LLK_ASSERT(
+            num_rows <= TILE_R_DIM && start_row <= TILE_R_DIM - num_rows,
+            "welfords: partial row window runs past the tile");  // overflow-safe start_row + num_rows <= TILE_R_DIM
         const std::uint32_t end_row = start_row + num_rows;
         std::uint32_t idx = start_idx;
         _calculate_welfords_all_quad_rows_<RECIPROCAL_SIZE>(idx, start_row, end_row, reciprocal_lut);
