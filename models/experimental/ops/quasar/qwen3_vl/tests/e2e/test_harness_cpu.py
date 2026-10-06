@@ -25,6 +25,7 @@ def _opts(**over):
         "--qwen-kv-blocks": None,
         "--qwen-host-ops": "",
         "--qwen-disable-wa": "",
+        "--qwen-allow-uncertified": False,
         "--qwen-quasar-config": False,
         "--qwen-expect-grid": None,
         "--qwen-run-dir": "/tmp/x",
@@ -650,3 +651,91 @@ def test_unshard_linear_workaround_predicate():
     assert not wa.applies((_FakeShardTensor(8, 8, True), w), {})  # full grid: stock behaviour
     assert not wa.applies((_FakeShardTensor(2, 1, False), w), {})  # interleaved input: nothing to do
     assert not wa.applies((_FakeShardTensor(2, 1, True), w), {"program_config": object()})  # explicit config wins
+
+
+def test_uncertified_fallback_refused(monkeypatch, expect_error):
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    monkeypatch.setattr(O, "CERTIFIED", {})
+    s = O.OverrideSession(mesh_device=None, host_ops=("linear",), disable_wa=())
+    with expect_error(RuntimeError, "not certified"):
+        s.install(monkeypatch)
+    assert s.host_ops_active == []
+
+
+def test_unknown_host_op_rejected(monkeypatch, expect_error):
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    s = O.OverrideSession(mesh_device=None, host_ops=("no_such_op",), disable_wa=())
+    with expect_error(KeyError, "no_such_op"):
+        s.install(monkeypatch)
+
+
+def test_host_op_short_and_full_names_and_all():
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    pick = lambda names: [f.target for f in O.OverrideSession(None, names, ())._selected_fallbacks()]
+    assert pick(("linear",)) == ["ttnn.linear"]
+    assert pick(("ttnn.experimental.paged_fill_cache",)) == ["ttnn.experimental.paged_fill_cache"]
+    assert sorted(pick(("all",))) == sorted(O.FALLBACKS)
+
+
+def test_allowed_uncertified_fallback_installs_and_counts(monkeypatch):
+    import ttnn
+
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    monkeypatch.setattr(O, "CERTIFIED", {})
+    monkeypatch.setattr(O, "WORKAROUNDS", [])
+    original = ttnn.linear
+    s = O.OverrideSession(mesh_device=None, host_ops=("linear",), disable_wa=(), allow_uncertified=True)
+    s.install(monkeypatch)
+    assert ttnn.linear is not original and s.host_ops_active == ["ttnn.linear"]
+
+
+def test_hand_rope_matches_rotate_half_definition():
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    x = torch.randn(1, 2, 64, 128)
+    cos, sin = torch.randn(1, 1, 64, 128), torch.randn(1, 1, 64, 128)
+    t = torch.zeros(32, 32)
+    for i in range(0, 32, 2):
+        t[i, i + 1], t[i + 1, i] = 1.0, -1.0
+    out = O.FALLBACKS["ttnn.experimental.rotary_embedding_llama"].torch_fn([x, cos, sin, t.reshape(1, 1, 32, 32)], {})
+    rot = torch.stack([-x[..., 1::2], x[..., 0::2]], dim=-1).reshape(x.shape)
+    assert torch.allclose(out, x * cos + rot * sin, atol=1e-5)
+
+
+def test_hand_paged_update_cache():
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    cache = torch.zeros(4, 2, 32, 8)
+    upd = torch.randn(1, 1, 32, 8)  # [1, batch, kv_heads padded to a tile, head_dim]
+    page_table = torch.tensor([[2, 0, 1, 3]])
+    O.FALLBACKS["ttnn.experimental.paged_update_cache"].torch_fn(
+        [cache, upd], {"update_idxs_tensor": torch.tensor([33]), "page_table": page_table}
+    )
+    # Position 33 is logical block 1 -> physical block page_table[0, 1] = 0, row 33 % 32 = 1.
+    assert torch.equal(cache[0, :, 1, :], upd[0, 0, :2, :])
+    assert cache.abs().sum() == upd[0, 0, :2, :].abs().sum()
+
+
+def test_hand_paged_fill_cache():
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    cache = torch.zeros(4, 2, 32, 8)
+    x = torch.randn(1, 2, 64, 8)
+    page_table = torch.tensor([[3, 1, 0, 2]])
+    O.FALLBACKS["ttnn.experimental.paged_fill_cache"].torch_fn([cache, x, page_table], {"batch_idx": 0})
+    assert torch.equal(cache[3], x[0, :, :32]) and torch.equal(cache[1], x[0, :, 32:])
+    assert cache[0].abs().sum() == 0 and cache[2].abs().sum() == 0
+
+
+def test_golden_fallback_still_works_after_wrappers_installed(monkeypatch):
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    monkeypatch.setattr(O, "_GOLDENS", {})
+    s = O.OverrideSession(mesh_device=None, host_ops=("linear",), disable_wa=(), allow_uncertified=True)
+    s.install(monkeypatch)  # ttnn.linear is now wrapped twice (workaround, then fallback)
+    a, b = torch.randn(32, 64), torch.randn(64, 16)
+    assert torch.allclose(O.FALLBACKS["ttnn.linear"].torch_fn([a, b], {}).float(), a @ b, atol=1e-4)
