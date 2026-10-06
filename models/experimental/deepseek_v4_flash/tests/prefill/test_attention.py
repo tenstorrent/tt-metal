@@ -19,6 +19,12 @@ prompt in one pass, and compares the device block against it:
   (``q_a``, ``kv``, the compressor and so the whole KV state) replicated. Needs an 8x4 system mesh and
   fabric, like the prefill MoE TP test. The output and every state tensor are replicated, so one
   rank's copy is compared against the same reference.
+* ``test_prefill_attention_maskless_chunked`` / ``test_prefill_attention_tp4_maskless_chunked`` -- the chunked
+  check of a sliding layer with ``maskless=True`` (dense causal sliding-window SDPA, no mask; CSA / HCA ignore it).
+* ``test_prefill_attention_static_chunked`` -- the traced path's :meth:`forward_static` (run eagerly, no trace)
+  over its persistent buffers, with the per-chunk step built on the host the way ``TracedPrefill`` builds it on
+  device: each chunk against the reference rows, and the front-anchored entry rows (written at device-tensor row
+  ids by ``indexed_fill``) against the reference entries. Masked, and mask-free for the sliding layer.
 
 Randomised weights are used on purpose. A CSA layer cannot be referenced with the real checkpoint
 (the HF module carries lightning-indexer weights the checkpoint does not ship), and random weights
@@ -53,8 +59,10 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 imp
     apply_rotary_pos_emb,
 )
 from models.experimental.deepseek_v4_flash.tt.prefill.attention import (
+    ALIGNMENT,
     DeepSeekV4PrefillAttention,
     PrefillAttentionState,
+    PrefillStaticStep,
 )
 
 _SEED = 1234
@@ -66,6 +74,7 @@ _LAYERS = [
     pytest.param(1, id="csa"),
     pytest.param(2, id="hca"),
 ]
+_SLIDING_LAYER = [pytest.param(0, id="sliding")]  # the only layer type ``maskless`` changes
 
 # (weight dtype, output PCC floor, state PCC floor). bf16 weights isolate the block's own numerics;
 # bf8 is what a production prefill would run, so its floor is the one that matters.
@@ -173,9 +182,18 @@ def _reference(layer_idx: int, seq_len: int) -> Reference:
     return Reference(module, cfg, hidden, rope, output, kv_tail, entries)
 
 
-def _build(device, ref: Reference, layer_idx: int, weight_dtype, tp_size: int = 1) -> DeepSeekV4PrefillAttention:
+def _build(
+    device, ref: Reference, layer_idx: int, weight_dtype, tp_size: int = 1, maskless: bool = False
+) -> DeepSeekV4PrefillAttention:
     return DeepSeekV4PrefillAttention(
-        ref.config, layer_idx, ref.weights, device, ref.rope, weight_dtype=weight_dtype, tp_size=tp_size
+        ref.config,
+        layer_idx,
+        ref.weights,
+        device,
+        ref.rope,
+        weight_dtype=weight_dtype,
+        tp_size=tp_size,
+        maskless=maskless,
     )
 
 
@@ -259,12 +277,12 @@ _CHUNKINGS = [
 ]
 
 
-def _run_chunked(device, tp_size, layer_idx, chunks) -> None:
+def _run_chunked(device, tp_size, layer_idx, chunks, maskless: bool = False) -> None:
     """The prompt as several chunks through one state matches the single-pass reference row for row."""
     seq_len = sum(chunks)
     ref = _reference(layer_idx, seq_len)
     layer_type = ref.config.layer_types[layer_idx]
-    attn = _build(device, ref, layer_idx, ttnn.bfloat8_b, tp_size)
+    attn = _build(device, ref, layer_idx, ttnn.bfloat8_b, tp_size, maskless=maskless)
 
     state = attn.new_state()
     start = 0
@@ -287,6 +305,79 @@ def _run_chunked(device, tp_size, layer_idx, chunks) -> None:
 def test_prefill_attention_chunked(device, reset_seeds, layer_idx, chunks):
     """The prompt as several chunks through one state matches the single-pass reference row for row."""
     _run_chunked(device, 1, layer_idx, chunks)
+
+
+@pytest.mark.parametrize("chunks", _CHUNKINGS)
+@pytest.mark.parametrize("layer_idx", _SLIDING_LAYER)
+def test_prefill_attention_maskless_chunked(device, reset_seeds, layer_idx, chunks):
+    """Mask-free sliding attention (dense causal sliding window) matches the reference row for row."""
+    _run_chunked(device, 1, layer_idx, chunks, maskless=True)
+
+
+def _static_step(attn: DeepSeekV4PrefillAttention, start: int, num_tokens: int, cap: int) -> PrefillStaticStep:
+    """The chunk's :class:`PrefillStaticStep`, built on the host (``TracedPrefill._step_inputs`` makes it on device)."""
+    positions = start + torch.arange(num_tokens)
+    entry_rope, entry_rows, masks = {}, {}, {}
+    if not attn.is_sliding:
+        n = num_tokens // attn.rate
+        entry_rope[attn.rate] = attn._rope_tables(start + attn.rate * torch.arange(n))
+        entry_rows[attn.rate] = ttnn.from_torch(
+            start // attn.rate + torch.arange(n, dtype=torch.int64),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=attn.device,
+        )
+    if not attn.maskless:
+        static, threshold = attn.mask_tables_host(num_tokens, cap)
+        mask = torch.where(threshold > start, float("-inf"), static)
+        masks[attn.layer_type] = attn._to_device(mask.reshape(1, 1, num_tokens, -1))
+    return PrefillStaticStep(
+        rope={attn.rope_kind: attn._rope_tables(positions)},
+        entry_rope=entry_rope,
+        masks=masks,
+        caps={attn.layer_type: cap},
+        entry_rows=entry_rows,
+        first_chunk=start == 0,
+    )
+
+
+# A whole number of equal chunks (one trace shape), and entry buffers larger than the prompt needs, as when the
+# traces are prepared for a longer ``max_len`` than the prompt.
+_STATIC_CHUNK = 256
+_STATIC_SEQ_LEN = 1024
+_STATIC_MAX_LEN = 2048
+
+
+@pytest.mark.parametrize("maskless", [False, True], ids=["masked", "maskless"])
+@pytest.mark.parametrize("layer_idx", _LAYERS)
+def test_prefill_attention_static_chunked(device, reset_seeds, layer_idx, maskless):
+    """``forward_static`` over persistent buffers, chunk by chunk, against the single-pass reference."""
+    if maskless and layer_idx != 0:
+        pytest.skip("maskless only changes sliding layers")
+    ref = _reference(layer_idx, _STATIC_SEQ_LEN)
+    layer_type = ref.config.layer_types[layer_idx]
+    attn = _build(device, ref, layer_idx, ttnn.bfloat8_b, maskless=maskless)
+    cap = 0
+    if not attn.is_sliding:
+        cap = -(-(_STATIC_MAX_LEN // attn.rate) // ALIGNMENT) * ALIGNMENT
+    bufs = attn.new_static_buffers(_STATIC_CHUNK, cap)
+
+    for start in range(0, _STATIC_SEQ_LEN, _STATIC_CHUNK):
+        step = _static_step(attn, start, _STATIC_CHUNK, cap)
+        out = attn.forward_static(_to_device(ref.hidden[:, start : start + _STATIC_CHUNK], device), bufs, step)
+        _assert_pcc(
+            ref.output[:, start : start + _STATIC_CHUNK],
+            _to_host(out),
+            _CHUNKED_PCC,
+            f"{layer_type} static chunk rows [{start}, {start + _STATIC_CHUNK})" + (", maskless" if maskless else ""),
+        )
+
+    _assert_pcc(ref.kv_tail, _to_host(bufs.tail), _CHUNKED_STATE_PCC, f"{layer_type} static K=V tail")
+    if ref.entries is not None:
+        emitted = ref.entries.shape[2]
+        entries = _to_host(bufs.entries)
+        _assert_pcc(ref.entries, entries[:, :, :emitted], _CHUNKED_STATE_PCC, f"{layer_type} static entry rows")
+        assert not entries[:, :, emitted:].any(), f"{layer_type}: rows past the {emitted} entries were written"
 
 
 # --------------------------------------------------------------------------- #
@@ -332,3 +423,13 @@ def test_prefill_attention_tp4_chunked(mesh_device, reset_seeds, layer_idx, chun
     """TP4: the prompt as several chunks through one (replicated) state, row for row against the reference."""
     submesh = _tp_submesh(mesh_device)
     _run_chunked(submesh, _TP_SIZE, layer_idx, chunks)
+
+
+@pytest.mark.parametrize("device_params", _TP_DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", [_PARENT_MESH], indirect=True, ids=["8x4"])
+@pytest.mark.parametrize("chunks", _TP_CHUNKINGS)
+@pytest.mark.parametrize("layer_idx", _SLIDING_LAYER)
+def test_prefill_attention_tp4_maskless_chunked(mesh_device, reset_seeds, layer_idx, chunks):
+    """TP4 mask-free sliding attention: each rank runs its 16 heads with no collective."""
+    submesh = _tp_submesh(mesh_device)
+    _run_chunked(submesh, _TP_SIZE, layer_idx, chunks, maskless=True)

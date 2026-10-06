@@ -209,9 +209,9 @@ def _assert_decode_parallelism(model: DeepSeekV4Model, tp_size: int, num_stages:
     )
 
 
-def _tokenize_chat(tokenizer, text: str) -> list[int]:
+def _tokenize_chat(tokenizer, text: str, thinking_mode: str = "chat", reasoning_effort: str | None = None) -> list[int]:
     """Chat-template a single user turn the way both decode demos do."""
-    prompt = encode_messages([{"role": "user", "content": text}], "chat")
+    prompt = encode_messages([{"role": "user", "content": text}], thinking_mode, reasoning_effort=reasoning_effort)
     # ``encode_messages`` includes DeepSeek's required BOS token explicitly.
     return list(tokenizer(prompt, add_special_tokens=False)["input_ids"])
 

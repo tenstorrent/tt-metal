@@ -11,6 +11,9 @@ TP4 stages on the Galaxy, dense CSA) prefills one prompt three ways:
    every layer's ``kv_tail`` / compressed entries / CSA overlap window;
 3. traced again -- must reproduce 2 (the persistent buffers are rewound by every run), and is timed against 1.
 
+Both attention modes run: ``masked`` (additive SDPA masks) and ``maskless`` (sliding layers without a mask, plus a
+first-chunk trace); eager and traced use the same mode, so each compares like with like.
+
 The prompt is the book prompt of the prefill demos, ``DEEPSEEK_V4_TRACED_LEN`` tokens (default 1152) in chunks of
 ``DEEPSEEK_V4_TRACED_CHUNK`` (default 256), with the traces prepared for prompts of up to
 ``DEEPSEEK_V4_TRACED_MAX_LEN`` tokens (default 2048). So with the defaults a run has several chunks, its last one
@@ -134,7 +137,8 @@ def _compare_states(
     ids=["fabric_2d"],
 )
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=["mesh_device"], ids=["galaxy_8x4"])
-def test_prefill_traced_matches_eager(mesh_device, reset_seeds) -> None:
+@pytest.mark.parametrize("maskless", [False, True], ids=["masked", "maskless"])
+def test_prefill_traced_matches_eager(mesh_device, reset_seeds, maskless) -> None:
     from transformers import AutoTokenizer
     from transformers.models.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
 
@@ -144,10 +148,10 @@ def test_prefill_traced_matches_eager(mesh_device, reset_seeds) -> None:
     )
     progress.verbose = False
     with progress:
-        _run(mesh_device, progress, AutoTokenizer, DeepseekV4Config)
+        _run(mesh_device, progress, AutoTokenizer, DeepseekV4Config, maskless)
 
 
-def _run(mesh_device, progress: _Progress, AutoTokenizer, DeepseekV4Config) -> None:
+def _run(mesh_device, progress: _Progress, AutoTokenizer, DeepseekV4Config, maskless: bool) -> None:
     prompt_len = _env_int("DEEPSEEK_V4_TRACED_LEN", 1152)
     chunk_size = _env_int("DEEPSEEK_V4_TRACED_CHUNK", 256)
     max_len = max(_env_int("DEEPSEEK_V4_TRACED_MAX_LEN", 2048), prompt_len)
@@ -197,6 +201,7 @@ def _run(mesh_device, progress: _Progress, AutoTokenizer, DeepseekV4Config) -> N
         tp_size=_TP_SIZE,
         layer_devices=layer_devices,
         dense_csa=True,
+        maskless=maskless,
         progress=progress,
     )
     model.synchronize("uploads")
@@ -246,7 +251,7 @@ def _run(mesh_device, progress: _Progress, AutoTokenizer, DeepseekV4Config) -> N
         "\n".join(
             [
                 "",
-                "=== traced vs eager ===",
+                f"=== traced vs eager ({'maskless' if maskless else 'masked'}) ===",
                 f"layers {num_layers}, prompt {prompt_len} tokens, chunk {chunk_size} "
                 f"({-(-prompt_len // chunk_size)} chunks), traces prepared for up to {max_len}",
                 f"logits pcc            : {logit_pcc:.6f}",
