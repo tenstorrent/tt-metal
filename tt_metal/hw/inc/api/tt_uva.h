@@ -22,9 +22,9 @@ namespace detail {
 inline SocketSenderInterface g_socket;
 inline uint32_t g_stage_addr = 0;
 inline uint32_t g_origin = 0;
-// Where the host publishes what the FAR device has pulled, and what we have put.
+// Where the host publishes what the FAR device has pulled, in bytes. Compared against the
+// socket's own bytes_sent, which persists across launches; no per-launch count is kept.
 inline uint32_t g_consumed_addr = 0;
-inline uint32_t g_posted = 0;
 // Signal addresses go on the wire as offsets from this, so a target with a different
 // allocator base still resolves them.
 inline uint32_t g_l1_base = 0;
@@ -82,8 +82,10 @@ inline void stage(uint32_t src_l1, tt_uva_t dst, uint32_t bytes, uint32_t sig_of
     noc_async_write_barrier();
 
     volatile tt_l1_ptr FrameTrailer* t = reinterpret_cast<volatile tt_l1_ptr FrameTrailer*>(g_stage_addr);
-    // g_posted is this core's frame index and increments below, so it names THIS frame.
-    t->guard = tt_uva_frame_guard(kFrameVersion, g_posted);
+    // bytes_sent has not counted this page yet (socket_push_pages below does), so it is THIS
+    // frame's ring position. Loaded from the socket config at launch, it carries on from the
+    // previous kernel exactly where the host's expectation does.
+    t->guard = tt_uva_frame_guard(kFrameVersion, tt_uva_frame_seq_at(g_socket.bytes_sent, g_page_size));
     t->dst = tt_uva_bits(dst);
     t->length = bytes;
     t->origin = g_origin;
@@ -98,7 +100,6 @@ inline void stage(uint32_t src_l1, tt_uva_t dst, uint32_t bytes, uint32_t sig_of
     noc_async_write_barrier();
 
     socket_push_pages(g_socket, 1);
-    ++g_posted;
 }
 
 // A single NOC transaction has a burst limit and exceeding it reads NOTHING, so the chunk
@@ -181,7 +182,6 @@ inline void tt_uva_ini(
         detail::g_stage_addr = stage_addr;
         detail::g_origin = origin;
         detail::g_consumed_addr = consumed_addr;
-        detail::g_posted = 0;
         detail::g_l1_base = l1_base;
         noc_write_init_state<write_cmd_buf>(noc_index, NOC_UNICAST_WRITE_VC);
     }
@@ -235,8 +235,10 @@ inline void tt_uva_sync() {
     }
     volatile tt_l1_ptr uint32_t* const consumed =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(detail::g_consumed_addr);
-    // Signed difference, so the comparison survives the counters wrapping at 2^32.
-    while (static_cast<int32_t>(*consumed - detail::g_posted) < 0) {
+    // Bytes against bytes, both cumulative for the socket's lifetime rather than this launch's,
+    // so a relaunch neither returns early nor waits forever. Signed difference, so the
+    // comparison survives the counters wrapping at 2^32.
+    while (static_cast<int32_t>(*consumed - detail::g_socket.bytes_sent) < 0) {
         invalidate_l1_cache();
     }
 }

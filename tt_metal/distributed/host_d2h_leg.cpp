@@ -192,6 +192,10 @@ uint32_t D2HLeg::poll(const Sink& sink) {
 
         uint64_t fresh = available - outstanding;
         uint32_t off = static_cast<uint32_t>((im.core[c].read_ptr + outstanding * im.page_size) % im.fifo_bytes);
+        // The next frame's position in the socket's cumulative byte count -- the same 32-bit
+        // value the sender's bytes_sent held when it stamped that frame. Derived from acked,
+        // not from a frame counter, so it survives a kernel relaunch on a leg kept open.
+        uint32_t pos = im.core[c].acked + static_cast<uint32_t>(outstanding) * im.page_size;
         while (fresh-- > 0) {
             const uint8_t* const page = im.core[c].fifo + off;
             const FrameTrailer* const t =
@@ -204,10 +208,8 @@ uint32_t D2HLeg::poll(const Sink& sink) {
                     "d2h: core {} page at ring offset {} has guard {:#x}, expected an armed frame", c, off, t->guard));
                 break;
             }
-            // forwarded has not counted this frame yet, so it IS the index the device stamped.
             // Armed says a frame is here; the sequence says it is the one this ring expects.
-            if (const uint32_t want = static_cast<uint32_t>(im.core[c].forwarded);
-                tt_uva_frame_seq(t->guard) != want) {
+            if (const uint32_t want = tt_uva_frame_seq_at(pos, im.page_size); tt_uva_frame_seq(t->guard) != want) {
                 im.fail(fmt::format(
                     "d2h: core {} page at ring offset {} carries frame {} but this ring expects {}",
                     c,
@@ -244,6 +246,7 @@ uint32_t D2HLeg::poll(const Sink& sink) {
             im.core[c].forwarded++;
             ++accepted;
             off = static_cast<uint32_t>((off + im.page_size) % im.fifo_bytes);
+            pos += im.page_size;
         }
     }
     im.rr = im.cfg.cores != 0 ? (im.rr + 1) % im.cfg.cores : 0;
@@ -278,9 +281,11 @@ void D2HLeg::retire(uint32_t core, uint32_t pages) {
 }
 
 // Only on change: an unchanged counter is a PCIe write the kernel would not notice.
+// Published in BYTES: tt_uva_sync() compares it with the socket's bytes_sent, which persists
+// across kernel launches, so neither side needs resetting when a leg outlives a launch.
 void D2HLeg::credit(uint32_t core, uint64_t pages) {
     Impl& im = *impl_;
-    const uint32_t v = static_cast<uint32_t>(pages);
+    const uint32_t v = static_cast<uint32_t>(pages * im.page_size);
     if (core >= im.cfg.cores || im.cfg.consumed_addr == 0 || im.core[core].credited == v) {
         return;
     }

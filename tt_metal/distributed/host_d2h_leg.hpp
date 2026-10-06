@@ -54,7 +54,8 @@ public:
     // Contiguous prefix only: bytes_acked is one counter and cannot free a page by name.
     void retire(uint32_t core, uint32_t pages);
 
-    // Publishes the far device's consumed count to this core, for tt_uva_sync().
+    // Publishes the far device's consumed count to this core, for tt_uva_sync(). `pages` is
+    // cumulative for this leg's lifetime, not per kernel launch; it goes out as bytes.
     void credit(uint32_t core, uint64_t pages);
 
     uint32_t page_size() const;
