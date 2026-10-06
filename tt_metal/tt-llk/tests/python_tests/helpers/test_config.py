@@ -3,6 +3,7 @@
 
 import fcntl
 import glob
+import json
 import os
 import re
 import shlex
@@ -232,7 +233,7 @@ class TestConfig:
 
     # === Addresses ===
     RUNTIME_ADDRESS_NON_COVERAGE: ClassVar[int] = 0x20000
-    RUNTIME_ADDRESS_COVERAGE: ClassVar[int] = 0x6E000
+    RUNTIME_ADDRESS_COVERAGE: ClassVar[int] = 0x8E000
     TRISC_START_ADDRS: ClassVar[list[int]] = [0x16DFF0, 0x16DFF4, 0x16DFF8]
     THREAD_PERFORMANCE_DATA_BUFFER_LENGTH = 0x400
     THREAD_PERFORMANCE_DATA_BUFFER = [
@@ -1390,7 +1391,8 @@ class TestConfig:
         if self.coverage_build == CoverageBuild.Yes:
             NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
             OPTIONS_COMPILE += (
-                "-fprofile-arcs -ftest-coverage -fprofile-info-section -DCOVERAGE "
+                "-fprofile-arcs -ftest-coverage -fprofile-info-section "
+                "-fno-early-inlining -DCOVERAGE "
             )
             MEMORY_LAYOUT_LD_SCRIPT = (
                 f"{TestConfig.LINKER_SCRIPTS}/memory.{TestConfig.ARCH.value}.debug.ld"
@@ -1798,8 +1800,7 @@ class TestConfig:
                         f"-DDEVICE_PRINT_BUFFER_SIZE2={TestConfig.DEVICE_PRINT_BUFFER_SIZE2} "
                         f"-DPROCESSOR_INDEX={risc_id} "
                     )
-                compile_command = TestConfig._argv(
-                    [TestConfig.GXX],
+                compile_flags = TestConfig._argv(
                     TestConfig.ARCH_COMPUTE,
                     TestConfig.OPTIONS_ALL,
                     [f"-I{TestConfig.TESTS_WORKING_DIR}"],
@@ -1811,6 +1812,26 @@ class TestConfig:
                     optional_kernel_flags,
                     f"-DLLK_TRISC_{trisc_define}",
                     device_print_flags,
+                )
+                if self.coverage_build == CoverageBuild.Yes:
+                    context = {
+                        "arch": TestConfig.ARCH.value,
+                        "build_axes": (
+                            {"quasar_arch_variant": quasar_arch_variant()}
+                            if TestConfig.ARCH == ChipArchitecture.QUASAR
+                            else {}
+                        ),
+                        "compiler": TestConfig.GXX,
+                        "flags": compile_flags,
+                        "cwd": str(TestConfig.TESTS_WORKING_DIR),
+                        "source": f"{self._barrier_reservation_include()}{self._kernel_source_include()}#include <trisc.cpp>\n",
+                    }
+                    (VARIANT_ELF_DIR / f"{name}.coverage.json").write_text(
+                        json.dumps(context, indent=2) + "\n"
+                    )
+                compile_command = TestConfig._argv(
+                    [TestConfig.GXX],
+                    compile_flags,
                     TestConfig.OPTIONS_LINK,
                     coverage_args,
                     [
@@ -1873,6 +1894,8 @@ class TestConfig:
             done_marker.touch()
 
     def read_coverage_data_from_device(self):
+        from .coverage.capture import run_metadata
+
         VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
         # Extracting coverage stream from device, for all kernel parts, for all their compilation units
         coverage_stream = b""
@@ -1890,14 +1913,24 @@ class TestConfig:
             length = read_word_from_device(
                 TestConfig.TENSIX_LOCATION, addr=coverage_start
             )
+            coverage_end = temp_elf.find_symbol_by_name("__coverage_end")
+            if coverage_end is None:
+                raise TTException(f"__coverage_end not found in {trisc_name}.elf")
+            if length == 0xFFFFFFFF:
+                raise TTException(
+                    f"Coverage truncated in {trisc_name}: gcov region overflow"
+                )
+            if not 4 <= length <= coverage_end.value - coverage_start:
+                raise TTException(
+                    f"Invalid coverage length {length} in {trisc_name}.elf"
+                )
             coverage_stream += read_from_device(
                 TestConfig.TENSIX_LOCATION, coverage_start + 4, num_bytes=length - 4
             )
 
-        if len(self.runtimes) == 0:
-            stream_name = "deafult_stream_name.stream"
-        else:
-            stream_name = f"{sha256(str(' | '.join([str(run_arg) for run_arg in self.runtimes])).encode()).hexdigest()}.stream"
+        metadata = run_metadata(self)
+        run_id = sha256(json.dumps(metadata, sort_keys=True).encode()).hexdigest()
+        stream_name = f"{run_id}.stream"
 
         logger.trace(stream_name)
 
@@ -1906,6 +1939,9 @@ class TestConfig:
             "wb",
         ) as fd:
             fd.write(coverage_stream)
+        (VARIANT_DIR / f"{run_id}.run.json").write_text(
+            json.dumps(metadata, indent=2) + "\n"
+        )
 
     BRISC_ELF_LOADED: ClassVar[bool] = False
     LAST_LOADED_ELFS: ClassVar[Path] = Path()
@@ -2418,43 +2454,65 @@ class TestConfig:
 
 
 def process_coverage_run_artefacts() -> bool:
+    from .coverage.ast_scan import LibraryScans
+    from .coverage.capture import collect_streams
+    from .coverage.report import write_report
+    from .coverage.store import Store
+
     start = time.time()
     sources = Path(TestConfig.ARTEFACTS_DIR) / "sources"
+    if not sources.is_dir():
+        logger.warning("No coverage sources in {}", sources)
+        return
+    lcov_available = shutil.which("lcov") is not None
+    if not lcov_available:
+        logger.warning(
+            "lcov not found in PATH: generating instantiation coverage reports only. "
+            "Install lcov to also generate merged_coverage.info."
+        )
+    database = TestConfig.ARTEFACTS_DIR / "instantiation_coverage.sqlite"
+    for info_file in TestConfig.COVERAGE_INFO_DIR.glob("*.info"):
+        info_file.unlink()
+    for info_file in TestConfig.ARTEFACTS_DIR.glob("merged_coverage*.info"):
+        info_file.unlink()
+    database.unlink(missing_ok=True)
+    compiled_variants = sorted(
+        elf.parent for elf in sources.rglob("elf") if elf.is_dir()
+    )
 
-    compiled_variants = []
-    for test_names in sources.iterdir():
-        compiled_variants.extend(variant for variant in test_names.iterdir())
+    scans = LibraryScans()
 
     def process_variants(compiled_variants: Path):
         for variant in compiled_variants:
             stream_runs = glob.glob(os.path.join(variant, "*.stream"))
+            records = collect_streams(
+                TestConfig.GCOV,
+                TestConfig.GCOV_TOOL,
+                variant,
+                TestConfig.ARCH.value,
+                TestConfig.TESTS_WORKING_DIR,
+                scans.document,
+            )
+            with Store(database) as store:
+                store.replace_variant(
+                    TestConfig.ARCH.value,
+                    variant.parent.name,
+                    variant.name,
+                    records,
+                    scans.variant(variant),
+                )
 
-            if not stream_runs:
+            # Generate single .info file per variant
+            if not lcov_available or not stream_runs:
                 continue
-
-            stream_parts = []
-            for stream in stream_runs:
-                with open(stream, "rb") as fd:
-                    stream_parts.append(fd.read())
-            merged_stream = b"".join(stream_parts)
-
-            if merged_stream:
-                run_shell_command(
-                    f"{TestConfig.GCOV_TOOL} merge-stream",
-                    TestConfig.TESTS_WORKING_DIR,
-                    merged_stream,
-                    text=False,
-                )
-
-                # Generate single .info file per variant
-                info_hash = sha256(str(variant).encode()).hexdigest()
-                command = (
-                    f"lcov --gcov-tool {TestConfig.GCOV} --capture "
-                    f"--directory {variant}/elf/ "
-                    f"--output-file {TestConfig.COVERAGE_INFO_DIR}/{info_hash}.info "
-                    "--rc lcov_branch_coverage=1"
-                )
-                run_shell_command(command, TestConfig.TESTS_WORKING_DIR)
+            info_hash = sha256(str(variant).encode()).hexdigest()
+            command = (
+                f"lcov --gcov-tool {TestConfig.GCOV} --capture "
+                f"--directory {variant}/elf/ "
+                f"--output-file {TestConfig.COVERAGE_INFO_DIR}/{info_hash}.info "
+                "--rc lcov_branch_coverage=1"
+            )
+            run_shell_command(command, TestConfig.TESTS_WORKING_DIR)
 
     worker_num = 20
 
@@ -2466,6 +2524,21 @@ def process_coverage_run_artefacts() -> bool:
         ]
         for fut in futures:
             fut.result()
+
+    with Store(database) as store:
+        write_report(
+            store.records(),
+            TestConfig.ARTEFACTS_DIR / "instantiation_coverage",
+            root=TestConfig.LLK_ROOT,
+            architectures=[TestConfig.ARCH.value],
+            scans=store.scans(),
+        )
+    logger.info(
+        "Instantiation coverage report: {}",
+        TestConfig.ARTEFACTS_DIR / "instantiation_coverage" / "index.html",
+    )
+    if not lcov_available:
+        return
 
     end = time.time()
 
@@ -2498,7 +2571,7 @@ def process_coverage_run_artefacts() -> bool:
     def combine_files(index, info_files):
         merged_path = TestConfig.ARTEFACTS_DIR / f"merged_coverage_{index}.info"
         for info_file in info_files:
-            cmd = f"lcov -a {merged_path} -a {info_file} -o {merged_path}"
+            cmd = f"lcov --rc lcov_branch_coverage=1 -a {merged_path} -a {info_file} -o {merged_path}"
             result = run_shell_command(cmd, TestConfig.ARTEFACTS_DIR)
 
             if result.returncode:
@@ -2519,7 +2592,7 @@ def process_coverage_run_artefacts() -> bool:
 
     for i in range(1, worker_num):
         info_file = TestConfig.ARTEFACTS_DIR / f"merged_coverage_{i}.info"
-        cmd = f"lcov -a {merged_path} -a {info_file} -o {merged_path}"
+        cmd = f"lcov --rc lcov_branch_coverage=1 -a {merged_path} -a {info_file} -o {merged_path}"
         result = run_shell_command(cmd, TestConfig.ARTEFACTS_DIR)
 
         if result.returncode:

@@ -199,6 +199,16 @@ jobs:
           name: code-coverage-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
           path: code-coverage-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.info
 
+      - name: Upload instantiation coverage
+        uses: actions/upload-artifact@v4
+        if: ${{ inputs.coverage }}
+        with:
+          name: instantiation-coverage-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
+          path: |
+            /tmp/tt-llk-build/instantiation_coverage.sqlite
+            /tmp/tt-llk-build/instantiation_coverage/
+          if-no-files-found: error
+
       # Step 5: Upload performance data
       - name: Upload performance data
         uses: actions/upload-artifact@v4
@@ -261,6 +271,27 @@ jobs:
         with:
           pattern: code-coverage-${{ env.CHIP_ARCH }}*
           path: ./merged_coverage_files
+      - name: Download instantiation coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: instantiation-coverage-${{ env.CHIP_ARCH }}-*
+          path: ./instantiation_coverage_shards
+      - name: Merge instantiation coverage and generate report
+        shell: bash
+        env:
+          PYTHONPATH: tests/python_tests
+        run: |
+          python3 -m helpers.coverage merge --db instantiation_coverage.sqlite \
+            instantiation_coverage_shards/*/instantiation_coverage.sqlite
+          python3 -m helpers.coverage report --db instantiation_coverage.sqlite \
+            --output instantiation_coverage_report
+      - name: Upload merged instantiation coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: instantiation-coverage-merged-${{ env.CHIP_ARCH }}
+          path: |
+            instantiation_coverage.sqlite
+            instantiation_coverage_report/
       - name: Unzip artefacts, merge coverage data, and generate HTML report
         shell: bash
         run: |
@@ -271,11 +302,11 @@ jobs:
           # Merge all other files
           for f in $(find ./merged_coverage_files/ -name "*.info"); do
             if [ "$f" != "$first" ]; then
-              lcov -q -a merged.info -a "$f" -o ./merged.info
+              lcov -q --rc lcov_branch_coverage=1 -a merged.info -a "$f" -o ./merged.info
             fi
           done
 
-          lcov -q --remove ./merged.info '*tests/*' \
+          lcov -q --rc lcov_branch_coverage=1 --remove ./merged.info '*tests/*' \
             -o ./code_coverage_for_${{ env.CHIP_ARCH }}.info
 
       - name: Upload merged coverage .info file

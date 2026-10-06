@@ -8,18 +8,14 @@ from enum import Enum, IntEnum
 from pathlib import Path
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.debug_tensix import TensixDebug
 from ttexalens.elf import CallstackEntry
 from ttexalens.tt_exalens_lib import (
-    ElfFile,
-    TTException,
     arc_msg,
     callstack,
     check_context,
     convert_coordinate,
-    parse_elf,
     read_word_from_device,
 )
 
@@ -429,32 +425,6 @@ def reset_mailboxes(location: str = "0,0"):
             addr=MAILBOX_START_BLOCK,
             data=[0xA3, 0xA3, 0xA3],  # All 3 TRISC mailboxes on Wormhole/Blackhole
         )
-
-
-def pull_coverage_stream_from_tensix(
-    location: str | OnChipCoordinate,
-    elf: str | ElfFile,
-    stream_path: str,
-    device_id: int = 0,
-    context: Context | None = None,
-) -> None:
-
-    coordinate = convert_coordinate(location, device_id, context)
-    context = coordinate.context
-    if isinstance(elf, str):
-        elf = parse_elf(elf, context)
-
-    COVERAGE_REGION_START_SYM = "__coverage_start"
-
-    coverage_start = elf.symbols[COVERAGE_REGION_START_SYM].value
-    if not coverage_start:
-        raise TTException(f"{COVERAGE_REGION_START_SYM} not found")
-
-    length = read_word_from_device(location, addr=coverage_start)
-
-    data = read_from_device(location, coverage_start + 4, num_bytes=length - 4)
-    with open(stream_path, "wb") as f:
-        f.write(data)
 
 
 def _send_arc_message(message_type: str, device_id: int):
