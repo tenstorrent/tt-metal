@@ -147,3 +147,69 @@ def test_tensor_mode(tmp_path):
     assert ltx_eval.main(["tensor", "--ref", str(tmp_path / "ref.pt"), "--cand", str(tmp_path / "cand.npy")]) == 0
     np.save(tmp_path / "bad.npy", torch.randn_like(ref).numpy())
     assert ltx_eval.main(["tensor", "--ref", str(tmp_path / "ref.pt"), "--cand", str(tmp_path / "bad.npy")]) == 1
+
+
+RAPPER, BOAT = "A confident rapper", "A red paper boat"
+
+
+def score_video(tmp_path, *extra):
+    argv = ["video", "--cand", str(tmp_path / "cand.mp4"), "--ref", str(tmp_path / "ref.mp4")]
+    return ltx_eval.main(argv + ["--out", str(tmp_path / "q"), "--vbench", "none", *extra])
+
+
+@pytest.fixture
+def clip_pair(tmp_path):
+    write_video(tmp_path / "ref.mp4", clip(0))
+    write_video(tmp_path / "cand.mp4", clip(0))
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    "cand_meta, field",
+    [({"prompt": BOAT, "seed": 0}, "prompt"), ({"prompt": RAPPER, "seed": 1}, "seed")],
+)
+def test_sidecar_mismatch_refuses_to_score(clip_pair, capsys, cand_meta, field):
+    ltx_eval.write_sidecar(clip_pair / "ref.mp4", prompt=RAPPER, seed=0)
+    ltx_eval.write_sidecar(clip_pair / "cand.mp4", **cand_meta)
+    assert score_video(clip_pair) == ltx_eval.EXIT_MISMATCH
+    out = capsys.readouterr().out
+    assert f"QUALITY MISMATCH {field} clip=cand" in out
+    assert "QUALITY OK" not in out and "QUALITY FAIL" not in out
+    assert not (clip_pair / "q" / "cand_report.json").exists()
+
+
+def test_allow_mismatch_scores_anyway(clip_pair, capsys):
+    ltx_eval.write_sidecar(clip_pair / "ref.mp4", prompt=RAPPER, seed=0)
+    ltx_eval.write_sidecar(clip_pair / "cand.mp4", prompt=BOAT, seed=0)
+    assert score_video(clip_pair, "--allow-mismatch") == 0
+    out = capsys.readouterr().out
+    assert "QUALITY MISMATCH prompt clip=cand" in out and "QUALITY OK clip=cand" in out
+
+
+@pytest.mark.parametrize("sidecars", [("ref", "cand"), ("ref",), ()])
+def test_matching_or_missing_sidecars_keep_output(clip_pair, capsys, sidecars):
+    assert score_video(clip_pair) == 0
+    baseline = capsys.readouterr().out
+    for side in sidecars:
+        ltx_eval.write_sidecar(clip_pair / f"{side}.mp4", prompt=RAPPER, seed=0, gen=int(side == "cand"))
+    assert score_video(clip_pair) == 0
+    captured = capsys.readouterr()
+    assert captured.out == baseline
+    assert ("WARNING: no sidecar" in captured.err) == (len(sidecars) < 2)
+
+
+def test_batch_seed_mismatch_refuses_and_allow_scores(tmp_path, capsys):
+    for side in ("ref", "cand"):
+        (tmp_path / side).mkdir()
+        for seed in range(2):
+            write_video(tmp_path / side / f"seed{seed}.mp4", clip(seed))
+            ltx_eval.write_sidecar(tmp_path / side / f"seed{seed}.mp4", prompt=RAPPER, seed=seed)
+    ltx_eval.write_sidecar(tmp_path / "cand" / "seed1.mp4", prompt=RAPPER, seed=4)
+    argv = ["batch", "--cand-dir", str(tmp_path / "cand"), "--ref-dir", str(tmp_path / "ref")]
+    argv += ["--out", str(tmp_path / "q"), "--vbench", "none", "--jobs", "1", "--seeds", "2"]
+    assert ltx_eval.main(argv) == ltx_eval.EXIT_MISMATCH
+    out = capsys.readouterr().out
+    assert out.splitlines() == ["QUALITY MISMATCH seed clip=seed1 cand=4 ref=1"]
+    assert not (tmp_path / "q" / "summary.json").exists()
+    assert ltx_eval.main(argv + ["--allow-mismatch"]) == 0
+    assert "BATCH OK" in capsys.readouterr().out

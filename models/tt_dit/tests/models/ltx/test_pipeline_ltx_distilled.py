@@ -23,6 +23,7 @@ from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import (
     LTXDistilledPipeline,
     pixel_to_latent_frame,
 )
+from models.tt_dit.tests.models.ltx.tools.ltx_eval import write_sidecar
 from models.tt_dit.utils.ltx import (
     DEFAULT_LTX_PROMPT,
     default_ltx_checkpoint,
@@ -205,6 +206,9 @@ def test_pipeline_distilled(
         pipeline = LTXDistilledPipeline.create_pipeline(**common, checkpoint_name=ckpt, gemma_path=gemma)
 
     prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
+    git_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=os.path.dirname(__file__), capture_output=True, text=True
+    ).stdout.strip()
 
     def run(*, prompt, number, seed):
         output_filename = os.environ.get(
@@ -235,6 +239,19 @@ def test_pipeline_distilled(
         # host overhead the per-stage timers do not see.
         logger.info(f"E2E_WALL_S gen#{number}: {time.perf_counter() - t_gen:.3f}")
         logger.info(f"Saved video to: {output_filename}")
+        # ltx_eval refuses to score a clip against a reference made from another prompt or seed.
+        write_sidecar(
+            output_filename,
+            prompt=prompt,
+            seed=seed,
+            gen=number,
+            LTX_FRESH_PROMPTS=os.environ.get("LTX_FRESH_PROMPTS", "0"),
+            LTX25_DIFFVAE=os.environ.get("LTX25_DIFFVAE", "0"),
+            num_frames=num_frames,
+            width=width,
+            height=height,
+            git_head=git_head or None,
+        )
         print_ltx_timing_table(
             pipeline,
             label="LTX DISTILLED",

@@ -16,6 +16,11 @@ Writes <out>/report.json (batch: one per clip plus summary.json) and PNG stills
 (<name>_f<idx>.png, and <name>_cmp_f<idx>.png = reference | candidate | 4x abs diff).
 Prints one verdict line per run: QUALITY OK|FAIL ... . A FAIL is a flag to look at the
 stills and seeds, not proof the video is worse.
+
+A clip may carry a sidecar <stem>.json (written by test_pipeline_ltx_distilled run()) with the
+prompt and seed it was made from. When candidate and reference both have one and their prompt
+or seed differ, nothing is scored: QUALITY MISMATCH prompt|seed ... and exit 3, unless
+--allow-mismatch. Without a sidecar on either side the clips are scored as before, with a warning.
 """
 
 from __future__ import annotations
@@ -37,6 +42,50 @@ DEFAULT_VBENCH = ["subject_consistency", "background_consistency", "motion_smoot
 # width-reduced lossless copy, same policy as the LTX CI gate (models/tt_dit/utils/vbench.md).
 TEMPORAL_VBENCH = {"motion_smoothness", "dynamic_degree"}
 PSNR_IDENTICAL = 99.0
+# Scores between clips of different prompts or seeds are meaningless (PCC 0.27 for a correct clip).
+PAIRING_KEYS = ("prompt", "seed")
+EXIT_MISMATCH = 3
+
+
+def sidecar_path(video):
+    return Path(video).with_suffix(".json")
+
+
+def write_sidecar(video, **meta):
+    sidecar_path(video).write_text(json.dumps(meta, indent=2) + "\n")
+
+
+def read_sidecar(video):
+    path = sidecar_path(video)
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+def pairing_mismatches(cand, ref):
+    """Mismatch lines for a cand/ref pair, or None when either clip has no sidecar."""
+    cand_meta, ref_meta = read_sidecar(cand), read_sidecar(ref)
+    if cand_meta is None or ref_meta is None:
+        return None
+    return [
+        f"QUALITY MISMATCH {key} clip={Path(cand).stem} cand={cand_meta.get(key)!r} ref={ref_meta.get(key)!r}"
+        for key in PAIRING_KEYS
+        if cand_meta.get(key) != ref_meta.get(key)
+    ]
+
+
+def check_pairing(pairs, allow_mismatch):
+    """Print mismatches and a missing-sidecar warning; True when scoring may go ahead."""
+    lines, unchecked = [], []
+    for cand, ref in pairs:
+        mismatches = pairing_mismatches(cand, ref)
+        if mismatches is None:
+            unchecked.append(Path(cand).stem)
+        else:
+            lines += mismatches
+    for line in lines:
+        print(line + (" (scored anyway: --allow-mismatch)" if allow_mismatch else ""), flush=True)
+    if unchecked:
+        print(f"WARNING: no sidecar on cand or ref, prompt/seed not checked: {','.join(unchecked)}", file=sys.stderr)
+    return allow_mismatch or not lines
 
 
 def iter_frames(path):
@@ -325,6 +374,8 @@ def run_batch(args, opts):
         if ref is not None and not ref.exists():
             raise ValueError(f"No reference for {clip.name} in {args.ref_dir}")
         pairs.append((clip, ref))
+    if args.ref_dir and not check_pairing(pairs, args.allow_mismatch):
+        return EXIT_MISMATCH
     out = Path(args.out)
     workers = max(1, min(args.jobs, len(pairs)))
     with ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("spawn")) as pool:
@@ -359,6 +410,7 @@ def main(argv=None):
         mode.add_argument("--stills", help="comma-separated frame indices (negative from end); default first,mid,last")
         mode.add_argument("--pcc-min", type=float, default=0.99)
         mode.add_argument("--psnr-min", type=float, default=30.0, help="per-frame minimum, dB")
+        mode.add_argument("--allow-mismatch", action="store_true", help="score even if sidecar prompt/seed differ")
     video.set_defaults(seeds=1)
     tensor = sub.add_parser("tensor")
     tensor.add_argument("--cand", required=True)
@@ -374,6 +426,8 @@ def main(argv=None):
     opts = parse_opts(args)
     if args.mode == "batch":
         return run_batch(args, opts)
+    if args.ref and not check_pairing([(args.cand, args.ref)], args.allow_mismatch):
+        return EXIT_MISMATCH
     report = evaluate_clip(args.cand, args.ref, args.out, name=Path(args.cand).stem, opts=opts)
     print(verdict_line(report), flush=True)
     return 0 if report["verdict"]["ok"] else 1
