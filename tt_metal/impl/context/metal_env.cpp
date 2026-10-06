@@ -51,9 +51,6 @@ MetalEnvImpl::MetalEnvImpl(MetalEnvDescriptor descriptor) : descriptor_(std::mov
     initialize_base_objects();
     verify_fw_capabilities();
 
-    // Fabric stays disabled until configure_fabric(). It is not applied here: callers choose it from queries
-    // against this environment (architecture, device count), which are only available after construction.
-
     // Pick up any custom mesh graph descriptor from env/rtoptions
     if (rtoptions_->is_custom_fabric_mesh_graph_desc_path_specified()) {
         custom_mesh_graph_desc_path_ = rtoptions_->get_custom_fabric_mesh_graph_desc_path();
