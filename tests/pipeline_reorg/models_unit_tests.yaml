@@ -1201,9 +1201,12 @@
 # geometry, keep the real allocator, circular-buffer validation and kernel JIT, and turn every device
 # read and write into a no-op. The test runs the ref2va preset's full init warmup (ladder walk, VAE,
 # audio and prompt-encoder warms) and fails on any rung that does not fit DRAM or any program whose
-# static circular buffers overflow L1. It skips without the mock descriptor or the H3 weights.
-# Nearly all of the time is kernel JIT on the host CPU (~55 min cold on a galaxy host), so a
-# cloud VM may be slower. See models/tt_dit/models/MiniMaxH3_mock_oom.md.
+# static circular buffers overflow L1. The runner's silicon is irrelevant; bh_quietbox_2 is chosen for
+# its HuggingFace mount (/mnt/models/huggingface at YYZ4, mounted at /mnt/MLPerf/huggingface): the
+# first run downloads the ~140 GB ref2va snapshot (transformer_ref, text_encoder, vae, audio_vae) into
+# it, which needs a dispatch with mlperf-read-only=false; later runs find it cached. Nearly all of the
+# remaining time is kernel JIT on the host CPU (~55 min cold on a galaxy host).
+# See models/tt_dit/models/MiniMaxH3_mock_oom.md.
 - name: Minimax H3 Ref2VA Memory Test
   cmd: |
     export TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_cluster_desc/6u_cluster_desc.yaml
@@ -1211,14 +1214,16 @@
     # so the watcher's first poll reads an invalid watcher.enable and aborts the process at mesh open.
     unset TT_METAL_WATCHER
     export HF_HOME=/mnt/MLPerf/huggingface  # the H3 weight resolver searches $HF_HOME/hub, not HF_HUB_CACHE
-    export MINIMAX_H3_REQUIRE_WEIGHTS=1  # a runner without the MiniMaxAI/MiniMax-H3 snapshot fails here instead of skipping green
+    unset HF_HUB_OFFLINE  # the resolver only calls the hub when the snapshot is absent
+    export TT_DIT_ALLOW_HF_DOWNLOAD=1  # populate $HF_HOME/hub/models--MiniMaxAI--MiniMax-H3 on first use (writable mount needed)
+    export MINIMAX_H3_REQUIRE_WEIGHTS=1  # a runner that can neither find nor fetch the snapshot fails here instead of skipping green
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
     export MINIMAX_H3_DRAM_PROBE=1  # per-owner DRAM attribution at each checkpoint, read at import
-    pytest --timeout 7200 -s models/tt_dit/tests/models/minimax_h3/test_mock_oom_minimax_h3.py
+    pytest --timeout 10800 -s models/tt_dit/tests/models/minimax_h3/test_mock_oom_minimax_h3.py
   model: minimax-h3
   skus:
-    wh_n150:
-      timeout: 130
+    bh_quietbox_2:
+      timeout: 200  # first run: ~140 GB snapshot download + cold JIT; cached runs should fit in ~90
       tier: 3
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
