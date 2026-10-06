@@ -147,7 +147,13 @@ def test_prefill_scenarios(mesh_device):
             from models.demos.blackhole.deepseek_v41_flash.tt.prefill_unified_moe import DSV41UnifiedMoE
 
             if L in UNI_LAYERS(layer_ids):
-                pls[-1][1].umoe = DSV41UnifiedMoE(md, L, log=log)
+                if (
+                    os.environ.get("DSV41_UNI_RING", "0") == "1"
+                ):  # one weight copy: read the decode ring weights in place
+                    es = layer.moe.decode.expert_state
+                    pls[-1][1].umoe = DSV41UnifiedMoE(md, L, log=log, ring=(es.tt_w0_w1, es.tt_w2))
+                else:
+                    pls[-1][1].umoe = DSV41UnifiedMoE(md, L, log=log)
         key = getattr(attn, "ratio", 0)
         if need_steps and key not in groups:
             groups[key] = DSV41StepState(attn, max_pos=257)
