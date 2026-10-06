@@ -143,7 +143,7 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::NoWait,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
-#endif
+#endif  // READER_REPACK
     dfb_in.wait_front(per_core_MN);
     if constexpr (welford_fp32_alias) {
         // Mirror the tilize push on the alias (c_31, shares SRAM with dfb_in / c_1) so it tracks
@@ -153,9 +153,9 @@ void kernel_main() {
         dfb_in_welford.push_back(per_core_MN);
         dfb_in_welford.wait_front(per_core_MN);
     }
-#else
+#else   // !TILIZE_IN
     compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in0_id);
-#endif
+#endif  // TILIZE_IN
 
     dfb_eps.wait_front(1);
     dfb_input_mask.wait_front(num_tiles_input_mask);
@@ -646,6 +646,17 @@ void kernel_main() {
     if constexpr (do_gamma) {
         dfb_gamma.pop_front(per_core_N);
     }
+
+#ifdef TILIZE_IN
+    // The tilized input is produced once by the tilize above and then read by tile offset for the
+    // whole kernel, so it is waited once rather than per batch. Pop it here, after the last read,
+    // to balance the buffer.
+    dfb_in.pop_front(per_core_MN);
+    if constexpr (welford_fp32_alias) {
+        // The alias mirrors dfb_in's reserve and push, so it takes the matching pop.
+        dfb_in_welford.pop_front(per_core_MN);
+    }
+#endif
 
 #ifdef UNTILIZE_OUT
     // untilize - DEST capacity auto-detected
