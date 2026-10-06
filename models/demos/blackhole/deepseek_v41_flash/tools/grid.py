@@ -29,6 +29,10 @@ GROUPS = {
     ],  # dedicated short-prompt process: gsm8k as the only scenario (multi-scenario sessions inflate its decode ms/token)
     "G1s2": ["gsm8k", "isl4k", "isl8k"],  # G1s<k>: B=4 only, spec k (k=3 asserts at B=4: T=5 drafter rows)
     "G1s1": ["gsm8k", "isl4k", "isl8k"],
+    "G4k": ["isl4k"],
+    "GMAX": [
+        "max"
+    ],  # the max ISL supported by that batch size (MAX_ISL), spec off  # 4k for every batch size with the default (unified MoE) prefill, spec off
 }  # user limited ISL to 64k (128k and 256k groups dropped)
 EXTRA = [(128, "S128", ["gsm8k"])]  # B=128 spec k=1 attempt, separate process
 ISL = {
@@ -51,7 +55,6 @@ SPEC_K = {
 EXTRA_ENV = "DSV41_MEMLOG=1 DSV41_ENGRAM_RAM=1"
 DEFAULT_HOSTS = [
     "30",
-    "31",
     "34",
     "35",
     "41",
@@ -62,8 +65,9 @@ DEFAULT_HOSTS = [
     "48",
     "32",
     "33",
-    "42",
-]  # .40/.43: batch-4 agent; .32/.33 free once the gate runs end; .42 last (first-op hangs)
+    "40",
+    "43",
+]  # .31 faulty (wrong outputs in mesh rows 0-1), .42 hangs on its first command: both excluded; .40/.43 old note:: batch-4 agent; .32/.33 free once the gate runs end; .42 last (first-op hangs)
 SPEC_ENV = "DSV41_TRACE_REGION=1900000000"
 
 
@@ -95,19 +99,32 @@ def check_hash():
         sys.exit(f"main tree dirty: {dirty[:5]}: refusing to start")
 
 
+MAX_ISL = {4: "isl64k", 8: "isl64k", 16: "isl64k", 32: "isl64k", 64: "isl32k", 128: "isl16k"}  # user: B=128 -> 16k
+
+
 def scenarios(B, g):
     if g == "S128":
         return ["gsm8k_b128"]
+    if g == "GMAX":
+        return [f"{MAX_ISL[B]}_b{B}"]
     return [f"{k}_b{B}" for k in GROUPS[g]]
 
 
 def env_for(B, g, spec=True):
     e = EXTRA_ENV
-    if (B == 128 and g not in ("G1", "G0")) or (B == 64 and g.startswith("G2")):
+    if (B == 128 and g not in ("G1", "G0", "G4k", "GMAX")) or (B == 64 and (g.startswith("G2") or g == "GMAX")):
         e += " DSV41_POOL_DTYPE=fp8"  # bf16 pool cannot hold 128 users at >= 32k (recorded in GRID.md)
     k = (1 if g == "S128" else SPEC_K[B]) if spec else 0
     if g.startswith("G1s"):
         k = int(g[3:])
+    if g in ("G4k", "GMAX"):
+        k = 0
+        if g == "GMAX" and B == 16:
+            e += " DSV41_PREFILL_ROW_TOKENS=2048"  # the unified default budget (8192/row, C=2048) ran out of DRAM at 64k (first run): use the old default budget
+        e += " DSV41_BUILD_SLOTS=10 DSV41_BUILD_STAGGER_S=480"  # at most 10 full builds at once, starts at least 8 min apart (NFS)
+        e = e.replace(
+            "DSV41_MEMLOG=1", ""
+        ).strip()  # MEMLOG stalls the host thread in the replay loop: clean prefill timing for G4k
     if g.startswith("G2"):
         e += " DSV41_BUILD_SLOTS=10"  # user: run the long-ISL cells fully in parallel (cap raised from 5)
         k = 0  # spec at >= 32k asserts 'spec verify needs the matmul indexer backend' (B=8/16/32 G2 first pass); plain re-run
@@ -118,7 +135,7 @@ def env_for(B, g, spec=True):
 
 def procs():
     out = []
-    order = {"G1": 0, "G2a": 1, "G2b": 2, "G3a": 3, "G3b": 4, "G1s2": 5, "G1s1": 6, "G0": 7}
+    order = {"G1": 0, "G2a": 1, "G2b": 2, "G3a": 3, "G3b": 4, "G1s2": 5, "G1s1": 6, "G0": 7, "G4k": 8, "GMAX": 9}
     for g in sorted(GROUPS, key=lambda x: order[x]):
         for B in BATCHES:
             if g.startswith("G1s") and B != 4:
@@ -132,8 +149,9 @@ def est_minutes(B, g):
     if g == "S128":
         return 100
     tok_s = 3000 if B <= 32 else 2800
-    pre = sum(B * ISL[k] / tok_s / 60 * (1 + (ISL[k] / 100000) * 0.5) for k in GROUPS[g])
-    dec = 3 * len(GROUPS[g])  # decode + spec phases (64 tokens each)
+    keys = [MAX_ISL[B]] if g == "GMAX" else GROUPS[g]
+    pre = sum(B * ISL[k] / tok_s / 60 * (1 + (ISL[k] / 100000) * 0.5) for k in keys)
+    dec = 3 * len(keys)  # decode + spec phases (64 tokens each)
     return int(
         75 + pre * 2 + dec + (8 if SPEC_K[B] else 0)
     )  # build ~75 min under the slot cap; x2: compile run + measured run
