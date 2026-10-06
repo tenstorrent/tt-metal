@@ -10,15 +10,14 @@ reference takes them, ``(num_cams, num_keys, bs, embed_dims)``. Parameters come 
 Camera geometry depends on the cameras only, not on the activations: once per frame,
 :meth:`TTBEVFormerEncoder.prepare_frame` projects the pillar points into the cameras in float32 on
 the host, as upstream's ``point_sampling`` does (``point_sampling_3d_2d.camera_geometry``), and
-fills the spatial cross-attention's rebatch plan, whose size the visibility mask decides. In
-bfloat16 the projection's homogeneous divide loses the points' precision. The forward then runs
+fills the spatial cross-attention's rebatch plan, whose per-camera capacity is fixed when it is
+built, so later frames refill it in place. In bfloat16 the projection's homogeneous divide loses
+the points' precision. The forward then runs
 on device only, the cells' reference points and the ego shift included.
 """
 
 
 import ttnn
-from models.experimental.bevformer.config.head_config import PC_RANGE
-
 from ..reference.point_sampling_3d_2d import bev_reference_points, camera_geometry
 from .tt_common import GRID_DTYPE, layer_norm
 from .tt_ms_deformable_attention import fp32_grid_sample_config
@@ -99,27 +98,22 @@ class TTBEVFormerEncoder:
         bev_h,
         bev_w,
         spatial_shapes,
-        embed_dims=256,
-        num_heads=8,
-        num_levels=4,
-        num_points=8,
-        tsa_num_points=4,
-        num_cams=6,
-        num_points_in_pillar=4,
-        pc_range=PC_RANGE,
     ):
-        """``params`` from ``create_bevformer_encoder_parameters``, one entry per layer;
-        ``spatial_shapes`` the camera feature levels as (h, w); ``num_points`` the spatial
-        cross-attention's sampling points per head and level, ``tsa_num_points`` the self-attention's."""
+        """``params`` from ``create_bevformer_encoder_parameters``: one entry per layer and the
+        reference encoder's configuration (heads, points, cameras, pillar depth, ``pc_range``);
+        ``spatial_shapes`` the camera feature levels as (h, w)."""
+        config = params.config
         spatial_shapes = [tuple(int(v) for v in shape) for shape in spatial_shapes]
-        assert len(spatial_shapes) == num_levels, f"{len(spatial_shapes)} spatial_shapes for {num_levels} levels"
+        assert (
+            len(spatial_shapes) == config.num_levels
+        ), f"{len(spatial_shapes)} spatial_shapes for {config.num_levels} levels"
         self.device = device
         self.bev_h, self.bev_w = bev_h, bev_w
-        self.embed_dims = embed_dims
-        self.num_heads = num_heads
-        self.tsa_num_points = tsa_num_points
-        self.num_points_in_pillar = num_points_in_pillar
-        self.pc_range = list(pc_range)
+        self.embed_dims = config.embed_dims
+        self.num_heads = config.num_heads
+        self.tsa_num_points = config.tsa_num_points
+        self.num_points_in_pillar = config.num_points_in_pillar
+        self.pc_range = list(config.pc_range)
         self.num_keys = sum(h * w for h, w in spatial_shapes)
         self._ref_2d = ttnn.from_torch(
             bev_reference_points(bev_h, bev_w, 1), device=device, dtype=GRID_DTYPE, layout=ttnn.ROW_MAJOR_LAYOUT
@@ -131,12 +125,12 @@ class TTBEVFormerEncoder:
                 device,
                 bev_shape=(bev_h, bev_w),
                 spatial_shapes=spatial_shapes,
-                embed_dims=embed_dims,
-                num_heads=num_heads,
-                num_levels=num_levels,
-                num_points=num_points,
-                tsa_num_points=tsa_num_points,
-                num_cams=num_cams,
+                embed_dims=config.embed_dims,
+                num_heads=config.num_heads,
+                num_levels=config.num_levels,
+                num_points=config.num_points,
+                tsa_num_points=config.tsa_num_points,
+                num_cams=config.num_cams,
                 grid_sample_compute_config=grid_sample_compute_config,
             )
             for layer_params in params.layers
@@ -144,9 +138,10 @@ class TTBEVFormerEncoder:
 
     def prepare_frame(self, img_metas, plan=None, capacity=None):
         """The spatial cross-attention's rebatch plan for this frame's cameras (``lidar2img`` and
-        ``img_shape`` per sample). Without ``plan``, a new one, sized for this frame unless
-        ``capacity`` (rows per camera) is given. With ``plan``, refilled in place, which keeps a
-        trace captured with it valid; its capacity must cover this frame."""
+        ``img_shape`` per sample). Without ``plan``, a new one: by default sized for this frame
+        only; a plan that later frames refill needs a ``capacity`` (rows per camera) covering
+        them, a bound for the rig or ``tt_spatial_cross_attention.full_capacity``. With ``plan``,
+        refilled in place, which keeps a trace captured with it valid."""
         reference_points_cam, bev_mask = camera_geometry(
             img_metas, self.bev_h, self.bev_w, self.num_points_in_pillar, self.pc_range
         )
@@ -182,6 +177,8 @@ class TTBEVFormerEncoder:
             hybrid_ref = ttnn.concat([ttnn.unsqueeze(ref_2d, 1), ttnn.unsqueeze(ref_2d, 1)], dim=1)
         hybrid_ref = ttnn.reshape(hybrid_ref, (bs * 2, num_query, 1, 2))
         grid_bias = tsa_grid_bias(hybrid_ref, self.num_heads, self.tsa_num_points, GRID_DTYPE)
+        # Every layer's cross-attention has the same heads, levels and points, so the first layer's
+        # frame inputs serve them all. Built here, inside the (traced) forward, from the plan.
         sca_frame = self.layers[0].spatial_cross_attention.frame_inputs(plan)
 
         output = bev_query

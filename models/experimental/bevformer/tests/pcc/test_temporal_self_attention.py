@@ -25,7 +25,8 @@ CASES = [
     ("tiny-first-frame", BEV_SHAPES["tiny"], 1, False),
     ("tiny-previous-bev", BEV_SHAPES["tiny"], 1, True),
     ("base-previous-bev", BEV_SHAPES["base"], 1, True),
-    # bs=2, so a batch mix-up in the stacked (previous, current) maps shows.
+    # bs=2 with a per-sample shift, so a batch mix-up in the stacked (previous, current) maps or
+    # the shifted reference points shows.
     ("tiny-bs2-previous-bev", BEV_SHAPES["tiny"], 2, True),
     # Non-square, so a swapped (h, w) in the grid scale or the reference points shows.
     ("50x100-previous-bev", (50, 100), 1, True),

@@ -184,7 +184,8 @@ class TTMSDeformableAttention:
                 - batch_first (bool): Whether batch dimension comes first
             device: TTNN device for tensor operations
             params: Pre-computed TTNN parameters containing linear layer weights and biases.
-                Should include: value_proj, sampling_offsets, attention_weights, output_proj
+                Should include: value_proj, sampling_offsets, attention_weights, and output_proj
+                exactly when ``output_proj`` is set
             spatial_shapes: Feature-map (H, W) per level. Fixed for the lifetime of the
                 module: it is folded into the sampling-offset Linear here and forward takes
                 no shapes of its own. Features at a different resolution require a new
@@ -240,7 +241,7 @@ class TTMSDeformableAttention:
         self.grid_dtype = grid_dtype
         self.grid_sample_compute_config = grid_sample_compute_config
         self.residual = residual
-        self.output_proj = output_proj
+        self.apply_output_proj = output_proj
         has_output_proj = getattr(params, "output_proj", None) is not None
         assert (
             has_output_proj == output_proj
@@ -467,7 +468,7 @@ class TTMSDeformableAttention:
             logger.info("MSDA Core Attention Complete")
 
         # Apply output projection
-        if self.output_proj:
+        if self.apply_output_proj:
             output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
             output = ttnn.linear(output, self.params.output_proj.weight, bias=self.params.output_proj.bias)
 
