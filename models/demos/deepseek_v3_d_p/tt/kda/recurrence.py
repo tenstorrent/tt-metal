@@ -288,7 +288,11 @@ def _distributed_prefix(
         ttnn.deallocate(increment)
 
     chronological_entries = ttnn.concat(entry_states, dim=0, memory_config=working_memory)
-    local_entries = selections.select_local_entry_state(chronological_entries, memory_config=working_memory)
+    # The local entry lives until the scan, so it goes to DRAM: allocated in L1 under the transient peak above
+    # (SP entry states plus their concat), it stayed low in L1 and clashed with the scan's static circular buffers
+    # at 32 heads on SP8 (tt_metal_tracker-g1b.5.4.3, Qwen3.8-2.4T LB-B). Values are unchanged; K3 SP2xTP4 trace
+    # time moved 9.69 -> 9.68 ms (interleaved A/B, noise level).
+    local_entries = selections.select_local_entry_state(chronological_entries, memory_config=output_memory)
     local_entry_state = ttnn.reshape(local_entries, (batch_heads, key_dim, value_dim))
     final_state = ttnn.reshape(ttnn.to_memory_config(carry, output_memory), (batch_heads, key_dim, value_dim))
     return local_entry_state, final_state
