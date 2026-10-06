@@ -63,7 +63,8 @@ def attention_forward(
         user_id: cache slot index for the per-layer cache write
         layer_idx: this layer's index, for the per-layer cache write
         cached_len: valid prefix length already in the cache BEFORE this chunk (0 = first/only chunk).
-            >0 selects the MSA cache-read path; dense SP layers read from the cache whenever one is given.
+            >0 selects the MSA cache-read path; dense SP layers read from the cache whenever it holds more
+            than this chunk.
 
     Returns:
         Attention output [batch, seq_len, hidden_size]
@@ -169,7 +170,7 @@ def attention_forward(
     #     output. num_groups = local KV heads (1 GQA group/KV head; 1 at TP=4). Degenerates to the
     #     full-context path at sp=1. cached_len > 0 reads the accumulated prefix from the cache instead.
     #   Dense layers (0-2): plain causal GQA SDPA at sp=1; under SP, ring_joint (dense_sp.py), reading K/V
-    #     from the cache whenever one is given.
+    #     from the cache whenever it holds more than this chunk.
     if config.is_sparse:
         with zone("index_branch"):
             tt_iq, tt_ik = index_branch_forward(
@@ -234,19 +235,22 @@ def attention_forward(
         # SP dense: ring_joint, each device's query shard attending the sequence reconstructed across the
         # SP ring. q/k/v are the per-device shards (seq_len = S/sp rows).
         sp = mesh_device.shape[mesh_config.sp_axis]
+        # ring_joint's KV-pad rotation needs Q.seq < K.seq per device, so a cache that holds only this
+        # chunk takes the no-cache path.
+        cache_read = kv_cache is not None and kv_cache.max_seq_len // sp > seq_len
         grid = mesh_device.compute_with_storage_grid_size()
         sp_prog = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),  # carve the CCL column
             q_chunk_size=128,
             # k1024 halves the softmax steps; the no-cache path's bf16 K/V CBs only fit k512 in L1.
-            k_chunk_size=1024 if kv_cache is not None else 512,
+            k_chunk_size=1024 if cache_read else 512,
             exp_approx_mode=False,  # Pavle's minimax3_gqa_causal_perf
         )
         # HiFi2: the call is math-bound at q128; K and V sit in SrcA and keep full precision.
         sp_kcfg = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
         )
-        if kv_cache is not None:
+        if cache_read:
             # Cache-read for every chunk, cold ones included (kv_actual 0): ring_joint over the valid
             # prefix in the cache, which the seam already wrote this chunk into (write_chunk=False).
             logical_n = cached_len + seq_len * sp
@@ -280,7 +284,7 @@ def attention_forward(
                     write_chunk=False,
                 )
         else:
-            # No cache: ring_joint over this chunk's own K/V.
+            # No cache, or one that holds only this chunk: ring_joint over this chunk's own K/V.
             assert cached_len == 0, f"cached_len {cached_len} needs a KV cache"
             with zone("ring_joint_sdpa"):
                 tt_sdpa_out = dense_sp_attention_nocache(
