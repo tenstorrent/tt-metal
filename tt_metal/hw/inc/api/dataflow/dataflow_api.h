@@ -2132,6 +2132,13 @@ void noc_async_write_barrier(uint8_t noc = noc_index) {
  * calls issued on the current Tensix core to depart, but will not wait
  * for them to complete
  *
+ * WARNING: on Wormhole and Blackhole this does NOT guarantee that the NoC has finished reading the
+ * write's source from L1. The counter it polls (NIU_MST_NONPOSTED_WR_REQ_SENT) increments when the
+ * NIU's L1 read is granted, and that read can still be queued for a few cycles after this returns.
+ * Overwriting the source right after this call can therefore send the new value instead of the old
+ * one (seen as a hang when a semaphore cell used as a multicast source was cleared right after the
+ * flush). Use noc_async_writes_departed() (or noc_async_write_barrier()) before overwriting a source.
+ *
  * Return value: None
  *
  * | Argument | Description                          | Type     | Valid Range | Required |
@@ -2159,6 +2166,11 @@ void noc_async_writes_flushed(uint8_t noc = noc_index) {
  * calls issued on the current Tensix core to depart, but will not wait
  * for them to complete
  *
+ * WARNING: same caveat as noc_async_writes_flushed(): on Wormhole and Blackhole the NoC may still be
+ * reading the write's source from L1 when this returns. Posted writes have no ack, so
+ * noc_async_write_barrier() does not cover them; use noc_async_writes_departed() before overwriting
+ * a source.
+ *
  * Return value: None
  *
  * | Argument | Description                          | Type     | Valid Range | Required |
@@ -2178,6 +2190,45 @@ void noc_async_posted_writes_flushed(uint8_t noc = noc_index) {
     }
     invalidate_l1_cache();
     WAYPOINT("NPWD");
+}
+
+/**
+ * This blocking call waits until the NoC has finished reading the L1 source of every outstanding
+ * *noc_async_write* (posted and non-posted) issued on this NoC, so every source buffer may be
+ * overwritten or reused. It does not wait for the writes to reach their destinations; use
+ * noc_async_write_barrier() for that.
+ *
+ * Use this instead of noc_async_writes_flushed() / noc_async_posted_writes_flushed() when a source is
+ * overwritten right after the flush (for example, a semaphore cell that is multicast and then reset).
+ *
+ * It first waits for all requests to be accepted by the NIU, so each one is counted in the
+ * per-transaction-ID outgoing-write counters, and then waits for every
+ * NIU_MST_WRITE_REQS_OUTGOING_ID counter to reach zero; those decrement only after the source data
+ * has been read from L1. The counters are per NIU, not per RISC, so this also waits for writes other
+ * RISCs issued on the same NoC.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | noc      | Which NOC to query on                | uint8_t  | 0 or 1      | False    |
+ */
+FORCE_INLINE
+void noc_async_writes_departed(uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::WRITE_FLUSH, false, noc);
+    WAYPOINT("NWDW");
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        do {
+            invalidate_l1_cache();
+        } while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc) || !ncrisc_dynamic_noc_posted_writes_sent(noc));
+    } else {
+        while (!ncrisc_noc_nonposted_writes_sent(noc) || !ncrisc_noc_posted_writes_sent(noc));
+    }
+    for (uint32_t trid = 0; trid <= NOC_MAX_TRANSACTION_ID; ++trid) {
+        while (!ncrisc_noc_nonposted_write_with_transaction_id_sent(noc, trid));
+    }
+    invalidate_l1_cache();
+    WAYPOINT("NWDD");
 }
 
 /**

@@ -692,6 +692,10 @@ public:
      * When NocOptions::POSTED is set, waits for posted (fire-and-forget) writes to flush.
      * When NocOptions::TXN_ID is set, only waits for writes tagged with noc_opts.trid.
      *
+     * WARNING: without NocOptions::TXN_ID this does not guarantee that the NoC has finished reading
+     * the write's source from L1 (see noc_async_writes_flushed()). Use async_writes_departed() before
+     * overwriting a source right after the flush.
+     *
      * @param noc_opts Optional NoC parameters: noc_opts.trid used when NocOptions::TXN_ID (default: {})
      * @tparam opts Bit-flag combination of NocOptions (default: DEFAULT)
      */
@@ -712,6 +716,14 @@ public:
             }
         }
     }
+
+    /** @brief Waits until the NoC has finished reading the source of every outstanding write.
+     *
+     * After this returns, the L1 source of every write (posted and non-posted) issued on this NoC
+     * may be overwritten or reused. The writes may not have reached their destinations yet; use
+     * async_write_barrier() for that. See noc_async_writes_departed().
+     */
+    void async_writes_departed() const { noc_async_writes_departed(noc_id_); }
 
     /** @brief Initiates an atomic barrier for synchronization.
      *
