@@ -72,7 +72,7 @@ std::uint32_t window_rows(const MaxReduceWithIndicesConfig& config) { return con
 // RawUInt16 unpacks as zeros, and Int32 has to unpack straight to Dest, which is kernel-wide on
 // Quasar and lands every copy_tile on Dest tile 0. So on Quasar the index tile uses a float format
 // of the same width; the kernel only moves index bits (SFPLOAD/SFPSTORE as UINT16 / INT32), and
-// every index code here is a small integer that the float format holds exactly.
+// every index code here is an integer that the float format holds exactly.
 tt::DataFormat index_format(tt::ARCH arch, bool wide) {
     if (arch == tt::ARCH::QUASAR) {
         return wide ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
@@ -193,9 +193,12 @@ std::vector<Chunk> generate_chunks(const MaxReduceWithIndicesConfig& config, std
         chunk.values.assign(kTileElems, kOutOfWindowValue);
         chunk.indices.resize(kTileElems);
         // The check only matches an index against its own column, so a code needs to tell apart
-        // the rows of every chunk; staying at or below 256 keeps it exact in bf16.
+        // the rows of every chunk. Narrow codes stay at or below 256, exact in bf16. Wide codes sit
+        // above 16 bits, so a path that drops the upper half fails; spaced 64 apart in [2^16, 2^17)
+        // they also stay exact in the TF32 a Quasar Float32 index operand unpacks to.
         for (std::uint32_t i = 0; i < kTileElems; ++i) {
-            chunk.indices[i] = c * kTileDim + i / kTileDim + 1;
+            const std::uint32_t row_code = c * kTileDim + i / kTileDim + 1;
+            chunk.indices[i] = config.wide_indices ? (1u << 16) + row_code * 64 : row_code;
         }
         for (std::uint32_t col = 0; col < kTileDim; ++col) {
             std::vector<int> steps(64);
