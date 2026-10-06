@@ -25,7 +25,11 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    ExpertMapping,
+    combine_overlap_payload_size,
+    get_ep_mesh_mapper,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_latent_proj import TtLatentMoeProjections
@@ -317,8 +321,10 @@ class TtMoe(LightweightModule):
                 agnostic, so this never invalidates one.
             overlap_routed_expert_with_combine: run the routed expert and combine_fabric2d as ONE program
                 (hybrid_routed_expert_moe in overlap mode), combine taking each expert as soon as it is
-                written. Blackhole only, and defaulted to that: None means on wherever it is supported. Needs a fabric payload of a whole bf16 token plus combine_fabric2d's
-                routing tail (the model's FABRIC_PAYLOAD_SIZE), and a threshold that leaves the unified half
+                written. Blackhole only. None means on wherever it is supported AND the mesh's fabric payload
+                fits a whole bf16 token plus combine_fabric2d's routing tail -- open the mesh with
+                init_helpers.moe_fabric_payload_size for that; with the model's own EMB_SIZE payload MoE runs
+                the routed expert then combine. Also needs a threshold that leaves the unified half
                 some experts. Its three global semaphores live in the mesh's TT_CCL; everything else it
                 places in L1 is freed when the op returns.
         """
@@ -527,10 +533,23 @@ class TtMoe(LightweightModule):
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
 
-        # Overlapping is the default wherever the op exists; only Blackhole has it.
+        # Overlapping is the default wherever the op exists -- only Blackhole has it -- and the mesh's fabric can
+        # carry combine_fabric2d's packet. A mesh opened with the model's own payload (EMB_SIZE) runs the routed
+        # expert then combine instead; moe_fabric_payload_size is what opens it with room for the overlap.
+        overlap_payload = combine_overlap_payload_size(self.routed_emb_dim)
+        fabric_payload = ttnn.get_tt_fabric_max_payload_size_bytes() if is_blackhole() else 0
         if overlap_routed_expert_with_combine is None:
-            overlap_routed_expert_with_combine = is_blackhole()
-        logger.info(f"TtMoe: routed expert overlapped with combine_fabric2d: {overlap_routed_expert_with_combine}")
+            overlap_routed_expert_with_combine = is_blackhole() and fabric_payload >= overlap_payload
+        elif overlap_routed_expert_with_combine and fabric_payload < overlap_payload:
+            raise ValueError(
+                f"overlap_routed_expert_with_combine needs a Blackhole fabric payload of at least {overlap_payload} B "
+                f"(a bf16 token plus combine_fabric2d's routing tail), got {fabric_payload} B; open the mesh with "
+                f"moe_fabric_payload_size"
+            )
+        logger.info(
+            f"TtMoe: routed expert overlapped with combine_fabric2d: {overlap_routed_expert_with_combine} "
+            f"(fabric payload {fabric_payload} B, overlap needs {overlap_payload} B)"
+        )
         # combine_fabric2d relays tokens between the chips of one ring, so each chip needs its own dispatch
         # group's rows of the table -- one row per ring chip -- and no other group's. Combine runs on mesh axis
         # 0, so a group is a mesh column: shard the groups across columns and replicate down each one.

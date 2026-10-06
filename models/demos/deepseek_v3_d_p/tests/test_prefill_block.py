@@ -32,6 +32,7 @@ from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import Mistra
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import load_moe_weights_from_hf
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
+    moe_fabric_payload,
     torus_xy_device_params,
 )
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
@@ -586,7 +587,7 @@ def run_model(
     [
         pytest.param(
             (8, 4),
-            fabric2d_device_params(fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE),
+            fabric2d_device_params(fabric_payload_size=moe_fabric_payload(MistralSmall4Config)),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="fabric2d-mesh-8x4",
@@ -760,7 +761,7 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE,
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
                 worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
             ),
             2,
