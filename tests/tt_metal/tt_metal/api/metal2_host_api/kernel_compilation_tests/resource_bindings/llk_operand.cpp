@@ -62,6 +62,26 @@ void kernel_main() {
     EXPECT_ANY_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
+TEST_F(LLKOperandInterop, ScratchpadWithoutMetadataReportsInvalidFormat) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+#include "api/compute/common.h"
+void kernel_main() {
+    Scratchpad<uint32_t> pad(scratch::pad);
+    ASSERT(pad.get_dataformat() == DataFormat::Invalid);
+}
+)"};
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 1024,
+    }};
+    spec.kernels[1].scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
 TEST_F(LLKOperandInterop, ScratchpadFormatAloneSucceeds) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
@@ -70,6 +90,7 @@ TEST_F(LLKOperandInterop, ScratchpadFormatAloneSucceeds) {
 void kernel_main() {
     Scratchpad<uint32_t> pad(scratch::pad);
     using PadOp = LLKOperandFrom<scratch::pad>;
+    ASSERT(pad.get_dataformat() == DataFormat::Float16_b);
     static_assert(PadOp::descriptor.format == DataFormat::Float16_b);
     static_assert(PadOp::descriptor.shape.face_r_dim == 16);
     static_assert(PadOp::descriptor.shape.face_c_dim == 16);
@@ -153,6 +174,7 @@ TEST_F(LLKOperandInterop, DFBDefaultTileCompiles) {
 void kernel_main() {
     DataflowBuffer in(dfb::input_dfb);
     using InOp = LLKOperandFrom<dfb::input_dfb>;
+    ASSERT(in.get_dataformat() == DataFormat::Float16_b);
     static_assert(InOp::descriptor.format == DataFormat::Float16_b);
     static_assert(InOp::descriptor.shape.face_r_dim == 16);
     static_assert(InOp::descriptor.shape.face_c_dim == 16);
