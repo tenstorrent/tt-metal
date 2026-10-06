@@ -81,6 +81,14 @@ class THROTTLE_LEVEL(TemplateParameter):
 
 
 @dataclass
+class MATMUL_ROW_MOP(TemplateParameter):
+    """Blackhole matmul math with one MOP per reuse row (_llk_math_matmul_init_ and _llk_math_matmul_ with row_mop)."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_ROW_MOP"
+
+
+@dataclass
 class MATH_TRANSPOSE_FACES(TemplateParameter):
     math_transpose_faces: Transpose
 

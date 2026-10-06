@@ -29,6 +29,7 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_ROW_MOP,
     NUM_FACES,
     PERF_RUN_TYPE,
     THROTTLE_LEVEL,
@@ -92,6 +93,7 @@ def test_matmul(
     math_fidelity,
     format_dest_acc_and_dims,
     boot_mode=BootMode.DEFAULT,
+    row_mop=False,
 ):
     torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
 
@@ -147,6 +149,7 @@ def test_matmul(
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
             DEST_SYNC(),
             THROTTLE_LEVEL(),
+            *([MATMUL_ROW_MOP()] if row_mop else []),
         ],
         runtimes=[
             NUM_FACES(),
@@ -180,6 +183,29 @@ def test_matmul(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+
+# The math thread's row MOP (one MOP per reuse row, Blackhole only) on every block shape, fidelity and DEST mode.
+ROW_MOP_COMBINATIONS = generate_format_aware_matmul_combinations(
+    input_output_formats(
+        [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Bfp8_b], same=True
+    ),
+    DEST_ACC_MODES,
+)
+
+
+@skip_for_wormhole
+@parametrize(
+    math_fidelity=[
+        MathFidelity.LoFi,
+        MathFidelity.HiFi2,
+        MathFidelity.HiFi3,
+        MathFidelity.HiFi4,
+    ],
+    format_dest_acc_and_dims=ROW_MOP_COMBINATIONS,
+)
+def test_matmul_row_mop(math_fidelity, format_dest_acc_and_dims):
+    test_matmul(math_fidelity, format_dest_acc_and_dims, row_mop=True)
 
 
 # Full-sync DEST blocks with rows of more than 8 streamed tiles, run in both config contexts (kt_dim 2): the unpack

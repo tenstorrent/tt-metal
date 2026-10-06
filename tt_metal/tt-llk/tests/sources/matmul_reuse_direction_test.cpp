@@ -64,19 +64,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_matmul.h"
 #include "params.h"
 
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_ROW_MOP)
+#define MATMUL_MATH_TEMPLATE_ARGS MATH_FIDELITY, THROTTLE_LEVEL, true
+#else
+#define MATMUL_MATH_TEMPLATE_ARGS MATH_FIDELITY, THROTTLE_LEVEL
+#endif
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
+    _llk_math_matmul_init_<MATMUL_MATH_TEMPLATE_ARGS>(
         TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /* partial_face */, 0 /* transpose */, INIT_CT_DIM, INIT_RT_DIM);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     for (std::uint32_t j = 0; j < params.KT_DIM; j++)
     {
-        _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(0 /* dst_index */, params.CT_DIM, params.RT_DIM);
+        _llk_math_matmul_<MATMUL_MATH_TEMPLATE_ARGS>(0 /* dst_index */, params.CT_DIM, params.RT_DIM);
     }
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_matmul_uninit_();

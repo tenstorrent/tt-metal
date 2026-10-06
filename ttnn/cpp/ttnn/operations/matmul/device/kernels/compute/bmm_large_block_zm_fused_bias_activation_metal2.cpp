@@ -95,6 +95,7 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_dfb_id, uint32_t i
     }
 }
 
+template <bool row_mop>
 FORCE_INLINE void reload_from_dfb_to_dst(
     uint32_t in0_dfb_id,
     uint32_t in1_dfb_id,
@@ -133,7 +134,7 @@ FORCE_INLINE void reload_from_dfb_to_dst(
     mm_partials_dfb.pop_front(out_subblock_num_tiles);
     // Reconfigure srcA back
     reconfig_data_format_srca(mm_partials_reload_dfb_id, in1_dfb_id);
-    matmul_block_init(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    matmul_block_init<row_mop>(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>
@@ -198,6 +199,8 @@ void kernel_main() {
     constexpr auto out_subblock_h = get_arg(args::out_subblock_h);              // inner row block size in tiles
     constexpr auto out_subblock_w = get_arg(args::out_subblock_w);              // inner column block size in tiles
     constexpr auto out_subblock_num_tiles = get_arg(args::out_subblock_num_tiles);  // out_subblock_h * out_subblock_w;
+    // one math MOP per row of the sub block (Blackhole) where its tile count and the k steps of a block hide the per-row work
+    constexpr bool row_mop = out_subblock_num_tiles >= 8 && in0_block_w > 1;
     constexpr auto batch = get_arg(args::batch);                                    // batch dim
     constexpr auto out_block_num_tiles = get_arg(args::out_block_num_tiles);        // number of tiles in out_block
     constexpr bool untilize_out = get_arg(args::untilize_out);                      // untilize output
@@ -289,7 +292,7 @@ void kernel_main() {
     constexpr bool spill = num_blocks_inner_dim > 1;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_id);
-    matmul_block_init(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    matmul_block_init<row_mop>(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
@@ -363,7 +366,7 @@ void kernel_main() {
 #endif
                         transpose_tile_block<in0_block_num_tiles>(in0_transpose_dfb_id, in0_dfb_id);
                         reconfig_data_format_srca(in0_transpose_dfb_id, in1_dfb_id);
-                        matmul_block_init(
+                        matmul_block_init<row_mop>(
                             in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                         PACK((pack_reconfig_data_format(mm_partials_dfb_id)));
 #ifdef ARCH_QUASAR
@@ -404,7 +407,7 @@ void kernel_main() {
 
                             tile_regs_acquire();
                             if (enable_reload) {
-                                reload_from_dfb_to_dst(
+                                reload_from_dfb_to_dst<row_mop>(
                                     in0_dfb_id,
                                     in1_dfb_id,
                                     mm_partials_dfb_id,
@@ -428,7 +431,7 @@ void kernel_main() {
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
                                 // in0
-                                matmul_block(
+                                matmul_block<row_mop>(
                                     in0_dfb_id,
                                     in1_dfb_id,
                                     in0_index,
@@ -700,7 +703,7 @@ void kernel_main() {
                     reconfig_data_format_srca(mm_partials_dfb_id, in1_dfb_id);
 #endif
                     // reconfigure init for matmul
-                    matmul_block_init(
+                    matmul_block_init<row_mop>(
                         in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                 }
             }

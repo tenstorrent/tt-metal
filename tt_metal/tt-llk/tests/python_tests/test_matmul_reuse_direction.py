@@ -17,6 +17,7 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     MATH_FIDELITY,
+    MATMUL_ROW_MOP,
     NUM_FACES,
     THROTTLE_LEVEL,
     TILE_COUNT,
@@ -44,7 +45,9 @@ class MATMUL_INIT_BLOCK(TemplateParameter):
         )
 
 
-def _configuration(formats, init_block, block, pack_result):
+def _configuration(
+    formats, init_block, block, pack_result, fidelity=MathFidelity.LoFi, row_mop=False
+):
     (init_rt, init_ct), (rt, ct) = init_block, block
     a_shape, b_shape = (rt * 32, KT_DIM * 32), (KT_DIM * 32, init_ct * 32)
     # Small binary fractions keep every product and sum exact at LoFi with a 16-bit DEST.
@@ -61,9 +64,10 @@ def _configuration(formats, init_block, block, pack_result):
         "sources/matmul_reuse_direction_test.cpp",
         formats,
         templates=[
-            MATH_FIDELITY(MathFidelity.LoFi),
+            MATH_FIDELITY(fidelity),
             THROTTLE_LEVEL(0),
             MATMUL_INIT_BLOCK(init_rt, init_ct, pack_result),
+            *([MATMUL_ROW_MOP()] if row_mop else []),
         ],
         runtimes=[NUM_FACES(), TILE_COUNT(rt * ct), CRK_TILE_DIMM(ct, rt, KT_DIM)],
         variant_stimuli=StimuliConfig(
@@ -95,10 +99,14 @@ def _configuration(formats, init_block, block, pack_result):
         ((4, 2), (3, 2)),
     ],
 )
-def test_matmul_narrowed_block(formats, blocks):
+def test_matmul_narrowed_block(
+    formats, blocks, fidelity=MathFidelity.LoFi, row_mop=False
+):
     """Blocks narrower than the init's in the same reuse direction, as the DRAM sharded matmul's last sub block."""
     init_block, block = blocks
-    configuration, a, b = _configuration(formats, init_block, block, True)
+    configuration, a, b = _configuration(
+        formats, init_block, block, True, fidelity, row_mop
+    )
     rt, ct = block
     result = torch.tensor(configuration.run().result, dtype=torch.bfloat16)
     assert result.numel() == rt * ct * 1024
@@ -106,7 +114,7 @@ def test_matmul_narrowed_block(formats, blocks):
         a,
         b,
         formats.output_format,
-        MathFidelity.LoFi,
+        fidelity,
         input_A_dimensions=(rt * 32, KT_DIM * 32),
         input_B_dimensions=(KT_DIM * 32, ct * 32),
         tilize=True,
@@ -114,6 +122,25 @@ def test_matmul_narrowed_block(formats, blocks):
         input_B_format=formats.input_format,
     )
     assert passed_test(expected, result, formats.output_format)
+
+
+@skip_for_wormhole
+@skip_for_quasar
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    # the row MOP's row length and DEST stride follow a narrowed call
+    blocks=[
+        ((1, 8), (1, 7)),
+        ((1, 8), (1, 5)),
+        ((2, 4), (2, 3)),
+        ((4, 2), (3, 2)),
+        ((8, 1), (5, 1)),
+        ((1, 4), (1, 1)),
+    ],
+    fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
+)
+def test_matmul_narrowed_block_row_mop(formats, blocks, fidelity):
+    test_matmul_narrowed_block(formats, blocks, fidelity, row_mop=True)
 
 
 @skip_for_wormhole

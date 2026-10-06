@@ -147,6 +147,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_common.h"
 #include "llk_math_matmul.h"
 
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_ROW_MOP)
+#define MATMUL_MATH_TEMPLATE_ARGS MATH_FIDELITY, THROTTLE_LEVEL, true
+#else
+#define MATMUL_MATH_TEMPLATE_ARGS MATH_FIDELITY, THROTTLE_LEVEL
+#endif
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -164,7 +170,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
+        _llk_math_matmul_init_<MATMUL_MATH_TEMPLATE_ARGS>(
             /* tile A */ TILE_R_DIM,
             /* tile A */ TILE_C_DIM,
             /* tile B */ TILE_R_DIM,
@@ -195,7 +201,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                 for (std::uint32_t j = 0; j < KT_DIM; j++)
                 {
-                    _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(/* dest_index */ 0, CT_DIM, RT_DIM);
+                    _llk_math_matmul_<MATMUL_MATH_TEMPLATE_ARGS>(/* dest_index */ 0, CT_DIM, RT_DIM);
                 }
             }
         }
@@ -210,7 +216,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_math_wait_for_dest_available_<dest_sync>();
                 for (std::uint32_t j = 0; j < KT_DIM; j++)
                 {
-                    _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(/* dest_index */ 0, CT_DIM, RT_DIM);
+                    _llk_math_matmul_<MATMUL_MATH_TEMPLATE_ARGS>(/* dest_index */ 0, CT_DIM, RT_DIM);
                 }
                 _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
