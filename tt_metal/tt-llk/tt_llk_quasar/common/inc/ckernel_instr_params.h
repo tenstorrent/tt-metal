@@ -62,10 +62,11 @@ struct p_unpacr
     constexpr static std::uint32_t TILE3_CFG_CONTEXT     = (0); // Config context for tile 3
     constexpr static std::uint32_t AUTO_INC_CONTEXT      = (1); // Auto increment config context (max value set through unpacker config command)
 
-    constexpr static std::uint32_t UNP_POP           = 0x0;
-    constexpr static std::uint32_t UNP_CLRSRC        = 0x1;
-    constexpr static std::uint32_t UNP_NOP           = 0x2;
-    constexpr static std::uint32_t UNP_POP_STREAM    = 0x3;
+    // UNPACR_NOP's Nop_type on Quasar: clear the source register, a pure delay, or set its dvalid alone; 3 is reserved.
+    // (Blackhole's encoding, where 1 clears and 2 is the delay, does not carry over.)
+    constexpr static std::uint32_t UNP_CLRSRC        = 0x0;
+    constexpr static std::uint32_t UNP_NOP           = 0x1;
+    constexpr static std::uint32_t UNP_SET_DVALID    = 0x2;
     constexpr static std::uint32_t UNP_CLRSRC_ZERO   = 0x0;
     constexpr static std::uint32_t UNP_CLRSRC_NEGINF = 0x1;
     constexpr static std::uint32_t UNP_CLRSRC_ONE    = 0x2;

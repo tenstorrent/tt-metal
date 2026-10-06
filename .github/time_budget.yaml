@@ -339,6 +339,7 @@ llk:
 models:
   agentic_research_tier3:
     bh_quietbox_2: 102
+    bh_p150: 30
   merge_gate:
     wh_galaxy_merge_gate: 5
   sanity:
@@ -353,6 +354,7 @@ models:
     bh_loudbox: 200
     bh_quietbox_2: 90
     bh_sc1: 20
+    bh_galaxy: 13
   e2e_tier1:
     wh_n150: 28
     wh_galaxy_perf: 215
@@ -363,9 +365,9 @@ models:
     bh_sc4: 160
   e2e_tier2:
     wh_llmbox_perf: 270
-    wh_n150: 45
+    wh_n150: 56
     wh_n300: 6
-    bh_p150: 26
+    bh_p150: 35
     bh_p300: 42
     bh_quietbox_2: 186
   e2e_tier3:
@@ -390,10 +392,10 @@ models:
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 191
-    wh_n150: 87
+    wh_n150: 122
     wh_n300: 30
-    wh_galaxy_perf: 80
-    bh_p150: 20
+    wh_galaxy_perf: 85
+    bh_p150: 43
     bh_quietbox_2: 60
   unit_tier3:
     wh_llmbox: 90
@@ -409,15 +411,17 @@ models:
   integration:
     wh_llmbox: 0
   device_perf:
-    wh_n150: 20
+    # Llama 3.1-8B device perf: the two profiled cases plus tracy post-processing need ~19 min on a slow
+    # N150 VM episode (vm-109 2026-10-01); 20 cut the leg off after both cases had passed.
+    wh_n150: 30
     wh_galaxy_perf: 70
     bh_p150: 20
     bh_p300: 20
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 1750
-    bh_sc1_high_power: 388
+    bh_sc1: 1790
+    bh_sc1_high_power: 448
     bh_sc4: 60
     wh_n150: 500
     wh_n150_civ2: 300
@@ -468,7 +472,8 @@ syseng:
     wh_n150_civ2: 34
     wh_n300_civ2: 36
     bh_p100: 20
-    bh_p150b_civ2: 20
+    bh_p150b_civ2: 30
+    bh_p300: 10
 
 gtm:
   e2e:

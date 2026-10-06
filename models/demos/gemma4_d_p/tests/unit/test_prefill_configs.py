@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+import ttnn
+from models.demos.gemma4_d_p.tt.attention.operations import projection_math_fidelity
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_sdpa_chunk_sizes
 from models.demos.gemma4_d_p.tt.matmul_config import prefill_1d_matmul_program_config
 from models.demos.gemma4_d_p.tt.rms_norm import _block_shard_geometry
@@ -17,17 +19,36 @@ GRID = SimpleNamespace(x=11, y=10)
 @pytest.mark.parametrize(
     "slab, sliding, expected",
     [
-        (256, False, (64, 256, 3)),
-        (512, False, (128, 256, 3)),
-        (1024, False, (96, 256, 1)),
-        (256, True, (128, 128, 1)),
+        (256, False, (64, 256, 3, True)),
+        (512, False, (128, 256, 3, True)),
+        (1024, False, (96, 256, 1, True)),
+        (256, True, (128, 128, 1, False)),
         # A quarter slab that is not whole tiles falls back to one tile.
-        (64, False, (32, 256, 3)),
-        (160, False, (32, 256, 3)),
+        (64, False, (32, 256, 3, True)),
+        (160, False, (32, 256, 3, True)),
+        # Segmented accumulation needs one Q chunk per core: 8 heads x ceil(slab / q) <= 110 cores.
+        (1536, False, (128, 256, 1, True)),
+        (1664, False, (128, 256, 1, True)),
+        # Too long for any q tried (chunk 16384: 16 chunks of q 128 per head): q 96 without segments.
+        (2048, False, (96, 256, 1, False)),
+        (4096, False, (96, 256, 1, False)),
     ],
 )
 def test_ring_sdpa_chunk_sizes(slab, sliding, expected):
-    assert ring_sdpa_chunk_sizes(slab, sliding) == expected
+    assert ring_sdpa_chunk_sizes(slab, sliding, num_heads=8, num_cores=110) == expected
+
+
+@pytest.mark.parametrize(
+    "rows, expected",
+    [
+        (256, ttnn.MathFidelity.HiFi2),
+        (511, ttnn.MathFidelity.HiFi2),
+        (512, ttnn.MathFidelity.LoFi),
+        (1024, ttnn.MathFidelity.LoFi),
+    ],
+)
+def test_projection_math_fidelity(rows, expected):
+    assert projection_math_fidelity(rows) == expected
 
 
 def _tensor(rows, cols):

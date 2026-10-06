@@ -769,6 +769,11 @@ Tensor min(
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool fast_and_approximate_mode) {
+    TT_FATAL(
+        !(fast_and_approximate_mode && input_tensor_arg.dtype() == DataType::FLOAT32),
+        "ttnn.min does not support fast_and_approximate_mode=True on Float32 input: the FPU has no min, so SFPU path "
+        "is both more accurate and faster.");
+
     /* Scaling is applied after reduction, so flip the op for negative scalars:
      * min(s * x) = s * max(x) when s < 0.*/
     if (scalar < 0.0f) {
