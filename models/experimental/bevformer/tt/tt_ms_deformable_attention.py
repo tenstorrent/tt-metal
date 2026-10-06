@@ -169,6 +169,7 @@ class TTMSDeformableAttention:
         spatial_shapes,
         grid_dtype=None,
         grid_sample_compute_config=None,
+        residual=True,
     ):
         """
         Initialize TTNN Multi-Scale Deformable Attention module.
@@ -196,6 +197,8 @@ class TTMSDeformableAttention:
                 bfloat16).
             grid_sample_compute_config: Passed to grid_sample; see
                 :func:`multi_scale_deformable_attn_ttnn`.
+            residual: Add ``identity`` to the output. BEVFormer's ``MSDeformableAttention3D``
+                (spatial cross-attention) has neither this shortcut nor an output projection.
 
         Raises:
             ValueError: If the configuration or spatial shapes are invalid.
@@ -234,6 +237,7 @@ class TTMSDeformableAttention:
         self.head_dim = self.embed_dims // self.num_heads
         self.grid_dtype = grid_dtype
         self.grid_sample_compute_config = grid_sample_compute_config
+        self.residual = residual
 
     def _fold_grid_scale(self, spatial_shapes):
         """Pre-scale the ``sampling_offsets`` Linear by ``2 / [W, H]`` per level.
@@ -458,8 +462,8 @@ class TTMSDeformableAttention:
         if ENABLE_LOGGING:
             logger.info("MSDA Adding Residual")
 
-        # Add residual connection
-        output = ttnn.add(output, identity)
+        if self.residual:
+            output = ttnn.add(output, identity)
 
         # Handle batch_first format for output
         if not self.batch_first:

@@ -243,168 +243,40 @@ def create_ms_deformable_attention_parameters(
     )
 
 
-def preprocess_spatial_cross_attention_parameters(
-    torch_model,
-    *,
-    device,
-    dtype=None,
-    layout=None,
-    weights_mesh_mapper=None,
-):
-    """
-    Preprocesses spatial cross attention model parameters from PyTorch to ttnn format.
-
-    Args:
-        torch_model: PyTorch SpatialCrossAttention model
-        device: ttnn device
-        dtype: Target data type for ttnn tensors
-        layout: Target layout for ttnn tensors
-        weights_mesh_mapper: Optional mesh mapper for distributed weights
-
-    Returns:
-        ParameterDict containing preprocessed ttnn tensors
-    """
-
-    parameters = {}
-
-    # SCA has its own output projection layer
-    if hasattr(torch_model, "output_proj"):
-        parameters["output_proj"] = _process_linear_layer(
-            torch_model.output_proj, device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
-        )
-
-    # The nested attention keeps its own namespace. Both modules own an
-    # ``output_proj`` and both apply it, so flattening them together drops one of
-    # the two and makes the other run twice.
-    if hasattr(torch_model, "deformable_attention"):
-        deform_attn = torch_model.deformable_attention
-
-        deform_parameters = {}
-        for layer_name in ["value_proj", "sampling_offsets", "attention_weights", "output_proj"]:
-            if hasattr(deform_attn, layer_name):
-                layer = getattr(deform_attn, layer_name)
-                deform_parameters[layer_name] = _process_linear_layer(
-                    layer, device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
-                )
-        parameters["deformable_attention"] = deform_parameters
-
-    params_obj = _convert_sca_parameters_to_object(parameters)
-
-    return params_obj
-
-
-def preprocess_temporal_self_attention_parameters(
-    torch_model,
-    *,
-    device,
-    dtype=None,
-    layout=None,
-    weights_mesh_mapper=None,
-):
-    """
-    Preprocesses temporal self attention model parameters from PyTorch to ttnn format.
-
-    Args:
-        torch_model: PyTorch TemporalSelfAttention model
-        device: ttnn device
-        dtype: Target data type for ttnn tensors
-        layout: Target layout for ttnn tensors
-        weights_mesh_mapper: Optional mesh mapper for distributed weights
-
-    Returns:
-        ParameterDict containing preprocessed ttnn tensors
-    """
-
-    parameters = {}
-
-    # TSA has a query projection layer for temporal features
-    if hasattr(torch_model, "query_proj"):
-        parameters["query_proj"] = _process_linear_layer(
-            torch_model.query_proj, device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
-        )
-
-    # Extract deformable attention parameters from the nested module
-    if hasattr(torch_model, "deformable_attention"):
-        deform_attn = torch_model.deformable_attention
-
-        # Process deformable attention layers
-        deform_layer_names = ["value_proj", "sampling_offsets", "attention_weights"]
-        for layer_name in deform_layer_names:
-            if hasattr(deform_attn, layer_name):
-                layer = getattr(deform_attn, layer_name)
-                parameters[layer_name] = _process_linear_layer(
-                    layer, device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
-                )
-
-        # Deformable attention output projection
-        if hasattr(deform_attn, "output_proj"):
-            parameters["output_proj"] = _process_linear_layer(
-                deform_attn.output_proj, device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
-            )
-
-    # Convert flat dictionary to object structure for dot notation access
-    params_obj = convert_parameterdict_to_object(parameters)
-
-    return params_obj
-
-
-def create_spatial_cross_attention_parameters(
-    torch_model_path: Optional[str] = None,
-    torch_model: Optional[torch.nn.Module] = None,
-    *,
-    device,
-    dtype=None,
-    layout=None,
-    weights_mesh_mapper=None,
-):
-    """Creates preprocessed parameters for spatial cross attention model."""
-
-    # Get the PyTorch model
-    if torch_model is None:
-        if torch_model_path is None:
-            raise ValueError("Either torch_model or torch_model_path must be provided for SCA")
-        torch_model = torch.load(torch_model_path, map_location="cpu")
-    else:
-        pass
-
-    torch_model.eval()
-
-    return preprocess_spatial_cross_attention_parameters(
-        torch_model,
-        device=device,
-        dtype=dtype,
-        layout=layout,
-        weights_mesh_mapper=weights_mesh_mapper,
+def create_spatial_cross_attention_parameters(sca, device, dtype=DEFAULT_DTYPE):
+    """``reference.spatial_cross_attention.SpatialCrossAttention`` as TTSpatialCrossAttention
+    takes it: the merged-slots ``output_proj`` and the nested ``MSDeformableAttention3D``'s
+    value, offset and attention Linears (it has no output projection)."""
+    deform = sca.deformable_attention
+    return SimpleNamespace(
+        output_proj=linear_params(sca.output_proj.weight, sca.output_proj.bias, device, dtype),
+        deformable_attention=SimpleNamespace(
+            **{
+                name: linear_params(getattr(deform, name).weight, getattr(deform, name).bias, device, dtype)
+                for name in ("value_proj", "sampling_offsets", "attention_weights")
+            }
+        ),
     )
 
 
-def create_temporal_self_attention_parameters(
-    torch_model_path: Optional[str] = None,
-    torch_model: Optional[torch.nn.Module] = None,
-    *,
-    device,
-    dtype=None,
-    layout=None,
-    weights_mesh_mapper=None,
-):
-    """Creates preprocessed parameters for temporal self attention model."""
+def create_temporal_self_attention_parameters(tsa, device, dtype=DEFAULT_DTYPE):
+    """``reference.temporal_self_attention.TemporalSelfAttention`` as TTTemporalSelfAttention
+    takes it. The offset and attention Linears emit channels head-major,
+    (head, queue, level, point[, xy]); they are reordered queue-major, so each stacked map's
+    channels are one contiguous half of the row."""
+    heads, queue = tsa.num_heads, tsa.num_bev_queue
+    per_head = tsa.num_levels * tsa.num_points
 
-    # Get the PyTorch model
-    if torch_model is None:
-        if torch_model_path is None:
-            raise ValueError("Either torch_model or torch_model_path must be provided for TSA")
-        torch_model = torch.load(torch_model_path, map_location="cpu")
-    else:
-        pass
+    def queue_major(linear, width):
+        order = torch.arange(heads * queue * per_head * width).view(heads, queue, per_head * width)
+        order = order.permute(1, 0, 2).reshape(-1)
+        return linear_params(linear.weight[order], linear.bias[order], device, dtype)
 
-    torch_model.eval()
-
-    return preprocess_temporal_self_attention_parameters(
-        torch_model,
-        device=device,
-        dtype=dtype,
-        layout=layout,
-        weights_mesh_mapper=weights_mesh_mapper,
+    return SimpleNamespace(
+        value_proj=linear_params(tsa.value_proj.weight, tsa.value_proj.bias, device, dtype),
+        sampling_offsets=queue_major(tsa.sampling_offsets, 2),
+        attention_weights=queue_major(tsa.attention_weights, 1),
+        output_proj=linear_params(tsa.output_proj.weight, tsa.output_proj.bias, device, dtype),
     )
 
 
@@ -439,172 +311,23 @@ def preprocess_layer_norm_parameters(layer_norm, *, device, dtype=None, layout=N
     return layer_params
 
 
-def preprocess_bevformer_layer_parameters(
-    torch_layer,
-    *,
-    device,
-    dtype=None,
-    layout=None,
-    weights_mesh_mapper=None,
-):
-    """
-    Preprocesses BEVFormer layer parameters from PyTorch to ttnn format.
-
-    Args:
-        torch_layer: PyTorch BEVFormerLayer instance
-        device: ttnn device
-        dtype: Target data type for ttnn tensors
-        layout: Target layout for ttnn tensors
-        weights_mesh_mapper: Optional mesh mapper for distributed weights
-
-    Returns:
-        ParameterDict containing preprocessed ttnn tensors
-    """
-
-    parameters = {}
-
-    # Process temporal self-attention if present
-    if hasattr(torch_layer, "temporal_self_attention") and torch_layer.temporal_self_attention is not None:
-        parameters["temporal_self_attention"] = preprocess_temporal_self_attention_parameters(
-            torch_layer.temporal_self_attention,
-            device=device,
-            dtype=dtype,
-            layout=layout,
-            weights_mesh_mapper=weights_mesh_mapper,
-        )
-
-    # Process spatial cross-attention if present
-    if hasattr(torch_layer, "spatial_cross_attention") and torch_layer.spatial_cross_attention is not None:
-        parameters["spatial_cross_attention"] = preprocess_spatial_cross_attention_parameters(
-            torch_layer.spatial_cross_attention,
-            device=device,
-            dtype=dtype,
-            layout=layout,
-            weights_mesh_mapper=weights_mesh_mapper,
-        )
-
-    # Process layer norms
-    if hasattr(torch_layer, "norm1") and torch_layer.norm1 is not None:
-        parameters["norm1"] = preprocess_layer_norm_parameters(
-            torch_layer.norm1, device=device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
-        )
-
-    if hasattr(torch_layer, "norm2") and torch_layer.norm2 is not None:
-        parameters["norm2"] = preprocess_layer_norm_parameters(
-            torch_layer.norm2, device=device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
-        )
-
-    if hasattr(torch_layer, "norm3") and torch_layer.norm3 is not None:
-        parameters["norm3"] = preprocess_layer_norm_parameters(
-            torch_layer.norm3, device=device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
-        )
-
-    # Process FFN
-    if hasattr(torch_layer, "ffn") and torch_layer.ffn is not None:
-        ffn_params = {}
-
-        # FFN is typically nn.Sequential with Linear layers
-        # Extract individual layers from the sequential
-        for i, ffn_layer in enumerate(torch_layer.ffn):
-            if isinstance(ffn_layer, torch.nn.Linear):
-                if i == 0:  # First linear layer
-                    ffn_params["linear1"] = _process_linear_layer(
-                        ffn_layer, device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
-                    )
-                elif i == 2:  # Second linear layer (index 3 due to ReLU and Dropout in between)
-                    ffn_params["linear2"] = _process_linear_layer(
-                        ffn_layer, device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
-                    )
-
-        parameters["ffn"] = ffn_params
-
-    # Convert to object structure
-    params_obj = convert_parameterdict_to_object(parameters)
-
-    return params_obj
-
-
-def preprocess_bevformer_encoder_parameters(
-    torch_encoder,
-    *,
-    device,
-    dtype=None,
-    layout=None,
-    weights_mesh_mapper=None,
-):
-    """
-    Preprocesses BEVFormer encoder parameters from PyTorch to ttnn format.
-
-    Args:
-        torch_encoder: PyTorch BEVFormerEncoder instance
-        device: ttnn device
-        dtype: Target data type for ttnn tensors
-        layout: Target layout for ttnn tensors
-        weights_mesh_mapper: Optional mesh mapper for distributed weights
-
-    Returns:
-        ParameterDict containing preprocessed ttnn tensors
-    """
-
-    print("Preprocessing BEVFormer encoder parameters...")
-    parameters = {}
-
-    # Process each layer
-    if hasattr(torch_encoder, "layers") and torch_encoder.layers is not None:
-        for layer_idx, layer in enumerate(torch_encoder.layers):
-            parameters[f"layer_{layer_idx}"] = preprocess_bevformer_layer_parameters(
-                layer,
-                device=device,
-                dtype=dtype,
-                layout=layout,
-                weights_mesh_mapper=weights_mesh_mapper,
-            )
-
-    # Convert to object structure
-    params_obj = convert_parameterdict_to_object(parameters)
-
-    print("BEVFormer encoder parameter preprocessing completed.")
-    return params_obj
-
-
-def create_bevformer_encoder_parameters(
-    torch_model_path: Optional[str] = None,
-    torch_model: Optional[torch.nn.Module] = None,
-    *,
-    device,
-    dtype=None,
-    layout=None,
-    weights_mesh_mapper=None,
-):
-    """
-    Creates preprocessed parameters for BEVFormer encoder model.
-
-    Args:
-        torch_model_path: Path to saved PyTorch model (optional)
-        torch_model: PyTorch BEVFormerEncoder instance (optional)
-        device: ttnn device
-        dtype: Target data type for ttnn tensors
-        layout: Target layout for ttnn tensors
-        weights_mesh_mapper: Optional mesh mapper for distributed weights
-
-    Returns:
-        ParameterDict containing preprocessed ttnn tensors
-    """
-
-    # Get the PyTorch model
-    if torch_model is None:
-        if torch_model_path is None:
-            raise ValueError("Either torch_model or torch_model_path must be provided for BEVFormer encoder")
-        torch_model = torch.load(torch_model_path, map_location="cpu")
-    else:
-        pass
-
-    torch_model.eval()
-
-    return preprocess_bevformer_encoder_parameters(
-        torch_model,
-        device=device,
-        dtype=dtype,
-        layout=layout,
-        weights_mesh_mapper=weights_mesh_mapper,
+def create_bevformer_layer_parameters(layer, device, dtype=DEFAULT_DTYPE):
+    """``reference.encoder.BEVFormerLayer`` as TTBEVFormerLayer takes it."""
+    ffn = layer.ffns[0].layers
+    return SimpleNamespace(
+        tsa=create_temporal_self_attention_parameters(layer.attentions[0], device, dtype),
+        sca=create_spatial_cross_attention_parameters(layer.attentions[1], device, dtype),
+        ffn=SimpleNamespace(
+            linear1=linear_params(ffn[0][0].weight, ffn[0][0].bias, device, dtype),
+            linear2=linear_params(ffn[1].weight, ffn[1].bias, device, dtype),
+        ),
+        norms=[
+            SimpleNamespace(**preprocess_layer_norm_parameters(norm, device=device, dtype=dtype))
+            for norm in layer.norms
+        ],
     )
+
+
+def create_bevformer_encoder_parameters(encoder, device, dtype=DEFAULT_DTYPE):
+    """``reference.encoder.BEVFormerEncoder`` as TTBEVFormerEncoder takes it, one entry per layer."""
+    return SimpleNamespace(layers=[create_bevformer_layer_parameters(layer, device, dtype) for layer in encoder.layers])

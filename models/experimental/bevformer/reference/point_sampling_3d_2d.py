@@ -162,10 +162,9 @@ def point_sampling_3d_to_2d(
     reference_points_cam[..., 0] /= img_w  # Normalize x by width
     reference_points_cam[..., 1] /= img_h  # Normalize y by height
 
-    # Check if points are within image bounds [0, 1]
-    reference_points_cam_clamped = torch.clamp(reference_points_cam, -10.0, 10.0)
-    valid_x = (reference_points_cam_clamped[..., 0:1] >= 0.0) & (reference_points_cam_clamped[..., 0:1] <= 1.0)
-    valid_y = (reference_points_cam_clamped[..., 1:2] >= 0.0) & (reference_points_cam_clamped[..., 1:2] <= 1.0)
+    # Inside the image, open bounds as upstream.
+    valid_x = (reference_points_cam[..., 0:1] > 0.0) & (reference_points_cam[..., 0:1] < 1.0)
+    valid_y = (reference_points_cam[..., 1:2] > 0.0) & (reference_points_cam[..., 1:2] < 1.0)
 
     # Combine depth and bounds validity
     bev_mask = bev_mask & valid_x & valid_y

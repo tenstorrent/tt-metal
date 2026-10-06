@@ -2,245 +2,123 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-BEVFormer Encoder implementation in PyTorch.
+BEVFormer encoder in PyTorch.
 
-This module implements the main BEVFormer encoder that combines spatial cross-attention
-and temporal self-attention to learn Bird's-Eye-View representations from multi-camera
-images. The encoder processes BEV queries through multiple transformer layers that
-enable both spatial feature extraction from camera views and temporal modeling.
+This module implements the encoder that builds the bird's-eye-view map: one query per BEV cell
+(200x200 for BEVFormer-base, 50x50 for BEVFormer-tiny) gathers the previous frame's BEV and the
+six cameras' FPN features. It follows upstream's ``BEVFormerEncoder`` and ``BEVFormerLayer``
+(``projects/mmdet3d_plugin/bevformer/modules/encoder.py`` in fundamentalvision/BEVFormer) and is
+the reference the TTNN encoder in ``tt/tt_encoder.py`` is checked against. Module names follow
+mmcv's ``BaseTransformerLayer`` (``attentions``, ``ffns``, ``norms``), so the
+``pts_bbox_head.transformer.encoder`` weights of a BEVFormer checkpoint load into it with that
+prefix stripped.
 
-Based on the original BEVFormer implementation:
-https://github.com/fundamentalvision/BEVFormer/blob/master/projects/mmdet3d_plugin/bevformer/modules/encoder.py
+Per frame, the encoder projects each BEV pillar's ``num_points_in_pillar`` points into the
+cameras (``point_sampling``) and builds the cells' 2D reference points; for the previous BEV
+these are shifted by the ego motion. Each of the six layers then performs, batch-first:
+1. Temporal self-attention over the BEV queries and the previous BEV, the positional encoding
+   added to the query, with a residual add
+2. LayerNorm
+3. Spatial cross-attention into the cameras each pillar projects into, with a residual add
+4. LayerNorm
+5. FFN (Linear-ReLU-Linear) with a residual add
+6. LayerNorm
+
+The previous BEV must already be rotated to the current frame; the detector does that before
+calling the encoder. Only inference is kept: dropout is dropped.
 """
 
 import torch
 import torch.nn as nn
-from typing import Optional, List, Dict, Any
 
+from .point_sampling_3d_2d import generate_reference_points, point_sampling_3d_to_2d
 from .spatial_cross_attention import SpatialCrossAttention
 from .temporal_self_attention import TemporalSelfAttention
-from .point_sampling_3d_2d import generate_reference_points, point_sampling_3d_to_2d
+
+PC_RANGE = (-51.2, -51.2, -5.0, 51.2, 51.2, 3.0)
+
+
+class FFN(nn.Module):
+    """mmcv's two-layer ``FFN`` with its identity shortcut; dropout is a no-op in inference."""
+
+    def __init__(self, embed_dims=256, feedforward_channels=512):
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Sequential(nn.Linear(embed_dims, feedforward_channels), nn.ReLU(inplace=True)),
+            nn.Linear(feedforward_channels, embed_dims),
+        )
+
+    def forward(self, x):
+        return x + self.layers(x)
 
 
 class BEVFormerLayer(nn.Module):
-    """
-    Single transformer layer for BEVFormer encoder.
-
-    This layer combines spatial cross-attention and temporal self-attention
-    to process BEV queries. Each layer performs:
-    1. Temporal self-attention (optional) - models temporal dependencies
-    2. Spatial cross-attention - extracts features from camera views
-    3. Feed-forward network (optional) - additional processing
-    """
-
     def __init__(
         self,
-        embed_dims: int = 256,
-        num_heads: int = 8,
-        num_levels: int = 4,
-        num_points: int = 4,
-        num_cams: int = 6,
-        use_temporal_self_attention: bool = True,
-        use_spatial_cross_attention: bool = True,
-        feedforward_channels: int = 1024,
-        batch_first: bool = True,
-        **kwargs,
+        embed_dims=256,
+        num_heads=8,
+        num_levels=4,
+        num_points=8,
+        num_cams=6,
+        feedforward_channels=512,
+        tsa_num_points=4,
     ):
-        """
-        Initialize a single BEVFormer transformer layer.
-
-        Args:
-            embed_dims (int): Feature embedding dimensions
-            num_heads (int): Number of attention heads
-            num_levels (int): Number of feature pyramid levels
-            num_points (int): Number of sampling points in deformable attention
-            num_cams (int): Number of cameras
-            use_temporal_self_attention (bool): Whether to include temporal self-attention
-            use_spatial_cross_attention (bool): Whether to include spatial cross-attention
-            feedforward_channels (int): Hidden dimensions in FFN
-            batch_first (bool): Whether batch dimension comes first
-            **kwargs: Additional arguments
-        """
-        super(BEVFormerLayer, self).__init__()
-
-        self.embed_dims = embed_dims
-        self.use_temporal_self_attention = use_temporal_self_attention
-        self.use_spatial_cross_attention = use_spatial_cross_attention
-        self.batch_first = batch_first
-
-        # Temporal Self-Attention
-        if use_temporal_self_attention:
-            self.temporal_self_attention = TemporalSelfAttention(
-                embed_dims=embed_dims,
-                num_heads=num_heads,
-                num_levels=1,  # Single level for temporal attention
-                num_points=num_points,
-                batch_first=batch_first,
-                **kwargs,
-            )
-            self.norm1 = nn.LayerNorm(embed_dims)
-
-        # Spatial Cross-Attention
-        if use_spatial_cross_attention:
-            deform_config = {
-                "embed_dims": embed_dims,
-                "num_heads": num_heads,
-                "num_levels": num_levels,
-                "num_points": num_points,
-            }
-            self.spatial_cross_attention = SpatialCrossAttention(
-                embed_dims=embed_dims,
-                num_cams=num_cams,
-                batch_first=batch_first,
-                deformable_attention=deform_config,
-                **kwargs,
-            )
-            self.norm2 = nn.LayerNorm(embed_dims)
-
-        # Feed-Forward Network
-        self.ffn = nn.Sequential(
-            nn.Linear(embed_dims, feedforward_channels),
-            nn.ReLU(inplace=True),
-            nn.Linear(feedforward_channels, embed_dims),
+        super().__init__()
+        self.attentions = nn.ModuleList(
+            [
+                TemporalSelfAttention(
+                    embed_dims=embed_dims, num_heads=num_heads, num_levels=1, num_points=tsa_num_points
+                ),
+                SpatialCrossAttention(
+                    embed_dims=embed_dims,
+                    num_cams=num_cams,
+                    num_heads=num_heads,
+                    num_levels=num_levels,
+                    num_points=num_points,
+                ),
+            ]
         )
-        self.norm3 = nn.LayerNorm(embed_dims)
+        self.ffns = nn.ModuleList([FFN(embed_dims, feedforward_channels)])
+        self.norms = nn.ModuleList([nn.LayerNorm(embed_dims) for _ in range(3)])
 
     def forward(
-        self,
-        bev_query: torch.Tensor,
-        key: Optional[torch.Tensor] = None,
-        value: Optional[torch.Tensor] = None,
-        bev_pos: Optional[torch.Tensor] = None,
-        spatial_shapes: Optional[torch.Tensor] = None,
-        bev_shape: Optional[torch.Tensor] = None,
-        level_start_index: Optional[torch.Tensor] = None,
-        prev_bev: Optional[torch.Tensor] = None,
-        shift: Optional[torch.Tensor] = None,
-        reference_points_3d: Optional[torch.Tensor] = None,
-        reference_points_cam: Optional[torch.Tensor] = None,
-        bev_mask: Optional[torch.Tensor] = None,
-        **kwargs,
-    ) -> torch.Tensor:
-        """
-        Forward pass for a single BEVFormer layer.
-
-        Args:
-            bev_query: Current BEV query features [B, num_queries, embed_dims]
-            key: Multi-camera features [num_cams, H*W, B, embed_dims]
-            value: Same as key
-            bev_pos: BEV positional encoding [B, num_queries, embed_dims]
-            spatial_shapes: Spatial shapes of multi-scale features [num_levels, 2]
-            level_start_index: Start index of each level [num_levels]
-            prev_bev: Previous timestep BEV features [B, num_queries, embed_dims]
-            shift: Camera shift information for temporal alignment
-            reference_points_3d: 3D reference points [num_queries, D, 3]
-            reference_points_cam: Camera reference points [num_cams, B, num_queries, D, 2]
-            bev_mask: Validity mask for camera projections [num_cams, B, num_queries, D]
-
-        Returns:
-            torch.Tensor: Updated BEV features [B, num_queries, embed_dims]
-        """
-
-        # Temporal Self-Attention
-        temp_query = bev_query
-        temp_query = self.temporal_self_attention(
-            query=temp_query,
-            value=prev_bev,  # Use previous BEV as value for temporal context
-            query_pos=bev_pos,
-            reference_points=reference_points_3d[:, :, 0, :2].unsqueeze(2),
-            spatial_shapes=bev_shape,
-            **kwargs,
+        self, query, value, bev_pos, ref_2d, bev_shape, spatial_shapes, reference_points_cam, bev_mask, prev_bev
+    ):
+        """``query`` and ``bev_pos`` ``(bs, num_query, C)``; ``prev_bev`` ``(bs * 2, num_query, C)``
+        (the previous BEV and the encoder's input query, stacked) or None; ``ref_2d``
+        ``(bs * 2, num_query, 1, 2)``. The positional encoding enters the self-attention only."""
+        query = self.attentions[0](
+            query, value=prev_bev, query_pos=bev_pos, reference_points=ref_2d, spatial_shapes=bev_shape
         )
-        bev_query = self.norm1(temp_query)
-
-        # Spatial Cross-Attention
-        if value is None:
-            value = key
-
-        spatial_query = self.spatial_cross_attention(
-            query=bev_query,
-            key=key,
+        query = self.norms[0](query)
+        query = self.attentions[1](
+            query,
             value=value,
-            residual=bev_query,
-            query_pos=bev_pos,
             reference_points_cam=reference_points_cam,
             bev_mask=bev_mask,
             spatial_shapes=spatial_shapes,
-            level_start_index=level_start_index,
-            **kwargs,
         )
-        bev_query = self.norm2(spatial_query)
-
-        # Feed-Forward Network
-        ffn_output = self.ffn(bev_query)
-        bev_query = self.norm3(bev_query + ffn_output)
-
-        return bev_query
+        query = self.norms[1](query)
+        return self.norms[2](self.ffns[0](query))
 
 
 class BEVFormerEncoder(nn.Module):
-    """
-    BEVFormer Encoder implementation.
-
-    The encoder transforms multi-camera features into unified BEV representations
-    using spatiotemporal transformers. It consists of multiple BEVFormerLayer modules
-    that perform spatial cross-attention and temporal self-attention.
-
-    Args:
-        num_layers (int): Number of transformer layers.
-        embed_dims (int): Feature embedding dimensions.
-        num_heads (int): Number of attention heads.
-        num_levels (int): Number of feature pyramid levels.
-        num_points (int): Number of sampling points in deformable attention.
-        num_cams (int): Number of cameras.
-        pc_range (List[float]): Point cloud range [x_min, y_min, z_min, x_max, y_max, z_max].
-        num_points_in_pillar (int): Number of points sampled in each pillar.
-        return_intermediate (bool): Whether to return intermediate layer outputs.
-        dataset (str): Dataset type for specific configurations.
-    """
-
     def __init__(
         self,
-        num_layers: int = 6,
-        embed_dims: int = 256,
-        num_heads: int = 8,
-        num_levels: int = 4,
-        num_points: int = 4,
-        num_cams: int = 6,
-        pc_range: List[float] = None,
-        num_points_in_pillar: int = 4,
-        return_intermediate: bool = False,
-        dataset: str = "nuScenes",
-        feedforward_channels: int = 1024,
-        batch_first: bool = True,
-        z_cfg: Dict[str, Any] = None,
-        **kwargs,
+        num_layers=6,
+        embed_dims=256,
+        num_heads=8,
+        num_levels=4,
+        num_points=8,
+        num_cams=6,
+        feedforward_channels=512,
+        tsa_num_points=4,
+        num_points_in_pillar=4,
+        pc_range=PC_RANGE,
     ):
-        super(BEVFormerEncoder, self).__init__()
-
-        if pc_range is None:
-            pc_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
-
-        if z_cfg is None:
-            z_cfg = {
-                "num_points": num_points_in_pillar,
-                "start": pc_range[2],  # z_min
-                "end": pc_range[5],  # z_max
-            }
-
-        self.num_layers = num_layers
-        self.embed_dims = embed_dims
-        self.num_heads = num_heads
-        self.num_levels = num_levels
-        self.num_points = num_points
-        self.num_cams = num_cams
-        self.pc_range = pc_range
+        super().__init__()
         self.num_points_in_pillar = num_points_in_pillar
-        self.return_intermediate = return_intermediate
-        self.batch_first = batch_first
-        self.z_cfg = z_cfg
-
-        # Build transformer layers
+        self.pc_range = list(pc_range)
         self.layers = nn.ModuleList(
             [
                 BEVFormerLayer(
@@ -250,126 +128,79 @@ class BEVFormerEncoder(nn.Module):
                     num_points=num_points,
                     num_cams=num_cams,
                     feedforward_channels=feedforward_channels,
-                    batch_first=batch_first,
-                    use_temporal_self_attention=True,
-                    use_spatial_cross_attention=True,
-                    **kwargs,
+                    tsa_num_points=tsa_num_points,
                 )
                 for _ in range(num_layers)
             ]
         )
 
+    def reference_points_3d(self, bev_h, bev_w, bs, dtype=torch.float32):
+        """Pillar points ``(bs, bev_h * bev_w, num_points_in_pillar, 3)`` in [0, 1], x along bev_w."""
+        z_cfg = dict(num_points=self.num_points_in_pillar, start=self.pc_range[2], end=self.pc_range[5])
+        return generate_reference_points(bev_h, bev_w, z_cfg, batch_size=bs, dtype=dtype)
+
+    @staticmethod
+    def reference_points_2d(bev_h, bev_w, bs, dtype=torch.float32):
+        """BEV cell centres ``(bs, bev_h * bev_w, 1, 2)`` in [0, 1], as (x, y)."""
+        ref_y, ref_x = torch.meshgrid(
+            torch.linspace(0.5, bev_h - 0.5, bev_h, dtype=dtype),
+            torch.linspace(0.5, bev_w - 0.5, bev_w, dtype=dtype),
+            indexing="ij",
+        )
+        ref_2d = torch.stack((ref_x.reshape(-1)[None] / bev_w, ref_y.reshape(-1)[None] / bev_h), -1)
+        return ref_2d.repeat(bs, 1, 1).unsqueeze(2)
+
+    def point_sampling(self, bev_h, bev_w, bs, img_metas):
+        """Each BEV pillar's points in every camera, ``(num_cams, bs, num_query, D, 2)``, and
+        whether they land inside the image, ``(num_cams, bs, num_query, D)``."""
+        lidar2img = torch.stack([torch.as_tensor(meta["lidar2img"], dtype=torch.float32) for meta in img_metas])
+        return point_sampling_3d_to_2d(
+            self.reference_points_3d(bev_h, bev_w, bs), self.pc_range, lidar2img, img_metas=img_metas
+        )
+
     def forward(
         self,
-        bev_query: torch.Tensor,
-        key: Optional[torch.Tensor] = None,
-        value: Optional[torch.Tensor] = None,
-        bev_h: int = 30,
-        bev_w: int = 30,
-        bev_pos: Optional[torch.Tensor] = None,
-        spatial_shapes: Optional[torch.Tensor] = None,
-        level_start_index: Optional[torch.Tensor] = None,
-        prev_bev: Optional[torch.Tensor] = None,
-        shift: Optional[torch.Tensor] = None,
-        img_metas: Optional[List[Dict[str, Any]]] = None,
-        **kwargs,
-    ) -> torch.Tensor:
-        """
-        Forward pass of BEVFormer encoder.
+        bev_query,
+        value,
+        bev_h,
+        bev_w,
+        bev_pos,
+        spatial_shapes,
+        img_metas,
+        prev_bev=None,
+        shift=None,
+    ):
+        """Upstream's argument layout: ``bev_query`` and ``bev_pos`` ``(num_query, bs, C)``, ``value``
+        ``(num_cams, num_value, bs, C)``, ``prev_bev`` ``(num_query, bs, C)`` already rotated to the
+        current frame, ``shift`` ``(bs, 2)`` the ego translation in BEV fractions, and
+        ``spatial_shapes`` ``(num_levels, 2)`` as (h, w). Returns ``(bs, num_query, C)``."""
+        bs = bev_query.shape[1]
+        ref_2d = self.reference_points_2d(bev_h, bev_w, bs, bev_query.dtype)
+        reference_points_cam, bev_mask = self.point_sampling(bev_h, bev_w, bs, img_metas)
 
-        Args:
-            bev_query: Initial BEV query features [B, num_queries, embed_dims]
-            key: Multi-camera features [num_cams, H*W, B, embed_dims]
-            value: Same as key (optional)
-            bev_h: BEV grid height
-            bev_w: BEV grid width
-            bev_pos: BEV positional encoding [B, num_queries, embed_dims]
-            spatial_shapes: Multi-scale feature shapes [num_levels, 2]
-            level_start_index: Start indices for each level [num_levels]
-            prev_bev: Previous timestep BEV features [B, num_queries, embed_dims]
-            shift: Camera shift for temporal alignment
-            img_metas: Camera metadata for point sampling
-
-        Returns:
-            torch.Tensor: Final BEV features [B, num_queries, embed_dims]
-                If return_intermediate=True, returns list of intermediate features.
-        """
-        output = bev_query
-        intermediate = []
-
-        bs, num_queries, _ = bev_query.shape
-
-        # Generate reference points for spatial cross-attention
-        if img_metas is not None:
-            # Generate 3D reference points using existing function
-            reference_points_3d = generate_reference_points(
-                bev_h=bev_h,
-                bev_w=bev_w,
-                z_cfg=self.z_cfg,
-                batch_size=bs,
-                device=bev_query.device,
-                dtype=bev_query.dtype,
-            )
-
-            # Extract lidar2img matrices from img_metas
-            # Assuming img_metas contains lidar2img or we can construct it from camera params
-            if "lidar2img" in img_metas[0]:
-                lidar2img = torch.stack(
-                    [
-                        torch.tensor(meta["lidar2img"], dtype=torch.float32, device=bev_query.device)
-                        for meta in img_metas
-                    ]
-                )
-            else:
-                # Construct lidar2img from intrinsics and extrinsics if available
-                camera_intrinsics = torch.tensor(
-                    img_metas[0]["camera_intrinsics"], dtype=torch.float32, device=bev_query.device
-                )
-                camera_extrinsics = torch.tensor(
-                    img_metas[0]["camera_extrinsics"], dtype=torch.float32, device=bev_query.device
-                )
-                lidar2img = camera_intrinsics @ camera_extrinsics  # [num_cams, 4, 4]
-
-            # Project to camera coordinates using existing function
-            reference_points_cam, bev_mask = point_sampling_3d_to_2d(
-                reference_points=reference_points_3d, pc_range=self.pc_range, lidar2img=lidar2img, img_metas=img_metas
-            )
+        bev_query = bev_query.permute(1, 0, 2)
+        bev_pos = bev_pos.permute(1, 0, 2)
+        _, len_bev, num_bev_level, _ = ref_2d.shape
+        if prev_bev is not None:
+            shift_ref_2d = ref_2d + (0.0 if shift is None else shift[:, None, None, :])
+            # The previous BEV is paired with the encoder's input query, not each layer's input.
+            prev_bev = torch.stack([prev_bev.permute(1, 0, 2), bev_query], 1).reshape(bs * 2, len_bev, -1)
+            hybrid_ref_2d = torch.stack([shift_ref_2d, ref_2d], 1).reshape(bs * 2, len_bev, num_bev_level, 2)
         else:
-            reference_points_cam = None
-            bev_mask = None
+            hybrid_ref_2d = torch.stack([ref_2d, ref_2d], 1).reshape(bs * 2, len_bev, num_bev_level, 2)
 
-        # Process through transformer layers
-        for lid, layer in enumerate(self.layers):
+        bev_shape = torch.tensor([[bev_h, bev_w]])
+        output = bev_query
+        for layer in self.layers:
             output = layer(
-                bev_query=output,
-                key=key,
+                output,
                 value=value,
                 bev_pos=bev_pos,
+                ref_2d=hybrid_ref_2d,
+                bev_shape=bev_shape,
                 spatial_shapes=spatial_shapes,
-                bev_shape=torch.tensor([[bev_h, bev_w]], device=bev_query.device),
-                level_start_index=level_start_index,
-                prev_bev=prev_bev,
-                shift=shift,
-                reference_points_3d=reference_points_3d,
                 reference_points_cam=reference_points_cam,
                 bev_mask=bev_mask,
-                **kwargs,
+                prev_bev=prev_bev,
             )
-
-            if self.return_intermediate:
-                intermediate.append(output)
-
-        if self.return_intermediate:
-            return torch.stack(intermediate)
-
         return output
-
-    def extra_repr(self) -> str:
-        """String representation for debugging."""
-        return (
-            f"num_layers={self.num_layers}, embed_dims={self.embed_dims}, "
-            f"num_heads={self.num_heads}, num_levels={self.num_levels}, "
-            f"num_points={self.num_points}, num_cams={self.num_cams}, "
-            f"pc_range={self.pc_range}, num_points_in_pillar={self.num_points_in_pillar}, "
-            f"z_cfg={self.z_cfg}"
-        )

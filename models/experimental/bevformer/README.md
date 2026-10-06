@@ -33,6 +33,27 @@ The multi-camera features the encoder reads come from BEVFormer-base's image bac
 
 It runs 6 cameras at 1600x900, padded to 1600x928. Weights are prepared in the constructors (`tt/model_preprocessing_backbone.py` preprocesses them), so the forward runs on device only.
 
+### Encoder
+
+`tt/tt_encoder.py` ports BEVFormer-base's `BEVFormerEncoder`: six layers of temporal
+self-attention (`tt/tt_temporal_self_attention.py`), spatial cross-attention into the cameras
+(`tt/tt_spatial_cross_attention.py`) and an FFN, each followed by a LayerNorm, over one query per
+cell of the 200x200 BEV grid. The reference (`reference/encoder.py`) follows upstream's modules
+and parameter names, so the checkpoint's `pts_bbox_head.transformer.encoder` loads into it
+unchanged, and matches upstream's code bit for bit on CPU.
+
+- The temporal self-attention samples both the previous BEV, aligned to the current frame and
+  shifted by the ego motion, and the current queries, from offsets that read both, and averages
+  the two. On the first frame it samples the queries twice.
+- The spatial cross-attention gathers each query into the cameras its pillar projects into and
+  attends to the four FPN levels there with 8 points split over the pillar's 4 heights.
+- `prepare_frame(img_metas)` projects the pillars into the cameras and builds the
+  cross-attention's rebatch plan once per frame, on the host in float32 as upstream does: the
+  geometry depends on the cameras only, and in bfloat16 the projected points are off by up to a
+  quarter of the image. The forward then runs on device only.
+- The sampling grids are float32, as in the decoder.
+- Parameters come from `tt/model_preprocessing.py` (`create_bevformer_encoder_parameters`).
+
 ### Detection Decoder
 
 `tt/tt_decoder.py` ports BEVFormer's `DetectionTransformerDecoder` (shared by tiny and base):
@@ -197,59 +218,48 @@ pytest models/experimental/bevformer/tests/pcc/test_nms_free_coder.py
 ```
 
 #### test_encoder.py
-Tests the complete BEVFormer encoder implementation.
+Tests the six-layer encoder over two consecutive frames.
 
 **What it tests:**
-- Full BEVFormer encoder forward pass correctness against PyTorch reference
-- Multi-layer transformer processing with spatial and temporal attention
-- BEV query processing through transformer layers
-- Integration of all encoder components
+- The base (200x200) BEV grid with six layers and with one, the tiny (50x50) grid with batch size
+  2, and a non-square 50x100 grid
+- Two frames: the first without a previous BEV, the second with each side's own first-frame output
+  as its previous BEV and an ego shift, so the device's error is carried forward as in the
+  detector; PCC 0.99 on both frames' outputs
+- A traced run: capture proves the forward has no host reads or writes
 
-**Key test cases:**
-- Single and multi-layer encoder configurations
-- Different BEV grid sizes and feature dimensions
+It uses seeded random weights (`tests/encoder_common.py`): upstream's offset-grid init with random
+weights on top, scaled to the offset spread and attention-logit spread the BEVFormer-base
+checkpoint's encoder shows, except the self-attention offsets: at the checkpoint's spread, random
+offset weights make the six layers amplify a bfloat16-sized input perturbation on their own,
+which the trained encoder does not. The camera features are random but spatially smooth, as the FPN's
+are, at the FPN's four level sizes for 928x1600 images; the camera geometry is nuScenes' rig
+(`tests/camera_rig.py`).
 
 **Usage:**
 ```bash
 pytest models/experimental/bevformer/tests/pcc/test_encoder.py
 ```
 
-#### test_spatial_cross_attention.py
-Tests the spatial cross-attention mechanism for projecting camera features to BEV space.
-
-**What it tests:**
-- Spatial cross-attention forward pass correctness
-- Multi-scale deformable attention for spatial feature extraction
-- 3D-2D point projection and sampling
-- Camera mask handling and feature aggregation
-
-**Key features:**
-- Validates camera coordinate transformations
-- Tests different numbers of cameras and feature levels
-- Precision and memory layout compatibility
-
-**Usage:**
-```bash
-pytest models/experimental/bevformer/tests/pcc/test_spatial_cross_attention.py
-```
-
 #### test_temporal_self_attention.py
-Tests the temporal self-attention mechanism for modeling frame-to-frame dependencies.
-
-**What it tests:**
-- Temporal self-attention forward pass correctness
-- Deformable attention for temporal feature aggregation
-- Previous BEV feature integration
-- Temporal shift handling for camera motion
-
-**Key test parameters:**
-- Different sequence lengths and temporal configurations
-- Various BEV grid resolutions
-- Memory length and temporal context settings
+Tests the temporal self-attention alone: the first frame (the queries stacked with themselves) and
+a later one (a smooth previous BEV stacked with the queries, shifted reference points), on the
+tiny, base and non-square grids and with batch size 2. PCC 0.99 on the output and on the attended
+part alone, without the residual.
 
 **Usage:**
 ```bash
 pytest models/experimental/bevformer/tests/pcc/test_temporal_self_attention.py
+```
+
+#### test_spatial_cross_attention.py
+Tests the spatial cross-attention alone, with the rebatch plan `prepare_frame` builds, on the tiny,
+base and non-square grids and with batch size 2. PCC 0.99 on the output and on the attended part
+alone.
+
+**Usage:**
+```bash
+pytest models/experimental/bevformer/tests/pcc/test_spatial_cross_attention.py
 ```
 
 #### test_ms_deformable_attention.py
