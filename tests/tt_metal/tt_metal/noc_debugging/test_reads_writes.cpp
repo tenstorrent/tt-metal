@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <thread>
@@ -975,7 +976,8 @@ void run_stress_write_program(
     uint32_t num_iterations,
     bool read_after = true,
     uint32_t wait_iters = 0,
-    uint32_t burst_size = 0) {
+    uint32_t burst_size = 0,
+    uint32_t source_slots = 128) {
     auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
     auto dest_core_virtual =
         mesh_device->worker_core_from_logical_core(CoreCoord{compute_grid_size.x - 1, compute_grid_size.y - 1});
@@ -994,7 +996,7 @@ void run_stress_write_program(
     auto l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
     std::map<std::string, std::string> defines = {
         {"SRC_BASE_ADDR", std::to_string(l1_buffer->address())},
-        {"SRC_SLOTS", std::to_string(kBufferBytes / kSlotBytes)},
+        {"SRC_SLOTS", std::to_string(std::min(source_slots, kBufferBytes / kSlotBytes))},
         {"OTHER_CORE_X", std::to_string(dest_core_virtual.x)},
         {"OTHER_CORE_Y", std::to_string(dest_core_virtual.y)},
         {"DST_ADDR", std::to_string(l1_buffer->address())},
@@ -1165,15 +1167,17 @@ TEST_F(NOCDebuggingFixture, IncrementalProcessingFastCycle) {
             // Relaunching the thread above drains the device once, which can push leftovers from earlier tests.
             noc_debug_state->reset_state();
 
-            // 400 writes in 10 bursts, each burst followed by an on-device idle, giving a sub-second kernel. The
-            // source slot wraps after SRC_SLOTS(=128) writes, so the unbarriered source reuse -- the violation this
-            // asserts on -- happens around burst 4, early enough to fall behind the watermark before the kernel ends.
+            // 400 writes in 10 bursts, each burst followed by an on-device idle, giving a sub-second kernel. Reuse a
+            // small source set within every burst so issue detection does not depend on pending-write state surviving
+            // profiler flushes between independently processed batches.
             constexpr uint32_t writes = 400;
             constexpr uint32_t burst = 40;
+            constexpr uint32_t source_slots = 8;
             constexpr uint32_t wait_iters = 8'000'000u;
 
             // NO user read: only the background thread drains, processes, reports and discharges.
-            run_stress_write_program(fixture, mesh_device, writes, /*read_after=*/false, wait_iters, burst);
+            run_stress_write_program(
+                fixture, mesh_device, writes, /*read_after=*/false, wait_iters, burst, source_slots);
             // Let the last full-read pass land after the kernel finished.
             std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
