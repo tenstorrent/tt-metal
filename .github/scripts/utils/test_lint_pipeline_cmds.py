@@ -212,6 +212,28 @@ def test_stale_baseline_entry_is_reported(tmp_path):
     assert "fixed leg" in problems[0]
 
 
+CONTINUE_LEG = """\
+- name: continuing leg
+  cmd: |
+    export CI_CONTINUE_ON_TEST_FAILURE=1
+    pytest tests/a.py || fail=1
+    pytest tests/b.py || fail=1
+    exit $fail
+"""
+
+
+def test_continue_marker_skips_the_leg_in_the_blaze_prefill_yaml(tmp_path):
+    yaml_path = _write_yaml(tmp_path, "blaze_models_prefill_tests.yaml", CONTINUE_LEG)
+    assert lint.lint_files([yaml_path], {}) == []
+
+
+def test_continue_marker_is_rejected_outside_the_allowed_yamls(tmp_path):
+    yaml_path = _write_yaml(tmp_path, "models_unit_tests.yaml", CONTINUE_LEG)
+    problems = lint.lint_files([yaml_path], {})
+    assert len(problems) == 1
+    assert "CI_CONTINUE_ON_TEST_FAILURE is not allowed" in problems[0]
+
+
 def test_baseline_growth_is_rejected_against_the_base_baseline():
     base = {"legacy_tests.yaml": ["old leg"]}
     grown = {"legacy_tests.yaml": ["old leg", "new leg"], "other_tests.yaml": ["another"]}

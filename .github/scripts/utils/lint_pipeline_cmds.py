@@ -58,6 +58,11 @@ _OR_GROUP_OPEN = re.compile(r"\|\|\s*\{")
 _OR_SWALLOW = re.compile(r"\|\|\s*(true|:)(?=\s|;|}|$)")
 _TEST_RUNNER = re.compile(r"(^|[\s;&|(\"'])(pytest|tracy|ctest|gtest|python3?\s+-m\s+(pytest|tracy))\b|/build/test/")
 _SET_PLUS_E = re.compile(r"(^|[\s;&|{])set\s+\+e\b")
+# WORKAROUND: Blaze prefill has too few Galaxies to give each section its own leg, so a leg
+# that exports this runs every section even after a failure, on devices nothing has reset.
+# Remove it once CI has enough Galaxies or the models are stable enough to split the legs.
+_CONTINUE_MARKER = re.compile(r"^\s*export\s+CI_CONTINUE_ON_TEST_FAILURE=1\b", re.MULTILINE)
+_CONTINUE_ALLOWED_YAMLS = {"blaze_models_prefill_tests.yaml"}
 _EXIT = re.compile(r"(^|[\s;{])exit\b")
 _FUNC_DEF = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{")
 _FIRST_WORD = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)")
@@ -222,6 +227,10 @@ def lint_files(paths: list[Path], baseline: dict[str, list[str]]) -> list[str]:
         seen: set[str] = set()
         for entry in _load_entries(path):
             name = str(entry.get("name", "<unnamed>"))
+            if _CONTINUE_MARKER.search(entry.get("cmd") or ""):
+                if path.name not in _CONTINUE_ALLOWED_YAMLS:
+                    problems.append(f"{path.name}: {name}: CI_CONTINUE_ON_TEST_FAILURE is not allowed in this yaml")
+                continue
             findings = lint_entry(entry)
             if not findings:
                 continue
