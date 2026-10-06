@@ -315,7 +315,7 @@ void check_router_blocks(const std::vector<RouterEntry>& routers) {
         EXPECT_EQ(
             keys_of(*entry.router),
             (std::set<std::string>{"identity", "link", "shape", "credit_counters", "channels"}));
-        EXPECT_EQ(keys_of(entry.router->at("channels")), (std::set<std::string>{"senders"}));
+        EXPECT_EQ(keys_of(entry.router->at("channels")), (std::set<std::string>{"senders", "receivers"}));
     }
 }
 
@@ -610,18 +610,72 @@ void expect_credit(
     EXPECT_LT(compact, router.at(pointer).at("num_elements").get<uint32_t>());
 }
 
-// The router's L1 regions that this unit's blocks describe must not overlap.
-void expect_regions_disjoint(std::vector<std::tuple<uint32_t, uint32_t, std::string>> regions) {
-    std::ranges::sort(regions);
-    for (size_t i = 1; i < regions.size(); ++i) {
-        const auto& [address, size, name] = regions[i - 1];
-        const auto& [next_address, next_size, next_name] = regions[i];
-        EXPECT_LE(address + size, next_address) << name << " overlaps " << next_name;
+// Every object under `node` with an address and a size, as (address, size, path).
+void collect_regions(
+    const json& node, const std::string& path, std::vector<std::tuple<uint32_t, uint32_t, std::string>>& regions) {
+    if (!node.is_object()) {
+        return;
+    }
+    if (node.contains("address") && node.contains("size")) {
+        regions.emplace_back(node.at("address").get<uint32_t>(), node.at("size").get<uint32_t>(), path);
+        return;
+    }
+    for (const auto& [key, child] : node.items()) {
+        collect_regions(child, path.empty() ? key : path + "/" + key, regions);
+    }
+}
+
+// No two of a router's L1 regions overlap.
+void check_router_regions_disjoint(const std::vector<RouterEntry>& routers) {
+    for (const auto& entry : routers) {
+        SCOPED_TRACE(entry.path);
+        std::vector<std::tuple<uint32_t, uint32_t, std::string>> regions;
+        collect_regions(*entry.router, "", regions);
+        std::ranges::sort(regions);
+        for (size_t i = 1; i < regions.size(); ++i) {
+            const auto& [address, size, name] = regions[i - 1];
+            const auto& [next_address, next_size, next_name] = regions[i];
+            EXPECT_LE(address + size, next_address) << name << " overlaps " << next_name;
+        }
     }
 }
 
 // The last component of a router path, e.g. "E0" for "M0/C7/E0".
 std::string key_of_path(const std::string& path) { return path.substr(path.rfind('/') + 1); }
+
+std::set<std::string> noc_cmd_buf_names() {
+    std::set<std::string> names;
+    for (const auto cmd_buf : enchantum::values<manifest::NocCmdBuf>) {
+        names.insert(lower_enum_name(cmd_buf));
+    }
+    return names;
+}
+
+// ERISC names in ascending order, each one active. Returns whether any ERISC services the channel.
+bool expect_serviced_by(const json& serviced_by, uint32_t num_active_eriscs) {
+    std::optional<uint32_t> previous_risc;
+    for (const auto& risc : serviced_by) {
+        const auto name = risc.get<std::string>();
+        EXPECT_TRUE(name.starts_with("erisc")) << name;
+        const auto risc_id = static_cast<uint32_t>(std::stoul(name.substr(5)));
+        EXPECT_LT(risc_id, num_active_eriscs);
+        if (previous_risc.has_value()) {
+            EXPECT_GT(risc_id, *previous_risc);
+        }
+        previous_risc = risc_id;
+    }
+    return !serviced_by.empty();
+}
+
+void expect_ring_buffer(const json& ring, uint32_t channel_buffer_size) {
+    EXPECT_EQ(keys_of(ring), k_array_region_keys);
+    EXPECT_EQ(ring.at("schema"), "packet_ring");
+    EXPECT_EQ(ring.at("size_per_element"), channel_buffer_size);
+    EXPECT_GE(ring.at("num_elements").get<uint32_t>(), 1u);
+    EXPECT_EQ(
+        ring.at("size").get<uint32_t>(),
+        ring.at("num_elements").get<uint32_t>() * ring.at("size_per_element").get<uint32_t>());
+}
 
 // A router's sender channels, over its shape. Each one's producer is the chip's worker on a VC's first channel, or a
 // different router on the same chip and routing plane, feeding at most one channel per VC; in 1D a router and its
@@ -632,10 +686,7 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
     const bool is_2d = fabric_context.at("is_2d_routing").get<bool>();
     const auto channel_buffer_size = fabric_context.at("channel_buffer_size_bytes").get<uint32_t>();
     const auto num_nocs = tt::tt_metal::MetalContext::instance().hal().get_num_nocs();
-    std::set<std::string> cmd_bufs;
-    for (const auto cmd_buf : enchantum::values<manifest::NocCmdBuf>) {
-        cmd_bufs.insert(lower_enum_name(cmd_buf));
-    }
+    const auto cmd_bufs = noc_cmd_buf_names();
 
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
@@ -646,12 +697,6 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
         const auto num_active_eriscs = shape.at("num_active_eriscs").get<uint32_t>();
         const bool vc0_bubble_flow_control = shape.at("vc0_bubble_flow_control").get<bool>();
         const auto chip_prefix = entry.path.substr(0, entry.path.rfind('/') + 1);
-
-        std::vector<std::tuple<uint32_t, uint32_t, std::string>> regions;
-        for (const auto& [name, array] : router.at("credit_counters").items()) {
-            regions.emplace_back(
-                array.at("address").get<uint32_t>(), array.at("size").get<uint32_t>(), "credit_counters/" + name);
-        }
 
         std::set<std::string> expected_vc_keys;
         uint32_t compact = 0;
@@ -669,8 +714,7 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
             std::set<std::string> producers;
             for (uint32_t ch = 0; ch < count; ++ch, ++compact) {
                 const auto ch_key = fmt::format("ch{}", ch);
-                const auto channel_path = fmt::format("senders/{}/{}", vc_key, ch_key);
-                SCOPED_TRACE(channel_path);
+                SCOPED_TRACE(fmt::format("senders/{}/{}", vc_key, ch_key));
                 ASSERT_TRUE(senders.at(vc_key).contains(ch_key));
                 const auto& sender = senders.at(vc_key).at(ch_key);
                 EXPECT_EQ(
@@ -685,18 +729,7 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
                         "credits",
                         "control_info"}));
 
-                std::optional<uint32_t> previous_risc;
-                for (const auto& risc : sender.at("serviced_by")) {
-                    const auto name = risc.get<std::string>();
-                    ASSERT_TRUE(name.starts_with("erisc")) << name;
-                    const auto risc_id = static_cast<uint32_t>(std::stoul(name.substr(5)));
-                    EXPECT_LT(risc_id, num_active_eriscs);
-                    if (previous_risc.has_value()) {
-                        EXPECT_GT(risc_id, *previous_risc);
-                    }
-                    previous_risc = risc_id;
-                }
-                const bool serviced = !sender.at("serviced_by").empty();
+                const bool serviced = expect_serviced_by(sender.at("serviced_by"), num_active_eriscs);
 
                 const auto& producer = sender.at("producer");
                 const bool worker_fed = producer == "worker";
@@ -731,15 +764,7 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
                 EXPECT_TRUE(cmd_bufs.contains(credit_return.at("cmd_buf").get<std::string>()))
                     << credit_return.at("cmd_buf");
 
-                const auto& ring = sender.at("ring_buffer");
-                EXPECT_EQ(keys_of(ring), k_array_region_keys);
-                EXPECT_EQ(ring.at("schema"), "packet_ring");
-                EXPECT_EQ(ring.at("size_per_element"), channel_buffer_size);
-                EXPECT_GE(ring.at("num_elements").get<uint32_t>(), 1u);
-                EXPECT_EQ(
-                    ring.at("size").get<uint32_t>(),
-                    ring.at("num_elements").get<uint32_t>() * ring.at("size_per_element").get<uint32_t>());
-
+                expect_ring_buffer(sender.at("ring_buffer"), channel_buffer_size);
                 expect_stream(sender.at("free_slots"), serviced);
 
                 const auto& credits = sender.at("credits");
@@ -776,21 +801,108 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
                     control_info.at("buffer_index_sem"),
                     "struct:SenderChannelProducerCursor",
                     sizeof(SenderChannelProducerCursor));
-
-                for (const auto& [name, region] :
-                     {std::pair<std::string, const json*>{"ring_buffer", &ring},
-                      {"control_info/connection", &control_info.at("connection")},
-                      {"control_info/conn_info", &control_info.at("conn_info")},
-                      {"control_info/buffer_index_sem", &control_info.at("buffer_index_sem")}}) {
-                    regions.emplace_back(
-                        region->at("address").get<uint32_t>(),
-                        region->at("size").get<uint32_t>(),
-                        fmt::format("{}/{}", channel_path, name));
-                }
             }
         }
         EXPECT_EQ(keys_of(senders), expected_vc_keys);
-        expect_regions_disjoint(std::move(regions));
+    }
+}
+
+// A router's receiver channels, over its shape. Only VC2's has a free-slots stream. A receiver forwards on its own
+// VC, except that VC0's may cross over to VC1, and VC2's forwards on none. Only a 2D VC0 or VC1 receiver whose peer
+// is on another mesh is an intermesh ingress. Serviced receivers poll distinct allocated packets-sent streams.
+void check_router_receivers(const json& manifest, const std::vector<RouterEntry>& routers) {
+    const auto& fabric_context = manifest.at("fabric_context");
+    const bool is_2d = fabric_context.at("is_2d_routing").get<bool>();
+    const auto channel_buffer_size = fabric_context.at("channel_buffer_size_bytes").get<uint32_t>();
+    const auto num_nocs = tt::tt_metal::MetalContext::instance().hal().get_num_nocs();
+    const auto cmd_bufs = noc_cmd_buf_names();
+
+    for (const auto& entry : routers) {
+        SCOPED_TRACE(entry.path);
+        const auto& router = *entry.router;
+        const auto& shape = router.at("shape");
+        const auto& receivers = router.at("channels").at("receivers");
+        const auto num_active_eriscs = shape.at("num_active_eriscs").get<uint32_t>();
+        const auto& peer = router.at("link").at("peer");
+        const bool peer_on_other_mesh =
+            !peer.is_null() && !peer.get<std::string>().starts_with(mesh_key(entry.node.mesh_id) + "/");
+
+        std::set<std::string> expected_vc_keys;
+        std::set<uint32_t> serviced_pkts_sent;
+        for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            const auto count = shape.at("receivers_per_vc").at(vc).get<uint32_t>();
+            if (count == 0) {
+                continue;
+            }
+            const auto vc_key = fmt::format("vc{}", vc);
+            expected_vc_keys.insert(vc_key);
+            ASSERT_TRUE(receivers.contains(vc_key));
+            ASSERT_EQ(receivers.at(vc_key).size(), count);
+
+            for (uint32_t ch = 0; ch < count; ++ch) {
+                const auto ch_key = fmt::format("ch{}", ch);
+                SCOPED_TRACE(fmt::format("receivers/{}/{}", vc_key, ch_key));
+                ASSERT_TRUE(receivers.at(vc_key).contains(ch_key));
+                const auto& receiver = receivers.at(vc_key).at(ch_key);
+                std::set<std::string> expected_keys = {
+                    "serviced_by",
+                    "forwards_on",
+                    "forwarding_disabled",
+                    "intermesh_ingress",
+                    "forward_noc",
+                    "local_write_noc",
+                    "ring_buffer",
+                    "pkts_sent"};
+                if (vc == 2) {
+                    expected_keys.insert("free_slots");
+                }
+                EXPECT_EQ(keys_of(receiver), expected_keys);
+
+                const bool serviced = expect_serviced_by(receiver.at("serviced_by"), num_active_eriscs);
+
+                const auto& forwards_on = receiver.at("forwards_on");
+                if (!serviced || vc == 2) {
+                    EXPECT_TRUE(forwards_on.is_null()) << forwards_on;
+                } else if (!forwards_on.is_null()) {
+                    const auto forward_vc = forwards_on.get<std::string>();
+                    if (vc == 0) {
+                        EXPECT_TRUE(forward_vc == "vc0" || forward_vc == "vc1") << forward_vc;
+                    } else {
+                        EXPECT_EQ(forward_vc, vc_key);
+                    }
+                }
+
+                EXPECT_TRUE(receiver.at("forwarding_disabled").is_boolean());
+                const auto& ingress = receiver.at("intermesh_ingress");
+                ASSERT_TRUE(ingress.is_boolean());
+                if (ingress.get<bool>()) {
+                    EXPECT_TRUE(is_2d);
+                    EXPECT_LT(vc, 2u);
+                    EXPECT_TRUE(peer_on_other_mesh) << peer;
+                }
+
+                const auto& forward_noc = receiver.at("forward_noc");
+                EXPECT_EQ(keys_of(forward_noc), (std::set<std::string>{"noc", "data_cmd_buf", "sync_cmd_buf"}));
+                EXPECT_LT(forward_noc.at("noc").get<uint32_t>(), num_nocs);
+                EXPECT_TRUE(cmd_bufs.contains(forward_noc.at("data_cmd_buf").get<std::string>()));
+                EXPECT_TRUE(cmd_bufs.contains(forward_noc.at("sync_cmd_buf").get<std::string>()));
+                const auto& local_write_noc = receiver.at("local_write_noc");
+                EXPECT_EQ(keys_of(local_write_noc), (std::set<std::string>{"noc", "cmd_buf"}));
+                EXPECT_LT(local_write_noc.at("noc").get<uint32_t>(), num_nocs);
+                EXPECT_TRUE(cmd_bufs.contains(local_write_noc.at("cmd_buf").get<std::string>()));
+
+                expect_ring_buffer(receiver.at("ring_buffer"), channel_buffer_size);
+                expect_stream(receiver.at("pkts_sent"), serviced);
+                if (serviced) {
+                    const auto stream_id = receiver.at("pkts_sent").at("stream_id").get<uint32_t>();
+                    EXPECT_TRUE(serviced_pkts_sent.insert(stream_id).second) << "stream " << stream_id;
+                }
+                if (vc == 2) {
+                    expect_stream(receiver.at("free_slots"), serviced);
+                }
+            }
+        }
+        EXPECT_EQ(keys_of(receivers), expected_vc_keys);
     }
 }
 
@@ -886,5 +998,11 @@ TEST_F(Fabric2DManifestFixture, RouterCreditCounters) { check_router_credit_coun
 
 TEST_F(Fabric1DManifestFixture, RouterSenders) { check_router_senders(manifest_, routers_); }
 TEST_F(Fabric2DManifestFixture, RouterSenders) { check_router_senders(manifest_, routers_); }
+
+TEST_F(Fabric1DManifestFixture, RouterReceivers) { check_router_receivers(manifest_, routers_); }
+TEST_F(Fabric2DManifestFixture, RouterReceivers) { check_router_receivers(manifest_, routers_); }
+
+TEST_F(Fabric1DManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(routers_); }
+TEST_F(Fabric2DManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(routers_); }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
