@@ -643,9 +643,9 @@ inline void calculate_acos() {
     }
 }
 
-// computes exp(abs(x))/4 without overflow
+// computes exp(abs(x))/4 without overflow; the 32-bit arm takes ln(2)_lo and two coefficients from the caller
 template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
+sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x, sfpi::vFloat ln2_lo, sfpi::vFloat p1, sfpi::vFloat p2) {
     // j = x * log2(e); i = round(abs(j)); j = (float)i;
     sfpi::vFloat j = x * sfpi::vConstFloatPrgm0;
     sfpi::vFloat a = sfpi::setsgn(x, 0);
@@ -667,11 +667,11 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
 
     } else {
         f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)_hi
-        f = j * -1.42860677e-6f + f;         // f = f - j * ln(2)_lo
+        f = j * ln2_lo + f;                  // f = f - j * ln(2)_lo
 
         r = 1.37805939e-3f;
-        r = r * f + 8.37312452e-3f;
-        r = r * f + 4.16695364e-2f;
+        r = r * f + p1;
+        r = r * f + p2;
         r = r * f + 1.66664720e-1f;
         r = r * f + sfpi::vConstFloatPrgm2;
         i += 125;
@@ -694,10 +694,10 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
 
 // t = exp(a); cosh(a) = 0.5 * (t + 1/t), one row of DEST
 template <bool is_fp32_dest_acc_en>
-sfpi_inline void _calculate_cosh_row_() {
+sfpi_inline void _calculate_cosh_row_(sfpi::vFloat ln2_lo, sfpi::vFloat p1, sfpi::vFloat p2) {
     sfpi::vFloat x = sfpi::dst_reg[0];
     sfpi::vFloat a = sfpi::setsgn(x, 0);
-    sfpi::vFloat q = _sfpu_quarter_exp_abs_<is_fp32_dest_acc_en>(a);
+    sfpi::vFloat q = _sfpu_quarter_exp_abs_<is_fp32_dest_acc_en>(a, ln2_lo, p1, p2);
     sfpi::vFloat r = _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(q);
     sfpi::vFloat y = q + q;
     r *= 0.125f;
@@ -715,15 +715,17 @@ sfpi_inline void _calculate_cosh_row_() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosh() {
+    // Held in registers across the loop; only the 32-bit arm reads them.
+    const sfpi::vFloat ln2_lo = -1.42860677e-6f, p1 = 8.37312452e-3f, p2 = 4.16695364e-2f;
     if constexpr (is_fp32_dest_acc_en) {
         // The 32-bit DEST row does not fit the replay buffer, so its loop stays rolled.
         for (int d = 0; d < ITERATIONS; d++) {
-            _calculate_cosh_row_<is_fp32_dest_acc_en>();
+            _calculate_cosh_row_<is_fp32_dest_acc_en>(ln2_lo, p1, p2);
         }
     } else {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
-            _calculate_cosh_row_<is_fp32_dest_acc_en>();
+            _calculate_cosh_row_<is_fp32_dest_acc_en>(ln2_lo, p1, p2);
         }
     }
 }
