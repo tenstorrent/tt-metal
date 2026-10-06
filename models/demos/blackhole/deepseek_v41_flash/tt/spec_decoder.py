@@ -105,6 +105,7 @@ class SpecDecoder(SpecVerifier):
     def __init__(self, md, layers, embedding, head, drafter, engram=None, step_states=None, n=2):
         super().__init__(md, layers, embedding, head, engram, step_states=step_states)
         self.drafter, self.n = drafter, n
+        self.draft_on = True
         self.U = drafter.U
         rep = ttnn.ReplicateTensorToMesh(md)
         c = lambda t, dt, lay: ttnn.from_torch(
@@ -252,6 +253,11 @@ class SpecDecoder(SpecVerifier):
         )  # [1,1,T,15360]; partial-layer debug runs have no tap layers
         dr = self.drafter
         dr.write_main_full(hidden, self.pos)
+        if not self.draft_on:  # k = 0 'plain' round without drafting (adaptive scheduler's no-spec mode): rings stay current, pack = [a (T), m (U)]
+            m_u32 = ttnn.typecast(ttnn.to_layout(mcount, rm), ttnn.uint32)
+            self.pack = ttnn.concat([ttnn.reshape(a, [1, T]), ttnn.reshape(m_u32, [1, U])], dim=1)
+            self.logits = logits
+            return self.pack
         t_u32 = ttnn.typecast(ttnn.to_layout(t_next, rm), ttnn.uint32)  # [U,1]
         f_i32 = ttnn.reshape(ttnn.typecast(ttnn.to_layout(f_next, rm), ttnn.int32), [U, 1])
         d, drafts = dr.draft_full(t_u32, f_i32)  # drafts [5U,1] uint32 block-index-major

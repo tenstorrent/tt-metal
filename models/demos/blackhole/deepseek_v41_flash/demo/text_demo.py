@@ -580,6 +580,15 @@ def _run_demo(
                         f"spec gap {generator.spec.gaps[u][dv - 1] if dv > 0 and len(generator.spec.gaps[u]) >= dv else float('nan'):.3f}, "
                         f"rounds {len(mh)}, mean accepted {sum(mh) / max(len(mh), 1):.2f}, tokens {len(gen_sp[u])}"
                     )
+                X0_ = getattr(generator.spec, "X0", None)
+                if X0_ is not None:  # quality of the seeded first drafts vs the plain greedy continuation (drafter / seeding diagnostic)
+                    hit_ = [0] * (X0_.shape[1] - 1)
+                    for u in range(batch_size):
+                        for j_ in range(X0_.shape[1] - 1):
+                            hit_[j_] += int(len(plain_gen[u]) > 1 + j_ and int(X0_[u, 1 + j_]) == int(plain_gen[u][1 + j_]))
+                    logger.info(
+                        f"SPEC seed draft check: first-block draft j matches the plain continuation for {hit_} of {batch_size} users (j=1..); user0 X0 {X0_[0].tolist()} plain {plain_gen[0][:X0_.shape[1]]}"
+                    )
                 grp = {}
                 for u in range(batch_size):
                     grp.setdefault(tuple(int(t) for t in input_tokens_prefill[u][: int(decoding_pos[u])]), []).append(u)

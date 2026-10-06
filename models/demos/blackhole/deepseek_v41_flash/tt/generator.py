@@ -167,4 +167,5 @@ class Generator:
         """
         spec = self.spec
         X, base = spec.seed(tokens, prompt_lens, first_tokens)
+        spec.X0 = X.clone()
         return spec.run(X, base, max_new_tokens, eos=eos, active=active)
