@@ -86,9 +86,9 @@ ttnn::device_operation::ProgramArtifacts ScatterReduceBfloat16ProgramFactory::cr
 
     // Metal 2.0 resource names. Declared local (not at namespace scope) so the sibling factory in
     // the same unity-build translation unit can reuse the same identifiers without collision.
-    const DFBSpecName INPUT_DFB{"input"};
-    const DFBSpecName INDEX_DFB{"index"};
-    const DFBSpecName SRC_DFB{"source"};
+    const ScratchpadSpecName INPUT_SCRATCH{"input"};
+    const ScratchpadSpecName INDEX_SCRATCH{"index"};
+    const ScratchpadSpecName SRC_SCRATCH{"source"};
     const DFBSpecName DST_DFB{"output"};
     const ScratchpadSpecName FP32_TEMP_SCRATCH{"fp32_temp"};
     const TensorParamName INPUT_TENSOR{"input"};
@@ -98,9 +98,9 @@ ttnn::device_operation::ProgramArtifacts ScatterReduceBfloat16ProgramFactory::cr
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
 
-    // Each scatter DFB holds exactly one chunk page (num_entries = 1; entry_size is the 32-aligned
-    // chunk byte size). The data format is set even though these are data-movement-only DFBs,
-    // because the kernels select their C++ element type at compile time via get_dataformat(dfb::name).
+    // The output DFB holds exactly one chunk page (num_entries = 1; entry_size is the 32-aligned
+    // chunk byte size). The data format is set even though this is a data-movement-only DFB,
+    // because the writer selects its C++ element type at compile time via get_dataformat(dfb::output).
     auto make_dfb = [](const DFBSpecName& name, DataType dtype, uint32_t page_size_bytes) {
         return DataflowBufferSpec{
             .unique_id = name,
@@ -111,36 +111,26 @@ ttnn::device_operation::ProgramArtifacts ScatterReduceBfloat16ProgramFactory::cr
     };
 
     Group<DataflowBufferSpec> dataflow_buffers{
-        make_dfb(INPUT_DFB, input_tensor.dtype(), input_page_size_bytes),
-        make_dfb(INDEX_DFB, index_tensor.dtype(), index_page_size_bytes),
-        make_dfb(SRC_DFB, src_tensor.dtype(), source_page_size_bytes),
         make_dfb(DST_DFB, output_tensor.dtype(), output_page_size_bytes),
     };
 
-    // The reader alone fills and drains INPUT/INDEX/SRC (self-loop: bound PRODUCER + CONSUMER) and
-    // privately fills/drains the FP32_TEMP scratchpad; it produces DST, which the writer consumes.
+    // The reader alone fills and reads INPUT/INDEX/SRC, each one 32-aligned chunk page, and the
+    // FP32_TEMP accumulator, all as private scratchpads; it produces DST, which the writer consumes. A
+    // scratchpad carries no data format, so the reader gets its index element size as a compile-time
+    // arg instead (input is always bfloat16 in this factory).
     KernelSpec reader{
         .unique_id = READER,
         .source = reader_kernel_path,
         .dfb_bindings =
             {
                 DFBBinding{
-                    .dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{
-                    .dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::CONSUMER},
-                DFBBinding{
-                    .dfb_spec_name = INDEX_DFB, .accessor_name = "index", .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{
-                    .dfb_spec_name = INDEX_DFB, .accessor_name = "index", .endpoint_type = DFBEndpointType::CONSUMER},
-                DFBBinding{
-                    .dfb_spec_name = SRC_DFB, .accessor_name = "source", .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{
-                    .dfb_spec_name = SRC_DFB, .accessor_name = "source", .endpoint_type = DFBEndpointType::CONSUMER},
-                DFBBinding{
                     .dfb_spec_name = DST_DFB, .accessor_name = "output", .endpoint_type = DFBEndpointType::PRODUCER},
             },
         .scratchpad_bindings =
             {
+                ScratchpadBinding{.scratchpad_spec_name = INPUT_SCRATCH, .accessor_name = "input"},
+                ScratchpadBinding{.scratchpad_spec_name = INDEX_SCRATCH, .accessor_name = "index"},
+                ScratchpadBinding{.scratchpad_spec_name = SRC_SCRATCH, .accessor_name = "source"},
                 ScratchpadBinding{.scratchpad_spec_name = FP32_TEMP_SCRATCH, .accessor_name = "fp32_temp"},
             },
         .tensor_bindings =
@@ -155,6 +145,7 @@ ttnn::device_operation::ProgramArtifacts ScatterReduceBfloat16ProgramFactory::cr
                 {"index_stick_size", index_stick_size},
                 {"source_stick_size", source_stick_size},
                 {"input_rank", static_cast<uint32_t>(input_shape.rank())},
+                {"index_element_size", index_datum_size},
             },
         .runtime_arg_schema =
             {
@@ -248,6 +239,9 @@ ttnn::device_operation::ProgramArtifacts ScatterReduceBfloat16ProgramFactory::cr
     spec.kernels = {reader, writer};
     spec.dataflow_buffers = std::move(dataflow_buffers);
     spec.scratchpads = {
+        ScratchpadSpec{.unique_id = INPUT_SCRATCH, .size_per_node = input_page_size_bytes},
+        ScratchpadSpec{.unique_id = INDEX_SCRATCH, .size_per_node = index_page_size_bytes},
+        ScratchpadSpec{.unique_id = SRC_SCRATCH, .size_per_node = source_page_size_bytes},
         ScratchpadSpec{.unique_id = FP32_TEMP_SCRATCH, .size_per_node = fp32_temp_page_size_bytes},
     };
     spec.tensor_parameters = {
