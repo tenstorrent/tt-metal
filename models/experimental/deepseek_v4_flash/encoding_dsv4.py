@@ -55,16 +55,27 @@ tool_calls_block_name: str = "tool_calls"
 
 tool_output_template: str = "<tool_result>{content}</tool_result>"
 
+# Wire values. ``medium`` is not its own template: DeepSeek maps it to ``high``,
+# which adds no prefix (the default thinking template). ``low`` and ``max``
+# prepend their text at the start of a thinking-mode conversation.
+REASONING_EFFORTS = ("low", "medium", "high", "max")
+_REASONING_EFFORT_ALIAS = {"medium": "high"}
+
 REASONING_EFFORT_LOW = (
     "Reasoning Effort: Low with shortcuts permitted.\n"
-    "Don't repeat yourself while thinking, or state what you're going to do next. Don't restate the input."
-    "Make sure every word you write is necessary and carries new imforation."
+    "Don't repeat yourself while thinking, or state what you're going to do next. Don't restate the input. "
+    "Make sure every word you write is necessary and carries new information.\n\n"
 )
 REASONING_EFFORT_MAX = (
     "Reasoning Effort: Absolute maximum with no shortcuts permitted.\n"
     "You MUST be very thorough in your thinking and comprehensively decompose the problem to resolve the root cause, rigorously stress-testing your logic against all potential paths, edge cases, and adversarial scenarios.\n"
     "Explicitly write out your entire deliberation process, documenting every intermediate step, considered alternative, and rejected hypothesis to ensure absolutely no assumption is left unchecked.\n\n"
 )
+_REASONING_EFFORT_PROMPTS = {
+    "low": REASONING_EFFORT_LOW,
+    "high": "",
+    "max": REASONING_EFFORT_MAX,
+}
 
 TOOLS_TEMPLATE = """## Tools
 
@@ -240,7 +251,8 @@ def render_message(
         messages: Full list of messages in the conversation.
         thinking_mode: Either "chat" or "thinking".
         drop_thinking: Whether to drop reasoning content from earlier turns.
-        reasoning_effort: Optional reasoning effort level ("max", "high", or None).
+        reasoning_effort: Optional reasoning effort ("low", "medium", "high", "max", or None).
+            ``medium`` uses the same prefix as ``high``.
 
     Returns:
         Encoded string for this message.
@@ -265,10 +277,12 @@ def render_message(
     if tool_calls:
         tool_calls = tool_calls_from_openai_format(tool_calls)
 
-    # Reasoning effort prefix (only at index 0 in thinking mode with max effort)
-    assert reasoning_effort in ["max", None, "high"], f"Invalid reasoning effort: {reasoning_effort}"
-    if index == 0 and thinking_mode == "thinking" and reasoning_effort == "max":
-        prompt += REASONING_EFFORT_MAX
+    # Reasoning-effort prefix, only at the start of a thinking-mode conversation.
+    # ``high`` (and ``medium``, which aliases it) adds nothing.
+    effort = _REASONING_EFFORT_ALIAS.get(reasoning_effort, reasoning_effort)
+    assert effort in _REASONING_EFFORT_PROMPTS or effort is None, f"Invalid reasoning effort: {reasoning_effort}"
+    if index == 0 and thinking_mode == "thinking" and effort is not None:
+        prompt += _REASONING_EFFORT_PROMPTS[effort]
 
     if role == "system":
         prompt += system_msg_template.format(content=content or "")
@@ -541,7 +555,8 @@ def encode_messages(
         drop_thinking: If True, drop reasoning_content from earlier assistant turns
                       (only keep reasoning for messages after the last user message).
         add_default_bos_token: Whether to prepend BOS token at conversation start.
-        reasoning_effort: Optional reasoning effort level ("max", "high", or None).
+        reasoning_effort: Optional reasoning effort ("low", "medium", "high", "max", or None).
+            ``medium`` uses the same prefix as ``high``.
 
     Returns:
         The encoded prompt string.
