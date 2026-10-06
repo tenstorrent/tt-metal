@@ -69,3 +69,10 @@ stills, pick the default set, commit the table + video/still paths on this branc
   426/428/430/432 failed from 21:58 on. Broker glx_reset gate 439 started 22:22:59. Job 422 still queued.
   driver.sh gained ADOPT=<label>:<job> (watch a job a killed driver left queued; if the broker never runs it,
   submit a fresh one without counting a drop). Relaunched as TAG=pack3 PRIOR_DROP=baseline ADOPT=baseline:422.
+- DROP 2026-10-06 21:57:24 UTC, g15blx02, broker job 421 (ltx-host, live service; not ours), tray 1 = chips 0-7 off
+  the PCIe bus again (2nd tray-1 drop in 23 min after our job 407). Recovery failed until the 22:20:55 power-cycle.
+- 22:25 UTC: job 422 started running 22:25:10 (after gate 439 passed). Relaunched: ttp detach t164-pack5 (TAG=pack3,
+  PRIOR_DROP=baseline, ADOPT=baseline:422, driver pid 16894) and t164-phase2c (PACK_TAG=pack3); run dir
+  state/runs/695. Wake probe: `ttp detach --check state/runs/695/t164-phase2c.rc` (fires when phase 2 ends, or at
+  once if the pack driver stops early). A third tray-1 drop on a baseline job stops the pack (marker 6): then move
+  the pack to blx01 (/var/tmp/fasth3, t48 bf7db12a149 build from #159; its tray 3 config skip does not apply here).
