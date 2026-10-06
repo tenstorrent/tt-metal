@@ -63,6 +63,7 @@ export TT_METAL_MOCK_CLUSTER_DESC_PATH=/path/to/wh_galaxy_cluster_desc.yaml
 export TT_DIT_CACHE_DIR=/path/to/tt_dit_cache      # pre-converted weights; otherwise safetensors load
 export TT_METAL_CACHE=/path/to/kernel/cache        # see note below
 export MINIMAX_H3_DRAM_PROBE=1                     # per-owner DRAM accounting at each checkpoint
+unset TT_METAL_WATCHER                             # CI jobs export it; the watcher's device reads come back 0 on the mock and it aborts at mesh open
 
 pytest models/tt_dit/tests/models/minimax_h3/test_pipeline_ref2va_minimax_h3.py \
     -k "one_image and 4x8_WH" -s -x --timeout 14400
