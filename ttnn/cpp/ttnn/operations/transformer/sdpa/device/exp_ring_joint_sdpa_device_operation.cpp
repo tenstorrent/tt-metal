@@ -28,7 +28,7 @@ namespace ttnn::prim {
 
 ExpRingJointSDPADeviceOperation::program_factory_t ExpRingJointSDPADeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
-    if (args.precision && *args.precision != ttnn::transformer::SDPAPrecision::FAST) {
+    if (args.precision.has_value()) {
         return ExpRingJointSDPARecipeMeshWorkloadFactory{};
     }
     return ExpRingJointSDPAMeshWorkloadFactory{};

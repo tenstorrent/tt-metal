@@ -6,8 +6,7 @@
 
 // Shared exp ring joint SDPA program construction: SDPA/fabric-MUX grid split, head-serial passes, row
 // multicast chains, fused K/V all-gather over the MUX, runtime-argument layout and the dataflow CBs. The
-// compute contract is supplied by a ComputeVariant: ExpRingJointSDPAProgramFactory (legacy exp-ring compute,
-// including FAST) and ExpRingJointSDPARecipeProgramFactory (named precision recipes B-E) each own one.
+// compute contract is supplied by a ComputeVariant: ExpRingJointSDPAProgramFactory (legacy exp-ring compute) and ExpRingJointSDPARecipeProgramFactory (named precision recipes) each own one.
 // Defined in exp_ring_joint_sdpa_program_factory.cpp next to the legacy factory.
 
 #include <cstdint>

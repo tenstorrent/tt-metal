@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Ring joint SDPA compute for the named precision recipes B/C/D/E (FAST keeps ring_joint_sdpa.cpp).
+// Ring joint SDPA compute for the named precision recipes B/C/D/E (precision unset keeps ring_joint_sdpa.cpp).
 // Every active ring contribution continues one recurrent state (streaming/recipe_ring.hpp); only the last
 // active contribution normalizes. Compile-time and runtime arguments share the ring-joint layout built by
 // RingJointSDPARecipeMeshWorkloadFactory. Causal/balanced, sliding-window, chunked, KV-pad rotation and
@@ -24,7 +24,7 @@
 #if defined(WATCHER_ENABLED)
 #pragma GCC optimize("Os")
 #elif defined(TRISC_MATH) || defined(SDPA_RECIPE_FUSED)
-// Fused LOW_PRECISION chunks add enough code that -O3 unpack/pack overflows the kernel config buffer.
+// Fused FAST chunks add enough code that -O3 unpack/pack overflows the kernel config buffer.
 #pragma GCC optimize("O2")
 #else
 #pragma GCC optimize("O3")

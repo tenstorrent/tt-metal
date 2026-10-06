@@ -4,7 +4,7 @@
 
 // Ring joint SDPA reader for the named precision recipes B/C/D/E (compute: ring_joint_sdpa_recipe.cpp).
 
-// Size-optimized: the recipe compute kernels (fused LOW_PRECISION in particular) leave little of the
+// Size-optimized: the recipe compute kernels (fused FAST in particular) leave little of the
 // kernel config buffer, and this kernel mostly issues NOC/fabric transfers and waits on them.
 #pragma GCC optimize("Os")
 
