@@ -6,9 +6,11 @@
 
 #include <cstdint>
 
+#include "ckernel.h"
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -16,9 +18,8 @@ namespace sfpu {
 
 constexpr std::uint32_t SFPSETSGN_MOD1_ARG_IMM = 1;   // sign bit taken from imm12[0]
 constexpr std::uint32_t SFPSETSGN_SIGN_POSITIVE = 0;  // imm12[0] = 0 -> sign bit cleared
-constexpr std::uint32_t PRNG_SEED_WAIT_NOPS = 1024;   // SFPNOPs for the PRNG seeder to finish after the seed write
-constexpr std::uint32_t DROPOUT_REPLAY_SLOT = 0;
-constexpr std::uint32_t DROPOUT_REPLAY_LEN = 8;  // SFP instructions in _calculate_dropout_sfp_rows_
+// probability is compared as a signed int32 (SFPIADD MOD1_SUB_CC_GTE0), so p = 1 is INT_MAX.
+constexpr std::uint32_t DROPOUT_PROBABILITY_MAX = 0x7FFFFFFF;
 
 /**
  * @brief Dropout body for one SFPU row pair (Quasar = 2 Dest rows):
@@ -39,32 +40,34 @@ inline void _calculate_dropout_sfp_rows_() {
     TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg */);  // store result
 }
 
+// Loads a 32-bit runtime value into an LREG as two 16-bit halves.
+inline void _dropout_load_u32_(const std::uint32_t lreg, const std::uint32_t value) {
+    TT_SFPLOADI(lreg, sfpi::SFPLOADI_MOD0_LOWER, value & 0xFFFF /* imm16 */);
+    TT_SFPLOADI(lreg, sfpi::SFPLOADI_MOD0_UPPER, value >> 16 /* imm16 */);
+}
+
 /**
  * @brief Apply dropout in place over one face of Dest.
  *
  * @tparam APPROXIMATION_MODE: Accepted for Compute API parity; dropout has no approximate variant.
  * @tparam ITERATIONS: SFPU row-pair iterations covering one face.
- * @param probability: Drop probability scaled to an integer, p * INT_MAX, range 0 .. 0x7FFFFFFF.
+ * @param probability: Drop probability scaled to an integer, p * INT_MAX, range 0 .. DROPOUT_PROBABILITY_MAX.
  * @param scale: fp32 bit pattern of the scale applied to surviving data (normally 1 / (1 - p)).
  * @note Call @ref dropout_init once before this to seed the PRNG.
- * @note Overwrites LREG0-LREG3 and replay slots [DROPOUT_REPLAY_SLOT, +DROPOUT_REPLAY_LEN).
+ * @note Overwrites LREG0-LREG3. Issues its body inline (no replay buffer), so replay-backed math
+ *       ops recorded in their init stay valid across dropout calls.
  */
 template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_dropout(const std::uint32_t probability, const std::uint32_t scale) {
-    TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, scale & 0xFFFF);
-    TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_UPPER, scale >> 16);
-    TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, probability & 0xFFFF);
-    TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, probability >> 16);
-    load_replay_buf<DROPOUT_REPLAY_SLOT, DROPOUT_REPLAY_LEN>([] { _calculate_dropout_sfp_rows_(); });
+    LLK_ASSERT(
+        probability <= DROPOUT_PROBABILITY_MAX,
+        "dropout: probability is p * INT_MAX and is compared signed; bit 31 must be clear");
+    _dropout_load_u32_(p_sfpu::LREG1, scale);
+    _dropout_load_u32_(p_sfpu::LREG2, probability);
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_REPLAY(
-            DROPOUT_REPLAY_SLOT,
-            DROPOUT_REPLAY_LEN,
-            0 /* last */,
-            0 /* set_mutex */,
-            0 /* execute_while_loading */,
-            0 /* load_mode */);
-        // dest_reg++, by the two Dest rows the replay just consumed
+        _calculate_dropout_sfp_rows_();
+        // dest_reg++, by the two Dest rows just consumed
         ckernel::math::_incr_counters_<0x0 /* srca */, 0x0 /* srcb */, ckernel::math::SFP_ROWS, 0x0 /* cr */>();
     }
 }
@@ -74,16 +77,11 @@ inline void calculate_dropout(const std::uint32_t probability, const std::uint32
  *
  * @tparam APPROXIMATION_MODE: Accepted for Compute API parity; unused.
  * @param seed: Seed value handed to the Tensix PRNG seeder.
- * @note Call once before @ref calculate_dropout. The seeder exposes no completion flag, so the
- *       SFPNOP wait is what guarantees the first PRNG read sees seeded lanes.
- * @note Do not place a TRISC_CFG STALLWAIT near this MMIO cfg write (errata TEN-4849).
+ * @note Call once before @ref calculate_dropout.
  */
 template <bool APPROXIMATION_MODE>
 inline void dropout_init(const std::uint32_t seed) {
-    ckernel::trisc::cfg[PRNG_SEED_Seed_Val_ADDR32] = seed;  // kicks the PRNG seeder
-    for (std::uint32_t i = 0; i < PRNG_SEED_WAIT_NOPS; i++) {
-        TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);
-    }
+    init_prng_seed(seed);
 }
 
 }  // namespace sfpu
