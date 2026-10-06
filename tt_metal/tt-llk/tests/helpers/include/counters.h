@@ -714,11 +714,19 @@ inline void read_last_zone()
 #define MEASURE_PERF_COUNTERS(zone_name)
 #endif
 
+// Experiment: N 4-byte nops after the zone alignment (moves every measured loop by 4*N bytes).
+#if defined(LLK_ZONE_PAD) && LLK_ZONE_PAD > 0
+#define LLK_ZONE_PAD_NOPS() asm volatile(".option push\n\t.option norvc\n\t.rept %0\n\tnop\n\t.endr\n\t.option pop" ::"i"(LLK_ZONE_PAD))
+#else
+#define LLK_ZONE_PAD_NOPS()
+#endif
+
 // One measured scope: NC activates timing only, WC both. Without the profiler there is no zone to open.
 #if defined(LLK_PROFILER)
 // The 64-byte alignment keeps code before a zone from moving the zone's loop (Wormhole pack issue rate, #55169).
 #define START_PERF_MEASURE(zone_name) \
     asm volatile(".p2align 6");       \
+    LLK_ZONE_PAD_NOPS();              \
     MEASURE_PERF_COUNTERS(zone_name)  \
     ZONE_SCOPED(zone_name)
 #else
