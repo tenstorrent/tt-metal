@@ -105,6 +105,10 @@ struct CoreRtArgs {
     uint32_t out_units = 0;
     uint32_t start_id = 0;
     uint32_t compute_units = 0;
+    uint32_t shard_pages = 0;       // SHARD_ROTATE only: reader/writer slot 3
+    uint32_t num_shards = 0;        // SHARD_ROTATE only: reader/writer slot 4
+    uint32_t last_shard_pages = 0;  // SHARD_ROTATE only: reader/writer slot 5
+    uint32_t start_shard = 0;       // SHARD_ROTATE only: reader/writer slot 6
 };
 
 // Core-invariant ROW_MAJOR-interleaved chunk constants, reader/writer slots 3-7. All shape-derived,
@@ -192,6 +196,7 @@ void enumerate_core_rt_args(
             k.rows_per_tile = tile_hw / row_width_elements;
         }
     }
+    const auto rotate = get_dram_height_rotate(input.tensor_spec(), output.tensor_spec());
     const uint32_t out_num_tiles =
         rm_interleaved ? (k.total_rows + k.rows_per_tile - 1) / k.rows_per_tile : output.physical_volume() / tile_hw;
     const uint32_t oWt = output.padded_shape()[-1] / output.tensor_spec().tile().get_width();
@@ -320,13 +325,33 @@ void enumerate_core_rt_args(
             fn(CoreRtArgs{.core = core, .noop = true}, k);
             continue;
         }
+        // SHARD_ROTATE keeps the same page split, but counts pages in rotated order (slot by slot across the
+        // shards) and starts each core at the (slot, shard) of its first page. Slots below last_shard_pages
+        // exist in every shard; above it the last shard has none.
+        uint32_t start_id = start_tile_id;
+        uint32_t start_shard = 0;
+        if (rotate.enabled) {
+            const uint32_t ns = rotate.num_shards;
+            const uint32_t full = rotate.last_shard_pages * ns;
+            if (start_tile_id < full) {
+                start_id = start_tile_id / ns;
+                start_shard = start_tile_id % ns;
+            } else {
+                start_id = rotate.last_shard_pages + (start_tile_id - full) / (ns - 1);
+                start_shard = (start_tile_id - full) % (ns - 1);
+            }
+        }
         fn(
             CoreRtArgs{
                 .core = core,
                 .in_units = npc,
                 .out_units = npc,
-                .start_id = start_tile_id,
-                .compute_units = rm_interleaved ? npc * k.chunks_per_row : npc},
+                .start_id = start_id,
+                .compute_units = rm_interleaved ? npc * k.chunks_per_row : npc,
+                .shard_pages = rotate.shard_pages,
+                .num_shards = rotate.num_shards,
+                .last_shard_pages = rotate.last_shard_pages,
+                .start_shard = start_shard},
             k);
         start_tile_id += npc;
     }
@@ -416,9 +441,19 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     DataFormat cb_data_format_for_input =
         (ops_chain[0].type() == unary::UnaryOpType::BITCAST) ? cb_data_format_output : cb_data_format;
 
+    // DRAM height-sharded tensors that qualify for SHARD_ROTATE read slot by slot across the shards,
+    // so consecutive pages sit on different banks. Their reader ramps up to 8 pages in flight and the
+    // writer flushes 2 pages at a time; each CB is two bursts deep so the next group can be posted while
+    // compute still holds the previous one. Every other path keeps one page in flight.
+    const auto rotate = get_dram_height_rotate(input.tensor_spec(), output.tensor_spec());
+    const uint32_t kReadBurst = rotate.enabled ? 8 : 1;
+    const uint32_t kWriteBurst = rotate.enabled ? 2 : 1;
+    const uint32_t interleaved_input_tiles = 2 * kReadBurst;
+    const uint32_t interleaved_output_tiles = 2 * kWriteBurst;
+
     // --- Circular Buffers ---
     desc.cbs.push_back(CBDescriptor{
-        .total_size = input_cb_page_size * src_num_tiles_per_shard.value_or(2),
+        .total_size = input_cb_page_size * src_num_tiles_per_shard.value_or(interleaved_input_tiles),
         .core_ranges = all_device_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
@@ -442,7 +477,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
 
     const uint32_t output_cb_index = CBIndex::c_2;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = output_cb_page_size * dst_num_tiles_per_shard.value_or(2),
+        .total_size = output_cb_page_size * dst_num_tiles_per_shard.value_or(interleaved_output_tiles),
         .core_ranges = all_device_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(output_cb_index),
@@ -456,6 +491,8 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     std::map<std::string, std::string> reader_defines;
     reader_defines["SRC_SHARDED"] = src_sharded ? "1" : "0";
     reader_defines["RM_INTERLEAVED"] = rm_interleaved ? "1" : "0";
+    reader_defines["READ_BURST"] = std::to_string(kReadBurst);
+    reader_defines["SHARD_ROTATE"] = rotate.enabled ? "1" : "0";
 
     std::vector<uint32_t> reader_compile_time_args;
     std::vector<uint32_t> reader_common_runtime_args;
@@ -475,6 +512,8 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     std::map<std::string, std::string> writer_defines;
     writer_defines["DST_SHARDED"] = dst_sharded ? "1" : "0";
     writer_defines["RM_INTERLEAVED"] = rm_interleaved ? "1" : "0";
+    writer_defines["WRITE_BURST"] = std::to_string(kWriteBurst);
+    writer_defines["SHARD_ROTATE"] = rotate.enabled ? "1" : "0";
 
     std::vector<uint32_t> writer_compile_time_args;
     std::vector<uint32_t> writer_common_runtime_args;
@@ -552,9 +591,26 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
                      kc.rows_per_tile,
                      kc.total_rows});
             } else {
-                reader_desc.emplace_runtime_args(w.core, {input.buffer(), w.in_units, w.start_id, 0u, 0u, 0u, 0u, 0u});
+                reader_desc.emplace_runtime_args(
+                    w.core,
+                    {input.buffer(),
+                     w.in_units,
+                     w.start_id,
+                     w.shard_pages,
+                     w.num_shards,
+                     w.last_shard_pages,
+                     w.start_shard,
+                     0u});
                 writer_desc.emplace_runtime_args(
-                    w.core, {output.buffer(), w.out_units, w.start_id, 0u, 0u, 0u, 0u, 0u});
+                    w.core,
+                    {output.buffer(),
+                     w.out_units,
+                     w.start_id,
+                     w.shard_pages,
+                     w.num_shards,
+                     w.last_shard_pages,
+                     w.start_shard,
+                     0u});
             }
             compute_desc.runtime_args.emplace_back(
                 w.core, KernelDescriptor::CoreRuntimeArgs{w.compute_units, packed_scalar1, packed_scalar2});
@@ -625,9 +681,11 @@ void UnaryDeviceOperation::ProgramFactory::override_runtime_arguments(
                     kc.output_last_chunk_size,
                     kc.rows_per_tile,
                     kc.total_rows};
+                // TILE: slots 3-6 carry the SHARD_ROTATE shard sizes, count and start shard (zero otherwise).
+                const std::array<uint32_t, 5> ttail{w.shard_pages, w.num_shards, w.last_shard_pages, w.start_shard, 0u};
                 for (uint32_t i = 0; i < rtail.size(); ++i) {
-                    r[3 + i] = rm_interleaved ? rtail[i] : 0u;
-                    wr[3 + i] = rm_interleaved ? wtail[i] : 0u;
+                    r[3 + i] = rm_interleaved ? rtail[i] : ttail[i];
+                    wr[3 + i] = rm_interleaved ? wtail[i] : ttail[i];
                 }
             }
             c[0] = w.compute_units;

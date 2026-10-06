@@ -58,6 +58,41 @@ bool is_native_L1_sharding(
     return true;
 }
 
+DramHeightRotate get_dram_height_rotate(
+    const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::TensorSpec& output_spec) {
+    using tt::tt_metal::BufferType;
+    using tt::tt_metal::Layout;
+    using tt::tt_metal::TensorMemoryLayout;
+    auto is_dram_height = [](const tt::tt_metal::TensorSpec& s) {
+        const auto& mc = s.memory_config();
+        return s.layout() == Layout::TILE && mc.buffer_type() == BufferType::DRAM &&
+               mc.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED && mc.shard_spec().has_value();
+    };
+    if (!is_dram_height(input_spec) || !is_dram_height(output_spec)) {
+        return {};
+    }
+    const auto& in_shard = *input_spec.memory_config().shard_spec();
+    const auto& out_shard = *output_spec.memory_config().shard_spec();
+    if (in_shard.shape != out_shard.shape) {
+        return {};
+    }
+    const auto& tile = input_spec.tile();
+    if (in_shard.shape[0] % tile.get_height() != 0 || in_shard.shape[1] % tile.get_width() != 0) {
+        return {};
+    }
+    const uint32_t shard_pages = (in_shard.shape[0] / tile.get_height()) * (in_shard.shape[1] / tile.get_width());
+    const uint64_t total_pages = input_spec.padded_shape().volume() / tile.get_tile_hw();
+    if (shard_pages == 0 || total_pages == 0) {
+        return {};
+    }
+    const auto num_shards = static_cast<uint32_t>((total_pages + shard_pages - 1) / shard_pages);
+    return {
+        .enabled = true,
+        .shard_pages = shard_pages,
+        .num_shards = num_shards,
+        .last_shard_pages = static_cast<uint32_t>(total_pages - (uint64_t{num_shards} - 1) * shard_pages)};
+}
+
 std::optional<UnaryShardSpecs> get_shard_specs(
     const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::TensorSpec& output_spec) {
     const bool input_sharded = input_spec.memory_config().is_sharded();

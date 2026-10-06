@@ -27,6 +27,21 @@ const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal:
 
 bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
+/** DRAM height-sharded TILE in and out with the same shard spec. A shard's pages sit in one bank, so
+ * the interleaved reader and writer visit every shard slot by slot (SHARD_ROTATE) instead of walking
+ * page ids, which keeps consecutive pages, and each burst, on different banks. Whether it applies
+ * depends only on the memory configs, which the program hash covers; the sizes below are runtime
+ * args. Other sharded DRAM layouts keep the one-page interleaved order. */
+struct DramHeightRotate {
+    bool enabled = false;
+    uint32_t shard_pages = 0;       // pages (slots) per full shard
+    uint32_t num_shards = 0;        // shards holding data, the last may be partial
+    uint32_t last_shard_pages = 0;  // pages in the last shard
+};
+
+DramHeightRotate get_dram_height_rotate(
+    const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::TensorSpec& output_spec);
+
 tt::tt_metal::CoreRangeSet get_worker_grid(
     const Tensor& input_tensor,
     const std::optional<Tensor>& output_tensor,
