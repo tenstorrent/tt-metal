@@ -75,7 +75,10 @@ ALWI void log_sigmoid_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void log_sigmoid_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+ALWI void log_sigmoid_tile_init() {
+    MATH(SFPU_UNARY_INIT(unused));
+    MATH(sfpu::init_logsigmoid_bf16());
+}
 
 #endif  // ARCH_BLACKHOLE
 

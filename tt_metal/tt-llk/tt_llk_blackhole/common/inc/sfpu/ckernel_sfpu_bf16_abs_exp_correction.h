@@ -21,26 +21,11 @@ namespace sfpi
 
 namespace ckernel::sfpu::bf16
 {
-template <typename Config>
-inline void init_abs_exp_correction()
-{
-    sfpi::vConstFloatPrgm0 = Config::kMultiplier;
-    {
-        sfpi::vConstFloatPrgm1 = Config::kExpCoefficients[Config::kExpDegree] * sfpi::correction_exp_scale(Config::kExpDegree);
-        sfpi::vConstFloatPrgm2 = Config::kExpCoefficients[Config::kExpDegree - 1] * sfpi::correction_exp_scale(Config::kExpDegree - 1);
-    }
-}
-
 template <typename Config, int Iterations = 32>
 inline void calculate_abs_exp_correction()
 {
     static_assert(Iterations == 32, "parked correction coefficients require the complete tile");
-    // Residual composite kernels keep their per-call initializer.
     {
-        init_abs_exp_correction<Config>();
-    }
-    {
-        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
         sfpi::abs_exp_residual_pins<Config>();
         constexpr std::uint32_t slots = 27u + (__builtin_bit_cast(std::uint32_t, Config::kNumerator[0]) == 0x3f800000u ? 0u : 1u);
         TTI_REPLAY(0, slots, 1, 1);
@@ -68,10 +53,8 @@ inline void calculate_abs_exp_correction()
         sfpi::vFloat raw = sfpi::dst_reg[row];
         sfpi::vFloat result;
         result = sfpi::abs_residual_correction<3, 0, Config>(raw, exp, reciprocal);
-        {
-            // A NaN of either sign stores +Inf; the affine part would keep the NaN's sign.
-            sfpi::nan_class_terminal<1>(sfpi::dst_reg[row].template mode<sfpi::DataLayout::U16>(), result);
-        }
+        // A NaN of either sign stores +Inf; the affine part would keep the NaN's sign.
+        sfpi::nan_class_terminal<1>(sfpi::dst_reg[row].template mode<sfpi::DataLayout::U16>(), result);
         result             = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         sfpi::dst_reg[row] = result;
     }
