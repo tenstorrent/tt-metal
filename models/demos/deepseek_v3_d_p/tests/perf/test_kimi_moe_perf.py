@@ -147,10 +147,11 @@ _K2_7 = _MoEPerfCase(
 # onto ND-sharded weight placement. Still 34 programs, and main's last three runs read 6,448,580 /
 # 6,404,459 / 6,425,097 ns (jobs 108833542648, 108591989836, 108483307703), so this is a 6.2% speedup
 # against their median.
+# 7,316,816 ns: CI run 36914642475, first with the dispatch op counted under sub-devices (#58861).
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
-    expected_ns=6_026_883,
+    expected_ns=7_316_816,
     # 3% retained: K3 runs second on an already-warm device and four samples on the previous shape
     # spanned just 0.44% peak to peak, so 3% is already generous -- the midpoint is what goes stale
     # here, not the width. Sub-nominal DDR doubles it to 6% via adjust_margin_for_ddr_speed.

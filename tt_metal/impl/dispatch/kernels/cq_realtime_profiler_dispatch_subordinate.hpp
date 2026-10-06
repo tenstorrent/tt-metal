@@ -25,6 +25,7 @@
 // Compile-time args from host (set in dispatch_s.cpp)
 constexpr uint32_t first_stream_index = FIRST_STREAM_INDEX;
 constexpr uint32_t num_streams_to_monitor = NUM_STREAMS_TO_MONITOR;
+static_assert(num_streams_to_monitor <= REALTIME_PROFILER_NUM_STREAMS);
 
 FORCE_INLINE void dispatch_subordinate_realtime_profiler() {
     // Dispatch-core-local L1 region carved by DispatchMemMap (CommandQueueDeviceAddrType::
@@ -54,7 +55,8 @@ FORCE_INLINE void dispatch_subordinate_realtime_profiler() {
         uint32_t stream_id = first_stream_index + i;
         volatile uint32_t* stream_reg =
             (volatile uint32_t*)STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
-        last_counts[i] = *stream_reg;
+        last_counts[i] = *stream_reg & REALTIME_PROFILER_STREAM_COUNT_MASK;
+        rt_profiler_msg->streams[i].done_count = last_counts[i];
     }
 
     while (rt_profiler_msg->realtime_profiler_state != REALTIME_PROFILER_STATE_TERMINATE) {
@@ -63,11 +65,11 @@ FORCE_INLINE void dispatch_subordinate_realtime_profiler() {
             volatile uint32_t* stream_reg =
                 (volatile uint32_t*)STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
 
-            uint32_t current_count = *stream_reg;
+            uint32_t current_count = *stream_reg & REALTIME_PROFILER_STREAM_COUNT_MASK;
             if (current_count != last_counts[i]) {
                 DeviceZoneScopedN("TRISC0-record-end-ts");
                 last_counts[i] = current_count;
-                record_realtime_timestamp(rt_profiler_msg, false);
+                record_stream_done(rt_profiler_msg, i, current_count);
             }
         }
     }

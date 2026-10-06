@@ -55,13 +55,13 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 |   |   L1 carve-out realtime_profiler_msg_t:                              |   |
 |   |     Ping-pong: kernel_start_a/b, kernel_end_a/b                     |   |
 |   |     program_id_fifo, realtime_profiler_core_noc_xy,                 |   |
-|   |     realtime_profiler_remote_state_addr                             |   |
+|   |     realtime_profiler_remote_state_addr, stream_done[] (TRISC)      |   |
 |   |                                                                     |   |
-|   |   Per-command: record start ts, FIFO program id, process cmd,       |   |
-|   |     record end ts, signal_realtime_profiler_and_switch()            |   |
-|   |     ... process command ...                                         |   |
-|   |     record_realtime_timestamp(false); signal_realtime_profiler_and_ |   |
-|   |     switch();  (NOC-write state to profiler core)                   |   |
+|   |   Per go signal: pop program id, open the record of its stream      |   |
+|   |     (one per sub-device), stamp start.                              |   |
+|   |   Next wait on that stream (go signal or RT_PROFILER_FLUSH): end =  |   |
+|   |     stream_done[stream] time, write buf A/B,                        |   |
+|   |     signal_realtime_profiler_and_switch() (NOC-write state)         |   |
 |   +---------------------------------------------------------------------+   |
 +-----------------------------------------------------------------------------+
 ```
@@ -75,11 +75,11 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
   (dispatch_s)               (cq_realtime_profiler)               (receiver thread)
 
        |                              |                                  |
-       | 1. Record start ts,          |                                  |
-       |    program_id into           |                                  |
-       |    mailbox buf A or B        |                                  |
-       | 2. Process command           |                                  |
-       | 3. Record end ts             |                                  |
+       | 1. Go signal sent: stamp     |                                  |
+       |    start for its stream      |                                  |
+       | 2. Next wait on that stream  |                                  |
+       | 3. End = stream's last       |                                  |
+       |    completion; write buf A/B |                                  |
        | 4. Update state PUSH_A/B     |                                  |
        | 5. NOC write state --------> |                                  |
        |                              | 6. See state PUSH_A or PUSH_B    |
