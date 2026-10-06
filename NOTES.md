@@ -1,33 +1,26 @@
-# t140 — eval pack, 4x8 1080p (blx03)
+# t166 — cut the LTX-2.5 4x8 fresh-process warmup under 400 s
 
-Branch ttp/t140-eval-pack-4x8. Overlay staged at g14blx03:/var/tmp/fasth3/t140/src (REV file), C++ build from blx03 ~/fasth3/t48.
-Collect-only of test_pipeline_distilled -k bh_4x8sp1tp0_ring passes (1/8).
+Branch ttp/t166-cut-ltx-2-5-4x8-fresh-process-warmup-und (from origin/ttp/t48-ltx25-integrated b81bb403d86;
+the NOTES.md it carried was t140's). Code commit: 0ee3d31bda9 `ltx: add opt-in LTX_WARMUP_T2V_ONLY ...`
+(host tests: test_ic_trace_generate.py 22 passed).
 
-Driver: /var/tmp/fasth3/t140/src/tmp/t140/driver.sh, launched via tt-project/harness/templates/blx03-launch.sh t140.
-- Waits for the t136 and t141 drivers to finish (or 2 h idle), then runs tmp/t140/configs.txt, one broker job per config,
-  each after the blx03 health gate. Job ids: /var/tmp/fasth3/t140/jobs.txt. Per-config output: /var/tmp/fasth3/t140/<label>/.
-- Done marker: `T140_DRIVER_DONE` in /var/tmp/fasth3/t140/driver.log. Relaunching skips configs with T140_EXIT=0.
+## Before (cold JIT cache): where the warmup goes
+blx01 job 621 (bf7db12a149, cold cache 0/3653 hits): process 660 s, warmup 551 s, gen#0 36.5 s, gen#1 6.031 s.
+setup ~66 s (183 compiles) | gemma encode 79 s (501) | image encoder 63 s (288) | s1 95 s (820) | s1_i2v 12 s (73)
+| upsample 13 s (93) | s2 41 s (245) | s2_i2v+transition+decode 26 s (129) | audio eager 211 s (1303 compiles,
+622 s compile CPU) | audio capture 10 s (18).
+blx03 t138: process 530 s, warmup 429 s, 985/3554 hits.
+=> most of the warmup is in-window cold JIT compile; a warm cache on an unchanged tree removes it.
 
-Next step after the marker:
-1. rsync g14blx03:/var/tmp/fasth3/t140/<label>/ (run.log, mp4, png, broker slices) to tt-project/t140/.
-2. `python3 tmp/t140/post.py tt-project/t140` -> summary.md/json (warm e2e, stages, PCC/PSNR vs baseline).
-3. 5-seed phase: write a second configs file (baseline + 1-2 best + any PCC/PSNR drop) with LTX_E2E_SEEDS=0,1,2,3,4,
-   relaunch with CONFIGS=<file>. Compare per seed vs baseline.
-4. Table + recommended default set + videos/stills; commit, push, clean /var/tmp/fasth3/t140 bulk.
+## After: blx01 job 625 (submitted 2026-10-06 21:09 UTC, -t 600)
+Script /var/tmp/fasth3/t166/job.sh (TAG=a), overlay /var/tmp/fasth3/t166/tree (hardlinked t48 models/ + t166
+python files; TT_METAL_HOME stays /var/tmp/fasth3/t48 so the job-621 JIT cache is reused).
+Env: LTX_WARMUP_T2V_ONLY=1 LTX_WARMUP_ENCODERS=0 LTX_E2E_SEEDS=0,1,2,3,4 + t159 env, TT_METAL_LOG_KERNEL_COMPILE=1.
+Output/log: g15blx01:/var/tmp/fasth3/t166/out/a/{run.log,*.mp4}.
 
-Run 2 (2026-10-06 03:12 UTC): blx03 rebooted 03:02 and killed the first driver before any t140 job. Relaunched at
-1016c3aac47 (waits for every other smarton job, not only t136/t141; pair cutoff 30 min idle). blx03 pid 31022.
-If the probe wakes and the log has no DONE line, the driver died (reboot): relaunch it the same way; it resumes.
-
-Run 3 (2026-10-06 03:45 UTC): blx03 power-cycled 03:42 and killed driver pid 31022 again before any t140 job.
-Relaunched (same src ae7aaf3b1d2), blx03 pid 8381. The launcher's ssh hung after launch (killed by timeout after 2 min); driver unaffected.
-
-Drops logged:
-- 2026-10-06 02:17-02:19 UTC, blx03 job 212 (smarton, t136 run_ab.sh), chips 8-15 (tray 2) off PCIe, chip 15 UNHEALTHY;
-  job 216 (t141) abandoned; resets 214/215 failed, health-gate 217 glx_reset; blx03 rebooted ~02:26 UTC. No t140 job was running.
-- 2026-10-06 ~03:02 UTC: blx03 rebooted (cause not seen; no t140 job running). Killed t140 driver pid 16601.
-- 2026-10-06 03:10 UTC: blx03 job 246 (smarton, t141 e2e) killed -9; chips 8-15 (tray 2) left the bus; broker post-job gate
-  escalated to glx_reset. No t140 job running.
-- 2026-10-06 03:16-03:42 UTC: recovery from the job-246 drop failed: bridge-reset of chips 8-15 (tray 2) failed 4x
-  (broker jobs 254/256/258/260), the broker's galaxy-reset health gates failed (255/257/259/261), broker power-cycled the
-  galaxy (job 263, 03:42 UTC, 32/32 chips off). Killed t140 driver pid 31022. No t140 job was running.
+## Next
+1. When 625 ends: pull run.log; section times + JIT stats; process wall; E2E_WALL_S per gen.
+2. Bit-identical: md5 of decoded frames (ffmpeg -f framemd5) of out/a/ltx_av_fast_1920x1088_{0,1}.mp4 vs
+   /var/tmp/fasth3/t159/out/ same names.
+3. Land 0ee3d31bda9 on t48 (cherry-pick onto <branch>-land from origin/t48, ttp push --detach).
+4. result.json: SHA, env, wall, -t recommendations (measured +50%, <= 600).
