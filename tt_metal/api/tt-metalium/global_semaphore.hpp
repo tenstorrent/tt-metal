@@ -15,7 +15,6 @@
 
 namespace tt::tt_metal {
 
-// Redeclared (not included from hal_types.hpp) to keep this header light; must match hal_types.hpp.
 using DeviceAddr = std::uint64_t;
 
 class IDevice;
