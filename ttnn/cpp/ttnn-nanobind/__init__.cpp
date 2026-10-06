@@ -77,6 +77,7 @@
 #include "ttnn/operations/prefetcher/prefetcher_nanobind.hpp"
 #include "ttnn/operations/reduction/reduction_nanobind.hpp"
 #include "ttnn/operations/sliding_window/sliding_window_nanobind.hpp"
+#include "ttnn/operations/toy_scaled_add/toy_scaled_add_nanobind.hpp"
 #include "ttnn/operations/transformer/transformer_nanobind.hpp"
 #include "ttnn/operations/uniform/uniform_nanobind.hpp"
 #include "ttnn/operations/rand/rand_nanobind.hpp"
@@ -220,6 +221,9 @@ void py_module(nb::module_& mod) {
 
     auto m_point_to_point = mod.def_submodule("point_to_point", "point_to_point operations");
     point_to_point::bind_point_to_point(m_point_to_point);
+
+    auto m_toy_scaled_add = mod.def_submodule("toy_scaled_add", "toy_scaled_add operation");
+    toy_scaled_add::bind_toy_scaled_add_operation(m_toy_scaled_add);
 }
 }  // namespace ttnn::operations
 

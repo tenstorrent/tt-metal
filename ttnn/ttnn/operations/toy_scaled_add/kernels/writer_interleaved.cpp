@@ -12,7 +12,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
-#include "toy_scaled_add_args.hpp"
+#include "ttnn/cpp/ttnn/operations/toy_scaled_add/device/kernels/toy_scaled_add_args.hpp"
 
 using namespace toy_scaled_add;
 
