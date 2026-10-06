@@ -32,16 +32,13 @@ struct Exp : UnaryOp<Exp<approx, Slot>, Slot> {
 };
 
 // ---- Log ----
-// log_tile / log_tile_init are WH/BH-only (not declared in Quasar's compute_kernel_api.h), and the
-// non-dependent name lookup in this template body fails to compile on Quasar even when Log is never
-// instantiated (e.g. layernorm only pulls in the header). Guard it out until the LLK is ported.
-#ifndef ARCH_QUASAR
+// log_tile / log_tile_init are declared for every arch in compute_kernel_api.h; the Quasar SFPU LLK
+// (ckernel_sfpu_log.h) landed with #58209.
 template <Approx fast, Dst Slot>
 struct Log : UnaryOp<Log<fast, Slot>, Slot> {
     static ALWI void init() { log_tile_init<fast == Approx::Fast>(); }
     static ALWI void exec_impl(uint32_t slot_offset) { log_tile<fast == Approx::Fast>(to_u32(Slot) + slot_offset); }
 };
-#endif
 
 // ---- Sqrt ----
 template <Approx fast, Dst Slot>
