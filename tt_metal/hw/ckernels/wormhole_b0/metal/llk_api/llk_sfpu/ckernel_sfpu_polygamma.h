@@ -146,10 +146,15 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
     }
 }
 
-template <bool APPROXIMATION_MODE>
+void init_polygamma_bf16();
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void polygamma_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     recip_init<APPROXIMATION_MODE, false>();
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+        init_polygamma_bf16();
+    }
 }
 
 }  // namespace ckernel::sfpu

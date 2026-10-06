@@ -545,7 +545,7 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::polygamma)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(polygamma_init<APPROX_MODE>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(polygamma_init<APPROX_MODE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::xielu)
     {

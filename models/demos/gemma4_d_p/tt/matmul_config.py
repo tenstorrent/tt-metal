@@ -14,9 +14,7 @@ _PER_CORE_N_1D = 2
 _MAX_PER_CORE_M = 4
 
 
-def prefill_matmul_program_config(
-    hidden_states, weight, grid_x, grid_y, fused_activation=None, fp32_dest_acc=False, max_per_core_m=_MAX_PER_CORE_M
-):
+def prefill_matmul_program_config(hidden_states, weight, grid_x, grid_y, fused_activation=None, fp32_dest_acc=False):
     """2D-multicast program config for hidden_states @ weight on a grid_x x grid_y core grid, or None
     to keep ttnn's default when the per-core block would not fit in L1.
 
@@ -30,7 +28,7 @@ def prefill_matmul_program_config(
     k_tiles = hidden_states.padded_shape[-1] // tile
     n_tiles = weight.padded_shape[-1] // tile
     per_core_m = ttnn.core.divup(m_tiles, grid_y)
-    if per_core_m > max_per_core_m:
+    if per_core_m > _MAX_PER_CORE_M:
         return None
     per_core_n = ttnn.core.divup(n_tiles, grid_x)
     subblock_w = 2 if per_core_n % 2 == 0 else 1

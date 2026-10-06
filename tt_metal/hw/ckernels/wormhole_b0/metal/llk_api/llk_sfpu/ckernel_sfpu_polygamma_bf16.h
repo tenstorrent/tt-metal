@@ -13,7 +13,6 @@ struct PolygammaBf16Config {
         __builtin_bit_cast(float, 0x40530000u),
         __builtin_bit_cast(float, 0x40b40000u),
         __builtin_bit_cast(float, 0x41930000u)};
-    static constexpr bool kRepair = false;
     static constexpr bool kWhRepair = true;
     static constexpr bool kDirectTail = false;
     static constexpr bool kFiniteReferencePrecedence = true;
@@ -34,6 +33,11 @@ inline bool bf16_dest_polygamma() {
 template <int ITERATIONS = 8>
 inline void calculate_polygamma_bf16() {
     ckernel::sfpu::bf16::calculate_inverse_square<ckernel::sfpu::PolygammaBf16Config, ITERATIONS>();
+}
+inline void init_polygamma_bf16() {
+    if (bf16_dest_polygamma()) {
+        ckernel::sfpu::bf16::init_inverse_square<ckernel::sfpu::PolygammaBf16Config>();
+    }
 }
 
 }  // namespace ckernel::sfpu

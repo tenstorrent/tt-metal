@@ -68,6 +68,6 @@ ALWI void polygamma_tile(std::uint32_t idst, std::uint32_t n_packed, std::uint32
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void polygamma_tile_init() { MATH(SFPU_UNARY_INIT_FN(polygamma, sfpu::polygamma_init, (APPROX))); }
+ALWI void polygamma_tile_init() { MATH(SFPU_UNARY_INIT_FN(polygamma, sfpu::polygamma_init, (APPROX, DST_ACCUM_MODE))); }
 
 }  // namespace ckernel

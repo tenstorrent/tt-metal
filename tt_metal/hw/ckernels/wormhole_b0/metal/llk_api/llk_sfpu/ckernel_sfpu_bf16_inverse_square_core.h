@@ -3,7 +3,8 @@
 #pragma once
 // Included inside namespace sfpi. Exact selected recurrence and same-row suffix.
 template <class Config, class Reciprocal, class Tail>
-__attribute__((always_inline)) inline vFloat inverse_square_scalar(vFloat x, Reciprocal reciprocal, Tail tail) {
+__attribute__((always_inline)) inline vFloat inverse_square_scalar(
+    vFloat x, Reciprocal reciprocal, [[maybe_unused]] Tail tail) {
     vFloat zero = 0.0f;
     vFloat one = 1.0f;
     // psi1(x)=psi1(x+1)+1/x^2 for every positive x. Taking that one
@@ -29,29 +30,11 @@ __attribute__((always_inline)) inline vFloat inverse_square_scalar(vFloat x, Rec
     vFloat regularizer = (Config::kP2[2] * q2 + Config::kP2[1]) * q2 + Config::kP2[0];
     vFloat result = iq * iq + copysgn(core, x);
     result = negative_mask * regularizer + result;
-    v_if((x < zero) && (q == zero)) {
-        result = std::numeric_limits<float>::infinity();
-        if constexpr (Config::kWhRepair && Config::kRepair) {
-            if constexpr (Config::kDirectTail) {
-                result = tail(x);
-            } else {
-                v_if(x < Config::kFiniteThreshold) {
-                    result = __builtin_bit_cast(float, uint32_t(Config::kFiniteRepresentative) << 16);
-                }
-                v_endif;
-                v_if(x < -Config::kZeroTransitionPreviousMagnitude) { result = 0.0f; }
-                v_endif;
-            }
-        }
-    }
+    v_if((x < zero) && (q == zero)) { result = std::numeric_limits<float>::infinity(); }
     v_endif;
     vInt source_exponent = exexp(setsgn(x, 0), ExponentMode::Biased);
     v_if(source_exponent == 255) { result = zero; }
     v_endif;
-    if constexpr (!Config::kWhRepair) {
-        v_if((source_exponent == 255) && (x < zero)) { result = std::numeric_limits<float>::quiet_NaN(); }
-        v_endif;
-    }
     v_if(is_zero(x)) { result = std::numeric_limits<float>::infinity(); }
     v_endif;
     v_if(x == 0x1p126f) { result = 0x1p-126f; }

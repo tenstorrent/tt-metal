@@ -6,12 +6,9 @@
 namespace ckernel::sfpu {
 struct PolygammaBf16Config {
     static constexpr float kP0 = __builtin_bit_cast(float, 0x3e210000u);
-    static constexpr float kFiniteThreshold = __builtin_bit_cast(float, 0x00000000u);
-    static constexpr float kZeroTransitionPreviousMagnitude = __builtin_bit_cast(float, 0x00000000u);
     static constexpr unsigned kZeroRepresentative = 0u;
     static constexpr unsigned kPositiveZeroFirstRaw = 0u;
     static constexpr unsigned kNanResultWord = 0u;
-    static constexpr unsigned kPositiveInfinityWord = 0u;
     static constexpr unsigned kNegativeInfinityWord = 32640u;
     static constexpr float kP2[] = {
         __builtin_bit_cast(float, 0x40530000u),
@@ -38,6 +35,11 @@ inline bool bf16_dest_polygamma() {
 template <int ITERATIONS = 8>
 inline void calculate_polygamma_bf16() {
     ckernel::sfpu::bf16::calculate_inverse_square<ckernel::sfpu::PolygammaBf16Config, ITERATIONS>();
+}
+inline void init_polygamma_bf16() {
+    if (bf16_dest_polygamma()) {
+        ckernel::sfpu::bf16::init_inverse_square<ckernel::sfpu::PolygammaBf16Config>();
+    }
 }
 
 }  // namespace ckernel::sfpu

@@ -34,6 +34,7 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 .github/time_budgets/ @roseli-TT @tdowdallTT @dpopovTT
 # Agentic research CI: @uaydonat is the backup owner.
 .github/workflows/agentic-research-model-tests.yaml @tenstorrent/metalium-models-maintainers @tchedaTT @tenstorrent/metalium-developers-infra
+.github/workflows/eltwise-accuracy-report-command.yaml @ijankowskiTT @tenstorrent/metalium-developers-eltwise @tenstorrent/metalium-developers-infra
 .github/workflows/fabric-cpu-only-tests-impl.yaml @Riddy21 @tt-asaigal @aliuTT @cfjchu @p1-0tr @tenstorrent/metalium-developers-infra
 .github/workflows/galaxy-multi-user-isolation-tests-impl.yaml @sott0n @changh95
 tests/pipeline_reorg/galaxy_multi_user_isolation_tests.yaml @sott0n @changh95
@@ -46,7 +47,7 @@ tests/pipeline_reorg/galaxy_multi_user_isolation_tests.yaml @sott0n @changh95
 .github/workflows/pipeline-select-profiler.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 .github/workflows/single-card-profiler-tests-impl.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 .github/workflows/single-card-profiler-tests.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
-.github/workflows/syseng-didt-tests-impl.yaml @rdjogoTT @rtawfik01 @tenstorrent/metalium-developers-infra
+.github/workflows/syseng-didt-tests-impl.yaml @rdjogoTT @rtawfik01 @mbezuljTT @pavlepopovic @tenstorrent/metalium-developers-infra
 .github/workflows/t3000-profiler-tests-impl.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 .github/workflows/t3000-profiler-tests.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 .github/workflows/ttnn-model-trace-sweep-validation*.yaml @stevendae @cmaryanTT @sjameelTT @bbradelTT @ntarafdar
@@ -295,7 +296,7 @@ tests/tt_metal/tt_metal/test_kernels/device_print @tenstorrent/metalium-develope
 tests/tt_metal/tt_metal/test_kernels/sfpi/ @nathan-TT @kstevensTT
 
 # misc tests
-tests/didt/ @rdjogoTT @rtawfik01 @ttmtrajkovic @ctr-nradojevicTT
+tests/didt/ @rdjogoTT @rtawfik01 @ttmtrajkovic @ctr-nradojevicTT @mbezuljTT @pavlepopovic
 
 # Deployment tests
 tests/tt_metal/tt_metal/deployment/ @gsarabandoTT @tt-mnijjar @mgajewskiTT @ctr-nradojevicTT
@@ -501,6 +502,7 @@ tests/ttnn/unit_tests/gtests/conv/ @tenstorrent/metalium-developers-convolutions
 tests/ttnn/unit_tests/gtests/sdpa/ @tenstorrent/metalium-developers-sdpa
 tests/ttnn/unit_tests/gtests/udm/ @yugaoTT @SeanNijjar
 tests/ttnn/unit_tests/gtests/udm/**/CMakeLists.txt @yugaoTT @SeanNijjar @tenstorrent/metalium-developers-infra
+tests/ttnn/unit_tests/kernel_lib/ @tenstorrent/metalium-developers-kernel-lib
 tests/ttnn/unit_tests/operations/ccl/ @tenstorrent/metalium-developers-ops-data-movement
 tests/ttnn/unit_tests/operations/data_movement/ @tenstorrent/metalium-developers-ops-data-movement
 tests/ttnn/unit_tests/operations/eltwise/ @tenstorrent/metalium-developers-eltwise
@@ -567,6 +569,7 @@ models/datasets/llm_dataset_utils.py @mtairum @uaydonat
 
 models/demos @tenstorrent/metalium-models-maintainers @cglagovichTT
 models/demos/audio/qwen3_asr @yasuhiroitoTT @sott0n @uaydonat
+models/demos/audio/qwen3_tts @acicovicTT
 models/demos/bge_large_en @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat
 models/demos/blackhole/qwen36 @atupe-tt @tenstorrent/cse-developer-ttnn
 models/demos/common/prefill @tenstorrent/metalium-developers-ds-prefill @philei-tt
@@ -669,3 +672,5 @@ tech_reports/real_time_profiler/ @mo-tenstorrent @yusufbashiTT
 tt_metal/tt-llk/tests/python_tests/helpers/perf* @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tests/python_tests/**/perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tests/python_tests/**/test_perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
+
+/models/experimental/qwen_image_2_1/ @changh95 @uaydonat @mtairum
