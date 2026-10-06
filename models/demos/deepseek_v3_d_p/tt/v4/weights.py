@@ -78,6 +78,10 @@ def v4_layer_from_checkpoint(
         attn.attn_sink       -> sinks                     [128]
         compressor.ape       -> compressor.position_bias  [128, 512]
         compressor.norm      -> compressor.kv_norm        [512]
+        indexer.compressor.wkv / wgate / ape / norm
+                             -> compressor.indexer.kv_proj / gate_proj / position_bias / kv_norm
+        indexer.wq_b         -> compressor.indexer.q_b_proj            (CSA layers)
+        indexer.weights_proj -> compressor.indexer.scorer.weights_proj
         ffn.gate.bias        -> gate.e_score_correction_bias   (top-k layers)
         ffn.gate.tid2eid     -> gate.tid2eid                   (hash layers)
         ffn.experts.e.w1/w3  -> experts.gate_up_proj[e]    cat on dim 0, gate half first
@@ -118,6 +122,18 @@ def v4_layer_from_checkpoint(
                 "attn.compressor.norm.weight": attn.compressor.kv_norm.weight,
             }
         )
+        indexer = getattr(attn.compressor, "indexer", None)
+        if indexer is not None:
+            flat.update(
+                {
+                    "attn.indexer.compressor.wkv.weight": indexer.kv_proj.weight,
+                    "attn.indexer.compressor.wgate.weight": indexer.gate_proj.weight,
+                    "attn.indexer.compressor.ape": indexer.position_bias,
+                    "attn.indexer.compressor.norm.weight": indexer.kv_norm.weight,
+                    "attn.indexer.wq_b.weight": indexer.q_b_proj.weight,
+                    "attn.indexer.weights_proj.weight": indexer.scorer.weights_proj.weight,
+                }
+            )
     # The router's second tensor says which kind of layer this is: a hash layer has the frozen
     # table, a top-k layer the selection bias.
     flat["ffn.gate.tid2eid" if mlp.is_hash else "ffn.gate.bias"] = (

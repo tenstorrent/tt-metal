@@ -35,10 +35,10 @@ from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 
 CHUNK = PREFILL_CHUNK_TOKENS
 _CASES = [
-    pytest.param(DeepSeekV4ProConfig, 0.98, id="pro-L2"),
-    pytest.param(DeepSeekV4FlashConfig, 0.99, id="flash-L2"),
+    pytest.param(DeepSeekV4ProConfig, 0.98, id="pro-L3"),
+    pytest.param(DeepSeekV4FlashConfig, 0.99, id="flash-L3"),
 ]
-_NUM_LAYERS = 2
+_NUM_LAYERS = 3
 _SEED = 7
 
 
@@ -95,6 +95,7 @@ def test_v4_transformer_chunked(mesh_device, device_params, num_links, n_chunks,
         logger.info(f"  chunk {chunk} done (start={start})")
 
     assert_layers_and_output(
+        config,
         [torch.cat(chunks, dim=1) for chunks in per_layer],
         ref_layers,
         torch.cat(outs, dim=1),
