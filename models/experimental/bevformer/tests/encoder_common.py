@@ -22,17 +22,14 @@ BEV_SHAPES = {"tiny": (50, 50), "base": (200, 200)}
 # The FPN's four levels for BEVFormer-base's 928x1600 (padded 900x1600) images, as (h, w).
 SPATIAL_SHAPES = ((116, 200), (58, 100), (29, 50), (15, 25))
 
-# Spread of the random weights on top of upstream's init, after what the BEVFormer-base
-# checkpoint's encoder shows per layer on these tests' inputs: TSA offsets 1.6-3.4 px off the
-# init pattern with attention logits of std 1.7-3.3, SCA offsets 1.5-1.9 px with logits of std
-# 1.3-2.2. Upstream's init alone has zero offset and attention weights: every query samples
-# the same fixed pattern with uniform weights.
-# The TSA offsets are the exception. The checkpoint's offsets barely move with the input, and its
-# six layers carry a bfloat16-sized input perturbation through unchanged, frame to frame too;
-# random offset weights at that spread follow every perturbation of the BEV maps they then
-# sample, and the six layers amplify it to PCC 0.94 in float32 on their own. At 0.5 px the
-# reference carries it through two frames at 0.99998, so the test measures the port's error, not
-# the dummy model's sensitivity. The offsets' bias (the init ring, up to 4 px) still exposes a
+# Spread of the random weights on top of upstream's init, after the offset and attention-logit
+# spread the BEVFormer-base checkpoint's encoder shows. Upstream's init alone has zero offset and
+# attention weights: every query samples the same fixed pattern with uniform weights.
+# The TSA offsets are drawn narrower than the checkpoint's. Its offsets barely move with the input,
+# so its six layers carry a bfloat16-sized perturbation through unchanged, frame to frame too;
+# random offset weights at its spread follow every perturbation of the BEV maps they then sample,
+# and the layers amplify it on their own, so the test would measure the dummy model's sensitivity,
+# not the port's error. The offsets' bias (upstream's init ring, up to 4 px) still exposes a
 # misordered channel.
 TSA_OFFSET_STD_PX = 0.5
 TSA_LOGIT_STD = 2.5
@@ -41,7 +38,8 @@ SCA_LOGIT_STD = 1.8
 
 # Correlation length of the random features, in cells. The FPN's and the encoder's features are
 # spatially smooth; white noise instead makes every sample position error an O(1) change in the
-# sampled value, which the previous BEV carries from layer to layer.
+# sampled value, which the queries carry from layer to layer and the previous BEV from frame to
+# frame.
 FEATURE_CELLS = 4
 
 # Ego translation between the two frames, in BEV fractions (x, y): a few cells on the base grid.
@@ -107,9 +105,21 @@ def random_encoder_inputs(bev_shape, batch_size=1, seed=0):
     )
 
 
-def img_metas(batch_size):
-    """``lidar2img`` and ``img_shape`` of nuScenes' six-camera rig (``tests/camera_rig.py``)."""
-    return img_metas_for_dataset(get_preset_config("nuscenes_base").dataset_config, batch_size)
+def img_metas(batch_size, preset="nuscenes_base", yaw_step_deg=0.0):
+    """``lidar2img`` and ``img_shape`` of a preset's six-camera rig (``tests/camera_rig.py``).
+    ``yaw_step_deg`` turns sample ``b``'s rig by ``b * yaw_step_deg`` about the vertical axis, so
+    the samples' cameras see different BEV cells."""
+    metas = img_metas_for_dataset(get_preset_config(preset).dataset_config, batch_size)
+    for b, meta in enumerate(metas):
+        yaw = math.radians(b * yaw_step_deg)
+        turn = torch.eye(4)
+        turn[:2, :2] = torch.tensor([[math.cos(yaw), -math.sin(yaw)], [math.sin(yaw), math.cos(yaw)]])
+        meta["lidar2img"] = (torch.tensor(meta["lidar2img"]) @ turn).tolist()
+    return metas
+
+
+def pc_range(preset="nuscenes_base"):
+    return tuple(get_preset_config(preset).dataset_config.pc_range)
 
 
 def ego_shift(batch_size):

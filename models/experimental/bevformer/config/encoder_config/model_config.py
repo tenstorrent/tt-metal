@@ -2,15 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Model configuration for BEVFormer encoder supporting different model variants.
+Dataset and model presets for the deformable-attention and point-sampling tests.
 
-This module provides model-specific parameters for different BEVFormer variants
-(base, tiny, etc.) that work in conjunction with the data configurations defined
-in data_config.py.
+The presets pair a dataset (camera rig, image size, point-cloud range, from data_config.py) with
+model sizes for the multi-scale deformable attention. They do not configure the encoder: its
+BEVFormer-base configuration is the defaults of ``reference/encoder.py``'s ``BEVFormerEncoder``
+(spatial cross-attention ``num_points=8``, self-attention ``tsa_num_points=4``, FFN 512), and the
+encoder tests take only the presets' camera rigs.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
+from typing import List, Optional
 from .data_config import DatasetConfig, get_dataset_config
 
 
@@ -196,34 +198,6 @@ class EncoderConfig:
 
         # Validate compatibility
         self.model_config.validate_with_dataset(self.dataset_config)
-
-    def get_encoder_kwargs(self) -> Dict[str, Any]:
-        """
-        Get keyword arguments for BEVFormer encoder initialization.
-
-        Returns:
-            Dictionary of parameters for BEVFormerEncoder constructor
-        """
-        if self.dataset_config is None or self.model_config is None:
-            raise ValueError("Configuration not loaded")
-
-        return {
-            # Dataset-specific parameters
-            "pc_range": self.dataset_config.pc_range,
-            "num_cams": self.dataset_config.num_cams,
-            "z_cfg": self.dataset_config.z_cfg,
-            "dataset": self.dataset_name.split("_")[0],  # Extract base dataset name
-            # Model architecture parameters
-            "num_layers": self.model_config.num_layers,
-            "embed_dims": self.model_config.embed_dims,
-            "num_heads": self.model_config.num_heads,
-            "num_levels": self.model_config.num_levels,
-            "num_points": self.model_config.num_points,
-            "num_points_in_pillar": self.model_config.num_points_in_pillar,
-            "feedforward_channels": self.model_config.feedforward_channels,
-            "batch_first": self.model_config.batch_first,
-            "return_intermediate": self.model_config.return_intermediate,
-        }
 
     def get_spatial_shapes_tensor(self):
         """

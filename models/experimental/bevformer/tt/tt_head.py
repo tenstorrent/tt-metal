@@ -27,8 +27,9 @@ from models.experimental.bevformer.config.decoder_config import (
     CODE_XY,
     CODE_Z,
 )
-from models.experimental.bevformer.tt.tt_common import layer_norm
-from models.experimental.bevformer.tt.tt_decoder import GRID_DTYPE, TtDetectionTransformerDecoder
+from models.experimental.bevformer.tt.tt_common import SCORE_DTYPE, layer_norm
+from models.experimental.bevformer.tt.tt_common import GRID_DTYPE
+from models.experimental.bevformer.tt.tt_decoder import TtDetectionTransformerDecoder
 
 # The dtypes of the head's outputs. Class logits: in bfloat16 many of the num_query * num_classes
 # scores tie, and the coder's top-k order departs from the reference's. Box predictions: the
