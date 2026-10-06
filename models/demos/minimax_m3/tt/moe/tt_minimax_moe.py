@@ -28,6 +28,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.minimax_m3.tt.moe.tt_reduce import TtMiniMaxReduce
+from models.demos.minimax_m3.tt.weight_cache import CACHE_DUMP_MODE
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 
 
@@ -94,6 +95,7 @@ class TtMiniMaxMoE(LightweightModule):
             fallback_mode=gate_fallback_mode,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.gate",
+            cache_dump_mode=CACHE_DUMP_MODE,
         )
         self.routing_setup = TtMoERoutingSetup(
             mesh_device, expert_dispatch_table, num_links=num_links, experts_per_chip=experts_per_chip
@@ -170,6 +172,7 @@ class TtMiniMaxMoE(LightweightModule):
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
             activation=ttnn.RoutedExpertActivation.SwiGluOai,
+            cache_dump_mode=CACHE_DUMP_MODE,
         )
         # M3's own reduce module (tt/moe/tt_reduce.py), not DeepSeek's: same shared post_combine_reduce
         # kernel, but the closing collective goes through the caller's reduce_scatter_fn — M3 passes
