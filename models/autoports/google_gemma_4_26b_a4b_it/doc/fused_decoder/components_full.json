@@ -1,0 +1,186 @@
+{
+  "layer_type": "full_attention",
+  "real_weights": true,
+  "results": [
+    {
+      "component": "qkv",
+      "candidate": "baseline",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 6810.798766666667
+    },
+    {
+      "component": "qkv",
+      "candidate": "broadcast_256",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 5811.378333333333
+    },
+    {
+      "component": "qkv",
+      "candidate": "broadcast_512",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 4584.3892
+    },
+    {
+      "component": "qkv",
+      "candidate": "broadcast_1024",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 4079.963166666667
+    },
+    {
+      "component": "qkv",
+      "candidate": "broadcast_2048",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 3875.490366666667
+    },
+    {
+      "component": "qkv",
+      "candidate": "broadcast_4096",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 3841.350066666667
+    },
+    {
+      "component": "qkv",
+      "candidate": "broadcast_8192",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 3776.357033333333
+    },
+    {
+      "component": "qkv",
+      "candidate": "broadcast_16384",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 3176.1417
+    },
+    {
+      "component": "router",
+      "candidate": "baseline",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 285.2873
+    },
+    {
+      "component": "router",
+      "candidate": "broadcast_scale",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 243.24326666666667
+    },
+    {
+      "component": "shared_1",
+      "candidate": "baseline",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 126.18383333333334
+    },
+    {
+      "component": "shared_1",
+      "candidate": "gelu_mul",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 124.45186666666666
+    },
+    {
+      "component": "experts_1",
+      "candidate": "baseline",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 1414.4269
+    },
+    {
+      "component": "experts_1",
+      "candidate": "packed",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 931.44
+    },
+    {
+      "component": "experts_1",
+      "candidate": "packed_gelu",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 932.8817666666666
+    },
+    {
+      "component": "shared_32",
+      "candidate": "baseline",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 126.32006666666666
+    },
+    {
+      "component": "shared_32",
+      "candidate": "gelu_mul",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 124.4722
+    },
+    {
+      "component": "experts_32",
+      "candidate": "baseline",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 38734.35766666666
+    },
+    {
+      "component": "experts_32",
+      "candidate": "packed",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 21866.102233333335
+    },
+    {
+      "component": "experts_32",
+      "candidate": "packed_gelu",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 21845.37546666667
+    }
+  ]
+}

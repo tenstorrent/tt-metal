@@ -1,0 +1,24 @@
+{
+  "before": [
+    {
+      "pid": 55104,
+      "ppid": 55103,
+      "command": "/home/container_app_user/tt-metal/python_env/bin/python -m readiness_check.run_vllm_server --stages serve --model-dir /workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it --hf-model google/gemma-4-26B-A4B-it --mesh-device P300x2 --max-num-seqs 32 --max-model-len 262144 --block-size 32 --sampling-profile full --tt-config {\"trace_region_size\": 1000000000, \"fabric_config\": \"FABRIC_1D\", \"enable_model_warmup\": false, \"trace_mode\": \"decode_only\"} --additional-server-args --hf-overrides '{\"architectures\": [\"TTAutoportGemma4ForCausalLM\"]}' --no-enable-chunked-prefill --no-enable-prefix-caching --async-scheduling --max-num-batched-tokens 262144 --benchmark-prompt-len 4096 --benchmark-output-len 128 --benchmark-num-requests 1 --benchmark-concurrency 1"
+    },
+    {
+      "pid": 55123,
+      "ppid": 55104,
+      "command": "/home/container_app_user/tt-metal/python_env/bin/python -m vllm.entrypoints.openai.api_server --model google/gemma-4-26B-A4B-it --block_size 32 --max_num_seqs 32 --port 8000 --max_model_len 262144 --additional-config {\"tt\": {\"sample_on_device_mode\": \"all\", \"trace_region_size\": 1000000000, \"fabric_config\": \"FABRIC_1D\", \"enable_model_warmup\": false, \"trace_mode\": \"decode_only\"}} --hf-overrides {\"architectures\": [\"TTAutoportGemma4ForCausalLM\"]} --no-enable-chunked-prefill --no-enable-prefix-caching --async-scheduling --max-num-batched-tokens 262144"
+    },
+    {
+      "pid": 55165,
+      "ppid": 55123,
+      "command": "VLLM::EngineCore"
+    }
+  ],
+  "action": "SIGINT to stage-owned ready shared runner PID55104",
+  "time_utc": "2026-09-27T16:35:36.926445+00:00",
+  "after": [],
+  "runner_exit_code": 0,
+  "checked_utc": "2026-09-27T16:36:04.329089+00:00"
+}

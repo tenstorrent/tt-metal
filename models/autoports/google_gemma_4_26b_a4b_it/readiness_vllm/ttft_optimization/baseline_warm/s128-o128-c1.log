@@ -1,0 +1,114 @@
+INFO 09-28 08:24:43 [__init__.py:52] Available plugins for group vllm.platform_plugins:
+INFO 09-28 08:24:43 [__init__.py:54] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 09-28 08:24:43 [__init__.py:57] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+INFO 09-28 08:24:44 [__init__.py:237] Platform plugin tt is activated
+INFO 09-28 08:24:46 [importing.py:53] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 09-28 08:24:46 [importing.py:88] Triton not installed or not compatible; certain GPU-related functions will not be available.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7b6afe5c3130>, trust_remote_code=False, seed=4101, num_prompts=3, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, enable_multimodal_chat=False, disable_shuffle=False, custom_output_len=256, custom_ensure_client_side_data=False, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, timed_trace_chunk_hash_size=16, timed_trace_sec_multiplier=1, timed_trace_label_timestamp='timestamp', timed_trace_label_input_length='input_length', timed_trace_label_output_length='output_length', timed_trace_label_hash_ids='hash_ids', blazedit_min_distance=0.0, blazedit_max_distance=1.0, asr_max_audio_len_sec=inf, asr_min_audio_len_sec=0.0, random_input_len=128, random_output_len=128, random_range_ratio='0.0', random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, bfcl_categories=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, speed_bench_dataset_subset='qualitative', speed_bench_output_len=4096, speed_bench_category=None, label=None, backend='vllm', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/completions', header=None, max_concurrency=1, model='google/gemma-4-26B-A4B-it', input_len=None, output_len=None, tokenizer='/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-26B-A4B-it/snapshots/4d7ae4984b7db7de8f8457170b3f1a419ee76d52', tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, disable_tqdm=False, num_warmups=3, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir='/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline_warm', result_filename='s128-o128-c1.json', ignore_eos=True, self_timed=None, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='50,95,99', goodput=None, request_id_prefix='gemma4-s128-o128-c1-', top_p=None, top_k=None, min_p=None, temperature=0.0, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, served_model_name=None, lora_modules=None, lora_assignment='random', ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, chat_template_kwargs=None, extra_body=None, skip_tokenizer_init=False, insecure=False, plot_timeline=False, timeline_itl_thresholds='25,50', plot_dataset_stats=False)
+INFO 09-28 08:24:51 [utils.py:90] Sampling input_len from [128, 128] and output_len from [128, 128]
+Starting initial single prompt test run...
+Skipping endpoint ready check.
+Warming up with 3 requests...
+
+  0%|          | 0/3 [00:00<?, ?it/s]
+ 33%|███▎      | 1/3 [00:02<00:05,  2.86s/it]
+ 67%|██████▋   | 2/3 [00:05<00:02,  2.86s/it]
+100%|██████████| 3/3 [00:08<00:00,  2.86s/it]
+100%|██████████| 3/3 [00:08<00:00,  2.86s/it]
+Warmup run completed.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+
+  0%|          | 0/3 [00:00<?, ?it/s]
+ 33%|███▎      | 1/3 [00:02<00:05,  2.84s/it]
+ 67%|██████▋   | 2/3 [00:05<00:02,  2.84s/it]
+100%|██████████| 3/3 [00:08<00:00,  2.85s/it]
+100%|██████████| 3/3 [00:08<00:00,  2.84s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     3
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  8.53
+Total input tokens:                      384
+Total generated tokens:                  384
+Request throughput (req/s):              0.35
+Output token throughput (tok/s):         45.00
+Peak output token throughput (tok/s):    53.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          90.00
+---------------Time to First Token----------------
+Mean TTFT (ms):                          421.13
+Median TTFT (ms):                        419.11
+P50 TTFT (ms):                           419.11
+P95 TTFT (ms):                           426.51
+P99 TTFT (ms):                           427.17
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          19.08
+Median TPOT (ms):                        19.07
+P50 TPOT (ms):                           19.07
+P95 TPOT (ms):                           19.10
+P99 TPOT (ms):                           19.10
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           19.08
+Median ITL (ms):                         18.98
+P50 ITL (ms):                            18.98
+P95 ITL (ms):                            19.63
+P99 ITL (ms):                            25.34
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          2844.18
+Median E2EL (ms):                        2840.95
+P50 E2EL (ms):                           2840.95
+P95 E2EL (ms):                           2851.92
+P99 E2EL (ms):                           2852.90
+==================================================
+nanobind: leaked 102 instances!
+ - leaked instance 0x5b861c03e1c0 of type "ttnn._ttnn.operations.unary.triu_t"
+ - leaked instance 0x7b6b2ae2d848 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7b6b2af2af68 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7b6b2ad34258 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x5b861c493320 of type "ttnn._ttnn.operations.unary.mish_t"
+ - leaked instance 0x5b861bc42510 of type "ttnn._ttnn.operations.unary.gez_t"
+ - leaked instance 0x5b861be60ed0 of type "ttnn._ttnn.operations.unary.log1p_t"
+ - leaked instance 0x5b861baf02e0 of type "ttnn._ttnn.operations.unary.multigammaln_t"
+ - leaked instance 0x7b6b2af2b388 of type "ttnn._ttnn.operations.normalization.SoftmaxDefaultProgramConfig"
+ - leaked instance 0x5b861c3202c0 of type "ttnn._ttnn.operations.unary.erfc_t"
+ - leaked instance 0x5b861bbd70f0 of type "ttnn._ttnn.operations.unary.logical_not_t"
+ - leaked instance 0x5b861c54ba00 of type "ttnn._ttnn.operations.unary.expm1_t"
+ - leaked instance 0x7b6b2ae959f8 of type "ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig"
+ - leaked instance 0x5b861a683b90 of type "ttnn._ttnn.operations.unary.hardswish_t"
+ - leaked instance 0x5b861c4932d0 of type "ttnn._ttnn.operations.unary.gelu_t"
+ - leaked instance 0x7b6b2af2a388 of type "ttnn._ttnn.operations.normalization.SoftmaxDefaultProgramConfig"
+ - leaked instance 0x7b6b2ae2d1e8 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x5b861c368910 of type "ttnn._ttnn.operations.unary.lgamma_t"
+ - leaked instance 0x5b861b523880 of type "ttnn._ttnn.operations.unary.sigmoid_accurate_t"
+ - leaked instance 0x5b861a67dbc0 of type "ttnn._ttnn.operations.unary.square_t"
+ - ... skipped remainder
+nanobind: leaked 973 types!
+ - leaked type "SocketEndpoint"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.gt__t"
+ - leaked type "ttnn._ttnn.d2d_stream_service.D2DStreamServiceSender"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.SliceDeviceOperation"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "ttnn._ttnn.operations.binary.lt__t"
+ - leaked type "ttnn._ttnn.operations.binary_backward.xlogy_bw_t"
+ - leaked type "ttnn._ttnn.operations.experimental.insert_t"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.isclose_t"
+ - leaked type "ttnn._ttnn.operations.reduction.var_t"
+ - ... skipped remainder
+nanobind: leaked 4455 functions!
+ - leaked function "__call__"
+ - leaked function "__init__"
+ - leaked function "__call__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "__call__"
+ - leaked function ""
+ - leaked function "__repr__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

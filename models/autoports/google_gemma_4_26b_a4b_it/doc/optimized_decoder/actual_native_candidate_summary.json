@@ -1,0 +1,883 @@
+[
+  {
+    "artifact": "actual_native_expert_act8_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.9954079358460217,
+    "passed": true,
+    "traced_decode_host_us_median": 1373.7062,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b"
+      }
+    },
+    "probe": {
+      "expert_activation_bfp8": true,
+      "shared_activation_bfp8": false,
+      "attention_query_bfp8": false
+    }
+  },
+  {
+    "artifact": "actual_native_expert_act8_layer5.json",
+    "prefill_pcc": 0.9999305080450267,
+    "decode_min_pcc": 0.9958762005892277,
+    "passed": true,
+    "traced_decode_host_us_median": 1466.6185333333333,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b"
+      }
+    },
+    "probe": {
+      "expert_activation_bfp8": true,
+      "shared_activation_bfp8": false,
+      "attention_query_bfp8": false
+    }
+  },
+  {
+    "artifact": "actual_native_gate4_down8_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.9928476479389354,
+    "passed": false,
+    "traced_decode_host_us_median": 1382.3157333333334,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "expert_down_dtype": "bfloat8_b"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_norm_all_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.9954119544239004,
+    "passed": true,
+    "traced_decode_host_us_median": 1338.4757333333334,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "sharded_norm_site": "all"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_norm_all_layer5.json",
+    "prefill_pcc": 0.9999305080450267,
+    "decode_min_pcc": 0.9958354831834898,
+    "passed": true,
+    "traced_decode_host_us_median": 1477.2348333333334,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "sharded_norm_site": "all"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_output_weight4_layer0.json",
+    "prefill_pcc": 0.9986898561044795,
+    "decode_min_pcc": 0.99558917052747,
+    "passed": true,
+    "traced_decode_host_us_median": 1362.3264,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b"
+      }
+    },
+    "probe": {
+      "cache_bfp8": false,
+      "native_sdpa": false,
+      "sdpa_full_sync": false,
+      "precise_bf16_query": false,
+      "precise_bf16_output": false,
+      "qkv_weight_dtype": null,
+      "output_weight_dtype": "bfloat4_b"
+    }
+  },
+  {
+    "artifact": "actual_native_output_weight4_layer5.json",
+    "prefill_pcc": 0.9988058173325594,
+    "decode_min_pcc": 0.9951880335457018,
+    "passed": true,
+    "traced_decode_host_us_median": 1441.1983,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b"
+      }
+    },
+    "probe": {
+      "cache_bfp8": false,
+      "native_sdpa": false,
+      "sdpa_full_sync": false,
+      "precise_bf16_query": false,
+      "precise_bf16_output": false,
+      "qkv_weight_dtype": null,
+      "output_weight_dtype": "bfloat4_b"
+    }
+  },
+  {
+    "artifact": "actual_native_output_weight8_layer0.json",
+    "prefill_pcc": 0.9992502758352587,
+    "decode_min_pcc": 0.9953141161130921,
+    "passed": true,
+    "traced_decode_host_us_median": 1363.0283666666667,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b"
+      }
+    },
+    "probe": {
+      "cache_bfp8": false,
+      "native_sdpa": false,
+      "sdpa_full_sync": false,
+      "precise_bf16_query": false,
+      "precise_bf16_output": false,
+      "qkv_weight_dtype": null,
+      "output_weight_dtype": "bfloat8_b"
+    }
+  },
+  {
+    "artifact": "actual_native_output_weight8_layer5.json",
+    "prefill_pcc": 0.9999267323823002,
+    "decode_min_pcc": 0.9960143013905723,
+    "passed": true,
+    "traced_decode_host_us_median": 1442.6193333333333,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b"
+      }
+    },
+    "probe": {
+      "cache_bfp8": false,
+      "native_sdpa": false,
+      "sdpa_full_sync": false,
+      "precise_bf16_query": false,
+      "precise_bf16_output": false,
+      "qkv_weight_dtype": null,
+      "output_weight_dtype": "bfloat8_b"
+    }
+  },
+  {
+    "artifact": "actual_native_qkv_hifi2_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.9953802676267746,
+    "passed": true,
+    "traced_decode_host_us_median": 1371.235,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_fidelity": "HiFi2"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_qkv_hifi2_layer5.json",
+    "prefill_pcc": 0.9999305080450267,
+    "decode_min_pcc": 0.9959620793427038,
+    "passed": true,
+    "traced_decode_host_us_median": 1475.3421333333333,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_fidelity": "HiFi2"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_qkv_lofi_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.99534763424061,
+    "passed": true,
+    "traced_decode_host_us_median": 1370.7096333333334,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_fidelity": "LoFi"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_qkv_lofi_layer5.json",
+    "prefill_pcc": 0.9999305080450267,
+    "decode_min_pcc": 0.9958399617274195,
+    "passed": true,
+    "traced_decode_host_us_median": 1474.8736,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_fidelity": "LoFi"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_qkv_r0_k0_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.9953817040923828,
+    "passed": true,
+    "traced_decode_host_us_median": 1374.8261666666667,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_qkv_r0_k0_layer5.json",
+    "prefill_pcc": 0.9999305080450267,
+    "decode_min_pcc": 0.9958367922441083,
+    "passed": true,
+    "traced_decode_host_us_median": 1478.0546666666667,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_qkv_r1_k1_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.9952940168639411,
+    "passed": true,
+    "traced_decode_host_us_median": 1516.4417666666666,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_dram": true,
+        "qkv_dram_readers": 1,
+        "qkv_dram_block": 1
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_qkv_r1_k1_layer5.json",
+    "prefill_pcc": 0.9999305080450267,
+    "decode_min_pcc": 0.9959911611787504,
+    "passed": true,
+    "traced_decode_host_us_median": 1638.7742666666666,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_dram": true,
+        "qkv_dram_readers": 1,
+        "qkv_dram_block": 1
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_qkv_r2_k11_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.9953595549843804,
+    "passed": true,
+    "traced_decode_host_us_median": 1383.5437666666667,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_dram": true,
+        "qkv_dram_readers": 2,
+        "qkv_dram_block": 11
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_qkv_r3_k11_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.9953595549843804,
+    "passed": true,
+    "traced_decode_host_us_median": 1415.3229333333334,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_dram": true,
+        "qkv_dram_readers": 3,
+        "qkv_dram_block": 11
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_qkv_r3_k11_layer5.json",
+    "prefill_pcc": 0.9999305080450267,
+    "decode_min_pcc": 0.9957786832217076,
+    "passed": true,
+    "traced_decode_host_us_median": 1514.0254666666667,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_dram": true,
+        "qkv_dram_readers": 3,
+        "qkv_dram_block": 11
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_qkv_weight4_layer0.json",
+    "prefill_pcc": 0.9983193167608199,
+    "decode_min_pcc": 0.9950572346310698,
+    "passed": true,
+    "traced_decode_host_us_median": 1302.8084333333334,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b"
+      }
+    },
+    "probe": {
+      "cache_bfp8": false,
+      "native_sdpa": false,
+      "sdpa_full_sync": false,
+      "precise_bf16_query": false,
+      "precise_bf16_output": false,
+      "qkv_weight_dtype": "bfloat4_b",
+      "output_weight_dtype": null
+    }
+  },
+  {
+    "artifact": "actual_native_qkv_weight4_layer5.json",
+    "prefill_pcc": 0.9985119701733436,
+    "decode_min_pcc": 0.9942133110504603,
+    "passed": false,
+    "traced_decode_host_us_median": 1398.3350333333333,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b"
+      }
+    },
+    "probe": {
+      "cache_bfp8": false,
+      "native_sdpa": false,
+      "sdpa_full_sync": false,
+      "precise_bf16_query": false,
+      "precise_bf16_output": false,
+      "qkv_weight_dtype": "bfloat4_b",
+      "output_weight_dtype": null
+    }
+  },
+  {
+    "artifact": "actual_native_qkv_weight8_layer0.json",
+    "prefill_pcc": 0.9992490472815775,
+    "decode_min_pcc": 0.9953132459617982,
+    "passed": true,
+    "traced_decode_host_us_median": 1319.051,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b"
+      }
+    },
+    "probe": {
+      "cache_bfp8": false,
+      "native_sdpa": false,
+      "sdpa_full_sync": false,
+      "precise_bf16_query": false,
+      "precise_bf16_output": false,
+      "qkv_weight_dtype": "bfloat8_b",
+      "output_weight_dtype": null
+    }
+  },
+  {
+    "artifact": "actual_native_qkv_weight8_layer5.json",
+    "prefill_pcc": 0.9999252010065667,
+    "decode_min_pcc": 0.9959557765727128,
+    "passed": true,
+    "traced_decode_host_us_median": 1417.5653,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b"
+      }
+    },
+    "probe": {
+      "cache_bfp8": false,
+      "native_sdpa": false,
+      "sdpa_full_sync": false,
+      "precise_bf16_query": false,
+      "precise_bf16_output": false,
+      "qkv_weight_dtype": "bfloat8_b",
+      "output_weight_dtype": null
+    }
+  },
+  {
+    "artifact": "actual_native_router_bf16_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.9953871207846035,
+    "passed": true,
+    "traced_decode_host_us_median": 1376.4984333333334,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b"
+      }
+    },
+    "probe": {
+      "round_logits_bf16": true,
+      "generalized_gate": false
+    }
+  },
+  {
+    "artifact": "actual_native_router_composite_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.9954474978619575,
+    "passed": true,
+    "traced_decode_host_us_median": 1357.2969,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b"
+      }
+    },
+    "probe": {
+      "round_logits_bf16": false,
+      "generalized_gate": true
+    }
+  },
+  {
+    "artifact": "actual_native_router_k11_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.9953817040923828,
+    "passed": true,
+    "traced_decode_host_us_median": 1452.1901,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "router_lanes": 16,
+        "router_block_w": 11
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_router_k11_layer5.json",
+    "prefill_pcc": 0.9999305080450267,
+    "decode_min_pcc": 0.9958367922441083,
+    "passed": true,
+    "traced_decode_host_us_median": 1563.8657,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "router_lanes": 16,
+        "router_block_w": 11
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_router_k22_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.9953817040923828,
+    "passed": true,
+    "traced_decode_host_us_median": 1450.1923333333334,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "router_lanes": 16,
+        "router_block_w": 22
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_router_k44_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.9953817040923828,
+    "passed": true,
+    "traced_decode_host_us_median": 1449.4733,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "router_lanes": 16,
+        "router_block_w": 44
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_router_k88_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.9953817040923828,
+    "passed": true,
+    "traced_decode_host_us_median": 1451.2487,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "router_lanes": 16,
+        "router_block_w": 88
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_sdpa_decode_grid110_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.9953460632718832,
+    "passed": true,
+    "traced_decode_host_us_median": 1379.7295666666666,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_sdpa_decode_grid110_layer5.json",
+    "prefill_pcc": 0.9999305080450267,
+    "decode_min_pcc": 0.9958367922441083,
+    "passed": true,
+    "traced_decode_host_us_median": 1477.7490333333333,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_sdpa_decode_grid32_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.9954023726524235,
+    "passed": true,
+    "traced_decode_host_us_median": 1371.8015333333333,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_sdpa_decode_grid32_layer5.json",
+    "prefill_pcc": 0.9999305080450267,
+    "decode_min_pcc": 0.9958367922441083,
+    "passed": true,
+    "traced_decode_host_us_median": 1477.5904,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_sdpa_decode_hifi2_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.9953080598642121,
+    "passed": true,
+    "traced_decode_host_us_median": 1373.7594333333334,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_sdpa_decode_hifi2_layer5.json",
+    "prefill_pcc": 0.9999305080450267,
+    "decode_min_pcc": 0.9959129283683748,
+    "passed": true,
+    "traced_decode_host_us_median": 1473.9146,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_sdpa_decode_lofi_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.9951754765020756,
+    "passed": true,
+    "traced_decode_host_us_median": 1373.9211,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_sdpa_decode_lofi_layer5.json",
+    "prefill_pcc": 0.9999305080450267,
+    "decode_min_pcc": 0.9958893340070336,
+    "passed": true,
+    "traced_decode_host_us_median": 1471.471,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_sdpa_prefill_hifi2_layer0.json",
+    "prefill_pcc": 0.9992469201850517,
+    "decode_min_pcc": 0.9953817040923828,
+    "passed": true,
+    "traced_decode_host_us_median": 1375.4485666666667,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_sdpa_prefill_hifi2_layer5.json",
+    "prefill_pcc": 0.9999246619221879,
+    "decode_min_pcc": 0.9958367922441083,
+    "passed": true,
+    "traced_decode_host_us_median": 1478.2777666666666,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_sdpa_prefill_lofi_layer0.json",
+    "prefill_pcc": 0.9991615172540769,
+    "decode_min_pcc": 0.9953817040923828,
+    "passed": true,
+    "traced_decode_host_us_median": 1374.8955333333333,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_sdpa_prefill_lofi_layer5.json",
+    "prefill_pcc": 0.9996621085584383,
+    "decode_min_pcc": 0.9958367922441083,
+    "passed": true,
+    "traced_decode_host_us_median": 1477.9599,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_shared_act8_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.9953843467053674,
+    "passed": true,
+    "traced_decode_host_us_median": 1376.204,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b"
+      }
+    },
+    "probe": {
+      "expert_activation_bfp8": false,
+      "shared_activation_bfp8": true,
+      "attention_query_bfp8": false
+    }
+  },
+  {
+    "artifact": "actual_native_shared_act8_layer5.json",
+    "prefill_pcc": 0.9999305080450267,
+    "decode_min_pcc": 0.995884102235776,
+    "passed": true,
+    "traced_decode_host_us_median": 1479.7328333333332,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b"
+      }
+    },
+    "probe": {
+      "expert_activation_bfp8": false,
+      "shared_activation_bfp8": true,
+      "attention_query_bfp8": false
+    }
+  },
+  {
+    "artifact": "actual_native_shared_down4_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.9946170082697874,
+    "passed": false,
+    "traced_decode_host_us_median": 1373.0995,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "shared_down_dtype": "bfloat4_b"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_shared_down4_layer5.json",
+    "prefill_pcc": 0.9999305080450267,
+    "decode_min_pcc": 0.9956328982528224,
+    "passed": true,
+    "traced_decode_host_us_median": 1474.2113666666667,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_shared_gate4_layer0.json",
+    "prefill_pcc": 0.9992525306272322,
+    "decode_min_pcc": 0.994964584294777,
+    "passed": false,
+    "traced_decode_host_us_median": 1369.3780333333334,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat8_b"
+      }
+    },
+    "probe": null
+  },
+  {
+    "artifact": "actual_native_shared_gate4_layer5.json",
+    "prefill_pcc": 0.9999305080450267,
+    "decode_min_pcc": 0.9956549169844421,
+    "passed": true,
+    "traced_decode_host_us_median": 1472.1274,
+    "candidate": {
+      "defaults": true,
+      "overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat8_b"
+      }
+    },
+    "probe": null
+  }
+]

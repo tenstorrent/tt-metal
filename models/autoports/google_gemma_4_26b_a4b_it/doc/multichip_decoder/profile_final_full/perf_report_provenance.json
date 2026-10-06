@@ -1,0 +1,85 @@
+{
+  "algorithm": "SHA256",
+  "files": [
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_full/reports/tp4/2026_09_27_03_16_37/ops_perf_results_tp4_2026_09_27_03_16_37.csv",
+      "bytes": 129306174,
+      "sha256": "4158f0a64ac4b0605063d1d6515842d8611b249f36c380d52aca590839ffcede"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_full/run.json",
+      "bytes": 5240,
+      "sha256": "b04d6e6b12f139ee5f4641e5bf628d2e629f7b02e11aa87bcdcfe632afea6aef"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_full/whole_layer.json",
+      "bytes": 320913,
+      "sha256": "9bb46dde2116ab7f68b74adecdb7ba89701e7aa86f472ddbebe1cdb0beecbd2b"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_full/whole_layer.windows.csv",
+      "bytes": 18115,
+      "sha256": "779d8ee71ab070c5cf2c32caf95b254a01b6a42702018f1e11cc0bdf5520ee45"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_full/capture_integrity.json",
+      "bytes": 1144,
+      "sha256": "8228e358665c73af3b72e1452ddcfbbb2bc870b6a3ea5b42176d0d7fb60b83be"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_full/op_accounting.json",
+      "bytes": 27309,
+      "sha256": "5faf91080de98f3324395ba066fca053242e45132f1bf331555deb89bfaf732f"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_full/capture_command.json",
+      "bytes": 882,
+      "sha256": "ebb7f24b88c496cc5dbe9884abf3d0a2aa0a9e25b013eb5f35f3bad9ceedac17"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_full.log",
+      "bytes": 1191210,
+      "sha256": "1f775233759d45c823b4e74eac37b2e2a3e0138fab071b2279aceb876b553159"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_full/prefill_perf_report.csv",
+      "bytes": 458320,
+      "sha256": "4ff5d55469532f3d345c4db09cf3e41ee73e30dc0f8712cf070f7a52182c3cd2"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_full/prefill_perf_report.csv.gz",
+      "bytes": 75181,
+      "sha256": "2ea1a7a71d0a3aba8895b8bb865eebec577e9d84ed532cfba81d4c41a8e5a58d"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_full/prefill_table.txt",
+      "bytes": 1038509,
+      "sha256": "942d56846fb10c090edf426845ae6f5bc470082f73f7a2932e00588ad2626b34"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_full/prefill_table.txt.gz",
+      "bytes": 47890,
+      "sha256": "21d3d5e44fded851982aaa7141052c88b3f6376648210863a5142293de9e498b"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_full/decode_perf_report.csv",
+      "bytes": 2446680,
+      "sha256": "9fc86b4aa6b0db6ff176d09237aa7541865f0d9f00cd92e5b4756eeb9d2e606b"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_full/decode_perf_report.csv.gz",
+      "bytes": 383100,
+      "sha256": "8fd90be81b319e212d76a03abb86ce3b3c33191d51590a7a3c8772d6ad4000c4"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_full/decode_table.txt",
+      "bytes": 2999992,
+      "sha256": "31757cbc6b4627ec50bceaa8934cf66bf57ed983f4ea63376010500279bd0ee2"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_full/decode_table.txt.gz",
+      "bytes": 131743,
+      "sha256": "eddec556661fcead146d676266e5f1c4d489fbef27779815aa4e7c78d2757759"
+    }
+  ]
+}

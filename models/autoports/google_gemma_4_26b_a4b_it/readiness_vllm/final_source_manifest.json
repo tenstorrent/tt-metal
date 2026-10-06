@@ -1,0 +1,18 @@
+{
+  "source_sha256": {
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/generator_vllm.py": "e8fc6f7f98552af64b10370e786b422bf71d9500cd0a32fd2854da50ad1f0533",
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/generator.py": "30b961d85f5acbb1ec6e38759332f29d68aaf05e9521e57055b7e861398a6dfb",
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/model.py": "5bf24a3a3680a1aeb9cb881993fac4e6583efc8aa50633a7b61eb0199a70680f",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/datatype_sweep/selected_precision_config.json": "9af37c1309a8cfd3b6018b7cbade031a11646dc46d3282cd2be1a4d018fba3b5",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/context_contract.json": "dc2a250ac132929c96ee1e267f51d5ceec9fe982767688f2261548736aaa5fb2",
+    "vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/async_decode.py": "c036137d1bc0120eeb7368242a618469a81a123c48fcaa92fd190bd951342223",
+    "vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/input_batch.py": "cabf894e18883d5732d3f5a2b6d978f012782576f86248c3062449f9c2067d4a",
+    "vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/model_input.py": "0427255358e8c8b681c739a2fabd8b31d6a4c233177d4cfefa30948bf93f5edd",
+    "vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/model_runner.py": "068d956521f8ee055b120dc1d49751d993e8c68fcf13dd16e563a57631caf442",
+    "vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py": "ea873ec71d50e51ff09e98eab043e38bd38f0a5b5346cadcaf90893648eb1846",
+    "vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/scheduler.py": "2612f306e06574349551844d7f98bd4e0dafc76c1314377deab5f78c37c29633"
+  },
+  "tt_metal_base": "58b7d77f12",
+  "vllm_base": "7f72b1c6e905f5137fe3377f2e7b42738d3f271d",
+  "scope": "Stage10 final serving validation; stage09 historical manifests in doc/optimized_vllm/inherited"
+}

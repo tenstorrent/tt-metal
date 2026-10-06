@@ -1,0 +1,30 @@
+{
+  "layer_type": "sliding_attention",
+  "length": 65,
+  "slot": 1,
+  "real_weights": true,
+  "pcc": 0.9990999498851691,
+  "passed": true,
+  "runtime_audit": "clean",
+  "cache_preservation": [
+    {
+      "start": 0,
+      "end": 31,
+      "prefix_unchanged": true,
+      "other_slot_unchanged": true
+    },
+    {
+      "start": 31,
+      "end": 33,
+      "prefix_unchanged": true,
+      "other_slot_unchanged": true
+    },
+    {
+      "start": 33,
+      "end": 65,
+      "prefix_unchanged": true,
+      "other_slot_unchanged": true
+    }
+  ],
+  "page_table": "random disjoint physical pages"
+}

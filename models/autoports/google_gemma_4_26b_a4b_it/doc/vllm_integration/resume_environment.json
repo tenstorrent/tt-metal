@@ -1,0 +1,13 @@
+{
+  "time_utc": "2026-09-27T14:11:05.136491+00:00",
+  "python": "/home/container_app_user/tt-metal/python_env/bin/python",
+  "versions": {
+    "vllm": "0.26.0+empty",
+    "vllm-tt-plugin": "0.1.0",
+    "openai": "3.13.0",
+    "uvloop": "0.22.1"
+  },
+  "old_dependency_blocker_resolved": true,
+  "runtime_logs": "readiness_vllm/runtime_logs",
+  "baseline_reduced_generator": "readiness_vllm/resume_generator_trace.json"
+}

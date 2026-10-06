@@ -1,0 +1,159 @@
+{
+  "layer_type": "sliding_attention",
+  "real_weights": true,
+  "results": [
+    {
+      "component": "qkv",
+      "candidate": "baseline",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 5449.5018666666665
+    },
+    {
+      "component": "qkv",
+      "candidate": "broadcast_256",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 4648.691666666667
+    },
+    {
+      "component": "qkv",
+      "candidate": "broadcast_512",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 3668.1524666666664
+    },
+    {
+      "component": "qkv",
+      "candidate": "broadcast_1024",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 3265.960466666667
+    },
+    {
+      "component": "qkv",
+      "candidate": "broadcast_2048",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 3102.4029
+    },
+    {
+      "component": "qkv",
+      "candidate": "broadcast_4096",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 3067.8912333333333
+    },
+    {
+      "component": "qkv",
+      "candidate": "broadcast_8192",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 2545.941
+    },
+    {
+      "component": "qkv",
+      "candidate": "broadcast_16384",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 2544.704333333333
+    },
+    {
+      "component": "router",
+      "candidate": "baseline",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 285.27253333333334
+    },
+    {
+      "component": "router",
+      "candidate": "broadcast_scale",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 243.28063333333333
+    },
+    {
+      "component": "shared_1",
+      "candidate": "baseline",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 126.35743333333333
+    },
+    {
+      "component": "shared_1",
+      "candidate": "gelu_mul",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 124.52063333333334
+    },
+    {
+      "component": "experts_1",
+      "candidate": "baseline",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 1407.3670666666667
+    },
+    {
+      "component": "experts_1",
+      "candidate": "packed",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 924.4541666666667
+    },
+    {
+      "component": "experts_1",
+      "candidate": "packed_gelu",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 926.3507666666667
+    },
+    {
+      "component": "shared_32",
+      "candidate": "baseline",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 126.47066666666667
+    },
+    {
+      "component": "shared_32",
+      "candidate": "gelu_mul",
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "traced_host_us": 124.89266666666667
+    }
+  ]
+}

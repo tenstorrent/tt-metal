@@ -1,0 +1,22 @@
+{
+  "source_ops_csv": "raw/reports/headline/2026_09_25_22_39_56/ops_perf_results_headline_2026_09_25_22_39_56.csv",
+  "ops_csv_sha256": "1dbf1ec1740ab961ef603b3c650ece0d14e7ee4c889a9371bf7ab32eea69dfaa",
+  "ops_csv_bytes": 33284598,
+  "summary_command": [
+    "python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.tests.summarize_perf",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tracy/full_verified/ops.csv",
+    "--layer-type",
+    "full_attention",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tracy/full_verified/whole_layer.json"
+  ],
+  "summary_exit_code": 0,
+  "op_info_cache": false,
+  "profile_result": "../../verified_profile_full.json",
+  "raw_device_csv": "raw/.logs/cpp_device_perf_report.csv",
+  "raw_host_trace": "raw/.logs/tracy_profile_log_host.tracy",
+  "source_fused_decoder_sha256": "0c8892be32e04202fdbddd2b06850848c63ae57660c49d03c4d149a5a88b041c",
+  "summary_metadata_correction": "2026-09-26: fidelity assumption text corrected; raw CSV and numeric device measurements unchanged"
+}

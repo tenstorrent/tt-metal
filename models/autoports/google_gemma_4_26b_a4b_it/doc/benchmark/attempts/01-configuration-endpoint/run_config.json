@@ -1,0 +1,73 @@
+{
+  "model": "google/gemma-4-26B-A4B-it",
+  "base_url": "http://127.0.0.1:8000",
+  "manifest": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/benchmark/run/manifest.json",
+  "tasks": [
+    "mmlu_pro",
+    "ifeval"
+  ],
+  "budget_seconds": 3600,
+  "performance_server_command": [
+    "/home/container_app_user/tt-metal/python_env/bin/python",
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/benchmark_server.py"
+  ],
+  "roofline_command": [
+    "/home/container_app_user/tt-metal/python_env/bin/python",
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/benchmark_roofline.py"
+  ],
+  "benchmark_command": [
+    "/home/container_app_user/tt-metal/python_env/bin/python",
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/benchmark_performance.py"
+  ],
+  "output_tokens": 128,
+  "accuracy_execution": "shared",
+  "generation": {
+    "mmlu_pro": {
+      "max_gen_toks": 4096,
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64,
+      "do_sample": true,
+      "until": [],
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      },
+      "logprobs": true,
+      "top_logprobs": 0
+    },
+    "ifeval": {
+      "max_gen_toks": 4096,
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64,
+      "do_sample": true,
+      "until": [],
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      },
+      "logprobs": true,
+      "top_logprobs": 0
+    }
+  },
+  "metrics": {
+    "mmlu_pro": [
+      "exact_match,custom-extract"
+    ],
+    "ifeval": [
+      "prompt_level_strict_acc,none",
+      "inst_level_strict_acc,none",
+      "prompt_level_loose_acc,none",
+      "inst_level_loose_acc,none"
+    ]
+  },
+  "references": {
+    "mmlu_pro": {
+      "exact_match,custom-extract": {
+        "score": 82.6,
+        "source_url": "https://huggingface.co/google/gemma-4-26B-A4B-it#benchmark-results",
+        "protocol_notes": "Published whole-benchmark result. This run uses a frozen280-question subset, upstream five-shot custom-extract scorer, native nonthinking mode and4096 output cap; publication recipe may differ."
+      }
+    }
+  },
+  "source_manifest": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/benchmark/setup-previous/preparation/subset/manifest.json"
+}

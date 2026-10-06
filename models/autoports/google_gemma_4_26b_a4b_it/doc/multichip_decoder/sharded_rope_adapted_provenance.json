@@ -1,0 +1,33 @@
+{
+  "runtime_before_sha256": "c96c935847572085ef97b67ebd76c79eaaf31a45b3f6b90277d69d4951e3fc8d",
+  "runtime_after_sha256": "c74f191d446a67ae75a7334dda513bdd4a664ae46e958a1a49d6d1ad79c4f508",
+  "only_optional_rotary_changed_ast": true,
+  "probe_sha256": "098fb070882744ad2c5688dd30f20d014392ff2d22c6ecedf97c6c0c250b2614",
+  "results": {
+    "sliding": {
+      "baseline": "sliding_router109_dense_qkv-n2.json",
+      "adapted": "sliding_sharded_rope_adapted.json",
+      "min_output_pcc": 0.9978613806276473,
+      "min_cache_pcc": 0.9999966584468448,
+      "baseline_tp4_host_decode_median_us": 731.4807735383511,
+      "adapted_tp4_host_decode_median_us": 671.7122159898281,
+      "relative_host_latency_change": -0.0817089931966466,
+      "passed": true,
+      "selected_candidate": true
+    },
+    "full": {
+      "baseline": "full_router109_integrated_bfp8.json",
+      "adapted": "full_sharded_rope_adapted.json",
+      "min_output_pcc": 0.9997071333356385,
+      "min_cache_pcc": 0.9999717667382211,
+      "baseline_tp4_host_decode_median_us": 724.2928259074688,
+      "adapted_tp4_host_decode_median_us": 740.5132055282593,
+      "relative_host_latency_change": 0.022394781558781718,
+      "passed": true,
+      "selected_candidate": false
+    }
+  },
+  "default_changed": false,
+  "C++_changed": false,
+  "hardware_released": true
+}

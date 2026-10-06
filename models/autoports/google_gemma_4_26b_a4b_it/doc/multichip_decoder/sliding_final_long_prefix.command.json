@@ -1,0 +1,17 @@
+{
+  "command": [
+    "/workspace/tt-metal/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.tests.test_multichip_contracts",
+    "--layer",
+    "0",
+    "--batch",
+    "1",
+    "--base-length",
+    "1056",
+    "--output",
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/sliding_final_long_prefix.json"
+  ],
+  "environment": {},
+  "exit_code": 0
+}

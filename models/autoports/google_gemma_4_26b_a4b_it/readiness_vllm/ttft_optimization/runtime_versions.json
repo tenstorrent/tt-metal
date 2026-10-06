@@ -1,0 +1,12 @@
+{
+  "python": "3.10.12",
+  "packages": {
+    "vllm": "0.26.0+empty",
+    "vllm-tt-plugin": "0.1.0",
+    "transformers": "5.12.1",
+    "tokenizers": "0.22.2",
+    "torch": "2.11.0+cpu",
+    "numpy": "1.26.4",
+    "ttnn": "0.1.dev1+g7aee192"
+  }
+}

@@ -1,0 +1,44 @@
+[
+  {
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_sequence_decode",
+      "--decoder",
+      "functional",
+      "--layer",
+      "0",
+      "--length",
+      "65",
+      "--real",
+      "--decode",
+      "--steps",
+      "8",
+      "--stage-report",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tail65_functional_stages.json",
+      "--inspect-position",
+      "68",
+      "--save-inputs",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tail65_inputs.pt",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tail65_functional_diagnostic.json"
+    ],
+    "exit_code": 1
+  },
+  {
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.hf_long_decode_precision_controls",
+      "--input-fixture",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tail65_inputs.pt",
+      "--length",
+      "65",
+      "--steps",
+      "8",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tail65_cpu_precision.json"
+    ],
+    "exit_code": 0
+  }
+]

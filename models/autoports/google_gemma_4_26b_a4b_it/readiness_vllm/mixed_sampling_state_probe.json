@@ -1,0 +1,33 @@
+{
+  "seed_restart_probe": {
+    "request_seed": 6,
+    "base_seed": 777314,
+    "observed_device_seeds_for_surviving_request": [
+      777315,
+      777316,
+      777315
+    ],
+    "expected_without_unrelated_completion": [
+      777315,
+      777316,
+      777317
+    ],
+    "steps": "first decode; unchanged decode; other request completes and params signature changes",
+    "real_code": "adapter decode, generator configure_sampling/_validate_sampling/_forward, canonical seed hash; device primitives/model compute substituted with CPU"
+  },
+  "same_params_reset_probe": {
+    "reset_batch_sequence": [
+      true,
+      true
+    ],
+    "slot_remap_second": [
+      1,
+      0
+    ],
+    "configure_calls": 1,
+    "output_history_reset_calls": 1,
+    "retained_old_history": true,
+    "second_history_applied": false
+  },
+  "limits": "No hardware or server. Proves state transition gaps, not attribution of observed first-visible-token live divergence."
+}

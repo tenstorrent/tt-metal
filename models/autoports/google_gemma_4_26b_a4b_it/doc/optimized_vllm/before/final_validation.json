@@ -1,0 +1,16 @@
+{
+  "shared_runner_exit_code": 0,
+  "command": "doc/vllm_integration/final_checks_command.json",
+  "sampling_profile": "full",
+  "sampling_passed": 72,
+  "sampling_skipped": 1,
+  "sampling_failed": 0,
+  "sampling_duration_s": 1123.65,
+  "skip_reason": "Shared chat all-vocabulary logprobs test skips for default server max_logprobs cap20",
+  "sampling_log": "sampling_tests.log",
+  "qualitative": "vllm_qualitative_outputs.json",
+  "degeneracy": "degeneracy.json",
+  "primary_benchmark": "vllm_benchmark.json",
+  "ci_serving_benchmark": "vllm_ci_serving_benchmark.json",
+  "source_manifest": "final_source_manifest.json"
+}

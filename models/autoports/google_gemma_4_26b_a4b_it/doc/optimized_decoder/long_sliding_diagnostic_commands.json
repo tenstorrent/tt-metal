@@ -1,0 +1,48 @@
+[
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.long_context",
+      "--decoder",
+      "fused",
+      "--layer",
+      "0",
+      "--length",
+      "262144",
+      "--threads",
+      "4",
+      "--input-fixture",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_long/actual_text_layer0_262144_0.pt",
+      "--reference-file",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_long/actual_text_layer0_262144_reference.pt",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_fused_long_sliding.json"
+    ],
+    "returncode": 0
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_contract",
+      "--contract",
+      "long_context",
+      "--default-overrides",
+      "{\"prefill_attention_fidelity\":\"HiFi2\"}",
+      "--layer",
+      "0",
+      "--length",
+      "262144",
+      "--threads",
+      "4",
+      "--input-fixture",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_long/actual_text_layer0_262144_0.pt",
+      "--reference-file",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_long/actual_text_layer0_262144_reference.pt",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_long_sliding_hifi2.json"
+    ],
+    "returncode": 0
+  }
+]

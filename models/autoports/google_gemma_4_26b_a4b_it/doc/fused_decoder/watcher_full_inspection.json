@@ -1,0 +1,9 @@
+{
+  "layer_type": "full_attention",
+  "watcher_interval_seconds": 10,
+  "result": "watcher_full_final.json",
+  "watcher_log": "watcher/full/generated/watcher/watcher.log",
+  "completed_dumps": 6,
+  "diagnostic_matches": [],
+  "sha256": "c31a798179a82a9e5d626b1649a16579d0d9dddee3c90fec2d418d8eb237b8e3"
+}

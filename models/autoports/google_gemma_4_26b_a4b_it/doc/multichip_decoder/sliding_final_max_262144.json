@@ -1,0 +1,92 @@
+{
+  "runtime_sha256": "a12a913cf752b765338736dc71f71151ab972af1529a0098455755dd4f499255",
+  "runner_sha256": "335ddaf8a4e0e7e789c697521cc5c988c5c01a2c9d0b2f8ba1cc0760cd9b3aa6",
+  "dense_geometry": "baseline",
+  "moe_ccl_bfp8": null,
+  "expert_gate_bfp4": false,
+  "shared_gate_bfp4": false,
+  "shared_down_bfp4": false,
+  "expert_activation_bfp8": false,
+  "split_expert_gate": false,
+  "split_shared_gate": false,
+  "projection_k": null,
+  "projection_role": "qkv",
+  "sharded_decode_rope": null,
+  "qkv_fidelity": "LoFi",
+  "output_fidelity": "LoFi",
+  "attention_ccl_dtype": "bfloat16",
+  "full_attention_ccl_dtype_override": "bfloat8_b",
+  "command": [
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py",
+    "--layer",
+    "0",
+    "--length",
+    "262144",
+    "--repeat-input",
+    "--steps",
+    "0",
+    "--trace",
+    "--check-cache",
+    "--prefill-timing-samples",
+    "1",
+    "--reserve-full-stack",
+    "--output",
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/sliding_final_max_262144.json"
+  ],
+  "expert_parallel": false,
+  "fused_tail": true,
+  "optimized_shared": true,
+  "shared_dram": false,
+  "attention_dram": null,
+  "shared_geometry_requested": null,
+  "shared_geometry": 2,
+  "sparse_gate_geometry": "baseline",
+  "sparse_down_geometry": "baseline",
+  "grouped_moe_reduce": true,
+  "hybrid_experts": true,
+  "cache_pcc": [
+    0.999999999777406,
+    0.9999999994744454,
+    1.0,
+    0.9999999994922686,
+    1.0,
+    1.0,
+    0.9999999996965437,
+    0.9999999999132032
+  ],
+  "capacity": {
+    "reserved_other_resident_bytes_per_device": 19797114880,
+    "current_weight_bound": 317399552,
+    "current_cache_bytes": 285212672,
+    "current_rope_bytes": 536870912,
+    "accounting": "memory_capacity_plan.json",
+    "limitation": "Anonymous DRAM reservations exercise capacity, not a full-model stack"
+  },
+  "layer_type": "sliding_attention",
+  "length": 262144,
+  "steps": 0,
+  "pcc": [
+    0.9999230200763243
+  ],
+  "passed": true,
+  "trace": true,
+  "duplicate_replays_per_position": 1,
+  "timings": {
+    "1": {
+      "prefill_host_us": [
+        14108006.985858083
+      ],
+      "decode_host_us": []
+    },
+    "4": {
+      "prefill_host_us": [
+        5911194.700747728
+      ],
+      "decode_host_us": []
+    }
+  },
+  "all_replicas_equal": true,
+  "sharded_residual": false,
+  "topology": "linear",
+  "fused_agmm": false
+}

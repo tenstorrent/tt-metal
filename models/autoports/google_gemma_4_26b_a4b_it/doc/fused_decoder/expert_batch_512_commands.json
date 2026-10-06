@@ -1,0 +1,32 @@
+[
+  {
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_expert_batch",
+      "--layer",
+      "0",
+      "--batch-tokens",
+      "64",
+      "512",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/expert_batch_512_sliding.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_expert_batch",
+      "--layer",
+      "5",
+      "--batch-tokens",
+      "64",
+      "512",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/expert_batch_512_full.json"
+    ],
+    "exit_code": 0
+  }
+]

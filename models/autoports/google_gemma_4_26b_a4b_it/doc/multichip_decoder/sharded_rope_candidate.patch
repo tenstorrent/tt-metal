@@ -1,0 +1,31 @@
+--- models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
++++ models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
+@@ -173,6 +173,28 @@
+ 
+ 
+ class _LocalAttention(OptimizedAttention):
++    def rotary(self, value, cos, sin, *, decode=False):
++        if not decode or not getattr(self, "sharded_decode_rope", False):
++            return super().rotary(value, cos, sin, decode=decode)
++        memory = ttnn.create_sharded_memory_config(
++            (32, value.shape[-1]),
++            ttnn.CoreGrid(x=1, y=1),
++            ttnn.ShardStrategy.HEIGHT,
++            ttnn.ShardOrientation.ROW_MAJOR,
++            use_height_and_width_as_shard_shape=True,
++        )
++        tables = tuple(
++            ttnn.to_memory_config(ttnn.typecast(table, ttnn.float32), memory)
++            for table in (cos, sin)
++        )
++        result = ttnn.experimental.rotary_embedding_hf(
++            ttnn.to_memory_config(value, memory),
++            *tables,
++            is_decode_mode=True,
++            compute_kernel_config=self.compute,
++        )
++        return ttnn.to_memory_config(result, value.memory_config())
++
+     def project(self, attention, decode):
+         if not decode or getattr(self, "decode_output_dram", None) is None:
+             return self.reduce(super().project(attention, decode))

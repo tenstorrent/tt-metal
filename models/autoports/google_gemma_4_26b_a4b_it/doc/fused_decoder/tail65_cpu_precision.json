@@ -1,0 +1,685 @@
+{
+  "model": "google/gemma-4-26B-A4B-it",
+  "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "layer": 0,
+  "seed": 42,
+  "length": 65,
+  "steps": 8,
+  "positions": [
+    65,
+    72
+  ],
+  "sliding_window": 1024,
+  "extent": 1024,
+  "cpu_threads": 8,
+  "torch_version": "2.11.0+cpu",
+  "pcc_threshold": 0.995,
+  "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tail65_inputs.pt",
+  "input_fixture_sha256": "5d9a32db1ceda8954df78b47f5c44fd3b0242058790d50522f657cc1ded35e9b",
+  "device_inputs_match_cpu_seed_reconstruction": true,
+  "x_sha256": "e5694f90f348d1764e1889ae8a503ceec54b70751fd2b670fe7b37b635da918b",
+  "decode_stream_sha256": "65df2a12ac6bc012868ed018840476967af24c913c74a3171bcaaa027cf61388",
+  "decode_inputs": [
+    {
+      "position": 65,
+      "sha256": "6806476a7412cad1cba1f7b90ca7cff22302320adc7855ea141090567afd89c5"
+    },
+    {
+      "position": 66,
+      "sha256": "685e1c572768a9eb0ac17067514e30c0c8547402fa9f50309bd73b97c2b97374"
+    },
+    {
+      "position": 67,
+      "sha256": "668d1028f25d5de05019e4d18fc865af0fa43c11c7b62616a2ccc2377f7cbcf0"
+    },
+    {
+      "position": 68,
+      "sha256": "4732b69682e0940a3d87560b3dbe0940c4699cd6b9c9867b2cd9dcacba838278"
+    },
+    {
+      "position": 69,
+      "sha256": "5f4723ed41c8ba052ebbba5b37ce561976bc78fa2e1c34f255c77cf65fbc039f"
+    },
+    {
+      "position": 70,
+      "sha256": "39bb4b302a4097728b5f2cd8917bf6f7f3634074de7d88523825650d27145639"
+    },
+    {
+      "position": 71,
+      "sha256": "2c1ebfce0a160421a855cfc3c27969124a345f47131c98fb7ba8634e5c654283"
+    },
+    {
+      "position": 72,
+      "sha256": "4d20cab434b7394eb0bcf56d963eb262c36eeaa3a43a079e89bdb3ada5e003e4"
+    }
+  ],
+  "config_sha256": "ed0c1eb3633de771906e9ba004a44cc5635bcc06ee2062077c3d2e88a50707d3",
+  "source_sha256": "d39d11e02a10ddfa630c58eef07bda4c656aa63c7d288d27e24d9e577334e344",
+  "shared_helper_source_sha256": "748dcf96d1e674bb196de431e212846aac369dedf9fc6358cda7275a9718fa30",
+  "run_decoder_source_sha256": "7287dce8b0a0a144bccc9512ce3819105e102211e675853b26af9c2c1b462e8b",
+  "command": "HF_HUB_OFFLINE=1 OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 python_env/bin/python -m models.autoports.google_gemma_4_26b_a4b_it.tests.hf_long_decode_precision_controls --input-fixture models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tail65_inputs.pt --length 65 --steps 8",
+  "reference": "Real weights and all HF eager computation FP32; same local config and exact saved input stream as device run",
+  "limitations": "CPU numerical controls do not emulate TT kernels. Cache quantization also affects CPU prefill attention. No acceptance threshold changed.",
+  "controls": {
+    "cache": {
+      "description": "FP32 HF plus BF16-roundtripped FP32 cached K/V",
+      "prefill_pcc": 0.99999738784494,
+      "minimum_decode_pcc": 0.9814915923967622,
+      "failed_positions": [
+        68
+      ],
+      "changed_route_positions": [
+        68
+      ],
+      "decode": [
+        {
+          "position": 65,
+          "pcc": 0.9999943450328617,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            73,
+            64,
+            19,
+            88,
+            29,
+            31,
+            52,
+            106
+          ],
+          "control_experts": [
+            73,
+            64,
+            19,
+            88,
+            29,
+            31,
+            52,
+            106
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.04315376281738281,
+          "control_logit_rank8_rank9_gap": 0.04526495933532715,
+          "fp32_probability_rank8_rank9_gap": 0.0010647643357515335,
+          "maximum_logit_absolute_error": 0.007305622100830078
+        },
+        {
+          "position": 66,
+          "pcc": 0.999997118180477,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            3,
+            52,
+            22,
+            111,
+            106,
+            125,
+            13,
+            11
+          ],
+          "control_experts": [
+            3,
+            52,
+            22,
+            111,
+            106,
+            125,
+            13,
+            11
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.066825270652771,
+          "control_logit_rank8_rank9_gap": 0.06732404232025146,
+          "fp32_probability_rank8_rank9_gap": 0.0012280233204364777,
+          "maximum_logit_absolute_error": 0.006821632385253906
+        },
+        {
+          "position": 67,
+          "pcc": 0.9999959298120243,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            96,
+            127,
+            105,
+            111,
+            22,
+            38,
+            108,
+            106
+          ],
+          "control_experts": [
+            96,
+            127,
+            105,
+            111,
+            22,
+            38,
+            108,
+            106
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.05328941345214844,
+          "control_logit_rank8_rank9_gap": 0.05054807662963867,
+          "fp32_probability_rank8_rank9_gap": 0.0012579746544361115,
+          "maximum_logit_absolute_error": 0.008611291646957397
+        },
+        {
+          "position": 68,
+          "pcc": 0.9814915923967622,
+          "passed": false,
+          "route_intersection": 7,
+          "fp32_experts": [
+            1,
+            56,
+            50,
+            94,
+            80,
+            113,
+            115,
+            10
+          ],
+          "control_experts": [
+            1,
+            56,
+            50,
+            94,
+            80,
+            113,
+            115,
+            70
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.0004329681396484375,
+          "control_logit_rank8_rank9_gap": 0.0011536478996276855,
+          "fp32_probability_rank8_rank9_gap": 7.715076208114624e-06,
+          "maximum_logit_absolute_error": 0.006055116653442383,
+          "stage_pcc": {
+            "self_attn": 0.9999985107631544,
+            "post_attention_layernorm": 0.9999980631200095,
+            "router.proj": 0.9999981139513582,
+            "router_input": 0.9999980964278073,
+            "experts": 0.9104965613860845,
+            "post_feedforward_layernorm_2": 0.9580814851146723,
+            "post_feedforward_layernorm": 0.9809546129722865
+          },
+          "candidate_logits": [
+            {
+              "expert": 1,
+              "fp32": 1.3481765985488892,
+              "control": 1.348630666732788
+            },
+            {
+              "expert": 10,
+              "fp32": 0.9369966983795166,
+              "control": 0.937795102596283
+            },
+            {
+              "expert": 50,
+              "fp32": 1.144818902015686,
+              "control": 1.1468076705932617
+            },
+            {
+              "expert": 56,
+              "fp32": 1.1761248111724854,
+              "control": 1.1773158311843872
+            },
+            {
+              "expert": 70,
+              "fp32": 0.9365637302398682,
+              "control": 0.9389487504959106
+            },
+            {
+              "expert": 80,
+              "fp32": 1.056384563446045,
+              "control": 1.0593674182891846
+            },
+            {
+              "expert": 94,
+              "fp32": 1.0903840065002441,
+              "control": 1.0923757553100586
+            },
+            {
+              "expert": 113,
+              "fp32": 1.0523251295089722,
+              "control": 1.0531655550003052
+            },
+            {
+              "expert": 115,
+              "fp32": 0.9914339780807495,
+              "control": 0.9925833940505981
+            }
+          ]
+        },
+        {
+          "position": 69,
+          "pcc": 0.9999963157116845,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            91,
+            127,
+            103,
+            114,
+            32,
+            106,
+            64,
+            53
+          ],
+          "control_experts": [
+            91,
+            127,
+            103,
+            114,
+            32,
+            106,
+            64,
+            53
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.024791479110717773,
+          "control_logit_rank8_rank9_gap": 0.020553112030029297,
+          "fp32_probability_rank8_rank9_gap": 0.00042928755283355713,
+          "maximum_logit_absolute_error": 0.004981040954589844
+        },
+        {
+          "position": 70,
+          "pcc": 0.9999973502134393,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            49,
+            58,
+            51,
+            63,
+            23,
+            120,
+            19,
+            69
+          ],
+          "control_experts": [
+            58,
+            49,
+            51,
+            63,
+            23,
+            120,
+            19,
+            69
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.027683734893798828,
+          "control_logit_rank8_rank9_gap": 0.02939927577972412,
+          "fp32_probability_rank8_rank9_gap": 0.0005682632327079773,
+          "maximum_logit_absolute_error": 0.006003379821777344
+        },
+        {
+          "position": 71,
+          "pcc": 0.9999972847261287,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            31,
+            52,
+            122,
+            25,
+            21,
+            67,
+            18,
+            89
+          ],
+          "control_experts": [
+            31,
+            52,
+            122,
+            25,
+            21,
+            67,
+            18,
+            89
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.04154014587402344,
+          "control_logit_rank8_rank9_gap": 0.046390533447265625,
+          "fp32_probability_rank8_rank9_gap": 0.0007671266794204712,
+          "maximum_logit_absolute_error": 0.005758523941040039
+        },
+        {
+          "position": 72,
+          "pcc": 0.9999981805690895,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            113,
+            68,
+            10,
+            117,
+            77,
+            37,
+            126,
+            56
+          ],
+          "control_experts": [
+            113,
+            68,
+            10,
+            117,
+            77,
+            37,
+            126,
+            56
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.0033218860626220703,
+          "control_logit_rank8_rank9_gap": 0.006161093711853027,
+          "fp32_probability_rank8_rank9_gap": 6.946548819541931e-05,
+          "maximum_logit_absolute_error": 0.006052851676940918
+        }
+      ]
+    },
+    "rope-cache": {
+      "description": "FP32 HF plus BF16-roundtripped FP32 cached K/V and BF16-roundtripped FP32 RoPE cos/sin tables",
+      "prefill_pcc": 0.9999963921427146,
+      "minimum_decode_pcc": 0.9815510237835411,
+      "failed_positions": [
+        68
+      ],
+      "changed_route_positions": [
+        68
+      ],
+      "decode": [
+        {
+          "position": 65,
+          "pcc": 0.9999955048743886,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            73,
+            64,
+            19,
+            88,
+            29,
+            31,
+            52,
+            106
+          ],
+          "control_experts": [
+            73,
+            64,
+            19,
+            88,
+            29,
+            31,
+            52,
+            106
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.04315376281738281,
+          "control_logit_rank8_rank9_gap": 0.04124307632446289,
+          "fp32_probability_rank8_rank9_gap": 0.0010647643357515335,
+          "maximum_logit_absolute_error": 0.00790262222290039
+        },
+        {
+          "position": 66,
+          "pcc": 0.9999962564885571,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            3,
+            52,
+            22,
+            111,
+            106,
+            125,
+            13,
+            11
+          ],
+          "control_experts": [
+            3,
+            52,
+            22,
+            111,
+            106,
+            125,
+            13,
+            11
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.066825270652771,
+          "control_logit_rank8_rank9_gap": 0.06889283657073975,
+          "fp32_probability_rank8_rank9_gap": 0.0012280233204364777,
+          "maximum_logit_absolute_error": 0.00799560546875
+        },
+        {
+          "position": 67,
+          "pcc": 0.999994552647259,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            96,
+            127,
+            105,
+            111,
+            22,
+            38,
+            108,
+            106
+          ],
+          "control_experts": [
+            96,
+            127,
+            105,
+            111,
+            22,
+            38,
+            108,
+            106
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.05328941345214844,
+          "control_logit_rank8_rank9_gap": 0.04820704460144043,
+          "fp32_probability_rank8_rank9_gap": 0.0012579746544361115,
+          "maximum_logit_absolute_error": 0.009336113929748535
+        },
+        {
+          "position": 68,
+          "pcc": 0.9815510237835411,
+          "passed": false,
+          "route_intersection": 7,
+          "fp32_experts": [
+            1,
+            56,
+            50,
+            94,
+            80,
+            113,
+            115,
+            10
+          ],
+          "control_experts": [
+            1,
+            56,
+            50,
+            94,
+            80,
+            113,
+            115,
+            70
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.0004329681396484375,
+          "control_logit_rank8_rank9_gap": 0.0009045600891113281,
+          "fp32_probability_rank8_rank9_gap": 7.715076208114624e-06,
+          "maximum_logit_absolute_error": 0.004456043243408203,
+          "stage_pcc": {
+            "self_attn": 0.9999980806046936,
+            "post_attention_layernorm": 0.9999973309877422,
+            "router.proj": 0.9999986904945094,
+            "router_input": 0.9999973763651028,
+            "experts": 0.9105027712813611,
+            "post_feedforward_layernorm_2": 0.9582587462184433,
+            "post_feedforward_layernorm": 0.981015646141002
+          },
+          "candidate_logits": [
+            {
+              "expert": 1,
+              "fp32": 1.3481765985488892,
+              "control": 1.348191738128662
+            },
+            {
+              "expert": 10,
+              "fp32": 0.9369966983795166,
+              "control": 0.9372233152389526
+            },
+            {
+              "expert": 50,
+              "fp32": 1.144818902015686,
+              "control": 1.145827293395996
+            },
+            {
+              "expert": 56,
+              "fp32": 1.1761248111724854,
+              "control": 1.1784965991973877
+            },
+            {
+              "expert": 70,
+              "fp32": 0.9365637302398682,
+              "control": 0.938127875328064
+            },
+            {
+              "expert": 80,
+              "fp32": 1.056384563446045,
+              "control": 1.0576739311218262
+            },
+            {
+              "expert": 94,
+              "fp32": 1.0903840065002441,
+              "control": 1.092374563217163
+            },
+            {
+              "expert": 113,
+              "fp32": 1.0523251295089722,
+              "control": 1.0529356002807617
+            },
+            {
+              "expert": 115,
+              "fp32": 0.9914339780807495,
+              "control": 0.9909402132034302
+            }
+          ]
+        },
+        {
+          "position": 69,
+          "pcc": 0.999995021444194,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            91,
+            127,
+            103,
+            114,
+            32,
+            106,
+            64,
+            53
+          ],
+          "control_experts": [
+            91,
+            127,
+            103,
+            114,
+            32,
+            106,
+            53,
+            64
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.024791479110717773,
+          "control_logit_rank8_rank9_gap": 0.018018722534179688,
+          "fp32_probability_rank8_rank9_gap": 0.00042928755283355713,
+          "maximum_logit_absolute_error": 0.005971431732177734
+        },
+        {
+          "position": 70,
+          "pcc": 0.9999910601830067,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            49,
+            58,
+            51,
+            63,
+            23,
+            120,
+            19,
+            69
+          ],
+          "control_experts": [
+            49,
+            58,
+            51,
+            63,
+            23,
+            120,
+            19,
+            69
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.027683734893798828,
+          "control_logit_rank8_rank9_gap": 0.03356504440307617,
+          "fp32_probability_rank8_rank9_gap": 0.0005682632327079773,
+          "maximum_logit_absolute_error": 0.00815439224243164
+        },
+        {
+          "position": 71,
+          "pcc": 0.9999963494756626,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            31,
+            52,
+            122,
+            25,
+            21,
+            67,
+            18,
+            89
+          ],
+          "control_experts": [
+            31,
+            52,
+            122,
+            25,
+            21,
+            67,
+            18,
+            89
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.04154014587402344,
+          "control_logit_rank8_rank9_gap": 0.04888319969177246,
+          "fp32_probability_rank8_rank9_gap": 0.0007671266794204712,
+          "maximum_logit_absolute_error": 0.006589636206626892
+        },
+        {
+          "position": 72,
+          "pcc": 0.9999960795828207,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            113,
+            68,
+            10,
+            117,
+            77,
+            37,
+            126,
+            56
+          ],
+          "control_experts": [
+            113,
+            68,
+            10,
+            117,
+            77,
+            37,
+            126,
+            56
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.0033218860626220703,
+          "control_logit_rank8_rank9_gap": 0.0039005279541015625,
+          "fp32_probability_rank8_rank9_gap": 6.946548819541931e-05,
+          "maximum_logit_absolute_error": 0.00887233018875122
+        }
+      ]
+    }
+  },
+  "elapsed_seconds": 0.767662444151938,
+  "ttnn_imported": false
+}

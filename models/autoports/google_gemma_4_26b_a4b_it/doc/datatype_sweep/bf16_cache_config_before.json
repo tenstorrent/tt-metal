@@ -1,0 +1,296 @@
+[
+  {
+    "dtype": "bfloat16",
+    "case": "short_tail_1025",
+    "calls": [
+      {
+        "q_chunk": 64,
+        "k_chunk": 128,
+        "q_rows": 64,
+        "base_offset": 1024,
+        "q_buffers": 1,
+        "cb_bytes": 856256,
+        "cb_end": 967872,
+        "read_end": 1152,
+        "capacity": 1152
+      }
+    ]
+  },
+  {
+    "dtype": "bfloat16",
+    "case": "full_second_chunk",
+    "calls": [
+      {
+        "q_chunk": 64,
+        "k_chunk": 256,
+        "q_rows": 1024,
+        "base_offset": 1024,
+        "q_buffers": 2,
+        "cb_bytes": 1479232,
+        "cb_end": 1590848,
+        "read_end": 2048,
+        "capacity": 4224
+      }
+    ]
+  },
+  {
+    "dtype": "bfloat16",
+    "case": "tail_4097",
+    "calls": [
+      {
+        "q_chunk": 64,
+        "k_chunk": 128,
+        "q_rows": 64,
+        "base_offset": 4096,
+        "q_buffers": 1,
+        "cb_bytes": 856640,
+        "cb_end": 968256,
+        "read_end": 4224,
+        "capacity": 4224
+      }
+    ]
+  },
+  {
+    "dtype": "bfloat16",
+    "case": "page_boundary_tail",
+    "calls": [
+      {
+        "q_chunk": 64,
+        "k_chunk": 128,
+        "q_rows": 64,
+        "base_offset": 4096,
+        "q_buffers": 1,
+        "cb_bytes": 856640,
+        "cb_end": 968256,
+        "read_end": 4224,
+        "capacity": 4224
+      }
+    ]
+  },
+  {
+    "dtype": "bfloat16",
+    "case": "page_boundary_aligned",
+    "calls": [
+      {
+        "q_chunk": 64,
+        "k_chunk": 128,
+        "q_rows": 128,
+        "base_offset": 4096,
+        "q_buffers": 2,
+        "cb_bytes": 922176,
+        "cb_end": 1033792,
+        "read_end": 4224,
+        "capacity": 4224
+      }
+    ]
+  },
+  {
+    "dtype": "bfloat16",
+    "case": "max_context_final_chunk",
+    "calls": [
+      {
+        "q_chunk": 64,
+        "k_chunk": 256,
+        "q_rows": 1024,
+        "base_offset": 261120,
+        "q_buffers": 2,
+        "cb_bytes": 1511424,
+        "cb_end": 1623040,
+        "read_end": 262144,
+        "capacity": 262144
+      }
+    ]
+  },
+  {
+    "dtype": "bfloat16",
+    "case": "batched_page_table",
+    "calls": [
+      {
+        "q_chunk": 64,
+        "k_chunk": 256,
+        "q_rows": 1024,
+        "base_offset": 1024,
+        "q_buffers": 2,
+        "cb_bytes": 1479680,
+        "cb_end": 1591296,
+        "read_end": 2048,
+        "capacity": 8192
+      }
+    ]
+  },
+  {
+    "dtype": "bfloat16",
+    "case": "internal_multichunk",
+    "calls": [
+      {
+        "q_chunk": 64,
+        "k_chunk": 256,
+        "q_rows": 8192,
+        "base_offset": 8192,
+        "q_buffers": 2,
+        "cb_bytes": 1482752,
+        "cb_end": 1594368,
+        "read_end": 16384,
+        "capacity": 32768
+      },
+      {
+        "q_chunk": 64,
+        "k_chunk": 256,
+        "q_rows": 8192,
+        "base_offset": 16384,
+        "q_buffers": 2,
+        "cb_bytes": 1482752,
+        "cb_end": 1594368,
+        "read_end": 24576,
+        "capacity": 32768
+      }
+    ]
+  },
+  {
+    "dtype": "bfloat8_b",
+    "case": "short_tail_1025",
+    "calls": [
+      {
+        "q_chunk": 64,
+        "k_chunk": 128,
+        "q_rows": 64,
+        "base_offset": 1024,
+        "q_buffers": 1,
+        "cb_bytes": 610496,
+        "cb_end": 722112,
+        "read_end": 1152,
+        "capacity": 1152
+      }
+    ]
+  },
+  {
+    "dtype": "bfloat8_b",
+    "case": "full_second_chunk",
+    "calls": [
+      {
+        "q_chunk": 64,
+        "k_chunk": 256,
+        "q_rows": 1024,
+        "base_offset": 1024,
+        "q_buffers": 2,
+        "cb_bytes": 987712,
+        "cb_end": 1099328,
+        "read_end": 2048,
+        "capacity": 4224
+      }
+    ]
+  },
+  {
+    "dtype": "bfloat8_b",
+    "case": "tail_4097",
+    "calls": [
+      {
+        "q_chunk": 64,
+        "k_chunk": 128,
+        "q_rows": 64,
+        "base_offset": 4096,
+        "q_buffers": 1,
+        "cb_bytes": 610880,
+        "cb_end": 722496,
+        "read_end": 4224,
+        "capacity": 4224
+      }
+    ]
+  },
+  {
+    "dtype": "bfloat8_b",
+    "case": "page_boundary_tail",
+    "calls": [
+      {
+        "q_chunk": 64,
+        "k_chunk": 128,
+        "q_rows": 64,
+        "base_offset": 4096,
+        "q_buffers": 1,
+        "cb_bytes": 610880,
+        "cb_end": 722496,
+        "read_end": 4224,
+        "capacity": 4224
+      }
+    ]
+  },
+  {
+    "dtype": "bfloat8_b",
+    "case": "page_boundary_aligned",
+    "calls": [
+      {
+        "q_chunk": 64,
+        "k_chunk": 128,
+        "q_rows": 128,
+        "base_offset": 4096,
+        "q_buffers": 2,
+        "cb_bytes": 676416,
+        "cb_end": 788032,
+        "read_end": 4224,
+        "capacity": 4224
+      }
+    ]
+  },
+  {
+    "dtype": "bfloat8_b",
+    "case": "max_context_final_chunk",
+    "calls": [
+      {
+        "q_chunk": 64,
+        "k_chunk": 256,
+        "q_rows": 1024,
+        "base_offset": 261120,
+        "q_buffers": 2,
+        "cb_bytes": 1019904,
+        "cb_end": 1131520,
+        "read_end": 262144,
+        "capacity": 262144
+      }
+    ]
+  },
+  {
+    "dtype": "bfloat8_b",
+    "case": "batched_page_table",
+    "calls": [
+      {
+        "q_chunk": 64,
+        "k_chunk": 256,
+        "q_rows": 1024,
+        "base_offset": 1024,
+        "q_buffers": 2,
+        "cb_bytes": 988160,
+        "cb_end": 1099776,
+        "read_end": 2048,
+        "capacity": 8192
+      }
+    ]
+  },
+  {
+    "dtype": "bfloat8_b",
+    "case": "internal_multichunk",
+    "calls": [
+      {
+        "q_chunk": 64,
+        "k_chunk": 256,
+        "q_rows": 8192,
+        "base_offset": 8192,
+        "q_buffers": 2,
+        "cb_bytes": 991232,
+        "cb_end": 1102848,
+        "read_end": 16384,
+        "capacity": 32768
+      },
+      {
+        "q_chunk": 64,
+        "k_chunk": 256,
+        "q_rows": 8192,
+        "base_offset": 16384,
+        "q_buffers": 2,
+        "cb_bytes": 991232,
+        "cb_end": 1102848,
+        "read_end": 24576,
+        "capacity": 32768
+      }
+    ]
+  }
+]

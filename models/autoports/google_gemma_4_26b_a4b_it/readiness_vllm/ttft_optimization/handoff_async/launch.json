@@ -1,0 +1,52 @@
+{
+  "status": "launch_intent_execve_pending_not_running_identity",
+  "server_slots": 32,
+  "command": [
+    "/home/container_app_user/tt-metal/python_env/bin/python",
+    "-m",
+    "vllm.entrypoints.openai.api_server",
+    "--model",
+    "google/gemma-4-26B-A4B-it",
+    "--revision",
+    "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+    "--tokenizer-revision",
+    "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+    "--block-size",
+    "32",
+    "--max-num-seqs",
+    "32",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "8000",
+    "--max-model-len",
+    "262144",
+    "--additional-config",
+    "{\"tt\": {\"sample_on_device_mode\": \"all\", \"trace_region_size\": 1000000000, \"fabric_config\": \"FABRIC_1D\", \"enable_model_warmup\": false, \"trace_mode\": \"decode_only\"}}",
+    "--hf-overrides",
+    "{\"architectures\": [\"TTAutoportGemma4ForCausalLM\"]}",
+    "--no-enable-chunked-prefill",
+    "--no-enable-prefix-caching",
+    "--async-scheduling",
+    "--max-num-batched-tokens",
+    "262144"
+  ],
+  "environment_overrides": {
+    "OMP_NUM_THREADS": "8",
+    "TT_METAL_LOGS_PATH": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/handoff_async/runtime",
+    "VLLM_CACHE_ROOT": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/handoff_async/vllm_cache",
+    "GEMMA4_AUTOPORT_ALLOW_HOST_SAMPLING": "1",
+    "MESH_DEVICE": "P300x2",
+    "HF_MODEL": "google/gemma-4-26B-A4B-it",
+    "VLLM_SERVER_DEV_MODE": "1",
+    "GEMMA4_BENCHMARK_CONTROL": "/tmp/gemma4-ttft-handoff-observer.sock",
+    "GEMMA4_PREFILL_HANDOFF_YIELD": "1",
+    "GEMMA4_SOURCE_REPO": "/workspace/tt-metal",
+    "GEMMA4_RUNTIME_REPO": "/home/container_app_user/tt-metal"
+  },
+  "inherited_precision": "doc/datatype_sweep/selected_precision_config.json",
+  "required_before_launch": [
+    "Verify exclusive device ownership before invoking this launcher.",
+    "Use server startup logs and server_info.json to attest the actual running configuration."
+  ]
+}

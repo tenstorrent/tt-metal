@@ -1,0 +1,10 @@
+{
+  "feedback_and_positions": true,
+  "changed_and_unchanged_page_table": true,
+  "reset_and_repeated_generation": true,
+  "counters": {
+    "model_replays": 3,
+    "sampling_replays": 3,
+    "token_readbacks": 3
+  }
+}

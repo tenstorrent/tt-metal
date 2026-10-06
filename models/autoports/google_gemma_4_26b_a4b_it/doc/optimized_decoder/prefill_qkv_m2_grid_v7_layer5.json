@@ -1,0 +1,1195 @@
+{
+  "cache_extent": 5120,
+  "cache_pages": 160,
+  "decoder": "optimized",
+  "fusion": "broadcast_pack_gelu_router_tail_norm_attention_common_tied_expmerge_residualnorm_shardedtail_kvnorm_expertbatch64_mixmatmul_mixsharded_qkvl1_projectsharded_sharedshard_directtail",
+  "runtime_prefill_audit": "clean",
+  "program_cache_miss_guard": true,
+  "prefill_cache_entries": 176,
+  "prefix_length": 0,
+  "layer_type": "full_attention",
+  "phase": "prefill",
+  "length": 4096,
+  "real_weights": true,
+  "pcc": 0.999122336916838,
+  "passed": true,
+  "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+  "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+  "input_source": {
+    "model": "google/gemma-4-26B-A4B-it",
+    "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+    "layer": 5,
+    "length": 4096,
+    "steps": 128,
+    "source": {
+      "kind": "recorded_real_text_hf_layer_inputs",
+      "text_files": [
+        {
+          "path": "/workspace/tt-metal/README.md",
+          "sha256": "7fdc0eca06ec1762c883745af52d022aabf154c09ac14035fdadc45f44a5648e"
+        },
+        {
+          "path": "/workspace/tt-metal/docs/realtime_profiler_architecture.md",
+          "sha256": "c82373c5d2b278773ab41af8d0aff21d9bdc0da9e82a5645873fd7d08fd3f857"
+        },
+        {
+          "path": "/workspace/tt-metal/docs/L1_ACCUMULATION_FP32_ANALYSIS.md",
+          "sha256": "00c228fd4e95c4d5d1b65c5b66e9d8ebabe6b9a7a379bec59894508b44ee9184"
+        }
+      ],
+      "corpus_path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_source.txt",
+      "corpus_sha256": "75ee9ef41b9c66e2f5619f02d1de3c56c58cf7759489892616794ccb799e5002",
+      "tokens_path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_tokens.json",
+      "tokens_sha256": "11e130cdfd2ff0ebdc0dd8ae8bfcc837a082a3192aa45b74d887089d28f46bf3",
+      "tokenizer": "GemmaTokenizer",
+      "tokenizer_revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+      "transformers_version": "5.12.1",
+      "hf_source_sha256": "90bb5dbd9f78208ef07851e099311603e9f185f8fac2ef588df823f3df96b776",
+      "config_sha256": "ed0c1eb3633de771906e9ba004a44cc5635bcc06ee2062077c3d2e88a50707d3",
+      "weight_index_sha256": "907826a6e46ff454272bd6db1fee629d5531a2303be22986d825a0871d7dc7a7",
+      "preceding_computation": "HF FP32 eager, FP32 checkpoint weights and KV, original scaled embedding and layer scalars",
+      "embedding_scale_fp32": 53.06599807739258,
+      "embedding_scale_bfloat16_control": 53.0,
+      "per_layer_embeddings": false,
+      "shared_kv_layers": 0,
+      "sampling": "Actual corpus token continuation; no generated or random activations"
+    },
+    "raw_dtype": "float32",
+    "transport_dtype": "bfloat16_roundtripped_float32",
+    "teacher_forced": true
+  },
+  "decode_rope_layout": "Layout.ROW_MAJOR",
+  "decode": {
+    "pcc": 0.9973476862987702,
+    "passed": true,
+    "traced": true,
+    "runtime_decode_audit": "clean",
+    "repeated_equal": true,
+    "steps": 128,
+    "min_pcc": 0.9951056876047375,
+    "positions": [
+      4096,
+      4223
+    ],
+    "checks": [
+      {
+        "position": 4096,
+        "pcc": 0.9973476862987702,
+        "passed": true
+      },
+      {
+        "position": 4096,
+        "pcc": 0.9973476862987702,
+        "passed": true
+      },
+      {
+        "position": 4097,
+        "pcc": 0.9981205860118946,
+        "passed": true
+      },
+      {
+        "position": 4098,
+        "pcc": 0.9976347243701986,
+        "passed": true
+      },
+      {
+        "position": 4099,
+        "pcc": 0.999022623405035,
+        "passed": true
+      },
+      {
+        "position": 4100,
+        "pcc": 0.9984108446442348,
+        "passed": true
+      },
+      {
+        "position": 4101,
+        "pcc": 0.999376589375886,
+        "passed": true
+      },
+      {
+        "position": 4102,
+        "pcc": 0.998989300449728,
+        "passed": true
+      },
+      {
+        "position": 4103,
+        "pcc": 0.9982313737194424,
+        "passed": true
+      },
+      {
+        "position": 4104,
+        "pcc": 0.9985318420420711,
+        "passed": true
+      },
+      {
+        "position": 4105,
+        "pcc": 0.9984488775209576,
+        "passed": true
+      },
+      {
+        "position": 4106,
+        "pcc": 0.9976532458863023,
+        "passed": true
+      },
+      {
+        "position": 4107,
+        "pcc": 0.9981661717050065,
+        "passed": true
+      },
+      {
+        "position": 4108,
+        "pcc": 0.9992674016940668,
+        "passed": true
+      },
+      {
+        "position": 4109,
+        "pcc": 0.9992095996843807,
+        "passed": true
+      },
+      {
+        "position": 4110,
+        "pcc": 0.9984727020590741,
+        "passed": true
+      },
+      {
+        "position": 4111,
+        "pcc": 0.9989142751242341,
+        "passed": true
+      },
+      {
+        "position": 4112,
+        "pcc": 0.9991808457114738,
+        "passed": true
+      },
+      {
+        "position": 4113,
+        "pcc": 0.9992738319808111,
+        "passed": true
+      },
+      {
+        "position": 4114,
+        "pcc": 0.9989263220034947,
+        "passed": true
+      },
+      {
+        "position": 4115,
+        "pcc": 0.9992558067307451,
+        "passed": true
+      },
+      {
+        "position": 4116,
+        "pcc": 0.9986646265704576,
+        "passed": true
+      },
+      {
+        "position": 4117,
+        "pcc": 0.9988162539323571,
+        "passed": true
+      },
+      {
+        "position": 4118,
+        "pcc": 0.9987513971134432,
+        "passed": true
+      },
+      {
+        "position": 4119,
+        "pcc": 0.9987492338332952,
+        "passed": true
+      },
+      {
+        "position": 4120,
+        "pcc": 0.9991709535478268,
+        "passed": true
+      },
+      {
+        "position": 4121,
+        "pcc": 0.9980255421428423,
+        "passed": true
+      },
+      {
+        "position": 4122,
+        "pcc": 0.9984926700883804,
+        "passed": true
+      },
+      {
+        "position": 4123,
+        "pcc": 0.9986592670302786,
+        "passed": true
+      },
+      {
+        "position": 4124,
+        "pcc": 0.9992976730444605,
+        "passed": true
+      },
+      {
+        "position": 4125,
+        "pcc": 0.9990666038435422,
+        "passed": true
+      },
+      {
+        "position": 4126,
+        "pcc": 0.9982575552905706,
+        "passed": true
+      },
+      {
+        "position": 4127,
+        "pcc": 0.9993415117613555,
+        "passed": true
+      },
+      {
+        "position": 4128,
+        "pcc": 0.9990797139727493,
+        "passed": true
+      },
+      {
+        "position": 4129,
+        "pcc": 0.9987628136180977,
+        "passed": true
+      },
+      {
+        "position": 4130,
+        "pcc": 0.9985581569293389,
+        "passed": true
+      },
+      {
+        "position": 4131,
+        "pcc": 0.9988599872315103,
+        "passed": true
+      },
+      {
+        "position": 4132,
+        "pcc": 0.9991060967191074,
+        "passed": true
+      },
+      {
+        "position": 4133,
+        "pcc": 0.9991818161459839,
+        "passed": true
+      },
+      {
+        "position": 4134,
+        "pcc": 0.9983096388923823,
+        "passed": true
+      },
+      {
+        "position": 4135,
+        "pcc": 0.9982312055770033,
+        "passed": true
+      },
+      {
+        "position": 4136,
+        "pcc": 0.9975985168726118,
+        "passed": true
+      },
+      {
+        "position": 4137,
+        "pcc": 0.9987490099939741,
+        "passed": true
+      },
+      {
+        "position": 4138,
+        "pcc": 0.999211352508292,
+        "passed": true
+      },
+      {
+        "position": 4139,
+        "pcc": 0.9986870633224066,
+        "passed": true
+      },
+      {
+        "position": 4140,
+        "pcc": 0.9992968311361476,
+        "passed": true
+      },
+      {
+        "position": 4141,
+        "pcc": 0.9989739539207397,
+        "passed": true
+      },
+      {
+        "position": 4142,
+        "pcc": 0.9988765240443671,
+        "passed": true
+      },
+      {
+        "position": 4143,
+        "pcc": 0.9990957846930493,
+        "passed": true
+      },
+      {
+        "position": 4144,
+        "pcc": 0.9988830945660829,
+        "passed": true
+      },
+      {
+        "position": 4145,
+        "pcc": 0.9989805176437055,
+        "passed": true
+      },
+      {
+        "position": 4146,
+        "pcc": 0.9983544302355277,
+        "passed": true
+      },
+      {
+        "position": 4147,
+        "pcc": 0.9994173377892472,
+        "passed": true
+      },
+      {
+        "position": 4148,
+        "pcc": 0.9986573812304542,
+        "passed": true
+      },
+      {
+        "position": 4149,
+        "pcc": 0.9995884828144855,
+        "passed": true
+      },
+      {
+        "position": 4150,
+        "pcc": 0.9995241302197218,
+        "passed": true
+      },
+      {
+        "position": 4151,
+        "pcc": 0.9988532216524767,
+        "passed": true
+      },
+      {
+        "position": 4152,
+        "pcc": 0.9987919829543932,
+        "passed": true
+      },
+      {
+        "position": 4153,
+        "pcc": 0.9996126726861521,
+        "passed": true
+      },
+      {
+        "position": 4154,
+        "pcc": 0.9991718226395911,
+        "passed": true
+      },
+      {
+        "position": 4155,
+        "pcc": 0.9984087528913724,
+        "passed": true
+      },
+      {
+        "position": 4156,
+        "pcc": 0.9988323516907387,
+        "passed": true
+      },
+      {
+        "position": 4157,
+        "pcc": 0.9992536678122809,
+        "passed": true
+      },
+      {
+        "position": 4158,
+        "pcc": 0.9985221605302105,
+        "passed": true
+      },
+      {
+        "position": 4159,
+        "pcc": 0.9988798196956864,
+        "passed": true
+      },
+      {
+        "position": 4160,
+        "pcc": 0.9976249493147966,
+        "passed": true
+      },
+      {
+        "position": 4161,
+        "pcc": 0.9988775024760275,
+        "passed": true
+      },
+      {
+        "position": 4162,
+        "pcc": 0.9988858849927619,
+        "passed": true
+      },
+      {
+        "position": 4163,
+        "pcc": 0.9993964561771354,
+        "passed": true
+      },
+      {
+        "position": 4164,
+        "pcc": 0.9987826343385968,
+        "passed": true
+      },
+      {
+        "position": 4165,
+        "pcc": 0.9980482827967353,
+        "passed": true
+      },
+      {
+        "position": 4166,
+        "pcc": 0.9989840430192685,
+        "passed": true
+      },
+      {
+        "position": 4167,
+        "pcc": 0.9991459248886346,
+        "passed": true
+      },
+      {
+        "position": 4168,
+        "pcc": 0.9981627079529491,
+        "passed": true
+      },
+      {
+        "position": 4169,
+        "pcc": 0.9994418940743028,
+        "passed": true
+      },
+      {
+        "position": 4170,
+        "pcc": 0.9989379933394522,
+        "passed": true
+      },
+      {
+        "position": 4171,
+        "pcc": 0.9989872340355758,
+        "passed": true
+      },
+      {
+        "position": 4172,
+        "pcc": 0.9991922875311287,
+        "passed": true
+      },
+      {
+        "position": 4173,
+        "pcc": 0.9992350157034727,
+        "passed": true
+      },
+      {
+        "position": 4174,
+        "pcc": 0.9987035533365995,
+        "passed": true
+      },
+      {
+        "position": 4175,
+        "pcc": 0.998490597869655,
+        "passed": true
+      },
+      {
+        "position": 4176,
+        "pcc": 0.999064044376659,
+        "passed": true
+      },
+      {
+        "position": 4177,
+        "pcc": 0.9991916374156484,
+        "passed": true
+      },
+      {
+        "position": 4178,
+        "pcc": 0.9988398937394317,
+        "passed": true
+      },
+      {
+        "position": 4179,
+        "pcc": 0.9990623417514531,
+        "passed": true
+      },
+      {
+        "position": 4180,
+        "pcc": 0.9988381260356284,
+        "passed": true
+      },
+      {
+        "position": 4181,
+        "pcc": 0.9991078121936303,
+        "passed": true
+      },
+      {
+        "position": 4182,
+        "pcc": 0.9986871724055576,
+        "passed": true
+      },
+      {
+        "position": 4183,
+        "pcc": 0.9987859776287485,
+        "passed": true
+      },
+      {
+        "position": 4184,
+        "pcc": 0.9993015613351985,
+        "passed": true
+      },
+      {
+        "position": 4185,
+        "pcc": 0.9987188931607849,
+        "passed": true
+      },
+      {
+        "position": 4186,
+        "pcc": 0.9989741747129274,
+        "passed": true
+      },
+      {
+        "position": 4187,
+        "pcc": 0.9994334192026906,
+        "passed": true
+      },
+      {
+        "position": 4188,
+        "pcc": 0.9990800297152593,
+        "passed": true
+      },
+      {
+        "position": 4189,
+        "pcc": 0.9985694058645916,
+        "passed": true
+      },
+      {
+        "position": 4190,
+        "pcc": 0.9994642498995654,
+        "passed": true
+      },
+      {
+        "position": 4191,
+        "pcc": 0.9989186283242615,
+        "passed": true
+      },
+      {
+        "position": 4192,
+        "pcc": 0.9990974564358903,
+        "passed": true
+      },
+      {
+        "position": 4193,
+        "pcc": 0.9990413993722426,
+        "passed": true
+      },
+      {
+        "position": 4194,
+        "pcc": 0.9991175661403234,
+        "passed": true
+      },
+      {
+        "position": 4195,
+        "pcc": 0.9989575768256218,
+        "passed": true
+      },
+      {
+        "position": 4196,
+        "pcc": 0.9959380967486814,
+        "passed": true
+      },
+      {
+        "position": 4197,
+        "pcc": 0.997491763862169,
+        "passed": true
+      },
+      {
+        "position": 4198,
+        "pcc": 0.9984446822646581,
+        "passed": true
+      },
+      {
+        "position": 4199,
+        "pcc": 0.9989072635645272,
+        "passed": true
+      },
+      {
+        "position": 4200,
+        "pcc": 0.9969180047171539,
+        "passed": true
+      },
+      {
+        "position": 4201,
+        "pcc": 0.9995928614398147,
+        "passed": true
+      },
+      {
+        "position": 4202,
+        "pcc": 0.9993983231085937,
+        "passed": true
+      },
+      {
+        "position": 4203,
+        "pcc": 0.9978648213898398,
+        "passed": true
+      },
+      {
+        "position": 4204,
+        "pcc": 0.9989812161885856,
+        "passed": true
+      },
+      {
+        "position": 4205,
+        "pcc": 0.9995544952273319,
+        "passed": true
+      },
+      {
+        "position": 4206,
+        "pcc": 0.9990863563609856,
+        "passed": true
+      },
+      {
+        "position": 4207,
+        "pcc": 0.9986727858264512,
+        "passed": true
+      },
+      {
+        "position": 4208,
+        "pcc": 0.998912574022246,
+        "passed": true
+      },
+      {
+        "position": 4209,
+        "pcc": 0.9994031651530343,
+        "passed": true
+      },
+      {
+        "position": 4210,
+        "pcc": 0.9984871749331625,
+        "passed": true
+      },
+      {
+        "position": 4211,
+        "pcc": 0.9951056876047375,
+        "passed": true
+      },
+      {
+        "position": 4212,
+        "pcc": 0.9990707855014846,
+        "passed": true
+      },
+      {
+        "position": 4213,
+        "pcc": 0.9988672987460614,
+        "passed": true
+      },
+      {
+        "position": 4214,
+        "pcc": 0.9992087638694925,
+        "passed": true
+      },
+      {
+        "position": 4215,
+        "pcc": 0.9958708109076274,
+        "passed": true
+      },
+      {
+        "position": 4216,
+        "pcc": 0.9985206952219796,
+        "passed": true
+      },
+      {
+        "position": 4217,
+        "pcc": 0.9987224868907155,
+        "passed": true
+      },
+      {
+        "position": 4218,
+        "pcc": 0.999026533585343,
+        "passed": true
+      },
+      {
+        "position": 4219,
+        "pcc": 0.9991710820899511,
+        "passed": true
+      },
+      {
+        "position": 4220,
+        "pcc": 0.9982909501744609,
+        "passed": true
+      },
+      {
+        "position": 4221,
+        "pcc": 0.9976224752833487,
+        "passed": true
+      },
+      {
+        "position": 4222,
+        "pcc": 0.998883613366662,
+        "passed": true
+      },
+      {
+        "position": 4223,
+        "pcc": 0.9984110613013277,
+        "passed": true
+      }
+    ]
+  },
+  "traced_decode_host_us": [
+    833.3313,
+    833.5443666666666,
+    832.6927666666667,
+    833.3687,
+    832.3731333333334
+  ],
+  "candidate": {
+    "defaults": true,
+    "overrides": {}
+  },
+  "runtime_sha256": "daa82a4a5197a007ccd5d29d912f082e695fd37a596578f25fba96a6694e625b",
+  "precision_policy": {
+    "attention_weights": {
+      "qkv": "DataType.BFLOAT8_B",
+      "output": "DataType.BFLOAT8_B"
+    },
+    "kv_cache": "bfloat8_b",
+    "native_sdpa": true,
+    "native_sdpa_grid": [
+      8,
+      8
+    ],
+    "native_sdpa_fidelity": "MathFidelity.LoFi",
+    "prefill_attention_fidelity": "MathFidelity.HiFi2",
+    "decode_expert_activation": "DataType.BFLOAT8_B",
+    "router_selection": "generalized_moe_gate",
+    "generalized_router_center": true,
+    "native_sdpa_dst_full_sync": true,
+    "residual": "float32",
+    "expert_gate": "DataType.BFLOAT4_B",
+    "decode_expert_down": "DataType.BFLOAT4_B",
+    "prefill_expert_gate": "DataType.BFLOAT4_B",
+    "prefill_expert_down": "DataType.BFLOAT4_B",
+    "decode_expert_fidelity": "MathFidelity.LoFi",
+    "decode_expert_fused_gelu": true,
+    "decode_expert_backend": "indexed_compact",
+    "decode_expert_slots": 8,
+    "prefill_expert_fidelity": "MathFidelity.LoFi",
+    "shared_decode_weights": "DataType.BFLOAT4_B",
+    "shared_decode_fidelity": "MathFidelity.LoFi",
+    "qkv_fidelity": "MathFidelity.LoFi",
+    "qkv_grid": [
+      11,
+      10
+    ],
+    "qkv_terms": null,
+    "qkv_lanes": 0,
+    "qkv_direct_dtype": "DataType.FLOAT32",
+    "qkv_direct_cleanup": true,
+    "router_lanes": 0,
+    "qkv_dram": false,
+    "qkv_dram_readers": null,
+    "qkv_dram_block": null,
+    "expert_grid": [
+      11,
+      4
+    ],
+    "expert_k_block": 22,
+    "prefill_batch_tokens": 32,
+    "expert_gate_k_block": 44,
+    "expert_down_k_block": 22,
+    "qkv_decode": {
+      "backend": "native_packed_linear",
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtypes": [
+        "DataType.BFLOAT8_B"
+      ],
+      "weight_shapes": [
+        [
+          1,
+          1,
+          2816,
+          9216
+        ]
+      ],
+      "weight_memory": [
+        "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+      ],
+      "output_dtype": "float32",
+      "output_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+      "math_fidelity": "MathFidelity.LoFi",
+      "fp32_dest_acc_en": true,
+      "packer_l1_acc": false,
+      "dram": false,
+      "programs": [
+        {
+          "grid": [
+            11,
+            10
+          ],
+          "in0_block_w": 11,
+          "out_subblock_h": 1,
+          "out_subblock_w": 3,
+          "per_core_M": 1,
+          "per_core_N": 3
+        }
+      ],
+      "setup_cleanup": {
+        "requested": true,
+        "shared_phase_weight": true,
+        "released_rows": true,
+        "released_lane_mask": true
+      },
+      "activation_decomposition": false,
+      "lane_mask": false,
+      "partial_row_reduce": false
+    },
+    "prefill_qkv_projection": {
+      "backend": "minimal_matmul",
+      "grid": [
+        11,
+        10
+      ],
+      "k_block": 16,
+      "m_block": "min(2, padded_M_tiles)",
+      "n_block": 8,
+      "subblock": [
+        1,
+        4
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "weight_shape": [
+        1,
+        1,
+        2816,
+        9216
+      ],
+      "input_dtype": "unchanged",
+      "output_dtype": "float32",
+      "fidelity": "MathFidelity.HiFi2",
+      "fp32_dest_acc_en": true,
+      "math_approx_mode": false,
+      "packer_l1_acc": false,
+      "programs": {
+        "1": "MinimalMatmulConfig(M_block_size=1,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-10)",
+        "2": "MinimalMatmulConfig(M_block_size=2,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-10)",
+        "3": "MinimalMatmulConfig(M_block_size=2,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-10)",
+        "4": "MinimalMatmulConfig(M_block_size=2,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-10)"
+      }
+    },
+    "router_projection": {
+      "backend": "native_linear",
+      "input_dtype": "float32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "output_dtype": "float32",
+      "output_memory": "L1 interleaved",
+      "grid": [
+        4,
+        1
+      ],
+      "k_block": 44,
+      "fidelity": "MathFidelity.LoFi",
+      "fp32_dest_acc_en": true,
+      "packer_l1_acc": false,
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=4-1,in0_block_w=44,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)"
+    },
+    "output_projection": {
+      "grid": [
+        11,
+        10
+      ],
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=16,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "fidelity": "MathFidelity.LoFi",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+      "weight_dtype": "DataType.BFLOAT8_B"
+    },
+    "prefill_output_projection": {
+      "enabled": true,
+      "grid": [
+        11,
+        8
+      ],
+      "k_block": 8,
+      "fidelity": "MathFidelity.LoFi",
+      "fp32_dest_acc_en": true,
+      "input_l1": false,
+      "output_dtype": "float32",
+      "output_memory": "DRAM interleaved",
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "programs": {
+        "1": "MinimalMatmulConfig(M_block_size=1,K_block_size=8,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)",
+        "2": "MinimalMatmulConfig(M_block_size=2,K_block_size=8,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)",
+        "3": "MinimalMatmulConfig(M_block_size=3,K_block_size=8,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)",
+        "4": "MinimalMatmulConfig(M_block_size=4,K_block_size=8,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)"
+      },
+      "backend": "minimal_matmul",
+      "m_block": "min(4, padded_M_tiles)",
+      "n_block": 8,
+      "subblock": [
+        1,
+        4
+      ],
+      "weight_shape": [
+        1,
+        1,
+        8192,
+        2816
+      ],
+      "input_dtype": "unchanged",
+      "math_approx_mode": false,
+      "packer_l1_acc": false
+    }
+  },
+  "qkv_input_l1": {
+    "candidate": "Both copy input to L1; only grid11x8 versus11x10 differs",
+    "metadata": {
+      "projection": {
+        "weight_dtype": "DataType.BFLOAT8_B",
+        "weight_shape": [
+          1,
+          1,
+          2816,
+          9216
+        ],
+        "weight_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "programs": [
+          "MinimalMatmulConfig(M_block_size=1,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)",
+          "MinimalMatmulConfig(M_block_size=2,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)",
+          "MinimalMatmulConfig(M_block_size=3,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)",
+          "MinimalMatmulConfig(M_block_size=4,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)"
+        ],
+        "compute": {
+          "math_fidelity": "MathFidelity.HiFi2",
+          "math_approx_mode": "False",
+          "fp32_dest_acc_en": "True",
+          "packer_l1_acc": "False",
+          "dst_full_sync_en": "False",
+          "throttle_level": "ThrottleLevel.NO_THROTTLE"
+        },
+        "output_dtype": "float32",
+        "input_dtype": "unchanged (selected FP32 prefill activation)"
+      },
+      "decode_policy": {
+        "backend": "native_packed_linear",
+        "input_dtype": "DataType.FLOAT32",
+        "weight_dtypes": [
+          "DataType.BFLOAT8_B"
+        ],
+        "weight_shapes": [
+          [
+            1,
+            1,
+            2816,
+            9216
+          ]
+        ],
+        "weight_memory": [
+          "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+        ],
+        "output_dtype": "float32",
+        "output_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "math_fidelity": "MathFidelity.LoFi",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false,
+        "dram": false,
+        "programs": [
+          {
+            "grid": [
+              11,
+              10
+            ],
+            "in0_block_w": 11,
+            "out_subblock_h": 1,
+            "out_subblock_w": 3,
+            "per_core_M": 1,
+            "per_core_N": 3
+          }
+        ],
+        "setup_cleanup": {
+          "requested": true,
+          "shared_phase_weight": true,
+          "released_rows": true,
+          "released_lane_mask": true
+        },
+        "activation_decomposition": false,
+        "lane_mask": false,
+        "partial_row_reduce": false
+      }
+    },
+    "observed": [
+      {
+        "program_variants": {
+          "baseline": [
+            "MinimalMatmulConfig(M_block_size=1,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)",
+            "MinimalMatmulConfig(M_block_size=2,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)",
+            "MinimalMatmulConfig(M_block_size=2,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)",
+            "MinimalMatmulConfig(M_block_size=2,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)"
+          ],
+          "candidate": [
+            "MinimalMatmulConfig(M_block_size=1,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-10)",
+            "MinimalMatmulConfig(M_block_size=2,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-10)",
+            "MinimalMatmulConfig(M_block_size=2,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-10)",
+            "MinimalMatmulConfig(M_block_size=2,K_block_size=16,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-10)"
+          ]
+        },
+        "baseline": {
+          "input_shape": [
+            1,
+            1,
+            1024,
+            2816
+          ],
+          "input_dtype": "DataType.FLOAT32",
+          "input_before_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+          "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+          "requested_output_memory": "None",
+          "grid": [
+            11,
+            8
+          ]
+        },
+        "candidate": {
+          "input_shape": [
+            1,
+            1,
+            1024,
+            2816
+          ],
+          "input_dtype": "DataType.FLOAT32",
+          "input_before_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+          "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+          "requested_output_memory": "None",
+          "grid": [
+            11,
+            10
+          ]
+        }
+      }
+    ],
+    "source_hashes": {
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py": "daa82a4a5197a007ccd5d29d912f082e695fd37a596578f25fba96a6694e625b",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/probe_optimized_prefill_qkv_l1.py": "7040e24332c1cf651d353c66a1f3239e146ceee0b512e8c6afc22074c57ce2c7",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/probe_optimized_prefill_pairs.py": "13f71dfb87a9cced61bd974effdb666dee972bade6591954fcb86a8c76a09376",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/probe_optimized_minimal_advice.py": "42e64584c36ed0cde95fada7d911abbb7db8af03ac6eada214d349ecafe14b98"
+    }
+  },
+  "paired_prefill": {
+    "pairs_requested": 8,
+    "samples": [
+      {
+        "pair": 0,
+        "candidate": false,
+        "whole_prefill_host_us": 185866.808
+      },
+      {
+        "pair": 0,
+        "candidate": true,
+        "whole_prefill_host_us": 185819.037
+      },
+      {
+        "pair": 1,
+        "candidate": true,
+        "whole_prefill_host_us": 185789.871
+      },
+      {
+        "pair": 1,
+        "candidate": false,
+        "whole_prefill_host_us": 185812.875
+      },
+      {
+        "pair": 2,
+        "candidate": false,
+        "whole_prefill_host_us": 185700.0
+      },
+      {
+        "pair": 2,
+        "candidate": true,
+        "whole_prefill_host_us": 186030.389
+      },
+      {
+        "pair": 3,
+        "candidate": true,
+        "whole_prefill_host_us": 185699.54
+      },
+      {
+        "pair": 3,
+        "candidate": false,
+        "whole_prefill_host_us": 185942.211
+      },
+      {
+        "pair": 4,
+        "candidate": false,
+        "whole_prefill_host_us": 185784.772
+      },
+      {
+        "pair": 4,
+        "candidate": true,
+        "whole_prefill_host_us": 185896.665
+      },
+      {
+        "pair": 5,
+        "candidate": true,
+        "whole_prefill_host_us": 185813.236
+      },
+      {
+        "pair": 5,
+        "candidate": false,
+        "whole_prefill_host_us": 185784.561
+      },
+      {
+        "pair": 6,
+        "candidate": false,
+        "whole_prefill_host_us": 185755.025
+      },
+      {
+        "pair": 6,
+        "candidate": true,
+        "whole_prefill_host_us": 185883.569
+      },
+      {
+        "pair": 7,
+        "candidate": true,
+        "whole_prefill_host_us": 185751.107
+      },
+      {
+        "pair": 7,
+        "candidate": false,
+        "whole_prefill_host_us": 185777.929
+      }
+    ],
+    "warmups": [
+      {
+        "round": 0,
+        "candidate": false,
+        "entries_before": 29,
+        "entries_after": 175
+      },
+      {
+        "round": 0,
+        "candidate": true,
+        "entries_before": 175,
+        "entries_after": 176
+      },
+      {
+        "round": 1,
+        "candidate": false,
+        "entries_before": 176,
+        "entries_after": 176
+      },
+      {
+        "round": 1,
+        "candidate": true,
+        "entries_before": 176,
+        "entries_after": 176
+      }
+    ],
+    "cache_entries_after_warmup": 176,
+    "cache_entries_after_samples": 176,
+    "baseline_median_us": 185784.6665,
+    "candidate_median_us": 185816.13650000002,
+    "paired_candidate_minus_baseline_us": [
+      -47.77099999997881,
+      -23.003999999986263,
+      330.3889999999956,
+      -242.6710000000021,
+      111.89300000001094,
+      28.675000000017462,
+      128.5439999999944,
+      -26.82200000001467
+    ],
+    "median_paired_delta_us": 2.8355000000155997,
+    "candidate_faster_pairs": 4,
+    "program_cache_misses_forbidden": true,
+    "scope": "Synchronous whole-prefill host calls; setup, selection, warmup, initial sync and output deallocation excluded; final sync included. Final candidate output/cache feeds the unchanged HF/decode gate. Baseline accuracy remains separately measured by the matched screen control."
+  },
+  "qkv_grid_control": {
+    "probe_sha256": "d77feeab80d1a9e253d68183726b34319a60291df12159b97336296ec02c0c6d",
+    "baseline": "Mblock2/Kblock16/Nblock8/subblock1x4/grid11x8; copied FP32 inputL1",
+    "candidate": "Mblock2/Kblock16/Nblock8/subblock1x4/grid11x10; copied FP32 inputL1",
+    "unchanged": "HiFi2, FP32 destination, BFP8 weight, DRAM output, decode projection and input-copy boundary",
+    "advice_predicate": "Increase grid if FLOPs>=65% and DRAM<65%; projected threshold336.082us at88 cores"
+  }
+}

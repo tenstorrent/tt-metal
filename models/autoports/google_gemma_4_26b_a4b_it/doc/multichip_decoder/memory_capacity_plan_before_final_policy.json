@@ -1,0 +1,117 @@
+{
+  "basis": "Source-audited payload/peak bounds plus single-layer max-context runs with anonymous full-stack resident reservations; no full-model allocator measurement",
+  "target_mesh": [
+    1,
+    4
+  ],
+  "layers": {
+    "sliding_attention": 25,
+    "full_attention": 5
+  },
+  "per_device": {
+    "sliding_attention": {
+      "expert_weights": 185991168,
+      "attention_weights": 9191424,
+      "shared_bf16_weights": 9191424,
+      "router_norm_allowance": 8388608,
+      "kv_cache_at_262144": 285212672,
+      "weight_bound": 212762624
+    },
+    "full_attention": {
+      "expert_weights": 116785152,
+      "attention_weights": 15319040,
+      "shared_bf16_weights": 9191424,
+      "router_norm_allowance": 8388608,
+      "kv_cache_at_262144": 285212672,
+      "weight_bound": 149684224
+    }
+  },
+  "full_stack_per_device": {
+    "decoder_weight_bound_bytes": 6067486720,
+    "kv_cache_bytes": 8556380160,
+    "replicated_tied_embedding_lm_head_bytes": 1476395008,
+    "replicated_prefill_and_decode_rope_bytes": 1610612736,
+    "reserved_trace_activation_allocator_bytes": 2147483648,
+    "total_bound_bytes": 24287543296,
+    "resident_and_reserve_bound_bytes": 19858358272,
+    "long_prefill_live_buffers_bytes": {
+      "input_bf16": 1476395008,
+      "retained_chunk_outputs_bf16": 1476395008,
+      "concatenated_output_bf16": 1476395008,
+      "total": 4429185024
+    },
+    "conservative_peak_bound_bytes": 24287543296,
+    "capacity_comparison_decimal_32gb_bytes": 32000000000,
+    "headroom_to_decimal_32gb_bytes": 7712456704,
+    "policy": "TP-only base for reservation arithmetic; see current_default_policy for actual default"
+  },
+  "assumptions": [
+    "32x32 BFP8/BFP4 tiles occupy 1088/576 bytes including exponent storage; each is already 64-byte aligned.",
+    "All 30 layers and 262144 absolute paged tokens retained; no sliding cache truncation. B1 maximum context does not imply 32 simultaneous maximum contexts.",
+    "8 MiB per layer covers retained norms, replicated router, two position tables and small metadata tensors. Expert BF16 originals and packed BF16 setup copies are released after each constructor returns; source proof is in memory_audit.md.",
+    "Embedding/LM-head allowance is one shared tied BF16 tensor replicated per device, not two separate copies.",
+    "RoPE allowance assumes prefill and decode tables shared across layers of each attention kind: two kinds times two layouts times cos/sin. Per-layer copies would exceed capacity.",
+    "Long fresh prefill retains tile-aligned chunks and merges32-way groups, releasing old groups before final nonaligned slice. Full-length input, retained outputs and final output total3*262144*2816*2=4429185024 bytes; independent2GiB reserve remains.",
+    "2 GiB reserve remains for trace regions, chunk-local workspaces, allocator padding, semaphores and unmodelled runtime overhead; no measured allocator peak is claimed.",
+    "Normal full-stack scheduling releases previous-layer full outputs and setup containers. Retaining diagnostic outputs or caller weight copies changes the bound.",
+    "Both layer kinds run262143+1 with anonymous full-stack resident reservations. This tests payload capacity and layer workspaces; real full-model allocation order/fragmentation remains a later-stage responsibility. No supported-context reduction."
+  ],
+  "status": "hybrid_shared_candidate_reserved_capacity_validated",
+  "setup_transients_per_device": {
+    "tp_original_experts_bf16_bytes": 415236096,
+    "tp_packed_gate_up_bf16_bytes": 276824064,
+    "tp_total_extra_over_final_expert_payload_bytes": 692060160,
+    "ep_original_experts_bf16_bytes": 380633088,
+    "ep_packed_gate_up_bf16_bytes": 253755392,
+    "ep_total_extra_over_final_expert_payload_bytes": 634388480,
+    "dual_constructor_temporary_bf16_upper_bound_bytes": 1326448640,
+    "lifetime": "One layer constructor; PackedExperts and active OptimizedExperts retain no original source weight container. Other small setup/allocator overhead remains in the separate reserve."
+  },
+  "hypothetical_dual_expert_layout": {
+    "selected": true,
+    "implemented": true,
+    "description": "Keep TP4 decode experts and separate EP4 prefill experts, with shared attention, router, norms and shared MLP.",
+    "extra_ep_experts_per_sliding_layer_bytes": 170491904,
+    "extra_ep_experts_per_full_layer_bytes": 107053056,
+    "extra_full_stack_ep_expert_bytes": 4797562880,
+    "resident_and_reserve_bound_bytes": 24655921152,
+    "long_prefill_live_buffers_bytes": 4429185024,
+    "conservative_peak_bound_bytes": 29085106176,
+    "headroom_to_decimal_32gb_bytes": 2914893824,
+    "setup_upper_bound_including_reserve_bytes": 25982369792,
+    "status": "reserved_capacity_validated_both_layer_kinds"
+  },
+  "source_audit": "memory_audit.md",
+  "optimized_shared_decode": {
+    "selected": true,
+    "implemented": true,
+    "extra_sliding_layer_bytes": 4882944,
+    "extra_full_layer_bytes": 2585088,
+    "extra_full_stack_bytes": 134999040,
+    "basis": "3*88*17 BFP tiles; retained BF16 prefill matrices plus BFP8 sliding/BFP4 full decode matrices"
+  },
+  "hybrid_shared_candidate": {
+    "selected": true,
+    "decoder_weight_bound_bytes": 11000048640,
+    "resident_and_reserve_bound_bytes": 24790920192,
+    "conservative_peak_bound_bytes": 29220105216,
+    "reservation_rounded_peak_bound_bytes": {
+      "sliding_attention": 29261726208,
+      "full_attention": 29267128832
+    },
+    "evidence": [
+      "sliding_max_capacity.json",
+      "full_max_capacity_verified.json"
+    ],
+    "scope": "Both real layer kinds262143-prefill+1decode with anonymous other-resident DRAM; no full-model compute/fragmentation measurement"
+  },
+  "current_default_policy": {
+    "runtime_sha256": "070613ddc32b5cc8a22fd92a64cb541de9a9f27152852f1caad0843d1d06903d",
+    "description": "EP4 prefill plus indexed TP4 decode experts; retained BF16 shared prefill and BFP shared decode weights; final validation pending",
+    "decoder_weight_bound_bytes": 11000048640,
+    "resident_and_reserve_bound_bytes": 24790920192,
+    "conservative_peak_bound_bytes": 29220105216,
+    "headroom_to_decimal_32gb_bytes": 2779894784,
+    "validation": "Earlier hybrid/shared max-context reservation tests pass; matching current-runtime tests pending. Not a full-model allocator measurement."
+  }
+}

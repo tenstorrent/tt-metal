@@ -1,0 +1,525 @@
+{
+  "hf_model": "google/gemma-4-26B-A4B-it",
+  "hf_revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "hf_advertised_context": 262144,
+  "supported_context": 262144,
+  "largest_tested_prefill_context": 262144,
+  "largest_tested_decode_context": 262144,
+  "capability_reduction": false,
+  "status": "datatype_sweep_validated_clean_pass",
+  "layer_types": [
+    "full_attention",
+    "sliding_attention"
+  ],
+  "per_layer_type": {
+    "sliding_attention": {
+      "passing_prefill_tokens": 262144,
+      "passing_traced_decode_context": 262144,
+      "evidence": [
+        "functional_decoder/long_sliding_262144_final.json",
+        "functional_decoder/long_sliding_262143_final.json",
+        "fused_decoder/verified_long_sliding_262144.json",
+        "fused_decoder/verified_long_sliding_262143.json",
+        "optimized_decoder/validated_v5_long_262144_layer0.json",
+        "optimized_decoder/validated_v5_long_262143_layer0.json"
+      ],
+      "status": "V5 maximum/nonaligned runs pass all291 sampled rows. Current v8 keeps sliding M4, HiFi4, original producer placement and arithmetic/configuration fields; source_delta_v6/v7/v8 preserves the explicit inherited mapping. Current headline/Watcher/stress and inherited allocation-tracked lifecycle pass; independent final review pending.",
+      "non_aligned_prefill_tokens": 262143,
+      "non_aligned_traced_decode_context": 262143,
+      "optimized_evidence_runtime_sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b"
+    },
+    "full_attention": {
+      "passing_prefill_tokens": 262144,
+      "passing_traced_decode_context": 262144,
+      "evidence": [
+        "functional_decoder/long_full_262144_fixed.json",
+        "functional_decoder/long_full_262143_fixed.json",
+        "fused_decoder/verified_long_full_262144.json",
+        "fused_decoder/verified_long_full_262143.json",
+        "optimized_decoder/validated_v8_long_262144_layer5.json",
+        "optimized_decoder/validated_v8_long_262143_layer5.json"
+      ],
+      "status": "Current v8 M2/producer-L1 full minimal-QKV maximum/nonaligned runs pass all291 sampled rows plus final tails/decode; minimum sampled-row PCC0.996029643684647. Independent final review pending.",
+      "non_aligned_prefill_tokens": 262143,
+      "non_aligned_traced_decode_context": 262143,
+      "optimized_evidence_runtime_sha256": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898"
+    }
+  },
+  "optimized_decoder": {
+    "status": "validated_independent_review_pending",
+    "supported_context": 262144,
+    "capability_reduction": false,
+    "logical_length_alignment_required": false,
+    "kv_dtype": "bfloat8_b",
+    "page_size_tokens": 32,
+    "prefill_chunk_tokens": 1024,
+    "expert_batch_tokens": 32,
+    "kv_cache_bytes_per_request_at_max_context": {
+      "sliding_attention": 1140850688,
+      "full_attention": 570425344
+    },
+    "changed_expert_weight_storage_bytes": {
+      "fused_bf16": 1522532352,
+      "selected_sliding_resident": 681967616,
+      "selected_full_resident": 428212224
+    },
+    "allocation_notes": [
+      "BFP8/BFP4 32x32 tiles occupy1088/576 bytes including exponent storage. Sliding shares BFP8 gate/up and BFP4 down across phases; full shares BFP4 expert weights. Sliding prefill gate BFP8 repairs recorded maximum-context query regressions and removes the extra BFP4 gate copy.",
+      "Packed direct QKV shares its BFP8 prefill/decode weight and drops unused FP32 rows and lane mask. QKV payload:24,510,464 bytes sliding;27,574,272 full.",
+      "Shared MLP retains BF16 prefill weights plus padded DRAM-sharded decode weights. Total shared payload:56,365,056 bytes sliding;46,632,960 full. See optimized_decoder/final_memory_accounting.md for role breakdown and exclusions.",
+      "The cache contract retains absolute32-token paged storage, including sliding attention. Nonaligned262143 rounds to the same allocation as262144. No context capability is reduced.",
+      "B1 maximum context and B32 short-context correctness are distinct validations;32 simultaneous maximum contexts require aggregate capacity beyond the tested allocation. Tensor payload estimates exclude allocator alignment,trace buffers,norm/router/rope state and transient workspaces. Maximum-context execution validates total feasibility.",
+      "Selected minimal prefill QKV K8 sliding/K16 full and minimal full output K8 reuse existing weights and add no persistent tensor payload. Integrated v5 maximum-context runs retain all291 sampled-row gates; source-derived transient CB accounting is in optimized_decoder/final_memory_accounting.md.",
+      "Final sliding chunk retains no temporary K/V tail. Decode uses the paged cache. Full attention selects a setup-built Q64/K128 boundary program when a K256 read would exceed 128-rounded logical page-table capacity. The advertised context and persistent allocation sizes are unchanged.",
+      "V7 changes only full minimal-prefill QKV math fidelity (HiFi4 to HiFi2), preserving FP32 accumulation/output, BFP8 weights and all cache/weight/layout payloads. Source-derived resident-byte delta is zero.",
+      "V8 selects full minimal-QKV M2/K16/N8 and directly emits the existing final FP32 weighted input-normalization result into L1. Resident checkpoint/cache/RoPE delta remains zero; a1024-row input payload is11,534,336bytes and per-compute-core QKV CB payload decreases1,196,032\u2192737,280bytes. These are transient source-derived sizes, not allocator peaks. Sliding remains M4 with its original placement.",
+      "Native v8 full minimal-QKV output also inheritsL1 from its input when output_mem_config isNone. Packed[1024,9216]FP32 payload37,748,736bytes and tiedKV slice[1024,1024]4,194,304bytes areL1; concat[1024,10240]41,943,040bytes returnsDRAM. These individual transient payloads are not summed live/peak estimates. Current max-context and native profiles verify the selected capacity and placement."
+    ],
+    "evidence": [
+      "optimized_decoder/validated_v5_long_262144_layer0.json",
+      "optimized_decoder/validated_v5_long_262143_layer0.json",
+      "optimized_decoder/validated_v8_long_262144_layer5.json",
+      "optimized_decoder/validated_v8_long_262143_layer5.json"
+    ],
+    "runtime_sha256": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898",
+    "full_attention_paged_prefill_program": {
+      "q_chunk_size": 64,
+      "k_chunk_size": 256,
+      "fidelity": "HiFi2",
+      "first_bf16_chunk": "unchanged legal128/128",
+      "tight_capacity_boundary": {
+        "q_chunk_size": 64,
+        "k_chunk_size": 128,
+        "selection": "Use only when the main program rounded read end exceeds the logical page-table capacity."
+      }
+    },
+    "validation_summary": "optimized_decoder/validated_v8_validation_summary.json",
+    "policy": "optimized_decoder/final_policy.json",
+    "memory_accounting": "optimized_decoder/final_memory_accounting.md",
+    "decode_expert_slots": 8,
+    "decode_rope_setup_layout": "ROW_MAJOR; TILE remains accepted",
+    "evidence_status": "Current v8 twelve primary plus five boundary commands pass, including full262144/262143 all291 sampled rows and allocation-tracked9-request reuse at379 stable program entries. Unchanged sliding broad contexts retain v5/v6 hashes through v7/v8 source proof. Current native profiles and CPU accounting pass; independent review remains separate.",
+    "prefill_output_projection": {
+      "grid": [
+        11,
+        8
+      ],
+      "k_block": {
+        "sliding_attention": 16,
+        "full_attention": 8
+      },
+      "fidelity": "LoFi",
+      "input_memory": "DRAM",
+      "output_dtype": "float32",
+      "output_memory": "DRAM",
+      "backend": {
+        "sliding_attention": "2D multicast linear",
+        "full_attention": "minimal_matmul"
+      }
+    },
+    "sharded_norm_sites": "all for both layer kinds",
+    "prefill_expert_gate_dtype": {
+      "sliding_attention": "bfloat8_b",
+      "full_attention": "bfloat4_b"
+    },
+    "decode_fused_gelu": true,
+    "prefill_qkv_projection": {
+      "backend": "minimal_matmul",
+      "grid": [
+        11,
+        8
+      ],
+      "k_block": {
+        "sliding_attention": 8,
+        "full_attention": 16
+      },
+      "fidelity": {
+        "sliding_attention": "HiFi4",
+        "full_attention": "HiFi2"
+      },
+      "weight_dtype": "bfloat8_b",
+      "output_dtype": "float32",
+      "m_block": {
+        "sliding_attention": 4,
+        "full_attention": 2
+      },
+      "input_memory": {
+        "sliding_attention": "unchanged DRAM path",
+        "full_attention": "L1 from final weighted input normalization"
+      },
+      "resident_payload_delta_bytes": 0,
+      "output_memory": {
+        "sliding_attention": "DRAM",
+        "full_attention": "L1 inherited from input"
+      },
+      "full_tied_kv_boundary": {
+        "slice_memory": "L1",
+        "concat_output_memory": "DRAM"
+      }
+    },
+    "source_delta": "optimized_decoder/source_delta_v8.json",
+    "paged_capacity_rounding_tokens": 128,
+    "source_delta_chain": [
+      "optimized_decoder/source_delta_v6.json",
+      "optimized_decoder/source_delta_v7.json",
+      "optimized_decoder/source_delta_v8.json"
+    ],
+    "native_profile_audit": "optimized_decoder/final_roofline_audit.json",
+    "native_profile_runtime_sha256": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898"
+  },
+  "multichip_decoder": {
+    "status": "validated_clean_pass",
+    "target_mesh": [
+      1,
+      4
+    ],
+    "hardware": "4 Blackhole P300c ASICs",
+    "tp": 4,
+    "supported_context_target": 262144,
+    "capability_reduction": false,
+    "logical_length_alignment_required": false,
+    "kv_dtype": "bfloat8_b",
+    "local_kv_heads": {
+      "sliding_attention": 2,
+      "full_attention": 1
+    },
+    "kv_cache_bytes_per_device_per_layer_at_max_context": {
+      "sliding_attention": 285212672,
+      "full_attention": 285212672
+    },
+    "full_stack_kv_cache_bytes_per_device_at_max_context": 8556380160,
+    "weight_bytes_per_device": 9231600640,
+    "reserved_trace_activation_bytes": 2147483648,
+    "largest_tested_multichip_context": 262144,
+    "evidence": [
+      "multichip_decoder/mesh_plan.md",
+      "multichip_decoder/memory_capacity_plan.json",
+      "multichip_decoder/memory_audit.md",
+      "multichip_decoder/sliding_ep_v2.json",
+      "multichip_decoder/full_ep_v2.json",
+      "multichip_decoder/sliding_max_capacity.json",
+      "multichip_decoder/full_group_tail.json",
+      "multichip_decoder/capacity_audit.md",
+      "multichip_decoder/full_max_capacity_verified.json",
+      "multichip_decoder/AUTOFIX_max_context.md",
+      "multichip_decoder/sliding_long_prefix.json",
+      "multichip_decoder/full_long_prefix.json",
+      "multichip_decoder/sliding_max_aligned.json",
+      "multichip_decoder/memory_capacity_plan_before_final_policy.json",
+      "multichip_decoder/sliding_final_max_262143.json",
+      "multichip_decoder/sliding_final_max_262144.json",
+      "multichip_decoder/full_final_max_262143.json",
+      "multichip_decoder/full_final_max_262144.json"
+    ],
+    "missing_reasons": [
+      "Real full-model allocation order/fragmentation is deferred to the full-model stage; these tests execute each real layer with anonymous other-resident reservations.",
+      "RoPE tables must be shared by kind/layout and tied embedding/LM head must share storage; B32 short contexts do not imply32 maximum-length requests."
+    ],
+    "memory_capacity_status": "final_policy_reserved_capacity_validated_both_layer_kinds",
+    "long_prefill_live_buffers_bytes_per_device": 4429185024,
+    "long_prefill_live_buffer_components_bytes_per_device": {
+      "input_bf16": 1476395008,
+      "retained_chunk_outputs_bf16": 1476395008,
+      "concatenated_output_bf16": 1476395008,
+      "total": 4429185024
+    },
+    "resident_and_reserve_bound_bytes_per_device": 23022472192,
+    "conservative_peak_bound_bytes_per_device": 27451657216,
+    "memory_accounting": "multichip_decoder/memory_audit.md",
+    "hypothetical_dual_expert_layout": {
+      "selected": true,
+      "implemented": true,
+      "additional_expert_weight_bytes_per_device": 4797562880,
+      "conservative_peak_bound_bytes_per_device": 27354955776,
+      "status": "selected current expert layouts; subtotal excludes shared decode weights; final maximum-context tests pass both layer kinds"
+    },
+    "per_layer_type": {
+      "sliding_attention": {
+        "passing_prefill_tokens": 262144,
+        "passing_traced_decode_context": 262144,
+        "nonaligned_prefill_tokens": 262143,
+        "reserved_other_resident_bytes_per_device": 19797114880,
+        "evidence": [
+          "multichip_decoder/sliding_final_max_262143.json",
+          "multichip_decoder/sliding_final_max_262144.json"
+        ]
+      },
+      "full_attention": {
+        "passing_prefill_tokens": 262144,
+        "passing_traced_decode_context": 262144,
+        "nonaligned_prefill_tokens": 262143,
+        "reserved_other_resident_bytes_per_device": 19260243968,
+        "evidence": [
+          "multichip_decoder/full_final_max_262143.json",
+          "multichip_decoder/full_final_max_262144.json"
+        ]
+      }
+    },
+    "candidate_weight_bytes_per_device": 11000048640,
+    "candidate_conservative_peak_bound_bytes_per_device": 29220105216,
+    "default_memory_policy": "Selected hybrid EP4 prefill plus indexed TP4 decode; raw host BFP4 sliding TP gate/up, BFP4 TP down, retained BF16 shared prefill, BFP4 shared decode gate/up with BFP8 sliding/BFP4 full down. Matching final maximum-context tests pass both layer kinds.",
+    "current_runtime_sha256": "a12a913cf752b765338736dc71f71151ab972af1529a0098455755dd4f499255",
+    "headroom_to_decimal_32gb_bytes_per_device": 4548342784,
+    "setup_temporary_upper_bound_bytes_per_device": 1404305408,
+    "setup_upper_bound_including_reserve_bytes_per_device": 24426777600,
+    "selected_hybrid_tp_decode_base_memory_bound": {
+      "weight_bytes_per_device": 4337336320,
+      "resident_and_reserve_bound_bytes_per_device": 18128207872,
+      "conservative_peak_bound_bytes_per_device": 22557392896,
+      "scope": "Selected hybrid policy's TP-decode base for additive accounting; not actual TP-only prefill memory. Excludes EP-prefill expert weights and additional shared decode weights."
+    },
+    "candidate_memory_evidence_status": "Historical pre-final-policy candidate. Candidate weight/peak fields and per-layer reservations are preserved as measured/planned at that time; see memory_capacity_plan_before_final_policy.json.",
+    "supported_context": 262144,
+    "review": "multichip_decoder/stage_review_final.md"
+  },
+  "optimized_multichip_decoder": {
+    "status": "clean-pass",
+    "target_mesh": [
+      1,
+      4
+    ],
+    "supported_context": 262144,
+    "capability_reduction": false,
+    "logical_length_alignment_required": false,
+    "kv_dtype": "bfloat8_b",
+    "local_kv_heads": {
+      "sliding_attention": 2,
+      "full_attention": 1
+    },
+    "full_stack_kv_cache_bytes_per_device_at_max_context": 8556380160,
+    "extra_dram_weight_bytes_per_device": 1754480640,
+    "persistent_ccl_memory": "L1_INTERLEAVED",
+    "persistent_ccl_payload_bytes_per_device": 2690688,
+    "conservative_dram_peak_bound_bytes_per_device": 29206137856,
+    "headroom_to_decimal_32gb_bytes_per_device": 2793862144,
+    "residual_contract": "optimized_multichip_decoder/residual_contract.md",
+    "memory_accounting": "optimized_multichip_decoder/final_memory_plan.json",
+    "precision": "Sliding QKV BFP8, expert gate/up BFP8, attention CCL BF16; full QKV decode BFP4 with retained BFP8 prefill, expert gate/up BFP4, attention CCL BFP8. WO BFP8, expert down BFP4 and KV BFP8 for both kinds.",
+    "capacity_probe": "Reserve other-resident DRAM plus new weight copies, prime the actual shared CCL payload pool, and allocate30 private full11x10-grid CCL semaphore sets before prefill.",
+    "evidence": [
+      "optimized_multichip_decoder/final_max_262143_sliding.json",
+      "optimized_multichip_decoder/final_max_262144_sliding.json",
+      "optimized_multichip_decoder/final_max_262143_full.json",
+      "optimized_multichip_decoder/final_max_262144_full.json"
+    ],
+    "notes": [
+      "Batch32 short-context correctness is distinct from one maximum-length request.",
+      "No full-model execution or serving implementation is part of this stage.",
+      "Both layer kinds pass aligned262144 prefill and nonaligned262143 prefill plus final-position decode with revised resident reservations and actual pooled buffers/semaphore sets."
+    ],
+    "persistent_ccl_ownership": "One caller-owned role-separated CollectiveBufferPool per serial mesh/command queue; private full-worker-grid semaphores for each layer.",
+    "per_layer_type": {
+      "sliding_attention": {
+        "passing_prefill_tokens": 262144,
+        "passing_traced_decode_context": 262144,
+        "nonaligned_prefill_tokens": 262143,
+        "reserved_other_resident_bytes_per_device": 21474836480,
+        "runtime_sha256": "2f240a9f5434efa370fed4cc6a3d6d72ec2dabc2bfae840ba9fbbc820919c797",
+        "minimum_tested_output_pcc": 0.9997701165855823
+      },
+      "full_attention": {
+        "passing_prefill_tokens": 262144,
+        "passing_traced_decode_context": 262144,
+        "nonaligned_prefill_tokens": 262143,
+        "reserved_other_resident_bytes_per_device": 21072183296,
+        "runtime_sha256": "2f240a9f5434efa370fed4cc6a3d6d72ec2dabc2bfae840ba9fbbc820919c797",
+        "minimum_tested_output_pcc": 0.9997186833575766
+      }
+    },
+    "source_equivalence": [
+      "optimized_multichip_decoder/fused_guard_source_equivalence.json",
+      "optimized_multichip_decoder/native_endpoint_source_equivalence.json"
+    ],
+    "current_runtime_sha256": "6938c6d512d19cf25c3c9d7fb5cee29f2b3f46d174426b715180527b16e02cd3",
+    "review": "optimized_multichip_decoder/stage_review.md",
+    "implementation_commit": "dc254cbde8997f0ec8f8f42bccb5aaf1f0e8d69e"
+  },
+  "full_model": {
+    "status": "full_stack_capacity_validated",
+    "supported_context_target": 262144,
+    "capability_reduction": false,
+    "mesh": [
+      1,
+      4
+    ],
+    "layers": 30,
+    "weight_policy_source": "optimized_multichip_decoder/README.md",
+    "decoder_weight_bytes_per_device": 10986081280,
+    "embedding_bytes_per_device": 369098752,
+    "lm_head_bytes_per_device": 369098752,
+    "tied_weights": "Same HF embedding weight supplies both matrices; hidden-sharded row-major embedding and vocab-sharded tiled LM head require distinct device representations. Both counted.",
+    "full_stack_kv_cache_bytes_per_device_at_max_context": 8556380160,
+    "rope_prefill_and_decode_bytes_per_device": 1610612736,
+    "page_table_bytes_per_device_batch1": 32768,
+    "trace_activation_allocator_reserve_bytes_per_device": 2147483648,
+    "persistent_ccl_bytes_per_device": 2690688,
+    "persistent_ccl_memory": "L1",
+    "conservative_peak_bound_bytes_per_device": 28467973120,
+    "capacity_basis": "Stage05 conservative bound, replace its replicated tied weight allowance with both actual sharded terminal representations and add B1 table; 2GiB reserve includes trace, sampler state and chunk scratch. Actual all-layer maximum-context caches and262143/262144 prompt execution pass, including final-position decode.",
+    "largest_tested_full_model_context": 262144,
+    "capacity_evidence": "full_model/capacity.json",
+    "nonaligned_prompt_validated": 262143,
+    "final_supported_position_decode_validated": 262143
+  },
+  "optimized_full_model": {
+    "status": "validated_clean_pass",
+    "target_mesh": [
+      1,
+      4
+    ],
+    "supported_context": 262144,
+    "capability_reduction": false,
+    "logical_length_alignment_required": false,
+    "decoder_policy": "optimized_multichip_decoder/README.md",
+    "persistent_output_buffer": "uint32 [(generated_tokens-1),1,1,32], replicated over TP4; captured indexed_fill scratch same size",
+    "output_history_logical_bytes_per_device_at_128_tokens": 32512,
+    "output_history_logical_bytes_per_device_upper_bound": 67108352,
+    "allocation_accounting": "History and captured scratch fit within inherited 2GiB trace/activation reserve; no weight/cache/RoPE allocation change. Row alignment and trace metadata also consume that reserve. Capacity increase releases traces before allocation.",
+    "evidence": [
+      "optimized_full_model/buffered_extended_watcher.json",
+      "optimized_full_model/trace_full_batch32.json",
+      "optimized_full_model/trace_mixed_slots.json",
+      "optimized_full_model/trace_page_tables.json",
+      "optimized_full_model/performance.json",
+      "optimized_full_model/final_perf_findings.md"
+    ],
+    "inherited_full_model_max_context_evidence": "full_model/capacity.json",
+    "review": "optimized_full_model/stage_review.md",
+    "implementation_commit": "9473a2e1b18be1dc9e5fe0add73a0f62ffcc115f"
+  },
+  "datatype_sweep": {
+    "status": "clean-pass",
+    "config_id": "head4_inner_all4_shared_down4",
+    "precision_config": "datatype_sweep/selected_precision_config.json",
+    "mesh": [
+      1,
+      4
+    ],
+    "supported_context": 262144,
+    "capability_reduction": false,
+    "logical_length_alignment_required": false,
+    "kv_cache_dtype": "bfloat8_b",
+    "full_stack_kv_cache_bytes_per_device_at_max_context": 8556380160,
+    "decoder_weight_bytes_per_device": 9435749376,
+    "lm_head_bytes_per_device": 103809024,
+    "conservative_peak_bound_bytes_per_device": 26652351488,
+    "headroom_to_decimal_32gb_bytes_per_device": 5347648512,
+    "memory_accounting": "datatype_sweep/memory_candidates.json",
+    "memory_basis": "Source-derived tensor payloads plus inherited 2GiB reserve; not measured allocator peak",
+    "default_construction": "build_generator -> Generator -> Model loads selected_precision_config.json; model max_seq_len defaults to HF max_position_embeddings=262144",
+    "limits": [
+      "B1 maximum context; B32 short requests is a separate supported shape.",
+      "BF16-cache candidate is unselected; its conservative upper bound is not evidence of physical impossibility."
+    ],
+    "largest_tested_prefill_context": 262144,
+    "largest_tested_decode_context": 262144,
+    "nonaligned_prompt_validated": 262143,
+    "final_supported_position_decode_validated": 262143,
+    "batch32_short_context_validated": true,
+    "evidence": [
+      "datatype_sweep/selected_capacity/capacity.json",
+      "datatype_sweep/selected_capacity/capacity_precision_runtime.json",
+      "datatype_sweep/selected_nonaligned.json",
+      "datatype_sweep/selected_trace_batch32.json",
+      "datatype_sweep/selected/source_manifest.json"
+    ],
+    "review": "datatype_sweep/stage_review.md",
+    "implementation_commit": "e9d0a0a5f9584060e4b4b905c1f2c6621086815d"
+  },
+  "ttft_optimization": {
+    "status": "local_clean_pass_remote_qualification_blocked_vllm_publish_access",
+    "supported_context": 262144,
+    "capability_reduction": false,
+    "logical_length_alignment_required": false,
+    "selected_precision_config": "datatype_sweep/selected_precision_config.json",
+    "prefill_trace_max_logical_length": 1024,
+    "prefill_trace_entries": 1,
+    "prefill_trace_eligibility": "B1 canonical greedy without penalties/logprobs; exact logical length, external cache identities and table shapes; all other cases retain eager prefill",
+    "short_expert_batch_policy": "Inherited 32 rows by default; expert prefill gate K22 and row32 down44-core grid11x4/N2/K22 selected by full-model geometry sweep and real-weight boundary checks; decode unchanged. Wider experimental override is not the deployment default. Latency-priority deployment selects synchronous scheduling; async remains the separately measured throughput profile.",
+    "trace_region_size": 1000000000,
+    "persistent_tensor_payload_delta_bound_bytes_per_device": 5181568,
+    "payload_components_bytes_per_device": {
+      "prefill_logits_bf16_32_by_65536": 4194304,
+      "prefill_tables_30_by_1_by_8192_int32": 983040,
+      "prefill_tokens_1024_uint32": 4096,
+      "prefill_output_32_uint32": 128,
+      "additional_expert_ownership_indices_all30_layers_uint16": 0
+    },
+    "memory_basis": "Source-derived payload bound, excludes allocator alignment and trace-command storage; existing1GB trace region and inherited2GiB reserve unchanged. No new weights/KV/RoPE or default expert ownership storage. Host page-table snapshots add at most983040 bytes. Rejected128-row expert candidate added552960 persistent ownership bytes and17301504 transient down-output bytes per chip; neither is in the default32-row path. K22/down44 change kernel circular buffers and per-core geometry, not persistent tensor shapes; no allocator-peak claim.",
+    "current_validation_scope": "watcher_down44 reduced layers0/5 passes12controls24traced12transitions4prefill-only cases; expert_down_geometry passes68 real-weight isolated-layer boundary rows, all bitexact including replay; full30-layer async and selected sync matrices complete primary128/128/C1 and C8/C32 bursts. All26 sync matrix/repeat rows preserve optimized async output texts and lengths. Selected sync sampling passes72 tests/1 expected skip;18greedy and6seed71 sampled chat controls exactly match legacy. Prior maximum-context evidence remains inherited, not newly reexecuted by these short-context probes. Independent acceptance and remote qualification remain in progress.",
+    "perf_summary": "ttft_optimization/perf_summary.json",
+    "long_context_path": "Lengths beyond1024 use existing eager prefill and release bounded state; full262144 context/cache allocation and nonaligned logical lengths remain supported",
+    "evidence": [
+      "../readiness_vllm/ttft_optimization/transitions.json",
+      "../readiness_vllm/ttft_optimization/watcher_k22.json",
+      "../readiness_vllm/ttft_optimization/full_candidates_context.json",
+      "../readiness_vllm/ttft_optimization/full_gate.json",
+      "../readiness_vllm/ttft_optimization/full_geometry.json",
+      "../readiness_vllm/ttft_optimization/watcher_down44.json",
+      "../readiness_vllm/ttft_optimization/expert_down_geometry.json",
+      "../readiness_vllm/ttft_optimization/acceptance_matrix/s128-o128-c1.json",
+      "../readiness_vllm/ttft_optimization/acceptance_matrix/s100-o100-c32.json",
+      "../readiness_vllm/ttft_optimization/acceptance_suite/readiness_vllm/vllm_benchmark.json"
+    ]
+  },
+  "tsu_optimization": {
+    "status": "selected_default_local_clean_pass_remote_pending",
+    "supported_context": 262144,
+    "scheduler_slots": 32,
+    "capability_reduction": false,
+    "logical_length_alignment_required": false,
+    "selected_precision_config": "datatype_sweep/selected_precision_config.json",
+    "prefill_trace_max_logical_length": 1024,
+    "trace_region_size": 1000000000,
+    "persistent_tensor_payload_delta_bytes": 0,
+    "long_context_path": "Eager prefill remains supported beyond1024. Default-enabled exact-signature B1 canonical-greedy reuse retains only a compatible live decode/sampler bundle; cache identities/addresses/specs, prompt/token/table metadata, logical length and mode changes invalidate it. Eager temporary tensors finish at the blocking first-token read and die before replay. No long-prefill graph is captured. Explicit GEMMA4_EAGER_PREFILL_DECODE_REUSE=0 restores release/recapture behavior.",
+    "serving_profile": "Async scheduling selected for TSU; synchronous scheduling remains available with --no-async-scheduling. Report TTFT and E2EL alongside TPOT; high-concurrency setup phase shifts are not steady decode speedups.",
+    "head_geometry": "BFP4/LoFi TP4 head on11x10 grid with in0_block_w1; dtype, fidelity, output shapes and persistent weights unchanged. Paired full-generator K4/K2/K1/K4 controls pass; final selected-default serving and qualitative controls pass.",
+    "batched_shared_decode": {
+      "status": "selected_local_clean_pass_default_reproduced_remote_matrix_pending",
+      "environment": "Default enabled; GEMMA4_BATCHED_SHARED_DECODE=0 restores the original serialized path",
+      "scope": "Dense active batches8..32, Linear TP4, replicated residuals, grouped MoE and fused tail; all other cases retain the serialized path. Attention/cache/router/indexed experts remain per slot; shared decode MLP, paired MoE reduction and tail are batched.",
+      "persistent_tensor_payload_delta_bytes": 0,
+      "allocation_notes": [
+        "No new weights, cache tensors, positions, page tables or persistent collective bundles are added. Existing attention-role CCL buffers remain caller-owned and shared across serial layers; same-role reuse is ordered by the next Linear RS before AG on one command queue.",
+        "This zero persistent-payload delta is not a zero temporary-memory claim. Per-slot residuals, expert outputs and shared inputs remain live through their respective concatenations. Tile padding amplifies the retained logical-one-row tensors; concatenations and batched shared/tail operations also need ordinary temporaries.",
+        "The batched paired-MoE tensor has sequence extent8..32, so it uses ordinary DRAM reduce-scatter/all-gather outputs, not the sequence-one persistent MoE bundle. Its buffers and workspaces follow normal operation/trace scratch ownership.",
+        "The reserved trace region remains1000000000 bytes. Captured command/scratch usage may change; no exact total transient peak or scratch-byte delta is claimed. Final-source B32 Watcher plus allocation tracking with program-cache exclusions disabled passes before candidate serving launch.",
+        "Full262144 aggregate serving capacity,8192-column page tables and32 scheduler slots are unchanged. This does not claim32 simultaneous262144-token requests fit the aggregate KV allocation."
+      ],
+      "evidence": [
+        "tsu_optimization/autodebug_batch_collectives.md",
+        "tsu_optimization/work_log.md",
+        "../readiness_vllm/tsu_optimization/batch32_final_contract.json",
+        "../readiness_vllm/tsu_optimization/batch_shared_async/launch.json",
+        "../readiness_vllm/tsu_optimization/batch_default_comparison.json",
+        "tsu_optimization/review_batched_shared_local.md"
+      ]
+    },
+    "current_validation_scope": "Default CPU125 pass; final reduced Watcher31 and explicitly allocation-tracked Watcher11 pass with stable model/sampler trace identities, changed token/page values and context transitions. Full-capacity selected K1/default async server reproduces primary performance;20 primary/short/8K and38 long-output/32K/C32 guard texts+lengths exactly match controls. All18 official greedy and6 seeded sampled controls exactly match prior results. Independent selected-local review is clean-pass; new exact-image remote23-row matrix remains pending. Prior maximum-context correctness is inherited, not newly claimed from reduced probes.",
+    "review": "tsu_optimization/review_selected_local.md",
+    "evidence": [
+      "tsu_optimization/work_log.md",
+      "../readiness_vllm/tsu_optimization/final_watcher.json",
+      "../readiness_vllm/tsu_optimization/final_tracking.json",
+      "../readiness_vllm/tsu_optimization/head_full_paths.json",
+      "../readiness_vllm/tsu_optimization/selected_async/launch.json"
+    ]
+  },
+  "optimized_vllm": {
+    "status": "clean-pass",
+    "supported_context": 262144,
+    "capability_reduction": false,
+    "logical_length_alignment_required": false,
+    "selected_precision_config": "datatype_sweep/selected_precision_config.json",
+    "persistent_tensor_payload_delta_bytes": 0,
+    "trace_change": "Existing public-token slice captured after canonical sampling within sampler trace; same persistent token and output tensors, no new trace replay.",
+    "trace_region_size": 1000000000,
+    "evidence": [
+      "optimized_vllm/final_validation.json",
+      "optimized_vllm/adapter_queued_reads.json",
+      "optimized_vllm/batch_cache_watcher.json",
+      "optimized_vllm/requests_final.json"
+    ]
+  }
+}

@@ -1,0 +1,242 @@
+[
+  {
+    "batch": 1,
+    "pad_batch": true,
+    "allow_force_argmax": false,
+    "mode": "greedy",
+    "logits_shape": [
+      1,
+      1,
+      32,
+      65536
+    ],
+    "logits_padded_shape": [
+      1,
+      1,
+      32,
+      65536
+    ],
+    "offsets_shape": [
+      1,
+      1,
+      32,
+      128
+    ],
+    "force_argmax_active": false,
+    "sampling_k": 1,
+    "sampling_p": 0.0,
+    "round": 0,
+    "expected": [
+      4
+    ],
+    "actual": [
+      [
+        4
+      ],
+      [
+        4
+      ],
+      [
+        4
+      ],
+      [
+        4
+      ]
+    ],
+    "passed": true
+  },
+  {
+    "batch": 1,
+    "pad_batch": true,
+    "allow_force_argmax": false,
+    "mode": "greedy",
+    "logits_shape": [
+      1,
+      1,
+      32,
+      65536
+    ],
+    "logits_padded_shape": [
+      1,
+      1,
+      32,
+      65536
+    ],
+    "offsets_shape": [
+      1,
+      1,
+      32,
+      128
+    ],
+    "force_argmax_active": false,
+    "sampling_k": 1,
+    "sampling_p": 0.0,
+    "round": 1,
+    "expected": [
+      131077
+    ],
+    "actual": [
+      [
+        131077
+      ],
+      [
+        131077
+      ],
+      [
+        131077
+      ],
+      [
+        131077
+      ]
+    ],
+    "passed": true
+  },
+  {
+    "batch": 1,
+    "pad_batch": true,
+    "allow_force_argmax": false,
+    "mode": "greedy",
+    "logits_shape": [
+      1,
+      1,
+      32,
+      65536
+    ],
+    "logits_padded_shape": [
+      1,
+      1,
+      32,
+      65536
+    ],
+    "offsets_shape": [
+      1,
+      1,
+      32,
+      128
+    ],
+    "force_argmax_active": false,
+    "sampling_k": 1,
+    "sampling_p": 0.0,
+    "host_wall_replay_us": 508.5179675370455
+  },
+  {
+    "batch": 1,
+    "pad_batch": true,
+    "allow_force_argmax": true,
+    "mode": "greedy",
+    "logits_shape": [
+      1,
+      1,
+      32,
+      65536
+    ],
+    "logits_padded_shape": [
+      1,
+      1,
+      32,
+      65536
+    ],
+    "offsets_shape": [
+      1,
+      1,
+      32,
+      128
+    ],
+    "force_argmax_active": true,
+    "sampling_k": 1,
+    "sampling_p": 0.0,
+    "round": 0,
+    "expected": [
+      4
+    ],
+    "actual": [
+      [
+        4
+      ],
+      [
+        4
+      ],
+      [
+        4
+      ],
+      [
+        4
+      ]
+    ],
+    "passed": true
+  },
+  {
+    "batch": 1,
+    "pad_batch": true,
+    "allow_force_argmax": true,
+    "mode": "greedy",
+    "logits_shape": [
+      1,
+      1,
+      32,
+      65536
+    ],
+    "logits_padded_shape": [
+      1,
+      1,
+      32,
+      65536
+    ],
+    "offsets_shape": [
+      1,
+      1,
+      32,
+      128
+    ],
+    "force_argmax_active": true,
+    "sampling_k": 1,
+    "sampling_p": 0.0,
+    "round": 1,
+    "expected": [
+      131077
+    ],
+    "actual": [
+      [
+        131077
+      ],
+      [
+        131077
+      ],
+      [
+        131077
+      ],
+      [
+        131077
+      ]
+    ],
+    "passed": true
+  },
+  {
+    "batch": 1,
+    "pad_batch": true,
+    "allow_force_argmax": true,
+    "mode": "greedy",
+    "logits_shape": [
+      1,
+      1,
+      32,
+      65536
+    ],
+    "logits_padded_shape": [
+      1,
+      1,
+      32,
+      65536
+    ],
+    "offsets_shape": [
+      1,
+      1,
+      32,
+      128
+    ],
+    "force_argmax_active": true,
+    "sampling_k": 1,
+    "sampling_p": 0.0,
+    "host_wall_replay_us": 3300.511986017227
+  }
+]

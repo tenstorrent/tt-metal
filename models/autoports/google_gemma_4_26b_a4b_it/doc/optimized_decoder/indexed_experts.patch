@@ -1,0 +1,152 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
+@@ -52,6 +52,7 @@
+     ):
+         self.__dict__.update(source.__dict__)
+         self.decode_activation_dtype = activation_dtype
++        self.indexed_router = None
+         self.prefill_source = None if active_prefill else source
+         self.active_prefill = active_prefill
+         self.prefill_memory = ttnn.L1_MEMORY_CONFIG if prefill_l1 else ttnn.DRAM_MEMORY_CONFIG
+@@ -167,6 +168,27 @@
+             packer_l1_acc=False,
+         )
+ 
++    def enable_indexed_decode(self, router):
++        if type(router) is not GeneralizedRouter:
++            raise ValueError("Indexed experts require the production GeneralizedRouter")
++        self.indexed_router = router
++        router.retain_decode_indices = True
++        # Eight selected experts occupy one padded K tile in the final mix.
++        cfg = self.mix_program
++        self.mix_program = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
++            compute_with_storage_grid_size=cfg.compute_with_storage_grid_size,
++            in0_block_w=1,
++            out_subblock_h=cfg.out_subblock_h,
++            out_subblock_w=cfg.out_subblock_w,
++            out_block_h=cfg.out_block_h,
++            out_block_w=cfg.out_block_w,
++            per_core_M=cfg.per_core_M,
++            per_core_N=cfg.per_core_N,
++            fuse_batch=True,
++            fused_activation=None,
++            mcast_in0=True,
++        )
++
+     def _chunk(self, x, routing, decode):
+         if not decode:
+             if not self.active_prefill:
+@@ -175,32 +197,41 @@
+         if self.decode_activation_dtype is not None:
+             x = ttnn.typecast(x, self.decode_activation_dtype)
+         sparsity = ttnn.to_layout(routing, ttnn.ROW_MAJOR_LAYOUT)
++        slots = self.config.num_experts
++        mix_weights = routing
+         common = dict(
+             sparsity=sparsity,
+-            nnz=self.config.top_k,
+             memory_config=ttnn.L1_MEMORY_CONFIG,
+             output_tile=ttnn.Tile([32, 32]),
+             dtype=ttnn.bfloat16,
+             compute_kernel_config=self.decode_compute,
+         )
++        if self.indexed_router is not None:
++            indices = self.indexed_router.decode_indices()
++            common["indices"] = indices
++            slots = self.config.top_k
++            selected = ttnn.gather(sparsity, dim=-1, index=indices, memory_config=ttnn.L1_MEMORY_CONFIG)
++            mix_weights = ttnn.to_layout(selected, ttnn.TILE_LAYOUT)
++        else:
++            common["nnz"] = self.config.top_k
+         if self.expert_split:
+             gate = ttnn.sparse_matmul(x, self.gate, program_config=self.separate_program, **common)
+             up = ttnn.sparse_matmul(x, self.up, program_config=self.separate_program, **common)
+-            gate = ttnn.reshape(gate, (1, self.config.num_experts, 1, self.width))
+-            up = ttnn.reshape(up, (1, self.config.num_experts, 1, self.width))
++            gate = ttnn.reshape(gate, (1, slots, 1, self.width))
++            up = ttnn.reshape(up, (1, slots, 1, self.width))
+             hidden = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)])
+         else:
+             gu = ttnn.sparse_matmul(x, self.gate_up, program_config=self.gate_config, **common)
+-            gu = ttnn.reshape(gu, (1, self.config.num_experts, 1, 2 * self.width))
++            gu = ttnn.reshape(gu, (1, slots, 1, 2 * self.width))
+             gate, up = gu[..., : self.width], gu[..., self.width :]
+             if self.decode_gelu_activations is not None:
+                 hidden = ttnn.mul(gate, up, input_tensor_a_activations=self.decode_gelu_activations)
+             else:
+                 hidden = ttnn.mul(ttnn.gelu(gate, variant=ttnn.GeluVariant.Accurate), up)
+         down = ttnn.sparse_matmul(hidden, self.down, program_config=self.down_config, is_input_a_sparse=True, **common)
+-        down = ttnn.reshape(down, (1, self.config.num_experts, 1, self.config.hidden_size))
++        down = ttnn.reshape(down, (1, slots, 1, self.config.hidden_size))
+         return ttnn.matmul(
+-            routing,
++            mix_weights,
+             ttnn.permute(down, (0, 2, 1, 3)),
+             dtype=ttnn.bfloat16,
+             memory_config=self.mix_memory,
+@@ -301,7 +332,8 @@
+         prefill_fidelity=ttnn.MathFidelity.LoFi,
+         prefill_l1=True,
+         expert_split=False,
+-        expert_fused_gelu=False,
++        expert_fused_gelu="auto",
++        indexed_experts="auto",
+         sharded_norms=True,
+         sharded_norm_site="auto",
+         shared_dtype="auto",
+@@ -358,6 +390,12 @@
+             sharded_norm_site = "all" if sliding else "post_common"
+         if shared_dtype == "auto":
+             shared_dtype = ttnn.bfloat8_b if sliding else ttnn.bfloat4_b
++        if indexed_experts == "auto":
++            indexed_experts = bool(generalized_router)
++        if expert_fused_gelu == "auto":
++            expert_fused_gelu = bool(indexed_experts)
++        if indexed_experts and not generalized_router:
++            raise ValueError("Indexed experts require generalized_router=True")
+         if router_direct and not generalized_router:
+             raise ValueError("Direct router projection requires generalized_router=True")
+         if generalized_router_center and not generalized_router:
+@@ -404,6 +442,8 @@
+             prefill_expert_down=str(prefill_down_dtype),
+             decode_expert_fidelity=str(expert_fidelity),
+             decode_expert_fused_gelu=expert_fused_gelu or expert_split,
++            decode_expert_backend="indexed_compact" if indexed_experts else "sparsity_scan_expanded",
++            decode_expert_slots=8 if indexed_experts else 128,
+             prefill_expert_fidelity=str(prefill_fidelity),
+             shared_decode_weights=str(shared_dtype),
+             shared_decode_fidelity=str(shared_fidelity),
+@@ -525,6 +565,8 @@
+                 projection_fidelity=router_direct_fidelity,
+             )
+             self.precision_policy["router_projection"] = self.layer.moe.router.projection_policy
++            if indexed_experts:
++                self.layer.moe.experts.enable_indexed_decode(self.layer.moe.router)
+         if router_lanes:
+             self.layer.moe.router = LanePartitionRouter(
+                 self.layer.moe.router,
+@@ -738,6 +780,8 @@
+         if original.source.source.num_experts != 128 or original.source.source.top_k != 8:
+             raise ValueError("Generalized router requires 128 experts and top-8 routing")
+         self.original = original
++        self.retain_decode_indices = False
++        self.last_decode_indices = None
+         self.center_logits = center_logits
+         self.direct_projection = direct_projection
+         self.projection_weight = original.source.source.proj_weight
+@@ -869,8 +913,15 @@
+         indices = ttnn.to_memory_config(indices, ttnn.L1_MEMORY_CONFIG)
+         values = ttnn.view(values[:, 0, :8], (1, 1, 1, 8))
+         indices = ttnn.view(indices[:, 0, :8], (1, 1, 1, 8))
++        if self.retain_decode_indices:
++            self.last_decode_indices = indices
+         routing = ttnn.scatter(ttnn.zeros_like(rounded), dim=-1, index=indices, src=values)
+         return ttnn.mul(routing, router.per_expert_scale)
++
++    def decode_indices(self):
++        if self.last_decode_indices is None:
++            raise RuntimeError("Indexed expert projection must follow decode routing")
++        return self.last_decode_indices
+ 
+ 
+ class LanePartitionRouter:

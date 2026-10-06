@@ -1,0 +1,78 @@
+{
+  "scope": "Stage10 final full30-layer shared vLLM validation. Stage09 snapshots in doc/optimized_vllm/inherited. requests_full_final and seed_lifecycle files are inherited controls; current request probe is ../doc/optimized_vllm/requests_final.json. Logs retained locally under ignore policy.",
+  "files": {
+    "server.log": {
+      "sha256": "538ef712c538a27259f77e262ee769476bccfd7c53c6f8bbe5d5b75a87d5c551",
+      "bytes": 212574
+    },
+    "sampling_tests.log": {
+      "sha256": "27a74f1f9215c61fef364b060b63365c39a7d9f210966bd549688ba0c8f25f42",
+      "bytes": 10318
+    },
+    "final_checks_runner.log": {
+      "sha256": "466c32da1b929a458d5f2b38525c12ee7b74d20f9e0568efe639f4bfd183bb9c",
+      "bytes": 5781
+    },
+    "vllm_benchmark.json": {
+      "sha256": "99c716dfaf82ea40bd27e26859399e45b6b6478a1c44331a5f29bd31ec91e970",
+      "bytes": 4132
+    },
+    "vllm_result.json": {
+      "sha256": "9a566f53f36e52d3f296bf508aa0979c2483b8b8b4dcb223000440c880f1b876",
+      "bytes": 1119
+    },
+    "vllm_benchmark.log": {
+      "sha256": "1a5809cd41e06fc2722d7be4ad4999c7f766d95394fbd4ac7d909f39597e133c",
+      "bytes": 8407
+    },
+    "vllm_ci_serving_benchmark.json": {
+      "sha256": "5bd45f52907afce71265cdc665298a4187f6a490d165c5329184ee065629415b",
+      "bytes": 3060
+    },
+    "vllm_ci_serving_result.json": {
+      "sha256": "dc6a9d0d12b557f7c9098e9bbb2d9f53876f505e83aca1b4c0ef4887d34f9bf4",
+      "bytes": 1164
+    },
+    "vllm_ci_serving_benchmark.log": {
+      "sha256": "f37ece4da374eda42cea33c408921c9fe199b5b94cb6d0111421c252281c3848",
+      "bytes": 8422
+    },
+    "vllm_qualitative_outputs.json": {
+      "sha256": "9ed2096036e4f849564ec160cf14f108487145a9b5afc1f2dee9117bcb69b77d",
+      "bytes": 10771
+    },
+    "qualitative_control_comparison.json": {
+      "sha256": "0c43d00a5ddfc35ee8e11d383d377277ae989deeede38288451a04ef413c3266",
+      "bytes": 1186
+    },
+    "degeneracy.json": {
+      "sha256": "f1ea55675183b4d06a874d77fe10b6dc92270cf5c56c9208b7412e8d99ef5128",
+      "bytes": 4265
+    },
+    "final_cleanup.json": {
+      "sha256": "1a167fab1231e12869d9cf5e7b654b9a0e9dc446c170253e5fd79a729d56d371",
+      "bytes": 337
+    },
+    "final_validation.json": {
+      "sha256": "29cd26d1605d00d50fb76d6cc45eb9cfbd795f49e6993e105da682a48677d654",
+      "bytes": 1003
+    },
+    "final_source_manifest.json": {
+      "sha256": "4e5b0c209fb50d89a16b0147c8e0e3be4aa1e9cce59fc10f75bce76e062b6551",
+      "bytes": 1763
+    },
+    "requests_full_final.json": {
+      "sha256": "529ea54bc58c1da2b308ddb8c0e7613b589e6429c6d6c7c006c70a487d827ff7",
+      "bytes": 57112
+    },
+    "seed_lifecycle_final.json": {
+      "sha256": "dae37b30ac61711604b417f645d6640a1ae2999765a83e027defb6e90e42da7f",
+      "bytes": 18729
+    },
+    "seed_lifecycle_final_seed_only.json": {
+      "sha256": "0ee3cb9b576de94ca7b701018d048244606613b6c3a8e2f221a12edc33608001",
+      "bytes": 17991
+    }
+  },
+  "formatting_note": "Repository EOF hook added final newlines to generated JSON; parsed content equality against pre-hook staged artifacts verified. Hashes refreshed after formatting."
+}

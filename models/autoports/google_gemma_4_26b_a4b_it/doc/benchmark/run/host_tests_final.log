@@ -1,0 +1,49 @@
+............E..EF.........................
+======================================================================
+ERROR: test_both_profiles_validate_and_first_profile_is_retained (test_benchmark_roofline.CollectorTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/test_benchmark_roofline.py", line 106, in test_both_profiles_validate_and_first_profile_is_retained
+    collect(root, n, data)
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/test_benchmark_roofline.py", line 93, in collect
+    collector.main()
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/benchmark_roofline.py", line 199, in main
+    execution_counts = decode_execution_counts(data["events"], ids)
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/benchmark_roofline.py", line 49, in decode_execution_counts
+    for event in sorted((e for e in events if e["event"] == "dispatch"), key=lambda e: int(e["submission_id"])):
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/benchmark_roofline.py", line 49, in <lambda>
+    for event in sorted((e for e in events if e["event"] == "dispatch"), key=lambda e: int(e["submission_id"])):
+ValueError: invalid literal for int() with base 10: '0:0'
+
+======================================================================
+ERROR: test_extra_complete_decode_is_accounted (test_benchmark_roofline.CollectorTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/test_benchmark_roofline.py", line 199, in test_extra_complete_decode_is_accounted
+    collect(root, 1, data)
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/test_benchmark_roofline.py", line 93, in collect
+    collector.main()
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/benchmark_roofline.py", line 199, in main
+    execution_counts = decode_execution_counts(data["events"], ids)
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/benchmark_roofline.py", line 49, in decode_execution_counts
+    for event in sorted((e for e in events if e["event"] == "dispatch"), key=lambda e: int(e["submission_id"])):
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/benchmark_roofline.py", line 49, in <lambda>
+    for event in sorted((e for e in events if e["event"] == "dispatch"), key=lambda e: int(e["submission_id"])):
+ValueError: invalid literal for int() with base 10: '0:0'
+
+======================================================================
+FAIL: test_host_sampling_rejected (test_benchmark_roofline.CollectorTests)
+----------------------------------------------------------------------
+ValueError: invalid literal for int() with base 10: '0:0'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/test_benchmark_roofline.py", line 186, in test_host_sampling_rejected
+    with self.assertRaisesRegex(ValueError, "host sampling"):
+AssertionError: "host sampling" does not match "invalid literal for int() with base 10: '0:0'"
+
+----------------------------------------------------------------------
+Ran 42 tests in 0.330s
+
+FAILED (failures=1, errors=2)

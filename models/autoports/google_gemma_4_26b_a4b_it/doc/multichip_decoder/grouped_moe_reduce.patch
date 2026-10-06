@@ -1,0 +1,70 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
+@@ -186,7 +186,7 @@
+ 
+             self.decode_programs = (program(gate_grid, gate_n, gate_k), program((11, 4), 2, 17))
+ 
+-    def __call__(self, x):
++    def __call__(self, x, *, reduce_output=True):
+         # Imported Gemma4 loader packs [up_i, gate_i] on each rank.
+         decode = self.decode_weights is not None and x.shape[-2] == 1
+         gu = (
+@@ -215,7 +215,7 @@
+             if decode
+             else self.down(hidden)
+         )
+-        return self.reduce(output)
++        return self.reduce(output) if reduce_output else output
+ 
+ 
+ class _ExpertParallelExperts(OptimizedExperts):
+@@ -376,6 +376,7 @@
+         expert_parallel=False,
+         fused_tail=False,
+         hybrid_experts=False,
++        grouped_moe_reduce=False,
+         fused_agmm=False,
+         topology=ttnn.Topology.Linear,
+         optimized_shared=False,
+@@ -401,6 +402,9 @@
+         self.topology = topology
+         self.fused_agmm = fused_agmm
+         self.ccl = CCLManager(mesh_device, 1, topology)
++        if grouped_moe_reduce and sharded_residual:
++            raise ValueError("Grouped MoE reduction requires replicated residuals")
++        self.grouped_moe_reduce = grouped_moe_reduce
+         self.sharded_residual = sharded_residual
+         self.fused_tail = fused_tail
+         if sharded_residual:
+@@ -703,6 +707,15 @@
+         groups.clear()
+         return result if result.shape[-2] == length else result[:, :, :length, :]
+ 
++    def _reduce_moe_pair(self, shared, routed):
++        if shared.dtype != ttnn.bfloat16 or routed.dtype != ttnn.bfloat16:
++            raise ValueError("Grouped MoE reduction requires BF16 local outputs")
++        if tuple(shared.shape) != tuple(routed.shape) or tuple(shared.shape[:2]) != (1, 1):
++            raise ValueError("Grouped MoE outputs must share shape [1,1,S,H]")
++        paired = ttnn.concat((shared, routed), dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
++        reduced = self.allreduce(paired)
++        return reduced[:, :1, :, :], reduced[:, 1:2, :, :]
++
+     def allreduce(self, value):
+         value = ttnn.to_memory_config(value, ttnn.DRAM_MEMORY_CONFIG)
+         return self.mesh_config.allreduce(value, self.ccl, axis=1)
+@@ -767,9 +780,13 @@
+         normalized = self.normalize(residual, eps)
+         routes = self.layer.moe.router(residual, normalized=normalized)
+         expert_input = ttnn.mul(normalized, self.expert_norm_weight, dtype=ttnn.bfloat16)
+-        routed = self.allreduce(self.layer.moe.experts(expert_input, routes))
++        routed = self.layer.moe.experts(expert_input, routes)
++        if not self.grouped_moe_reduce:
++            routed = self.allreduce(routed)
+         shared_input = ttnn.mul(normalized, self.shared_norm_weight, dtype=ttnn.bfloat16)
+-        shared = self.layer.shared_mlp(shared_input)
++        shared = self.layer.shared_mlp(shared_input, reduce_output=not self.grouped_moe_reduce)
++        if self.grouped_moe_reduce:
++            shared, routed = self._reduce_moe_pair(shared, routed)
+         if self.fused_tail:
+             return self._fused_tail(residual, shared, routed, x.shape[-2] <= 32)
+         combined = ttnn.add(

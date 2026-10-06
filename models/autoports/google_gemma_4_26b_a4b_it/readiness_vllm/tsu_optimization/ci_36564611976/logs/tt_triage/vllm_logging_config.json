@@ -1,0 +1,22 @@
+{
+    "version": 1,
+    "disable_existing_loggers": false,
+    "handlers": {
+        "async_handler": {
+            "class": "utils.logging_utils.AsyncLogHandler",
+            "level": "DEBUG",
+            "filename": "/home/container_app_user/cache_root/logs/vllm_2026-09-29_13-05-09.log",
+            "max_bytes": 104857600,
+            "backup_count": 5
+        }
+    },
+    "loggers": {
+        "vllm": {
+            "handlers": [
+                "async_handler"
+            ],
+            "level": "DEBUG",
+            "propagate": false
+        }
+    }
+}

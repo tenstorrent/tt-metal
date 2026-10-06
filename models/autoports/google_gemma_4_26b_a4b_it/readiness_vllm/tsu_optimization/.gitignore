@@ -1,0 +1,31 @@
+# Keep runtime/JIT/profiler bulk local; compact JSON, commands and console logs
+# provide the committed experiment record.
+**/runtime/
+**/vllm_cache/
+probe_runtime/
+watcher_runtime/
+*_runtime/
+profile/
+profile_retry/reports/
+profile_short/reports/
+**/reports/
+**/.logs/
+**/profile_log_device.csv
+**/*.tracy
+# Completed large console logs are committed losslessly as .log.gz.
+/autodebug_investigation.log
+/profile.log
+/profile_retry.log
+/profile_short.log
+/eager_async_server.log
+/eager_sync_server.log
+/prefill8192_cwd_server.log
+/selected_async_server.log
+# Full profiler warmup captures remain local; archive complete decode windows.
+profile_retry/raw_ops.csv.gz
+profile_short/raw_ops.csv.gz
+profile_retry/raw_decode_ops.csv
+profile_short/raw_decode_ops.csv
+batch8_profile_retry/raw_decode_ops.csv
+batch8_profile_retry/raw_decode_ops.csv.gz
+batch8_profile_retry/raw_decode_ops_device*.csv

@@ -1,0 +1,35 @@
+{
+  "status": "blocked_setup",
+  "runner_invoked": false,
+  "elapsed_seconds": null,
+  "accuracy": {},
+  "performance": {},
+  "failure": "Upstream lm-evaluation-harness is unavailable in both provisioned environments; AGENTS.md prohibits dependency installation and no exception or alternate client was supplied. Live collector/control integration and all Stage 11 measurements remain incomplete.",
+  "setup_inventory": "setup_inventory.json",
+  "offline_preparation": {
+    "native_tokenizer": "tokenizer_preflight.json",
+    "vllm_cli_help": "vllm_client_help.log",
+    "phase_reducer": "phase_reducer_tests_continued.log",
+    "server_plan_validation": "server_config_tests_continued.log",
+    "sampling_candidate": "host_sampling_route_probe.json"
+  },
+  "continued_checks": {
+    "phase_reducer_tests": {
+      "exit_code": 0,
+      "log": "phase_reducer_tests_continued.log"
+    },
+    "server_config_tests": {
+      "exit_code": 0,
+      "log": "server_config_tests_continued.log"
+    },
+    "evidence_check": {
+      "exit_code": 2,
+      "log": "evidence_check_continued.log"
+    },
+    "context_check": {
+      "exit_code": 0,
+      "log": "context_check_continued.log"
+    }
+  },
+  "blocked_audit": "blocked_audit.json"
+}

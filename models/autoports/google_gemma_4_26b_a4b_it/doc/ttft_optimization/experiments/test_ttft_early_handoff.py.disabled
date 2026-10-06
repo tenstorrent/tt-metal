@@ -1,0 +1,115 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Mocked contracts for the experimental pre-input-build scheduling yield."""
+
+import importlib.util  # Archived alongside the rejected experiment implementation.
+import sys
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
+
+
+@pytest.fixture
+def handoff(monkeypatch):
+    # Load the pure host wrapper without importing a real runner, TTNN, or model.
+    path = Path(__file__).resolve().parents[1] / "tools" / "ttft_early_handoff.py"
+    spec = importlib.util.spec_from_file_location("ttft_early_handoff_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    events = []
+
+    class Runner:
+        def __init__(self, model):
+            self.model = model
+
+        def execute_model(self, *args, **kwargs):
+            events.append(("execute", self, args, kwargs))
+            return "executed"
+
+    fake_module = ModuleType("vllm_tt_plugin.model_runner")
+    fake_module.TTModelRunner = Runner
+    monkeypatch.setitem(sys.modules, "vllm_tt_plugin.model_runner", fake_module)
+    package = ModuleType("vllm_tt_plugin")
+    package.__path__ = []
+    package.model_runner = fake_module
+    monkeypatch.setitem(sys.modules, "vllm_tt_plugin", package)
+    sleep = Mock(side_effect=lambda duration: events.append(("sleep", duration)))
+    monkeypatch.setattr(module.time, "sleep", sleep)
+    original_prefill = Mock(return_value="prefilled")
+    model = SimpleNamespace(
+        generator=SimpleNamespace(prefill_prepared={"key": (128,)}),
+        prefill_forward=original_prefill,
+    )
+    module.install(model)
+    return model, Runner, original_prefill, sleep, events
+
+
+def test_yield_exactly_once_before_runner_and_preserve_arguments(handoff):
+    model, Runner, prefill, sleep, events = handoff
+    runner = Runner(model)
+    assert model.prefill_forward("tokens", flag=True) == "prefilled"
+    prefill.assert_called_once_with("tokens", flag=True)
+    assert runner.execute_model("scheduled", flag=False) == "executed"
+    assert events == [("sleep", 0), ("execute", runner, ("scheduled",), {"flag": False})]
+    runner.execute_model()
+    sleep.assert_called_once_with(0)
+    model.prefill_forward()
+    runner.execute_model()
+    assert sleep.call_count == 2
+
+
+def test_foreign_runner_does_not_yield_or_consume_pending(handoff):
+    model, Runner, _, sleep, events = handoff
+    model.prefill_forward()
+    foreign = Runner(object())
+    assert foreign.execute_model() == "executed"
+    sleep.assert_not_called()
+    own = Runner(model)
+    own.execute_model()
+    assert events[0][0] == "execute" and events[0][1] is foreign
+    assert events[1] == ("sleep", 0)
+    sleep.assert_called_once_with(0)
+
+
+@pytest.mark.parametrize("state", [None, {"key": (1025,)}])
+def test_ineligible_prefill_clears_existing_pending(handoff, state):
+    model, Runner, _, sleep, _ = handoff
+    model.prefill_forward()
+    model.generator.prefill_prepared = state
+    model.prefill_forward()
+    Runner(model).execute_model()
+    sleep.assert_not_called()
+
+
+def test_state_is_observed_after_prefill_returns(handoff):
+    model, Runner, prefill, sleep, _ = handoff
+    model.generator.prefill_prepared = None
+
+    def prepare():
+        model.generator.prefill_prepared = {"key": (1024,)}
+        return "prepared"
+
+    prefill.side_effect = prepare
+    assert model.prefill_forward() == "prepared"
+    Runner(model).execute_model()
+    sleep.assert_called_once_with(0)
+
+
+def test_prefill_failure_clears_previous_pending_and_propagates(handoff):
+    model, Runner, prefill, sleep, _ = handoff
+    model.prefill_forward()
+    error = RuntimeError("prefill failed")
+    prefill.side_effect = error
+    with pytest.raises(RuntimeError, match="prefill failed") as raised:
+        model.prefill_forward()
+    assert raised.value is error
+    Runner(model).execute_model()
+    sleep.assert_not_called()
+
+
+def test_no_prefill_means_no_yield(handoff):
+    model, Runner, _, sleep, _ = handoff
+    Runner(model).execute_model()
+    sleep.assert_not_called()

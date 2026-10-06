@@ -1,0 +1,71 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
+@@ -241,6 +241,8 @@
+ 
+ class OptimizedDecoder(FusedDecoder):
+     """Preserve the fused public cache contract with layer-specific precision."""
++
++    decode_rope_layout = ttnn.ROW_MAJOR_LAYOUT
+ 
+     @classmethod
+     def from_state_dict(
+@@ -643,7 +645,9 @@
+     def decode_forward(self, hidden_states, *, rope_mats, current_pos, cache_pos, page_table, kv_cache):
+         """Device-only decode; tensor positions and page IDs may change on replay.
+ 
+-        rope_mats are 2D [context, head_dim] tables. current_pos is uint32
++        rope_mats are 2D [context, head_dim] tables. TILE and ROW_MAJOR are
++        accepted; decode_rope_layout advertises the preferred setup layout.
++        Prefill tables remain TILE. current_pos is uint32
+         [1, padded_batch] for on-device embedding lookup; cache_pos is int32
+         [B] of valid nonnegative cache positions. The caller allocates these
+         buffers before capture, warms this exact signature, and refreshes their
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tests/run_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tests/run_decoder.py
+@@ -252,7 +252,9 @@
+                     past_key_values=hf_cache,
+                 )
+             dt = device(dx[None])
+-            dr = tuple(device(t.squeeze(0)) for t in (cos, sin))
++            decode_rope_layout = getattr(decoder, "decode_rope_layout", ttnn.TILE_LAYOUT)
++            dr = tuple(device(t.squeeze(0), layout=decode_rope_layout) for t in (cos, sin))
++            result["decode_rope_layout"] = str(decode_rope_layout)
+             p = torch.zeros(1, 32, dtype=torch.int32)
+             p[0, 0] = pos
+             cp = torch.full((1,), -1, dtype=torch.int32)
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tests/batched.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tests/batched.py
+@@ -167,7 +167,8 @@
+         p[0, :batch] = cp
+         rp = device(p, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+         dp = device(cp, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+-        dr = tuple(device(t.squeeze(0)) for t in (cos, sin))
++        decode_rope_layout = getattr(layer, "decode_rope_layout", ttnn.TILE_LAYOUT)
++        dr = tuple(device(t.squeeze(0), layout=decode_rope_layout) for t in (cos, sin))
+ 
+         def forward():
+             return layer.decode_forward(
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tests/request_reuse.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tests/request_reuse.py
+@@ -84,7 +84,8 @@
+         ]
+         pt = device(torch.arange(extent // 32, dtype=torch.int32)[None], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+         rt = tuple(device(t[None]) for t in (cos, sin))
+-        dr = tuple(device(t.squeeze(0)) for t in (cos, sin))
++        decode_rope_layout = getattr(layer, "decode_rope_layout", ttnn.TILE_LAYOUT)
++        dr = tuple(device(t.squeeze(0), layout=decode_rope_layout) for t in (cos, sin))
+         dt = device(torch.zeros(1, 1, 1, cfg.hidden_size))
+         p = torch.zeros(1, 32, dtype=torch.int32)
+         cp = torch.zeros(1, dtype=torch.int32)
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tests/long_context.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tests/long_context.py
+@@ -148,7 +148,8 @@
+         args.output.write_text(json.dumps(result, indent=2) + "\n")
+         print(result, flush=True)
+         dt = device(x[:, -1:][None])
+-        dr = tuple(device(t.squeeze(0)) for t in (cos, sin))
++        decode_rope_layout = getattr(decoder, "decode_rope_layout", ttnn.TILE_LAYOUT)
++        dr = tuple(device(t.squeeze(0), layout=decode_rope_layout) for t in (cos, sin))
+         p = torch.zeros(1, 32, dtype=torch.int32)
+         p[0, 0] = length - 1
+         cp = torch.tensor([length - 1], dtype=torch.int32)

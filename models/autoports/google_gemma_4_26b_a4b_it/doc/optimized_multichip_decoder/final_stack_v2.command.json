@@ -1,0 +1,11 @@
+{
+  "command": [
+    "/workspace/tt-metal/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.tests.test_multichip_stack",
+    "--output",
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/final_stack.json"
+  ],
+  "environment": {},
+  "exit_code": 0
+}

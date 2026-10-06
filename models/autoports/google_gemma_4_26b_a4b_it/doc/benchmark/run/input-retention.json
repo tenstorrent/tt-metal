@@ -1,0 +1,6 @@
+{
+  "captured_inputs": 536,
+  "actual_request_hashes_verified": 5,
+  "inference_requests_sent": 0,
+  "method": "Upstream request construction with identical seeds, frozen documents and native structured-chat transport; stopped before any API inference or scoring."
+}

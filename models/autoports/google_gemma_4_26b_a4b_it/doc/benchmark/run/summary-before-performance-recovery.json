@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "status": "failed",
+  "accuracy": {},
+  "performance": {},
+  "accuracy_execution": "shared",
+  "error": "RuntimeError: command exited -15; inspect /workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/benchmark/run/accuracy-shared.log",
+  "elapsed_seconds": 942.5644382312894
+}

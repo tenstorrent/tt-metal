@@ -1,0 +1,371 @@
+{
+  "selected": "unchanged DRAM producers",
+  "reason": "Retain DRAM producers. Initial0.4\u20130.5% apparent gains do not repeat consistently: second full control78540.505us vs QKV78543.679, output78558.617, router78586.753. Sliding router92717.347 vs control92690.445 in first repeat reverses the initial gain; second repeat changes ordering again. Combined full placement78487.685 vs78535.423us control is only0.061%, within overlapping30-sample distributions, while decode702.372 vs701.530us. No reproducible material whole-layer gain is established. Shared-input L1 loses2.3\u20132.4%. All24 cases pass identical per-kind output PCC; source intercepts verify actual L1 producer placement. No API failure was used as rejection.",
+  "records": [
+    {
+      "evidence": "prefill_producer_control_full.json",
+      "roles": [
+        "control"
+      ],
+      "layer_type": "full_attention",
+      "samples": 5,
+      "prefill_median_us": 78900.39961785078,
+      "prefill_min_us": 78411.49903833866,
+      "prefill_max_us": 81119.4833368063,
+      "decode_median_us": 702.1515630185604,
+      "minimum_pcc": 0.9965429315304237,
+      "producer_hits": {}
+    },
+    {
+      "evidence": "prefill_producer_control_sliding.json",
+      "roles": [
+        "control"
+      ],
+      "layer_type": "sliding_attention",
+      "samples": 5,
+      "prefill_median_us": 93097.43717312813,
+      "prefill_min_us": 92338.09169381857,
+      "prefill_max_us": 93550.54888874292,
+      "decode_median_us": 653.3581763505936,
+      "minimum_pcc": 0.9976438866079221,
+      "producer_hits": {}
+    },
+    {
+      "evidence": "prefill_producer_output_full.json",
+      "roles": [
+        "output"
+      ],
+      "layer_type": "full_attention",
+      "samples": 5,
+      "prefill_median_us": 78561.75769120455,
+      "prefill_min_us": 78455.82626760006,
+      "prefill_max_us": 79034.80809181929,
+      "decode_median_us": 702.0356133580208,
+      "minimum_pcc": 0.9965429315304237,
+      "producer_hits": {
+        "output": 24
+      }
+    },
+    {
+      "evidence": "prefill_producer_output_sliding.json",
+      "roles": [
+        "output"
+      ],
+      "layer_type": "sliding_attention",
+      "samples": 5,
+      "prefill_median_us": 93288.65353018045,
+      "prefill_min_us": 92380.25546073914,
+      "prefill_max_us": 93509.10410284996,
+      "decode_median_us": 652.6466459035873,
+      "minimum_pcc": 0.9976438866079221,
+      "producer_hits": {
+        "output": 24
+      }
+    },
+    {
+      "evidence": "prefill_producer_qkv_full.json",
+      "roles": [
+        "qkv"
+      ],
+      "layer_type": "full_attention",
+      "samples": 5,
+      "prefill_median_us": 78516.02043956518,
+      "prefill_min_us": 78431.76834285259,
+      "prefill_max_us": 79133.63352417946,
+      "decode_median_us": 702.4216465651989,
+      "minimum_pcc": 0.9965429315304237,
+      "producer_hits": {}
+    },
+    {
+      "evidence": "prefill_producer_qkv_sliding.json",
+      "roles": [
+        "qkv"
+      ],
+      "layer_type": "sliding_attention",
+      "samples": 5,
+      "prefill_median_us": 93282.14079141617,
+      "prefill_min_us": 92443.47363710403,
+      "prefill_max_us": 93581.57869428396,
+      "decode_median_us": 653.2231345772743,
+      "minimum_pcc": 0.9976438866079221,
+      "producer_hits": {}
+    },
+    {
+      "evidence": "prefill_producer_router_full.json",
+      "roles": [
+        "router"
+      ],
+      "layer_type": "full_attention",
+      "samples": 5,
+      "prefill_median_us": 78556.57860636711,
+      "prefill_min_us": 78401.21351182461,
+      "prefill_max_us": 78843.46507489681,
+      "decode_median_us": 701.9760087132454,
+      "minimum_pcc": 0.9965429315304237,
+      "producer_hits": {
+        "router": 24
+      }
+    },
+    {
+      "evidence": "prefill_producer_router_sliding.json",
+      "roles": [
+        "router"
+      ],
+      "layer_type": "sliding_attention",
+      "samples": 5,
+      "prefill_median_us": 92689.2152056098,
+      "prefill_min_us": 92374.41699951887,
+      "prefill_max_us": 93365.45318365097,
+      "decode_median_us": 653.8690067827702,
+      "minimum_pcc": 0.9976438866079221,
+      "producer_hits": {
+        "router": 24
+      }
+    },
+    {
+      "evidence": "prefill_producer_shared_full.json",
+      "roles": [
+        "shared"
+      ],
+      "layer_type": "full_attention",
+      "samples": 5,
+      "prefill_median_us": 80813.38461488485,
+      "prefill_min_us": 80693.79720836878,
+      "prefill_max_us": 81286.34374588728,
+      "decode_median_us": 701.7995230853558,
+      "minimum_pcc": 0.9965429315304237,
+      "producer_hits": {
+        "shared": 24
+      }
+    },
+    {
+      "evidence": "prefill_producer_shared_sliding.json",
+      "roles": [
+        "shared"
+      ],
+      "layer_type": "sliding_attention",
+      "samples": 5,
+      "prefill_median_us": 95261.7833390832,
+      "prefill_min_us": 94669.72481459379,
+      "prefill_max_us": 96293.2063266635,
+      "decode_median_us": 653.6641158163548,
+      "minimum_pcc": 0.9976438866079221,
+      "producer_hits": {
+        "shared": 24
+      }
+    },
+    {
+      "evidence": "prefill_repeat_10_output_full.json",
+      "roles": [
+        "output"
+      ],
+      "layer_type": "full_attention",
+      "samples": 15,
+      "prefill_median_us": 78558.61727148294,
+      "prefill_min_us": 78402.2007137537,
+      "prefill_max_us": 79342.4304574728,
+      "decode_median_us": 701.5797309577465,
+      "minimum_pcc": 0.9965429315304237,
+      "producer_hits": {
+        "output": 64
+      }
+    },
+    {
+      "evidence": "prefill_repeat_11_router_full.json",
+      "roles": [
+        "router"
+      ],
+      "layer_type": "full_attention",
+      "samples": 15,
+      "prefill_median_us": 78586.75252646208,
+      "prefill_min_us": 78369.33806538582,
+      "prefill_max_us": 79249.06350672245,
+      "decode_median_us": 702.4412043392658,
+      "minimum_pcc": 0.9965429315304237,
+      "producer_hits": {
+        "router": 64
+      }
+    },
+    {
+      "evidence": "prefill_repeat_12_control_full.json",
+      "roles": [
+        "control"
+      ],
+      "layer_type": "full_attention",
+      "samples": 15,
+      "prefill_median_us": 78540.50491005182,
+      "prefill_min_us": 78410.8079969883,
+      "prefill_max_us": 79313.11521679163,
+      "decode_median_us": 702.7573883533478,
+      "minimum_pcc": 0.9965429315304237,
+      "producer_hits": {}
+    },
+    {
+      "evidence": "prefill_repeat_1_router_sliding.json",
+      "roles": [
+        "router"
+      ],
+      "layer_type": "sliding_attention",
+      "samples": 15,
+      "prefill_median_us": 92717.34673529863,
+      "prefill_min_us": 92454.16522026062,
+      "prefill_max_us": 94313.11301887035,
+      "decode_median_us": 653.333030641079,
+      "minimum_pcc": 0.9976438866079221,
+      "producer_hits": {
+        "router": 64
+      }
+    },
+    {
+      "evidence": "prefill_repeat_2_control_sliding.json",
+      "roles": [
+        "control"
+      ],
+      "layer_type": "sliding_attention",
+      "samples": 15,
+      "prefill_median_us": 92690.44548273087,
+      "prefill_min_us": 92415.00310599804,
+      "prefill_max_us": 93689.90827351809,
+      "decode_median_us": 652.6918150484562,
+      "minimum_pcc": 0.9976438866079221,
+      "producer_hits": {}
+    },
+    {
+      "evidence": "prefill_repeat_3_router_sliding.json",
+      "roles": [
+        "router"
+      ],
+      "layer_type": "sliding_attention",
+      "samples": 15,
+      "prefill_median_us": 92632.00592249632,
+      "prefill_min_us": 92374.95716661215,
+      "prefill_max_us": 93490.16938358545,
+      "decode_median_us": 652.4068303406239,
+      "minimum_pcc": 0.9976438866079221,
+      "producer_hits": {
+        "router": 64
+      }
+    },
+    {
+      "evidence": "prefill_repeat_4_control_sliding.json",
+      "roles": [
+        "control"
+      ],
+      "layer_type": "sliding_attention",
+      "samples": 15,
+      "prefill_median_us": 92934.34210121632,
+      "prefill_min_us": 92437.89780884981,
+      "prefill_max_us": 93889.39011842012,
+      "decode_median_us": 652.8869271278381,
+      "minimum_pcc": 0.9976438866079221,
+      "producer_hits": {}
+    },
+    {
+      "evidence": "prefill_repeat_5_qkv_full.json",
+      "roles": [
+        "qkv"
+      ],
+      "layer_type": "full_attention",
+      "samples": 15,
+      "prefill_median_us": 78482.0793196559,
+      "prefill_min_us": 78400.11268854141,
+      "prefill_max_us": 80242.61984974146,
+      "decode_median_us": 703.3185102045536,
+      "minimum_pcc": 0.9965429315304237,
+      "producer_hits": {}
+    },
+    {
+      "evidence": "prefill_repeat_6_output_full.json",
+      "roles": [
+        "output"
+      ],
+      "layer_type": "full_attention",
+      "samples": 15,
+      "prefill_median_us": 78577.18225568533,
+      "prefill_min_us": 78426.31358653307,
+      "prefill_max_us": 79272.04389125109,
+      "decode_median_us": 701.9001059234142,
+      "minimum_pcc": 0.9965429315304237,
+      "producer_hits": {
+        "output": 64
+      }
+    },
+    {
+      "evidence": "prefill_repeat_7_router_full.json",
+      "roles": [
+        "router"
+      ],
+      "layer_type": "full_attention",
+      "samples": 15,
+      "prefill_median_us": 78526.7660394311,
+      "prefill_min_us": 78399.04353022575,
+      "prefill_max_us": 79329.81383055449,
+      "decode_median_us": 702.5366649031639,
+      "minimum_pcc": 0.9965429315304237,
+      "producer_hits": {
+        "router": 64
+      }
+    },
+    {
+      "evidence": "prefill_repeat_8_control_full.json",
+      "roles": [
+        "control"
+      ],
+      "layer_type": "full_attention",
+      "samples": 15,
+      "prefill_median_us": 78681.10109120607,
+      "prefill_min_us": 78481.55125975609,
+      "prefill_max_us": 79897.46518433094,
+      "decode_median_us": 703.4186273813248,
+      "minimum_pcc": 0.9965429315304237,
+      "producer_hits": {}
+    },
+    {
+      "evidence": "prefill_repeat_9_qkv_full.json",
+      "roles": [
+        "qkv"
+      ],
+      "layer_type": "full_attention",
+      "samples": 15,
+      "prefill_median_us": 78543.67885738611,
+      "prefill_min_us": 78348.83872419596,
+      "prefill_max_us": 79222.921282053,
+      "decode_median_us": 702.1618075668812,
+      "minimum_pcc": 0.9965429315304237,
+      "producer_hits": {}
+    },
+    {
+      "evidence": "prefill_combined_combined_full.json",
+      "roles": [
+        "qkv",
+        "output",
+        "router"
+      ],
+      "layer_type": "full_attention",
+      "samples": 30,
+      "prefill_median_us": 78487.6854158938,
+      "prefill_min_us": 78333.65350961685,
+      "prefill_max_us": 79277.14753895998,
+      "decode_median_us": 702.371820807457,
+      "minimum_pcc": 0.9965429315304237,
+      "producer_hits": {
+        "output": 124,
+        "router": 124
+      }
+    },
+    {
+      "evidence": "prefill_combined_control_full.json",
+      "roles": [
+        "control"
+      ],
+      "layer_type": "full_attention",
+      "samples": 30,
+      "prefill_median_us": 78535.42268276215,
+      "prefill_min_us": 78407.02310204506,
+      "prefill_max_us": 80254.16918098927,
+      "decode_median_us": 701.5299052000046,
+      "minimum_pcc": 0.9965429315304237,
+      "producer_hits": {}
+    }
+  ]
+}

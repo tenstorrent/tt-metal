@@ -1,0 +1,232 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Alternate setup-built prefill policies in one process; retain the original HF gate."""
+
+import argparse
+import copy
+import json
+import statistics
+import sys
+import time
+from pathlib import Path
+from unittest.mock import patch
+
+from models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_minimal_advice import describe, digest
+
+
+def attach_prefill_pairs(decoder, mesh, select, record, *, pairs=8, ttnn_module):
+    """Select prebuilt states outside timing, warm both, then time whole prefill."""
+    if pairs < 2:
+        raise ValueError("At least two alternating pairs are required")
+    original = decoder.prefill_forward
+    first = True
+    ttnn = ttnn_module
+
+    def prefill(*inputs, **options):
+        nonlocal first
+        if not first:
+            select(True)
+            return original(*inputs, **options)
+        first = False
+        record.update(pairs_requested=pairs, samples=[], warmups=[])
+        for warmup in range(2):
+            for enabled in (False, True):
+                select(enabled)
+                before = mesh.num_program_cache_entries()
+                temporary = original(*inputs, **options)
+                ttnn.synchronize_device(mesh)
+                temporary.deallocate(True)
+                record["warmups"].append(
+                    dict(
+                        round=warmup,
+                        candidate=enabled,
+                        entries_before=before,
+                        entries_after=mesh.num_program_cache_entries(),
+                    )
+                )
+        entries = mesh.num_program_cache_entries()
+        if entries <= 0:
+            raise AssertionError("Warmup did not populate program cache")
+        record["cache_entries_after_warmup"] = entries
+        mesh.set_program_cache_misses_allowed(False)
+        try:
+            for pair in range(pairs):
+                for enabled in ((False, True) if pair % 2 == 0 else (True, False)):
+                    select(enabled)
+                    ttnn.synchronize_device(mesh)
+                    start = time.perf_counter_ns()
+                    temporary = original(*inputs, **options)
+                    ttnn.synchronize_device(mesh)
+                    elapsed = (time.perf_counter_ns() - start) / 1000
+                    temporary.deallocate(True)
+                    record["samples"].append(dict(pair=pair, candidate=enabled, whole_prefill_host_us=elapsed))
+            # The ordinary runner reads this output and decodes from this cache.
+            select(True)
+            output = original(*inputs, **options)
+            ttnn.synchronize_device(mesh)
+            record["cache_entries_after_samples"] = mesh.num_program_cache_entries()
+            if record["cache_entries_after_samples"] != entries:
+                raise AssertionError("Program cache grew during paired samples")
+        finally:
+            mesh.set_program_cache_misses_allowed(True)
+        baseline = [row["whole_prefill_host_us"] for row in record["samples"] if not row["candidate"]]
+        candidate = [row["whole_prefill_host_us"] for row in record["samples"] if row["candidate"]]
+        deltas = [new - old for old, new in zip(baseline, candidate)]
+        record.update(
+            baseline_median_us=statistics.median(baseline),
+            candidate_median_us=statistics.median(candidate),
+            paired_candidate_minus_baseline_us=deltas,
+            median_paired_delta_us=statistics.median(deltas),
+            candidate_faster_pairs=sum(delta < 0 for delta in deltas),
+            program_cache_misses_forbidden=True,
+            scope="Synchronous whole-prefill host calls; setup, selection, warmup, initial sync and output deallocation excluded; final sync included. Final candidate output/cache feeds the unchanged HF/decode gate. Baseline accuracy remains separately measured by the matched screen control.",
+        )
+        return output
+
+    decoder.prefill_forward = prefill
+
+
+def qkv_control(decoder, mesh, candidate, ttnn):
+    from models.autoports.google_gemma_4_26b_a4b_it.tt.optimized_decoder import MinimalPrefillQKV
+
+    qkv = decoder.layer.self_attn.source.weights.wqkv
+    if not isinstance(qkv, MinimalPrefillQKV):
+        raise TypeError("Selected minimal QKV is required")
+    projection = qkv.projection
+    before = describe(projection)
+    baseline = (projection.compute, projection.programs, copy.deepcopy(projection.precision_policy))
+    compute, programs, policy = baseline
+    if candidate == "hifi2":
+        compute = ttnn.init_device_compute_kernel_config(
+            mesh.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=compute.math_approx_mode,
+            fp32_dest_acc_en=compute.fp32_dest_acc_en,
+            packer_l1_acc=compute.packer_l1_acc,
+            dst_full_sync_en=compute.dst_full_sync_en,
+            throttle_level=compute.throttle_level,
+        )
+    elif candidate == "grid110":
+        available = mesh.compute_with_storage_grid_size()
+        if available.x < 11 or available.y < 10:
+            raise ValueError("11x10 requires 110 available cores")
+        programs = tuple(
+            ttnn.MinimalMatmulConfig(
+                M_block_size=program.M_block_size,
+                K_block_size=program.K_block_size,
+                N_block_size=program.N_block_size,
+                subblock_h=program.subblock_h,
+                subblock_w=program.subblock_w,
+                compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+            )
+            for program in programs
+        )
+    else:
+        raise ValueError(candidate)
+    policy = copy.deepcopy(policy)
+    policy.update(
+        fidelity=str(compute.math_fidelity),
+        grid=(11, 10) if candidate == "grid110" else (11, 8),
+        programs={str(index + 1): str(program) for index, program in enumerate(programs)},
+    )
+    alternate = (compute, programs, policy)
+
+    def select(enabled):
+        projection.compute, projection.programs, projection.precision_policy = alternate if enabled else baseline
+        decoder.precision_policy["prefill_qkv_projection"] = projection.precision_policy
+
+    select(True)
+    after = describe(projection)
+    expected_compute = dict(before["compute"])
+    if candidate == "hifi2":
+        expected_compute["math_fidelity"] = str(ttnn.MathFidelity.HiFi2)
+    assert after["compute"] == expected_compute
+    for key in ("weight_dtype", "weight_shape", "weight_memory", "output_dtype", "input_dtype"):
+        assert before[key] == after[key]
+    return select, dict(
+        candidate=candidate,
+        baseline=before,
+        alternate=after,
+        decode_policy=copy.deepcopy(decoder.precision_policy["qkv_decode"]),
+        output_policy=copy.deepcopy(decoder.precision_policy["prefill_output_projection"]),
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--paired-minimal-advice", choices=("hifi2", "grid110"))
+    group.add_argument("--paired-placement", choices=("shared_l1", "output_l1"))
+    parser.add_argument("--pairs", type=int, default=8)
+    args, rest = parser.parse_known_args()
+    if not all(flag in rest for flag in ("--defaults", "--real", "--input-fixture", "--verify-program-cache")):
+        parser.error("Use selected defaults, real input fixture and program-cache verification")
+    output = Path(rest[rest.index("--output") + 1])
+    if output.exists():
+        raise FileExistsError(output)
+
+    import torch
+    import ttnn
+    from models.autoports.google_gemma_4_26b_a4b_it.tests import run_optimized_contract, run_optimized_decoder
+    from models.autoports.google_gemma_4_26b_a4b_it.tt.optimized_decoder import OptimizedDecoder
+
+    torch.set_num_threads(4)
+    runtime = Path(__file__).parents[1] / "tt/optimized_decoder.py"
+    source_paths = [runtime, Path(__file__), Path(__file__).with_name("probe_optimized_minimal_advice.py")]
+    placement_class = None
+    if args.paired_placement:
+        from models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_placement import PlacementControl
+
+        placement_class = PlacementControl
+        source_paths.append(Path(__file__).with_name("probe_optimized_prefill_placement.py"))
+    hashes = {str(path): digest(path) for path in source_paths}
+    factory = OptimizedDecoder.from_state_dict.__func__
+    original_linear = ttnn.linear
+    controls, metadata, paired = [], {}, {}
+
+    def build(cls, *a, **kw):
+        decoder = factory(cls, *a, **kw)
+        mesh = kw["mesh_device"]
+        if args.paired_minimal_advice:
+            select, data = qkv_control(decoder, mesh, args.paired_minimal_advice, ttnn)
+            metadata.update(data)
+        else:
+            control = placement_class(decoder, mesh, args.paired_placement, ttnn)
+            control.original_linear = original_linear
+            controls.append(control)
+            select = control.set_enabled
+            metadata.update(control.metadata)
+        attach_prefill_pairs(decoder, mesh, select, paired, pairs=args.pairs, ttnn_module=ttnn)
+        return decoder
+
+    def linear(*a, **kw):
+        return controls[-1].linear(*a, **kw) if controls else original_linear(*a, **kw)
+
+    failure = None
+    try:
+        with (
+            patch.object(OptimizedDecoder, "from_state_dict", classmethod(build)),
+            patch.object(ttnn, "linear", linear),
+            patch.object(torch, "set_num_threads", lambda _: None),
+            patch.object(sys, "argv", [sys.argv[0], *rest]),
+        ):
+            (run_optimized_contract.main if "--contract" in rest else run_optimized_decoder.main)()
+        assert len(paired["samples"]) == args.pairs * 2
+    except Exception as error:
+        failure = f"{type(error).__name__}: {error}"
+        raise
+    finally:
+        report = json.loads(output.read_text()) if output.exists() else {}
+        report.update(
+            prefill_pairing=paired, paired_candidate=vars(args), paired_policy=metadata, paired_source_hashes=hashes
+        )
+        if failure:
+            report["prefill_pairing_error"] = failure
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(report, indent=2) + "\n")
+        if hashes != {str(path): digest(path) for path in source_paths}:
+            raise RuntimeError("Paired experiment source changed during execution")
+
+
+if __name__ == "__main__":
+    main()

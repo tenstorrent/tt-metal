@@ -1,0 +1,31 @@
+{
+  "source": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/reports/tp4/2026_09_27_06_01_55/ops_perf_results_tp4_2026_09_27_06_01_55.csv",
+  "per_device": {
+    "0": {
+      "prefill_programs": 2593,
+      "decode_replay_sessions": 128,
+      "programs_per_decode_replay": 128,
+      "same_op_set_all_replays": true
+    },
+    "1": {
+      "prefill_programs": 2593,
+      "decode_replay_sessions": 128,
+      "programs_per_decode_replay": 128,
+      "same_op_set_all_replays": true
+    },
+    "2": {
+      "prefill_programs": 2593,
+      "decode_replay_sessions": 128,
+      "programs_per_decode_replay": 128,
+      "same_op_set_all_replays": true
+    },
+    "3": {
+      "prefill_programs": 2593,
+      "decode_replay_sessions": 128,
+      "programs_per_decode_replay": 128,
+      "same_op_set_all_replays": true
+    }
+  },
+  "invalid_fw_spans": [],
+  "passed": true
+}

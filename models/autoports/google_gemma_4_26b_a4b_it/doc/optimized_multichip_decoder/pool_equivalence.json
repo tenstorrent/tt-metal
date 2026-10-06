@@ -1,0 +1,15 @@
+{
+  "private": "stack_full_grid_actual_context.json",
+  "pooled": "stack_shared_grid_actual_context.json",
+  "length": 4096,
+  "steps": 128,
+  "layers": [
+    0,
+    1
+  ],
+  "bitwise_all_outputs_equal": true,
+  "replicas_equal": true,
+  "repeated_traces_equal": true,
+  "accuracy_gate_passed": false,
+  "limitation": "Buffer reuse equivalence passed; this precision policy still fails cumulative stack PCC and is not accepted."
+}

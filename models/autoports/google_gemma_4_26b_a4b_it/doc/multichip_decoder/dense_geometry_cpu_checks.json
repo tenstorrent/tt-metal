@@ -1,0 +1,125 @@
+{
+  "scope": "Arithmetic and AST only; no TTNN import/device use",
+  "cases": [
+    {
+      "role": "sliding_qkv",
+      "n_tiles": 64,
+      "k_tiles": 88,
+      "block_k": 22,
+      "subblock": [
+        1,
+        2
+      ],
+      "workers": 32,
+      "divisible": true
+    },
+    {
+      "role": "sliding_qkv",
+      "n_tiles": 64,
+      "k_tiles": 88,
+      "block_k": 22,
+      "subblock": [
+        1,
+        4
+      ],
+      "workers": 16,
+      "divisible": true
+    },
+    {
+      "role": "full_qkv",
+      "n_tiles": 96,
+      "k_tiles": 88,
+      "block_k": 22,
+      "subblock": [
+        1,
+        2
+      ],
+      "workers": 48,
+      "divisible": true
+    },
+    {
+      "role": "full_qkv",
+      "n_tiles": 96,
+      "k_tiles": 88,
+      "block_k": 22,
+      "subblock": [
+        1,
+        4
+      ],
+      "workers": 24,
+      "divisible": true
+    },
+    {
+      "role": "sliding_wo",
+      "n_tiles": 88,
+      "k_tiles": 32,
+      "block_k": 8,
+      "subblock": [
+        1,
+        2
+      ],
+      "workers": 44,
+      "divisible": true
+    },
+    {
+      "role": "sliding_wo",
+      "n_tiles": 88,
+      "k_tiles": 32,
+      "block_k": 8,
+      "subblock": [
+        1,
+        4
+      ],
+      "workers": 22,
+      "divisible": true
+    },
+    {
+      "role": "full_wo",
+      "n_tiles": 88,
+      "k_tiles": 64,
+      "block_k": 8,
+      "subblock": [
+        1,
+        2
+      ],
+      "workers": 44,
+      "divisible": true
+    },
+    {
+      "role": "full_wo",
+      "n_tiles": 88,
+      "k_tiles": 64,
+      "block_k": 8,
+      "subblock": [
+        1,
+        4
+      ],
+      "workers": 22,
+      "divisible": true
+    },
+    {
+      "role": "router",
+      "n_tiles": 4,
+      "k_tiles": 88,
+      "block_k": 22,
+      "subblock": [
+        1,
+        2
+      ],
+      "workers": 2,
+      "divisible": true
+    },
+    {
+      "role": "router",
+      "n_tiles": 4,
+      "k_tiles": 88,
+      "block_k": 22,
+      "subblock": [
+        1,
+        4
+      ],
+      "workers": 1,
+      "divisible": true
+    }
+  ]
+}

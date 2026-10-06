@@ -1,0 +1,55 @@
+{
+  "layer_type": "sliding_attention",
+  "workload": {
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "batch": 1,
+    "concurrency": 1
+  },
+  "source": "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/tracy/sliding/ops_stale_metadata.csv",
+  "whole_layer_windows": {
+    "prefill": {
+      "device_us": 4996258.5355555555,
+      "min_device_us": 4996258.5355555555,
+      "max_device_us": 4996258.5355555555,
+      "ns_per_cycle": 0.7407407407407407,
+      "samples": 1,
+      "native_ops": 2501,
+      "estimated_dram_bytes": 39553777664.0,
+      "summed_kernel_device_us": 4993873.494
+    },
+    "decode": {
+      "device_us": 9811.40282986111,
+      "min_device_us": 9799.97851851852,
+      "max_device_us": 9825.382962962964,
+      "ns_per_cycle": 0.7407407407407407,
+      "samples": 128,
+      "native_ops": 71680,
+      "estimated_dram_bytes": 3070070976.0,
+      "summed_kernel_device_us": 9396.325765625
+    }
+  },
+  "prefill_device_us": 4996258.5355555555,
+  "decode_device_us": 9811.40282986111,
+  "prefill_useful_flops": 882489950208,
+  "useful_flops_terms": {
+    "qkv_and_output_projections": 283467841536,
+    "shared_mlp": 146163105792,
+    "active_experts_top8": 389768282112,
+    "router_projection": 2952790016,
+    "causal_attention_qk_and_pv": 60137930752
+  },
+  "decode_dram_bytes": 3070070976.0,
+  "peak_flops_per_s": 165888000000000.0,
+  "peak_dram_bytes_per_s": 512000000000.0,
+  "prefill_flops_pct": 0.10647555045279991,
+  "decode_dram_pct": 61.11493411268776,
+  "peak_basis": "One P300 Blackhole ASIC: theoretical120 Tensix cores at1.35GHz,4096 FLOP/core/cycle divided by4 for BF16 HiFi4;512GB/s DRAM. Mixed fidelity/SFPU code, so this is a common useful-work roofline basis, not measured FPU utilization.",
+  "assumptions": [
+    "Time is first native firmware start to last native firmware end, including all intervening layer operations and gaps. Decode is mean of128 individual trace replay windows; inter-replay input-copy/host gaps are excluded.",
+    "Useful FLOPs count logical projection/MLP/router and causal attention work, with only8 active experts. Padding, masked attention, extra prefill expert computation, scalar normalization and transcendental work are excluded from numerator; their time remains in denominator.",
+    "Estimated DRAM bytes sum one padded DRAM input read/output write per native operation. Sparse weights count8/128 experts; embedding/slices count selected inputs; whole-cache layout conversions count full pool. Extra per-core rereads, metadata and profiler traffic are excluded. This is an estimate, not hardware counters.",
+    "BF16 weights/cache, mixed BF16/FP32 activations, HiFi4 attention/QKV and expert prefill, inherited shared/expert decode fidelity, exact SFPU decode QKV/router/norm/rotary. No percentages are clamped."
+  ],
+  "traffic_status": "Invalidated by independent review: cached shapes are stale; cache updates and sparse nnz accounting also need correction. Device timing windows remain valid."
+}

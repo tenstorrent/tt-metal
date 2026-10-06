@@ -1,0 +1,274 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-9.0.3, pluggy-1.6.0 -- /home/container_app_user/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /workspace/tt-metal
+configfile: pytest.ini
+plugins: benchmark-5.2.3, timeout-2.4.0, anyio-4.15.1, cov-7.0.0, dash-2.15.0, repeat-0.9.4, split-0.11.0, github-actions-annotate-failures-0.3.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... INFO 09-28 08:53:40 [__init__.py:52] Available plugins for group vllm.platform_plugins:
+INFO 09-28 08:53:40 [__init__.py:54] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 09-28 08:53:40 [__init__.py:57] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+INFO 09-28 08:53:40 [__init__.py:237] Platform plugin tt is activated
+INFO 09-28 08:53:42 [importing.py:53] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 09-28 08:53:42 [importing.py:88] Triton not installed or not compatible; certain GPU-related functions will not be available.
+collected 91 items
+
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[None-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[None-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[0-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[0-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[1-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[1-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[3-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[3-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[5-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[5-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[10-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[10-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_host_only_parameters_select_host_sampling[allowed_tokens] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_host_only_parameters_select_host_sampling[bad_words] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_host_only_parameters_select_host_sampling[logits_processor] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_host_only_parameters_select_host_sampling[structured_output] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_omits_sampling_params_and_default_adapter_refuses_host_mode[None-False] 2026-09-28 08:53:52.893 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Host sampling"
+2026-09-28 08:53:52.893 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Host sampling"
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_omits_sampling_params_and_default_adapter_refuses_host_mode[None-True] 2026-09-28 08:53:53.313 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Host sampling"
+2026-09-28 08:53:53.313 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Host sampling"
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_omits_sampling_params_and_default_adapter_refuses_host_mode[0-False] 2026-09-28 08:53:53.731 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Host sampling"
+2026-09-28 08:53:53.731 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Host sampling"
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_omits_sampling_params_and_default_adapter_refuses_host_mode[0-True] 2026-09-28 08:53:54.147 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Host sampling"
+2026-09-28 08:53:54.147 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Host sampling"
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_omits_sampling_params_and_default_adapter_refuses_host_mode[true-False] 2026-09-28 08:53:54.692 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Host sampling"
+2026-09-28 08:53:54.692 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Host sampling"
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_omits_sampling_params_and_default_adapter_refuses_host_mode[true-True] 2026-09-28 08:53:55.248 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Host sampling"
+2026-09-28 08:53:55.248 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Host sampling"
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_host_sampler_consumes_last_token_logits_and_returns_logprobs[None-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_host_sampler_consumes_last_token_logits_and_returns_logprobs[None-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_host_sampler_consumes_last_token_logits_and_returns_logprobs[0-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_host_sampler_consumes_last_token_logits_and_returns_logprobs[0-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_host_sampler_consumes_last_token_logits_and_returns_logprobs[3-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_host_sampler_consumes_last_token_logits_and_returns_logprobs[3-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_decode_finalizer_accepts_materialized_host_logits_without_device_processing PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_lane_host_logits_preserve_decode_slots_and_scatter_prefill_rows PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_opt_in_host_submission_returns_all_logits_and_preserves_row_order[False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_opt_in_host_submission_returns_all_logits_and_preserves_row_order[True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_device_host_device_transition_reconfigures_without_changing_device_default PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_generator_capture_and_replay_only_sample_in_token_mode[False] SPLIT_TRACE_READY
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_generator_capture_and_replay_only_sample_in_token_mode[True] LOGITS_TRACE_READY
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_decode_formats_public_tokens_eagerly_only_for_host_sampling[False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_decode_formats_public_tokens_eagerly_only_for_host_sampling[True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_sampler_trace_formats_public_output_after_canonical_sampling_and_penalties PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_sampler_prefill_formats_only_explicit_bound_output[none] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_sampler_prefill_formats_only_explicit_bound_output[other] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_sampler_prefill_formats_only_explicit_bound_output[bound] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_generator_logits_mode_requires_scheduler_feedback[None-False] 2026-09-28 08:54:04.858 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="explicit scheduler tokens and positions"
+2026-09-28 08:54:04.858 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="explicit scheduler tokens and positions"
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_generator_logits_mode_requires_scheduler_feedback[tokens1-True] 2026-09-28 08:54:05.538 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="explicit scheduler tokens and positions"
+2026-09-28 08:54:05.538 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="explicit scheduler tokens and positions"
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_generator_logits_decode_refreshes_scheduler_state_and_recaptures_on_mode_change PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_decode_trims_wire_padding_but_preserves_interior_slots PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_prefill_penalty_mask_excludes_padding_and_stale_tokens[0] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_prefill_penalty_mask_excludes_padding_and_stale_tokens[19] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_decode_prompt_history_masks_stale_tail_in_request_order PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_sampling_reconfiguration_preserves_surviving_request_seed_progress PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_identical_sampling_parameters_refresh_remapped_history_on_reset PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_produces_padded_counts_without_copying_penalty_history[False-False-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_produces_padded_counts_without_copying_penalty_history[False-False-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_produces_padded_counts_without_copying_penalty_history[False-True-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_produces_padded_counts_without_copying_penalty_history[False-True-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_produces_padded_counts_without_copying_penalty_history[True-False-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_produces_padded_counts_without_copying_penalty_history[True-False-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_produces_padded_counts_without_copying_penalty_history[True-True-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_produces_padded_counts_without_copying_penalty_history[True-True-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[False-False-False-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[False-False-False-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[False-False-True-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[False-False-True-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[False-True-False-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[False-True-False-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[False-True-True-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[False-True-True-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[True-False-False-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[True-False-False-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[True-False-True-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[True-False-True-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[True-True-False-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[True-True-False-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[True-True-True-False] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[True-True-True-True] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_seed_counts_restore_without_penalties_and_stable_decode_does_not_reconfigure PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_adapter_rejects_invalid_output_counts_before_sampler_reset[counts0] 2026-09-28 08:54:21.505 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="output_token_counts"
+2026-09-28 08:54:21.505 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="output_token_counts"
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_adapter_rejects_invalid_output_counts_before_sampler_reset[counts1] 2026-09-28 08:54:21.966 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="output_token_counts"
+2026-09-28 08:54:21.967 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="output_token_counts"
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_adapter_rejects_invalid_output_counts_before_sampler_reset[counts2] 2026-09-28 08:54:22.388 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="output_token_counts"
+2026-09-28 08:54:22.388 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="output_token_counts"
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_adapter_rejects_invalid_output_counts_before_sampler_reset[counts3] 2026-09-28 08:54:22.808 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="output_token_counts"
+2026-09-28 08:54:22.808 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="output_token_counts"
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_adapter_rejects_invalid_output_counts_before_sampler_reset[counts4] 2026-09-28 08:54:23.322 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="output_token_counts"
+2026-09-28 08:54:23.322 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="output_token_counts"
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_adapter_page_growth_restores_state_without_releasing_trace[0.0] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_adapter_page_growth_restores_state_without_releasing_trace[0.5] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_resumed_prefill_restores_seed_and_actual_penalty_masks_before_sampling PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_prefill_rejects_retained_count_beyond_logical_prefix 2026-09-28 08:54:25.276 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="cannot exceed"
+2026-09-28 08:54:25.276 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="cannot exceed"
+PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_prefill_slots.py::test_prefill_cache_rows_are_compact_despite_live_state_slots[0-1] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_prefill_slots.py::test_prefill_cache_rows_are_compact_despite_live_state_slots[0-2] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_prefill_slots.py::test_prefill_cache_rows_are_compact_despite_live_state_slots[1-1] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_prefill_slots.py::test_prefill_cache_rows_are_compact_despite_live_state_slots[1-2] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_prefill_slots.py::test_prefill_cache_rows_are_compact_despite_live_state_slots[3-1] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_prefill_slots.py::test_trace_prefill_compacts_scheduler_table_rows_without_truncating_columns[1] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_prefill_slots.py::test_trace_prefill_compacts_scheduler_table_rows_without_truncating_columns[2] PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+../../home/container_app_user/tt-metal/python_env/lib/python3.10/site-packages/torch/jit/_script.py:365: 14 warnings
+  /home/container_app_user/tt-metal/python_env/lib/python3.10/site-packages/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /workspace/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.70s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_opt_in_host_submission_returns_all_logits_and_preserves_row_order[True]
+0.69s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_seed_counts_restore_without_penalties_and_stable_decode_does_not_reconfigure
+0.68s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_generator_logits_mode_requires_scheduler_feedback[tokens1-True]
+0.68s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_host_only_parameters_select_host_sampling[structured_output]
+0.67s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[False-True-False-True]
+0.66s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_prefill_slots.py::test_trace_prefill_compacts_scheduler_table_rows_without_truncating_columns[2]
+0.66s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_sampler_prefill_formats_only_explicit_bound_output[none]
+0.63s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[False-False-False-True]
+0.62s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_produces_padded_counts_without_copying_penalty_history[False-True-True]
+0.62s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_prefill_slots.py::test_prefill_cache_rows_are_compact_despite_live_state_slots[1-1]
+0.62s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[10-True]
+0.61s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[None-False]
+0.60s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[1-True]
+0.58s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_host_sampler_consumes_last_token_logits_and_returns_logprobs[3-True]
+0.56s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_adapter_page_growth_restores_state_without_releasing_trace[0.0]
+0.55s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_omits_sampling_params_and_default_adapter_refuses_host_mode[true-True]
+0.55s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_identical_sampling_parameters_refresh_remapped_history_on_reset
+0.55s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_decode_formats_public_tokens_eagerly_only_for_host_sampling[False]
+0.54s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_omits_sampling_params_and_default_adapter_refuses_host_mode[true-False]
+0.54s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[True-False-True-False]
+0.53s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_host_sampler_consumes_last_token_logits_and_returns_logprobs[3-False]
+0.53s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_sampling_reconfiguration_preserves_surviving_request_seed_progress
+0.53s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[True-True-False-False]
+0.52s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_device_host_device_transition_reconfigures_without_changing_device_default
+0.52s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_decode_formats_public_tokens_eagerly_only_for_host_sampling[True]
+=========================== short test summary info ============================
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[None-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[None-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[0-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[0-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[1-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[1-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[3-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[3-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[5-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[5-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[10-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_tp4_logprobs_select_host_sampling_in_both_phases[10-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_host_only_parameters_select_host_sampling[allowed_tokens]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_host_only_parameters_select_host_sampling[bad_words]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_host_only_parameters_select_host_sampling[logits_processor]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_host_only_parameters_select_host_sampling[structured_output]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_omits_sampling_params_and_default_adapter_refuses_host_mode[None-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_omits_sampling_params_and_default_adapter_refuses_host_mode[None-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_omits_sampling_params_and_default_adapter_refuses_host_mode[0-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_omits_sampling_params_and_default_adapter_refuses_host_mode[0-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_omits_sampling_params_and_default_adapter_refuses_host_mode[true-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_omits_sampling_params_and_default_adapter_refuses_host_mode[true-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_host_sampler_consumes_last_token_logits_and_returns_logprobs[None-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_host_sampler_consumes_last_token_logits_and_returns_logprobs[None-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_host_sampler_consumes_last_token_logits_and_returns_logprobs[0-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_host_sampler_consumes_last_token_logits_and_returns_logprobs[0-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_host_sampler_consumes_last_token_logits_and_returns_logprobs[3-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_host_sampler_consumes_last_token_logits_and_returns_logprobs[3-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_decode_finalizer_accepts_materialized_host_logits_without_device_processing
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_lane_host_logits_preserve_decode_slots_and_scatter_prefill_rows
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_opt_in_host_submission_returns_all_logits_and_preserves_row_order[False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_opt_in_host_submission_returns_all_logits_and_preserves_row_order[True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_device_host_device_transition_reconfigures_without_changing_device_default
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_generator_capture_and_replay_only_sample_in_token_mode[False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_generator_capture_and_replay_only_sample_in_token_mode[True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_decode_formats_public_tokens_eagerly_only_for_host_sampling[False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_decode_formats_public_tokens_eagerly_only_for_host_sampling[True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_sampler_trace_formats_public_output_after_canonical_sampling_and_penalties
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_sampler_prefill_formats_only_explicit_bound_output[none]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_sampler_prefill_formats_only_explicit_bound_output[other]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_sampler_prefill_formats_only_explicit_bound_output[bound]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_generator_logits_mode_requires_scheduler_feedback[None-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_generator_logits_mode_requires_scheduler_feedback[tokens1-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_generator_logits_decode_refreshes_scheduler_state_and_recaptures_on_mode_change
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_decode_trims_wire_padding_but_preserves_interior_slots
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_prefill_penalty_mask_excludes_padding_and_stale_tokens[0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_prefill_penalty_mask_excludes_padding_and_stale_tokens[19]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_decode_prompt_history_masks_stale_tail_in_request_order
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_sampling_reconfiguration_preserves_surviving_request_seed_progress
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_identical_sampling_parameters_refresh_remapped_history_on_reset
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_produces_padded_counts_without_copying_penalty_history[False-False-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_produces_padded_counts_without_copying_penalty_history[False-False-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_produces_padded_counts_without_copying_penalty_history[False-True-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_produces_padded_counts_without_copying_penalty_history[False-True-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_produces_padded_counts_without_copying_penalty_history[True-False-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_produces_padded_counts_without_copying_penalty_history[True-False-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_produces_padded_counts_without_copying_penalty_history[True-True-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_produces_padded_counts_without_copying_penalty_history[True-True-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[False-False-False-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[False-False-False-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[False-False-True-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[False-False-True-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[False-True-False-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[False-True-False-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[False-True-True-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[False-True-True-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[True-False-False-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[True-False-False-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[True-False-True-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[True-False-True-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[True-True-False-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[True-True-False-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[True-True-True-False]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_plugin_forwards_counts_only_for_opt_in_device_sampling[True-True-True-True]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_seed_counts_restore_without_penalties_and_stable_decode_does_not_reconfigure
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_adapter_rejects_invalid_output_counts_before_sampler_reset[counts0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_adapter_rejects_invalid_output_counts_before_sampler_reset[counts1]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_adapter_rejects_invalid_output_counts_before_sampler_reset[counts2]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_adapter_rejects_invalid_output_counts_before_sampler_reset[counts3]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_adapter_rejects_invalid_output_counts_before_sampler_reset[counts4]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_adapter_page_growth_restores_state_without_releasing_trace[0.0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_adapter_page_growth_restores_state_without_releasing_trace[0.5]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_resumed_prefill_restores_seed_and_actual_penalty_masks_before_sampling
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_sampling_contract.py::test_prefill_rejects_retained_count_beyond_logical_prefix
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_prefill_slots.py::test_prefill_cache_rows_are_compact_despite_live_state_slots[0-1]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_prefill_slots.py::test_prefill_cache_rows_are_compact_despite_live_state_slots[0-2]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_prefill_slots.py::test_prefill_cache_rows_are_compact_despite_live_state_slots[1-1]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_prefill_slots.py::test_prefill_cache_rows_are_compact_despite_live_state_slots[1-2]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_prefill_slots.py::test_prefill_cache_rows_are_compact_despite_live_state_slots[3-1]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_prefill_slots.py::test_trace_prefill_compacts_scheduler_table_rows_without_truncating_columns[1]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_vllm_prefill_slots.py::test_trace_prefill_compacts_scheduler_table_rows_without_truncating_columns[2]
+======================= 91 passed, 16 warnings in 48.47s =======================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

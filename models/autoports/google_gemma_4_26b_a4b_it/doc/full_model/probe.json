@@ -1,0 +1,26 @@
+{
+  "tokens": [
+    31,
+    31,
+    31,
+    1
+  ],
+  "completion": "<unused25><unused25><unused25><eos>",
+  "prompt_tokens": 19,
+  "elapsed_seconds": 26.941833950579166,
+  "metrics": {
+    "ttft_ms": 12997.625085525215,
+    "decode_tps": 339.76870680276716,
+    "input_tokens": 19,
+    "output_tokens": 4,
+    "batch": 1,
+    "source": "autoregressive",
+    "reduced_probe": true,
+    "host_sampling": false,
+    "counters": {
+      "model_replays": 3,
+      "sampling_replays": 3,
+      "token_readbacks": 3
+    }
+  }
+}

@@ -1,0 +1,136 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
+@@ -218,6 +218,105 @@
+         return self.reduce(output) if reduce_output else output
+ 
+ 
++class _DramSharedMLP(_SharedMLP):
++    """Bank-sharded shared decode; the inherited BF16 prefill stays unchanged."""
++
++    def configure_decode(self, state, mesh, sliding, geometry=0):
++        import torch
++
++        banks = mesh.dram_grid_size().x
++        if banks != 8 or self.width != 544 or state["mlp.gate_proj.weight"].shape[-1] != 2816:
++            raise ValueError("Shared DRAM decode requires eight banks and local shared width544/hidden2816")
++        gate = state["mlp.gate_proj.weight"].transpose(-2, -1)
++        up = state["mlp.up_proj.weight"].transpose(-2, -1)
++        down = state["mlp.down_proj.weight"].transpose(-2, -1)
++        padding = 4 * self.width - gate.shape[-1]
++        gate, up = (torch.nn.functional.pad(t, (0, padding)) for t in (gate, up))
++        down = torch.nn.functional.pad(down, (0, 0, 0, padding))
++        local_n = 2 * self.width
++        physical_n = ((local_n + banks * 32 - 1) // (banks * 32)) * banks * 32
++        # Bank padding belongs inside each mesh rank, after its [up, gate] pair.
++        packed = torch.cat(
++            [
++                torch.nn.functional.pad(torch.cat((u, g), dim=-1), (0, physical_n - local_n))
++                for u, g in zip(up.chunk(4, dim=-1), gate.chunk(4, dim=-1))
++            ],
++            dim=-1,
++        )
++        dtype = ttnn.bfloat8_b if sliding else ttnn.bfloat4_b
++        bank_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
++        self.decode_weights = []
++        self.decode_inputs = []
++        self.decode_outputs = []
++        self.decode_programs = []
++        for matrix, axis, k, n, cores, block in (
++            (packed, -1, 2816, physical_n, 8, 11),
++            (down, -2, self.width, 2816, 1, 17),
++        ):
++            weight_memory = ttnn.MemoryConfig(
++                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
++                ttnn.BufferType.DRAM,
++                ttnn.ShardSpec(bank_grid, (k, n // banks), ttnn.ShardOrientation.ROW_MAJOR),
++            )
++            self.decode_weights.append(
++                ttnn.from_torch(
++                    matrix[None, None],
++                    device=mesh,
++                    dtype=dtype,
++                    layout=ttnn.TILE_LAYOUT,
++                    memory_config=weight_memory,
++                    mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=axis),
++                )
++            )
++            storage_grid = ttnn.CoreGrid(x=cores, y=1)
++            for memories, width in ((self.decode_inputs, k), (self.decode_outputs, n)):
++                memories.append(
++                    ttnn.create_sharded_memory_config(
++                        (32, width // cores),
++                        storage_grid,
++                        ttnn.ShardStrategy.WIDTH,
++                        ttnn.ShardOrientation.ROW_MAJOR,
++                        use_height_and_width_as_shard_shape=True,
++                    )
++                )
++            self.decode_programs.append(
++                ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
++                    in0_block_w=block,
++                    per_core_M=1,
++                    per_core_N=n // 32 // cores,
++                    num_workers_per_dram_bank=1,
++                )
++            )
++        self.decode_compute = ttnn.init_device_compute_kernel_config(
++            mesh.arch(),
++            math_fidelity=ttnn.MathFidelity.LoFi,
++            math_approx_mode=False,
++            fp32_dest_acc_en=False,
++            packer_l1_acc=True,
++        )
++        self.extra_decode_weight_tiles = (2816 // 32) * ((physical_n - local_n) // 32)
++
++    def _project(self, value, index):
++        output = ttnn.linear(
++            ttnn.to_memory_config(value, self.decode_inputs[index]),
++            self.decode_weights[index],
++            dtype=ttnn.bfloat16,
++            memory_config=self.decode_outputs[index],
++            program_config=self.decode_programs[index],
++            compute_kernel_config=self.decode_compute,
++        )
++        return ttnn.to_memory_config(output, ttnn.L1_MEMORY_CONFIG)
++
++    def __call__(self, x, *, reduce_output=True):
++        if x.shape[-2] != 1:
++            return super().__call__(x, reduce_output=reduce_output)
++        gu = self._project(x, 0)[..., : 2 * self.width]
++        up, gate = gu[..., : self.width], gu[..., self.width :]
++        hidden = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)])
++        output = self._project(hidden, 1)
++        return self.reduce(output) if reduce_output else output
++
++
+ class _ExpertParallelExperts(OptimizedExperts):
+     """Own 32 complete experts per rank and scan only their routing mask."""
+ 
+@@ -380,12 +479,17 @@
+         fused_agmm=False,
+         topology=ttnn.Topology.Linear,
+         optimized_shared=False,
++        shared_dram=False,
+         shared_geometry=0,
+     ):
+         import torch
+ 
+         if tuple(mesh_device.shape) != (1, 4):
+             raise ValueError("This decoder targets the four-chip 1x4 Blackhole mesh")
++        if shared_dram and not optimized_shared:
++            raise ValueError("Shared DRAM decode requires optimized_shared=True")
++        if shared_dram and shared_geometry:
++            raise ValueError("Shared DRAM decode requires shared_geometry=0")
+         config = getattr(hf_config, "text_config", hf_config)
+         if chunk_size != 1024:
+             raise ValueError("Internal prefill chunk size must be 1024; logical lengths are unrestricted")
+@@ -574,7 +678,8 @@
+             )
+         self.hybrid_experts = hybrid_experts
+         self.expert_parallel = expert_parallel
+-        self.layer.shared_mlp = _SharedMLP(self.layer.shared_mlp, compute, self.allreduce)
++        shared_class = _DramSharedMLP if shared_dram else _SharedMLP
++        self.layer.shared_mlp = shared_class(self.layer.shared_mlp, compute, self.allreduce)
+         if optimized_shared:
+             self.layer.shared_mlp.configure_decode(state_dict, mesh_device, sliding, shared_geometry)
+         positions = torch.arange(config.max_position_embeddings, dtype=torch.int32)[None]

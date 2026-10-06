@@ -1,0 +1,106 @@
+{
+  "runtime_sha256": "dcee732efc1f6d61ace996a31662e880ffaf8c011d8396f5a2c081a2f9910f2b",
+  "runner_sha256": "798ab7b32f8c3578b247146878c3a0a443a86aaabac8cf2ac26cbd8fade3dd7d",
+  "optimized_decode": true,
+  "attention_precision": "qkv",
+  "persistent_ccl": true,
+  "ccl_tuning": {
+    "num_workers_per_link": 2
+  },
+  "collective_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+  "dense_geometry": "baseline",
+  "moe_ccl_bfp8": null,
+  "expert_gate_bfp4": false,
+  "shared_gate_bfp4": false,
+  "shared_down_bfp4": false,
+  "expert_activation_bfp8": false,
+  "split_expert_gate": false,
+  "split_shared_gate": false,
+  "projection_k": null,
+  "projection_role": "qkv",
+  "sharded_decode_rope": null,
+  "qkv_fidelity": "LoFi",
+  "output_fidelity": "LoFi",
+  "attention_ccl_dtype": "bfloat8_b",
+  "full_attention_ccl_dtype_override": "bfloat8_b",
+  "command": [
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py",
+    "--layer",
+    "5",
+    "--length",
+    "262143",
+    "--steps",
+    "1",
+    "--trace",
+    "--check-cache",
+    "--repeat-input",
+    "--reserve-full-stack",
+    "--prefill-timing-samples",
+    "1",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/capacity_pool_full_grid_full.json"
+  ],
+  "expert_parallel": false,
+  "fused_tail": true,
+  "optimized_shared": true,
+  "shared_dram": false,
+  "attention_dram": null,
+  "shared_geometry_requested": null,
+  "shared_geometry": 1,
+  "sparse_gate_geometry": "baseline",
+  "sparse_down_geometry": "baseline",
+  "grouped_moe_reduce": true,
+  "hybrid_experts": true,
+  "cache_pcc": [
+    0.9999709718909707,
+    0.9999709718909707,
+    0.999971464373627,
+    0.999971464373627,
+    0.9999725366395884,
+    0.9999725366395884,
+    0.9999728517522728,
+    0.9999728517522728
+  ],
+  "capacity": {
+    "resident_layer_ccl_managers": 30,
+    "persistent_ccl_l1_payload_reserved_bytes_per_device": 2104960,
+    "reserved_other_resident_bytes_per_device": 19394461696,
+    "current_weight_bound": 264188416,
+    "current_cache_bytes": 285212672,
+    "current_rope_bytes": 1073741824,
+    "accounting": "memory_capacity_plan.json",
+    "limitation": "Anonymous DRAM reservations exercise capacity, not a full-model stack"
+  },
+  "layer_type": "full_attention",
+  "length": 262143,
+  "steps": 1,
+  "pcc": [
+    0.9999435500125748,
+    0.9997186833575766
+  ],
+  "passed": true,
+  "trace": true,
+  "duplicate_replays_per_position": 1,
+  "timings": {
+    "1": {
+      "prefill_host_us": [
+        36382650.3418386
+      ],
+      "decode_host_us": [
+        2384.7008123993874
+      ]
+    },
+    "4": {
+      "prefill_host_us": [
+        11455085.845664144
+      ],
+      "decode_host_us": [
+        1545.596867799759
+      ]
+    }
+  },
+  "all_replicas_equal": true,
+  "sharded_residual": false,
+  "topology": "linear",
+  "fused_agmm": false
+}

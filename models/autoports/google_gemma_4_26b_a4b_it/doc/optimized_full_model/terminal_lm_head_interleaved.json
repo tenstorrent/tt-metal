@@ -1,0 +1,150 @@
+{
+  "model": "google/gemma-4-26B-A4B-it",
+  "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_full_model/terminal_input.pt",
+  "fixture_sha256": "f27d52cb4c47b14fe7877dd3410346b75c76748901635fa6032ccc7c089e92c7",
+  "scope": "Isolated complete TP4 LM head, actual reduced-model terminal input; no sampler or stack",
+  "dtype": "BF16",
+  "fidelity": "HiFi4",
+  "fp32_dest_acc_en": true,
+  "mesh": [
+    1,
+    4
+  ],
+  "cases": [
+    {
+      "name": "baseline",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "host_replay_us": [
+        956.5887041389942,
+        957.3881514370441,
+        956.6637687385082
+      ],
+      "median_host_replay_us": 956.6637687385082,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_b4",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=4,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "pcc_baseline_per_device": [
+        0.9999999998615848,
+        0.9999999997661505,
+        0.9999999984157126,
+        0.9999999988191999
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.5,
+        0.5,
+        1.0,
+        1.0
+      ],
+      "host_replay_us": [
+        937.9971772432327,
+        937.164667993784,
+        937.5683963298798
+      ],
+      "median_host_replay_us": 937.5683963298798,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_b8",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "host_replay_us": [
+        956.3300758600235,
+        953.1931951642036,
+        955.17598092556
+      ],
+      "median_host_replay_us": 955.17598092556,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_b11",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=11,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "pcc_baseline_per_device": [
+        0.999999999442833,
+        0.99999999998766,
+        0.9999999999040499,
+        0.9999999988093087
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        1.0,
+        0.125,
+        0.25,
+        1.0
+      ],
+      "host_replay_us": [
+        963.7392126023769,
+        965.46346321702,
+        962.6311250030994
+      ],
+      "median_host_replay_us": 963.7392126023769,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_b22",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=22,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "status": "allocation_rejected",
+      "error": "TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception\ninfo:\nStatically allocated circular buffers on core range [0-0 - 10-8] grow to 2030592 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x247a52a) [0x7b0a3847a52a]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x7b0a37178479]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1183538) [0x7b0a37183538]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xff) [0x7b0a37176d9f]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1b5) [0x7b0a37174615]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x7b0a37158bd8]\n --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x10e5f60) [0x7b0a370e5f60]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x264) [0x7b0a370e74a4]\n --- /workspace/tt-metal/ttnn/ttnn/_ttnn.so(+0x7945eb) [0x7b0a393945eb]\n --- /workspace/tt-metal/ttnn/ttnn/_ttnn.so(+0x7942e3) [0x7b0a393942e3]\n --- /workspace/tt-metal/ttnn/ttnn/_ttnn.so(+0x374d3d) [0x7b0a38f74d3d]\n --- python(_PyObject_Call_Prepend+0x115) [0x63d0ef0f7c65]\n --- python(+0x3a2b46) [0x63d0ef12bb46]\n --- python(_PyEval_EvalFrameDefault+0xa16c) [0x63d0ef05987c]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(_PyObject_Call_Prepend+0x115) [0x63d0ef0f7c65]\n --- python(+0x3a2b46) [0x63d0ef12bb46]\n --- python(+0x2fd2a2) [0x63d0ef0862a2]\n --- python(_PyEval_EvalFrameDefault+0x3eef) [0x63d0ef0535ff]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(+0x2fd0b9) [0x63d0ef0860b9]\n --- python(_PyEval_EvalFrameDefault+0x4068) [0x63d0ef053778]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(+0x2fd0b9) [0x63d0ef0860b9]\n --- python(_PyEval_EvalFrameDefault+0x4068) [0x63d0ef053778]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(+0x2fd0b9) [0x63d0ef0860b9]\n --- python(_PyEval_EvalFrameDefault+0x4068) [0x63d0ef053778]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(+0x2fd0b9) [0x63d0ef0860b9]\n --- python(_PyEval_EvalFrameDefault+0x4068) [0x63d0ef053778]\n --- python(+0x3d4a54) [0x63d0ef15da54]\n --- python(+0x3d27c9) [0x63d0ef15b7c9]\n --- python(+0x29259f) [0x63d0ef01b59f]\n --- python(+0x2fd0b9) [0x63d0ef0860b9]\n --- python(_PyEval_EvalFrameDefault+0x4068) [0x63d0ef053778]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(+0x2fd0b9) [0x63d0ef0860b9]\n --- python(_PyEval_EvalFrameDefault+0x4068) [0x63d0ef053778]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(+0x1bc738) [0x63d0eef45738]\n --- python(Py_RunMain+0x673) [0x63d0ef19f023]\n --- python(+0x148028) [0x63d0eeed1028]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7b0a7d00bd90]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7b0a7d00be40]\n --- python(+0x34616b) [0x63d0ef0cf16b]\n"
+    },
+    {
+      "name": "interleaved_b44",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=44,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "status": "allocation_rejected",
+      "error": "TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception\ninfo:\nStatically allocated circular buffers on core range [0-0 - 10-8] grow to 3832832 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x247a52a) [0x7b0a3847a52a]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x7b0a37178479]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1183538) [0x7b0a37183538]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xff) [0x7b0a37176d9f]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1b5) [0x7b0a37174615]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x7b0a37158bd8]\n --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x10e5f60) [0x7b0a370e5f60]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x264) [0x7b0a370e74a4]\n --- /workspace/tt-metal/ttnn/ttnn/_ttnn.so(+0x7945eb) [0x7b0a393945eb]\n --- /workspace/tt-metal/ttnn/ttnn/_ttnn.so(+0x7942e3) [0x7b0a393942e3]\n --- /workspace/tt-metal/ttnn/ttnn/_ttnn.so(+0x374d3d) [0x7b0a38f74d3d]\n --- python(_PyObject_Call_Prepend+0x115) [0x63d0ef0f7c65]\n --- python(+0x3a2b46) [0x63d0ef12bb46]\n --- python(_PyEval_EvalFrameDefault+0xa16c) [0x63d0ef05987c]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(_PyObject_Call_Prepend+0x115) [0x63d0ef0f7c65]\n --- python(+0x3a2b46) [0x63d0ef12bb46]\n --- python(+0x2fd2a2) [0x63d0ef0862a2]\n --- python(_PyEval_EvalFrameDefault+0x3eef) [0x63d0ef0535ff]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(+0x2fd0b9) [0x63d0ef0860b9]\n --- python(_PyEval_EvalFrameDefault+0x4068) [0x63d0ef053778]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(+0x2fd0b9) [0x63d0ef0860b9]\n --- python(_PyEval_EvalFrameDefault+0x4068) [0x63d0ef053778]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(+0x2fd0b9) [0x63d0ef0860b9]\n --- python(_PyEval_EvalFrameDefault+0x4068) [0x63d0ef053778]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(+0x2fd0b9) [0x63d0ef0860b9]\n --- python(_PyEval_EvalFrameDefault+0x4068) [0x63d0ef053778]\n --- python(+0x3d4a54) [0x63d0ef15da54]\n --- python(+0x3d27c9) [0x63d0ef15b7c9]\n --- python(+0x29259f) [0x63d0ef01b59f]\n --- python(+0x2fd0b9) [0x63d0ef0860b9]\n --- python(_PyEval_EvalFrameDefault+0x4068) [0x63d0ef053778]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(+0x2fd0b9) [0x63d0ef0860b9]\n --- python(_PyEval_EvalFrameDefault+0x4068) [0x63d0ef053778]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(+0x1bc738) [0x63d0eef45738]\n --- python(Py_RunMain+0x673) [0x63d0ef19f023]\n --- python(+0x148028) [0x63d0eeed1028]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7b0a7d00bd90]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7b0a7d00be40]\n --- python(+0x34616b) [0x63d0ef0cf16b]\n"
+    },
+    {
+      "name": "interleaved_b88",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=88,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "status": "allocation_rejected",
+      "error": "TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception\ninfo:\nStatically allocated circular buffers on core range [0-0 - 10-8] grow to 3832832 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x247a52a) [0x7b0a3847a52a]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x7b0a37178479]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1183538) [0x7b0a37183538]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xff) [0x7b0a37176d9f]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1b5) [0x7b0a37174615]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x7b0a37158bd8]\n --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x10e5f60) [0x7b0a370e5f60]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x264) [0x7b0a370e74a4]\n --- /workspace/tt-metal/ttnn/ttnn/_ttnn.so(+0x7945eb) [0x7b0a393945eb]\n --- /workspace/tt-metal/ttnn/ttnn/_ttnn.so(+0x7942e3) [0x7b0a393942e3]\n --- /workspace/tt-metal/ttnn/ttnn/_ttnn.so(+0x374d3d) [0x7b0a38f74d3d]\n --- python(_PyObject_Call_Prepend+0x115) [0x63d0ef0f7c65]\n --- python(+0x3a2b46) [0x63d0ef12bb46]\n --- python(_PyEval_EvalFrameDefault+0xa16c) [0x63d0ef05987c]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(_PyObject_Call_Prepend+0x115) [0x63d0ef0f7c65]\n --- python(+0x3a2b46) [0x63d0ef12bb46]\n --- python(+0x2fd2a2) [0x63d0ef0862a2]\n --- python(_PyEval_EvalFrameDefault+0x3eef) [0x63d0ef0535ff]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(+0x2fd0b9) [0x63d0ef0860b9]\n --- python(_PyEval_EvalFrameDefault+0x4068) [0x63d0ef053778]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(+0x2fd0b9) [0x63d0ef0860b9]\n --- python(_PyEval_EvalFrameDefault+0x4068) [0x63d0ef053778]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(+0x2fd0b9) [0x63d0ef0860b9]\n --- python(_PyEval_EvalFrameDefault+0x4068) [0x63d0ef053778]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(+0x2fd0b9) [0x63d0ef0860b9]\n --- python(_PyEval_EvalFrameDefault+0x4068) [0x63d0ef053778]\n --- python(+0x3d4a54) [0x63d0ef15da54]\n --- python(+0x3d27c9) [0x63d0ef15b7c9]\n --- python(+0x29259f) [0x63d0ef01b59f]\n --- python(+0x2fd0b9) [0x63d0ef0860b9]\n --- python(_PyEval_EvalFrameDefault+0x4068) [0x63d0ef053778]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(+0x2fd0b9) [0x63d0ef0860b9]\n --- python(_PyEval_EvalFrameDefault+0x4068) [0x63d0ef053778]\n --- python(_PyFunction_Vectorcall+0x202) [0x63d0eeffa352]\n --- python(+0x1bc738) [0x63d0eef45738]\n --- python(Py_RunMain+0x673) [0x63d0ef19f023]\n --- python(+0x148028) [0x63d0eeed1028]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7b0a7d00bd90]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7b0a7d00be40]\n --- python(+0x34616b) [0x63d0ef0cf16b]\n"
+    }
+  ]
+}

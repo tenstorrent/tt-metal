@@ -1,0 +1,20 @@
+{
+  "cache_shape": [
+    160,
+    8,
+    32,
+    256
+  ],
+  "results": [
+    {
+      "candidate": "embedding",
+      "exact_equal": true,
+      "traced_host_us": 658.6475
+    },
+    {
+      "candidate": "tiled_gather",
+      "exact_equal": true,
+      "traced_host_us": 24390.0203
+    }
+  ]
+}

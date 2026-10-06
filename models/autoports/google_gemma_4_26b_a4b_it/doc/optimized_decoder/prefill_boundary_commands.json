@@ -1,0 +1,486 @@
+[
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--layer",
+      "0",
+      "--length",
+      "65",
+      "--real",
+      "--input-fixture",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer0_65.pt",
+      "--decode",
+      "--steps",
+      "1",
+      "--prefill-timing",
+      "--verify-program-cache",
+      "--output",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_fused_layer0_65.json"
+    ],
+    "returncode": 0,
+    "logical_length": 65,
+    "chunk_size": 1024,
+    "chunk_count": 1,
+    "physical_rows": [
+      96
+    ]
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_contract",
+      "--contract",
+      "run_decoder",
+      "--layer",
+      "0",
+      "--length",
+      "65",
+      "--real",
+      "--input-fixture",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer0_65.pt",
+      "--decode",
+      "--steps",
+      "1",
+      "--prefill-timing",
+      "--verify-program-cache",
+      "--output",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_optimized_layer0_65.json"
+    ],
+    "returncode": 0,
+    "logical_length": 65,
+    "chunk_size": 1024,
+    "chunk_count": 1,
+    "physical_rows": [
+      96
+    ]
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--layer",
+      "0",
+      "--length",
+      "1023",
+      "--real",
+      "--input-fixture",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer0_1023.pt",
+      "--decode",
+      "--steps",
+      "1",
+      "--prefill-timing",
+      "--verify-program-cache",
+      "--output",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_fused_layer0_1023.json"
+    ],
+    "returncode": 0,
+    "logical_length": 1023,
+    "chunk_size": 1024,
+    "chunk_count": 1,
+    "physical_rows": [
+      1024
+    ]
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_contract",
+      "--contract",
+      "run_decoder",
+      "--layer",
+      "0",
+      "--length",
+      "1023",
+      "--real",
+      "--input-fixture",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer0_1023.pt",
+      "--decode",
+      "--steps",
+      "1",
+      "--prefill-timing",
+      "--verify-program-cache",
+      "--output",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_optimized_layer0_1023.json"
+    ],
+    "returncode": 0,
+    "logical_length": 1023,
+    "chunk_size": 1024,
+    "chunk_count": 1,
+    "physical_rows": [
+      1024
+    ]
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--layer",
+      "0",
+      "--length",
+      "1024",
+      "--real",
+      "--input-fixture",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer0_1024.pt",
+      "--decode",
+      "--steps",
+      "1",
+      "--prefill-timing",
+      "--verify-program-cache",
+      "--output",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_fused_layer0_1024.json"
+    ],
+    "returncode": 0,
+    "logical_length": 1024,
+    "chunk_size": 1024,
+    "chunk_count": 1,
+    "physical_rows": [
+      1024
+    ]
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_contract",
+      "--contract",
+      "run_decoder",
+      "--layer",
+      "0",
+      "--length",
+      "1024",
+      "--real",
+      "--input-fixture",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer0_1024.pt",
+      "--decode",
+      "--steps",
+      "1",
+      "--prefill-timing",
+      "--verify-program-cache",
+      "--output",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_optimized_layer0_1024.json"
+    ],
+    "returncode": 0,
+    "logical_length": 1024,
+    "chunk_size": 1024,
+    "chunk_count": 1,
+    "physical_rows": [
+      1024
+    ]
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--layer",
+      "0",
+      "--length",
+      "1025",
+      "--real",
+      "--input-fixture",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer0_1025.pt",
+      "--decode",
+      "--steps",
+      "1",
+      "--prefill-timing",
+      "--verify-program-cache",
+      "--output",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_fused_layer0_1025.json"
+    ],
+    "returncode": 0,
+    "logical_length": 1025,
+    "chunk_size": 1024,
+    "chunk_count": 2,
+    "physical_rows": [
+      1024,
+      1024
+    ]
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_contract",
+      "--contract",
+      "run_decoder",
+      "--layer",
+      "0",
+      "--length",
+      "1025",
+      "--real",
+      "--input-fixture",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer0_1025.pt",
+      "--decode",
+      "--steps",
+      "1",
+      "--prefill-timing",
+      "--verify-program-cache",
+      "--output",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_optimized_layer0_1025.json"
+    ],
+    "returncode": 0,
+    "logical_length": 1025,
+    "chunk_size": 1024,
+    "chunk_count": 2,
+    "physical_rows": [
+      1024,
+      1024
+    ]
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--layer",
+      "5",
+      "--length",
+      "65",
+      "--real",
+      "--input-fixture",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer5_65.pt",
+      "--decode",
+      "--steps",
+      "1",
+      "--prefill-timing",
+      "--verify-program-cache",
+      "--output",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_fused_layer5_65.json"
+    ],
+    "returncode": 0,
+    "logical_length": 65,
+    "chunk_size": 1024,
+    "chunk_count": 1,
+    "physical_rows": [
+      96
+    ]
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_contract",
+      "--contract",
+      "run_decoder",
+      "--layer",
+      "5",
+      "--length",
+      "65",
+      "--real",
+      "--input-fixture",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer5_65.pt",
+      "--decode",
+      "--steps",
+      "1",
+      "--prefill-timing",
+      "--verify-program-cache",
+      "--output",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_optimized_layer5_65.json"
+    ],
+    "returncode": 0,
+    "logical_length": 65,
+    "chunk_size": 1024,
+    "chunk_count": 1,
+    "physical_rows": [
+      96
+    ]
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--layer",
+      "5",
+      "--length",
+      "1023",
+      "--real",
+      "--input-fixture",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer5_1023.pt",
+      "--decode",
+      "--steps",
+      "1",
+      "--prefill-timing",
+      "--verify-program-cache",
+      "--output",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_fused_layer5_1023.json"
+    ],
+    "returncode": 0,
+    "logical_length": 1023,
+    "chunk_size": 1024,
+    "chunk_count": 1,
+    "physical_rows": [
+      1024
+    ]
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_contract",
+      "--contract",
+      "run_decoder",
+      "--layer",
+      "5",
+      "--length",
+      "1023",
+      "--real",
+      "--input-fixture",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer5_1023.pt",
+      "--decode",
+      "--steps",
+      "1",
+      "--prefill-timing",
+      "--verify-program-cache",
+      "--output",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_optimized_layer5_1023.json"
+    ],
+    "returncode": 0,
+    "logical_length": 1023,
+    "chunk_size": 1024,
+    "chunk_count": 1,
+    "physical_rows": [
+      1024
+    ]
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--layer",
+      "5",
+      "--length",
+      "1024",
+      "--real",
+      "--input-fixture",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer5_1024.pt",
+      "--decode",
+      "--steps",
+      "1",
+      "--prefill-timing",
+      "--verify-program-cache",
+      "--output",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_fused_layer5_1024.json"
+    ],
+    "returncode": 0,
+    "logical_length": 1024,
+    "chunk_size": 1024,
+    "chunk_count": 1,
+    "physical_rows": [
+      1024
+    ]
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_contract",
+      "--contract",
+      "run_decoder",
+      "--layer",
+      "5",
+      "--length",
+      "1024",
+      "--real",
+      "--input-fixture",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer5_1024.pt",
+      "--decode",
+      "--steps",
+      "1",
+      "--prefill-timing",
+      "--verify-program-cache",
+      "--output",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_optimized_layer5_1024.json"
+    ],
+    "returncode": 0,
+    "logical_length": 1024,
+    "chunk_size": 1024,
+    "chunk_count": 1,
+    "physical_rows": [
+      1024
+    ]
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--layer",
+      "5",
+      "--length",
+      "1025",
+      "--real",
+      "--input-fixture",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer5_1025.pt",
+      "--decode",
+      "--steps",
+      "1",
+      "--prefill-timing",
+      "--verify-program-cache",
+      "--output",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_fused_layer5_1025.json"
+    ],
+    "returncode": 0,
+    "logical_length": 1025,
+    "chunk_size": 1024,
+    "chunk_count": 2,
+    "physical_rows": [
+      1024,
+      32
+    ]
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_contract",
+      "--contract",
+      "run_decoder",
+      "--layer",
+      "5",
+      "--length",
+      "1025",
+      "--real",
+      "--input-fixture",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer5_1025.pt",
+      "--decode",
+      "--steps",
+      "1",
+      "--prefill-timing",
+      "--verify-program-cache",
+      "--output",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_optimized_layer5_1025.json"
+    ],
+    "returncode": 0,
+    "logical_length": 1025,
+    "chunk_size": 1024,
+    "chunk_count": 2,
+    "physical_rows": [
+      1024,
+      32
+    ]
+  }
+]

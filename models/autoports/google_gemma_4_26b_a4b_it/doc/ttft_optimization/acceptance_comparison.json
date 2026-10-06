@@ -1,0 +1,330 @@
+{
+  "scope": "Warmed end-to-end native vLLM serving; no device-profiler timings",
+  "occupancy_warmup_note": "Original C1 baseline:3 native warmups; candidate:10. Original C8/C32:zero warmups and optional readiness test skipped; candidate:full occupancy8/32 warmups. All measurements exclude explicit warmups. Later matched controls are in matched_async_comparison.json.",
+  "device_prefill_ms": null,
+  "device_decode_ms": null,
+  "rows": [
+    {
+      "shape": "s100-o100-c32",
+      "baseline_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline/s100-o100-c32.json",
+      "candidate_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_matrix/s100-o100-c32.json",
+      "baseline_sha256": "1fd66a20fccf3a3154f36797049c51152295c721c3f2f54cb0b2a13263d94f72",
+      "candidate_sha256": "f9cb08c5c8f3425db9d64b7dc90d27a3fc781b8aa6d58e54f4aec4b533ae1af9",
+      "completed": [
+        32,
+        32
+      ],
+      "input_lengths_equal": true,
+      "output_lengths_equal": true,
+      "generated_texts_equal": true,
+      "differing_output_rows": [],
+      "median_ttft_ms": {
+        "baseline": 14971.166097093374,
+        "candidate": 14860.139842610806
+      },
+      "p99_ttft_ms": {
+        "baseline": 14972.063107509166,
+        "candidate": 14861.477930983528
+      },
+      "mean_tpot_ms": {
+        "baseline": 681.9622100179786,
+        "candidate": 680.2926661971147
+      },
+      "median_itl_ms": {
+        "baseline": 677.1862134337425,
+        "candidate": 677.1999141201377
+      },
+      "ttft_reduction_percent": 0.7416005791567759
+    },
+    {
+      "shape": "s127-o16-c1",
+      "baseline_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline_warm/s127-o16-c1.json",
+      "candidate_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_matrix/s127-o16-c1.json",
+      "baseline_sha256": "677091e183afb5452ce11be0bfe47e5cb18ed0ba2aa53d3a4ef39cb7f270bbda",
+      "candidate_sha256": "a649d539b25dceaf1431bcf1021ae6781201557c4f20924919f0d54678848bfa",
+      "completed": [
+        10,
+        10
+      ],
+      "input_lengths_equal": true,
+      "output_lengths_equal": true,
+      "generated_texts_equal": true,
+      "differing_output_rows": [],
+      "median_ttft_ms": {
+        "baseline": 428.94880985841155,
+        "candidate": 122.98842379823327
+      },
+      "p99_ttft_ms": {
+        "baseline": 467.42517290636897,
+        "candidate": 128.3868384361267
+      },
+      "mean_tpot_ms": {
+        "baseline": 19.21706578383843,
+        "candidate": 19.067704683790605
+      },
+      "median_itl_ms": {
+        "baseline": 18.969221971929073,
+        "candidate": 18.948903307318687
+      },
+      "ttft_reduction_percent": 71.3279484703945
+    },
+    {
+      "shape": "s128-o128-c1",
+      "baseline_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline_warm/s128-o128-c1.json",
+      "candidate_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_matrix/s128-o128-c1.json",
+      "baseline_sha256": "6a1ced821ad13f5118cd3307f54befafb58dc57f6e431795855d9fa7e402a539",
+      "candidate_sha256": "99384cc793360567b73ed747de698b591196c0affd8bf27fe92c37082e24d661",
+      "completed": [
+        3,
+        3
+      ],
+      "input_lengths_equal": true,
+      "output_lengths_equal": true,
+      "generated_texts_equal": true,
+      "differing_output_rows": [],
+      "median_ttft_ms": {
+        "baseline": 419.10529136657715,
+        "candidate": 104.29357271641493
+      },
+      "p99_ttft_ms": {
+        "baseline": 427.16604828834534,
+        "candidate": 106.83715367689729
+      },
+      "mean_tpot_ms": {
+        "baseline": 19.07914406143305,
+        "candidate": 19.122812535193336
+      },
+      "median_itl_ms": {
+        "baseline": 18.976750783622265,
+        "candidate": 18.977152183651924
+      },
+      "ttft_reduction_percent": 75.11518588172801
+    },
+    {
+      "shape": "s128-o16-c1",
+      "baseline_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline_warm/s128-o16-c1.json",
+      "candidate_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_matrix/s128-o16-c1.json",
+      "baseline_sha256": "0bdb728fa47f0e08bf4cddda6ea2f643771634d602f441db390ebcc88a14d446",
+      "candidate_sha256": "49557bf8b1035e0c78eeec11969f564caebbaf6edca7b279f709548672c7baa5",
+      "completed": [
+        10,
+        10
+      ],
+      "input_lengths_equal": true,
+      "output_lengths_equal": true,
+      "generated_texts_equal": true,
+      "differing_output_rows": [],
+      "median_ttft_ms": {
+        "baseline": 424.9854409135878,
+        "candidate": 103.37929287925363
+      },
+      "p99_ttft_ms": {
+        "baseline": 458.0078171938658,
+        "candidate": 110.20633161999285
+      },
+      "mean_tpot_ms": {
+        "baseline": 18.857831731438637,
+        "candidate": 18.844079008946814
+      },
+      "median_itl_ms": {
+        "baseline": 18.9523808658123,
+        "candidate": 18.944960553199053
+      },
+      "ttft_reduction_percent": 75.67462719263513
+    },
+    {
+      "shape": "s128-o32-c8",
+      "baseline_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline/s128-o32-c8.json",
+      "candidate_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_matrix/s128-o32-c8.json",
+      "baseline_sha256": "31b233a045bec4ab7460f0291bcda62743d83564748442f4b64967d422a5f993",
+      "candidate_sha256": "a71a561431072c9982cff381716012e3ce25fbd48bc59890253dd975054b5b1b",
+      "completed": [
+        8,
+        8
+      ],
+      "input_lengths_equal": true,
+      "output_lengths_equal": true,
+      "generated_texts_equal": true,
+      "differing_output_rows": [],
+      "median_ttft_ms": {
+        "baseline": 3745.7269160076976,
+        "candidate": 3709.7334871068597
+      },
+      "p99_ttft_ms": {
+        "baseline": 3746.0038873180747,
+        "candidate": 3709.8602510988712
+      },
+      "mean_tpot_ms": {
+        "baseline": 188.68324351346783,
+        "candidate": 188.65439520713184
+      },
+      "median_itl_ms": {
+        "baseline": 177.7339819818735,
+        "candidate": 177.69848043099046
+      },
+      "ttft_reduction_percent": 0.9609197282112847
+    },
+    {
+      "shape": "s129-o16-c1",
+      "baseline_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline_warm/s129-o16-c1.json",
+      "candidate_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_matrix/s129-o16-c1.json",
+      "baseline_sha256": "10df65ba6709c8abfe52be40af574c41668d80a74f1ecfe1b6d0b6882e0bfcbb",
+      "candidate_sha256": "4abb80c89d5473f0188e87754a6c7d78d68da895dede24b759b318d89f33c50d",
+      "completed": [
+        10,
+        10
+      ],
+      "input_lengths_equal": true,
+      "output_lengths_equal": true,
+      "generated_texts_equal": true,
+      "differing_output_rows": [],
+      "median_ttft_ms": {
+        "baseline": 435.96965866163373,
+        "candidate": 116.72541312873363
+      },
+      "p99_ttft_ms": {
+        "baseline": 447.09003263153136,
+        "candidate": 125.4376379121095
+      },
+      "mean_tpot_ms": {
+        "baseline": 18.871328172584377,
+        "candidate": 18.790043847014505
+      },
+      "median_itl_ms": {
+        "baseline": 18.955306615680456,
+        "candidate": 18.968149553984404
+      },
+      "ttft_reduction_percent": 73.22625306378787
+    },
+    {
+      "shape": "s256-o16-c1",
+      "baseline_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline_warm/s256-o16-c1.json",
+      "candidate_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_matrix/s256-o16-c1.json",
+      "baseline_sha256": "378d415343879fe43a4fee224512dd3f9400f0633330fd4fdce92ca054b12d2f",
+      "candidate_sha256": "36c03dfd1a0880ea6de9180fec9f00dc00f16e5713c985800878cf37d33a9584",
+      "completed": [
+        10,
+        10
+      ],
+      "input_lengths_equal": true,
+      "output_lengths_equal": true,
+      "generated_texts_equal": true,
+      "differing_output_rows": [],
+      "median_ttft_ms": {
+        "baseline": 469.48289731517434,
+        "candidate": 177.56672762334347
+      },
+      "p99_ttft_ms": {
+        "baseline": 474.8060617689043,
+        "candidate": 183.2772441022098
+      },
+      "mean_tpot_ms": {
+        "baseline": 18.957754485309128,
+        "candidate": 18.535440918058157
+      },
+      "median_itl_ms": {
+        "baseline": 19.059536512941122,
+        "candidate": 19.042445812374353
+      },
+      "ttft_reduction_percent": 62.17823297956284
+    },
+    {
+      "shape": "s32-o16-c1",
+      "baseline_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline_warm/s32-o16-c1.json",
+      "candidate_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_matrix/s32-o16-c1.json",
+      "baseline_sha256": "6651bd0acd2edded468f79634651289f43b6f91bddf9c4d31686731a3d8578f5",
+      "candidate_sha256": "b59d402c9e5028c6e871c0e292157018404dea8e5213a56b2054921d164863f7",
+      "completed": [
+        10,
+        10
+      ],
+      "input_lengths_equal": true,
+      "output_lengths_equal": true,
+      "generated_texts_equal": true,
+      "differing_output_rows": [],
+      "median_ttft_ms": {
+        "baseline": 384.3230437487364,
+        "candidate": 58.34250943735242
+      },
+      "p99_ttft_ms": {
+        "baseline": 396.24396812170744,
+        "candidate": 64.17481199838221
+      },
+      "mean_tpot_ms": {
+        "baseline": 18.9152363439401,
+        "candidate": 18.859644463906687
+      },
+      "median_itl_ms": {
+        "baseline": 18.976363353431225,
+        "candidate": 18.975139129906893
+      },
+      "ttft_reduction_percent": 84.8194089877432
+    },
+    {
+      "shape": "s33-o16-c1",
+      "baseline_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline_warm/s33-o16-c1.json",
+      "candidate_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_matrix/s33-o16-c1.json",
+      "baseline_sha256": "60064279b81c165815216fd8ae1bdf741bf5d56b863f414f0f9e29ab38445a7e",
+      "candidate_sha256": "5b9199ac8eaa7e9a24282835da0761fb6156614ff94d8faeb716dc76ba60dc5c",
+      "completed": [
+        10,
+        10
+      ],
+      "input_lengths_equal": true,
+      "output_lengths_equal": true,
+      "generated_texts_equal": true,
+      "differing_output_rows": [],
+      "median_ttft_ms": {
+        "baseline": 395.4601902514696,
+        "candidate": 75.32921759411693
+      },
+      "p99_ttft_ms": {
+        "baseline": 462.2164803277701,
+        "candidate": 127.00884350575508
+      },
+      "mean_tpot_ms": {
+        "baseline": 18.892901744693518,
+        "candidate": 18.902140650898218
+      },
+      "median_itl_ms": {
+        "baseline": 18.988937605172396,
+        "candidate": 18.994359765201807
+      },
+      "ttft_reduction_percent": 80.95150423454362
+    },
+    {
+      "shape": "s64-o16-c1",
+      "baseline_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/baseline_warm/s64-o16-c1.json",
+      "candidate_path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_matrix/s64-o16-c1.json",
+      "baseline_sha256": "0acebe7620c0cc77c01d0745a6d7e41d04d879ed1f2341070f82c8897bb9fafa",
+      "candidate_sha256": "423c579a2defd93d12ec393fa1eb6be5918143a260dd5e403878d4479145c252",
+      "completed": [
+        10,
+        10
+      ],
+      "input_lengths_equal": true,
+      "output_lengths_equal": true,
+      "generated_texts_equal": true,
+      "differing_output_rows": [],
+      "median_ttft_ms": {
+        "baseline": 396.4192047715187,
+        "candidate": 73.74077197164297
+      },
+      "p99_ttft_ms": {
+        "baseline": 400.80648980103433,
+        "candidate": 78.64727121777833
+      },
+      "mean_tpot_ms": {
+        "baseline": 18.793097455054525,
+        "candidate": 18.806391060352322
+      },
+      "median_itl_ms": {
+        "baseline": 18.93793698400259,
+        "candidate": 18.91917735338211
+      },
+      "ttft_reduction_percent": 81.39828467338145
+    }
+  ],
+  "all_outputs_equal": true,
+  "all_lengths_equal": true
+}

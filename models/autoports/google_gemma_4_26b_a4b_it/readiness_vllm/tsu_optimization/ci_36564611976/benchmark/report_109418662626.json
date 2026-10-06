@@ -1,0 +1,105 @@
+{
+    "metadata": {
+        "model_name": "gemma-4-26B-A4B-it",
+        "model_repo": "google/gemma-4-26B-A4B-it",
+        "device": "P300X2",
+        "generated_at": "2026-09-29T13:23:35+00:00",
+        "report_id": "google__gemma-4-26B-A4B-it_2026-09-29T132335+0000",
+        "workflow": "benchmarks",
+        "report_partial": false,
+        "report_blocks": 1,
+        "server_mode": "docker",
+        "run_command": "python run.py --model google/gemma-4-26B-A4B-it --workflow benchmarks --device p300x2 --docker-server --dev-mode --impl gemma4-autoport --ci-mode --override-docker-image ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.22.0-eb1d2af61c7630c7424e9593b646093ef7be45af-c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42-ttmetal-7f72b1c6e905-109393485980",
+        "runtime_model_spec_json": "/home/ubuntu/actions-runner/_work/tt-agentic-bringup-qb2/tt-agentic-bringup-qb2/tt-inference-server/workflow_logs/runtime_model_specs/runtime_model_spec_2026-09-29_13-05-07_id_gemma4-autoport_gemma-4-26B-A4B-it_p300x2_3q-5FQ5g.json",
+        "model_id": "id_gemma4-autoport_gemma-4-26B-A4B-it_p300x2",
+        "inference_engine": "vLLM",
+        "tt_metal_commit": null,
+        "vllm_commit": null,
+        "model_impl": "gemma4-autoport"
+    },
+    "sections": [
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 4096,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 2089.9989,
+                "p50_ttft": 2092.1194,
+                "p99_ttft": 2100.8922,
+                "mean_tpot_ms": 19.7324,
+                "mean_e2el_ms": 4596.0149,
+                "tps_input_throughput": 891.1566,
+                "tps_output_throughput": 27.8486,
+                "tps_total_throughput": 919.0052,
+                "request_throughput": 0.2176,
+                "goodput_pct": null,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "google__gemma-4-26B-A4B-it_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "google/gemma-4-26B-A4B-it",
+                "device": "P300X2",
+                "timestamp": "2026-09-29 13:24:10"
+            }
+        }
+    ],
+    "acceptance_criteria": true,
+    "acceptance_blockers": {},
+    "acceptance_criteria_metadata": {
+        "enforcement_result": "PASS",
+        "model_status": "EXPERIMENTAL",
+        "categories": [
+            {
+                "name": "Benchmarks",
+                "status": "NA",
+                "total": 1,
+                "passed": 0,
+                "failed": 0,
+                "na": 1,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Evals",
+                "status": "NA",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Spec Tests",
+                "status": "NA",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Agentic Targets",
+                "status": "NA",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            }
+        ]
+    },
+    "acceptance_summary_markdown": "### Acceptance Criteria\n\n- Acceptance status: \u2705 `PASS`\n- Model status: `EXPERIMENTAL`\n- Benchmarks: \ud83d\udfe8 `NA` (0/1 passed, 1 NA)\n- Evals: \ud83d\udfe8 `NA` (no blocks present)\n- Spec Tests: \ud83d\udfe8 `NA` (no blocks present)\n- Agentic Targets: \ud83d\udfe8 `NA` (no blocks present)\n- All acceptance criteria passed."
+}

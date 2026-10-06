@@ -1,0 +1,272 @@
+[
+  {
+    "name": "request_reuse_full",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.request_reuse",
+      "--decoder",
+      "fused",
+      "--layer",
+      "5",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/final_request_reuse_full.json"
+    ],
+    "environment": {},
+    "exit_code": 0
+  },
+  {
+    "name": "batched_full",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.batched",
+      "--decoder",
+      "fused",
+      "--layer",
+      "5",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/final_batched_full.json",
+      "--batch",
+      "32"
+    ],
+    "environment": {},
+    "exit_code": 0
+  },
+  {
+    "name": "prefix_continuation_full",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.prefix_continuation",
+      "--decoder",
+      "fused",
+      "--layer",
+      "5",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/final_prefix_continuation_full.json"
+    ],
+    "environment": {},
+    "exit_code": 0
+  },
+  {
+    "name": "pytest",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py"
+    ],
+    "environment": {},
+    "exit_code": 0
+  },
+  {
+    "name": "long_sliding_262144",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.long_context",
+      "--decoder",
+      "fused",
+      "--layer",
+      "0",
+      "--length",
+      "262144",
+      "--reference-file",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/reference_sliding_262144.pt",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/long_sliding_262144.json"
+    ],
+    "environment": {},
+    "exit_code": 0
+  },
+  {
+    "name": "long_sliding_262143",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.long_context",
+      "--decoder",
+      "fused",
+      "--layer",
+      "0",
+      "--length",
+      "262143",
+      "--reference-file",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/reference_sliding_262143.pt",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/long_sliding_262143.json"
+    ],
+    "environment": {},
+    "exit_code": 0
+  },
+  {
+    "name": "long_full_262144",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.long_context",
+      "--decoder",
+      "fused",
+      "--layer",
+      "5",
+      "--length",
+      "262144",
+      "--reference-file",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/reference_full_262144.pt",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/long_full_262144.json"
+    ],
+    "environment": {},
+    "exit_code": 0
+  },
+  {
+    "name": "long_full_262143",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.long_context",
+      "--decoder",
+      "fused",
+      "--layer",
+      "5",
+      "--length",
+      "262143",
+      "--reference-file",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/reference_full_262143.pt",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/long_full_262143.json"
+    ],
+    "environment": {},
+    "exit_code": 0
+  },
+  {
+    "name": "watcher_sliding_final",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--layer",
+      "0",
+      "--length",
+      "4096",
+      "--real",
+      "--decode",
+      "--steps",
+      "128",
+      "--verify-program-cache",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/watcher_sliding_final.json"
+    ],
+    "environment": {
+      "TT_METAL_WATCHER": "10",
+      "TT_METAL_LOGS_PATH": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/watcher/sliding"
+    },
+    "exit_code": 0
+  },
+  {
+    "name": "watcher_full_final",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--layer",
+      "5",
+      "--length",
+      "4096",
+      "--real",
+      "--decode",
+      "--steps",
+      "128",
+      "--verify-program-cache",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/watcher_full_final.json"
+    ],
+    "environment": {
+      "TT_METAL_WATCHER": "10",
+      "TT_METAL_LOGS_PATH": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/watcher/full"
+    },
+    "exit_code": 0
+  },
+  {
+    "name": "profile_sliding_final",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "tracy",
+      "-r",
+      "-p",
+      "-v",
+      "--op-support-count",
+      "100000",
+      "--no-op-info-cache",
+      "--disable-device-data-dump-to-files",
+      "--disable-device-data-push-to-tracy",
+      "-o",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tracy/sliding/raw_final",
+      "-n",
+      "headline",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--layer",
+      "0",
+      "--length",
+      "4096",
+      "--real",
+      "--decode",
+      "--steps",
+      "128",
+      "--profile",
+      "--verify-program-cache",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/profile_sliding_final.json"
+    ],
+    "environment": {},
+    "exit_code": 0
+  },
+  {
+    "name": "profile_full_final",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "tracy",
+      "-r",
+      "-p",
+      "-v",
+      "--op-support-count",
+      "100000",
+      "--no-op-info-cache",
+      "--disable-device-data-dump-to-files",
+      "--disable-device-data-push-to-tracy",
+      "-o",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tracy/full/raw_final",
+      "-n",
+      "headline",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--layer",
+      "5",
+      "--length",
+      "4096",
+      "--real",
+      "--decode",
+      "--steps",
+      "128",
+      "--profile",
+      "--verify-program-cache",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/profile_full_final.json"
+    ],
+    "environment": {},
+    "exit_code": 1
+  }
+]

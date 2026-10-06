@@ -1,0 +1,204 @@
+{
+  "contract": "optimized_preserves_fused_1025_prefill_512_traced_decode",
+  "threshold": 0.995,
+  "length": 1025,
+  "steps": 512,
+  "real_weights": true,
+  "input_mode": "recorded",
+  "input_kind": "recorded layer activations",
+  "evidence_scope": "recorded-input preservation",
+  "input_fixtures": {
+    "0": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_1025_512.pt",
+    "5": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_1025_512.pt"
+  },
+  "input_fixture_sha256": {
+    "0": "12820c41eb01a5be411eaef4a6a69273cf78f107af5c3e7304c9ac1daee62ad2",
+    "5": "df7b191402921a23224be6a3e1913b9a81a5c765dab713c5c053eb155d48eb46"
+  },
+  "source_sha256": {
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/functional_decoder.py": "d19667d70e42650a5a241fa334dd57a396a564a2dca0cf8ab2a1a6573156b3a3",
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/fused_decoder.py": "0c8892be32e04202fdbddd2b06850848c63ae57660c49d03c4d149a5a88b041c",
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py": "3d51014f98128dfb21bb484fcece50993524b967754f68f6dfe825ae7f472ba9",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/run_decoder.py": "13e23a8beeb5c3aa436079a3b8c68827e22defc74e061189c9891846caaaffe5",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/run_optimized_contract.py": "5ddbb1524da30e7c6811969898ff6d85c52cbed0d6a5885dc883f36234e693d1",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/compare_decoder_outputs.py": "6dc8d2282b6429a85c9661e5cefb30bbe03a034765f3135cf72d0388bf4d0546",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/run_optimized_stress.py": "942e6d94287fcc218bdb89890c49b00e73ee4263fe89dcb0f2bd9446fa8c4cc8"
+  },
+  "run_directory": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/stress_validated_v4_defaults/recorded/20260926T145936.843565Z",
+  "command_journal": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/stress_validated_v4_defaults/recorded/20260926T145936.843565Z/commands.json",
+  "orchestrator_command": [
+    "/workspace/tt-metal/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_stress",
+    "--output-dir",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/stress_validated_v4_defaults",
+    "--input-fixture-template",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer{layer}_1025_512.pt"
+  ],
+  "preservation_passed": true,
+  "exact_hf_passed": true,
+  "interpretation": "A preservation pass retains every raw HF failure; it does not assert exact-HF parity",
+  "layers": {
+    "0": {
+      "checks": {
+        "fused": {
+          "decoder": true,
+          "real_weights": true,
+          "layer_type": true,
+          "length": true,
+          "prefill_hf": true,
+          "prefill_runtime_audit": true,
+          "decode_runtime_audit": true,
+          "program_cache_guard": true,
+          "traced": true,
+          "deterministic": true,
+          "steps": true,
+          "position_range": true,
+          "all_position_checks": true,
+          "hf_flags_match_pcc": true,
+          "hf_decode_status_consistent": true,
+          "hf_minimum_consistent": true,
+          "input_fixture": true,
+          "expected_process_result": true,
+          "saved_outputs_exist": true
+        },
+        "optimized": {
+          "decoder": true,
+          "real_weights": true,
+          "layer_type": true,
+          "length": true,
+          "prefill_hf": true,
+          "prefill_runtime_audit": true,
+          "decode_runtime_audit": true,
+          "program_cache_guard": true,
+          "traced": true,
+          "deterministic": true,
+          "steps": true,
+          "position_range": true,
+          "all_position_checks": true,
+          "hf_flags_match_pcc": true,
+          "hf_decode_status_consistent": true,
+          "hf_minimum_consistent": true,
+          "functional_fallback_forbidden": true,
+          "default_contract": true,
+          "input_fixture": true,
+          "expected_process_result": true,
+          "saved_outputs_exist": true
+        },
+        "preservation": {
+          "all_outputs_direct_pcc": true,
+          "no_new_hf_failures": true,
+          "matching_input_metadata": true
+        }
+      },
+      "raw_hf": {
+        "fused": {
+          "prefill_passed": true,
+          "prefill_pcc": 0.9999031906788831,
+          "decode_passed": true,
+          "minimum_decode_pcc": 0.9961050088659095,
+          "failed_positions": []
+        },
+        "optimized": {
+          "prefill_passed": true,
+          "prefill_pcc": 0.9990925150817404,
+          "decode_passed": true,
+          "minimum_decode_pcc": 0.9955258622331264,
+          "failed_positions": []
+        }
+      },
+      "reports": {
+        "fused": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/stress_validated_v4_defaults/recorded/20260926T145936.843565Z/fused_layer0.json",
+        "optimized": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/stress_validated_v4_defaults/recorded/20260926T145936.843565Z/optimized_layer0.json"
+      },
+      "comparison": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/stress_validated_v4_defaults/recorded/20260926T145936.843565Z/comparison_layer0.json",
+      "minimum_direct_decode_pcc": 0.9951464835991652,
+      "direct_failed_positions": [],
+      "new_hf_failed_positions": [],
+      "shared_hf_failed_positions": [],
+      "recovered_hf_positions": []
+    },
+    "5": {
+      "checks": {
+        "fused": {
+          "decoder": true,
+          "real_weights": true,
+          "layer_type": true,
+          "length": true,
+          "prefill_hf": true,
+          "prefill_runtime_audit": true,
+          "decode_runtime_audit": true,
+          "program_cache_guard": true,
+          "traced": true,
+          "deterministic": true,
+          "steps": true,
+          "position_range": true,
+          "all_position_checks": true,
+          "hf_flags_match_pcc": true,
+          "hf_decode_status_consistent": true,
+          "hf_minimum_consistent": true,
+          "input_fixture": true,
+          "expected_process_result": true,
+          "saved_outputs_exist": true
+        },
+        "optimized": {
+          "decoder": true,
+          "real_weights": true,
+          "layer_type": true,
+          "length": true,
+          "prefill_hf": true,
+          "prefill_runtime_audit": true,
+          "decode_runtime_audit": true,
+          "program_cache_guard": true,
+          "traced": true,
+          "deterministic": true,
+          "steps": true,
+          "position_range": true,
+          "all_position_checks": true,
+          "hf_flags_match_pcc": true,
+          "hf_decode_status_consistent": true,
+          "hf_minimum_consistent": true,
+          "functional_fallback_forbidden": true,
+          "default_contract": true,
+          "input_fixture": true,
+          "expected_process_result": true,
+          "saved_outputs_exist": true
+        },
+        "preservation": {
+          "all_outputs_direct_pcc": true,
+          "no_new_hf_failures": true,
+          "matching_input_metadata": true
+        }
+      },
+      "raw_hf": {
+        "fused": {
+          "prefill_passed": true,
+          "prefill_pcc": 0.9999118498391082,
+          "decode_passed": true,
+          "minimum_decode_pcc": 0.999331282102757,
+          "failed_positions": []
+        },
+        "optimized": {
+          "prefill_passed": true,
+          "prefill_pcc": 0.9990381038952226,
+          "decode_passed": true,
+          "minimum_decode_pcc": 0.996240662328566,
+          "failed_positions": []
+        }
+      },
+      "reports": {
+        "fused": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/stress_validated_v4_defaults/recorded/20260926T145936.843565Z/fused_layer5.json",
+        "optimized": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/stress_validated_v4_defaults/recorded/20260926T145936.843565Z/optimized_layer5.json"
+      },
+      "comparison": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/stress_validated_v4_defaults/recorded/20260926T145936.843565Z/comparison_layer5.json",
+      "minimum_direct_decode_pcc": 0.9963202986182689,
+      "direct_failed_positions": [],
+      "new_hf_failed_positions": [],
+      "shared_hf_failed_positions": [],
+      "recovered_hf_positions": []
+    }
+  },
+  "errors": [],
+  "sources_unchanged": true,
+  "input_fixtures_unchanged": true
+}

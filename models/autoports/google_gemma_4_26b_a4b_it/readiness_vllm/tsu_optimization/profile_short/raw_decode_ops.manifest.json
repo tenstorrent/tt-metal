@@ -1,0 +1,8 @@
+{
+  "scope": "All original columns/field values within PERF_DECODE/PERF_DECODE_END; only out-of-window rows omitted",
+  "original_source": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/profile_short/reports/selected_short/2026_09_29_11_20_39/ops_perf_results_selected_short_2026_09_29_11_20_39.csv",
+  "original_sha256": "df664ec510114d6cb8b0590aae38694d591d5ec8d97ebbb84fee7bc82c1e97af",
+  "window_sha256": "7505425eea952bfdc9c1c37b81bbad754dd9d26286e758f6aad3e696e8f8ebe8",
+  "rows_including_signposts": 1146,
+  "columns": 128
+}

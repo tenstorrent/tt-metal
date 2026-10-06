@@ -1,0 +1,18 @@
+{
+  "engine_pid": 88297,
+  "environment": {
+    "TT_METAL_HOME": "/home/container_app_user/tt-metal",
+    "LD_LIBRARY_PATH": "/home/container_app_user/tt-metal/python_env/lib/python3.10/site-packages/cv2/../../lib64:/home/container_app_user/tt-metal/build/lib",
+    "PYTHONPATH": null,
+    "OMP_NUM_THREADS": "8",
+    "TT_METAL_DEVICE_PROFILER": null,
+    "TT_METAL_WATCHER": null,
+    "TT_METAL_WATCHER_DISABLE_ETH": null,
+    "TT_METAL_TRACE_ALLOC_TRACKING": null,
+    "TT_METAL_PROFILER_CPP_POST_PROCESS": null,
+    "TT_METAL_PROFILER_MID_RUN_DUMP": null,
+    "TT_METAL_PROFILER_TRACE_TRACKING": null,
+    "GEMMA4_AUTOPORT_ALLOW_HOST_SAMPLING": "1",
+    "GEMMA4_AUTOPORT_PROBE_LAYERS": null
+  }
+}

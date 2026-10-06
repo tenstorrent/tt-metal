@@ -1,0 +1,19 @@
+{
+  "native_csv": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_v0/reports/tp4/2026_09_26_20_28_12/ops_perf_results_tp4_2026_09_26_20_28_12.csv",
+  "sha256": "11cd392d62e7e31648aad6375d5f148575182c66711b0b568500b041fde8ff1d",
+  "bytes": 68303068,
+  "workload": {
+    "input_tokens": 4096,
+    "decode_steps": 1
+  },
+  "status": "diagnostic candidate v0, not final target performance",
+  "human_tables": [
+    "decode_table.txt",
+    "prefill_table.txt.gz"
+  ],
+  "report_csvs": [
+    "decode_perf_report.csv.gz",
+    "prefill_perf_report.csv.gz"
+  ],
+  "runtime_snapshot": "../runtime_v0.py.txt"
+}

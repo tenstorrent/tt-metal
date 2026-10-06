@@ -1,0 +1,155 @@
+{
+  "candidate": "norm_external_weight",
+  "norm_site": "head",
+  "phase": "all",
+  "layer": 0,
+  "runner": "request_reuse",
+  "real_weights": true,
+  "threshold": 0.995,
+  "same_input": [
+    {
+      "boundary": "head_q_prefill",
+      "shape": [
+        1,
+        16,
+        32,
+        256
+      ],
+      "pcc": 0.9999998703980529,
+      "max_abs_error": 0.009943962097167969,
+      "relative_l2": 0.0005549223278649151,
+      "passed": true
+    },
+    {
+      "boundary": "head_k_prefill",
+      "shape": [
+        1,
+        8,
+        32,
+        256
+      ],
+      "pcc": 0.9999998694972432,
+      "max_abs_error": 0.0009308457374572754,
+      "relative_l2": 0.000551351928152144,
+      "passed": true
+    },
+    {
+      "boundary": "head_v_prefill",
+      "shape": [
+        1,
+        8,
+        32,
+        256
+      ],
+      "pcc": 0.9999998715079668,
+      "max_abs_error": 0.006422519683837891,
+      "relative_l2": 0.0005329730338416994,
+      "passed": true
+    },
+    {
+      "boundary": "head_q_decode",
+      "shape": [
+        1,
+        1,
+        16,
+        256
+      ],
+      "pcc": 0.9999998742299737,
+      "max_abs_error": 0.005029439926147461,
+      "relative_l2": 0.0005256670410744846,
+      "passed": true
+    },
+    {
+      "boundary": "head_k_decode",
+      "shape": [
+        1,
+        1,
+        8,
+        256
+      ],
+      "pcc": 0.9999998745204018,
+      "max_abs_error": 0.0005213022232055664,
+      "relative_l2": 0.0005459215608425438,
+      "passed": true
+    },
+    {
+      "boundary": "head_v_decode",
+      "shape": [
+        1,
+        1,
+        8,
+        256
+      ],
+      "pcc": 0.99999985921285,
+      "max_abs_error": 0.0044879913330078125,
+      "relative_l2": 0.00062364008044824,
+      "passed": true
+    }
+  ],
+  "harness_output": "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/norm_external_head_reuse_sliding.harness.json",
+  "performance_evidence": false,
+  "passed": false,
+  "error": "AssertionError: [{'length': 31, 'prefill_pcc': 0.9957669651587667, 'decode_pcc': 0.9997760587373633, 'passed': True}, {'length': 32, 'prefill_pcc': 0.9996171759672849, 'decode_pcc': 0.999900106647301, 'passed': True}, {'length': 33, 'prefill_pcc': 0.9992521849555399, 'decode_pcc': 0.9999347285297676, 'passed': True}, {'length': 1023, 'prefill_pcc': 0.9984117416495797, 'decode_pcc': 0.9998185383213302, 'passed': True}, {'length': 1024, 'prefill_pcc': 0.9985117051840986, 'decode_pcc': 0.9998679709284171, 'passed': True}, {'length': 1025, 'prefill_pcc': 0.9986366854844164, 'decode_pcc': 0.999852851525902, 'passed': True}, {'length': 2049, 'prefill_pcc': 0.9986168760080446, 'decode_pcc': 0.9881958068653772, 'passed': False}, {'length': 33, 'prefill_pcc': 0.998668837957539, 'decode_pcc': 0.9998108826746864, 'passed': True}, {'length': 2047, 'prefill_pcc': 0.9985474290045011, 'decode_pcc': 0.9998178733755325, 'passed': True}]",
+  "harness": {
+    "layer_type": "sliding_attention",
+    "real_weights": true,
+    "requests": [
+      {
+        "length": 31,
+        "prefill_pcc": 0.9957669651587667,
+        "decode_pcc": 0.9997760587373633,
+        "passed": true
+      },
+      {
+        "length": 32,
+        "prefill_pcc": 0.9996171759672849,
+        "decode_pcc": 0.999900106647301,
+        "passed": true
+      },
+      {
+        "length": 33,
+        "prefill_pcc": 0.9992521849555399,
+        "decode_pcc": 0.9999347285297676,
+        "passed": true
+      },
+      {
+        "length": 1023,
+        "prefill_pcc": 0.9984117416495797,
+        "decode_pcc": 0.9998185383213302,
+        "passed": true
+      },
+      {
+        "length": 1024,
+        "prefill_pcc": 0.9985117051840986,
+        "decode_pcc": 0.9998679709284171,
+        "passed": true
+      },
+      {
+        "length": 1025,
+        "prefill_pcc": 0.9986366854844164,
+        "decode_pcc": 0.999852851525902,
+        "passed": true
+      },
+      {
+        "length": 2049,
+        "prefill_pcc": 0.9986168760080446,
+        "decode_pcc": 0.9881958068653772,
+        "passed": false
+      },
+      {
+        "length": 33,
+        "prefill_pcc": 0.998668837957539,
+        "decode_pcc": 0.9998108826746864,
+        "passed": true
+      },
+      {
+        "length": 2047,
+        "prefill_pcc": 0.9985474290045011,
+        "decode_pcc": 0.9998178733755325,
+        "passed": true
+      }
+    ],
+    "runtime_audit": "clean",
+    "trace_reused": true
+  }
+}

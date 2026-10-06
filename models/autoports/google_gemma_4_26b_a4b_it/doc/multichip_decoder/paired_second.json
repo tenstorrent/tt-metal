@@ -1,0 +1,11 @@
+{
+  "layer_type": "sliding_attention",
+  "length": 65,
+  "steps": 2,
+  "pcc": [
+    0.999614985457779,
+    0.9998534455395066,
+    0.9999265615910922
+  ],
+  "passed": true
+}

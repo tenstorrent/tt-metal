@@ -1,0 +1,7 @@
+{
+  "source": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/dram_readers_v5/tracy_layer5/raw/reports/readers/2026_09_26_18_20_21/ops_perf_results_readers_2026_09_26_18_20_21.csv",
+  "source_sha256": "f1ac89b884e00ab661c9d7c0829e276570f339b95fd17febdaa8dddb39b886a5",
+  "copy": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/dram_readers_v5/tracy_layer5/ops.csv",
+  "copy_sha256": "f1ac89b884e00ab661c9d7c0829e276570f339b95fd17febdaa8dddb39b886a5",
+  "runtime_sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b"
+}

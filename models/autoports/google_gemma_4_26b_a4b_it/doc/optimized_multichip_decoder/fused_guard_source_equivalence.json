@@ -1,0 +1,220 @@
+{
+  "before_runtime_sha256": "2f240a9f5434efa370fed4cc6a3d6d72ec2dabc2bfae840ba9fbbc820919c797",
+  "after_runtime_sha256": "6938c6d512d19cf25c3c9d7fb5cee29f2b3f46d174426b715180527b16e02cd3",
+  "diff": "fused_guard_source_delta.patch",
+  "basis": "Only fused_agmm=True selects changed K block and constructs _GatherProjection. Every retained default command has fused_agmm=False. No default allocation, arithmetic, cache or residual branch changes. This record does not cover any subsequent native kernel change.",
+  "reused_evidence": [
+    {
+      "artifact": "final_max_262143_sliding.json",
+      "command": [
+        "/workspace/tt-metal/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.run_multichip_decoder",
+        "--layer",
+        "0",
+        "--length",
+        "262143",
+        "--steps",
+        "1",
+        "--trace",
+        "--check-cache",
+        "--repeat-input",
+        "--reserve-full-stack",
+        "--prefill-timing-samples",
+        "1",
+        "--output",
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/final_max_262143_sliding.json"
+      ],
+      "fused_agmm": false,
+      "sha256": "c763d3731b4885e0311bbd6f906d5a18bc29812a4bd4fdf1e73fcf50657f7595"
+    },
+    {
+      "artifact": "final_max_262144_sliding.json",
+      "command": [
+        "/workspace/tt-metal/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.run_multichip_decoder",
+        "--layer",
+        "0",
+        "--length",
+        "262144",
+        "--steps",
+        "0",
+        "--trace",
+        "--check-cache",
+        "--repeat-input",
+        "--reserve-full-stack",
+        "--prefill-timing-samples",
+        "1",
+        "--output",
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/final_max_262144_sliding.json"
+      ],
+      "fused_agmm": false,
+      "sha256": "1ce06bf125067b0b4505f334af7204cd6acceb3dc94337e184a1f0c4251507be"
+    },
+    {
+      "artifact": "final_max_262143_full.json",
+      "command": [
+        "/workspace/tt-metal/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.run_multichip_decoder",
+        "--layer",
+        "5",
+        "--length",
+        "262143",
+        "--steps",
+        "1",
+        "--trace",
+        "--check-cache",
+        "--repeat-input",
+        "--reserve-full-stack",
+        "--prefill-timing-samples",
+        "1",
+        "--output",
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/final_max_262143_full.json"
+      ],
+      "fused_agmm": false,
+      "sha256": "0d7e5235c460427f0e8da94afbb3da4241d021a04eab560f74c1c5bc77302917"
+    },
+    {
+      "artifact": "final_max_262144_full.json",
+      "command": [
+        "/workspace/tt-metal/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.run_multichip_decoder",
+        "--layer",
+        "5",
+        "--length",
+        "262144",
+        "--steps",
+        "0",
+        "--trace",
+        "--check-cache",
+        "--repeat-input",
+        "--reserve-full-stack",
+        "--prefill-timing-samples",
+        "1",
+        "--output",
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/final_max_262144_full.json"
+      ],
+      "fused_agmm": false,
+      "sha256": "6bb37735e4c19e699e3ffc098789da583368f7886078894f671c07b15d56a9d5"
+    },
+    {
+      "artifact": "final_stack_samekind_33.json",
+      "command": [
+        "/workspace/tt-metal/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.test_multichip_stack",
+        "--layers",
+        "0",
+        "1",
+        "--length",
+        "33",
+        "--steps",
+        "128",
+        "--output",
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/final_stack_samekind_33.json"
+      ],
+      "fused_agmm": false,
+      "sha256": "1aa6caaeeb290b8a8ff65cff69a4f8344a903ab16dffa2ccb2549aeee40b8086"
+    },
+    {
+      "artifact": "final_stack_samekind_4096.json",
+      "command": [
+        "/workspace/tt-metal/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.test_multichip_stack",
+        "--layers",
+        "0",
+        "1",
+        "--length",
+        "4096",
+        "--steps",
+        "128",
+        "--output",
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/final_stack_samekind_4096.json"
+      ],
+      "fused_agmm": false,
+      "sha256": "e429030cf7ff572d753050d22205fe3c04f273b1a9c55cbb3d823758826e8a80"
+    },
+    {
+      "artifact": "final_stack_mixed_33.json",
+      "command": [
+        "/workspace/tt-metal/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.test_multichip_stack",
+        "--layers",
+        "4",
+        "5",
+        "--length",
+        "33",
+        "--steps",
+        "128",
+        "--output",
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/final_stack_mixed_33.json"
+      ],
+      "fused_agmm": false,
+      "sha256": "5f57164ce9a92c6e04fc2ac9e1d6bfd0057f2039ffd5c3b3a24cbf20f0c24a72"
+    },
+    {
+      "artifact": "final_stack_mixed_4096.json",
+      "command": [
+        "/workspace/tt-metal/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.test_multichip_stack",
+        "--layers",
+        "4",
+        "5",
+        "--length",
+        "4096",
+        "--steps",
+        "128",
+        "--output",
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/final_stack_mixed_4096.json"
+      ],
+      "fused_agmm": false,
+      "sha256": "9539fc33476664552454d771bc9775cc07f5d5451b47bc0b3fb0a556824cb6fb"
+    },
+    {
+      "artifact": "final_nonaligned_sliding.json",
+      "command": [
+        "/workspace/tt-metal/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.run_multichip_decoder",
+        "--layer",
+        "0",
+        "--trace",
+        "--check-cache",
+        "--length",
+        "4095",
+        "--steps",
+        "128",
+        "--output",
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/final_nonaligned_sliding.json"
+      ],
+      "fused_agmm": false,
+      "sha256": "ffc9e52e50ed2165bbe5d4eac94428a636c05bc1bee5794781bc5c5e25d800ea"
+    },
+    {
+      "artifact": "final_nonaligned_full.json",
+      "command": [
+        "/workspace/tt-metal/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.run_multichip_decoder",
+        "--layer",
+        "5",
+        "--trace",
+        "--check-cache",
+        "--length",
+        "4095",
+        "--steps",
+        "128",
+        "--output",
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/final_nonaligned_full.json"
+      ],
+      "fused_agmm": false,
+      "sha256": "b14fe4d4143db507b4cb5737b3dfed281b94d5265a1fa4dfd30c5c17bc17606b"
+    }
+  ]
+}

@@ -1,0 +1,98 @@
+[
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_components",
+      "--layer",
+      "0",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/components_sliding_retry.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_components",
+      "--layer",
+      "5",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/components_full.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_cache_gather",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tiled_cache_gather.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_precision",
+      "--candidate",
+      "rope_native_fp32",
+      "--runner",
+      "batched",
+      "--batch",
+      "32",
+      "--layer",
+      "0",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/rope_native_sliding_adapted.json"
+    ],
+    "exit_code": 1
+  },
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_precision",
+      "--candidate",
+      "rope_native_fp32",
+      "--runner",
+      "batched",
+      "--batch",
+      "32",
+      "--layer",
+      "5",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/rope_native_full_adapted.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--fusion",
+      "broadcast_pack_gelu_router_tail_norm_attention_common",
+      "--group-size",
+      "16384",
+      "--layer",
+      "0",
+      "--length",
+      "4096",
+      "--real",
+      "--decode",
+      "--steps",
+      "128",
+      "--timing",
+      "--verify-program-cache",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/common_norm_sliding.json"
+    ],
+    "exit_code": 0
+  }
+]

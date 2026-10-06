@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=77.0.3,<81.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vllm-tt-plugin"
+version = "0.0.0"
+description = "Tenstorrent backend plugin for vLLM"
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+license = "Apache-2.0"
+# vLLM is intentionally absent: it must be the locally built TT `empty` target,
+# which is not the (CUDA) `vllm` on PyPI. Declaring it as a resolvable dependency
+# lets a version conflict silently uninstall the TT build and pull the PyPI wheel.
+# The install order (build vLLM, then this plugin) guarantees it is present.
+# tblib is required at runtime for cross-process traceback serialization and is
+# not provided by the tt-metal env or by vLLM core's runtime requirements.
+dependencies = ["tblib>=3.1.0"]
+
+[project.optional-dependencies]
+# The plugin runs only inside a tt-metal python_env, which already owns torch,
+# transformers, numpy, and torchvision; restating them here only risks conflicts.
+# qwen-vl-utils is used solely by the offline Qwen-VL example
+# (examples/offline_inference_tt.py), not by the serving path, and the tt-metal
+# env does not provide it.
+examples = ["qwen-vl-utils"]
+
+[project.entry-points."vllm.general_plugins"]
+tt_model_registry = "vllm_tt_plugin.entrypoints:register"
+
+[project.entry-points."vllm.platform_plugins"]
+tt = "vllm_tt_plugin.entrypoints:platform_plugin"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["vllm_tt_plugin*"]

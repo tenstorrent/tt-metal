@@ -1,0 +1,14 @@
+--- models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
++++ models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
+@@ -925,7 +925,11 @@
+         if tuple(shared.shape) != tuple(routed.shape) or tuple(shared.shape)[:2] != (1, 1):
+             raise ValueError("Grouped MoE outputs must share shape [1,1,S,H]")
+         paired = ttnn.concat((shared, routed), dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
++        if getattr(self, "moe_ccl_bfp8", False):
++            paired = ttnn.typecast(paired, ttnn.bfloat8_b)
+         reduced = self.allreduce(paired)
++        if reduced.dtype != ttnn.bfloat16:
++            reduced = ttnn.typecast(reduced, ttnn.bfloat16)
+         return reduced[:, :1, :, :], reduced[:, 1:2, :, :]
+ 
+     def _reduce_attention(self, value):

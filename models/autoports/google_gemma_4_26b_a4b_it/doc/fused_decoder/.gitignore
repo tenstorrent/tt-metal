@@ -1,0 +1,5 @@
+# Bulky captures stay local; compact summaries and provenance are checkpointed.
+tracy/*/raw*/
+watcher/*/generated/
+!tracy/*/*_perf_report_stacked.csv
+!tracy/*/whole_layer.replays.csv

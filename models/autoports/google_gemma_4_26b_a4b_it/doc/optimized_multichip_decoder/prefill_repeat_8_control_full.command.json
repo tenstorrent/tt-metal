@@ -1,0 +1,22 @@
+{
+  "command": [
+    "/workspace/tt-metal/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.doc.optimized_multichip_decoder.probe_prefill_producer_l1",
+    "--prefill-l1-role",
+    "control",
+    "--layer",
+    "5",
+    "--length",
+    "4096",
+    "--steps",
+    "128",
+    "--trace",
+    "--check-cache",
+    "--prefill-timing-samples",
+    "15",
+    "--output",
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/prefill_repeat_8_control_full.json"
+  ],
+  "exit_code": 0
+}

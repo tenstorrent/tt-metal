@@ -1,0 +1,36 @@
+{
+  "runtime_path": "models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py",
+  "base_sha256": "c96cf65fff7ec69e8193a0df502610bce39f8bd5ea2ab2a0bec3dfbeeda4090a",
+  "proposed_sha256": "e0691dc70a93b1e2d76d3028f022980f137cec4b0ac2ea944a25da425f19ea22",
+  "patch_sha256": "2417c588bedc9a3b8d7a4de80e5d96d729c479994424a511631aa6594649907f",
+  "changes_live_runtime": true,
+  "paths_changed": [
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py"
+  ],
+  "new_options": {
+    "qkv_weight_dtype": null,
+    "output_weight_dtype": null,
+    "expert_activation_dtype": null,
+    "native_sdpa_fidelity": "HiFi4",
+    "native_sdpa_grid": [
+      8,
+      8
+    ],
+    "prefill_attention_fidelity": null,
+    "generalized_router": false
+  },
+  "validation": [
+    "Existing OptimizedDecoder constructor parameter defaults unchanged",
+    "Owned chunk helper mocked call sequence exactly matches imported helper in eight scalar-offset cases: padding, multiple chunks, multiple request slots, cache geometry override and custom Q/K chunk environment",
+    "Native and prefill compute overrides isolated; unset prefill preserves compute identity and imported chunk helper",
+    "Promoted generalized router matches tested probe for normalized/unnormalized inputs and delegates prefill",
+    "Black target py310, line length120; py_compile"
+  ],
+  "limitations": [
+    "No hardware validation of the integrated source",
+    "Configured full-prefill helper accepts scalar offsets, as supplied by OptimizedDecoder full prefill; arbitrary prefix continuation uses decode_forward",
+    "No production defaults promoted"
+  ],
+  "applied": true,
+  "applied_sha256": "e0691dc70a93b1e2d76d3028f022980f137cec4b0ac2ea944a25da425f19ea22"
+}

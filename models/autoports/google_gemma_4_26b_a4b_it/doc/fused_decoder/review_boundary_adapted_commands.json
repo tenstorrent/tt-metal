@@ -1,0 +1,178 @@
+[
+  {
+    "name": "shared_sharding_sliding_retry",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_shared_sharding",
+      "--layer",
+      "0",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/shared_sharding_sliding_retry.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "boundary_unarycastshard_sliding",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--fusion",
+      "broadcast_pack_gelu_router_tail_norm_attention_common_tied_ropepolicy_cache_kvnorm_shardedtail_preciseheads_expmerge_residualnorm_rsqrt_expertbatch64_mixmatmul_mixsharded_mixfp32_unarycastshard",
+      "--layer",
+      "0",
+      "--length",
+      "4096",
+      "--real",
+      "--decode",
+      "--steps",
+      "128",
+      "--verify-program-cache",
+      "--timing",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/boundary_unarycastshard_sliding.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "boundary_i2scast_sliding",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--fusion",
+      "broadcast_pack_gelu_router_tail_norm_attention_common_tied_ropepolicy_cache_kvnorm_shardedtail_preciseheads_expmerge_residualnorm_rsqrt_expertbatch64_mixmatmul_mixsharded_mixfp32_i2scast",
+      "--layer",
+      "0",
+      "--length",
+      "4096",
+      "--real",
+      "--decode",
+      "--steps",
+      "128",
+      "--verify-program-cache",
+      "--timing",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/boundary_i2scast_sliding.json"
+    ],
+    "exit_code": 1
+  },
+  {
+    "name": "boundary_sharedshard_sliding",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--fusion",
+      "broadcast_pack_gelu_router_tail_norm_attention_common_tied_ropepolicy_cache_kvnorm_shardedtail_preciseheads_expmerge_residualnorm_rsqrt_expertbatch64_mixmatmul_mixsharded_mixfp32_sharedshard",
+      "--layer",
+      "0",
+      "--length",
+      "4096",
+      "--real",
+      "--decode",
+      "--steps",
+      "128",
+      "--verify-program-cache",
+      "--timing",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/boundary_sharedshard_sliding.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "shared_sharding_full_retry",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_shared_sharding",
+      "--layer",
+      "5",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/shared_sharding_full_retry.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "boundary_unarycastshard_full",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--fusion",
+      "broadcast_pack_gelu_router_tail_norm_attention_common_tied_expmerge_residualnorm_shardedtail_kvnorm_expertbatch64_mixmatmul_mixsharded_unarycastshard",
+      "--layer",
+      "5",
+      "--length",
+      "4096",
+      "--real",
+      "--decode",
+      "--steps",
+      "128",
+      "--verify-program-cache",
+      "--timing",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/boundary_unarycastshard_full.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "boundary_i2scast_full",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--fusion",
+      "broadcast_pack_gelu_router_tail_norm_attention_common_tied_expmerge_residualnorm_shardedtail_kvnorm_expertbatch64_mixmatmul_mixsharded_i2scast",
+      "--layer",
+      "5",
+      "--length",
+      "4096",
+      "--real",
+      "--decode",
+      "--steps",
+      "128",
+      "--verify-program-cache",
+      "--timing",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/boundary_i2scast_full.json"
+    ],
+    "exit_code": 1
+  },
+  {
+    "name": "boundary_sharedshard_full",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--fusion",
+      "broadcast_pack_gelu_router_tail_norm_attention_common_tied_expmerge_residualnorm_shardedtail_kvnorm_expertbatch64_mixmatmul_mixsharded_sharedshard",
+      "--layer",
+      "5",
+      "--length",
+      "4096",
+      "--real",
+      "--decode",
+      "--steps",
+      "128",
+      "--verify-program-cache",
+      "--timing",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/boundary_sharedshard_full.json"
+    ],
+    "exit_code": 0
+  }
+]

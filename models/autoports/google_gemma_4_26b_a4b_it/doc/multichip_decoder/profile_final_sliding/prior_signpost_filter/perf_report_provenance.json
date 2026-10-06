@@ -1,0 +1,90 @@
+{
+  "algorithm": "SHA256",
+  "files": [
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_sliding/reports/tp4/2026_09_27_03_13_25/ops_perf_results_tp4_2026_09_27_03_13_25.csv",
+      "bytes": 151158535,
+      "sha256": "ff00e77a20bd967dd767a20f01b3da88e2a99d1a1a22839b596cefc9d19a4ca3"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_sliding/run.json",
+      "bytes": 5244,
+      "sha256": "743730c07aae236cbeb291e2f9a3e5fde62c80b3db8fac24ca51c7e8fd71569f"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_sliding/whole_layer.json",
+      "bytes": 323989,
+      "sha256": "1773e383740b44d4187b4999b32f57944a5258709d85f8edace3867271ce27b0"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_sliding/whole_layer.windows.csv",
+      "bytes": 18070,
+      "sha256": "2f2bcaa3fb3ed52f35162e5f0a3c71f95cc8d610b164d8e213cdfc79de0b334a"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_sliding/capture_integrity.json",
+      "bytes": 1147,
+      "sha256": "002b98934546efadfec37ebca2f58972259b180a14b06f6abe11ca5089b870d4"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_sliding/op_accounting.json",
+      "bytes": 28587,
+      "sha256": "8ad4f47167384500720b20098da81d415764f887b9e5b3138e34a2b791cddc76"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_sliding/capture_command.json",
+      "bytes": 888,
+      "sha256": "1a7d1c7c5fd56278f8e7dba8e2a3f276163a1dc4d301261093b8e6fb92d5f0e3"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_sliding.log",
+      "bytes": 471976,
+      "sha256": "ca82a2de6b327ac07543feac4ba280a9a80ac765a4f1834911e005b549989a73"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_sliding/prefill_perf_report.csv",
+      "bytes": 3468034,
+      "sha256": "6012d1742e74f550b70bde3f209276197197c1087ee5b9bfb58b7c2c4ebcff25"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_sliding/prefill_perf_report.csv.gz",
+      "bytes": 543849,
+      "sha256": "070123c15572f83187829c4ca8ed8e9d09dfaf6fcaa3ea6ea5d52f26aac52129"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_sliding/prefill_table.txt",
+      "bytes": 4801938,
+      "sha256": "6d797bf895d92bf123ddab3c716765e973873a17748189a8a8043b028aac00ad"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_sliding/prefill_table.txt.gz",
+      "bytes": 210965,
+      "sha256": "5049fac075bde9370a17f4b8051fb16116ee94e3987f34187f78d787ca22b7d9"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_sliding/decode_perf_report.csv",
+      "bytes": 2916458,
+      "sha256": "9e775521050b272dd9ad137b797003bd26762a8220dc8a732a49d45625c6fc46"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_sliding/decode_perf_report.csv.gz",
+      "bytes": 458732,
+      "sha256": "9500736b0563c3299bdc9e305f8b52980ee0fcee7ffcd42784a6f4578afa4b01"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_sliding/decode_table.txt",
+      "bytes": 3568150,
+      "sha256": "ce07cca51cc70414f05cba495c4fd0b796338603fe6f856244a55c16bb081dd1"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_sliding/decode_table.txt.gz",
+      "bytes": 155272,
+      "sha256": "da31e78684a7c53f5a27d75514594b43eca99a62b59c26ebc7742125d3266a02"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_sliding/prefill_perf_report.csv.xz",
+      "bytes": 336220,
+      "sha256": "cbcbb2933227fbcbd7993dbc8f323ca5db8746c8428baa0724f69eda3f8e0568"
+    }
+  ]
+}

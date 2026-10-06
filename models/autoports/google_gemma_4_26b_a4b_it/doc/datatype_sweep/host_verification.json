@@ -1,0 +1,37 @@
+{
+  "policy_tests": {
+    "command": "python -m pytest -q models/autoports/google_gemma_4_26b_a4b_it/tests/test_precision_policy.py",
+    "passed": 8,
+    "failed": 0,
+    "evidence": "policy_tests.log"
+  },
+  "syntax_compile": {
+    "passed": true,
+    "files": [
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/datatype_sweep/verify_bf16_cache_config.py",
+      "models/autoports/google_gemma_4_26b_a4b_it/tests/check_full_trace.py",
+      "models/autoports/google_gemma_4_26b_a4b_it/tests/make_datatype_candidates.py",
+      "models/autoports/google_gemma_4_26b_a4b_it/tests/precision_memory.py",
+      "models/autoports/google_gemma_4_26b_a4b_it/tests/probe_full_lm_head.py",
+      "models/autoports/google_gemma_4_26b_a4b_it/tests/run_datatype_candidate.py",
+      "models/autoports/google_gemma_4_26b_a4b_it/tests/run_datatype_smoke.py",
+      "models/autoports/google_gemma_4_26b_a4b_it/tests/run_full_capacity.py",
+      "models/autoports/google_gemma_4_26b_a4b_it/tests/run_optimized_full_model.py",
+      "models/autoports/google_gemma_4_26b_a4b_it/tests/summarize_datatype_sweep.py",
+      "models/autoports/google_gemma_4_26b_a4b_it/tests/test_precision_policy.py",
+      "models/autoports/google_gemma_4_26b_a4b_it/tt/generator.py",
+      "models/autoports/google_gemma_4_26b_a4b_it/tt/model.py",
+      "models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py",
+      "models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py",
+      "models/autoports/google_gemma_4_26b_a4b_it/tt/precision_policy.py"
+    ]
+  },
+  "git_diff_check": true,
+  "precommit": {
+    "passed": true,
+    "command": "pre-commit run --files <all stage-owned changed/untracked files>",
+    "evidence": "precommit.log"
+  },
+  "build_required": false,
+  "build_reason": "Only Python and evidence/documentation changes; no C++ or CMake changes."
+}

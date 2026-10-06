@@ -1,0 +1,4890 @@
+{
+  "command": [
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/diagnose_attention_ccl_boundaries.py",
+    "--router-core-x",
+    "1",
+    "--expert-boundaries",
+    "--expert-retain",
+    "gate",
+    "up",
+    "hidden",
+    "--read-padding",
+    "--log-addresses",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/bfp8_boundary_router_core1_slices.json"
+  ],
+  "runtime_sha256": "8b59370cda6f4ff88157de123123509036f2e91e8054000c809752e21f933175",
+  "diagnostic_sha256": "604b3abeed2b7a377cb871f0c881407fca5359c32db731cc4ffc9fc2d7e98c2e",
+  "dtype": "bfloat8_b",
+  "experts_sha256": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898",
+  "expert_boundaries": true,
+  "expert_retained_names": [
+    "gate",
+    "up",
+    "hidden"
+  ],
+  "gate_k_block": null,
+  "gate_n_tiles": 1,
+  "log_addresses": true,
+  "expert_input_dram": false,
+  "router_core_x": 1,
+  "layer": 0,
+  "output_only": false,
+  "retained_groups": [
+    "all"
+  ],
+  "read_output_only": false,
+  "replay_delay_ms": 0,
+  "read_padding": true,
+  "length": 4096,
+  "steps": 128,
+  "completed_steps": 128,
+  "duplicates": 1,
+  "completed_duplicate_checks": 128,
+  "passed": true,
+  "reference_read_host_ms": [
+    31.325893476605415,
+    21.10678981989622,
+    23.197867907583714,
+    19.75200232118368,
+    27.495195157825947,
+    19.085293635725975,
+    18.686555325984955,
+    23.69143720716238,
+    29.298527166247368,
+    20.261961966753006,
+    20.287562161684036,
+    20.29176987707615,
+    19.55262292176485,
+    22.93554972857237,
+    20.758708007633686,
+    18.481235019862652,
+    19.80210840702057,
+    19.59956157952547,
+    19.104710780084133,
+    19.71043273806572,
+    21.5293038636446,
+    19.094430841505527,
+    22.06190675497055,
+    22.038042545318604,
+    22.611753083765507,
+    18.34855228662491,
+    21.462947130203247,
+    19.698530435562134,
+    19.037543796002865,
+    18.00281461328268,
+    31.259496696293354,
+    20.09744942188263,
+    24.794667027890682,
+    20.516566932201385,
+    25.01199021935463,
+    17.73936301469803,
+    26.00413840264082,
+    29.372187331318855,
+    19.06545553356409,
+    49.00079406797886,
+    18.50766409188509,
+    24.327456951141357,
+    18.51270440965891,
+    20.194253884255886,
+    19.582790322601795,
+    19.09361034631729,
+    20.221254788339138,
+    20.39803098887205,
+    19.957021810114384,
+    18.534736707806587,
+    19.64088063687086,
+    19.097416661679745,
+    23.065045475959778,
+    20.462915301322937,
+    27.212226763367653,
+    20.231754519045353,
+    20.253576338291168,
+    18.658491782844067,
+    18.914809450507164,
+    17.54153613001108,
+    23.958785459399223,
+    32.49509818851948,
+    24.54224694520235,
+    26.654344983398914,
+    18.186544068157673,
+    19.873714074492455,
+    21.957337856292725,
+    19.912688061594963,
+    19.19015310704708,
+    20.072813145816326,
+    19.229727797210217,
+    19.045166671276093,
+    23.744377307593822,
+    26.404310017824173,
+    19.488190300762653,
+    20.022546872496605,
+    19.606946036219597,
+    25.990962982177734,
+    18.638843670487404,
+    20.579827018082142,
+    21.17288578301668,
+    19.087919034063816,
+    19.300793297588825,
+    18.920110538601875,
+    17.95137580484152,
+    20.81258036196232,
+    23.89621641486883,
+    21.475501358509064,
+    20.884376950562,
+    20.360339432954788,
+    18.626459874212742,
+    21.344371140003204,
+    42.25487820804119,
+    18.802965991199017,
+    24.09274224191904,
+    19.929420202970505,
+    70.35423163324594,
+    18.436088226735592,
+    23.888181895017624,
+    20.21336928009987,
+    22.4634213373065,
+    22.434947080910206,
+    20.413140766322613,
+    18.930268473923206,
+    18.571565859019756,
+    18.46659556031227,
+    18.26218795031309,
+    64.26371354609728,
+    18.308485858142376,
+    17.898675054311752,
+    18.02834216505289,
+    41.11240338534117,
+    18.878160044550896,
+    21.819996647536755,
+    20.341984927654266,
+    18.384860828518867,
+    19.02505848556757,
+    17.474357970058918,
+    19.936813041567802,
+    24.342084303498268,
+    20.158756524324417,
+    22.469081915915012,
+    19.08389013260603,
+    20.391007885336876,
+    19.271048717200756,
+    19.37396265566349,
+    61.11094541847706,
+    19.871008582413197
+  ],
+  "physical_variation_steps": [],
+  "limitation": "Retained tensor handles change allocator lifetimes; this run does not measure performance.",
+  "expert_gate_program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=6-2,in0_block_w=44,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=0,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+  "expert_down_program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=6,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=0,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+  "buffer_addresses": [
+    {
+      "phase": "warm1",
+      "name": "forward_entry_input",
+      "address": 5964736,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "previous_forward:input_norm",
+      "address": 15601216,
+      "shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "previous_forward:attention_sdpa",
+      "address": 19271232,
+      "shape": [
+        1,
+        4,
+        1024,
+        256
+      ],
+      "padded_shape": [
+        1,
+        4,
+        1024,
+        256
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "previous_forward:attention_wo_fp32",
+      "address": 19533376,
+      "shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "previous_forward:attention_cast",
+      "address": 18484800,
+      "shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "previous_forward:attention_dram",
+      "address": 18484800,
+      "shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "previous_forward:attention_rs",
+      "address": 18867776,
+      "shape": [
+        1,
+        1,
+        1024,
+        704
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1024,
+        704
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "previous_forward:attention_ag",
+      "address": 20975168,
+      "shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "previous_forward:post_attention_norm",
+      "address": 21358144,
+      "shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "previous_forward:residual",
+      "address": 22799936,
+      "shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "previous_forward:residual_norm",
+      "address": 24241728,
+      "shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "previous_forward:routes",
+      "address": 7927808,
+      "shape": [
+        1,
+        1,
+        1024,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1024,
+        128
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "previous_forward:expert_input",
+      "address": 17043008,
+      "shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "previous_forward:routed_local",
+      "address": 17763904,
+      "shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "previous_forward:shared_input",
+      "address": 25683520,
+      "shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "previous_forward:shared_local",
+      "address": 26682944,
+      "shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "previous_forward:shared_reduced",
+      "address": 30225472,
+      "shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "previous_forward:routed_reduced",
+      "address": 31729216,
+      "shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "previous_forward:output",
+      "address": 34612800,
+      "shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1024,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "input_norm",
+      "address": 1553536,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "attention_sdpa",
+      "address": 5922752,
+      "shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        256
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "attention_wo_fp32",
+      "address": 1557632,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "attention_cast",
+      "address": 1564864,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "attention_dram",
+      "address": 5928896,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "attention_rs",
+      "address": 5940864,
+      "shape": [
+        1,
+        1,
+        1,
+        704
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        704
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "attention_ag",
+      "address": 5944128,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "attention_promoted_fp32",
+      "address": 6032320,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "attention_sharded_fp32",
+      "address": 1549440,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}], shape=[32, 32], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 32],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "post_attention_norm_sharded",
+      "address": 1545344,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}], shape=[32, 32], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 32],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "post_attention_norm_unweighted",
+      "address": 1541248,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "post_attention_norm",
+      "address": 1537152,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "residual",
+      "address": 7927808,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "residual_norm",
+      "address": 1524864,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "router_scores",
+      "address": 1528960,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "router_centered_scores",
+      "address": 1516672,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "router_rounded_scores",
+      "address": 1522816,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "router_gate_values",
+      "address": 1564672,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "router_gate_indices",
+      "address": 1564800,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.UINT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "routes",
+      "address": 1514624,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "route_indices",
+      "address": 1564800,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.UINT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "expert_input",
+      "address": 1535104,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "expert_chunk_entry_input",
+      "address": 1535104,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "expert_routing_row_major",
+      "address": 1564416,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "expert_indices",
+      "address": 1564800,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.UINT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "expert_mix_weights_row_major",
+      "address": 1564736,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "expert_mix_weights_tiled",
+      "address": 1533056,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        32
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "expert_gate_up_raw",
+      "address": 1520768,
+      "shape": [
+        1,
+        1,
+        1,
+        8,
+        1,
+        384
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8,
+        32,
+        384
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "expert_gate_up_reshaped",
+      "address": 1520768,
+      "shape": [
+        1,
+        8,
+        1,
+        384
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        384
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "expert_gate",
+      "address": 1512576,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "expert_gate",
+      "address": 1512576,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "expert_up",
+      "address": 1510528,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "expert_up",
+      "address": 1510528,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "expert_hidden",
+      "address": 1508480,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "expert_hidden",
+      "address": 1508480,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "expert_down_raw",
+      "address": 1494144,
+      "shape": [
+        1,
+        8,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "expert_down_permuted",
+      "address": 1492096,
+      "shape": [
+        1,
+        1,
+        8,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "expert_output",
+      "address": 1490048,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "routed_local",
+      "address": 1490048,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "shared_input",
+      "address": 1533056,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "shared_local",
+      "address": 1500288,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "shared_reduced",
+      "address": 7972864,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "routed_reduced",
+      "address": 11734592,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm1",
+      "name": "output",
+      "address": 5987264,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "forward_entry_input",
+      "address": 5964736,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:input_norm",
+      "address": 1553536,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:attention_sdpa",
+      "address": 5922752,
+      "shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        256
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:attention_wo_fp32",
+      "address": 1557632,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:attention_cast",
+      "address": 1564864,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:attention_dram",
+      "address": 5928896,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:attention_rs",
+      "address": 5940864,
+      "shape": [
+        1,
+        1,
+        1,
+        704
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        704
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:attention_ag",
+      "address": 5944128,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:attention_promoted_fp32",
+      "address": 6032320,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:attention_sharded_fp32",
+      "address": 1549440,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}], shape=[32, 32], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 32],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:post_attention_norm_sharded",
+      "address": 1545344,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}], shape=[32, 32], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 32],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:post_attention_norm_unweighted",
+      "address": 1541248,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:post_attention_norm",
+      "address": 1537152,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:residual",
+      "address": 7927808,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:residual_norm",
+      "address": 1524864,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:router_scores",
+      "address": 1528960,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:router_centered_scores",
+      "address": 1516672,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:router_rounded_scores",
+      "address": 1522816,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:router_gate_values",
+      "address": 1564672,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:router_gate_indices",
+      "address": 1564800,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.UINT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:routes",
+      "address": 1514624,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:route_indices",
+      "address": 1564800,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.UINT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:expert_input",
+      "address": 1535104,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:expert_gate",
+      "address": 1512576,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:expert_up",
+      "address": 1510528,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:expert_hidden",
+      "address": 1508480,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:routed_local",
+      "address": 1490048,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:shared_input",
+      "address": 1533056,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:shared_local",
+      "address": 1500288,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:shared_reduced",
+      "address": 7972864,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:routed_reduced",
+      "address": 11734592,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "previous_forward:output",
+      "address": 5987264,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "input_norm",
+      "address": 1553536,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "attention_sdpa",
+      "address": 5922752,
+      "shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        256
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "attention_wo_fp32",
+      "address": 1516672,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "attention_cast",
+      "address": 1564864,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "attention_dram",
+      "address": 5928896,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "attention_rs",
+      "address": 5940864,
+      "shape": [
+        1,
+        1,
+        1,
+        704
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        704
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "attention_ag",
+      "address": 5944128,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "attention_promoted_fp32",
+      "address": 7927808,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "attention_sharded_fp32",
+      "address": 1557632,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}], shape=[32, 32], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 32],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "post_attention_norm_sharded",
+      "address": 1549440,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}], shape=[32, 32], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 32],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "post_attention_norm_unweighted",
+      "address": 1545344,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "post_attention_norm",
+      "address": 1541248,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "residual",
+      "address": 9172032,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "residual_norm",
+      "address": 1528960,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "router_scores",
+      "address": 1533056,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "router_centered_scores",
+      "address": 1520768,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "router_rounded_scores",
+      "address": 1526912,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "router_gate_values",
+      "address": 1564608,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "router_gate_indices",
+      "address": 1564736,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.UINT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "routes",
+      "address": 1514624,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "route_indices",
+      "address": 1564736,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.UINT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "expert_input",
+      "address": 1539200,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "expert_chunk_entry_input",
+      "address": 1539200,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "expert_previous_chunk:gate",
+      "address": 1512576,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "expert_previous_chunk:up",
+      "address": 1510528,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "expert_previous_chunk:hidden",
+      "address": 1508480,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "expert_routing_row_major",
+      "address": 1564352,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "expert_indices",
+      "address": 1564736,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.UINT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "expert_mix_weights_row_major",
+      "address": 1564800,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "expert_mix_weights_tiled",
+      "address": 1537152,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        32
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "expert_gate_up_raw",
+      "address": 1524864,
+      "shape": [
+        1,
+        1,
+        1,
+        8,
+        1,
+        384
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8,
+        32,
+        384
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "expert_gate_up_reshaped",
+      "address": 1524864,
+      "shape": [
+        1,
+        8,
+        1,
+        384
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        384
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "expert_gate",
+      "address": 1512576,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "expert_gate",
+      "address": 1512576,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "expert_up",
+      "address": 1510528,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "expert_up",
+      "address": 1510528,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "expert_hidden",
+      "address": 1508480,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "expert_hidden",
+      "address": 1508480,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "expert_down_raw",
+      "address": 1494144,
+      "shape": [
+        1,
+        8,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "expert_down_permuted",
+      "address": 1492096,
+      "shape": [
+        1,
+        1,
+        8,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "expert_output",
+      "address": 1490048,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "routed_local",
+      "address": 1490048,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "shared_input",
+      "address": 1537152,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "shared_local",
+      "address": 1500288,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "shared_reduced",
+      "address": 6054848,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "routed_reduced",
+      "address": 7972864,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "warm2",
+      "name": "output",
+      "address": 6009792,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "forward_entry_input",
+      "address": 5964736,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:input_norm",
+      "address": 1553536,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:attention_sdpa",
+      "address": 5922752,
+      "shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        256
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:attention_wo_fp32",
+      "address": 1516672,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:attention_cast",
+      "address": 1564864,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:attention_dram",
+      "address": 5928896,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:attention_rs",
+      "address": 5940864,
+      "shape": [
+        1,
+        1,
+        1,
+        704
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        704
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:attention_ag",
+      "address": 5944128,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:attention_promoted_fp32",
+      "address": 7927808,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:attention_sharded_fp32",
+      "address": 1557632,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}], shape=[32, 32], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 32],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:post_attention_norm_sharded",
+      "address": 1549440,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}], shape=[32, 32], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 32],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:post_attention_norm_unweighted",
+      "address": 1545344,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:post_attention_norm",
+      "address": 1541248,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:residual",
+      "address": 9172032,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:residual_norm",
+      "address": 1528960,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:router_scores",
+      "address": 1533056,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:router_centered_scores",
+      "address": 1520768,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:router_rounded_scores",
+      "address": 1526912,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:router_gate_values",
+      "address": 1564608,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:router_gate_indices",
+      "address": 1564736,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.UINT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:routes",
+      "address": 1514624,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:route_indices",
+      "address": 1564736,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.UINT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:expert_input",
+      "address": 1539200,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:expert_gate",
+      "address": 1512576,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:expert_up",
+      "address": 1510528,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:expert_hidden",
+      "address": 1508480,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:routed_local",
+      "address": 1490048,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:shared_input",
+      "address": 1537152,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:shared_local",
+      "address": 1500288,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:shared_reduced",
+      "address": 6054848,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:routed_reduced",
+      "address": 7972864,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "previous_forward:output",
+      "address": 6009792,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "input_norm",
+      "address": 1553536,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "attention_sdpa",
+      "address": 5922752,
+      "shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        256
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "attention_wo_fp32",
+      "address": 1516672,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "attention_cast",
+      "address": 1564864,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "attention_dram",
+      "address": 5928896,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "attention_rs",
+      "address": 5940864,
+      "shape": [
+        1,
+        1,
+        1,
+        704
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        704
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "attention_ag",
+      "address": 5944128,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "attention_promoted_fp32",
+      "address": 7927808,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "attention_sharded_fp32",
+      "address": 1557632,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}], shape=[32, 32], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 32],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "post_attention_norm_sharded",
+      "address": 1549440,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}], shape=[32, 32], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 32],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "post_attention_norm_unweighted",
+      "address": 1545344,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "post_attention_norm",
+      "address": 1541248,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "residual",
+      "address": 9172032,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "residual_norm",
+      "address": 1528960,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "router_scores",
+      "address": 1533056,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "router_centered_scores",
+      "address": 1520768,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "router_rounded_scores",
+      "address": 1526912,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "router_gate_values",
+      "address": 1564608,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "router_gate_indices",
+      "address": 1564800,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.UINT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "routes",
+      "address": 1514624,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "route_indices",
+      "address": 1564800,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.UINT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "expert_input",
+      "address": 1539200,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "expert_chunk_entry_input",
+      "address": 1539200,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "expert_previous_chunk:gate",
+      "address": 1512576,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "expert_previous_chunk:up",
+      "address": 1510528,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "expert_previous_chunk:hidden",
+      "address": 1508480,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "expert_routing_row_major",
+      "address": 1564352,
+      "shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "expert_indices",
+      "address": 1564800,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.UINT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "expert_mix_weights_row_major",
+      "address": 1564736,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "expert_mix_weights_tiled",
+      "address": 1537152,
+      "shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        32
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "expert_gate_up_raw",
+      "address": 1524864,
+      "shape": [
+        1,
+        1,
+        1,
+        8,
+        1,
+        384
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8,
+        32,
+        384
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "expert_gate_up_reshaped",
+      "address": 1524864,
+      "shape": [
+        1,
+        8,
+        1,
+        384
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        384
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "expert_gate",
+      "address": 1512576,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "expert_gate",
+      "address": 1512576,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "expert_up",
+      "address": 1510528,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "expert_up",
+      "address": 1510528,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "expert_hidden",
+      "address": 1508480,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "expert_hidden",
+      "address": 1508480,
+      "shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "expert_down_raw",
+      "address": 1494144,
+      "shape": [
+        1,
+        8,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "expert_down_permuted",
+      "address": 1492096,
+      "shape": [
+        1,
+        1,
+        8,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "expert_output",
+      "address": 1490048,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "routed_local",
+      "address": 1490048,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "shared_input",
+      "address": 1537152,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "shared_local",
+      "address": 1500288,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "shared_reduced",
+      "address": 5987264,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "routed_reduced",
+      "address": 7972864,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    {
+      "phase": "capture",
+      "name": "output",
+      "address": 6032320,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    }
+  ],
+  "boundaries": {
+    "input_norm": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "attention_sdpa": {
+      "logical_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        256
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "attention_wo_fp32": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "attention_cast": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "attention_dram": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "attention_rs": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        704
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        704
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "attention_ag": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "attention_promoted_fp32": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "attention_sharded_fp32": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}], shape=[32, 32], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 32],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "post_attention_norm_sharded": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}], shape=[32, 32], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 32],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "post_attention_norm_unweighted": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "post_attention_norm": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "residual": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "residual_norm": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "router_scores": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "router_centered_scores": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "router_rounded_scores": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "router_gate_values": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "router_gate_indices": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.UINT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "routes": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "route_indices": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.UINT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "expert_input": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "expert_gate": {
+      "logical_shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "expert_up": {
+      "logical_shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "expert_hidden": {
+      "logical_shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "routed_local": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "shared_input": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "shared_local": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "shared_reduced": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "routed_reduced": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "output": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    }
+  }
+}

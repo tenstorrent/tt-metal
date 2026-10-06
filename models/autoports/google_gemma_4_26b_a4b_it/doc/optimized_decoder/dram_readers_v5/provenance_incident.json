@@ -1,0 +1,59 @@
+{
+  "event": "Black formatting and plan-only rewrite while serialized reader driver was active",
+  "runtime_sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b",
+  "runtime_changed": false,
+  "driver_sha256": "71c24f1a69962f6239628fe1d138a4e6cf4827b8f60337244b54ca9d8faab5b1",
+  "driver_changed": false,
+  "probe_file": "models/autoports/google_gemma_4_26b_a4b_it/tests/probe_optimized_dram_readers.py",
+  "old_probe_sha256": "363222fac9947e216fa8045d891bb17987462acc8b7a84df06adb1cd72e71df9",
+  "new_probe_sha256": "d2da0336d4529b997b68d85773dfc5c89aa8bf9ec216f9f598e2648f5ba23266",
+  "format_utc": "2026-09-26T18:20:03.992988+00:00",
+  "plan_only_rewrite_utc": "2026-09-26T18:20:04.054367+00:00",
+  "transient_plan_sha256": "37af14c327a90f9f363b904e41e9a04d798ca69d4aedef0f217e1d6124cc3306",
+  "format_command": [
+    "python_env/bin/python",
+    "-m",
+    "black",
+    "--include",
+    ".*\\.py$",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/probe_optimized_dram_readers.py",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/test_dram_reader_probe_cpu.py",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/run_dram_reader_microbenchmarks.py"
+  ],
+  "formatter": "Black26.3.1; default safe mode, no --fast; returned0",
+  "semantic_equivalence_basis": "Black default AST-equivalence safety check; only the probe was reformatted. No independent before-file AST dump was retained.",
+  "unchanged_files": [
+    "tests/test_dram_reader_probe_cpu.py",
+    "tests/run_dram_reader_microbenchmarks.py",
+    "tt/optimized_decoder.py"
+  ],
+  "per_run_artifacts_modified": false,
+  "execution_journal": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/dram_readers_v5/commands.json",
+  "execution_journal_sha256": "4049228d1b94dfe9b63aa96aadc624834c989e834c55447ba32c3603c3540d14",
+  "final_plan_note": "The live driver subsequently wrote its original in-memory plan at completion, restoring status complete and its start-time old probe hash. That single hash is not asserted for every phase.",
+  "corrective_action": "No edits to published driver/probe while parent owns active runs; record actual per-phase hashes without rewriting measured reports. No benchmark rerun requested for formatting alone.",
+  "phase_provenance": [
+    {
+      "layer": 0,
+      "capture_entry_probe_file_sha256": "363222fac9947e216fa8045d891bb17987462acc8b7a84df06adb1cd72e71df9",
+      "capture_post_close_report_probe_file_sha256": "363222fac9947e216fa8045d891bb17987462acc8b7a84df06adb1cd72e71df9",
+      "profile_process_probe_file_sha256": "363222fac9947e216fa8045d891bb17987462acc8b7a84df06adb1cd72e71df9",
+      "capture_payload_sha256": "16b04ae1e503a4ff7982645a38e37237f8ce8fe8e837025bd89b397eb33f6b60",
+      "capture_report_sha256": "81257da6d406cd7ab38bc66d869d3cb33357db41471bb914e70dfdeac4cd28c1",
+      "profile_and_summary_report_sha256": "38a588f504c6877f6a46be2da63bc071c4e1e4571c74e7388f0cd76742631e8e",
+      "native_csv_sha256": "1dc1198083a2a0921d195d368ed802a0dd0f0fb7d917ed9e0d16ce374b8f4220",
+      "interpretation": "Capture and profile both report old source hash."
+    },
+    {
+      "layer": 5,
+      "capture_entry_probe_file_sha256": "363222fac9947e216fa8045d891bb17987462acc8b7a84df06adb1cd72e71df9",
+      "capture_post_close_report_probe_file_sha256": "d2da0336d4529b997b68d85773dfc5c89aa8bf9ec216f9f598e2648f5ba23266",
+      "profile_process_probe_file_sha256": "d2da0336d4529b997b68d85773dfc5c89aa8bf9ec216f9f598e2648f5ba23266",
+      "capture_payload_sha256": "483b3343ea49a865a6c91c9df43cbe5337d4e0cbbd707b18385b4337eed10c32",
+      "capture_report_sha256": "1bc8ae7f96087f4450871a8187508e9412f30edb5ed3500e706c18f32bf8a528",
+      "profile_and_summary_report_sha256": "8bc36532e8f03f6fd629761b3f11891ef521a96a853fc8d4bb9379728e3dfb66",
+      "native_csv_sha256": "f1ac89b884e00ab661c9d7c0829e276570f339b95fd17febdaa8dddb39b886a5",
+      "interpretation": "Layer5 capture entered before formatting; its already-loaded code continued while the post-close file digest observed new formatting. The subsequent profile process loaded the formatted file."
+    }
+  ]
+}

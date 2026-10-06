@@ -1,0 +1,33 @@
+import json,pathlib,subprocess,os,time,sys,shutil
+p=pathlib.Path('models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder');j=[]
+def run(name,args,watcher=False,timeout=1800):
+ out=p/(name+'.json');assert not out.exists(),out
+ cmd=['python','-m','models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_contract',*args,'--output',str(out)]
+ env=os.environ|{'OMP_NUM_THREADS':'4','MKL_NUM_THREADS':'4'}
+ if watcher:env['TT_METAL_WATCHER']='10'
+ start=time.time()
+ with (p/(name+'.log')).open('w') as log:r=subprocess.run(cmd,stdout=log,stderr=subprocess.STDOUT,env=env,timeout=timeout)
+ j.append({'command':cmd,'returncode':r.returncode,'watcher':watcher,'seconds':time.time()-start});(p/'validated_v4_contract_commands.json').write_text(json.dumps(j,indent=2)+'\n');print(name,r.returncode,flush=True)
+ if watcher: shutil.copyfile('generated/watcher/watcher.log',p/(name+'.device.log'))
+ if r.returncode: sys.exit(r.returncode)
+ return r.returncode
+for l in (5,0):
+ fixture=str(p/f'actual_text_layer{l}_4096_128.pt')
+ for kind in ('batched','prefix_continuation','request_reuse'):
+  extra=['--batch','32','--heterogeneous-positions'] if kind=='batched' else []
+  run(f'validated_v4_{kind}_layer{l}',['--contract',kind,'--layer',str(l),'--input-fixture',fixture,*extra])
+ run(f'validated_v4_bf16_cache_prefix_layer{l}',['--contract','prefix_continuation','--layer',str(l),'--input-fixture',fixture,'--default-overrides','{"kv_cache_dtype":"bfloat16"}'])
+ for length in (262144,262143):
+  run(f'validated_v4_long_{length}_layer{l}',['--contract','long_context','--layer',str(l),'--length',str(length),'--threads','4','--input-fixture',str(p/f'actual_text_long/actual_text_layer{l}_262144_0.pt'),'--reference-file',str(p/f'actual_text_long/actual_text_layer{l}_{length}_reference.pt')])
+ run(f'validated_v4_headline_layer{l}',['--contract','run_decoder','--layer',str(l),'--length','4096','--real','--input-fixture',fixture,'--decode','--steps','128','--timing','--prefill-timing','--verify-program-cache'])
+ run(f'validated_v4_watcher_layer{l}',['--contract','run_decoder','--layer',str(l),'--length','4096','--real','--input-fixture',fixture,'--decode','--steps','128','--verify-program-cache'],watcher=True)
+
+# Keep final small-tail and extended preservation gates serialized after contracts.
+cmd=['python','-m','pytest','-q','models/autoports/google_gemma_4_26b_a4b_it/tests/test_optimized_decoder.py','--basetemp',str(p/'pytest_validated_v4_tmp')]
+with (p/'pytest_validated_v4.log').open('w') as log:r=subprocess.run(cmd,stdout=log,stderr=subprocess.STDOUT,env=os.environ|{'OMP_NUM_THREADS':'4','MKL_NUM_THREADS':'4'},timeout=1800)
+j.append({'command':cmd,'returncode':r.returncode});(p/'validated_v4_contract_commands.json').write_text(json.dumps(j,indent=2)+'\n');print('pytest_validated_v4',r.returncode,flush=True)
+if r.returncode:sys.exit(r.returncode)
+cmd=['python','-m','models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_stress','--output-dir',str(p/'stress_validated_v4_defaults'),'--input-fixture-template',str(p/'actual_text_layer{layer}_1025_512.pt')]
+with (p/'stress_validated_v4_defaults.log').open('w') as log:r=subprocess.run(cmd,stdout=log,stderr=subprocess.STDOUT,env=os.environ|{'OMP_NUM_THREADS':'4','MKL_NUM_THREADS':'4'},timeout=1800)
+j.append({'command':cmd,'returncode':r.returncode});(p/'validated_v4_contract_commands.json').write_text(json.dumps(j,indent=2)+'\n');print('stress_validated_v4_defaults',r.returncode,flush=True)
+if r.returncode:sys.exit(r.returncode)

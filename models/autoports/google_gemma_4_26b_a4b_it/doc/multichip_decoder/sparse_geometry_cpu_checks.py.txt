@@ -1,0 +1,28 @@
+from pathlib import Path
+from types import SimpleNamespace as NS
+import ast,hashlib,json
+root=Path('/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it');doc=root/'doc/multichip_decoder';p=doc/'sparse_geometry_runner_candidate.py.txt';s=p.read_text();tree=ast.parse(s)
+node=next(n for n in ast.walk(tree) if isinstance(n,ast.If) and ast.unparse(n.test).startswith("tp == 4 and (args.sparse_gate_geometry"))
+reports=[]
+for gate,down in [('baseline','baseline'),('n2-k44','baseline'),('n2-k88','baseline'),('baseline','n2-k6'),('n2-k44','n2-k6'),('n2-k88','n2-k6')]:
+ gate_default=object();down_default=object();compute=object();gate_weights=NS(shape=(1,128,2816,384));down_weights=NS(shape=(1,128,192,2816));prefill=object();mix=object();router=object()
+ expert=NS(indexed_router=router,expert_split=False,config=NS(top_k=8),gate_up=gate_weights,down=down_weights,gate_config=gate_default,down_config=down_default,decode_compute=compute,mix_program=mix)
+ ns={'tp':4,'args':NS(sparse_gate_geometry=gate,sparse_down_geometry=down),'decoder':NS(layer=NS(moe=NS(experts=NS(prefill=prefill,decode=expert)))),'mesh':NS(compute_with_storage_grid_size=lambda:NS(x=11,y=10)),'ttnn':NS(MatmulMultiCoreReuseMultiCast1DProgramConfig=lambda **kw:NS(**kw)),'block':32}
+ exec(compile(ast.Module(body=[node],type_ignores=[]),'sparse_override','exec'),ns)
+ assert ns['block']==32 and expert.gate_up is gate_weights and expert.down is down_weights
+ assert expert.decode_compute is compute and expert.mix_program is mix and expert.indexed_router is router
+ assert ns['decoder'].layer.moe.experts.prefill is prefill
+ row={'gate':gate,'down':down,'page_block_unchanged':True,'weights_compute_router_mix_prefill_unchanged':True}
+ for role,choice,original,k,n in [('gate',gate,gate_default,88,12),('down',down,down_default,6,88)]:
+  cfg=getattr(expert,role+'_config')
+  if choice=='baseline':assert cfg is original;continue
+  assert cfg.out_block_w==cfg.out_subblock_w==cfg.per_core_N==2
+  assert cfg.out_block_h==cfg.out_subblock_h==cfg.per_core_M==1
+  assert cfg.fuse_batch is False and cfg.mcast_in0 is True
+  assert k%cfg.in0_block_w==0
+  cores=cfg.compute_with_storage_grid_size[0]*cfg.compute_with_storage_grid_size[1]
+  assert n//cfg.per_core_N==cores
+  row[role+'_program']=vars(cfg)
+ reports.append(row)
+report=dict(ttnn_imported=False,hardware_used=False,runner_candidate_sha256=hashlib.sha256(s.encode()).hexdigest(),checks=reports)
+(doc/'sparse_geometry_cpu_checks.json').write_text(json.dumps(report,indent=2)+'\n');(doc/'sparse_geometry_cpu_checks.py.txt').write_text(Path(__file__).read_text());print(json.dumps(report,indent=2))

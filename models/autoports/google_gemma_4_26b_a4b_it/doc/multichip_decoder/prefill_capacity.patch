@@ -1,0 +1,70 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
+@@ -492,6 +492,67 @@
+         )
+         return self
+ 
++    def prefill_forward(self, hidden_states, *, rope_mats, page_table, kv_cache, user_id=0, start_pos=0):
++        """Assemble long replicated prefill outputs in bounded tiled groups."""
++        length = hidden_states.shape[-2]
++        if start_pos or length <= self.chunk_size or self.sharded_residual:
++            return super().prefill_forward(
++                hidden_states,
++                rope_mats=rope_mats,
++                page_table=page_table,
++                kv_cache=kv_cache,
++                user_id=user_id,
++                start_pos=start_pos,
++            )
++        self._validate_kv_cache(kv_cache)
++        if length > self.config.max_position_embeddings:
++            raise ValueError("Sequence outside HF context contract")
++        block = kv_cache[0].shape[-2]
++        if self.chunk_size % block:
++            raise ValueError("Chunk size must be a multiple of the cache page size")
++        attention = self.layer.self_attn
++        attention._release_sliding_prefill_tail(clear_persistent=True)
++        groups, chunks = [], []
++        for start in range(0, length, self.chunk_size):
++            valid = min(self.chunk_size, length - start)
++            tiled_rows = (valid + 31) // 32 * 32
++            short_sliding_tail = attention.config.is_sliding and start > 0 and valid < self.config.sliding_window
++            physical = self.config.sliding_window if short_sliding_tail else tiled_rows
++            x = hidden_states[:, :, start : start + valid, :]
++            if physical != valid:
++                x = ttnn.pad(x, [(0, 0), (0, 0), (0, physical - valid), (0, 0)], 0.0)
++            rope = tuple(r[:, :, start : start + physical, :] for r in rope_mats)
++            chunk_table = page_table[:, start // block : (start + valid + block - 1) // block]
++            chunk_start = self.positions_i32[:, start : start + 1] if short_sliding_tail else start
++            out = self._forward(
++                x,
++                rope_mats=rope,
++                page_table=page_table,
++                kv_cache=kv_cache,
++                position_idx=None,
++                is_decode=False,
++                user_id=user_id,
++                valid_seq_len=valid,
++                chunk_start_idx=chunk_start,
++                chunk_page_table=chunk_table,
++                retain_prefill_tail=start + valid < length,
++            )
++            # Keep the final tile physical until assembly is complete. A logical
++            # partial tile here makes concat untilize every retained chunk.
++            chunks.append(out if out.shape[-2] == tiled_rows else out[:, :, :tiled_rows, :])
++            del out
++            if len(chunks) == 32:
++                groups.append(ttnn.concat(chunks, dim=2))
++                chunks.clear()
++        if chunks:
++            groups.append(chunks[0] if len(chunks) == 1 else ttnn.concat(chunks, dim=2))
++            chunks.clear()
++        # At the supported context limit there are at most eight groups, below
++        # concat's 47-input batching threshold. Release them before final unpad.
++        result = groups[0] if len(groups) == 1 else ttnn.concat(groups, dim=2)
++        groups.clear()
++        return result if result.shape[-2] == length else result[:, :, :length, :]
++
+     def allreduce(self, value):
+         value = ttnn.to_memory_config(value, ttnn.DRAM_MEMORY_CONFIG)
+         return self.mesh_config.allreduce(value, self.ccl, axis=1)

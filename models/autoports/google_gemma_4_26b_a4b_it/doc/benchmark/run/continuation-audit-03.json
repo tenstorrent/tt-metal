@@ -1,0 +1,28 @@
+{
+  "audit_number_since_accuracy_runtime_blocker": 3,
+  "checked_at_utc": "2026-09-27T19:49:52.893498+00:00",
+  "previous_turn_classification": "progress: source-only AutoFix audit ruled out a demonstrated transport/scheduling defect and identified only unvalidated optimization hypotheses",
+  "original_clock_elapsed_seconds": 3014.1878241766244,
+  "original_deadline_monotonic": 5315279.6,
+  "accuracy_completed": 8,
+  "accuracy_selected": 536,
+  "missing_responses": 528,
+  "live_server_or_client_processes": [],
+  "checks": {
+    "evidence_check": {
+      "exit_code": 2,
+      "output": "benchmark stage did not complete within its budget and one hour"
+    },
+    "context_check": {
+      "exit_code": 0,
+      "output": "Context contract OK for models/autoports/google_gemma_4_26b_a4b_it: target=262144, supported=262144 (full HF context)."
+    }
+  },
+  "performance_hashes_unchanged": true,
+  "new_measurements": false,
+  "same_blocker_three_turns": true,
+  "blocker": "The frozen accuracy workload is incomplete under the original one-hour contract. The supplied implementation has no validated path to complete the missing528 responses within this attempt; no time-limit exception or replacement validated implementation has been supplied.",
+  "limitation": "Observed runtime and source audit do not prove mathematical impossibility or an accuracy failure. No speculative optimization, smaller subset, shorter outputs, changed sampling or fresh clock is counted as completion.",
+  "required_external_change": "Owner decision on the time constraint, or a faster validated Stage10 implementation supporting a new complete attempt.",
+  "source_audit": "../AUTODEBUG_runtime_limit.md"
+}

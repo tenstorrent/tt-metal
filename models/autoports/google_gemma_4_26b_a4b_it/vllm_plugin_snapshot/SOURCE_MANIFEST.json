@@ -1,0 +1,31 @@
+{
+  "source_repository": "tenstorrent/vllm",
+  "source_commit": "7f72b1c6e905f5137fe3377f2e7b42738d3f271d",
+  "source_parent": "5ffebf4128f81ea5cf8413175eabde52cd8c8d75",
+  "source_path": "plugins/vllm-tt-plugin",
+  "files": {
+    "README.md": "54f03eb238b7efbbe7c25285497fd802f9afc76c2abf9352822e1424d8fea256",
+    "pyproject.toml": "c4a7277efc4da3bdab20a1dcf1641f317a9859984b0bb9ec27429e8789feac65",
+    "setup.py": "bfee1f785f5979fb98d00e7e50da6cd5ff81d71f01b13e7ed4fd7f48c30c7db3",
+    "src/vllm_tt_plugin/__init__.py": "96efaf2e7a2304b27e02e00ff28b2fc5dd8507065d648c15eff95b694c436409",
+    "src/vllm_tt_plugin/async_decode.py": "c036137d1bc0120eeb7368242a618469a81a123c48fcaa92fd190bd951342223",
+    "src/vllm_tt_plugin/config.py": "244f04d416d2358deacf554b791aee75b784efbae845b6c2372e0634e0828780",
+    "src/vllm_tt_plugin/engine.py": "df04b0729686d560640ba25aeb75fb2f7fc99d2f71a2d08e8df7a62a13a1c48b",
+    "src/vllm_tt_plugin/entrypoints.py": "6b05176e589326ad79413ffe05410f842109e7ae55e22c10133981f55084f0ad",
+    "src/vllm_tt_plugin/gemma4_reasoning_parser.py": "3ecc735a7088cffa6b1cf1bc4d57117e06f33f562558e600e877a63947cf728e",
+    "src/vllm_tt_plugin/gemma4_tool_parser.py": "03f14e24134ca06d08b468d52c6ad079f88e6cf50dff3006e7856dd1418b74b8",
+    "src/vllm_tt_plugin/input_batch.py": "cabf894e18883d5732d3f5a2b6d978f012782576f86248c3062449f9c2067d4a",
+    "src/vllm_tt_plugin/lane_scheduler.py": "5d8235f12a2e4856889e2d1d83ccdb7c5e97541ff5197bfa71fedafdba4570e4",
+    "src/vllm_tt_plugin/launcher.py": "8c2d03ae27982e85a1242fc2078e9c4ed5e959b43c1ebd68b89b3fec2bd8c0a0",
+    "src/vllm_tt_plugin/loader.py": "3b33768ef6700018c129a63bfabb7b537c41333104df4254ad688f45847a22b3",
+    "src/vllm_tt_plugin/logger.py": "e11f1c1da8de1f332336163e633360eef6bab403bcb0e65fae4bedb5127110a8",
+    "src/vllm_tt_plugin/logprobs.py": "da0754dacc8c64db2f6efa5f0a81363d11e0a723deb8efcf98f68da5de983026",
+    "src/vllm_tt_plugin/model_input.py": "0427255358e8c8b681c739a2fabd8b31d6a4c233177d4cfefa30948bf93f5edd",
+    "src/vllm_tt_plugin/model_registry.py": "5c2cd3fbc2878bc7bbe844d9243ce02e4aa5008bf5113eaa7a97d0306adf4cc9",
+    "src/vllm_tt_plugin/model_runner.py": "068d956521f8ee055b120dc1d49751d993e8c68fcf13dd16e563a57631caf442",
+    "src/vllm_tt_plugin/platform.py": "ea873ec71d50e51ff09e98eab043e38bd38f0a5b5346cadcaf90893648eb1846",
+    "src/vllm_tt_plugin/scheduler.py": "2612f306e06574349551844d7f98bd4e0dafc76c1314377deab5f78c37c29633",
+    "src/vllm_tt_plugin/structured_output.py": "6522a8300ca1cbc3560077614833767a48f71e2495b6fd357a44516592ffae2c",
+    "src/vllm_tt_plugin/worker.py": "8d794f19947a63e7cda6b92aab6caa6937263fa8afd4efe9bb484c4f0b1cff96"
+  }
+}

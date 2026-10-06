@@ -1,0 +1,60 @@
+[
+  {
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_expert_batch",
+      "--layer",
+      "0",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/expert_batch_sliding.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_expert_batch",
+      "--layer",
+      "5",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/expert_batch_full.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_rope_merge",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/rope_merge.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_components",
+      "--layer",
+      "0",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/components_sliding_repro.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_components",
+      "--layer",
+      "5",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/components_full_repro.json"
+    ],
+    "exit_code": 0
+  }
+]

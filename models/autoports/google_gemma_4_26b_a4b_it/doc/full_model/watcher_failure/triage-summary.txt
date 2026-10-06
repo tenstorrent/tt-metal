@@ -1,0 +1,34 @@
+inspector_data.py: FAIL -
+	Log directory /tmp/tt-metal/inspector does not exist.
+	Metal runtime is not running. Do not kill host process, but open triage in parallel.
+	If you have generated inspector logs, you can load them with --inspector-log-path
+	or defining TT_METAL_LOGS_PATH environment variable.
+configuration_provider.py: FAIL - Skipped: dependency inspector_data.py failed.
+dump_configuration.py: FAIL - Skipped: dependency configuration_provider.py failed.
+metal_device_id_mapping.py: FAIL - Skipped: dependency inspector_data.py failed.
+run_checks.py: FAIL - Triage (with --dev=in_use) needs Inspector data or TT_METAL_VISIBLE_DEVICES set; pass --dev=<id> or --dev=all to override and use specific or all devices correspondingly.
+arc_heartbeat_sampling.py: FAIL - Skipped: dependency run_checks.py failed.
+check_cb_inactive.py: FAIL - Skipped: dependency run_checks.py failed.
+check_eth_status.py: FAIL - Skipped: dependency run_checks.py failed.
+check_l1_status.py: FAIL - Skipped: dependency run_checks.py, inspector_data.py, metal_device_id_mapping.py failed.
+check_noc_locations.py: FAIL - Skipped: dependency run_checks.py failed.
+device_info.py: FAIL - Skipped: dependency run_checks.py failed.
+device_telemetry.py: FAIL - Skipped: dependency run_checks.py failed.
+dispatcher_data.py: FAIL - Skipped: dependency inspector_data.py, run_checks.py, metal_device_id_mapping.py failed.
+operation_provider.py: FAIL - Skipped: dependency run_checks.py, dispatcher_data.py, inspector_data.py failed.
+dump_op_mesh.py: FAIL - Skipped: dependency operation_provider.py, metal_device_id_mapping.py, inspector_data.py failed.
+dump_op_window.py: FAIL - Skipped: dependency operation_provider.py failed.
+dump_running_operations.py: FAIL - Skipped: dependency operation_provider.py failed.
+callstack_provider.py: FAIL - Skipped: dependency dispatcher_data.py failed.
+check_binary_integrity.py: FAIL - Skipped: dependency run_checks.py, dispatcher_data.py failed.
+check_core_magic.py: FAIL - Skipped: dependency run_checks.py, dispatcher_data.py failed.
+check_noc_status.py: FAIL - Skipped: dependency run_checks.py, dispatcher_data.py failed.
+dump_callstacks.py: FAIL - Skipped: dependency run_checks.py, callstack_provider.py failed.
+dump_fast_dispatch.py: FAIL - Skipped: dependency run_checks.py, dispatcher_data.py, inspector_data.py, metal_device_id_mapping.py failed.
+dump_lightweight_asserts.py: FAIL - Skipped: dependency run_checks.py, callstack_provider.py failed.
+dump_mesh_sockets.py: FAIL - Skipped: dependency inspector_data.py, run_checks.py, metal_device_id_mapping.py, callstack_provider.py failed.
+dump_watcher_ringbuffer.py: FAIL - Skipped: dependency run_checks.py, dispatcher_data.py failed.
+firmware_versions.py: FAIL - Skipped: dependency run_checks.py failed.
+system_info.py: pass
+check_arc.py: FAIL - Skipped: dependency run_checks.py, arc_heartbeat_sampling.py failed.
+check_broken_components.py: FAIL - Skipped: dependency run_checks.py failed.

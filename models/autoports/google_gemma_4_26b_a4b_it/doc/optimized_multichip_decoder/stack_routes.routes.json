@@ -1,0 +1,1382 @@
+{
+  "source_sha256": "5389adf9f55b8f091e4bf3f18b46ff67d5b9be4f88f7d30e718dfe1c51f109cd",
+  "allocation_lifetimes_perturbed": true,
+  "collective_boundary_snapshots": "device copies inside the diagnostic trace",
+  "hf_reference_scope": "router only, independently on each captured TP residual",
+  "capture_positions": [
+    4103,
+    4117
+  ],
+  "routes": [
+    {
+      "position": 4103,
+      "tp": 1,
+      "layer": 0,
+      "device_indices": [
+        13,
+        60,
+        116,
+        22,
+        48,
+        127,
+        64,
+        90
+      ],
+      "hf_indices_same_residual": [
+        13,
+        60,
+        116,
+        22,
+        48,
+        127,
+        64,
+        90
+      ],
+      "device_vs_hf_symmetric_difference": [],
+      "hf_rank8_rank9_margin": 0.03136730194091797,
+      "route_weights_same_residual": {
+        "pcc": 0.9999968363817168,
+        "max_abs": 0.000675499439239502
+      },
+      "replica_mismatches": {
+        "attention_input": [
+          0
+        ],
+        "attention_output": [
+          0
+        ],
+        "router_scaled_input": [
+          0
+        ],
+        "router_scores_fp32": [
+          0
+        ],
+        "attention_residual": [
+          0
+        ],
+        "normalized_residual": [
+          0
+        ],
+        "routes": [
+          0
+        ],
+        "route_indices": [
+          0
+        ],
+        "expert_input": [
+          0
+        ],
+        "routed": [
+          0
+        ],
+        "shared_input": [
+          0
+        ],
+        "shared": [
+          0
+        ],
+        "layer_input": [
+          0
+        ],
+        "layer_output": [
+          0
+        ]
+      },
+      "device_score_vs_hf": {
+        "pcc": 0.9999998312047531,
+        "max_abs": 0.0033898353576660156
+      },
+      "raw_score_top8": [
+        13,
+        60,
+        116,
+        22,
+        48,
+        127,
+        64,
+        90
+      ],
+      "centered_bf16_top8": [
+        13,
+        60,
+        116,
+        22,
+        48,
+        127,
+        64,
+        90
+      ],
+      "centered_bf16_rank8_rank9_margin": 0.03125,
+      "gate_vs_raw_score_symmetric_difference": []
+    },
+    {
+      "position": 4103,
+      "tp": 1,
+      "layer": 1,
+      "device_indices": [
+        82,
+        124,
+        78,
+        22,
+        110,
+        30,
+        92,
+        54
+      ],
+      "hf_indices_same_residual": [
+        82,
+        124,
+        78,
+        22,
+        110,
+        30,
+        92,
+        54
+      ],
+      "device_vs_hf_symmetric_difference": [],
+      "hf_rank8_rank9_margin": 0.07226037979125977,
+      "route_weights_same_residual": {
+        "pcc": 0.9999948749875179,
+        "max_abs": 0.0012716352939605713
+      },
+      "replica_mismatches": {
+        "attention_input": [
+          0
+        ],
+        "attention_output": [
+          0
+        ],
+        "router_scaled_input": [
+          0
+        ],
+        "router_scores_fp32": [
+          0
+        ],
+        "attention_residual": [
+          0
+        ],
+        "normalized_residual": [
+          0
+        ],
+        "routes": [
+          0
+        ],
+        "route_indices": [
+          0
+        ],
+        "expert_input": [
+          0
+        ],
+        "routed": [
+          0
+        ],
+        "shared_input": [
+          0
+        ],
+        "shared": [
+          0
+        ],
+        "layer_input": [
+          0
+        ],
+        "layer_output": [
+          0
+        ]
+      },
+      "device_score_vs_hf": {
+        "pcc": 0.9999998508906289,
+        "max_abs": 0.0014781951904296875
+      },
+      "raw_score_top8": [
+        82,
+        124,
+        78,
+        22,
+        110,
+        30,
+        92,
+        54
+      ],
+      "centered_bf16_top8": [
+        82,
+        124,
+        78,
+        22,
+        110,
+        30,
+        92,
+        54
+      ],
+      "centered_bf16_rank8_rank9_margin": 0.078125,
+      "gate_vs_raw_score_symmetric_difference": []
+    },
+    {
+      "position": 4103,
+      "tp": 4,
+      "layer": 0,
+      "device_indices": [
+        13,
+        60,
+        116,
+        22,
+        48,
+        64,
+        127,
+        105
+      ],
+      "hf_indices_same_residual": [
+        13,
+        60,
+        116,
+        22,
+        48,
+        64,
+        127,
+        105
+      ],
+      "device_vs_hf_symmetric_difference": [],
+      "hf_rank8_rank9_margin": 0.05423784255981445,
+      "route_weights_same_residual": {
+        "pcc": 0.999994925278517,
+        "max_abs": 0.0009387582540512085
+      },
+      "replica_mismatches": {
+        "attention_input": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "attention_output": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "router_scaled_input": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "router_scores_fp32": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "attention_residual": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "normalized_residual": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "routes": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "route_indices": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "expert_input": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "shared_input": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "shared": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "routed": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "layer_input": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "layer_output": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "device_score_vs_hf": {
+        "pcc": 0.9999998768284638,
+        "max_abs": 0.0020982027053833008
+      },
+      "raw_score_top8": [
+        13,
+        60,
+        116,
+        22,
+        48,
+        64,
+        127,
+        105
+      ],
+      "centered_bf16_top8": [
+        13,
+        60,
+        116,
+        22,
+        48,
+        64,
+        127,
+        105
+      ],
+      "centered_bf16_rank8_rank9_margin": 0.0546875,
+      "gate_vs_raw_score_symmetric_difference": []
+    },
+    {
+      "position": 4103,
+      "tp": 4,
+      "layer": 1,
+      "device_indices": [
+        82,
+        124,
+        78,
+        110,
+        22,
+        30,
+        92,
+        105
+      ],
+      "hf_indices_same_residual": [
+        82,
+        124,
+        78,
+        110,
+        22,
+        30,
+        92,
+        105
+      ],
+      "device_vs_hf_symmetric_difference": [],
+      "hf_rank8_rank9_margin": 0.06058859825134277,
+      "route_weights_same_residual": {
+        "pcc": 0.9999931938903611,
+        "max_abs": 0.0010258853435516357
+      },
+      "replica_mismatches": {
+        "attention_input": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "attention_output": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "router_scaled_input": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "router_scores_fp32": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "attention_residual": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "normalized_residual": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "routes": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "route_indices": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "expert_input": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "shared_input": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "shared": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "routed": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "layer_input": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "layer_output": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "device_score_vs_hf": {
+        "pcc": 0.9999998333133373,
+        "max_abs": 0.0022780895233154297
+      },
+      "raw_score_top8": [
+        82,
+        124,
+        78,
+        110,
+        22,
+        30,
+        92,
+        105
+      ],
+      "centered_bf16_top8": [
+        82,
+        124,
+        78,
+        110,
+        22,
+        30,
+        92,
+        105
+      ],
+      "centered_bf16_rank8_rank9_margin": 0.0625,
+      "gate_vs_raw_score_symmetric_difference": []
+    },
+    {
+      "position": 4117,
+      "tp": 1,
+      "layer": 0,
+      "device_indices": [
+        13,
+        60,
+        116,
+        22,
+        48,
+        127,
+        64,
+        111
+      ],
+      "hf_indices_same_residual": [
+        13,
+        60,
+        116,
+        22,
+        48,
+        127,
+        64,
+        111
+      ],
+      "device_vs_hf_symmetric_difference": [],
+      "hf_rank8_rank9_margin": 0.054204702377319336,
+      "route_weights_same_residual": {
+        "pcc": 0.9999966003397673,
+        "max_abs": 0.003172069787979126
+      },
+      "replica_mismatches": {
+        "attention_input": [
+          0
+        ],
+        "attention_output": [
+          0
+        ],
+        "router_scaled_input": [
+          0
+        ],
+        "router_scores_fp32": [
+          0
+        ],
+        "attention_residual": [
+          0
+        ],
+        "normalized_residual": [
+          0
+        ],
+        "routes": [
+          0
+        ],
+        "route_indices": [
+          0
+        ],
+        "expert_input": [
+          0
+        ],
+        "routed": [
+          0
+        ],
+        "shared_input": [
+          0
+        ],
+        "shared": [
+          0
+        ],
+        "layer_input": [
+          0
+        ],
+        "layer_output": [
+          0
+        ]
+      },
+      "device_score_vs_hf": {
+        "pcc": 0.9999998820235154,
+        "max_abs": 0.0021088123321533203
+      },
+      "raw_score_top8": [
+        13,
+        60,
+        116,
+        22,
+        48,
+        127,
+        64,
+        111
+      ],
+      "centered_bf16_top8": [
+        13,
+        60,
+        116,
+        22,
+        48,
+        127,
+        64,
+        111
+      ],
+      "centered_bf16_rank8_rank9_margin": 0.046875,
+      "gate_vs_raw_score_symmetric_difference": []
+    },
+    {
+      "position": 4117,
+      "tp": 1,
+      "layer": 1,
+      "device_indices": [
+        82,
+        78,
+        124,
+        22,
+        110,
+        30,
+        105,
+        92
+      ],
+      "hf_indices_same_residual": [
+        82,
+        78,
+        124,
+        22,
+        110,
+        30,
+        105,
+        92
+      ],
+      "device_vs_hf_symmetric_difference": [],
+      "hf_rank8_rank9_margin": 0.0439220666885376,
+      "route_weights_same_residual": {
+        "pcc": 0.9999941804271101,
+        "max_abs": 0.0011707842350006104
+      },
+      "replica_mismatches": {
+        "attention_input": [
+          0
+        ],
+        "attention_output": [
+          0
+        ],
+        "router_scaled_input": [
+          0
+        ],
+        "router_scores_fp32": [
+          0
+        ],
+        "attention_residual": [
+          0
+        ],
+        "normalized_residual": [
+          0
+        ],
+        "routes": [
+          0
+        ],
+        "route_indices": [
+          0
+        ],
+        "expert_input": [
+          0
+        ],
+        "routed": [
+          0
+        ],
+        "shared_input": [
+          0
+        ],
+        "shared": [
+          0
+        ],
+        "layer_input": [
+          0
+        ],
+        "layer_output": [
+          0
+        ]
+      },
+      "device_score_vs_hf": {
+        "pcc": 0.9999998255563167,
+        "max_abs": 0.001452876254916191
+      },
+      "raw_score_top8": [
+        82,
+        78,
+        124,
+        22,
+        110,
+        30,
+        105,
+        92
+      ],
+      "centered_bf16_top8": [
+        82,
+        78,
+        124,
+        22,
+        110,
+        30,
+        105,
+        92
+      ],
+      "centered_bf16_rank8_rank9_margin": 0.046875,
+      "gate_vs_raw_score_symmetric_difference": []
+    },
+    {
+      "position": 4117,
+      "tp": 4,
+      "layer": 0,
+      "device_indices": [
+        13,
+        60,
+        116,
+        22,
+        48,
+        127,
+        64,
+        105
+      ],
+      "hf_indices_same_residual": [
+        13,
+        60,
+        116,
+        22,
+        48,
+        127,
+        64,
+        105
+      ],
+      "device_vs_hf_symmetric_difference": [],
+      "hf_rank8_rank9_margin": 0.008662939071655273,
+      "route_weights_same_residual": {
+        "pcc": 0.9999981294693957,
+        "max_abs": 0.0008324682712554932
+      },
+      "replica_mismatches": {
+        "attention_input": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "attention_output": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "router_scaled_input": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "router_scores_fp32": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "attention_residual": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "normalized_residual": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "routes": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "route_indices": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "expert_input": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "shared_input": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "shared": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "routed": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "layer_input": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "layer_output": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "device_score_vs_hf": {
+        "pcc": 0.9999998563633968,
+        "max_abs": 0.0016009807586669922
+      },
+      "raw_score_top8": [
+        13,
+        60,
+        116,
+        22,
+        48,
+        127,
+        64,
+        105
+      ],
+      "centered_bf16_top8": [
+        13,
+        60,
+        116,
+        22,
+        48,
+        127,
+        64,
+        105
+      ],
+      "centered_bf16_rank8_rank9_margin": 0.015625,
+      "gate_vs_raw_score_symmetric_difference": []
+    },
+    {
+      "position": 4117,
+      "tp": 4,
+      "layer": 1,
+      "device_indices": [
+        82,
+        78,
+        124,
+        22,
+        110,
+        30,
+        105,
+        92
+      ],
+      "hf_indices_same_residual": [
+        82,
+        78,
+        124,
+        22,
+        110,
+        30,
+        105,
+        92
+      ],
+      "device_vs_hf_symmetric_difference": [],
+      "hf_rank8_rank9_margin": 0.09931039810180664,
+      "route_weights_same_residual": {
+        "pcc": 0.9999982869613254,
+        "max_abs": 0.0005797445774078369
+      },
+      "replica_mismatches": {
+        "attention_input": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "attention_output": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "router_scaled_input": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "router_scores_fp32": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "attention_residual": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "normalized_residual": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "routes": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "route_indices": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "expert_input": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "shared_input": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "shared": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "routed": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "layer_input": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "layer_output": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "device_score_vs_hf": {
+        "pcc": 0.9999998003908662,
+        "max_abs": 0.001175224781036377
+      },
+      "raw_score_top8": [
+        82,
+        78,
+        124,
+        22,
+        110,
+        30,
+        105,
+        92
+      ],
+      "centered_bf16_top8": [
+        82,
+        78,
+        124,
+        22,
+        110,
+        30,
+        105,
+        92
+      ],
+      "centered_bf16_rank8_rank9_margin": 0.1015625,
+      "gate_vs_raw_score_symmetric_difference": []
+    }
+  ],
+  "tp1_tp4_boundary_comparisons": [
+    {
+      "position": 4103,
+      "layer": 0,
+      "boundary": "attention_input",
+      "pcc": 1.0,
+      "max_abs": 0.0
+    },
+    {
+      "position": 4103,
+      "layer": 0,
+      "boundary": "attention_output",
+      "pcc": 0.998851754003416,
+      "max_abs": 1.607757568359375
+    },
+    {
+      "position": 4103,
+      "layer": 0,
+      "boundary": "attention_residual",
+      "pcc": 0.9988820440874184,
+      "max_abs": 2.818817138671875
+    },
+    {
+      "position": 4103,
+      "layer": 0,
+      "boundary": "expert_input",
+      "pcc": 0.998617659957026,
+      "max_abs": 0.15625
+    },
+    {
+      "position": 4103,
+      "layer": 0,
+      "boundary": "layer_input",
+      "pcc": 1.0,
+      "max_abs": 0.0
+    },
+    {
+      "position": 4103,
+      "layer": 0,
+      "boundary": "layer_output",
+      "pcc": 0.9985332568048534,
+      "max_abs": 1.25390625
+    },
+    {
+      "position": 4103,
+      "layer": 0,
+      "boundary": "normalized_residual",
+      "pcc": 0.9988807607650785,
+      "max_abs": 0.4406929016113281
+    },
+    {
+      "position": 4103,
+      "layer": 0,
+      "boundary": "route_indices",
+      "pcc": 0.670375875374265,
+      "max_abs": 63.0
+    },
+    {
+      "position": 4103,
+      "layer": 0,
+      "boundary": "routed",
+      "pcc": 0.9909270346144278,
+      "max_abs": 0.0966796875
+    },
+    {
+      "position": 4103,
+      "layer": 0,
+      "boundary": "router_scaled_input",
+      "pcc": 0.9989271969272234,
+      "max_abs": 0.2782047390937805
+    },
+    {
+      "position": 4103,
+      "layer": 0,
+      "boundary": "router_scores_fp32",
+      "pcc": 0.9993668306861693,
+      "max_abs": 0.14552521705627441
+    },
+    {
+      "position": 4103,
+      "layer": 0,
+      "boundary": "routes",
+      "pcc": 0.9838437152796893,
+      "max_abs": 0.06103515625
+    },
+    {
+      "position": 4103,
+      "layer": 0,
+      "boundary": "shared",
+      "pcc": 0.9976908114489751,
+      "max_abs": 4.25
+    },
+    {
+      "position": 4103,
+      "layer": 0,
+      "boundary": "shared_input",
+      "pcc": 0.9989382032288912,
+      "max_abs": 0.546875
+    },
+    {
+      "position": 4103,
+      "layer": 1,
+      "boundary": "attention_input",
+      "pcc": 0.9970488713745458,
+      "max_abs": 1.1800575256347656
+    },
+    {
+      "position": 4103,
+      "layer": 1,
+      "boundary": "attention_output",
+      "pcc": 0.998925970166479,
+      "max_abs": 0.817413330078125
+    },
+    {
+      "position": 4103,
+      "layer": 1,
+      "boundary": "attention_residual",
+      "pcc": 0.9982997049673856,
+      "max_abs": 1.5267791748046875
+    },
+    {
+      "position": 4103,
+      "layer": 1,
+      "boundary": "expert_input",
+      "pcc": 0.9968744360837154,
+      "max_abs": 0.107177734375
+    },
+    {
+      "position": 4103,
+      "layer": 1,
+      "boundary": "layer_input",
+      "pcc": 0.9985332568048534,
+      "max_abs": 1.25390625
+    },
+    {
+      "position": 4103,
+      "layer": 1,
+      "boundary": "layer_output",
+      "pcc": 0.9866052423578386,
+      "max_abs": 2.90625
+    },
+    {
+      "position": 4103,
+      "layer": 1,
+      "boundary": "normalized_residual",
+      "pcc": 0.9983015132112153,
+      "max_abs": 0.6850242614746094
+    },
+    {
+      "position": 4103,
+      "layer": 1,
+      "boundary": "route_indices",
+      "pcc": 0.05086994938819779,
+      "max_abs": 88.0
+    },
+    {
+      "position": 4103,
+      "layer": 1,
+      "boundary": "routed",
+      "pcc": 0.9776220506999707,
+      "max_abs": 0.08984375
+    },
+    {
+      "position": 4103,
+      "layer": 1,
+      "boundary": "router_scaled_input",
+      "pcc": 0.9983700675385714,
+      "max_abs": 0.3969489336013794
+    },
+    {
+      "position": 4103,
+      "layer": 1,
+      "boundary": "router_scores_fp32",
+      "pcc": 0.9970145639943941,
+      "max_abs": 0.17873144149780273
+    },
+    {
+      "position": 4103,
+      "layer": 1,
+      "boundary": "routes",
+      "pcc": 0.9677180869272742,
+      "max_abs": 0.06982421875
+    },
+    {
+      "position": 4103,
+      "layer": 1,
+      "boundary": "shared",
+      "pcc": 0.9986234136120717,
+      "max_abs": 2.5
+    },
+    {
+      "position": 4103,
+      "layer": 1,
+      "boundary": "shared_input",
+      "pcc": 0.9972926546536798,
+      "max_abs": 0.455078125
+    },
+    {
+      "position": 4117,
+      "layer": 0,
+      "boundary": "attention_input",
+      "pcc": 1.0,
+      "max_abs": 0.0
+    },
+    {
+      "position": 4117,
+      "layer": 0,
+      "boundary": "attention_output",
+      "pcc": 0.9987919217662683,
+      "max_abs": 1.7867469787597656
+    },
+    {
+      "position": 4117,
+      "layer": 0,
+      "boundary": "attention_residual",
+      "pcc": 0.9987129108359215,
+      "max_abs": 3.779745101928711
+    },
+    {
+      "position": 4117,
+      "layer": 0,
+      "boundary": "expert_input",
+      "pcc": 0.9985260548954654,
+      "max_abs": 0.2099609375
+    },
+    {
+      "position": 4117,
+      "layer": 0,
+      "boundary": "layer_input",
+      "pcc": 1.0,
+      "max_abs": 0.0
+    },
+    {
+      "position": 4117,
+      "layer": 0,
+      "boundary": "layer_output",
+      "pcc": 0.9985283786367996,
+      "max_abs": 1.34375
+    },
+    {
+      "position": 4117,
+      "layer": 0,
+      "boundary": "normalized_residual",
+      "pcc": 0.9987122412565773,
+      "max_abs": 0.6043128967285156
+    },
+    {
+      "position": 4117,
+      "layer": 0,
+      "boundary": "route_indices",
+      "pcc": 0.9989434019560705,
+      "max_abs": 6.0
+    },
+    {
+      "position": 4117,
+      "layer": 0,
+      "boundary": "routed",
+      "pcc": 0.9917235011249323,
+      "max_abs": 0.11328125
+    },
+    {
+      "position": 4117,
+      "layer": 0,
+      "boundary": "router_scaled_input",
+      "pcc": 0.9987609106990473,
+      "max_abs": 0.3672614097595215
+    },
+    {
+      "position": 4117,
+      "layer": 0,
+      "boundary": "router_scores_fp32",
+      "pcc": 0.9991699205343197,
+      "max_abs": 0.14420771598815918
+    },
+    {
+      "position": 4117,
+      "layer": 0,
+      "boundary": "routes",
+      "pcc": 0.9861689984754257,
+      "max_abs": 0.056396484375
+    },
+    {
+      "position": 4117,
+      "layer": 0,
+      "boundary": "shared",
+      "pcc": 0.9972567973398615,
+      "max_abs": 4.75
+    },
+    {
+      "position": 4117,
+      "layer": 0,
+      "boundary": "shared_input",
+      "pcc": 0.9987244570882416,
+      "max_abs": 0.71875
+    },
+    {
+      "position": 4117,
+      "layer": 1,
+      "boundary": "attention_input",
+      "pcc": 0.997188474145427,
+      "max_abs": 1.0406150817871094
+    },
+    {
+      "position": 4117,
+      "layer": 1,
+      "boundary": "attention_output",
+      "pcc": 0.9987042045076227,
+      "max_abs": 0.9785537719726562
+    },
+    {
+      "position": 4117,
+      "layer": 1,
+      "boundary": "attention_residual",
+      "pcc": 0.9982482577157845,
+      "max_abs": 1.8182907104492188
+    },
+    {
+      "position": 4117,
+      "layer": 1,
+      "boundary": "expert_input",
+      "pcc": 0.99707629420232,
+      "max_abs": 0.1064453125
+    },
+    {
+      "position": 4117,
+      "layer": 1,
+      "boundary": "layer_input",
+      "pcc": 0.9985283786367996,
+      "max_abs": 1.34375
+    },
+    {
+      "position": 4117,
+      "layer": 1,
+      "boundary": "layer_output",
+      "pcc": 0.9902116191004384,
+      "max_abs": 3.625
+    },
+    {
+      "position": 4117,
+      "layer": 1,
+      "boundary": "normalized_residual",
+      "pcc": 0.9982451297178851,
+      "max_abs": 0.6588902473449707
+    },
+    {
+      "position": 4117,
+      "layer": 1,
+      "boundary": "route_indices",
+      "pcc": 0.9999999999999998,
+      "max_abs": 0.0
+    },
+    {
+      "position": 4117,
+      "layer": 1,
+      "boundary": "routed",
+      "pcc": 0.9864748628941593,
+      "max_abs": 0.046875
+    },
+    {
+      "position": 4117,
+      "layer": 1,
+      "boundary": "router_scaled_input",
+      "pcc": 0.9983131762597124,
+      "max_abs": 0.3818052373826504
+    },
+    {
+      "position": 4117,
+      "layer": 1,
+      "boundary": "router_scores_fp32",
+      "pcc": 0.9965564531754172,
+      "max_abs": 0.23197102546691895
+    },
+    {
+      "position": 4117,
+      "layer": 1,
+      "boundary": "routes",
+      "pcc": 0.9933684837964915,
+      "max_abs": 0.05078125
+    },
+    {
+      "position": 4117,
+      "layer": 1,
+      "boundary": "shared",
+      "pcc": 0.9984905359515691,
+      "max_abs": 1.75
+    },
+    {
+      "position": 4117,
+      "layer": 1,
+      "boundary": "shared_input",
+      "pcc": 0.9970123869029225,
+      "max_abs": 0.453125
+    }
+  ]
+}

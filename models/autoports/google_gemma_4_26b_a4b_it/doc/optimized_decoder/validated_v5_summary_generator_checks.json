@@ -1,0 +1,54 @@
+{
+  "status": "passed",
+  "runtime_sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b",
+  "scope": "CPU-only packaging/metadata checks; no runtime/test edits or hardware execution",
+  "checks": [
+    {
+      "name": "wrong_qkv_k",
+      "status": "passed"
+    },
+    {
+      "name": "legacy_qkv",
+      "status": "passed"
+    },
+    {
+      "name": "wrong_full_output_k",
+      "status": "passed"
+    },
+    {
+      "name": "legacy_full_output",
+      "status": "passed"
+    },
+    {
+      "name": "stale_v4_runtime",
+      "status": "passed"
+    },
+    {
+      "name": "driver_hash_mismatch",
+      "status": "passed"
+    },
+    {
+      "name": "numeric_row_failure_despite_pass_flag",
+      "status": "passed"
+    },
+    {
+      "name": "v4_journal_not_v5_evidence",
+      "status": "passed"
+    },
+    {
+      "name": "profile_plan_renaming_and_peak_native_parameters",
+      "status": "passed"
+    },
+    {
+      "name": "synthetic_minimal_native_config_parsing_both_kinds",
+      "status": "passed",
+      "scope": "Metadata only; not hardware/performance evidence"
+    },
+    {
+      "name": "minimal_metadata_traffic_and_projection_flops_from_v4_shapes",
+      "status": "passed",
+      "scope": "Synthetic operation/config substitution on saved native shapes; no v5 hardware/performance claim"
+    }
+  ],
+  "syntax": "passed"
+}

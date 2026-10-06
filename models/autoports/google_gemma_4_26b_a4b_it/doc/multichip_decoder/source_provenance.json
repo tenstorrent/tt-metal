@@ -1,0 +1,31 @@
+{
+  "status": "validated; independent clean-pass; stage checkpoint committed",
+  "git_head": "9a529836fc91b1117a48f6d63ef30455a69cd42d",
+  "branch": "gemma-4-26b-a4b-it",
+  "baseline_commit": "a9259624f2",
+  "baseline_sha256": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898",
+  "files": {
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/diagnose_attention_ccl_boundaries.py": "a56768b654dc8d2778dbb70cb1df1164cff82672536ca90489230a1a457096cc",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/diagnose_multichip_progress.py": "6d18cc14e90cf9ee2b8c80f8cfcdf8bacb1eb93ef557f0f6b6c919fecad0ee32",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/diagnose_paired_boundary.py": "cfcfa094a1e6672027d43d1e3f0f3ee396d152ed60be55344ef8d117b621b3c8",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/diagnose_paired_cleanup.py": "fa62ac25a9b2995f1e5f18bbec475820275a189ee79d3c3f9cbded3176ad77e1",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/probe_attention_ccl_replay.py": "a901958de86bc704094e84b514b6f47dd7d772eebbb8fb84d3269b0a1ef8e020",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/probe_indexed_expert_replay.py": "a45fde34064305329cfc7b323636c5c4d5f0d64bae4d5f52f90f836f16ca689e",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/probe_multichip_fused_ccl.py": "8212857de436d21498b18435fad1e92977ec92026363c4f5b8a7b6eff2c7e73d",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/probe_sharded_rope_contract.py": "0930b67dc01f4903be302b0d7baa3f547ddae26f8e611866a1d729e97c6e24cd",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py": "335ddaf8a4e0e7e789c697521cc5c988c5c01a2c9d0b2f8ba1cc0760cd9b3aa6",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/summarize_multichip_candidates.py": "7f819eea2a0aa0c99569587243254ee0a4add2867dc9098a8bf47acce556c9a7",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/summarize_multichip_perf.py": "d14aa7de6c560fbb3cdb5b9c0bfa4b5ca8002dbb3a5fe4a08bea72bc6628d3a2",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_contracts.py": "d06fc03c30e3d2fe3ff6030a6df2dfe83da8b66120cd21c17a8b2c59e25fc3d3",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_stack.py": "2c29bc5eaf19d28c067e6e16ff51732294f612627437d616dd14a1285ea6f453",
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py": "a12a913cf752b765338736dc71f71151ab972af1529a0098455755dd4f499255"
+  },
+  "formatting_after_measurement": {
+    "file": "models/autoports/google_gemma_4_26b_a4b_it/tests/probe_sharded_rope_contract.py",
+    "before_sha256": "098fb070882744ad2c5688dd30f20d014392ff2d22c6ecedf97c6c0c250b2614",
+    "after_sha256": "0930b67dc01f4903be302b0d7baa3f547ddae26f8e611866a1d729e97c6e24cd",
+    "ast_identical": true,
+    "change": "Commit Black hook removed redundant conditional-expression parentheses in diagnostic probe only"
+  },
+  "stage_checkpoint": "ab2892308b8960b8652546bbaf070ad8b120996d"
+}

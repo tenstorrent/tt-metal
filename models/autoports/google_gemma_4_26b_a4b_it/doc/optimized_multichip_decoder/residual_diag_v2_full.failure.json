@@ -1,0 +1,77 @@
+{
+  "command": [
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py",
+    "--layer",
+    "5",
+    "--length",
+    "4096",
+    "--steps",
+    "1",
+    "--trace",
+    "--check-cache",
+    "--residual-l1",
+    "--diagnose-residual",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/residual_diag_v2_full.json"
+  ],
+  "runtime_sha256": "c062eb5e5e899ea16efb299150754febe4c9f0dbfd367c75fcb395ea60278407",
+  "runner_sha256": "ea618e68073db2429a36c5f881e8978cb8b758b28e9ba76c64ae220d3c79f85a",
+  "layer": 5,
+  "kind": "replica_difference",
+  "tp": 4,
+  "phase": "decode",
+  "step": 0,
+  "replay": "first",
+  "absolute_position": 4096,
+  "replicas_equal": false,
+  "ranks": [
+    {
+      "rank": 0,
+      "elements": 2816,
+      "finite": 2816,
+      "nan": 0,
+      "positive_infinity": 0,
+      "negative_infinity": 0,
+      "equal_to_rank0": true,
+      "bits_equal_to_rank0": true,
+      "changed_vs_rank0": 0,
+      "finite_max_abs_diff": 0.0
+    },
+    {
+      "rank": 1,
+      "elements": 2816,
+      "finite": 2816,
+      "nan": 0,
+      "positive_infinity": 0,
+      "negative_infinity": 0,
+      "equal_to_rank0": false,
+      "bits_equal_to_rank0": false,
+      "changed_vs_rank0": 16,
+      "finite_max_abs_diff": 1.703125
+    },
+    {
+      "rank": 2,
+      "elements": 2816,
+      "finite": 2816,
+      "nan": 0,
+      "positive_infinity": 0,
+      "negative_infinity": 0,
+      "equal_to_rank0": false,
+      "bits_equal_to_rank0": false,
+      "changed_vs_rank0": 16,
+      "finite_max_abs_diff": 1.703125
+    },
+    {
+      "rank": 3,
+      "elements": 2816,
+      "finite": 2816,
+      "nan": 0,
+      "positive_infinity": 0,
+      "negative_infinity": 0,
+      "equal_to_rank0": false,
+      "bits_equal_to_rank0": false,
+      "changed_vs_rank0": 32,
+      "finite_max_abs_diff": 3.71875
+    }
+  ]
+}

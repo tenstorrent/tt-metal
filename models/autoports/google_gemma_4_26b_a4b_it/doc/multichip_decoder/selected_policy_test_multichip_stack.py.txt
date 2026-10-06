@@ -1,0 +1,257 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Compare direct two-layer TP1/TP4 handoff and advancing traced decode."""
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+import torch
+from transformers import AutoConfig
+from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
+
+import ttnn
+from models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder import load_layer
+from models.autoports.google_gemma_4_26b_a4b_it.tests.runtime_audit import device_only
+from models.autoports.google_gemma_4_26b_a4b_it.tt.multichip_decoder import MultichipDecoder
+from models.autoports.google_gemma_4_26b_a4b_it.tt.optimized_decoder import OptimizedDecoder
+
+
+def pcc(left, right):
+    assert torch.isfinite(left).all() and torch.isfinite(right).all()
+    return torch.corrcoef(torch.stack((left.flatten().double(), right.flatten().double())))[0, 1].item()
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--expert-parallel", action="store_true")
+    parser.add_argument("--hybrid-experts", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--fused-tail", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--optimized-shared", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--shared-geometry", type=int, choices=[0, 1, 2], default=1)
+    parser.add_argument("--grouped-moe-reduce", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--output-fidelity", choices=["LoFi", "HiFi2", "HiFi4"], default="LoFi")
+    parser.add_argument("--qkv-fidelity", choices=["LoFi", "HiFi2", "HiFi4"], default="LoFi")
+    parser.add_argument("--attention-ccl-dtype", choices=["float32", "bfloat16", "bfloat8_b"], default="bfloat16")
+    parser.add_argument("--full-attention-ccl-dtype", choices=["float32", "bfloat16", "bfloat8_b"])
+    parser.add_argument("--sharded-residual", action="store_true")
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    if args.expert_parallel and args.hybrid_experts:
+        parser.error("--expert-parallel requires --no-hybrid-experts")
+    if args.shared_geometry and not args.optimized_shared:
+        parser.error("--no-optimized-shared requires --shared-geometry 0")
+    if args.sharded_residual and args.grouped_moe_reduce:
+        parser.error("--sharded-residual requires --no-grouped-moe-reduce")
+    torch.set_num_threads(8)
+    torch.manual_seed(47)
+    root = Path(__file__).parents[1]
+    source_hashes = {
+        name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+        for name in ("tt/multichip_decoder.py", "tt/optimized_decoder.py", "tests/test_multichip_stack.py")
+    }
+    config = AutoConfig.from_pretrained(Path(__file__).parent).text_config
+    layers = (0, 5)
+    length, steps, block, extent = 33, 2, 32, 128
+    hf_layers = {layer: load_layer(config, layer, True) for layer in layers}
+    fixture = torch.load(root / "doc/optimized_decoder/actual_text_layer0_4096_128.pt", weights_only=True)
+    prefill_input = fixture["prefill"][:, :length].unsqueeze(0)
+    decode_inputs = fixture["decode"][:, :steps].unsqueeze(0)
+    tables = {layer: torch.randperm(extent // block, dtype=torch.int32)[None] for layer in layers}
+    ropes = {
+        layer: Gemma4TextRotaryEmbedding(config)(
+            fixture["prefill"][:, :length], torch.arange(extent)[None], layer_type=config.layer_types[layer]
+        )
+        for layer in layers
+    }
+    results = {}
+    for tp, decoder_class in ((1, OptimizedDecoder), (4, MultichipDecoder)):
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED if tp == 1 else ttnn.FabricConfig.FABRIC_1D)
+        mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, tp), trace_region_size=67108864)
+        try:
+            replicated = ttnn.ReplicateTensorToMesh(mesh)
+            sharded = tp == 4 and args.sharded_residual
+            input_mapper = ttnn.ShardTensorToMesh(mesh, dim=-1) if sharded else replicated
+
+            def upload(value, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mapper=replicated):
+                return ttnn.from_torch(value, device=mesh, dtype=dtype, layout=layout, mesh_mapper=mapper)
+
+            def read(value):
+                if sharded:
+                    return ttnn.to_torch(value, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=-1)).float()
+                parts = [ttnn.to_torch(part).float() for part in ttnn.get_device_tensors(value)]
+                assert all(torch.equal(parts[0], part) for part in parts[1:]), "Stack output replicas differ"
+                return parts[0]
+
+            contexts = []
+            for layer in layers:
+                decoder = decoder_class.from_state_dict(
+                    hf_layers[layer].state_dict(),
+                    hf_config=config,
+                    layer_idx=layer,
+                    mesh_device=mesh,
+                    **(
+                        {
+                            "expert_parallel": args.expert_parallel,
+                            "sharded_residual": args.sharded_residual,
+                            "hybrid_experts": args.hybrid_experts,
+                            "fused_tail": args.fused_tail,
+                            "optimized_shared": args.optimized_shared,
+                            "shared_geometry": args.shared_geometry,
+                            "grouped_moe_reduce": args.grouped_moe_reduce,
+                            "qkv_fidelity": getattr(ttnn.MathFidelity, args.qkv_fidelity),
+                            "output_fidelity": getattr(ttnn.MathFidelity, args.output_fidelity),
+                            "attention_ccl_dtype": getattr(ttnn, args.attention_ccl_dtype),
+                            "full_attention_ccl_dtype": (
+                                getattr(ttnn, args.full_attention_ccl_dtype) if args.full_attention_ccl_dtype else None
+                            ),
+                        }
+                        if tp == 4
+                        else {}
+                    ),
+                )
+                attention = decoder.layer.self_attn.config
+                contexts.append(
+                    dict(
+                        decoder=decoder,
+                        cache=[
+                            upload(
+                                torch.zeros(extent // block, attention.num_key_value_heads, block, attention.head_dim),
+                                ttnn.bfloat8_b,
+                            )
+                            for _ in range(2)
+                        ],
+                        page_table=upload(tables[layer], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+                        prefill_rope=tuple(upload(value.unsqueeze(0)) for value in ropes[layer]),
+                        decode_rope=tuple(
+                            upload(value.squeeze(0), layout=ttnn.ROW_MAJOR_LAYOUT) for value in ropes[layer]
+                        ),
+                        position=upload(
+                            torch.tensor([[length]], dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+                        ),
+                        cache_position=upload(
+                            torch.tensor([length], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
+                        ),
+                    )
+                )
+            hidden = upload(prefill_input, mapper=input_mapper)
+            prefill_outputs = []
+            with device_only():
+                for context in contexts:
+                    # Pass the exact device output into the next layer. No host
+                    # conversion or interlayer memory/layout transformation.
+                    hidden = context["decoder"].prefill_forward(
+                        hidden,
+                        rope_mats=context["prefill_rope"],
+                        page_table=context["page_table"],
+                        kv_cache=context["cache"],
+                    )
+                    prefill_outputs.append(hidden)
+            prefills = [read(value) for value in prefill_outputs]
+            assert all(tuple(value.shape) == (1, 1, length, config.hidden_size) for value in prefills)
+            token = upload(decode_inputs[:, :, :1], mapper=input_mapper)
+
+            def forward():
+                hidden = token
+                outputs = []
+                with device_only():
+                    for context in contexts:
+                        hidden = context["decoder"].decode_forward(
+                            hidden,
+                            rope_mats=context["decode_rope"],
+                            current_pos=context["position"],
+                            cache_pos=context["cache_position"],
+                            page_table=context["page_table"],
+                            kv_cache=context["cache"],
+                        )
+                        outputs.append(hidden)
+                return outputs
+
+            for _ in range(2):
+                forward()
+            trace = ttnn.begin_trace_capture(mesh, cq_id=0)
+            decode_outputs = forward()
+            ttnn.end_trace_capture(mesh, trace, cq_id=0)
+            decoded = []
+            try:
+                for step in range(steps):
+                    host_token = ttnn.from_torch(
+                        decode_inputs[:, :, step : step + 1],
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        mesh_mapper=input_mapper,
+                    )
+                    ttnn.copy_host_to_device_tensor(host_token, token)
+                    for context in contexts:
+                        for value, destination, dtype in (
+                            (torch.tensor([[length + step]], dtype=torch.int32), context["position"], ttnn.uint32),
+                            (torch.tensor([length + step], dtype=torch.int32), context["cache_position"], ttnn.int32),
+                        ):
+                            host = ttnn.from_torch(
+                                value, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=replicated
+                            )
+                            ttnn.copy_host_to_device_tensor(host, destination)
+                    ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
+                    values = [read(value) for value in decode_outputs]
+                    assert all(tuple(value.shape) == (1, 1, 1, config.hidden_size) for value in values)
+                    ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
+                    repeated = [read(value) for value in decode_outputs]
+                    assert all(
+                        torch.equal(first, second) for first, second in zip(values, repeated)
+                    ), "Stack replay differs"
+                    decoded.append(values)
+            finally:
+                ttnn.release_trace(mesh, trace)
+            results[tp] = dict(prefill=prefills, decode=decoded)
+            print("STACK_TP_DONE", tp, flush=True)
+        finally:
+            ttnn.close_mesh_device(mesh)
+
+    comparisons = []
+    for index, layer in enumerate(layers):
+        comparisons.append(
+            dict(phase="prefill", layer=layer, pcc=pcc(results[1]["prefill"][index], results[4]["prefill"][index]))
+        )
+        for step in range(steps):
+            comparisons.append(
+                dict(
+                    phase="decode",
+                    layer=layer,
+                    position=length + step,
+                    pcc=pcc(results[1]["decode"][step][index], results[4]["decode"][step][index]),
+                )
+            )
+    report = dict(
+        layers=list(layers),
+        layer_types=[config.layer_types[layer] for layer in layers],
+        length=length,
+        decode_positions=list(range(length, length + steps)),
+        expert_parallel=args.expert_parallel,
+        hybrid_experts=args.hybrid_experts,
+        fused_tail=args.fused_tail,
+        optimized_shared=args.optimized_shared,
+        shared_geometry=args.shared_geometry,
+        grouped_moe_reduce=args.grouped_moe_reduce,
+        qkv_fidelity=args.qkv_fidelity,
+        output_fidelity=args.output_fidelity,
+        attention_ccl_dtype=args.attention_ccl_dtype,
+        full_attention_ccl_dtype_override=args.full_attention_ccl_dtype,
+        sharded_residual=args.sharded_residual,
+        direct_interlayer_handoff=True,
+        independent_layer_caches=True,
+        trace_scope="both layers in one trace",
+        repeat_trace_equal=True,
+        all_replicas_equal=not args.sharded_residual,
+        runtime_audit="clean",
+        source_sha256=source_hashes,
+        comparisons=comparisons,
+        passed=min(value["pcc"] for value in comparisons) >= 0.995,
+    )
+    args.output.write_text(json.dumps(report, indent=2) + "\n")
+    print(report, flush=True)
+    assert report["passed"]
+
+
+if __name__ == "__main__":
+    main()

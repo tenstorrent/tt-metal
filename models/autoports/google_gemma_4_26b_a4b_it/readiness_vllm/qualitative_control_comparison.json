@@ -1,0 +1,43 @@
+{
+  "control": "doc/datatype_sweep/selected/qualitative_tt.json",
+  "control_output_tokens": 128,
+  "serving_max_output_tokens": 256,
+  "prompts": [
+    {
+      "id": "shared_0",
+      "greedy_matches_selected_control_prefix": true,
+      "rendered_prompt_matches": true
+    },
+    {
+      "id": "shared_1",
+      "greedy_matches_selected_control_prefix": true,
+      "rendered_prompt_matches": true
+    },
+    {
+      "id": "shared_2",
+      "greedy_matches_selected_control_prefix": true,
+      "rendered_prompt_matches": true
+    },
+    {
+      "id": "shared_3",
+      "greedy_matches_selected_control_prefix": true,
+      "rendered_prompt_matches": true
+    },
+    {
+      "id": "shared_4",
+      "greedy_matches_selected_control_prefix": true,
+      "rendered_prompt_matches": true
+    },
+    {
+      "id": "shared_5",
+      "greedy_matches_selected_control_prefix": true,
+      "rendered_prompt_matches": true
+    }
+  ],
+  "final_serving_sha256": "9ed2096036e4f849564ec160cf14f108487145a9b5afc1f2dee9117bcb69b77d",
+  "extended_256_token_greedy_matches": {
+    "shared_2": true,
+    "shared_3": true
+  },
+  "stage10_evidence": "../doc/optimized_vllm/qualitative_comparison.json"
+}

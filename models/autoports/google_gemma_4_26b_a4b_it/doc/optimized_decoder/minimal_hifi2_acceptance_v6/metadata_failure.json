@@ -1,0 +1,20 @@
+{
+  "driver": "../run_hifi2_acceptance.py",
+  "driver_exit_code": 1,
+  "failure": "Post-run journal aggregation called .get(min_pcc) on the long-context decode list; AttributeError. Device run had already closed.",
+  "affected_command": "commands.json final entry (long sliding)",
+  "child_returncode": null,
+  "child_returncode_missing_reason": "Postprocessing failed before persisting the child return code. The raw long test log and report retain its numerical assertion failure.",
+  "report": "long_layer0.json",
+  "report_sha256": "2e1ee7d0fa030e9c6926d818567cfce3c2134cf86044d1a0178174e1d60bf2e4",
+  "report_passed": false,
+  "sampled_rows": 291,
+  "failed_rows": [
+    {
+      "position": 32,
+      "pcc": 0.9949930133358956,
+      "passed": false
+    }
+  ],
+  "continuation": "full_long_resume_command.json independently records the remaining full-attention command and return code."
+}

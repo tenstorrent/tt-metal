@@ -1,0 +1,141 @@
+{
+  "scope": "Completed actual-input norm controls; source-only interpretation, no hardware run by report author",
+  "threshold": 0.995,
+  "exact_b513_precise_compact_512_baseline_found": false,
+  "cases": [
+    {
+      "file": "native_headnorm_headline_layer0.json",
+      "sha256": "cf671dc076ae5787dd78e15b373483e7c9d10bf6d69bbdc36bf8e830c81f0c84",
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "length": 4096,
+      "steps": 128,
+      "prefill_pcc": 0.9991551933848574,
+      "decode_min_pcc": 0.9953229528616707,
+      "decode_passed": true,
+      "failures": [],
+      "selected_positions": [],
+      "traced_host_median_us": 740.7616333333333,
+      "program_cache_guard": true,
+      "runtime_prefill_audit": "clean",
+      "runtime_decode_audit": "clean",
+      "deterministic": true
+    },
+    {
+      "file": "native_headnorm_stress_layer0.json",
+      "sha256": "aa085735c319117509e3fc1b45df01d7caabdca942e4577df7dfa2f8d90e7bdc",
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "fixture_sha256": "12820c41eb01a5be411eaef4a6a69273cf78f107af5c3e7304c9ac1daee62ad2",
+      "length": 1025,
+      "steps": 512,
+      "prefill_pcc": 0.9991024036528721,
+      "decode_min_pcc": 0.9944188549357699,
+      "decode_passed": false,
+      "failures": [
+        {
+          "position": 1257,
+          "pcc": 0.994804004647526,
+          "passed": false
+        },
+        {
+          "position": 1459,
+          "pcc": 0.9944188549357699,
+          "passed": false
+        }
+      ],
+      "selected_positions": [
+        {
+          "position": 1257,
+          "pcc": 0.994804004647526,
+          "passed": false
+        },
+        {
+          "position": 1459,
+          "pcc": 0.9944188549357699,
+          "passed": false
+        }
+      ],
+      "traced_host_median_us": 748.9732666666666,
+      "program_cache_guard": true,
+      "runtime_prefill_audit": "clean",
+      "runtime_decode_audit": "clean",
+      "deterministic": true
+    },
+    {
+      "file": "full_all_norm_headline.json",
+      "sha256": "c6380d97efd703f2b38465ccf0818edfeec334fbba20e490f57bf3aa8d91395e",
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "length": 4096,
+      "steps": 128,
+      "prefill_pcc": 0.9991318001817636,
+      "decode_min_pcc": 0.9950555610521771,
+      "decode_passed": true,
+      "failures": [],
+      "selected_positions": [],
+      "traced_host_median_us": 832.3554,
+      "program_cache_guard": true,
+      "runtime_prefill_audit": "clean",
+      "runtime_decode_audit": "clean",
+      "deterministic": true
+    },
+    {
+      "file": "full_all_norm_stress.json",
+      "sha256": "4b3001437bb512a9a54d0237cedcdb5072833882f6b14dea3acce50c32db67ea",
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "fixture_sha256": "df7b191402921a23224be6a3e1913b9a81a5c765dab713c5c053eb155d48eb46",
+      "length": 1025,
+      "steps": 512,
+      "prefill_pcc": 0.9990450170982876,
+      "decode_min_pcc": 0.996240662328566,
+      "decode_passed": true,
+      "failures": [],
+      "selected_positions": [
+        {
+          "position": 1257,
+          "pcc": 0.9987942461511058,
+          "passed": true
+        },
+        {
+          "position": 1459,
+          "pcc": 0.9988603339197762,
+          "passed": true
+        }
+      ],
+      "traced_host_median_us": 809.0888666666667,
+      "program_cache_guard": true,
+      "runtime_prefill_audit": "clean",
+      "runtime_decode_audit": "clean",
+      "deterministic": true
+    },
+    {
+      "file": "router_repair_hifi4_stress_layer0.json",
+      "sha256": "5f68f43ffe8bc17f3dc16e4aaee500edfc4e9834af6eaf06697adc1a8e294ed2",
+      "runtime_sha256": "2a55a06716a405ff96f9f29a22c4dfb169bf4a56e279904a440e161eb5df41c9",
+      "fixture_sha256": "12820c41eb01a5be411eaef4a6a69273cf78f107af5c3e7304c9ac1daee62ad2",
+      "length": 1025,
+      "steps": 512,
+      "prefill_pcc": 0.998591960372716,
+      "decode_min_pcc": 0.9955236049581246,
+      "decode_passed": true,
+      "failures": [],
+      "selected_positions": [
+        {
+          "position": 1257,
+          "pcc": 0.9996336990335712,
+          "passed": true
+        },
+        {
+          "position": 1459,
+          "pcc": 0.9997627200800984,
+          "passed": true
+        }
+      ],
+      "traced_host_median_us": 979.5869666666666,
+      "program_cache_guard": true,
+      "runtime_prefill_audit": "clean",
+      "runtime_decode_audit": "clean",
+      "deterministic": true
+    }
+  ]
+}

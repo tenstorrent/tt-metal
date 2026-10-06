@@ -1,0 +1,930 @@
+{
+  "cache_extent": 5120,
+  "cache_pages": 160,
+  "decoder": "optimized",
+  "fusion": "broadcast_pack_gelu_router_tail_norm_attention_common_tied_ropepolicy_cache_kvnorm_shardedtail_preciseheads_expmerge_residualnorm_rsqrt_expertbatch64_mixmatmul_mixsharded_mixfp32_qkvl1_projectsharded_sharedshard_unarycastshard_directtail",
+  "runtime_prefill_audit": "clean",
+  "program_cache_miss_guard": true,
+  "prefill_cache_entries": 174,
+  "prefix_length": 0,
+  "layer_type": "sliding_attention",
+  "phase": "prefill",
+  "length": 4096,
+  "real_weights": true,
+  "pcc": 0.9991560942734605,
+  "passed": true,
+  "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+  "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+  "input_source": {
+    "model": "google/gemma-4-26B-A4B-it",
+    "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+    "layer": 0,
+    "length": 4096,
+    "steps": 128,
+    "source": {
+      "kind": "recorded_real_text_hf_layer_inputs",
+      "text_files": [
+        {
+          "path": "/workspace/tt-metal/README.md",
+          "sha256": "7fdc0eca06ec1762c883745af52d022aabf154c09ac14035fdadc45f44a5648e"
+        },
+        {
+          "path": "/workspace/tt-metal/docs/realtime_profiler_architecture.md",
+          "sha256": "c82373c5d2b278773ab41af8d0aff21d9bdc0da9e82a5645873fd7d08fd3f857"
+        },
+        {
+          "path": "/workspace/tt-metal/docs/L1_ACCUMULATION_FP32_ANALYSIS.md",
+          "sha256": "00c228fd4e95c4d5d1b65c5b66e9d8ebabe6b9a7a379bec59894508b44ee9184"
+        }
+      ],
+      "corpus_path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_source.txt",
+      "corpus_sha256": "75ee9ef41b9c66e2f5619f02d1de3c56c58cf7759489892616794ccb799e5002",
+      "tokens_path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_tokens.json",
+      "tokens_sha256": "11e130cdfd2ff0ebdc0dd8ae8bfcc837a082a3192aa45b74d887089d28f46bf3",
+      "tokenizer": "GemmaTokenizer",
+      "tokenizer_revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+      "transformers_version": "5.12.1",
+      "hf_source_sha256": "90bb5dbd9f78208ef07851e099311603e9f185f8fac2ef588df823f3df96b776",
+      "config_sha256": "ed0c1eb3633de771906e9ba004a44cc5635bcc06ee2062077c3d2e88a50707d3",
+      "weight_index_sha256": "907826a6e46ff454272bd6db1fee629d5531a2303be22986d825a0871d7dc7a7",
+      "preceding_computation": "HF FP32 eager, FP32 checkpoint weights and KV, original scaled embedding and layer scalars",
+      "embedding_scale_fp32": 53.06599807739258,
+      "embedding_scale_bfloat16_control": 53.0,
+      "per_layer_embeddings": false,
+      "shared_kv_layers": 0,
+      "sampling": "Actual corpus token continuation; no generated or random activations"
+    },
+    "raw_dtype": "float32",
+    "transport_dtype": "bfloat16_roundtripped_float32",
+    "teacher_forced": true
+  },
+  "decode_rope_layout": "Layout.ROW_MAJOR",
+  "decode": {
+    "pcc": 0.9997266441934727,
+    "passed": true,
+    "traced": true,
+    "runtime_decode_audit": "clean",
+    "repeated_equal": true,
+    "steps": 128,
+    "min_pcc": 0.995257485930251,
+    "positions": [
+      4096,
+      4223
+    ],
+    "checks": [
+      {
+        "position": 4096,
+        "pcc": 0.9997266441934727,
+        "passed": true
+      },
+      {
+        "position": 4096,
+        "pcc": 0.9997266441934727,
+        "passed": true
+      },
+      {
+        "position": 4097,
+        "pcc": 0.9989806518636516,
+        "passed": true
+      },
+      {
+        "position": 4098,
+        "pcc": 0.9989433718742018,
+        "passed": true
+      },
+      {
+        "position": 4099,
+        "pcc": 0.9996268250491509,
+        "passed": true
+      },
+      {
+        "position": 4100,
+        "pcc": 0.9996522867541386,
+        "passed": true
+      },
+      {
+        "position": 4101,
+        "pcc": 0.999847272324311,
+        "passed": true
+      },
+      {
+        "position": 4102,
+        "pcc": 0.9995989454174838,
+        "passed": true
+      },
+      {
+        "position": 4103,
+        "pcc": 0.9989308271369567,
+        "passed": true
+      },
+      {
+        "position": 4104,
+        "pcc": 0.9981130049546766,
+        "passed": true
+      },
+      {
+        "position": 4105,
+        "pcc": 0.9996935041928586,
+        "passed": true
+      },
+      {
+        "position": 4106,
+        "pcc": 0.9993812835009103,
+        "passed": true
+      },
+      {
+        "position": 4107,
+        "pcc": 0.9991180968493908,
+        "passed": true
+      },
+      {
+        "position": 4108,
+        "pcc": 0.9995328307316321,
+        "passed": true
+      },
+      {
+        "position": 4109,
+        "pcc": 0.999523113374655,
+        "passed": true
+      },
+      {
+        "position": 4110,
+        "pcc": 0.9992908089883079,
+        "passed": true
+      },
+      {
+        "position": 4111,
+        "pcc": 0.9982887433581795,
+        "passed": true
+      },
+      {
+        "position": 4112,
+        "pcc": 0.9987123817175899,
+        "passed": true
+      },
+      {
+        "position": 4113,
+        "pcc": 0.9998332374647778,
+        "passed": true
+      },
+      {
+        "position": 4114,
+        "pcc": 0.9993273027442956,
+        "passed": true
+      },
+      {
+        "position": 4115,
+        "pcc": 0.9992987844761319,
+        "passed": true
+      },
+      {
+        "position": 4116,
+        "pcc": 0.9996796525098385,
+        "passed": true
+      },
+      {
+        "position": 4117,
+        "pcc": 0.998987605799854,
+        "passed": true
+      },
+      {
+        "position": 4118,
+        "pcc": 0.998125707809353,
+        "passed": true
+      },
+      {
+        "position": 4119,
+        "pcc": 0.9997751253252533,
+        "passed": true
+      },
+      {
+        "position": 4120,
+        "pcc": 0.999518549890364,
+        "passed": true
+      },
+      {
+        "position": 4121,
+        "pcc": 0.9995633913235509,
+        "passed": true
+      },
+      {
+        "position": 4122,
+        "pcc": 0.9996813409971858,
+        "passed": true
+      },
+      {
+        "position": 4123,
+        "pcc": 0.9994218435114667,
+        "passed": true
+      },
+      {
+        "position": 4124,
+        "pcc": 0.9997518912084224,
+        "passed": true
+      },
+      {
+        "position": 4125,
+        "pcc": 0.9989274751457192,
+        "passed": true
+      },
+      {
+        "position": 4126,
+        "pcc": 0.9988972740689519,
+        "passed": true
+      },
+      {
+        "position": 4127,
+        "pcc": 0.9996380078010364,
+        "passed": true
+      },
+      {
+        "position": 4128,
+        "pcc": 0.9993011583218719,
+        "passed": true
+      },
+      {
+        "position": 4129,
+        "pcc": 0.9991303529738539,
+        "passed": true
+      },
+      {
+        "position": 4130,
+        "pcc": 0.9984560956503002,
+        "passed": true
+      },
+      {
+        "position": 4131,
+        "pcc": 0.9987303941209763,
+        "passed": true
+      },
+      {
+        "position": 4132,
+        "pcc": 0.9994437844954361,
+        "passed": true
+      },
+      {
+        "position": 4133,
+        "pcc": 0.9992211628987573,
+        "passed": true
+      },
+      {
+        "position": 4134,
+        "pcc": 0.9996962213791637,
+        "passed": true
+      },
+      {
+        "position": 4135,
+        "pcc": 0.9996053399765311,
+        "passed": true
+      },
+      {
+        "position": 4136,
+        "pcc": 0.9995038946262282,
+        "passed": true
+      },
+      {
+        "position": 4137,
+        "pcc": 0.9994291743936586,
+        "passed": true
+      },
+      {
+        "position": 4138,
+        "pcc": 0.9986194975686452,
+        "passed": true
+      },
+      {
+        "position": 4139,
+        "pcc": 0.9995299382432306,
+        "passed": true
+      },
+      {
+        "position": 4140,
+        "pcc": 0.9991198299252024,
+        "passed": true
+      },
+      {
+        "position": 4141,
+        "pcc": 0.9995700965517686,
+        "passed": true
+      },
+      {
+        "position": 4142,
+        "pcc": 0.9997068232360619,
+        "passed": true
+      },
+      {
+        "position": 4143,
+        "pcc": 0.9996161105333238,
+        "passed": true
+      },
+      {
+        "position": 4144,
+        "pcc": 0.9990507259784014,
+        "passed": true
+      },
+      {
+        "position": 4145,
+        "pcc": 0.9996819331606898,
+        "passed": true
+      },
+      {
+        "position": 4146,
+        "pcc": 0.999292091046007,
+        "passed": true
+      },
+      {
+        "position": 4147,
+        "pcc": 0.999335780047352,
+        "passed": true
+      },
+      {
+        "position": 4148,
+        "pcc": 0.9994001645331079,
+        "passed": true
+      },
+      {
+        "position": 4149,
+        "pcc": 0.995257485930251,
+        "passed": true
+      },
+      {
+        "position": 4150,
+        "pcc": 0.998010114677039,
+        "passed": true
+      },
+      {
+        "position": 4151,
+        "pcc": 0.9998272133295718,
+        "passed": true
+      },
+      {
+        "position": 4152,
+        "pcc": 0.9992099309065932,
+        "passed": true
+      },
+      {
+        "position": 4153,
+        "pcc": 0.9990377719868562,
+        "passed": true
+      },
+      {
+        "position": 4154,
+        "pcc": 0.9992847662414948,
+        "passed": true
+      },
+      {
+        "position": 4155,
+        "pcc": 0.9990887283762666,
+        "passed": true
+      },
+      {
+        "position": 4156,
+        "pcc": 0.9984176193183394,
+        "passed": true
+      },
+      {
+        "position": 4157,
+        "pcc": 0.9996538163688068,
+        "passed": true
+      },
+      {
+        "position": 4158,
+        "pcc": 0.9995971576352649,
+        "passed": true
+      },
+      {
+        "position": 4159,
+        "pcc": 0.9997286940058033,
+        "passed": true
+      },
+      {
+        "position": 4160,
+        "pcc": 0.9992622462304053,
+        "passed": true
+      },
+      {
+        "position": 4161,
+        "pcc": 0.9983158611036776,
+        "passed": true
+      },
+      {
+        "position": 4162,
+        "pcc": 0.9995372146647203,
+        "passed": true
+      },
+      {
+        "position": 4163,
+        "pcc": 0.9991641645204178,
+        "passed": true
+      },
+      {
+        "position": 4164,
+        "pcc": 0.9995702372595897,
+        "passed": true
+      },
+      {
+        "position": 4165,
+        "pcc": 0.9992785254010887,
+        "passed": true
+      },
+      {
+        "position": 4166,
+        "pcc": 0.9996590711681133,
+        "passed": true
+      },
+      {
+        "position": 4167,
+        "pcc": 0.9994532299994957,
+        "passed": true
+      },
+      {
+        "position": 4168,
+        "pcc": 0.9991259811458619,
+        "passed": true
+      },
+      {
+        "position": 4169,
+        "pcc": 0.999228234532564,
+        "passed": true
+      },
+      {
+        "position": 4170,
+        "pcc": 0.999363177630377,
+        "passed": true
+      },
+      {
+        "position": 4171,
+        "pcc": 0.9994716927757993,
+        "passed": true
+      },
+      {
+        "position": 4172,
+        "pcc": 0.9993983663393561,
+        "passed": true
+      },
+      {
+        "position": 4173,
+        "pcc": 0.9995974647656071,
+        "passed": true
+      },
+      {
+        "position": 4174,
+        "pcc": 0.9997421519109941,
+        "passed": true
+      },
+      {
+        "position": 4175,
+        "pcc": 0.9991165068016983,
+        "passed": true
+      },
+      {
+        "position": 4176,
+        "pcc": 0.9996328498862109,
+        "passed": true
+      },
+      {
+        "position": 4177,
+        "pcc": 0.9996476438379337,
+        "passed": true
+      },
+      {
+        "position": 4178,
+        "pcc": 0.9989703966721163,
+        "passed": true
+      },
+      {
+        "position": 4179,
+        "pcc": 0.9997771021792075,
+        "passed": true
+      },
+      {
+        "position": 4180,
+        "pcc": 0.9995672487176767,
+        "passed": true
+      },
+      {
+        "position": 4181,
+        "pcc": 0.999298514624528,
+        "passed": true
+      },
+      {
+        "position": 4182,
+        "pcc": 0.9995158692716393,
+        "passed": true
+      },
+      {
+        "position": 4183,
+        "pcc": 0.9992552534475534,
+        "passed": true
+      },
+      {
+        "position": 4184,
+        "pcc": 0.9996945176510472,
+        "passed": true
+      },
+      {
+        "position": 4185,
+        "pcc": 0.9995732504458099,
+        "passed": true
+      },
+      {
+        "position": 4186,
+        "pcc": 0.9996896271149753,
+        "passed": true
+      },
+      {
+        "position": 4187,
+        "pcc": 0.9990521968276037,
+        "passed": true
+      },
+      {
+        "position": 4188,
+        "pcc": 0.9996724420684677,
+        "passed": true
+      },
+      {
+        "position": 4189,
+        "pcc": 0.9993569397904677,
+        "passed": true
+      },
+      {
+        "position": 4190,
+        "pcc": 0.9996846647789293,
+        "passed": true
+      },
+      {
+        "position": 4191,
+        "pcc": 0.9994628785370506,
+        "passed": true
+      },
+      {
+        "position": 4192,
+        "pcc": 0.9996311669377452,
+        "passed": true
+      },
+      {
+        "position": 4193,
+        "pcc": 0.9997461729076385,
+        "passed": true
+      },
+      {
+        "position": 4194,
+        "pcc": 0.9996104968696407,
+        "passed": true
+      },
+      {
+        "position": 4195,
+        "pcc": 0.9990067879262958,
+        "passed": true
+      },
+      {
+        "position": 4196,
+        "pcc": 0.9978550448364732,
+        "passed": true
+      },
+      {
+        "position": 4197,
+        "pcc": 0.9992751493454954,
+        "passed": true
+      },
+      {
+        "position": 4198,
+        "pcc": 0.9986266203469946,
+        "passed": true
+      },
+      {
+        "position": 4199,
+        "pcc": 0.9994054717293772,
+        "passed": true
+      },
+      {
+        "position": 4200,
+        "pcc": 0.9994323549765738,
+        "passed": true
+      },
+      {
+        "position": 4201,
+        "pcc": 0.9955688770800217,
+        "passed": true
+      },
+      {
+        "position": 4202,
+        "pcc": 0.9980145262792108,
+        "passed": true
+      },
+      {
+        "position": 4203,
+        "pcc": 0.9998354586680976,
+        "passed": true
+      },
+      {
+        "position": 4204,
+        "pcc": 0.9992181558624997,
+        "passed": true
+      },
+      {
+        "position": 4205,
+        "pcc": 0.999186148239998,
+        "passed": true
+      },
+      {
+        "position": 4206,
+        "pcc": 0.9993100954559023,
+        "passed": true
+      },
+      {
+        "position": 4207,
+        "pcc": 0.9990941686226382,
+        "passed": true
+      },
+      {
+        "position": 4208,
+        "pcc": 0.9983718791428123,
+        "passed": true
+      },
+      {
+        "position": 4209,
+        "pcc": 0.9996530276213613,
+        "passed": true
+      },
+      {
+        "position": 4210,
+        "pcc": 0.9995220588293752,
+        "passed": true
+      },
+      {
+        "position": 4211,
+        "pcc": 0.9985104353070294,
+        "passed": true
+      },
+      {
+        "position": 4212,
+        "pcc": 0.9979715405089219,
+        "passed": true
+      },
+      {
+        "position": 4213,
+        "pcc": 0.9995811556389489,
+        "passed": true
+      },
+      {
+        "position": 4214,
+        "pcc": 0.9997176524753201,
+        "passed": true
+      },
+      {
+        "position": 4215,
+        "pcc": 0.9981062486808794,
+        "passed": true
+      },
+      {
+        "position": 4216,
+        "pcc": 0.9993548249842366,
+        "passed": true
+      },
+      {
+        "position": 4217,
+        "pcc": 0.9986240498461966,
+        "passed": true
+      },
+      {
+        "position": 4218,
+        "pcc": 0.9996846051401715,
+        "passed": true
+      },
+      {
+        "position": 4219,
+        "pcc": 0.9996370382482626,
+        "passed": true
+      },
+      {
+        "position": 4220,
+        "pcc": 0.9992122115195627,
+        "passed": true
+      },
+      {
+        "position": 4221,
+        "pcc": 0.9997717936430703,
+        "passed": true
+      },
+      {
+        "position": 4222,
+        "pcc": 0.9989351828525755,
+        "passed": true
+      },
+      {
+        "position": 4223,
+        "pcc": 0.9993298021345337,
+        "passed": true
+      }
+    ]
+  },
+  "runtime_sha256": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898",
+  "contract": "run_decoder",
+  "functional_fallback": "forbidden",
+  "precision_policy": {
+    "attention_weights": {
+      "qkv": "DataType.BFLOAT8_B",
+      "output": "DataType.BFLOAT8_B"
+    },
+    "kv_cache": "bfloat8_b",
+    "native_sdpa": true,
+    "native_sdpa_grid": [
+      8,
+      8
+    ],
+    "native_sdpa_fidelity": "MathFidelity.HiFi4",
+    "prefill_attention_fidelity": "MathFidelity.LoFi",
+    "decode_expert_activation": "unchanged",
+    "router_selection": "generalized_moe_gate",
+    "generalized_router_center": true,
+    "native_sdpa_dst_full_sync": true,
+    "residual": "float32",
+    "expert_gate": "DataType.BFLOAT8_B",
+    "decode_expert_down": "DataType.BFLOAT4_B",
+    "prefill_expert_gate": "DataType.BFLOAT8_B",
+    "prefill_expert_down": "DataType.BFLOAT4_B",
+    "decode_expert_fidelity": "MathFidelity.LoFi",
+    "decode_expert_fused_gelu": true,
+    "decode_expert_backend": "indexed_compact",
+    "decode_expert_slots": 8,
+    "prefill_expert_fidelity": "MathFidelity.LoFi",
+    "shared_decode_weights": "DataType.BFLOAT8_B",
+    "shared_decode_fidelity": "MathFidelity.LoFi",
+    "qkv_fidelity": "MathFidelity.HiFi2",
+    "qkv_grid": [
+      11,
+      10
+    ],
+    "qkv_terms": null,
+    "qkv_lanes": 0,
+    "qkv_direct_dtype": "DataType.FLOAT32",
+    "qkv_direct_cleanup": true,
+    "router_lanes": 0,
+    "qkv_dram": false,
+    "qkv_dram_readers": null,
+    "qkv_dram_block": null,
+    "expert_grid": [
+      11,
+      4
+    ],
+    "expert_k_block": 22,
+    "prefill_batch_tokens": 32,
+    "expert_gate_k_block": 44,
+    "expert_down_k_block": 22,
+    "qkv_decode": {
+      "backend": "native_packed_linear",
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtypes": [
+        "DataType.BFLOAT8_B"
+      ],
+      "weight_shapes": [
+        [
+          1,
+          1,
+          2816,
+          8192
+        ]
+      ],
+      "weight_memory": [
+        "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+      ],
+      "output_dtype": "float32",
+      "output_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+      "math_fidelity": "MathFidelity.HiFi2",
+      "fp32_dest_acc_en": true,
+      "packer_l1_acc": false,
+      "dram": false,
+      "programs": [
+        {
+          "grid": [
+            11,
+            10
+          ],
+          "in0_block_w": 11,
+          "out_subblock_h": 1,
+          "out_subblock_w": 3,
+          "per_core_M": 1,
+          "per_core_N": 3
+        }
+      ],
+      "setup_cleanup": {
+        "requested": true,
+        "shared_phase_weight": true,
+        "released_rows": true,
+        "released_lane_mask": true
+      },
+      "activation_decomposition": false,
+      "lane_mask": false,
+      "partial_row_reduce": false
+    },
+    "prefill_qkv_projection": {
+      "backend": "minimal_matmul",
+      "grid": [
+        11,
+        8
+      ],
+      "k_block": 8,
+      "m_block": "min(4, padded_M_tiles)",
+      "n_block": 8,
+      "subblock": [
+        1,
+        4
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "weight_shape": [
+        1,
+        1,
+        2816,
+        8192
+      ],
+      "input_dtype": "unchanged",
+      "output_dtype": "float32",
+      "fidelity": "MathFidelity.HiFi4",
+      "fp32_dest_acc_en": true,
+      "math_approx_mode": false,
+      "packer_l1_acc": false,
+      "programs": {
+        "1": "MinimalMatmulConfig(M_block_size=1,K_block_size=8,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)",
+        "2": "MinimalMatmulConfig(M_block_size=2,K_block_size=8,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)",
+        "3": "MinimalMatmulConfig(M_block_size=3,K_block_size=8,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)",
+        "4": "MinimalMatmulConfig(M_block_size=4,K_block_size=8,N_block_size=8,subblock_h=1,subblock_w=4,compute_with_storage_grid_size=11-8)"
+      },
+      "input_memory": "unchanged"
+    },
+    "router_projection": {
+      "backend": "native_linear",
+      "input_dtype": "float32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "output_dtype": "float32",
+      "output_memory": "L1 interleaved",
+      "grid": [
+        4,
+        1
+      ],
+      "k_block": 22,
+      "fidelity": "MathFidelity.HiFi4",
+      "fp32_dest_acc_en": true,
+      "packer_l1_acc": false,
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=4-1,in0_block_w=22,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)"
+    },
+    "output_projection": {
+      "grid": [
+        8,
+        8
+      ],
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=8-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=2,out_block_h=1,out_block_w=2,per_core_M=1,per_core_N=2,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "fidelity": "MathFidelity.HiFi4",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+      "weight_dtype": "DataType.BFLOAT8_B"
+    },
+    "prefill_output_projection": {
+      "enabled": true,
+      "grid": [
+        11,
+        8
+      ],
+      "k_block": 16,
+      "fidelity": "MathFidelity.LoFi",
+      "fp32_dest_acc_en": true,
+      "input_l1": false,
+      "output_dtype": "float32",
+      "output_memory": "DRAM interleaved",
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "programs": {
+        "32": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=8,per_core_M=1,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "64": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=8,per_core_M=1,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "96": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=8,per_core_M=1,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "128": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=8,per_core_M=1,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "160": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=8,per_core_M=1,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "192": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=8,per_core_M=1,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "224": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=8,per_core_M=1,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "256": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=8,per_core_M=1,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "288": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=2,out_block_w=8,per_core_M=2,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "320": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=2,out_block_w=8,per_core_M=2,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "352": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=2,out_block_w=8,per_core_M=2,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "384": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=2,out_block_w=8,per_core_M=2,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "416": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=2,out_block_w=8,per_core_M=2,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "448": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=2,out_block_w=8,per_core_M=2,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "480": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=2,out_block_w=8,per_core_M=2,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "512": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=2,out_block_w=8,per_core_M=2,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "544": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=3,out_block_w=8,per_core_M=3,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "576": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=3,out_block_w=8,per_core_M=3,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "608": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=3,out_block_w=8,per_core_M=3,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "640": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=3,out_block_w=8,per_core_M=3,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "672": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=3,out_block_w=8,per_core_M=3,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "704": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=3,out_block_w=8,per_core_M=3,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "736": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=3,out_block_w=8,per_core_M=3,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "768": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=3,out_block_w=8,per_core_M=3,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "800": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "832": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "864": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "896": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "928": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "960": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "992": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)",
+        "1024": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      }
+    }
+  }
+}

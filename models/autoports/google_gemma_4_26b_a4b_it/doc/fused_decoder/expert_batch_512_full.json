@@ -1,0 +1,111 @@
+{
+  "layer": 5,
+  "layer_type": "full_attention",
+  "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "real_weights": true,
+  "recorded_inputs": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/headline_inputs.pt",
+  "input_source": "expert inputs and routes captured from selected FusedDecoder prefill",
+  "length": 1024,
+  "batch_tokens": [
+    64,
+    512
+  ],
+  "repeats": 3,
+  "timing_samples": 3,
+  "warmup_replays": 3,
+  "pcc_threshold": 0.995,
+  "results": [
+    {
+      "candidate": "loop32",
+      "batch_tokens": 32,
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "trace_replay_equal": true,
+      "traced_host_us": 699349.451,
+      "traced_host_us_samples": [
+        699265.7753333333,
+        699360.3386666666,
+        699349.451
+      ]
+    },
+    {
+      "candidate": "direct_m64",
+      "batch_tokens": 64,
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "sparse_output_shapes": {
+        "gate_up": [
+          1,
+          1,
+          1,
+          128,
+          64,
+          1408
+        ],
+        "down": [
+          1,
+          128,
+          64,
+          2816
+        ]
+      },
+      "trace_replay_equal": true,
+      "traced_host_us": 695442.7186666667,
+      "traced_host_us_samples": [
+        695442.7186666667,
+        695326.571,
+        695450.657
+      ]
+    },
+    {
+      "candidate": "direct_m512",
+      "batch_tokens": 512,
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "sparse_output_shapes": {
+        "gate_up": [
+          1,
+          1,
+          1,
+          128,
+          512,
+          1408
+        ],
+        "down": [
+          1,
+          128,
+          512,
+          2816
+        ]
+      },
+      "trace_replay_equal": true,
+      "traced_host_us": 701893.7836666667,
+      "traced_host_us_samples": [
+        702715.188,
+        701893.7836666667,
+        701075.7423333334
+      ]
+    }
+  ],
+  "capture_fusion": "broadcast_pack_gelu_router_tail_norm_attention_common_tied_expmerge_residualnorm_shardedtail_kvnorm",
+  "expert_fused_gelu": true,
+  "captured_chunks": 1,
+  "expert_input_shape": [
+    1,
+    1,
+    1024,
+    2816
+  ],
+  "routing_shape": [
+    1,
+    1,
+    1024,
+    128
+  ]
+}

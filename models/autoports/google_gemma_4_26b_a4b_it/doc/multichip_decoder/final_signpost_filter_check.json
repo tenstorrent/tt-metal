@@ -1,0 +1,40 @@
+{
+  "passed": true,
+  "scope": "CPU-only reprocessing of existing final captures; no benchmark rerun",
+  "whole_layer_measurements_unchanged": true,
+  "rows": [
+    {
+      "layer_type": "sliding_attention",
+      "phase": "prefill",
+      "merged_report_rows": 2593,
+      "expected_native_rows": 2593,
+      "start_signpost": "PERF_PREFILL",
+      "end_signpost": "PERF_PREFILL_END"
+    },
+    {
+      "layer_type": "sliding_attention",
+      "phase": "decode",
+      "merged_report_rows": 16512,
+      "expected_native_rows": 16512,
+      "start_signpost": "PERF_DECODE",
+      "end_signpost": "PERF_DECODE_END"
+    },
+    {
+      "layer_type": "full_attention",
+      "phase": "prefill",
+      "merged_report_rows": 2469,
+      "expected_native_rows": 2469,
+      "start_signpost": "PERF_PREFILL",
+      "end_signpost": "PERF_PREFILL_END"
+    },
+    {
+      "layer_type": "full_attention",
+      "phase": "decode",
+      "merged_report_rows": 13568,
+      "expected_native_rows": 13568,
+      "start_signpost": "PERF_DECODE",
+      "end_signpost": "PERF_DECODE_END"
+    }
+  ],
+  "source": "tt_perf_report/perf_report.py filter_by_signpost requires distinct END names unless there are two same-name occurrences"
+}

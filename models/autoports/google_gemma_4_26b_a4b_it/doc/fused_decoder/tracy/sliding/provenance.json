@@ -1,0 +1,17 @@
+{
+  "source_ops_csv": "raw_final/reports/headline/2026_09_25_21_36_58/ops_perf_results_headline_2026_09_25_21_36_58.csv",
+  "ops_csv_sha256": "a3b120a8be815382734af91f95cdabe31a35d898d5c40752bc3e5bb9b330390c",
+  "ops_csv_bytes": 43035372,
+  "summary_command": [
+    "python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.tests.summarize_perf",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tracy/sliding/ops.csv",
+    "--layer-type",
+    "sliding_attention",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tracy/sliding/whole_layer.json"
+  ],
+  "summary_exit_code": 0,
+  "op_info_cache": false
+}

@@ -1,0 +1,11 @@
+{
+  "reader_layer_candidate": {
+    "reader_role": "qkv",
+    "readers": 1,
+    "reader_qkv_block": 1
+  },
+  "reader_layer_runtime": {},
+  "reader_layer_probe_sha256": "246ec16be38f1875849c909e9c8ad062786f91b53cf7a37045abd25f77103a26",
+  "reader_layer_runtime_sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b",
+  "reader_layer_error": "TypeError: __getitem__(): incompatible function arguments. The following argument types are supported:\n    1. __getitem__(self, arg: int, /) -> int\n\nInvoked with types: ttnn._ttnn.types.Shape, slice"
+}

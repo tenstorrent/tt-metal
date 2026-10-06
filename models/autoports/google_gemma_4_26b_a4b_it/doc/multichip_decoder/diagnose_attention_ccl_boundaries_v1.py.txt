@@ -1,0 +1,369 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Locate the first changing boundary in duplicate TP4 attention-CCL replays.
+
+This is a diagnostic companion to run_multichip_decoder. Retaining intermediate
+tensors changes allocator lifetimes; use --output-only as the matching control.
+Host reads and comparisons occur only after blocking trace execution.
+"""
+
+import argparse
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+import torch
+from transformers import AutoConfig
+from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
+
+import ttnn
+from models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder import load_layer
+from models.autoports.google_gemma_4_26b_a4b_it.tests.runtime_audit import device_only
+from models.autoports.google_gemma_4_26b_a4b_it.tt.multichip_decoder import MultichipDecoder
+from models.autoports.google_gemma_4_26b_a4b_it.tt.optimized_decoder import GeneralizedRouter, OptimizedAttention
+
+
+class BoundaryRouter(GeneralizedRouter):
+    """Retain the selected router's logits, gate outputs and expert IDs."""
+
+    def __call__(self, x, normalized=None):
+        if x.shape[-2] != 1:
+            return self.original(x, normalized=normalized)
+        retain = self.diagnostic_decoder.retain
+        source = self.original.source
+        router = source.source
+        if normalized is None:
+            normalized = self.original.normalize(x, source.epsilon)
+        scaled = ttnn.mul(
+            normalized,
+            source.scale,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, router.scalar_root_size)],
+        )
+        if scaled.is_sharded():
+            scaled = ttnn.to_memory_config(scaled, ttnn.L1_MEMORY_CONFIG)
+        scores = retain(
+            "router_scores",
+            ttnn.linear(
+                scaled,
+                self.projection_weight,
+                dtype=ttnn.float32,
+                program_config=self.projection_program,
+                compute_kernel_config=self.projection_compute,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            ),
+        )
+        scores = retain("router_centered_scores", ttnn.subtract(scores, ttnn.max(scores, dim=-1, keepdim=True)))
+        rounded = retain("router_rounded_scores", ttnn.typecast(scores, ttnn.bfloat16))
+        padded = ttnn.pad(rounded, [(0, 0), (0, 0), (0, 0), (0, 128)], float("-inf"))
+        face = ttnn.to_memory_config(ttnn.reshape(padded, (1, 16, 16)), self.memory)
+        values, indices = ttnn.experimental.deepseek.moe.generalized_moe_gate(
+            face,
+            bias_tensor=self.bias,
+            input_indices_tensor=self.indices,
+            output_tensor=self.output,
+            output_indices_tensor=self.output_indices,
+            eps=1e-20,
+            scaling_factor=1.0,
+            enable_sigmoid=False,
+            topk=8,
+            output_softmax=True,
+            grouped=False,
+        )
+        values = ttnn.to_memory_config(values, ttnn.L1_MEMORY_CONFIG)
+        indices = ttnn.to_memory_config(indices, ttnn.L1_MEMORY_CONFIG)
+        values = retain("router_gate_values", ttnn.view(values[:, 0, :8], (1, 1, 1, 8)))
+        indices = retain("router_gate_indices", ttnn.view(indices[:, 0, :8], (1, 1, 1, 8)))
+        if self.retain_decode_indices:
+            self.last_decode_indices = indices
+        routing = ttnn.scatter(ttnn.zeros_like(rounded), dim=-1, index=indices, src=values)
+        return ttnn.mul(routing, router.per_expert_scale)
+
+
+class BoundaryDecoder(MultichipDecoder):
+    """Same replicated forward operations, retaining their tensor handles."""
+
+    def retain(self, name, value):
+        self.boundaries[name] = value
+        return value
+
+    def install_attention_probe(self, dtype):
+        attention = self.layer.self_attn
+
+        def project(value, decode):
+            self.retain("attention_sdpa", value)
+            local = self.retain("attention_wo_fp32", OptimizedAttention.project(attention, value, decode))
+            cast = self.retain("attention_cast", ttnn.typecast(local, dtype))
+            cast = self.retain("attention_dram", ttnn.to_memory_config(cast, ttnn.DRAM_MEMORY_CONFIG))
+            scattered = self.retain(
+                "attention_rs",
+                ttnn.experimental.reduce_scatter_minimal_async(
+                    cast,
+                    dim=3,
+                    multi_device_global_semaphore=self.ccl.get_rs_ping_pong_semaphore(),
+                    num_links=self.ccl.num_links,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=self.ccl.topology,
+                    cluster_axis=1,
+                    barrier_semaphore=self.ccl.get_barrier_semaphore(),
+                ),
+            )
+            return self.retain(
+                "attention_ag",
+                ttnn.experimental.all_gather_async(
+                    scattered,
+                    dim=3,
+                    cluster_axis=1,
+                    mesh_device=self.ccl.mesh_device,
+                    topology=self.ccl.topology,
+                    multi_device_global_semaphore=self.ccl.get_ag_ping_pong_semaphore(),
+                    num_links=self.ccl.num_links,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    barrier_semaphore=self.ccl.get_barrier_semaphore(),
+                ),
+            )
+
+        attention.project = project
+        router = self.layer.moe.router
+        assert isinstance(router, GeneralizedRouter) and router.direct_projection and router.center_logits
+        router.__class__ = BoundaryRouter
+        router.diagnostic_decoder = self
+
+    def _forward(self, x, **attention_kwargs):
+        # This matches MultichipDecoder._forward's replicated/grouped/fused path.
+        self.boundaries = {}
+        eps = self.config.rms_norm_eps
+        normed = self.retain("input_norm", self.normalize(x, eps, self.input_norm_weight))
+        attention = self.layer.self_attn(normed, **attention_kwargs)
+        promoted = self.retain("attention_promoted_fp32", ttnn.typecast(attention, ttnn.float32))
+        post_norm = self.retain(
+            "post_attention_norm_unweighted",
+            ttnn.rms_norm(promoted, epsilon=eps, compute_kernel_config=self.layer.self_attn.compute),
+        )
+        post_norm = self.retain("post_attention_norm", ttnn.mul(post_norm, self.post_attention_norm_weight))
+        residual = self.retain("residual", ttnn.add(ttnn.typecast(x, ttnn.float32), post_norm))
+        normalized = self.retain("residual_norm", self.normalize(residual, eps))
+        routes = self.retain("routes", self.layer.moe.router(residual, normalized=normalized))
+        if x.shape[-2] == 1:
+            self.retain("route_indices", self.layer.moe.router.decode_indices())
+        expert_input = self.retain("expert_input", ttnn.mul(normalized, self.expert_norm_weight, dtype=ttnn.bfloat16))
+        routed = self.retain("routed_local", self.layer.moe.experts(expert_input, routes))
+        shared_input = self.retain("shared_input", ttnn.mul(normalized, self.shared_norm_weight, dtype=ttnn.bfloat16))
+        shared = self.retain("shared_local", self.layer.shared_mlp(shared_input, reduce_output=False))
+        shared, routed = self._reduce_moe_pair(shared, routed)
+        self.retain("shared_reduced", shared)
+        self.retain("routed_reduced", routed)
+        return self.retain("output", self._fused_tail(residual, shared, routed, x.shape[-2] <= 32))
+
+
+def snapshot(tensors):
+    return {
+        name: [ttnn.to_torch(part).float().clone() for part in ttnn.get_device_tensors(tensor)]
+        for name, tensor in tensors.items()
+    }
+
+
+def compare(reference, actual):
+    comparisons = {}
+    for name, wanted_parts in reference.items():
+        ranks = []
+        for rank, (wanted, got) in enumerate(zip(wanted_parts, actual[name])):
+            changed = wanted != got
+            finite_pair = torch.isfinite(wanted) & torch.isfinite(got)
+            ranks.append(
+                dict(
+                    rank=rank,
+                    equal=torch.equal(wanted, got),
+                    changed_elements=int(changed.sum()),
+                    reference_nonfinite=int((~torch.isfinite(wanted)).sum()),
+                    actual_nonfinite=int((~torch.isfinite(got)).sum()),
+                    finite_max_abs_diff=(
+                        float((wanted[finite_pair] - got[finite_pair]).abs().max()) if finite_pair.any() else None
+                    ),
+                    first_changed_index=changed.nonzero()[0].tolist() if changed.any() else None,
+                )
+            )
+        comparisons[name] = dict(
+            equal=all(item["equal"] for item in ranks),
+            reference_replicas_equal=all(torch.equal(wanted_parts[0], p) for p in wanted_parts[1:]),
+            actual_replicas_equal=all(torch.equal(actual[name][0], p) for p in actual[name][1:]),
+            ranks=ranks,
+        )
+    return comparisons
+
+
+def main():
+    parser = argparse.ArgumentParser(__doc__)
+    parser.add_argument("--layer", type=int, default=0)
+    parser.add_argument("--length", type=int, default=4096)
+    parser.add_argument("--steps", type=int, default=128)
+    parser.add_argument("--dtype", choices=["bfloat16", "bfloat8_b"], default="bfloat8_b")
+    parser.add_argument("--output-only", action="store_true")
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    if not 1 <= args.length <= 4096 or not 1 <= args.steps <= 128:
+        parser.error("Fixture supports length1..4096 and steps1..128")
+    torch.set_num_threads(8)
+    torch.manual_seed(42)
+    root = Path(__file__).parents[1]
+    config = AutoConfig.from_pretrained(Path(__file__).parent).text_config
+    hf = load_layer(config, args.layer, True)
+    fixture = torch.load(root / f"doc/optimized_decoder/actual_text_layer{args.layer}_4096_128.pt", weights_only=True)
+    x = fixture["prefill"][:, : args.length]
+    decode = fixture["decode"][:, : args.steps]
+    extent = (args.length + args.steps + 1023) // 1024 * 1024
+    cos, sin = Gemma4TextRotaryEmbedding(config)(
+        x, torch.arange(extent)[None], layer_type=config.layer_types[args.layer]
+    )
+    block = 32
+    pages = extent // block
+    table = torch.randperm(pages, dtype=torch.int32)[None]
+    result = dict(
+        command=sys.argv,
+        runtime_sha256=hashlib.sha256((root / "tt/multichip_decoder.py").read_bytes()).hexdigest(),
+        diagnostic_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        dtype=args.dtype,
+        layer=args.layer,
+        output_only=args.output_only,
+        length=args.length,
+        steps=args.steps,
+        completed_steps=0,
+        passed=False,
+        limitation="Retained tensor handles change allocator lifetimes; this run does not measure performance.",
+    )
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=16777216)
+    trace_id = None
+    try:
+        mapper = ttnn.ReplicateTensorToMesh(mesh)
+
+        def upload(value, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
+            return ttnn.from_torch(value, device=mesh, dtype=dtype, layout=layout, mesh_mapper=mapper)
+
+        cls = MultichipDecoder if args.output_only else BoundaryDecoder
+        decoder = cls.from_state_dict(
+            hf.state_dict(),
+            hf_config=config,
+            layer_idx=args.layer,
+            mesh_device=mesh,
+            topology=ttnn.Topology.Linear,
+            fused_tail=True,
+            hybrid_experts=True,
+            optimized_shared=True,
+            shared_geometry=1,
+            grouped_moe_reduce=True,
+        )
+        attention = decoder.layer.self_attn
+        dtype = getattr(ttnn, args.dtype)
+        if args.output_only:
+            original_reduce = attention.reduce
+            attention.reduce = lambda value: original_reduce(ttnn.typecast(value, dtype))
+        else:
+            decoder.install_attention_probe(dtype)
+        projection = attention.source.weights.wqkv
+        projection = getattr(projection, "projection", projection)
+        for owner, field in ((attention, "output_compute"), (projection, "decode_compute")):
+            original = getattr(owner, field)
+            setattr(
+                owner,
+                field,
+                ttnn.init_device_compute_kernel_config(
+                    mesh.arch(),
+                    math_fidelity=ttnn.MathFidelity.LoFi,
+                    math_approx_mode=original.math_approx_mode,
+                    fp32_dest_acc_en=original.fp32_dest_acc_en,
+                    packer_l1_acc=original.packer_l1_acc,
+                    dst_full_sync_en=original.dst_full_sync_en,
+                ),
+            )
+        cfg = attention.config
+        cache = [
+            upload(torch.zeros(pages, cfg.num_key_value_heads, block, cfg.head_dim), ttnn.bfloat8_b) for _ in range(2)
+        ]
+        page_table = upload(table, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        rope = tuple(upload(t.unsqueeze(0)) for t in (cos, sin))
+        rope_decode = tuple(upload(t.squeeze(0), layout=ttnn.ROW_MAJOR_LAYOUT) for t in (cos, sin))
+        dx = upload(x.unsqueeze(0))
+        # The original runner performs one validation and three timed prefills.
+        for _ in range(4):
+            with device_only():
+                y = decoder.prefill_forward(dx, rope_mats=rope, page_table=page_table, kv_cache=cache)
+            ttnn.synchronize_device(mesh)
+            del y
+        token = upload(decode[:, :1].unsqueeze(0))
+        pos = upload(torch.tensor([[args.length]], dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        cache_pos = upload(torch.tensor([args.length], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+
+        def forward():
+            with device_only():
+                return decoder.decode_forward(
+                    token,
+                    rope_mats=rope_decode,
+                    current_pos=pos,
+                    cache_pos=cache_pos,
+                    page_table=page_table,
+                    kv_cache=cache,
+                )
+
+        for _ in range(2):
+            y = forward()
+        trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
+        y = forward()
+        ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+        tensors = {"output": y} if args.output_only else decoder.boundaries
+        result["boundaries"] = {
+            name: dict(
+                logical_shape=list(tensor.shape),
+                padded_shape=list(tensor.padded_shape),
+                dtype=str(tensor.dtype),
+                memory=str(tensor.memory_config()),
+            )
+            for name, tensor in tensors.items()
+        }
+        for step in range(args.steps):
+            for value, dst, dtype, layout in (
+                (decode[:, step : step + 1].unsqueeze(0), token, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+                (torch.tensor([[args.length + step]], dtype=torch.int32), pos, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+                (torch.tensor([args.length + step], dtype=torch.int32), cache_pos, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+            ):
+                host = ttnn.from_torch(value, dtype=dtype, layout=layout, mesh_mapper=mapper)
+                ttnn.copy_host_to_device_tensor(host, dst)
+            ttnn.synchronize_device(mesh)
+            ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=True)
+            reference = snapshot(tensors)
+            ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=True)
+            actual = snapshot(tensors)
+            comparisons = compare(reference, actual)
+            first_difference = next((name for name, item in comparisons.items() if not item["equal"]), None)
+            output = comparisons["output"]
+            nonfinite = any(item["reference_nonfinite"] or item["actual_nonfinite"] for item in output["ranks"])
+            replicas_differ = not (output["reference_replicas_equal"] and output["actual_replicas_equal"])
+            result["completed_steps"] = step + 1
+            if first_difference is not None or replicas_differ or nonfinite:
+                result["failure"] = dict(
+                    tp=4,
+                    step=step,
+                    absolute_position=args.length + step,
+                    first_different_boundary=first_difference,
+                    output_replicas_differ=replicas_differ,
+                    output_nonfinite=nonfinite,
+                    comparisons=comparisons,
+                )
+                tensor_path = args.output.with_suffix(".pt")
+                torch.save(dict(reference=reference, actual=actual, input=decode[:, step : step + 1]), tensor_path)
+                result["failure_tensors"] = str(tensor_path)
+                print("REPLAY_BOUNDARY_FAILURE", json.dumps(result["failure"]), flush=True)
+                break
+        else:
+            result["passed"] = True
+        args.output.write_text(json.dumps(result, indent=2) + "\n")
+        print(json.dumps({k: v for k, v in result.items() if k not in ("boundaries", "failure")}), flush=True)
+        assert result["passed"], result.get("failure")
+    finally:
+        if trace_id is not None:
+            ttnn.release_trace(mesh, trace_id)
+        ttnn.close_mesh_device(mesh)
+
+
+if __name__ == "__main__":
+    main()

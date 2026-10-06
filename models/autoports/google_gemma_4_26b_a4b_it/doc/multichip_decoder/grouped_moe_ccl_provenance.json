@@ -1,0 +1,6 @@
+{
+  "status": "unapplied CPU syntax check only",
+  "base_runtime_sha256": "070613ddc32b5cc8a22fd92a64cb541de9a9f27152852f1caad0843d1d06903d",
+  "candidate_sha256": "95c118f2b37137e53eec1eeed42b927790501a1148958650449c53955383c4b2",
+  "patch_sha256": "bebc4c40206e1a35c046cb0d0ac97cad496dac0583f16f5d1c400fb73278e0b4"
+}

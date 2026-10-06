@@ -1,0 +1,42 @@
+{
+  "source_only": true,
+  "source_artifacts": [
+    "tracy/sliding/raw_retry/.logs/tracy_ops_data.csv",
+    "tracy/sliding/ops.csv"
+  ],
+  "full_json_messages": 365,
+  "compact_messages": 5786,
+  "serialized_flags": {
+    "false": 6151
+  },
+  "unique_op_device_hash_keys": 365,
+  "phase_counts": {
+    "setup": {
+      "ops": 2530,
+      "new_hashes": 195
+    },
+    "PERF_PREFILL": {
+      "ops": 2501,
+      "new_hashes": 0
+    },
+    "PERF_PREFILL_END": {
+      "ops": 560,
+      "new_hashes": 170
+    },
+    "decode_capture": {
+      "ops": 560,
+      "new_hashes": 0
+    }
+  },
+  "prefill_sequence_matches_warmup_suffix": true,
+  "decode_capture_sequence_matches_warmup": true,
+  "measured_csv_flags": {
+    "PERF_PREFILL": {
+      "False": 2501
+    },
+    "PERF_DECODE": {
+      "False": 71680
+    }
+  },
+  "runtime_cache_miss_guard": "pending; not executed by this audit"
+}

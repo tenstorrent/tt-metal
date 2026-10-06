@@ -1,0 +1,40 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
+@@ -166,6 +166,13 @@
+             fp32_dest_acc_en=False,
+             packer_l1_acc=False,
+         )
++        self.weighted_mix_compute = ttnn.init_device_compute_kernel_config(
++            mesh_device.arch(),
++            math_fidelity=ttnn.MathFidelity.HiFi4,
++            math_approx_mode=False,
++            fp32_dest_acc_en=True,
++            packer_l1_acc=False,
++        )
+ 
+     def _chunk(self, x, routing, decode):
+         if not decode:
+@@ -199,14 +206,15 @@
+                 hidden = ttnn.mul(ttnn.gelu(gate, variant=ttnn.GeluVariant.Accurate), up)
+         down = ttnn.sparse_matmul(hidden, self.down, program_config=self.down_config, is_input_a_sparse=True, **common)
+         down = ttnn.reshape(down, (1, self.config.num_experts, 1, self.config.hidden_size))
+-        return ttnn.matmul(
+-            routing,
+-            ttnn.permute(down, (0, 2, 1, 3)),
+-            dtype=ttnn.bfloat16,
+-            memory_config=self.mix_memory,
+-            program_config=self.mix_program,
+-            compute_kernel_config=self.mix_compute,
+-        )
++        weight_columns = ttnn.permute(routing, (0, 3, 2, 1))
++        result = ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(
++            down,
++            weight_columns,
++            dim=1,
++            memory_config=ttnn.L1_MEMORY_CONFIG,
++            compute_kernel_config=self.weighted_mix_compute,
++        )
++        return ttnn.to_memory_config(result, self.mix_memory)
+ 
+     def _active_prefill(self, x, routing):
+         # Each batch computes only the union of its tokens' selected experts.

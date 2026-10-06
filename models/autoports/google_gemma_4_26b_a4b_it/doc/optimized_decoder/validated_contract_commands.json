@@ -1,0 +1,103 @@
+[
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_contract",
+      "--contract",
+      "batched",
+      "--layer",
+      "5",
+      "--input-fixture",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "--batch",
+      "32",
+      "--heterogeneous-positions",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/validated_batched_layer5.json"
+    ],
+    "returncode": 0,
+    "watcher": false,
+    "seconds": 10.433037042617798
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_contract",
+      "--contract",
+      "prefix_continuation",
+      "--layer",
+      "5",
+      "--input-fixture",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/validated_prefix_continuation_layer5.json"
+    ],
+    "returncode": 0,
+    "watcher": false,
+    "seconds": 6.97646164894104
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_contract",
+      "--contract",
+      "request_reuse",
+      "--layer",
+      "5",
+      "--input-fixture",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/validated_request_reuse_layer5.json"
+    ],
+    "returncode": 0,
+    "watcher": false,
+    "seconds": 11.285557746887207
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_contract",
+      "--contract",
+      "prefix_continuation",
+      "--layer",
+      "5",
+      "--input-fixture",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "--default-overrides",
+      "{\"kv_cache_dtype\":\"bfloat16\"}",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/validated_bf16_cache_prefix_layer5.json"
+    ],
+    "returncode": 0,
+    "watcher": false,
+    "seconds": 7.827061176300049
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_contract",
+      "--contract",
+      "long_context",
+      "--layer",
+      "5",
+      "--length",
+      "262144",
+      "--threads",
+      "4",
+      "--input-fixture",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_long/actual_text_layer5_262144_0.pt",
+      "--reference-file",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_long/actual_text_layer5_262144_reference.pt",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/validated_long_262144_layer5.json"
+    ],
+    "returncode": 1,
+    "watcher": false,
+    "seconds": 259.5343403816223
+  }
+]

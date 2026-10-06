@@ -1,0 +1,43 @@
+/home/container_app_user/tt-metal/python_env/lib/python3.10/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.7.0) or chardet (6.0.0.post1)/charset_normalizer (3.5.1) doesn't match a supported version!
+  warnings.warn(
+/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/benchmark_score_partial.py:47: DeprecationWarning: get_task_dict is deprecated. Use TaskManager.load() instead.
+  tasks = flatten(get_task_dict(config["tasks"]))
+{
+  "status": "incomplete_accuracy_per_question_only",
+  "harness_version": "0.4.13",
+  "manifest_sha256": "ef36dff6d479319adc5b0438e79acc4e139bd108300e209479ab6ee864c4c994",
+  "groups": {
+    "mmlu_pro": {
+      "completed_samples": 8,
+      "missing_samples": 272,
+      "stop_responses": 8,
+      "length_responses": 0,
+      "empty_final_length_responses": 0,
+      "selected_samples": 280,
+      "dataset_samples": 12032,
+      "scope": "incomplete_frozen_subset",
+      "aggregate_score": null
+    },
+    "ifeval": {
+      "completed_samples": 0,
+      "missing_samples": 256,
+      "stop_responses": 0,
+      "length_responses": 0,
+      "empty_final_length_responses": 0,
+      "selected_samples": 256,
+      "dataset_samples": 541,
+      "scope": "incomplete_frozen_subset",
+      "aggregate_score": null
+    }
+  },
+  "retained_inputs": 536,
+  "verified_completed_request_hashes": 8,
+  "questions_file": "partial-accuracy-questions.jsonl",
+  "questions_sha256": "7f62635083543ba037ba4c416bd81fe03a4a7fe2b01783b9668ea40b6bde0199",
+  "scoring": "Actual upstream task.apply_filters() and task.process_results(); no copied filters or scorer.",
+  "limitations": [
+    "No aggregate score: completed answers are a completion-biased subset.",
+    "Missing answers remain explicitly unscored; this cannot satisfy the benchmark stage.",
+    "Original task results/sample artifacts are not created or overwritten."
+  ]
+}

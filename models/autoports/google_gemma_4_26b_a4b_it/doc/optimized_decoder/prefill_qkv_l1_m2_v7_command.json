@@ -1,0 +1,33 @@
+{
+  "command": [
+    "python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_qkv_l1_m2",
+    "--pairs",
+    "8",
+    "--defaults",
+    "--real",
+    "--layer",
+    "5",
+    "--length",
+    "4096",
+    "--decode",
+    "--steps",
+    "128",
+    "--input-fixture",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+    "--verify-program-cache",
+    "--timing",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_qkv_l1_m2_v7_layer5.json"
+  ],
+  "runtime_sha256": "daa82a4a5197a007ccd5d29d912f082e695fd37a596578f25fba96a6694e625b",
+  "environment_overrides": {
+    "OMP_NUM_THREADS": "4",
+    "MKL_NUM_THREADS": "4",
+    "HF_HUB_OFFLINE": "1"
+  },
+  "profiler_and_watcher_unset": true,
+  "returncode": 0,
+  "output_sha256": "effb802ee13e441b302bbe5875d0ab839071dd6f92ba1129f0ebd5b8abc4abac"
+}

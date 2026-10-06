@@ -1,0 +1,8 @@
+{
+  "measured_runtime_sha256": "0dceb74b26029a63dc9a2747c35906de3320e1bf52f4068e4a559eaba2dd577a",
+  "formatted_runtime_sha256": "a7c8370500079afd74548628186a565c758a2fd4b37b07993988938ea4479efb",
+  "baseline_commit": "a9259624f2",
+  "starting_commit": "2e3a1779d3",
+  "ast_equivalent_except_import_order": true,
+  "formatting": "black and isort; top-level import order changed, remaining AST identical"
+}

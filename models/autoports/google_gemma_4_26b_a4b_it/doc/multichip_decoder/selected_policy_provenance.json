@@ -1,0 +1,22 @@
+{
+  "models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py": {
+    "base_sha256": "49cd4b3e47aeca24389fd58c29262556d05ec35cf0f0d80c8077c02af51f88e5",
+    "candidate_sha256": "8b59370cda6f4ff88157de123123509036f2e91e8054000c809752e21f933175",
+    "candidate_snapshot": "selected_policy_multichip_decoder.py.txt"
+  },
+  "models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py": {
+    "base_sha256": "acf7c7991775248983d779bc6e782d6f803516528c998213d01aeb4a05138876",
+    "candidate_sha256": "06f0a0573dbd14e852be4a27c88b72faa610a51961b90cf33365025747898581",
+    "candidate_snapshot": "selected_policy_run_multichip_decoder.py.txt"
+  },
+  "models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_stack.py": {
+    "base_sha256": "ef3a5f297b197ea1c70eb7e5d97860f131ec53cd257381065d74d5b5de15c81b",
+    "candidate_sha256": "7e5e1ad3b084214a15b44e22ede77637f1c3f3c96103f5fa2bdc8d1564dbb5cc",
+    "candidate_snapshot": "selected_policy_test_multichip_stack.py.txt"
+  },
+  "models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_contracts.py": {
+    "base_sha256": "4ff91b32bf1bdd761e6199425217995c03b6e88281b5c67efaa9704b414bf409",
+    "candidate_sha256": "b625802d77cd2d2e7794f347e2da701ec689883393908eba431fed4c678f909f",
+    "candidate_snapshot": "selected_policy_test_multichip_contracts.py.txt"
+  }
+}

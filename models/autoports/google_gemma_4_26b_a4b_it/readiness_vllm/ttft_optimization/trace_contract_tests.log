@@ -1,0 +1,59 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-9.0.3, pluggy-1.6.0 -- /home/container_app_user/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /workspace/tt-metal
+configfile: pytest.ini
+plugins: benchmark-5.2.3, timeout-2.4.0, anyio-4.15.1, cov-7.0.0, dash-2.15.0, repeat-0.9.4, split-0.11.0, github-actions-annotate-failures-0.3.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 10 items
+
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_failed_prefill_capture_closes_started_traces_and_releases_ids[first_begin] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_failed_prefill_capture_closes_started_traces_and_releases_ids[model] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_failed_prefill_capture_closes_started_traces_and_releases_ids[second_begin] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_failed_prefill_capture_closes_started_traces_and_releases_ids[sampling] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_failed_prefill_capture_closes_started_traces_and_releases_ids[second_end] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_ineligible_sampling_invalidates_prepared_state_despite_reuse[overrides0] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_ineligible_sampling_invalidates_prepared_state_despite_reuse[overrides1] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_ineligible_sampling_invalidates_prepared_state_despite_reuse[overrides2] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_ineligible_sampling_invalidates_prepared_state_despite_reuse[overrides3] PASSED
+models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_neutral_padded_greedy_parameters_keep_prepared_state PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /workspace/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.30s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_ineligible_sampling_invalidates_prepared_state_despite_reuse[overrides3]
+0.28s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_ineligible_sampling_invalidates_prepared_state_despite_reuse[overrides2]
+0.25s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_ineligible_sampling_invalidates_prepared_state_despite_reuse[overrides0]
+0.24s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_failed_prefill_capture_closes_started_traces_and_releases_ids[model]
+0.24s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_failed_prefill_capture_closes_started_traces_and_releases_ids[sampling]
+0.24s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_neutral_padded_greedy_parameters_keep_prepared_state
+0.24s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_failed_prefill_capture_closes_started_traces_and_releases_ids[second_end]
+0.23s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_ineligible_sampling_invalidates_prepared_state_despite_reuse[overrides1]
+0.23s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_failed_prefill_capture_closes_started_traces_and_releases_ids[first_begin]
+0.23s setup    models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_failed_prefill_capture_closes_started_traces_and_releases_ids[second_begin]
+
+(15 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_failed_prefill_capture_closes_started_traces_and_releases_ids[first_begin]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_failed_prefill_capture_closes_started_traces_and_releases_ids[model]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_failed_prefill_capture_closes_started_traces_and_releases_ids[second_begin]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_failed_prefill_capture_closes_started_traces_and_releases_ids[sampling]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_failed_prefill_capture_closes_started_traces_and_releases_ids[second_end]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_ineligible_sampling_invalidates_prepared_state_despite_reuse[overrides0]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_ineligible_sampling_invalidates_prepared_state_despite_reuse[overrides1]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_ineligible_sampling_invalidates_prepared_state_despite_reuse[overrides2]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_ineligible_sampling_invalidates_prepared_state_despite_reuse[overrides3]
+PASSED models/autoports/google_gemma_4_26b_a4b_it/tests/test_ttft_trace_contract.py::test_neutral_padded_greedy_parameters_keep_prepared_state
+======================== 10 passed, 2 warnings in 3.54s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

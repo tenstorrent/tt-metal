@@ -1,0 +1,2248 @@
+{
+  "format": "gzip; deterministic mtime0; exact byte-for-byte reconstruction",
+  "restore": "From this directory: python -c \"import gzip,json,pathlib; [(pathlib.Path(r['original']).write_bytes(gzip.decompress(pathlib.Path(r['archive']).read_bytes()))) for r in json.loads(pathlib.Path('evidence_archives.json').read_text())['artifacts']]\"",
+  "note": "Originals remain local. Unpack before running CPU audits that verify historical file hashes.",
+  "artifacts": [
+    {
+      "original": "actual_native_precision_commands.json",
+      "original_sha256": "5a7102ee96a66f4854b41e1129385bed03a9250524c17109d21cf5ee82f94dbb",
+      "original_bytes": 5413,
+      "archive": "actual_native_precision_commands.json.gz",
+      "archive_sha256": "cea8fbd7dff2e2f396a6a536851204065cdd4c6671819c981f55237fe25dd0dc",
+      "archive_bytes": 501,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "actual_native_qkv_commands.json",
+      "original_sha256": "0d5bf07cca7655e7a28efaac8c3b772658a1565bd2fa71949c42f2eababc6dab",
+      "original_bytes": 6450,
+      "archive": "actual_native_qkv_commands.json.gz",
+      "archive_sha256": "01bfbd6352097ad2f72594813b4b684358864c858349b527af095d9a3872d051",
+      "archive_bytes": 483,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "actual_native_role_precision_commands.json",
+      "original_sha256": "7a03c806ea40adb88832a330273486b350482b7f57c2a6ed7e5b1211078b1ec5",
+      "original_bytes": 12492,
+      "archive": "actual_native_role_precision_commands.json.gz",
+      "archive_sha256": "59fce66c9c8f3205da18274b256307f6efe66beab3477e2fe9abdbcff5dfa3e0",
+      "archive_bytes": 618,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "actual_native_sdpa_config_commands.json",
+      "original_sha256": "b4da82155ec98cd8d5b9f3632218501c40104336edc65124b974c2e6c5689f9f",
+      "original_bytes": 9876,
+      "archive": "actual_native_sdpa_config_commands.json.gz",
+      "archive_sha256": "5fd271ba6d8122bb7d35313650273ea4cd34d4d4467cf24e355c8069cbeb9188",
+      "archive_bytes": 544,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "actual_text_attention_commands.json",
+      "original_sha256": "ab7aa0a65fc92cea8fb71b9e9b9ca9f30e38fa4c3ef5ac98c5b6a6fbfb251cc9",
+      "original_bytes": 2598,
+      "archive": "actual_text_attention_commands.json.gz",
+      "archive_sha256": "24c941e082d0ac68c80f1183bf6656a4a86908803fc25629c215815f1c1dfe95",
+      "archive_bytes": 348,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "actual_text_expert_geometry_commands.json",
+      "original_sha256": "83204701263dc17f180efef669e17459be6b745df683815fe30b2aa0a19afcaf",
+      "original_bytes": 4365,
+      "archive": "actual_text_expert_geometry_commands.json.gz",
+      "archive_sha256": "092f092614a336e8ed23af104b60c85a6bb468bf144297774d7776cce1afbb88",
+      "archive_bytes": 452,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "actual_text_first_commands.json",
+      "original_sha256": "bb90c773410b898c45b7840f00aa44df6b74f566ad99dff2536b412a957a6b1b",
+      "original_bytes": 3355,
+      "archive": "actual_text_first_commands.json.gz",
+      "archive_sha256": "9ccd13ffd628adbdc3911a975ee2b02d114dfcd616ba550262832b13dd0d1621",
+      "archive_bytes": 444,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "actual_text_native_combined_commands.json",
+      "original_sha256": "3a9b97697516f417b437fb8d0f5b9715583304e771f43faf75cf78e10b4396ab",
+      "original_bytes": 3728,
+      "archive": "actual_text_native_combined_commands.json.gz",
+      "archive_sha256": "eee78ef1b1fac6e3f04e8bfb6cefbad1d0c579de66335cbac06d5bcff3c0ca32",
+      "archive_bytes": 427,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "actual_text_qkv_dram_commands.json",
+      "original_sha256": "03b0ebac59d7a8b10e06d90fb9fe42693a856571e67416b243191e03a0e2e781",
+      "original_bytes": 4342,
+      "archive": "actual_text_qkv_dram_commands.json.gz",
+      "archive_sha256": "6dbb5417b35046b6115a3ff2ff8c3dae5eb18f8f6e78d3fa66a926a1db648d61",
+      "archive_bytes": 393,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "actual_text_second_commands.json",
+      "original_sha256": "94b4ccbeec53c0f758734cad1ad6f7daf116841d626160bc4dd5140afc9922e2",
+      "original_bytes": 4017,
+      "archive": "actual_text_second_commands.json.gz",
+      "archive_sha256": "1669d86ece2f9ef8ef5da9b96c059fb8e9930bd18a01b3c7b811f2ceebfc2c2b",
+      "archive_bytes": 439,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "actual_text_stress_sliding_commands.json",
+      "original_sha256": "ec3daf1636bcabb47cfb6a50fcc27cb4d645632768799192841cd9dac5f5f5d4",
+      "original_bytes": 1718,
+      "archive": "actual_text_stress_sliding_commands.json.gz",
+      "archive_sha256": "c2079a936c312e1d03aab92edaf468281b520d29a2e57c669256f1dcc2fef665",
+      "archive_bytes": 378,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "attention_commands.json",
+      "original_sha256": "988fe6221552f890ae47c35429112d8a6c54e75bd0df10b774b14fdb381bce47",
+      "original_bytes": 5016,
+      "archive": "attention_commands.json.gz",
+      "archive_sha256": "6e66ee95e1eabd6c0569d97d35334b8e692b4dd31d0b5c228aafe183f94ec43a",
+      "archive_bytes": 373,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "black_final_all.log",
+      "original_sha256": "1bfb67447a06a422bde3c8028fe40d77d9da5c7ba773571abb538b11c10144b4",
+      "original_bytes": 57,
+      "archive": "black_final_all.log.gz",
+      "archive_sha256": "6022143b368bd1d8c9643ba1483cc9726a38e4141606e56ed937f0fcdce86e3c",
+      "archive_bytes": 75,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "black_final_check.log",
+      "original_sha256": "b2db0cd9608722a5287cdbe514a5b3f05a1849474f9af7a01220270f793f1ff1",
+      "original_bytes": 57,
+      "archive": "black_final_check.log.gz",
+      "archive_sha256": "8107e8f209f5e669e46264fce44e37636616b9898b63b6cb3e3617ff659c96fa",
+      "archive_bytes": 75,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "black_final_optional_sweep.log",
+      "original_sha256": "577af8a3742184ee0b0537d973f1c7e62d579cb8c241b67982328de9c7a5e4f1",
+      "original_bytes": 183,
+      "archive": "black_final_optional_sweep.log.gz",
+      "archive_sha256": "a55d7da69ce432cf8b8dbf91cafa2edb6bffb04d0a9aa061507b7475f1f67141",
+      "archive_bytes": 163,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "contract_commands.json",
+      "original_sha256": "b385fb0f1e60d6a1d5db04e9def182b4ae100427e8366b2f60d346e7c17503a9",
+      "original_bytes": 2412,
+      "archive": "contract_commands.json.gz",
+      "archive_sha256": "a32d0d0965f6d3d1e4fdbcc3b172aabd9e2ea05287ce6c31a325ef1b59152f9b",
+      "archive_bytes": 308,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "default_candidate_commands.json",
+      "original_sha256": "b1bdad57210a1f662a7a52ad0d4e0f9e1dc8365ddc628310491bdac7b550aefc",
+      "original_bytes": 1084,
+      "archive": "default_candidate_commands.json.gz",
+      "archive_sha256": "8b438588c4d9a119d922a31aa927022d5b5d08363b9d8607ed8f8b2e6c22699e",
+      "archive_bytes": 294,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "final_default_commands.json",
+      "original_sha256": "7110ed51768d1fbee81fd23171dc2c52f077b218de502409f636d2ef60914b38",
+      "original_bytes": 1076,
+      "archive": "final_default_commands.json.gz",
+      "archive_sha256": "b0141016a09fb44406b6164f0be1736b4d27a1e944af2dea79a53f8f5cf3dd13",
+      "archive_bytes": 291,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "final_perf_advice.json",
+      "original_sha256": "021770126a122c5db1a59a6ecc70ea8a949c46918187945aceedde7b4020e48d",
+      "original_bytes": 518318,
+      "archive": "final_perf_advice.json.gz",
+      "archive_sha256": "0c02c30a8c080f80d935801fdb9c7c4b6e3a2d17d27cf4dea1e9a09fc632c3fc",
+      "archive_bytes": 34151,
+      "reason": "preserve exact evidence bytes; report exceeds repository500KiB limit"
+    },
+    {
+      "original": "final_perf_advice_v4_historical.json",
+      "original_sha256": "9c8f0d2aaec7b663583edf25ac26d2fa111142f0e57113bf318977b503472956",
+      "original_bytes": 662272,
+      "archive": "final_perf_advice_v4_historical.json.gz",
+      "archive_sha256": "d56964ffbddbf35531ce43b40cd2c0d354166523691f05b7d6697f908efe1398",
+      "archive_bytes": 53498,
+      "reason": "preserve exact evidence bytes; report exceeds repository500KiB limit"
+    },
+    {
+      "original": "final_stress_commands.json",
+      "original_sha256": "cf3367fa0392f8bbc42ec2a9289799155384c4f1f5606429f2cab3ab91ce0589",
+      "original_bytes": 1020,
+      "archive": "final_stress_commands.json.gz",
+      "archive_sha256": "f6db4dae8b59e5927b44c2d488fe734a8e5144f8266e0c3b1eecca8dda52ae04",
+      "archive_bytes": 280,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "geometry_retry_commands.json",
+      "original_sha256": "6b9b4bd4a9c6b5740862798f0d711ed3b92266e6a74f54bb4808a79da0bf44b8",
+      "original_bytes": 10534,
+      "archive": "geometry_retry_commands.json.gz",
+      "archive_sha256": "bf68b0dd8da7aabdaf42136cbf683bd13654173675b280089aa4f1bca277ca4c",
+      "archive_bytes": 574,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "headline_attention_boundary_commands.json",
+      "original_sha256": "892dd1bd6ceb10667f6861bd22ec1ccbac735501ae3c579f917ef394b5de811f",
+      "original_bytes": 7789,
+      "archive": "headline_attention_boundary_commands.json.gz",
+      "archive_sha256": "cfcfaf25c4f813cb457d77b2949101baff4330ef3072aa55abf8eaf74447e309",
+      "archive_bytes": 564,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "headline_attention_precision_commands.json",
+      "original_sha256": "26abecad6be00afbecc708570480b5c855fe1a511e0a07de722b3e42f4b35bc0",
+      "original_bytes": 2140,
+      "archive": "headline_attention_precision_commands.json.gz",
+      "archive_sha256": "8fc43f2d9ef2edfbd3690669e64b2d207134d9490432e22f790feb2056ff3ccd",
+      "archive_bytes": 441,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "headline_dense2d_commands.json",
+      "original_sha256": "3e8d54f1d2f9ae7811e9fc70c46dac78e8d26abca5b8953e8b526f9797a0026b",
+      "original_bytes": 5688,
+      "archive": "headline_dense2d_commands.json.gz",
+      "archive_sha256": "4615eb4244da20bf239b6ebfa76f7654bee5d0a7654e678121d5c420fd19d34b",
+      "archive_bytes": 524,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "headline_final_tune_commands.json",
+      "original_sha256": "1aa95fda9315a9b228ba533a95c88cd2c16c02f7713d7365faaef201d0a92c08",
+      "original_bytes": 8438,
+      "archive": "headline_final_tune_commands.json.gz",
+      "archive_sha256": "3fb735c4fb33ba868503497f3f64a19f09870000522643249ffc0386f65fb772",
+      "archive_bytes": 588,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "headline_lanes_commands.json",
+      "original_sha256": "9be1ead8d268d5d98be6da26070d8432c6a939fa4c2c73cfc2416a734fa9ebae",
+      "original_bytes": 1106,
+      "archive": "headline_lanes_commands.json.gz",
+      "archive_sha256": "136896bcbd92665892c4f28c57e7c4d476697d8f0d0e61b890d8d1352f2cb339",
+      "archive_bytes": 407,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "headline_lanes_precision_commands.json",
+      "original_sha256": "493ec141eaf9e1933c0b418eb8bc45ec3b9399bd41be1f8b2998df14d718e12f",
+      "original_bytes": 4566,
+      "archive": "headline_lanes_precision_commands.json.gz",
+      "archive_sha256": "2bea3cdbb2017c83498d649a9b21bfc7f187808fde44d22a8f968a0814749ec0",
+      "archive_bytes": 480,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "headline_lanes_retry_commands.json",
+      "original_sha256": "f530b662de89340943b3fe427947a47e767a81a1c44df20d6fd414385ced3133",
+      "original_bytes": 2221,
+      "archive": "headline_lanes_retry_commands.json.gz",
+      "archive_sha256": "09efd24d340534248fb6f0e8c92a1f8f77e231be9c9fd101c12aed46638789e7",
+      "archive_bytes": 442,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "headline_precision_retry_commands.json",
+      "original_sha256": "65a527d4ef54b9f8e7b7f9147bd2cab352d488bf185909e0428f1d9990c35cf8",
+      "original_bytes": 2131,
+      "archive": "headline_precision_retry_commands.json.gz",
+      "archive_sha256": "b1388dd47da4814ceb9bd9105328d6b121deebebe5c584ffbf8d16cb09bc3232",
+      "archive_bytes": 438,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "headline_prefill_commands.json",
+      "original_sha256": "1e8d0e11024dfa0fc0b2b22ed81139993b0dab8ccc8175af965143e0ea6dcf96",
+      "original_bytes": 16646,
+      "archive": "headline_prefill_commands.json.gz",
+      "archive_sha256": "32aa63a45aa414a42bc2b2cca68937b06b41fbdaeee52b77b62d0d2f15c2576b",
+      "archive_bytes": 659,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "headline_sdpa_fullsync_commands.json",
+      "original_sha256": "117fe75a9df1a257976ec668b20e0f6d579c44435cf5e2318b760d58f86954f5",
+      "original_bytes": 2183,
+      "archive": "headline_sdpa_fullsync_commands.json.gz",
+      "archive_sha256": "0d100bdb9514407f50cdbf38f4f51f4907bc538b1ef0a1dbe45f3fafb1dbdd37",
+      "archive_bytes": 442,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "headline_stress_correct_geometry_commands.json",
+      "original_sha256": "c8a7755bdff731e73ac007fbc26b847e9f98448808b1cca71967f4886489f96f",
+      "original_bytes": 2506,
+      "archive": "headline_stress_correct_geometry_commands.json.gz",
+      "archive_sha256": "11b3c3ca09a89f7113580f735d53e281d4e848929bc2e834356dda961ef27aec",
+      "archive_bytes": 403,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "long_contract_commands.json",
+      "original_sha256": "0d1d36a889aa32e93b879ae5f25e925c55b0c90b70a9abfba8b068d9a01fed45",
+      "original_bytes": 2202,
+      "archive": "long_contract_commands.json.gz",
+      "archive_sha256": "6ad08a0f5cd4ebf3770d8c2d5a8a5c5552e26e04d5531617ba160cd7a226b661",
+      "archive_bytes": 323,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "minimal_hifi2_acceptance_v6/long_layer0.log",
+      "original_sha256": "a2e958198147547e09a352c34ca92d1230187690ddcf79dc5ab7f250c82ffd8d",
+      "original_bytes": 53256,
+      "archive": "minimal_hifi2_acceptance_v6/long_layer0.log.gz",
+      "archive_sha256": "7f5d463a33c45c5f3b84a2cc39200b5082577edc0a6ea55f7be322b46fa654e1",
+      "archive_bytes": 8579,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "minimal_hifi2_acceptance_v6/long_layer5.log",
+      "original_sha256": "9e685154f73479f3e0179ce2e4658d7490e064a4fbf0965b6092306848d78f50",
+      "original_bytes": 27966,
+      "archive": "minimal_hifi2_acceptance_v6/long_layer5.log.gz",
+      "archive_sha256": "f5f2592dd2f93162bab3a530233960b1accb000d76f5fed71494a2fa9307f31d",
+      "archive_bytes": 7798,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "minimal_hifi2_acceptance_v6/stress_layer0.log",
+      "original_sha256": "878eab852d353b96427a356908b0399ce3c9f6833ee8f5f91e81056a21361847",
+      "original_bytes": 45151,
+      "archive": "minimal_hifi2_acceptance_v6/stress_layer0.log.gz",
+      "archive_sha256": "341b8a01afd592b9b22347f394481a2e56a2f9448b4e73465d937d019374dfed",
+      "archive_bytes": 9344,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "minimal_hifi2_acceptance_v6/stress_layer5.log",
+      "original_sha256": "f534ddcac7e6ac4696378dc50988425871954171c7d46c8bd83dc8adc0b73c10",
+      "original_bytes": 44920,
+      "archive": "minimal_hifi2_acceptance_v6/stress_layer5.log.gz",
+      "archive_sha256": "413b207b679f1f138f2de0c829f971d817c4a24189035893689acf74a73b212a",
+      "archive_bytes": 9348,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "precommit_final.log",
+      "original_sha256": "1ceb812b5215d77c2e302892726526904a96d9f0e4900dc27a4972d38851dd08",
+      "original_bytes": 2929,
+      "archive": "precommit_final.log.gz",
+      "archive_sha256": "70cbe7483d78f478ffa4f2863fbae0db53a97fb2841212129020172d4f87917b",
+      "archive_bytes": 668,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "precommit_final_all.log",
+      "original_sha256": "1ceb812b5215d77c2e302892726526904a96d9f0e4900dc27a4972d38851dd08",
+      "original_bytes": 2929,
+      "archive": "precommit_final_all.log.gz",
+      "archive_sha256": "70cbe7483d78f478ffa4f2863fbae0db53a97fb2841212129020172d4f87917b",
+      "archive_bytes": 668,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "precommit_final_staged.log",
+      "original_sha256": "1ceb812b5215d77c2e302892726526904a96d9f0e4900dc27a4972d38851dd08",
+      "original_bytes": 2929,
+      "archive": "precommit_final_staged.log.gz",
+      "archive_sha256": "70cbe7483d78f478ffa4f2863fbae0db53a97fb2841212129020172d4f87917b",
+      "archive_bytes": 668,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "prefill_boundary_v8_optimized_layer5_1023.log",
+      "original_sha256": "a160ff31d2652ecc9c3b8003ae2fb527be9699f532a19e61f6a5f19ee9d53154",
+      "original_bytes": 13576,
+      "archive": "prefill_boundary_v8_optimized_layer5_1023.log.gz",
+      "archive_sha256": "c16a342a108ec1dafcb00d7937dc9075e66ec8b48a89c9f4a1aa4c945b32f75b",
+      "archive_bytes": 3075,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "prefill_boundary_v8_optimized_layer5_1024.log",
+      "original_sha256": "78356727cdd759df7ef4cf3b2d1308335c2c953066e4da587a70440f8f67d169",
+      "original_bytes": 13581,
+      "archive": "prefill_boundary_v8_optimized_layer5_1024.log.gz",
+      "archive_sha256": "248abd6fa07a201efe0adc72d9515e3561da39faa1c66cd57bc738070bebef04",
+      "archive_bytes": 3074,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "prefill_boundary_v8_optimized_layer5_1025.log",
+      "original_sha256": "7a3fb044288bec0ac05ab98a2592810c30cffab497a512b8fb30e1bec77495b1",
+      "original_bytes": 13752,
+      "archive": "prefill_boundary_v8_optimized_layer5_1025.log.gz",
+      "archive_sha256": "6bfcba1cca18b0638de68809964efe35fad09c03e092ebf4cf7e3519d2f6b868",
+      "archive_bytes": 3149,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "prefill_boundary_v8_optimized_layer5_65.log",
+      "original_sha256": "31e1eb9c7ce90c3f43bf2d7cea62dc4f1a9719adfdbe01c02bcbc1436b1ebfa7",
+      "original_bytes": 13546,
+      "archive": "prefill_boundary_v8_optimized_layer5_65.log.gz",
+      "archive_sha256": "3c9a0551c239bccc4b89400dd1dae09f8829ca45ccb04946ee8848ebed9ad3ee",
+      "archive_bytes": 3071,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "prefill_down4_long_commands.json",
+      "original_sha256": "dfc63e7592304415fc6143a33ff386868ba93015a3637ba6bf8e995bc6b747e5",
+      "original_bytes": 1158,
+      "archive": "prefill_down4_long_commands.json.gz",
+      "archive_sha256": "059f7d9455e07b891b0f015f5e126d966774db2011b95b2b2422501b7a4730de",
+      "archive_bytes": 312,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "prefill_geometry_commands.json",
+      "original_sha256": "f105273356bed15efebfa01320e5705cce12b3b54d5e08f239eb1530a293024d",
+      "original_bytes": 3908,
+      "archive": "prefill_geometry_commands.json.gz",
+      "archive_sha256": "08b7eb42aeb278a152674ae124e7ad198068d834608abb01de2a778791c926a1",
+      "archive_bytes": 482,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "prefill_lifetime_command.json",
+      "original_sha256": "c67aa851b331d4d6bba9d7152fbbaead7b884a7354d64ef22d2f064cb8a6853a",
+      "original_bytes": 1199,
+      "archive": "prefill_lifetime_command.json.gz",
+      "archive_sha256": "e3fe72e2b535f476f9ffac428e9c2e941d0c68e6cb2269e97108a7e969502cff",
+      "archive_bytes": 425,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "prefill_qkv_l1_m2_v7_layer5.log",
+      "original_sha256": "632cc24e3daa4b1d8c46680114ade8bd057a87f676c2452e53fe4ad51b6ef18c",
+      "original_bytes": 20759,
+      "archive": "prefill_qkv_l1_m2_v7_layer5.log.gz",
+      "archive_sha256": "09c3a9f0b4c7a9cbf0d7b7293a18875af0ab36e34d58cb14b27e3865dac98086",
+      "archive_bytes": 4642,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "prefill_qkv_l1_n4_v7_layer5.log",
+      "original_sha256": "dafc551a8d9e8351ff669d804e74bf574985fe7f3d9531f820b3fa4350ec41aa",
+      "original_bytes": 20779,
+      "archive": "prefill_qkv_l1_n4_v7_layer5.log.gz",
+      "archive_sha256": "ce76539053feb6e2ee5c20ff9cd392b09d5d6e7548b271c721a9e64be0cdfe64",
+      "archive_bytes": 4646,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "prefill_qkv_l1_v7_layer5.log",
+      "original_sha256": "7f49e1ba11c37dd606cd4784920fd725c1ef0c190c329a66d6e8f923d8b5238e",
+      "original_bytes": 15389,
+      "archive": "prefill_qkv_l1_v7_layer5.log.gz",
+      "archive_sha256": "04fe7c62d7819aca1e2128e68d4c3e910d979b60dd554bf3b3d5852a55588f06",
+      "archive_bytes": 3438,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "prefill_qkv_m2_grid_v7_layer5.log",
+      "original_sha256": "373b28f4e7ce77f60f9950b6490c1fd4b547803fc37b9b3f133b919a9f246501",
+      "original_bytes": 20759,
+      "archive": "prefill_qkv_m2_grid_v7_layer5.log.gz",
+      "archive_sha256": "5028439e3e27b819ba279779fb94a32abf7d8d395ec368374409fb306ae69c49",
+      "archive_bytes": 4645,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "prefill_qkv_m2_placement_v7_layer5.log",
+      "original_sha256": "d99132b2e70b3934a35e1b1a40fa00c9dd1cc0f67ef5e93abc0b44cf38d34680",
+      "original_bytes": 20768,
+      "archive": "prefill_qkv_m2_placement_v7_layer5.log.gz",
+      "archive_sha256": "c78bfabeeeefbf5604d3789eddb56caf5a1f4452ce4a0d72e718904b79a537a2",
+      "archive_bytes": 4634,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "prefill_qkv_m2_placement_v7_layer5_65.log",
+      "original_sha256": "f7ea8dfed5bee880c5e0be8c7d87fc2cd4322eec90385dd2ee198ee12e4b7051",
+      "original_bytes": 13423,
+      "archive": "prefill_qkv_m2_placement_v7_layer5_65.log.gz",
+      "archive_sha256": "823c5722a30712c07f70eaa78da7dbf553339fb9401cf1de6bdc6f29cd33b41c",
+      "archive_bytes": 3085,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "prefill_qkv_producer_v7_layer5.log",
+      "original_sha256": "9e449563de1eceb68bc58812c98d1371fb2c68dd75b12a5960a9c2759cd7c837",
+      "original_bytes": 20750,
+      "archive": "prefill_qkv_producer_v7_layer5.log.gz",
+      "archive_sha256": "e6a219bb6719b34a4a5683be9d5f93da405aa9ec3435d1290b3ade1f3d7bb20a",
+      "archive_bytes": 4649,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "prefill_router_v8/layer0_hifi2.log",
+      "original_sha256": "464d92a22550f375229d50d066a85422c74989b8b1599f0e0433a25016ebfcf0",
+      "original_bytes": 20994,
+      "archive": "prefill_router_v8/layer0_hifi2.log.gz",
+      "archive_sha256": "707f35284331e85ac5bab73686c3378b8b1e5ff60d68405410947059b827099b",
+      "archive_bytes": 4672,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "prefill_router_v8/layer0_producer_l1.log",
+      "original_sha256": "1af0a9afd9a659f1192ca980ed262f60b25c4fb5f0f2f0b619d35bf046d70cac",
+      "original_bytes": 21019,
+      "archive": "prefill_router_v8/layer0_producer_l1.log.gz",
+      "archive_sha256": "fc0a4d458b589825c7aff26ab4b8de73ee8f62295dc72d0ca82ef8c47cdba24b",
+      "archive_bytes": 4673,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "prefill_router_v8/layer5_hifi2.log",
+      "original_sha256": "33c187be89967ce90276a66b8253645ac1c6ccdfa9d0105d315d6997bc0fc71e",
+      "original_bytes": 20829,
+      "archive": "prefill_router_v8/layer5_hifi2.log.gz",
+      "archive_sha256": "e4665e3b10b07f07fea06ade86220634123635796c0020c0431bc0e474b16f4f",
+      "archive_bytes": 4649,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "prefill_router_v8/layer5_producer_l1.log",
+      "original_sha256": "af38ab745329b8181017f45f48db7c39093774d6ee30e2a6c5c91fcc05b67d5c",
+      "original_bytes": 20820,
+      "archive": "prefill_router_v8/layer5_producer_l1.log.gz",
+      "archive_sha256": "b8dd692723321e3e494359a1061943981e9ecb3cc803c39d80be0408d82c5508",
+      "archive_bytes": 4647,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "pytest_validated_v5.log",
+      "original_sha256": "d441692675fabba131a55223f251e3b429bc34627724005204f187f9abd3b6ea",
+      "original_bytes": 66654,
+      "archive": "pytest_validated_v5.log.gz",
+      "archive_sha256": "c9df7422edaa37a616e8c12977fd9a111fefb630355820bb53e633943df558e0",
+      "archive_bytes": 5444,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "pytest_validated_v7.log",
+      "original_sha256": "afcebcb891c1f1123fd52d0b1772a3aa46559e9aaa395a4ec943002bf6c4feea",
+      "original_bytes": 67389,
+      "archive": "pytest_validated_v7.log.gz",
+      "archive_sha256": "710a89ef1a4b73e56ef0976158a003c345a1c2f468fb3d7650864fc5f34e3c5a",
+      "archive_bytes": 5470,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "pytest_validated_v8.log",
+      "original_sha256": "ba173a397dc94a76ff2cbd15adfd9c2ef910215cb46f32e262491604a1a1ce6b",
+      "original_bytes": 67390,
+      "archive": "pytest_validated_v8.log.gz",
+      "archive_sha256": "c7897532d6aab7582723db266d07b82feb89eca6059431d5a2bc37b8016ec90f",
+      "archive_bytes": 5479,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "qkv_geometry_commands.json",
+      "original_sha256": "d5d4977893fbda7d7b231abde2fdee06476249aa8092deb0d6e94b82b1ad294f",
+      "original_bytes": 20314,
+      "archive": "qkv_geometry_commands.json.gz",
+      "archive_sha256": "e2ebba92168a11bcae18c30c8ba35a2407af72b70cc3c1aaa8c4225a132462b6",
+      "archive_bytes": 664,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "reader_cpu_final.log",
+      "original_sha256": "921b60a7fd52e978fbb551cacd29df2d6708879400278e1fcc70fceeb0c6f8e0",
+      "original_bytes": 101,
+      "archive": "reader_cpu_final.log.gz",
+      "archive_sha256": "199711f9f11966bdd0300b64dc8e1e7d764add50dca339e3905086d2287b8ee7",
+      "archive_bytes": 54,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "role_commands.json",
+      "original_sha256": "fd10488a7212e3781dab09caf11407629883a01a46914b3f6ab7607690be9e3c",
+      "original_bytes": 6387,
+      "archive": "role_commands.json.gz",
+      "archive_sha256": "295aaf03aac485e73342a319e3ffca0b21b33005e919f4c05fb079488e450872",
+      "archive_bytes": 491,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "run_minimal_acceptance.py",
+      "original_sha256": "b4ffdc2241aba78dd07338685864fcefcf3dfb16633992c56cba4b8ce6b29681",
+      "original_bytes": 1853,
+      "archive": "run_minimal_acceptance.py.gz",
+      "archive_sha256": "1e04468e922cd18101fdfc713d23290480044ad1a1e12c0ddd5c96fe8cdcfbbc",
+      "archive_bytes": 890,
+      "reason": "preserve exact evidence bytes; historical executed source snapshot"
+    },
+    {
+      "original": "run_minimal_stress.py",
+      "original_sha256": "3918ea5b054d4597aec451063a7fd820dc4b5a7c21474b63e81de76c93cbcb69",
+      "original_bytes": 1345,
+      "archive": "run_minimal_stress.py.gz",
+      "archive_sha256": "6293532fa3eae4c7566d22d02030f1455bf4e8a6c12253dbb6e9ffb19308a57f",
+      "archive_bytes": 749,
+      "reason": "preserve exact evidence bytes; historical executed source snapshot"
+    },
+    {
+      "original": "run_operator_audits.py",
+      "original_sha256": "1e6077f9ef0b9a150754fa7c3dd5b23649fd482414237b22d7051cd002fa3a17",
+      "original_bytes": 4207,
+      "archive": "run_operator_audits.py.gz",
+      "archive_sha256": "991956c0af401b42e092f22c124e77f9c2a5bc1b6faa9660f55389a9b8219045",
+      "archive_bytes": 1615,
+      "reason": "preserve exact evidence bytes; historical executed source snapshot"
+    },
+    {
+      "original": "run_prefill_boundaries.py",
+      "original_sha256": "02ea5c8926f59fe17b2b00841c714c0ff5992e4a47a8ef0df53189d791c1f243",
+      "original_bytes": 2832,
+      "archive": "run_prefill_boundaries.py.gz",
+      "archive_sha256": "d530ad58da76028d1a787943233ef7c5ba921e18ef9cca53a0d31e44dc3cfbd3",
+      "archive_bytes": 1212,
+      "reason": "preserve exact evidence bytes; historical executed source snapshot"
+    },
+    {
+      "original": "run_prefill_resume_controls.py",
+      "original_sha256": "a65fe6208f642d0d1ee776d4aad6b71fcd59ad4c45fb31e0eb38451759e2115d",
+      "original_bytes": 1900,
+      "archive": "run_prefill_resume_controls.py.gz",
+      "archive_sha256": "77bfcacaf82a87ba0f0e5b08465545f8de033b381b8e440acab736ec1a9a999f",
+      "archive_bytes": 951,
+      "reason": "preserve exact evidence bytes; historical executed source snapshot"
+    },
+    {
+      "original": "run_trace_allocation_controls.py",
+      "original_sha256": "7f1928a350a792c12cd1581b3f4e5e493e653c436b7ffbcecd0953c8ad110fb1",
+      "original_bytes": 1480,
+      "archive": "run_trace_allocation_controls.py.gz",
+      "archive_sha256": "3e059c71588b2e456cf493b1d887e2a538da799517569ab0297b3b5a91fdacb4",
+      "archive_bytes": 789,
+      "reason": "preserve exact evidence bytes; historical executed source snapshot"
+    },
+    {
+      "original": "run_v6_remaining.py",
+      "original_sha256": "36dac03937d1f18934670f247b12ca0e33311491e93f9cc15120d3a141a8abde",
+      "original_bytes": 691,
+      "archive": "run_v6_remaining.py.gz",
+      "archive_sha256": "c03a7a21117995a462a748b378773f4c49393896d902ac8b29ca6fd953ad00c4",
+      "archive_bytes": 439,
+      "reason": "preserve exact evidence bytes; historical executed source snapshot"
+    },
+    {
+      "original": "run_validated_v5.py",
+      "original_sha256": "d94e451ba57a3a303d24fd4ac1543684f15e55592d70ca0c67ca57d199965ec7",
+      "original_bytes": 4372,
+      "archive": "run_validated_v5.py.gz",
+      "archive_sha256": "c0884c41eac46e6618f91506557aac94be549d02c20fb72211d20694041efae3",
+      "archive_bytes": 1480,
+      "reason": "preserve exact evidence bytes; historical executed source snapshot"
+    },
+    {
+      "original": "run_validated_v6.py",
+      "original_sha256": "7a3d98e790881b5b84a39cfda0815cf70208c23c2f08192b4cc61b6d63732e7a",
+      "original_bytes": 1502,
+      "archive": "run_validated_v6.py.gz",
+      "archive_sha256": "983d2382aadef2d6192a6665605948ceeee6e8cf13fa50f0ed5221b797f7b5ec",
+      "archive_bytes": 765,
+      "reason": "preserve exact evidence bytes; historical executed source snapshot"
+    },
+    {
+      "original": "stress_combined_commands.json",
+      "original_sha256": "65f3a17c036d64a9efcc7ec906fe2272fb5fb607eb14419e8c9422c8fb13809b",
+      "original_bytes": 1391,
+      "archive": "stress_combined_commands.json.gz",
+      "archive_sha256": "f588720f80b61776e83119dcacdc2f7c10f51d91d031f1a23933bcf0a31a84cf",
+      "archive_bytes": 359,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "stress_down8_commands.json",
+      "original_sha256": "c6aba8cafbbf3503d7bb216ae262e57c2f111754f742e787b3fd15b0ba766722",
+      "original_bytes": 1350,
+      "archive": "stress_down8_commands.json.gz",
+      "archive_sha256": "d95871cb629e1c2c08abc5020289123c0cd60e406569eaf0b6835efa0d729533",
+      "archive_bytes": 316,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "stress_normoff_commands.json",
+      "original_sha256": "3c8d029e5f5dcfcbe026b42dbded185aac8e7eb1538724ecf707560f22ce416b",
+      "original_bytes": 1334,
+      "archive": "stress_normoff_commands.json.gz",
+      "archive_sha256": "8b82e6b21cae85244a2f8c6147129d48e70a9f7d476c30b17b22d941011ee03c",
+      "archive_bytes": 308,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "stress_pair_commands.json",
+      "original_sha256": "06e3d60b4d9c9a2c8630b609d7eae5482f6758fed49f6d4835244cb1c1e08631",
+      "original_bytes": 2570,
+      "archive": "stress_pair_commands.json.gz",
+      "archive_sha256": "5d74dd9a0a56488551e6d0fbc3f512a8661812c095392f35aa8b90ace0afff24",
+      "archive_bytes": 339,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "stress_terms3_commands.json",
+      "original_sha256": "9436c50c9abfa2be7f8310f4189028849d3def6e97ec985704e42fd0d3396e36",
+      "original_bytes": 1314,
+      "archive": "stress_terms3_commands.json.gz",
+      "archive_sha256": "a6788c861b2b0437805f5d000d6866ad37a5efa147523cb1e5a85bfbdcd0f1ae",
+      "archive_bytes": 305,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "stress_validated_v5_defaults.log",
+      "original_sha256": "d25971ee371668ff2847afe9ee2d8a56f3fc4e7097ee810cdf9f12afbb27a031",
+      "original_bytes": 1027,
+      "archive": "stress_validated_v5_defaults.log.gz",
+      "archive_sha256": "9bb9372b260c394bea900e0a4254d361f847a362d78d6ed979a4e50ddce2eacd",
+      "archive_bytes": 269,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "stress_validated_v5_defaults/recorded/20260926T181708.949989Z/fused_layer0.log",
+      "original_sha256": "c6c6746cfeeacc65644430ea5a7d03413652e2f504d8edb643a430c14275eab3",
+      "original_bytes": 44907,
+      "archive": "stress_validated_v5_defaults/recorded/20260926T181708.949989Z/fused_layer0.log.gz",
+      "archive_sha256": "d3e8f89f90d28161d245239dda89e8b8369d603b6e409ccfa0c0e1010568f641",
+      "archive_bytes": 8894,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "stress_validated_v5_defaults/recorded/20260926T181708.949989Z/fused_layer5.log",
+      "original_sha256": "3b4d4520fea5f9c11519b89bd0680f36be9ccf1566cefd11f5fd5208459939f2",
+      "original_bytes": 44713,
+      "archive": "stress_validated_v5_defaults/recorded/20260926T181708.949989Z/fused_layer5.log.gz",
+      "archive_sha256": "b538cec065d793683f24bbab9be0662862f06ffae3918d9080959d319b6d579a",
+      "archive_bytes": 8723,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "stress_validated_v5_defaults/recorded/20260926T181708.949989Z/optimized_layer0.log",
+      "original_sha256": "5487ee6a2ac2a837321ff2f89508a2bc82e2385c24c3871d24c816e50e2c323b",
+      "original_bytes": 44921,
+      "archive": "stress_validated_v5_defaults/recorded/20260926T181708.949989Z/optimized_layer0.log.gz",
+      "archive_sha256": "5a82a7a725c01c316b6f845f3b22a8b86a04eeb8df3e51f5e6a2156bc274ed60",
+      "archive_bytes": 9247,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "stress_validated_v5_defaults/recorded/20260926T181708.949989Z/optimized_layer5.log",
+      "original_sha256": "58d7f4ffe7f12f9357fd267e3eb4b5b923101e29e9b12d2904a6991ce05b2ebe",
+      "original_bytes": 44739,
+      "archive": "stress_validated_v5_defaults/recorded/20260926T181708.949989Z/optimized_layer5.log.gz",
+      "archive_sha256": "3e97da1ac078d90fe8cabb23a40176909d9fa47ff93ccf776c1534e3dc619ccc",
+      "archive_bytes": 9257,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "stress_validated_v7_defaults.log",
+      "original_sha256": "92246477132cbf02c265a6ebd3ebfff8faa5ac5d59ce0b467dcb75a0ce300264",
+      "original_bytes": 1027,
+      "archive": "stress_validated_v7_defaults.log.gz",
+      "archive_sha256": "c3d1b99d8430b3434ef5893d19b93ae3fe0cc1c3585f2d093a3968fba2433b20",
+      "archive_bytes": 269,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "stress_validated_v7_defaults/recorded/20260926T191747.360797Z/fused_layer0.log",
+      "original_sha256": "9a47900ea3c6c0a168a0ad4cf647fcf97d6a6b3b425639cdd1b937057c223b90",
+      "original_bytes": 45204,
+      "archive": "stress_validated_v7_defaults/recorded/20260926T191747.360797Z/fused_layer0.log.gz",
+      "archive_sha256": "c89592278e7e71edcb64f8fd5adcb145bd52b9992b32fe4747b4faa89d8a480b",
+      "archive_bytes": 9002,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "stress_validated_v7_defaults/recorded/20260926T191747.360797Z/fused_layer5.log",
+      "original_sha256": "f6da3b8b234a876b1f41aa81f60f3fdef7c09e89a1d2b65911380ae0c9606f45",
+      "original_bytes": 44836,
+      "archive": "stress_validated_v7_defaults/recorded/20260926T191747.360797Z/fused_layer5.log.gz",
+      "archive_sha256": "f2bad967053f10e187cdd0221b471b86102f1861ef003643bc91a9112dfe36a6",
+      "archive_bytes": 8751,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "stress_validated_v7_defaults/recorded/20260926T191747.360797Z/optimized_layer0.log",
+      "original_sha256": "ae0ebf8faa8ac2d07f81765d98eb94e7e7dd79293e2e45c735cfc074e11b2a85",
+      "original_bytes": 45044,
+      "archive": "stress_validated_v7_defaults/recorded/20260926T191747.360797Z/optimized_layer0.log.gz",
+      "archive_sha256": "b75badc55713e412eeba7319938ee659daa2e7d683d2e2f36392946ab5529859",
+      "archive_bytes": 9274,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "stress_validated_v7_defaults/recorded/20260926T191747.360797Z/optimized_layer5.log",
+      "original_sha256": "6318bb25046f2815156f1cf709b48a1f533081e25e2709a06ee832095266dc07",
+      "original_bytes": 44828,
+      "archive": "stress_validated_v7_defaults/recorded/20260926T191747.360797Z/optimized_layer5.log.gz",
+      "archive_sha256": "7006c0151d064ff7fd8c10442f3923531df65cc2488a5b5ff73ef659d25c28e6",
+      "archive_bytes": 9302,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "stress_validated_v8_defaults.log",
+      "original_sha256": "e6858aa120ba83975a5472512ef88f330092cdbb62164ba5f509702a776713e4",
+      "original_bytes": 1027,
+      "archive": "stress_validated_v8_defaults.log.gz",
+      "archive_sha256": "e25642f9a8ccf550926d3587062c71c54bfae18ac6ec0884e3c438ecbaa330bd",
+      "archive_bytes": 269,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "stress_validated_v8_defaults/recorded/20260926T194848.403740Z/fused_layer0.log",
+      "original_sha256": "d9d135c990b2a6c5f9232ff590f4da94dc6096441ff44df6778dca973ab76d1a",
+      "original_bytes": 45030,
+      "archive": "stress_validated_v8_defaults/recorded/20260926T194848.403740Z/fused_layer0.log.gz",
+      "archive_sha256": "bdac0d0b1f7b6f0c828ffbd774574b5bd62ba89f23a09a5cd03f5ace93fc76c0",
+      "archive_bytes": 8916,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "stress_validated_v8_defaults/recorded/20260926T194848.403740Z/fused_layer5.log",
+      "original_sha256": "fd500914dde8afc4aae98ad92064653e5162cb860985f29bc844fc8832de1392",
+      "original_bytes": 44836,
+      "archive": "stress_validated_v8_defaults/recorded/20260926T194848.403740Z/fused_layer5.log.gz",
+      "archive_sha256": "f467103255024c7a428db3f49f08facbe8dc26913740f217cd633f3fdc6190a3",
+      "archive_bytes": 8747,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "stress_validated_v8_defaults/recorded/20260926T194848.403740Z/optimized_layer0.log",
+      "original_sha256": "1b8b54f82ae56d7f312b6292470abf91e465d3bc412b3edbd0602710d3fddc11",
+      "original_bytes": 45044,
+      "archive": "stress_validated_v8_defaults/recorded/20260926T194848.403740Z/optimized_layer0.log.gz",
+      "archive_sha256": "7fab03acf7158498b29663dfe384965786fffec0ad6132e8b6419ada964b279c",
+      "archive_bytes": 9273,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "stress_validated_v8_defaults/recorded/20260926T194848.403740Z/optimized_layer5.log",
+      "original_sha256": "dd6ad79cd95187c178182f6321738f640dc2eee0a102d9a7ae990b799fecbc57",
+      "original_bytes": 44828,
+      "archive": "stress_validated_v8_defaults/recorded/20260926T194848.403740Z/optimized_layer5.log.gz",
+      "archive_sha256": "683be88f69c75d0a42825de25e2c078da68e04988c6bc64778af2cd3b1bf8fb0",
+      "archive_bytes": 9300,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "summarize_validated_v4.py",
+      "original_sha256": "cf02860ef1062c8bca23501bd8e0d463ed2fbd7599e0826b6a86610a41a8b3e6",
+      "original_bytes": 29193,
+      "archive": "summarize_validated_v4.py.gz",
+      "archive_sha256": "105827c42d0706ab512d18665d9720db3dd23473341f5c927491770ec0a19d3d",
+      "archive_bytes": 7921,
+      "reason": "preserve exact evidence bytes; historical executed source snapshot"
+    },
+    {
+      "original": "summarize_validated_v5.py",
+      "original_sha256": "d324b8c6d9cad9475ea82ad954c8044d188c5b3dd9a378dbe19bdc8ea16d9b99",
+      "original_bytes": 31339,
+      "archive": "summarize_validated_v5.py.gz",
+      "archive_sha256": "9281a4dc95c2e06d81cf53ed7b60ff4e8d6be5594e13b3ac13a9d4e1e2d3db5e",
+      "archive_bytes": 8373,
+      "reason": "preserve exact evidence bytes; historical executed source snapshot"
+    },
+    {
+      "original": "summarize_validated_v6.py",
+      "original_sha256": "00ba60543e784fdd81aa41df4447a65d4389d40841c7514362b9d6914d996718",
+      "original_bytes": 14331,
+      "archive": "summarize_validated_v6.py.gz",
+      "archive_sha256": "ca331d64caee6b5663d84de27aed45c83119af889eb08bdb6d27a92e9825a517",
+      "archive_bytes": 5182,
+      "reason": "preserve exact evidence bytes; historical executed source snapshot"
+    },
+    {
+      "original": "tight_cache_v6_layer5_1025.device.log",
+      "original_sha256": "8740fed6d653335af2da94ce31835d336f9231e10559fff232b3f2ea10541b76",
+      "original_bytes": 72645,
+      "archive": "tight_cache_v6_layer5_1025.device.log.gz",
+      "archive_sha256": "68b83a3051dd1c790b70f02f34318be141d65b7ec031553a0e3dcc81f05d301c",
+      "archive_bytes": 2911,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "tight_cache_v6_layer5_1025.log",
+      "original_sha256": "8b3f321e287b55208c954a1fdabe56b3f01c3bde07c146dbe39f68e33c6fb643",
+      "original_bytes": 14168,
+      "archive": "tight_cache_v6_layer5_1025.log.gz",
+      "archive_sha256": "f436007a65ca339037b9c8176a478072137f3d04934bdf3e7c939e0b46e4406e",
+      "archive_bytes": 3185,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "tight_cache_v6_layer5_1088_steps1.log",
+      "original_sha256": "1f0615bcb9f2cce7af01c332fa4f2e3c3a828ccc48d3dad3d7ffd466efd14820",
+      "original_bytes": 13412,
+      "archive": "tight_cache_v6_layer5_1088_steps1.log.gz",
+      "archive_sha256": "6c896be1e9a805b9fdfce8a71371ad78e13217a95082da60324eceb808e67480",
+      "archive_bytes": 3036,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "tight_cache_v6_layer5_1089_steps1.log",
+      "original_sha256": "1df0e9019b3e6197a9d578e992764158a4367f9d40ee1fb98a51f0b4c5aa553f",
+      "original_bytes": 13412,
+      "archive": "tight_cache_v6_layer5_1089_steps1.log.gz",
+      "archive_sha256": "19bc99d3f391ef93365fa4fa58191bacff851da4d635c08f796ef35630bd6377",
+      "archive_bytes": 3042,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "tight_cache_v6_layer5_1152_steps0.log",
+      "original_sha256": "bb9b39f231fcbf817dbba2e31c0363d3343930c6a34092a35798e0128c2ae1d5",
+      "original_bytes": 7202,
+      "archive": "tight_cache_v6_layer5_1152_steps0.log.gz",
+      "archive_sha256": "b7edcf88b1499dc679991a32250ea9e6c4e4ec06e3fa636bad954098228aa22c",
+      "archive_bytes": 2852,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "tight_cache_v6_layer5_1152_steps1.log",
+      "original_sha256": "2dc0365a42921bb18b6b82ea1ac577ff0e9ca08ea836705a4a4ba1562ecc300b",
+      "original_bytes": 13412,
+      "archive": "tight_cache_v6_layer5_1152_steps1.log.gz",
+      "archive_sha256": "48069afd4578d3d96010ac832160940870cd797e024cf816b2ff76acae59c84a",
+      "archive_bytes": 3037,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "tight_cache_v6_layer5_1153_steps1.log",
+      "original_sha256": "2511bff569d3b39a5633e5ab75a58cbd85f191e9199b9da0e9088069b108a13f",
+      "original_bytes": 13412,
+      "archive": "tight_cache_v6_layer5_1153_steps1.log.gz",
+      "archive_sha256": "2ceb8d019914866725d66e13d711cca2b77bc2a458049ab74d369c6fafa76c30",
+      "archive_bytes": 3037,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "tight_cache_v6_layer5_1281_steps1.device.log",
+      "original_sha256": "969b1ebec1ddff5fd3119f69171328148a32acbe0f6085f4a81e94e130f0310e",
+      "original_bytes": 145797,
+      "archive": "tight_cache_v6_layer5_1281_steps1.device.log.gz",
+      "archive_sha256": "7968e11981c9596779275d869fcc03cfe8689cb896e673dd7f66400b96fa3486",
+      "archive_bytes": 5460,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "tight_cache_v6_layer5_1281_steps1.log",
+      "original_sha256": "326c6a92d97b5e28519fb1ba54f60f8ad71083afdba0fd4b132dd66af09a45d9",
+      "original_bytes": 14885,
+      "archive": "tight_cache_v6_layer5_1281_steps1.log.gz",
+      "archive_sha256": "9682c02b5af6b0f960e22f2c9e6d560fc2bbd46c41f387bcd92d0aecd2b53c71",
+      "archive_bytes": 3301,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "tight_cache_v6_layer5_2049_steps1.log",
+      "original_sha256": "83cfbc4979e336ef56a32d160cd2877568cb44b2530185c7cb331057861181f5",
+      "original_bytes": 13412,
+      "archive": "tight_cache_v6_layer5_2049_steps1.log.gz",
+      "archive_sha256": "b36a64fa3c9ac63759460be27bf2c7c46e27c0ac1d7f4d937ef6c43c52c63c60",
+      "archive_bytes": 3033,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "tight_cache_v7_layer5_1025.device.log",
+      "original_sha256": "c901f83ff84f3ef6ad8c5662072ecb9080add6599877bdbf20a50c874df2bce5",
+      "original_bytes": 72645,
+      "archive": "tight_cache_v7_layer5_1025.device.log.gz",
+      "archive_sha256": "14a923e6fe3ee24ccd8f4893ca9fe4d410409a6062b9003df91959001d883cbd",
+      "archive_bytes": 2911,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "tight_cache_v7_layer5_1025.log",
+      "original_sha256": "43687f04e764baf7751f7e28752d572c1df07d02287c96f00219aa8ba5d022cc",
+      "original_bytes": 14184,
+      "archive": "tight_cache_v7_layer5_1025.log.gz",
+      "archive_sha256": "946dfb03fe2f26d80fdf77ed7d483994c73b7f3238e400a0e604b517adce911a",
+      "archive_bytes": 3187,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "tight_cache_v8_layer5_1025.device.log",
+      "original_sha256": "f8fcb063214d3f5908d1142c6dff7acab77eeb8de1209834a1aadb34c5672e68",
+      "original_bytes": 72645,
+      "archive": "tight_cache_v8_layer5_1025.device.log.gz",
+      "archive_sha256": "7bda522d5db4ec49d8758baf020132d4e4ab17d45c946c5e4a5fdb785f127668",
+      "archive_bytes": 2911,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "tight_cache_v8_layer5_1025.log",
+      "original_sha256": "31e70448cc995c6a1fcbe38c0ab77eed253944cd665dcc061d8c5eeb2dfd2311",
+      "original_bytes": 14184,
+      "archive": "tight_cache_v8_layer5_1025.log.gz",
+      "archive_sha256": "2d2ca6cba25dd506f531a5c4e7bad0013624ff9124edbc0b98a68c67a528d266",
+      "archive_bytes": 3183,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "trace_alloc_v5_layer0.log",
+      "original_sha256": "b8a239d37b419851621f83958385af0a887deaf495c6eb1f4aaad8d3162adaae",
+      "original_bytes": 11168,
+      "archive": "trace_alloc_v5_layer0.log.gz",
+      "archive_sha256": "ec77e17b8d5f325640145f211e5135bda72b41044e0d6c8b3c595f9737a99554",
+      "archive_bytes": 2801,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "trace_alloc_v5_layer5.log",
+      "original_sha256": "9ed120837643cebd9c319f5c8d4a2c6dd648cac1db69f90e5617fd9ba43e87a1",
+      "original_bytes": 136098,
+      "archive": "trace_alloc_v5_layer5.log.gz",
+      "archive_sha256": "4db6bf3412e41c3c64692a4afbffe4a6d63cea9b9adc62d31066a6e0138384b2",
+      "archive_bytes": 8654,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "trace_alloc_v6_layer0.log",
+      "original_sha256": "daeb0681114a53ae4ac66f09107ea8f516a4bdf7037ed5b7abb2bd58a3a4f1d0",
+      "original_bytes": 5235,
+      "archive": "trace_alloc_v6_layer0.log.gz",
+      "archive_sha256": "e228f0021e77a55488d12e4025e4f95e15f091f7cb7b79ba4e917db4ee539af6",
+      "archive_bytes": 1745,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "trace_alloc_v6_layer5.log",
+      "original_sha256": "b62a933d488abe11990a34d234c6906cd13a17f41b763934e456786a8d1e32a6",
+      "original_bytes": 5234,
+      "archive": "trace_alloc_v6_layer5.log.gz",
+      "archive_sha256": "4c1d3a870702bec65ccc0f0cfee543d945021f73e3640f69e9dbf6a4de8286c0",
+      "archive_bytes": 1739,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "tracy/actual_fused_layer0/decode_one_replay.csv",
+      "original_sha256": "a0358f88ff2bcce61a19c07de3034b21f35fbc2e660f547d09f572411dd89695",
+      "original_bytes": 247815,
+      "archive": "tracy/actual_fused_layer0/decode_one_replay.csv.gz",
+      "archive_sha256": "b3f5e40ceec648d6710d14f5446ca90363ea7f60ca99b2d238b3eaeb4e267ef3",
+      "archive_bytes": 28872,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_fused_layer0/decode_perf_report.csv",
+      "original_sha256": "10e9a3a9c3b2621dd95d098ad2cd5c127f8f50f1d8825a8e942c2b2555fc8bb5",
+      "original_bytes": 27012,
+      "archive": "tracy/actual_fused_layer0/decode_perf_report.csv.gz",
+      "archive_sha256": "6d45d5b730ca5a8656c4e67a68e57ca78a3016503b13c69fa5ba471e608e6149",
+      "archive_bytes": 5794,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_fused_layer0/decode_perf_report.txt",
+      "original_sha256": "26082fe318b55c1413e4bc9fedcb47c8c2edc0936e3fb7479eb100284c6fa9c2",
+      "original_bytes": 34474,
+      "archive": "tracy/actual_fused_layer0/decode_perf_report.txt.gz",
+      "archive_sha256": "ec9993c160660829ef117a744ba3c4a4a2ce67bde04c4be11911c9670e3eea6c",
+      "archive_bytes": 2811,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/actual_fused_layer0/prefill_perf_report.csv",
+      "original_sha256": "f768731dc65060ec91a9ababae7ff59acb192095ba9d3db6daad78b87c6e6eb8",
+      "original_bytes": 247799,
+      "archive": "tracy/actual_fused_layer0/prefill_perf_report.csv.gz",
+      "archive_sha256": "90a61c121c523e20b16cbbd60ac6016c045b5bac5794c066f7a71503371aeda8",
+      "archive_bytes": 39203,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_fused_layer0/prefill_perf_report.txt",
+      "original_sha256": "82a5ed31ddac9c0512611f5b4c2703d3b8295ca0dce9e69cee09acb959d56acb",
+      "original_bytes": 301933,
+      "archive": "tracy/actual_fused_layer0/prefill_perf_report.txt.gz",
+      "archive_sha256": "5e98f4b0378f0c492b73281ab16b7fb4c890435cd07d9e3723ea8bf7190d8968",
+      "archive_bytes": 11440,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/actual_fused_layer0/whole_layer.replays.csv",
+      "original_sha256": "96a84b8ce608a666776f78d809d682b4a568c9f17f5ab47849337f8169609444",
+      "original_bytes": 10781,
+      "archive": "tracy/actual_fused_layer0/whole_layer.replays.csv.gz",
+      "archive_sha256": "01bd0cb3d6e6c2641d3d6d9dd8af17e30fb903c123d837ce175b63e763703a5c",
+      "archive_bytes": 2830,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_fused_layer5/decode_one_replay.csv",
+      "original_sha256": "a84b0462713cf4ca358fd875edcfc98bceedb1df81b9b078efcb2693810b05f6",
+      "original_bytes": 229185,
+      "archive": "tracy/actual_fused_layer5/decode_one_replay.csv.gz",
+      "archive_sha256": "31ecfe3111dc97a7bb04cbe75f2377fb486f4cdcd1496eee6a343305c65a1a30",
+      "archive_bytes": 27215,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_fused_layer5/decode_perf_report.csv",
+      "original_sha256": "6b8fab0d0831423d773b0307c032fe199da8bb323017f6bd77f7a9f48f53b386",
+      "original_bytes": 25366,
+      "archive": "tracy/actual_fused_layer5/decode_perf_report.csv.gz",
+      "archive_sha256": "66b7626a57cc4d5c6bf87120d41d4f8264a92d0b5ffb6708bcf78bfd65257112",
+      "archive_bytes": 5537,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_fused_layer5/decode_perf_report.txt",
+      "original_sha256": "22b39ae24fe5f5ba0e689038535a1a61b3383f4297c27a3b84a3363deba63fd1",
+      "original_bytes": 31982,
+      "archive": "tracy/actual_fused_layer5/decode_perf_report.txt.gz",
+      "archive_sha256": "2c7209c73ab2657204d63a9ccc3a0ddb9884184ec64e302dd171dcf98a39c48b",
+      "archive_bytes": 2636,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/actual_fused_layer5/prefill_perf_report.csv",
+      "original_sha256": "a98ad5ec6e83fa8099cb5aa50535685e3e9725d2a0b0e70043e8a9436967b311",
+      "original_bytes": 237479,
+      "archive": "tracy/actual_fused_layer5/prefill_perf_report.csv.gz",
+      "archive_sha256": "163a58443f9ad1edb99a22ad105189f7b92b52f978a4bfffe54461302a9e47c5",
+      "archive_bytes": 37329,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_fused_layer5/prefill_perf_report.txt",
+      "original_sha256": "3a992c0fd7a3ff732a4dc87564d53dddef3a8651bbaa5ff335a3cdcaa18b2677",
+      "original_bytes": 289261,
+      "archive": "tracy/actual_fused_layer5/prefill_perf_report.txt.gz",
+      "archive_sha256": "5fab883ad0c23b4f4d39ae96952f77d691f73d3dc19cc1ebb68ea873a4411880",
+      "archive_bytes": 11013,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/actual_fused_layer5/whole_layer.replays.csv",
+      "original_sha256": "808c1674194afa3ff12fe0ea323bad08b8550abce504785800321603d3ecea3f",
+      "original_bytes": 10733,
+      "archive": "tracy/actual_fused_layer5/whole_layer.replays.csv.gz",
+      "archive_sha256": "fbb65b51d08517174dfee35f5f90c32ea39f252873b5230670482530f82f0882",
+      "archive_bytes": 2877,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_layer0/decode_one_replay.csv",
+      "original_sha256": "4a197be29952e0c6a907b86b6db8706e24f8156fe6744819419b58b76fa22ff8",
+      "original_bytes": 217151,
+      "archive": "tracy/actual_optimized_layer0/decode_one_replay.csv.gz",
+      "archive_sha256": "55f11946cbef6c03109b419ed5dafd102f080961ae5f21a67bc90b8b5eb6d624",
+      "archive_bytes": 25160,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_layer0/decode_perf_report.csv",
+      "original_sha256": "38990a294fb869a34eadf80eb45c2bc5c9fef14e1966bc4bfb4649a0a8363cef",
+      "original_bytes": 21231,
+      "archive": "tracy/actual_optimized_layer0/decode_perf_report.csv.gz",
+      "archive_sha256": "cf40ce47f43f8747f44b6c30588f47d351d9f197d85e72fe6ef73ed0d625018d",
+      "archive_bytes": 5002,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_layer0/decode_perf_report.txt",
+      "original_sha256": "4c86914c3014797313d0ba9f0dd84a793d2a7ebad3862ce8f71af0d571a61326",
+      "original_bytes": 27400,
+      "archive": "tracy/actual_optimized_layer0/decode_perf_report.txt.gz",
+      "archive_sha256": "1bfbc47087852c22b8ddf6271de0e44a2d806edd697dddb9939a80fccc7bd838",
+      "archive_bytes": 2368,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/actual_optimized_layer0/prefill_perf_report.csv",
+      "original_sha256": "475d16e80bbb1b6ccc0d8e198508f83cf6f4034be7989ab426b0d981f247d0ca",
+      "original_bytes": 405269,
+      "archive": "tracy/actual_optimized_layer0/prefill_perf_report.csv.gz",
+      "archive_sha256": "ad51266d3af4241873ea91fd1f924cad27700ba5701eadb0d75d4b97bf2eca17",
+      "archive_bytes": 60786,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_layer0/prefill_perf_report.txt",
+      "original_sha256": "c42f90d4c6e3eb2cf276e3a058c4c74f2fc53f27aa015b0944cd646a20b0f8d5",
+      "original_bytes": 525985,
+      "archive": "tracy/actual_optimized_layer0/prefill_perf_report.txt.gz",
+      "archive_sha256": "21d19cf6593a468d080648930374dc4818da7bbbfcbb8d5c8516b1e48089a2f5",
+      "archive_bytes": 17722,
+      "reason": "preserve exact evidence bytes; report exceeds repository500KiB limit"
+    },
+    {
+      "original": "tracy/actual_optimized_layer0/whole_layer.replays.csv",
+      "original_sha256": "dd98868bb552b0d1e2dc50bc76737af3bcda54b6dd4f5adfddd38870bb0b78dd",
+      "original_bytes": 11982,
+      "archive": "tracy/actual_optimized_layer0/whole_layer.replays.csv.gz",
+      "archive_sha256": "af050a4f245d925d92db7db7f28a13b2df77868656a381250e3d193614b314d9",
+      "archive_bytes": 2861,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_layer5/decode_one_replay.csv",
+      "original_sha256": "144232ca89cec0620765cea316dd63f270a961015ac3a59879d574c4d5bc28bd",
+      "original_bytes": 218700,
+      "archive": "tracy/actual_optimized_layer5/decode_one_replay.csv.gz",
+      "archive_sha256": "13561c180db0a693e36d64d3ad13f44fcc7bb998d2f980be7092ef67980543c5",
+      "archive_bytes": 24914,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_layer5/decode_perf_report.csv",
+      "original_sha256": "af6ae13fa4bf8060b31d998bd2dbcbbbcb7ccca28f63120243549a90507ef4b5",
+      "original_bytes": 21980,
+      "archive": "tracy/actual_optimized_layer5/decode_perf_report.csv.gz",
+      "archive_sha256": "013f5bfdc19906a047b5cc8df5d6c91dc5698f37f561bb9a0dc720a2d48d70ed",
+      "archive_bytes": 5035,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_layer5/decode_perf_report.txt",
+      "original_sha256": "e7c9e8f262ee84cec11a45eb1e1a744cedfe3d1612e6df6a28fbea9976e14faa",
+      "original_bytes": 28197,
+      "archive": "tracy/actual_optimized_layer5/decode_perf_report.txt.gz",
+      "archive_sha256": "bef0923700aab4492a4b86b1eb5cb022dadea136058e2847530890ed0fc64cb1",
+      "archive_bytes": 2371,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/actual_optimized_layer5/prefill_perf_report.csv",
+      "original_sha256": "efa88e22f5cca97c0a8e9a5ed892b4cb9a097cd9753ce3a7c7642053b5b682dc",
+      "original_bytes": 395017,
+      "archive": "tracy/actual_optimized_layer5/prefill_perf_report.csv.gz",
+      "archive_sha256": "40f251f006438dd60a82eca3412bfb0009b050bb46edb80e8b964e076b986a72",
+      "archive_bytes": 59094,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_layer5/prefill_perf_report.txt",
+      "original_sha256": "590d03f2aeeb76dc08f9eaa288d5dafe3c6459b79e6e61bd225206c7d62df88e",
+      "original_bytes": 513245,
+      "archive": "tracy/actual_optimized_layer5/prefill_perf_report.txt.gz",
+      "archive_sha256": "0aafa31d16578995ede402b5d2de1a57e4de077427351062aec8d861863a02e9",
+      "archive_bytes": 17163,
+      "reason": "preserve exact evidence bytes; report exceeds repository500KiB limit"
+    },
+    {
+      "original": "tracy/actual_optimized_layer5/whole_layer.replays.csv",
+      "original_sha256": "b2a556e96576dbbed88ddfd005bd2b848838fbeedc28f3080a68cc3b468b3121",
+      "original_bytes": 11996,
+      "archive": "tracy/actual_optimized_layer5/whole_layer.replays.csv.gz",
+      "archive_sha256": "0d69a971ce5a69f5ffcf80447362147c1898be233d27f5c0d66a0557b7ca4c6c",
+      "archive_bytes": 2849,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v4_layer0/decode_one_replay.csv",
+      "original_sha256": "a571db318e21afd41d2b893543dc9bbb115adde2dbb6632eb7f33998c6c0410e",
+      "original_bytes": 215947,
+      "archive": "tracy/actual_optimized_v4_layer0/decode_one_replay.csv.gz",
+      "archive_sha256": "fe5cbc13fc6e78e3a891c6a8a51f1d8e25539b8e5f30c08b1912b66735d4bc98",
+      "archive_bytes": 25083,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v4_layer0/decode_perf_report.csv",
+      "original_sha256": "a62be1b197bb7402f73f69d99ea8da042987264bfc9417de08f3452645af3f1c",
+      "original_bytes": 21082,
+      "archive": "tracy/actual_optimized_v4_layer0/decode_perf_report.csv.gz",
+      "archive_sha256": "a863362b7e4242abb5f482a76a4ea9cabab3aeeb80467aca81bba5f3cc6a03f3",
+      "archive_bytes": 4938,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v4_layer0/decode_perf_report.txt",
+      "original_sha256": "fb6a4b063c4bf645f43c646059aea731b10b9afcde9307d46ac66f6d1b1139ba",
+      "original_bytes": 27207,
+      "archive": "tracy/actual_optimized_v4_layer0/decode_perf_report.txt.gz",
+      "archive_sha256": "40f8abe2bcfda856ee7679cdd003e484bbf0b35f4935a5a892efa2225b5b31e7",
+      "archive_bytes": 2369,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/actual_optimized_v4_layer0/prefill_perf_report.csv",
+      "original_sha256": "986b9738e2bf3755edf0c5e782fc72a265764352a1ea0b944816d29ac7963df3",
+      "original_bytes": 405185,
+      "archive": "tracy/actual_optimized_v4_layer0/prefill_perf_report.csv.gz",
+      "archive_sha256": "337ac1ffb77acf3d7b2ad3f218dced7c7dcab718c6387c177af325793f184873",
+      "archive_bytes": 60905,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v4_layer0/prefill_perf_report.txt",
+      "original_sha256": "f65f25494c52ae415a6b4fa1763a1c24fef99f3ea45e7d19030bc576045492e5",
+      "original_bytes": 525841,
+      "archive": "tracy/actual_optimized_v4_layer0/prefill_perf_report.txt.gz",
+      "archive_sha256": "b8fe5fcbf8746daf473f428a6505863686155d2b9a884950d1be63e0b5f398fa",
+      "archive_bytes": 17751,
+      "reason": "preserve exact evidence bytes; report exceeds repository500KiB limit"
+    },
+    {
+      "original": "tracy/actual_optimized_v4_layer0/whole_layer.replays.csv",
+      "original_sha256": "3a90f2602706c577d4bf14856fff2bf84bfae80daba9f603ad54bc922c0677f1",
+      "original_bytes": 11897,
+      "archive": "tracy/actual_optimized_v4_layer0/whole_layer.replays.csv.gz",
+      "archive_sha256": "ffc0f607fbc78dcbb595da1be0c6c25d9e7937e7d432e4c0637636a18604bcee",
+      "archive_bytes": 2825,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v4_layer5/decode_one_replay.csv",
+      "original_sha256": "ec6dfb9793485109961ff37d96309a4a68b8068754be4e33ae933fd4cb521269",
+      "original_bytes": 218178,
+      "archive": "tracy/actual_optimized_v4_layer5/decode_one_replay.csv.gz",
+      "archive_sha256": "cad9259a154ea26c154687d0e11153043caf491733bcedb2e37a6cb811b84f0b",
+      "archive_bytes": 25023,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v4_layer5/decode_perf_report.csv",
+      "original_sha256": "275f067caca1377df3dbdc0844bf6fd3ef7f3c0e05298e23b3a86ab689eb5221",
+      "original_bytes": 21713,
+      "archive": "tracy/actual_optimized_v4_layer5/decode_perf_report.csv.gz",
+      "archive_sha256": "0d0b06917a3cbeda19b884ad9b431a6b09777a303eb0fbb504bfdc174bdfe4ce",
+      "archive_bytes": 4987,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v4_layer5/decode_perf_report.txt",
+      "original_sha256": "9b71b9ffdb9afeb2f6223cfe19b91b05ebba891b491a32b83ee43ec5a5d628dc",
+      "original_bytes": 28399,
+      "archive": "tracy/actual_optimized_v4_layer5/decode_perf_report.txt.gz",
+      "archive_sha256": "ee7a5f21dfbb9555b0c22b8ef852679c34d1dcacd08e233e39fd2d77ac653548",
+      "archive_bytes": 2500,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/actual_optimized_v4_layer5/prefill_perf_report.csv",
+      "original_sha256": "751ccdbaddbe8728cc97d23d8df35eaca71b761f5737ace6048402e96faa877c",
+      "original_bytes": 394765,
+      "archive": "tracy/actual_optimized_v4_layer5/prefill_perf_report.csv.gz",
+      "archive_sha256": "c0014cfbdae4dab413513d7ac74f0a541ba7181551c2bb1be8d63e193c897304",
+      "archive_bytes": 58882,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v4_layer5/prefill_perf_report.txt",
+      "original_sha256": "64d0adbeba4eb0ec8f21a26537ba3156805f5e9c02bf3aa31d86d55dc0f9f0b1",
+      "original_bytes": 512905,
+      "archive": "tracy/actual_optimized_v4_layer5/prefill_perf_report.txt.gz",
+      "archive_sha256": "5d29b1ab86c44fef98524340a0ad4c86eac996db32e57dcfd7e02d8a151a4cee",
+      "archive_bytes": 17248,
+      "reason": "preserve exact evidence bytes; report exceeds repository500KiB limit"
+    },
+    {
+      "original": "tracy/actual_optimized_v4_layer5/whole_layer.replays.csv",
+      "original_sha256": "600b713a679b1cdba6eb58edddf674ddcfe5dd102fdf7193a2e1f95a3376185e",
+      "original_bytes": 11894,
+      "archive": "tracy/actual_optimized_v4_layer5/whole_layer.replays.csv.gz",
+      "archive_sha256": "d4e6058cdcc845536733c8290b4917a4eac71f3b8e7e1204d659ffd2970249d3",
+      "archive_bytes": 2809,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v5_layer0/decode_one_replay.csv",
+      "original_sha256": "f65d643bdc1fd7692d144711133f8aa2ab4373f4965c21f1ab147d138465bf79",
+      "original_bytes": 215936,
+      "archive": "tracy/actual_optimized_v5_layer0/decode_one_replay.csv.gz",
+      "archive_sha256": "d40c20a9ecb4e621c4657b36e62cbeb6f9eb61235a66ce7fd768cff1822f962d",
+      "archive_bytes": 25060,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v5_layer0/decode_perf_report.csv",
+      "original_sha256": "80007d8cbae401d8bf185109383d5418855f211c59969f68afc9d16db859eb58",
+      "original_bytes": 21091,
+      "archive": "tracy/actual_optimized_v5_layer0/decode_perf_report.csv.gz",
+      "archive_sha256": "531df5da7738b967559762e9e062a0e2fa92dc8ed99dcb1f2b8c99f55d02bb74",
+      "archive_bytes": 4912,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v5_layer0/decode_perf_report.txt",
+      "original_sha256": "9c7e4d4a58f301dc350a97869474a46036d28bd32d786aeeccfe335842788cab",
+      "original_bytes": 27207,
+      "archive": "tracy/actual_optimized_v5_layer0/decode_perf_report.txt.gz",
+      "archive_sha256": "c126fb377fb7da2f62604db16a3cf5f299a911a6df68868387320efd8c3b96af",
+      "archive_bytes": 2369,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/actual_optimized_v5_layer0/prefill_perf_report.csv",
+      "original_sha256": "722bcc000cfce4011f1be69607fb40c5a480d389070d442108bddd9f61a96cec",
+      "original_bytes": 404867,
+      "archive": "tracy/actual_optimized_v5_layer0/prefill_perf_report.csv.gz",
+      "archive_sha256": "9167030c9d252ff909f1182019c79e07bef9527ffda395dc1e89db5f9dd6b8cc",
+      "archive_bytes": 60887,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v5_layer0/prefill_perf_report.txt",
+      "original_sha256": "82b154b1a98145583f73d3c834eb6940495021d59fbfcaa7de175be003eb4650",
+      "original_bytes": 525333,
+      "archive": "tracy/actual_optimized_v5_layer0/prefill_perf_report.txt.gz",
+      "archive_sha256": "11b7af01502b13fa41f5edc450d448f245c9bec131d7d6b15119d0855bd01684",
+      "archive_bytes": 17791,
+      "reason": "preserve exact evidence bytes; report exceeds repository500KiB limit"
+    },
+    {
+      "original": "tracy/actual_optimized_v5_layer0/whole_layer.replays.csv",
+      "original_sha256": "d3e7444d927df08dabc7a1483511510f00b9362de69ed032797193e326362701",
+      "original_bytes": 12156,
+      "archive": "tracy/actual_optimized_v5_layer0/whole_layer.replays.csv.gz",
+      "archive_sha256": "ad02ffea0b576cccfe02315610b6d878772dfd15caad04056a0a8be083d96f27",
+      "archive_bytes": 2808,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v5_layer5/decode_one_replay.csv",
+      "original_sha256": "352fbc3e9a8aec349a998f4ae7ae179e99ab06deae1fbfde94592920813007a0",
+      "original_bytes": 218435,
+      "archive": "tracy/actual_optimized_v5_layer5/decode_one_replay.csv.gz",
+      "archive_sha256": "5d8dff170f26edb3f554b5931ea052f0628aa36e3608d20c3e207ea09259fcad",
+      "archive_bytes": 24998,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v5_layer5/decode_perf_report.csv",
+      "original_sha256": "de39eea8f95a7ef5dada98b50f0a1caecfe9201307e1c3c99ed062919908ad76",
+      "original_bytes": 21731,
+      "archive": "tracy/actual_optimized_v5_layer5/decode_perf_report.csv.gz",
+      "archive_sha256": "69eda880c89d95adf1fead7e15553d380d0bf1e171be2f7c02f6d891dce4da9c",
+      "archive_bytes": 4967,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v5_layer5/decode_perf_report.txt",
+      "original_sha256": "23b961f694711a213b77878a6ca0f97c73c33df102d35b7e9688778c81443c1d",
+      "original_bytes": 28399,
+      "archive": "tracy/actual_optimized_v5_layer5/decode_perf_report.txt.gz",
+      "archive_sha256": "141bad8c321e2b18d50ef0080c2af37a84d13c5b0f2a32b24c53c732659cbbf9",
+      "archive_bytes": 2488,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/actual_optimized_v5_layer5/prefill_perf_report.csv",
+      "original_sha256": "d6044f7b354a14a666df6b8a5012b7145ee8df488cc1020abd1372dce7028527",
+      "original_bytes": 394385,
+      "archive": "tracy/actual_optimized_v5_layer5/prefill_perf_report.csv.gz",
+      "archive_sha256": "a04b1a031cf0c0c733fa0185e283f3b5059af97c85900d5099c7de2fb1cf4494",
+      "archive_bytes": 58995,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v5_layer5/prefill_perf_report.txt",
+      "original_sha256": "8aff3f31dd577da3e688861cde796af2d3ee6065fa42e3fca25000c44769f3b4",
+      "original_bytes": 512861,
+      "archive": "tracy/actual_optimized_v5_layer5/prefill_perf_report.txt.gz",
+      "archive_sha256": "ecb63d729f9ee8099d4a60cf05ce8713b039f357ed6c215bdfe21ef905da393d",
+      "archive_bytes": 17360,
+      "reason": "preserve exact evidence bytes; report exceeds repository500KiB limit"
+    },
+    {
+      "original": "tracy/actual_optimized_v5_layer5/whole_layer.replays.csv",
+      "original_sha256": "321f1f055174bd1ea5b1eda3bf25e5698b58f4accb8ea13f713246c8bac9bd3d",
+      "original_bytes": 12148,
+      "archive": "tracy/actual_optimized_v5_layer5/whole_layer.replays.csv.gz",
+      "archive_sha256": "bafc1ae8c4d51d7d0194945286888d7ee92871d7481407f65350173d9098f70d",
+      "archive_bytes": 2849,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v7_layer0/decode_one_replay.csv",
+      "original_sha256": "dd9f504fe2409a3caa39a3ea1a21fc9d974e6de9d1db7d15a09937d4c6d411df",
+      "original_bytes": 215696,
+      "archive": "tracy/actual_optimized_v7_layer0/decode_one_replay.csv.gz",
+      "archive_sha256": "a62ccc545222b35aa08c62808b853c72694adf545829c7b879e27a018ffa269a",
+      "archive_bytes": 25025,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v7_layer0/decode_perf_report.csv",
+      "original_sha256": "09089508768f1b2416092ab5da1472383d3b61c40c3ebe3acb0cde22b53a550d",
+      "original_bytes": 21092,
+      "archive": "tracy/actual_optimized_v7_layer0/decode_perf_report.csv.gz",
+      "archive_sha256": "6493f3b507fc57d63eeff879815951137b71a2d458b4fd5c7dedbe78913e8881",
+      "archive_bytes": 4904,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v7_layer0/decode_perf_report.txt",
+      "original_sha256": "4b90c96144c07423aeb71378c1a991ec91bb8af24f9a3c3eaafc569828aeef23",
+      "original_bytes": 27207,
+      "archive": "tracy/actual_optimized_v7_layer0/decode_perf_report.txt.gz",
+      "archive_sha256": "bb97895b06b58ba046e9876120d95491c50eac26da1a0db4f84e613fa92937c2",
+      "archive_bytes": 2372,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/actual_optimized_v7_layer0/prefill_perf_report.csv",
+      "original_sha256": "136550cc3ee0eab6c256e2385f7e13bf2abfcbd477fc4e4b7daf3a1e702ef1f0",
+      "original_bytes": 404283,
+      "archive": "tracy/actual_optimized_v7_layer0/prefill_perf_report.csv.gz",
+      "archive_sha256": "9bfd80d5cacdca4ea7bc00111a53f7af2ea0b5ba28d8d43dc3e2bdfa917b8cfa",
+      "archive_bytes": 60786,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v7_layer0/prefill_perf_report.txt",
+      "original_sha256": "c850b215270e50cd7658920172453e6b0103edb73209cc4da76752549559aaf9",
+      "original_bytes": 524745,
+      "archive": "tracy/actual_optimized_v7_layer0/prefill_perf_report.txt.gz",
+      "archive_sha256": "7e21c0ac1a9d672855339b460f1b9f6c5dd1c26d9518b997fc4dac727dfb74d6",
+      "archive_bytes": 17807,
+      "reason": "preserve exact evidence bytes; report exceeds repository500KiB limit"
+    },
+    {
+      "original": "tracy/actual_optimized_v7_layer0/whole_layer.replays.csv",
+      "original_sha256": "095e127ee2acd2b609f93f19002e4d537934e33b411b1431afb5fffb7e062ee5",
+      "original_bytes": 11865,
+      "archive": "tracy/actual_optimized_v7_layer0/whole_layer.replays.csv.gz",
+      "archive_sha256": "9d6f0d9cdd6a4de9e78b8c578eeb49cc75c06c519a423766427ff90100de9b45",
+      "archive_bytes": 2849,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v7_layer5/decode_one_replay.csv",
+      "original_sha256": "c067caa9bcdacd38052b0fd9b443f0102ddc4e3cd994d7179d07b0215115c8ed",
+      "original_bytes": 217926,
+      "archive": "tracy/actual_optimized_v7_layer5/decode_one_replay.csv.gz",
+      "archive_sha256": "6d1e8d80afa228049ff737ce61a1b6d31b6ee7ff036d10fbe8d2f1d3755f1654",
+      "archive_bytes": 25023,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v7_layer5/decode_perf_report.csv",
+      "original_sha256": "1998ff811c7ab3eeb6482097c7d43a7bee18a698d23add4987e33ebfd810f0a2",
+      "original_bytes": 21794,
+      "archive": "tracy/actual_optimized_v7_layer5/decode_perf_report.csv.gz",
+      "archive_sha256": "3800aa70aacfa1936d0d5ec7b667fd11e712b3b0b28ad19a0ef507d348a1517c",
+      "archive_bytes": 4954,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v7_layer5/decode_perf_report.txt",
+      "original_sha256": "a30c254e5fecf202552c537361e240ed1e4441388291a2fffb1db56bc02f25ec",
+      "original_bytes": 28483,
+      "archive": "tracy/actual_optimized_v7_layer5/decode_perf_report.txt.gz",
+      "archive_sha256": "beb567becb150460c7a05a451ff9c96512a40758b4c86331d2ba894b3bbe736e",
+      "archive_bytes": 2515,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/actual_optimized_v7_layer5/prefill_perf_report.csv",
+      "original_sha256": "5363ad1e7a72283b6f01db22b95fefd4c3632369dfcb0c8046a7e51c6d2a21a6",
+      "original_bytes": 394534,
+      "archive": "tracy/actual_optimized_v7_layer5/prefill_perf_report.csv.gz",
+      "archive_sha256": "c55100acb7244c0ed1764cde63c56cc140659f2608150da3f6bb7866f1331c77",
+      "archive_bytes": 58941,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v7_layer5/prefill_perf_report.txt",
+      "original_sha256": "26b620316549c76447c6cf46c9bb78d652877571a403b75fdad1fedcf30fae44",
+      "original_bytes": 512597,
+      "archive": "tracy/actual_optimized_v7_layer5/prefill_perf_report.txt.gz",
+      "archive_sha256": "1091182bdfb8039aabd338aedc3ce109144a1bb4e5306570152d0bbc0f93b07b",
+      "archive_bytes": 17246,
+      "reason": "preserve exact evidence bytes; report exceeds repository500KiB limit"
+    },
+    {
+      "original": "tracy/actual_optimized_v7_layer5/whole_layer.replays.csv",
+      "original_sha256": "25a5bfda9dea70d84fb9f5766c912e65618bfaac87c4983a2274572236816278",
+      "original_bytes": 11859,
+      "archive": "tracy/actual_optimized_v7_layer5/whole_layer.replays.csv.gz",
+      "archive_sha256": "61c08a535eaae2b4fd2fb22dd2968fe253760431070d9d7b6d8cca250f02fff4",
+      "archive_bytes": 2833,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v8_layer0/decode_one_replay.csv",
+      "original_sha256": "5f70cb66bb087a65d68a03b2a9fd3562ea0968340e26b9f776b1f3b721ce1629",
+      "original_bytes": 215697,
+      "archive": "tracy/actual_optimized_v8_layer0/decode_one_replay.csv.gz",
+      "archive_sha256": "3a3aaf510a539f974521e8f0cd6edbf027fbf871986ad1d135cef6402c4c35dd",
+      "archive_bytes": 25040,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v8_layer0/decode_perf_report.csv",
+      "original_sha256": "7dddf34dff252b25098c29a5d53baa9792a72df0097b755c30f0f691677361e9",
+      "original_bytes": 21100,
+      "archive": "tracy/actual_optimized_v8_layer0/decode_perf_report.csv.gz",
+      "archive_sha256": "fba3ddd8ffdc888f5afd0123930769ada0e2b9e936e1f5988ee261cc94819529",
+      "archive_bytes": 4970,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v8_layer0/decode_perf_report.txt",
+      "original_sha256": "218b980c48fe5f1bc1aa78cf890935afbcaaf858e3c2f892d495e977542148c9",
+      "original_bytes": 27207,
+      "archive": "tracy/actual_optimized_v8_layer0/decode_perf_report.txt.gz",
+      "archive_sha256": "8157ea42f3d47cda029cbb8eef2553733ad917955b0fe004fc295faa737a3eb6",
+      "archive_bytes": 2351,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/actual_optimized_v8_layer0/prefill_perf_report.csv",
+      "original_sha256": "121fa52cdd641a6cf86dd9fbbc9ba33aa46402c9a3bd45af4529aefddc248c87",
+      "original_bytes": 404239,
+      "archive": "tracy/actual_optimized_v8_layer0/prefill_perf_report.csv.gz",
+      "archive_sha256": "207005576c21de9ca6ebeac9c2cc8d1bccb9e988bc65841132a9fe07061b0937",
+      "archive_bytes": 60596,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v8_layer0/prefill_perf_report.txt",
+      "original_sha256": "e5b3e951c482464bc0b85d7f6f963c3348c0ba0e583c2b2f44f71e59861d6ea6",
+      "original_bytes": 524745,
+      "archive": "tracy/actual_optimized_v8_layer0/prefill_perf_report.txt.gz",
+      "archive_sha256": "1c7e373bd1274d16b2b322426d8b39f8258494c8f8c2c06d84449a7b470cc738",
+      "archive_bytes": 17931,
+      "reason": "preserve exact evidence bytes; report exceeds repository500KiB limit"
+    },
+    {
+      "original": "tracy/actual_optimized_v8_layer0/whole_layer.replays.csv",
+      "original_sha256": "077a9186973358ff6e260a58938ec7eeeaceb3a31f3a2f414f66368873f07459",
+      "original_bytes": 11911,
+      "archive": "tracy/actual_optimized_v8_layer0/whole_layer.replays.csv.gz",
+      "archive_sha256": "f6920767c3dbaabbf522915a0601645dd39fe505ddbeaca8525d38a7590cef35",
+      "archive_bytes": 2829,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v8_layer5/decode_one_replay.csv",
+      "original_sha256": "4ff71cd67d91cd0e26c364e2fa575b9c3ff5f8e1678f5efb9559bf124a197126",
+      "original_bytes": 217932,
+      "archive": "tracy/actual_optimized_v8_layer5/decode_one_replay.csv.gz",
+      "archive_sha256": "bc2ed6d1004b244d20ad3eb458f38a7246377fb76ce4c7a68e8e452bd1d5d775",
+      "archive_bytes": 24994,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v8_layer5/decode_perf_report.csv",
+      "original_sha256": "987ec786fb26752df853430f2a22457d4b77d0e51bccba3622e0aa0c233ad2ba",
+      "original_bytes": 21821,
+      "archive": "tracy/actual_optimized_v8_layer5/decode_perf_report.csv.gz",
+      "archive_sha256": "f00587b85766f353f9cbc4a870c74ec68bcc55756c9353d9b044ab098846e911",
+      "archive_bytes": 5012,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v8_layer5/decode_perf_report.txt",
+      "original_sha256": "d2211992a5e23970c726e31dd784fae6520fe4dbfc9c7e87a04a5988660cb01e",
+      "original_bytes": 28483,
+      "archive": "tracy/actual_optimized_v8_layer5/decode_perf_report.txt.gz",
+      "archive_sha256": "13b59c3cc67fda5969b9beca03778ae0f6507a25dd4d43150a2efc97513e7ac6",
+      "archive_bytes": 2527,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/actual_optimized_v8_layer5/prefill_perf_report.csv",
+      "original_sha256": "1e5372a7bb63f84947de5c784fcb546cdb79d2bee3c49d493e19702c82fa913d",
+      "original_bytes": 394212,
+      "archive": "tracy/actual_optimized_v8_layer5/prefill_perf_report.csv.gz",
+      "archive_sha256": "8e444b16a1c8b45ece9fb7db5896111821d3df56cbae22bdc4022696b0312c80",
+      "archive_bytes": 59084,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/actual_optimized_v8_layer5/prefill_perf_report.txt",
+      "original_sha256": "220af96c7307dd33bc39473907563f310102edcc72b295675942e3f8a83bbd84",
+      "original_bytes": 512309,
+      "archive": "tracy/actual_optimized_v8_layer5/prefill_perf_report.txt.gz",
+      "archive_sha256": "8255f1bb897889a8f7148e63b6146beb1f747b84d86b0781e8d15f9549339a72",
+      "archive_bytes": 17268,
+      "reason": "preserve exact evidence bytes; report exceeds repository500KiB limit"
+    },
+    {
+      "original": "tracy/actual_optimized_v8_layer5/whole_layer.replays.csv",
+      "original_sha256": "c739f8b528ffe9cfe48e7b1311010ec8feb267c653dd7542ea0e53ff77c0805d",
+      "original_bytes": 11886,
+      "archive": "tracy/actual_optimized_v8_layer5/whole_layer.replays.csv.gz",
+      "archive_sha256": "d1951ff712ef6381443477ada382d05386872adbb22ea486bf376411d306af8d",
+      "archive_bytes": 2834,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/expert_candidate/decode_perf_report.csv",
+      "original_sha256": "3efb55f9cbb6cf53872c49b77b95b27303f7719539dde74122b1e7bdc462c1c9",
+      "original_bytes": 3459849,
+      "archive": "tracy/expert_candidate/decode_perf_report.csv.gz",
+      "archive_sha256": "7ec288eb91117957233659a1c0cf55682122e567e2750dcb67abdf7545082826",
+      "archive_bytes": 484135,
+      "reason": "preserve exact evidence bytes; report exceeds repository500KiB limit"
+    },
+    {
+      "original": "tracy/expert_candidate/decode_perf_report.txt",
+      "original_sha256": "09107d5a267f4b05ee6d9979ed3fea70e6a076fe2b90f3e6334dac23b2e933c3",
+      "original_bytes": 34474,
+      "archive": "tracy/expert_candidate/decode_perf_report.txt.gz",
+      "archive_sha256": "8057f44fc71c5d2fd4bbb8e4a9099fa83eb15e287632121e924f5db447d7ee0f",
+      "archive_bytes": 2837,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/expert_candidate/decode_perf_report_stacked.csv",
+      "original_sha256": "0054a9adf2dc5b363c77c88a640001481c1b54af7fa430c911653162136eb0a3",
+      "original_bytes": 2765,
+      "archive": "tracy/expert_candidate/decode_perf_report_stacked.csv.gz",
+      "archive_sha256": "604954819ba4afadf5ae02db2a83bb7679122737c3878fc03c3583e78af7fa22",
+      "archive_bytes": 857,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/expert_candidate/prefill_perf_report.csv",
+      "original_sha256": "7e23f4c0bd04e4a7ae6076cb169171e16cbf96aef3fd55a2a71e88f1076bdbfa",
+      "original_bytes": 259081,
+      "archive": "tracy/expert_candidate/prefill_perf_report.csv.gz",
+      "archive_sha256": "af4105d7bc705f475532189229f0564c79c198d48e0f25d0ec6ef8f983c3cf09",
+      "archive_bytes": 43030,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/expert_candidate/prefill_perf_report.txt",
+      "original_sha256": "179c30ba56e4bb9367a761064901d2f7a9bc1e29f77b579c2aa8900f5197b9a0",
+      "original_bytes": 315758,
+      "archive": "tracy/expert_candidate/prefill_perf_report.txt.gz",
+      "archive_sha256": "d46d892ccc251b9e10d75d6ecdf6b17f39102bddee75ca62397837b0f8973ebb",
+      "archive_bytes": 12672,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/expert_candidate/prefill_perf_report_stacked.csv",
+      "original_sha256": "729869d11851da0f18469ec4cd7863161a81f66f1ffa10eaea25bf596f7dcf45",
+      "original_bytes": 1799,
+      "archive": "tracy/expert_candidate/prefill_perf_report_stacked.csv.gz",
+      "archive_sha256": "a5470cc3435982ae236322f31ca7addc43aa08316814dbadae6ad5c08f1483be",
+      "archive_bytes": 590,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/operator_expanded44k44_layer0/decode_perf_report.csv",
+      "original_sha256": "6fac6f05499e0dcbdba88b87b4643545097cc75fc1e26d0d71d8a9e044b4dd59",
+      "original_bytes": 20924,
+      "archive": "tracy/operator_expanded44k44_layer0/decode_perf_report.csv.gz",
+      "archive_sha256": "453c5462768723cd6d95e6285d4b02638d7d7853d44c1c3d62c63a2fb375e6e2",
+      "archive_bytes": 4910,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/operator_expanded44k44_layer0/decode_perf_report.txt",
+      "original_sha256": "ff3345eab148ef0af6c6db79add780d099cbe67cb542e536e75ee89ea630d8e6",
+      "original_bytes": 27014,
+      "archive": "tracy/operator_expanded44k44_layer0/decode_perf_report.txt.gz",
+      "archive_sha256": "2d27de1f3792752d0c68179aa84d1217a0dbe40e0ebd978a0c1953c34148ff7e",
+      "archive_bytes": 2354,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/operator_expanded44k44_layer5/decode_perf_report.csv",
+      "original_sha256": "dc27efbc9c8228d0610849283b42df9ec040d414b8bbfb823ff17d8aaca3fbb5",
+      "original_bytes": 21647,
+      "archive": "tracy/operator_expanded44k44_layer5/decode_perf_report.csv.gz",
+      "archive_sha256": "fe520a465d8c204247a99a1720578c5dfa57d8378e435ad4db6a2e5987445830",
+      "archive_bytes": 4969,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/operator_expanded44k44_layer5/decode_perf_report.txt",
+      "original_sha256": "c85afaba5dc54e921952203b7d4c7c57f55f75d9fa51f6af6d2591870b87a834",
+      "original_bytes": 28290,
+      "archive": "tracy/operator_expanded44k44_layer5/decode_perf_report.txt.gz",
+      "archive_sha256": "0ff019823c0ea5ed7dc96a883924cb8e0df2cb9917a30474740d951f6aef264c",
+      "archive_bytes": 2500,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/operator_indexed22k44_layer0/decode_perf_report.csv",
+      "original_sha256": "b1dd05b8aadd4287479f6b67a90619a7d22b065dd14feb6b724aa7d7cbce1a27",
+      "original_bytes": 21147,
+      "archive": "tracy/operator_indexed22k44_layer0/decode_perf_report.csv.gz",
+      "archive_sha256": "8d87e63915ff4186cb1c6abf9d55a2db070d908ec90eac6236065854ec06c01e",
+      "archive_bytes": 4918,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/operator_indexed22k44_layer0/decode_perf_report.txt",
+      "original_sha256": "3c8bea7d24d26a9c7319b222dbe91685dfbb0c1f9b167aab94092b919753607d",
+      "original_bytes": 27263,
+      "archive": "tracy/operator_indexed22k44_layer0/decode_perf_report.txt.gz",
+      "archive_sha256": "63c35271d20361808797634302bcaf6eee148b2f2aa9f0e07a787bc261d2e8ba",
+      "archive_bytes": 2367,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/operator_indexed22k44_layer5/decode_perf_report.csv",
+      "original_sha256": "d262c27257994df4a581bcac1d4970db69cce70969330201ab7cc20b477e37d6",
+      "original_bytes": 21786,
+      "archive": "tracy/operator_indexed22k44_layer5/decode_perf_report.csv.gz",
+      "archive_sha256": "4b20245a9009579c3056d4ee8b4ec2f8f33b0dc5510d1798295019b7b82d6358",
+      "archive_bytes": 5012,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/operator_indexed22k44_layer5/decode_perf_report.txt",
+      "original_sha256": "bbc84a99fc23712497034ba223ea92a425f2177508ff353272988408fe5ff13d",
+      "original_bytes": 28454,
+      "archive": "tracy/operator_indexed22k44_layer5/decode_perf_report.txt.gz",
+      "archive_sha256": "ca2db0e6d5a6f9bc34929ce1559fd6f589a97f00571a17a76a4d8c39c4c2442c",
+      "archive_bytes": 2512,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/operator_indexed_separatek44_layer0/decode_perf_report.csv",
+      "original_sha256": "e66f929c7ec9d16ad6a40c7dc8ea85daca81492b0c38643ec1f5fadfeba7dcbc",
+      "original_bytes": 21481,
+      "archive": "tracy/operator_indexed_separatek44_layer0/decode_perf_report.csv.gz",
+      "archive_sha256": "de47a210426c975272e52126932c985c61e9370eb2d508e291230f61093176b9",
+      "archive_bytes": 4993,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/operator_indexed_separatek44_layer0/decode_perf_report.txt",
+      "original_sha256": "92a89ffb1e8b6569250213f68eba26206cabcfb5199e64773d814b66958b25dd",
+      "original_bytes": 27500,
+      "archive": "tracy/operator_indexed_separatek44_layer0/decode_perf_report.txt.gz",
+      "archive_sha256": "b4f0428a39258fdc1816dc078af284279cc57491b0b390739a218f60b467f1c1",
+      "archive_bytes": 2377,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tracy/operator_indexed_separatek44_layer5/decode_perf_report.csv",
+      "original_sha256": "a0ca896f5184ea4d528ae63c0410876bcc839e6a678270007574c7e89506f7f4",
+      "original_bytes": 21930,
+      "archive": "tracy/operator_indexed_separatek44_layer5/decode_perf_report.csv.gz",
+      "archive_sha256": "07e71835a440519d312ba595c6eacc5aa580712bc9252056c1321c2f3110f70f",
+      "archive_bytes": 4990,
+      "reason": "preserve exact evidence bytes; compact profiler CSV ignored by repository"
+    },
+    {
+      "original": "tracy/operator_indexed_separatek44_layer5/decode_perf_report.txt",
+      "original_sha256": "1756eb71eba3d43024f7f171473533590a2a0f0e9fba4cf6ba64727603db33c2",
+      "original_bytes": 28538,
+      "archive": "tracy/operator_indexed_separatek44_layer5/decode_perf_report.txt.gz",
+      "archive_sha256": "11f4a985304ac260fa86881e4cd2794ebf94633ebdd56381088f0722c69658b0",
+      "archive_bytes": 2521,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "tuning_commands.json",
+      "original_sha256": "bee98b0a0e5ffb36fd69b3e69e1c79fcebefffc4b329282fcbae31710cada392",
+      "original_bytes": 16718,
+      "archive": "tuning_commands.json.gz",
+      "archive_sha256": "5fa7c80d5dd4dff8377a5205f2dfd623d651b1471528dce1bdd8e827d5e41360",
+      "archive_bytes": 659,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    },
+    {
+      "original": "validated_v5_batched_layer0.log",
+      "original_sha256": "f2936356b1136f0f32855d3c4d8ed3fd3a365b76e6659b671e40aed5aca0fec8",
+      "original_bytes": 13934,
+      "archive": "validated_v5_batched_layer0.log.gz",
+      "archive_sha256": "af13b70e0a8124d40da5ad4682b962c9750ca7836e0a598328340937216fa52f",
+      "archive_bytes": 4205,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v5_batched_layer5.log",
+      "original_sha256": "539445b307557398a15dc50dee11252535c7d0fea9d3a7054d653c668b4031c6",
+      "original_bytes": 14104,
+      "archive": "validated_v5_batched_layer5.log.gz",
+      "archive_sha256": "c9fa796b32d6ee4d37ef05873b5e6736d5960461d8bc4786e366095239393044",
+      "archive_bytes": 4277,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v5_bf16_cache_prefix_layer0.log",
+      "original_sha256": "0c2c4e80e4f50a1bb7ab3f73ca34c076e2c0e8008d8b2a037bc0daca73577e6d",
+      "original_bytes": 6967,
+      "archive": "validated_v5_bf16_cache_prefix_layer0.log.gz",
+      "archive_sha256": "74b3afde18c3cfa6e3a8f99b16e3003648f1c51945f1e61af70d9d15dd4c9e34",
+      "archive_bytes": 2731,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v5_bf16_cache_prefix_layer5.log",
+      "original_sha256": "919606a302f59ab04f2807dc68d120d4fe29106ad37d33ba236ad261280720b6",
+      "original_bytes": 6790,
+      "archive": "validated_v5_bf16_cache_prefix_layer5.log.gz",
+      "archive_sha256": "6329e2d8f1e5c5f0245ff45081889bcac858d41667180633979e2eca27e0ba86",
+      "archive_bytes": 2645,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v5_headline_layer0.log",
+      "original_sha256": "8d2d8b7d4e6599eeb64806c5b030fb6d0673cd058660f0412f6c09b22a51b8f7",
+      "original_bytes": 21011,
+      "archive": "validated_v5_headline_layer0.log.gz",
+      "archive_sha256": "c9302a8dd4bed5153dfacca21bff01fc01e40c50bd2af6d3bcf1659f1d0259c0",
+      "archive_bytes": 4680,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v5_headline_layer5.log",
+      "original_sha256": "9f6dca8bc0bd128f07b37a29daa67950d33c3805c7ba0039dd57f82aca281b35",
+      "original_bytes": 20822,
+      "archive": "validated_v5_headline_layer5.log.gz",
+      "archive_sha256": "54368d0975f83990a8dc48228692945db0cf64c65e1e1c0abee6fa409d586b03",
+      "archive_bytes": 4651,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v5_long_262143_layer0.log",
+      "original_sha256": "7c7c1606692ff052c11acfe31ed431d59260c062a871c0b2a1498cd22243828e",
+      "original_bytes": 27964,
+      "archive": "validated_v5_long_262143_layer0.log.gz",
+      "archive_sha256": "6afc566a13aaeb6a2575dc01ef36ff0d7d80fd180d7bab70d81c3dcd4d356762",
+      "archive_bytes": 7784,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v5_long_262143_layer5.log",
+      "original_sha256": "90096f76c25c79b7edcb4430764645f059cfec33ca06e0352e5e25bef14c310b",
+      "original_bytes": 27958,
+      "archive": "validated_v5_long_262143_layer5.log.gz",
+      "archive_sha256": "30b0ef8399f781b9ef0b3541498b7e28bcfad8ac2075b4613e14b5025a1d9aec",
+      "archive_bytes": 7785,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v5_long_262144_layer0.log",
+      "original_sha256": "b01ae1d004c3825eeda8a8a16ffd3c53a6931007d8aec3eb945b04ea37a45902",
+      "original_bytes": 28138,
+      "archive": "validated_v5_long_262144_layer0.log.gz",
+      "archive_sha256": "2ebfa988dca544b3aab715f8470449ffe39ff2040e9edd125b69791afdc77441",
+      "archive_bytes": 7863,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v5_long_262144_layer5.log",
+      "original_sha256": "53df6cfea0d95dbc2ad44ebd9c8f10029c39f33074d1e848559904e93216a61d",
+      "original_bytes": 27959,
+      "archive": "validated_v5_long_262144_layer5.log.gz",
+      "archive_sha256": "7a5856e6ca7b9fc77845b9054dfcfaf83a734fa4ca3dd604b937bd03cea539af",
+      "archive_bytes": 7779,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v5_prefix_continuation_layer0.log",
+      "original_sha256": "35a5a758359bc714d0e961b1176dfdc5b0303b0a856d3e61cb010c6348aa41fa",
+      "original_bytes": 6793,
+      "archive": "validated_v5_prefix_continuation_layer0.log.gz",
+      "archive_sha256": "bafcf3b7e41423a83ac573a161e4082683ba402a07991a5bd783ee6e3755e991",
+      "archive_bytes": 2645,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v5_prefix_continuation_layer5.log",
+      "original_sha256": "651616b49d88bc83c3d5e7bb8b473ac5e0d11b525df3bbb452975d1fc6fa8281",
+      "original_bytes": 6790,
+      "archive": "validated_v5_prefix_continuation_layer5.log.gz",
+      "archive_sha256": "e2ade7da138cfc8c3ec21384e8ef01b58209ec0b4093340d6c9077acf2966105",
+      "archive_bytes": 2643,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v5_request_reuse_layer0.log",
+      "original_sha256": "996bddf9f04b96d45b8bc2f9dc2a0cb47e11487806ea90b3e5a49b099b1df080",
+      "original_bytes": 5537,
+      "archive": "validated_v5_request_reuse_layer0.log.gz",
+      "archive_sha256": "bc8eb5d0785f2ad8f94ea62bb81073c2050c2f0a27606266519ed549abf66e54",
+      "archive_bytes": 1885,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v5_request_reuse_layer5.log",
+      "original_sha256": "e9aa2940fa478dd23b46f933b5fc805cbe9a2a73c0d1e0a6b8c423aa1846f0fb",
+      "original_bytes": 5536,
+      "archive": "validated_v5_request_reuse_layer5.log.gz",
+      "archive_sha256": "d4f6325df2a068f73a381db2a3659bb00f544325c77e6bcc45afac241fd1978b",
+      "archive_bytes": 1874,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v5_watcher_layer0.device.log",
+      "original_sha256": "1c625f0bc4eda29f37260287b55aaa7fa3d0a71b094e26aedcf1294f559e4848",
+      "original_bytes": 146018,
+      "archive": "validated_v5_watcher_layer0.device.log.gz",
+      "archive_sha256": "b02a62ff135e122dcd5f145a18399fce98ef5961c8dd54f79e452ca7221d6c97",
+      "archive_bytes": 5499,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v5_watcher_layer0.log",
+      "original_sha256": "f7f78f7558c922978d577f82b48bffc27ad5450083aa4789b3af2127ae4388cc",
+      "original_bytes": 22013,
+      "archive": "validated_v5_watcher_layer0.log.gz",
+      "archive_sha256": "5d6c06c9e09752875525e0e7784aee12bf0904c38fd4e6ca46911d6986694ada",
+      "archive_bytes": 4789,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v5_watcher_layer5.device.log",
+      "original_sha256": "3bce0a39c82f6cda7d87f513d2c7c4e52f376531fea44bf82c634a29982ccaa7",
+      "original_bytes": 146018,
+      "archive": "validated_v5_watcher_layer5.device.log.gz",
+      "archive_sha256": "ace73e7452ca92a225414f6e1dd419504d83bae15c899d42b6646afd356ec41f",
+      "archive_bytes": 5501,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v5_watcher_layer5.log",
+      "original_sha256": "1b7f46dd78d2712763e1712ffac44c0dbee8ca324fea14a04d240f2f9d8f5035",
+      "original_bytes": 21824,
+      "archive": "validated_v5_watcher_layer5.log.gz",
+      "archive_sha256": "82508ed924b59cb33f11b62793e7f4f8a7861e59f24ca6189427cdf147cd4ce3",
+      "archive_bytes": 4756,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v7_batched_layer5.log",
+      "original_sha256": "76dbf44ef066ca262d354ed3ccbd6f418f079080ece66e08d5dae7767aef3e7f",
+      "original_bytes": 13924,
+      "archive": "validated_v7_batched_layer5.log.gz",
+      "archive_sha256": "ef0e12a2957422f67547dd57669b884f284ed60be094aeebabb66e2a32ba5b9f",
+      "archive_bytes": 4189,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v7_bf16_cache_prefix_layer5.log",
+      "original_sha256": "885d031c15fdbf6ad89dc01ca167c626fc1139fc6e28f97757e361d59ee484df",
+      "original_bytes": 6790,
+      "archive": "validated_v7_bf16_cache_prefix_layer5.log.gz",
+      "archive_sha256": "8ee0c80eab982945df228aedd3bccda7e62d4e542edb2b4affce0385c5c70583",
+      "archive_bytes": 2646,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v7_headline_layer0.log",
+      "original_sha256": "8c5aa235133b22cb9ec84a23d4b6c809595023b9446a365eade4c57e487875f5",
+      "original_bytes": 21134,
+      "archive": "validated_v7_headline_layer0.log.gz",
+      "archive_sha256": "19328d73af716b5373c4c677112fbfb9c72764a128ecbf33401a9ae508923124",
+      "archive_bytes": 4705,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v7_headline_layer5.log",
+      "original_sha256": "e23f7d4c013870df47e9958344b22d5bf1c64b8bf5b09f66f5c3cc21e375710c",
+      "original_bytes": 20961,
+      "archive": "validated_v7_headline_layer5.log.gz",
+      "archive_sha256": "ed183d2651e6b4e502211daf8d1fd27c4794c37d8d127650dee4f690aae533fa",
+      "archive_bytes": 4682,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v7_long_262143_layer5.log",
+      "original_sha256": "6df429afb08c8ea4eef9f7d2a09c9f728906015793c33cd2bf50b9d59227639d",
+      "original_bytes": 27963,
+      "archive": "validated_v7_long_262143_layer5.log.gz",
+      "archive_sha256": "31337eb6203f3a000725a8373575f1ad3038372a8e8ea115b29be5c1a727c3d1",
+      "archive_bytes": 7794,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v7_long_262144_layer5.log",
+      "original_sha256": "ddbe1ced17c196cc2a59dff93ee1bc121753ff1215d2a8d399dc7720e5b9720e",
+      "original_bytes": 27966,
+      "archive": "validated_v7_long_262144_layer5.log.gz",
+      "archive_sha256": "7b260701d6aabdd5b0ccecf7ea2dad82948c312ae6901d159c410e8da2aa1c2d",
+      "archive_bytes": 7797,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v7_prefix_continuation_layer5.log",
+      "original_sha256": "c0cad6728f19c621eb0a837c735a41eb028899992c6f4dc498d60fab18089983",
+      "original_bytes": 6788,
+      "archive": "validated_v7_prefix_continuation_layer5.log.gz",
+      "archive_sha256": "b21e908545d02f7ec7a959684cc2f50364535df3cf577cd7d5b2bcc34a86075b",
+      "archive_bytes": 2642,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v7_request_reuse_layer5.log",
+      "original_sha256": "4431774e4a3fb5624d86b5697ff5fd4045857ee85a02bf702c97a8bf26f1acdb",
+      "original_bytes": 5234,
+      "archive": "validated_v7_request_reuse_layer5.log.gz",
+      "archive_sha256": "5ee9adcb6d77539ed8304fbb200f5ab99bdcb64cda881d5131ab5b1c2f9a84a9",
+      "archive_bytes": 1746,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v7_watcher_layer0.device.log",
+      "original_sha256": "e8958c7d88b986b25f8d8051dca011a98a3b054aae101799572dc78267ea06f0",
+      "original_bytes": 146018,
+      "archive": "validated_v7_watcher_layer0.device.log.gz",
+      "archive_sha256": "3cd55f5b8ae827017b67ed970b41ee5c6405f94b795bd81d3e371e0ee28a4876",
+      "archive_bytes": 5499,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v7_watcher_layer0.log",
+      "original_sha256": "52d6d999f768a2bb4e751f363a071d6610072b15a4f2b3672817120eeb656b2e",
+      "original_bytes": 22140,
+      "archive": "validated_v7_watcher_layer0.log.gz",
+      "archive_sha256": "752990df13ad152eb9136e108bda4f8dd661b105032e16ed38b849adbe0fd311",
+      "archive_bytes": 4811,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v7_watcher_layer5.device.log",
+      "original_sha256": "08db9335f34990ab96c9aef6a65100ced2c8460845fe8024361cfbd891e6c3c6",
+      "original_bytes": 146018,
+      "archive": "validated_v7_watcher_layer5.device.log.gz",
+      "archive_sha256": "93f2cec834adc8bfdee38b780858005f788e5b0a609448e570d89653c2c4f766",
+      "archive_bytes": 5502,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v7_watcher_layer5.log",
+      "original_sha256": "c059c8338c07f75930d51b8d3ccd3836c048ea19139e5ee730e834964cddc2b3",
+      "original_bytes": 21957,
+      "archive": "validated_v7_watcher_layer5.log.gz",
+      "archive_sha256": "01e43d377ddc2c17ed970b41ddeefae50b31145fb7a8f558605f0faf7d3ab566",
+      "archive_bytes": 4783,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v8_batched_layer5.log",
+      "original_sha256": "cad9de5a89e6b5d7577bc89e4185b21a05a1382b22de82598a7cde9d081a9104",
+      "original_bytes": 13924,
+      "archive": "validated_v8_batched_layer5.log.gz",
+      "archive_sha256": "5be4cb5994179754b5421e4c3ffd44b84db27cebf7f92bd716ae1cb3ff607104",
+      "archive_bytes": 4189,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v8_bf16_cache_prefix_layer5.log",
+      "original_sha256": "58718430a53c5f65bde57286110b75f48ea517e612f1680685d486c3c02fd171",
+      "original_bytes": 6790,
+      "archive": "validated_v8_bf16_cache_prefix_layer5.log.gz",
+      "archive_sha256": "0b583d274e9184d90cc7afbe3d32325f8becdcdc1b352498dae3307726e0237e",
+      "archive_bytes": 2647,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v8_headline_layer0.log",
+      "original_sha256": "c09a052fca03b3c29c8d317348be83af7844494be47d77817abd058f44d71750",
+      "original_bytes": 21146,
+      "archive": "validated_v8_headline_layer0.log.gz",
+      "archive_sha256": "c83a37a5bd5c34680cd3dc2920f3774594d96da4225c79b29e9e873cb96c54e5",
+      "archive_bytes": 4700,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v8_headline_layer5.log",
+      "original_sha256": "6e338a1478f1f13409dbd2b31744f54c8861f5f4398f4550a604bff53a72a41e",
+      "original_bytes": 20961,
+      "archive": "validated_v8_headline_layer5.log.gz",
+      "archive_sha256": "666ba174039dd451e8e480780f1e447e64ba41b7ebbd60ea1e45ced8f3029ad2",
+      "archive_bytes": 4678,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v8_long_262143_layer5.log",
+      "original_sha256": "9a7bbae65175830fcb99b613c02825b7ce9f09033bdc967e634fcca3f9c62491",
+      "original_bytes": 27963,
+      "archive": "validated_v8_long_262143_layer5.log.gz",
+      "archive_sha256": "830ae101e8a07e24fb286cf9070bce8205db6761f9537b4d57201e9e20917040",
+      "archive_bytes": 7799,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v8_long_262144_layer5.log",
+      "original_sha256": "8ea0d1b0a6fd3b4c9bf714cf67a584acd6a81080f98e1e353aceb665013bedcb",
+      "original_bytes": 27966,
+      "archive": "validated_v8_long_262144_layer5.log.gz",
+      "archive_sha256": "d6fd2082e0eef3a84fc4a34f1360157005aee0e8635797732c198af8be9f24fe",
+      "archive_bytes": 7796,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v8_prefix_continuation_layer5.log",
+      "original_sha256": "3030485a8f525d202b977c222fb5f7c33b820369e17e02420b7b7a1a4828b133",
+      "original_bytes": 6788,
+      "archive": "validated_v8_prefix_continuation_layer5.log.gz",
+      "archive_sha256": "3f78064ebb95646cb839b60aa5a4c76ed9187d7f118d946c71f93ab6935d9a3c",
+      "archive_bytes": 2643,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v8_request_reuse_layer5.log",
+      "original_sha256": "e0af86d5933841e3c56b30a7fd23535face149cdbe865f2421c0ccfbbef76109",
+      "original_bytes": 5234,
+      "archive": "validated_v8_request_reuse_layer5.log.gz",
+      "archive_sha256": "3b238c1e4c8727da0b88f9fc7b997252eaea2024cf4169d95f09450f80a36887",
+      "archive_bytes": 1738,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v8_watcher_layer0.device.log",
+      "original_sha256": "bb86e4d04e3777009d2366d0bb077d63d6b95fb65407ad04cef9fc1e8ab101b1",
+      "original_bytes": 146018,
+      "archive": "validated_v8_watcher_layer0.device.log.gz",
+      "archive_sha256": "75ed93c0abb97d0a257e97b4c12da8922edadb70928f69d2fd08784aa622b91d",
+      "archive_bytes": 5500,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v8_watcher_layer0.log",
+      "original_sha256": "b5af57885754cd1deea8ae273d57fba7beb79732596ff0f96120ff7b63af6ce6",
+      "original_bytes": 22140,
+      "archive": "validated_v8_watcher_layer0.log.gz",
+      "archive_sha256": "3de6976cc93f5a443a9e2557106bb0ca61cdffdbd37c67ae3f8f4f9e056e6563",
+      "archive_bytes": 4809,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v8_watcher_layer5.device.log",
+      "original_sha256": "01cd0c429256c4568ecd3d4424fa91d1c9cae19113a4144970e51cb4862f0a72",
+      "original_bytes": 146018,
+      "archive": "validated_v8_watcher_layer5.device.log.gz",
+      "archive_sha256": "b6dca614c3d0347311a0c908d97291a0703171ef2605f060a4fe32561d7a0bd8",
+      "archive_bytes": 5501,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "validated_v8_watcher_layer5.log",
+      "original_sha256": "cb7b8d9d09f09a7f58c4c2890b5f88a5a1b7b895d43286fdfd2575da228aa8cd",
+      "original_bytes": 21957,
+      "archive": "validated_v8_watcher_layer5.log.gz",
+      "archive_sha256": "8652316ad01b510f382dacdb3bbcca715d1bb82a0fc8d91408b99fc5338082d5",
+      "archive_bytes": 4787,
+      "reason": "preserve exact evidence bytes; compact correctness/recovery log ignored by repository"
+    },
+    {
+      "original": "watcher_repaired_commands.json",
+      "original_sha256": "bda1562738f4d372d7195dd75aa28dd4a72fd7c12e4908f918f7a8802df675eb",
+      "original_bytes": 1281,
+      "archive": "watcher_repaired_commands.json.gz",
+      "archive_sha256": "3fa952ab7725a2e7862626bd693249a0f9a5cc62f276d42396b360deeb28855c",
+      "archive_bytes": 393,
+      "reason": "preserve exact evidence bytes; immutable report whitespace"
+    }
+  ]
+}

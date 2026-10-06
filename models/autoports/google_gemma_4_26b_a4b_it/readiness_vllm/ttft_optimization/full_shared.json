@@ -1,0 +1,30 @@
+{
+  "scope": "Full model, direct adapter with synchronized prefill and first decode; excludes HTTP/scheduler and later decode",
+  "model": "google/gemma-4-26B-A4B-it",
+  "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "seed": 4101,
+  "requested_length": 128,
+  "max_seq_len": 262144,
+  "physical_cache_context": 262144,
+  "page_table_shape": [
+    32,
+    8192
+  ],
+  "trace_region_size": 1073741824,
+  "requests": 10,
+  "warmups": 3,
+  "dataset_requests": 10,
+  "candidate_order": [
+    "32cached",
+    "shared_gate22",
+    "shared_gate44",
+    "shared_gate88",
+    "shared_down44",
+    "shared_pair44"
+  ],
+  "prompt_source": "Native RandomDataset.sample(range_ratio=0,prefix_len=0,output_len=16), pinned generator tokenizer; encode with special tokens as completion endpoint does",
+  "prompts": [],
+  "candidates": [],
+  "passed": false,
+  "error": "TypeError('__getitem__(): incompatible function arguments. The following argument types are supported:\\n    1. __getitem__(self, arg: int, /) -> int\\n\\nInvoked with types: ttnn._ttnn.types.Shape, slice')"
+}

@@ -1,0 +1,256 @@
+{
+  "config": {
+    "output": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/batch32_attention.json",
+    "batch": 32,
+    "input_length": 128,
+    "profile": false,
+    "all_layers": false,
+    "candidate": "attention",
+    "mixed": false,
+    "repeats": 5
+  },
+  "scope": "Reduced real layers 0/5, full head/sampler; synthetic diverse prompts; not a full-model TSU claim",
+  "source_sha256": {
+    "tests/probe_tsu_batch.py": "b6d08d124ecc2572b12ad3df32dd1f649cc8d4a26f0d5686a3546918b7bfa331",
+    "tests/tsu_batch_candidate.py": "cd8c6566f614bace19ed3ded94ad72a64c27090d51306ca55aeff07829cd4e7f",
+    "tt/decode_attention.py": "fd67ca281493097d4c7da60cbe52d5fe29581370b9fc62c4a9829baf69044b96",
+    "tt/functional_decoder.py": "d19667d70e42650a5a241fa334dd57a396a564a2dca0cf8ab2a1a6573156b3a3",
+    "tt/fused_decoder.py": "0c8892be32e04202fdbddd2b06850848c63ae57660c49d03c4d149a5a88b041c",
+    "tt/generator.py": "92bc9a64bad64cf7f3b4dbda01293824c515030f9f861ee97091350521bb3091",
+    "tt/generator_vllm.py": "ab0aed5cae4ad38ae36fb8717f56eed2a67ec75681ebd1a56ce160ef71e353df",
+    "tt/model.py": "f52a55d7976779dec1f9e011d72c74bbef76d72bad19f44279a8bc4a8be63d8e",
+    "tt/multichip_decoder.py": "ef1716fb826e81ac7ecdf7d6c54ae18eb4c511d095f774a09fbcf87f795c0d75",
+    "tt/optimized_decoder.py": "2d2e52e029bb840e47e9ea17b7684c5bd6c807f1c56b38f647801a75977d7d55",
+    "tt/precise_attention.py": "688c0526ccad6e2f02be4bb532f914fc2ad5b08398fa398e6cf6aa0c4d9f6f65",
+    "tt/precision_ops.py": "52f0bad533c4d421b5c807914ad0d101533da3eb012b734e3e9c55bceefe23ef",
+    "tt/precision_policy.py": "67fd21539e3bf629bc767c145bd8c5d9fe2b980ce5ac957b5478b78032e9aa3f",
+    "tt/routing_precision.py": "1237d3eb7b90563b4032b1ba1fa42606aca5cb2db93ba557f7603d5355ff6672"
+  },
+  "rows": [],
+  "correctness": [
+    {
+      "step": 0,
+      "slot": 0,
+      "pcc": 0.9995562434196472,
+      "top1": true,
+      "max_abs": 7.59375
+    },
+    {
+      "step": 0,
+      "slot": 1,
+      "pcc": 0.9733461737632751,
+      "top1": false,
+      "max_abs": 51.0
+    },
+    {
+      "step": 0,
+      "slot": 2,
+      "pcc": 0.9996131658554077,
+      "top1": true,
+      "max_abs": 9.875
+    },
+    {
+      "step": 0,
+      "slot": 3,
+      "pcc": 0.9992779493331909,
+      "top1": true,
+      "max_abs": 14.34375
+    },
+    {
+      "step": 0,
+      "slot": 4,
+      "pcc": 0.9987506866455078,
+      "top1": true,
+      "max_abs": 14.1875
+    },
+    {
+      "step": 0,
+      "slot": 5,
+      "pcc": 0.9990103840827942,
+      "top1": true,
+      "max_abs": 17.9375
+    },
+    {
+      "step": 0,
+      "slot": 6,
+      "pcc": 0.9993009567260742,
+      "top1": true,
+      "max_abs": 19.375
+    },
+    {
+      "step": 0,
+      "slot": 7,
+      "pcc": 0.9994470477104187,
+      "top1": true,
+      "max_abs": 10.40625
+    },
+    {
+      "step": 0,
+      "slot": 8,
+      "pcc": 0.9995755553245544,
+      "top1": true,
+      "max_abs": 11.0
+    },
+    {
+      "step": 0,
+      "slot": 9,
+      "pcc": 0.9997201561927795,
+      "top1": true,
+      "max_abs": 12.90625
+    },
+    {
+      "step": 0,
+      "slot": 10,
+      "pcc": 0.9995701909065247,
+      "top1": true,
+      "max_abs": 15.5625
+    },
+    {
+      "step": 0,
+      "slot": 11,
+      "pcc": 0.9996455907821655,
+      "top1": true,
+      "max_abs": 10.0625
+    },
+    {
+      "step": 0,
+      "slot": 12,
+      "pcc": 0.9995644092559814,
+      "top1": true,
+      "max_abs": 10.43359375
+    },
+    {
+      "step": 0,
+      "slot": 13,
+      "pcc": 0.9997395873069763,
+      "top1": true,
+      "max_abs": 9.171875
+    },
+    {
+      "step": 0,
+      "slot": 14,
+      "pcc": 0.9996181726455688,
+      "top1": true,
+      "max_abs": 11.4921875
+    },
+    {
+      "step": 0,
+      "slot": 15,
+      "pcc": 0.9997743964195251,
+      "top1": true,
+      "max_abs": 10.59375
+    },
+    {
+      "step": 0,
+      "slot": 16,
+      "pcc": 0.9995813369750977,
+      "top1": true,
+      "max_abs": 10.703125
+    },
+    {
+      "step": 0,
+      "slot": 17,
+      "pcc": 0.988409161567688,
+      "top1": true,
+      "max_abs": 40.625
+    },
+    {
+      "step": 0,
+      "slot": 18,
+      "pcc": 0.9993686079978943,
+      "top1": true,
+      "max_abs": 13.15625
+    },
+    {
+      "step": 0,
+      "slot": 19,
+      "pcc": 0.9997805953025818,
+      "top1": true,
+      "max_abs": 9.09375
+    },
+    {
+      "step": 0,
+      "slot": 20,
+      "pcc": 0.9994422197341919,
+      "top1": true,
+      "max_abs": 10.1875
+    },
+    {
+      "step": 0,
+      "slot": 21,
+      "pcc": 0.9994811415672302,
+      "top1": true,
+      "max_abs": 13.09375
+    },
+    {
+      "step": 0,
+      "slot": 22,
+      "pcc": 0.9997945427894592,
+      "top1": true,
+      "max_abs": 9.9375
+    },
+    {
+      "step": 0,
+      "slot": 23,
+      "pcc": 0.9996297955513,
+      "top1": true,
+      "max_abs": 9.421875
+    },
+    {
+      "step": 0,
+      "slot": 24,
+      "pcc": 0.9992279410362244,
+      "top1": true,
+      "max_abs": 15.3125
+    },
+    {
+      "step": 0,
+      "slot": 25,
+      "pcc": 0.9995666742324829,
+      "top1": true,
+      "max_abs": 11.554443359375
+    },
+    {
+      "step": 0,
+      "slot": 26,
+      "pcc": 0.9991002082824707,
+      "top1": true,
+      "max_abs": 18.65234375
+    },
+    {
+      "step": 0,
+      "slot": 27,
+      "pcc": 0.9996952414512634,
+      "top1": true,
+      "max_abs": 11.84375
+    },
+    {
+      "step": 0,
+      "slot": 28,
+      "pcc": 0.9995802044868469,
+      "top1": true,
+      "max_abs": 9.703125
+    },
+    {
+      "step": 0,
+      "slot": 29,
+      "pcc": 0.9995867609977722,
+      "top1": true,
+      "max_abs": 12.3125
+    },
+    {
+      "step": 0,
+      "slot": 30,
+      "pcc": 0.9997214674949646,
+      "top1": true,
+      "max_abs": 10.1875
+    },
+    {
+      "step": 0,
+      "slot": 31,
+      "pcc": 0.9936814904212952,
+      "top1": true,
+      "max_abs": 38.875
+    }
+  ]
+}

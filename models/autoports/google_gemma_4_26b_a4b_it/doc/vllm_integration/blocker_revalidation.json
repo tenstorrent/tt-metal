@@ -1,0 +1,13 @@
+{
+  "time_utc": "2026-09-27T10:31:53.179030+00:00",
+  "blocked_audit_turn": 3,
+  "installed_versions": {
+    "openai": null,
+    "uvloop": null,
+    "vllm": null,
+    "vllm-tt-plugin": null
+  },
+  "status": "blocked",
+  "prior_turn_classification": "no progress: same dependency blocker rechecked; no changed runtime or authorization",
+  "installation_authorized": false
+}

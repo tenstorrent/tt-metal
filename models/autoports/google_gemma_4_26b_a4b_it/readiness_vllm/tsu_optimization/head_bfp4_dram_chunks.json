@@ -1,0 +1,1614 @@
+{
+  "model": "google/gemma-4-26B-A4B-it",
+  "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "fixture": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_full_model/terminal_input.pt",
+  "fixture_sha256": "f27d52cb4c47b14fe7877dd3410346b75c76748901635fa6032ccc7c089e92c7",
+  "scope": "Isolated complete TP4 LM head, actual reduced-model terminal input; no sampler or stack",
+  "dtype": "bfloat4_b",
+  "fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "mesh": [
+    1,
+    4
+  ],
+  "cases": [
+    {
+      "name": "baseline",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=4,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "host_replay_us": [
+        389.593280851841,
+        390.75599052011967,
+        389.9419214576483,
+        390.04613645374775,
+        389.6709065884352
+      ],
+      "median_host_replay_us": 389.9419214576483,
+      "status": "passed"
+    },
+    {
+      "name": "c32768_b1_r1",
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          32768
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          33792
+        ],
+        "in0_block_w": 1,
+        "input_storage_cores": 8,
+        "input_shard_shape": [
+          32,
+          352
+        ],
+        "output_shard_shape": [
+          32,
+          4224
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          4224
+        ],
+        "per_bank_N_tiles": 132,
+        "stored_tile_bytes": 576,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 12672,
+        "blackhole_one_reader_pages_per_K_block": 6,
+        "logical_weight_bytes": 51904512,
+        "physical_weight_bytes": 53526528,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 132,
+            "per_reader_row_bytes": 76032,
+            "in1_triple_buffer_bytes": 228096,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 66,
+            "per_reader_row_bytes": 38016,
+            "in1_triple_buffer_bytes": 114048,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 3
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 44,
+            "per_reader_row_bytes": 25344,
+            "in1_triple_buffer_bytes": 76032,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "readers": 1,
+      "program": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=1,per_core_M=1,per_core_N=132,fused_activation=std::nullopt,num_workers_per_dram_bank=1)",
+      "pcc_baseline_per_device": [
+        0.9999991381420543,
+        0.999999137023535,
+        0.999999121732177,
+        0.9999991459940172
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        2.0,
+        2.0,
+        2.0,
+        2.0
+      ],
+      "host_replay_us": [
+        1140.3280775994062,
+        1140.6547389924526,
+        1139.9824637919664,
+        1140.315132215619,
+        1140.7509446144104
+      ],
+      "median_host_replay_us": 1140.3280775994062,
+      "status": "passed"
+    },
+    {
+      "name": "c32768_b1_r2",
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          32768
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          33792
+        ],
+        "in0_block_w": 1,
+        "input_storage_cores": 8,
+        "input_shard_shape": [
+          32,
+          352
+        ],
+        "output_shard_shape": [
+          32,
+          4224
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          4224
+        ],
+        "per_bank_N_tiles": 132,
+        "stored_tile_bytes": 576,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 12672,
+        "blackhole_one_reader_pages_per_K_block": 6,
+        "logical_weight_bytes": 51904512,
+        "physical_weight_bytes": 53526528,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 132,
+            "per_reader_row_bytes": 76032,
+            "in1_triple_buffer_bytes": 228096,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 66,
+            "per_reader_row_bytes": 38016,
+            "in1_triple_buffer_bytes": 114048,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 3
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 44,
+            "per_reader_row_bytes": 25344,
+            "in1_triple_buffer_bytes": 76032,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "readers": 2,
+      "program": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=1,per_core_M=1,per_core_N=132,fused_activation=std::nullopt,num_workers_per_dram_bank=2)",
+      "pcc_baseline_per_device": [
+        0.9999991381420543,
+        0.999999137023535,
+        0.999999121732177,
+        0.9999991459940172
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        2.0,
+        2.0,
+        2.0,
+        2.0
+      ],
+      "host_replay_us": [
+        625.5049258470535,
+        625.4918873310089,
+        625.3656465560198,
+        625.3385916352272,
+        625.5330052226782
+      ],
+      "median_host_replay_us": 625.4918873310089,
+      "status": "passed"
+    },
+    {
+      "name": "c32768_b1_r3",
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          32768
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          33792
+        ],
+        "in0_block_w": 1,
+        "input_storage_cores": 8,
+        "input_shard_shape": [
+          32,
+          352
+        ],
+        "output_shard_shape": [
+          32,
+          4224
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          4224
+        ],
+        "per_bank_N_tiles": 132,
+        "stored_tile_bytes": 576,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 12672,
+        "blackhole_one_reader_pages_per_K_block": 6,
+        "logical_weight_bytes": 51904512,
+        "physical_weight_bytes": 53526528,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 132,
+            "per_reader_row_bytes": 76032,
+            "in1_triple_buffer_bytes": 228096,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 66,
+            "per_reader_row_bytes": 38016,
+            "in1_triple_buffer_bytes": 114048,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 3
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 44,
+            "per_reader_row_bytes": 25344,
+            "in1_triple_buffer_bytes": 76032,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "readers": 3,
+      "program": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=1,per_core_M=1,per_core_N=132,fused_activation=std::nullopt,num_workers_per_dram_bank=3)",
+      "pcc_baseline_per_device": [
+        0.9999991381420543,
+        0.999999137023535,
+        0.999999121732177,
+        0.9999991459940172
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        2.0,
+        2.0,
+        2.0,
+        2.0
+      ],
+      "host_replay_us": [
+        454.63060960173607,
+        454.02245596051216,
+        453.09620909392834,
+        454.45174910128117,
+        453.306594863534
+      ],
+      "median_host_replay_us": 454.02245596051216,
+      "status": "passed"
+    },
+    {
+      "name": "c32768_b2_r1",
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          32768
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          33792
+        ],
+        "in0_block_w": 2,
+        "input_storage_cores": 4,
+        "input_shard_shape": [
+          32,
+          704
+        ],
+        "output_shard_shape": [
+          32,
+          8448
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          4224
+        ],
+        "per_bank_N_tiles": 132,
+        "stored_tile_bytes": 576,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 13824,
+        "blackhole_one_reader_pages_per_K_block": 11,
+        "logical_weight_bytes": 51904512,
+        "physical_weight_bytes": 53526528,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 132,
+            "per_reader_row_bytes": 76032,
+            "in1_triple_buffer_bytes": 456192,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 66,
+            "per_reader_row_bytes": 38016,
+            "in1_triple_buffer_bytes": 228096,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 3
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 44,
+            "per_reader_row_bytes": 25344,
+            "in1_triple_buffer_bytes": 152064,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "readers": 1,
+      "program": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=2,per_core_M=1,per_core_N=264,fused_activation=std::nullopt,num_workers_per_dram_bank=1)",
+      "status": "allocation_rejected",
+      "error": "TT_THROW @ /home/container_app_user/tt-metal/tt_metal/impl/program/program.cpp:1932: tt::exception\ninfo:\nStatically allocated circular buffers in program 32 clash with L1 buffers on core range [0-0 - 5-9]. L1 buffer allocated at 987136 and static circular buffer region ends at 1387008\nbacktrace:\n --- /home/container_app_user/tt-metal/build/lib/libtt_metal.so(+0xa0f5a3) [0x733138ca75a3]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x73313a9990a9]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x11af538) [0x73313a9a7538]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xff) [0x73313a9979cf]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1b5) [0x73313a995245]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x73313a979808]\n --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x110eb90) [0x73313a906b90]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x264) [0x73313a9080d4]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x6508c3) [0x73313c9128c3]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x6505bb) [0x73313c9125bb]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x36ee4d) [0x73313c630e4d]\n --- python(_PyObject_FastCallDictTstate+0x16d) [0x5abf82dd5e2d]\n --- python(_PyObject_Call_Prepend+0x5c) [0x5abf82dead5c]\n --- python(+0x29dea4) [0x5abf82ef2ea4]\n --- python(PyObject_Call+0xbb) [0x5abf82dee83b]\n --- python(_PyEval_EvalFrameDefault+0x28e9) [0x5abf82dccee9]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyObject_FastCallDictTstate+0x16d) [0x5abf82dd5e2d]\n --- python(_PyObject_Call_Prepend+0x5c) [0x5abf82dead5c]\n --- python(+0x29dea4) [0x5abf82ef2ea4]\n --- python(_PyObject_MakeTpCall+0x25b) [0x5abf82dd6bab]\n --- python(_PyEval_EvalFrameDefault+0x69a5) [0x5abf82dd0fa5]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(+0x25b036) [0x5abf82eb0036]\n --- python(PyEval_EvalCode+0x86) [0x5abf82eaff06]\n --- python(+0x26061d) [0x5abf82eb561d]\n --- python(+0x18bd49) [0x5abf82de0d49]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(+0x275f5d) [0x5abf82ecaf5d]\n --- python(Py_RunMain+0x128) [0x5abf82ec9d18]\n --- python(Py_BytesMain+0x2d) [0x5abf82ea3f4d]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x73316c354d90]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x73316c354e40]\n --- python(_start+0x25) [0x5abf82ea3e45]\n"
+    },
+    {
+      "name": "c32768_b2_r2",
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          32768
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          33792
+        ],
+        "in0_block_w": 2,
+        "input_storage_cores": 4,
+        "input_shard_shape": [
+          32,
+          704
+        ],
+        "output_shard_shape": [
+          32,
+          8448
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          4224
+        ],
+        "per_bank_N_tiles": 132,
+        "stored_tile_bytes": 576,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 13824,
+        "blackhole_one_reader_pages_per_K_block": 11,
+        "logical_weight_bytes": 51904512,
+        "physical_weight_bytes": 53526528,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 132,
+            "per_reader_row_bytes": 76032,
+            "in1_triple_buffer_bytes": 456192,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 66,
+            "per_reader_row_bytes": 38016,
+            "in1_triple_buffer_bytes": 228096,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 3
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 44,
+            "per_reader_row_bytes": 25344,
+            "in1_triple_buffer_bytes": 152064,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "readers": 2,
+      "program": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=2,per_core_M=1,per_core_N=264,fused_activation=std::nullopt,num_workers_per_dram_bank=2)",
+      "pcc_baseline_per_device": [
+        0.9999991265050442,
+        0.9999991451063543,
+        0.9999991320572686,
+        0.9999990847189036
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        2.0,
+        2.0,
+        2.0,
+        2.0
+      ],
+      "host_replay_us": [
+        455.4962273687124,
+        455.9335298836231,
+        455.4480779916048,
+        456.35136775672436,
+        456.0502711683512
+      ],
+      "median_host_replay_us": 455.9335298836231,
+      "status": "passed"
+    },
+    {
+      "name": "c32768_b2_r3",
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          32768
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          33792
+        ],
+        "in0_block_w": 2,
+        "input_storage_cores": 4,
+        "input_shard_shape": [
+          32,
+          704
+        ],
+        "output_shard_shape": [
+          32,
+          8448
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          4224
+        ],
+        "per_bank_N_tiles": 132,
+        "stored_tile_bytes": 576,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 13824,
+        "blackhole_one_reader_pages_per_K_block": 11,
+        "logical_weight_bytes": 51904512,
+        "physical_weight_bytes": 53526528,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 132,
+            "per_reader_row_bytes": 76032,
+            "in1_triple_buffer_bytes": 456192,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 66,
+            "per_reader_row_bytes": 38016,
+            "in1_triple_buffer_bytes": 228096,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 3
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 44,
+            "per_reader_row_bytes": 25344,
+            "in1_triple_buffer_bytes": 152064,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "readers": 3,
+      "program": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=2,per_core_M=1,per_core_N=264,fused_activation=std::nullopt,num_workers_per_dram_bank=3)",
+      "pcc_baseline_per_device": [
+        0.9999991265050442,
+        0.9999991451063543,
+        0.9999991320572686,
+        0.9999990847189036
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        2.0,
+        2.0,
+        2.0,
+        2.0
+      ],
+      "host_replay_us": [
+        470.5072846263647,
+        470.9461238235235,
+        470.7127343863249,
+        470.01391649246216,
+        470.55790200829506
+      ],
+      "median_host_replay_us": 470.55790200829506,
+      "status": "passed"
+    },
+    {
+      "name": "c32768_b4_r1",
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          32768
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          33792
+        ],
+        "in0_block_w": 4,
+        "input_storage_cores": 2,
+        "input_shard_shape": [
+          32,
+          1408
+        ],
+        "output_shard_shape": [
+          32,
+          16896
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          4224
+        ],
+        "per_bank_N_tiles": 132,
+        "stored_tile_bytes": 576,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 13824,
+        "blackhole_one_reader_pages_per_K_block": 22,
+        "logical_weight_bytes": 51904512,
+        "physical_weight_bytes": 53526528,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 132,
+            "per_reader_row_bytes": 76032,
+            "in1_triple_buffer_bytes": 912384,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 66,
+            "per_reader_row_bytes": 38016,
+            "in1_triple_buffer_bytes": 456192,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 3
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 44,
+            "per_reader_row_bytes": 25344,
+            "in1_triple_buffer_bytes": 304128,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "readers": 1,
+      "program": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=4,per_core_M=1,per_core_N=528,fused_activation=std::nullopt,num_workers_per_dram_bank=1)",
+      "status": "allocation_rejected",
+      "error": "TT_THROW @ /home/container_app_user/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception\ninfo:\nStatically allocated circular buffers on core range [0-0 - 5-9] grow to 1851392 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x24a316a) [0x73313bc9b16a]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x73313a9990a9]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x11af538) [0x73313a9a7538]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xff) [0x73313a9979cf]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1b5) [0x73313a995245]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x73313a979808]\n --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x110eb90) [0x73313a906b90]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x264) [0x73313a9080d4]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x6508c3) [0x73313c9128c3]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x6505bb) [0x73313c9125bb]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x36ee4d) [0x73313c630e4d]\n --- python(_PyObject_FastCallDictTstate+0x16d) [0x5abf82dd5e2d]\n --- python(_PyObject_Call_Prepend+0x5c) [0x5abf82dead5c]\n --- python(+0x29dea4) [0x5abf82ef2ea4]\n --- python(PyObject_Call+0xbb) [0x5abf82dee83b]\n --- python(_PyEval_EvalFrameDefault+0x28e9) [0x5abf82dccee9]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyObject_FastCallDictTstate+0x16d) [0x5abf82dd5e2d]\n --- python(_PyObject_Call_Prepend+0x5c) [0x5abf82dead5c]\n --- python(+0x29dea4) [0x5abf82ef2ea4]\n --- python(_PyObject_MakeTpCall+0x25b) [0x5abf82dd6bab]\n --- python(_PyEval_EvalFrameDefault+0x69a5) [0x5abf82dd0fa5]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(+0x25b036) [0x5abf82eb0036]\n --- python(PyEval_EvalCode+0x86) [0x5abf82eaff06]\n --- python(+0x26061d) [0x5abf82eb561d]\n --- python(+0x18bd49) [0x5abf82de0d49]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(+0x275f5d) [0x5abf82ecaf5d]\n --- python(Py_RunMain+0x128) [0x5abf82ec9d18]\n --- python(Py_BytesMain+0x2d) [0x5abf82ea3f4d]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x73316c354d90]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x73316c354e40]\n --- python(_start+0x25) [0x5abf82ea3e45]\n"
+    },
+    {
+      "name": "c32768_b4_r2",
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          32768
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          33792
+        ],
+        "in0_block_w": 4,
+        "input_storage_cores": 2,
+        "input_shard_shape": [
+          32,
+          1408
+        ],
+        "output_shard_shape": [
+          32,
+          16896
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          4224
+        ],
+        "per_bank_N_tiles": 132,
+        "stored_tile_bytes": 576,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 13824,
+        "blackhole_one_reader_pages_per_K_block": 22,
+        "logical_weight_bytes": 51904512,
+        "physical_weight_bytes": 53526528,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 132,
+            "per_reader_row_bytes": 76032,
+            "in1_triple_buffer_bytes": 912384,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 66,
+            "per_reader_row_bytes": 38016,
+            "in1_triple_buffer_bytes": 456192,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 3
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 44,
+            "per_reader_row_bytes": 25344,
+            "in1_triple_buffer_bytes": 304128,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "readers": 2,
+      "program": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=4,per_core_M=1,per_core_N=528,fused_activation=std::nullopt,num_workers_per_dram_bank=2)",
+      "status": "allocation_rejected",
+      "error": "TT_THROW @ /home/container_app_user/tt-metal/tt_metal/impl/program/program.cpp:1932: tt::exception\ninfo:\nStatically allocated circular buffers in program 44 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 401408 and static circular buffer region ends at 1001984\nbacktrace:\n --- /home/container_app_user/tt-metal/build/lib/libtt_metal.so(+0xa0f5a3) [0x733138ca75a3]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x73313a9990a9]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x11af538) [0x73313a9a7538]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xff) [0x73313a9979cf]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1b5) [0x73313a995245]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x73313a979808]\n --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x110eb90) [0x73313a906b90]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x264) [0x73313a9080d4]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x6508c3) [0x73313c9128c3]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x6505bb) [0x73313c9125bb]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x36ee4d) [0x73313c630e4d]\n --- python(_PyObject_FastCallDictTstate+0x16d) [0x5abf82dd5e2d]\n --- python(_PyObject_Call_Prepend+0x5c) [0x5abf82dead5c]\n --- python(+0x29dea4) [0x5abf82ef2ea4]\n --- python(PyObject_Call+0xbb) [0x5abf82dee83b]\n --- python(_PyEval_EvalFrameDefault+0x28e9) [0x5abf82dccee9]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyObject_FastCallDictTstate+0x16d) [0x5abf82dd5e2d]\n --- python(_PyObject_Call_Prepend+0x5c) [0x5abf82dead5c]\n --- python(+0x29dea4) [0x5abf82ef2ea4]\n --- python(_PyObject_MakeTpCall+0x25b) [0x5abf82dd6bab]\n --- python(_PyEval_EvalFrameDefault+0x69a5) [0x5abf82dd0fa5]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(+0x25b036) [0x5abf82eb0036]\n --- python(PyEval_EvalCode+0x86) [0x5abf82eaff06]\n --- python(+0x26061d) [0x5abf82eb561d]\n --- python(+0x18bd49) [0x5abf82de0d49]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(+0x275f5d) [0x5abf82ecaf5d]\n --- python(Py_RunMain+0x128) [0x5abf82ec9d18]\n --- python(Py_BytesMain+0x2d) [0x5abf82ea3f4d]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x73316c354d90]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x73316c354e40]\n --- python(_start+0x25) [0x5abf82ea3e45]\n"
+    },
+    {
+      "name": "c32768_b4_r3",
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          32768
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          33792
+        ],
+        "in0_block_w": 4,
+        "input_storage_cores": 2,
+        "input_shard_shape": [
+          32,
+          1408
+        ],
+        "output_shard_shape": [
+          32,
+          16896
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          4224
+        ],
+        "per_bank_N_tiles": 132,
+        "stored_tile_bytes": 576,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 13824,
+        "blackhole_one_reader_pages_per_K_block": 22,
+        "logical_weight_bytes": 51904512,
+        "physical_weight_bytes": 53526528,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 132,
+            "per_reader_row_bytes": 76032,
+            "in1_triple_buffer_bytes": 912384,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 66,
+            "per_reader_row_bytes": 38016,
+            "in1_triple_buffer_bytes": 456192,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 3
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 44,
+            "per_reader_row_bytes": 25344,
+            "in1_triple_buffer_bytes": 304128,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "readers": 3,
+      "program": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=4,per_core_M=1,per_core_N=528,fused_activation=std::nullopt,num_workers_per_dram_bank=3)",
+      "status": "allocation_rejected",
+      "error": "TT_THROW @ /home/container_app_user/tt-metal/tt_metal/impl/program/program.cpp:1932: tt::exception\ninfo:\nStatically allocated circular buffers in program 46 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 401408 and static circular buffer region ends at 702464\nbacktrace:\n --- /home/container_app_user/tt-metal/build/lib/libtt_metal.so(+0xa0f5a3) [0x733138ca75a3]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x73313a9990a9]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x11af538) [0x73313a9a7538]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xff) [0x73313a9979cf]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1b5) [0x73313a995245]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x73313a979808]\n --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x110eb90) [0x73313a906b90]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x264) [0x73313a9080d4]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x6508c3) [0x73313c9128c3]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x6505bb) [0x73313c9125bb]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x36ee4d) [0x73313c630e4d]\n --- python(_PyObject_FastCallDictTstate+0x16d) [0x5abf82dd5e2d]\n --- python(_PyObject_Call_Prepend+0x5c) [0x5abf82dead5c]\n --- python(+0x29dea4) [0x5abf82ef2ea4]\n --- python(PyObject_Call+0xbb) [0x5abf82dee83b]\n --- python(_PyEval_EvalFrameDefault+0x28e9) [0x5abf82dccee9]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyObject_FastCallDictTstate+0x16d) [0x5abf82dd5e2d]\n --- python(_PyObject_Call_Prepend+0x5c) [0x5abf82dead5c]\n --- python(+0x29dea4) [0x5abf82ef2ea4]\n --- python(_PyObject_MakeTpCall+0x25b) [0x5abf82dd6bab]\n --- python(_PyEval_EvalFrameDefault+0x69a5) [0x5abf82dd0fa5]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(+0x25b036) [0x5abf82eb0036]\n --- python(PyEval_EvalCode+0x86) [0x5abf82eaff06]\n --- python(+0x26061d) [0x5abf82eb561d]\n --- python(+0x18bd49) [0x5abf82de0d49]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(+0x275f5d) [0x5abf82ecaf5d]\n --- python(Py_RunMain+0x128) [0x5abf82ec9d18]\n --- python(Py_BytesMain+0x2d) [0x5abf82ea3f4d]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x73316c354d90]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x73316c354e40]\n --- python(_start+0x25) [0x5abf82ea3e45]\n"
+    },
+    {
+      "name": "c16384_b1_r1",
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          16384
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          16896
+        ],
+        "in0_block_w": 1,
+        "input_storage_cores": 8,
+        "input_shard_shape": [
+          32,
+          352
+        ],
+        "output_shard_shape": [
+          32,
+          2112
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          2112
+        ],
+        "per_bank_N_tiles": 66,
+        "stored_tile_bytes": 576,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 12672,
+        "blackhole_one_reader_pages_per_K_block": 3,
+        "logical_weight_bytes": 25952256,
+        "physical_weight_bytes": 26763264,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 66,
+            "per_reader_row_bytes": 38016,
+            "in1_triple_buffer_bytes": 114048,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 33,
+            "per_reader_row_bytes": 19008,
+            "in1_triple_buffer_bytes": 57024,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 22,
+            "per_reader_row_bytes": 12672,
+            "in1_triple_buffer_bytes": 38016,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "readers": 1,
+      "program": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=1,per_core_M=1,per_core_N=66,fused_activation=std::nullopt,num_workers_per_dram_bank=1)",
+      "pcc_baseline_per_device": [
+        0.9999991381420543,
+        0.999999137023535,
+        0.999999121732177,
+        0.9999991459940172
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        2.0,
+        2.0,
+        2.0,
+        2.0
+      ],
+      "host_replay_us": [
+        1176.9969016313553,
+        1176.7995543777943,
+        1176.8090073019266,
+        1176.7865158617496,
+        1176.9392993301153
+      ],
+      "median_host_replay_us": 1176.8090073019266,
+      "status": "passed"
+    },
+    {
+      "name": "c16384_b1_r2",
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          16384
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          16896
+        ],
+        "in0_block_w": 1,
+        "input_storage_cores": 8,
+        "input_shard_shape": [
+          32,
+          352
+        ],
+        "output_shard_shape": [
+          32,
+          2112
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          2112
+        ],
+        "per_bank_N_tiles": 66,
+        "stored_tile_bytes": 576,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 12672,
+        "blackhole_one_reader_pages_per_K_block": 3,
+        "logical_weight_bytes": 25952256,
+        "physical_weight_bytes": 26763264,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 66,
+            "per_reader_row_bytes": 38016,
+            "in1_triple_buffer_bytes": 114048,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 33,
+            "per_reader_row_bytes": 19008,
+            "in1_triple_buffer_bytes": 57024,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 22,
+            "per_reader_row_bytes": 12672,
+            "in1_triple_buffer_bytes": 38016,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "readers": 2,
+      "program": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=1,per_core_M=1,per_core_N=66,fused_activation=std::nullopt,num_workers_per_dram_bank=2)",
+      "pcc_baseline_per_device": [
+        0.9999991381420543,
+        0.999999137023535,
+        0.999999121732177,
+        0.9999991459940172
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        2.0,
+        2.0,
+        2.0,
+        2.0
+      ],
+      "host_replay_us": [
+        690.8899173140526,
+        690.870825201273,
+        690.9034214913845,
+        691.5556732565165,
+        691.5020756423473
+      ],
+      "median_host_replay_us": 690.9034214913845,
+      "status": "passed"
+    },
+    {
+      "name": "c16384_b1_r3",
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          16384
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          16896
+        ],
+        "in0_block_w": 1,
+        "input_storage_cores": 8,
+        "input_shard_shape": [
+          32,
+          352
+        ],
+        "output_shard_shape": [
+          32,
+          2112
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          2112
+        ],
+        "per_bank_N_tiles": 66,
+        "stored_tile_bytes": 576,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 12672,
+        "blackhole_one_reader_pages_per_K_block": 3,
+        "logical_weight_bytes": 25952256,
+        "physical_weight_bytes": 26763264,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 66,
+            "per_reader_row_bytes": 38016,
+            "in1_triple_buffer_bytes": 114048,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 33,
+            "per_reader_row_bytes": 19008,
+            "in1_triple_buffer_bytes": 57024,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 22,
+            "per_reader_row_bytes": 12672,
+            "in1_triple_buffer_bytes": 38016,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "readers": 3,
+      "program": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=1,per_core_M=1,per_core_N=66,fused_activation=std::nullopt,num_workers_per_dram_bank=3)",
+      "pcc_baseline_per_device": [
+        0.9999991381420543,
+        0.999999137023535,
+        0.999999121732177,
+        0.9999991459940172
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        2.0,
+        2.0,
+        2.0,
+        2.0
+      ],
+      "host_replay_us": [
+        513.1109617650509,
+        513.0383186042309,
+        512.9856988787651,
+        512.7422511577606,
+        512.7166397869587
+      ],
+      "median_host_replay_us": 512.9856988787651,
+      "status": "passed"
+    },
+    {
+      "name": "c16384_b2_r1",
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          16384
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          16896
+        ],
+        "in0_block_w": 2,
+        "input_storage_cores": 4,
+        "input_shard_shape": [
+          32,
+          704
+        ],
+        "output_shard_shape": [
+          32,
+          4224
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          2112
+        ],
+        "per_bank_N_tiles": 66,
+        "stored_tile_bytes": 576,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 12672,
+        "blackhole_one_reader_pages_per_K_block": 6,
+        "logical_weight_bytes": 25952256,
+        "physical_weight_bytes": 26763264,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 66,
+            "per_reader_row_bytes": 38016,
+            "in1_triple_buffer_bytes": 228096,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 33,
+            "per_reader_row_bytes": 19008,
+            "in1_triple_buffer_bytes": 114048,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 22,
+            "per_reader_row_bytes": 12672,
+            "in1_triple_buffer_bytes": 76032,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "readers": 1,
+      "program": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=2,per_core_M=1,per_core_N=132,fused_activation=std::nullopt,num_workers_per_dram_bank=1)",
+      "pcc_baseline_per_device": [
+        0.9999991265050442,
+        0.9999991451063543,
+        0.9999991320572686,
+        0.9999990847189036
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        2.0,
+        2.0,
+        2.0,
+        2.0
+      ],
+      "host_replay_us": [
+        675.8948788046837,
+        675.6613496690989,
+        675.7315248250961,
+        675.8543197065592,
+        675.9078707545996
+      ],
+      "median_host_replay_us": 675.8543197065592,
+      "status": "passed"
+    },
+    {
+      "name": "c16384_b2_r2",
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          16384
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          16896
+        ],
+        "in0_block_w": 2,
+        "input_storage_cores": 4,
+        "input_shard_shape": [
+          32,
+          704
+        ],
+        "output_shard_shape": [
+          32,
+          4224
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          2112
+        ],
+        "per_bank_N_tiles": 66,
+        "stored_tile_bytes": 576,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 12672,
+        "blackhole_one_reader_pages_per_K_block": 6,
+        "logical_weight_bytes": 25952256,
+        "physical_weight_bytes": 26763264,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 66,
+            "per_reader_row_bytes": 38016,
+            "in1_triple_buffer_bytes": 228096,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 33,
+            "per_reader_row_bytes": 19008,
+            "in1_triple_buffer_bytes": 114048,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 22,
+            "per_reader_row_bytes": 12672,
+            "in1_triple_buffer_bytes": 76032,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "readers": 2,
+      "program": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=2,per_core_M=1,per_core_N=132,fused_activation=std::nullopt,num_workers_per_dram_bank=2)",
+      "pcc_baseline_per_device": [
+        0.9999991265050442,
+        0.9999991451063543,
+        0.9999991320572686,
+        0.9999990847189036
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        2.0,
+        2.0,
+        2.0,
+        2.0
+      ],
+      "host_replay_us": [
+        463.3761942386627,
+        462.5576548278332,
+        462.82922849059105,
+        462.9579372704029,
+        462.35225163400173
+      ],
+      "median_host_replay_us": 462.82922849059105,
+      "status": "passed"
+    },
+    {
+      "name": "c16384_b2_r3",
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          16384
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          16896
+        ],
+        "in0_block_w": 2,
+        "input_storage_cores": 4,
+        "input_shard_shape": [
+          32,
+          704
+        ],
+        "output_shard_shape": [
+          32,
+          4224
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          2112
+        ],
+        "per_bank_N_tiles": 66,
+        "stored_tile_bytes": 576,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 12672,
+        "blackhole_one_reader_pages_per_K_block": 6,
+        "logical_weight_bytes": 25952256,
+        "physical_weight_bytes": 26763264,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 66,
+            "per_reader_row_bytes": 38016,
+            "in1_triple_buffer_bytes": 228096,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 33,
+            "per_reader_row_bytes": 19008,
+            "in1_triple_buffer_bytes": 114048,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 22,
+            "per_reader_row_bytes": 12672,
+            "in1_triple_buffer_bytes": 76032,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "readers": 3,
+      "program": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=2,per_core_M=1,per_core_N=132,fused_activation=std::nullopt,num_workers_per_dram_bank=3)",
+      "pcc_baseline_per_device": [
+        0.9999991265050442,
+        0.9999991451063543,
+        0.9999991320572686,
+        0.9999990847189036
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        2.0,
+        2.0,
+        2.0,
+        2.0
+      ],
+      "host_replay_us": [
+        478.86320389807224,
+        478.1107883900404,
+        478.1157709658146,
+        478.140776976943,
+        478.81114296615124
+      ],
+      "median_host_replay_us": 478.140776976943,
+      "status": "passed"
+    },
+    {
+      "name": "c16384_b4_r1",
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          16384
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          16896
+        ],
+        "in0_block_w": 4,
+        "input_storage_cores": 2,
+        "input_shard_shape": [
+          32,
+          1408
+        ],
+        "output_shard_shape": [
+          32,
+          8448
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          2112
+        ],
+        "per_bank_N_tiles": 66,
+        "stored_tile_bytes": 576,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 13824,
+        "blackhole_one_reader_pages_per_K_block": 11,
+        "logical_weight_bytes": 25952256,
+        "physical_weight_bytes": 26763264,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 66,
+            "per_reader_row_bytes": 38016,
+            "in1_triple_buffer_bytes": 456192,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 33,
+            "per_reader_row_bytes": 19008,
+            "in1_triple_buffer_bytes": 228096,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 22,
+            "per_reader_row_bytes": 12672,
+            "in1_triple_buffer_bytes": 152064,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "readers": 1,
+      "program": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=4,per_core_M=1,per_core_N=264,fused_activation=std::nullopt,num_workers_per_dram_bank=1)",
+      "status": "allocation_rejected",
+      "error": "TT_THROW @ /home/container_app_user/tt-metal/tt_metal/impl/program/program.cpp:1932: tt::exception\ninfo:\nStatically allocated circular buffers in program 68 clash with L1 buffers on core range [0-0 - 5-9]. L1 buffer allocated at 942080 and static circular buffer region ends at 1001984\nbacktrace:\n --- /home/container_app_user/tt-metal/build/lib/libtt_metal.so(+0xa0f5a3) [0x733138ca75a3]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x73313a9990a9]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x11af538) [0x73313a9a7538]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xff) [0x73313a9979cf]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1b5) [0x73313a995245]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x73313a979808]\n --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(+0x110eb90) [0x73313a906b90]\n --- /home/container_app_user/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x264) [0x73313a9080d4]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x6508c3) [0x73313c9128c3]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x6505bb) [0x73313c9125bb]\n --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x36ee4d) [0x73313c630e4d]\n --- python(_PyObject_FastCallDictTstate+0x16d) [0x5abf82dd5e2d]\n --- python(_PyObject_Call_Prepend+0x5c) [0x5abf82dead5c]\n --- python(+0x29dea4) [0x5abf82ef2ea4]\n --- python(PyObject_Call+0xbb) [0x5abf82dee83b]\n --- python(_PyEval_EvalFrameDefault+0x28e9) [0x5abf82dccee9]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyObject_FastCallDictTstate+0x16d) [0x5abf82dd5e2d]\n --- python(_PyObject_Call_Prepend+0x5c) [0x5abf82dead5c]\n --- python(+0x29dea4) [0x5abf82ef2ea4]\n --- python(_PyObject_MakeTpCall+0x25b) [0x5abf82dd6bab]\n --- python(_PyEval_EvalFrameDefault+0x69a5) [0x5abf82dd0fa5]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(+0x25b036) [0x5abf82eb0036]\n --- python(PyEval_EvalCode+0x86) [0x5abf82eaff06]\n --- python(+0x26061d) [0x5abf82eb561d]\n --- python(+0x18bd49) [0x5abf82de0d49]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(_PyEval_EvalFrameDefault+0x6c0) [0x5abf82dcacc0]\n --- python(_PyFunction_Vectorcall+0x7c) [0x5abf82de0aec]\n --- python(+0x275f5d) [0x5abf82ecaf5d]\n --- python(Py_RunMain+0x128) [0x5abf82ec9d18]\n --- python(Py_BytesMain+0x2d) [0x5abf82ea3f4d]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x73316c354d90]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x73316c354e40]\n --- python(_start+0x25) [0x5abf82ea3e45]\n"
+    },
+    {
+      "name": "c16384_b4_r2",
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          16384
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          16896
+        ],
+        "in0_block_w": 4,
+        "input_storage_cores": 2,
+        "input_shard_shape": [
+          32,
+          1408
+        ],
+        "output_shard_shape": [
+          32,
+          8448
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          2112
+        ],
+        "per_bank_N_tiles": 66,
+        "stored_tile_bytes": 576,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 13824,
+        "blackhole_one_reader_pages_per_K_block": 11,
+        "logical_weight_bytes": 25952256,
+        "physical_weight_bytes": 26763264,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 66,
+            "per_reader_row_bytes": 38016,
+            "in1_triple_buffer_bytes": 456192,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 33,
+            "per_reader_row_bytes": 19008,
+            "in1_triple_buffer_bytes": 228096,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 22,
+            "per_reader_row_bytes": 12672,
+            "in1_triple_buffer_bytes": 152064,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "readers": 2,
+      "program": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=4,per_core_M=1,per_core_N=264,fused_activation=std::nullopt,num_workers_per_dram_bank=2)",
+      "pcc_baseline_per_device": [
+        0.9999991336194269,
+        0.9999991368204736,
+        0.9999991003666304,
+        0.9999991464088679
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        2.0,
+        2.0,
+        2.0,
+        2.0
+      ],
+      "host_replay_us": [
+        487.74066381156445,
+        488.65131102502346,
+        487.43258230388165,
+        488.0616907030344,
+        488.2420413196087
+      ],
+      "median_host_replay_us": 488.0616907030344,
+      "status": "passed"
+    },
+    {
+      "name": "c16384_b4_r3",
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          16384
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          16896
+        ],
+        "in0_block_w": 4,
+        "input_storage_cores": 2,
+        "input_shard_shape": [
+          32,
+          1408
+        ],
+        "output_shard_shape": [
+          32,
+          8448
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          2112
+        ],
+        "per_bank_N_tiles": 66,
+        "stored_tile_bytes": 576,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 13824,
+        "blackhole_one_reader_pages_per_K_block": 11,
+        "logical_weight_bytes": 25952256,
+        "physical_weight_bytes": 26763264,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 66,
+            "per_reader_row_bytes": 38016,
+            "in1_triple_buffer_bytes": 456192,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 33,
+            "per_reader_row_bytes": 19008,
+            "in1_triple_buffer_bytes": 228096,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 22,
+            "per_reader_row_bytes": 12672,
+            "in1_triple_buffer_bytes": 152064,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "readers": 3,
+      "program": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=4,per_core_M=1,per_core_N=264,fused_activation=std::nullopt,num_workers_per_dram_bank=3)",
+      "pcc_baseline_per_device": [
+        0.9999991336194269,
+        0.9999991368204736,
+        0.9999991003666304,
+        0.9999991464088679
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        2.0,
+        2.0,
+        2.0,
+        2.0
+      ],
+      "host_replay_us": [
+        500.96032209694386,
+        501.48325972259045,
+        500.686839222908,
+        501.0213702917099,
+        500.29498524963856
+      ],
+      "median_host_replay_us": 500.96032209694386,
+      "status": "passed"
+    }
+  ]
+}

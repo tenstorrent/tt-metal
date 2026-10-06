@@ -1,0 +1,9 @@
+{
+  "scope": "All original columns/field values for the selected device within PERF_DECODE/PERF_DECODE_END, including both signposts",
+  "device_filter": "3",
+  "original_source": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/batch8_profile_retry/reports/serial8/2026_09_29_12_06_37/ops_perf_results_serial8_2026_09_29_12_06_37.csv",
+  "original_sha256": "de5f83ecad29869c070a08927a5f89f322d9c43742ad294ef804618e37a51c85",
+  "window_sha256": "3ca9e66ab2ade75349bba21b0cf19192a2c8fad33208eefcd7ea37a6a0b2e6cd",
+  "rows_including_signposts": 2028,
+  "columns": 142
+}

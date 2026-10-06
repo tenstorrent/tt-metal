@@ -1,0 +1,12 @@
+{
+  "mode": "fresh independent source-only Codex CLI, after collaboration thread-limit rejection",
+  "model": "gpt-5.5",
+  "reasoning_effort": "xhigh",
+  "exit_code": 0,
+  "sandbox": "danger-full-access, matching enclosing environment; prior workspace-write CLI could not start tools because bwrap is absent",
+  "hardware_access": "forbidden in prompt; none used",
+  "prompt_sha256": "32fd7bcd46dfb0ce899746d70372c1b9d4ea19a8808f0b0d6aa783090ebc1e18",
+  "report_sha256_with_coordinator_addendum": "c2835ebade133465496bd57f3b1b8ad680f4155d3244742b69bbae16119d3ddd",
+  "log_sha256": "be2d7f98594525120f267a1c22e3f53cd707470b49f3b8d24283758c0b9b23b9",
+  "not_stage_review": true
+}

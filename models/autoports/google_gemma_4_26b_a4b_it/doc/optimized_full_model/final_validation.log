@@ -1,0 +1,153 @@
+2026-09-27 08:22:24.040 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-09-27 08:22:25.401 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-27 08:22:25.401 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-27 08:22:25.401 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-27 08:22:25.401 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-27 08:22:25.406 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:576)
+2026-09-27 08:22:25.406 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-27 08:22:25.486 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-27 08:22:25.486 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-27 08:22:25.486 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-27 08:22:25.486 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-27 08:22:25.488 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-27 08:22:25.695 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-27 08:22:25.819 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-27 08:22:25.819 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-27 08:22:25.819 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-27 08:22:25.819 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-27 08:22:25.819 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-27 08:22:25.863 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-27 08:22:25.885 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:455)
+2026-09-27 08:22:25.885 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:325)
+LAYER_READY 0
+LAYER_READY 1
+LAYER_READY 2
+LAYER_READY 3
+LAYER_READY 4
+LAYER_READY 5
+LAYER_READY 6
+LAYER_READY 7
+LAYER_READY 8
+LAYER_READY 9
+LAYER_READY 10
+LAYER_READY 11
+LAYER_READY 12
+LAYER_READY 13
+LAYER_READY 14
+LAYER_READY 15
+LAYER_READY 16
+LAYER_READY 17
+LAYER_READY 18
+LAYER_READY 19
+LAYER_READY 20
+LAYER_READY 21
+LAYER_READY 22
+LAYER_READY 23
+LAYER_READY 24
+LAYER_READY 25
+LAYER_READY 26
+LAYER_READY 27
+LAYER_READY 28
+LAYER_READY 29
+MODEL_READY
+2026-09-27 08:24:38.963 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-09-27 08:24:38.968 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-27 08:24:38.968 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-27 08:24:38.968 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-27 08:24:38.968 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-27 08:24:38.970 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-09-27 08:24:38.970 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 4096 B pages. Configure 12288 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-27 08:24:38.970 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 4096 B pages. Configure 12288 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-27 08:24:38.970 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 4096 B pages. Configure 12288 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-27 08:24:38.970 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 4096 B pages. Configure 12288 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-27 08:24:39.486 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:130)
+SPLIT_TRACE_READY
+2026-09-27 08:24:41.475 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(1))
+SPLIT_TRACE_READY
+2026-09-27 08:24:42.343 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(3))
+SPLIT_TRACE_READY
+QUALITATIVE shared_0 Data flows like rain,
+Patterns bloom within the code,
+Mind built out of math.<turn|>
+2026-09-27 08:24:45.269 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(5))
+SPLIT_TRACE_READY
+2026-09-27 08:24:48.204 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(8))
+SPLIT_TRACE_READY
+QUALITATIVE shared_1 To understand the difference, imagine you are teaching a child how to identify different types of fruit.
+
+### 1. Supervised Learning (The Teacher Method)
+Think of this as learning with a **teacher** or an **answer key**.
+
+In supervised learning, you give the computer a dataset where the "answers" are already provided. Each piece of data is labeled.
+
+*   **The Process:** You show the computer 100 pictures. You point to one and say, *"This is an apple."* You point to another and say, *"This is an orange."*
+*   **The Goal:**
+2026-09-27 08:24:51.132 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(10))
+SPLIT_TRACE_READY
+2026-09-27 08:24:54.162 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(13))
+SPLIT_TRACE_READY
+QUALITATIVE shared_2 Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered a brass-bound-compass that didn't point North, but instead pointed toward things that were lost.
+
+His name was Elian, and he lived in a workshop cluttered with half-finished clockwork birds and steam-powered tea kettles. While the other citizens of the kingdom of Oakhaven were content with the predictable rhythms of harvest and feast, Elian spent his days peering through magnifying lenses and tinkering with gears.
+
+The discovery happened on a rainy Tuesday. Elian had been scavenging in the kingdom’s Great Junkyard
+2026-09-27 08:24:57.096 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(15))
+SPLIT_TRACE_READY
+2026-09-27 08:25:00.033 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(18))
+SPLIT_TRACE_READY
+QUALITATIVE shared_3 While there are technically four statements (the Three Laws plus the Zeroth Law), the **Three Laws of Thermodynamics** describe how energy, temperature, and entropy behave in a system.
+
+Here is a breakdown of each law:
+
+### 1. The First Law: The Law of Conservation of Energy
+**The Concept:** Energy cannot be created or destroyed; it can only be transferred from one form to another or converted from one form to another.
+
+*   **In simple terms:** You can’t get something for nothing. The total amount of energy in an isolated system remains constant.
+*   **The Equation:** $\Delta
+2026-09-27 08:25:02.952 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(20))
+SPLIT_TRACE_READY
+2026-09-27 08:25:05.336 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(23))
+SPLIT_TRACE_READY
+QUALITATIVE shared_4 There are a few ways to translate this depending on the level of formality:
+
+**1. Formal (Use this with strangers, bosses, or elders):**
+> "Bonjour, comment allez-vous aujourd'hui ?"
+
+**2. Informal (Use this with friends or family):**
+> "Salut, comment vas-tu aujourd'hui ?"
+
+**3. Casual/Common (Very common in everyday conversation):**
+> "Salut, ça va aujourd'hui ?"<turn|>
+2026-09-27 08:25:08.267 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(25))
+SPLIT_TRACE_READY
+2026-09-27 08:25:11.201 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(28))
+SPLIT_TRACE_READY
+QUALITATIVE shared_5 Depending on your needs (performance, simplicity, or memory efficiency), there are several ways to write this function. Here are the three most common approaches.
+
+### 1. The Iterative Approach (Most Efficient for General Use)
+This is the best approach for most real-world applications. It uses a loop to calculate the next number, making it very fast and memory-efficient.
+
+```python
+def fibonacci_iterative(n):
+    """
+    Returns a list containing the Fibonacci sequence up to the n-th term.
+    """
+    sequence = []
+    a, b = 0,
+2026-09-27 08:25:14.124 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(30))
+SPLIT_TRACE_READY
+2026-09-27 08:25:17.090 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(33))
+SPLIT_TRACE_READY
+PERFORMANCE streaming {'samples': [{'ttft_ms': 2115.0267776101828, 'trace_setup_ms': 0.00018067657947540283, 'reused_request_trace': True, 'generation_wall_ms': 4692.561206407845, 'decode_tps': 49.27200578930734, 'input_tokens': 4096, 'output_tokens': 128, 'batch': 1, 'source': 'autoregressive', 'reduced_probe': False, 'host_sampling': False, 'buffered_token_output': False, 'counters': {'model_replays': 127, 'sampling_replays': 127, 'token_refreshes': 0, 'position_refreshes': 0, 'cache_position_refreshes': 0, 'page_table_refreshes': 0, 'synchronizations': 0, 'token_readbacks': 127, 'full_logits_readbacks': 0, 'teacher_forcing_token_refreshes': 0}, 'concurrency': 1}, {'ttft_ms': 2115.8428713679314, 'trace_setup_ms': 0.00017136335372924805, 'reused_request_trace': True, 'generation_wall_ms': 4693.778130225837, 'decode_tps': 49.26432688460231, 'input_tokens': 4096, 'output_tokens': 128, 'batch': 1, 'source': 'autoregressive', 'reduced_probe': False, 'host_sampling': False, 'buffered_token_output': False, 'counters': {'model_replays': 127, 'sampling_replays': 127, 'token_refreshes': 0, 'position_refreshes': 0, 'cache_position_refreshes': 0, 'page_table_refreshes': 0, 'synchronizations': 0, 'token_readbacks': 127, 'full_logits_readbacks': 0, 'teacher_forcing_token_refreshes': 0}, 'concurrency': 1}, {'ttft_ms': 2115.1150800287724, 'trace_setup_ms': 0.0003902241587638855, 'reused_request_trace': True, 'generation_wall_ms': 4693.731110543013, 'decode_tps': 49.25134273817778, 'input_tokens': 4096, 'output_tokens': 128, 'batch': 1, 'source': 'autoregressive', 'reduced_probe': False, 'host_sampling': False, 'buffered_token_output': False, 'counters': {'model_replays': 127, 'sampling_replays': 127, 'token_refreshes': 0, 'position_refreshes': 0, 'cache_position_refreshes': 0, 'page_table_refreshes': 0, 'synchronizations': 0, 'token_readbacks': 127, 'full_logits_readbacks': 0, 'teacher_forcing_token_refreshes': 0}, 'concurrency': 1}], 'median_ttft_ms': 2115.1150800287724, 'median_decode_tps': 49.26432688460231}
+2026-09-27 08:25:36.462 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(36))
+SPLIT_TRACE_READY
+PERFORMANCE buffered {'samples': [{'ttft_ms': 2113.192867487669, 'trace_setup_ms': 0.37113483995199203, 'reused_request_trace': True, 'generation_wall_ms': 4686.440408229828, 'decode_tps': 49.35407828525631, 'input_tokens': 4096, 'output_tokens': 128, 'batch': 1, 'source': 'autoregressive', 'reduced_probe': False, 'host_sampling': False, 'buffered_token_output': True, 'counters': {'model_replays': 127, 'sampling_replays': 127, 'token_refreshes': 0, 'position_refreshes': 0, 'cache_position_refreshes': 0, 'page_table_refreshes': 0, 'synchronizations': 0, 'token_readbacks': 1, 'full_logits_readbacks': 0, 'teacher_forcing_token_refreshes': 0, 'output_replays': 127}, 'concurrency': 1}, {'ttft_ms': 2112.5227753072977, 'trace_setup_ms': 0.13822317123413086, 'reused_request_trace': True, 'generation_wall_ms': 4685.830717906356, 'decode_tps': 49.352916177678374, 'input_tokens': 4096, 'output_tokens': 128, 'batch': 1, 'source': 'autoregressive', 'reduced_probe': False, 'host_sampling': False, 'buffered_token_output': True, 'counters': {'model_replays': 127, 'sampling_replays': 127, 'token_refreshes': 0, 'position_refreshes': 0, 'cache_position_refreshes': 0, 'page_table_refreshes': 0, 'synchronizations': 0, 'token_readbacks': 1, 'full_logits_readbacks': 0, 'teacher_forcing_token_refreshes': 0, 'output_replays': 127}, 'concurrency': 1}, {'ttft_ms': 2114.0978587791324, 'trace_setup_ms': 0.18098391592502594, 'reused_request_trace': True, 'generation_wall_ms': 4687.287595123053, 'decode_tps': 49.355189108343666, 'input_tokens': 4096, 'output_tokens': 128, 'batch': 1, 'source': 'autoregressive', 'reduced_probe': False, 'host_sampling': False, 'buffered_token_output': True, 'counters': {'model_replays': 127, 'sampling_replays': 127, 'token_refreshes': 0, 'position_refreshes': 0, 'cache_position_refreshes': 0, 'page_table_refreshes': 0, 'synchronizations': 0, 'token_readbacks': 1, 'full_logits_readbacks': 0, 'teacher_forcing_token_refreshes': 0, 'output_replays': 127}, 'concurrency': 1}], 'median_ttft_ms': 2113.192867487669, 'median_decode_tps': 49.35407828525631}
+2026-09-27 08:25:55.546 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(38))
+2026-09-27 08:25:56.426 | info     |    BuildKernels | JIT cache stats: 2112/2112 hits (100.0%) [2112 cached, 1778 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-27 08:25:56.426 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-27 08:25:56.453 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-27 08:25:56.453 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-27 08:25:57.031 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-27 08:25:57.032 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-27 08:25:57.032 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

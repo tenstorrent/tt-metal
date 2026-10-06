@@ -1,0 +1,34 @@
+{
+  "command": [
+    "python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_qkv_m2_placement",
+    "--pairs",
+    "8",
+    "--defaults",
+    "--real",
+    "--layer",
+    "5",
+    "--length",
+    "65",
+    "--decode",
+    "--steps",
+    "1",
+    "--input-fixture",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_boundary_layer5_65.pt",
+    "--verify-program-cache",
+    "--timing",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_qkv_m2_placement_v7_layer5_65.json"
+  ],
+  "runtime_sha256": "daa82a4a5197a007ccd5d29d912f082e695fd37a596578f25fba96a6694e625b",
+  "environment_overrides": {
+    "OMP_NUM_THREADS": "4",
+    "MKL_NUM_THREADS": "4",
+    "HF_HUB_OFFLINE": "1"
+  },
+  "profiler_and_watcher_unset": true,
+  "scope": "M2 arithmetic/placement at three logical M tiles; not headline telemetry",
+  "returncode": 0,
+  "output_sha256": "9c72f4695ddd0b482db84e0eb11f9fead6b3c64ac21514b4e8a643cbff2cabdc"
+}

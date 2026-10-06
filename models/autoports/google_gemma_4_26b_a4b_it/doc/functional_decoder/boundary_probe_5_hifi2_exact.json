@@ -1,0 +1,154 @@
+{
+  "length": 1025,
+  "request_index": 5,
+  "eager_final": {
+    "pcc": 0.9922767773043529,
+    "passed": false
+  },
+  "attention": {
+    "pcc": 0.9998186514091613,
+    "passed": true
+  },
+  "input_layernorm": {
+    "pcc": 0.9999952982363749,
+    "passed": true
+  },
+  "post_attention_layernorm": {
+    "pcc": 0.9996278212685455,
+    "passed": true
+  },
+  "post_feedforward_layernorm_1": {
+    "pcc": 0.9996151425304517,
+    "passed": true
+  },
+  "post_feedforward_layernorm_2": {
+    "pcc": 0.9428418629131448,
+    "passed": false
+  },
+  "residual": {
+    "pcc": 0.9996356282728373,
+    "passed": true
+  },
+  "experts": {
+    "pcc": 0.9666108662749406,
+    "passed": false
+  },
+  "cache_k": {
+    "pcc": 0.9999773316497537,
+    "passed": true
+  },
+  "cache_v": {
+    "pcc": 0.9999835628097206,
+    "passed": true
+  },
+  "cache_current_k": {
+    "pcc": 0.9999729709438024,
+    "passed": true
+  },
+  "cache_current_v": {
+    "pcc": 0.9999839061156676,
+    "passed": true
+  },
+  "query": {
+    "pcc": 0.999975147294148,
+    "passed": true
+  },
+  "sdpa_same_qkv": {
+    "pcc": 0.9997696730954956,
+    "passed": true
+  },
+  "routes": {
+    "hf_original": [
+      [
+        58,
+        63,
+        8,
+        17,
+        43,
+        123,
+        50,
+        44
+      ]
+    ],
+    "hf_same_residual": [
+      [
+        58,
+        8,
+        17,
+        63,
+        43,
+        123,
+        50,
+        26
+      ]
+    ],
+    "tt": [
+      8,
+      17,
+      26,
+      43,
+      50,
+      58,
+      63,
+      123
+    ]
+  },
+  "original_routes_final": {
+    "pcc": 0.9996160077855634,
+    "passed": true
+  },
+  "oracle_sdpa_final": {
+    "pcc": 0.9924367519818804,
+    "passed": false
+  },
+  "oracle_sdpa_routes": [
+    8,
+    17,
+    26,
+    43,
+    50,
+    58,
+    63,
+    123
+  ],
+  "oracle_output_projection_final": {
+    "pcc": 0.9928492093225111,
+    "passed": false
+  },
+  "oracle_sdpa_and_output_final": {
+    "pcc": 0.9925278672967439,
+    "passed": false
+  },
+  "oracle_sdpa_q_final": {
+    "pcc": 0.9922955084068574,
+    "passed": false
+  },
+  "oracle_sdpa_k_final": {
+    "pcc": 0.9925902599447836,
+    "passed": false
+  },
+  "oracle_sdpa_v_final": {
+    "pcc": 0.9923166542364479,
+    "passed": false
+  },
+  "oracle_sdpa_qkv_final": {
+    "pcc": 0.9998249067021604,
+    "passed": true
+  },
+  "hf_bf16_vs_fp32": {
+    "pcc": 0.9999539305770924,
+    "passed": true
+  },
+  "hf_bf16_routes": [
+    [
+      58,
+      63,
+      17,
+      8,
+      43,
+      123,
+      50,
+      44
+    ]
+  ]
+}

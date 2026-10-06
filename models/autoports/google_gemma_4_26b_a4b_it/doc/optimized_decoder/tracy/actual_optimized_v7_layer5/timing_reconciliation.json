@@ -1,0 +1,121 @@
+{
+  "layer_type": "full_attention",
+  "workload": {
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "batch": 1,
+    "concurrency": 1,
+    "decode_start_position": 4096
+  },
+  "sources": {
+    "summary": {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v7_layer5/whole_layer.json",
+      "sha256": "e4f227ee8e793d2e46658a6542e6dd30f4dbd8b09b1b38ea66a2a76fa949ea44"
+    },
+    "runner": {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/profile_actual_optimized_v7_layer5.json",
+      "sha256": "8208bc1052b806eca5b86bdb35fa3434c92b8325ad7775862eb30bb6e74324b6"
+    },
+    "csv": {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v7_layer5/ops.csv",
+      "sha256": "a20c1882f3692b725a812b1962464b534b04e54ddca9e7a35f93d46b409e7756"
+    }
+  },
+  "same_run_provenance": {
+    "journal": {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_optimized_v7_profile_commands.json",
+      "sha256": "5dd5459d16fcf555a520092847a461cffe8f75b5b45224af88febab9747c84d3"
+    },
+    "command": [
+      "python",
+      "-m",
+      "tracy",
+      "-r",
+      "-p",
+      "-v",
+      "--op-support-count",
+      "100000",
+      "--no-op-info-cache",
+      "--disable-device-data-dump-to-files",
+      "--disable-device-data-push-to-tracy",
+      "-o",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v7_layer5/raw",
+      "-n",
+      "headline",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_decoder",
+      "--defaults",
+      "--input-fixture",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "--layer",
+      "5",
+      "--length",
+      "4096",
+      "--real",
+      "--decode",
+      "--steps",
+      "128",
+      "--profile",
+      "--timing",
+      "--verify-program-cache",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/profile_actual_optimized_v7_layer5.json"
+    ],
+    "raw_csv": {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_v7_layer5/raw/reports/headline/2026_09_26_19_24_21/ops_perf_results_headline_2026_09_26_19_24_21.csv",
+      "sha256": "a20c1882f3692b725a812b1962464b534b04e54ddca9e7a35f93d46b409e7756"
+    }
+  },
+  "decode_estimated_dram_bytes": 106384012.0,
+  "theoretical_dram_bytes_per_s": 512000000000.0,
+  "decode_theoretical_transfer_us": 207.7812734375,
+  "decode_whole_device_window_mean_us": 899.7246759259259,
+  "decode_profile_loop_host_mean_us": 914.9205,
+  "decode_fixed_position_host_median_us": 907.7984333333334,
+  "profile_loop": {
+    "start_ns": 16728803330,
+    "end_ns": 16845913154,
+    "total_ns": 117109824,
+    "mean_host_us": 914.9205,
+    "replays": 128,
+    "native_ops": 16128
+  },
+  "fixed_position_host": {
+    "samples_us": [
+      907.2684333333333,
+      907.6574666666667,
+      907.7984333333334,
+      907.9059333333333,
+      907.8632
+    ],
+    "samples": 5,
+    "replays_per_sample": 30,
+    "absolute_position": 4223,
+    "input_refresh": false
+  },
+  "gaps_us": {
+    "device_window_minus_theoretical_transfer": 691.9434024884259,
+    "profile_loop_host_minus_device_window": 15.19582407407404,
+    "fixed_position_host_minus_device_window": 8.07375740740747,
+    "profile_loop_host_minus_fixed_position_host": 7.122066666666569
+  },
+  "scopes": [
+    "Theoretical transfer time is estimated operand bytes divided by the stated peak DRAM bandwidth. It is a traffic-only roofline estimate, not measured memory-controller time or a prediction of complete-layer latency.",
+    "Device time is the mean of complete first-firmware-start to last-firmware-end windows for all successive-position replays. All layer operations and intra-layer gaps remain included; inter-replay gaps and input refresh are outside these individual windows.",
+    "Profile-loop host time is the Tracy host-clock difference between PERF_DECODE and PERF_DECODE_END divided by replay count. The runner synchronizes before the first signpost and before the final signpost. The span includes all per-step input/position preparation, copies, trace submissions, waits, inter-replay intervals, final synchronization and signpost-call boundary costs; HF preparation and output readback are outside it.",
+    "Fixed-position host time is from the same profiled process, after the successive-position loop: median of five batches of 30 trace replays with no input refresh at the final position. It uses perf_counter_ns and is a different execution regime from the profile-loop mean.",
+    "Only elapsed durations are compared across host/device clocks; absolute timestamps are not subtracted across clock domains. The CSV host signpost timestamps are nanoseconds (Tracy message total_ns). Device cycle conversion follows the whole-layer summary.",
+    "Gaps are arithmetic differences, not isolated measurements of Python, dispatch, refresh, DRAM, contention or synchronization costs. Those components can overlap, and fixed-position versus successive-position behavior differs. No specific bottleneck or contention cause is inferred from these artifacts alone; negative differences are retained without clamping."
+  ],
+  "separate_unprofiled_observation": {
+    "source": {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/validated_v7_headline_layer5.json",
+      "sha256": "d99a49c331078e2ad9d0039355a2df0dc72c2ede8aacbf085268e8b68c01ca8e"
+    },
+    "median_host_us": 833.3791333333334,
+    "layer_type": "full_attention",
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "scope": "Separate process/instrumentation regime; excluded from all same-run gaps above."
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "status": "draft_greedy_match_seeded_control_pending",
+  "scope": "Artifact-only comparison; no new requests, tokenization, hardware execution, or final acceptance",
+  "hf_model": "google/gemma-4-26B-A4B-it",
+  "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "sources": {
+    "current": {"path": "readiness_vllm/ttft_optimization/acceptance_suite/readiness_vllm/vllm_qualitative_outputs.json", "sha256": "6775c031be8a2eda56defa5ea1b543738f1bf4a83da056e4068d5df3e7d87842"},
+    "optimized": {"path": "doc/optimized_vllm/after/vllm_qualitative_outputs.json", "sha256": "9ed2096036e4f849564ec160cf14f108487145a9b5afc1f2dee9117bcb69b77d"},
+    "stage9": {"path": "readiness_vllm/vllm_qualitative_outputs.json", "sha256": "9ed2096036e4f849564ec160cf14f108487145a9b5afc1f2dee9117bcb69b77d"},
+    "format": {"path": "readiness_vllm/qualitative_prompt_format.json", "sha256": "76c685b40d78031c2cc128e79811740629a9fc64f42171cdae2fb357ec59edac"},
+    "selected128": "doc/datatype_sweep/selected/qualitative_tt.json",
+    "hf128": "doc/full_model/qualitative_hf.json",
+    "standalone256_controls": "readiness_vllm/qualitative_256_controls.json"
+  },
+  "parameters": {"prompt_mode": "chat", "endpoint": "/v1/chat/completions", "greedy": {"temperature": 0, "max_tokens": 256}, "sampled": {"temperature": 0.7, "top_p": 0.9, "max_tokens": 256}, "sampled_seed": null},
+  "format_provenance": "Historical pinned format artifact and selected128 controls have identical rendered prompts and prompt token IDs for all six inputs. Current shared suite records prompt text/mode, not rendered IDs, usage, finish reasons, or revision; new pinned replay attestation remains pending.",
+  "all_prompts_equal": true,
+  "all_greedy_equal_optimized": true,
+  "all_greedy_equal_stage9": true,
+  "all_selected128_prefixes_equal_after_removing_terminal_turn_marker": true,
+  "sampled_equality_is_regression_test": false,
+  "seed71_selected_vs_legacy_control": "pending",
+  "repeated_warm_greedy_trace_replay": "pending",
+  "rows": [
+    {"id": "shared_0", "topic": "haiku", "greedy_equal_optimized": true, "greedy_equal_stage9": true, "selected128_prefix_equal": true, "greedy_characters": 78, "sampled_characters": 80, "sampled_equal_optimized": false, "observation": "Coherent relevant three-line poems with ordinary 5-7-5 syllable readings. Greedy wording is inherited."},
+    {"id": "shared_1", "topic": "supervised_vs_unsupervised", "greedy_equal_optimized": true, "greedy_equal_stage9": true, "selected128_prefix_equal": true, "greedy_characters": 1029, "sampled_characters": 1015, "sampled_equal_optimized": false, "observation": "Relevant labeled-example analogy; both texts cut off during the unsupervised explanation."},
+    {"id": "shared_2", "topic": "story", "greedy_equal_optimized": true, "greedy_equal_stage9": true, "selected128_prefix_equal": true, "greedy_characters": 1208, "sampled_characters": 1126, "sampled_equal_optimized": false, "observation": "Coherent continuation but unusual tiny-brass-heart in greedy and brass-bound-and-glass in sampled. Both are incomplete; exact greedy phrase reproduced in prior standalone256 control."},
+    {"id": "shared_3", "topic": "thermodynamics", "greedy_equal_optimized": true, "greedy_equal_stage9": true, "selected128_prefix_equal": true, "greedy_characters": 1119, "sampled_characters": 1162, "sampled_equal_optimized": false, "observation": "Inherited greedy own-contained wording and will always increase statement are problematic; neither response reaches the third law. Sampled closed-system constant-energy claim is overbroad because a closed system may exchange energy. Current sampled second-law nondecrease statement is better qualified."},
+    {"id": "shared_4", "topic": "French_translation", "greedy_equal_optimized": true, "greedy_equal_stage9": true, "selected128_prefix_equal": true, "greedy_characters": 372, "sampled_characters": 278, "sampled_equal_optimized": false, "observation": "Relevant readable formal/informal translations; no visible truncation."},
+    {"id": "shared_5", "topic": "Fibonacci", "greedy_equal_optimized": true, "greedy_equal_stage9": true, "selected128_prefix_equal": true, "greedy_characters": 890, "sampled_characters": 899, "sampled_equal_optimized": false, "observation": "Greedy iterative function is sensible but example/code fence is truncated. Sampled Generator Approach returns a materialized list and contains no yield; description is false. Seed-matched regression attribution is pending."}
+  ]
+}

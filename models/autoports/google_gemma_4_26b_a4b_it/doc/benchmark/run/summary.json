@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "status": "failed",
+  "accuracy": {},
+  "performance": {
+    "32": {
+      "concurrency": 32,
+      "requested_input_tokens": 4096,
+      "requested_output_tokens": 128,
+      "server_max_num_seqs": 32,
+      "server_identity_sha256": "32c95b89e057407640d7a1ad075a9928aac955904e2fd635e10bb404972174f3",
+      "requests": 96,
+      "completed": 96,
+      "duration": 505.66786194220185,
+      "total_input_tokens": 393216,
+      "total_output_tokens": 12288,
+      "request_throughput": 0.1898479362150424,
+      "output_throughput": 24.300535835525427,
+      "total_token_throughput": 801.9176825723391,
+      "mean_ttft_ms": 79663.91259864515,
+      "median_ttft_ms": 80044.03531271964,
+      "p95_ttft_ms": 80097.25649142638,
+      "p99_ttft_ms": 80097.48661909252,
+      "mean_tpot_ms": 699.9224896494297,
+      "median_tpot_ms": 697.2552948690012,
+      "p95_tpot_ms": 697.4079988247854,
+      "p99_tpot_ms": 782.0285092397615,
+      "mean_itl_ms": 699.9224903311164,
+      "median_itl_ms": 697.1499207429588,
+      "p95_itl_ms": 701.2494564987719,
+      "p99_itl_ms": 717.104704612866,
+      "mean_e2el_ms": 168554.06878412273,
+      "median_e2el_ms": 168613.32360096276,
+      "p95_e2el_ms": 168632.93409137987,
+      "p99_e2el_ms": 168633.391105989
+    },
+    "1": {
+      "concurrency": 1,
+      "requested_input_tokens": 4096,
+      "requested_output_tokens": 128,
+      "server_max_num_seqs": 1,
+      "server_identity_sha256": "b9f2222fdfe95ca82b6f8b6b254cf613541e3119225c8d8c3c0956a3459ce864",
+      "requests": 8,
+      "completed": 8,
+      "duration": 40.19872208405286,
+      "total_input_tokens": 32768,
+      "total_output_tokens": 1024,
+      "request_throughput": 0.1990113014854684,
+      "output_throughput": 25.473446590139954,
+      "total_token_throughput": 840.6237374746185,
+      "mean_ttft_ms": 2534.3487514182925,
+      "median_ttft_ms": 2519.365218002349,
+      "p95_ttft_ms": 2583.5604642517865,
+      "p99_ttft_ms": 2584.934979919344,
+      "mean_tpot_ms": 19.608271229410853,
+      "median_tpot_ms": 19.64471944952457,
+      "p95_tpot_ms": 19.727168393534,
+      "p99_tpot_ms": 19.733818504871348,
+      "mean_itl_ms": 19.646947852591204,
+      "median_itl_ms": 19.616179633885622,
+      "p95_itl_ms": 20.257645845413204,
+      "p99_itl_ms": 26.01671081967652,
+      "mean_e2el_ms": 5024.599197553471,
+      "median_e2el_ms": 5017.924540210515,
+      "p95_e2el_ms": 5064.987227553502,
+      "p99_e2el_ms": 5075.493941502646
+    }
+  },
+  "accuracy_execution": "shared",
+  "error": "Accuracy incomplete: interrupted after8/536responses at942.54s to reserve the original remaining budget for required serving measurements. No complete benchmark aggregate is available.",
+  "elapsed_seconds": 3014.1878241766244,
+  "performance_recovery": {
+    "status": "measurements_collected_stage_still_failed",
+    "original_started_monotonic": 5311679.6,
+    "absolute_deadline_monotonic": 5315279.6,
+    "idle_confirmation": {
+      "pid": 5920,
+      "process_start": "531167964",
+      "scheduler_gauges": {
+        "vllm:num_requests_running": [
+          0.0
+        ],
+        "vllm:num_requests_waiting": [
+          0.0
+        ]
+      },
+      "observer_pending": [],
+      "monotonic": 5312645.310422017
+    },
+    "accuracy_retried": false,
+    "original_error": "RuntimeError: command exited -15; inspect /workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/benchmark/run/accuracy-shared.log",
+    "within_original_budget": true
+  },
+  "runner_and_performance_recovery_elapsed_seconds": 1917.6656491374597,
+  "partial_accuracy": {
+    "mmlu_pro": {
+      "completed_samples": 8,
+      "missing_samples": 272,
+      "stop_responses": 8,
+      "length_responses": 0,
+      "empty_final_length_responses": 0,
+      "selected_samples": 280,
+      "dataset_samples": 12032,
+      "scope": "incomplete_frozen_subset",
+      "aggregate_score": null
+    },
+    "ifeval": {
+      "completed_samples": 0,
+      "missing_samples": 256,
+      "stop_responses": 0,
+      "length_responses": 0,
+      "empty_final_length_responses": 0,
+      "selected_samples": 256,
+      "dataset_samples": 541,
+      "scope": "incomplete_frozen_subset",
+      "aggregate_score": null
+    }
+  },
+  "final_timing_basis": "Conservative original runner process start through final host verification and report; includes launch, verification, accuracy, interruption, warmups, measurements, reload, collection and reporting. No recovery clock reset.",
+  "first_final_report_elapsed_seconds": 2703.4520078776404
+}

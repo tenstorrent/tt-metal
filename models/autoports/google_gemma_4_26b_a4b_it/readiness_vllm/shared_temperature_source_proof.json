@@ -1,0 +1,45 @@
+{
+  "only_temperature_values_and_messages_changed": true,
+  "changed_literal_sites": [
+    {
+      "line": 188,
+      "old_temperature": 10.0,
+      "new_temperature": 2.0
+    },
+    {
+      "line": 204,
+      "old_temperature": 10.0,
+      "new_temperature": 2.0
+    },
+    {
+      "line": 237,
+      "old_temperature": 10.0,
+      "new_temperature": 2.0
+    },
+    {
+      "line": 262,
+      "old_temperature": 5,
+      "new_temperature": 2.0
+    },
+    {
+      "line": 279,
+      "old_temperature": 5,
+      "new_temperature": 2.0
+    },
+    {
+      "line": 308,
+      "old_temperature": 50,
+      "new_temperature": 2.0
+    }
+  ],
+  "unchanged_semantics": [
+    "seed values",
+    "top_k",
+    "prompt",
+    "max_tokens",
+    "repeat counts",
+    "variety thresholds",
+    "greedy comparisons"
+  ],
+  "remaining_temperature_literals_over_two": 0
+}

@@ -1,0 +1,70 @@
+{
+  "runtime_sha256": "d3dee9c50f549b6a48e657f0f8b2745a42c436a81ebecb8d8b099e1ae34f454b",
+  "command": [
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py",
+    "--fused-tail",
+    "--hybrid-experts",
+    "--optimized-shared",
+    "--layer",
+    "0",
+    "--length",
+    "1025",
+    "--steps",
+    "2",
+    "--trace",
+    "--check-cache",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/sliding_chunk_tail.json"
+  ],
+  "expert_parallel": false,
+  "fused_tail": true,
+  "optimized_shared": true,
+  "hybrid_experts": true,
+  "cache_pcc": [
+    0.9999999999394439,
+    0.9999999997577654,
+    1.0,
+    0.9999999999390019,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+  ],
+  "capacity": {},
+  "layer_type": "sliding_attention",
+  "length": 1025,
+  "steps": 2,
+  "pcc": [
+    0.9999667375231267,
+    0.999969306057738,
+    0.9999542129539143
+  ],
+  "passed": true,
+  "trace": true,
+  "timings": {
+    "1": {
+      "prefill_host_us": [
+        82451.89767330885,
+        82614.90799486637,
+        82993.92834305763
+      ],
+      "decode_host_us": [
+        830.7388052344322,
+        828.063115477562
+      ]
+    },
+    "4": {
+      "prefill_host_us": [
+        39269.82171833515,
+        38851.08605027199,
+        38490.330800414085
+      ],
+      "decode_host_us": [
+        824.1971954703331,
+        818.7349885702133
+      ]
+    }
+  },
+  "all_replicas_equal": true,
+  "sharded_residual": false
+}

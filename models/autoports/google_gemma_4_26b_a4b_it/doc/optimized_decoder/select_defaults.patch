@@ -1,0 +1,122 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
+@@ -243,37 +243,37 @@
+         cls,
+         state_dict,
+         *,
+-        expert_gate_dtype=ttnn.bfloat8_b,
++        expert_gate_dtype="auto",
+         expert_down_dtype=ttnn.bfloat4_b,
+-        expert_block_w=11,
++        expert_block_w=22,
+         expert_fidelity=ttnn.MathFidelity.LoFi,
+         compensated_qkv=False,
+         qkv_lanes=16,
+         qkv_terms=2,
+-        qkv_grid="auto",
++        qkv_grid=(11, 10),
+         qkv_block_w=11,
+-        qkv_subblock_w=1,
++        qkv_subblock_w=0,
+         qkv_separate=False,
+-        qkv_fidelity=None,
+-        qkv_weight_dtype=None,
+-        qkv_direct_dtype=None,
+-        qkv_direct_cleanup=False,
+-        output_weight_dtype=None,
+-        output_grid=None,
++        qkv_fidelity="auto",
++        qkv_weight_dtype=ttnn.bfloat8_b,
++        qkv_direct_dtype="auto",
++        qkv_direct_cleanup="auto",
++        output_weight_dtype=ttnn.bfloat8_b,
++        output_grid="auto",
+         output_block_w=16,
+-        output_fidelity=None,
++        output_fidelity=ttnn.MathFidelity.HiFi4,
+         output_l1=False,
+         qkv_dram=False,
+         qkv_dram_readers=1,
+         qkv_dram_block=1,
+-        native_sdpa=False,
+-        native_sdpa_fidelity=ttnn.MathFidelity.HiFi4,
++        native_sdpa=True,
++        native_sdpa_fidelity="auto",
+         native_sdpa_grid=(8, 8),
+-        prefill_attention_fidelity=None,
+-        kv_cache_dtype=ttnn.bfloat16,
+-        expert_activation_dtype=None,
+-        generalized_router=False,
+-        generalized_router_center=False,
++        prefill_attention_fidelity=ttnn.MathFidelity.LoFi,
++        kv_cache_dtype=ttnn.bfloat8_b,
++        expert_activation_dtype="auto",
++        generalized_router="auto",
++        generalized_router_center="auto",
+         router_lanes=0,
+         router_terms=2,
+         router_grid=(4, 1),
+@@ -287,15 +287,15 @@
+         active_prefill=True,
+         prefill_grid=(11, 4),
+         prefill_block_w=11,
+-        prefill_dtype=ttnn.bfloat8_b,
+-        prefill_down_dtype=None,
++        prefill_dtype=ttnn.bfloat4_b,
++        prefill_down_dtype=ttnn.bfloat4_b,
+         prefill_fidelity=ttnn.MathFidelity.LoFi,
+         prefill_l1=True,
+         expert_split=False,
+         expert_fused_gelu=False,
+         sharded_norms=True,
+-        sharded_norm_site=None,
+-        shared_dtype=ttnn.bfloat8_b,
++        sharded_norm_site="auto",
++        shared_dtype="auto",
+         shared_down_dtype=None,
+         shared_fidelity=ttnn.MathFidelity.LoFi,
+         shared_dram=True,
+@@ -306,6 +306,35 @@
+         residual_sharded=True,
+         **kwargs,
+     ):
++        """Construct measured defaults by attention kind; explicit overrides take precedence.
++
++        ``"auto"`` selects a layer policy without changing an explicit ``None``
++        that disables a backend, cast, or program override.
++        """
++        config = getattr(kwargs["hf_config"], "text_config", kwargs["hf_config"])
++        sliding = config.layer_types[kwargs["layer_idx"]] == "sliding_attention"
++        if expert_gate_dtype == "auto":
++            expert_gate_dtype = ttnn.bfloat8_b if sliding else ttnn.bfloat4_b
++        if qkv_fidelity == "auto":
++            qkv_fidelity = ttnn.MathFidelity.HiFi4 if sliding else ttnn.MathFidelity.LoFi
++        if qkv_direct_dtype == "auto":
++            qkv_direct_dtype = ttnn.float32 if qkv_lanes else None
++        if qkv_direct_cleanup == "auto":
++            qkv_direct_cleanup = qkv_direct_dtype is not None
++        if output_grid == "auto":
++            output_grid = (8, 8) if sliding else (11, 10)
++        if native_sdpa_fidelity == "auto":
++            native_sdpa_fidelity = ttnn.MathFidelity.HiFi4 if sliding else ttnn.MathFidelity.LoFi
++        if expert_activation_dtype == "auto":
++            expert_activation_dtype = None if sliding else ttnn.bfloat8_b
++        if generalized_router == "auto":
++            generalized_router = not router_lanes
++        if generalized_router_center == "auto":
++            generalized_router_center = sliding and generalized_router
++        if sharded_norm_site == "auto":
++            sharded_norm_site = "all" if sliding else "post_common"
++        if shared_dtype == "auto":
++            shared_dtype = ttnn.bfloat8_b if sliding else ttnn.bfloat4_b
+         if generalized_router_center and not generalized_router:
+             raise ValueError("Router score centering requires generalized_router=True")
+         if generalized_router and router_lanes:
+@@ -320,7 +349,6 @@
+             raise ValueError("Optimized decoder supports BF16 or BFP8 caches")
+         self = super().from_state_dict(state_dict, **kwargs)
+         self.kv_cache_dtype = kv_cache_dtype
+-        sliding = self.config.layer_types[self.layer_idx] == "sliding_attention"
+         if prefill_down_dtype is None:
+             prefill_down_dtype = ttnn.bfloat4_b if sliding else ttnn.bfloat8_b
+         if qkv_grid == "auto":

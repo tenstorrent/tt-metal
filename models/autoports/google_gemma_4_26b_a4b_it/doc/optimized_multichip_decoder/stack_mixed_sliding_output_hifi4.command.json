@@ -1,0 +1,22 @@
+{
+  "command": [
+    "/workspace/tt-metal/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.doc.optimized_multichip_decoder.probe_stack_precision",
+    "--layers",
+    "0",
+    "5",
+    "--attention-precision",
+    "baseline",
+    "--probe-layers",
+    "0",
+    "--length",
+    "4096",
+    "--steps",
+    "128",
+    "--probe-output-hifi4",
+    "--output",
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/stack_mixed_sliding_output_hifi4.json"
+  ],
+  "exit_code": 1
+}

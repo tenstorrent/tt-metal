@@ -1,0 +1,74 @@
+{
+  "layers": [
+    0,
+    5
+  ],
+  "layer_types": [
+    "sliding_attention",
+    "full_attention"
+  ],
+  "length": 33,
+  "decode_positions": [
+    33,
+    34
+  ],
+  "expert_parallel": false,
+  "hybrid_experts": true,
+  "fused_tail": true,
+  "optimized_shared": true,
+  "shared_geometry": 1,
+  "grouped_moe_reduce": true,
+  "qkv_fidelity": "LoFi",
+  "output_fidelity": "LoFi",
+  "attention_ccl_dtype": "bfloat16",
+  "full_attention_ccl_dtype_override": null,
+  "sharded_residual": false,
+  "direct_interlayer_handoff": true,
+  "independent_layer_caches": true,
+  "trace_scope": "both layers in one trace",
+  "repeat_trace_equal": true,
+  "all_replicas_equal": true,
+  "runtime_audit": "clean",
+  "source_sha256": {
+    "tt/multichip_decoder.py": "8b59370cda6f4ff88157de123123509036f2e91e8054000c809752e21f933175",
+    "tt/optimized_decoder.py": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898",
+    "tests/test_multichip_stack.py": "7e5e1ad3b084214a15b44e22ede77637f1c3f3c96103f5fa2bdc8d1564dbb5cc"
+  },
+  "comparisons": [
+    {
+      "phase": "prefill",
+      "layer": 0,
+      "pcc": 0.9999600688653809
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 33,
+      "pcc": 0.9999606949754283
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 34,
+      "pcc": 0.9999121781709672
+    },
+    {
+      "phase": "prefill",
+      "layer": 5,
+      "pcc": 0.9989911988283855
+    },
+    {
+      "phase": "decode",
+      "layer": 5,
+      "position": 33,
+      "pcc": 0.9996771634119377
+    },
+    {
+      "phase": "decode",
+      "layer": 5,
+      "position": 34,
+      "pcc": 0.9997638390081112
+    }
+  ],
+  "passed": true
+}

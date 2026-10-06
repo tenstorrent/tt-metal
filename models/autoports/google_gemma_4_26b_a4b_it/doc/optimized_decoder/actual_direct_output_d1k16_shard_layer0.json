@@ -1,0 +1,985 @@
+{
+  "decoder": "optimized",
+  "fusion": "broadcast_pack_gelu_router_tail_norm_attention_common_tied_ropepolicy_cache_kvnorm_shardedtail_preciseheads_expmerge_residualnorm_rsqrt_expertbatch64_mixmatmul_mixsharded_mixfp32_qkvl1_projectsharded_sharedshard_unarycastshard_directtail",
+  "runtime_prefill_audit": "clean",
+  "program_cache_miss_guard": true,
+  "prefill_cache_entries": 175,
+  "prefix_length": 0,
+  "layer_type": "sliding_attention",
+  "phase": "prefill",
+  "length": 4096,
+  "real_weights": true,
+  "pcc": 0.9986693851431688,
+  "passed": true,
+  "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+  "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+  "input_source": {
+    "model": "google/gemma-4-26B-A4B-it",
+    "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+    "layer": 0,
+    "length": 4096,
+    "steps": 128,
+    "source": {
+      "kind": "recorded_real_text_hf_layer_inputs",
+      "text_files": [
+        {
+          "path": "/workspace/tt-metal/README.md",
+          "sha256": "7fdc0eca06ec1762c883745af52d022aabf154c09ac14035fdadc45f44a5648e"
+        },
+        {
+          "path": "/workspace/tt-metal/docs/realtime_profiler_architecture.md",
+          "sha256": "c82373c5d2b278773ab41af8d0aff21d9bdc0da9e82a5645873fd7d08fd3f857"
+        },
+        {
+          "path": "/workspace/tt-metal/docs/L1_ACCUMULATION_FP32_ANALYSIS.md",
+          "sha256": "00c228fd4e95c4d5d1b65c5b66e9d8ebabe6b9a7a379bec59894508b44ee9184"
+        }
+      ],
+      "corpus_path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_source.txt",
+      "corpus_sha256": "75ee9ef41b9c66e2f5619f02d1de3c56c58cf7759489892616794ccb799e5002",
+      "tokens_path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_tokens.json",
+      "tokens_sha256": "11e130cdfd2ff0ebdc0dd8ae8bfcc837a082a3192aa45b74d887089d28f46bf3",
+      "tokenizer": "GemmaTokenizer",
+      "tokenizer_revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+      "transformers_version": "5.12.1",
+      "hf_source_sha256": "90bb5dbd9f78208ef07851e099311603e9f185f8fac2ef588df823f3df96b776",
+      "config_sha256": "ed0c1eb3633de771906e9ba004a44cc5635bcc06ee2062077c3d2e88a50707d3",
+      "weight_index_sha256": "907826a6e46ff454272bd6db1fee629d5531a2303be22986d825a0871d7dc7a7",
+      "preceding_computation": "HF FP32 eager, FP32 checkpoint weights and KV, original scaled embedding and layer scalars",
+      "embedding_scale_fp32": 53.06599807739258,
+      "embedding_scale_bfloat16_control": 53.0,
+      "per_layer_embeddings": false,
+      "shared_kv_layers": 0,
+      "sampling": "Actual corpus token continuation; no generated or random activations"
+    },
+    "raw_dtype": "float32",
+    "transport_dtype": "bfloat16_roundtripped_float32",
+    "teacher_forced": true
+  },
+  "decode": {
+    "pcc": 0.9997558691530297,
+    "passed": true,
+    "traced": true,
+    "runtime_decode_audit": "clean",
+    "repeated_equal": true,
+    "steps": 128,
+    "min_pcc": 0.9953647556436336,
+    "positions": [
+      4096,
+      4223
+    ],
+    "checks": [
+      {
+        "position": 4096,
+        "pcc": 0.9997558691530297,
+        "passed": true
+      },
+      {
+        "position": 4096,
+        "pcc": 0.9997558691530297,
+        "passed": true
+      },
+      {
+        "position": 4097,
+        "pcc": 0.9989997600882607,
+        "passed": true
+      },
+      {
+        "position": 4098,
+        "pcc": 0.9990233482854353,
+        "passed": true
+      },
+      {
+        "position": 4099,
+        "pcc": 0.9996126979416277,
+        "passed": true
+      },
+      {
+        "position": 4100,
+        "pcc": 0.9996401747055919,
+        "passed": true
+      },
+      {
+        "position": 4101,
+        "pcc": 0.999835721304013,
+        "passed": true
+      },
+      {
+        "position": 4102,
+        "pcc": 0.9996020446249791,
+        "passed": true
+      },
+      {
+        "position": 4103,
+        "pcc": 0.9989558533627658,
+        "passed": true
+      },
+      {
+        "position": 4104,
+        "pcc": 0.9981441164173498,
+        "passed": true
+      },
+      {
+        "position": 4105,
+        "pcc": 0.9997138746798369,
+        "passed": true
+      },
+      {
+        "position": 4106,
+        "pcc": 0.9993660337776599,
+        "passed": true
+      },
+      {
+        "position": 4107,
+        "pcc": 0.9991114884366773,
+        "passed": true
+      },
+      {
+        "position": 4108,
+        "pcc": 0.9995086566149125,
+        "passed": true
+      },
+      {
+        "position": 4109,
+        "pcc": 0.9995576387815004,
+        "passed": true
+      },
+      {
+        "position": 4110,
+        "pcc": 0.9993098071107139,
+        "passed": true
+      },
+      {
+        "position": 4111,
+        "pcc": 0.998291403721443,
+        "passed": true
+      },
+      {
+        "position": 4112,
+        "pcc": 0.9987384952182448,
+        "passed": true
+      },
+      {
+        "position": 4113,
+        "pcc": 0.9998234513885348,
+        "passed": true
+      },
+      {
+        "position": 4114,
+        "pcc": 0.9993333056081044,
+        "passed": true
+      },
+      {
+        "position": 4115,
+        "pcc": 0.9993026175253107,
+        "passed": true
+      },
+      {
+        "position": 4116,
+        "pcc": 0.9996693744072573,
+        "passed": true
+      },
+      {
+        "position": 4117,
+        "pcc": 0.9990291321161584,
+        "passed": true
+      },
+      {
+        "position": 4118,
+        "pcc": 0.9981733661364312,
+        "passed": true
+      },
+      {
+        "position": 4119,
+        "pcc": 0.999757649297984,
+        "passed": true
+      },
+      {
+        "position": 4120,
+        "pcc": 0.9994917062614749,
+        "passed": true
+      },
+      {
+        "position": 4121,
+        "pcc": 0.999566528870669,
+        "passed": true
+      },
+      {
+        "position": 4122,
+        "pcc": 0.9996858336094895,
+        "passed": true
+      },
+      {
+        "position": 4123,
+        "pcc": 0.9994019431777966,
+        "passed": true
+      },
+      {
+        "position": 4124,
+        "pcc": 0.999742685813608,
+        "passed": true
+      },
+      {
+        "position": 4125,
+        "pcc": 0.9989484735277165,
+        "passed": true
+      },
+      {
+        "position": 4126,
+        "pcc": 0.9988890303757813,
+        "passed": true
+      },
+      {
+        "position": 4127,
+        "pcc": 0.9997166692167606,
+        "passed": true
+      },
+      {
+        "position": 4128,
+        "pcc": 0.9993057424385466,
+        "passed": true
+      },
+      {
+        "position": 4129,
+        "pcc": 0.9991209579414994,
+        "passed": true
+      },
+      {
+        "position": 4130,
+        "pcc": 0.9983011561507268,
+        "passed": true
+      },
+      {
+        "position": 4131,
+        "pcc": 0.998774781355002,
+        "passed": true
+      },
+      {
+        "position": 4132,
+        "pcc": 0.9994793818334768,
+        "passed": true
+      },
+      {
+        "position": 4133,
+        "pcc": 0.9992615621372799,
+        "passed": true
+      },
+      {
+        "position": 4134,
+        "pcc": 0.9996905457099556,
+        "passed": true
+      },
+      {
+        "position": 4135,
+        "pcc": 0.9996105848145457,
+        "passed": true
+      },
+      {
+        "position": 4136,
+        "pcc": 0.9995084322936753,
+        "passed": true
+      },
+      {
+        "position": 4137,
+        "pcc": 0.9993483528859056,
+        "passed": true
+      },
+      {
+        "position": 4138,
+        "pcc": 0.9986003592749508,
+        "passed": true
+      },
+      {
+        "position": 4139,
+        "pcc": 0.9995138131350026,
+        "passed": true
+      },
+      {
+        "position": 4140,
+        "pcc": 0.9991390248113549,
+        "passed": true
+      },
+      {
+        "position": 4141,
+        "pcc": 0.9996154602823507,
+        "passed": true
+      },
+      {
+        "position": 4142,
+        "pcc": 0.9997337775322745,
+        "passed": true
+      },
+      {
+        "position": 4143,
+        "pcc": 0.9996076926581722,
+        "passed": true
+      },
+      {
+        "position": 4144,
+        "pcc": 0.9990359725657183,
+        "passed": true
+      },
+      {
+        "position": 4145,
+        "pcc": 0.9996774873003019,
+        "passed": true
+      },
+      {
+        "position": 4146,
+        "pcc": 0.9992006294640746,
+        "passed": true
+      },
+      {
+        "position": 4147,
+        "pcc": 0.9993483776635713,
+        "passed": true
+      },
+      {
+        "position": 4148,
+        "pcc": 0.9993970422924531,
+        "passed": true
+      },
+      {
+        "position": 4149,
+        "pcc": 0.9953647556436336,
+        "passed": true
+      },
+      {
+        "position": 4150,
+        "pcc": 0.9980188677311354,
+        "passed": true
+      },
+      {
+        "position": 4151,
+        "pcc": 0.9998056183774884,
+        "passed": true
+      },
+      {
+        "position": 4152,
+        "pcc": 0.9991906243985016,
+        "passed": true
+      },
+      {
+        "position": 4153,
+        "pcc": 0.9990565861950622,
+        "passed": true
+      },
+      {
+        "position": 4154,
+        "pcc": 0.9992715496184716,
+        "passed": true
+      },
+      {
+        "position": 4155,
+        "pcc": 0.9990873840264641,
+        "passed": true
+      },
+      {
+        "position": 4156,
+        "pcc": 0.9983221324327701,
+        "passed": true
+      },
+      {
+        "position": 4157,
+        "pcc": 0.9996496215665553,
+        "passed": true
+      },
+      {
+        "position": 4158,
+        "pcc": 0.9995542887240294,
+        "passed": true
+      },
+      {
+        "position": 4159,
+        "pcc": 0.9996952381335129,
+        "passed": true
+      },
+      {
+        "position": 4160,
+        "pcc": 0.9983111527687557,
+        "passed": true
+      },
+      {
+        "position": 4161,
+        "pcc": 0.9983022230361478,
+        "passed": true
+      },
+      {
+        "position": 4162,
+        "pcc": 0.9995752857745063,
+        "passed": true
+      },
+      {
+        "position": 4163,
+        "pcc": 0.9992250316039784,
+        "passed": true
+      },
+      {
+        "position": 4164,
+        "pcc": 0.9995741572821579,
+        "passed": true
+      },
+      {
+        "position": 4165,
+        "pcc": 0.9992945026012021,
+        "passed": true
+      },
+      {
+        "position": 4166,
+        "pcc": 0.9996359382320639,
+        "passed": true
+      },
+      {
+        "position": 4167,
+        "pcc": 0.999428686193621,
+        "passed": true
+      },
+      {
+        "position": 4168,
+        "pcc": 0.9990871383657076,
+        "passed": true
+      },
+      {
+        "position": 4169,
+        "pcc": 0.99926414962004,
+        "passed": true
+      },
+      {
+        "position": 4170,
+        "pcc": 0.999373934173359,
+        "passed": true
+      },
+      {
+        "position": 4171,
+        "pcc": 0.9994654155159974,
+        "passed": true
+      },
+      {
+        "position": 4172,
+        "pcc": 0.9994235426745043,
+        "passed": true
+      },
+      {
+        "position": 4173,
+        "pcc": 0.9996064130368765,
+        "passed": true
+      },
+      {
+        "position": 4174,
+        "pcc": 0.9997173471387,
+        "passed": true
+      },
+      {
+        "position": 4175,
+        "pcc": 0.9991309593822028,
+        "passed": true
+      },
+      {
+        "position": 4176,
+        "pcc": 0.9996526714142137,
+        "passed": true
+      },
+      {
+        "position": 4177,
+        "pcc": 0.9993204002270262,
+        "passed": true
+      },
+      {
+        "position": 4178,
+        "pcc": 0.9989746988423418,
+        "passed": true
+      },
+      {
+        "position": 4179,
+        "pcc": 0.999751680759894,
+        "passed": true
+      },
+      {
+        "position": 4180,
+        "pcc": 0.9995773459993683,
+        "passed": true
+      },
+      {
+        "position": 4181,
+        "pcc": 0.9993106922931366,
+        "passed": true
+      },
+      {
+        "position": 4182,
+        "pcc": 0.9995078817882415,
+        "passed": true
+      },
+      {
+        "position": 4183,
+        "pcc": 0.9992583387727095,
+        "passed": true
+      },
+      {
+        "position": 4184,
+        "pcc": 0.9996843532408665,
+        "passed": true
+      },
+      {
+        "position": 4185,
+        "pcc": 0.9995680333668738,
+        "passed": true
+      },
+      {
+        "position": 4186,
+        "pcc": 0.9996930710741403,
+        "passed": true
+      },
+      {
+        "position": 4187,
+        "pcc": 0.9990236272294979,
+        "passed": true
+      },
+      {
+        "position": 4188,
+        "pcc": 0.9996774560101606,
+        "passed": true
+      },
+      {
+        "position": 4189,
+        "pcc": 0.9993381258673798,
+        "passed": true
+      },
+      {
+        "position": 4190,
+        "pcc": 0.9996995863031701,
+        "passed": true
+      },
+      {
+        "position": 4191,
+        "pcc": 0.9994601725564422,
+        "passed": true
+      },
+      {
+        "position": 4192,
+        "pcc": 0.9995747707620385,
+        "passed": true
+      },
+      {
+        "position": 4193,
+        "pcc": 0.999740564766122,
+        "passed": true
+      },
+      {
+        "position": 4194,
+        "pcc": 0.9996236693363769,
+        "passed": true
+      },
+      {
+        "position": 4195,
+        "pcc": 0.9990421060078938,
+        "passed": true
+      },
+      {
+        "position": 4196,
+        "pcc": 0.997918188485679,
+        "passed": true
+      },
+      {
+        "position": 4197,
+        "pcc": 0.9992707987492258,
+        "passed": true
+      },
+      {
+        "position": 4198,
+        "pcc": 0.9985830630728093,
+        "passed": true
+      },
+      {
+        "position": 4199,
+        "pcc": 0.9994080811709041,
+        "passed": true
+      },
+      {
+        "position": 4200,
+        "pcc": 0.9993796591609019,
+        "passed": true
+      },
+      {
+        "position": 4201,
+        "pcc": 0.9955368765583159,
+        "passed": true
+      },
+      {
+        "position": 4202,
+        "pcc": 0.9980096185742349,
+        "passed": true
+      },
+      {
+        "position": 4203,
+        "pcc": 0.9998250877890467,
+        "passed": true
+      },
+      {
+        "position": 4204,
+        "pcc": 0.9992189764320971,
+        "passed": true
+      },
+      {
+        "position": 4205,
+        "pcc": 0.9992786033515153,
+        "passed": true
+      },
+      {
+        "position": 4206,
+        "pcc": 0.9992569206010116,
+        "passed": true
+      },
+      {
+        "position": 4207,
+        "pcc": 0.9987682572755839,
+        "passed": true
+      },
+      {
+        "position": 4208,
+        "pcc": 0.9985520242699168,
+        "passed": true
+      },
+      {
+        "position": 4209,
+        "pcc": 0.9996273984307152,
+        "passed": true
+      },
+      {
+        "position": 4210,
+        "pcc": 0.999534114850705,
+        "passed": true
+      },
+      {
+        "position": 4211,
+        "pcc": 0.9985087131394721,
+        "passed": true
+      },
+      {
+        "position": 4212,
+        "pcc": 0.998039736635284,
+        "passed": true
+      },
+      {
+        "position": 4213,
+        "pcc": 0.999505940319772,
+        "passed": true
+      },
+      {
+        "position": 4214,
+        "pcc": 0.9997068655158707,
+        "passed": true
+      },
+      {
+        "position": 4215,
+        "pcc": 0.9981367184084209,
+        "passed": true
+      },
+      {
+        "position": 4216,
+        "pcc": 0.9993706518185628,
+        "passed": true
+      },
+      {
+        "position": 4217,
+        "pcc": 0.9986179736523934,
+        "passed": true
+      },
+      {
+        "position": 4218,
+        "pcc": 0.9997100720394576,
+        "passed": true
+      },
+      {
+        "position": 4219,
+        "pcc": 0.9996207256855019,
+        "passed": true
+      },
+      {
+        "position": 4220,
+        "pcc": 0.9992637676622971,
+        "passed": true
+      },
+      {
+        "position": 4221,
+        "pcc": 0.9997850475485455,
+        "passed": true
+      },
+      {
+        "position": 4222,
+        "pcc": 0.9989392310775279,
+        "passed": true
+      },
+      {
+        "position": 4223,
+        "pcc": 0.9993591898634371,
+        "passed": true
+      }
+    ]
+  },
+  "traced_decode_host_us": [
+    1121.7966,
+    1122.3780333333334,
+    1122.4368333333334,
+    1121.9495666666667,
+    1122.3947333333333
+  ],
+  "candidate": {
+    "defaults": true,
+    "overrides": {
+      "native_sdpa": true,
+      "kv_cache_dtype": "bfloat8_b",
+      "qkv_weight_dtype": "bfloat8_b",
+      "output_weight_dtype": "bfloat8_b",
+      "expert_gate_dtype": "bfloat8_b",
+      "sharded_norm_site": "all",
+      "qkv_direct_dtype": "float32",
+      "qkv_fidelity": "HiFi4",
+      "generalized_router": true,
+      "prefill_dtype": "bfloat4_b",
+      "prefill_down_dtype": "bfloat4_b",
+      "prefill_attention_fidelity": "LoFi",
+      "generalized_router_center": true,
+      "qkv_direct_cleanup": true,
+      "qkv_grid": [
+        11,
+        10
+      ],
+      "qkv_subblock_w": 0,
+      "expert_block_w": 22
+    }
+  },
+  "runtime_sha256": "4a9050497d5d4734eb40715d8942adfc33413b958358a209dbbd31c9132a146e",
+  "precision_policy": {
+    "attention_weights": {
+      "qkv": "DataType.BFLOAT8_B",
+      "output": "DataType.BFLOAT8_B"
+    },
+    "kv_cache": "bfloat8_b",
+    "native_sdpa": true,
+    "native_sdpa_grid": [
+      8,
+      8
+    ],
+    "native_sdpa_fidelity": "MathFidelity.HiFi4",
+    "prefill_attention_fidelity": "MathFidelity.LoFi",
+    "decode_expert_activation": "unchanged",
+    "router_selection": "generalized_moe_gate",
+    "generalized_router_center": true,
+    "native_sdpa_dst_full_sync": true,
+    "residual": "float32",
+    "expert_gate": "DataType.BFLOAT8_B",
+    "decode_expert_down": "DataType.BFLOAT4_B",
+    "prefill_expert_gate": "DataType.BFLOAT4_B",
+    "prefill_expert_down": "DataType.BFLOAT4_B",
+    "decode_expert_fidelity": "MathFidelity.LoFi",
+    "decode_expert_fused_gelu": false,
+    "prefill_expert_fidelity": "MathFidelity.LoFi",
+    "shared_decode_weights": "DataType.BFLOAT8_B",
+    "shared_decode_fidelity": "MathFidelity.LoFi",
+    "qkv_fidelity": "MathFidelity.HiFi4",
+    "qkv_grid": [
+      11,
+      10
+    ],
+    "qkv_terms": null,
+    "qkv_lanes": 0,
+    "qkv_direct_dtype": "DataType.FLOAT32",
+    "qkv_direct_cleanup": true,
+    "router_lanes": 0,
+    "qkv_dram": false,
+    "qkv_dram_readers": null,
+    "qkv_dram_block": null,
+    "expert_grid": [
+      11,
+      4
+    ],
+    "expert_k_block": 22,
+    "prefill_batch_tokens": 32,
+    "qkv_decode": {
+      "backend": "native_packed_linear",
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtypes": [
+        "DataType.BFLOAT8_B"
+      ],
+      "weight_shapes": [
+        [
+          1,
+          1,
+          2816,
+          8192
+        ]
+      ],
+      "weight_memory": [
+        "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+      ],
+      "output_dtype": "float32",
+      "output_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+      "math_fidelity": "MathFidelity.HiFi4",
+      "fp32_dest_acc_en": true,
+      "packer_l1_acc": false,
+      "dram": false,
+      "programs": [
+        {
+          "grid": [
+            11,
+            10
+          ],
+          "in0_block_w": 11,
+          "out_subblock_h": 1,
+          "out_subblock_w": 3,
+          "per_core_M": 1,
+          "per_core_N": 3
+        }
+      ],
+      "setup_cleanup": {
+        "requested": true,
+        "shared_phase_weight": true,
+        "released_rows": true,
+        "released_lane_mask": true
+      },
+      "activation_decomposition": false,
+      "lane_mask": false,
+      "partial_row_reduce": false
+    }
+  },
+  "output_projection_probe": {
+    "output_mode": "dram",
+    "output_grid": [
+      8,
+      8
+    ],
+    "output_k_block": 16,
+    "output_subblock": 0,
+    "output_readers": 1,
+    "output_input_cores": 0,
+    "output_memory": "sharded",
+    "output_input_dtype": "float32",
+    "output_weight_dtype": null,
+    "output_fidelity": null
+  },
+  "output_projection_probe_runtime": {
+    "source_weight": {
+      "shape": [
+        1,
+        1,
+        4096,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        4096,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "layout": "Layout.TILE",
+      "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "geometry": {
+      "input_storage_cores": 8,
+      "input_shard_shape": [
+        32,
+        512
+      ],
+      "output_shard_shape": [
+        32,
+        352
+      ],
+      "weight_banks": 8,
+      "readers_per_bank": 1,
+      "weight_shard_shape": [
+        4096,
+        352
+      ],
+      "logical_N": 2816,
+      "padded_N": 2816,
+      "in1_triple_buffer_bytes_per_reader": 574464,
+      "buffer_estimate_scope": "Weight buffer only; excludes activation, FP32 output/intermediate and live L1",
+      "source_weight_values_preserved_before_repack": true
+    },
+    "mode": "dram",
+    "weight": {
+      "shape": [
+        1,
+        1,
+        4096,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        4096,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "layout": "Layout.TILE",
+      "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::DRAM,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[4096, 352], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[4096, 352],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "program": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=16,per_core_M=1,per_core_N=11,fused_activation=std::nullopt,num_workers_per_dram_bank=1)",
+    "compute": {
+      "math_fidelity": "MathFidelity.HiFi4",
+      "math_approx_mode": "False",
+      "fp32_dest_acc_en": "True",
+      "packer_l1_acc": "False",
+      "dst_full_sync_en": "False"
+    },
+    "input_dtype": "DataType.FLOAT32",
+    "matmul_output_dtype": "float32",
+    "final_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+    "prefill": "delegate unchanged",
+    "observed_decode": {
+      "attention": {
+        "shape": [
+          1,
+          1,
+          16,
+          256
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          256
+        ],
+        "dtype": "DataType.FLOAT32",
+        "layout": "Layout.TILE",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+      },
+      "matmul_input": {
+        "shape": [
+          1,
+          1,
+          1,
+          4096
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          4096
+        ],
+        "dtype": "DataType.FLOAT32",
+        "layout": "Layout.TILE",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[32, 512], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 512],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0)"
+      },
+      "output": {
+        "shape": [
+          1,
+          1,
+          1,
+          2816
+        ],
+        "padded_shape": [
+          1,
+          1,
+          32,
+          2816
+        ],
+        "dtype": "DataType.FLOAT32",
+        "layout": "Layout.TILE",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[32, 352], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 352],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0)"
+      }
+    }
+  },
+  "output_projection_probe_sha256": "93364a50da16ee9b11f6e0809e355c1469639b27b3b2414024ddbe39947ebb8d"
+}

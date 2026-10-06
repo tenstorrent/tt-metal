@@ -1,0 +1,25 @@
+{
+  "status": "selected default; capacity validation pending",
+  "mesh": [
+    1,
+    4
+  ],
+  "context": 262144,
+  "per_device_extra_attention_weights": {
+    "sliding_attention": 3244032,
+    "full_attention": 4866048
+  },
+  "per_device_persistent_ccl_payload": {
+    "sliding_attention": 933504,
+    "full_attention": 1482624
+  },
+  "full_stack_extra_dram_weight_bytes_per_device": 105431040,
+  "full_stack_persistent_ccl_bytes_per_device": 30750720,
+  "basis": [
+    "30 layers:25 sliding,5 full; QKV keeps BFP8 prefill weight and adds BFP4 decode. WO remains BFP8 in both phases; full BFP4 WO combined with BFP4 QKV fails real batch32 PCC.",
+    "Each Linear RS intermediate has twice input padded shape, output widthH/4, AG outputH. A role has286 tiles per logical input plane; groupedMoE has2 planes. BF16 tiles2048bytes; BFP8 tiles1088bytes; BFP4 tiles576bytes.",
+    "Selected CCL candidate uses L1 persistent buffers; weight copies are DRAM. Payload excludes bank allocation rounding; capacity test must allocate representative buffers.",
+    "Selected attention payload is BFP8 for both kinds. Shared serial-layer pool retains role separation and three role/dtype entries, totaling2104960B/device; per-layer tensor dictionaries would retain30750720B/device and fail long-prefill L1 capacity."
+  ],
+  "pooled_persistent_ccl_bytes_per_device": 2104960
+}

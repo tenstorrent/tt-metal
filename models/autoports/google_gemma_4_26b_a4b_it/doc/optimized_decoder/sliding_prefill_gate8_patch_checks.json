@@ -1,0 +1,97 @@
+{
+  "applied": true,
+  "source_files": {
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py": {
+      "base_sha256": "e81018299b722aa81eae0e4e9ec3ec638520adcb3bdd85d3c2c8b429dfa0e370",
+      "proposed_sha256": "0aabcac2109a35b436c78ca6322ba4e88331abdab39e8271e14ea5235af9938a",
+      "syntax": "passed"
+    },
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/long_context.py": {
+      "base_sha256": "23cf32d1db2e8553b80e010347e994361ff4e669ba3deaf126cfea212ee9445d",
+      "proposed_sha256": "27fffef25bf756c8cac5c0a9848ae2b4a542be02d66f283deb55b90e3ac9090b",
+      "syntax": "passed"
+    }
+  },
+  "artifact_gate_replay": [
+    {
+      "artifact": "verified_long_262144_layer0.json",
+      "actual_fixture": true,
+      "passed": false,
+      "expected": false
+    },
+    {
+      "artifact": "verified_long_262144_layer0.json",
+      "actual_fixture": false,
+      "passed": true,
+      "expected": true,
+      "purpose": "prior no-fixture gate semantics retained"
+    },
+    {
+      "artifact": "actual_long_sliding_pref_gate8.json",
+      "actual_fixture": true,
+      "passed": true,
+      "expected": true
+    },
+    {
+      "artifact": "actual_long_sliding_pref_down8.json",
+      "actual_fixture": true,
+      "passed": false,
+      "expected": false
+    },
+    {
+      "artifact": "actual_long_sliding_qkv_bf16.json",
+      "actual_fixture": true,
+      "passed": false,
+      "expected": false
+    },
+    {
+      "artifact": "actual_long_sliding_output_bf16.json",
+      "actual_fixture": true,
+      "passed": false,
+      "expected": false
+    },
+    {
+      "artifact": "actual_long_sliding_hifi2.json",
+      "actual_fixture": true,
+      "passed": false,
+      "expected": false
+    },
+    {
+      "artifact": "verified_long_262144_layer5.json",
+      "actual_fixture": true,
+      "passed": true,
+      "expected": true
+    },
+    {
+      "artifact": "verified_long_262143_layer5.json",
+      "actual_fixture": true,
+      "passed": true,
+      "expected": true
+    },
+    {
+      "artifact": "actual_fused_long_sliding.json",
+      "actual_fixture": true,
+      "passed": true,
+      "expected": true
+    }
+  ],
+  "gate_buffer_payload": {
+    "tiles": 495616,
+    "bytes_per_bfp4_tile": 576,
+    "bytes": 285474816,
+    "MiB": 272.25,
+    "basis": "static shape and BFP4 tile format; allocation not measured",
+    "source": "tt_metal/api/tt-metalium/tt_backend_api_types.hpp:126"
+  },
+  "applied_by": "parent",
+  "applied_hashes_match_proposed": true,
+  "device_default_regression_after_application": "pending parent execution",
+  "format_check": {
+    "command": "python_env/bin/black --check --target-version py310 --line-length 120 <runtime> <long_context>",
+    "exit_code": 1,
+    "long_context": "passed",
+    "runtime": "pre-existing normalize nested-conditional reflow requested outside patch",
+    "source_modified": false,
+    "repository_black_version": "23.10.1"
+  }
+}

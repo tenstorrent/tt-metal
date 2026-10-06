@@ -1,0 +1,17 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tests/long_context.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tests/long_context.py
+@@ -131,6 +131,14 @@
+             ok, value = comp_pcc(ref[:, index : index + 1], actual[:, index : index + 1], 0.995)
+             row_checks.append(dict(position=position, pcc=float(value), passed=bool(ok)))
+         result["sampled_row_diagnostics"] = row_checks
++        # Regression for long-prefill endpoint drift hidden by aggregate PCC.
++        # These are the same final positions compared individually by decode.
++        tail_positions = sorted({max(0, length - 2), length - 1})
++        tail_checks = [row_checks[samples.index(position)] for position in tail_positions]
++        result["prefill_aggregate_passed"] = bool(passed)
++        result["prefill_tail_checks"] = tail_checks
++        passed = passed and all(check["passed"] for check in tail_checks)
++        result["passed"] = bool(passed)
+         args.output.write_text(json.dumps(result, indent=2) + "\n")
+         print(result, flush=True)
+         dt = device(x[:, -1:][None])

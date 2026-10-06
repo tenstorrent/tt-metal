@@ -1,0 +1,16 @@
+{
+  "json_content_unchanged": true,
+  "newline_only_files": [
+    "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/baseline_padded_decode/vllm_qualitative_outputs.json",
+    "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/baseline_padded_decode/vllm_result.json",
+    "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/degeneracy.json",
+    "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/request_attempt5.json",
+    "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/request_batch_order.json",
+    "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/vllm_ci_serving_result.json",
+    "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/vllm_qualitative_outputs.json",
+    "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/vllm_result.json"
+  ],
+  "old_qualitative_sha256": "16bba56a34c4dce3a1914f530d49a63f76c1654d2b9e90f44c1aae96bd04ff17",
+  "formatted_qualitative_sha256": "508928954b84fb5e82a9a6152dfccab8fc34d57f6498a1ce1100d9ab1c46b904",
+  "runtime_source_unchanged": true
+}

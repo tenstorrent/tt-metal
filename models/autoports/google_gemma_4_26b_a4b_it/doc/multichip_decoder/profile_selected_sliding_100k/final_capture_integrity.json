@@ -1,0 +1,37 @@
+{
+  "source": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_selected_sliding_100k/reports/tp4/2026_09_27_00_43_07/ops_perf_results_tp4_2026_09_27_00_43_07.csv",
+  "signposts": [
+    "PERF_PREFILL",
+    "PERF_PREFILL_END",
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ],
+  "per_device": {
+    "0": {
+      "prefill_programs": 2585,
+      "decode_replay_sessions": 128,
+      "programs_per_decode_replay": 126,
+      "same_op_set_all_replays": true
+    },
+    "1": {
+      "prefill_programs": 2585,
+      "decode_replay_sessions": 128,
+      "programs_per_decode_replay": 126,
+      "same_op_set_all_replays": true
+    },
+    "2": {
+      "prefill_programs": 2585,
+      "decode_replay_sessions": 128,
+      "programs_per_decode_replay": 126,
+      "same_op_set_all_replays": true
+    },
+    "3": {
+      "prefill_programs": 2585,
+      "decode_replay_sessions": 128,
+      "programs_per_decode_replay": 126,
+      "same_op_set_all_replays": true
+    }
+  },
+  "invalid_fw_spans": [],
+  "passed": true
+}

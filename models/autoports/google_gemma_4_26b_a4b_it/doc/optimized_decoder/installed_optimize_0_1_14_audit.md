@@ -1,0 +1,22 @@
+# Installed optimize 0.1.14 evidence audit
+
+This bounded source/artifact audit supplements E01–E11/O01–O27 for the explicitly selected installed skill at `/home/mvasiljevic/.codex-personal-gemma4/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.14/skills/optimize/SKILL.md`. Its Prefill Latency And TTFT section (lines103–116) and OPT-015 (lines393–422) add requirements not established by the earlier local checklist. Snapshot runtime: `3d51014f98128dfb21bb484fcece50993524b967754f68f6dfe825ae7f472ba9`. Later runtime changes require their own validation/profile binding.
+
+| Requirement | Existing exact evidence | Bounded remaining work / owner |
+| --- | --- | --- |
+| Before/after warmed prefill at short, long, and chunk-tail lengths | Current v4 actual 4096/128 profiles pass. Historical actual 1025/512 candidates retain prefill host samples; public 33/65/prefix/tail checks establish correctness. | Matched current fused/optimized real short and 1025 tail timings, physical chunk count/size and warmed boundary were not in the audited journals. Parent owns the added timing controls. |
+| Consider `minimal_matmul` at actual LLM prefill shapes | The local DiT wrapper/config helper and op validator provide a legal candidate family for the BF16/BFP8 dense projection. Weight leading dimensions must be one, so it is not a direct replacement for the batched 128-expert weight tensor. | Parent is running bounded QKV/output/shared controls, including small/tail contracts and maximum-input accuracy. Their results and any integration need to be bound into the final ledger; this audit does not infer a win from DiT. |
+| Production-precision readers1/2/3, identical geometry | Historical [QKV/shared geometry](direct_geometry_results.md), [QKV journal](actual_direct_geometry_commands.json), [shared journal](actual_direct_mlp_geometry_commands.json), and [output journal](actual_direct_output_commands.json) retain exact runs. | They do not close the current isolated requirement. [The new controlled probe](dram_reader_microbenchmark.md) is ready; parent owns device execution and any integrated winner. |
+
+Reader gaps are specific:
+
+- Sliding QKV reader2/3 controls used HiFi4, while current production uses HiFi2. Sliding reader2 N8192 and reader3 N8448 also differ in padded work. Full LoFi reader controls are closer, but neither kind had the required isolated alternating-order comparison. Reader1/K11 has preserved static-CB/L1 failures in the original layer environment; a separate all-reader K1 family provides a bounded legal control without conflating K-block and reader effects.
+- Full shared BFP4/LoFi reader1/2/3 whole-layer controls exist. Sliding real-input reader2/3 controls were explicitly deferred in the historical geometry summary; the older BF8 S33 tests used synthetic activations. Production gate/up/down roles must be compared separately, even though the current policy uses one shared count per kind.
+- Output DRAM controls cover readers1/2 but not reader3. Their probe used FP32 projection input before the native BF16 boundary was preserved; full fidelity also differs from selected LoFi. The new probe captures BF16 input at the actual boundary and uses N3072 for all reader counts, with production compute flags.
+- No completed isolated alternating reader microbenchmark was present in the audited stage artifacts. Thus old layer medians cannot supply the skill's device GB/s, peak percentage, fixed-geometry reader distributions or native math-versus-reader timing.
+
+The new probe records exact source-derived legality, physical BF8/BF4 header bytes, per-bank tiles, input storage cores, per-reader rows and Blackhole NoC request splitting. Its CSV parser requires native dtype/fidelity/reader proof and complete one-op replay windows. A winning isolated candidate still needs actual traced layer comparison including layout movement. No broad new dtype or topology sweep is requested by this audit.
+
+Current v4 validation and representative profile completion remain valid for their recorded hash. Added controls, remaining operator advice/audits, independent stage review and final commit remain separate closure items.
+
+Reader follow-up is now complete: [isolated native evidence](dram_reader_results.md) and [all22 actual whole-layer controls](reader_layer_results.md) resolve the reader gaps listed above at their recorded source hashes. All pass; no material whole-layer gain is observed and defaults remain selected. Overall v6 contract/profile/review closure remains separate.

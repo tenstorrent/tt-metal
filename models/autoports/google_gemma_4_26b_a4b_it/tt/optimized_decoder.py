@@ -1,0 +1,2079 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Single-device Gemma4 decoder with measured projection and expert policies."""
+
+import os
+from dataclasses import replace
+from types import SimpleNamespace
+
+import ttnn
+from models.autoports.google_gemma_4_26b_a4b_it.tt.decode_attention import concat_heads
+from models.autoports.google_gemma_4_26b_a4b_it.tt.fused_decoder import (
+    BroadcastQKV,
+    BroadcastRouter,
+    FusedAttention,
+    FusedDecoder,
+    PackedExperts,
+    TiedQKV,
+)
+from models.demos.gemma4.tt.attention.operations import (
+    PREFILL_CHUNK_SIZE,
+    chunked_prefill_sdpa,
+    effective_block_size,
+    prefill_sdpa_program_config,
+)
+
+
+class OptimizedExperts(PackedExperts):
+    """Preserve routed execution while configuring expert projections explicitly."""
+
+    def __init__(
+        self,
+        source,
+        *,
+        gate_dtype,
+        down_dtype,
+        block_w,
+        fidelity,
+        mesh_device,
+        gate_block_w=None,
+        activation_dtype=None,
+        expert_grid=None,
+        down_grid=None,
+        prefill_tokens=None,
+        active_prefill=False,
+        prefill_grid=None,
+        prefill_block_w=1,
+        prefill_dtype=ttnn.bfloat16,
+        prefill_down_dtype=None,
+        prefill_fidelity=ttnn.MathFidelity.HiFi4,
+        prefill_l1=False,
+        expert_split=False,
+        expert_fused_gelu=False,
+    ):
+        self.__dict__.update(source.__dict__)
+        self.decode_activation_dtype = activation_dtype
+        self.indexed_router = None
+        self.prefill_source = None if active_prefill else source
+        self.active_prefill = active_prefill
+        self.prefill_memory = ttnn.L1_MEMORY_CONFIG if prefill_l1 else ttnn.DRAM_MEMORY_CONFIG
+        self.prefill_compute = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=prefill_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+        self.prefill_configs = dict(source.prefill_configs)
+        if prefill_tokens is not None:
+            if prefill_tokens <= 0 or prefill_tokens % 32:
+                raise ValueError("Internal prefill batch must contain whole tiles")
+            from models.demos.gemma4.tt.experts.decode import _build_sparse_matmul_config
+
+            self.prefill_batch_tokens = prefill_tokens
+            self.prefill_configs = {
+                rows: tuple(
+                    _build_sparse_matmul_config(rows, width) for width in (2 * self.width, self.config.hidden_size)
+                )
+                for rows in range(32, prefill_tokens + 1, 32)
+            }
+        if prefill_grid is not None:
+            gx, gy = prefill_grid
+            for rows in self.prefill_configs:
+                configs = []
+                for width in (2 * self.width, self.config.hidden_size):
+                    per_n = width // 32 // (gx * gy)
+                    if width // 32 % (gx * gy):
+                        raise ValueError("Prefill expert grid must divide output tiles")
+                    configs.append(
+                        ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                            compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+                            in0_block_w=prefill_block_w,
+                            out_subblock_h=1,
+                            out_subblock_w=next(v for v in (4, 2, 1) if per_n % v == 0),
+                            out_block_h=1,
+                            out_block_w=per_n,
+                            per_core_M=rows // 32,
+                            per_core_N=per_n,
+                            fuse_batch=False,
+                            fused_activation=None,
+                            mcast_in0=True,
+                        )
+                    )
+                self.prefill_configs[rows] = tuple(configs)
+        self.gate_up = ttnn.typecast(source.gate_up, gate_dtype)
+        self.down = ttnn.typecast(source.down, down_dtype)
+        self.prefill_gate = (
+            self.gate_up if prefill_dtype == gate_dtype else ttnn.typecast(source.gate_up, prefill_dtype)
+        )
+        prefill_down_dtype = prefill_down_dtype or prefill_dtype
+        self.prefill_down = (
+            self.down if prefill_down_dtype == down_dtype else ttnn.typecast(source.down, prefill_down_dtype)
+        )
+        self.gate_config.in0_block_w = block_w
+        self.down_config.in0_block_w = block_w
+        if expert_grid is not None:
+            gx, gy = expert_grid
+            for role, width in [("gate_config", 2 * self.width), ("down_config", self.config.hidden_size)]:
+                if role == "down_config" and down_grid is not None:
+                    gx, gy = down_grid
+                tiles = width // 32
+                workers = gx * gy
+                if tiles % workers:
+                    raise ValueError(f"{role} output tiles {tiles} must divide grid {expert_grid}")
+                per_n = tiles // workers
+                setattr(
+                    self,
+                    role,
+                    ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+                        in0_block_w=block_w,
+                        out_subblock_h=1,
+                        out_subblock_w=next(v for v in (4, 2, 1) if per_n % v == 0),
+                        out_block_h=1,
+                        out_block_w=per_n,
+                        per_core_M=1,
+                        per_core_N=per_n,
+                        fuse_batch=False,
+                        fused_activation=None,
+                        mcast_in0=True,
+                    ),
+                )
+        if gate_block_w is not None:
+            if not isinstance(gate_block_w, int) or gate_block_w <= 0 or self.config.hidden_size % (32 * gate_block_w):
+                raise ValueError("Expert gate K block must be a positive integer divisor of the tiled hidden width")
+            self.gate_config.in0_block_w = gate_block_w
+        self.expert_split = expert_split
+        self.decode_gelu_activations = [ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)] if expert_fused_gelu else None
+        if expert_split:
+            self.gate = self.gate_up[..., : self.width]
+            self.up = self.gate_up[..., self.width :]
+            self.separate_program = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(11, 2),
+                in0_block_w=self.gate_config.in0_block_w,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                out_block_h=1,
+                out_block_w=1,
+                per_core_M=1,
+                per_core_N=1,
+                fuse_batch=False,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+        self.decode_compute = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+    def enable_indexed_decode(self, router):
+        if type(router) is not GeneralizedRouter:
+            raise ValueError("Indexed experts require the production GeneralizedRouter")
+        self.indexed_router = router
+        router.retain_decode_indices = True
+        # Eight selected experts occupy one padded K tile in the final mix.
+        cfg = self.mix_program
+        self.mix_program = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=cfg.compute_with_storage_grid_size,
+            in0_block_w=1,
+            out_subblock_h=cfg.out_subblock_h,
+            out_subblock_w=cfg.out_subblock_w,
+            out_block_h=cfg.out_block_h,
+            out_block_w=cfg.out_block_w,
+            per_core_M=cfg.per_core_M,
+            per_core_N=cfg.per_core_N,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
+    def _chunk(self, x, routing, decode):
+        if not decode:
+            if not self.active_prefill:
+                return self.prefill_source._chunk(x, routing, decode)
+            return self._active_prefill(x, routing)
+        if self.decode_activation_dtype is not None:
+            x = ttnn.typecast(x, self.decode_activation_dtype)
+        sparsity = ttnn.to_layout(routing, ttnn.ROW_MAJOR_LAYOUT)
+        slots = self.config.num_experts
+        mix_weights = routing
+        common = dict(
+            sparsity=sparsity,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([32, 32]),
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.decode_compute,
+        )
+        if self.indexed_router is not None:
+            indices = self.indexed_router.decode_indices()
+            common["indices"] = indices
+            slots = self.config.top_k
+            selected = ttnn.gather(sparsity, dim=-1, index=indices, memory_config=ttnn.L1_MEMORY_CONFIG)
+            mix_weights = ttnn.to_layout(selected, ttnn.TILE_LAYOUT)
+        else:
+            common["nnz"] = self.config.top_k
+        if self.expert_split:
+            gate = ttnn.sparse_matmul(x, self.gate, program_config=self.separate_program, **common)
+            up = ttnn.sparse_matmul(x, self.up, program_config=self.separate_program, **common)
+            gate = ttnn.reshape(gate, (1, slots, 1, self.width))
+            up = ttnn.reshape(up, (1, slots, 1, self.width))
+            hidden = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)])
+        else:
+            gu = ttnn.sparse_matmul(x, self.gate_up, program_config=self.gate_config, **common)
+            gu = ttnn.reshape(gu, (1, slots, 1, 2 * self.width))
+            gate, up = gu[..., : self.width], gu[..., self.width :]
+            if self.decode_gelu_activations is not None:
+                hidden = ttnn.mul(gate, up, input_tensor_a_activations=self.decode_gelu_activations)
+            else:
+                hidden = ttnn.mul(ttnn.gelu(gate, variant=ttnn.GeluVariant.Accurate), up)
+        down = ttnn.sparse_matmul(hidden, self.down, program_config=self.down_config, is_input_a_sparse=True, **common)
+        down = ttnn.reshape(down, (1, slots, 1, self.config.hidden_size))
+        return ttnn.matmul(
+            mix_weights,
+            ttnn.permute(down, (0, 2, 1, 3)),
+            dtype=ttnn.bfloat16,
+            memory_config=self.mix_memory,
+            program_config=self.mix_program,
+            compute_kernel_config=self.mix_compute,
+        )
+
+    def _active_prefill(self, x, routing):
+        # Each batch computes only the union of its tokens' selected experts.
+        # The union varies per batch, so use runtime nnz inference.
+        sparsity = ttnn.to_layout(ttnn.sum(routing, dim=2, keepdim=True), ttnn.ROW_MAJOR_LAYOUT)
+        rows = x.shape[-2]
+        gate_config, down_config = self.prefill_configs[rows]
+        common = dict(
+            sparsity=sparsity,
+            memory_config=self.prefill_memory,
+            output_tile=ttnn.Tile([32, 32]),
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.prefill_compute,
+        )
+        gu = ttnn.sparse_matmul(x, self.prefill_gate, program_config=gate_config, **common)
+        gu = ttnn.reshape(gu, (1, self.config.num_experts, rows, 2 * self.width))
+        gate, up = gu[..., : self.width], gu[..., self.width :]
+        hidden = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)])
+        # Private projection buffers are no longer needed when down allocates
+        # its wider output. Weight that output in place before reducing experts.
+        ttnn.deallocate(gate)
+        ttnn.deallocate(up)
+        ttnn.deallocate(gu)
+        down = ttnn.sparse_matmul(
+            hidden, self.prefill_down, program_config=down_config, is_input_a_sparse=True, **common
+        )
+        ttnn.deallocate(hidden)
+        down = ttnn.reshape(down, (1, self.config.num_experts, rows, self.config.hidden_size))
+        weighted = ttnn.mul(down, ttnn.permute(routing, (0, 3, 2, 1)), output_tensor=down)
+        return ttnn.reshape(ttnn.experimental.fast_reduce_nc(weighted, dims=[1]), (1, 1, rows, self.config.hidden_size))
+
+
+class OptimizedDecoder(FusedDecoder):
+    """Preserve the fused public cache contract with layer-specific precision."""
+
+    decode_rope_layout = ttnn.ROW_MAJOR_LAYOUT
+
+    @classmethod
+    def from_state_dict(
+        cls,
+        state_dict,
+        *,
+        expert_gate_dtype="auto",
+        expert_down_dtype=ttnn.bfloat4_b,
+        expert_block_w=22,
+        expert_gate_block_w=44,
+        expert_fidelity=ttnn.MathFidelity.LoFi,
+        compensated_qkv=False,
+        qkv_lanes=16,
+        qkv_terms=2,
+        qkv_grid=(11, 10),
+        qkv_block_w=11,
+        qkv_subblock_w=0,
+        qkv_separate=False,
+        qkv_fidelity="auto",
+        qkv_weight_dtype=ttnn.bfloat8_b,
+        qkv_direct_dtype="auto",
+        qkv_direct_cleanup="auto",
+        prefill_qkv_minimal=True,
+        prefill_qkv_minimal_block_w="auto",
+        prefill_qkv_minimal_block_h="auto",
+        prefill_qkv_input_l1="auto",
+        prefill_qkv_fidelity="auto",
+        output_weight_dtype=ttnn.bfloat8_b,
+        output_grid="auto",
+        output_block_w=16,
+        output_fidelity="auto",
+        output_l1=True,
+        prefill_output_grid=(11, 8),
+        prefill_output_block_w=16,
+        prefill_output_fidelity=ttnn.MathFidelity.LoFi,
+        prefill_output_l1=False,
+        prefill_output_minimal="auto",
+        prefill_output_minimal_block_w="auto",
+        qkv_dram=False,
+        qkv_dram_readers=1,
+        qkv_dram_block=1,
+        native_sdpa=True,
+        native_sdpa_fidelity="auto",
+        native_sdpa_grid=(8, 8),
+        prefill_attention_fidelity="auto",
+        kv_cache_dtype=ttnn.bfloat8_b,
+        expert_activation_dtype="auto",
+        generalized_router="auto",
+        generalized_router_center="auto",
+        router_direct="auto",
+        router_direct_grid=(4, 1),
+        router_direct_block_w="auto",
+        router_direct_fidelity="auto",
+        router_lanes=0,
+        router_terms=2,
+        router_grid=(4, 1),
+        router_block_w=11,
+        router_fidelity=ttnn.MathFidelity.HiFi4,
+        dense_prefill_2d=False,
+        dense_prefill_block_w=4,
+        expert_grid=(11, 4),
+        down_grid=None,
+        prefill_tokens=32,
+        active_prefill=True,
+        prefill_grid=(11, 4),
+        prefill_block_w=11,
+        prefill_dtype="auto",
+        prefill_down_dtype=ttnn.bfloat4_b,
+        prefill_fidelity=ttnn.MathFidelity.LoFi,
+        prefill_l1=True,
+        expert_split=False,
+        expert_fused_gelu="auto",
+        indexed_experts="auto",
+        sharded_norms=True,
+        sharded_norm_site="auto",
+        shared_dtype="auto",
+        shared_down_dtype=None,
+        shared_fidelity=ttnn.MathFidelity.LoFi,
+        shared_dram=True,
+        shared_readers="auto",
+        shared_split=False,
+        shared_block=11,
+        residual_l1=False,
+        residual_sharded=True,
+        **kwargs,
+    ):
+        """Construct measured defaults by attention kind; explicit overrides take precedence.
+
+        ``"auto"`` selects a layer policy without changing an explicit ``None``
+        that disables a backend, cast, or program override.
+        """
+        config = getattr(kwargs["hf_config"], "text_config", kwargs["hf_config"])
+        sliding = config.layer_types[kwargs["layer_idx"]] == "sliding_attention"
+        if prefill_qkv_minimal_block_h == "auto":
+            prefill_qkv_minimal_block_h = 4 if sliding else 2
+        if prefill_qkv_input_l1 == "auto":
+            prefill_qkv_input_l1 = bool(prefill_qkv_minimal and not sliding)
+        if prefill_qkv_fidelity == "auto":
+            prefill_qkv_fidelity = ttnn.MathFidelity.HiFi4 if sliding else ttnn.MathFidelity.HiFi2
+        if prefill_qkv_minimal_block_w == "auto":
+            prefill_qkv_minimal_block_w = 8 if sliding else 16
+        if prefill_output_minimal == "auto":
+            prefill_output_minimal = not sliding
+        if prefill_output_minimal_block_w == "auto":
+            prefill_output_minimal_block_w = 16 if sliding else 8
+        if prefill_dtype == "auto":
+            prefill_dtype = ttnn.bfloat8_b if sliding else ttnn.bfloat4_b
+        if expert_gate_dtype == "auto":
+            expert_gate_dtype = ttnn.bfloat8_b if sliding else ttnn.bfloat4_b
+        if qkv_fidelity == "auto":
+            qkv_fidelity = ttnn.MathFidelity.HiFi2 if sliding else ttnn.MathFidelity.LoFi
+        if qkv_direct_dtype == "auto":
+            qkv_direct_dtype = ttnn.float32 if qkv_lanes else None
+        if qkv_direct_cleanup == "auto":
+            qkv_direct_cleanup = qkv_direct_dtype is not None
+        if output_grid == "auto":
+            output_grid = (8, 8) if sliding else (11, 10)
+        if output_fidelity == "auto":
+            output_fidelity = ttnn.MathFidelity.HiFi4 if sliding else ttnn.MathFidelity.LoFi
+        if shared_readers == "auto":
+            shared_readers = 1 if sliding else 2
+        if prefill_attention_fidelity == "auto":
+            prefill_attention_fidelity = ttnn.MathFidelity.LoFi if sliding else ttnn.MathFidelity.HiFi2
+        if native_sdpa_fidelity == "auto":
+            native_sdpa_fidelity = ttnn.MathFidelity.HiFi4 if sliding else ttnn.MathFidelity.LoFi
+        if expert_activation_dtype == "auto":
+            expert_activation_dtype = None if sliding else ttnn.bfloat8_b
+        if generalized_router == "auto":
+            generalized_router = not router_lanes
+        if router_direct == "auto":
+            router_direct = bool(generalized_router)
+        if router_direct_block_w == "auto":
+            router_direct_block_w = 22 if sliding else 44
+        if router_direct_fidelity == "auto":
+            router_direct_fidelity = ttnn.MathFidelity.HiFi4 if sliding else ttnn.MathFidelity.LoFi
+        if generalized_router_center == "auto":
+            generalized_router_center = generalized_router
+        if sharded_norm_site == "auto":
+            sharded_norm_site = "all"
+        if shared_dtype == "auto":
+            shared_dtype = ttnn.bfloat8_b if sliding else ttnn.bfloat4_b
+        if indexed_experts == "auto":
+            indexed_experts = bool(generalized_router)
+        if expert_fused_gelu == "auto":
+            expert_fused_gelu = bool(indexed_experts)
+        if indexed_experts and not generalized_router:
+            raise ValueError("Indexed experts require generalized_router=True")
+        if router_direct and not generalized_router:
+            raise ValueError("Direct router projection requires generalized_router=True")
+        if generalized_router_center and not generalized_router:
+            raise ValueError("Router score centering requires generalized_router=True")
+        if generalized_router and router_lanes:
+            raise ValueError("Generalized routing and lane-router projection are separate candidates")
+        if qkv_direct_cleanup and qkv_direct_dtype is None:
+            raise ValueError("QKV setup cleanup requires the direct backend")
+        if qkv_direct_dtype is not None and (not qkv_lanes or qkv_direct_dtype not in (ttnn.float32, ttnn.bfloat16)):
+            raise ValueError("Direct QKV requires lane setup and FP32 or BF16 input dtype")
+        if qkv_dram and (not qkv_lanes or qkv_separate):
+            raise ValueError("DRAM-sharded QKV requires lane partitioning and a packed QKV projection")
+        if kv_cache_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b):
+            raise ValueError("Optimized decoder supports BF16 or BFP8 caches")
+        self = super().from_state_dict(state_dict, **kwargs)
+        self.prefill_qkv_input_l1 = bool(prefill_qkv_input_l1)
+        self.kv_cache_dtype = kv_cache_dtype
+        if prefill_down_dtype is None:
+            prefill_down_dtype = ttnn.bfloat4_b if sliding else ttnn.bfloat8_b
+        if qkv_grid == "auto":
+            qkv_grid = (8, 8) if sliding else (9, 8)
+            qkv_subblock_w = 1 if sliding or (qkv_direct_dtype is not None and qkv_separate) else 4
+        self.precision_policy = dict(
+            attention_weights={
+                "qkv": str(qkv_weight_dtype or ttnn.bfloat16),
+                "output": str(output_weight_dtype or ttnn.bfloat16),
+            },
+            kv_cache=str(kv_cache_dtype).split(".")[-1].lower(),
+            native_sdpa=native_sdpa,
+            native_sdpa_grid=tuple(native_sdpa_grid) if native_sdpa else None,
+            native_sdpa_fidelity=str(native_sdpa_fidelity) if native_sdpa else None,
+            prefill_attention_fidelity=(
+                str(prefill_attention_fidelity) if prefill_attention_fidelity is not None else None
+            ),
+            decode_expert_activation=(
+                str(expert_activation_dtype) if expert_activation_dtype is not None else "unchanged"
+            ),
+            router_selection="generalized_moe_gate" if generalized_router else "fp32_topk",
+            generalized_router_center=generalized_router_center,
+            native_sdpa_dst_full_sync=native_sdpa,
+            residual="float32",
+            expert_gate=str(expert_gate_dtype),
+            decode_expert_down=str(expert_down_dtype),
+            prefill_expert_gate=str(prefill_dtype),
+            prefill_expert_down=str(prefill_down_dtype),
+            decode_expert_fidelity=str(expert_fidelity),
+            decode_expert_fused_gelu=expert_fused_gelu or expert_split,
+            decode_expert_backend="indexed_compact" if indexed_experts else "sparsity_scan_expanded",
+            decode_expert_slots=8 if indexed_experts else 128,
+            prefill_expert_fidelity=str(prefill_fidelity),
+            shared_decode_weights=str(shared_dtype),
+            shared_decode_fidelity=str(shared_fidelity),
+            qkv_fidelity=str(ttnn.MathFidelity.HiFi4 if qkv_fidelity is None else qkv_fidelity),
+            qkv_grid=None if qkv_dram else qkv_grid,
+            qkv_terms=None if qkv_direct_dtype is not None else qkv_terms,
+            qkv_lanes=0 if qkv_direct_dtype is not None else qkv_lanes,
+            qkv_direct_dtype=str(qkv_direct_dtype) if qkv_direct_dtype is not None else None,
+            qkv_direct_cleanup=qkv_direct_cleanup,
+            router_lanes=router_lanes,
+            qkv_dram=qkv_dram,
+            qkv_dram_readers=qkv_dram_readers if qkv_dram else None,
+            qkv_dram_block=qkv_dram_block if qkv_dram else None,
+            expert_grid=expert_grid,
+            expert_k_block=expert_block_w,
+            prefill_batch_tokens=prefill_tokens,
+        )
+        self.residual_l1 = residual_l1
+        self.residual_sharded = residual_sharded
+        self.layer.moe.experts = OptimizedExperts(
+            self.layer.moe.experts,
+            gate_dtype=expert_gate_dtype,
+            down_dtype=expert_down_dtype,
+            block_w=expert_block_w,
+            gate_block_w=expert_gate_block_w,
+            fidelity=expert_fidelity,
+            mesh_device=kwargs["mesh_device"],
+            activation_dtype=expert_activation_dtype,
+            expert_grid=expert_grid,
+            down_grid=down_grid,
+            prefill_tokens=prefill_tokens,
+            active_prefill=active_prefill,
+            prefill_grid=prefill_grid,
+            prefill_block_w=prefill_block_w,
+            prefill_dtype=prefill_dtype,
+            prefill_down_dtype=prefill_down_dtype,
+            prefill_fidelity=prefill_fidelity,
+            prefill_l1=prefill_l1,
+            expert_split=expert_split,
+            expert_fused_gelu=expert_fused_gelu,
+        )
+        self.precision_policy["expert_gate_k_block"] = self.layer.moe.experts.gate_config.in0_block_w
+        self.precision_policy["expert_down_k_block"] = self.layer.moe.experts.down_config.in0_block_w
+        self.use_sharded_norms = sharded_norms
+        self.sharded_norm_site = sharded_norm_site or (
+            "input_common" if self.config.layer_types[self.layer_idx] == "sliding_attention" else "post_common"
+        )
+        if shared_dtype is not None:
+            self.layer.shared_mlp = OptimizedSharedMLP(
+                self.layer.shared_mlp,
+                state_dict,
+                kwargs["mesh_device"],
+                dtype=shared_dtype,
+                down_dtype=shared_down_dtype or shared_dtype,
+                fidelity=shared_fidelity,
+                dram=shared_dram,
+                readers=shared_readers,
+                split=shared_split,
+                block=shared_block,
+            )
+        if qkv_lanes:
+            attention = self.layer.self_attn.source
+            attention.weights = replace(
+                attention.weights,
+                wqkv=LanePartitionQKV(
+                    attention.weights.wqkv,
+                    kwargs["mesh_device"],
+                    lanes=qkv_lanes,
+                    terms=qkv_terms,
+                    grid=qkv_grid,
+                    block_w=qkv_block_w,
+                    subblock_w=qkv_subblock_w,
+                    separate=qkv_separate,
+                    fidelity=qkv_fidelity,
+                    dram=qkv_dram,
+                    dram_readers=qkv_dram_readers,
+                    dram_block=qkv_dram_block,
+                    state_dict=state_dict if qkv_dram else None,
+                    prefill_2d=dense_prefill_2d,
+                    prefill_chunk=self.chunk_size,
+                    prefill_block_w=dense_prefill_block_w,
+                    q_width=attention.config.num_attention_heads * attention.config.head_dim,
+                    kv_width=attention.config.num_key_value_heads * attention.config.head_dim,
+                ),
+            )
+            if qkv_dram:
+                self.precision_policy["qkv_dram_geometry"] = attention.weights.wqkv.dram_geometry
+        elif compensated_qkv:
+            attention = self.layer.self_attn.source
+            attention.weights = replace(attention.weights, wqkv=CompensatedQKV(attention.weights.wqkv))
+        attention = self.layer.self_attn.source
+        if qkv_weight_dtype is not None:
+            projection = attention.weights.wqkv
+            if isinstance(projection, LanePartitionQKV):
+                projection.weights = tuple(ttnn.typecast(weight, qkv_weight_dtype) for weight in projection.weights)
+                projection = projection.source
+            elif isinstance(projection, CompensatedQKV):
+                projection = projection.source
+            projection.weight = ttnn.typecast(projection.weight, qkv_weight_dtype)
+            projection.rows = ttnn.transpose(ttnn.typecast(projection.weight, ttnn.float32), -2, -1)
+        if qkv_direct_dtype is not None:
+            projection = DirectQKV(attention.weights.wqkv, qkv_direct_dtype, cleanup=qkv_direct_cleanup)
+            attention.weights = replace(attention.weights, wqkv=projection)
+            self.precision_policy["qkv_decode"] = projection.precision_policy
+            if qkv_dram:
+                self.precision_policy["qkv_dram_geometry"]["weight_dtype"] = str(projection.weights[0].dtype)
+        if prefill_qkv_minimal:
+            projection = MinimalPrefillQKV(
+                attention.weights.wqkv,
+                kwargs["mesh_device"],
+                block_w=prefill_qkv_minimal_block_w,
+                block_h=prefill_qkv_minimal_block_h,
+                fidelity=prefill_qkv_fidelity,
+            )
+            attention.weights = replace(attention.weights, wqkv=projection)
+            projection.projection.precision_policy["input_memory"] = (
+                "L1 from input normalization" if self.prefill_qkv_input_l1 else "unchanged"
+            )
+            self.precision_policy["prefill_qkv_projection"] = projection.projection.precision_policy
+        if output_weight_dtype is not None:
+            attention.weights = replace(
+                attention.weights, o_proj=ttnn.typecast(attention.weights.o_proj, output_weight_dtype)
+            )
+        if generalized_router:
+            self.layer.moe.router = GeneralizedRouter(
+                self.layer.moe.router,
+                kwargs["mesh_device"],
+                center_logits=generalized_router_center,
+                direct_projection=router_direct,
+                projection_grid=router_direct_grid,
+                projection_block_w=router_direct_block_w,
+                projection_fidelity=router_direct_fidelity,
+            )
+            self.precision_policy["router_projection"] = self.layer.moe.router.projection_policy
+            if indexed_experts:
+                self.layer.moe.experts.enable_indexed_decode(self.layer.moe.router)
+        if router_lanes:
+            self.layer.moe.router = LanePartitionRouter(
+                self.layer.moe.router,
+                kwargs["mesh_device"],
+                lanes=router_lanes,
+                terms=router_terms,
+                grid=router_grid,
+                block_w=router_block_w,
+                fidelity=router_fidelity,
+            )
+            self.precision_policy["router_projection"] = self.layer.moe.router.precision_policy
+        self.layer.self_attn = OptimizedAttention.from_existing(
+            self.layer.self_attn,
+            mesh_device=kwargs["mesh_device"],
+            native_sdpa=native_sdpa,
+            native_sdpa_fidelity=native_sdpa_fidelity,
+            native_sdpa_grid=native_sdpa_grid,
+            prefill_attention_fidelity=prefill_attention_fidelity,
+            output_grid=output_grid,
+            output_block_w=output_block_w,
+            output_fidelity=output_fidelity,
+            output_l1=output_l1,
+        )
+        self.precision_policy["output_projection"] = self.layer.self_attn.output_policy
+        self.layer.self_attn.configure_prefill_output(
+            kwargs["mesh_device"],
+            max(self.chunk_size, self.config.sliding_window or 0),
+            grid=prefill_output_grid,
+            block_w=prefill_output_block_w,
+            fidelity=prefill_output_fidelity,
+            input_l1=prefill_output_l1,
+            minimal=prefill_output_minimal,
+            minimal_block_w=prefill_output_minimal_block_w,
+        )
+        self.precision_policy["prefill_output_projection"] = self.layer.self_attn.prefill_output_policy
+        return self
+
+    @staticmethod
+    def _validate_kv_cache(kv_cache):
+        if len(kv_cache) != 2 or any(
+            cache.shape[-2] != 32 or cache.dtype not in (ttnn.bfloat16, ttnn.bfloat8_b) for cache in kv_cache
+        ):
+            raise ValueError("Optimized decoder requires a BF16 or BFP8 K/V pair with 32-token pages")
+        if kv_cache[0].dtype != kv_cache[1].dtype:
+            raise ValueError("K and V cache dtypes must match")
+
+    def prefill_forward(self, hidden_states, *, rope_mats, page_table, kv_cache, user_id=0, start_pos=0):
+        """Prefill or prefix continuation, preserving all S logical outputs.
+
+        page_table [slots, pages] contains physical page IDs; K/V are
+        [physical_pages, kv_heads, page_size, head_dim]. Pages belonging to the
+        request must cover the requested context rounded up to 128 tokens
+        (the attention kernel's read padding). RoPE tables are 4D, absolute,
+        [1,1,context,head_dim], tile rounded for a single chunk and chunk
+        rounded for multi-chunk sliding prefill. Allocating both for the full
+        HF context satisfies every logical length. Other slots are untouched. The final
+        tile's padded rows must belong to the same request, beyond its valid S.
+        start_pos=0 begins a fresh request. For a nonzero start_pos the caller
+        must have filled [0,start_pos) in this request's pages; per-token updates
+        preserve partially occupied pages and all prefix K/V.
+        """
+        length = hidden_states.shape[-2]
+        self._validate_kv_cache(kv_cache)
+        if length <= 0 or start_pos < 0 or start_pos + length > self.config.max_position_embeddings:
+            raise ValueError("Sequence outside HF context contract")
+        if start_pos:
+            # A continuation may begin within an occupied page or tile. Using
+            # per-token paged updates preserves the prefix and neighboring rows;
+            # fresh prompts still use bounded parallel prefill chunks below.
+            rope_2d = tuple(ttnn.reshape(r, (r.shape[-2], r.shape[-1])) for r in rope_mats)
+            request_table = page_table[user_id : user_id + 1, :]
+            outputs = []
+            for offset in range(length):
+                position = start_pos + offset
+                outputs.append(
+                    self.decode_forward(
+                        hidden_states[:, :, offset : offset + 1, :],
+                        rope_mats=rope_2d,
+                        current_pos=self.positions_u32[:, position : position + 1],
+                        cache_pos=ttnn.reshape(self.positions_i32[:, position : position + 1], (1,)),
+                        page_table=request_table,
+                        kv_cache=kv_cache,
+                    )
+                )
+            return outputs[0] if length == 1 else ttnn.concat(outputs, dim=2)
+        block = kv_cache[0].shape[-2]
+        if self.chunk_size % block:
+            raise ValueError("Chunk size must be a multiple of the cache page size")
+        attention = self.layer.self_attn
+        attention._release_sliding_prefill_tail(clear_persistent=True)
+        outputs = []
+        for start in range(0, length, self.chunk_size):
+            valid = min(self.chunk_size, length - start)
+            physical = (valid + 31) // 32 * 32
+            short_sliding_tail = attention.config.is_sliding and start > 0 and valid < self.config.sliding_window
+            if short_sliding_tail:
+                physical = self.config.sliding_window
+            x = hidden_states[:, :, start : start + valid, :]
+            if physical != valid:
+                x = ttnn.pad(x, [(0, 0), (0, 0), (0, physical - valid), (0, 0)], 0.0)
+            rope = tuple(r[:, :, start : start + physical, :] for r in rope_mats)
+            chunk_table = page_table[:, start // block : (start + valid + block - 1) // block]
+            chunk_start = start
+            if length <= self.chunk_size:
+                # Single-chunk attention does not need a left-padded tail stash.
+                chunk_start, chunk_table = None, None
+            elif short_sliding_tail:
+                # Tensor-offset mode retains an unpadded final tail. Together
+                # with physical window padding this avoids the imported helper's
+                # host-created zero buffers for short Q and K/V tails.
+                chunk_start = self.positions_i32[:, start : start + 1]
+            out = self._forward(
+                x,
+                rope_mats=rope,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                position_idx=None,
+                is_decode=False,
+                user_id=user_id,
+                valid_seq_len=valid,
+                chunk_start_idx=chunk_start,
+                chunk_page_table=chunk_table,
+                retain_prefill_tail=start + valid < length,
+            )
+            outputs.append(out[:, :, :valid, :])
+        return outputs[0] if len(outputs) == 1 else ttnn.concat(outputs, dim=2)
+
+    def decode_forward(self, hidden_states, *, rope_mats, current_pos, cache_pos, page_table, kv_cache):
+        """Device-only decode; tensor positions and page IDs may change on replay.
+
+        rope_mats are 2D [context, head_dim] tables. TILE and ROW_MAJOR are
+        accepted; decode_rope_layout advertises the preferred setup layout.
+        Prefill tables remain TILE. current_pos is uint32
+        [1, padded_batch] for on-device embedding lookup; cache_pos is int32
+        [B] of valid nonnegative cache positions. The caller allocates these
+        buffers before capture, warms this exact signature, and refreshes their
+        contents before execute_trace. Output has the input's logical shape.
+        """
+        batch = hidden_states.shape[-2]
+        self._validate_kv_cache(kv_cache)
+        if batch > 1:
+            # Fixed logical-batch orchestration is recorded by trace capture.
+            # Each slot uses its own page-table row and tensor-valued position.
+            rows = []
+            for slot in range(batch):
+                rows.append(
+                    self.decode_forward(
+                        hidden_states[:, :, slot : slot + 1, :],
+                        rope_mats=rope_mats,
+                        current_pos=current_pos[:, slot : slot + 1],
+                        cache_pos=cache_pos[slot : slot + 1],
+                        page_table=page_table[slot : slot + 1, :],
+                        kv_cache=kv_cache,
+                    )
+                )
+            return ttnn.concat(rows, dim=2)
+        return self._forward(
+            hidden_states,
+            rope_mats=rope_mats,
+            position_idx=current_pos,
+            position_idx_cache=cache_pos,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            is_decode=True,
+        )
+
+    def _forward(self, x, **attention_kwargs):
+        if x.shape[-2] == 1 and (self.residual_l1 or self.residual_sharded):
+            memory = (
+                self.layer.post_feedforward_layernorm_1._sharded_cfg[0]
+                if self.residual_sharded
+                else ttnn.L1_MEMORY_CONFIG
+            )
+            x = ttnn.to_memory_config(x, memory)
+        return super()._forward(x, **attention_kwargs)
+
+    def normalize(self, value, epsilon, weight=None):
+        site = (
+            "input"
+            if weight is getattr(self, "input_norm_weight", None)
+            else "post"
+            if weight is getattr(self, "post_attention_norm_weight", None)
+            else "common"
+        )
+        if (
+            (getattr(self, "sharded_norm_site", "all") == "all" or site in self.sharded_norm_site.split("_"))
+            and getattr(self, "use_sharded_norms", False)
+            and value.shape[-2] == 1
+            and value.shape[-1] == self.config.hidden_size
+        ):
+            memory, program = self.layer.post_feedforward_layernorm_1._sharded_cfg
+            value = ttnn.to_memory_config(ttnn.typecast(value, ttnn.float32), memory)
+            result = ttnn.rms_norm(
+                value,
+                epsilon=epsilon,
+                program_config=program,
+                compute_kernel_config=self.layer.self_attn.compute,
+                memory_config=memory,
+            )
+            result = ttnn.to_memory_config(result, ttnn.L1_MEMORY_CONFIG)
+            return result if weight is None else ttnn.mul(result, weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if value.is_sharded():
+            value = ttnn.to_memory_config(value, ttnn.L1_MEMORY_CONFIG)
+        if getattr(self, "prefill_qkv_input_l1", False) and site == "input" and value.shape[-2] > 1:
+            result = super().normalize(value, epsilon, weight=None)
+            return ttnn.mul(result, weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+        return super().normalize(value, epsilon, weight)
+
+
+class GeneralizedRouter:
+    """Native top-8/softmax gate with optional centering before BF16 score conversion."""
+
+    def __init__(
+        self,
+        original,
+        mesh,
+        *,
+        center_logits=False,
+        direct_projection=False,
+        projection_grid=(4, 1),
+        projection_block_w=22,
+        projection_fidelity=ttnn.MathFidelity.HiFi4,
+    ):
+        import torch
+
+        if type(original) is not BroadcastRouter:
+            raise ValueError("Generalized router requires the unmodified BroadcastRouter backend")
+        if original.source.source.num_experts != 128 or original.source.source.top_k != 8:
+            raise ValueError("Generalized router requires 128 experts and top-8 routing")
+        self.original = original
+        self.retain_decode_indices = False
+        self.last_decode_indices = None
+        self.center_logits = center_logits
+        self.direct_projection = direct_projection
+        self.projection_weight = original.source.source.proj_weight
+        self.projection_program = None
+        self.projection_compute = original.source.compute
+        if direct_projection:
+            weight = self.projection_weight
+            if tuple(weight.shape) != (1, 1, 2816, 128) or weight.dtype != ttnn.bfloat16:
+                raise ValueError("Direct router requires the original BF16 [1,1,2816,128] projection weight")
+            if weight.layout != ttnn.TILE_LAYOUT or weight.is_sharded():
+                raise ValueError("Direct router requires a tiled interleaved projection weight")
+            gx, gy = projection_grid
+            available = mesh.compute_with_storage_grid_size()
+            if not (0 < gx <= available.x and 0 < gy <= available.y) or 4 % (gx * gy):
+                raise ValueError("Direct router grid must fit the device and divide four output tiles")
+            if projection_block_w <= 0 or 88 % projection_block_w:
+                raise ValueError("Direct router K block must divide 88 tiles")
+            per_n = 4 // (gx * gy)
+            self.projection_program = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+                in0_block_w=projection_block_w,
+                out_subblock_h=1,
+                out_subblock_w=per_n,
+                out_block_h=1,
+                out_block_w=per_n,
+                per_core_M=1,
+                per_core_N=per_n,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+            self.projection_compute = ttnn.init_device_compute_kernel_config(
+                mesh.arch(),
+                math_fidelity=projection_fidelity,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+                dst_full_sync_en=False,
+            )
+        self.projection_policy = dict(
+            backend="native_linear" if direct_projection else "fp32_broadcast",
+            input_dtype="float32",
+            weight_dtype=str(self.projection_weight.dtype) if direct_projection else "float32",
+            output_dtype="float32",
+            output_memory="L1 interleaved" if direct_projection else "inherited broadcast",
+            grid=tuple(projection_grid) if direct_projection else None,
+            k_block=projection_block_w if direct_projection else None,
+            fidelity=str(self.projection_compute.math_fidelity) if direct_projection else None,
+            fp32_dest_acc_en=True if direct_projection else None,
+            packer_l1_acc=False if direct_projection else None,
+            program=str(self.projection_program),
+        )
+
+        core = ttnn.CoreCoord(0, 0)
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core)})
+        shard = ttnn.ShardSpec(grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR)
+        self.memory = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard)
+
+        def upload(value, dtype, layout=ttnn.TILE_LAYOUT):
+            return ttnn.from_torch(value, dtype=dtype, layout=layout, device=mesh, memory_config=self.memory)
+
+        # Match test_generalized_moe_gate.py: logits stay untransposed, whereas
+        # bias and global expert ids are transposed within the 16x16 face.
+        self.bias = upload(torch.zeros((1, 16, 16), dtype=torch.bfloat16).transpose(-2, -1), ttnn.bfloat16)
+        self.indices = upload(
+            torch.arange(256, dtype=torch.int32).reshape(1, 16, 16).transpose(-2, -1).to(torch.uint16), ttnn.uint16
+        )
+        # Match TTMoEGate's row-major output buffers so UInt16 ids need only
+        # metadata views after slicing, without a device reshape or dtype cast.
+        self.output = upload(torch.zeros((1, 32, 32), dtype=torch.bfloat16), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+        self.output_indices = upload(torch.zeros((1, 32, 32), dtype=torch.uint16), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT)
+
+    def __getattr__(self, name):
+        return getattr(self.original, name)
+
+    def __call__(self, x, normalized=None):
+        if x.shape[-2] != 1:
+            return self.original(x, normalized=normalized)
+
+        source = self.original.source
+        router = source.source
+        if normalized is None:
+            normalized = self.original.normalize(x, source.epsilon)
+        scaled = ttnn.mul(
+            normalized,
+            source.scale,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, router.scalar_root_size)],
+        )
+        if self.direct_projection:
+            if scaled.dtype != ttnn.float32:
+                raise ValueError("Direct router requires the existing FP32 scaled activation")
+            if scaled.is_sharded():
+                scaled = ttnn.to_memory_config(scaled, ttnn.L1_MEMORY_CONFIG)
+            scores = ttnn.linear(
+                scaled,
+                self.projection_weight,
+                dtype=ttnn.float32,
+                program_config=self.projection_program,
+                compute_kernel_config=self.projection_compute,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+        else:
+            products = ttnn.mul(source.projection_rows, scaled)
+            scores = ttnn.transpose(ttnn.sum(products, dim=-1, keepdim=True), -2, -1)
+        if tuple(scores.shape) != (1, 1, 1, 128):
+            raise ValueError("Generalized router supports one decode token with 128 logits")
+        if self.center_logits:
+            if scores.dtype != ttnn.float32:
+                raise ValueError("Score-centering control requires FP32 scores before subtraction")
+            scores = ttnn.subtract(scores, ttnn.max(scores, dim=-1, keepdim=True))
+        rounded = ttnn.typecast(scores, ttnn.bfloat16)
+
+        padded = ttnn.pad(rounded, [(0, 0), (0, 0), (0, 0), (0, 128)], float("-inf"))
+        face = ttnn.to_memory_config(ttnn.reshape(padded, (1, 16, 16)), self.memory)
+        values, indices = ttnn.experimental.deepseek.moe.generalized_moe_gate(
+            face,
+            bias_tensor=self.bias,
+            input_indices_tensor=self.indices,
+            output_tensor=self.output,
+            output_indices_tensor=self.output_indices,
+            eps=1e-20,
+            scaling_factor=1.0,
+            enable_sigmoid=False,
+            topk=8,
+            output_softmax=True,
+            grouped=False,
+        )
+        values = ttnn.to_memory_config(values, ttnn.L1_MEMORY_CONFIG)
+        indices = ttnn.to_memory_config(indices, ttnn.L1_MEMORY_CONFIG)
+        values = ttnn.view(values[:, 0, :8], (1, 1, 1, 8))
+        indices = ttnn.view(indices[:, 0, :8], (1, 1, 1, 8))
+        if self.retain_decode_indices:
+            self.last_decode_indices = indices
+        routing = ttnn.scatter(ttnn.zeros_like(rounded), dim=-1, index=indices, src=values)
+        return ttnn.mul(routing, router.per_expert_scale)
+
+    def decode_indices(self):
+        if self.last_decode_indices is None:
+            raise RuntimeError("Indexed expert projection must follow decode routing")
+        return self.last_decode_indices
+
+
+class LanePartitionRouter:
+    """Retain routing policy while projecting isolated K lanes during decode."""
+
+    def __init__(self, original, mesh, *, lanes=16, terms=2, grid=(4, 1), block_w=11, fidelity=ttnn.MathFidelity.HiFi4):
+        if not isinstance(original, BroadcastRouter):
+            raise ValueError("Lane router projection requires the fused BroadcastRouter")
+        self.original = original
+        self.source = original.source
+        self.normalize = original.normalize
+        router = self.source.source
+        if router.proj_weight.dtype != ttnn.bfloat16:
+            raise ValueError("Lane router projection requires the original BF16 router weight")
+        if isinstance(fidelity, str):
+            fidelity = getattr(ttnn.MathFidelity, fidelity)
+        projection_source = SimpleNamespace(
+            weight=router.proj_weight,
+            compute=self.source.compute,
+            decode_memory=ttnn.L1_MEMORY_CONFIG,
+        )
+        self.projection = LanePartitionQKV(
+            projection_source,
+            mesh,
+            lanes=lanes,
+            terms=terms,
+            grid=grid,
+            block_w=block_w,
+            subblock_w=1,
+            fidelity=fidelity,
+        )
+        self.precision_policy = dict(
+            lanes=lanes,
+            terms=terms,
+            grid=grid,
+            k_block=block_w,
+            fidelity=str(fidelity),
+            input_dtype="float32",
+            component_dtype="bfloat16",
+            weight_dtype=str(router.proj_weight.dtype),
+            weight_shape=list(router.proj_weight.shape),
+            output_dtype="float32",
+            fp32_dest_acc_en=True,
+            math_approx_mode=False,
+            packer_l1_acc=False,
+            projection_output_memory="L1",
+            normalization="original BroadcastRouter",
+        )
+
+    def __call__(self, x, normalized=None):
+        if x.shape[-2] != 1:
+            return self.original(x, normalized=normalized)
+        source = self.source
+        router = source.source
+        if normalized is None:
+            normalized = self.normalize(x, source.epsilon)
+        scaled = ttnn.mul(
+            normalized,
+            source.scale,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, router.scalar_root_size)],
+        )
+        scores = self.projection(scaled)
+        selected, indices = ttnn.topk(scores, k=router.top_k, dim=-1)
+        values = ttnn.softmax(selected, dim=-1)
+        routing = ttnn.scatter(
+            ttnn.zeros_like(ttnn.typecast(scores, ttnn.bfloat16)),
+            dim=-1,
+            index=indices,
+            src=ttnn.typecast(values, ttnn.bfloat16),
+        )
+        return ttnn.mul(routing, router.per_expert_scale)
+
+
+class ConfiguredChunkedPrefillAttention:
+    """Paged full-prefill slices with a compute policy prepared during setup."""
+
+    def __init__(self, head_dim, compute):
+        self.compute = compute
+        self.chunk_size = PREFILL_CHUNK_SIZE
+        grid, default_q, default_k = ((8, 4), 64, 256) if head_dim >= 512 else ((8, 8), 256, 128)
+        q_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_QCHUNK", default_q))
+        k_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_KCHUNK", default_k))
+        self.program = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=grid,
+            q_chunk_size=max(32, min(q_chunk, self.chunk_size)),
+            k_chunk_size=max(32, min(k_chunk, self.chunk_size)),
+            exp_approx_mode=False,
+        )
+        self.boundary_program = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=grid,
+            q_chunk_size=min(self.program.q_chunk_size, 128),
+            k_chunk_size=min(self.program.k_chunk_size, 128),
+            exp_approx_mode=False,
+        )
+
+    def __call__(self, q, k_cache, v_cache, page_table, user_id, head_dim, scale=1.0, base_offset=0, num_kv_heads=None):
+        # OptimizedDecoder uses scalar offsets for full-attention chunks;
+        # arbitrary prefix continuation is dispatched through decode_forward.
+        if not isinstance(base_offset, int):
+            raise ValueError("Configured full-prefill attention requires a scalar chunk offset")
+        geometry = None
+        if num_kv_heads is not None:
+            block_size = effective_block_size(k_cache, head_dim, num_kv_heads)
+            if block_size != k_cache.padded_shape[2] or num_kv_heads != k_cache.padded_shape[1]:
+                geometry = ttnn.PagedCacheGeometryOverride(block_size=block_size, num_kv_heads=num_kv_heads)
+        owns_table = page_table.shape[0] > 1
+        user_table = (
+            ttnn.slice(page_table, [user_id, 0], [user_id + 1, page_table.shape[-1]]) if owns_table else page_table
+        )
+        outputs = []
+        for start in range(0, q.shape[-2], self.chunk_size):
+            length = min(self.chunk_size, q.shape[-2] - start)
+            query = ttnn.slice(q, [0, 0, start, 0], [1, q.shape[1], start + length, head_dim])
+            program = self.program
+            if head_dim >= 512 and k_cache.dtype == ttnn.bfloat16:
+                # BF16 K/V double buffers need smaller blocks to fit wide heads in L1.
+                program = self.boundary_program
+            query_end = base_offset + start + length + (-length) % program.q_chunk_size
+            read_end = query_end + (-query_end) % program.k_chunk_size
+            capacity = page_table.shape[-1] * k_cache.shape[-2]
+            if read_end > capacity:
+                # The public cache contract rounds capacity to 128 tokens.
+                # A wider K block must not read past its logical page table.
+                program = self.boundary_program
+            padding = (-length) % program.q_chunk_size
+            if padding:
+                unpadded = query
+                query = ttnn.pad(unpadded, [(0, 0), (0, 0), (0, padding), (0, 0)], value=0.0)
+                unpadded.deallocate(True)
+            output = ttnn.transformer.chunked_scaled_dot_product_attention(
+                query,
+                k_cache,
+                v_cache,
+                user_table,
+                chunk_start_idx=base_offset + start,
+                scale=scale,
+                program_config=program,
+                compute_kernel_config=self.compute,
+                paged_cache_geometry=geometry,
+            )
+            query.deallocate(True)
+            if padding:
+                padded = output
+                output = ttnn.slice(padded, [0, 0, 0, 0], [1, q.shape[1], length, head_dim])
+                padded.deallocate(True)
+            outputs.append(output)
+        if owns_table:
+            user_table.deallocate(True)
+        if len(outputs) == 1:
+            return outputs[0]
+        output = ttnn.concat(outputs, dim=2)
+        for chunk in outputs:
+            chunk.deallocate(True)
+        return output
+
+
+class NativePagedAttention:
+    """Native paged decode with explicit query rounding and synchronized FP32 accumulation."""
+
+    def __init__(self, mesh_device, config, *, fidelity=ttnn.MathFidelity.HiFi4, grid=(8, 8)):
+        self.config = config
+        self.compute = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+            dst_full_sync_en=True,
+        )
+        self.program = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=tuple(grid), q_chunk_size=0, k_chunk_size=0, exp_approx_mode=False
+        )
+
+    def __call__(self, q, k, v, *, cur_pos_tensor, page_table_tensor, **kwargs):
+        query = ttnn.to_memory_config(ttnn.typecast(q, ttnn.bfloat16), ttnn.DRAM_MEMORY_CONFIG)
+        result = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            query,
+            k,
+            v,
+            cur_pos_tensor=cur_pos_tensor,
+            page_table_tensor=page_table_tensor,
+            scale=1.0,
+            sliding_window_size=self.config.sliding_window if self.config.is_sliding else None,
+            program_config=self.program,
+            compute_kernel_config=self.compute,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return result
+
+
+class OptimizedAttention(FusedAttention):
+    """Keep prefill attention in BF16 while supporting BF16 or BFP8 cache storage."""
+
+    @classmethod
+    def from_existing(
+        cls,
+        source,
+        *,
+        mesh_device,
+        native_sdpa=False,
+        native_sdpa_fidelity=ttnn.MathFidelity.HiFi4,
+        native_sdpa_grid=(8, 8),
+        prefill_attention_fidelity=None,
+        output_grid=None,
+        output_block_w=16,
+        output_fidelity=None,
+        output_l1=False,
+    ):
+        self = cls.__new__(cls)
+        self.__dict__.update(source.__dict__)
+        self.output_program = None
+        self.output_memory = ttnn.L1_MEMORY_CONFIG if output_l1 else ttnn.DRAM_MEMORY_CONFIG
+        self.output_compute = self.compute
+        if output_grid is not None:
+            gx, gy = output_grid
+            available = mesh_device.compute_with_storage_grid_size()
+            k = self.config.num_attention_heads * self.config.head_dim
+            n = self.source.weights.o_proj.shape[-1]
+            if not (0 < gx <= available.x and 0 < gy <= available.y):
+                raise ValueError("Output projection grid must fit the device")
+            if output_block_w <= 0 or (k // 32) % output_block_w:
+                raise ValueError("Output projection K block must divide tiled K")
+            per_n = (n // 32 + gx * gy - 1) // (gx * gy)
+            subblock = next(v for v in (4, 3, 2, 1) if per_n % v == 0)
+            self.output_program = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+                in0_block_w=output_block_w,
+                out_subblock_h=1,
+                out_subblock_w=subblock,
+                out_block_h=1,
+                out_block_w=per_n,
+                per_core_M=1,
+                per_core_N=per_n,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+        if output_fidelity is not None:
+            self.output_compute = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=output_fidelity,
+                math_approx_mode=self.compute.math_approx_mode,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=self.compute.packer_l1_acc,
+                dst_full_sync_en=self.compute.dst_full_sync_en,
+            )
+        self.output_policy = dict(
+            grid=output_grid,
+            program=str(self.output_program),
+            fidelity=str(self.output_compute.math_fidelity),
+            memory=str(self.output_memory),
+            weight_dtype=str(self.source.weights.o_proj.dtype),
+        )
+        if native_sdpa:
+            self.decode_sdpa = NativePagedAttention(
+                mesh_device, self.config, fidelity=native_sdpa_fidelity, grid=native_sdpa_grid
+            )
+        self.prefill_attention_compute = self.compute
+        self.configured_chunked_prefill = None
+        if prefill_attention_fidelity is not None:
+            self.prefill_attention_compute = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=prefill_attention_fidelity,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+                dst_full_sync_en=True,
+            )
+            self.configured_chunked_prefill = ConfiguredChunkedPrefillAttention(
+                self.config.head_dim, self.prefill_attention_compute
+            )
+        return self
+
+    def configure_prefill_output(
+        self, mesh, max_rows, *, grid=None, block_w=4, fidelity=None, input_l1=False, minimal=False, minimal_block_w=16
+    ):
+        self.prefill_output_enabled = grid is not None or fidelity is not None or input_l1 or minimal
+        self.prefill_output_l1 = input_l1
+        self.prefill_output_compute = self.compute
+        self.prefill_output_programs = {}
+        if fidelity is not None:
+            self.prefill_output_compute = ttnn.init_device_compute_kernel_config(
+                mesh.arch(),
+                math_fidelity=fidelity,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+                dst_full_sync_en=False,
+            )
+        self.prefill_minimal_output = (
+            MinimalPrefillProjection(
+                self.source.weights.o_proj, self.prefill_output_compute, mesh, block_w=minimal_block_w
+            )
+            if minimal
+            else None
+        )
+        if grid is not None and not minimal:
+            gx, gy = grid
+            available = mesh.compute_with_storage_grid_size()
+            k, n = self.source.weights.o_proj.shape[-2], self.source.weights.o_proj.shape[-1]
+            if not (0 < gx <= available.x and 0 < gy <= available.y):
+                raise ValueError("Prefill output grid must fit the device")
+            if block_w <= 0 or k // 32 % block_w:
+                raise ValueError("Prefill output K block must divide tiled K")
+            for rows in range(32, (max_rows + 31) // 32 * 32 + 1, 32):
+                per_m = (rows // 32 + gy - 1) // gy
+                per_n = (n // 32 + gx - 1) // gx
+                candidates = [(h, w) for h in (1, 2, 4) for w in (1, 2, 4) if h * w <= 4]
+                h, w = max(
+                    ((h, w) for h, w in candidates if per_m % h == 0 and per_n % w == 0),
+                    key=lambda pair: (pair[0] * pair[1], pair[1]),
+                )
+                self.prefill_output_programs[rows] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(gx, gy),
+                    in0_block_w=block_w,
+                    out_subblock_h=h,
+                    out_subblock_w=w,
+                    out_block_h=per_m,
+                    out_block_w=per_n,
+                    per_core_M=per_m,
+                    per_core_N=per_n,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                    fuse_batch=False,
+                )
+        self.prefill_output_policy = dict(
+            enabled=self.prefill_output_enabled,
+            grid=tuple(grid) if grid is not None else None,
+            k_block=block_w if grid is not None else None,
+            fidelity=str(self.prefill_output_compute.math_fidelity),
+            fp32_dest_acc_en=self.prefill_output_compute.fp32_dest_acc_en,
+            input_l1=input_l1,
+            output_dtype="float32",
+            output_memory="DRAM interleaved",
+            weight_dtype=str(self.source.weights.o_proj.dtype),
+            programs={str(rows): str(program) for rows, program in self.prefill_output_programs.items()},
+        )
+        if minimal:
+            self.prefill_output_policy.update(self.prefill_minimal_output.precision_policy)
+
+    def project(self, attention, decode):
+        if not decode and getattr(self, "prefill_output_enabled", False):
+            cfg = self.source.config
+            combined = concat_heads(
+                attention,
+                is_decode_mode=False,
+                num_heads=cfg.num_attention_heads,
+                head_dim=cfg.head_dim,
+                mesh_device=self.source.mesh_device,
+            )
+            if self.prefill_output_l1:
+                combined = ttnn.to_memory_config(combined, ttnn.L1_MEMORY_CONFIG)
+            if self.prefill_minimal_output is not None:
+                return self.prefill_minimal_output(combined, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            rows = combined.padded_shape[-2]
+            if self.prefill_output_programs and rows not in self.prefill_output_programs:
+                raise ValueError(f"No setup-time prefill output program for {rows} rows")
+            return ttnn.linear(
+                combined,
+                self.source.weights.o_proj,
+                dtype=ttnn.float32,
+                program_config=self.prefill_output_programs.get(rows),
+                compute_kernel_config=self.prefill_output_compute,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        if not decode or self.output_program is None or not self.project_sharded:
+            return super().project(attention, decode)
+        cfg = self.source.config
+        memory = ttnn.create_sharded_memory_config(
+            (32, cfg.head_dim),
+            ttnn.CoreGrid(x=1, y=1),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        combined = ttnn.experimental.nlp_concat_heads_decode(
+            ttnn.to_memory_config(attention, memory), num_heads=cfg.num_attention_heads
+        )
+        width = cfg.num_attention_heads * cfg.head_dim
+        combined = ttnn.reshape(combined, (1, 1, 1, width), (1, 1, 32, width))
+        combined = ttnn.to_memory_config(combined, ttnn.L1_MEMORY_CONFIG)
+        return ttnn.linear(
+            combined,
+            self.source.weights.o_proj,
+            dtype=ttnn.float32,
+            program_config=self.output_program,
+            compute_kernel_config=self.output_compute,
+            memory_config=self.output_memory,
+        )
+
+    def cache_cast(self, value, dtype, memory):
+        # Decode writers repack BF16 rows into the destination cache format.
+        return super().cache_cast(value, ttnn.bfloat16, memory)
+
+    def prefill(self, hidden_states, **kwargs):
+        cfg = self.source.config
+        q, k, v, _ = self.heads(hidden_states, False)
+        cos, sin = kwargs["rope_mats"]
+        q, k = self.rotary(q, cos, sin), self.rotary(k, cos, sin)
+        q, k, v = [ttnn.typecast(t, ttnn.bfloat16) for t in (q, k, v)]
+        page_table, user_id = kwargs["page_table"], kwargs["user_id"]
+        fill_table = kwargs.get("chunk_page_table")
+        fill_table = page_table if fill_table is None else fill_table
+        valid = kwargs["valid_seq_len"]
+        fill_length = (valid + 31) // 32 * 32
+        for cache, update in zip(kwargs["kv_cache"], (k, v)):
+            fill_value = update[:, :, :fill_length, :]
+            if fill_value.dtype != cache.dtype:
+                fill_value = ttnn.typecast(fill_value, cache.dtype)
+            ttnn.experimental.paged_fill_cache(
+                cache, fill_value, fill_table, batch_idx=user_id, block_size=cache.shape[-2]
+            )
+
+        start = kwargs.get("chunk_start_idx")
+        if cfg.is_sliding:
+            history = 0
+            if self.tail is not None:
+                history = self.tail[0].shape[-2]
+                q_attention = ttnn.concat((q[:, :, :history, :], q), dim=2)
+                k_attention = ttnn.concat((self.tail[0], k), dim=2)
+                v_attention = ttnn.concat((self.tail[1], v), dim=2)
+            else:
+                q_attention, k_attention, v_attention = q, k, v
+            attention = ttnn.transformer.scaled_dot_product_attention(
+                q_attention,
+                k_attention,
+                v_attention,
+                is_causal=True,
+                scale=1.0,
+                sliding_window_size=cfg.sliding_window,
+                program_config=prefill_sdpa_program_config(cfg.head_dim, q_attention.shape[-2], cfg.sliding_window),
+                compute_kernel_config=self.prefill_attention_compute,
+            )
+            if history:
+                attention = attention[:, :, history : history + q.shape[-2], :]
+            # Only another chunk in this prefill consumes the tail. Decode
+            # and prefix continuation use the paged cache instead.
+            tail_length = min(cfg.sliding_window, k.shape[-2])
+            self.tail = (
+                tuple(ttnn.clone(t[:, :, -tail_length:, :]) for t in (k, v))
+                if kwargs.get("retain_prefill_tail", True)
+                else None
+            )
+        elif start is not None and start != 0:
+            chunked = self.configured_chunked_prefill or chunked_prefill_sdpa
+            attention = chunked(
+                q,
+                *kwargs["kv_cache"],
+                page_table,
+                user_id,
+                cfg.head_dim,
+                scale=1.0,
+                base_offset=start,
+                num_kv_heads=cfg.num_key_value_heads,
+            )
+        else:
+            attention = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                is_causal=True,
+                scale=1.0,
+                program_config=prefill_sdpa_program_config(cfg.head_dim, q.shape[-2]),
+                compute_kernel_config=self.prefill_attention_compute,
+            )
+        return self.project(attention, False)
+
+
+class MinimalPrefillProjection:
+    """Reuse the selected weight/compute policy with setup-time minimal-matmul blocks."""
+
+    def __init__(self, weight, compute, mesh, *, block_w=16, block_h=4):
+        if block_h not in (1, 2, 3, 4):
+            raise ValueError("Minimal prefill M block must be 1, 2, 3, or 4 tiles")
+        if block_w not in (4, 8, 16):
+            raise ValueError("Minimal prefill K block must be 4, 8, or 16 tiles")
+        available = mesh.compute_with_storage_grid_size()
+        if available.x < 11 or available.y < 8:
+            raise ValueError("Minimal prefill projection requires an 11x8 compute grid")
+        self.weight = weight
+        self.compute = compute
+        self.programs = tuple(
+            ttnn.MinimalMatmulConfig(
+                M_block_size=min(rows, block_h),
+                K_block_size=block_w,
+                N_block_size=8,
+                subblock_h=1,
+                subblock_w=4,
+                compute_with_storage_grid_size=ttnn.CoreCoord(11, 8),
+            )
+            for rows in (1, 2, 3, 4)
+        )
+        self.precision_policy = dict(
+            backend="minimal_matmul",
+            grid=(11, 8),
+            k_block=block_w,
+            m_block=f"min({block_h}, padded_M_tiles)",
+            n_block=8,
+            subblock=(1, 4),
+            weight_dtype=str(weight.dtype),
+            weight_shape=list(weight.shape),
+            input_dtype="unchanged",
+            output_dtype="float32",
+            fidelity=str(compute.math_fidelity),
+            fp32_dest_acc_en=compute.fp32_dest_acc_en,
+            math_approx_mode=compute.math_approx_mode,
+            packer_l1_acc=compute.packer_l1_acc,
+            programs={str(index + 1): str(program) for index, program in enumerate(self.programs)},
+        )
+
+    def __call__(self, hidden_states, *, memory_config=None):
+        block_m = min(4, hidden_states.padded_shape[-2] // 32)
+        return ttnn.experimental.minimal_matmul(
+            hidden_states,
+            self.weight,
+            config=self.programs[block_m - 1],
+            dtype=ttnn.float32,
+            compute_kernel_config=self.compute,
+            memory_config=memory_config,
+        )
+
+
+class MinimalPrefillQKV:
+    """Replace only the packed prefill projection; retain the configured decode callable."""
+
+    def __init__(self, source, mesh, *, block_w=16, block_h=4, fidelity=None):
+        self.decode_source = source
+        while isinstance(source, (DirectQKV, LanePartitionQKV, CompensatedQKV)):
+            source = source.source
+        if type(source) not in (BroadcastQKV, TiedQKV):
+            raise ValueError("Minimal prefill QKV requires the known packed broadcast projection")
+        self.source = source
+        compute = source.compute
+        if fidelity is not None:
+            compute = ttnn.init_device_compute_kernel_config(
+                mesh.arch(),
+                math_fidelity=fidelity,
+                math_approx_mode=compute.math_approx_mode,
+                fp32_dest_acc_en=compute.fp32_dest_acc_en,
+                packer_l1_acc=compute.packer_l1_acc,
+                dst_full_sync_en=compute.dst_full_sync_en,
+                throttle_level=compute.throttle_level,
+            )
+        self.projection = MinimalPrefillProjection(source.weight, compute, mesh, block_w=block_w, block_h=block_h)
+
+    def __call__(self, hidden_states, compute_kernel_config=None, out_memory_config=None):
+        if hidden_states.shape[-2] == 1:
+            return self.decode_source(hidden_states, compute_kernel_config, out_memory_config)
+        result = self.projection(hidden_states, memory_config=out_memory_config)
+        if isinstance(self.source, TiedQKV):
+            result = ttnn.concat(
+                (result, result[..., self.source.width - self.source.kv_width :]),
+                dim=-1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return result
+
+
+class DirectQKV:
+    """Use native one-token projections while retaining the configured prefill path."""
+
+    def __init__(self, source, input_dtype, *, cleanup=False):
+        if not isinstance(source, LanePartitionQKV):
+            raise ValueError("Direct QKV requires the configured lane projection for setup")
+        if input_dtype not in (ttnn.float32, ttnn.bfloat16):
+            raise ValueError("Direct QKV input dtype must be FP32 or BF16")
+        self.prefill_source = source
+        self.source = source.source
+        cleanup_policy = dict(
+            requested=cleanup, shared_phase_weight=False, released_rows=False, released_lane_mask=False
+        )
+        if cleanup:
+            if type(self.source) not in (BroadcastQKV, TiedQKV):
+                raise ValueError("Direct cleanup requires the known broadcast prefill implementation")
+            # The factory quantizes packed interleaved decode/prefill weights
+            # from the same source. Reuse the prefill copy only at that boundary.
+            if not source.dram and len(source.weights) == 1:
+                weight, prefill_weight = source.weights[0], self.source.weight
+                if (
+                    weight.dtype == prefill_weight.dtype
+                    and tuple(weight.shape) == tuple(prefill_weight.shape)
+                    and weight.layout == prefill_weight.layout
+                    and weight.memory_config() == prefill_weight.memory_config()
+                ):
+                    source.weights = (prefill_weight,)
+                    cleanup_policy["shared_phase_weight"] = True
+            # M=1 is handled here; delegated M>1 prefill never reads these.
+            # Drop references without forcing deallocation of aliased storage.
+            self.source.rows = None
+            source.lane_mask = None
+            cleanup_policy.update(released_rows=True, released_lane_mask=True)
+        self.weights = source.weights
+        self.compute = source.compute
+        self.input_dtype = input_dtype
+        self.dram = source.dram
+        self.programs = []
+        geometry = []
+        for weight, program in zip(self.weights, source.programs):
+            if program is None:
+                self.programs.append(None)
+                geometry.append(None)
+            elif self.dram:
+                self.programs.append(
+                    ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                        in0_block_w=program.in0_block_w,
+                        per_core_M=1,
+                        per_core_N=program.per_core_N,
+                        num_workers_per_dram_bank=program.num_workers_per_dram_bank,
+                        fused_activation=None,
+                    )
+                )
+                geometry.append(
+                    dict(
+                        in0_block_w=program.in0_block_w,
+                        per_core_M=1,
+                        per_core_N=program.per_core_N,
+                        num_workers_per_dram_bank=program.num_workers_per_dram_bank,
+                    )
+                )
+            else:
+                grid = program.compute_with_storage_grid_size
+                self.programs.append(
+                    ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=grid,
+                        in0_block_w=program.in0_block_w,
+                        out_subblock_h=1,
+                        out_subblock_w=program.out_subblock_w,
+                        per_core_M=1,
+                        per_core_N=program.per_core_N,
+                        fuse_batch=True,
+                        fused_activation=None,
+                        mcast_in0=True,
+                    )
+                )
+                geometry.append(
+                    dict(
+                        grid=[grid.x, grid.y],
+                        in0_block_w=program.in0_block_w,
+                        out_subblock_h=1,
+                        out_subblock_w=program.out_subblock_w,
+                        per_core_M=1,
+                        per_core_N=program.per_core_N,
+                    )
+                )
+        self.input_memory = source.input_memory if self.dram else None
+        self.precision_policy = dict(
+            backend="native_separate_linear" if len(self.weights) > 1 else "native_packed_linear",
+            input_dtype=str(self.input_dtype),
+            weight_dtypes=[str(weight.dtype) for weight in self.weights],
+            weight_shapes=[list(weight.shape) for weight in self.weights],
+            weight_memory=[str(weight.memory_config()) for weight in self.weights],
+            output_dtype="float32",
+            output_memory=str(self.source.decode_memory),
+            math_fidelity=str(self.compute.math_fidelity),
+            fp32_dest_acc_en=self.compute.fp32_dest_acc_en,
+            packer_l1_acc=self.compute.packer_l1_acc,
+            dram=self.dram,
+            programs=geometry,
+            setup_cleanup=cleanup_policy,
+            activation_decomposition=False,
+            lane_mask=False,
+            partial_row_reduce=False,
+        )
+
+    def __call__(self, hidden_states, compute_kernel_config=None, out_memory_config=None):
+        if hidden_states.shape[-2] != 1:
+            return self.prefill_source(hidden_states, compute_kernel_config, out_memory_config)
+        operand = hidden_states
+        if operand.dtype != self.input_dtype:
+            operand = ttnn.typecast(operand, self.input_dtype)
+        if self.dram:
+            operand = ttnn.to_memory_config(operand, self.input_memory)
+        outputs = []
+        for weight, program in zip(self.weights, self.programs):
+            result = ttnn.linear(
+                operand,
+                weight,
+                dtype=ttnn.float32,
+                program_config=program,
+                compute_kernel_config=self.compute,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if self.dram else self.source.decode_memory,
+            )
+            if self.dram:
+                result = ttnn.to_memory_config(result, self.source.decode_memory)
+                result = result[..., : self.source.weight.shape[-1]]
+            outputs.append(result)
+        result = (
+            ttnn.concat(outputs, dim=-1, memory_config=self.source.decode_memory) if len(outputs) > 1 else outputs[0]
+        )
+        if hasattr(self.source, "kv_width"):
+            result = ttnn.concat(
+                (result, result[..., self.source.width - self.source.kv_width :]),
+                dim=-1,
+                memory_config=self.source.decode_memory,
+            )
+        return result
+
+
+class LanePartitionQKV:
+    """Project disjoint K lanes, then combine FP32 rows outside the FPU dot."""
+
+    def __init__(
+        self,
+        source,
+        mesh,
+        *,
+        lanes=16,
+        terms=3,
+        grid=None,
+        block_w=1,
+        subblock_w=1,
+        separate=False,
+        fidelity=None,
+        dram=False,
+        dram_readers=1,
+        dram_block=1,
+        state_dict=None,
+        prefill_2d=False,
+        prefill_chunk=1024,
+        prefill_block_w=4,
+        q_width=None,
+        kv_width=None,
+    ):
+        import torch
+
+        self.source = source
+        self.terms = terms
+        self.dram = dram
+        self.compute = (
+            source.compute
+            if fidelity is None
+            else ttnn.init_device_compute_kernel_config(
+                mesh.arch(),
+                math_fidelity=fidelity,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
+        )
+        k, width = source.weight.shape[-2], source.weight.shape[-1]
+        self.prefill_programs = {}
+        if prefill_2d:
+            from models.demos.gemma4.tt.dram_sharded import prefill_progcfg
+
+            # Small M keeps the native wide-N policy. For large M, use the
+            # Gemma helper's architecture-safe two-dimensional worker grid.
+            for rows in range(512, prefill_chunk + 1, 32):
+                program = prefill_progcfg(rows, k, width)
+                program.in0_block_w = prefill_block_w
+                if prefill_block_w > 4:
+                    program.out_block_h = 1
+                    program.out_block_w = 4
+                self.prefill_programs[rows] = program
+        if lanes not in (1, 2, 4, 8, 16, 32) or k % lanes:
+            raise ValueError("QKV lane count must divide K and be one of 1, 2, 4, 8, 16, 32")
+        if terms not in (1, 2, 3):
+            raise ValueError("QKV activation decomposition supports one, two, or three terms")
+        if not dram and grid is None and (block_w != 1 or subblock_w != 1):
+            raise ValueError("An explicit QKV grid is required to tune block or subblock width")
+        if not dram and grid is not None:
+            gx, gy = grid
+            available = mesh.compute_with_storage_grid_size()
+            if not (0 < gx <= available.x and 0 < gy <= available.y):
+                raise ValueError("QKV grid must fit the device compute grid")
+            if k % 32 or block_w <= 0 or (k // 32) % block_w:
+                raise ValueError("QKV K block must divide the tiled input width")
+            if subblock_w not in (0, 1, 2, 3, 4):
+                raise ValueError("FP32 QKV output subblock width must be 0 for automatic selection or 1 through 4")
+
+        mask = torch.arange(k)[None, :] % lanes == torch.arange(lanes)[:, None]
+        self.lane_mask = ttnn.from_torch(
+            mask[None, None].bfloat16(),
+            device=mesh,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if dram:
+            if separate:
+                raise ValueError("DRAM-sharded QKV currently requires a packed QKV projection")
+            self._init_dram(mesh, state_dict, dram_readers, dram_block)
+            return
+        if separate:
+            widths = (q_width, kv_width) if hasattr(source, "kv_width") else (q_width, kv_width, kv_width)
+            if any(part is None or part <= 0 or part % 32 for part in widths) or sum(widths) != width:
+                raise ValueError("Separate QKV widths must be tiled and match the stored projection")
+            weights = []
+            offset = 0
+            for part in widths:
+                weights.append(source.weight[..., offset : offset + part])
+                offset += part
+            self.weights = tuple(weights)
+        else:
+            self.weights = (source.weight,)
+        self.programs = []
+        for weight in self.weights:
+            if grid is None:
+                self.programs.append(None)
+                continue
+            if weight.shape[-1] % 32:
+                raise ValueError("Explicit QKV configurations require tiled projection widths")
+            per_core_n = (weight.shape[-1] // 32 + gx * gy - 1) // (gx * gy)
+            weight_subblock_w = subblock_w or next(v for v in (4, 3, 2, 1) if per_core_n % v == 0)
+            if per_core_n % weight_subblock_w:
+                raise ValueError("QKV output subblock width must divide per-core N")
+            self.programs.append(
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+                    in0_block_w=block_w,
+                    out_subblock_h=1,
+                    out_subblock_w=weight_subblock_w,
+                    per_core_M=(lanes * terms + 31) // 32,
+                    per_core_N=per_core_n,
+                    fuse_batch=True,
+                    fused_activation=None,
+                    mcast_in0=True,
+                )
+            )
+
+    def _init_dram(self, mesh, state_dict, readers, block):
+        import math
+
+        import torch
+
+        if state_dict is None or self.source.weight.dtype != ttnn.bfloat16:
+            raise ValueError("DRAM-sharded QKV requires the original host state and BF16 source weights")
+        if readers not in (1, 2, 3) or (readers > 1 and mesh.arch() != ttnn.Arch.BLACKHOLE):
+            raise ValueError("QKV DRAM readers must be 1, 2, or 3; multiple readers require Blackhole")
+        k, width = self.source.weight.shape[-2], self.source.weight.shape[-1]
+        if k % 32 or block <= 0 or (k // 32) % block:
+            raise ValueError("QKV DRAM block must be a positive divisor of tiled K")
+        available = mesh.compute_with_storage_grid_size()
+        cores = next(
+            c for c in (8, 6, 4, 3, 2, 1) if c <= available.x and (k // 32) % c == 0 and (k // 32 // c) % block == 0
+        )
+        bank_grid = mesh.dram_grid_size()
+        banks = bank_grid.x * bank_grid.y
+        # Pad only for this reader geometry: extra N tiles enlarge the FP32
+        # output and BF16 weight buffers enough to exhaust L1 at larger K blocks.
+        alignment = 32 * math.lcm(banks * readers, cores)
+        physical_n = ((width + alignment - 1) // alignment) * alignment
+        projections = [state_dict["self_attn.q_proj.weight"], state_dict["self_attn.k_proj.weight"]]
+        if not hasattr(self.source, "kv_width"):
+            projections.append(state_dict.get("self_attn.v_proj.weight", projections[1]))
+        matrix = torch.cat(projections, dim=0).transpose(-2, -1).contiguous()[None, None]
+        if tuple(matrix.shape) != (1, 1, k, width):
+            raise ValueError("Host QKV dimensions do not match the stored single-device projection")
+        matrix = torch.nn.functional.pad(matrix, (0, physical_n - width))
+        weight_memory = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(bank_grid.x - 1, bank_grid.y - 1))}
+                ),
+                (k, physical_n // banks),
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        self.weights = (
+            ttnn.from_torch(
+                matrix, device=mesh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=weight_memory
+            ),
+        )
+        self.input_memory = ttnn.create_sharded_memory_config(
+            (32, k // cores),
+            ttnn.CoreGrid(x=cores, y=1),
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.programs = (
+            ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=block,
+                per_core_M=1,
+                per_core_N=physical_n // 32 // cores,
+                num_workers_per_dram_bank=readers,
+            ),
+        )
+        self.dram_geometry = dict(
+            input_storage_cores=cores,
+            weight_banks=banks,
+            logical_width=width,
+            padded_width=physical_n,
+            weight_shard_shape=[k, physical_n // banks],
+            input_shard_shape=[32, k // cores],
+            output_shard_shape=[32, physical_n // cores],
+            weight_dtype="bfloat16",
+            output_dtype="float32",
+        )
+
+    def __call__(self, hidden_states, compute_kernel_config=None, out_memory_config=None):
+        if hidden_states.shape[-2] != 1:
+            if hidden_states.shape[-2] in self.prefill_programs:
+                result = ttnn.linear(
+                    hidden_states,
+                    self.source.weight,
+                    dtype=ttnn.float32,
+                    compute_kernel_config=self.source.compute,
+                    memory_config=out_memory_config,
+                    program_config=self.prefill_programs[hidden_states.shape[-2]],
+                )
+                if hasattr(self.source, "kv_width"):
+                    result = ttnn.concat((result, result[..., self.source.width - self.source.kv_width :]), dim=-1)
+                return result
+            return self.source(hidden_states, compute_kernel_config, out_memory_config)
+        residual = hidden_states
+        operands = []
+        for index in range(self.terms):
+            component = ttnn.typecast(residual, ttnn.bfloat16)
+            operands.append(ttnn.mul(self.lane_mask, component))
+            if index + 1 < self.terms:
+                residual = ttnn.subtract(residual, ttnn.typecast(component, ttnn.float32))
+        packed = ttnn.concat(operands, dim=-2) if len(operands) > 1 else operands[0]
+        matmul_inputs = (packed,)
+        if self.dram:
+            # The DRAM-sharded kernel requires exactly one padded M tile.
+            # Keep the original row order when three terms need a second call.
+            matmul_inputs = tuple(
+                ttnn.to_memory_config(
+                    packed if packed.shape[-2] <= 32 else packed[..., start : min(start + 32, packed.shape[-2]), :],
+                    self.input_memory,
+                )
+                for start in range(0, packed.shape[-2], 32)
+            )
+        outputs = []
+        for weight, program in zip(self.weights, self.programs):
+            kwargs = dict(
+                dtype=ttnn.float32,
+                compute_kernel_config=self.compute,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if self.dram else self.source.decode_memory,
+            )
+            if program is not None:
+                kwargs["program_config"] = program
+            rows = []
+            for operand in matmul_inputs:
+                product = ttnn.linear(operand, weight, **kwargs)
+                if self.dram:
+                    product = ttnn.to_memory_config(product, self.source.decode_memory)
+                    product = product[..., : self.source.weight.shape[-1]]
+                rows.append(product)
+            products = ttnn.concat(rows, dim=-2) if len(rows) > 1 else rows[0]
+            outputs.append(ttnn.sum(products, dim=-2, keepdim=True))
+        result = (
+            ttnn.concat(outputs, dim=-1, memory_config=self.source.decode_memory) if len(outputs) > 1 else outputs[0]
+        )
+        if hasattr(self.source, "kv_width"):
+            result = ttnn.concat(
+                (result, result[..., self.source.width - self.source.kv_width :]),
+                dim=-1,
+                memory_config=self.source.decode_memory,
+            )
+        return result
+
+
+class CompensatedQKV:
+    """Two BF16 products retain the residual of an FP32 decode activation."""
+
+    def __init__(self, source):
+        self.source = source
+
+    def __call__(self, hidden_states, compute_kernel_config=None, out_memory_config=None):
+        if hidden_states.shape[-2] != 1:
+            return self.source(hidden_states, compute_kernel_config, out_memory_config)
+        high = ttnn.typecast(hidden_states, ttnn.bfloat16)
+        low = ttnn.typecast(ttnn.subtract(hidden_states, ttnn.typecast(high, ttnn.float32)), ttnn.bfloat16)
+        kwargs = dict(
+            dtype=ttnn.float32, compute_kernel_config=self.source.compute, memory_config=self.source.decode_memory
+        )
+        result = ttnn.add(
+            ttnn.linear(high, self.source.weight, **kwargs),
+            ttnn.linear(low, self.source.weight, **kwargs),
+            memory_config=self.source.decode_memory,
+        )
+        if hasattr(self.source, "kv_width"):
+            result = ttnn.concat(
+                (result, result[..., self.source.width - self.source.kv_width :]),
+                dim=-1,
+                memory_config=self.source.decode_memory,
+            )
+        return result
+
+
+class DecodeLinear:
+    """Explicit interleaved or DRAM-bank-sharded decode projection candidate."""
+
+    def __init__(self, weight, mesh, *, dtype, fidelity, dram=False, readers=1, block=11):
+        import torch
+
+        self.width = weight.shape[0]
+        k = weight.shape[1]
+        self.dram = dram
+        self.compute = ttnn.init_device_compute_kernel_config(
+            mesh.arch(),
+            math_fidelity=fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        matrix = weight.transpose(-2, -1).contiguous()[None, None]
+        if dram:
+            banks = mesh.dram_grid_size().x
+            # Pad by every reader count so controls share identical storage.
+            physical_n = ((self.width + banks * 32 * 6 - 1) // (banks * 32 * 6)) * banks * 32 * 6
+            matrix = torch.nn.functional.pad(matrix, (0, physical_n - self.width))
+            cores = next(
+                c
+                for c in (8, 6, 4, 3, 2, 1)
+                if (k // 32) % c == 0 and (physical_n // 32) % c == 0 and (k // 32 // c) % block == 0
+            )
+            grid = ttnn.CoreGrid(x=cores, y=1)
+            self.input_memory = ttnn.create_sharded_memory_config(
+                (32, k // cores),
+                grid,
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            weight_memory = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.DRAM,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))}),
+                    (k, physical_n // banks),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+            if (k // 32 // cores) % block:
+                raise ValueError("Working activation shard must divide K block")
+            self.program = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=block,
+                per_core_M=1,
+                per_core_N=physical_n // 32 // cores,
+                num_workers_per_dram_bank=readers,
+            )
+            self.output_memory = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        else:
+            weight_memory = ttnn.DRAM_MEMORY_CONFIG
+            self.output_memory = ttnn.L1_MEMORY_CONFIG
+            self.program = None
+        self.weight = ttnn.from_torch(
+            matrix, device=mesh, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=weight_memory
+        )
+
+    def __call__(self, x):
+        if self.dram:
+            x = ttnn.to_memory_config(x, self.input_memory)
+        out = ttnn.linear(
+            x,
+            self.weight,
+            dtype=ttnn.bfloat16,
+            memory_config=self.output_memory,
+            program_config=self.program,
+            compute_kernel_config=self.compute,
+        )
+        if self.dram:
+            out = ttnn.to_memory_config(out, ttnn.L1_MEMORY_CONFIG)
+            out = out[..., : self.width]
+        return out
+
+
+class OptimizedSharedMLP:
+    def __init__(
+        self, source, state_dict, mesh, *, dtype, down_dtype, fidelity, dram=False, readers=1, split=False, block=11
+    ):
+        import torch
+
+        self.source = source
+        self.split = split
+        gate = state_dict["mlp.gate_proj.weight"]
+        up = state_dict["mlp.up_proj.weight"]
+        self.width = gate.shape[0]
+        common = dict(dtype=dtype, fidelity=fidelity, dram=dram, readers=readers, block=block)
+        if split:
+            self.gate = DecodeLinear(gate, mesh, **common)
+            self.up = DecodeLinear(up, mesh, **common)
+        else:
+            self.gate_up = DecodeLinear(torch.cat((gate, up), dim=0), mesh, **common)
+        self.down = DecodeLinear(
+            state_dict["mlp.down_proj.weight"],
+            mesh,
+            dtype=down_dtype,
+            fidelity=fidelity,
+            dram=dram,
+            readers=readers,
+            block=block,
+        )
+
+    def __call__(self, x):
+        if x.shape[-2] != 1:
+            return self.source(x)
+        if self.split:
+            gate, up = self.gate(x), self.up(x)
+        else:
+            gu = self.gate_up(x)
+            gate, up = gu[..., : self.width], gu[..., self.width :]
+        hidden = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)])
+        return self.down(hidden)

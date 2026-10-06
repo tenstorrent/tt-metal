@@ -1,0 +1,50 @@
+{
+  "runtime_sha256": "daa82a4a5197a007ccd5d29d912f082e695fd37a596578f25fba96a6694e625b",
+  "scope": "warmed synchronous whole-prefill host medians; matched fixtures, separate processes",
+  "rows": [
+    {
+      "length": 65,
+      "optimized_host_us": 5621.885,
+      "fused_host_us": 68676.759,
+      "pcc": 0.9989912332904254,
+      "decode_pcc": 0.9994158891895104,
+      "report": "prefill_boundary_v7_optimized_layer5_65.json",
+      "sha256": "d7ab394a005beca7c2999d16e49be51670d142bbc7573347a14767ff04344210",
+      "baseline": "prefill_boundary_fused_layer5_65.json",
+      "baseline_sha256": "5e361d6ccfd25bd568692252c39cfa80b0c2239da73b7ae6f66fdf55e82507cb"
+    },
+    {
+      "length": 1023,
+      "optimized_host_us": 45778.007,
+      "fused_host_us": 705745.995,
+      "pcc": 0.9990422708453083,
+      "decode_pcc": 0.998160123454412,
+      "report": "prefill_boundary_v7_optimized_layer5_1023.json",
+      "sha256": "fa393ff797c064b3caf60897745432e4420f5bcabd7e4cbfa19169a6439eaf90",
+      "baseline": "prefill_boundary_fused_layer5_1023.json",
+      "baseline_sha256": "6b29f23828573960328df15c910991d69d41ad86f39dc141f20fb6bd2a8504f7"
+    },
+    {
+      "length": 1024,
+      "optimized_host_us": 46052.288,
+      "fused_host_us": 706077.585,
+      "pcc": 0.9990418857581841,
+      "decode_pcc": 0.9967590270435489,
+      "report": "prefill_boundary_v7_optimized_layer5_1024.json",
+      "sha256": "ed70f3b924f4fdeaf6a2b7898dd9d512d166f0f66f48c48dc6f8109997aff89d",
+      "baseline": "prefill_boundary_fused_layer5_1024.json",
+      "baseline_sha256": "9872aa757d15e0ec365224b27339baec2a49ac3ea3ae45e83767078ee3adce50"
+    },
+    {
+      "length": 1025,
+      "optimized_host_us": 47765.071,
+      "fused_host_us": 729475.659,
+      "pcc": 0.9990396139541134,
+      "decode_pcc": 0.9991662108831547,
+      "report": "prefill_boundary_v7_optimized_layer5_1025.json",
+      "sha256": "68d0a036cfb23b3b4c171bb13e52b8d5522e6d4253834c8122929a37d54ca3a3",
+      "baseline": "prefill_boundary_fused_layer5_1025.json",
+      "baseline_sha256": "2e013116c3af77950f74cc5cca9a9b5cdbd660caa14c7abb2ccdf2942c766f15"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Tracing mode enabled. CSV will not be sorted by 'HOST START TS'.
+Using operations after 'PERF_DECODE'.
+Using operations until 'PERF_DECODE_END'.
+Detected data from 4 devices. Merging device data...
+Writing CSV output to /workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/tsu_optimization/profile_retry/decode_perf_report.csv
+Overall DRAM roofline (modeled ops): 11.7% (60 GB/s)

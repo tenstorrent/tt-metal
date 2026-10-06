@@ -1,0 +1,74 @@
+2026-09-27 08:33:07.893 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-09-27 08:33:09.264 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-27 08:33:09.264 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-27 08:33:09.264 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-27 08:33:09.264 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-27 08:33:09.269 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:576)
+2026-09-27 08:33:09.269 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-27 08:33:09.348 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-27 08:33:09.348 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-27 08:33:09.348 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-27 08:33:09.348 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-27 08:33:09.350 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-27 08:33:09.576 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-27 08:33:09.701 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-27 08:33:09.701 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-27 08:33:09.701 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-27 08:33:09.702 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-27 08:33:09.702 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-27 08:33:09.744 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-27 08:33:09.767 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:455)
+2026-09-27 08:33:09.767 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:325)
+LAYER_READY 0
+LAYER_READY 1
+LAYER_READY 2
+LAYER_READY 3
+LAYER_READY 4
+LAYER_READY 5
+LAYER_READY 6
+LAYER_READY 7
+LAYER_READY 8
+LAYER_READY 9
+LAYER_READY 10
+LAYER_READY 11
+LAYER_READY 12
+LAYER_READY 13
+LAYER_READY 14
+LAYER_READY 15
+LAYER_READY 16
+LAYER_READY 17
+LAYER_READY 18
+LAYER_READY 19
+LAYER_READY 20
+LAYER_READY 21
+LAYER_READY 22
+LAYER_READY 23
+LAYER_READY 24
+LAYER_READY 25
+LAYER_READY 26
+LAYER_READY 27
+LAYER_READY 28
+LAYER_READY 29
+MODEL_READY
+2026-09-27 08:35:37.310 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-09-27 08:35:37.316 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-27 08:35:37.316 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-27 08:35:37.316 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-27 08:35:37.316 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-27 08:35:37.317 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-09-27 08:35:37.317 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 4096 B pages. Configure 12288 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-27 08:35:37.318 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 4096 B pages. Configure 12288 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-27 08:35:37.318 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 4096 B pages. Configure 12288 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-27 08:35:37.318 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 4096 B pages. Configure 12288 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-27 08:35:44.944 | warning  |           Metal | Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed if they are not released before then. Use the trace allocation tracker to verify. (allocator.cpp:130)
+SPLIT_TRACE_READY
+2026-09-27 08:35:46.538 | DEBUG    | models.common.sampling.generator:reset_trace:166 - Resetting sampling trace (bucket=None, penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(1))
+{'isolated_slot_comparison': [{'slot': 0, 'prefill_pcc': 1.0, 'decode_pcc': 1.0, 'second_decode_pcc': 0.9999999403953552, 'top5_match': True}, {'slot': 31, 'prefill_pcc': 0.9999999403953552, 'decode_pcc': 0.9999999403953552, 'second_decode_pcc': 1.0, 'top5_match': True}], 'batch': 32, 'active_slots': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31], 'mixed_lengths': [31, 127, 31, 127, 31, 127, 31, 127, 31, 127, 31, 127, 31, 127, 31, 127, 31, 127, 31, 127, 31, 127, 31, 127, 31, 127, 31, 127, 31, 127, 31, 127], 'feedback': True, 'inactive_cache_unchanged': None, 'layer_count': 30, 'counters': {'model_replays': 2, 'sampling_replays': 2, 'token_refreshes': 1, 'position_refreshes': 0, 'cache_position_refreshes': 0, 'page_table_refreshes': 0, 'synchronizations': 0, 'token_readbacks': 0, 'full_logits_readbacks': 9, 'teacher_forcing_token_refreshes': 0}}
+2026-09-27 08:35:48.189 | info     |    BuildKernels | JIT cache stats: 1496/1496 hits (100.0%) [1496 cached, 1109 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-27 08:35:48.189 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-27 08:35:48.218 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-27 08:35:48.218 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-27 08:35:48.800 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-27 08:35:48.800 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-27 08:35:48.800 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

@@ -1,0 +1,27 @@
+{
+  "command": [
+    "/workspace/tt-metal/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.tests.test_multichip_stack",
+    "--layers",
+    "4",
+    "5",
+    "--length",
+    "4096",
+    "--steps",
+    "128",
+    "--output",
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/final_watcher_stack_mixed.json"
+  ],
+  "environment": {
+    "TT_METAL_WATCHER": "10",
+    "TT_METAL_WATCHER_NOINLINE": "1"
+  },
+  "exit_code": 0,
+  "source_sha256": {
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py": "6938c6d512d19cf25c3c9d7fb5cee29f2b3f46d174426b715180527b16e02cd3",
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_stack.py": "1e6ce4fca7b62fcb296c4a023f0cad3f93f8107c5f845829c7cd22bf601b34f6",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_writer.cpp": "14ca782e9b60777f75e3d5a8e3ed8700bc2508cc6af0b0efaac86941d35b490a",
+    "ttnn/cpp/ttnn/operations/matmul/device/utilities/matmul_utilities.cpp": "c97504644b95b8ade64522597fb9f7c4405dcc6211fc53da5a10adcdadd805e1"
+  }
+}

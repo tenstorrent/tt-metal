@@ -1,0 +1,131 @@
+{
+  "status": "local_clean_pass_remote_qualification_blocked_vllm_publish_access",
+  "workload": {
+    "profile": "single_user_decode",
+    "prompt_len": 128,
+    "gen_len": 128,
+    "batch": 1,
+    "concurrency": 1,
+    "measured_requests": 3,
+    "warmup_requests": 10,
+    "warmup_scope": "Native client repeats prompt0; not all measured prompts or larger occupancies",
+    "temperature": 0.0
+  },
+  "source": "native_vllm_bench_serve",
+  "scheduling": "synchronous; explicit --no-async-scheduling",
+  "candidate_geometry": "Expert prefill32 rows, gate K22, down44 cores grid11x4/N2/K22; selected precision unchanged",
+  "deployment_profile": "latency-priority synchronous deployment; async remains a separately measured throughput option",
+  "ttft_ms": 95.24080157279968,
+  "ttft_statistic": "median",
+  "ttft_mean_ms": 95.10404368241628,
+  "ttft_p99_ms": 95.28540777042508,
+  "decode_ms_per_token_e2e": 20.37326702383638,
+  "tpot_p99_ms": 20.76808388586941,
+  "itl_median_ms": 20.125320181250572,
+  "itl_p99_ms": 23.16269893199204,
+  "decode_statistic": "native mean_tpot_ms",
+  "decode_tps": 49.083929387958094,
+  "decode_tps_basis": "1000 / native mean_tpot_ms; not output throughput or mean of per-request rates",
+  "decode_ms_per_token_device": null,
+  "roofline_ms_per_token_estimate": null,
+  "profiler_status": "intentionally_disabled_for_vllm_serving",
+  "profiler_reason": "Serving-stage guidance deliberately excludes Tracy, tt-perf-report, and live device/adapter profiling to protect hardware; no same-run device time or roofline is claimed",
+  "completed_requests": 3,
+  "failed_requests": 0,
+  "evidence": "../../readiness_vllm/ttft_optimization/acceptance_sync_matrix/s128-o128-c1.json",
+  "evidence_sha256": "6dbb8d5c3fe90495baf7c22d44eec4530e8ab9d9272b2c5d11a972573ed0e666",
+  "mean_e2el_ms": 2682.508955709636,
+  "output_throughput_tokens_per_second": 47.71215809571182,
+  "stability_cohorts": [
+    {
+      "evidence": "../../readiness_vllm/ttft_optimization/acceptance_sync_matrix/s128-o128-c1.json",
+      "median_ttft_ms": 95.24080157279968,
+      "p99_ttft_ms": 95.28540777042508,
+      "mean_tpot_ms": 20.37326702383638
+    },
+    {
+      "evidence": "../../readiness_vllm/ttft_optimization/acceptance_sync_repeat1/s128-o128-c1.json",
+      "median_ttft_ms": 95.35737801343203,
+      "p99_ttft_ms": 95.38507560268044,
+      "mean_tpot_ms": 20.277549155799576
+    },
+    {
+      "evidence": "../../readiness_vllm/ttft_optimization/acceptance_sync_repeat2/s128-o128-c1.json",
+      "median_ttft_ms": 95.02796083688736,
+      "p99_ttft_ms": 97.45022714138031,
+      "mean_tpot_ms": 20.27224039223798
+    }
+  ],
+  "throughput_profile_comparison": {
+    "scheduling": "async",
+    "evidence": "../../readiness_vllm/ttft_optimization/acceptance_matrix/s128-o128-c1.json",
+    "median_ttft_ms": 104.29357271641493,
+    "mean_tpot_ms": 19.122812535193336,
+    "mean_e2el_ms": 2532.940147444606,
+    "output_throughput_tokens_per_second": 50.529068834476824,
+    "selection_basis": "Primary objective is warmed C1 TTFT; sync is selected with a disclosed approximately6-9% C1 decode TPOT cost, not a universal throughput improvement"
+  },
+  "first_use_shared_suite_primary": {
+    "evidence": "../../readiness_vllm/ttft_optimization/acceptance_suite/readiness_vllm/vllm_benchmark.json",
+    "evidence_sha256": "ba5795230c4a9c9573bb325e889e6213a23a5be99a06cc019b444bbc38853d8c",
+    "raw_result": "../../readiness_vllm/ttft_optimization/acceptance_suite/readiness_vllm/vllm_result.json",
+    "classification": "Async first-use shared-suite primary measurement; not interchangeable with separately warmed native matrix or selected sync profile",
+    "prompt_len": 128,
+    "gen_len": 128,
+    "concurrency": 1,
+    "completed_requests": 1,
+    "explicit_warmups": 0,
+    "optional_readiness_test_sent": false,
+    "ttft_ms": 711.1925939098,
+    "decode_ms_per_token_e2e": 19.09167908396073,
+    "cause_of_ttft_difference": "unresolved; compilation, capture, scheduling, and process-history contributions are not isolated by these two artifacts",
+    "comparison_policy": "Preserve both raw results; do not substitute warmed result for official suite measurement or present difference as an isolated code speedup"
+  },
+  "selected_sync_shared_suite_primary": {
+    "evidence": "../../readiness_vllm/ttft_optimization/acceptance_sync_suite/readiness_vllm/vllm_benchmark.json",
+    "evidence_sha256": "019b9b2f65d107a14f8d4e3df19a9a8459ea21d5c406f7db4ff3dd0f95d99aa2",
+    "raw_result": "../../readiness_vllm/ttft_optimization/acceptance_sync_suite/readiness_vllm/vllm_result.json",
+    "prompt_len": 128,
+    "gen_len": 128,
+    "concurrency": 1,
+    "completed_requests": 1,
+    "explicit_warmups": 0,
+    "optional_readiness_test_sent": false,
+    "ttft_ms": 147.95102085918188,
+    "mean_tpot_ms": 24.486430136002895,
+    "mean_e2el_ms": 3257.7276481315494,
+    "classification": "No-warmup first request following qualitative state changes; the installed native CLI explicitly skips its optional readiness request. This is not the warmed target statistic.",
+    "attribution_limit": "First-use/capture costs are consistent with the lifecycle, but exact phase costs were not measured and detailed request ITL arrays were not saved by this shared-suite invocation.",
+    "protocol_source_audit": "../../readiness_vllm/ttft_optimization/native_protocol_source.log"
+  },
+  "serving_burst": {
+    "evidence": "../../readiness_vllm/ttft_optimization/acceptance_sync_matrix/s100-o100-c32.json",
+    "prompt_len": 100,
+    "gen_len": 100,
+    "concurrency": 32,
+    "completed_requests": 32,
+    "failed_requests": 0,
+    "median_ttft_ms": 4124.1058595478535,
+    "mean_tpot_ms": 789.8281299711365,
+    "mean_e2el_ms": 82197.89331129869,
+    "output_throughput_tokens_per_second": 38.92954344788265,
+    "scheduler_tradeoff": "Versus optimized async, TTFT falls but first-decode capture moves into ITL; meanE2EL is0.40% higher and output throughput0.39% lower. Not a uniform occupancy gain.",
+    "limitation": "--warm-occupancy warms a full occupancy-matched request burst (8 or 32 requests), repeating prompt0. General B>1 prefill invalidates the decode trace each burst, so measured decode capture is recurring general-path work, not merely unwarmed larger-occupancy first-use overhead. Repeated prompt0 does not warm every measured prompt."
+  },
+  "pending": [
+    "Publish exact tested vLLM commit: upstream push denied403; write access or explicit new-fork authorization required",
+    "Terminal remote image-build and benchmark qualification"
+  ],
+  "named_limitations": [
+    "vllm_serving_profiler_disabled_to_protect_hardware",
+    "device_time_and_roofline_not_measured_for_this_serving_run",
+    "three_measured_primary_requests",
+    "first_use_and_warmed_protocols_are_distinct",
+    "latency_priority_profile_trades_decode_throughput_for_first_token_latency",
+    "first_sync_S128_OSL16_cohort_median107ms_retained_not_target_met",
+    "repeated_S128_OSL16_P99_can_exceed100ms",
+    "S129_and_S256_medians_exceed100ms",
+    "no_claim_all_novel_prompts_or_first_use_requests_are_below100ms",
+    "remote_qualification_blocked_vllm_publish_access"
+  ]
+}

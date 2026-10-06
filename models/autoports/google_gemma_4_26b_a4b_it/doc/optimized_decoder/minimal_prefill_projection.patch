@@ -1,0 +1,173 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
+@@ -297,6 +297,8 @@
+         qkv_weight_dtype=ttnn.bfloat8_b,
+         qkv_direct_dtype="auto",
+         qkv_direct_cleanup="auto",
++        prefill_qkv_minimal=False,
++        prefill_qkv_minimal_block_w=16,
+         output_weight_dtype=ttnn.bfloat8_b,
+         output_grid="auto",
+         output_block_w=16,
+@@ -306,6 +308,8 @@
+         prefill_output_block_w=16,
+         prefill_output_fidelity=ttnn.MathFidelity.LoFi,
+         prefill_output_l1=False,
++        prefill_output_minimal=False,
++        prefill_output_minimal_block_w=16,
+         qkv_dram=False,
+         qkv_dram_readers=1,
+         qkv_dram_block=1,
+@@ -557,6 +561,12 @@
+             self.precision_policy["qkv_decode"] = projection.precision_policy
+             if qkv_dram:
+                 self.precision_policy["qkv_dram_geometry"]["weight_dtype"] = str(projection.weights[0].dtype)
++        if prefill_qkv_minimal:
++            projection = MinimalPrefillQKV(
++                attention.weights.wqkv, kwargs["mesh_device"], block_w=prefill_qkv_minimal_block_w
++            )
++            attention.weights = replace(attention.weights, wqkv=projection)
++            self.precision_policy["prefill_qkv_projection"] = projection.projection.precision_policy
+         if output_weight_dtype is not None:
+             attention.weights = replace(
+                 attention.weights, o_proj=ttnn.typecast(attention.weights.o_proj, output_weight_dtype)
+@@ -605,6 +615,8 @@
+             block_w=prefill_output_block_w,
+             fidelity=prefill_output_fidelity,
+             input_l1=prefill_output_l1,
++            minimal=prefill_output_minimal,
++            minimal_block_w=prefill_output_minimal_block_w,
+         )
+         self.precision_policy["prefill_output_projection"] = self.layer.self_attn.prefill_output_policy
+         return self
+@@ -1196,8 +1208,10 @@
+             )
+         return self
+ 
+-    def configure_prefill_output(self, mesh, max_rows, *, grid=None, block_w=4, fidelity=None, input_l1=False):
+-        self.prefill_output_enabled = grid is not None or fidelity is not None or input_l1
++    def configure_prefill_output(
++        self, mesh, max_rows, *, grid=None, block_w=4, fidelity=None, input_l1=False, minimal=False, minimal_block_w=16
++    ):
++        self.prefill_output_enabled = grid is not None or fidelity is not None or input_l1 or minimal
+         self.prefill_output_l1 = input_l1
+         self.prefill_output_compute = self.compute
+         self.prefill_output_programs = {}
+@@ -1210,7 +1224,14 @@
+                 packer_l1_acc=False,
+                 dst_full_sync_en=False,
+             )
+-        if grid is not None:
++        self.prefill_minimal_output = (
++            MinimalPrefillProjection(
++                self.source.weights.o_proj, self.prefill_output_compute, mesh, block_w=minimal_block_w
++            )
++            if minimal
++            else None
++        )
++        if grid is not None and not minimal:
+             gx, gy = grid
+             available = mesh.compute_with_storage_grid_size()
+             k, n = self.source.weights.o_proj.shape[-2], self.source.weights.o_proj.shape[-1]
+@@ -1251,6 +1272,8 @@
+             weight_dtype=str(self.source.weights.o_proj.dtype),
+             programs={str(rows): str(program) for rows, program in self.prefill_output_programs.items()},
+         )
++        if minimal:
++            self.prefill_output_policy.update(self.prefill_minimal_output.precision_policy)
+ 
+     def project(self, attention, decode):
+         if not decode and getattr(self, "prefill_output_enabled", False):
+@@ -1264,6 +1287,8 @@
+             )
+             if self.prefill_output_l1:
+                 combined = ttnn.to_memory_config(combined, ttnn.L1_MEMORY_CONFIG)
++            if self.prefill_minimal_output is not None:
++                return self.prefill_minimal_output(combined, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+             rows = combined.padded_shape[-2]
+             if self.prefill_output_programs and rows not in self.prefill_output_programs:
+                 raise ValueError(f"No setup-time prefill output program for {rows} rows")
+@@ -1372,6 +1397,83 @@
+                 compute_kernel_config=self.prefill_attention_compute,
+             )
+         return self.project(attention, False)
++
++
++class MinimalPrefillProjection:
++    """Reuse the selected weight/compute policy with setup-time minimal-matmul blocks."""
++
++    def __init__(self, weight, compute, mesh, *, block_w=16):
++        if block_w not in (4, 8, 16):
++            raise ValueError("Minimal prefill K block must be 4, 8, or 16 tiles")
++        available = mesh.compute_with_storage_grid_size()
++        if available.x < 11 or available.y < 8:
++            raise ValueError("Minimal prefill projection requires an 11x8 compute grid")
++        self.weight = weight
++        self.compute = compute
++        self.programs = tuple(
++            ttnn.MinimalMatmulConfig(
++                M_block_size=rows,
++                K_block_size=block_w,
++                N_block_size=8,
++                subblock_h=1,
++                subblock_w=4,
++                compute_with_storage_grid_size=ttnn.CoreCoord(11, 8),
++            )
++            for rows in (1, 2, 3, 4)
++        )
++        self.precision_policy = dict(
++            backend="minimal_matmul",
++            grid=(11, 8),
++            k_block=block_w,
++            m_block="min(4, padded_M_tiles)",
++            n_block=8,
++            subblock=(1, 4),
++            weight_dtype=str(weight.dtype),
++            weight_shape=list(weight.shape),
++            input_dtype="unchanged",
++            output_dtype="float32",
++            fidelity=str(compute.math_fidelity),
++            fp32_dest_acc_en=compute.fp32_dest_acc_en,
++            math_approx_mode=compute.math_approx_mode,
++            packer_l1_acc=compute.packer_l1_acc,
++            programs={str(index + 1): str(program) for index, program in enumerate(self.programs)},
++        )
++
++    def __call__(self, hidden_states, *, memory_config=None):
++        block_m = min(4, hidden_states.padded_shape[-2] // 32)
++        return ttnn.experimental.minimal_matmul(
++            hidden_states,
++            self.weight,
++            config=self.programs[block_m - 1],
++            dtype=ttnn.float32,
++            compute_kernel_config=self.compute,
++            memory_config=memory_config,
++        )
++
++
++class MinimalPrefillQKV:
++    """Replace only the packed prefill projection; retain the configured decode callable."""
++
++    def __init__(self, source, mesh, *, block_w=16):
++        self.decode_source = source
++        while isinstance(source, (DirectQKV, LanePartitionQKV, CompensatedQKV)):
++            source = source.source
++        if type(source) not in (BroadcastQKV, TiedQKV):
++            raise ValueError("Minimal prefill QKV requires the known packed broadcast projection")
++        self.source = source
++        self.projection = MinimalPrefillProjection(source.weight, source.compute, mesh, block_w=block_w)
++
++    def __call__(self, hidden_states, compute_kernel_config=None, out_memory_config=None):
++        if hidden_states.shape[-2] == 1:
++            return self.decode_source(hidden_states, compute_kernel_config, out_memory_config)
++        result = self.projection(hidden_states, memory_config=out_memory_config)
++        if isinstance(self.source, TiedQKV):
++            result = ttnn.concat(
++                (result, result[..., self.source.width - self.source.kv_width :]),
++                dim=-1,
++                memory_config=ttnn.DRAM_MEMORY_CONFIG,
++            )
++        return result
+ 
+ 
+ class DirectQKV:

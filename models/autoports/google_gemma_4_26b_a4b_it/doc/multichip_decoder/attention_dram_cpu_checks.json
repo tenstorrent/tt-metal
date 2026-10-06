@@ -1,0 +1,132 @@
+{
+  "candidate_sha256": "49cd4b3e47aeca24389fd58c29262556d05ec35cf0f0d80c8077c02af51f88e5",
+  "ttnn_imported": false,
+  "hardware_used": false,
+  "checks": "AST-extracted adapters with a CPU stand-in: geometry, branch selection, live compute-policy forwarding; no numerical validation",
+  "geometry": [
+    {
+      "role": "qkv",
+      "kind": "sliding_attention",
+      "k": 2816,
+      "n": 2048,
+      "bank_shard": [
+        2816,
+        256
+      ],
+      "input_shard": [
+        32,
+        352
+      ],
+      "output_shard": [
+        32,
+        256
+      ],
+      "block": 11,
+      "per_core_M": 1,
+      "per_core_N": 8,
+      "input_dtype": "FP32",
+      "weight_dtype": "BFP8",
+      "output_dtype": "FP32",
+      "extra_bytes": 6127616,
+      "primary_worker_a_cb_bytes": 90112,
+      "primary_worker_b_cb_bytes": 287232
+    },
+    {
+      "role": "qkv",
+      "kind": "full_attention",
+      "k": 2816,
+      "n": 3072,
+      "bank_shard": [
+        2816,
+        384
+      ],
+      "input_shard": [
+        32,
+        352
+      ],
+      "output_shard": [
+        32,
+        384
+      ],
+      "block": 11,
+      "per_core_M": 1,
+      "per_core_N": 12,
+      "input_dtype": "FP32",
+      "weight_dtype": "BFP8",
+      "output_dtype": "FP32",
+      "extra_bytes": 9191424,
+      "primary_worker_a_cb_bytes": 90112,
+      "primary_worker_b_cb_bytes": 430848
+    },
+    {
+      "role": "output",
+      "kind": "sliding_attention",
+      "k": 1024,
+      "n": 2816,
+      "bank_shard": [
+        1024,
+        352
+      ],
+      "input_shard": [
+        32,
+        128
+      ],
+      "output_shard": [
+        32,
+        352
+      ],
+      "block": 4,
+      "per_core_M": 1,
+      "per_core_N": 11,
+      "input_dtype": "BF16",
+      "weight_dtype": "BFP8",
+      "output_dtype": "FP32",
+      "extra_bytes": 3063808,
+      "primary_worker_a_cb_bytes": 16384,
+      "primary_worker_b_cb_bytes": 143616
+    },
+    {
+      "role": "output",
+      "kind": "full_attention",
+      "k": 2048,
+      "n": 2816,
+      "bank_shard": [
+        2048,
+        352
+      ],
+      "input_shard": [
+        32,
+        256
+      ],
+      "output_shard": [
+        32,
+        352
+      ],
+      "block": 8,
+      "per_core_M": 1,
+      "per_core_N": 11,
+      "input_dtype": "BF16",
+      "weight_dtype": "BFP8",
+      "output_dtype": "FP32",
+      "extra_bytes": 6127616,
+      "primary_worker_a_cb_bytes": 32768,
+      "primary_worker_b_cb_bytes": 287232
+    }
+  ],
+  "extra_weight_bytes": {
+    "qkv": {
+      "sliding_attention": 6127616,
+      "full_attention": 9191424,
+      "full_stack_bytes": 199147520
+    },
+    "output": {
+      "sliding_attention": 3063808,
+      "full_attention": 6127616,
+      "full_stack_bytes": 107233280
+    }
+  },
+  "qkv_prefill_preserved": true,
+  "output_prefill_preserved": true,
+  "live_compute_policy_forwarding": true,
+  "input_dtype_preserved": true
+}

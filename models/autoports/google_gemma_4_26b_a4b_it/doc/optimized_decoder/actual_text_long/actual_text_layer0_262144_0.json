@@ -1,0 +1,64 @@
+{
+  "model": "google/gemma-4-26B-A4B-it",
+  "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "layer": 0,
+  "length": 262144,
+  "steps": 0,
+  "source": {
+    "kind": "recorded_real_text_hf_layer_inputs",
+    "text_files": [
+      {
+        "path": "/workspace/tt-metal/README.md",
+        "sha256": "7fdc0eca06ec1762c883745af52d022aabf154c09ac14035fdadc45f44a5648e"
+      },
+      {
+        "path": "/workspace/tt-metal/docs/realtime_profiler_architecture.md",
+        "sha256": "c82373c5d2b278773ab41af8d0aff21d9bdc0da9e82a5645873fd7d08fd3f857"
+      },
+      {
+        "path": "/workspace/tt-metal/docs/L1_ACCUMULATION_FP32_ANALYSIS.md",
+        "sha256": "00c228fd4e95c4d5d1b65c5b66e9d8ebabe6b9a7a379bec59894508b44ee9184"
+      }
+    ],
+    "corpus_path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_long/actual_text_source.txt",
+    "corpus_sha256": "2632ca2c03d816a2c3f386c2000d61421537e1309b735864b8f1387a2e408a40",
+    "tokens_path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_long/actual_text_tokens.json",
+    "tokens_sha256": "11aa00f0d2cf742747419323e225cd056643b7585c4c342ae2bedf4e8a9f18a5",
+    "tokenizer": "GemmaTokenizer",
+    "tokenizer_revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+    "transformers_version": "5.12.1",
+    "fixture_generator_sha256": "caab319307acfd76fafecf6744c49ab13e28503c19dbcae074b38520d666d99d",
+    "hf_source_sha256": "90bb5dbd9f78208ef07851e099311603e9f185f8fac2ef588df823f3df96b776",
+    "config_sha256": "ed0c1eb3633de771906e9ba004a44cc5635bcc06ee2062077c3d2e88a50707d3",
+    "weight_index_sha256": "907826a6e46ff454272bd6db1fee629d5531a2303be22986d825a0871d7dc7a7",
+    "preceding_computation": "HF FP32 eager, FP32 checkpoint weights and KV, original scaled embedding and layer scalars",
+    "embedding_scale_fp32": 53.06599807739258,
+    "embedding_scale_bfloat16_control": 53.0,
+    "per_layer_embeddings": false,
+    "shared_kv_layers": 0,
+    "sampling": "Actual corpus token continuation; no generated or random activations",
+    "text_repetitions_before_tokenization": 20,
+    "prefill_chunk_size": 1024,
+    "preceding_cache": "explicit HF DynamicSlidingWindowLayer"
+  },
+  "raw_dtype": "float32",
+  "transport_dtype": "bfloat16_roundtripped_float32",
+  "teacher_forced": true,
+  "fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_long/actual_text_layer0_262144_0.pt",
+  "fixture_sha256": "74cfb212f7f18fbc2bb7ebc3aa5f8f10619766a437b0ea93f86c8ad09f15c596",
+  "prefill_shape": [
+    1,
+    262144,
+    2816
+  ],
+  "decode_shape": [
+    1,
+    0,
+    2816
+  ],
+  "token_count": 262144,
+  "decode_first_token_ids": [],
+  "finite": true,
+  "raw_rms": 1.5338832139968872,
+  "max_transport_rounding_error": 0.11612319946289062
+}

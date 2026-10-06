@@ -1,0 +1,47 @@
+{
+  "control": "inherited/vllm_qualitative_outputs.json",
+  "control_stage": "09-vllm",
+  "cases": [
+    {
+      "prompt_id": "shared_0",
+      "prompt_matches": true,
+      "prompt_mode": "chat",
+      "greedy_exact_match": true
+    },
+    {
+      "prompt_id": "shared_1",
+      "prompt_matches": true,
+      "prompt_mode": "chat",
+      "greedy_exact_match": true
+    },
+    {
+      "prompt_id": "shared_2",
+      "prompt_matches": true,
+      "prompt_mode": "chat",
+      "greedy_exact_match": true
+    },
+    {
+      "prompt_id": "shared_3",
+      "prompt_matches": true,
+      "prompt_mode": "chat",
+      "greedy_exact_match": true
+    },
+    {
+      "prompt_id": "shared_4",
+      "prompt_matches": true,
+      "prompt_mode": "chat",
+      "greedy_exact_match": true
+    },
+    {
+      "prompt_id": "shared_5",
+      "prompt_matches": true,
+      "prompt_mode": "chat",
+      "greedy_exact_match": true
+    }
+  ],
+  "greedy_exact_matches": 6,
+  "greedy_cases": 6,
+  "sampled_cases_read": 6,
+  "hf_control_basis": "../vllm_integration/qualitative_verdict.md",
+  "sha256": "9ed2096036e4f849564ec160cf14f108487145a9b5afc1f2dee9117bcb69b77d"
+}

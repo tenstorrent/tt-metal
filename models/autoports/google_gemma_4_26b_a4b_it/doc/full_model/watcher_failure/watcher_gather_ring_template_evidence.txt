@@ -1,0 +1,4 @@
+/home/mvasiljevic/.cache/tt-metal-cache/4029278992320149898/kernels/multicast_writer/14294827184435158534/brisc/brisc.elf
+FabricWriter<2048, 4352, true>
+/home/mvasiljevic/.cache/tt-metal-cache/4029278992320149898/kernels/multicast_writer/51540904646920510/brisc/brisc.elf
+FabricWriter<4096, 4352, true>

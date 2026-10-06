@@ -1,0 +1,40 @@
+{
+  "layer_type": "full_attention",
+  "expert_parallel": false,
+  "hybrid_experts": true,
+  "fused_tail": true,
+  "optimized_shared": true,
+  "batch": 1,
+  "base_length": 1056,
+  "continuation_lengths": [
+    1025
+  ],
+  "lengths": [
+    1056
+  ],
+  "prefill_pcc": [
+    0.9999147818057174
+  ],
+  "decode_pcc": [
+    0.9997500997865925
+  ],
+  "cache_preservation": {
+    "1": {
+      "prefix_unchanged": true,
+      "other_slots_unchanged": true,
+      "all_device_outputs_equal": true,
+      "repeat_trace_equal": true,
+      "refreshed_request_page_ownership": true
+    },
+    "4": {
+      "prefix_unchanged": true,
+      "other_slots_unchanged": true,
+      "all_device_outputs_equal": true,
+      "repeat_trace_equal": true,
+      "refreshed_request_page_ownership": true
+    }
+  },
+  "runtime_audit": "clean",
+  "passed": true,
+  "runtime_sha256": "a102e006caea6b91bf233981a9f734c4a464ebb086a40bab110ff62e8700ac65"
+}

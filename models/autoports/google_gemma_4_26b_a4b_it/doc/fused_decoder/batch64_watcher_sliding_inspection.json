@@ -1,0 +1,9 @@
+{
+  "layer_type": "sliding_attention",
+  "watcher_interval_seconds": 10,
+  "result": "batch64_watcher_sliding.json",
+  "watcher_log": "watcher/batch64_sliding/generated/watcher/watcher.log",
+  "completed_dumps": 6,
+  "diagnostic_matches": [],
+  "sha256": "5ebcb518bf1e508cdbccd1844618cc56899376a1c72636342c52f0ebb554034a"
+}

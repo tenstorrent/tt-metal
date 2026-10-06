@@ -1,0 +1,106 @@
+{
+  "ttnn_imported": false,
+  "hardware_used": false,
+  "source_csv": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_v0/reports/tp4/2026_09_26_20_28_12/ops_perf_results_tp4_2026_09_26_20_28_12.csv",
+  "source_csv_sha256": "11cd392d62e7e31648aad6375d5f148575182c66711b0b568500b041fde8ff1d",
+  "summarizer_sha256": "d14aa7de6c560fbb3cdb5b9c0bfa4b5ca8002dbb3a5fe4a08bea72bc6628d3a2",
+  "baseline_summarizer_sha256": "8beb5082231274b8a8b8f1a7ba6212471b37f0bc1e615a9b484b54b43706381a",
+  "old_estimated_dram_bytes": 199607360.0,
+  "corrected_estimated_dram_bytes": 193840192.0,
+  "removed_scratch_allocations": 5767168.0,
+  "whole_layer_windows_unchanged": true,
+  "sparse_native_ops": [
+    {
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    }
+  ],
+  "synthetic_grouped_ccl_checks": {
+    "FLOAT32": {
+      "single_branch_rs_ag_mesh_io_bytes": 3604480,
+      "paired_branch_rs_ag_mesh_io_bytes": 7208960
+    },
+    "BFLOAT16": {
+      "single_branch_rs_ag_mesh_io_bytes": 1802240,
+      "paired_branch_rs_ag_mesh_io_bytes": 3604480
+    },
+    "BFLOAT8_B": {
+      "single_branch_rs_ag_mesh_io_bytes": 957440.0,
+      "paired_branch_rs_ag_mesh_io_bytes": 1914880.0
+    }
+  },
+  "native_128_position_checks": {
+    "sliding_attention": {
+      "mean_mesh_kv_bytes": 5009152.0,
+      "first_read_tokens": 1152,
+      "last_read_tokens": 1024
+    },
+    "full_attention": {
+      "mean_mesh_kv_bytes": 18382848.0,
+      "first_read_tokens": 4224,
+      "last_read_tokens": 4224
+    }
+  },
+  "useful_flops_terms": {
+    "sliding_attention": {
+      "qkv_and_output_projections": 283467841536,
+      "shared_mlp": 146163105792,
+      "active_experts_top8": 389768282112,
+      "router_projection": 2952790016,
+      "causal_attention_qk_and_pv": 60137930752
+    },
+    "full_attention": {
+      "qkv_and_output_projections": 401579442176,
+      "shared_mlp": 146163105792,
+      "active_experts_top8": 389768282112,
+      "router_projection": 2952790016,
+      "causal_attention_qk_and_pv": 274945015808
+    }
+  },
+  "peak_flops_per_s": 2654208000000000.0,
+  "peak_dram_bytes_per_s": 2048000000000.0
+}

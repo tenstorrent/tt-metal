@@ -1,0 +1,56 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
+@@ -46,6 +46,7 @@
+         prefill_fidelity=ttnn.MathFidelity.HiFi4,
+         prefill_l1=False,
+         expert_split=False,
++        expert_fused_gelu=False,
+     ):
+         self.__dict__.update(source.__dict__)
+         self.decode_activation_dtype = activation_dtype
+@@ -135,6 +136,9 @@
+                     ),
+                 )
+         self.expert_split = expert_split
++        self.decode_gelu_activations = (
++            [ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)] if expert_fused_gelu else None
++        )
+         if expert_split:
+             self.gate = self.gate_up[..., : self.width]
+             self.up = self.gate_up[..., self.width :]
+@@ -185,7 +189,10 @@
+             gu = ttnn.sparse_matmul(x, self.gate_up, program_config=self.gate_config, **common)
+             gu = ttnn.reshape(gu, (1, self.config.num_experts, 1, 2 * self.width))
+             gate, up = gu[..., : self.width], gu[..., self.width :]
+-            hidden = ttnn.mul(ttnn.gelu(gate, variant=ttnn.GeluVariant.Accurate), up)
++            if self.decode_gelu_activations is not None:
++                hidden = ttnn.mul(gate, up, input_tensor_a_activations=self.decode_gelu_activations)
++            else:
++                hidden = ttnn.mul(ttnn.gelu(gate, variant=ttnn.GeluVariant.Accurate), up)
+         down = ttnn.sparse_matmul(hidden, self.down, program_config=self.down_config, is_input_a_sparse=True, **common)
+         down = ttnn.reshape(down, (1, self.config.num_experts, 1, self.config.hidden_size))
+         return ttnn.matmul(
+@@ -278,6 +285,7 @@
+         prefill_fidelity=ttnn.MathFidelity.LoFi,
+         prefill_l1=True,
+         expert_split=False,
++        expert_fused_gelu=False,
+         sharded_norms=True,
+         sharded_norm_site=None,
+         shared_dtype=ttnn.bfloat8_b,
+@@ -328,6 +336,7 @@
+             prefill_expert_gate=str(prefill_dtype),
+             prefill_expert_down=str(prefill_down_dtype),
+             decode_expert_fidelity=str(expert_fidelity),
++            decode_expert_fused_gelu=expert_fused_gelu or expert_split,
+             prefill_expert_fidelity=str(prefill_fidelity),
+             shared_decode_weights=str(shared_dtype),
+             shared_decode_fidelity=str(shared_fidelity),
+@@ -364,6 +373,7 @@
+             prefill_fidelity=prefill_fidelity,
+             prefill_l1=prefill_l1,
+             expert_split=expert_split,
++            expert_fused_gelu=expert_fused_gelu,
+         )
+         self.use_sharded_norms = sharded_norms
+         self.sharded_norm_site = sharded_norm_site or (

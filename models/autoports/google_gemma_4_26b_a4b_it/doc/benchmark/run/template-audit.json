@@ -1,0 +1,165 @@
+{
+  "scope": "Offline pinned native tokenizer only; no server or inference",
+  "rows": [
+    {
+      "task": "mmlu_pro_biology",
+      "doc_id": 519,
+      "response_id": "chatcmpl-9c6910d29e5bb859",
+      "api_prompt_tokens": 1453,
+      "variants": {
+        "string": {
+          "length": 1452,
+          "bos_count": 1,
+          "tokens_sha256": "82786d3644a5c8d430f02cf07924b1c88ae202f9502cd4735704a76fa98a8ff4",
+          "rendered_prefix": "<bos><|turn>system\nThe following are multiple choice questions (with answers) about biology. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice.<turn|>\n<|turn>user\nQuestion:\nWhich of the following represents an accurate statement concerning a"
+        },
+        "openai_parts": {
+          "length": 1453,
+          "bos_count": 1,
+          "tokens_sha256": "4b25c79616c06a96c57e8edcb951b59a4bbc6e7f20e6c1130b529066125d449a",
+          "rendered_prefix": "<bos><|turn>system\nThe following are multiple choice questions (with answers) about biology. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice. <turn|>\n<|turn>user\nQuestion:\nWhich of the following represents an accurate statement concerning "
+        }
+      }
+    },
+    {
+      "task": "mmlu_pro_business",
+      "doc_id": 6,
+      "response_id": "chatcmpl-aa0b6a059713c3d1",
+      "api_prompt_tokens": 1116,
+      "variants": {
+        "string": {
+          "length": 1115,
+          "bos_count": 1,
+          "tokens_sha256": "aacaebc0f7a9490e6ce41bddb5f5cf9e05ed76120aead8274bec14928606bf91",
+          "rendered_prefix": "<bos><|turn>system\nThe following are multiple choice questions (with answers) about business. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice.<turn|>\n<|turn>user\nQuestion:\nIn contrast to _______, _______ aim to reward favourable behaviour "
+        },
+        "openai_parts": {
+          "length": 1116,
+          "bos_count": 1,
+          "tokens_sha256": "825e1d06c98f91b94c208a3079b76c4509e329ea7eafcb10d7ce8508cad21443",
+          "rendered_prefix": "<bos><|turn>system\nThe following are multiple choice questions (with answers) about business. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice. <turn|>\n<|turn>user\nQuestion:\nIn contrast to _______, _______ aim to reward favourable behaviour"
+        }
+      }
+    },
+    {
+      "task": "mmlu_pro_biology",
+      "doc_id": 243,
+      "response_id": "chatcmpl-b6fbd1695cf0e0f1",
+      "api_prompt_tokens": 1553,
+      "variants": {
+        "string": {
+          "length": 1552,
+          "bos_count": 1,
+          "tokens_sha256": "b1eecc3a95685fe61167187c05848c09896c57f24bf8689b6a4c3b99d76e9a22",
+          "rendered_prefix": "<bos><|turn>system\nThe following are multiple choice questions (with answers) about biology. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice.<turn|>\n<|turn>user\nQuestion:\nWhich of the following represents an accurate statement concerning a"
+        },
+        "openai_parts": {
+          "length": 1553,
+          "bos_count": 1,
+          "tokens_sha256": "cdf3ca75c8002e27969b620b496376ddf7bbe6bed3543158d571774f042fae64",
+          "rendered_prefix": "<bos><|turn>system\nThe following are multiple choice questions (with answers) about biology. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice. <turn|>\n<|turn>user\nQuestion:\nWhich of the following represents an accurate statement concerning "
+        }
+      }
+    },
+    {
+      "task": "mmlu_pro_business",
+      "doc_id": 244,
+      "response_id": "chatcmpl-96faf68b11a87ec8",
+      "api_prompt_tokens": 1061,
+      "variants": {
+        "string": {
+          "length": 1060,
+          "bos_count": 1,
+          "tokens_sha256": "b7da5393d556d245b06ae3bbcd0efc8bec95704135c755bd61c7dbe1defc0588",
+          "rendered_prefix": "<bos><|turn>system\nThe following are multiple choice questions (with answers) about business. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice.<turn|>\n<|turn>user\nQuestion:\nIn contrast to _______, _______ aim to reward favourable behaviour "
+        },
+        "openai_parts": {
+          "length": 1061,
+          "bos_count": 1,
+          "tokens_sha256": "deee52ff42e5202da9c0b642e8cd3a99d94ae110a13e3c47a70b104d5e265e83",
+          "rendered_prefix": "<bos><|turn>system\nThe following are multiple choice questions (with answers) about business. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice. <turn|>\n<|turn>user\nQuestion:\nIn contrast to _______, _______ aim to reward favourable behaviour"
+        }
+      }
+    },
+    {
+      "task": "mmlu_pro_business",
+      "doc_id": 130,
+      "response_id": "chatcmpl-ba481317f0057a27",
+      "api_prompt_tokens": 1071,
+      "variants": {
+        "string": {
+          "length": 1070,
+          "bos_count": 1,
+          "tokens_sha256": "fdf29becd2c98c1f6576294746c447334b8105631505f47354747413ce3f2aba",
+          "rendered_prefix": "<bos><|turn>system\nThe following are multiple choice questions (with answers) about business. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice.<turn|>\n<|turn>user\nQuestion:\nIn contrast to _______, _______ aim to reward favourable behaviour "
+        },
+        "openai_parts": {
+          "length": 1071,
+          "bos_count": 1,
+          "tokens_sha256": "1873a275e0da5a682da885c19daafe4b6ef75055990cd3a1696b32ee1152485e",
+          "rendered_prefix": "<bos><|turn>system\nThe following are multiple choice questions (with answers) about business. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice. <turn|>\n<|turn>user\nQuestion:\nIn contrast to _______, _______ aim to reward favourable behaviour"
+        }
+      }
+    },
+    {
+      "task": "mmlu_pro_biology",
+      "doc_id": 536,
+      "response_id": "chatcmpl-9ae5428ed2dc9a7b",
+      "api_prompt_tokens": 1512,
+      "variants": {
+        "string": {
+          "length": 1511,
+          "bos_count": 1,
+          "tokens_sha256": "9ba3b700c22324c26bd368e5bb756eff5a98781c1d78f574537c4a203d5500bb",
+          "rendered_prefix": "<bos><|turn>system\nThe following are multiple choice questions (with answers) about biology. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice.<turn|>\n<|turn>user\nQuestion:\nWhich of the following represents an accurate statement concerning a"
+        },
+        "openai_parts": {
+          "length": 1512,
+          "bos_count": 1,
+          "tokens_sha256": "c058fc0dbc51757705a58793f112ff05f0d1e7c21b1de8975e8c75cf8c80747c",
+          "rendered_prefix": "<bos><|turn>system\nThe following are multiple choice questions (with answers) about biology. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice. <turn|>\n<|turn>user\nQuestion:\nWhich of the following represents an accurate statement concerning "
+        }
+      }
+    },
+    {
+      "task": "mmlu_pro_biology",
+      "doc_id": 676,
+      "response_id": "chatcmpl-84377472c726d2d7",
+      "api_prompt_tokens": 1518,
+      "variants": {
+        "string": {
+          "length": 1517,
+          "bos_count": 1,
+          "tokens_sha256": "fac9c7e7190d5719c7a3b59ce1d3f53a54ceacfd513798728bffa2e610690aca",
+          "rendered_prefix": "<bos><|turn>system\nThe following are multiple choice questions (with answers) about biology. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice.<turn|>\n<|turn>user\nQuestion:\nWhich of the following represents an accurate statement concerning a"
+        },
+        "openai_parts": {
+          "length": 1518,
+          "bos_count": 1,
+          "tokens_sha256": "ea82cb63ec8e299042fdb7400b725756c140961bc1f7e256c88159892abeedcb",
+          "rendered_prefix": "<bos><|turn>system\nThe following are multiple choice questions (with answers) about biology. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice. <turn|>\n<|turn>user\nQuestion:\nWhich of the following represents an accurate statement concerning "
+        }
+      }
+    },
+    {
+      "task": "mmlu_pro_biology",
+      "doc_id": 307,
+      "response_id": "chatcmpl-bf2fd22d32af9c48",
+      "api_prompt_tokens": 1585,
+      "variants": {
+        "string": {
+          "length": 1584,
+          "bos_count": 1,
+          "tokens_sha256": "7c9b45aa83ce3efefbd64c7558d10300a91b8dfabaf1bb52537afefb69428aa5",
+          "rendered_prefix": "<bos><|turn>system\nThe following are multiple choice questions (with answers) about biology. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice.<turn|>\n<|turn>user\nQuestion:\nWhich of the following represents an accurate statement concerning a"
+        },
+        "openai_parts": {
+          "length": 1585,
+          "bos_count": 1,
+          "tokens_sha256": "6a13854c413c0d246ac003e95d20589d36c45f1bdd161c5df3f5390e31250fb2",
+          "rendered_prefix": "<bos><|turn>system\nThe following are multiple choice questions (with answers) about biology. Think step by step and then finish your answer with \"the answer is (X)\" where X is the correct letter choice. <turn|>\n<|turn>user\nQuestion:\nWhich of the following represents an accurate statement concerning "
+        }
+      }
+    }
+  ]
+}

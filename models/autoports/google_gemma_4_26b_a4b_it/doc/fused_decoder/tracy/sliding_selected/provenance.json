@@ -1,0 +1,21 @@
+{
+  "source_ops_csv": "raw/reports/headline/2026_09_25_22_19_35/ops_perf_results_headline_2026_09_25_22_19_35.csv",
+  "ops_csv_sha256": "5891a6d05fec8296ffdc55e7a0a5c27e4f082d8a3ad7794665fa9390afb0b988",
+  "ops_csv_bytes": 37018559,
+  "summary_command": [
+    "python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.tests.summarize_perf",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tracy/sliding_selected/ops.csv",
+    "--layer-type",
+    "sliding_attention",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tracy/sliding_selected/whole_layer.json"
+  ],
+  "summary_exit_code": 0,
+  "op_info_cache": false,
+  "profile_result": "../../selected_profile_sliding.json",
+  "raw_device_csv": "raw/.logs/cpp_device_perf_report.csv",
+  "raw_host_trace": "raw/.logs/tracy_profile_log_host.tracy",
+  "source_fused_decoder_sha256": "ec5f247e00c19c34bca7361b58e5c53cbe0c8aab6bba24f95c9c3680b3a10b34"
+}

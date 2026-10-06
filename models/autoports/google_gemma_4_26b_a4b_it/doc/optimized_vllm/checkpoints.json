@@ -1,0 +1,10 @@
+{
+  "stage": "10-optimized-vllm",
+  "implementation_and_evidence_commit": "8148e15d639eaf777953f096f1f570adc53455a7",
+  "vllm_commit": "7f72b1c6e905f5137fe3377f2e7b42738d3f271d",
+  "vllm_modified": false,
+  "review": "clean-pass",
+  "review_evidence": "stage_review.md",
+  "push_performed": false,
+  "validation": "84 host tests; full vLLM sampling72 passed1 skipped; primary and CI benchmarks; qualitative; requests; queued async reads; pre-commit passed"
+}

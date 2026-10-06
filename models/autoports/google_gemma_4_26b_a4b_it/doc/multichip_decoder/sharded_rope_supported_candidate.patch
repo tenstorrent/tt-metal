@@ -1,0 +1,67 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
+@@ -174,21 +174,55 @@
+     def rotary(self, value, cos, sin, *, decode=False):
+         if not decode or not getattr(self, "sharded_decode_rope", False):
+             return super().rotary(value, cos, sin, decode=decode)
++        width = value.shape[-1]
++        if width not in (256, 512):
++            raise ValueError("Sharded decode RoPE supports head dimensions 256 and 512")
++        # Native sharded RoPE requires uniform BF16 formats and at most eight DST tiles.
++        compute = ttnn.init_device_compute_kernel_config(
++            value.device().arch(),
++            math_fidelity=self.compute.math_fidelity,
++            math_approx_mode=self.compute.math_approx_mode,
++            fp32_dest_acc_en=False,
++            packer_l1_acc=False,
++        )
+         memory = ttnn.create_sharded_memory_config(
+-            (32, value.shape[-1]),
++            (32, 256),
+             ttnn.CoreGrid(x=1, y=1),
+             ttnn.ShardStrategy.HEIGHT,
+             ttnn.ShardOrientation.ROW_MAJOR,
+             use_height_and_width_as_shard_shape=True,
+         )
+-        tables = tuple(ttnn.to_memory_config(ttnn.typecast(table, ttnn.float32), memory) for table in (cos, sin))
+-        result = ttnn.experimental.rotary_embedding_hf(
+-            ttnn.to_memory_config(value, memory),
+-            *tables,
+-            is_decode_mode=True,
+-            compute_kernel_config=self.compute,
+-        )
+-        return ttnn.to_memory_config(result, value.memory_config())
++        operands = tuple(ttnn.typecast(tensor, ttnn.bfloat16) for tensor in (value, cos, sin))
++        outputs = []
++        half = width // 2
++        for start in range(0, half, 128):
++            # Pair matching segments from the two global rotate-half operands.
++            paired = (
++                operands
++                if width == 256
++                else tuple(
++                    ttnn.concat(
++                        (tensor[..., start : start + 128], tensor[..., half + start : half + start + 128]), dim=-1
++                    )
++                    for tensor in operands
++                )
++            )
++            result = ttnn.experimental.rotary_embedding_hf(
++                *(ttnn.to_memory_config(tensor, memory) for tensor in paired),
++                is_decode_mode=True,
++                compute_kernel_config=compute,
++            )
++            outputs.append(ttnn.to_memory_config(result, value.memory_config()))
++        result = (
++            outputs[0]
++            if width == 256
++            else ttnn.concat(
++                tuple(output[..., :128] for output in outputs) + tuple(output[..., 128:] for output in outputs),
++                dim=-1,
++                memory_config=value.memory_config(),
++            )
++        )
++        return ttnn.typecast(result, value.dtype)
+ 
+     def project(self, attention, decode):
+         if not decode or getattr(self, "decode_output_dram", None) is None:

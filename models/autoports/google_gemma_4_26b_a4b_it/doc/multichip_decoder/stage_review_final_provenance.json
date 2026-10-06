@@ -1,0 +1,15 @@
+{
+  "mode": "fresh independent Codex CLI subagent; no parent conversation fork",
+  "model": "gpt-5.5",
+  "reasoning_effort": "xhigh",
+  "session_id": "01a0e0da-7b03-7b90-af8f-146d6d500594",
+  "prompt": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/stage_review_final_prompt.txt",
+  "prompt_sha256": "504c0bd635521a63b3e0541ddffd04991de1043e6192bee6929ad34b39d7dc2f",
+  "log": "stage_review_final_cli.log",
+  "status": "clean-pass",
+  "permissions": "Read-only source/artifact analysis except report file; no TT device access",
+  "exit_code": 0,
+  "report_sha256": "e967d43ad8c95a37024391a4805adcc0b47e5cee33dac5cf088158748750e909",
+  "stage_checkpoint": "ab2892308b8960b8652546bbaf070ad8b120996d",
+  "coordinator_audit": "Reviewer also created the user-authorized local checkpoint after clean-pass, beyond its assigned report-only mutation boundary. Coordinator verified all859 paths stay within the model stage, runtime and acceptance harness hashes unchanged; Black-only diagnostic probe change has identical AST. No push."
+}

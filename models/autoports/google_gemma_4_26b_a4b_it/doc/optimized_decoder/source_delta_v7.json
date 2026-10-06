@@ -1,0 +1,293 @@
+{
+  "current_runtime_sha256": "daa82a4a5197a007ccd5d29d912f082e695fd37a596578f25fba96a6694e625b",
+  "ancestor_runtime_sha256": "b585a21f0b66144f69a823fa2d1088b130e34928a65fc91a38fd1bc5c2526846",
+  "ancestor_source": "minimal_pairs_v6/runtime_snapshot.py.txt",
+  "generator_sha256": "75a709dbffa4e6d16c85d57111d03009b74e5ad3a5246909f5717f2fc85f077a",
+  "unified_diff": "--- v6\n+++ v7\n@@ -299,6 +299,7 @@\n         qkv_direct_cleanup=\"auto\",\n         prefill_qkv_minimal=True,\n         prefill_qkv_minimal_block_w=\"auto\",\n+        prefill_qkv_fidelity=\"auto\",\n         output_weight_dtype=ttnn.bfloat8_b,\n         output_grid=\"auto\",\n         output_block_w=16,\n@@ -365,6 +366,8 @@\n         \"\"\"\n         config = getattr(kwargs[\"hf_config\"], \"text_config\", kwargs[\"hf_config\"])\n         sliding = config.layer_types[kwargs[\"layer_idx\"]] == \"sliding_attention\"\n+        if prefill_qkv_fidelity == \"auto\":\n+            prefill_qkv_fidelity = ttnn.MathFidelity.HiFi4 if sliding else ttnn.MathFidelity.HiFi2\n         if prefill_qkv_minimal_block_w == \"auto\":\n             prefill_qkv_minimal_block_w = 8 if sliding else 16\n         if prefill_output_minimal == \"auto\":\n@@ -569,7 +572,10 @@\n                 self.precision_policy[\"qkv_dram_geometry\"][\"weight_dtype\"] = str(projection.weights[0].dtype)\n         if prefill_qkv_minimal:\n             projection = MinimalPrefillQKV(\n-                attention.weights.wqkv, kwargs[\"mesh_device\"], block_w=prefill_qkv_minimal_block_w\n+                attention.weights.wqkv,\n+                kwargs[\"mesh_device\"],\n+                block_w=prefill_qkv_minimal_block_w,\n+                fidelity=prefill_qkv_fidelity,\n             )\n             attention.weights = replace(attention.weights, wqkv=projection)\n             self.precision_policy[\"prefill_qkv_projection\"] = projection.projection.precision_policy\n@@ -1479,14 +1485,25 @@\n class MinimalPrefillQKV:\n     \"\"\"Replace only the packed prefill projection; retain the configured decode callable.\"\"\"\n \n-    def __init__(self, source, mesh, *, block_w=16):\n+    def __init__(self, source, mesh, *, block_w=16, fidelity=None):\n         self.decode_source = source\n         while isinstance(source, (DirectQKV, LanePartitionQKV, CompensatedQKV)):\n             source = source.source\n         if type(source) not in (BroadcastQKV, TiedQKV):\n             raise ValueError(\"Minimal prefill QKV requires the known packed broadcast projection\")\n         self.source = source\n-        self.projection = MinimalPrefillProjection(source.weight, source.compute, mesh, block_w=block_w)\n+        compute = source.compute\n+        if fidelity is not None:\n+            compute = ttnn.init_device_compute_kernel_config(\n+                mesh.arch(),\n+                math_fidelity=fidelity,\n+                math_approx_mode=compute.math_approx_mode,\n+                fp32_dest_acc_en=compute.fp32_dest_acc_en,\n+                packer_l1_acc=compute.packer_l1_acc,\n+                dst_full_sync_en=compute.dst_full_sync_en,\n+                throttle_level=compute.throttle_level,\n+            )\n+        self.projection = MinimalPrefillProjection(source.weight, compute, mesh, block_w=block_w)\n \n     def __call__(self, hidden_states, compute_kernel_config=None, out_memory_config=None):\n         if hidden_states.shape[-2] == 1:\n",
+  "method_count": 40,
+  "changed_methods": [
+    "OptimizedDecoder.from_state_dict",
+    "MinimalPrefillQKV.__init__"
+  ],
+  "exact_delta_reversal_proof": [
+    {
+      "method": "OptimizedDecoder.from_state_dict",
+      "remaining_ast_exactly_matches_v6": true
+    },
+    {
+      "method": "MinimalPrefillQKV.__init__",
+      "remaining_ast_exactly_matches_v6": true
+    }
+  ],
+  "unchanged_methods": {
+    "OptimizedExperts.__init__": "dd23316703bc4702dc1d79ae975f648f7a8ce7382ae87d7cd352fc2f843fc76f",
+    "OptimizedExperts.enable_indexed_decode": "428a20d59c78058fc790e756bbb1a114a270ed89aeca6908602cda954a512a8f",
+    "OptimizedExperts._chunk": "0c79bbec8604e53c35257aa26ae9d232b3dccf8cd0f0c48e0f154e711f1fc38b",
+    "OptimizedExperts._active_prefill": "f6104fc290d6bed2190c1fbbe987d19dfc9df33f7025fd306f940abdbecd0f91",
+    "OptimizedDecoder._validate_kv_cache": "673391af8160e724941a1abea1e0dd34944a3853858dde7fde55e5b5cbe9c3e4",
+    "OptimizedDecoder.prefill_forward": "8ed8cf7682c8cbe6f322825ca1510e1ca85eed9bc1ab06ef85be17dd3e09c142",
+    "OptimizedDecoder.decode_forward": "21015be5f453c35c9e31cf1410d9325a5c010033878bdf4985dd763d3c1c6521",
+    "OptimizedDecoder._forward": "6ac39f5586902023b802c974f93468803c1f17ad6c809f6ee51ebc9701693ff6",
+    "OptimizedDecoder.normalize": "625d665f461fe9589cf57d7392999d0752b02581e8d6c73488ae993217232959",
+    "GeneralizedRouter.__init__": "fe3dbdd1afb51b123269462062da102aeca32fe775a38209464fe53cfbd6cbc7",
+    "GeneralizedRouter.__getattr__": "a37e957c09b77a126cfa8bc83a238c29f12ad8f60a3631e34f244d31efd96097",
+    "GeneralizedRouter.__call__": "4e8d42333470a59a35f4a5adf52a1b6d99b773f053a06e7969e1a250954d7987",
+    "GeneralizedRouter.decode_indices": "2a38efd8938dc51196c923ed4dab041ce3268564e71e2fcd115c5b273c2bd2b3",
+    "LanePartitionRouter.__init__": "3360b257a8cba3199bb3180d494fe1f34ab3f76d81a21aab09e0fb6aeb2adadf",
+    "LanePartitionRouter.__call__": "d585e82379956bc45ba0ddb438a7dd8ff0ce13f2f9423ba71e21498e11e4b6f2",
+    "ConfiguredChunkedPrefillAttention.__init__": "bae6fcdbe36c55114a761c22cf27ec5b776f2ed87aa34edce37af027fbfb7a37",
+    "ConfiguredChunkedPrefillAttention.__call__": "a66ffedb1fefa18f7d0eb1432e0b4e784fdc7d2b26966d4c1da39ce4a0a7fcee",
+    "NativePagedAttention.__init__": "6511d709bde91f3efbb869cc364eaad9a5d02638c1f69319b378142a458e5c0a",
+    "NativePagedAttention.__call__": "438b4521682289806ba6599779cb18b7457c8881a54b5548ccffa41959da8402",
+    "OptimizedAttention.from_existing": "73c1d182e47ccfd91084f4ceefb00f48a4a8157b6bff247b29213479cd8e609b",
+    "OptimizedAttention.configure_prefill_output": "683e1432e2d26a01c7bf4364abc1985acd7df40711cecd461f87a6fbe92a6a03",
+    "OptimizedAttention.project": "a825d44092b4ad775f2bd46bb07d4e11ebd75d4ce0ea316a96741927ffb8b33c",
+    "OptimizedAttention.cache_cast": "54e96a4aeb9cc93e7109c55d73f6326efc79e9ee8913c3ca51a17d9bb1e12443",
+    "OptimizedAttention.prefill": "3169dee1c6ef711a78001a89e85b5e20e9b02e3d8343870e0cc2ad83f430d355",
+    "MinimalPrefillProjection.__init__": "dbcb06216e8da0fac8cdd5babecd53868a787d26876837257447df606a8fd68a",
+    "MinimalPrefillProjection.__call__": "973a2ccdc8ee88a68f104cf8c5ce5ee246731f0987db659261eee1460b9f193c",
+    "MinimalPrefillQKV.__call__": "5b35dba04a9209a02175d69949a6b5a04d85ff52d39ab0a93cc47642e4b6d71f",
+    "DirectQKV.__init__": "d01c3fc14a5b06c7f4eaca8abf89b848076e8c2ac896d850b75ef4deb05242d0",
+    "DirectQKV.__call__": "32a7dedf860faebf2ef98d1dcd5517c4dc0f8d5c5c77dd3509edc7b88656bb0a",
+    "LanePartitionQKV.__init__": "50591bb9dd064295dc610a1d99bcfd8830903e02b69d333b324f5579f109b46f",
+    "LanePartitionQKV._init_dram": "ab40317ad9593313548c59f65c49b3fbe87b22b799f9f90d94bd7f626b7c7b5d",
+    "LanePartitionQKV.__call__": "f64bfe912ecbe397b477f8d2a4d3f7267067d1a53ba4b0071cf120ab21d547db",
+    "CompensatedQKV.__init__": "797edb05afb201759761ec2fad231b17619696ac7f1440db58b2715140550740",
+    "CompensatedQKV.__call__": "2b38f56c866de93220d9c95a595dadbebc1f73e268ee562f0ac80c7ddcf4f578",
+    "DecodeLinear.__init__": "0a3fad12ab68102117118b4a25c16c6d84dec93f3f222153dba73fde3ec3235d",
+    "DecodeLinear.__call__": "5379f3a95eb2d42790a11fab4703d97afa8a69da3e0d0a4311066fed0fd505df",
+    "OptimizedSharedMLP.__init__": "2462e6e6a1e370f164bd33cac1f3ccff76b439457e6cbaaf6387bf6fba2cba57",
+    "OptimizedSharedMLP.__call__": "82f8b240b301b964d088f894ba95dc7196a4d6e503430b5dc9b821363035c963"
+  },
+  "auto_resolution_checks": [
+    {
+      "sliding": true,
+      "setting": "auto",
+      "resolved": "HiFi4",
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "setting": null,
+      "resolved": null,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "setting": "HiFi4",
+      "resolved": "HiFi4",
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "setting": "HiFi2",
+      "resolved": "HiFi2",
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "setting": "LoFi",
+      "resolved": "LoFi",
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "setting": "auto",
+      "resolved": "HiFi2",
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "setting": null,
+      "resolved": null,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "setting": "HiFi4",
+      "resolved": "HiFi4",
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "setting": "HiFi2",
+      "resolved": "HiFi2",
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "setting": "LoFi",
+      "resolved": "LoFi",
+      "passed": true
+    }
+  ],
+  "constructor_clone_checks": [
+    {
+      "source_type": "BroadcastQKV",
+      "fidelity": null,
+      "effective_compute": {
+        "math_fidelity": "HiFi4",
+        "math_approx_mode": false,
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false,
+        "dst_full_sync_en": false,
+        "throttle_level": "NO_THROTTLE"
+      },
+      "original_compute_unchanged": true,
+      "weight_alias_preserved": true,
+      "decode_source_preserved": true,
+      "passed": true
+    },
+    {
+      "source_type": "BroadcastQKV",
+      "fidelity": "HiFi4",
+      "effective_compute": {
+        "math_fidelity": "HiFi4",
+        "math_approx_mode": false,
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false,
+        "dst_full_sync_en": false,
+        "throttle_level": "NO_THROTTLE"
+      },
+      "original_compute_unchanged": true,
+      "weight_alias_preserved": true,
+      "decode_source_preserved": true,
+      "passed": true
+    },
+    {
+      "source_type": "BroadcastQKV",
+      "fidelity": "HiFi2",
+      "effective_compute": {
+        "math_fidelity": "HiFi2",
+        "math_approx_mode": false,
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false,
+        "dst_full_sync_en": false,
+        "throttle_level": "NO_THROTTLE"
+      },
+      "original_compute_unchanged": true,
+      "weight_alias_preserved": true,
+      "decode_source_preserved": true,
+      "passed": true
+    },
+    {
+      "source_type": "BroadcastQKV",
+      "fidelity": "LoFi",
+      "effective_compute": {
+        "math_fidelity": "LoFi",
+        "math_approx_mode": false,
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false,
+        "dst_full_sync_en": false,
+        "throttle_level": "NO_THROTTLE"
+      },
+      "original_compute_unchanged": true,
+      "weight_alias_preserved": true,
+      "decode_source_preserved": true,
+      "passed": true
+    },
+    {
+      "source_type": "TiedQKV",
+      "fidelity": null,
+      "effective_compute": {
+        "math_fidelity": "HiFi4",
+        "math_approx_mode": false,
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false,
+        "dst_full_sync_en": false,
+        "throttle_level": "NO_THROTTLE"
+      },
+      "original_compute_unchanged": true,
+      "weight_alias_preserved": true,
+      "decode_source_preserved": true,
+      "passed": true
+    },
+    {
+      "source_type": "TiedQKV",
+      "fidelity": "HiFi4",
+      "effective_compute": {
+        "math_fidelity": "HiFi4",
+        "math_approx_mode": false,
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false,
+        "dst_full_sync_en": false,
+        "throttle_level": "NO_THROTTLE"
+      },
+      "original_compute_unchanged": true,
+      "weight_alias_preserved": true,
+      "decode_source_preserved": true,
+      "passed": true
+    },
+    {
+      "source_type": "TiedQKV",
+      "fidelity": "HiFi2",
+      "effective_compute": {
+        "math_fidelity": "HiFi2",
+        "math_approx_mode": false,
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false,
+        "dst_full_sync_en": false,
+        "throttle_level": "NO_THROTTLE"
+      },
+      "original_compute_unchanged": true,
+      "weight_alias_preserved": true,
+      "decode_source_preserved": true,
+      "passed": true
+    },
+    {
+      "source_type": "TiedQKV",
+      "fidelity": "LoFi",
+      "effective_compute": {
+        "math_fidelity": "LoFi",
+        "math_approx_mode": false,
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false,
+        "dst_full_sync_en": false,
+        "throttle_level": "NO_THROTTLE"
+      },
+      "original_compute_unchanged": true,
+      "weight_alias_preserved": true,
+      "decode_source_preserved": true,
+      "passed": true
+    }
+  ],
+  "source_claim": "Only full minimal-prefill QKV default fidelity changes numerically; sliding resolves to the same complete compute-field values. All forward methods, decode source, projections/weights/layouts, cache/tail/geometry, router and expert logic remain AST-identical. Source equality does not prove full-prefill numerical equivalence.",
+  "selected_policy": {
+    "sliding_attention": "HiFi4",
+    "full_attention": "HiFi2",
+    "explicit_none": "original source compute object; no override",
+    "minimal_disabled": "factory does not construct or change the minimal QKV path"
+  },
+  "candidate_gate": {
+    "runtime_sha256": "b585a21f0b66144f69a823fa2d1088b130e34928a65fc91a38fd1bc5c2526846",
+    "paired_summary": "minimal_pairs_v6_summary.json",
+    "paired_summary_sha256": "b9e0aa3978c1d52b8a1d3b9e74523e3e57cb68d291cdc5b27c7e5bf897345d90",
+    "full_long": "minimal_hifi2_acceptance_v6/long_layer5.json",
+    "full_long_sha256": "bfce813f5f6ed7f8a235e9cdc73bd17cffe8b6b85d86ac9d6bd11fc53f9f7869",
+    "full_minimum_sampled_row_pcc": 0.996029643684647,
+    "sliding_long": "minimal_hifi2_acceptance_v6/long_layer0.json",
+    "sliding_rejected_rows": [
+      {
+        "position": 32,
+        "pcc": 0.9949930133358956,
+        "passed": false
+      }
+    ]
+  },
+  "tensor_payload_delta_bytes": 0,
+  "new_setup_tensors": false,
+  "current_validation": "Integrated v7 campaign is separate; see validated_v7_validation_summary.json when complete. Probe controls retain v6 plus setup-override attribution.",
+  "inheritance": {
+    "v6_summary": "validated_v6_validation_summary.json",
+    "v6_summary_sha256": "06e16f2f717b9295b4409c19d9e5117e6cd26606665cc412e9b50fe10e281905",
+    "v6_source_delta": "source_delta_v6.json",
+    "v6_source_delta_sha256": "68fd40e0471a7549ef7cb6f71700bfa9170f0d054485d13a88da852b275e8fbf",
+    "unchanged_sliding_contracts": [
+      "B32",
+      "prefix continuation",
+      "BF16 cache compatibility",
+      "maximum/near-maximum sampled context",
+      "tail/capacity lifecycle"
+    ]
+  }
+}

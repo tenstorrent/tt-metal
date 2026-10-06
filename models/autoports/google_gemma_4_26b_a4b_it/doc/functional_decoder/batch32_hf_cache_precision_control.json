@@ -1,0 +1,2124 @@
+{
+  "model": "google/gemma-4-26B-A4B-it",
+  "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "seed": 42,
+  "batch": 32,
+  "prefill_length": 33,
+  "decode_position": 33,
+  "extent": 128,
+  "cpu_threads": 8,
+  "torch_version": "2.11.0+cpu",
+  "pcc_threshold": 0.995,
+  "harness": "Exact batched.py RNG order and real checkpoint loading; x/dx BF16-roundtripped FP32",
+  "control": "FP32 HF eager throughout; only DynamicCache.update K/V inputs rounded through BF16 before FP32 storage and return; applies to prefill and decode",
+  "route_comparison": "Unordered top-8 expert sets; CPU torch.topk tie-breaking",
+  "limitations": "CPU numerical controls do not reproduce TT kernels or establish unavoidable precision limits. Cache control prefill attends to rounded K/V. Threshold and implementation are unchanged.",
+  "command": "HF_HUB_OFFLINE=1 OMP_NUM_THREADS=8 MKL_NUM_THREADS=8 python_env/bin/python -m models.autoports.google_gemma_4_26b_a4b_it.tests.hf_precision_controls --control cache",
+  "control_source_sha256": "748dcf96d1e674bb196de431e212846aac369dedf9fc6358cda7275a9718fa30",
+  "batched_harness_sha256": "37a89ff633647b83727bb11f71929120ec791b304164d21b9f28f06c599ccd16",
+  "layers": [
+    {
+      "layer": 0,
+      "layer_type": "sliding_attention",
+      "x_sha256": "09a58cb893da51cd6aadfd884bdd89da85396a468ca594a485f08b8f2a26229f",
+      "dx_sha256": "81191419704528c8e325d3e3c3129d78f16b49ebc24766e10d67e56e1afcaa3b",
+      "oracle_cache": {
+        "sequence_length": 34,
+        "storage_dtype": "torch.float32"
+      },
+      "control_cache": {
+        "sequence_length": 34,
+        "storage_dtype": "torch.float32"
+      },
+      "prefill_pcc_per_slot": [
+        0.999997998692639,
+        0.9999976421913319,
+        0.9999006444650242,
+        0.9993915713035421,
+        0.9999977025842135,
+        0.9995555983817241,
+        0.999755168056038,
+        0.9999978257105254,
+        0.9999722067494807,
+        0.9999981900080845,
+        0.9999980612933708,
+        0.9999975693831472,
+        0.9997020724869576,
+        0.9999981354237745,
+        0.9999980814837179,
+        0.9995622997674265,
+        0.9993056085483734,
+        0.9999005709856097,
+        0.9998946768236129,
+        0.9999980344091081,
+        0.9994138388609529,
+        0.9999977840246336,
+        0.9999978356301649,
+        0.9999976893773176,
+        0.9999982151519535,
+        0.999997809297995,
+        0.9999980946474241,
+        0.9999983580855807,
+        0.9999978242009816,
+        0.9999979512020223,
+        0.9999420509836526,
+        0.9999985780779195
+      ],
+      "prefill_failed_slots": [],
+      "prefill_changed_route_tokens": 16,
+      "prefill_tokens": 1056,
+      "decode_failed_slots": [],
+      "decode_changed_route_slots": [],
+      "recorded_tt_artifact": "doc/functional_decoder/batch32_sliding_final.json",
+      "recorded_tt_artifact_sha256": "40b80651ee5f0b4f2f04e95a77c43ca38a9a29bec6b48f1eccc4af9e2d8d7723",
+      "summary": {
+        "tt_failing_slots_also_failing_control": [],
+        "tt_failing_slots_passing_control": [
+          5,
+          15,
+          17,
+          25,
+          27
+        ],
+        "control_failing_slots_passing_recorded_tt": [],
+        "minimum_decode_pcc": 0.9999927490877436
+      },
+      "decode": [
+        {
+          "slot": 0,
+          "pcc": 0.9999960848619109,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            103,
+            91,
+            114,
+            112,
+            17,
+            18,
+            111,
+            29
+          ],
+          "bf16_cache_experts": [
+            103,
+            91,
+            114,
+            112,
+            17,
+            18,
+            111,
+            29
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.04780161380767822,
+          "recorded_tt_pcc": 0.9989007441079101,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 1,
+          "pcc": 0.9999969266845707,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            68,
+            52,
+            56,
+            39,
+            10,
+            126,
+            59,
+            64
+          ],
+          "bf16_cache_experts": [
+            68,
+            52,
+            56,
+            39,
+            10,
+            126,
+            59,
+            64
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.023253202438354492,
+          "recorded_tt_pcc": 0.9994947310671944,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 2,
+          "pcc": 0.9999971032695293,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            45,
+            122,
+            87,
+            68,
+            113,
+            33,
+            116,
+            90
+          ],
+          "bf16_cache_experts": [
+            45,
+            122,
+            87,
+            68,
+            113,
+            33,
+            116,
+            90
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.025473356246948242,
+          "recorded_tt_pcc": 0.9996068529038348,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 3,
+          "pcc": 0.9999965327308984,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            20,
+            107,
+            41,
+            51,
+            21,
+            112,
+            88,
+            76
+          ],
+          "bf16_cache_experts": [
+            20,
+            107,
+            41,
+            51,
+            21,
+            112,
+            88,
+            76
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.027744293212890625,
+          "recorded_tt_pcc": 0.9991834386667323,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 4,
+          "pcc": 0.9999927490877436,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            105,
+            20,
+            76,
+            0,
+            49,
+            112,
+            104,
+            123
+          ],
+          "bf16_cache_experts": [
+            105,
+            20,
+            76,
+            0,
+            49,
+            112,
+            104,
+            123
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.04688668251037598,
+          "recorded_tt_pcc": 0.9991266500264194,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 5,
+          "pcc": 0.9999974032133058,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            105,
+            88,
+            44,
+            78,
+            121,
+            127,
+            41,
+            0
+          ],
+          "bf16_cache_experts": [
+            105,
+            88,
+            44,
+            78,
+            121,
+            127,
+            41,
+            0
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.009282469749450684,
+          "recorded_tt_pcc": 0.991934934152884,
+          "targeted_tt_failure": true,
+          "stage_pcc": {
+            "input_layernorm": 0.9999999999999998,
+            "self_attn": 0.9999988161494251,
+            "post_attention_layernorm": 0.9999979894984947,
+            "mlp": 0.9999970025066418,
+            "post_feedforward_layernorm_1": 0.9999983979705066,
+            "router.proj": 0.999998927574358,
+            "router_input": 0.9999980436166642,
+            "experts": 0.9999945273061674,
+            "post_feedforward_layernorm_2": 0.9999949187452699,
+            "post_feedforward_layernorm": 0.9999969635849221
+          }
+        },
+        {
+          "slot": 6,
+          "pcc": 0.9999972833699123,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            84,
+            63,
+            112,
+            35,
+            127,
+            22,
+            104,
+            123
+          ],
+          "bf16_cache_experts": [
+            84,
+            63,
+            112,
+            35,
+            127,
+            22,
+            104,
+            123
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.13936972618103027,
+          "recorded_tt_pcc": 0.9996575545535316,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 7,
+          "pcc": 0.9999986840537962,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            20,
+            112,
+            31,
+            64,
+            60,
+            107,
+            26,
+            100
+          ],
+          "bf16_cache_experts": [
+            20,
+            112,
+            31,
+            64,
+            60,
+            107,
+            26,
+            100
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.019690990447998047,
+          "recorded_tt_pcc": 0.9996270886842842,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 8,
+          "pcc": 0.9999964826167966,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            26,
+            51,
+            114,
+            73,
+            31,
+            49,
+            64,
+            5
+          ],
+          "bf16_cache_experts": [
+            26,
+            51,
+            114,
+            73,
+            31,
+            49,
+            64,
+            5
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.004587411880493164,
+          "recorded_tt_pcc": 0.9991561061489606,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 9,
+          "pcc": 0.9999979672733782,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            87,
+            79,
+            18,
+            103,
+            28,
+            84,
+            90,
+            57
+          ],
+          "bf16_cache_experts": [
+            87,
+            79,
+            18,
+            103,
+            28,
+            84,
+            90,
+            57
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.009387373924255371,
+          "recorded_tt_pcc": 0.999602839082942,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 10,
+          "pcc": 0.9999987473713581,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            99,
+            60,
+            50,
+            47,
+            124,
+            88,
+            53,
+            64
+          ],
+          "bf16_cache_experts": [
+            99,
+            60,
+            50,
+            47,
+            88,
+            124,
+            53,
+            64
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.04794764518737793,
+          "recorded_tt_pcc": 0.9970523405490826,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 11,
+          "pcc": 0.999997663736358,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            88,
+            96,
+            20,
+            85,
+            44,
+            123,
+            43,
+            11
+          ],
+          "bf16_cache_experts": [
+            88,
+            96,
+            20,
+            85,
+            44,
+            123,
+            43,
+            11
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.09764599800109863,
+          "recorded_tt_pcc": 0.9994043186960097,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 12,
+          "pcc": 0.9999975485246534,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            114,
+            26,
+            56,
+            33,
+            115,
+            59,
+            116,
+            68
+          ],
+          "bf16_cache_experts": [
+            114,
+            26,
+            56,
+            33,
+            115,
+            59,
+            116,
+            68
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.04482746124267578,
+          "recorded_tt_pcc": 0.9996103271142437,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 13,
+          "pcc": 0.9999963850465767,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            73,
+            78,
+            114,
+            17,
+            125,
+            96,
+            121,
+            90
+          ],
+          "bf16_cache_experts": [
+            73,
+            78,
+            114,
+            17,
+            96,
+            125,
+            121,
+            90
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.08766317367553711,
+          "recorded_tt_pcc": 0.9989710982154684,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 14,
+          "pcc": 0.999995389832264,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            107,
+            20,
+            100,
+            39,
+            102,
+            85,
+            6,
+            27
+          ],
+          "bf16_cache_experts": [
+            107,
+            20,
+            100,
+            39,
+            102,
+            85,
+            6,
+            27
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.0040743350982666016,
+          "recorded_tt_pcc": 0.9993218458105573,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 15,
+          "pcc": 0.9999975320732994,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            41,
+            51,
+            104,
+            122,
+            31,
+            68,
+            26,
+            91
+          ],
+          "bf16_cache_experts": [
+            41,
+            51,
+            104,
+            122,
+            31,
+            68,
+            26,
+            91
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.03717052936553955,
+          "recorded_tt_pcc": 0.9838589619773657,
+          "targeted_tt_failure": true,
+          "stage_pcc": {
+            "input_layernorm": 0.9999999999999996,
+            "self_attn": 0.9999981370951436,
+            "post_attention_layernorm": 0.9999973827702233,
+            "mlp": 0.9999951507484803,
+            "post_feedforward_layernorm_1": 0.9999988910914367,
+            "router.proj": 0.9999980062959437,
+            "router_input": 0.9999974416611362,
+            "experts": 0.999990803217547,
+            "post_feedforward_layernorm_2": 0.9999911339611939,
+            "post_feedforward_layernorm": 0.9999977440647619
+          }
+        },
+        {
+          "slot": 16,
+          "pcc": 0.9999987840891832,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            12,
+            81,
+            8,
+            116,
+            41,
+            58,
+            57,
+            29
+          ],
+          "bf16_cache_experts": [
+            12,
+            81,
+            8,
+            116,
+            41,
+            58,
+            57,
+            29
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.02368795871734619,
+          "recorded_tt_pcc": 0.9996459088582517,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 17,
+          "pcc": 0.999996790208026,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            3,
+            73,
+            106,
+            13,
+            127,
+            51,
+            76,
+            21
+          ],
+          "bf16_cache_experts": [
+            3,
+            73,
+            106,
+            13,
+            127,
+            51,
+            21,
+            76
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.0019234418869018555,
+          "recorded_tt_pcc": 0.9805928703067063,
+          "targeted_tt_failure": true,
+          "stage_pcc": {
+            "input_layernorm": 0.9999999999999993,
+            "self_attn": 0.9999974263455869,
+            "post_attention_layernorm": 0.9999976525355425,
+            "mlp": 0.999998843322825,
+            "post_feedforward_layernorm_1": 0.9999982643966159,
+            "router.proj": 0.9999978113414242,
+            "router_input": 0.9999976943814325,
+            "experts": 0.9999957134442922,
+            "post_feedforward_layernorm_2": 0.9999945755215507,
+            "post_feedforward_layernorm": 0.9999970766578418
+          }
+        },
+        {
+          "slot": 18,
+          "pcc": 0.9999981043546811,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            22,
+            32,
+            107,
+            105,
+            64,
+            122,
+            111,
+            16
+          ],
+          "bf16_cache_experts": [
+            22,
+            32,
+            107,
+            105,
+            64,
+            122,
+            111,
+            16
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.10087060928344727,
+          "recorded_tt_pcc": 0.9994979881470902,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 19,
+          "pcc": 0.9999952442841807,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            49,
+            45,
+            121,
+            78,
+            123,
+            40,
+            13,
+            44
+          ],
+          "bf16_cache_experts": [
+            49,
+            45,
+            121,
+            78,
+            123,
+            40,
+            13,
+            44
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.07977724075317383,
+          "recorded_tt_pcc": 0.9992876305995854,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 20,
+          "pcc": 0.9999989513720741,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            112,
+            64,
+            6,
+            93,
+            56,
+            71,
+            21,
+            40
+          ],
+          "bf16_cache_experts": [
+            112,
+            64,
+            6,
+            93,
+            56,
+            71,
+            21,
+            40
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.03228110074996948,
+          "recorded_tt_pcc": 0.9996562042168523,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 21,
+          "pcc": 0.9999982611941247,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            18,
+            84,
+            45,
+            87,
+            114,
+            63,
+            29,
+            108
+          ],
+          "bf16_cache_experts": [
+            18,
+            84,
+            45,
+            87,
+            114,
+            63,
+            29,
+            108
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.06202101707458496,
+          "recorded_tt_pcc": 0.9988100225303737,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 22,
+          "pcc": 0.9999944666557087,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            88,
+            12,
+            35,
+            109,
+            73,
+            96,
+            6,
+            14
+          ],
+          "bf16_cache_experts": [
+            88,
+            12,
+            35,
+            109,
+            73,
+            96,
+            6,
+            14
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.07556653022766113,
+          "recorded_tt_pcc": 0.99883188196684,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 23,
+          "pcc": 0.999999874790526,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            57,
+            80,
+            93,
+            42,
+            40,
+            56,
+            82,
+            20
+          ],
+          "bf16_cache_experts": [
+            57,
+            80,
+            93,
+            42,
+            40,
+            56,
+            82,
+            20
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.021031200885772705,
+          "recorded_tt_pcc": 0.999949053265183,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 24,
+          "pcc": 0.9999993746189605,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            20,
+            105,
+            49,
+            71,
+            40,
+            34,
+            25,
+            48
+          ],
+          "bf16_cache_experts": [
+            20,
+            105,
+            49,
+            71,
+            40,
+            34,
+            25,
+            48
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.1464129090309143,
+          "recorded_tt_pcc": 0.9997200819137784,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 25,
+          "pcc": 0.9999992366240331,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            8,
+            31,
+            81,
+            4,
+            76,
+            20,
+            12,
+            11
+          ],
+          "bf16_cache_experts": [
+            8,
+            31,
+            81,
+            4,
+            76,
+            20,
+            12,
+            11
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.0012890100479125977,
+          "recorded_tt_pcc": 0.9934889542041361,
+          "targeted_tt_failure": true,
+          "stage_pcc": {
+            "input_layernorm": 0.9999999999999996,
+            "self_attn": 0.9999983610964235,
+            "post_attention_layernorm": 0.9999982377920988,
+            "mlp": 0.9999977254087051,
+            "post_feedforward_layernorm_1": 0.9999994368046103,
+            "router.proj": 0.9999984235263559,
+            "router_input": 0.9999982696504378,
+            "experts": 0.9999965194971198,
+            "post_feedforward_layernorm_2": 0.9999978184049546,
+            "post_feedforward_layernorm": 0.9999993992288055
+          }
+        },
+        {
+          "slot": 26,
+          "pcc": 0.9999983102036286,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            31,
+            14,
+            41,
+            116,
+            3,
+            12,
+            125,
+            122
+          ],
+          "bf16_cache_experts": [
+            31,
+            14,
+            41,
+            116,
+            3,
+            12,
+            125,
+            122
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.24016475677490234,
+          "recorded_tt_pcc": 0.9996502438257909,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 27,
+          "pcc": 0.9999971767131398,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            112,
+            19,
+            31,
+            107,
+            76,
+            83,
+            55,
+            6
+          ],
+          "bf16_cache_experts": [
+            112,
+            19,
+            31,
+            107,
+            76,
+            83,
+            55,
+            6
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.0020967721939086914,
+          "recorded_tt_pcc": 0.9902932044795163,
+          "targeted_tt_failure": true,
+          "stage_pcc": {
+            "input_layernorm": 0.9999999999999996,
+            "self_attn": 0.9999986436417614,
+            "post_attention_layernorm": 0.999998690821919,
+            "mlp": 0.9999972652594264,
+            "post_feedforward_layernorm_1": 0.9999963801561189,
+            "router.proj": 0.9999981902524012,
+            "router_input": 0.9999987120205072,
+            "experts": 0.9999964514818352,
+            "post_feedforward_layernorm_2": 0.9999973440498644,
+            "post_feedforward_layernorm": 0.9999969147195352
+          }
+        },
+        {
+          "slot": 28,
+          "pcc": 0.9999952039192811,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            79,
+            103,
+            28,
+            81,
+            87,
+            18,
+            15,
+            45
+          ],
+          "bf16_cache_experts": [
+            79,
+            103,
+            28,
+            81,
+            87,
+            18,
+            15,
+            45
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.0036298036575317383,
+          "recorded_tt_pcc": 0.9992664104647517,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 29,
+          "pcc": 0.9999969403149297,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            105,
+            26,
+            50,
+            124,
+            48,
+            99,
+            53,
+            76
+          ],
+          "bf16_cache_experts": [
+            105,
+            26,
+            50,
+            124,
+            48,
+            99,
+            53,
+            76
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.27590060234069824,
+          "recorded_tt_pcc": 0.998790003662291,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 30,
+          "pcc": 0.9999977834445816,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            100,
+            31,
+            1,
+            125,
+            18,
+            84,
+            110,
+            5
+          ],
+          "bf16_cache_experts": [
+            100,
+            31,
+            1,
+            125,
+            18,
+            84,
+            110,
+            5
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.1072726845741272,
+          "recorded_tt_pcc": 0.9996655734851115,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 31,
+          "pcc": 0.9999944762727819,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            107,
+            44,
+            43,
+            123,
+            125,
+            87,
+            32,
+            64
+          ],
+          "bf16_cache_experts": [
+            107,
+            44,
+            43,
+            123,
+            125,
+            87,
+            32,
+            64
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.08021408319473267,
+          "recorded_tt_pcc": 0.99963449437219,
+          "targeted_tt_failure": false
+        }
+      ]
+    },
+    {
+      "layer": 5,
+      "layer_type": "full_attention",
+      "x_sha256": "09a58cb893da51cd6aadfd884bdd89da85396a468ca594a485f08b8f2a26229f",
+      "dx_sha256": "81191419704528c8e325d3e3c3129d78f16b49ebc24766e10d67e56e1afcaa3b",
+      "oracle_cache": {
+        "sequence_length": 34,
+        "storage_dtype": "torch.float32"
+      },
+      "control_cache": {
+        "sequence_length": 34,
+        "storage_dtype": "torch.float32"
+      },
+      "prefill_pcc_per_slot": [
+        0.9999997943115867,
+        0.9999997882836865,
+        0.9998254114199158,
+        0.9999997907081165,
+        0.9999998036886834,
+        0.9997792913050833,
+        0.9999997783880709,
+        0.9996801668807829,
+        0.999702151047307,
+        0.9999997779128605,
+        0.9997270077566076,
+        0.9999998141463028,
+        0.9998315572214472,
+        0.9999997955195232,
+        0.9999997858720687,
+        0.9999997948981467,
+        0.9996688339233586,
+        0.9997011702657994,
+        0.9995432718580477,
+        0.9993534114538657,
+        0.9996856732101607,
+        0.9996558395297676,
+        0.9999997860147961,
+        0.9999997987998928,
+        0.9999997960540227,
+        0.9999997719062876,
+        0.9999997917521214,
+        0.999999797224006,
+        0.9993495016205779,
+        0.9999997716551995,
+        0.9999997909894861,
+        0.999685589699987
+      ],
+      "prefill_failed_slots": [],
+      "prefill_changed_route_tokens": 14,
+      "prefill_tokens": 1056,
+      "decode_failed_slots": [],
+      "decode_changed_route_slots": [],
+      "recorded_tt_artifact": "doc/functional_decoder/batch32_full_final.json",
+      "recorded_tt_artifact_sha256": "a7cf343d340646954cc0de8e159ca8655eba1c2b0f585c4b4b648bf9b6664d0a",
+      "summary": {
+        "tt_failing_slots_also_failing_control": [],
+        "tt_failing_slots_passing_control": [
+          9,
+          11,
+          21,
+          29
+        ],
+        "control_failing_slots_passing_recorded_tt": [],
+        "minimum_decode_pcc": 0.999999557100464
+      },
+      "decode": [
+        {
+          "slot": 0,
+          "pcc": 0.9999998759127336,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            108,
+            125,
+            43,
+            37,
+            92,
+            52,
+            40,
+            6
+          ],
+          "bf16_cache_experts": [
+            108,
+            125,
+            43,
+            37,
+            92,
+            52,
+            40,
+            6
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.019599974155426025,
+          "recorded_tt_pcc": 0.9998102410393501,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 1,
+          "pcc": 0.9999998270308208,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            26,
+            112,
+            12,
+            82,
+            87,
+            65,
+            54,
+            7
+          ],
+          "bf16_cache_experts": [
+            26,
+            112,
+            12,
+            82,
+            87,
+            65,
+            54,
+            7
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.029977262020111084,
+          "recorded_tt_pcc": 0.999898221404787,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 2,
+          "pcc": 0.9999998393065919,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            98,
+            16,
+            94,
+            63,
+            105,
+            61,
+            118,
+            1
+          ],
+          "bf16_cache_experts": [
+            98,
+            16,
+            94,
+            63,
+            105,
+            61,
+            118,
+            1
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.050904154777526855,
+          "recorded_tt_pcc": 0.999878552044066,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 3,
+          "pcc": 0.9999998141865306,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            112,
+            87,
+            16,
+            33,
+            14,
+            109,
+            25,
+            0
+          ],
+          "bf16_cache_experts": [
+            112,
+            87,
+            16,
+            33,
+            14,
+            109,
+            25,
+            0
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.06522178649902344,
+          "recorded_tt_pcc": 0.9998764317668786,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 4,
+          "pcc": 0.9999997846053214,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            74,
+            67,
+            75,
+            7,
+            19,
+            113,
+            15,
+            86
+          ],
+          "bf16_cache_experts": [
+            74,
+            67,
+            75,
+            7,
+            19,
+            113,
+            15,
+            86
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.03509557247161865,
+          "recorded_tt_pcc": 0.9998379945554243,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 5,
+          "pcc": 0.9999997780176142,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            5,
+            47,
+            76,
+            11,
+            121,
+            19,
+            107,
+            114
+          ],
+          "bf16_cache_experts": [
+            5,
+            47,
+            76,
+            11,
+            121,
+            19,
+            107,
+            114
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.0035953521728515625,
+          "recorded_tt_pcc": 0.9998315726430143,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 6,
+          "pcc": 0.9999998262446653,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            15,
+            6,
+            30,
+            69,
+            117,
+            20,
+            73,
+            125
+          ],
+          "bf16_cache_experts": [
+            15,
+            6,
+            30,
+            69,
+            117,
+            20,
+            73,
+            125
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.014938831329345703,
+          "recorded_tt_pcc": 0.9998183692412771,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 7,
+          "pcc": 0.9999998324785168,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            55,
+            42,
+            36,
+            51,
+            83,
+            122,
+            8,
+            10
+          ],
+          "bf16_cache_experts": [
+            55,
+            42,
+            36,
+            51,
+            83,
+            122,
+            8,
+            10
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.11035645008087158,
+          "recorded_tt_pcc": 0.9998677347175711,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 8,
+          "pcc": 0.9999997647030151,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            37,
+            23,
+            18,
+            14,
+            104,
+            24,
+            74,
+            97
+          ],
+          "bf16_cache_experts": [
+            37,
+            23,
+            18,
+            14,
+            104,
+            24,
+            74,
+            97
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.01122194528579712,
+          "recorded_tt_pcc": 0.999829382327735,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 9,
+          "pcc": 0.9999996851983735,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            2,
+            25,
+            111,
+            112,
+            26,
+            99,
+            47,
+            37
+          ],
+          "bf16_cache_experts": [
+            2,
+            25,
+            111,
+            112,
+            26,
+            99,
+            47,
+            37
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.017699718475341797,
+          "recorded_tt_pcc": 0.9917362028409782,
+          "targeted_tt_failure": true,
+          "stage_pcc": {
+            "input_layernorm": 1.0000000000000002,
+            "self_attn": 0.9999974431125515,
+            "post_attention_layernorm": 0.9999966195102138,
+            "mlp": 0.99999999975967,
+            "post_feedforward_layernorm_1": 0.9999999999009103,
+            "router.proj": 0.9999980275831388,
+            "router_input": 0.9999993486117706,
+            "experts": 0.9999993102650835,
+            "post_feedforward_layernorm_2": 0.9999994363816295,
+            "post_feedforward_layernorm": 0.9999998647119183
+          }
+        },
+        {
+          "slot": 10,
+          "pcc": 0.9999997793887271,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            127,
+            17,
+            18,
+            32,
+            101,
+            38,
+            66,
+            73
+          ],
+          "bf16_cache_experts": [
+            127,
+            17,
+            18,
+            32,
+            38,
+            101,
+            66,
+            73
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.08235585689544678,
+          "recorded_tt_pcc": 0.9998086838807774,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 11,
+          "pcc": 0.9999998135249766,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            17,
+            13,
+            86,
+            16,
+            73,
+            14,
+            97,
+            72
+          ],
+          "bf16_cache_experts": [
+            17,
+            13,
+            86,
+            16,
+            73,
+            14,
+            97,
+            72
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.0013170242309570312,
+          "recorded_tt_pcc": 0.9863523849119987,
+          "targeted_tt_failure": true,
+          "stage_pcc": {
+            "input_layernorm": 1.0000000000000002,
+            "self_attn": 0.9999977763392782,
+            "post_attention_layernorm": 0.9999975864078032,
+            "mlp": 0.9999999997725232,
+            "post_feedforward_layernorm_1": 0.9999999998654402,
+            "router.proj": 0.9999993006988626,
+            "router_input": 0.9999995173488043,
+            "experts": 0.9999996469095628,
+            "post_feedforward_layernorm_2": 0.9999996541817175,
+            "post_feedforward_layernorm": 0.9999999190228823
+          }
+        },
+        {
+          "slot": 12,
+          "pcc": 0.9999997563763908,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            2,
+            18,
+            49,
+            70,
+            38,
+            116,
+            67,
+            60
+          ],
+          "bf16_cache_experts": [
+            2,
+            18,
+            49,
+            70,
+            38,
+            116,
+            67,
+            60
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.05411088466644287,
+          "recorded_tt_pcc": 0.9998174418271654,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 13,
+          "pcc": 0.9999998596154783,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            51,
+            56,
+            112,
+            92,
+            81,
+            70,
+            48,
+            120
+          ],
+          "bf16_cache_experts": [
+            51,
+            56,
+            112,
+            92,
+            81,
+            70,
+            48,
+            120
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.024241268634796143,
+          "recorded_tt_pcc": 0.9998680326999057,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 14,
+          "pcc": 0.9999998375465207,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            104,
+            39,
+            26,
+            69,
+            86,
+            84,
+            10,
+            32
+          ],
+          "bf16_cache_experts": [
+            104,
+            39,
+            26,
+            69,
+            86,
+            84,
+            10,
+            32
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.010726451873779297,
+          "recorded_tt_pcc": 0.9998523065541618,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 15,
+          "pcc": 0.9999998096502052,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            67,
+            120,
+            35,
+            47,
+            6,
+            23,
+            40,
+            63
+          ],
+          "bf16_cache_experts": [
+            67,
+            120,
+            47,
+            35,
+            6,
+            23,
+            40,
+            63
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.024043798446655273,
+          "recorded_tt_pcc": 0.9998558063181554,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 16,
+          "pcc": 0.9999997759696391,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            77,
+            67,
+            30,
+            2,
+            127,
+            20,
+            8,
+            12
+          ],
+          "bf16_cache_experts": [
+            77,
+            67,
+            30,
+            2,
+            127,
+            20,
+            8,
+            12
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.0069522857666015625,
+          "recorded_tt_pcc": 0.9959211942335593,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 17,
+          "pcc": 0.999999673386731,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            23,
+            6,
+            127,
+            88,
+            118,
+            18,
+            43,
+            64
+          ],
+          "bf16_cache_experts": [
+            23,
+            6,
+            127,
+            88,
+            118,
+            18,
+            43,
+            64
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.06476563215255737,
+          "recorded_tt_pcc": 0.9998464152449731,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 18,
+          "pcc": 0.9999998174004769,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            109,
+            51,
+            102,
+            116,
+            84,
+            91,
+            3,
+            126
+          ],
+          "bf16_cache_experts": [
+            109,
+            51,
+            102,
+            116,
+            84,
+            91,
+            3,
+            126
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.11058765649795532,
+          "recorded_tt_pcc": 0.9998594710589666,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 19,
+          "pcc": 0.9999997923515702,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            9,
+            36,
+            56,
+            52,
+            44,
+            25,
+            24,
+            108
+          ],
+          "bf16_cache_experts": [
+            9,
+            36,
+            56,
+            52,
+            44,
+            25,
+            24,
+            108
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.050009846687316895,
+          "recorded_tt_pcc": 0.9998423956527979,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 20,
+          "pcc": 0.9999996731976907,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            54,
+            101,
+            117,
+            67,
+            23,
+            90,
+            104,
+            113
+          ],
+          "bf16_cache_experts": [
+            54,
+            101,
+            117,
+            67,
+            23,
+            90,
+            104,
+            113
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.017284154891967773,
+          "recorded_tt_pcc": 0.9997835358007756,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 21,
+          "pcc": 0.9999997938591169,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            22,
+            39,
+            58,
+            12,
+            122,
+            104,
+            116,
+            84
+          ],
+          "bf16_cache_experts": [
+            22,
+            39,
+            58,
+            12,
+            122,
+            104,
+            116,
+            84
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.018731415271759033,
+          "recorded_tt_pcc": 0.9855103269705318,
+          "targeted_tt_failure": true,
+          "stage_pcc": {
+            "input_layernorm": 1.0000000000000007,
+            "self_attn": 0.9999977232219407,
+            "post_attention_layernorm": 0.9999975119271286,
+            "mlp": 0.9999999997844508,
+            "post_feedforward_layernorm_1": 0.9999999998432636,
+            "router.proj": 0.9999991308796484,
+            "router_input": 0.9999994618603704,
+            "experts": 0.9999996955114097,
+            "post_feedforward_layernorm_2": 0.9999996855951571,
+            "post_feedforward_layernorm": 0.9999999404931815
+          }
+        },
+        {
+          "slot": 22,
+          "pcc": 0.9999997391602069,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            93,
+            90,
+            110,
+            39,
+            19,
+            70,
+            94,
+            75
+          ],
+          "bf16_cache_experts": [
+            93,
+            90,
+            110,
+            39,
+            19,
+            70,
+            94,
+            75
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.06099426746368408,
+          "recorded_tt_pcc": 0.9998512073571201,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 23,
+          "pcc": 0.99999975385795,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            99,
+            3,
+            125,
+            97,
+            13,
+            73,
+            71,
+            27
+          ],
+          "bf16_cache_experts": [
+            99,
+            3,
+            125,
+            97,
+            13,
+            73,
+            71,
+            27
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.05448782444000244,
+          "recorded_tt_pcc": 0.9998464538383993,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 24,
+          "pcc": 0.9999998059636441,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            105,
+            22,
+            36,
+            101,
+            104,
+            108,
+            30,
+            45
+          ],
+          "bf16_cache_experts": [
+            105,
+            22,
+            36,
+            101,
+            104,
+            108,
+            30,
+            45
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.027500271797180176,
+          "recorded_tt_pcc": 0.9998679413515483,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 25,
+          "pcc": 0.9999998085912021,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            37,
+            97,
+            58,
+            1,
+            113,
+            91,
+            33,
+            115
+          ],
+          "bf16_cache_experts": [
+            37,
+            97,
+            58,
+            1,
+            113,
+            91,
+            33,
+            115
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.023298978805541992,
+          "recorded_tt_pcc": 0.999872437392635,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 26,
+          "pcc": 0.9999998192116625,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            117,
+            118,
+            64,
+            47,
+            102,
+            67,
+            18,
+            127
+          ],
+          "bf16_cache_experts": [
+            117,
+            118,
+            64,
+            47,
+            102,
+            67,
+            18,
+            127
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.051780760288238525,
+          "recorded_tt_pcc": 0.9998557651710254,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 27,
+          "pcc": 0.9999998118604363,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            85,
+            114,
+            37,
+            53,
+            102,
+            15,
+            25,
+            66
+          ],
+          "bf16_cache_experts": [
+            85,
+            114,
+            37,
+            53,
+            102,
+            15,
+            66,
+            25
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.039481520652770996,
+          "recorded_tt_pcc": 0.9998490877177723,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 28,
+          "pcc": 0.999999557100464,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            111,
+            1,
+            22,
+            104,
+            89,
+            114,
+            37,
+            74
+          ],
+          "bf16_cache_experts": [
+            111,
+            1,
+            22,
+            104,
+            89,
+            114,
+            37,
+            74
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.02769571542739868,
+          "recorded_tt_pcc": 0.999825311516529,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 29,
+          "pcc": 0.9999998171833823,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            86,
+            31,
+            10,
+            5,
+            19,
+            121,
+            103,
+            56
+          ],
+          "bf16_cache_experts": [
+            86,
+            31,
+            10,
+            5,
+            19,
+            121,
+            103,
+            56
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.00791710615158081,
+          "recorded_tt_pcc": 0.9923501637221807,
+          "targeted_tt_failure": true,
+          "stage_pcc": {
+            "input_layernorm": 1.0,
+            "self_attn": 0.9999982991559349,
+            "post_attention_layernorm": 0.9999980714124286,
+            "mlp": 0.9999999998146495,
+            "post_feedforward_layernorm_1": 0.9999999999223949,
+            "router.proj": 0.9999988621613601,
+            "router_input": 0.9999995689069873,
+            "experts": 0.9999995569941369,
+            "post_feedforward_layernorm_2": 0.9999995221806177,
+            "post_feedforward_layernorm": 0.9999999264844723
+          }
+        },
+        {
+          "slot": 30,
+          "pcc": 0.9999998422711528,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            22,
+            18,
+            21,
+            37,
+            29,
+            93,
+            121,
+            32
+          ],
+          "bf16_cache_experts": [
+            22,
+            18,
+            21,
+            37,
+            29,
+            93,
+            121,
+            32
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.08169585466384888,
+          "recorded_tt_pcc": 0.9998313668959253,
+          "targeted_tt_failure": false
+        },
+        {
+          "slot": 31,
+          "pcc": 0.9999998047872595,
+          "passed": true,
+          "route_intersection": 8,
+          "fp32_experts": [
+            34,
+            121,
+            30,
+            43,
+            37,
+            77,
+            39,
+            80
+          ],
+          "bf16_cache_experts": [
+            34,
+            121,
+            30,
+            43,
+            37,
+            77,
+            39,
+            80
+          ],
+          "fp32_logit_rank8_rank9_gap": 0.012630343437194824,
+          "recorded_tt_pcc": 0.9997953348356472,
+          "targeted_tt_failure": false
+        }
+      ]
+    }
+  ],
+  "elapsed_seconds": 3.2368707079440355,
+  "ttnn_imported": false
+}

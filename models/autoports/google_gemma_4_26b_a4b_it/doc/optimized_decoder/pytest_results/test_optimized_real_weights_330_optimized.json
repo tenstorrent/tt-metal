@@ -1,0 +1,77 @@
+{
+  "decoder": "optimized",
+  "fusion": "broadcast_pack_gelu_router_tail_norm_attention_common_tied_ropepolicy_cache_kvnorm_shardedtail_preciseheads_expmerge_residualnorm_rsqrt_expertbatch64_mixmatmul_mixsharded_mixfp32_qkvl1_projectsharded_sharedshard_unarycastshard_directtail",
+  "runtime_prefill_audit": "clean",
+  "program_cache_miss_guard": true,
+  "prefill_cache_entries": 98,
+  "prefix_length": 0,
+  "layer_type": "sliding_attention",
+  "phase": "prefill",
+  "length": 33,
+  "real_weights": true,
+  "pcc": 0.9982383435853565,
+  "passed": true,
+  "decode": {
+    "pcc": 0.9990205038080481,
+    "passed": true,
+    "traced": true,
+    "runtime_decode_audit": "clean",
+    "repeated_equal": true,
+    "steps": 8,
+    "min_pcc": 0.9972776479966969,
+    "positions": [
+      33,
+      40
+    ],
+    "checks": [
+      {
+        "position": 33,
+        "pcc": 0.9990205038080481,
+        "passed": true
+      },
+      {
+        "position": 33,
+        "pcc": 0.9990205038080481,
+        "passed": true
+      },
+      {
+        "position": 34,
+        "pcc": 0.9983215403870275,
+        "passed": true
+      },
+      {
+        "position": 35,
+        "pcc": 0.9984315980837795,
+        "passed": true
+      },
+      {
+        "position": 36,
+        "pcc": 0.9972776479966969,
+        "passed": true
+      },
+      {
+        "position": 37,
+        "pcc": 0.9980546167586013,
+        "passed": true
+      },
+      {
+        "position": 38,
+        "pcc": 0.9973688259205501,
+        "passed": true
+      },
+      {
+        "position": 39,
+        "pcc": 0.9982311933206294,
+        "passed": true
+      },
+      {
+        "position": 40,
+        "pcc": 0.9976601071122807,
+        "passed": true
+      }
+    ]
+  },
+  "runtime_sha256": "dfec2ce40c8ec95ccce00674fa4fcf291a31f60e062310f352b562e193dea3c3",
+  "contract": "run_decoder",
+  "functional_fallback": "forbidden"
+}

@@ -1,0 +1,128 @@
+INFO 09-28 11:51:00 [__init__.py:52] Available plugins for group vllm.platform_plugins:
+INFO 09-28 11:51:00 [__init__.py:54] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 09-28 11:51:00 [__init__.py:57] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+INFO 09-28 11:51:01 [__init__.py:237] Platform plugin tt is activated
+INFO 09-28 11:51:04 [importing.py:53] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 09-28 11:51:04 [importing.py:88] Triton not installed or not compatible; certain GPU-related functions will not be available.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x78b329bc7130>, trust_remote_code=False, seed=4101, num_prompts=10, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, enable_multimodal_chat=False, disable_shuffle=False, custom_output_len=256, custom_ensure_client_side_data=False, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, timed_trace_chunk_hash_size=16, timed_trace_sec_multiplier=1, timed_trace_label_timestamp='timestamp', timed_trace_label_input_length='input_length', timed_trace_label_output_length='output_length', timed_trace_label_hash_ids='hash_ids', blazedit_min_distance=0.0, blazedit_max_distance=1.0, asr_max_audio_len_sec=inf, asr_min_audio_len_sec=0.0, random_input_len=128, random_output_len=16, random_range_ratio='0.0', random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, bfcl_categories=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, speed_bench_dataset_subset='qualitative', speed_bench_output_len=4096, speed_bench_category=None, label=None, backend='vllm', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/completions', header=None, max_concurrency=1, model='google/gemma-4-26B-A4B-it', input_len=None, output_len=None, tokenizer='/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-26B-A4B-it/snapshots/4d7ae4984b7db7de8f8457170b3f1a419ee76d52', tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, disable_tqdm=False, num_warmups=10, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir='models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/acceptance_sync_repeat2', result_filename='s128-o16-c1.json', ignore_eos=True, self_timed=None, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='50,95,99', goodput=None, request_id_prefix='gemma4-s128-o16-c1-', top_p=None, top_k=None, min_p=None, temperature=0.0, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, served_model_name=None, lora_modules=None, lora_assignment='random', ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, chat_template_kwargs=None, extra_body=None, skip_tokenizer_init=False, insecure=False, plot_timeline=False, timeline_itl_thresholds='25,50', plot_dataset_stats=False)
+INFO 09-28 11:51:08 [utils.py:90] Sampling input_len from [128, 128] and output_len from [16, 16]
+Starting initial single prompt test run...
+Skipping endpoint ready check.
+Warming up with 10 requests...
+
+  0%|          | 0/10 [00:00<?, ?it/s]
+ 10%|█         | 1/10 [00:00<00:08,  1.02it/s]
+ 20%|██        | 2/10 [00:01<00:05,  1.55it/s]
+ 30%|███       | 3/10 [00:01<00:03,  1.88it/s]
+ 40%|████      | 4/10 [00:02<00:02,  2.07it/s]
+ 50%|█████     | 5/10 [00:02<00:02,  2.19it/s]
+ 60%|██████    | 6/10 [00:03<00:01,  2.28it/s]
+ 70%|███████   | 7/10 [00:03<00:01,  2.35it/s]
+ 80%|████████  | 8/10 [00:03<00:00,  2.37it/s]
+ 90%|█████████ | 9/10 [00:04<00:00,  2.38it/s]
+100%|██████████| 10/10 [00:04<00:00,  2.41it/s]
+100%|██████████| 10/10 [00:04<00:00,  2.15it/s]
+Warmup run completed.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+
+  0%|          | 0/10 [00:00<?, ?it/s]
+ 10%|█         | 1/10 [00:00<00:03,  2.49it/s]
+ 20%|██        | 2/10 [00:00<00:03,  2.50it/s]
+ 30%|███       | 3/10 [00:01<00:02,  2.47it/s]
+ 40%|████      | 4/10 [00:01<00:02,  2.46it/s]
+ 50%|█████     | 5/10 [00:02<00:02,  2.47it/s]
+ 60%|██████    | 6/10 [00:02<00:01,  2.47it/s]
+ 70%|███████   | 7/10 [00:02<00:01,  2.48it/s]
+ 80%|████████  | 8/10 [00:03<00:00,  2.49it/s]
+ 90%|█████████ | 9/10 [00:03<00:00,  2.48it/s]
+100%|██████████| 10/10 [00:04<00:00,  2.48it/s]
+100%|██████████| 10/10 [00:04<00:00,  2.48it/s]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     10
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  4.04
+Total input tokens:                      1280
+Total generated tokens:                  160
+Request throughput (req/s):              2.48
+Output token throughput (tok/s):         39.64
+Peak output token throughput (tok/s):    42.00
+Peak concurrent requests:                4.00
+Total token throughput (tok/s):          356.74
+---------------Time to First Token----------------
+Mean TTFT (ms):                          97.29
+Median TTFT (ms):                        95.59
+P50 TTFT (ms):                           95.59
+P95 TTFT (ms):                           101.64
+P99 TTFT (ms):                           102.07
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          20.41
+Median TPOT (ms):                        20.42
+P50 TPOT (ms):                           20.42
+P95 TPOT (ms):                           20.56
+P99 TPOT (ms):                           20.60
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           20.41
+Median ITL (ms):                         20.15
+P50 ITL (ms):                            20.15
+P95 ITL (ms):                            22.10
+P99 ITL (ms):                            24.35
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          403.43
+Median E2EL (ms):                        403.22
+P50 E2EL (ms):                           403.22
+P95 E2EL (ms):                           408.72
+P99 E2EL (ms):                           409.59
+==================================================
+nanobind: leaked 102 instances!
+ - leaked instance 0x610e1dfb65d0 of type "ttnn._ttnn.operations.unary.log2_t"
+ - leaked instance 0x78b35638e588 of type "ttnn._ttnn.tensor.Tile"
+ - leaked instance 0x78b3a65f5ad8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x78b3564c5998 of type "ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig"
+ - leaked instance 0x78b3565742b8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x610e1e45b3f0 of type "ttnn._ttnn.operations.unary.mish_t"
+ - leaked instance 0x610e1c68bb90 of type "ttnn._ttnn.operations.unary.isposinf_t"
+ - leaked instance 0x610e1db98b00 of type "ttnn._ttnn.operations.unary.ltz_t"
+ - leaked instance 0x78b35646d1e8 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x610e1e4d0ca0 of type "ttnn._ttnn.operations.unary.floor_t"
+ - leaked instance 0x610e1e4d02d0 of type "ttnn._ttnn.operations.unary.expm1_t"
+ - leaked instance 0x610e1e5794b0 of type "ttnn._ttnn.operations.unary.cosh_t"
+ - leaked instance 0x610e1e0721a0 of type "ttnn._ttnn.operations.unary.sigmoid_t"
+ - leaked instance 0x610e1e4cf8c0 of type "ttnn._ttnn.operations.unary.exp2_t"
+ - leaked instance 0x610e1ddc8a80 of type "ttnn._ttnn.operations.unary.log_sigmoid_t"
+ - leaked instance 0x78b35656a7e8 of type "ttnn._ttnn.operations.normalization.SoftmaxDefaultProgramConfig"
+ - leaked instance 0x610e1de2b570 of type "ttnn._ttnn.operations.unary.tanh_t"
+ - leaked instance 0x610e1dc947a0 of type "ttnn._ttnn.operations.unary.relu_t"
+ - leaked instance 0x610e1e37f160 of type "ttnn._ttnn.operations.unary.lgamma_t"
+ - leaked instance 0x610e1e09fe30 of type "ttnn._ttnn.operations.unary.bitcast_t"
+ - ... skipped remainder
+nanobind: leaked 973 types!
+ - leaked type "SocketEndpoint"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.gt__t"
+ - leaked type "ttnn._ttnn.d2d_stream_service.D2DStreamServiceSender"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.SliceDeviceOperation"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "ttnn._ttnn.operations.binary.lt__t"
+ - leaked type "ttnn._ttnn.operations.binary_backward.xlogy_bw_t"
+ - leaked type "ttnn._ttnn.operations.experimental.insert_t"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.isclose_t"
+ - leaked type "ttnn._ttnn.operations.reduction.var_t"
+ - ... skipped remainder
+nanobind: leaked 4455 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__call__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__call__"
+ - leaked function "__call__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

@@ -1,0 +1,106 @@
+{
+  "command": [
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/probe_indexed_expert_replay.py",
+    "--output-only",
+    "--fixture",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/bfp8_boundary_v3_all.pt",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/frozen_experts_output_only.json"
+  ],
+  "runtime_sha256": "8b59370cda6f4ff88157de123123509036f2e91e8054000c809752e21f933175",
+  "experts_sha256": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898",
+  "probe_sha256": "023d8b611188447bb4b13aa1860e0231874246d729a0615e969378adcd32f64a",
+  "fixture_sha256": "7f2f2947b1232312c4e2f3cea1a0314d403f36bd7e753ea87c69b6ef791f46f2",
+  "passed": true,
+  "layer": 0,
+  "output_only": true,
+  "read_output_only": false,
+  "read_padding": false,
+  "repeats": 128,
+  "completed_repeats": 128,
+  "limitation": "Host reupload preserves logical values; producer padding and whole-layer allocator state differ.",
+  "configuration": {
+    "local_width": 192,
+    "gate_program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=6-2,in0_block_w=44,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=0,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+    "down_program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=6,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=0,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+    "mix_program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=1,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+    "decode_compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7fba502e3ba0>",
+    "mix_compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7fba502e3e40>",
+    "gate_weight_dtype": "DataType.BFLOAT8_B",
+    "gate_weight_shape": [
+      1,
+      128,
+      2816,
+      384
+    ],
+    "down_weight_dtype": "DataType.BFLOAT4_B",
+    "down_weight_shape": [
+      1,
+      128,
+      192,
+      2816
+    ]
+  },
+  "boundaries": {
+    "output": {
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16"
+    }
+  },
+  "recorded_output_comparison": {
+    "output": {
+      "equal": true,
+      "reference_replicas_equal": false,
+      "actual_replicas_equal": false,
+      "ranks": [
+        {
+          "rank": 0,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        },
+        {
+          "rank": 1,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        },
+        {
+          "rank": 2,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        },
+        {
+          "rank": 3,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        }
+      ]
+    }
+  }
+}

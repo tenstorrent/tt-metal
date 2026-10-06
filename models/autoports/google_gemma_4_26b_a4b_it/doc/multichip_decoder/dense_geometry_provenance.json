@@ -1,0 +1,6 @@
+{
+  "base_sha256": "06f0a0573dbd14e852be4a27c88b72faa610a51961b90cf33365025747898581",
+  "candidate_sha256": "6c6b625d3e49d3eb7aae7097a1b3ce1c0aa3829e2d388c55c987df8bd159acc3",
+  "status": "Unapplied; AST parse only; hardware pending",
+  "constraints": "Real layer0 or5 fixtures only; no DRAM or fused AGMM backend; one role per trial; full qkv-n2 already baseline and not a new candidate"
+}

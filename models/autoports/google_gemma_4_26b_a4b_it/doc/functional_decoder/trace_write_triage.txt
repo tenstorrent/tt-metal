@@ -1,0 +1,10 @@
+
+dump_running_operations.py:
+  pass
+
+check_eth_status.py:
+Dev,Loc,Port Status,Retrain Count,RX Link Up,Heartbeat,Mailbox
+3,"4-1 (e0,5)",Up,0,Up,True,"0xD0E50002, 0x00000000, 0x00000000, 0x00000000"
+3,"3-1 (e0,4)",Up,0,Up,True,"0xD0E50002, 0x00000000, 0x00000000, 0x00000000"
+3,"15-1 (e0,3)",Up,0,Up,True,"0xD0E50002, 0x00000000, 0x00000000, 0x00000000"
+3,"2-1 (e0,2)",Up,0,Up,True,"0xD0E50002, 0x00000000, 0x00000000, 0x00000000"

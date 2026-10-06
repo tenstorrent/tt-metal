@@ -1,0 +1,98 @@
+{
+  "passed": true,
+  "fixture_checks": [
+    {
+      "layer": 0,
+      "shape": [
+        1,
+        262144,
+        2816
+      ],
+      "token_count": 262144,
+      "fixture_sha256": "74cfb212f7f18fbc2bb7ebc3aa5f8f10619766a437b0ea93f86c8ad09f15c596",
+      "finite_during_capture": true,
+      "finite_and_transport_validated_by_each_reference": true
+    },
+    {
+      "layer": 5,
+      "shape": [
+        1,
+        262144,
+        2816
+      ],
+      "token_count": 262144,
+      "fixture_sha256": "52d5a811ff0735478d3fff537be518fc10c098c812c8a34ffede705b0385352a",
+      "finite_during_capture": true,
+      "finite_and_transport_validated_by_each_reference": true
+    }
+  ],
+  "reference_checks": [
+    {
+      "layer": 0,
+      "length": 262144,
+      "shape": [
+        1,
+        291,
+        2816
+      ],
+      "finite": true,
+      "reference_sha256": "265d58f4b7af9e40147017e74e63696f15259774df04796731ff147ba0c0b5bd",
+      "input_fixture_sha256": "74cfb212f7f18fbc2bb7ebc3aa5f8f10619766a437b0ea93f86c8ad09f15c596",
+      "seconds": 41.44614246394485
+    },
+    {
+      "layer": 0,
+      "length": 262143,
+      "shape": [
+        1,
+        291,
+        2816
+      ],
+      "finite": true,
+      "reference_sha256": "4a2f341538df85575be9700e7b0110119dab339f349a26f846c1fcd1cfc664eb",
+      "input_fixture_sha256": "74cfb212f7f18fbc2bb7ebc3aa5f8f10619766a437b0ea93f86c8ad09f15c596",
+      "seconds": 41.31836446840316
+    },
+    {
+      "layer": 5,
+      "length": 262144,
+      "shape": [
+        1,
+        291,
+        2816
+      ],
+      "finite": true,
+      "reference_sha256": "ed6269c8742665461e330ddf63e15996d99e125f8c4564b9089cbee73da0ce73",
+      "input_fixture_sha256": "52d5a811ff0735478d3fff537be518fc10c098c812c8a34ffede705b0385352a",
+      "seconds": 59.292301901616156
+    },
+    {
+      "layer": 5,
+      "length": 262143,
+      "shape": [
+        1,
+        291,
+        2816
+      ],
+      "finite": true,
+      "reference_sha256": "f336d8c59d0e0f25aab81bf6a76235fc365b6fe2acb3ea30cf05f11196d634b5",
+      "input_fixture_sha256": "52d5a811ff0735478d3fff537be518fc10c098c812c8a34ffede705b0385352a",
+      "seconds": 50.5112131414935
+    }
+  ],
+  "imports_ttnn": false,
+  "causal_prefix_comparisons": [
+    {
+      "layer": 0,
+      "shared_rows": 290,
+      "min_per_token_pcc": 0.9999999999999272,
+      "max_abs_difference": 1.52587890625e-05
+    },
+    {
+      "layer": 5,
+      "shared_rows": 290,
+      "min_per_token_pcc": 0.9999999987744099,
+      "max_abs_difference": 0.001453399658203125
+    }
+  ]
+}

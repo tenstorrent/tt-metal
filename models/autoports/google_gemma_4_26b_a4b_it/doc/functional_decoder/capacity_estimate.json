@@ -1,0 +1,16 @@
+{
+  "status": "allocation estimate only; no capacity reduction claimed",
+  "context": 262144,
+  "batch": 1,
+  "dtype": "BF16",
+  "kv_cache_bytes": {
+    "sliding_attention": 2147483648,
+    "full_attention": 1073741824
+  },
+  "one_hidden_tensor_bytes": 1476395008,
+  "expert_weight_bytes": 1522532352,
+  "notes": [
+    "Estimates omit TT padding, all nonexpert weights, intermediates and trace storage.",
+    "Measured capacity and full-context executions are required before any supported-capacity claim."
+  ]
+}

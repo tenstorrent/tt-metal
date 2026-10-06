@@ -1,0 +1,236 @@
+[
+  {
+    "kind": "rounded_product",
+    "bits": 7,
+    "rne": false,
+    "max_error": 0.22852706909179688,
+    "rms_error": 0.026242197309819627,
+    "error_corr": -0.08735779135029743,
+    "pred_err_rms": 0.02583824608487374
+  },
+  {
+    "kind": "rounded_product",
+    "bits": 7,
+    "rne": true,
+    "max_error": 0.10793361440300941,
+    "rms_error": 0.014110717463128322,
+    "error_corr": -0.0044680731871698295,
+    "pred_err_rms": 0.01380568738151775
+  },
+  {
+    "kind": "rounded_product",
+    "bits": 8,
+    "rne": false,
+    "max_error": 0.08346031606197357,
+    "rms_error": 0.01335837741726604,
+    "error_corr": -0.08520259927957112,
+    "pred_err_rms": 0.01280853660250245
+  },
+  {
+    "kind": "rounded_product",
+    "bits": 8,
+    "rne": true,
+    "max_error": 0.04113838076591492,
+    "rms_error": 0.007416672007637826,
+    "error_corr": -0.006348406894089892,
+    "pred_err_rms": 0.00682593378805056
+  },
+  {
+    "kind": "rounded_product",
+    "bits": 9,
+    "rne": false,
+    "max_error": 0.051808565855026245,
+    "rms_error": 0.007123068907915104,
+    "error_corr": -0.09158650774593417,
+    "pred_err_rms": 0.006268857791062945
+  },
+  {
+    "kind": "rounded_product",
+    "bits": 9,
+    "rne": true,
+    "max_error": 0.03348416090011597,
+    "rms_error": 0.004476757219315429,
+    "error_corr": 0.01181642631900941,
+    "pred_err_rms": 0.0034797204747335168
+  },
+  {
+    "kind": "rounded_product",
+    "bits": 10,
+    "rne": false,
+    "max_error": 0.02998092770576477,
+    "rms_error": 0.00431383982605024,
+    "error_corr": -0.08128959977532159,
+    "pred_err_rms": 0.0030079727300548397
+  },
+  {
+    "kind": "rounded_product",
+    "bits": 10,
+    "rne": true,
+    "max_error": 0.03080892562866211,
+    "rms_error": 0.003346779675454413,
+    "error_corr": -0.002478300675425307,
+    "pred_err_rms": 0.0017352175647945773
+  },
+  {
+    "kind": "rounded_product",
+    "bits": 11,
+    "rne": false,
+    "max_error": 0.029937803745269775,
+    "rms_error": 0.0032950956208725505,
+    "error_corr": -0.09346127825958006,
+    "pred_err_rms": 0.0013956160333811224
+  },
+  {
+    "kind": "rounded_product",
+    "bits": 11,
+    "rne": true,
+    "max_error": 0.030974894762039185,
+    "rms_error": 0.002985660839955214,
+    "error_corr": 0.005547313434969245,
+    "pred_err_rms": 0.0008810539911520736
+  },
+  {
+    "kind": "rounded_product",
+    "bits": 12,
+    "rne": false,
+    "max_error": 0.029802724719047546,
+    "rms_error": 0.0029693629595885277,
+    "error_corr": -0.07671941847002187,
+    "pred_err_rms": 0.0006174167764275667
+  },
+  {
+    "kind": "rounded_product",
+    "bits": 12,
+    "rne": true,
+    "max_error": 0.030330970883369446,
+    "rms_error": 0.0028822182034492286,
+    "error_corr": 0.015138248356521274,
+    "pred_err_rms": 0.00042190665456793896
+  },
+  {
+    "kind": "rounded_product",
+    "bits": 13,
+    "rne": false,
+    "max_error": 0.029985211789608,
+    "rms_error": 0.002882343454525945,
+    "error_corr": -0.05947712375749657,
+    "pred_err_rms": 0.00024379463341945489
+  },
+  {
+    "kind": "rounded_product",
+    "bits": 13,
+    "rne": true,
+    "max_error": 0.030324749648571014,
+    "rms_error": 0.002862187688883332,
+    "error_corr": 0.011417329407236864,
+    "pred_err_rms": 0.00019774540443116356
+  },
+  {
+    "kind": "rounded_phase0_product",
+    "bits": 7,
+    "rne": false,
+    "max_error": 0.12280691135674715,
+    "rms_error": 0.02243040332872693,
+    "error_corr": -0.1264923250233593,
+    "pred_err_rms": 0.021889797806782914
+  },
+  {
+    "kind": "rounded_phase0_product",
+    "bits": 7,
+    "rne": true,
+    "max_error": 0.11673069349490106,
+    "rms_error": 0.013631197637027219,
+    "error_corr": 0.006274524102462309,
+    "pred_err_rms": 0.01334595774312247
+  },
+  {
+    "kind": "rounded_phase0_product",
+    "bits": 8,
+    "rne": false,
+    "max_error": 0.07491638138890266,
+    "rms_error": 0.010309771273985075,
+    "error_corr": -0.12278676313230308,
+    "pred_err_rms": 0.009561543641809264
+  },
+  {
+    "kind": "rounded_phase0_product",
+    "bits": 8,
+    "rne": true,
+    "max_error": 0.0673978142440319,
+    "rms_error": 0.007112854938178418,
+    "error_corr": 0.030879799070914964,
+    "pred_err_rms": 0.006602453407765904
+  },
+  {
+    "kind": "rounded_phase0_product",
+    "bits": 9,
+    "rne": false,
+    "max_error": 0.05726299528032541,
+    "rms_error": 0.005080965529292399,
+    "error_corr": -0.10967535467302203,
+    "pred_err_rms": 0.003899845796379286
+  },
+  {
+    "kind": "rounded_phase0_product",
+    "bits": 9,
+    "rne": true,
+    "max_error": 0.028744816780090332,
+    "rms_error": 0.004225116542292845,
+    "error_corr": 0.014156769382700562,
+    "pred_err_rms": 0.0031529302067860986
+  },
+  {
+    "kind": "rounded_phase0_product",
+    "bits": 10,
+    "rne": false,
+    "max_error": 0.028433680534362793,
+    "rms_error": 0.00317973449839335,
+    "error_corr": -0.07524654138015711,
+    "pred_err_rms": 0.0011962007186658182
+  },
+  {
+    "kind": "rounded_phase0_product",
+    "bits": 10,
+    "rne": true,
+    "max_error": 0.026141881942749023,
+    "rms_error": 0.0030839894120387153,
+    "error_corr": 0.013918403706868516,
+    "pred_err_rms": 0.001200322451894128
+  },
+  {
+    "kind": "rounded_phase0_product",
+    "bits": 11,
+    "rne": false,
+    "max_error": 0.030030488967895508,
+    "rms_error": 0.0028575972279113794,
+    "error_corr": null,
+    "pred_err_rms": 0.0
+  },
+  {
+    "kind": "rounded_phase0_product",
+    "bits": 11,
+    "rne": true,
+    "max_error": 0.030030488967895508,
+    "rms_error": 0.0028575972279113794,
+    "error_corr": null,
+    "pred_err_rms": 0.0
+  },
+  {
+    "kind": "rounded_phase0_product",
+    "bits": 12,
+    "rne": false,
+    "max_error": 0.030030488967895508,
+    "rms_error": 0.0028575972279113794,
+    "error_corr": null,
+    "pred_err_rms": 0.0
+  },
+  {
+    "kind": "rounded_phase0_product",
+    "bits": 12,
+    "rne": true,
+    "max_error": 0.030030488967895508,
+    "rms_error": 0.0028575972279113794,
+    "error_corr": null,
+    "pred_err_rms": 0.0
+  }
+]

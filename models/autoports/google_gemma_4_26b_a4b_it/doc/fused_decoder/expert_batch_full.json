@@ -1,0 +1,207 @@
+{
+  "layer": 5,
+  "layer_type": "full_attention",
+  "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "real_weights": true,
+  "recorded_inputs": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/functional_decoder/headline_inputs.pt",
+  "input_source": "expert inputs and routes captured from selected FusedDecoder prefill",
+  "length": 1024,
+  "batch_tokens": [
+    32,
+    64,
+    128,
+    256,
+    1024
+  ],
+  "repeats": 3,
+  "timing_samples": 3,
+  "warmup_replays": 3,
+  "pcc_threshold": 0.995,
+  "results": [
+    {
+      "candidate": "loop32",
+      "batch_tokens": 32,
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "trace_replay_equal": true,
+      "traced_host_us": 699473.4826666666,
+      "traced_host_us_samples": [
+        699787.933,
+        699473.4826666666,
+        699409.322
+      ]
+    },
+    {
+      "candidate": "direct_m32",
+      "batch_tokens": 32,
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "sparse_output_shapes": {
+        "gate_up": [
+          1,
+          1,
+          1,
+          128,
+          32,
+          1408
+        ],
+        "down": [
+          1,
+          128,
+          32,
+          2816
+        ]
+      },
+      "trace_replay_equal": true,
+      "traced_host_us": 699477.2186666667,
+      "traced_host_us_samples": [
+        699267.3636666667,
+        699477.2186666667,
+        699602.1986666666
+      ]
+    },
+    {
+      "candidate": "direct_m64",
+      "batch_tokens": 64,
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "sparse_output_shapes": {
+        "gate_up": [
+          1,
+          1,
+          1,
+          128,
+          64,
+          1408
+        ],
+        "down": [
+          1,
+          128,
+          64,
+          2816
+        ]
+      },
+      "trace_replay_equal": true,
+      "traced_host_us": 695402.1443333334,
+      "traced_host_us_samples": [
+        695403.509,
+        695345.037,
+        695402.1443333334
+      ]
+    },
+    {
+      "candidate": "direct_m128",
+      "batch_tokens": 128,
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "sparse_output_shapes": {
+        "gate_up": [
+          1,
+          1,
+          1,
+          128,
+          128,
+          1408
+        ],
+        "down": [
+          1,
+          128,
+          128,
+          2816
+        ]
+      },
+      "trace_replay_equal": true,
+      "traced_host_us": 705017.6913333334,
+      "traced_host_us_samples": [
+        704960.562,
+        705040.967,
+        705017.6913333334
+      ]
+    },
+    {
+      "candidate": "direct_m256",
+      "batch_tokens": 256,
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "sparse_output_shapes": {
+        "gate_up": [
+          1,
+          1,
+          1,
+          128,
+          256,
+          1408
+        ],
+        "down": [
+          1,
+          128,
+          256,
+          2816
+        ]
+      },
+      "trace_replay_equal": true,
+      "traced_host_us": 698329.126,
+      "traced_host_us_samples": [
+        698329.126,
+        698324.8833333333,
+        698346.537
+      ]
+    },
+    {
+      "candidate": "direct_m1024",
+      "batch_tokens": 1024,
+      "pcc": 1.0,
+      "passed": true,
+      "exact_equal": true,
+      "max_abs": 0.0,
+      "sparse_output_shapes": {
+        "gate_up": [
+          1,
+          1,
+          1,
+          128,
+          1024,
+          1408
+        ],
+        "down": [
+          1,
+          128,
+          1024,
+          2816
+        ]
+      },
+      "trace_replay_equal": true,
+      "traced_host_us": 699118.1503333333,
+      "traced_host_us_samples": [
+        699130.5466666666,
+        699098.0436666667,
+        699118.1503333333
+      ]
+    }
+  ],
+  "capture_fusion": "broadcast_pack_gelu_router_tail_norm_attention_common_tied_expmerge_residualnorm_shardedtail_kvnorm",
+  "expert_fused_gelu": true,
+  "captured_chunks": 1,
+  "expert_input_shape": [
+    1,
+    1,
+    1024,
+    2816
+  ],
+  "routing_shape": [
+    1,
+    1,
+    1024,
+    128
+  ]
+}
