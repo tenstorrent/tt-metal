@@ -31,6 +31,13 @@ void calc_numeric_stable(std::uint32_t Wt, std::uint32_t ndst) {
     DataflowBuffer dfb_out_obj(dfb_out);
 
     // calculate max val per row
+#ifdef ARCH_QUASAR
+    // Quasar: the packer's L1 destination (BFD) is baked by pack_init; pack_reconfig_data_format only
+    // reprograms the format gasket, and the chain / reduce helpers never re-run pack_init. Retarget the
+    // packer at every output switch, else pack_tile trips the LLK re-init guard (or, with asserts off,
+    // keeps writing into the previous output ring and this DFB is never written).
+    pack_init(dfb_max);
+#endif
     compute_kernel_lib::reduce<
         PoolType::MAX,
         ReduceDim::REDUCE_ROW,
@@ -41,6 +48,9 @@ void calc_numeric_stable(std::uint32_t Wt, std::uint32_t ndst) {
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
     // calculate x-max(x)
+#ifdef ARCH_QUASAR
+    pack_init(dfb_out);  // Quasar: retarget the packer from dfb_max back to the exps ring (see above)
+#endif
     ckl::eltwise_chain(
         ckl::IterationShape::tiles(Wt).block_size(ndst),
         ckl::BinaryFpu<
@@ -72,8 +82,14 @@ ALWI void cycle_dfb_pad(std::uint32_t dfb_id, std::uint32_t pad) {
     }
     DataflowBuffer dfb(static_cast<uint16_t>(dfb_id));
     dfb.reserve_back(static_cast<uint16_t>(pad));
+#ifdef ARCH_QUASAR
+    dummy_pack(dfb_id);  // TEN-4746: a real PACR must sit between reserve_back and push_back on Quasar
+#endif
     dfb.push_back(static_cast<uint16_t>(pad));
     dfb.wait_front(static_cast<uint16_t>(pad));
+#ifdef ARCH_QUASAR
+    dummy_unpack(dfb_id);  // TEN-4746: a real UNPACR must sit between wait_front and pop_front on Quasar
+#endif
     dfb.pop_front(static_cast<uint16_t>(pad));
 }
 
@@ -84,6 +100,9 @@ ALWI void drain_dfb_pad(std::uint32_t dfb_id, std::uint32_t pad) {
     }
     DataflowBuffer dfb(static_cast<uint16_t>(dfb_id));
     dfb.wait_front(static_cast<uint16_t>(pad));
+#ifdef ARCH_QUASAR
+    dummy_unpack(dfb_id);  // TEN-4746: a real UNPACR must sit between wait_front and pop_front on Quasar
+#endif
     dfb.pop_front(static_cast<uint16_t>(pad));
 }
 
@@ -183,6 +202,9 @@ void kernel_main() {
         const std::uint32_t Wt_unpadded_tiles = Wt;
 #endif
         // apply fused scale [*= 1/sqrt(...)]
+#ifdef ARCH_QUASAR
+        pack_init(dfb_scale_mask);  // Quasar: retarget the packer to the scale-mask ring (see calc_numeric_stable)
+#endif
         if (Wt_unpadded_tiles > 0) {
             ckl::mul<
                 ckl::input(
@@ -213,6 +235,9 @@ void kernel_main() {
 #endif
         constexpr auto mask_bcast = causal_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
         constexpr auto attn_wait = causal_mask ? ckl::WaitPolicy::Cumulative : ckl::WaitPolicy::None;
+#ifdef ARCH_QUASAR
+        pack_init(dfb_x);  // Quasar: retarget the packer from dfb_scale_mask to dfb_x (see calc_numeric_stable)
+#endif
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(Wt).block_size(ndst),
             ckl::BinaryFpu<
@@ -258,6 +283,15 @@ void kernel_main() {
 #else
         reconfig_data_format(dfb_in0, dfb_in0);
         pack_reconfig_data_format(dfb_exps);
+#ifdef ARCH_QUASAR
+        // Quasar: retarget the packer (the previous row ended on dfb_out0). dfb_x is a distinct ring only on
+        // the numeric-stable padded path, where the first pack of the row goes there (see calc_numeric_stable).
+#if defined(NUMERIC_STABLE) && defined(MASK_PADDED_DATA)
+        pack_init(dfb_x);
+#else
+        pack_init(dfb_exps);
+#endif
+#endif
         copy_init(dfb_in0);  // need to copy from CB to DST to be able to run sfpu math
 #ifndef NUMERIC_STABLE
         exp_tile_init<EXP_APPROX>();
@@ -327,6 +361,9 @@ void kernel_main() {
 #endif  // FUSED_SCALE_MASK
 
         // SUM reduce with reciprocal post-processing (1/sum)
+#ifdef ARCH_QUASAR
+        pack_init(dfb_recipsumexps);  // Quasar: retarget the packer to the reduce output (see calc_numeric_stable)
+#endif
         compute_kernel_lib::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
@@ -349,6 +386,9 @@ void kernel_main() {
             });
 
         // tile *= 1/(sum(exp(x)))
+#ifdef ARCH_QUASAR
+        pack_init(dfb_out0);  // Quasar: retarget the packer to the output (see calc_numeric_stable)
+#endif
         ckl::mul<
             ckl::input(dfb_exps, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
             ckl::input(dfb_recipsumexps, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
@@ -370,11 +410,19 @@ void kernel_main() {
 #endif
         if (out0_pad > 0) {
             dfb_out0_obj.reserve_back(static_cast<uint16_t>(out0_pad));
+#ifdef ARCH_QUASAR
+            dummy_pack(dfb_out0);  // TEN-4746: a real PACR must sit between reserve_back and push_back on Quasar
+#endif
             dfb_out0_obj.push_back(static_cast<uint16_t>(out0_pad));  // writer drains, does not write to DRAM
         }
     }  // NCHt loop
     // The scaler tiles are each waited once and reused across the whole NCHt loop; pop them at
     // the end so the CBs are left balanced.
+#if defined(ARCH_QUASAR) && !defined(NUMERIC_STABLE)
+    // TEN-4746: only the numeric-stable max reduce unpacks dfb_max_scaler; without it the wait_front ->
+    // pop_front pair has no UNPACR in between, which the Quasar TDMA guard rejects.
+    dummy_unpack(dfb_max_scaler);
+#endif
     dfb_max_scaler_obj.pop_front(1);
     dfb_sum_scaler_obj.pop_front(1);
 #ifdef FUSED_SCALE_MASK
