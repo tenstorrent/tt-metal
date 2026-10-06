@@ -1,13 +1,11 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Dense and joint SDPA precision recipes (host: sdpa_recipe.cpp). FAST (A) runs the legacy streaming loop;
-// STANDARD, BALANCED, ACCURATE and LOW_PRECISION (B-E) run recipe_streaming.hpp. The host selects the
-// recipe with SDPA_RECIPE_BASELINE / _FP32 / _ACCURATE / _LOFI; the two loops define the same names, so
-// exactly one is included.
+// Dense and joint SDPA precision recipes (host: sdpa_recipe.cpp): STANDARD, BALANCED, ACCURATE and FAST
+// (B-E) run recipe_streaming.hpp. The host selects the recipe with SDPA_RECIPE_FP32 / _ACCURATE / _LOFI.
 //
 // Optimization: the default level (-O3), except ACCURATE at -O2 (2% faster, measured). The host disables the
-// SFPI compiler's replay optimization for B-E (tenstorrent/tt-metal#58433). Watcher builds are size-optimized.
+// SFPI compiler's replay optimization (tenstorrent/tt-metal#58433). Watcher builds are size-optimized.
 #if defined(WATCHER_ENABLED)
 #define SDPA_RECIPE_OPTIMIZE_PUSHED
 #pragma GCC push_options
@@ -22,12 +20,8 @@
 #include "compute_common.hpp"
 #include "streaming/recipe_tail.hpp"
 
-#ifdef SDPA_RECIPE_BASELINE
-#include "compute_streaming.hpp"
-#else
 #include "streaming/recipe_sfpu.hpp"
 #include "streaming/recipe_streaming.hpp"
-#endif
 
 namespace {
 constexpr uint32_t k_chunks = get_named_compile_time_arg_val("k_chunks");
@@ -46,27 +40,6 @@ constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_identity_scale = 3, cb_col_i
 constexpr uint32_t cb_qk = 6, cb_out_a = 8, cb_out_b = 9, cb_max_a = 10, cb_max_b = 11, cb_sum_a = 12,
                    cb_sum_b = 13, cb_exp_max_diff = 14, cb_mask = 15, cb_out = 16;
 
-#ifdef SDPA_RECIPE_BASELINE
-#ifdef SDPA_RECIPE_MASK
-constexpr bool has_mask = true;
-#else
-constexpr bool has_mask = false;
-#endif
-
-// FAST: the legacy streaming loop. Odd Q chunks use single-row subblocks; subblock height only changes
-// which rows share a dest pass, not any element's accumulation. The mask is L1-accumulated before the max.
-void recipe_run(uint32_t jobs) {
-    constexpr uint32_t subblock_h = q_tiles % 2 == 0 ? 2 : 1;
-    sdpa_standard_v2<
-        q_tiles, k_tiles, k_tiles * k_chunks, d_tiles, d_tiles, scale,
-        subblock_h, qk_subblock_w, subblock_h, pv_subblock_w,
-        /*use_padded_mask=*/false,
-        cb_q, cb_k, cb_v, cb_qk, cb_identity_scale, cb_exp_max_diff, cb_col_identity, cb_recip_scratch, cb_out,
-        cb_mask,
-        /*sliding_window_size=*/0, /*is_causal=*/false, /*use_attention_sink=*/false, INVALID_CB,
-        /*use_provided_mask=*/has_mask>(jobs, k_chunks, cb_out_a, cb_out_b, cb_max_a, cb_max_b, cb_sum_a, cb_sum_b);
-}
-#else
 // B-E: FP32 recipes process one Q tile row per group; paired BF16 recipes two (the host pads odd chunks).
 void recipe_run(uint32_t jobs) {
 #ifdef SDPA_RECIPE_FP32
@@ -80,7 +53,6 @@ void recipe_run(uint32_t jobs) {
         cb_q, cb_k, cb_v, cb_qk, cb_identity_scale, cb_exp_max_diff, cb_col_identity, cb_recip_scratch,
         cb_out>(jobs, k_chunks, cb_out_a, cb_out_b, cb_max_a, cb_max_b, cb_sum_a, cb_sum_b);
 }
-#endif
 }  // namespace
 
 void kernel_main() {

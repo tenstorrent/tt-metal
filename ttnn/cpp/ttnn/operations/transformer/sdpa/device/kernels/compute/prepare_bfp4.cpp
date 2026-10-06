@@ -6,7 +6,7 @@
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
 
-// LOW_PRECISION BFP4 K/V: round each value onto its native BFP4 group's grid so the packer's own
+// FAST BFP4 K/V: round each value onto its native BFP4 group's grid so the packer's own
 // conversion to BFP4 is exact. A BFP4 group is 16 adjacent values of one face row sharing an exponent;
 // each value is a sign and a 3-bit magnitude, m * 2^(E - 2) with m in 0..7. Per group:
 //     M     = max |x|                     (lane butterfly over the 16 values)

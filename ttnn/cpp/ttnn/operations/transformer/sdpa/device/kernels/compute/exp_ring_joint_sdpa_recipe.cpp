@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Exp ring joint SDPA compute for the named precision recipes B/C/D/E (FAST keeps exp_ring_joint_sdpa.cpp).
+// Exp ring joint SDPA compute for the named precision recipes B/C/D/E (precision unset keeps exp_ring_joint_sdpa.cpp).
 // The shared streaming recipe continuation (recipe_ring.hpp) keeps one recurrent state per pass across the
 // ring. Compile-time arguments share the exp-ring layout (ExpRingJointSDPARecipeProgramFactory). Any
 // tile-aligned Q/K chunk and head dim (the QK/PV subblock widths are the host's SDPA_RECIPE_QK_W/PV_W).
@@ -20,7 +20,7 @@
 #if defined(WATCHER_ENABLED)
 #pragma GCC optimize("Os")
 #elif defined(TRISC_MATH) || defined(SDPA_RECIPE_FUSED) || defined(SDPA_RECIPE_ACCURATE)
-// Fused LOW_PRECISION chunks (and ACCURATE's FP32 paths) overflow the kernel config buffer at -O3 unpack/pack.
+// Fused FAST chunks (and ACCURATE's FP32 paths) overflow the kernel config buffer at -O3 unpack/pack.
 #pragma GCC optimize("O2")
 #else
 #pragma GCC optimize("O3")

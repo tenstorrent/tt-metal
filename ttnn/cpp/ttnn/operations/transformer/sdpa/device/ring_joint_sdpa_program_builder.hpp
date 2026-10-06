@@ -6,8 +6,8 @@
 
 // Shared ring joint SDPA program construction: ring/all-gather transport, core work split, K/V
 // store-and-forward chains, runtime-argument layout and the dataflow CBs. The compute contract is supplied by
-// a ComputeVariant: RingJointSDPAProgramFactory (legacy compute, including FAST) and
-// RingJointSDPARecipeProgramFactory (named precision recipes B-E) each own one.
+// a ComputeVariant: RingJointSDPAProgramFactory (legacy compute) and
+// RingJointSDPARecipeProgramFactory (named precision recipes) each own one.
 // Defined in ring_joint_sdpa_program_factory.cpp next to the legacy factory.
 
 #include <cstdint>

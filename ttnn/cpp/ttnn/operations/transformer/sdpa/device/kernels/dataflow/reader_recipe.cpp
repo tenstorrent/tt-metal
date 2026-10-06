@@ -36,7 +36,7 @@
 // DRAM read-barrier interval for the chain head's K/V fetch. Barriering every two
 // tiles serialized the fetch and left multi-core chains 12-30% behind legacy SDPA;
 // 16 tiles keeps enough reads in flight (measured 10x8192x8192 D128, full grid:
-// FAST Q256 2.16 -> 1.78 ms, Q128 4.12 -> 2.45 ms) and is neutral on 1-4 cores.
+// legacy-numerics recipe Q256 2.16 -> 1.78 ms, Q128 4.12 -> 2.45 ms) and is neutral on 1-4 cores.
 constexpr uint32_t reader_barrier_tiles = 16;
 constexpr uint32_t kv_tiles = SDPA_K_CHUNK_TILES * SDPA_RECIPE_DHT;
 
