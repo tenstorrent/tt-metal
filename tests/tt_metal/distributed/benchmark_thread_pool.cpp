@@ -92,6 +92,12 @@ struct alignas(64) TaskTimes {
     int64_t end = 0;
 };
 
+void run_task(TaskTimes* slot, int64_t work_ns) {
+    slot->start = now_ns();
+    spin_for_ns(work_ns);
+    slot->end = now_ns();
+}
+
 template <typename MakeTask>
 void submit_fan_out(ThreadPool& pool, uint32_t workers, uint32_t tasks_per_worker, const MakeTask& make_task) {
     for (uint32_t t = 0; t < tasks_per_worker; t++) {
@@ -115,14 +121,17 @@ void BM_FanOut(benchmark::State& state) {
     const uint32_t num_tasks = workers * tasks_per_worker;
     std::vector<TaskTimes> times(num_tasks);
     std::vector<double> wall_us, submit_us, first_start_us, last_start_us, join_us;
-    std::array<char, PadBytes> pad{};  // Optionally exceeds the callable's small buffer, like the dispatch captures.
-    auto make_task = [&times, work_ns, &pad](uint32_t i) {
-        return [slot = &times[i], work_ns, pad]() {
-            slot->start = now_ns();
-            benchmark::DoNotOptimize(pad);
-            spin_for_ns(work_ns);
-            slot->end = now_ns();
-        };
+    auto make_task = [&times, work_ns](uint32_t i) {
+        if constexpr (PadBytes == 0) {
+            // Fits the callable's small buffer.
+            return [slot = &times[i], work_ns]() { run_task(slot, work_ns); };
+        } else {
+            // Exceeds the callable's small buffer, like the dispatch captures.
+            return [slot = &times[i], work_ns, pad = std::array<char, PadBytes>{}]() {
+                benchmark::DoNotOptimize(pad);
+                run_task(slot, work_ns);
+            };
+        }
     };
 
     const Usage self_before = usage(RUSAGE_SELF);
