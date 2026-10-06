@@ -139,7 +139,6 @@ void kernel_main() {
                         in0_block_w);
                 }
 
-#ifndef SKIP_COMPUTE
                 // Compute output sub-block
                 const uint32_t dst_index = 0;  // start at 0, each call to matmul_block internally increments dst_index
                 uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
@@ -162,7 +161,6 @@ void kernel_main() {
                     in0_index++;               // stride right by 1
                     in1_index += in1_block_w;  // to stride down by 1 need to stride by in1_block_w
                 }
-#endif  // SKIP_COMPUTE
 
                 if (last_out) {
                     if constexpr (untilize_out) {

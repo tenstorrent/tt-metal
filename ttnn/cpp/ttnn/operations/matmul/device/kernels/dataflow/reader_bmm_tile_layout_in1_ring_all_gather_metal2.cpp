@@ -58,9 +58,8 @@ void kernel_main() {
             pipe.pop_front(1, noc);
         }
     }
-    if constexpr (num_blocks > 0) {
-        pipe.pop_front(1, noc);
-    }
+    // num_blocks is the ring size, so there is always a last block to hand back.
+    pipe.pop_front(1, noc);
 
     // The output stays resident in the sharded output tensor; wait for compute to finish it so this
     // buffer has the consumer every buffer needs.
