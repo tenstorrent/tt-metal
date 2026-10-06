@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Resolve the pinned cache snapshot or TTI's explicitly supplied checkpoint."""
 

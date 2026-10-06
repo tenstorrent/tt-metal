@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Granite TP4 decoder on a four-device Blackhole ring. Setup owns weights; callers own paged KV storage.
 

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+# IBM Granite parser; upstream attribution and provenance are in granite_thinking_parser.NOTICE.
 from typing import Sequence
 
 import vllm
