@@ -680,7 +680,7 @@ def test_dsv41_demo_session(mesh_device, device_params):
         if os.environ.get("DSV41_SESSION_NOWARM") == "1":  # chunk-size calibration: no compile run (total_replay_loop excludes the capture)
             wu = False
         cont = os.environ.get("DSV41_SESSION_CONTINUE") == "1"  # keep going after a failing scenario (OOM at a large budget)
-        budget_i = int(os.environ.get("DSV41_PREFILL_ROW_TOKENS") or 0)
+        budget_i = int(os.environ.get("DSV41_PREFILL_ROW_TOKENS") or 0) if (os.environ.get("DSV41_PREFILL_ROW_TOKENS") or "0").isdigit() else 0
         if cont and budget_i >= min(failed.get(s.id, 1 << 30), failed.get("*", 1 << 30)):
             logger.info(
                 f"=== session scenario {s.id} ROW_TOKENS={budget_i} SKIPPED (budget >= failed {min(failed.get(s.id, 1 << 30), failed.get('*', 1 << 30))}) ==="
