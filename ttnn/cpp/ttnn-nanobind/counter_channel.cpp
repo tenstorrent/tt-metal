@@ -24,9 +24,10 @@ void py_module_types(nb::module_& mod) {
             // ===== Owner-side ctor =====
             // Creates /dev/shm/<shm_name> via shm_open(O_CREAT|O_EXCL),
             // ftruncate, mmap. Stamps prior_clean_shutdown=1 so the
-            // first connector to attach sees a clean prior. Throws
-            // RuntimeError if a stale segment with the same name
-            // already exists — caller must clean up before retrying.
+            // first connector to attach sees a clean prior. A copy left
+            // by a dead owner is reaped and the open retried; throws
+            // RuntimeError if the name is held by a live owner — caller
+            // must clean up before retrying.
             nb::init<const std::string&>(),
             nb::arg("shm_name"),
             R"doc(
@@ -49,11 +50,12 @@ void py_module_types(nb::module_& mod) {
                         service id.
 
                 Raises:
-                    RuntimeError: A segment with this name already
-                        exists. The owner is responsible for
-                        unlinking a stale segment from a prior
-                        crashed run (e.g. `os.unlink('/dev/shm' +
-                        shm_name)`) before retrying.
+                    RuntimeError: A segment with this name is held
+                        by a live owner. A copy left by a dead owner
+                        is reaped automatically; anything else the
+                        owner must unlink itself (e.g.
+                        `os.unlink('/dev/shm' + shm_name)`) before
+                        retrying.
             )doc")
         .def_static(
             // ===== Connector-side factory =====

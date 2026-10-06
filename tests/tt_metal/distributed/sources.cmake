@@ -18,6 +18,7 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_hd_sockets.cpp
     test_shm_owner_liveness.cpp
     test_shm_resource_tracker_manifest.cpp
+    test_inter_process_counter_channel_tracking.cpp
     test_mesh_sub_device.cpp
     test_mesh_allocator.cpp
     test_mesh_events.cpp

@@ -1,0 +1,212 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// The owner side of InterProcessCounterChannel registers its segment with
+// ShmResourceTracker, so the segment leaves /dev/shm together with its owner
+// (exit or SIGTERM), and a copy left by a killed predecessor is reaped when
+// the owner is constructed, while a live owner's segment is never taken over.
+// No device needed.
+//
+// The tracker's signal path is driven directly rather than through a
+// re-executed child (gtest death tests): this binary opens the devices at
+// startup, so such a child would redo device initialisation. A forked child
+// that never execs, used below as a live owner, is fine.
+
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/prctl.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include <cerrno>
+#include <csignal>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
+#include <stdexcept>
+#include <string>
+
+#include <fmt/format.h>
+#include <gtest/gtest.h>
+
+#include <internal/service/inter_process_counter_channel.hpp>
+#include "tt_metal/distributed/inter_process_counter_layout.hpp"
+#include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
+
+namespace tt::tt_metal::distributed {
+namespace {
+
+std::string tracking_manifest_path(pid_t pid) { return fmt::format("/dev/shm/tt_socket_manifest_{}", pid); }
+
+bool tracking_manifest_names(pid_t pid, const std::string& shm_name) {
+    std::ifstream ifs(tracking_manifest_path(pid));
+    std::string line;
+    while (std::getline(ifs, line)) {
+        if (line == "shm " + shm_name) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool tracking_segment_exists(const std::string& shm_name) {
+    const int fd = ::shm_open(shm_name.c_str(), O_RDONLY, 0);
+    if (fd == -1) {
+        return false;
+    }
+    ::close(fd);
+    return true;
+}
+
+// Inode of the segment behind a name, 0 if absent; tells a fresh segment from a reused one.
+ino_t tracking_segment_inode(const std::string& shm_name) {
+    const int fd = ::shm_open(shm_name.c_str(), O_RDONLY, 0);
+    if (fd == -1) {
+        return 0;
+    }
+    struct stat st{};
+    const ino_t ino = (::fstat(fd, &st) == 0) ? st.st_ino : 0;
+    ::close(fd);
+    return ino;
+}
+
+// A pid that was alive a moment ago and is now gone. Returns -1 if fork fails.
+pid_t tracking_reaped_child_pid() {
+    const pid_t pid = fork();
+    if (pid < 0) {
+        return -1;
+    }
+    if (pid == 0) {
+        _exit(0);
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    return pid;
+}
+
+// A process that stays alive for the duration of a test: a live owner whose
+// segment must not be taken over.
+class TrackingLiveChild {
+public:
+    TrackingLiveChild() : parent_(getpid()), pid_(fork()) {
+        if (pid_ == 0) {
+            // Die with the test process, and do not run the tracker's
+            // inherited SIGINT/SIGTERM handler on the parent's resources.
+            prctl(PR_SET_PDEATHSIG, SIGKILL);
+            if (getppid() != parent_) {
+                _exit(0);
+            }
+            signal(SIGINT, SIG_DFL);
+            signal(SIGTERM, SIG_DFL);
+            for (;;) {
+                pause();
+            }
+        }
+    }
+    ~TrackingLiveChild() {
+        if (pid_ > 0) {
+            kill(pid_, SIGKILL);
+            int status = 0;
+            waitpid(pid_, &status, 0);
+        }
+    }
+    pid_t pid() const { return pid_; }
+
+private:
+    pid_t parent_;
+    pid_t pid_;
+};
+
+// What an owner leaves behind: the segment itself plus a manifest naming it.
+void tracking_plant_owner_segment(const std::string& shm_name, pid_t owner) {
+    const int fd = ::shm_open(shm_name.c_str(), O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
+    ASSERT_NE(fd, -1) << std::strerror(errno);
+    ASSERT_EQ(::ftruncate(fd, sizeof(InterProcessCounterSegment)), 0);
+    ::close(fd);
+    const std::string path = tracking_manifest_path(owner);
+    const std::string tmp_path = path + ".planting";
+    {
+        std::ofstream manifest(tmp_path, std::ios::trunc);
+        manifest << "shm " << shm_name << "\n";
+        ASSERT_TRUE(manifest.good());
+    }
+    ASSERT_EQ(std::rename(tmp_path.c_str(), path.c_str()), 0) << std::strerror(errno);
+}
+
+TEST(CounterChannelTracking, OwnerSegmentIsListedInManifestUntilShutdown) {
+    const std::string name = fmt::format("/tt_test_ctr_manifest_{}", getpid());
+    ::shm_unlink(name.c_str());
+
+    InterProcessCounterChannel owner(name);
+    EXPECT_TRUE(tracking_segment_exists(name));
+    EXPECT_TRUE(tracking_manifest_names(getpid(), name));
+
+    owner.shutdown();
+    EXPECT_FALSE(tracking_segment_exists(name));
+    EXPECT_FALSE(tracking_manifest_names(getpid(), name));
+}
+
+TEST(CounterChannelTracking, OwnerSegmentIsUnlinkedBySignalCleanup) {
+    const std::string name = fmt::format("/tt_test_ctr_signal_{}", getpid());
+    ::shm_unlink(name.c_str());
+
+    InterProcessCounterChannel owner(name);
+    ASSERT_TRUE(tracking_segment_exists(name));
+
+    // What the tracker's SIGINT/SIGTERM handler runs before the process dies.
+    ShmResourceTracker::instance().cleanup_from_signal();
+    EXPECT_FALSE(tracking_segment_exists(name)) << name << " survived the signal cleanup";
+    EXPECT_FALSE(tracking_manifest_names(getpid(), name));
+
+    // The owner's own teardown afterwards is harmless.
+    owner.shutdown();
+}
+
+TEST(CounterChannelTracking, SegmentOfKilledPredecessorIsReapedOnConstruction) {
+    const std::string name = fmt::format("/tt_test_ctr_stale_{}", getpid());
+    const pid_t predecessor = tracking_reaped_child_pid();
+    ASSERT_GT(predecessor, 0) << "fork failed: " << std::strerror(errno);
+    tracking_plant_owner_segment(name, predecessor);
+    if (HasFatalFailure()) {
+        return;
+    }
+    const ino_t planted_inode = tracking_segment_inode(name);
+    ASSERT_NE(planted_inode, 0u);
+
+    // No explicit scan: the constructor finds the name taken, runs the stale
+    // scan and retries, so the planted copy and its manifest are gone and the
+    // name now belongs to a fresh segment of ours.
+    InterProcessCounterChannel owner(name);
+    EXPECT_FALSE(std::ifstream(tracking_manifest_path(predecessor)).good()) << "stale manifest was not reaped";
+    EXPECT_TRUE(tracking_segment_exists(name));
+    EXPECT_NE(tracking_segment_inode(name), planted_inode) << "the planted copy was reused instead of replaced";
+    EXPECT_TRUE(tracking_manifest_names(getpid(), name));
+
+    owner.shutdown();
+    EXPECT_FALSE(tracking_segment_exists(name));
+}
+
+TEST(CounterChannelTracking, SegmentOfLiveOwnerIsNotTakenOver) {
+    TrackingLiveChild live_owner;
+    ASSERT_GT(live_owner.pid(), 0) << "fork failed: " << std::strerror(errno);
+    const std::string name = fmt::format("/tt_test_ctr_live_{}", getpid());
+    tracking_plant_owner_segment(name, live_owner.pid());
+    if (HasFatalFailure()) {
+        return;
+    }
+
+    // The stale scan leaves a live owner's manifest alone, so the retry fails
+    // with EEXIST exactly like the first attempt.
+    EXPECT_THROW(InterProcessCounterChannel owner(name), std::runtime_error);
+    EXPECT_TRUE(tracking_segment_exists(name)) << "a live owner's segment was removed";
+    EXPECT_TRUE(std::ifstream(tracking_manifest_path(live_owner.pid())).good())
+        << "a live owner's manifest was removed";
+
+    ::shm_unlink(name.c_str());
+    std::remove(tracking_manifest_path(live_owner.pid()).c_str());
+}
+
+}  // namespace
+}  // namespace tt::tt_metal::distributed
