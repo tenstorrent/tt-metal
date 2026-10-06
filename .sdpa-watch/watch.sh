@@ -16,8 +16,45 @@ PROMPT_TEMPLATE="$SDPA_HOME/agent_prompt.txt"
 AGENT_ERR="$SDPA_HOME/agent_errors.log"
 DRY_RUN="${DRY_RUN:-0}"
 
+# ---------- logging ----------
+# One file per UTC day under logs/, so "show me 1 September" is a single file
+# instead of a grep through 50k lines.
+#
+# Why each instance buffers locally first: $HOME is NFS4, where O_APPEND is
+# NOT atomic, and this box runs two cron daemons (`cron -f` and `cron -P`) that
+# both fire the crontab entry — so ~4 instances raced per tick, all appending
+# to one shared file. That shredded it: interleaved half-lines ("ick" on its
+# own) and 29k NUL bytes by 2026-09-01. Buffering to a LOCAL temp file and
+# flushing once, under flock, makes each tick one contiguous ordered chunk.
+LOG_DIR="$SDPA_HOME/logs"
+LOG_RETENTION_DAYS="${LOG_RETENTION_DAYS:-60}"
+mkdir -p "$LOG_DIR"
+
+# Interactive runs and DRY_RUN keep their output on the terminal, so a manual
+# preview never lands in the day log.
+if [[ "$DRY_RUN" != "1" && ! -t 1 ]]; then
+  RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/watch-$$-XXXXXX.log")"
+  exec >>"$RUN_LOG" 2>&1
+  flush_run_log() {
+    local day
+    day="$(date -u +%F)"
+    flock "$LOG_DIR/.write.lock" -c "cat '$RUN_LOG' >> '$LOG_DIR/$day.log'" \
+      2>/dev/null || cat "$RUN_LOG" >> "$LOG_DIR/$day.log"
+    # today.log always points at the current day, so `tail -F today.log`
+    # survives midnight without knowing the date.
+    ln -sfn "$day.log" "$LOG_DIR/today.log" 2>/dev/null || true
+    rm -f "$RUN_LOG"
+  }
+  trap flush_run_log EXIT
+fi
+
 ts()  { date -u +'%Y-%m-%dT%H:%M:%SZ'; }
 log() { echo "[$(ts)] $*" >&2; }
+
+# Local wall-clock for anything a human reads in Slack. Belgrade = Central
+# European Time with EU DST rules; POSIX TZ string instead of "Europe/Belgrade"
+# because this host has no tzdata installed.
+ts_local() { TZ='CET-1CEST,M3.5.0,M10.5.0/3' date +'%Y-%m-%d %H:%M %Z'; }
 
 # Serialize runs: prevent overlapping invocations (a stray second cron daemon,
 # or a manual run coinciding with a scheduled tick) from double-posting to Slack
@@ -28,6 +65,10 @@ if ! flock -n 200; then
   log "another watch.sh instance holds the lock — skipping this tick"
   exit 0
 fi
+
+# Winner only, once per tick: drop day logs past the retention window.
+find "$LOG_DIR" -maxdepth 1 -name '20*-*-*.log' -type f \
+     -mtime "+$LOG_RETENTION_DAYS" -delete 2>/dev/null || true
 
 # Extract failure markers from a failed run's job logs. Outputs a single
 # multi-job blob suitable for inclusion in the agent prompt.
@@ -458,19 +499,70 @@ for entry in "${PIPELINES[@]}"; do
      "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
 done
 
-# Total API outage → nothing was actually checked this tick. Don't post:
-# with every block degraded the digest is either garbage ("no runs"-style)
-# or a stale echo of the cache claiming a fresh "checked" time.
+# Total API outage → nothing was actually checked this tick, but every entry in
+# `blocks` is already a cached echo of the last good digest (the "reusing
+# cached summary" branch above), so there IS still something true to show.
+# Re-render it in place, flagged stale and stamped with the LAST SUCCESSFUL
+# check's time, rather than going silent: silence is indistinguishable from
+# "all green, nothing changed", because chat.update never bumps a message in
+# the channel. A dead gh token therefore read as a healthy digest for 30 h on
+# 2026-08-30 before anyone noticed.
+stale=0
+fail_streak=0
 if (( api_failures >= ${#PIPELINES[@]} )); then
-  log "WARN: all ${#PIPELINES[@]} GitHub queries failed this tick — skipping Slack post"
-  exit 0
+  stale=1
+  fail_streak=$(( $(jq -r '._slack.fail_streak // 0' "$STATE") + 1 ))
+  log "WARN: all ${#PIPELINES[@]} GitHub queries failed this tick — re-rendering cached digest as stale (streak $fail_streak)"
+  # Every block is the no-cache placeholder → genuinely nothing to say. Stay
+  # silent, as before, rather than posting a wall of "query failed".
+  have_cache=0
+  for b in "${blocks[@]+"${blocks[@]}"}"; do
+    [[ "$b" == *"_GitHub query failed this tick_"* ]] || { have_cache=1; break; }
+  done
+  if (( ! have_cache )); then
+    log "  no cached digest to re-render — skipping Slack post"
+    exit 0
+  fi
 fi
 
 # ---------- assemble digest (Slack Block Kit) ----------
-# Belgrade = Central European Time with EU DST rules. POSIX TZ string used
-# instead of "Europe/Belgrade" because this host has no tzdata installed.
-ts_human="$(TZ='CET-1CEST,M3.5.0,M10.5.0/3' date +'%Y-%m-%d %H:%M %Z')"
-title="SDPA Pipelines — $BRANCH — $ts_human"
+ts_human="$(ts_local)"
+
+# last_ok = when the pipeline data was actually fetched. On a stale tick the
+# title must carry THAT, not now, so the digest never claims a check it did not
+# make. Older state predates last_ok, so fall back to the last "checked:" entry.
+last_ok=$(jq -r '._slack.last_ok // (._slack.ticks[-1] // "")' "$STATE")
+if (( stale )); then
+  title_ts="${last_ok:-unknown}"
+else
+  title_ts="$ts_human"
+  last_ok="$ts_human"
+fi
+title="SDPA Pipelines — $BRANCH — $title_ts"
+
+# Autofix status lines for a failing pipeline, from the sibling fixer's ledger
+# (~/.sdpa-fix, optional — prints nothing when it is absent). One line per
+# draft PR / dry-run proposal / no-fix verdict on a still-open signature.
+AUTOFIX_LEDGER="$HOME/.sdpa-fix/ledger.json"
+autofix_note() {
+  local display="$1" wf="" e
+  [[ -f "$AUTOFIX_LEDGER" ]] || return 0
+  for e in "${PIPELINES[@]}"; do
+    [[ "$(cut -d'|' -f2 <<<"$e")" == "$display" ]] && { wf="${e%%|*}"; break; }
+  done
+  [[ -n "$wf" ]] || return 0
+  jq -r --arg w "$wf" '
+    [.sigs[] | select(.workflow == $w)
+     | if .state == "pr_open"   then "🛠️ draft PR \(.pr.url) — targeted CI running"
+       elif .state == "ci_passed" then "🛠 draft PR \(.pr.url) — targeted CI ✅, awaiting your review"
+       elif .state == "ci_failed" then "🛠 draft PR \(.pr.url) — targeted CI ❌, needs a human"
+       elif .state == "proposed_dryrun" then "🛠 autofix proposal (dry run): \(.verdict_title // "see proposals/")"
+       elif .state == "fixed_upstream" then "📌 already fixed on main: \(.reason // "") — awaiting a run that contains it"
+       elif .state == "merged" then "🟣 fix merged \(.pr.url // "") — awaiting a run that contains \((.fix_sha // "")[0:10])"
+       elif .state == "verified" then "✅ verified green after fix: `\(.test | sub(".*::"; ""))`"
+       elif .state == "no_fix" then "🛠 autofix: no safe fix for `\(.test | sub(".*::"; ""))`"
+       else empty end] | unique | .[]' "$AUTOFIX_LEDGER" 2>/dev/null || true
+}
 
 # Split into success (collapse to one line) and failure (keep full block).
 success_names=()
@@ -481,7 +573,9 @@ for b in "${blocks[@]}"; do
     name=$(printf '%s' "$first_line" | sed -E 's/^▸ \*([^*]+)\*.*/\1/')
     success_names+=("$name")
   else
-    failure_blocks+=("$b")
+    name=$(printf '%s' "$first_line" | sed -E 's/^▸ \*([^*]+)\*.*/\1/')
+    note=$(autofix_note "$name")
+    failure_blocks+=("$b${note:+$'\n'$note}")
   fi
 done
 
@@ -514,20 +608,32 @@ if [[ "$slack_mode" == "bot" ]]; then
     ticks_json=$(jq -c '._slack.ticks // []' "$STATE")
   fi
   # Append this tick; keep the last 48 so a week-long steady state can't
-  # blow past Slack's 3000-char section limit.
-  ticks_json=$(jq -c --arg t "$ts_human" '(. + [$t]) | .[-48:]' <<<"$ticks_json")
+  # blow past Slack's 3000-char section limit. A stale tick checked nothing, so
+  # it must not enter the "checked:" history — the banner reports it instead.
+  (( stale )) || ticks_json=$(jq -c --arg t "$ts_human" '(. + [$t]) | .[-48:]' <<<"$ticks_json")
 fi
 ticks_line=$(jq -r 'if length > 1 then "checked: " + join("  ·  ") else "" end' <<<"$ticks_json")
+
+# The one line that makes a frozen digest legible at a glance. Deliberately a
+# section (not a context) block: full-size text, first thing under the header.
+stale_banner=""
+if (( stale )); then
+  noun="ticks"; (( fail_streak == 1 )) && noun="tick"
+  stale_banner="⚠️ *stale — GitHub API unreachable; the status below is NOT current.*"
+  stale_banner+=$'\n'"last successful check: ${last_ok:-unknown}  ·  last tick: $ts_human  ·  $fail_streak consecutive failed $noun"
+fi
 
 payload=$(jq -nc \
   --arg title "$title" \
   --arg succ "$success_line" \
   --arg ticks "$ticks_line" \
+  --arg stale "$stale_banner" \
   --args \
   '{
      text: $title,
      blocks: (
        [{type: "header", text: {type: "plain_text", text: $title, emoji: true}}]
+       + (if $stale != "" then [{type: "section", text: {type: "mrkdwn", text: $stale}}] else [] end)
        + (if $ticks != "" then [{type: "context", elements: [{type: "mrkdwn", text: $ticks}]}] else [] end)
        + (if $succ != "" then [{type: "section", text: {type: "mrkdwn", text: $succ}}] else [] end)
        + ($ARGS.positional | map([{type: "divider"},
@@ -541,6 +647,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   log "DRY RUN — would post to Slack:"
   echo "================================================================"
   echo "$title"
+  [[ -n "$stale_banner" ]] && printf '%s\n' "$stale_banner"
   [[ -n "$success_line" ]] && echo "$success_line"
   for b in "${failure_blocks[@]+"${failure_blocks[@]}"}"; do
     echo "----------------------------------------------------------------"
@@ -578,9 +685,14 @@ elif [[ "$slack_mode" == "bot" ]]; then
     fi
   fi
   if [[ -n "$msg_ts" ]]; then
+    # last_ok + fail_streak drive the staleness banner; last_tick records the
+    # attempt itself, so "when did it last run at all" is answerable from
+    # state.json even when Slack was never touched.
     jq --arg ch "$SLACK_CHANNEL_ID" --arg ts "$msg_ts" --arg fp "$fingerprint" \
        --argjson ticks "$ticks_json" \
-       '._slack = {channel: $ch, ts: $ts, fingerprint: $fp, ticks: $ticks}' \
+       --arg ok "$last_ok" --arg lasttick "$ts_human" --argjson streak "$fail_streak" \
+       '._slack = {channel: $ch, ts: $ts, fingerprint: $fp, ticks: $ticks,
+                   last_ok: $ok, last_tick: $lasttick, fail_streak: $streak}' \
        "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
   fi
 else

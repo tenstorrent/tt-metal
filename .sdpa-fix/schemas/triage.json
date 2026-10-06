@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["failures"],
+  "properties": {
+    "failures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["test", "job", "kind", "owner", "error_key", "summary", "culprit_sha", "culprit_evidence", "fixable", "group"],
+        "properties": {
+          "test": {"type": "string"},
+          "job": {"type": "string"},
+          "kind": {"type": "string", "enum": ["code_regression", "perf_threshold", "infra", "missing_data", "collateral", "flaky", "unknown"]},
+          "owner": {"type": "string", "enum": ["sdpa_op", "k3_model", "other"]},
+          "error_key": {"type": "string"},
+          "summary": {"type": "string"},
+          "culprit_sha": {"type": "string"},
+          "culprit_evidence": {"type": "string"},
+          "fixable": {"type": "boolean"},
+          "group": {"type": "string"}
+        }
+      }
+    }
+  }
+}
