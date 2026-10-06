@@ -308,8 +308,7 @@ void BindPrefetcherPipeArgs(
 // Named RTAs/CRTAs and vararg RTAs/CRTAs are validated separately:
 //   - Named args must have EVERY declared name set (and no extras). Named RTA values are
 //     required for every node the kernel runs on.
-//   - Vararg counts per-node must match the schema. A node with no vararg entry in the schema
-//     expects zero varargs (but may still have named RTAs, if the schema declares them).
+//   - Every node must supply the kernel's declared vararg count (and may also have named RTAs).
 void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params) {
     const detail::ProgramImpl& program_impl = program.impl();
 
@@ -348,9 +347,7 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
                 kernel_name,
                 node_coord.str());
 
-            auto it_schema = schema->num_runtime_varargs_per_node.find(node_coord);
-            const size_t expected_varargs =
-                (it_schema != schema->num_runtime_varargs_per_node.end()) ? it_schema->second : 0;
+            const size_t expected_varargs = schema->num_runtime_varargs;
             TT_FATAL(
                 args.size() == expected_varargs,
                 "Kernel '{}' node {} expects {} vararg runtime args, but {} were provided",
@@ -359,18 +356,16 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
                 expected_varargs,
                 args.size());
         }
-        // Every node with a non-zero schema vararg entry must have values provided.
-        // Zero-count entries should already be filtered out during schema expansion
-        for (const auto& [node_coord, expected_count] : schema->num_runtime_varargs_per_node) {
-            if (expected_count == 0) {
-                continue;
+        // A non-zero vararg count requires values on every node running the kernel.
+        if (schema->num_runtime_varargs > 0) {
+            for (const auto& node_coord : kernel_nodes) {
+                TT_FATAL(
+                    nodes_with_vararg_params.contains(node_coord),
+                    "Kernel '{}' is missing vararg runtime args for node {} (expected {} args)",
+                    kernel_name,
+                    node_coord.str(),
+                    schema->num_runtime_varargs);
             }
-            TT_FATAL(
-                nodes_with_vararg_params.contains(node_coord),
-                "Kernel '{}' is missing vararg runtime args for node {} (expected {} args)",
-                kernel_name,
-                node_coord.str(),
-                expected_count);
         }
 
         // Validate vararg CRTA count
@@ -463,9 +458,9 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
         if (schema == nullptr) {
             continue;
         }
-        const bool has_anything_to_supply =
-            !schema->runtime_arg_names.empty() || !schema->common_runtime_arg_names.empty() ||
-            !schema->num_runtime_varargs_per_node.empty() || schema->num_common_runtime_varargs > 0;
+        const bool has_anything_to_supply = !schema->runtime_arg_names.empty() ||
+                                            !schema->common_runtime_arg_names.empty() ||
+                                            schema->num_runtime_varargs > 0 || schema->num_common_runtime_varargs > 0;
         TT_FATAL(
             !has_anything_to_supply,
             "Kernel '{}' is registered in the Program with a non-empty RTA/CRTA schema but has no "
@@ -1143,7 +1138,7 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
 
         // --- Vararg RTAs: a node's vararg section may be omitted (retaining its prior value). If
         //     supplied, its target node must belong to the kernel and its count must match the
-        //     schema for that node. An empty section is treated as omitted (matching both the
+        //     kernel schema. An empty section is treated as omitted (matching both the
         //     patch step below and the common-vararg handling). ---
         for (const auto& [node_coord, args] : kernel_runtime_varargs(kernel_params)) {
             if (args.empty()) {
@@ -1154,9 +1149,7 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
                 "Kernel '{}' is setting runtime_varargs for node {}, but the kernel does not run on that node.",
                 kernel_name,
                 node_coord.str());
-            auto it_schema = schema->num_runtime_varargs_per_node.find(node_coord);
-            const size_t expected_varargs =
-                (it_schema != schema->num_runtime_varargs_per_node.end()) ? it_schema->second : 0;
+            const size_t expected_varargs = schema->num_runtime_varargs;
             TT_FATAL(
                 args.size() == expected_varargs,
                 "Kernel '{}' node {} expects {} vararg runtime args, but {} were provided",

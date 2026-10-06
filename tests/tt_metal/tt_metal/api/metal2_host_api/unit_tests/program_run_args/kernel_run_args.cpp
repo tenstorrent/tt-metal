@@ -455,8 +455,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_MultiNode_MissingOneNodeFails) {
 TEST_F(ProgramRunArgsTestQuasar, CPU_AllEmptySchemaSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     // spec.kernels already default to empty runtime_arg_values / common_runtime_arg_values /
-    // compile_time_args, num_runtime_varargs = 0, num_common_runtime_varargs = 0,
-    // num_runtime_varargs_per_node = nullopt.
+    // compile_time_args, num_runtime_varargs = 0, num_common_runtime_varargs = 0.
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;

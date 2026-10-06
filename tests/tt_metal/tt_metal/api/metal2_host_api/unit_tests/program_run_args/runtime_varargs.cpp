@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 #include <cstdint>
+#include <span>
 #include <stdexcept>
 #include <vector>
 
@@ -14,6 +15,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
+#include "impl/kernels/kernel.hpp"
+#include "impl/program/program_impl.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
 #include "metal2_host_api/test_helpers/run_args_test_helpers.hpp"
@@ -27,141 +30,99 @@ using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::ProgramRunArgsTestQuasar;
 
-// Shorthand for the per-node-override vararg type: a Table keyed by Nodes mapping to a
-// vararg count (matches KernelAdvancedOptions::num_runtime_varargs_per_node).
-using NumVarargsPerNode = Table<Nodes, uint32_t>;
-
-// These document the "legacy kernel migrated lazily to Metal 2.0" pattern: all args as
-// positional varargs, no named RTAs/CRTAs/CTAs.
-TEST_F(ProgramRunArgsTestQuasar, CPU_VarargOnlyMultiNodeDifferingCountsSucceeds) {
-    // A kernel on two nodes with DIFFERENT vararg counts per node. Exercises the advanced
-    // num_runtime_varargs_per_node override path. The RTA dispatch buffer must be sized
-    // per-node, which is a common failure mode for layout bugs.
-    NodeCoord node_a{0, 0};
-    NodeCoord node_b{1, 0};
-    NodeRangeSet nodes{std::vector<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}}};
-
-    ProgramSpec spec;
-    spec.name = "vararg_differing_counts";
-    auto kernel = MakeMinimalGen2DMKernel("dm_kernel");
-    kernel.advanced_options.num_runtime_varargs_per_node = NumVarargsPerNode{{node_a, 2}, {node_b, 5}};
-    spec.kernels = {kernel};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", nodes, {"dm_kernel"})};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-
-    ProgramRunArgs params;
-    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
-        .kernel = KernelSpecName{"dm_kernel"},
-        .advanced_options =
-            AdvancedKernelRunArgs{
-                .runtime_varargs = {{node_a, {10, 20}}, {node_b, {100, 200, 300, 400, 500}}},
-            },
-    });
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
-}
-
-TEST_F(ProgramRunArgsTestQuasar, CPU_VarargPerNodeOverrideMixedEntryTypesSucceeds) {
-    // Per-node override with a MIX of entry shapes: one entry groups two nodes via a
-    // NodeRangeSet, another names a single NodeCoord. Exercises the schema-side expansion
-    // from heterogeneous Nodes variants into per-coord validation entries — if the expansion
-    // is wrong for either shape, some node won't be checked and validation will either fail
-    // to require its values or fail to validate their count.
+TEST_F(ProgramRunArgsTestQuasar, CPU_UniformVarargCapacityAcrossWorkUnitsSucceeds) {
     NodeCoord node_a{0, 0};
     NodeCoord node_b{1, 0};
     NodeCoord node_c{2, 0};
-    NodeRangeSet ab{std::vector<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}}};
-    NodeRangeSet all_nodes{
-        std::vector<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}, NodeRange{node_c, node_c}}};
+    NodeRangeSet ab{std::vector<NodeRange>{NodeRange{node_a, node_b}}};
+    NodeRangeSet c{std::vector<NodeRange>{NodeRange{node_c, node_c}}};
 
     ProgramSpec spec;
-    spec.name = "vararg_mixed_entry_types";
+    spec.name = "uniform_vararg_capacity";
     auto kernel = MakeMinimalGen2DMKernel("dm_kernel");
-    // Nodes a and b share count 3 (declared via a NodeRangeSet entry).
-    // Node c has count 5 (declared via a NodeCoord entry).
-    kernel.advanced_options.num_runtime_varargs_per_node = NumVarargsPerNode{{ab, 3}, {node_c, 5}};
+    kernel.runtime_arg_schema.runtime_arg_names = {"count"};
+    kernel.advanced_options.num_runtime_varargs = 5;
     spec.kernels = {kernel};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", all_nodes, {"dm_kernel"})};
+    spec.work_units = {
+        MakeMinimalWorkUnit("main", ab, {"dm_kernel"}),
+        MakeMinimalWorkUnit("cliff", c, {"dm_kernel"}),
+    };
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    auto impl = program.impl().get_kernel_by_spec_name("dm_kernel");
+    // Factory construction must reserve named + vararg slots even before values are supplied.
+    for (const auto& node : {node_a, node_b, node_c}) {
+        EXPECT_EQ(impl->runtime_args_data(node).size(), 6u);
+    }
 
+    auto runtime_values = [&](const NodeCoord& node) {
+        const auto& rta = impl->runtime_args_data(node);
+        return std::span<const uint32_t>(rta.data(), rta.size());
+    };
+
+    KernelRunArgs args{.kernel = KernelSpecName{"dm_kernel"}};
+    AddRuntimeArgsForNode(args.runtime_arg_values, node_a, {{"count", 2}});
+    AddRuntimeArgsForNode(args.runtime_arg_values, node_b, {{"count", 5}});
+    AddRuntimeArgsForNode(args.runtime_arg_values, node_c, {{"count", 0}});
+    args.advanced_options.runtime_varargs = {
+        {node_a, {10, 20, 0, 0, 0}},
+        {node_b, {100, 200, 300, 400, 500}},
+        {node_c, {0, 0, 0, 0, 0}},
+    };
     ProgramRunArgs params;
-    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
-        .kernel = KernelSpecName{"dm_kernel"},
-        .advanced_options =
-            AdvancedKernelRunArgs{
-                .runtime_varargs = {{node_a, {1, 2, 3}}, {node_b, {10, 20, 30}}, {node_c, {100, 200, 300, 400, 500}}},
-            },
-    });
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    params.kernel_run_args = {args};
+    ASSERT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_THAT(runtime_values(node_a), ::testing::ElementsAre(2, 10, 20, 0, 0, 0));
+    EXPECT_THAT(runtime_values(node_b), ::testing::ElementsAre(5, 100, 200, 300, 400, 500));
+    EXPECT_THAT(runtime_values(node_c), ::testing::ElementsAre(0, 0, 0, 0, 0, 0));
+
+    // Updating one core uses the same capacity and retains the other cores' sections.
+    ProgramRunArgs update;
+    KernelRunArgs updated{.kernel = KernelSpecName{"dm_kernel"}};
+    AddRuntimeArgsForNode(updated.runtime_arg_values, node_a, {{"count", 1}});
+    updated.advanced_options.runtime_varargs = {{node_a, {99, 0, 0, 0, 0}}};
+    update.kernel_run_args = {updated};
+    ASSERT_NO_THROW(UpdateProgramRunArgs(program, update));
+    EXPECT_THAT(runtime_values(node_a), ::testing::ElementsAre(1, 99, 0, 0, 0, 0));
+    EXPECT_THAT(runtime_values(node_b), ::testing::ElementsAre(5, 100, 200, 300, 400, 500));
+    EXPECT_THAT(runtime_values(node_c), ::testing::ElementsAre(0, 0, 0, 0, 0, 0));
 }
 
-TEST_F(ProgramRunArgsTestQuasar, CPU_VarargScalarDefaultWithSparseOverrideSucceeds) {
-    // Scalar provides the default count for every node the kernel runs on; the per-node
-    // override covers only specific nodes. Unlisted nodes fall back to the scalar value.
-    // This is the "3 on most nodes, 5 on the edges" shape that motivates the sparse
-    // override design.
+TEST_F(ProgramRunArgsTestQuasar, CPU_VarargCountsMustMatchOnEveryNode) {
     NodeCoord node_a{0, 0};
     NodeCoord node_b{1, 0};
-    NodeCoord node_c{2, 0};
-    NodeRangeSet all_nodes{
-        std::vector<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}, NodeRange{node_c, node_c}}};
+    NodeRangeSet nodes{std::vector<NodeRange>{NodeRange{node_a, node_b}}};
 
     ProgramSpec spec;
-    spec.name = "vararg_scalar_with_sparse_override";
+    spec.name = "uniform_vararg_count_validation";
     auto kernel = MakeMinimalGen2DMKernel("dm_kernel");
-    kernel.advanced_options = KernelAdvancedOptions{
-        .num_runtime_varargs = 2,                                        // default for unlisted nodes
-        .num_runtime_varargs_per_node = NumVarargsPerNode{{node_c, 5}},  // node_c is the exception
-    };
+    kernel.advanced_options.num_runtime_varargs = 3;
     spec.kernels = {kernel};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", all_nodes, {"dm_kernel"})};
+    spec.work_units = {MakeMinimalWorkUnit("main", nodes, {"dm_kernel"})};
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
-    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+    params.kernel_run_args = {KernelRunArgs{
         .kernel = KernelSpecName{"dm_kernel"},
-        .advanced_options =
-            AdvancedKernelRunArgs{
-                .runtime_varargs =
-                    {
-                        {node_a, {1, 2}},                     // scalar default (2 args)
-                        {node_b, {10, 20}},                   // scalar default (2 args)
-                        {node_c, {100, 200, 300, 400, 500}},  // override (5 args)
-                    },
-            },
-    });
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
-}
+        .advanced_options = {.runtime_varargs = {{node_a, {1, 2, 3}}, {node_b, {4, 5, 6}}}},
+    }};
+    ASSERT_NO_THROW(SetProgramRunArgs(program, params));
 
-TEST_F(ProgramRunArgsTestQuasar, CPU_VarargSparseOverrideZeroErasesScalarDefault) {
-    // An explicit override of 0 on a node erases the scalar default for that node.
-    // Regression canary for the expansion logic: if the erase is missing, the node would
-    // carry the scalar-default count and run-params validation would either require an
-    // empty value list or error on count mismatch.
-    NodeCoord node_a{0, 0};
-    NodeCoord node_b{1, 0};
-    NodeRangeSet both{std::vector<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}}};
-
-    ProgramSpec spec;
-    spec.name = "vararg_zero_override";
-    auto kernel = MakeMinimalGen2DMKernel("dm_kernel");
-    kernel.advanced_options = KernelAdvancedOptions{
-        .num_runtime_varargs = 3,
-        .num_runtime_varargs_per_node = NumVarargsPerNode{{node_b, 0}},  // node_b: no varargs despite scalar default
-    };
-    spec.kernels = {kernel};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", both, {"dm_kernel"})};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-
-    // node_b is treated as having no varargs — run-params needs no entry for it.
-    ProgramRunArgs params;
-    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
-        .kernel = KernelSpecName{"dm_kernel"},
-        .advanced_options =
-            AdvancedKernelRunArgs{
-                .runtime_varargs = {{node_a, {1, 2, 3}}},
-            },
-    });
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    for (const auto& node : {node_a, node_b}) {
+        for (uint32_t count : {0u, 2u, 4u}) {
+            auto invalid = params;
+            invalid.kernel_run_args[0].advanced_options.runtime_varargs[node].resize(count);
+            EXPECT_THAT(
+                [&] { SetProgramRunArgs(program, invalid); },
+                ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("expects 3 vararg runtime args")));
+            // Empty updates intentionally retain the previous value.
+            if (count != 0) {
+                EXPECT_THAT(
+                    [&] { UpdateProgramRunArgs(program, invalid); },
+                    ::testing::ThrowsMessage<std::runtime_error>(
+                        ::testing::HasSubstr("expects 3 vararg runtime args")));
+            }
+        }
+    }
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_VarargOnlyAcrossMultipleKernelsSucceeds) {

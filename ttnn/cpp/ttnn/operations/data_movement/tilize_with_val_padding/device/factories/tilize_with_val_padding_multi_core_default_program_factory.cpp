@@ -4,6 +4,7 @@
 
 #include "tilize_with_val_padding_multi_core_default_program_factory.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
@@ -230,8 +231,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
 
         // The block-representation stream is a genuine variable-count, loop-indexed collection (the
         // kernel walks it with a running index bounded by the runtime n_block_reps), so it stays
-        // positional: it rides the kernel's runtime varargs rather than being named. Its length
-        // differs per core, hence the per-node vararg-count schema below.
+        // positional: it rides the kernel's runtime varargs rather than being named.
         AdvancedKernelRunArgs::Varargs block_reps;
         block_reps.reserve(assignment.size() * 5);
 
@@ -274,7 +274,8 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
              {"pad_value", packed_pad_value},
              {"start_page_id", reader_start_page_id},
              {"n_block_reps", n_block_reps}});
-        reader.advanced_options.num_runtime_varargs_per_node[core] = static_cast<uint32_t>(block_reps.size());
+        reader.advanced_options.num_runtime_varargs =
+            std::max(reader.advanced_options.num_runtime_varargs, static_cast<uint32_t>(block_reps.size()));
         reader_ra.advanced_options.runtime_varargs[core] = std::move(block_reps);
 
         // writer runtime args
@@ -282,6 +283,11 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
             writer_ra.runtime_arg_values, core, {{"num_pages", num_tiles_per_core}, {"start_id", tile_start_id}});
 
         tile_start_id += num_tiles_per_core;
+    }
+
+    // n_block_reps bounds each core's live BlockRep stream; trailing capacity is never read.
+    for (auto& [core, varargs] : reader_ra.advanced_options.runtime_varargs) {
+        varargs.resize(reader.advanced_options.num_runtime_varargs, 0);
     }
 
     spec.kernels.push_back(std::move(reader));

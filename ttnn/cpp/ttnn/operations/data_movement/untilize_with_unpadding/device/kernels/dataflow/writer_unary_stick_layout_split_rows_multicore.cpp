@@ -64,7 +64,9 @@ void kernel_main() {
 
     uint32_t stick_id = start_stick_id;
     // The per-BlockRep groups are runtime varargs, which live in their own section, so this walks
-    // from 0 rather than from the end of the named args.
+    // from 0 rather than from the end of the named args. n_block_reps counts uncompressed entries;
+    // repeat_count advances through the compressed payload without reading the trailing padding
+    // to the kernel's uniform vararg capacity.
     uint32_t rt_arg_idx = 0;
     uint32_t count = 1;
     constexpr int32_t n_mixed_idx = 1;

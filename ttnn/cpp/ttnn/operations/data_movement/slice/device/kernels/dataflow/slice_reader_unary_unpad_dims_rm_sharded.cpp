@@ -28,7 +28,8 @@ void kernel_main() {
     // The vararg block, in the order the host appends it: one (noc_x, noc_y) pair per source core,
     // then one chunk count per source core, then one (start_id, num_sticks) pair per chunk. How many
     // chunks a source core contributes is itself runtime data, so the pair block is walked with a
-    // running offset rather than indexed by source core.
+    // running offset rather than indexed by source core. The host pads every core's varargs to
+    // the same capacity; num_cores_read and the chunk counts exclude that trailing padding.
     const uint32_t read_noc_xy_base = 0;
     const uint32_t num_stick_chunks_base = num_cores_read * 2;
     const uint32_t chunk_base = num_cores_read * 3;

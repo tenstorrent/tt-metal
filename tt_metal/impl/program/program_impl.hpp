@@ -625,10 +625,8 @@ public:
         std::unordered_map<std::string, size_t> runtime_arg_name_to_slot;
         std::unordered_map<std::string, size_t> common_runtime_arg_name_to_slot;
 
-        // Vararg counts. RTA vararg count is per-node (stored post-expansion from the
-        // user-facing schema, which groups nodes that share a count); CRTA vararg is a single
-        // broadcast count.
-        std::unordered_map<CoreCoord, size_t> num_runtime_varargs_per_node;
+        // Every node running the kernel has the same RTA vararg count; CRTA varargs are broadcast.
+        size_t num_runtime_varargs = 0;
         size_t num_common_runtime_varargs = 0;
     };
 

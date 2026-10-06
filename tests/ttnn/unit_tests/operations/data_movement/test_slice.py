@@ -2133,3 +2133,21 @@ def test_slice_rm_wide_row_chunking(device, last_dim):
     ttnn_output = ttnn.slice(ttnn_input, begins, ends, step, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     assert torch.equal(torch_output, ttnn.to_torch(ttnn_output))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_slice_rm_sharded_uniform_vararg_capacity(device, dtype, orientation):
+    # Four 6-row output shards draw from four 8-row input shards. Channel gaps produce
+    # different source-core/chunk counts, so some payloads need trailing capacity padding.
+    make, out_cfg, end, reference = _rm_height_sharded_slice(device, dtype, orientation, 2, 2, 3, 10, 8, 64, 48)
+    keep_alive = []
+    for iteration in range(2):
+        torch_input, tt_input = make()
+        entries = device.num_program_cache_entries()
+        tt_output = ttnn.slice(tt_input, (0, 0, 0, 0), end, memory_config=out_cfg)
+        if iteration:
+            assert device.num_program_cache_entries() == entries
+        actual = ttnn.to_torch(ttnn.to_memory_config(tt_output, ttnn.L1_MEMORY_CONFIG))
+        assert_equal(reference(torch_input), actual)
+        keep_alive.extend((tt_input, tt_output))

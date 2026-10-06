@@ -4,6 +4,8 @@
 
 #include "untilize_with_unpadding_multi_core_interleaved_program_factory.hpp"
 
+#include <algorithm>
+
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -186,7 +188,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
         };
     };
 
-    // The writer joins after the core loop below, which fills in its per-node vararg counts.
+    // The writer joins after the core loop below, which determines its uniform vararg capacity.
     Group<KernelSpec> kernels = {std::move(reader)};
     Group<WorkUnitSpec> work_units;
     if (!core_range.empty()) {
@@ -263,12 +265,17 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
             {{"padded_X_size", padded_row_size_bytes},
              {"start_stick_id", core_row_start_id},
              {"n_block_reps", static_cast<uint32_t>(assignment.size())}});
-        // Each core's BlockRep runs are a runtime-length payload, so they ride as runtime varargs.
-        // The run count differs per core, which is what the per-node vararg-count override says.
-        writer.advanced_options.num_runtime_varargs_per_node[core] = static_cast<uint32_t>(writer_varargs.size());
+        // Keep the largest compressed payload as the capacity shared by every core.
+        writer.advanced_options.num_runtime_varargs =
+            std::max(writer.advanced_options.num_runtime_varargs, static_cast<uint32_t>(writer_varargs.size()));
         writer_run_args.advanced_options.runtime_varargs[core] = std::move(writer_varargs);
 
         tile_start_id += num_tiles_per_core;
+    }
+
+    // n_block_reps bounds each core's live BlockRep stream; trailing capacity is never read.
+    for (auto& [core, varargs] : writer_run_args.advanced_options.runtime_varargs) {
+        varargs.resize(writer.advanced_options.num_runtime_varargs, 0);
     }
 
     kernels.push_back(std::move(writer));

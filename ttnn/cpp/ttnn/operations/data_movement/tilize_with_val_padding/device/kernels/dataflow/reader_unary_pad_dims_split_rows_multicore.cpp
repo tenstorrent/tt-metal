@@ -85,6 +85,8 @@ void kernel_main() {
     uint32_t page_id = start_page_id;
     // The block-representation stream is a variable-count collection walked positionally, so it comes
     // in as runtime varargs (0-indexed within the vararg section) rather than as named arguments.
+    // n_block_reps counts uncompressed entries; repeat_count advances through the compressed
+    // payload. Together they exclude the trailing padding to the kernel's uniform vararg capacity.
     uint32_t rt_arg_idx = 0;
     uint32_t count = 1;
     constexpr int32_t n_mixed_idx = 1;

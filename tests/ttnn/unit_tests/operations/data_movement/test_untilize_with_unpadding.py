@@ -1077,3 +1077,37 @@ def test_untilize_with_unpadding_width_crop(device, padded_width, out_width):
 
     # A bf16 tilize/untilize round trip is an identity, so this is exact.
     assert_equal(ttnn.to_torch(untilized), torch_input[:, :, :out_width])
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "logical_shape, padded_shape, num_cores",
+    [
+        # Unequal compressed streams, including a repeated BlockRep and a cliff core.
+        ((5, 3, 45, 48), (5, 3, 64, 64), 4),
+        # Channel/height padding creates mixed blocks and blocks containing only padding.
+        ((2, 3, 45, 48), (2, 4, 96, 64), 5),
+    ],
+)
+def test_untilize_with_unpadding_uniform_vararg_capacity(device, dtype, logical_shape, padded_shape, num_cores):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    slices = tuple(slice(0, size) for size in logical_shape)
+    keep_alive = []
+    for iteration in range(2):
+        torch_input = torch.randn(padded_shape, dtype=torch_dtype)
+        tt_input = ttnn.from_torch(
+            torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        entries = device.num_program_cache_entries()
+        tt_output = ttnn.untilize_with_unpadding(
+            tt_input,
+            output_tensor_end=tuple(size - 1 for size in logical_shape),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            use_multicore=True,
+            sub_core_grids=grid,
+        )
+        if iteration:
+            assert device.num_program_cache_entries() == entries
+        assert_equal(torch_input[slices], ttnn.to_torch(tt_output))
+        keep_alive.extend((tt_input, tt_output))

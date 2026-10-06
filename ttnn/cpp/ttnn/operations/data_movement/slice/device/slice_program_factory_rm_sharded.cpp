@@ -7,6 +7,7 @@
 
 #include "ttnn/operations/data_movement/slice/device/slice_metal2_names.hpp"
 
+#include <algorithm>
 #include <map>
 #include <optional>
 #include <vector>
@@ -362,10 +363,13 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
     // The reader runs on all_cores_unpadded, so every argument list must go to a core of that set.
     // get_slice_runtime_args_rm_sharded builds list i for output shard i, and output_cores[i] is the core
     // holding that shard.
-    //
-    // How many varargs a core takes depends on how many input shards its output shard draws from and
-    // how those rows coalesce into chunks, so the count genuinely differs per core rather than being
-    // one number for the kernel. num_runtime_varargs_per_node is the API's mechanism for that.
+    // Use one capacity for every core. num_cores_read and the per-source chunk counts bound
+    // the live payload, so the reader never consumes the zero-filled tail.
+    uint32_t num_runtime_varargs = 0;
+    for (const auto& [reader_args, writer_args] : all_runtime_args) {
+        num_runtime_varargs = std::max(num_runtime_varargs, static_cast<uint32_t>(reader_args.size() - 1));
+    }
+    reader.advanced_options.num_runtime_varargs = num_runtime_varargs;
     KernelRunArgs reader_run_args{.kernel = SHARDED_READER};
     for (uint32_t i = 0; i < num_cores_unpadded; ++i) {
         const CoreCoord& core = output_cores[i];
@@ -373,7 +377,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
         AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"num_cores_read", core_args[0]}});
         reader_run_args.advanced_options.runtime_varargs[core] =
             std::vector<uint32_t>(core_args.begin() + 1, core_args.end());
-        reader.advanced_options.num_runtime_varargs_per_node[Nodes{core}] = static_cast<uint32_t>(core_args.size() - 1);
+        reader_run_args.advanced_options.runtime_varargs[core].resize(num_runtime_varargs, 0);
     }
 
     ProgramSpec spec{

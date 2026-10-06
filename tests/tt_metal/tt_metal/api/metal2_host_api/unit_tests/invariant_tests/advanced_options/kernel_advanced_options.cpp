@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Local invariants of KernelAdvancedOptions (advanced_options.hpp): tensor binding sequences,
-// per-node vararg counts and PrefetcherPipe bindings.
+// and PrefetcherPipe bindings.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -28,16 +28,13 @@ using test_helpers::BindTensorParameterToKernel;
 using test_helpers::KernelNamed;
 using test_helpers::MakeFullPipeSpec;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
-using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalTensorParameter;
-using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::MakeOtherPipeParameter;
 using test_helpers::MakeSenderOnlySpec;
 using test_helpers::other_param_name;
 using test_helpers::pipe_param_name;
 using test_helpers::PrefetcherPipeSpecTestQuasar;
 using test_helpers::ProgramSpecTestGen1;
-using test_helpers::ProgramSpecTestQuasar;
 
 TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceUnknownMemberFails) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
@@ -123,27 +120,6 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceInvalidIdentifierFails) {
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("tensor binding sequence_name 'has-dash' must be a valid C++ identifier")));
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_VarargPerNodeOverlapFails) {
-    // Rule: overlapping entries in num_runtime_varargs_per_node are an error, even when
-    // their counts agree. Overlap suggests a user mistake.
-    NodeCoord node_a{0, 0};
-    NodeCoord node_b{1, 0};
-    NodeRangeSet both{std::vector<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}}};
-
-    ProgramSpec spec;
-    spec.name = "vararg_overlap_test";
-    auto kernel = MakeMinimalGen2DMKernel("dm_kernel");
-    kernel.advanced_options = KernelAdvancedOptions{
-        .num_runtime_varargs_per_node = Table<Nodes, uint32_t>{{both, 3}, {node_a, 3}},  // node_a listed twice
-    };
-    spec.kernels = {kernel};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", both, {"dm_kernel"})};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("overlapping entries")));
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_EmptyAccessorGroupFails) {

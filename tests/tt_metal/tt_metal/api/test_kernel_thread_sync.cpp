@@ -98,13 +98,13 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
     if (is_quasar) {
         auto spec = MakeMinimalGen2DMKernel("dm_barrier_kernel", expected_num_threads);
         spec.source = kKernelPath;
-        spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
+        spec.advanced_options.num_runtime_varargs = kKernelArgsCount;
         kernel_configs.push_back({"dm_barrier_kernel", spec, make_layout(l1_base, kRounds)});
         work_unit_kernel_names = {"dm_barrier_kernel"};
     } else {
         auto make_gen1 = [&](KernelSpec spec, uint32_t layout_base) {
             spec.source = kKernelPath;
-            spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
+            spec.advanced_options.num_runtime_varargs = kKernelArgsCount;
             return KernelConfig{*spec.unique_id, std::move(spec), make_layout(layout_base, kRounds)};
         };
         // BRISC uses the writer role (RISCV_0/NOC_1); NCRISC uses the reader helper (RISCV_1/NOC_0).
@@ -188,7 +188,7 @@ TEST_F(KernelThreadSyncTest, ComputeBarrierSynchronizesAllTriscs) {
 
     auto kernel_spec = MakeMinimalGen2ComputeKernel("compute_barrier_kernel", kNumNeos);
     kernel_spec.source = kComputeKernelPath;
-    kernel_spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
+    kernel_spec.advanced_options.num_runtime_varargs = kKernelArgsCount;
 
     ProgramSpec spec;
     spec.name = "compute_kernel_thread_barrier";
@@ -276,7 +276,7 @@ TEST_F(KernelThreadSyncTest, PerKernelBarriersAreIndependentAcrossDmAndCompute) 
         std::string name = "dm_barrier_kernel_" + std::to_string(i);
         auto spec = MakeMinimalGen2DMKernel(name, kDmThreadsPerKernel);
         spec.source = kKernelPath;
-        spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
+        spec.advanced_options.num_runtime_varargs = kKernelArgsCount;
         specs.push_back(spec);
         dm_layouts.push_back(make_layout(next_addr, kRounds));
         next_addr += dm_layouts.back().total_words * sizeof(uint32_t);
@@ -295,7 +295,7 @@ TEST_F(KernelThreadSyncTest, PerKernelBarriersAreIndependentAcrossDmAndCompute) 
 
     auto compute_spec = MakeMinimalGen2ComputeKernel("compute_barrier_kernel", kNumNeos);
     compute_spec.source = kComputeKernelPath;
-    compute_spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
+    compute_spec.advanced_options.num_runtime_varargs = kKernelArgsCount;
     specs.push_back(compute_spec);
     kernel_names.push_back("compute_barrier_kernel");
 
@@ -405,11 +405,11 @@ TEST_F(KernelThreadSyncTest, DmComputeBarrierSynchronizesDmAndTriscs) {
 
     auto dm_spec = MakeMinimalGen2DMKernel("dm_barrier_kernel", kNumDmThreads);
     dm_spec.source = kDmKernelPath;
-    dm_spec.advanced_options.num_runtime_varargs_per_node = {{node, kDmComputeArgsCount}};
+    dm_spec.advanced_options.num_runtime_varargs = kDmComputeArgsCount;
 
     auto compute_spec = MakeMinimalGen2ComputeKernel("compute_barrier_kernel", kNumNeos);
     compute_spec.source = kComputeKernelPath;
-    compute_spec.advanced_options.num_runtime_varargs_per_node = {{node, kDmComputeArgsCount}};
+    compute_spec.advanced_options.num_runtime_varargs = kDmComputeArgsCount;
 
     ProgramSpec spec;
     spec.name = "dm_compute_kernel_thread_barrier";

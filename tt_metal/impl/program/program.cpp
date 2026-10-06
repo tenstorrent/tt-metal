@@ -725,18 +725,11 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
         const size_t crta_words =
             static_cast<size_t>(layout.vararg_section_offset) + schema->num_common_runtime_varargs;
 
-        // Per-node RTAs: named count + per-node vararg count from the schema.
-        const size_t named_rta_words = schema->runtime_arg_names.size();
+        const size_t rta_words = schema->runtime_arg_names.size() + schema->num_runtime_varargs;
 
         // Reserve unique RTAs first so set_common_runtime_args can validate against
         // max_runtime_args_per_core_ once CRTAs are installed.
         for (const CoreCoord& core : kernel->logical_cores()) {
-            size_t vararg_words = 0;
-            if (auto it = schema->num_runtime_varargs_per_node.find(core);
-                it != schema->num_runtime_varargs_per_node.end()) {
-                vararg_words = it->second;
-            }
-            const size_t rta_words = named_rta_words + vararg_words;
             if (rta_words == 0) {
                 continue;
             }

@@ -272,18 +272,6 @@ TEST(AggregateSpecTypes, CPU_VarargCountsOnAdvancedOptions) {
 
     EXPECT_EQ(adv.num_runtime_varargs, 4u);
     EXPECT_EQ(adv.num_common_runtime_varargs, 2u);
-    EXPECT_TRUE(adv.num_runtime_varargs_per_node.empty());
-}
-
-TEST(AggregateSpecTypes, CPU_VarargPerNodeOverrideOnAdvancedOptions) {
-    // Per-node override path (advanced): ensure designated-init works.
-    using NumVarargsPerNode = Table<Nodes, uint32_t>;
-    KernelAdvancedOptions adv{
-        .num_runtime_varargs_per_node = NumVarargsPerNode{{NodeCoord{0, 0}, 4}, {NodeCoord{1, 0}, 7}},
-    };
-
-    EXPECT_EQ(adv.num_runtime_varargs_per_node.size(), 2u);
-    EXPECT_EQ(adv.num_runtime_varargs, 0u);  // scalar left at default in this example
 }
 
 TEST(AggregateSpecTypes, CPU_KernelSpecNamedRuntimeArgsDesignatedInitializers) {

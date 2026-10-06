@@ -46,15 +46,6 @@ using test_helpers::ProgramSpecHWTest;
 //       named_rta_words offset is per-kernel, not shared state.
 //   Vararg CRTAs: get_common_vararg(0) on both kernels.
 //
-// Not covered here (intentional):
-//   - num_runtime_varargs_per_node (the per-node override path). The internal schema
-//     representation is a per-coord unordered_map regardless of how it was populated, so
-//     the dispatch-time behavior is identical to the scalar path covered here. The
-//     override-specific semantics are covered by host-side unit tests
-//     (VarargScalarDefaultWithSparseOverrideSucceeds,
-//      VarargSparseOverrideZeroErasesScalarDefault,
-//      VarargPerNodeOverrideMixedEntryTypesSucceeds).
-//
 // Verification trick — XOR cancellation:
 //   Each kernel computes the XOR of all its vararg values into a scalar sum and folds
 //   that sum into the first word of every DFB entry (producer on write, consumer on read).

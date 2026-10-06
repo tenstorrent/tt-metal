@@ -67,7 +67,7 @@ struct KernelAdvancedOptions {
     //--------------------------------
     // Runtime varargs
     //--------------------------------
-    // Number of runtime varargs for the kernel.
+    // Number of runtime varargs, identical on every node the kernel runs on.
     // Set the vararg values (per node) via ProgramRunArgs.
     //
     // To retrieve these values in kernel code, use:
@@ -87,15 +87,6 @@ struct KernelAdvancedOptions {
     // CAUTION: This feature exists to address niche uses cases only.
     //          Prefer named common runtime arguments unless varargs are strictly necessary.
     uint32_t num_common_runtime_varargs = 0;
-
-    // Per-node runtime vararg-count override.
-    // In very rare cases a kernel needs a DIFFERENT number of runtime varargs on
-    // different nodes. Each entry pairs a node set with its vararg count; nodes
-    // not listed default to num_runtime_varargs.
-    // TODO: This feature is truly bizarre. It will be removed from the API once
-    //       existing uses are refactored to avoid it.
-    [[deprecated("Per-node-vararg-count feature is deprecated and will be removed.")]]
-    Table<Nodes, /* num_varargs */ uint32_t> num_runtime_varargs_per_node;
 
     //--------------------------------
     // Compile time varargs
