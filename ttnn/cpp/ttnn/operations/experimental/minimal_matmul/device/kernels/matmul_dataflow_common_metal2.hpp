@@ -43,6 +43,11 @@ constexpr bool kMmNoIn = true;
 #else
 constexpr bool kMmNoIn = false;
 #endif
+#ifdef MM_NO_OUT
+constexpr bool kMmNoOut = true;
+#else
+constexpr bool kMmNoOut = false;
+#endif
 
 #ifdef DYNAMIC_M
 template <typename AccessorT>
@@ -371,14 +376,11 @@ void write_block_sync_granular(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
-#ifdef MM_NO_OUT
-    return;
-#endif
     Noc noc;
     for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
         dfb_out.wait_front(N_block_tiles);
         uint32_t m_tile = d0_start + m_id;
-        if (m_tile < d0_end && m_tile < shape.logical_d0) {
+        if (!kMmNoOut && m_tile < d0_end && m_tile < shape.logical_d0) {
             uint32_t out_read_ptr = dfb_out.get_read_ptr();
             for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++) {
                 if (n_tile_id >= shape.logical_d1) {
@@ -512,9 +514,6 @@ void write_block_sync_granular_split(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
-#ifdef MM_NO_OUT
-    return;
-#endif
     Noc noc;
     const uint32_t chunk_idx_start = d1_start / N_tiles_per_chunk;
     const uint32_t tile_idx_in_chunk_start = d1_start % N_tiles_per_chunk;
@@ -522,7 +521,7 @@ void write_block_sync_granular_split(
     for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
         dfb_out.wait_front(N_block_tiles);
         uint32_t m_tile = d0_start + m_id;
-        if (m_tile < d0_end && m_tile < chunk_shape.logical_d0) {
+        if (!kMmNoOut && m_tile < d0_end && m_tile < chunk_shape.logical_d0) {
             uint32_t out_read_ptr = dfb_out.get_read_ptr();
 
             uint32_t chunk_idx = chunk_idx_start;
