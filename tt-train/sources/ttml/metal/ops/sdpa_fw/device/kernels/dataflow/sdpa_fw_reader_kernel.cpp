@@ -16,6 +16,7 @@ void kernel_main() {
     uint32_t key_address = get_arg_val<uint32_t>(runtime_args_counter++);          // key buffer address
     uint32_t value_address = get_arg_val<uint32_t>(runtime_args_counter++);        // value buffer address
     uint32_t mask_address = get_arg_val<uint32_t>(runtime_args_counter++);         // mask buffer address
+    uint32_t gate_address = get_arg_val<uint32_t>(runtime_args_counter++);         // gate buffer address
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);  // rows to process in this kernel
     uint32_t start_row =
         get_arg_val<uint32_t>(runtime_args_counter++);  // pre calculated num_rows_written in program factory
@@ -25,6 +26,9 @@ void kernel_main() {
     constexpr uint32_t cb_value = tt::CBIndex::c_2;
 #ifdef USE_ATTN_MASK
     constexpr uint32_t cb_attn_mask = tt::CBIndex::c_3;
+#endif
+#ifdef HAS_GATE
+    constexpr uint32_t cb_gate = tt::CBIndex::c_16;
 #endif
 
     constexpr uint32_t qWt = get_compile_time_arg_val(0);      // num tile in inner dim in query/key (d_qk/TILE_W)
@@ -38,9 +42,9 @@ void kernel_main() {
     constexpr auto query_args = TensorAccessorArgs<6>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
-
-#ifdef USE_ATTN_MASK
     constexpr auto mask_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
+#ifdef HAS_GATE
+    constexpr auto gate_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
 #endif
 
     const uint32_t tile_bytes = get_tile_size(cb_query);
@@ -51,6 +55,9 @@ void kernel_main() {
 
 #ifdef USE_ATTN_MASK
     const auto mask_address_generator = TensorAccessor(mask_args, mask_address);
+#endif
+#ifdef HAS_GATE
+    const auto gate_address_generator = TensorAccessor(gate_args, gate_address);
 #endif
 
     // Note: Tile generation (reduction_scaler, matmul_reduce, causal_mask) moved to writer kernel
@@ -93,6 +100,9 @@ void kernel_main() {
             read_tiles_by_row(
                 cb_value, value_address_generator, value_start_idx, Sk_chunk_t * vWt, tile_bytes, Sk_chunk_t * vWt);
         }
+#ifdef HAS_GATE
+        read_tiles_by_row(cb_gate, gate_address_generator, global_row_idx * vWt, vWt, tile_bytes, vWt);
+#endif
     };
 
     for (uint32_t p = 0; p < num_rows_to_process; ++p) {
@@ -167,6 +177,9 @@ void kernel_main() {
             read_tiles_by_row(
                 cb_value, value_address_generator, value_start_idx, Sk_chunk_t * vWt, tile_bytes, Sk_chunk_t * vWt);
         }
+#ifdef HAS_GATE
+        read_tiles_by_row(cb_gate, gate_address_generator, global_row_idx * vWt, vWt, tile_bytes, vWt);
+#endif
     }
 #endif
 }

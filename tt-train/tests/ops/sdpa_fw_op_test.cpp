@@ -400,11 +400,19 @@ ttnn::Tensor group_shared_matmul(
     return reshaped_mm;
 }
 
+// Reference gating: out * sigmoid(gate), elementwise. Both tensors are (B, H, S, Dh_v).
+xt::xarray<float> apply_gate_reference(const xt::xarray<float>& out, const xt::xarray<float>& gate) {
+    assert(out.shape() == gate.shape());
+    xt::xarray<float> sig = 1.0F / (1.0F + xt::exp(-gate));
+    return out * sig;
+}
+
 std::vector<ttnn::Tensor> composite_sdpa_fw(
     const ttnn::Tensor& query,
     const ttnn::Tensor& key,
     const ttnn::Tensor& value,
-    const std::optional<ttnn::Tensor>& attn_mask) {
+    const std::optional<ttnn::Tensor>& attn_mask,
+    const std::optional<ttnn::Tensor>& gate = std::nullopt) {
     // std::vector<ttnn::Tensor> result;
     // result.reserve(2U);  // one for output, one for intermediate if needed
 
@@ -454,7 +462,48 @@ std::vector<ttnn::Tensor> composite_sdpa_fw(
     auto attention_weights = ttml::metal::softmax(qk_scaled, /* axis */ 3);
 
     auto attention_qkv = group_shared_matmul(attention_weights, value, /*transpose_a=*/false, /*transpose_b=*/false);
+
+    // Optional output gating: out = out * sigmoid(gate). Gate is (B, H, S, Dh_v), same as the output.
+    if (gate.has_value()) {
+        auto sig_gate = ttnn::sigmoid(gate.value());
+        attention_qkv =
+            ttnn::multiply(attention_qkv, sig_gate, std::nullopt, std::nullopt, std::nullopt, none, none, none);
+    }
     return {attention_qkv, intermediates};
+}
+
+// Shape of the 1/0 attention mask used for AttentionMaskType::Arbitrary. The kernel generates
+// its own causal mask for AttentionMaskType::Causal, so non-causal patterns require Arbitrary.
+enum class MaskPattern {
+    Causal,              // lower triangular (default; also what Causal mask_type compares against)
+    SlidingWindow,       // causal, but only the last `window_size` positions are kept
+    RandomKeepDiagonal,  // random 1/0 with the diagonal forced to 1 so no row is fully masked
+};
+
+// Sliding-window causal mask: keep (i, j) iff j <= i && i - j < window_size.
+xt::xarray<float> generate_sliding_window_mask(std::size_t S, std::size_t window_size) {
+    xt::xarray<float> mask = xt::zeros<float>({1UL, 1UL, S, S});
+    for (std::size_t i = 0; i < S; ++i) {
+        const std::size_t j_begin = (i + 1 > window_size) ? (i + 1 - window_size) : 0U;
+        for (std::size_t j = j_begin; j <= i; ++j) {
+            mask(0, 0, i, j) = 1.0F;
+        }
+    }
+    return mask;
+}
+
+// Random 1/0 mask with the diagonal forced to 1. Deterministic for a given seed.
+xt::xarray<float> generate_random_mask(std::size_t S, uint32_t seed, float keep_prob = 0.5F) {
+    xt::xarray<float> uniform =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1UL, 1UL, S, S}, 0.0F, 1.0F, seed);
+    xt::xarray<float> mask = xt::zeros<float>({1UL, 1UL, S, S});
+    for (std::size_t i = 0; i < S; ++i) {
+        for (std::size_t j = 0; j < S; ++j) {
+            mask(0, 0, i, j) = (uniform(0, 0, i, j) < keep_prob) ? 1.0F : 0.0F;
+        }
+        mask(0, 0, i, i) = 1.0F;
+    }
+    return mask;
 }
 
 struct SDPATestConfig {
@@ -467,6 +516,13 @@ struct SDPATestConfig {
     uint32_t num_query_heads;
     uint32_t num_key_heads;
     ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal;  // default: causal mask
+    MaskPattern mask_pattern = MaskPattern::Causal;  // only meaningful for mask_type == Arbitrary
+    uint32_t window_size = 0U;                       // for MaskPattern::SlidingWindow, in elements
+    // Optional output gate: when true a gate tensor of shape (B, num_query_heads, S, head_dim_v) is generated,
+    // passed to the kernel, and the expected output becomes sdpa(Q,K,V) * sigmoid(gate).
+    bool use_gate = false;
+    float gate_min = -4.0F;  // sigmoid(-4) ~ 0.018
+    float gate_max = 4.0F;   // sigmoid(+4) ~ 0.982
     float dropout_prob = 0.0F;
     float result_atol = 2e-2F;
     float result_rtol = 2e-2F;
@@ -506,6 +562,16 @@ void run_sdpa_test(const SDPATestConfig& config) {
         config.batch_size, config.num_key_heads, config.sequence_length, head_dim_v};
     xt::xarray<float> value_tensor = ttml::test_utils::make_uniform_xarray<float>(value_shape, -1.0F, 1.0F, seed);
 
+    // Optional gate: (B, num_query_heads, S, head_dim_v) - same shape as the kernel output.
+    // Use a different seed so the gate is decorrelated from V (same shape, same seed would give identical data).
+    std::optional<xt::xarray<float>> gate_tensor;
+    if (config.use_gate) {
+        const std::array<std::size_t, 4> gate_shape{
+            config.batch_size, config.num_query_heads, config.sequence_length, head_dim_v};
+        gate_tensor =
+            ttml::test_utils::make_uniform_xarray<float>(gate_shape, config.gate_min, config.gate_max, seed + 1U);
+    }
+
     // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads.
     // For None the kernel computes unmasked attention, so the reference mask must keep
     // every position (all-ones) instead of the causal pattern.
@@ -513,8 +579,18 @@ void run_sdpa_test(const SDPATestConfig& config) {
     if (config.mask_type == ttml::metal::AttentionMaskType::None) {
         const auto seq = static_cast<std::size_t>(config.sequence_length);
         attn_mask_tensor = xt::ones<float>({1UL, 1UL, seq, seq});
-    } else {
+    } else if (config.mask_pattern == MaskPattern::Causal) {
         attn_mask_tensor = generate_mask(query_tensor);
+    } else {
+        ASSERT_EQ(config.mask_type, ttml::metal::AttentionMaskType::Arbitrary)
+            << "Non-causal mask patterns require AttentionMaskType::Arbitrary in " << config.test_name;
+        const auto seq = static_cast<std::size_t>(config.sequence_length);
+        if (config.mask_pattern == MaskPattern::SlidingWindow) {
+            ASSERT_GT(config.window_size, 0U) << "window_size must be set for SlidingWindow in " << config.test_name;
+            attn_mask_tensor = generate_sliding_window_mask(seq, config.window_size);
+        } else {
+            attn_mask_tensor = generate_random_mask(seq, seed + 2U);
+        }
     }
 
     // Convert to device tensors
@@ -531,9 +607,14 @@ void run_sdpa_test(const SDPATestConfig& config) {
         kernel_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
     }
 
+    std::optional<ttnn::Tensor> kernel_gate = std::nullopt;
+    if (gate_tensor.has_value()) {
+        kernel_gate = core::from_xtensor(gate_tensor.value(), &autograd::ctx().get_device());
+    }
+
     // Run SDPA kernel with new interface - this is our reference implementation
     auto result = ttml::metal::sdpa_fw(
-        query, key, value, config.mask_type, kernel_mask, config.dropout_prob, return_intermediates);
+        query, key, value, config.mask_type, kernel_mask, kernel_gate, config.dropout_prob, return_intermediates);
     xt::xarray<float> result_xtensor =
         core::to_xtensor(result[0].value());  // Kernel returns (B, H, S, D) - heads NOT fused
     xt::xarray<float> interm_xtensor = core::to_xtensor(result[1].value());
@@ -541,13 +622,38 @@ void run_sdpa_test(const SDPATestConfig& config) {
     // Run composite SDPA implementation with split tensors - output is (B, H, S, D)
     // Composite always needs the mask tensor for comparison (even when kernel generates it on-the-fly)
     auto attn_mask_device = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
-    auto composite_result_split = composite_sdpa_fw(query, key, value, attn_mask_device);
+    auto composite_result_split = composite_sdpa_fw(query, key, value, attn_mask_device, kernel_gate);
     xt::xarray<float> composite_result_xtensor = core::to_xtensor(composite_result_split[0]);  // Already (B, H, S, D)
     xt::xarray<float> composite_interm_xtensor = core::to_xtensor(composite_result_split[1]);
 
     // Run float reference implementation with split tensors - now outputs (B, H, S, D) format
     auto [float_result, float_intermediates] =
         sdpa_split_heads_naive_with_intermediates(query_tensor, key_tensor, value_tensor, attn_mask_tensor);
+    if (gate_tensor.has_value()) {
+        float_result = apply_gate_reference(float_result, gate_tensor.value());
+    }
+
+    // Gate-specific checks against the kernel's own ungated output. These do not depend on the composite or
+    // float references, so they isolate the gating step from the rest of the attention math.
+    if (gate_tensor.has_value()) {
+        auto ungated = ttml::metal::sdpa_fw(
+            query, key, value, config.mask_type, kernel_mask, std::nullopt, config.dropout_prob, return_intermediates);
+        xt::xarray<float> ungated_xtensor = core::to_xtensor(ungated[0].value());
+        xt::xarray<float> ungated_interm_xtensor = core::to_xtensor(ungated[1].value());
+
+        ASSERT_EQ(result_xtensor.shape(), ungated_xtensor.shape())
+            << "Gated and ungated kernel outputs must have the same shape in " << config.test_name;
+
+        // (1) gated == ungated * sigmoid(gate)
+        xt::xarray<float> expected_from_ungated = apply_gate_reference(ungated_xtensor, gate_tensor.value());
+        EXPECT_TRUE(xt::allclose(result_xtensor, expected_from_ungated, config.result_atol, config.result_rtol))
+            << "Gated kernel output != ungated kernel output * sigmoid(gate) in " << config.test_name
+            << " (MSE: " << compute_mse(expected_from_ungated, result_xtensor) << ")";
+
+        // (2) the gate must not touch the logsumexp intermediates
+        EXPECT_TRUE(xt::allclose(interm_xtensor, ungated_interm_xtensor, 1e-6F, 1e-6F))
+            << "Gate changed the intermediates (logsumexp) in " << config.test_name;
+    }
 
     // All results are now in split format (B, H, S, D) - heads NOT fused
     // Shape validation - all should be in split format (B, H, S, D)
@@ -836,8 +942,8 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
         auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
         auto attn_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
 
-        auto result =
-            ttml::metal::sdpa_fw(query, key, value, ttml::metal::AttentionMaskType::Arbitrary, attn_mask, 0.0F, false);
+        auto result = ttml::metal::sdpa_fw(
+            query, key, value, ttml::metal::AttentionMaskType::Arbitrary, attn_mask, std::nullopt, 0.0F, false);
 
         EXPECT_TRUE(result[0].has_value()) << "Main result should always be present";
         EXPECT_FALSE(result[1].has_value()) << "Intermediate should be null when return_intermediates=false";
@@ -855,8 +961,8 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
         auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
         auto attn_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
 
-        auto result =
-            ttml::metal::sdpa_fw(query, key, value, ttml::metal::AttentionMaskType::Arbitrary, attn_mask, 0.0F, true);
+        auto result = ttml::metal::sdpa_fw(
+            query, key, value, ttml::metal::AttentionMaskType::Arbitrary, attn_mask, std::nullopt, 0.0F, true);
 
         EXPECT_TRUE(result[0].has_value()) << "Main result should be present";
         EXPECT_TRUE(result[1].has_value()) << "Intermediate should be present when return_intermediates=true";
@@ -1038,5 +1144,696 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ArbitraryMask_TwoTileRows) {
         .num_key_heads = 1U,
         .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
         .test_name = "ArbitraryMask_TwoTileRows"};
+    run_sdpa_test(config);
+}
+
+// =============================================================================
+// GATE TESTS - optional gate input: out = sdpa(Q, K, V) * sigmoid(gate)
+// Gate shape is (B, num_query_heads, S, head_dim_v), i.e. identical to the output shape.
+// =============================================================================
+
+// --- Randomised gate through the shared driver -------------------------------
+// run_sdpa_test with use_gate=true checks, in addition to the usual kernel/composite/float comparisons:
+//   * gated kernel output == ungated kernel output * sigmoid(gate)
+//   * logsumexp intermediates are unchanged by the gate
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_Gate_CausalMask_Small) {
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .use_gate = true,
+        .test_name = "Gate_CausalMask_Small_2H"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_Gate_ArbitraryMask_Small) {
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+        .use_gate = true,
+        .test_name = "Gate_ArbitraryMask_Small_2H"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_Gate_NoMask_Small) {
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::None,
+        .use_gate = true,
+        .test_name = "Gate_NoMask_Small_2H"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_Gate_SingleTile) {
+    // S = 32 (one tile row), one head: the gate is exactly vWt tiles per row.
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 32U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .use_gate = true,
+        .test_name = "Gate_SingleTile"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_Gate_TwoTileRows) {
+    // S = 64 -> Ht = 2: the gate reader must advance by one tile row per output row.
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 64U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .use_gate = true,
+        .test_name = "Gate_TwoTileRows"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_Gate_GQA) {
+    // 4 query heads share 2 KV heads. Gate has num_query_heads heads, not num_key_heads.
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 256U,      // 4 heads * 64
+        .key_value_dim = 128U,  // 2 heads * 64
+        .num_query_heads = 4U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .use_gate = true,
+        .test_name = "Gate_GQA_4Q_2KV"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_Gate_MultiBatch) {
+    // Gate is indexed by batch; make sure batch b reads gate[b], not gate[0].
+    SDPATestConfig config{
+        .batch_size = 2U,
+        .sequence_length = 64U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .use_gate = true,
+        .test_name = "Gate_MultiBatch_2B"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_Gate_DifferentVDim_SmallV) {
+    // Q/K head_dim = 64, V head_dim = 32. Gate last dim must follow V (32), not Q/K.
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .value_dim = 64U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .use_gate = true,
+        .test_name = "Gate_DifferentVDim_SmallV"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_Gate_DifferentVDim_LargeV) {
+    // Q/K head_dim = 32, V head_dim = 64. Gate last dim must follow V (64).
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .use_gate = true,
+        .test_name = "Gate_DifferentVDim_LargeV"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_Gate_WideRange) {
+    // Push the gate into sigmoid's saturated tails on both sides to check bf16 behaviour at the extremes.
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .use_gate = true,
+        .gate_min = -12.0F,
+        .gate_max = 12.0F,
+        .test_name = "Gate_WideRange"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Gate_12Heads_6Group) {
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 1024U,
+        .query_dim = 768U,
+        .key_value_dim = 384U,
+        .num_query_heads = 12U,
+        .num_key_heads = 6U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .use_gate = true,
+        .test_name = "Gate_12H_6KV_Grouped"};
+    run_sdpa_test(config);
+}
+
+// --- Structured gates with analytically known results ------------------------
+
+namespace {
+
+struct GateFixtureTensors {
+    xt::xarray<float> query;
+    xt::xarray<float> key;
+    xt::xarray<float> value;
+    std::array<std::size_t, 4> out_shape;  // (B, H, S, Dh_v)
+};
+
+// Small MHA problem used by the structured-gate tests below.
+GateFixtureTensors make_gate_fixture(
+    uint32_t B = 1U, uint32_t H = 2U, uint32_t S = 64U, uint32_t Dh_qk = 64U, uint32_t Dh_v = 64U) {
+    auto& rng = ttml::autograd::ctx().get_generator();
+    const uint32_t seed = rng();
+    const std::array<std::size_t, 4> qk_shape{B, H, S, Dh_qk};
+    const std::array<std::size_t, 4> v_shape{B, H, S, Dh_v};
+    GateFixtureTensors t;
+    t.query = ttml::test_utils::make_uniform_xarray<float>(qk_shape, -1.0F, 1.0F, seed);
+    t.key = ttml::test_utils::make_uniform_xarray<float>(qk_shape, -1.0F, 1.0F, seed + 1U);
+    t.value = ttml::test_utils::make_uniform_xarray<float>(v_shape, -1.0F, 1.0F, seed + 2U);
+    t.out_shape = v_shape;
+    return t;
+}
+
+// Runs the kernel (causal, intermediates on) with an optional gate and returns {output, intermediates} on host.
+std::pair<xt::xarray<float>, xt::xarray<float>> run_kernel_causal(
+    const GateFixtureTensors& t, const std::optional<xt::xarray<float>>& gate) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    auto q = core::from_xtensor(t.query, device);
+    auto k = core::from_xtensor(t.key, device);
+    auto v = core::from_xtensor(t.value, device);
+    std::optional<ttnn::Tensor> g = std::nullopt;
+    if (gate.has_value()) {
+        g = core::from_xtensor(gate.value(), device);
+    }
+    auto res = metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, std::nullopt, g, 0.0F, true);
+    return {core::to_xtensor(res[0].value()), core::to_xtensor(res[1].value())};
+}
+
+}  // namespace
+
+TEST_F(SDPAForwardTest, GateTest_SaturatedPositiveGateIsIdentity) {
+    // sigmoid(+16) == 1 to well beyond bf16 precision, so the gated output must equal the ungated output.
+    auto t = make_gate_fixture();
+    auto [ungated, ungated_lse] = run_kernel_causal(t, std::nullopt);
+
+    xt::xarray<float> gate = xt::ones<float>(t.out_shape) * 16.0F;
+    auto [gated, gated_lse] = run_kernel_causal(t, gate);
+
+    ASSERT_EQ(gated.shape(), ungated.shape());
+    EXPECT_TRUE(xt::allclose(gated, ungated, 1e-2F, 1e-2F))
+        << "sigmoid(+16) ~ 1: gated output should match ungated output (MSE: " << compute_mse(ungated, gated) << ")";
+    EXPECT_TRUE(xt::allclose(gated_lse, ungated_lse, 1e-6F, 1e-6F)) << "Gate must not change logsumexp";
+}
+
+TEST_F(SDPAForwardTest, GateTest_SaturatedNegativeGateZeroesOutput) {
+    // sigmoid(-16) ~ 1e-7, so every output element must be ~0 regardless of the attention result.
+    auto t = make_gate_fixture();
+    xt::xarray<float> gate = xt::ones<float>(t.out_shape) * -16.0F;
+    auto [gated, gated_lse] = run_kernel_causal(t, gate);
+
+    const float max_abs = xt::amax(xt::abs(gated))();
+    EXPECT_LT(max_abs, 1e-3F) << "sigmoid(-16) ~ 0: gated output should be ~0, max |out| = " << max_abs;
+
+    // Intermediates must still be the real logsumexp, not zeroed.
+    auto [ungated, ungated_lse] = run_kernel_causal(t, std::nullopt);
+    EXPECT_TRUE(xt::allclose(gated_lse, ungated_lse, 1e-6F, 1e-6F)) << "Gate must not change logsumexp";
+}
+
+TEST_F(SDPAForwardTest, GateTest_ZeroGateHalvesOutput) {
+    // sigmoid(0) == 0.5 exactly, and multiplying a bf16 value by 0.5 is exact, so this comparison can be tight.
+    auto t = make_gate_fixture();
+    auto [ungated, ungated_lse] = run_kernel_causal(t, std::nullopt);
+
+    xt::xarray<float> gate = xt::zeros<float>(t.out_shape);
+    auto [gated, gated_lse] = run_kernel_causal(t, gate);
+
+    xt::xarray<float> expected = 0.5F * ungated;
+    EXPECT_TRUE(xt::allclose(gated, expected, 2e-3F, 2e-3F))
+        << "sigmoid(0) == 0.5: gated output should be half the ungated output (MSE: " << compute_mse(expected, gated)
+        << ")";
+}
+
+TEST_F(SDPAForwardTest, GateTest_IsElementwiseNotBroadcast) {
+    // Gate pattern that differs along every axis the kernel has to index:
+    //   batch 0 / batch 1 are swapped, head h and column block alternate, and odd sequence rows are inverted.
+    //   gate = +16 (open)  where parity(b + h + s + d/32) is even
+    //   gate = -16 (closed) otherwise
+    // If the kernel broadcasts the gate over any axis, reads the wrong tile, or applies it to the wrong head,
+    // some open elements will come out zero or some closed ones non-zero.
+    const uint32_t B = 2U, H = 2U, S = 64U, Dh = 64U;
+    auto t = make_gate_fixture(B, H, S, Dh, Dh);
+    auto [ungated, ungated_lse] = run_kernel_causal(t, std::nullopt);
+
+    xt::xarray<float> gate = xt::empty<float>(t.out_shape);
+    xt::xarray<float> expected = xt::empty<float>(t.out_shape);
+    for (size_t b = 0; b < B; ++b) {
+        for (size_t h = 0; h < H; ++h) {
+            for (size_t s = 0; s < S; ++s) {
+                for (size_t d = 0; d < Dh; ++d) {
+                    const bool open = ((b + h + s + (d / 32U)) % 2U) == 0U;
+                    gate(b, h, s, d) = open ? 16.0F : -16.0F;
+                    expected(b, h, s, d) = open ? ungated(b, h, s, d) : 0.0F;
+                }
+            }
+        }
+    }
+
+    auto [gated, gated_lse] = run_kernel_causal(t, gate);
+    ASSERT_EQ(gated.shape(), expected.shape());
+    EXPECT_TRUE(xt::allclose(gated, expected, 1e-2F, 1e-2F))
+        << "Structured gate mismatch: the gate is not being applied elementwise with the right indexing (MSE: "
+        << compute_mse(expected, gated) << ")";
+
+    // Spot-check a few closed/open positions with a stronger statement than allclose.
+    EXPECT_LT(std::abs(gated(0, 0, 1, 0)), 1e-3F) << "(b=0,h=0,s=1,d=0) is closed and should be ~0";
+    EXPECT_LT(std::abs(gated(1, 0, 0, 0)), 1e-3F) << "(b=1,h=0,s=0,d=0) is closed and should be ~0";
+    EXPECT_LT(std::abs(gated(0, 1, 0, 0)), 1e-3F) << "(b=0,h=1,s=0,d=0) is closed and should be ~0";
+    EXPECT_LT(std::abs(gated(0, 0, 0, 32)), 1e-3F) << "(b=0,h=0,s=0,d=32) is closed and should be ~0";
+    EXPECT_NEAR(gated(0, 0, 0, 0), ungated(0, 0, 0, 0), 1e-2F) << "(b=0,h=0,s=0,d=0) is open";
+    EXPECT_NEAR(gated(1, 1, 0, 0), ungated(1, 1, 0, 0), 1e-2F) << "(b=1,h=1,s=0,d=0) is open";
+}
+
+TEST_F(SDPAForwardTest, GateTest_WorksWithoutIntermediates) {
+    // Gate path with return_intermediates = false must still produce the gated output and no intermediates.
+    using namespace ttml;
+    auto t = make_gate_fixture();
+    auto* device = &autograd::ctx().get_device();
+    auto q = core::from_xtensor(t.query, device);
+    auto k = core::from_xtensor(t.key, device);
+    auto v = core::from_xtensor(t.value, device);
+
+    xt::xarray<float> gate_host = ttml::test_utils::make_uniform_xarray<float>(t.out_shape, -4.0F, 4.0F, 1234U);
+    auto gate = core::from_xtensor(gate_host, device);
+
+    auto ungated = metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, std::nullopt, std::nullopt, 0.0F, false);
+    auto gated = metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, std::nullopt, gate, 0.0F, false);
+
+    ASSERT_TRUE(gated[0].has_value());
+    EXPECT_FALSE(gated[1].has_value()) << "Intermediates must be absent when return_intermediates=false";
+
+    xt::xarray<float> gated_host = core::to_xtensor(gated[0].value());
+    xt::xarray<float> expected = apply_gate_reference(core::to_xtensor(ungated[0].value()), gate_host);
+    std::vector<size_t> expected_shape(t.out_shape.begin(), t.out_shape.end());
+    EXPECT_EQ(gated_host.shape(), expected_shape) << "Gated output must keep the (B, H, S, Dh_v) shape";
+    EXPECT_TRUE(xt::allclose(gated_host, expected, 2e-2F, 2e-2F))
+        << "Gated output mismatch without intermediates (MSE: " << compute_mse(expected, gated_host) << ")";
+}
+
+TEST_F(SDPAForwardTest, GateTest_RejectsWrongShapes) {
+    // The op validates the gate as (B, num_query_heads, S, head_dim_v). Each case below breaks exactly one dim.
+    using namespace ttml;
+    const uint32_t B = 1U, Hq = 4U, Hkv = 2U, S = 64U, Dh_qk = 64U, Dh_v = 32U;
+    auto* device = &autograd::ctx().get_device();
+    const std::array<std::size_t, 4> q_shape{B, Hq, S, Dh_qk};
+    const std::array<std::size_t, 4> k_shape{B, Hkv, S, Dh_qk};
+    const std::array<std::size_t, 4> v_shape{B, Hkv, S, Dh_v};
+    auto q = core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(q_shape, -1.0F, 1.0F, 1U), device);
+    auto k = core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(k_shape, -1.0F, 1.0F, 2U), device);
+    auto v = core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(v_shape, -1.0F, 1.0F, 3U), device);
+
+    auto make_gate = [&](std::array<std::size_t, 4> shape) {
+        return core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 4U), device);
+    };
+    auto run = [&](const ttnn::Tensor& gate) {
+        return metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, std::nullopt, gate, 0.0F, false);
+    };
+
+    // Correct shape must be accepted.
+    EXPECT_NO_THROW(run(make_gate({B, Hq, S, Dh_v}))) << "Correct gate shape (B, Hq, S, Dh_v) was rejected";
+
+    // Wrong head count: KV heads instead of query heads.
+    EXPECT_ANY_THROW(run(make_gate({B, Hkv, S, Dh_v}))) << "Gate with num_key_heads heads should be rejected";
+    // Wrong last dim: Q/K head dim instead of V head dim.
+    EXPECT_ANY_THROW(run(make_gate({B, Hq, S, Dh_qk}))) << "Gate with Q/K head dim should be rejected";
+    // Wrong sequence length.
+    EXPECT_ANY_THROW(run(make_gate({B, Hq, S / 2U, Dh_v}))) << "Gate with wrong S should be rejected";
+    // Wrong batch.
+    EXPECT_ANY_THROW(run(make_gate({B + 1U, Hq, S, Dh_v}))) << "Gate with wrong B should be rejected";
+    // Fused-heads layout (B, 1, S, Hq*Dh_v) is not what the op expects.
+    EXPECT_ANY_THROW(run(make_gate({B, 1U, S, Hq * Dh_v}))) << "Gate in fused-heads layout should be rejected";
+}
+
+// =============================================================================
+// MULTI-BATCH TESTS (small shapes) - batch indexing of Q/K/V/output across cores
+// =============================================================================
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_MultiBatch_2B_Causal) {
+    SDPATestConfig config{
+        .batch_size = 2U,
+        .sequence_length = 64U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "MultiBatch_2B_Causal"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_MultiBatch_3B_ArbitraryMask_GQA) {
+    // Odd batch count so rows do not divide evenly across cores, plus 2:1 grouping.
+    SDPATestConfig config{
+        .batch_size = 3U,
+        .sequence_length = 64U,
+        .query_dim = 128U,
+        .key_value_dim = 64U,
+        .num_query_heads = 2U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+        .test_name = "MultiBatch_3B_Arbitrary_GQA"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_MultiBatch_4B_NoMask_GQA) {
+    SDPATestConfig config{
+        .batch_size = 4U,
+        .sequence_length = 64U,
+        .query_dim = 256U,
+        .key_value_dim = 128U,
+        .num_query_heads = 4U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::None,
+        .test_name = "MultiBatch_4B_NoMask_GQA"};
+    run_sdpa_test(config);
+}
+
+// =============================================================================
+// HEAD DIM TESTS - vary Wt so the finalize loop uses different DST block sizes
+//   Dh=64  -> vWt=2 -> block_size=2, 1 block   (covered elsewhere)
+//   Dh=96  -> vWt=3 -> block_size=3, 1 block   (DST at its fullest: 3 data + 1 scratch)
+//   Dh=128 -> vWt=4 -> block_size=2, 2 blocks  (tile_idx offset into the second block)
+//   Dh=160 -> vWt=5 -> block_size=1, 5 blocks
+// =============================================================================
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_HeadDim128_Causal) {
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "HeadDim128_Causal"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_HeadDim128_ArbitraryMask_2H) {
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 256U,
+        .key_value_dim = 256U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+        .test_name = "HeadDim128_Arbitrary_2H"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_HeadDim96_Causal) {
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 96U,
+        .key_value_dim = 96U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "HeadDim96_Causal"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_HeadDim160_Causal) {
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 160U,
+        .key_value_dim = 160U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "HeadDim160_Causal"};
+    run_sdpa_test(config);
+}
+
+// =============================================================================
+// IRREGULAR ARBITRARY MASK TESTS - masks that are not lower triangular
+// =============================================================================
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ArbitraryMask_SlidingWindow) {
+    // Window of 64 elements (2 tiles) over S=256 (8 tiles): most rows have both masked-out
+    // chunks at the start and the causal cut at the diagonal.
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 256U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+        .mask_pattern = MaskPattern::SlidingWindow,
+        .window_size = 64U,
+        .test_name = "ArbitraryMask_SlidingWindow_256S_W64"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ArbitraryMask_Random) {
+    // Non-causal: positions above the diagonal can be kept, so every K/V chunk matters.
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+        .mask_pattern = MaskPattern::RandomKeepDiagonal,
+        .test_name = "ArbitraryMask_Random_128S"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ArbitraryMask_Random_MultiBatch_GQA) {
+    SDPATestConfig config{
+        .batch_size = 2U,
+        .sequence_length = 64U,
+        .query_dim = 256U,
+        .key_value_dim = 128U,
+        .num_query_heads = 4U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+        .mask_pattern = MaskPattern::RandomKeepDiagonal,
+        .test_name = "ArbitraryMask_Random_2B_4Q_2KV"};
+    run_sdpa_test(config);
+}
+
+// =============================================================================
+// BALANCED PARALLELISM - causal, even St, and B*H*St/2 >= number of cores.
+// B=4, H=12, S=256 gives 192 light/heavy row pairs, above the Blackhole worker count,
+// so the program factory selects the paired reader/compute/writer loops.
+// =============================================================================
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_BalancedParallelism_Causal) {
+    SDPATestConfig config{
+        .batch_size = 4U,
+        .sequence_length = 256U,
+        .query_dim = 768U,  // 12 heads * 64
+        .key_value_dim = 768U,
+        .num_query_heads = 12U,
+        .num_key_heads = 12U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "BalancedParallelism_4B_12H_256S"};
+    run_sdpa_test(config);
+}
+
+// =============================================================================
+// VALIDATION - argument combinations the op must reject before launching anything
+// =============================================================================
+
+TEST_F(SDPAForwardTest, ValidationTest_RejectsInvalidArgumentCombinations) {
+    using namespace ttml;
+    const uint32_t B = 1U, H = 2U, S = 64U, Dh = 64U;
+    auto* device = &autograd::ctx().get_device();
+    const std::array<std::size_t, 4> shape{B, H, S, Dh};
+    auto q = core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 1U), device);
+    auto k = core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 2U), device);
+    auto v = core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 3U), device);
+    auto mask = core::from_xtensor(generate_sliding_window_mask(S, S), device);
+
+    // Dropout is not implemented in the forward kernel (ticket #28205); any non-zero value must be rejected.
+    EXPECT_ANY_THROW(metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, std::nullopt, std::nullopt, 0.1F, false))
+        << "Non-zero dropout should be rejected";
+
+    // Arbitrary mask type requires a mask tensor.
+    EXPECT_ANY_THROW(
+        metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Arbitrary, std::nullopt, std::nullopt, 0.0F, false))
+        << "Arbitrary mask_type without a mask tensor should be rejected";
+
+    // A mask tensor is only valid with Arbitrary.
+    EXPECT_ANY_THROW(metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, mask, std::nullopt, 0.0F, false))
+        << "Mask tensor with Causal mask_type should be rejected";
+    EXPECT_ANY_THROW(metal::sdpa_fw(q, k, v, metal::AttentionMaskType::None, mask, std::nullopt, 0.0F, false))
+        << "Mask tensor with None mask_type should be rejected";
+
+    // Mask with the wrong sequence length.
+    auto short_mask = core::from_xtensor(generate_sliding_window_mask(S / 2U, S / 2U), device);
+    EXPECT_ANY_THROW(
+        metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Arbitrary, short_mask, std::nullopt, 0.0F, false))
+        << "Mask with wrong S should be rejected";
+
+    // The valid combinations must still be accepted.
+    EXPECT_NO_THROW(metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, std::nullopt, std::nullopt, 0.0F, false));
+    EXPECT_NO_THROW(metal::sdpa_fw(q, k, v, metal::AttentionMaskType::None, std::nullopt, std::nullopt, 0.0F, false));
+    EXPECT_NO_THROW(metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Arbitrary, mask, std::nullopt, 0.0F, false));
+}
+
+// =============================================================================
+// DETERMINISM - same inputs twice must give bit-identical outputs and intermediates
+// =============================================================================
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_Deterministic_Ungated) {
+    auto t = make_gate_fixture(/*B=*/2U, /*H=*/2U, /*S=*/128U);
+    auto [out1, lse1] = run_kernel_causal(t, std::nullopt);
+    auto [out2, lse2] = run_kernel_causal(t, std::nullopt);
+    EXPECT_TRUE(xt::all(xt::equal(out1, out2))) << "Ungated output differs between two identical runs";
+    EXPECT_TRUE(xt::all(xt::equal(lse1, lse2))) << "Ungated logsumexp differs between two identical runs";
+}
+
+TEST_F(SDPAForwardTest, GateTest_Deterministic) {
+    auto t = make_gate_fixture(/*B=*/2U, /*H=*/2U, /*S=*/128U);
+    xt::xarray<float> gate = ttml::test_utils::make_uniform_xarray<float>(t.out_shape, -4.0F, 4.0F, 777U);
+    auto [out1, lse1] = run_kernel_causal(t, gate);
+    auto [out2, lse2] = run_kernel_causal(t, gate);
+    EXPECT_TRUE(xt::all(xt::equal(out1, out2))) << "Gated output differs between two identical runs";
+    EXPECT_TRUE(xt::all(xt::equal(lse1, lse2))) << "Gated logsumexp differs between two identical runs";
+}
+
+// =============================================================================
+// MORE GATE TESTS - DST block sizes, irregular masks, balanced parallelism, odd batch
+// =============================================================================
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_Gate_VDim128_TwoBlocks) {
+    // vWt=4, block_size=2: the gate copy_tile must offset by tile_idx into the second block.
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .use_gate = true,
+        .test_name = "Gate_VDim128_TwoBlocks"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_Gate_VDim96_FullDst) {
+    // vWt=3, block_size=3: three output tiles plus the shared scratch slot fill all four DST tiles.
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .value_dim = 96U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .use_gate = true,
+        .test_name = "Gate_VDim96_FullDst"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_Gate_VDim160_FiveBlocks) {
+    // vWt=5, block_size=1: five single-tile blocks, each loading one gate tile.
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .value_dim = 160U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .use_gate = true,
+        .test_name = "Gate_VDim160_FiveBlocks"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_Gate_ArbitraryMask_Random) {
+    SDPATestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 128U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+        .mask_pattern = MaskPattern::RandomKeepDiagonal,
+        .use_gate = true,
+        .test_name = "Gate_ArbitraryMask_Random"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_Gate_MultiBatch_3B) {
+    SDPATestConfig config{
+        .batch_size = 3U,
+        .sequence_length = 64U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .use_gate = true,
+        .test_name = "Gate_MultiBatch_3B"};
+    run_sdpa_test(config);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_Gate_BalancedParallelism) {
+    // Same shape as BalancedParallelism_Causal: exercises the gate read inside the paired read_row lambda.
+    SDPATestConfig config{
+        .batch_size = 4U,
+        .sequence_length = 256U,
+        .query_dim = 768U,
+        .key_value_dim = 768U,
+        .num_query_heads = 12U,
+        .num_key_heads = 12U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .use_gate = true,
+        .test_name = "Gate_BalancedParallelism_4B_12H_256S"};
     run_sdpa_test(config);
 }
