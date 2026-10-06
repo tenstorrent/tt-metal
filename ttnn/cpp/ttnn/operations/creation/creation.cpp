@@ -5,12 +5,26 @@
 #include "ttnn/operations/creation/creation.hpp"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttnn {
+
+namespace {
+
+// Smallest tensor, in tile-padded bytes per device, that full_impl fills on the device. The device fill pays a fixed
+// program dispatch while the host fill and upload grow with the tensor, so below some size the host path is faster.
+// Measured warm on single-chip Wormhole n150 and Blackhole p150b (TILE, DRAM and L1, one call plus
+// synchronize_device), that size is about 128 KiB on Wormhole and between 128 KiB and 256 KiB on Blackhole, the same
+// in bytes for bfloat16 and float32. The gate follows Wormhole: that costs Blackhole a few microseconds per call
+// between 128 KiB and its crossover, while a 256 KiB gate would cost Wormhole over 10 microseconds just below it.
+// Below the gate the call stays a host write, which cannot run during trace capture.
+constexpr std::size_t k_min_device_fill_bytes = 128 * 1024;
+
+}  // namespace
 
 namespace creation_detail {
 
@@ -189,8 +203,8 @@ Tensor full_impl(
 
     // Fast on-device fill, the same path full_like_impl takes: allocate the tensor on the device and fill it
     // there instead of building it on the host and uploading it. The host path below stays for host tensors,
-    // row-major layouts, the other dtypes, sharded memory configs, and a bfloat16 NaN fill value (the device
-    // fill stores that as inf, the host path as NaN).
+    // row-major layouts, the other dtypes, sharded memory configs, a bfloat16 NaN fill value (the device fill stores
+    // that as inf, the host path as NaN), and tensors smaller than k_min_device_fill_bytes.
     const float float_value = static_cast<float>(fill_value);
     const bool output_on_device =
         !optional_output_tensor.has_value() || optional_output_tensor->storage_type() == StorageType::DEVICE;
@@ -198,17 +212,19 @@ Tensor full_impl(
         dtype_value == DataType::FLOAT32 || (dtype_value == DataType::BFLOAT16 && !std::isnan(float_value));
     if (device_to_use != nullptr && output_on_device && device_fill_dtype && layout_value == Layout::TILE &&
         !mem_cfg.is_sharded()) {
-        Tensor output = optional_output_tensor.has_value()
-                            ? *optional_output_tensor
-                            : create_device_tensor(
-                                  tt::tt_metal::TensorSpec(
-                                      shape_value, TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
-                                  device_to_use);
-        // Round to bfloat16 on the host (ties to even, as the host path does), so the device stores exactly the
-        // value the host path would have written.
-        const float value =
-            dtype_value == DataType::FLOAT32 ? float_value : static_cast<float>(::bfloat16(float_value));
-        return ttnn::fill(output, value, mem_cfg, output);
+        const tt::tt_metal::TensorSpec output_spec =
+            optional_output_tensor.has_value()
+                ? optional_output_tensor->tensor_spec()
+                : tt::tt_metal::TensorSpec(shape_value, TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg));
+        if (output_spec.compute_packed_buffer_size_bytes() >= k_min_device_fill_bytes) {
+            Tensor output = optional_output_tensor.has_value() ? *optional_output_tensor
+                                                               : create_device_tensor(output_spec, device_to_use);
+            // Round to bfloat16 on the host (ties to even, as the host path does), so the device stores exactly the
+            // value the host path would have written.
+            const float value =
+                dtype_value == DataType::FLOAT32 ? float_value : static_cast<float>(::bfloat16(float_value));
+            return ttnn::fill(output, value, mem_cfg, output);
+        }
     }
 
     auto concrete_full = [&]<typename BufferType>(BufferType fill_value) {
