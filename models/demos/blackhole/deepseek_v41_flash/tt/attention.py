@@ -320,7 +320,12 @@ class DSV41Attention:
         # The fused rows-layout kernel rotates every row by the angle of table row 0 (tests/test_attn_fused_rope.py: "all users share row 0"): only valid when all rows
         # share ONE position. Paged decode with per-user positions (ragged) and spec verify blocks (n rows at different positions, > 32 rows) need per-row angles:
         # the unfused path is the default now; DSV41_ROPE_ROWS_FUSED=1 restores the fused kernel (uniform single-position decode only).
-        if AF.flag("DSV41_ATTN_FUSED_ROPE", "1") and AF.flag("DSV41_ROPE_ROWS_FUSED", "0"):
+        # Choice: plain decode keeps the fused kernel (near-identical streams, 4.6 ms/token faster at B=16); spec verify views set ``per_row_rope`` (rows at different
+        # positions). DSV41_ROPE_ROWS_FUSED=1 forces fused everywhere, =0 forces the per-row path everywhere.
+        fused_rows = os.environ.get("DSV41_ROPE_ROWS_FUSED", "auto")
+        if AF.flag("DSV41_ATTN_FUSED_ROPE", "1") and (
+            fused_rows == "1" or (fused_rows == "auto" and not getattr(self, "per_row_rope", False))
+        ):
             return AF.rope_inplace(x, c, s, 1, rows_layout=True)
         return ttnn.addcmul(ttnn.multiply(x, c), self._lin(x, self.Pf, name), s)
 

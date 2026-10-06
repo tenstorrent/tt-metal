@@ -113,6 +113,10 @@ class SpecPagedWindowAttention(_SpecFinish, DSV41PagedAttention):
 
 
 class SpecPagedCompressedAttention(_SpecFinish, DSV41PagedCompressedAttention):
+    per_row_rope = (
+        True  # verify blocks hold rows at different positions: no fused rows-layout RoPE (one angle for all rows)
+    )
+
     def __init__(
         self,
         md,
