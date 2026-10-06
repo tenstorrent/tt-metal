@@ -31,7 +31,7 @@ SKIP_FILES = {
 BANNED_HEADERS = {
     "tt_stl/reflection.hpp": "reflection.hpp pulls in <reflect> and <nlohmann/json.hpp>; use forward declarations or move usage to .cpp files",
     "tt_stl/concepts.hpp": "concepts.hpp pulls in <reflect>; use sizeof(T)==0 for always_false_v, or move usage to .cpp files",
-    "tt-metalium/host_api.hpp": "host_api.hpp declares the free-function API (CreateKernel, CreateBuffer, ...) and pulls in program, buffer, device and kernel headers; include the specific type headers you need, and let .cpp files include host_api.hpp",
+    "tt-metalium/host_api.hpp": "host_api.hpp declares the free-function API (CreateKernel, CreateBuffer, ...) and pulls in program, buffer, device and kernel headers; include only the specific headers you actually need",
 }
 
 # Exhaustive set of UMD headers allowed in the public API.
