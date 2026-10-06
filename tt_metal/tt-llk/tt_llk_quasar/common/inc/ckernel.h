@@ -795,15 +795,17 @@ void set_up_dest_dvalid_per_thread(dest_dvalid_client const (&clients)[N])
  * Writing PRNG_SEED_Seed_Val kicks the seeder, which sweeps all clients; the per-client
  * PRNG_SEED_OVERRIDE_CTRL/DATA path is not needed for a global reseed. The seeder exposes no
  * busy flag, so wait it out with SFPNOPs: 1024 is the bound the Quasar Tensix DV PRNG kernels
- * use (WH/BH init_prng_seed uses 600).
+ * use (WH/BH init_prng_seed uses 600). The all-ones seed is remapped to 0xFFFFFFFE.
  * @note Do not wait for this cfg write with STALLWAIT(TRISC_CFG): that can deadlock behind the
  *       MMIO cfg write it waits for (TEN-4849).
  */
 inline void init_prng_seed(const std::uint32_t seed)
 {
     constexpr std::uint32_t PRNG_SEED_WAIT_NOPS = 1024;
-    auto cfg                                    = (std::uint32_t volatile *)TENSIX_CFG_BASE;
-    cfg[PRNG_SEED_Seed_Val_ADDR32]              = seed;
+    // All ones is the lock-up state of the hardware XNOR LFSR (as in WH/BH rand_init).
+    constexpr std::uint32_t PRNG_LFSR_LOCKUP_SEED = 0xFFFFFFFF;
+    auto cfg                                      = (std::uint32_t volatile *)TENSIX_CFG_BASE;
+    cfg[PRNG_SEED_Seed_Val_ADDR32]                = (seed == PRNG_LFSR_LOCKUP_SEED) ? seed - 1 : seed;
     for (std::uint32_t i = 0; i < PRNG_SEED_WAIT_NOPS; i++)
     {
         TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);

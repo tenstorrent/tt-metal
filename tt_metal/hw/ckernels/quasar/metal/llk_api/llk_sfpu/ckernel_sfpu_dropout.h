@@ -40,6 +40,13 @@ inline void _calculate_dropout_sfp_rows_() {
     TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg */);  // store result
 }
 
+// The p = 0 body for one SFPU row pair: out = x * scale, no PRNG compare (see calculate_dropout).
+inline void _calculate_dropout_scale_sfp_rows_() {
+    TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg */);   // x from dest
+    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* mod1 */);           // x * scale
+    TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg */);  // store result
+}
+
 // Loads a 32-bit runtime value into an LREG as two 16-bit halves.
 inline void _dropout_load_u32_(const std::uint32_t lreg, const std::uint32_t value) {
     TT_SFPLOADI(lreg, sfpi::SFPLOADI_MOD0_LOWER, value & 0xFFFF /* imm16 */);
@@ -63,6 +70,17 @@ inline void calculate_dropout(const std::uint32_t probability, const std::uint32
         probability <= DROPOUT_PROBABILITY_MAX,
         "dropout: probability is p * INT_MAX and is compared signed; bit 31 must be clear");
     _dropout_load_u32_(p_sfpu::LREG1, scale);
+    if (probability == 0) {
+        // The compare drops rand <= probability, which at p = 0 would still drop a zero rand
+        // (1 in 2**31); p = 0 must keep every datum, so skip the compare.
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            _calculate_dropout_scale_sfp_rows_();
+            // dest_reg++, by the two Dest rows just consumed
+            ckernel::math::_incr_counters_<0x0 /* srca */, 0x0 /* srcb */, ckernel::math::SFP_ROWS, 0x0 /* cr */>();
+        }
+        return;
+    }
     _dropout_load_u32_(p_sfpu::LREG2, probability);
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
