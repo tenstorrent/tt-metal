@@ -276,6 +276,40 @@ size_t add_kernel_descriptor(
     return desc.kernels.size() - 1;
 }
 
+void emplace_runtime_args_with_buffers(
+    KernelDescriptor& kernel,
+    const CoreCoord& core,
+    const std::vector<uint32_t>& args,
+    std::initializer_list<std::pair<size_t, Buffer*>> buffer_slots) {
+    KernelDescriptor::RTArgList list;
+    list.reserve(args.size());
+    for (size_t i = 0; i < args.size(); ++i) {
+        Buffer* buffer = nullptr;
+        for (const auto& [slot, slot_buffer] : buffer_slots) {
+            if (slot == i) {
+                buffer = slot_buffer;
+            }
+        }
+        if (buffer != nullptr) {
+            list.push_back(buffer);
+        } else {
+            list.push_back(args[i]);
+        }
+    }
+    kernel.emplace_runtime_args(core, list);
+}
+
+void set_runtime_arg_on_all_cores(Program& program, KernelHandle kernel, size_t slot, uint32_t value) {
+    auto& runtime_args_by_core = GetRuntimeArgs(program, kernel);
+    for (auto& column : runtime_args_by_core) {
+        for (auto& runtime_args : column) {
+            if (runtime_args.size() > slot) {
+                runtime_args[slot] = value;
+            }
+        }
+    }
+}
+
 CBDescriptor make_cb_descriptor(
     const CircularBufferConfig& config,
     const CoreRangeSet& cores,

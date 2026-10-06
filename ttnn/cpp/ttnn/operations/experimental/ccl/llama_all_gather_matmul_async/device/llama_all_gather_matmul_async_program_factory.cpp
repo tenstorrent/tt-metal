@@ -31,25 +31,17 @@ using namespace tt::constants;
 
 namespace ttnn::experimental::prim {
 
-LlamaAllGatherMatmulAsyncProgramFactory::cached_mesh_workload_t
-LlamaAllGatherMatmulAsyncProgramFactory::create_mesh_workload(
-    const LlamaAllGatherMatmulAsyncParams& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const LlamaAllGatherMatmulAsyncInputs& tensor_args,
-    LlamaAllGatherMatmulAsyncResult& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload mesh_workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_vars;
+namespace {
 
-    for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
-        mesh_workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_vars.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
-    }
+// The all-gather kernels are the first three in each per-coordinate descriptor; a Program built from it uses the same
+// indices as kernel handles. The cache-hit override relies on that to find the semaphore slots.
+struct {
+    size_t reader = 0;
+    size_t writer = 1;
+    size_t receiver = 2;
+} constexpr kAllGatherKernels;
 
-    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_vars)};
-}
-
-LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAsyncProgramFactory::create_at(
+tt::tt_metal::ProgramDescriptor build_program_descriptor(
     const LlamaAllGatherMatmulAsyncParams& args,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const LlamaAllGatherMatmulAsyncInputs& tensor_args,
@@ -105,7 +97,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     }
 
     uint32_t ring_index = device_index;
-    tt::tt_metal::Program program{};
+    tt::tt_metal::ProgramDescriptor desc;
 
     // Section for fusion signaler initialization
     auto tensor_slicer =
@@ -129,9 +121,9 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     );
 
     matmul_fused_op_signaler->init_fused_op(
-        program,
+        desc,
         sender_device,
-        aggregated_tensor.memory_config().shard_spec()->grid.bounding_box(),
+        CoreRangeSet(aggregated_tensor.memory_config().shard_spec()->grid.bounding_box()),
         ttnn::experimental::ccl::FusedOpSignalerMode::SINGLE);
     // Section end for fusion signaler initialization
 
@@ -208,7 +200,8 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
+    desc.cbs.push_back(
+        ttnn::experimental::ccl::make_cb_descriptor(cb_src0_config, CoreRangeSet(sender_worker_core_range)));
 
     uint32_t inter_cb_index = tt::CB::c_in2;
     tt::tt_metal::CircularBufferConfig cb_inter_config =
@@ -216,7 +209,8 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
             intermediate_tensor_shard_num_pages * intermediate_tensor_page_size, {{inter_cb_index, df}})
             .set_page_size(inter_cb_index, intermediate_tensor_page_size)
             .set_globally_allocated_address(*intermediate_tensor.buffer());
-    const auto cb_inter = CreateCircularBuffer(program, intermediate_tensor_cores, cb_inter_config);
+    desc.cbs.push_back(ttnn::experimental::ccl::make_cb_descriptor(
+        cb_inter_config, CoreRangeSet(intermediate_tensor_cores), nullptr, intermediate_tensor.buffer()));
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in1;
@@ -227,7 +221,8 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
             num_packet_headers_storable * packet_header_size_bytes * 2,
             {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
+    desc.cbs.push_back(ttnn::experimental::ccl::make_cb_descriptor(
+        cb_reserved_packet_header_config, CoreRangeSet(sender_worker_core_range)));
 
     // KERNEL CREATION
     // Reader
@@ -241,11 +236,11 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     for ([[maybe_unused]] const auto& arg : reader_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
     }
-    auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    const size_t worker_sender_reader_kernel_id = ttnn::experimental::ccl::add_kernel_descriptor(
+        desc,
         "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/"
         "worker_reader.cpp",
-        sender_worker_core_range,
+        CoreRangeSet(sender_worker_core_range),
         reader_kernel_config);
 
     // Writer
@@ -265,11 +260,11 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     for ([[maybe_unused]] const auto& arg : writer_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
     }
-    auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    const size_t worker_sender_writer_kernel_id = ttnn::experimental::ccl::add_kernel_descriptor(
+        desc,
         "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/"
         "worker_writer.cpp",
-        sender_worker_core_range,
+        CoreRangeSet(sender_worker_core_range),
         writer_kernel_config);
 
     // Receiver
@@ -286,29 +281,12 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
         matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[2],  // semaphore id to notify to start mcast
         matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[3],  // semaphore id to notify to start mcast
     };
-    auto worker_receiver_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    const size_t worker_receiver_kernel_id = ttnn::experimental::ccl::add_kernel_descriptor(
+        desc,
         "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/"
         "worker_receiver.cpp",
-        intermediate_tensor_cores,
+        CoreRangeSet(intermediate_tensor_cores),
         receiver_kernel_config);
-    tt::tt_metal::SetRuntimeArgs(
-        program,
-        worker_receiver_kernel_id,
-        intermediate_tensor_cores,
-        {args.semaphore.address(),  // sem_address
-         0,           // core id, corresponds to the id of which device it expect data from, will be reset later
-         ring_index,  // device id
-         aggregated_tensor.buffer()->address(),
-         static_cast<uint32_t>(bbox_physical_start_core.x),
-         static_cast<uint32_t>(bbox_physical_start_core.y),
-         static_cast<uint32_t>(bbox_physical_end_core.x),
-         static_cast<uint32_t>(bbox_physical_end_core.y),
-         static_cast<uint32_t>(bbox.size()),
-         intermediate_tensor_shard_num_pages,
-         0,    // mm_core_offset
-         0,    // next_core_to_left to be notified to start mcast
-         0});  // next_core_to_right to be notified to start mcast
 
     // Kernel Runtime Args
 
@@ -322,14 +300,14 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
         uint32_t next_core_to_left = (i - 1 + args.ring_size) % args.ring_size;
         uint32_t next_core_to_right = (i + 1 + args.ring_size) % args.ring_size;
 
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            worker_receiver_kernel_id,
-            {intermediate_cores_vec[i]},
-            {args.semaphore.address(),
+        ttnn::experimental::ccl::emplace_runtime_args_with_buffers(
+            desc.kernels[worker_receiver_kernel_id],
+            intermediate_cores_vec[i],
+            {static_cast<uint32_t>(
+                 args.semaphore.address()),  // smuggled-rta-ok: re-applied in override_runtime_arguments()
              i,
              ring_index,
-             aggregated_tensor.buffer()->address(),
+             0u,  // aggregated tensor address: buffer binding (slot 3)
              static_cast<uint32_t>(bbox_physical_start_core.x),
              static_cast<uint32_t>(bbox_physical_start_core.y),
              static_cast<uint32_t>(bbox_physical_end_core.x),
@@ -338,7 +316,8 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
              intermediate_tensor_shard_num_pages,
              mm_core_offset,
              next_core_to_left,
-             next_core_to_right});
+             next_core_to_right},
+            {{3, aggregated_tensor.buffer()}});
     }
     uint32_t start_core_index_for_device = intermediate_cores_vec.size() / args.ring_size * ring_index;
     uint32_t end_core_index_for_device = start_core_index_for_device + cores_per_device;
@@ -403,17 +382,18 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
 
         // Set reader runtime args
         std::vector<uint32_t> reader_rt_args = {
-            input0.buffer()->address(),                 // input tensor_address0
-            intermediate_tensor.buffer()->address(),    // output tensor_address0
-            input_tensor_shard_num_pages,               // num_tiles_per_core
-            worker_num_tiles_to_read,                   // num_tiles_to_read
+            0u,                            // input tensor_address0: buffer binding on input0 (slot 0)
+            0u,                            // output tensor_address0: buffer binding on the intermediate tensor (slot 1)
+            input_tensor_shard_num_pages,  // num_tiles_per_core
+            worker_num_tiles_to_read,      // num_tiles_to_read
             input_first_core_tile_start_offset,         // first_core_tile_start_offset
             intermediate_first_core_tile_start_offset,  // intermediate_first_core_tile_start_offset
             input_tensor_cores_x.size(),                // num_cores it reads from
             ring_index,                                 // ring_index
-            args.semaphore.address(),                   // out_ready_sem_bank_addr (absolute address)
-            drain_sync_core.x,                          // out_ready_sem_noc0_x
-            drain_sync_core.y,                          // out_ready_sem_noc0_y
+            static_cast<uint32_t>(
+                args.semaphore.address()),  // smuggled-rta-ok: re-applied in override_runtime_arguments()
+            drain_sync_core.x,              // out_ready_sem_noc0_x
+            drain_sync_core.y,              // out_ready_sem_noc0_y
         };
         reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
         reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
@@ -426,12 +406,17 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
         for ([[maybe_unused]] const auto& arg : reader_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
-        tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
+        ttnn::experimental::ccl::emplace_runtime_args_with_buffers(
+            desc.kernels[worker_sender_reader_kernel_id],
+            core,
+            reader_rt_args,
+            {{0, input0.buffer()}, {1, intermediate_tensor.buffer()}});
 
         // Set writer runtime args
         std::vector<uint32_t> writer_rt_args = {
-            intermediate_tensor.buffer()->address(),    // tensor_address0
-            args.semaphore.address(),                   // out_ready_sem_bank_addr (absolute address)
+            0u,  // tensor_address0: buffer binding on the intermediate tensor (slot 0)
+            static_cast<uint32_t>(
+                args.semaphore.address()),              // smuggled-rta-ok: re-applied in override_runtime_arguments()
             intermediate_tensor_shard_num_pages,        // num_tiles_per_core
             worker_num_tiles_to_read,                   // num_tiles_to_read
             intermediate_first_core_tile_start_offset,  // first_core_tile_start_offset
@@ -452,21 +437,22 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
         if (forward_fabric_node_id.has_value()) {
             const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
             tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_fabric_node_id, forward_fabric_node_id.value(), link, program, {core}, writer_rt_args);
+                sender_fabric_node_id, forward_fabric_node_id.value(), link, desc, core, writer_rt_args);
         }
         writer_rt_args.push_back(backward_fabric_node_id.has_value());
         if (backward_fabric_node_id.has_value()) {
             const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
             tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_fabric_node_id, backward_fabric_node_id.value(), link, program, {core}, writer_rt_args);
+                sender_fabric_node_id, backward_fabric_node_id.value(), link, desc, core, writer_rt_args);
         }
 
-        tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
+        ttnn::experimental::ccl::emplace_runtime_args_with_buffers(
+            desc.kernels[worker_sender_writer_kernel_id], core, writer_rt_args, {{0, intermediate_tensor.buffer()}});
     }
 
     // Call MM program factory with matmul_fused_op_signaler
-    auto matmul_shared_variables = ttnn::operations::llama_matmul::matmul_multi_core_agmm_fusion_helper(
-        program,
+    ttnn::operations::llama_matmul::matmul_multi_core_agmm_fusion_helper(
+        desc,
         aggregated_tensor,         // in0
         {input1},                  // in1
         std::nullopt,              // bias
@@ -481,71 +467,60 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
         matmul_fused_op_signaler->start_cb_index,
         std::nullopt);
 
-    return cached_program_t{
-        std::move(program),
-        {worker_sender_reader_kernel_id,
-         worker_sender_writer_kernel_id,
-         worker_receiver_kernel_id,
-         sender_worker_cores,
-         intermediate_cores_vec,
-         ring_index,
-         cb_inter,
-         matmul_shared_variables}};
+    TT_FATAL(
+        worker_sender_reader_kernel_id == kAllGatherKernels.reader &&
+            worker_sender_writer_kernel_id == kAllGatherKernels.writer &&
+            worker_receiver_kernel_id == kAllGatherKernels.receiver,
+        "llama_all_gather_matmul_async: the all-gather reader/writer/receiver must be the first three kernels (got {}, "
+        "{}, {}); the cache-hit override depends on it",
+        worker_sender_reader_kernel_id,
+        worker_sender_writer_kernel_id,
+        worker_receiver_kernel_id);
+    return desc;
 }
 
-void LlamaAllGatherMatmulAsyncProgramFactory::override_runtime_arguments(
+}  // namespace
+
+tt::tt_metal::WorkloadDescriptor LlamaAllGatherMatmulAsyncProgramFactory::create_workload_descriptor(
+    const LlamaAllGatherMatmulAsyncParams& args,
+    const LlamaAllGatherMatmulAsyncInputs& tensor_args,
+    LlamaAllGatherMatmulAsyncResult& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor workload;
+    const auto coords = tensor_coords.coords();
+    workload.programs.reserve(coords.size());
+    for (const auto& coord : coords) {
+        workload.programs.push_back(
+            {ttnn::MeshCoordinateRange(coord),
+             build_program_descriptor(args, coord, tensor_args, tensor_return_value)});
+    }
+    return workload;
+}
+
+LlamaAllGatherMatmulAsyncMeshWorkloadFactory::cached_mesh_workload_t
+LlamaAllGatherMatmulAsyncMeshWorkloadFactory::create_mesh_workload(
+    const LlamaAllGatherMatmulAsyncParams& args,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const LlamaAllGatherMatmulAsyncInputs& tensor_args,
+    LlamaAllGatherMatmulAsyncResult& tensor_return_value) {
+    return descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensor_args, tensor_return_value);
+}
+
+void LlamaAllGatherMatmulAsyncMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const LlamaAllGatherMatmulAsyncParams& args,
     const LlamaAllGatherMatmulAsyncInputs& tensor_args,
     LlamaAllGatherMatmulAsyncResult& tensor_return_value) {
-    const auto& input0 = tensor_args.input0;
-    const auto& input1 = tensor_args.input1;
-    const auto& intermediate_tensor = tensor_args.intermediate;
-    auto& output_tensor = tensor_return_value.mm;
-    const auto& aggregated_tensor = tensor_return_value.aggregated;
+    // Tensor addresses (input0 / intermediate / aggregated / in1 args, intermediate and matmul CBs).
+    descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, tensor_return_value);
 
-    log_trace(tt::LogOp, "DEBUG: semaphore: {}", args.semaphore.address());
-
+    // The caller-owned GlobalSemaphore: reader arg 8, writer arg 1, receiver arg 0.
+    const auto semaphore_address = static_cast<uint32_t>(args.semaphore.address());
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
-
-        // update senders
-        auto& worker_reader_sender_runtime_args_by_core =
-            GetRuntimeArgs(program, shared_vars.worker_sender_reader_kernel_id);
-        auto& worker_writer_sender_runtime_args_by_core =
-            GetRuntimeArgs(program, shared_vars.worker_sender_writer_kernel_id);
-        for (const auto& core : shared_vars.sender_worker_cores) {
-            // reader
-            auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
-            worker_reader_sender_runtime_args[0] = input0.buffer()->address();
-            worker_reader_sender_runtime_args[1] = intermediate_tensor.buffer()->address();
-            worker_reader_sender_runtime_args[8] = args.semaphore.address();
-            // writer
-            auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-            worker_writer_sender_runtime_args[0] = intermediate_tensor.buffer()->address();
-            worker_writer_sender_runtime_args[1] = args.semaphore.address();
-        }
-
-        // update worker receiver
-        auto& worker_receiver_runtime_args_by_core = GetRuntimeArgs(program, shared_vars.worker_receiver_kernel_id);
-        for (const auto& core : shared_vars.intermediate_cores_vec) {
-            auto& worker_receiver_runtime_args = worker_receiver_runtime_args_by_core[core.x][core.y];
-            worker_receiver_runtime_args[0] = args.semaphore.address();
-            worker_receiver_runtime_args[3] = aggregated_tensor.buffer()->address();
-        }
-
-        // The intermediate CB is globally allocated over the intermediate tensor's buffer. Patching the
-        // reader/writer address args above does not move the CB itself, so without this a cached program
-        // keeps pointing every intermediate access at the first call's allocation.
-        UpdateDynamicCircularBufferAddress(program, shared_vars.cb_inter, *intermediate_tensor.buffer());
-
-        ttnn::operations::llama_matmul::override_agmm_fusion_program_parameters(
-            shared_vars.matmul_shared_variables,
-            args.matmul_struct,
-            program,
-            {aggregated_tensor, input1},
-            {},
-            {output_tensor});
+        ttnn::experimental::ccl::set_runtime_arg_on_all_cores(program, kAllGatherKernels.reader, 8, semaphore_address);
+        ttnn::experimental::ccl::set_runtime_arg_on_all_cores(program, kAllGatherKernels.writer, 1, semaphore_address);
+        ttnn::experimental::ccl::set_runtime_arg_on_all_cores(
+            program, kAllGatherKernels.receiver, 0, semaphore_address);
     }
 }
 
