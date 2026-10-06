@@ -56,6 +56,8 @@ if [[ -z "$ARCH" ]]; then
     exit 4
 fi
 
+(cd "$WORKTREE/tests" && ./setup_testing_env.sh)
+
 rm -rf "$REPORT_DIR"
 mkdir -p "$REPORT_DIR/catalog"
 
