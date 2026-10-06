@@ -41,6 +41,7 @@ from helpers.llk_params import (
 from helpers.param_config import get_num_blocks_and_num_tiles_in_block
 from helpers.sfpu_accuracy_budget import (
     _SFPU_ACCURACY_BUDGET,
+    FLUSH_SUBNORMAL_OUTPUTS,
     MEASURED_ARCH,
     Metric,
     accuracy_contract,
