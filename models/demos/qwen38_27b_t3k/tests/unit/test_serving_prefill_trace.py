@@ -550,3 +550,47 @@ class ServingPrefillAdapterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class ContinuationBookkeepingTests(unittest.TestCase):
+    """What the slot holds while the delegated prefill runs.
+
+    ``serving_prefill_tokens`` and ``prefill_forward`` both guard continuity, and the inner one
+    sees whatever the outer left behind. A fresh request hides any disagreement between them,
+    because a start of zero is legal against every held length; a chunk that continues a prefix
+    does not, so this is where the two have to agree.
+
+    The fixture is borrowed rather than inherited: subclassing would rerun every test above
+    against the validating delegate installed here.
+    """
+
+    def setUp(self):
+        ServingPrefillTraceTests.setUp(self)
+        from models.demos.qwen38_27b_t3k.tt.generator import validate_prefix_continuity
+
+        seen = self.seen_prefix_lens = []
+
+        def validating(tokens, **kwargs):
+            # Stand in for the real prefill_forward, which guards its own rows before touching
+            # them. Recording the held length is what makes the outer mark visible here.
+            seen.append(list(self.gen._slot_prefix_len))
+            validate_prefix_continuity(kwargs["start_pos"], kwargs["slots"], self.gen._slot_prefix_len)
+            return [FakeLogits()]
+
+        self.gen.prefill_forward = validating
+
+    def request(self, *args, **kwargs):
+        return ServingPrefillTraceTests.request(self, *args, **kwargs)
+
+    def test_a_continuation_chunk_reaches_the_delegate_against_the_prefix_it_continues(self):
+        self.request(torch.arange(96).reshape(1, 96), ends=(96,), starts=(64,), slots=(0,))
+        self.assertEqual(self.seen_prefix_lens, [[64, 0, 0, 0]])
+
+    def test_the_slot_records_the_absolute_end_the_chunk_reached(self):
+        self.request(torch.arange(96).reshape(1, 96), ends=(96,), starts=(64,), slots=(0,))
+        self.assertEqual(self.gen._slot_prefix_len[0], 96)
+
+    def test_several_continuing_rows_each_reach_the_delegate_intact(self):
+        self.request(torch.arange(2 * 128).reshape(2, 128), ends=(128, 128), starts=(64, 96), slots=(1, 2))
+        self.assertEqual(self.seen_prefix_lens, [[0, 64, 96, 0], [0, 64, 96, 0]])
+        self.assertEqual(self.gen._slot_prefix_len, [0, 128, 128, 0])
