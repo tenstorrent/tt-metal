@@ -31,7 +31,7 @@ from models.common.moe.tt_moe_gate import TTMoEGate
 from models.common.moe.tt_moe_gate_config import TTMoEGateConfig
 from tests.ttnn.utils_for_testing import comp_pcc
 
-CONFIGS_DIR = Path(__file__).resolve().parents[3] / "modules/moe/configs"
+CONFIGS_DIR = Path(__file__).resolve().parents[2] / "moe" / "configs"
 CONFIG_PATHS = sorted(CONFIGS_DIR.glob("*.yaml"))
 assert CONFIG_PATHS, f"no YAML configs found in {CONFIGS_DIR}"
 

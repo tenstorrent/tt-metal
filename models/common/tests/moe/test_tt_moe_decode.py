@@ -341,7 +341,7 @@ def _add_shared_experts_to_golden_tp(
     return out
 
 
-CONFIGS_DIR = Path(__file__).resolve().parents[3] / "modules" / "moe" / "configs"
+CONFIGS_DIR = Path(__file__).resolve().parents[2] / "moe" / "configs"
 CONFIG_PATHS = sorted(CONFIGS_DIR.glob("*.yaml"))
 
 assert CONFIG_PATHS, f"no YAML configs found in {CONFIGS_DIR}"
