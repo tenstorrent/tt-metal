@@ -78,6 +78,9 @@ constexpr double kMaxStressDurationNs = 1'000'000'000.0;
 // Upper bound for the callback consumer to drain records already published to the host ring.
 constexpr auto kPostQuiesceDrainTimeout = std::chrono::seconds(5);
 
+// Settling window before sampling the multi-consumer accounting test.
+constexpr auto kConsumerAccountingDrain = std::chrono::milliseconds(2000);
+
 // Allowed slack for the deterministic startup race where the compute kernel
 // detects dispatch_d's stream-register clearing before dispatch_s has
 // recorded the first start_timestamp, producing one record where
@@ -490,7 +493,7 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     }
 
     mesh_device->quiesce_devices();
-    std::this_thread::sleep_for(kPostQuiesceDrain);
+    std::this_thread::sleep_for(kConsumerAccountingDrain);
 
     const uint32_t peak_fifo_pages = rt->peak_fifo_pages();
     const uint32_t fifo_capacity_pages = rt->host_fifo_capacity_pages();
