@@ -27,7 +27,7 @@ FIX_MODEL="claude-opus-5-5"      # writes the fix; the harder task
 # ---- Eligibility & caps ----------------------------------------------------
 # A signature is attempted only when it failed in >= MIN_STREAK consecutive
 # runs of its workflow, OR triage pinned a culprit commit with evidence.
-MIN_STREAK="${MIN_STREAK:-2}"
+MIN_STREAK="${MIN_STREAK:-1}"
 MAX_NEW_PER_DAY="${MAX_NEW_PER_DAY:-3}"               # PRs (live) or proposals (dryrun) per UTC day
 MAX_FIX_PER_TICK="${MAX_FIX_PER_TICK:-1}"              # fix attempts per tick (each takes minutes)
 FIX_TIMEOUT_SEC=2400             # hard wall-clock cap on one fix agent run
