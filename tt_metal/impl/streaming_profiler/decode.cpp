@@ -106,15 +106,17 @@ constexpr uint32_t sticky_value(const uint32_t* src) {
 
 }  // namespace
 
-StreamDecoder::StreamDecoder(const CaptureContext::Device& dev, experimental::streaming_profiler::RecordType types) :
+StreamDecoder::StreamDecoder(const CaptureContext::Device& dev, uint32_t types) :
     lanes_(dev.lanes.size()), heads_(dev.lanes.size() / profiler::kSpscNRiscDecode), dev_(dev) {
-    using experimental::streaming_profiler::RecordType;
-    using experimental::streaming_profiler::detail::has;
+    using experimental::streaming_profiler::Event;
+    using experimental::streaming_profiler::TimestampedData;
+    using experimental::streaming_profiler::Zone;
+    using experimental::streaming_profiler::detail::record_bit;
     using profiler::Kind;
     for (const profiler::PacketFormat& format : profiler::kFormats) {
-        const bool skipped = (format.kind == Kind::Zone && !has(types, RecordType::Zones)) ||
-                             (format.kind == Kind::Point && !has(types, RecordType::Events)) ||
-                             (format.kind == Kind::Data && !has(types, RecordType::TimestampedData));
+        const bool skipped = (format.kind == Kind::Zone && (types & record_bit<Zone>) == 0) ||
+                             (format.kind == Kind::Point && (types & record_bit<Event>) == 0) ||
+                             (format.kind == Kind::Data && (types & record_bit<TimestampedData>) == 0);
         skipped_types_ |= skipped ? 1u << format.type : 0u;
     }
     for (size_t lane = 0; lane < dev.lanes.size(); lane++) {
