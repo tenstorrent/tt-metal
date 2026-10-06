@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-metalium/program_descriptors.hpp>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -84,6 +85,9 @@ struct TestCaseConfig {
     // When set: per-packet randomized payload size (shared PRNG with receiver) and
     // sender-only random inter-packet delay. Host byte-count checks are skipped.
     bool randomize_payload_size_and_delay = false;
+    // Build the mux through the ProgramDescriptor overload of add_fabric_mux_v2_to_program (then turn the
+    // descriptor into the deployment's Program) instead of the Program& overload.
+    bool build_mux_from_descriptor = false;
 };
 
 struct SenderMemoryLayout {
@@ -506,21 +510,35 @@ std::optional<MuxDeployment> create_mux_deployment(
         return std::nullopt;
     }
 
-    auto program = std::make_shared<tt::tt_metal::Program>(tt::tt_metal::CreateProgram());
     auto mux_config = std::make_unique<tt::tt_fabric::FabricMuxV2Config>(
         num_channels,
         num_buffers_per_channel,
         channel_buffer_size_bytes,
         device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
 
-    tt::tt_fabric::add_fabric_mux_v2_to_program(
-        *program,
-        *mux_config,
-        mux_logical_core,
-        src_fabric_node_id,
-        anchor_dst_fabric_node_id,
-        link_indices.front(),
-        test_case.forwarder_noc);
+    std::shared_ptr<tt::tt_metal::Program> program;
+    if (test_case.build_mux_from_descriptor) {
+        tt::tt_metal::ProgramDescriptor desc;
+        tt::tt_fabric::add_fabric_mux_v2_to_program(
+            desc,
+            *mux_config,
+            mux_logical_core,
+            src_fabric_node_id,
+            anchor_dst_fabric_node_id,
+            link_indices.front(),
+            test_case.forwarder_noc);
+        program = std::make_shared<tt::tt_metal::Program>(desc);
+    } else {
+        program = std::make_shared<tt::tt_metal::Program>(tt::tt_metal::CreateProgram());
+        tt::tt_fabric::add_fabric_mux_v2_to_program(
+            *program,
+            *mux_config,
+            mux_logical_core,
+            src_fabric_node_id,
+            anchor_dst_fabric_node_id,
+            link_indices.front(),
+            test_case.forwarder_noc);
+    }
 
     return MuxDeployment{
         device,
@@ -847,7 +865,21 @@ class FabricMuxV2Functional2DFixture : public Fabric2DFixture, public ::testing:
 
 TEST_P(FabricMuxV2Functional2DFixture, SharedMuxFunctionalCoverage) { run_test_case(*this, GetParam()); }
 
-constexpr std::array<TestCaseConfig, 6> kSmokeCases = {{
+constexpr std::array<TestCaseConfig, 8> kSmokeCases = {{
+    // Same as the two SingleSender cases below, with the mux built from a ProgramDescriptor.
+    TestCaseConfig{
+        .name = "SingleSender_DefaultPayload_Riscv0_FromDescriptor",
+        .num_packets = kShortPacketCount,
+        .num_buffers_per_channel = 4,
+        .build_mux_from_descriptor = true,
+    },
+    TestCaseConfig{
+        .name = "SingleSender_DefaultPayload_Riscv1_FromDescriptor",
+        .num_packets = kShortPacketCount,
+        .num_buffers_per_channel = 4,
+        .forwarder_noc = tt::tt_metal::NOC::RISCV_1_default,
+        .build_mux_from_descriptor = true,
+    },
     TestCaseConfig{
         .name = "SingleSender_DefaultPayload_Riscv0",
         .num_packets = kShortPacketCount,
