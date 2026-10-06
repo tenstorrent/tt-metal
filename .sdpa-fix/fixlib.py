@@ -374,6 +374,9 @@ def cmd_dispatch(a):
 
 # -------------------------------------------------------------------- guard
 SKIP_RE = re.compile(r"pytest\.mark\.(skip|xfail)|pytest\.skip\(|pytest\.xfail\(|@skip_for_|\bskipif\b")
+# Comment lines that log history (dates, run/job ids, "re-centred …"): git and
+# the PR keep that, the code keeps only the durable rule.
+HISTORY_RE = re.compile(r"^\s*(#|//|\*).*(\b20\d\d-\d\d-\d\d\b|\b(run|job)s? \d{8,}|re-?cent(e|r)?red|re-?baselined)", re.I)
 THRESH_WORDS = re.compile(r"pcc|atol|rtol|toleran|threshold|band|margin|expected|_ns\b|lower|upper|perf|bound", re.I)
 NUM = re.compile(r"\d+(\.\d+)?(e-?\d+)?")
 
@@ -399,6 +402,8 @@ def cmd_guard(a):
             body = line[1:]
             if SKIP_RE.search(body):
                 reasons.append("adds a skip/xfail in %s: %s" % (cur, body.strip()[:120]))
+            if HISTORY_RE.search(body):
+                reasons.append("adds a history comment in %s: %s" % (cur, body.strip()[:120]))
             if cur and THRESH_WORDS.search(body) and NUM.search(body) and minus_nums:
                 thresh_hits.append("%s: %s" % (cur, body.strip()[:140]))
         elif line.startswith("-"):
@@ -428,94 +433,64 @@ def cmd_guard(a):
 
 
 # --------------------------------------------------------------- PR render
+def _shield(text):
+    """Escape one shields.io static-badge field (dash/underscore doubled)."""
+    from urllib.parse import quote
+    return quote(text.replace("-", "--").replace("_", "__"), safe="")
+
+
+def _short_test(test):
+    """'path/to/test_x.py::test_fn[blackhole-k3-torus]' -> 'test_fn[blackhole-k3-torus]'."""
+    return test.split("::")[-1] if "::" in test else test
+
+
 def cmd_render(a):
+    """PR body. House style: short, straight, scannable. One section each for
+    what regressed, why, what changed, how it is being validated, and what a
+    reviewer must check; badges link the failing run and the validation runs.
+    No history, no narrative: git and the linked runs hold the rest."""
     with open(a.meta) as f:
         m = json.load(f)
     v, recs, repo = m["verdict"], m["records"], m["repo"]
-    approach = {"revert": "Revert of the culprit commit", "forward_fix": "Forward fix",
-                "threshold_update": "Threshold update", "none": "No change"}[v["approach"]]
-    L = []
-    L.append("> [!WARNING]")
-    L.append("> **Automated fix: needs human review.** The SDPA autofix bot opened this draft from a "
-             "failing nightly. **It was not run on any device and nothing was built locally.** "
-             "The failing CI legs were dispatched on this branch (see *Validation*). "
-             "Do not mark it ready or merge it until a person has reviewed the diff and the CI results.")
+    gh = "https://github.com/" + repo
+    from urllib.parse import quote
+    L = ["> [!WARNING]",
+         "> Automated fix, not run on hardware. Needs human review before merge."]
     if v.get("threshold_change"):
-        L.append(">")
-        L.append("> ⚠️ **This PR changes a test threshold.** Check the numbers under *Threshold change* before approving.")
-    L.append("")
-    L.append("## Regression")
-    L.append("")
-    L.append("| Pipeline | Job | Test | Failing since |")
-    L.append("|---|---|---|---|")
-    for r in recs:
-        fs = r.get("first_seen") or {}
-        L.append("| `%s` | %s | `%s` | [run #%s](%s) |" % (
-            r["workflow"], r["job"], r["test"], fs.get("number", "?"), fs.get("url", "")))
+        L.append("> This PR changes a test threshold.")
+    L += ["", "### Regression"]
     ls = recs[0].get("last_seen") or {}
+    pipe = m.get("pipeline") or recs[0]["workflow"].replace(".yaml", "")
+    label = "%s #%s" % (pipe, ls.get("number", "?"))
+    L.append("[![%s](https://img.shields.io/badge/%s-failed-d73a49?logo=githubactions&logoColor=white)](%s)"
+             % (label, _shield(label), ls.get("url", "")))
     L.append("")
-    L.append("Latest failing run: [#%s](%s) on `%s` (failed %d consecutive run(s)).  " % (
-        ls.get("number"), ls.get("url"), (ls.get("sha") or "")[:10], max(r.get("streak", 0) for r in recs)))
-    L.append("Error: %s" % "; ".join(sorted(set(r.get("summary") or r.get("error_key") or "" for r in recs))))
-    L.append("")
-    L.append("## Root cause")
-    L.append("")
-    L.append(v["root_cause"])
-    if v.get("culprit_sha"):
-        L.append("")
-        L.append("Culprit: %s %s" % (v["culprit_sha"][:10],
-                                     ('"%s"' % v["culprit_title"]) if v.get("culprit_title") else ""))
-    L.append("")
-    L.append("## Fix: %s" % approach)
-    L.append("")
-    L.append(v["change_summary"])
-    L.append("")
-    L.append("**Why this is correct:** " + v["why_correct"])
-    if v.get("threshold_change"):
-        L.append("")
-        L.append("### Threshold change")
-        L.append("")
-        L.append(v.get("threshold_details") or "(no details given)")
-    L.append("")
-    L.append("**Risk:** " + v["risk"])
-    L.append("")
-    L.append("## Validation")
-    L.append("")
-    L.append("- ❌ Not run on hardware, not built locally (the bot has no device access by design).")
+    tests = sorted(set(_short_test(r["test"]) for r in recs))
+    reg = v.get("regression") or "; ".join(sorted(set(r.get("summary") or r.get("error_key") or "" for r in recs)))
+    L.append("%s: %s" % (", ".join("`%s`" % t for t in tests), reg))
+    L += ["", "### Why", v.get("why") or v["root_cause"]]
+    L += ["", "### Fix", v.get("fix") or v["change_summary"]]
+    L += ["", "### Validation"]
+    branch = m.get("branch") or ""
     for p in m.get("dispatch", []):
-        if p.get("run_url"):
-            L.append("- 🔄 `%s` with `%s`: [run](%s)" % (p["workflow"], _fmt_inputs(p["inputs"]), p["run_url"]))
-        elif p.get("inputs") is not None:
-            L.append("- ⏳ `%s` with `%s`" % (p["workflow"], _fmt_inputs(p["inputs"])))
-        else:
-            L.append("- ⚠️ No dispatch mapping for job *%s*: run it manually." % p["job"])
-    L.append("")
-    L.append("The bot updates this section and the `%s` commit status once the runs finish." % m.get("ci_ctx", "autofix/targeted-ci"))
-    if m.get("related_prs"):
-        L.append("")
-        L.append("**Possibly related open PRs:** " + ", ".join(m["related_prs"]))
-    L.append("")
-    L.append("## Reviewer checklist")
-    L.append("")
+        wf = p["workflow"]
+        if p.get("inputs") is None:
+            L.append("- No dispatch mapping for job *%s*: run it manually." % p["job"])
+            continue
+        badge = "%s/actions/workflows/%s/badge.svg?branch=%s&event=workflow_dispatch" % (gh, wf, quote(branch, safe=""))
+        target = p.get("run_url") or "%s/actions/workflows/%s?query=branch%%3A%s" % (gh, wf, quote(branch, safe=""))
+        L.append("[![%s](%s)](%s) `%s` on this branch" % (wf.replace(".yaml", ""), badge, target, _fmt_inputs(p["inputs"])))
+    L += ["", "### Review"]
     for item in v.get("reviewer_focus") or []:
         L.append("- [ ] " + item)
-    L.append("- [ ] Targeted CI legs above are green")
-    L.append("- [ ] Diff is minimal and matches the surrounding code")
-    L.append("- [ ] Mark ready for review (or close if wrong)")
+    if m.get("related_prs"):
+        nums = [("#" + x.group(1)) for x in (re.search(r"/pull/(\d+)", r) for r in m["related_prs"]) if x]
+        if nums:
+            L.append("- [ ] Possibly related: " + ", ".join(nums))
     L.append("")
-    L.append("<details><summary>Automation details</summary>")
-    L.append("")
-    L.append("- Confidence: **%s**, approach: `%s`" % (v["confidence"], v["approach"]))
-    L.append("- Signatures: %s" % ", ".join("`%s`" % s for s in m["sigs"]))
-    L.append("- Triage kind/owner: %s" % ", ".join(sorted(set("%s/%s" % (r.get("kind"), r.get("owner")) for r in recs))))
-    L.append("- Fix model: `%s`" % m.get("model", "?"))
-    L.append("")
-    L.append("</details>")
-    L.append("")
-    for s in m["sigs"]:
-        L.append("<!-- autofixsig%s -->" % s)
-    L.append("")
-    L.append("🤖 Generated with [Claude Code](https://claude.com/claude-code)")
+    for s_ in m["sigs"]:
+        L.append("<!-- autofixsig%s -->" % s_)
+    L += ["", "🤖 Generated with [Claude Code](https://claude.com/claude-code)"]
     sys.stdout.write("\n".join(L) + "\n")
 
 

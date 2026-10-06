@@ -369,6 +369,7 @@ while IFS= read -r grp; do
   mkdir -p "$pdir"
   printf '%s' "$recs" | jq . > "$pdir/records.json"
   hint=$(printf '%s\n' "${PIPELINES[@]}" | awk -F'|' -v w="$workflow" '$1==w {print $3}')
+  pipe_name=$(printf '%s\n' "${PIPELINES[@]}" | awk -F'|' -v w="$workflow" '$1==w {print $2}')
 
   prompt="$(cat "$FIX_HOME/prompts/fix.txt")
 
@@ -453,12 +454,14 @@ fixed by $upstream · commit:$fsha · waiting for the next run that contains it 
   $FIXLIB dispatch --workflow "$workflow" --jobs "$jobs_list" --repo "$FIX_WORKTREE" > "$pdir/dispatch.json"
   thr=""; [[ "$(jq -r .threshold_change "$pdir/verdict.json")" == "true" ]] && thr=" [threshold]"
   title="$PR_TITLE_PREFIX$thr $v_title"
+  branch="$BRANCH_PREFIX/$sig8-$(slugify "$v_title")"   # known before render: the CI badges link it
   printf '%s\n' "$title" > "$pdir/pr_title.txt"
   render() {
     jq -n --slurpfile v "$pdir/verdict.json" --argjson recs "$recs" --slurpfile d "$pdir/dispatch.json" \
           --argjson rel "$related" --arg repo "$REPO" --arg model "$FIX_MODEL" --arg ci "$CI_STATUS_CONTEXT" \
+          --arg pipe "$pipe_name" --arg br "$branch" \
           '{verdict: $v[0], records: [$recs | to_entries[].value], sigs: ($recs | keys), dispatch: $d[0],
-            related_prs: $rel, repo: $repo, model: $model, ci_ctx: $ci}' > "$pdir/meta.json"
+            related_prs: $rel, repo: $repo, model: $model, ci_ctx: $ci, pipeline: $pipe, branch: $br}' > "$pdir/meta.json"
     $FIXLIB render --meta "$pdir/meta.json" > "$pdir/pr_body.md"
   }
   render
@@ -478,12 +481,11 @@ fixed by $upstream · commit:$fsha · waiting for the next run that contains it 
   fi
 
   # ---------------- live: branch, commit, push, draft PR, dispatch ----------------
-  branch="$BRANCH_PREFIX/$sig8-$(slugify "$v_title")"
   git -C "$FIX_WORKTREE" checkout -q -b "$branch"
   git -C "$FIX_WORKTREE" commit -q --no-verify -F - <<EOF
 $v_title
 
-$(jq -r .root_cause "$pdir/verdict.json")
+$(jq -r '.why // .root_cause' "$pdir/verdict.json")
 
 Automated fix for a nightly regression in $workflow
 ($(jq -r 'to_entries[0].value.last_seen.url' <<<"$recs")). Not run on
