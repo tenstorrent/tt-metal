@@ -6,8 +6,8 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/device_types.hpp>
 // UMD: re-exports CoreType (used in append_fabric_connection/FabricHandle default params).
