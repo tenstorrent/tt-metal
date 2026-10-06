@@ -88,6 +88,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/resource/semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec_validation/resource/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_construction/construct_program.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_construction/processor_assignment/processor_assignment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_run_args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/tensor_spec_relaxations.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
