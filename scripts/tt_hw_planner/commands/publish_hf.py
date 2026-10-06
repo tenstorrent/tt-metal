@@ -54,11 +54,45 @@ _BOX_TARGET = {
     "GalaxyBH": ("blackhole", "p150x4", "P150x4"),
     "P150": ("blackhole", "p150", "P150"),
     "P300": ("blackhole", "p300", "P300"),
-    "T3K": ("wormhole_b0", "n300x4", "N300x4"),
+    "T3K": ("wormhole_b0", "n300x4", "T3K"),
     "GalaxyWH": ("wormhole_b0", "galaxy", "TG"),
     "N150": ("wormhole_b0", "n150", "N150"),
     "N300": ("wormhole_b0", "n300", "N300"),
 }
+
+# The vLLM plugin (vllm_tt_plugin/utils/dp_discovery.py) accepts ONLY these mesh_device labels, or a
+# literal "(rows, cols)" tuple; anything else raises at manifest-load. Keep this in sync with it.
+_PLUGIN_MESH = {
+    "BH-Galaxy",
+    "N150",
+    "N150x4",
+    "N300",
+    "P100",
+    "P150",
+    "P150x2",
+    "P150x4",
+    "P150x8",
+    "P300",
+    "P300x2",
+    "QB2",
+    "T3K",
+    "TG",
+}
+
+
+def _validate_mesh_device(mesh_device: str) -> None:
+    """Raise before publishing if mesh_device is not a value the vLLM plugin will accept."""
+    import re as _re
+
+    if mesh_device in _PLUGIN_MESH:
+        return
+    if _re.fullmatch(r"\(\s*\d+\s*,\s*\d+\s*\)", str(mesh_device)):
+        return
+    raise ValueError(
+        "mesh_device %r is not accepted by the vLLM plugin -- expected one of %s or a '(rows, cols)' "
+        "tuple. Fix the box->mesh mapping or pass --mesh with a valid value."
+        % (mesh_device, ", ".join(sorted(_PLUGIN_MESH)))
+    )
 
 
 def _box_from_env(env: dict | None) -> str | None:
@@ -135,6 +169,7 @@ def _write_tt_model_yaml(
             "no serve target: the run's detected hardware (%s) is no single known box and no --box / "
             "--arch / --hardware / --mesh was given" % (state.get("env") or {}).get("arch")
         )
+    _validate_mesh_device(mesh_device)
     thr = state.get("throughput") or {}
     sv = state.get("serving") or {}
     pt = sv.get("per_token") or {}
