@@ -412,6 +412,24 @@ class SFPU_SHIFT_AMOUNT(TemplateParameter):
 
 
 @dataclass
+class SFPU_DROPOUT_PROBABILITY(TemplateParameter):
+    """Drop probability for the Quasar dropout kernel, as ``p * INT_MAX`` (0 .. 0x7FFFFFFF).
+
+    Emitted as a macro rather than a constexpr for the same reason as
+    :class:`SFPU_SHIFT_AMOUNT`: sfpu_operations_quasar.h selects on ``#ifdef``, the header is
+    shared by every unary test, and only the dedicated dropout tests set this. Unset means
+    p = 0, the deterministic ``x * scale`` the unified sweep checks.
+    """
+
+    dropout_probability: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"#define SFPU_DROPOUT_PROBABILITY {self.dropout_probability & 0x7FFFFFFF}u"
+        )
+
+
+@dataclass
 class DISABLE_SRC_ZERO_FLAG(TemplateParameter):
     disable_src_zero_flag: bool
 

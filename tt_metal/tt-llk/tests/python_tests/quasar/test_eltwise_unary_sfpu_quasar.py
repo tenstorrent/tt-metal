@@ -36,6 +36,8 @@ from helpers.param_config import (
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.sfpu_dispatch_constants import (
+    DROPOUT_PROBABILITY_MAX,
+    DROPOUT_SCALE,
     RELU_MAX_THRESHOLD,
     RELU_MIN_THRESHOLD,
 )
@@ -57,6 +59,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
+    SFPU_DROPOUT_PROBABILITY,
     TEST_FACE_DIMS,
     TILE_COUNT,
     TYPECAST_FORMATS,
@@ -414,6 +417,13 @@ def prepare_inputs_for_operation(
         # cases (mirrors sfpu_domains' Clamp spec).
         min_val = -2.0
         max_val = 2.0
+        src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        src_A = src_A.to(torch_format)
+    elif mathop == MathOperation.Dropout:
+        # Kept datums are scaled by DROPOUT_SCALE (2.0), exact in every float format; [-10, 10]
+        # spans both signs with ample headroom.
+        min_val = -10.0
+        max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
     elif mathop == MathOperation.Neg:
@@ -874,6 +884,9 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Silu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Clamp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    # Dropout at the dispatcher's default p = 0: no datum is dropped, so the golden is x * 2.0.
+    # The drop path is covered by test_dropout_probability_quasar below.
+    OpConfig(MathOperation.Dropout, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     # Column-wise cumulative sum: a whole-tile op (VectorMode::RC_custom, one call per
     # tile) whose running total lives in LREG4-7 between calls. Every tile is swept with
@@ -1031,7 +1044,7 @@ def test_eltwise_unary_sfpu_quasar(
     """
     Consolidated unary-SFPU test on Quasar. One compile-time-selected op per
     variant (abs, exp, gelu, relu, lrelu, relu_min, relu_max, reciprocal, sqrt,
-    tanh, sigmoid, silu, rsqrt, square, cumsum, typecast,
+    tanh, sigmoid, silu, rsqrt, square, cumsum, dropout, typecast,
     floor/ceil/trunc/frac/round, the six
     compare-to-zero modes, and signbit), validated against the UnarySFPUGolden reference.
     Typecast sweeps explicit (src, dst) format pairs; every other op sweeps the
@@ -1548,4 +1561,135 @@ def test_typecast_fp32_to_uint16_edge_cases_quasar(dest_sync):
         "Float32 -> UInt16 mismatch:\n"
         f"got      {result[:32].tolist()}\n"
         f"expected {expected_flat[:32].tolist()}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Dropout drop-path detector.
+#
+# The sweep above runs dropout at p = 0, which proves the x * scale path but never drops a
+# datum. The PRNG mask is not predictable from the host, so the drop path gets its own
+# oracle here:
+#   * p = 1 (probability = INT_MAX) drops every datum — an exact all-zero result;
+#   * p = 1/2 must leave every datum at 0 or x * scale, with the dropped fraction near 1/2.
+# ---------------------------------------------------------------------------
+DROPOUT_DETECTOR_FORMATS = input_output_formats(
+    [DataFormat.Float16_b, DataFormat.Float32], same=True
+)
+
+# (name, probability operand, expected dropped fraction band)
+DROPOUT_PROBABILITY_CASES = (
+    ("drop_all", DROPOUT_PROBABILITY_MAX, (1.0, 1.0)),
+    ("drop_half", DROPOUT_PROBABILITY_MAX // 2, (0.4, 0.6)),
+)
+
+
+@pytest.mark.quasar
+@parametrize(
+    dropout_case_variant_dims=[
+        (case, variant, dims)
+        for case in DROPOUT_PROBABILITY_CASES
+        for variant in generate_quasar_sfpu_format_variants(
+            MathOperation.Dropout, DROPOUT_DETECTOR_FORMATS
+        )
+        # The kept-path oracle is exact, so skip the Float32-into-16-bit-Dest truncation.
+        if not (
+            variant.formats.input_format == DataFormat.Float32
+            and variant.dest_acc == DestAccumulation.No
+        )
+        for dims in TENSOR_DIMS
+    ],
+)
+def test_dropout_probability_quasar(dropout_case_variant_dims):
+    """
+    Prove the dropout kernel's PRNG compare and predicated zero: every output is either 0 or
+    x * scale, and the dropped fraction matches the requested probability.
+    """
+    ((case_name, probability, (min_frac, max_frac)), variant, input_dimensions) = (
+        dropout_case_variant_dims[0]
+    )
+    formats = variant.formats
+
+    src_A, tile_cnt, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        spec_A=StimuliSpec.uniform(low=0.0, high=1.0),
+        spec_B=StimuliSpec.uniform(low=0.0, high=1.0),
+    )
+    # Magnitudes in [0.5, 10] with random signs, so no input is itself zero and a zero output
+    # can only mean the datum was dropped.
+    magnitudes = 0.5 + src_A.to(torch.float32) * 9.5
+    signs = torch.where(src_B.to(torch.float32) < 0.5, -1.0, 1.0)
+    src_A = (signs * magnitudes).to(format_dict[formats.input_format])
+
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs={
+            "test_name": "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
+            "formats": formats,
+            "templates": [
+                MATH_OP(mathop=MathOperation.Dropout),
+                APPROX_MODE(ApproximationMode.No),
+                IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
+                DATA_COPY_TYPE(DataCopyType.A2D),
+                UNPACKER_ENGINE_SEL(
+                    UnpackerEngine.UnpDest
+                    if variant.unpack_to_dest
+                    else UnpackerEngine.UnpA
+                ),
+                DEST_SYNC(DestSync.Half),
+                TYPECAST_FORMATS(),
+                SFPU_DROPOUT_PROBABILITY(probability),
+            ],
+            "runtimes": [
+                TILE_COUNT(tile_cnt),
+                NUM_FACES(MAX_NUM_FACES),
+                TEST_FACE_DIMS(),
+                DEST_INDEX(0),
+                LOOP_FACTOR(1),
+            ],
+            "variant_stimuli": StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt,
+                tile_count_B=tile_cnt,
+                tile_count_res=tile_cnt,
+                num_faces=MAX_NUM_FACES,
+            ),
+            "unpack_to_dest": variant.unpack_to_dest,
+            "dest_acc": variant.dest_acc,
+        },
+    )
+
+    variant.apply_formats(configuration.formats_config)
+
+    res_from_L1 = configuration.run().result
+
+    # Dropout is element-wise, so the result is read back in the stimulus' row-major order.
+    result = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format]).to(
+        torch.float32
+    )
+    kept = src_A.to(torch.float32).flatten() * DROPOUT_SCALE
+    assert (
+        result.numel() == kept.numel()
+    ), f"result has {result.numel()} elements, expected {kept.numel()}"
+
+    dropped = result == 0.0
+    stray = ~dropped & (result != kept)
+    assert not stray.any(), (
+        f"{case_name}: {int(stray.sum())} of {result.numel()} outputs are neither 0 nor "
+        f"x * {DROPOUT_SCALE}; first got {result[stray][:8].tolist()}, "
+        f"expected {kept[stray][:8].tolist()}"
+    )
+
+    dropped_frac = dropped.float().mean().item()
+    assert min_frac <= dropped_frac <= max_frac, (
+        f"{case_name}: dropped fraction {dropped_frac:.4f} outside "
+        f"[{min_frac}, {max_frac}] (probability operand {probability:#x})"
     )

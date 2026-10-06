@@ -36,6 +36,7 @@ from helpers.sfpu_dispatch_constants import (
     CLAMP_MAX,
     CLAMP_MIN,
     CLAMPED_SILU_GLU_LIMIT,
+    DROPOUT_SCALE,
     EXP_WITH_BASE_SCALE,
     HARDSHRINK_LAMBDA,
     INT_MAXMIN_SCALAR,
@@ -2411,6 +2412,7 @@ class UnarySFPUGolden:
             MathOperation.ReduceColumn: self._reduce_columns,
             MathOperation.ReduceRow: self._reduce_rows,
             MathOperation.Cumsum: self._cumsum,
+            MathOperation.Dropout: self._dropout,
             MathOperation.Typecast: self._typecast,
             # Integer unary ops (routed through the integer path in __call__).
             MathOperation.LeftShift: self._left_shift,
@@ -3297,6 +3299,10 @@ class UnarySFPUGolden:
 
     def _neg(self, x):
         return -x
+
+    def _dropout(self, x):
+        # The kept path only: the unified sweep runs dropout at p = 0, where no datum is dropped.
+        return x * DROPOUT_SCALE
 
     def _typecast(self, x):
         # Typecast is an elementwise identity at the value level; the src->dst format

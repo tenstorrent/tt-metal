@@ -82,3 +82,9 @@ SITU_GLU_BETA_UP = 25.0
 # rand's default interval [RAND_FROM, RAND_FROM + RAND_SCALE] (RAND_FROM_BITS / RAND_SCALE_BITS).
 RAND_FROM = 1.0
 RAND_SCALE = 2.0
+
+# dropout scales every kept datum by this (the kernel's kDropoutScaleBits, 2.0f).
+DROPOUT_SCALE = 2.0
+
+# dropout's probability operand is p * INT_MAX; this is p = 1 (every datum dropped).
+DROPOUT_PROBABILITY_MAX = 0x7FFFFFFF
