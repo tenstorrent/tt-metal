@@ -17,8 +17,11 @@ walkthrough of the whole flow.
      "✅ targeted CI passed". The PR stays a draft.
    - Any red: comment, mark `ci_failed`, and post to Slack.
    - PR merged or closed by a human: the ledger records `merged` or `rejected`.
-2. **Triage**. Each run the watcher has newly analyzed is triaged once per
-   run id:
+2. **Triage**, per job. The watcher records the finished in-scope jobs of the
+   run it reports, which may still be in progress. Each job is triaged once by
+   job id. The ledger keeps `job_runs` (the last run in which each job
+   finished), so a test whose job is still queued in a new run stays "still
+   failing" rather than looking fixed:
    - ❌ runs go to `TRIAGE_MODEL` with a JSON schema
      (`schemas/triage.json`). Every in-scope failure gets a
      `kind`/`owner`/`fixable`/`group`.

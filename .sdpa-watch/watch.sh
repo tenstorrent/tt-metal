@@ -11,7 +11,7 @@ set -euo pipefail
 SDPA_HOME="$HOME/.sdpa-watch"
 source "$SDPA_HOME/config.sh"
 
-STATE="$SDPA_HOME/state.json"
+STATE="${WATCH_STATE_FILE:-$SDPA_HOME/state.json}"   # override = dry-run on a copy
 PROMPT_TEMPLATE="$SDPA_HOME/agent_prompt.txt"
 AGENT_ERR="$SDPA_HOME/agent_errors.log"
 DRY_RUN="${DRY_RUN:-0}"
@@ -67,8 +67,54 @@ if ! flock -n 200; then
 fi
 
 # Winner only, once per tick: drop day logs past the retention window.
+find "$SDPA_HOME/joblogs" -maxdepth 1 -name '*.txt' -type f -mtime +7 -delete 2>/dev/null || true
 find "$LOG_DIR" -maxdepth 1 -name '20*-*-*.log' -type f \
      -mtime "+$LOG_RETENTION_DAYS" -delete 2>/dev/null || true
+
+# Failure excerpt of ONE finished job, cached on disk by job id. A finished
+# job's log never changes (a re-run attempt is a new job id), so each job is
+# downloaded once however many ticks — or the autofix bot — ask for it.
+# Long CI logs (10MB+) bury FAILED markers in the body while the last 12k is
+# post-job docker cleanup: grep for failure patterns with context, fall back
+# to the 12k tail if nothing matched.
+job_log_excerpt() {
+  local jid="$1" dir="${SDPA_HOME:-$HOME/.sdpa-watch}/joblogs" full ex
+  mkdir -p "$dir"
+  if [[ -s "$dir/$jid.txt" ]]; then cat "$dir/$jid.txt"; return; fi
+  full=$(gh api "repos/$REPO/actions/jobs/$jid/logs" 2>/dev/null | tr -d '\000') || full=""
+  ex=$(printf '%s' "$full" | { grep -E -B 5 -A 100 '##\[error\]|FAILED |AssertionError|Traceback' || true; })
+  [[ -z "$ex" ]] && ex=$(printf '%s' "$full" | tail -c 12000)
+  [[ -n "$full" ]] && printf '%s' "$ex" > "$dir/$jid.txt"
+  printf '%s' "$ex"
+}
+
+# In-scope jobs of a run, ANY status, as [{id, name, status, conclusion}].
+# Reads $job_pattern from the caller (empty = every job). The API returns the
+# latest attempt of each job, so a re-run replaces the attempt it re-ran.
+# Three tries: L2's run has several pages of jobs, so a transient 502 or TLS
+# timeout on one page is common enough to cost a pipeline its tick.
+inscope_jobs() {
+  local i out
+  for i in 1 2 3; do
+    if out=$(gh api "repos/$REPO/actions/runs/$1/jobs?per_page=100" --paginate \
+               --jq '.jobs[] | {id, name, status, conclusion}' 2>>"$AGENT_ERR" \
+             | jq -sc --arg p "${job_pattern:-}" '[.[] | select($p == "" or (.name | test($p; "i")))]'); then
+      printf '%s' "$out"; return 0
+    fi
+    sleep $((i * 5))
+  done
+  return 1
+}
+
+# While a run is in progress, append its job progress to the block header.
+# Reads $partial / $done_n / $total_n from the caller.
+with_progress() {
+  if (( partial )); then
+    printf '%s' "$1" | sed "1 s|\$|  ⏳ $done_n/$total_n in-scope jobs done|"
+  else
+    printf '%s' "$1"
+  fi
+}
 
 # Extract failure markers from a failed run's job logs. Outputs a single
 # multi-job blob suitable for inclusion in the agent prompt.
@@ -98,13 +144,7 @@ fetch_failure_logs() {
   combined=""
   while IFS=$'\t' read -r jid jname; do
     [[ -z "$jid" ]] && continue
-    jlog_full=$(gh api "repos/$REPO/actions/jobs/$jid/logs" 2>/dev/null)
-    # Long CI logs (10MB+) bury FAILED markers in the body while the last
-    # 12k is post-job docker cleanup. Grep for failure patterns with
-    # context; fall back to 12k tail if nothing matched.
-    jlog=$(printf '%s' "$jlog_full" \
-           | { grep -E -B 5 -A 100 '##\[error\]|FAILED |AssertionError|Traceback' || true; })
-    [[ -z "$jlog" ]] && jlog=$(printf '%s' "$jlog_full" | tail -c 12000)
+    jlog=$(job_log_excerpt "$jid")
     combined+="=== JOB: $jname ===
 $jlog
 
@@ -310,6 +350,12 @@ fi
 git -C "$TT_METAL_DIR" fetch --quiet origin "$BRANCH" 2>/dev/null \
   || log "warn: git fetch failed; commit-range data may be stale"
 
+# GitHub's run list serves a stale index for branch=/event= filtered queries
+# (2026-10: L2's "latest" main run came back as September's #9871 for days,
+# freezing the digest behind the stale-page guard). Adding a created>= window
+# routes the query to a fresh index. 10 days covers every watched schedule.
+RECENT="&created=>$(date -u -d '-10 days' +%F)"
+
 # ---------- per-pipeline processing ----------
 blocks=()
 api_failures=0
@@ -326,15 +372,14 @@ for entry in "${PIPELINES[@]}"; do
   evq="${event_filter:+&event=$event_filter}"
   [[ -n "$event_filter" ]] && log "  event filter: $event_filter"
 
-  # Latest run on $BRANCH (any status). We deliberately do NOT pass
-  # status=completed: a re-attempt flips the run back to in_progress, and
-  # the filter would then hide it and surface an OLDER completed run.
-  # Status is checked client-side below.
+  # Latest run on $BRANCH (any status). Status is checked client-side below:
+  # a re-attempt flips a run back to in_progress, and with per-job tracking an
+  # in-progress run is reported from its FINISHED in-scope jobs.
   # per_page=10 + newest created_at instead of trusting item [0] of a
   # per_page=1 response: the list endpoint occasionally serves a stale page
   # whose first item is an ancient run (2026-08-19 it returned May's #6154
   # as L2's "latest", which then got cached as current state).
-  if ! run=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&per_page=10$evq" \
+  if ! run=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH$RECENT&per_page=10$evq" \
         --jq '[.workflow_runs[]] | sort_by(.created_at) | last' 2>>"$AGENT_ERR"); then
     # gh failed (burst rate limit / auth / network) — NOT the same as "no
     # runs". Reuse the cached summary so the digest content (and therefore
@@ -370,33 +415,44 @@ for entry in "${PIPELINES[@]}"; do
   prev_id=$(jq -r '.run_id // ""' <<<"$prev")
   prev_sha=$(jq -r '.sha    // ""' <<<"$prev")
   prev_num=$(jq -r '.run_number // 0' <<<"$prev")
+  prev_key=$(jq -r '.cache_key // ""' <<<"$prev")
+  cached=$(jq -r '.summary // ""' <<<"$prev")
+  # Progress of the cached block, for the paths that only re-show it.
+  partial=$(jq -r 'if .partial == true then 1 else 0 end' <<<"$prev")
+  done_n=$(jq -r '.done // 0' <<<"$prev"); total_n=$(jq -r '.total // 0' <<<"$prev")
 
-  # Cache hit: same run as last time (covers in-progress re-attempts of the
-  # cached run too — run_id is stable across attempts).
-  if [[ "$run_id" == "$prev_id" ]]; then
-    cached=$(jq -r --arg w "$workflow" '.[$w].summary // ""' "$STATE")
-    if [[ -n "$cached" ]]; then
-      blocks+=("$cached")
-      log "  cache hit (run #$run_number unchanged)"
-      continue
-    fi
+  # Stale-page guard: run_number is monotonic per workflow, so a chosen run
+  # OLDER than the cached one can only mean the API served a stale page (it
+  # cannot be a genuinely new run). Reuse the cache; next tick retries.
+  if (( prev_num > 0 && run_number < prev_num )) && [[ -n "$cached" ]]; then
+    blocks+=("$(with_progress "$cached")")
+    log "  stale API page (run #$run_number < cached #$prev_num) — reusing cached summary"
+    continue
   fi
 
-  # Latest run is in-flight (fresh trigger queued, or a re-attempt). The
-  # cache-hit check above already handles re-attempts of the cached run.
-  # Here we must look past the in-flight run to the latest *completed*
-  # run: if a newer completion exists than what's cached, analyze it;
-  # otherwise the cache is still the freshest real result.
-  if [[ "$status" != "completed" ]]; then
-    log "  run #$run_number is $status — checking latest completed"
-    completed_run=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&status=completed&per_page=10$evq" \
+  if ! jobs=$(inscope_jobs "$run_id"); then
+    api_failures=$((api_failures + 1))
+    if [[ -n "$cached" ]]; then
+      blocks+=("$(with_progress "$cached")"); log "  WARN: job list failed — reusing cached summary"
+    else
+      blocks+=("▸ *$display* — ⚠️ _GitHub query failed this tick_")
+    fi
+    continue
+  fi
+  done_n=$(jq '[.[] | select(.status == "completed")] | length' <<<"$jobs")
+
+  # Nothing in scope of the newest run has finished yet: report the latest
+  # completed run instead (or keep the cache if that is what it already is).
+  if [[ "$status" != "completed" && "$done_n" == "0" ]]; then
+    log "  run #$run_number is $status with 0/$(jq length <<<"$jobs") in-scope jobs done — checking latest completed"
+    completed_run=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH$RECENT&status=completed&per_page=10$evq" \
                     --jq '[.workflow_runs[]] | sort_by(.created_at) | last' 2>/dev/null || echo "null")
     completed_id=""
     if [[ -n "$completed_run" && "$completed_run" != "null" ]]; then
       completed_id=$(jq -r '.id // empty' <<<"$completed_run")
     fi
-
-    if [[ -n "$completed_id" && "$completed_id" != "$prev_id" ]]; then
+    if [[ -n "$completed_id" && "$completed_id" != "$prev_id" ]] \
+       && (( $(jq -r '.run_number' <<<"$completed_run") >= prev_num )); then
       run="$completed_run"
       run_id="$completed_id"
       status=$(jq -r '.status // "unknown"'         <<<"$run")
@@ -404,11 +460,17 @@ for entry in "${PIPELINES[@]}"; do
       sha=$(jq -r '.head_sha'                       <<<"$run")
       url=$(jq -r '.html_url'                       <<<"$run")
       run_number=$(jq -r '.run_number'              <<<"$run")
-      log "  latest completed is #$run_number ($conclusion) — analyzing"
+      if ! jobs=$(inscope_jobs "$run_id"); then
+        api_failures=$((api_failures + 1))
+        [[ -n "$cached" ]] && blocks+=("$(with_progress "$cached")") || blocks+=("▸ *$display* — ⚠️ _GitHub query failed this tick_")
+        continue
+      fi
+      log "  latest completed is #$run_number ($conclusion)"
     else
-      cached=$(jq -r --arg w "$workflow" '.[$w].summary // ""' "$STATE")
+      partial=$(jq -r 'if .partial == true then 1 else 0 end' <<<"$prev")
+      done_n=$(jq -r '.done // 0' <<<"$prev")
       if [[ -n "$cached" ]]; then
-        blocks+=("$cached")
+        blocks+=("$(with_progress "$cached")")
         log "  no newer completed run — reusing cached summary"
         continue
       fi
@@ -418,28 +480,80 @@ for entry in "${PIPELINES[@]}"; do
     fi
   fi
 
-  # Stale-page guard: run_number is monotonic per workflow, so a chosen run
-  # OLDER than the cached one can only mean the API served a stale page (it
-  # cannot be a genuinely new run). Reuse the cache; next tick retries.
-  if (( prev_num > 0 && run_number < prev_num )); then
-    cached=$(jq -r --arg w "$workflow" '.[$w].summary // ""' "$STATE")
-    if [[ -n "$cached" ]]; then
-      blocks+=("$cached")
-      log "  stale API page (run #$run_number < cached #$prev_num) — reusing cached summary"
-      continue
-    fi
+  partial=0; [[ "$status" != "completed" ]] && partial=1
+  total_n=$(jq 'length' <<<"$jobs")
+  done_n=$(jq '[.[] | select(.status == "completed")] | length' <<<"$jobs")
+  finished=$(jq -c '[.[] | select(.status == "completed") | {id, name, conclusion}]' <<<"$jobs")
+  fail_ids=$(jq -r '[.[] | select(.status == "completed" and .conclusion == "failure") | .id | tostring] | sort | join(",")' <<<"$jobs")
+  failed_names=$(jq -c '[.[] | select(.status == "completed" and .conclusion == "failure") | .name] | unique' <<<"$jobs")
+
+  # Baseline = the last COMPLETED run reported for this pipeline. While a new
+  # run is in progress, jobs that failed in the baseline and have not finished
+  # yet are "carried": the block must not flip to ✅ just because the job that
+  # failed last night is still queued.
+  if [[ "$run_id" == "$prev_id" || "$(jq -r '.partial == true' <<<"$prev")" == "true" ]]; then
+    base_failed=$(jq -c '.base_failed // []' <<<"$prev")
+    base_summary=$(jq -r '.base_summary // ""' <<<"$prev")
+  else
+    base_failed=$(jq -c '.failed_names // []' <<<"$prev")
+    base_summary="$cached"
+  fi
+  carry="[]"
+  if (( partial )); then
+    carry=$(jq -c --argjson b "$base_failed" --argjson f "$finished" '$b - [$f[].name]' <<<"null")
+  fi
+  cache_key="$run_id|$( ((partial)) && echo p || echo c )|$fail_ids|$(jq -r 'join(",")' <<<"$carry")"
+
+  # Same run, same failed jobs, same carried jobs → the cached analysis still
+  # holds. Only the progress counter and the finished-jobs list move on.
+  if [[ "$run_id" == "$prev_id" && "$cache_key" == "$prev_key" && -n "$cached" ]]; then
+    blocks+=("$(with_progress "$cached")")
+    jq --arg w "$workflow" --argjson f "$finished" --argjson d "$done_n" --argjson t "$total_n" \
+       '.[$w].jobs = $f | .[$w].done = $d | .[$w].total = $t' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+    log "  cache hit (run #$run_number, $done_n/$total_n in-scope jobs done)"
+    continue
   fi
 
-  # Cache miss: analyze the chosen run.
-  log "  new run #$run_number ($conclusion) — analyzing"
-  summary=$(analyze_run "$run_id" "$run_number" "$conclusion" "$sha" "$url" "")
+  carry_line=""
+  if [[ "$carry" != "[]" ]]; then
+    carry_line="↳ still pending in run #$run_number (failed in the last completed run): $(jq -r 'map("`" + . + "`") | join(", ")' <<<"$carry")"
+  fi
+
+  if (( partial )) && [[ -z "$fail_ids" ]]; then
+    if [[ -n "$carry_line" && -n "$base_summary" ]]; then
+      summary="$base_summary
+$carry_line"
+      log "  run #$run_number in progress, no new failures; $(jq length <<<"$carry") previously-failing job(s) not finished — keeping last result"
+    else
+      summary="▸ *$display*  ✅ success  _run #${run_number}_
+$url"
+      log "  run #$run_number in progress, all $done_n finished in-scope jobs green — no agent call"
+    fi
+  else
+    if (( partial )); then
+      log "  run #$run_number in progress ($done_n/$total_n in-scope jobs done, failed: $fail_ids) — analyzing"
+      summary=$(analyze_run "$run_id" "$run_number" "failure" "$sha" "$url" \
+                "This run is STILL IN PROGRESS: $done_n of $total_n in-scope jobs have finished. Judge only the finished jobs; jobs that have not finished are NOT failures and must not be reported.")
+      [[ -n "$carry_line" ]] && summary="$summary
+$carry_line"
+    elif [[ -n "$fail_ids" && "$conclusion" != "failure" ]]; then
+      # e.g. Blaze: a slow leg gets cancelled, the run concludes "cancelled",
+      # yet in-scope jobs ran and failed. Judge those jobs, not the run label.
+      log "  new run #$run_number ($conclusion, but in-scope jobs failed: $fail_ids) — analyzing"
+      summary=$(analyze_run "$run_id" "$run_number" "failure" "$sha" "$url" \
+                "The run's overall conclusion is '$conclusion' (another leg was cancelled or timed out), but $(jq length <<<"$failed_names") in-scope job(s) ran to completion and FAILED. Judge those failed jobs on their logs; do not report tests-did-not-run for them.")
+    else
+      log "  new run #$run_number ($conclusion) — analyzing"
+      summary=$(analyze_run "$run_id" "$run_number" "$conclusion" "$sha" "$url" "")
+    fi
+  fi
 
   # If the primary run didn't actually run tests (per the agent's ⚠️
   # emoji — which covers infra setup failures as well as the GH-level
   # cancel/timeout conclusions), surface the most recent run where tests
   # *did* run so the digest still reflects real test state.
   primary_first_line=$(printf '%s' "$summary" | head -n1)
-  if [[ "$primary_first_line" == *⚠️* ]]; then
+  if (( ! partial )) && [[ "$primary_first_line" == *⚠️* ]]; then
     log "  primary classified ⚠️ (tests didn't run) — searching for last test-ran run"
     # Walk back through recent completed runs (newest first), skipping
     # the primary itself, runs whose GH conclusion already implies no
@@ -467,7 +581,7 @@ for entry in "${PIPELINES[@]}"; do
       fi
       log "  #$crnum also classified ⚠️ — continuing"
       (( fb_checked >= fb_max )) && { log "  giving up after $fb_max candidates"; break; }
-    done < <(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&status=completed&per_page=15$evq" \
+    done < <(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH$RECENT&status=completed&per_page=15$evq" \
              --jq '[.workflow_runs[]] | sort_by(.created_at) | reverse | .[] | "\(.id)\t\(.conclusion)\t\(.head_sha)\t\(.html_url)\t\(.run_number)"' 2>/dev/null)
 
     if [[ -n "$fb_summary" ]]; then
@@ -482,7 +596,7 @@ for entry in "${PIPELINES[@]}"; do
     fi
   fi
 
-  blocks+=("$summary")
+  blocks+=("$(with_progress "$summary")")
 
   # 🟡 = agent error fallback; keep the old cache entry so the next tick
   # sees a cache miss and retries the analysis.
@@ -491,11 +605,22 @@ for entry in "${PIPELINES[@]}"; do
     continue
   fi
 
-  # Persist new state, keyed on the primary (latest) run id. run_number
-  # feeds the stale-page guard above.
+  # A completed run becomes the new baseline for the next in-progress run.
+  if (( ! partial )); then
+    base_failed="$failed_names"; base_summary="$summary"
+  else
+    failed_names=$(jq -c --argjson c "$carry" '. + $c | unique' <<<"$failed_names")
+  fi
+
+  # Persist new state, keyed on the reported run. run_number feeds the
+  # stale-page guard; jobs (finished in-scope jobs) feeds the autofix bot.
   jq --arg w "$workflow" --arg id "$run_id" --arg sha "$sha" --arg sm "$summary" \
-     --argjson num "$run_number" \
-     '.[$w] = {run_id: $id, run_number: $num, sha: $sha, summary: $sm, updated: now}' \
+     --argjson num "$run_number" --arg key "$cache_key" --argjson part "$( ((partial)) && echo true || echo false )" \
+     --argjson d "$done_n" --argjson t "$total_n" --argjson f "$finished" --arg u "$url" \
+     --argjson fn "$failed_names" --argjson bf "$base_failed" --arg bs "$base_summary" \
+     '.[$w] = {run_id: $id, run_number: $num, sha: $sha, url: $u, summary: $sm, cache_key: $key,
+               partial: $part, done: $d, total: $t, jobs: $f, failed_names: $fn,
+               base_failed: $bf, base_summary: $bs, updated: now}' \
      "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
 done
 
@@ -573,7 +698,8 @@ for b in "${blocks[@]}"; do
   first_line=$(printf '%s' "$b" | head -n1)
   if [[ "$first_line" == *✅* ]]; then
     name=$(printf '%s' "$first_line" | sed -E 's/^▸ \*([^*]+)\*.*/\1/')
-    success_names+=("$name")
+    prog=$(printf '%s' "$first_line" | grep -oE '⏳ [0-9]+/[0-9]+' || true)
+    success_names+=("$name${prog:+ ($prog)}")
   else
     name=$(printf '%s' "$first_line" | sed -E 's/^▸ \*([^*]+)\*.*/\1/')
     note=$(autofix_note "$name")
@@ -594,7 +720,11 @@ fi
 # this tick's time to the "checked:" history line. Different fingerprint →
 # post a brand-new message (so status CHANGES still notify) with a fresh tick
 # list. History lives in state.json under _slack.
+# Job progress ("⏳ 6/9 …") moves every tick while a run is in flight; it is
+# stripped here so a progress tick edits the digest in place instead of
+# posting a new message. A new failure or a finished run still changes it.
 fingerprint=$(printf '%s\n' "$success_line" "${failure_blocks[@]+"${failure_blocks[@]}"}" \
+              | sed -E 's/ *\(?⏳ [0-9]+\/[0-9]+( in-scope jobs done)?\)?//g' \
               | sha256sum | awk '{print $1}')
 
 slack_mode="webhook"

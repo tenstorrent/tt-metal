@@ -234,6 +234,37 @@ Edit `MODEL=` in `config.sh`:
 
 ---
 
+## Per-job tracking (in-progress runs)
+
+The watcher no longer waits for a whole run to finish. Each tick it lists the
+newest run's in-scope jobs (those matching the pipeline's job pattern), in any
+status:
+
+- **No in-scope job finished yet:** report the latest completed run, as before.
+- **Some finished:** report the run from its finished jobs. The header shows
+  `⏳ 6/9 in-scope jobs done`, and the success line shows `Blaze Prefill (⏳ 6/9)`.
+  The counter is left out of the Slack fingerprint, so progress alone edits the
+  digest in place.
+- **The agent runs only when the set of failed in-scope jobs changes.** The
+  cache key is `run_id | in-progress-or-complete | failed job ids | carried jobs`.
+  Newly finished green jobs cost nothing.
+- **No early ✅.** Jobs that failed in the last completed run and have not
+  finished in the new one are carried. The block keeps the old ❌ with a
+  `↳ still pending in run #N …` line until they finish.
+- **Cancelled runs.** If in-scope jobs failed, the run is judged on those jobs
+  even when its conclusion is `cancelled` (e.g. Blaze's SC4 leg cancelled).
+- **Job-log cache.** Each failed job's excerpt is cached in `joblogs/<job_id>.txt`
+  for 7 days. A finished job's log never changes, and a re-run attempt gets a
+  new job id. The autofix bot reads the same cache.
+- **Run-list queries carry `created=>` (last 10 days).** GitHub serves a stale
+  index for `branch=`/`event=` filtered run lists. Without the date window, L2's
+  "latest" main run came back as a September run for days, and the stale-page
+  guard froze the digest.
+
+`state.json` per pipeline now also holds `cache_key, partial, done, total, jobs`
+(finished in-scope jobs), `failed_names`, `base_failed` and `base_summary`.
+`WATCH_STATE_FILE=<copy> DRY_RUN=1 FORCE=1 ./watch.sh` dry-runs against a copy.
+
 ## Files
 
 | Path | Purpose |
