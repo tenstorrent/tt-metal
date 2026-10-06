@@ -1,0 +1,17 @@
+{
+ "expected": {
+  "demo": 11,
+  "grid24x40": 2,
+  "grid32": 6,
+  "grid64": 2
+ },
+ "pin": "A3/vision-chunked-32k/divergence_index",
+ "schema": "qwen38-ci-baseline/v1",
+ "source": {
+  "date": "2026-09-29",
+  "evidence": "the vision prefill gate (a dev tool, --device-features) on one 1x4 p150 line, 2026-09-29: the device tower's features spliced into the prompt embeddings, three-axis rotary rows, the decode shift; 32 greedy tokens per fixture against the CPU reference's greedy stream (transformers 5.16.1 Qwen4ExpForConditionalGeneration bf16); the same streams with the 128-row chunk form, and with the CPU reference's features on grid32/demo; the text control at the A3 chunked-32k index before and after the images; every value measured on this run",
+  "head": "93792424627f9800672b74078f3f7dc84c90731d",
+  "sku": "p150x4"
+ },
+ "status": "proposal"
+}

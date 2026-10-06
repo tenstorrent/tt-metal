@@ -1,0 +1,111 @@
+{
+  "source_author": "Samuel Jett (sjettTT, sjett@tenstorrent.com)",
+  "source_sha": "cd9a11771107ea2c27da3303a0556ff7343e4af5",
+  "inputs": "Synthetic FP32 tiles; no checkpoint or generated task responses. Seeds20260930/20261001. Wide reciprocal signedexp2[-12,12], softplus uniform[-20,20]; first points from admitted real-checkpoint GDN9/GDN30 transitions.",
+  "fixtures": [
+    {
+      "operator": "reciprocal",
+      "seed": 20260930,
+      "file": "reciprocal-seed20260930.pt",
+      "artifact_sha256": "22af3ba8965f1d52367c4add3bda12900c6d8b5181889b5bfb684a47544cb405",
+      "input_sha256": "1866e09a1fcc934be9607fbc81ec4af778bfcee88dd6e62d8f0381440d4c5a85",
+      "output_sha256": "df42b69e287e26365be82d44df2444ace39b5e7c4ab0e8ddbeb5e0f89cc9590a",
+      "shape": [
+        1,
+        1,
+        32,
+        32
+      ],
+      "dtype": "torch.float32",
+      "source_helper_sha256": "3f0e73684b40c31f8d0697d87fde0f17e8d08d980c955994680cd0a2b6e8a4fa",
+      "source_run_sha256": "fa3ea1376b5ac33ac8dcb5315e36d324184fa842cd918b220f4e2d1c20e3427d",
+      "source_sfpi_sha256": "2dfa8cb1c02fb350139bdfe886d9dfe2feb687a88757dd8598f96a1832e21a9e",
+      "source_native_sha256": {
+        "libtt-umd.so.0.0": "19d9238f55bddacef69e4430215d41b080735b53f36d83eea86df9ea0022f83c",
+        "libtracy.so.0.13.3": "1a5c8dca3c02ee586b111bdb1a58b7931a00317641e57a0fa45a2bade5b15f69",
+        "libtt_metal.so": "a890cda0ab302a57d1e1eec4c97c4302fdc95b0e5deab480e7de018f94814b2a",
+        "_ttnncpp.so": "7b93c875c6bdb82903d0fba0e6ce14b4898a5374adaba247d322691823e2da63",
+        "_ttnn.so": "1054bfeb7c4dfd4b838e614151264eeb1f8e3fdf74190bd97a12ebc236a98253",
+        "libtt_stl.so": "14e53105716851314dc2d8668659bab3bb818aaf801524f6d45589f848d4a59d"
+      }
+    },
+    {
+      "operator": "reciprocal",
+      "seed": 20261001,
+      "file": "reciprocal-seed20261001.pt",
+      "artifact_sha256": "791ccde686df405559e1461ef5d5da9d13796412590701b6ffe5ffb9a2a09b45",
+      "input_sha256": "529b6e65e15ed6131eb92f709a51575f9b822afd41097c31776657a690de7980",
+      "output_sha256": "d773556ffc580baf18eb287cd6aaeaa2d651e45e30f25e1dab97d69e5f3c0431",
+      "shape": [
+        1,
+        1,
+        32,
+        32
+      ],
+      "dtype": "torch.float32",
+      "source_helper_sha256": "3f0e73684b40c31f8d0697d87fde0f17e8d08d980c955994680cd0a2b6e8a4fa",
+      "source_run_sha256": "fa3ea1376b5ac33ac8dcb5315e36d324184fa842cd918b220f4e2d1c20e3427d",
+      "source_sfpi_sha256": "2dfa8cb1c02fb350139bdfe886d9dfe2feb687a88757dd8598f96a1832e21a9e",
+      "source_native_sha256": {
+        "libtt-umd.so.0.0": "19d9238f55bddacef69e4430215d41b080735b53f36d83eea86df9ea0022f83c",
+        "libtracy.so.0.13.3": "1a5c8dca3c02ee586b111bdb1a58b7931a00317641e57a0fa45a2bade5b15f69",
+        "libtt_metal.so": "a890cda0ab302a57d1e1eec4c97c4302fdc95b0e5deab480e7de018f94814b2a",
+        "_ttnncpp.so": "7b93c875c6bdb82903d0fba0e6ce14b4898a5374adaba247d322691823e2da63",
+        "_ttnn.so": "1054bfeb7c4dfd4b838e614151264eeb1f8e3fdf74190bd97a12ebc236a98253",
+        "libtt_stl.so": "14e53105716851314dc2d8668659bab3bb818aaf801524f6d45589f848d4a59d"
+      }
+    },
+    {
+      "operator": "softplus",
+      "seed": 20260930,
+      "file": "softplus-seed20260930.pt",
+      "artifact_sha256": "d4829f26b92fd1c6c8307def39c6d114410f9f716d6df9b7dbf8ed2c014746c6",
+      "input_sha256": "9b937f38783783bf02d31b2ea07ca8da33981ae20ac5399f1e31c6ee9fa14ed2",
+      "output_sha256": "5e7f116999429187f114cd63abc30c81bc3f88a24ad6e68a6f83078a8d34e44c",
+      "shape": [
+        1,
+        1,
+        32,
+        32
+      ],
+      "dtype": "torch.float32",
+      "source_helper_sha256": "5c5bce25a59d564e030c2fce0148de1c1d5ed4df7b06dc2d00ccbd29dc62adae",
+      "source_run_sha256": "b69f4259d11b2c02ca439a0ec6434c473c9925f31ff1dcabb8f6fbee64e47425",
+      "source_sfpi_sha256": "2dfa8cb1c02fb350139bdfe886d9dfe2feb687a88757dd8598f96a1832e21a9e",
+      "source_native_sha256": {
+        "libtt-umd.so.0.0": "19d9238f55bddacef69e4430215d41b080735b53f36d83eea86df9ea0022f83c",
+        "libtracy.so.0.13.3": "1a5c8dca3c02ee586b111bdb1a58b7931a00317641e57a0fa45a2bade5b15f69",
+        "libtt_metal.so": "a890cda0ab302a57d1e1eec4c97c4302fdc95b0e5deab480e7de018f94814b2a",
+        "_ttnncpp.so": "7b93c875c6bdb82903d0fba0e6ce14b4898a5374adaba247d322691823e2da63",
+        "_ttnn.so": "1054bfeb7c4dfd4b838e614151264eeb1f8e3fdf74190bd97a12ebc236a98253",
+        "libtt_stl.so": "14e53105716851314dc2d8668659bab3bb818aaf801524f6d45589f848d4a59d"
+      }
+    },
+    {
+      "operator": "softplus",
+      "seed": 20261001,
+      "file": "softplus-seed20261001.pt",
+      "artifact_sha256": "675e6ccd316128b1279273361860b88980bd1833109280dfb8dbbc06223b3f27",
+      "input_sha256": "4990fc19a0bc162d26f6dca06a0159aba017c215aef522cab06e1e83c35492c6",
+      "output_sha256": "e578a81bd207353fd78fc560f02bbf7d87275abc26bda6008ceb071cd14fe63d",
+      "shape": [
+        1,
+        1,
+        32,
+        32
+      ],
+      "dtype": "torch.float32",
+      "source_helper_sha256": "5c5bce25a59d564e030c2fce0148de1c1d5ed4df7b06dc2d00ccbd29dc62adae",
+      "source_run_sha256": "b69f4259d11b2c02ca439a0ec6434c473c9925f31ff1dcabb8f6fbee64e47425",
+      "source_sfpi_sha256": "2dfa8cb1c02fb350139bdfe886d9dfe2feb687a88757dd8598f96a1832e21a9e",
+      "source_native_sha256": {
+        "libtt-umd.so.0.0": "19d9238f55bddacef69e4430215d41b080735b53f36d83eea86df9ea0022f83c",
+        "libtracy.so.0.13.3": "1a5c8dca3c02ee586b111bdb1a58b7931a00317641e57a0fa45a2bade5b15f69",
+        "libtt_metal.so": "a890cda0ab302a57d1e1eec4c97c4302fdc95b0e5deab480e7de018f94814b2a",
+        "_ttnncpp.so": "7b93c875c6bdb82903d0fba0e6ce14b4898a5374adaba247d322691823e2da63",
+        "_ttnn.so": "1054bfeb7c4dfd4b838e614151264eeb1f8e3fdf74190bd97a12ebc236a98253",
+        "libtt_stl.so": "14e53105716851314dc2d8668659bab3bb818aaf801524f6d45589f848d4a59d"
+      }
+    }
+  ]
+}
