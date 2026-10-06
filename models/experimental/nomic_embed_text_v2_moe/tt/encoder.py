@@ -22,7 +22,8 @@ class TtNomicBertEncoder(LightweightModule):
 
     The rotary tables and the additive mask are arguments rather than members: both depend only
     on S, which is the batch's longest sequence and so varies per call, and building them once
-    per forward pass instead of once per block saves 11 repetitions of the same host work.
+    per forward pass instead of once per block saves 11 repetitions of the same host work. The
+    model keeps the tables across forwards (tt.common.RotaryTables).
     """
 
     def __init__(self, device, config, tt_config, state_dict, state_dict_prefix="encoder."):
@@ -51,7 +52,7 @@ class TtNomicBertEncoder(LightweightModule):
 
         Args:
             hidden_states: (B, 1, S, H) post-embedding input.
-            rot_mats: (cos, sin), each (1, 1, S, D).
+            rot_mats: (cos, sin), each (1, 1, S, D) or longer, from tt.common.RotaryTables.
             attn_mask: (B, 1, S, S) additive mask, or None.
 
         Returns:
