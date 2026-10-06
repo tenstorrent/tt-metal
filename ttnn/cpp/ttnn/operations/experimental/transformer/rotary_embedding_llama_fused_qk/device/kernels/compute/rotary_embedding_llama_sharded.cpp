@@ -88,10 +88,17 @@ void kernel_main() {
         // rotated = x @ trans_mat
         matmul_init(in_dfb, trans_mat_dfb);
         ACQ();
+#ifdef ARCH_BLACKHOLE
+        for (uint32_t j = 0; j < Wt; ++j) {
+            matmul_tiles(in_dfb, trans_mat_dfb, j, 0, j);
+        }
+        pack_block_mop(0, rotated_in_interm_dfb, Wt);
+#else
         for (uint32_t j = 0; j < Wt; ++j) {
             matmul_tiles(in_dfb, trans_mat_dfb, j, 0, j);
             pack_tile(j, rotated_in_interm_dfb, j);
         }
+#endif
         REL();
         rotated_in_interm_dfb_obj.push_back(Wt);
         mul_bcast_rows_init(rotated_in_interm_dfb, sin_dfb);
@@ -120,11 +127,19 @@ void kernel_main() {
                 ckl::DataFormatReconfig::Disabled)>{});
 
         ACQ();
+#ifdef ARCH_BLACKHOLE
+        for (uint32_t j = 0; j < Wt; ++j) {
+            // cos_interim = x * cos
+            mul_tiles_bcast<BroadcastType::ROW>(in_dfb, cos_dfb, j, j, j);
+        }
+        pack_block_mop(0, cos_interm_dfb, Wt);
+#else
         for (uint32_t j = 0; j < Wt; ++j) {
             // cos_interim = x * cos
             mul_tiles_bcast<BroadcastType::ROW>(in_dfb, cos_dfb, j, j, j);
             pack_tile(j, cos_interm_dfb, j);
         }
+#endif
         REL();
         cos_interm_dfb_obj.push_back(Wt);
         in_dfb_obj.pop_front(Wt);  // Done with input
@@ -133,11 +148,19 @@ void kernel_main() {
         cos_interm_dfb_obj.wait_front(Wt);
         add_init(cos_interm_dfb, sin_interm_dfb);
         ACQ();
+#ifdef ARCH_BLACKHOLE
+        for (uint32_t j = 0; j < Wt; ++j) {
+            // out = cos_interim + sin_interim
+            add_tiles(cos_interm_dfb, sin_interm_dfb, j, j, j);
+        }
+        pack_block_mop(0, out_dfb, Wt);
+#else
         for (uint32_t j = 0; j < Wt; ++j) {
             // out = cos_interim + sin_interim
             add_tiles(cos_interm_dfb, sin_interm_dfb, j, j, j);
             pack_tile(j, out_dfb, j);
         }
+#endif
         REL();
         out_dfb_obj.push_back(Wt);
         sin_interm_dfb_obj.pop_front(Wt);

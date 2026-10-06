@@ -498,8 +498,12 @@ void kernel_main() {
         // The combined/multicast statistics are transposed to columns downstream.
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(welford_mean_dst, dfb_ex_partial_id, 2);
+#else
         pack_tile(welford_mean_dst, dfb_ex_partial_id);
         pack_tile(welford_var_dst, dfb_ex_partial_id);
+#endif
         tile_regs_release();
         index_h_offset += block_wt;
     }
@@ -564,9 +568,13 @@ void kernel_main() {
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, dfb_transpose_id, tiles_to_load);
+#else
         for (uint32_t i = 0; i < tiles_to_load; i++) {
             pack_tile(i, dfb_transpose_id);
         }
+#endif
         tile_regs_release();
         processed_tiles += tiles_to_load;
     }
@@ -635,9 +643,13 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                pack_block_mop(0, dfb_xmm_id, subblock_wt);
+#else
                 for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
                     pack_tile(sbi, dfb_xmm_id);
                 }
+#endif
                 tile_regs_release();
                 index_subblock_w_offset += subblock_wt;
             }
@@ -668,9 +680,13 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                pack_block_mop(0, dfb_im_id, subblock_wt);
+#else
                 for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
                     pack_tile(sbi, dfb_im_id);
                 }
+#endif
                 tile_regs_release();
                 index_subblock_w_offset += subblock_wt;
             }
@@ -705,9 +721,13 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                pack_block_mop(0, dfb_outgamma_id, subblock_wt);
+#else
                 for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
                     pack_tile(sbi, dfb_outgamma_id);
                 }
+#endif
                 tile_regs_release();
                 index_subblock_w_offset += subblock_wt;
             }
@@ -741,9 +761,13 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                pack_block_mop(0, dfb_out_id, subblock_wt);
+#else
                 for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
                     pack_tile(sbi, dfb_out_id);
                 }
+#endif
                 tile_regs_release();
                 index_subblock_w_offset += subblock_wt;
             }
