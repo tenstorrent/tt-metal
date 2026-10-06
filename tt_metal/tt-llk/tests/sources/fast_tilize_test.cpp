@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Keep blocks in source order: reordered loop blocks move with code before the zone (#55169).
+#ifndef LLK_FT_REORDER // experiment: REPRO_FT_REORDER=1 drops the pragma
 #pragma GCC optimize("no-reorder-blocks")
+#endif
 
 #include <algorithm>
 #include <cstdint>
