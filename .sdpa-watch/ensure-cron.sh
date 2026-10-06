@@ -17,7 +17,7 @@ MARKER='.sdpa-watch/watch.sh'
 CRON_LINE='0 * * * * $HOME/.sdpa-watch/watch.sh >> $HOME/.sdpa-watch/logs/cron-preinit.log 2>&1'
 # Sibling autofix (~/.sdpa-fix), restored alongside the watcher when installed.
 FIX_MARKER='.sdpa-fix/fixer.sh'
-FIX_CRON_LINE='15 * * * * $HOME/.sdpa-fix/fixer.sh >> $HOME/.sdpa-fix/logs/cron.log 2>&1'
+FIX_CRON_LINE='10 * * * * $HOME/.sdpa-fix/fixer.sh >> $HOME/.sdpa-fix/logs/cron.log 2>&1'
 
 daemon_up()  { pgrep -x cron >/dev/null 2>&1; }
 tab_present() {

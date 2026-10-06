@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SDPA autofix — turns the SDPA watcher's ❌ runs into DRAFT PRs marked for
-# human review. Cron'd hourly at :15 (between the sdpa :00 and conv :30
+# human review. Cron'd hourly at :10 (between the sdpa :00 and conv :30
 # watchers). See README.md for the design; config.sh for knobs.
 #
 #   FIX_MODE=dryrun|live   (default from config.sh)

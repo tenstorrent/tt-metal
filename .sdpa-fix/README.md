@@ -9,7 +9,7 @@ snapshot of its code (no ledger, proposals or logs). Edit the live copy, then
 copy the changed files here before committing. `flow.html` is the interactive
 walkthrough of the whole flow.
 
-## Flow (one tick, cron `15 * * * *`)
+## Flow (one tick, cron `10 * * * *`)
 
 1. **Follow-up** (live mode only). For every open autofix draft, poll the CI
    runs it dispatched:
