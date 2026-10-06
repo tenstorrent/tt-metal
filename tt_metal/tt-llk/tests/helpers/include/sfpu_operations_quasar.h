@@ -62,6 +62,7 @@
 #include "llk_sfpu/ckernel_sfpu_selu.h"
 #include "llk_sfpu/ckernel_sfpu_sigmoid_appx.h"
 #include "llk_sfpu/ckernel_sfpu_sign.h"
+#include "llk_sfpu/ckernel_sfpu_signbit.h"
 #include "llk_sfpu/ckernel_sfpu_softcap.h"
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
 #include "llk_sfpu/ckernel_sfpu_softshrink.h"
@@ -207,6 +208,10 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (is_zero_comp_op(OPERATION))
     {
         init_zero_comp();
+    }
+    else if constexpr (OPERATION == SfpuType::signbit)
+    {
+        init_signbit();
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
@@ -517,6 +522,60 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
 }
 
 /**
+ * @brief Apply signbit in-place on one Dest tile.
+ *
+ * Signbit needs the SFPU math format at runtime to pick the load/store width and the
+ * integer-vs-float result encoding (see `ckernel_sfpu_signbit.h`); the format mapping
+ * matches @ref call_zero_comp_operation_quasar.
+ *
+ * @tparam DST_SYNC Destination synchronization mode used for bounds checking.
+ * @tparam is_fp32_dest_acc_en Whether Dest is in FP32 mode.
+ * @tparam ITERATIONS Number of SFPU loop iterations.
+ * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
+ * @param sfpu_format SFPU math format selecting the sfpmem mode / result encoding.
+ * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for signbit.
+ */
+template <DstSync DST_SYNC, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
+void call_signbit_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format)
+{
+    // A sign-bit test is exact, so signbit has no approximate path.
+    constexpr bool approx_mode = false;
+
+    switch (sfpu_format)
+    {
+        case DataFormat::Int32:
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_signbit, (approx_mode, DataFormat::Int32, ITERATIONS), dst_index, VectorMode::RC);
+            break;
+        case DataFormat::Int16:
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_signbit, (approx_mode, DataFormat::Int16, ITERATIONS), dst_index, VectorMode::RC);
+            break;
+        case DataFormat::Int8:
+        {
+            constexpr DataFormat sfpu_fmt = is_fp32_dest_acc_en ? DataFormat::Int32 : DataFormat::Int8;
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_signbit, (approx_mode, sfpu_fmt, ITERATIONS), dst_index, VectorMode::RC);
+            break;
+        }
+        case DataFormat::UInt16:
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_signbit, (approx_mode, DataFormat::UInt16, ITERATIONS), dst_index, VectorMode::RC);
+            break;
+        case DataFormat::UInt8:
+        {
+            constexpr DataFormat sfpu_fmt = is_fp32_dest_acc_en ? DataFormat::Int32 : DataFormat::UInt8;
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_signbit, (approx_mode, sfpu_fmt, ITERATIONS), dst_index, VectorMode::RC);
+            break;
+        }
+        case DataFormat::Float16:
+        case DataFormat::Float16_b:
+        case DataFormat::Float32:
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_signbit, (approx_mode, DataFormat::Float32, ITERATIONS), dst_index, VectorMode::RC);
+            break;
+        default:
+            LLK_ASSERT(false, "Unsupported Quasar signbit SFPU format");
+            break;
+    }
+}
+
+/**
  * @brief Apply a Quasar unary SFPU op in-place on one Dest tile.
  *
  * @tparam OPERATION The SFPU operation type (compile-time `SfpuType` constant).
@@ -527,7 +586,7 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
  * @tparam TYPECAST_IN_FORMAT Source format for the typecast op (default Float32).
  * @tparam TYPECAST_OUT_FORMAT Destination format for the typecast op (default Float16_b).
  * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
- * @param sfpu_format SFPU math format used by format-dependent ops such as comp and fill.
+ * @param sfpu_format SFPU math format used by format-dependent ops such as comp, signbit and fill.
  * @param first Whether this tile starts a fresh top-to-bottom accumulation chain; only cumsum
  *        reads it. Defaults to true so each tile is independent.
  * @param fill_const_value Constant written by fill; other operations ignore it.
@@ -714,6 +773,10 @@ void call_unary_sfpu_operation_quasar(
     else if constexpr (is_zero_comp_op(OPERATION))
     {
         call_zero_comp_operation_quasar<OPERATION, DST_SYNC, is_fp32_dest_acc_en, ITERATIONS>(dst_index, sfpu_format);
+    }
+    else if constexpr (OPERATION == SfpuType::signbit)
+    {
+        call_signbit_operation_quasar<DST_SYNC, is_fp32_dest_acc_en, ITERATIONS>(dst_index, sfpu_format);
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
