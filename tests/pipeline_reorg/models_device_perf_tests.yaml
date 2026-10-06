@@ -23,7 +23,10 @@
   model: llama3.1-8b
   skus:
     wh_n150:
-      timeout: 20
+      # The two profiled runs take 200 + 175 s on vm-121 / vm-71 but 567 + 286 s (10-02, vm-166) and
+      # 646 + 445 s (10-01, vm-109) on the slower N150 VMs; with setup and tracy post-processing those
+      # runs pass every test and then die at the 20-minute job limit.
+      timeout: 30
       tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_p150:

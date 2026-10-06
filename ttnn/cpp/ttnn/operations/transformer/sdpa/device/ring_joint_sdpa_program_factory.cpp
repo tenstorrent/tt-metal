@@ -1429,8 +1429,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         qk_out_subblock_h,
         qk_out_subblock_w);
 
-    // In-place latent-V reads non-contiguous K^T rows as V columns, so the phase-2 matmul must
-    // emit exactly one output column tile per issue (max_subblock_w=1).
+    // Keep the host phase-2 layout at one column for in-place latent V. The compute helper
+    // independently batches strided K^T rows into DST, including a short final batch.
     auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(
         Sq_chunk_t,
         vDHt,
@@ -2670,7 +2670,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             rotated_handoff_sem_ids.push_back(sem_id);
         }
         // Report the selected schedule once per program compilation.
-        log_info(
+        log_debug(
             tt::LogOp,
             "Rotated Q split ACTIVE: base={} floats={} groups={}x{} groups_needed={} ring_size={} "
             "active_iters={} kv_pad_rotation={} unit_chunks={}",
@@ -2684,7 +2684,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             kv_pad_rotation_enabled,
             rotation_unit_chunks);
     } else if (kernel_chunked || use_head_chain) {
-        log_info(
+        log_debug(
             tt::LogOp,
             "Ring joint rotated Q split declined: base={} floats={} groups_needed={} of {} groups, "
             "balanced={} head_chain={} streaming={} attention_sink={} kv_chains={} groups=\"{}\"; "

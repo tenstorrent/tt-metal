@@ -204,31 +204,26 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
     # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944),
-    # then re-cut four times. Recentered to CI run 36817743337 / job 110348724900: every chunk came
-    # in 0.9-2.7% under the previous centre (run 36356786056 / job 108828333472), chunk 10 within 0.4%
-    # of the band floor.
+    # then re-cut five times.
     (61, 11, 10): [
-        0.394,
+        0.390,
         0.397,
-        0.435,
-        0.462,
+        0.429,
+        0.453,
         0.494,
-        0.527,
-        0.554,
-        0.584,
-        0.630,
-        0.664,
-        0.698,
+        0.526,
+        0.550,
+        0.578,
+        0.623,
+        0.652,
+        0.684,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
     # 55k / code_debug: per-chunk medians over nine post-warmup iterations on a Galaxy with
     # TT_METAL_SHM_TRACKING_DISABLED=1 and LOGURU_LEVEL=ERROR. Tolerance is 5%.
-    # Recentered to the mean of CI run 36817743337 / job 110348725004 and run 36886712494 / job
-    # 110456359778, which agree within 1.7% per chunk: chunks 0-1 came in 8-9% under the previous centre
-    # (run 36032933534 / job 107749492403) and failed its band, the rest 2.9-4.3%.
-    (61, 11, 10): [0.399, 0.399, 0.436, 0.464, 0.496, 0.529, 0.556, 0.587, 0.634, 0.669, 0.706],
+    (61, 11, 10): [0.396, 0.399, 0.430, 0.455, 0.496, 0.528, 0.552, 0.579, 0.624, 0.652, 0.681],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured

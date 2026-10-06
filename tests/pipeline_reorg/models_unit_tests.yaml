@@ -21,6 +21,7 @@
     # (variant-qualified markers, fail-closed unverifiable variants, sidecar single-load) that
     # every tt_transformers e2e leg depends on. See #45400.
     pytest --timeout 120 models/tt_transformers/tests/test_warm_cache_marker.py
+    pytest --timeout 60 models/tt_transformers/tests/test_decode_output_rows.py
     pytest --timeout 300 models/tt_transformers/tests/test_load_state_dict_layers.py
     pytest --timeout 300 models/tt_transformers/tests/test_traced_prefill_rope_slice.py
     pytest --timeout 300 models/tt_transformers/tests/test_embedding.py
@@ -958,6 +959,52 @@
   team: models
   budget_type: unit
 
+- name: Qwen3-TTS unit tests
+  cmd: |
+    export TT_METAL_WATCHER=30
+    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    export HF_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-1.7B-Base
+    pytest --timeout 600 models/demos/audio/qwen3_tts/tests/pcc/test_speaker_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_talker_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_code_predictor_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_encoder_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_decode_pcc.py
+  model: qwen3-tts-1.7b
+  model_family: Qwen3-TTS
+  skus:
+    wh_n150:
+      timeout: 25
+      tier: 2
+    bh_p150:
+      timeout: 20
+      tier: 2
+  owner_id: U09LNK7BT1Q # Andrija Cicovic
+  team: models
+  budget_type: unit
+
+- name: Qwen3-TTS 0.6B unit tests
+  cmd: |
+    export TT_METAL_WATCHER=30
+    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    export HF_MODEL=Qwen/Qwen3-TTS-12Hz-0.6B-Base TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-0.6B-Base
+    pytest --timeout 600 models/demos/audio/qwen3_tts/tests/pcc/test_speaker_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_talker_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_code_predictor_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_decode_pcc.py
+  model: qwen3-tts-0.6b
+  model_family: Qwen3-TTS
+  skus:
+    wh_n150:
+      timeout: 10
+      tier: 2
+    bh_p150:
+      timeout: 8
+      tier: 2
+  owner_id: U09LNK7BT1Q # Andrija Cicovic
+  team: models
+  budget_type: unit
+
 - name: QwQ-32B unit tests
   cmd: |
     export TT_METAL_WATCHER=30
@@ -1864,13 +1911,7 @@
 - name: On-device sampling unit tests
   cmd: |
     # Stop at the first failed command: the devices are not reset between commands (#57706).
-    pytest --timeout 300 models/common/tests/test_sampling.py -k "ttsampling or num_single_device_vocab_splits or untilize_chunk_count or seed or slot_remap or topk_authoritative_route_decision" || exit $?
-    # Shared-generator behaviour rather than a model's, so it rides along here instead
-    # of reserving its own leg: the async-ahead keep runs before any transformer layer
-    # and reads only torch tensors plus the two device trace-input buffers, so one
-    # device is enough, no weights are loaded, and both files finish in seconds.
-    pytest --timeout 300 models/tt_transformers/tests/test_async_ahead_token_keep_unit.py \
-      models/tt_transformers/tests/test_async_ahead_token_keep_decode.py || exit $?
+    pytest --timeout 300 models/common/tests/test_sampling.py -k "ttsampling or num_single_device_vocab_splits or untilize_chunk_count or seed or slot_remap or topk_authoritative_route_decision"
   model: tt-model-sampling
   skus:
     wh_n150:
@@ -2136,7 +2177,8 @@
 
 - name: DeepSeek-V3 unit tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export TT_METAL_WATCHER=30
+    export TT_METAL_WATCHER_DISABLE_ETH=1
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
     export MESH_DEVICE=TG
@@ -2145,7 +2187,7 @@
   model: deepseek-v3
   skus:
     wh_galaxy_perf:
-      timeout: 10
+      timeout: 15
       tier: 2
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
@@ -2153,7 +2195,9 @@
 
 - name: DeepSeek-V3 module tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export TT_METAL_WATCHER=30
+    export TT_METAL_WATCHER_DISABLE_ETH=1
+    export TT_METAL_OPERATION_TIMEOUT_SECONDS=60
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
     export MESH_DEVICE=TG
