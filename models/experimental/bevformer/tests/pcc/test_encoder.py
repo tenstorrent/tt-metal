@@ -20,14 +20,15 @@ from models.experimental.bevformer.tt.tt_common import GRID_DTYPE
 from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
 
 CASES = [
-    # (name, bev_shape, num_layers, batch_size)
-    ("base", BEV_SHAPES["base"], NUM_LAYERS, 1),
-    ("base-1-layer", BEV_SHAPES["base"], 1, 1),
-    ("tiny", BEV_SHAPES["tiny"], NUM_LAYERS, 1),
-    # bs=2, so a batch mix-up in the stacked previous BEV or the reference points shows.
-    ("tiny-bs2", BEV_SHAPES["tiny"], NUM_LAYERS, 2),
+    # (name, bev_shape, num_layers, batch_size, yaw_step_deg)
+    ("base", BEV_SHAPES["base"], NUM_LAYERS, 1, 0.0),
+    ("base-1-layer", BEV_SHAPES["base"], 1, 1, 0.0),
+    ("tiny", BEV_SHAPES["tiny"], NUM_LAYERS, 1, 0.0),
+    # bs=2 with a per-sample shift and the second sample's rig turned, so a batch mix-up in the
+    # stacked previous BEV, the reference points, the shift or the rebatch shows.
+    ("tiny-bs2", BEV_SHAPES["tiny"], NUM_LAYERS, 2, 40.0),
     # Non-square, so a swapped (h, w) in the BEV grid, its reference points or the shift shows.
-    ("50x100", (50, 100), NUM_LAYERS, 1),
+    ("50x100", (50, 100), NUM_LAYERS, 1, 0.0),
 ]
 
 
@@ -40,9 +41,11 @@ def _batch_first(tensor):
 
 
 @torch.no_grad()
-@pytest.mark.parametrize("name, bev_shape, num_layers, batch_size", CASES, ids=[case[0] for case in CASES])
+@pytest.mark.parametrize(
+    "name, bev_shape, num_layers, batch_size, yaw_step_deg", CASES, ids=[case[0] for case in CASES]
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
-def test_encoder(device, reset_seeds, name, bev_shape, num_layers, batch_size):
+def test_encoder(device, reset_seeds, name, bev_shape, num_layers, batch_size, yaw_step_deg):
     """Two consecutive frames: the first without a previous BEV, the second with each side's
     own first-frame output as its previous BEV and an ego shift, so the temporal path carries
     the device's own error forward as it does in the detector."""
@@ -55,7 +58,7 @@ def test_encoder(device, reset_seeds, name, bev_shape, num_layers, batch_size):
         bev_w=bev_w,
         spatial_shapes=SPATIAL_SHAPES,
     )
-    inputs = random_encoder_inputs(bev_shape, batch_size)
+    inputs = random_encoder_inputs(bev_shape, batch_size, yaw_step_deg=yaw_step_deg)
     spatial_shapes = torch.tensor(SPATIAL_SHAPES)
     shift = ego_shift(batch_size)
 

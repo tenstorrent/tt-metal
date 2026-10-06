@@ -21,6 +21,7 @@ import torch
 import ttnn
 
 from ..config import DeformableAttentionConfig
+from .tt_common import GRID_DTYPE
 from .tt_ms_deformable_attention import TTMSDeformableAttention
 
 
@@ -35,13 +36,17 @@ class SCARebatchPlan:
 
     Each camera's visible queries are compacted into ``capacity`` rows (tile-aligned, at least one
     tile), so the deformable attention runs on those rows instead of all queries; unused rows
-    gather query 0 and scatter into a sink row past the last query, which the forward drops.
+    gather the sample's last query (any valid row; the result is discarded) and scatter into a
+    sink row past the last query, which the forward drops.
 
     Attributes:
         capacity: Rows per camera; fixed when the plan is built, as the buffers' shapes depend on it.
+        batch_size, num_cams, num_queries, num_points_in_pillar: The frame shape the plan is built
+            for; a refill must match it.
         query_index: ``[1, 1, 1, bs * num_cams * capacity]`` uint32, the stacked query row each
             rebatched row gathers.
-        reference_points: ``[bs * num_cams, capacity, num_points_in_pillar, 2]`` float32 ROW_MAJOR,
+        reference_points: ``[bs * num_cams, capacity, num_points_in_pillar, 2]`` ROW_MAJOR, in the
+            ``grid_dtype`` the plan was built with (float32 in the encoder),
             the rebatched rows' pillar points in their camera's normalized image coordinates.
         scatter_ids: ``[bs, num_cams * capacity, 1]`` ROW_MAJOR, the query each row adds into, or the
             sink row ``num_queries``.
@@ -53,6 +58,10 @@ class SCARebatchPlan:
     """
 
     capacity: int
+    batch_size: int
+    num_cams: int
+    num_queries: int
+    num_points_in_pillar: int
     query_index: ttnn.Tensor
     reference_points: ttnn.Tensor
     scatter_ids: ttnn.Tensor
@@ -87,6 +96,8 @@ def _host_plan(reference_points_cam, bev_mask, capacity):
 
 
 def _plan_dtypes(num_queries, grid_dtype):
+    """Each host-built plan buffer's device dtype and layout, shared by the build and the refill so
+    ``copy_host_to_device_tensor`` sees matching tensors."""
     return dict(
         query_index=(ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
         reference_points=(grid_dtype, ttnn.ROW_MAJOR_LAYOUT),
@@ -95,8 +106,15 @@ def _plan_dtypes(num_queries, grid_dtype):
     )
 
 
+def full_capacity(num_queries):
+    """The capacity that fits any rig: every query, tile-aligned. The deformable attention then runs
+    on every query for every camera; with nuScenes' rig the busiest camera sees about a quarter of
+    the base grid, which the default capacity sizes to."""
+    return -(-num_queries // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+
 def build_rebatch_plan(
-    reference_points_cam, bev_mask, embed_dims, device, grid_dtype=ttnn.float32, capacity=None
+    reference_points_cam, bev_mask, embed_dims, device, grid_dtype=GRID_DTYPE, capacity=None
 ) -> SCARebatchPlan:
     """A plan for one frame, on device.
 
@@ -108,10 +126,12 @@ def build_rebatch_plan(
         device: Device the plan's buffers live on.
         grid_dtype: Dtype of the rebatched reference points. In bfloat16 a point near the image's
             right edge moves in steps of 2^-8, 0.8 px on the 200-wide first FPN level.
-        capacity: Rows per camera; by default the most queries any camera sees in this frame,
-            tile-aligned. A plan refilled by :func:`update_rebatch_plan` must cover every later frame.
+        capacity: Rows per camera. By default the most queries any camera sees in this frame,
+            tile-aligned, which fits this frame only: a plan refilled by :func:`update_rebatch_plan`
+            needs a capacity that covers every later frame, a bound for the rig or
+            :func:`full_capacity`.
     """
-    num_cams, bs, num_queries, _ = bev_mask.shape
+    num_cams, bs, num_queries, depth = bev_mask.shape
     if capacity is None:
         most_visible = int((bev_mask[:, 0].sum(-1) > 0).sum(-1).max())
         capacity = max(ttnn.TILE_SIZE, -(-most_visible // ttnn.TILE_SIZE) * ttnn.TILE_SIZE)
@@ -123,6 +143,10 @@ def build_rebatch_plan(
     }
     return SCARebatchPlan(
         capacity=capacity,
+        batch_size=bs,
+        num_cams=num_cams,
+        num_queries=num_queries,
+        num_points_in_pillar=depth,
         scatter_base=ttnn.zeros(
             (bs, num_queries + 1, embed_dims), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
         ),
@@ -131,11 +155,17 @@ def build_rebatch_plan(
 
 
 def update_rebatch_plan(plan: SCARebatchPlan, reference_points_cam, bev_mask):
-    """Refill ``plan`` in place for a new frame of the same cameras: the buffers keep their shapes
-    and addresses, so a trace captured with the plan replays on the new frame."""
-    num_queries = bev_mask.shape[2]
+    """Refill ``plan`` in place for a new frame: the buffers keep their shapes and addresses, so a
+    trace captured with the plan replays on the new frame. The frame must have the plan's batch
+    size, cameras, BEV size and pillar depth, and no camera may see more queries than the plan's
+    capacity; the cameras' poses may differ."""
+    shape = (plan.num_cams, plan.batch_size, plan.num_queries, plan.num_points_in_pillar)
+    assert tuple(bev_mask.shape) == shape, (
+        f"the plan is for (num_cams, bs, num_queries, num_points_in_pillar) {shape}, the frame is "
+        f"{tuple(bev_mask.shape)}; build a new plan"
+    )
     host = _host_plan(reference_points_cam, bev_mask, plan.capacity)
-    for name, (dtype, layout) in _plan_dtypes(num_queries, plan.reference_points.dtype).items():
+    for name, (dtype, layout) in _plan_dtypes(plan.num_queries, plan.reference_points.dtype).items():
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(getattr(host, name), dtype=dtype, layout=layout), getattr(plan, name)
         )
@@ -159,7 +189,7 @@ class TTSpatialCrossAttention:
         num_heads=8,
         num_levels=4,
         num_points=8,
-        grid_dtype=None,
+        grid_dtype=GRID_DTYPE,
         grid_sample_compute_config=None,
     ):
         """``params`` from ``model_preprocessing.create_spatial_cross_attention_parameters``;
@@ -187,8 +217,12 @@ class TTSpatialCrossAttention:
 
     def frame_inputs(self, plan):
         """The device tensors every layer of a frame shares, derived from ``plan`` on device: the
-        full-width scatter index and the deformable attention's grid bias."""
-        depth = plan.reference_points.shape[2]
+        full-width scatter index and the deformable attention's grid bias. They are derived in the
+        forward, not stored in the plan, so a refilled plan reaches them under trace replay."""
+        assert (
+            plan.reference_points.dtype == self.deformable_attention.grid_dtype
+        ), f"plan points {plan.reference_points.dtype}, attention grid {self.deformable_attention.grid_dtype}"
+        depth = plan.num_points_in_pillar
         assert (
             self.deformable_attention.num_points % depth == 0
         ), f"num_points ({self.deformable_attention.num_points}) must split evenly over the {depth} pillar points"
@@ -201,9 +235,14 @@ class TTSpatialCrossAttention:
     def __call__(self, query, value, frame):
         """``query`` bfloat16 ``(bs, num_queries, C)``, ``value`` ``(num_cams, num_keys, bs, C)``,
         ``frame`` from :meth:`frame_inputs`. Returns ``(bs, num_queries, C)``. Deformable attention
-        scores no key: two Linears on the query predict where to sample and with what weight."""
+        scores no key: two Linears on the query predict where to sample and with what weight. No
+        positional encoding enters: upstream's encoder adds it in the self-attention only."""
         plan = frame.plan
         bs, num_queries, embed_dims = query.shape
+        assert (bs, num_queries) == (
+            plan.batch_size,
+            plan.num_queries,
+        ), f"query {(bs, num_queries)}, plan built for {(plan.batch_size, plan.num_queries)}"
         assert (
             query.dtype == ttnn.bfloat16
         ), f"the rebatch gathers query rows, so it must be bfloat16, got {query.dtype}"

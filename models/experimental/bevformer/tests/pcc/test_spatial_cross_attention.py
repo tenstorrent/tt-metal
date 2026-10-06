@@ -24,6 +24,7 @@ from models.experimental.bevformer.tt.tt_ms_deformable_attention import fp32_gri
 from models.experimental.bevformer.tt.tt_spatial_cross_attention import (
     TTSpatialCrossAttention,
     build_rebatch_plan,
+    full_capacity,
     update_rebatch_plan,
 )
 
@@ -43,6 +44,8 @@ CASES = [
     # Every camera sees exactly one plan's worth of queries: no padding rows.
     ("tiny-full-plan", BEV_SHAPES["tiny"], 1, "full-plan"),
 ]
+# Two tiles: one tile is also the plan's minimum capacity, which would hide whether the capacity
+# came from the mask.
 FULL_PLAN_ROWS = 2 * ttnn.TILE_SIZE
 
 
@@ -117,9 +120,9 @@ def test_rebatch_plan_update(device, reset_seeds):
     second = camera_geometry(img_metas(2, yaw_step_deg=25.0)[1:], *bev_shape, 4, pc_range())
 
     tt_model = _tt_model(torch_model, device)
-    num_queries = bev_shape[0] * bev_shape[1]
-    capacity = -(-num_queries // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-    plan = build_rebatch_plan(*first, tt_model.embed_dims, device, GRID_DTYPE, capacity)
+    plan = build_rebatch_plan(
+        *first, tt_model.embed_dims, device, GRID_DTYPE, full_capacity(bev_shape[0] * bev_shape[1])
+    )
     update_rebatch_plan(plan, *second)
 
     torch_output = torch_model(query, inputs["value"], *second, torch.tensor(SPATIAL_SHAPES))
