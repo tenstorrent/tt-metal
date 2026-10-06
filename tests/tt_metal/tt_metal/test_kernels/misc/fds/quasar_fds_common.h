@@ -127,24 +127,26 @@ inline bool received_go(
 // clears a bit and writing 1 leaves it unchanged. Clear the bits of lanes no longer carrying group_id, so the
 // register reads as it would where status is live.
 inline void refresh_dispatch_group_status(uint32_t group_id) {
-    uint32_t live_lanes = overlay::FdsDispatch::fds_read_group_status(group_id);
-    for (uint32_t mask = live_lanes, neo = 0; mask != 0; mask >>= 1, neo++) {
+    uint32_t stale_lanes = 0;
+    const uint32_t set_lanes = overlay::FdsDispatch::fds_read_group_status(group_id);
+    for (uint32_t mask = set_lanes, neo = 0; mask != 0; mask >>= 1, neo++) {
         if ((mask & 1u) != 0 &&
             FDS_INTF_READ(TT_FDS_DISPATCH_TENSIX_TO_DISPATCH_0__REG_ADDR + (neo * sizeof(uint32_t))) != group_id) {
-            live_lanes &= ~(uint32_t{1} << neo);
+            stale_lanes |= uint32_t{1} << neo;
         }
     }
-    FDS_INTF_WRITE(TT_FDS_DISPATCH_GROUPID_STATUS_0__REG_ADDR + (group_id * sizeof(uint32_t)), live_lanes);
+    overlay::FdsDispatch::fds_write_group_status(group_id, ~stale_lanes);
 }
 
 inline void refresh_worker_group_status(uint32_t group_id) {
-    uint32_t live_lanes = overlay::FdsNeo::fds_read_group_status(group_id);
-    for (uint32_t mask = live_lanes, inst = 0; mask != 0; mask >>= 1, inst++) {
+    uint32_t stale_lanes = 0;
+    const uint32_t set_lanes = overlay::FdsNeo::fds_read_group_status(group_id);
+    for (uint32_t mask = set_lanes, inst = 0; mask != 0; mask >>= 1, inst++) {
         if ((mask & 1u) != 0 && overlay::FdsNeo::fds_read_de_status(inst) != group_id) {
-            live_lanes &= ~(uint32_t{1} << inst);
+            stale_lanes |= uint32_t{1} << inst;
         }
     }
-    FDS_INTF_WRITE(TT_FDS_TENSIXNEO_GROUPID_STATUS_0__REG_ADDR + (group_id * sizeof(uint32_t)), live_lanes);
+    overlay::FdsNeo::fds_write_group_status(group_id, ~stale_lanes);
 }
 
 inline bool wait_group_count_nonzero(uint32_t group_id, uint32_t poll_iterations) {
