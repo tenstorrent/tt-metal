@@ -19,7 +19,7 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.nomic_embed_text_v2_moe.tt.attention import TtNomicBertAttention
-from models.experimental.nomic_embed_text_v2_moe.tt.common import to_device
+from models.experimental.nomic_embed_text_v2_moe.tt.common import LayerNormParameters
 from models.experimental.nomic_embed_text_v2_moe.tt.mlp import TtNomicBertMLP
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from models.experimental.nomic_embed_text_v2_moe.tt.moe import TtNomicMoELayer
@@ -41,14 +41,20 @@ class TtNomicBertBlock(LightweightModule):
         ffn = TtNomicMoELayer if moe else TtNomicBertMLP
         self.mlp = ffn(device, config, tt_config, state_dict, f"{state_dict_prefix}mlp.")
 
-        def norm(name, parameter):
-            return to_device(state_dict[f"{state_dict_prefix}{name}.{parameter}"], device, dtype=tt_config.weight_dtype)
+        def norm(name):
+            return LayerNormParameters(
+                state_dict[f"{state_dict_prefix}{name}.weight"],
+                state_dict[f"{state_dict_prefix}{name}.bias"],
+                device,
+                tt_config.weight_dtype,
+            )
 
-        self.norm1_weight, self.norm1_bias = norm("norm1", "weight"), norm("norm1", "bias")
-        self.norm2_weight, self.norm2_bias = norm("norm2", "weight"), norm("norm2", "bias")
+        self.norm1, self.norm2 = norm("norm1"), norm("norm2")
 
-    def _norm(self, x: ttnn.Tensor, residual: ttnn.Tensor, weight, bias) -> ttnn.Tensor:
-        # The attention output may sit in L1 (dense_linear); the block's activations stay in DRAM.
+    def _norm(self, x: ttnn.Tensor, residual: ttnn.Tensor, parameters: LayerNormParameters) -> ttnn.Tensor:
+        # The attention and fc2 outputs may sit in L1 (dense_linear); the block's activations stay
+        # in DRAM.
+        weight, bias = parameters.for_input(x)
         return ttnn.layer_norm(
             x,
             residual_input_tensor=residual,
@@ -69,18 +75,18 @@ class TtNomicBertBlock(LightweightModule):
 
         Args:
             x: (B, 1, S, H) block input.
-            rot_mats: (cos, sin), each (1, 1, S, D).
+            rot_mats: (cos, sin), each (1, 1, S, D) or longer, from tt.common.RotaryTables.
             attn_mask: (B, 1, S, S) additive mask, or None.
 
         Returns:
             ttnn.Tensor: (B, 1, S, H), shape unchanged.
         """
         attn_out = self.attn(x, rot_mats, attn_mask)
-        hidden = self._norm(attn_out, x, self.norm1_weight, self.norm1_bias)
+        hidden = self._norm(attn_out, x, self.norm1)
         ttnn.deallocate(attn_out)
 
         mlp_out = self.mlp(hidden)
-        out = self._norm(mlp_out, hidden, self.norm2_weight, self.norm2_bias)
+        out = self._norm(mlp_out, hidden, self.norm2)
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(hidden)
         return out
