@@ -276,7 +276,6 @@ void MetalEnvImpl::enable_fabric_for_dispatch() {
     this->fabric_config_ = tt_fabric::FabricConfig::FABRIC_1D;
     this->fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
     this->num_fabric_active_routing_planes_ = 1;
-    this->force_reinit_ = true;
 
     {
         std::lock_guard<std::mutex> lock(control_plane_mutex_);
