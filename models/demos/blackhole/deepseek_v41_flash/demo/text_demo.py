@@ -273,6 +273,10 @@ def _run_demo(
     spec_k = int(
         os.environ.get("DSV41_SPEC", "0")
     )  # speculative decoding: k drafts per round (DSpark drafter), 0 = off
+    if spec_k and batch_size >= 128 and os.environ.get("DSV41_SPEC_B128") != "1":
+        # measured at 40 layers (GSM8K, B=128): k=1 0.69x, k=3 0.85x of plain decode (chunked 64/128-row verify rounds of 243/400 ms): spec decode is OFF by default for B >= 128
+        logger.info(f"DSV41_SPEC={spec_k} ignored at batch {batch_size}: plain decode (DSV41_SPEC_B128=1 forces the spec runner)")
+        spec_k = 0
     if spec_k and os.environ.get("DSV41_SPEC_EARLY") == "1" and not hasattr(generator, "spec"):
         # build the spec runner(s) BEFORE any prefill / decode trace exists: persistent tensors allocated after a captured trace can sit on that trace's scratch memory and
         # are overwritten by its replays (a later prefill then hangs the spec traces)
