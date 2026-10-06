@@ -78,45 +78,20 @@ sfpi_inline void _compute_ema_math_()
     // Transpose the input data to the correct order
     TTI_SFPTRANSP(0, 0, 0, 0);
 
-    // EMA equation: EMA_new = α * EMA_old + β * input
-    // Where: LREG0=input, LREG4=EMA_old, LREG5=α, LREG6=(1-α), LREG7=EMA_new
-    // Thus, LREG7 = LREG5 * LREG4 + LREG6 * LREG0
-    // We do this for each of the 4 inputs.
+    // EMA_new = α * EMA_old + β * input (LREG0-3 inputs, LREG4 EMA_old, LREG5 α, LREG6 β); the β products go first,
+    // off the carried chain.
+    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG0, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG1, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG2, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG3, 0);
 
-    // Step 1(in0): Calculate α * EMA_old in LREG7
-    // LREG7 = LREG5 * LREG4 (α * EMA_old)
-    TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG7, 0);
-
-    // Step 2(in0): Calculate final EMA = β * in0 + α * EMA_old
-    // LREG0 = (LREG6 * LREG0) + LREG7
-    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG0, 0);
-
-    // Step 1(in1): Calculate α * EMA_old in LREG7
-    // LREG7 = LREG5 * LREG0 (α * EMA_old)
-    TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG7, 0);
-
-    // Step 2(in1): Calculate final EMA = β * in1 + α * EMA_old
-    // LREG1 = (LREG6 * LREG1) + LREG7
-    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG1, 0);
-
-    // Step 1(in2): Calculate α * EMA_old in LREG7
-    // LREG7 = LREG5 * LREG1 (α * EMA_old)
-    TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG7, 0);
-
-    // Step 2(in2): Calculate final EMA = β * in2 + α * EMA_old
-    // LREG2 = (LREG6 * LREG2) + LREG7
-    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG2, 0);
-
-    // Step 1(in3): Calculate α * EMA_old in LREG7
-    // LREG7 = LREG5 * LREG2 (α * EMA_old)
-    TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG7, 0);
-
-    // Step 2(in3): Calculate final EMA = β * in3 + α * EMA_old
-    // LREG3 = (LREG6 * LREG3) + LREG7
-    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG3, 0);
+    // LREGn = α * EMA_(n-1) + β * input_n
+    TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG1, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG2, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG3, 0);
 
     // Update EMA_old for next iteration
-    // LREG4 = LREG3 (copy new EMA to old EMA register)
     TTI_SFPMOV(0, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG4, 0);
 
     // Transpose the output data to the correct order
