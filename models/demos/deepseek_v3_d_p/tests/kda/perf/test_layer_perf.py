@@ -56,14 +56,18 @@ _PERF_REFERENCE_MS = {
 _GALAXY_PERF_REFERENCE_MS = 3.690
 # LoudBox Galaxy-proxy layouts at 640 tokens per SP rank (tests/kda/cases.py LB_A / LB_B): LB-A 2x4 SP2xTP4 T=1280,
 # LB-B 8x1 SP8xTP1 T=5120 with one TP4 shard's heads; synthetic weights, production program config on the 11x10
-# LoudBox worker grid. Calibration at PLACEHOLDER: median across PLACEHOLDER independent sessions, each using the
-# median of five warm synchronized 10-replay samples (tt_metal_tracker-g1b.4.8).
+# LoudBox worker grid (Galaxy has 12x10, so these are proxies, not Galaxy predictions). Calibration at 891a4a0f6de
+# (feature head d3641159dce) on 2026-10-06: median across six independent sessions started at host load average < 7,
+# each using the median of five warm synchronized 10-replay samples; session ranges K3 LB-A 2.852-2.860, LB-B
+# 3.285-3.291, GLM LB-A 1.923-2.114 (one host stall), LB-B 2.309-2.310 ms (tt_metal_tracker-g1b.4.8). Host load
+# from other processes can step trace wall time up by ~0.1-0.25 ms; re-run at low load before treating a miss as a
+# regression.
 _LOUDBOX_MESH_SHAPES = {"LB-A": LB_A[0], "LB-B": LB_B[0]}
 _LOUDBOX_PROXY_REFERENCE_MS = {
-    ("kimi_k3", "LB-A"): 2.855,
-    ("kimi_k3", "LB-B"): 3.282,
-    ("glm_5_3_flash", "LB-A"): 1.917,
-    ("glm_5_3_flash", "LB-B"): 2.304,
+    ("kimi_k3", "LB-A"): 2.857,
+    ("kimi_k3", "LB-B"): 3.288,
+    ("glm_5_3_flash", "LB-A"): 1.925,
+    ("glm_5_3_flash", "LB-B"): 2.309,
 }
 
 
