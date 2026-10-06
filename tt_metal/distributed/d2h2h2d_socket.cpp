@@ -26,7 +26,9 @@ struct D2H2H2DSocket::Impl {
     // Stamped at publish, popped when the device reports that page drained. A DEQUE per core,
     // not one stamp: at ring_pages > 1 several are outstanding and drained() reports in order.
     std::vector<std::deque<std::chrono::steady_clock::time_point>> published;
-    HostRegion* region = nullptr;
+    // A handle, not a raw pointer: this socket may be destroyed after the mesh has closed, and
+    // its destructor still calls release() on the region (see MeshDeviceImpl::host_region_).
+    std::shared_ptr<HostRegion> region;
 
     // Declaration order is teardown order and is load-bearing: the window must go before
     // the region it covers, and the legs' overlays before the sockets they alias.
@@ -43,7 +45,8 @@ D2H2H2DSocket::D2H2H2DSocket() : impl_(std::make_unique<Impl>()) {}
 // window names pinned pages and must go first, the legs' anonymous re-maps must come after.
 D2H2H2DSocket::~D2H2H2DSocket() {
     impl_->h2h.reset();
-    if (impl_->region != nullptr) {
+    // Harmless after the mesh's close(): that already released it, and release() is idempotent.
+    if (impl_->region) {
         impl_->region->release();
     }
 }
@@ -91,7 +94,8 @@ std::unique_ptr<D2H2H2DSocket> D2H2H2DSocket::create(
             return false;
         }
 
-        HostRegion& region = mesh->impl().host_region();
+        const std::shared_ptr<HostRegion> region_h = mesh->impl().host_region();
+        HostRegion& region = *region_h;
         uint8_t* const base = region.reserved_base(cfg.reserved_cores != 0 ? cfg.reserved_cores : cfg.cores);
 
         // 1. Both legs first: they allocate their sockets and MAP_FIXED the rings over the
@@ -123,7 +127,7 @@ std::unique_ptr<D2H2H2DSocket> D2H2H2DSocket::create(
         try {
             region.provision(
                 mesh, cfg.chip, cfg.cores, cfg.topo, HostRegion::Grid{cfg.grid_width, cfg.grid_height});
-            im.region = &region;
+            im.region = region_h;
         } catch (const std::exception& ex) {
             err = std::string("host region unavailable: ") + ex.what();
             return false;
