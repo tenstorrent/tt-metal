@@ -58,15 +58,16 @@ constexpr experimental::NodeCoord kDefaultPrintNode{0, 0};
 // A Quasar print-storm program: `dm_threads` user DM threads and `compute_engines` Tensix engines on
 // `node`, all running `kernel_path`. Pass 0 for either count to omit that kernel.
 //
-// Kernel contract: `kernel_path` takes exactly one runtime vararg, its iteration count, read with
-// get_arg_val<uint32_t>(0). Neither KernelSpec declares a named runtime-arg schema, so the vararg
-// section starts at index 0 -- which is what lets the same kernel source also run unchanged on the
-// classic Wormhole/Blackhole path.
+// Kernel contract: `kernel_path` takes `num_varargs` runtime varargs (by default one, its iteration
+// count), read with get_arg_val<uint32_t>(0...). Neither KernelSpec declares a named runtime-arg
+// schema, so the vararg section starts at index 0 -- which is what lets the same kernel source also
+// run unchanged on the classic Wormhole/Blackhole path.
 experimental::ProgramSpec MakeQuasarPrintSpec(
     std::string_view kernel_path,
     uint32_t dm_threads,
     uint32_t compute_engines,
-    const experimental::NodeCoord& node = kDefaultPrintNode) {
+    const experimental::NodeCoord& node = kDefaultPrintNode,
+    uint32_t num_varargs = 1) {
     experimental::ProgramSpec spec{.name = "dprint_concurrent"};
     experimental::Group<experimental::KernelSpecName> placed;
 
@@ -76,7 +77,7 @@ experimental::ProgramSpec MakeQuasarPrintSpec(
             .source = std::filesystem::path{kernel_path},
             .num_threads = dm_threads,
             .hw_config = experimental::DataMovementHardwareConfig{},
-            .advanced_options = experimental::KernelAdvancedOptions{.num_runtime_varargs = 1},
+            .advanced_options = experimental::KernelAdvancedOptions{.num_runtime_varargs = num_varargs},
         });
         placed.push_back(experimental::KernelSpecName{"dm_print"});
     }
@@ -86,7 +87,7 @@ experimental::ProgramSpec MakeQuasarPrintSpec(
             .source = std::filesystem::path{kernel_path},
             .num_threads = compute_engines,
             .hw_config = experimental::ComputeHardwareConfig{},
-            .advanced_options = experimental::KernelAdvancedOptions{.num_runtime_varargs = 1},
+            .advanced_options = experimental::KernelAdvancedOptions{.num_runtime_varargs = num_varargs},
         });
         placed.push_back(experimental::KernelSpecName{"compute_print"});
     }
@@ -115,19 +116,24 @@ experimental::ProgramSpec MakeComputePrintSpec(
     };
 }
 
-// Gives every kernel in the spec its iteration count as vararg 0. The node is read back out of the
-// spec so it cannot drift from the one the kernels were placed on.
-experimental::ProgramRunArgs MakeIterationArgs(const experimental::ProgramSpec& spec, uint32_t iterations) {
+// Gives every kernel in the spec the same runtime varargs. The node is read back out of the spec so
+// it cannot drift from the one the kernels were placed on.
+experimental::ProgramRunArgs MakeVarargs(const experimental::ProgramSpec& spec, const std::vector<uint32_t>& values) {
     const auto& node = std::get<experimental::NodeCoord>(spec.work_units.front().target_nodes);
 
     experimental::ProgramRunArgs args;
     for (const auto& kernel : spec.kernels) {
         args.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = kernel.unique_id,
-            .advanced_options = experimental::AdvancedKernelRunArgs{.runtime_varargs = {{node, {iterations}}}},
+            .advanced_options = experimental::AdvancedKernelRunArgs{.runtime_varargs = {{node, values}}},
         });
     }
     return args;
+}
+
+// Gives every kernel in the spec its iteration count as vararg 0.
+experimental::ProgramRunArgs MakeIterationArgs(const experimental::ProgramSpec& spec, uint32_t iterations) {
+    return MakeVarargs(spec, {iterations});
 }
 
 }  // namespace
@@ -467,6 +473,51 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentRocketRiscs) {
         for (int i = 0; i < static_cast<int>(counts.size()); i++) {
             EXPECT_EQ(counts[i], expected_count)
                 << "Iteration " << i << " appeared " << counts[i] << " times (expected " << expected_count << " times)";
+        }
+    }
+}
+
+// Quasar-only: the user DMs print while their kernel reads an L1 buffer between prints, as a kernel
+// working on its input data does. The buffer is larger than the DM L2 cache (128 KiB). Each message
+// must appear exactly once per DM.
+TEST_F(DevicePrintOutputFixture, PrintConcurrentRocketRiscsWithL1Reads) {
+    constexpr uint32_t kIterations = 20;
+    constexpr uint32_t kBufferBytes = 256 * 1024;
+    constexpr const char* kPrintIterationsWithL1ReadsKernel =
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations_with_l1_reads.cpp";
+    for (auto& mesh_device : this->devices_) {
+        if (mesh_device->arch() != tt::ARCH::QUASAR) {
+            continue;
+        }
+        // Nothing is allocated in L1 in this test, so the start of the unreserved region is free.
+        const uint32_t buffer_addr = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        ASSERT_LE(buffer_addr + kBufferBytes, mesh_device->l1_size_per_core());
+
+        const uint32_t dm_threads = GetQuasarNodeTopology().user_dm_threads;
+        auto spec = MakeQuasarPrintSpec(
+            kPrintIterationsWithL1ReadsKernel, dm_threads, /*compute_engines=*/0, kDefaultPrintNode, 3);
+        Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+        experimental::SetProgramRunArgs(program, MakeVarargs(spec, {kIterations, buffer_addr, kBufferBytes}));
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        workload.add_program(distributed::MeshCoordinateRange(zero_coord, zero_coord), std::move(program));
+        DebugToolsMeshFixture::RunProgram(mesh_device, workload);
+        MetalContext::instance().dprint_server()->await();
+
+        std::fstream log_file;
+        ASSERT_TRUE(OpenFile(dprint_file_name, log_file, std::fstream::in));
+        std::vector<int> counts(kIterations, 0);
+        std::string line;
+        while (getline(log_file, line)) {
+            int iter = -1;
+            if (sscanf(line.c_str(), "Test iteration: %d", &iter) == 1 && iter >= 0 &&
+                iter < static_cast<int>(counts.size())) {
+                counts[iter]++;
+            }
+        }
+        for (int i = 0; i < static_cast<int>(counts.size()); i++) {
+            EXPECT_EQ(counts[i], static_cast<int>(dm_threads))
+                << "Iteration " << i << " appeared " << counts[i] << " times";
         }
     }
 }

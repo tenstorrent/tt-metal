@@ -7,6 +7,12 @@
 #include "hostdev/device_print_common.h"
 
 struct DevicePrintMemoryLayout {
+#if defined(ENV_LLK_INFRA)
+    static constexpr uint32_t dm_lock_line_bytes = 0;
+#else
+    static constexpr uint32_t dm_lock_line_bytes = DEVICE_PRINT_QUASAR_L2_CACHE_LINE_SIZE;
+#endif
+
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
     // TODO: This needs to be properly defined
 #if !defined(DEVICE_PRINT_BUFFER_SIZE)
@@ -24,9 +30,9 @@ struct DevicePrintMemoryLayout {
 #elif defined(COMPILE_FOR_DISPATCH_ENGINE)
     // Dispatch engine cores are DM-only (no TRISCs), so one buffer covers all 8 processors.
 #if !defined(DEVICE_PRINT_BUFFER_SIZE)
-    DevicePrintBuffer<1632, 8> buffer;
+    DevicePrintBuffer<1632, 8, 0, dm_lock_line_bytes> buffer;
 #else
-    DevicePrintBuffer<DEVICE_PRINT_BUFFER_SIZE, 8> buffer;
+    DevicePrintBuffer<DEVICE_PRINT_BUFFER_SIZE, 8, 0, dm_lock_line_bytes> buffer;
 #endif
 #else
 #if !defined(DEVICE_PRINT_BUFFER_SIZE)
@@ -40,14 +46,14 @@ struct DevicePrintMemoryLayout {
     static constexpr uint32_t buffer_size_dms = DEVICE_PRINT_BUFFER_SIZE2;
 #endif
 #if defined(COMPILE_FOR_DM)
-    DevicePrintBuffer<buffer_size_triscs, 16, 8> buffer_triscs;  // Quasar TRISC 16 processors
-    DevicePrintBuffer<buffer_size_dms, 8, 0> buffer;             // Quasar DM 8 processors
+    DevicePrintBuffer<buffer_size_triscs, 16, 8> buffer_triscs;           // Quasar TRISC 16 processors
+    DevicePrintBuffer<buffer_size_dms, 8, 0, dm_lock_line_bytes> buffer;  // Quasar DM 8 processors
 #elif defined(COMPILE_FOR_TRISC) || defined(ENV_LLK_INFRA)  // Eventual LLK DM code will need to #define COMPILE_FOR_DM.
-    DevicePrintBuffer<buffer_size_triscs, 16, 8> buffer;  // Quasar TRISC 16 processors
-    DevicePrintBuffer<buffer_size_dms, 8, 0> buffer_dms;  // Quasar DM 8 processors
+    DevicePrintBuffer<buffer_size_triscs, 16, 8> buffer;                      // Quasar TRISC 16 processors
+    DevicePrintBuffer<buffer_size_dms, 8, 0, dm_lock_line_bytes> buffer_dms;  // Quasar DM 8 processors
 #else
-    DevicePrintBuffer<buffer_size_triscs, 16, 8> buffer_triscs;  // Quasar TRISC 16 processors
-    DevicePrintBuffer<buffer_size_dms, 8, 0> buffer_dms;         // Quasar DM 8 processors
+    DevicePrintBuffer<buffer_size_triscs, 16, 8> buffer_triscs;               // Quasar TRISC 16 processors
+    DevicePrintBuffer<buffer_size_dms, 8, 0, dm_lock_line_bytes> buffer_dms;  // Quasar DM 8 processors
 #endif
 #endif
 };

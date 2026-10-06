@@ -125,7 +125,7 @@ void deassert_trisc() {
     // held so the next boot cannot hang in acquire_lock / wait_for_space before writing DONE.
     {
         auto* trisc_print = GET_MAILBOX_ADDRESS_DEV(dprint_buf.buffer_triscs);
-        trisc_print->aux.lock = 0;
+        trisc_print->aux.lock.get() = 0;
         uint32_t wpos = trisc_print->aux.wpos;
         if (wpos != DEBUG_PRINT_SERVER_DISABLED_MAGIC && wpos != DEBUG_PRINT_SERVER_STARTING_MAGIC) {
             trisc_print->aux.wpos = DEBUG_PRINT_SERVER_STARTING_MAGIC;
