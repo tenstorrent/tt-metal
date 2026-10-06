@@ -134,6 +134,7 @@ __attribute__((noinline)) void calculate_sigmoid_appx_tree_cpp()
     for (int row = 0; row < ITERATIONS; ++row)
     {
         const sfpi::vFloat input = sfpi::dst_reg[0];
+        const sfpi::vUInt input_bits = sfpi::as<sfpi::vUInt>(input);
         const sfpi::vFloat mag   = sfpi::abs(input);
         // A literal tail is equivalent for every finite input and avoids the
         // otherwise-observable 0*inf NaN at the saturated endpoints.
@@ -147,7 +148,19 @@ __attribute__((noinline)) void calculate_sigmoid_appx_tree_cpp()
             g = mag * 0.265625f + -0.046875f;
         }
         v_endif;
-        sfpi::dst_reg[0] = sfpi::copysgn(g, input) + 0.5f;
+        sfpi::vFloat result = sfpi::copysgn(g, input) + 0.5f;
+        // Saturate infinities, but propagate either-sign NaNs.  FP compares
+        // cannot reliably classify a NaN, so use its exponent/fraction bits.
+        v_if ((input_bits & 0x7F800000u) == 0x7F800000u)
+        {
+            v_if ((input_bits & 0x007FFFFFu) != 0u)
+            {
+                result = input;
+            }
+            v_endif;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }
@@ -592,6 +605,7 @@ __attribute__((noinline)) void calculate_log_fresh_cpp()
     for (int d = 0; d < ITERATIONS; ++d)
     {
         const sfpi::vFloat in = sfpi::dst_reg[0];
+        const sfpi::vUInt in_bits = sfpi::as<sfpi::vUInt>(in);
         const sfpi::vFloat x  = sfpi::setexp(in, 127); // mantissa into [1, 2)
         sfpi::vFloat series   = x * (x * (x * A + B) + C) + D;
 
@@ -603,9 +617,10 @@ __attribute__((noinline)) void calculate_log_fresh_cpp()
             result = -std::numeric_limits<float>::infinity();
         }
         v_endif;
-        // The polynomial reduction is finite-only.  Pass infinities and NaNs
-        // through so log(+inf) and NaN propagation retain their semantics.
-        v_if (sfpi::abs(in) >= std::numeric_limits<float>::infinity())
+        // The polynomial reduction is finite-only.  Classify specials by
+        // their exponent bits: an FP comparison with NaN is unordered and
+        // previously missed every negative-NaN bf16 payload.
+        v_if ((in_bits & 0x7F800000u) == 0x7F800000u)
         {
             result = in;
         }
