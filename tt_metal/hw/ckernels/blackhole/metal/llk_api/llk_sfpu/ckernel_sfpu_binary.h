@@ -273,12 +273,8 @@ inline void calculate_sfpu_binary_div(
             v_endif;
         }
 
-        // Zero divisor: vConstFloatPrgm1 = inf and vConstFloatPrgm2 = NaN, loaded by sfpu_binary_init<DIV>.
-        v_if(in1 == 0) {
-            result = sfpi::copysgn(sfpi::vFloat(sfpi::vConstFloatPrgm1), in0);
-            v_if(in0 == 0) { result = sfpi::vConstFloatPrgm2; }
-            v_endif;
-        }
+        // Zero divisor: r = +inf, so a +0 dividend already gives in0 * r = NaN. vConstFloatPrgm1 = inf, from the init.
+        v_if(in1 == 0 && in0 != 0) { result = sfpi::copysgn(sfpi::vFloat(sfpi::vConstFloatPrgm1), in0); }
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
@@ -294,10 +290,9 @@ inline void calculate_sfpu_binary_div(
 template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
 inline void sfpu_binary_init() {
     if constexpr (BINOP == BinaryOp::DIV) {
-        // Initialisation for sfpu_reciprocal_iter<2> in DIV and the zero-divisor constants of the div arm.
+        // Initialisation for sfpu_reciprocal_iter<2> in DIV and the zero-divisor infinity of the div arm.
         sfpu_reciprocal_init<false>();
         sfpi::vConstFloatPrgm1 = std::numeric_limits<float>::infinity();
-        sfpi::vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
     } else if constexpr (BINOP == BinaryOp::POW) {
         // Initialisation for use of sfpu_reciprocal_iter<2> in POW.
         sfpu_reciprocal_init<false>();
