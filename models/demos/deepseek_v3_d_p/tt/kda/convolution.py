@@ -4,6 +4,7 @@
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
+from models.demos.deepseek_v3_d_p.tt.kda.collectives import sp_all_gather
 
 
 def exchange_convolution_carry(
@@ -20,14 +21,13 @@ def exchange_convolution_carry(
     selects the caller's initial history at the logical sequence start.
     """
     outgoing = selections.select_outgoing_history(projected_qkv)
-    gathered_outgoing_history = ttnn.all_gather(
-        outgoing, dim=1, cluster_axis=sequence_parallel_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    gathered_outgoing_history = sp_all_gather(
+        outgoing, name="outgoing_history", dim=1, cluster_axis=sequence_parallel_axis
     )
     predecessor = selections.select_predecessor_history(gathered_outgoing_history)
     physical_tail_history = selections.select_local_final_history(
         projected_qkv, tuple(projected_qkv.device().shape)[sequence_parallel_axis]
     )
-    broadcast_tail_histories = ttnn.all_broadcast(physical_tail_history, cluster_axis=sequence_parallel_axis)
-    candidates = ttnn.concat(broadcast_tail_histories, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    candidates = sp_all_gather(physical_tail_history, name="tail_histories", dim=1, cluster_axis=sequence_parallel_axis)
     final_carry = selections.select_final_history(candidates)
     return predecessor, final_carry

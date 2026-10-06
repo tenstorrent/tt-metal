@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
+from models.demos.deepseek_v3_d_p.tt.kda.collectives import sp_all_gather
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_AFFINE_SUMMARY_DTYPE,
     KDA_CHUNK_SIZE,
@@ -239,12 +240,7 @@ def _distributed_prefix(
     transport_a = ttnn.reshape(transport_a, (1, batch_heads, key_dim, key_dim))
     transport_b = ttnn.reshape(transport_b, (1, batch_heads, key_dim, value_dim))
     packed = ttnn.concat([transport_a, transport_b], dim=3, memory_config=output_memory)
-    gathered = ttnn.all_gather(
-        packed,
-        dim=0,
-        cluster_axis=sequence_parallel_axis,
-        memory_config=output_memory,
-    )
+    gathered = sp_all_gather(packed, name="affine_transforms", dim=0, cluster_axis=sequence_parallel_axis)
 
     carry = ttnn.to_memory_config(initial_state, working_memory)
     carry = ttnn.reshape(carry, (1, batch_heads, key_dim, value_dim))
@@ -488,11 +484,11 @@ def _scan_sp_grouped_chunks(
     )
     # Keep the gather in the fixed graph: the device selector chooses the completed
     # tail when split, or the prefix's final state when unsplit, at runtime.
-    gathered = ttnn.all_gather(
+    gathered = sp_all_gather(
         _last_group_state(scan.final_state, geometry, groups),
+        name="final_states",
         dim=0,
         cluster_axis=sequence_parallel_axis,
-        memory_config=KDA_OUTPUT_MEMORY_CONFIG,
     )
     final_state = selections.select_final_state(gathered, prefix_final_state)
     return RecurrenceResult(
