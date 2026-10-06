@@ -341,18 +341,43 @@ json sender_channel_json(
     return out;
 }
 
-// Keyed vc<N> then ch<M>. VCs the router has no senders on are left out.
-json senders_json(const manifest::Router& router, const ControlPlane& control_plane, FabricNodeId node) {
+json noc_forward_config_json(const manifest::NocForwardConfig& config) {
+    json out;
+    out["noc"] = static_cast<uint32_t>(config.noc);
+    out["data_cmd_buf"] = lower_enum_name(config.data_cmd_buf);
+    out["sync_cmd_buf"] = lower_enum_name(config.sync_cmd_buf);
+    return out;
+}
+
+json receiver_channel_json(const manifest::ReceiverChannel& receiver) {
+    json out;
+    out["serviced_by"] = serviced_by_json(receiver.serviced_by);
+    out["forwards_on"] =
+        receiver.forwards_on.has_value() ? json(fmt::format("vc{}", *receiver.forwards_on)) : json(nullptr);
+    out["forwarding_disabled"] = receiver.forwarding_disabled;
+    out["intermesh_ingress"] = receiver.intermesh_ingress;
+    out["forward_noc"] = noc_forward_config_json(receiver.forward_noc);
+    out["local_write_noc"] = noc_write_config_json(receiver.local_write_noc);
+    out["ring_buffer"] = l1_region_json(receiver.ring_buffer);
+    out["pkts_sent"] = stream_ref_json(receiver.pkts_sent);
+    if (receiver.free_slots.has_value()) {
+        out["free_slots"] = stream_ref_json(*receiver.free_slots);
+    }
+    return out;
+}
+
+// Keyed vc<N> then ch<M>. VCs the router has no channels of this kind on are left out.
+template <typename Channel, typename ChannelJson>
+json channels_by_vc_json(const std::vector<std::vector<Channel>>& channels_by_vc, ChannelJson channel_json) {
     json out = json::object();
-    for (size_t vc = 0; vc < router.channels.senders.size(); ++vc) {
-        const auto& channels = router.channels.senders[vc];
+    for (size_t vc = 0; vc < channels_by_vc.size(); ++vc) {
+        const auto& channels = channels_by_vc[vc];
         if (channels.empty()) {
             continue;
         }
         json vc_json;
         for (size_t channel = 0; channel < channels.size(); ++channel) {
-            vc_json[fmt::format("ch{}", channel)] =
-                sender_channel_json(channels[channel], control_plane, node, router.identity.eth_chan);
+            vc_json[fmt::format("ch{}", channel)] = channel_json(channels[channel]);
         }
         out[fmt::format("vc{}", vc)] = std::move(vc_json);
     }
@@ -391,7 +416,10 @@ json make_router_json(
         is_wrap_link(fabric_type, control_plane.get_mesh_graph(), node, router.link.direction, peer));
     out["shape"] = router_shape_json(router.shape);
     out["credit_counters"] = credit_counters_json(router.credit_counters);
-    out["channels"]["senders"] = senders_json(router, control_plane, node);
+    out["channels"]["senders"] = channels_by_vc_json(
+        router.channels.senders,
+        [&](const manifest::SenderChannel& sender) { return sender_channel_json(sender, control_plane, node, chan); });
+    out["channels"]["receivers"] = channels_by_vc_json(router.channels.receivers, receiver_channel_json);
     return out;
 }
 
