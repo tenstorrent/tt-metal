@@ -49,7 +49,12 @@ uint32_t fused_height_of(const Shape& shape) {
 // A derived shard extent is 0 exactly when that axis of the output is empty, and no shard shape
 // can hold a 0 -- a zero-volume shard is rejected. Keep the base extent on such an axis, but only
 // for an empty input: a non-empty one asked to produce an empty sharded output must still be
-// rejected on the zero extent, as it was before this fallback existed.
+// rejected on the zero extent.
+// One core's share of `total`, rounded up to a whole tile.
+uint32_t per_core_extent(uint32_t total, uint32_t cores, uint32_t tile) {
+    return tt::round_up(tt::div_up(total, cores), tile);
+}
+
 uint32_t shard_extent_or(uint32_t derived, uint32_t base, bool input_is_empty) {
     return (input_is_empty && derived == 0) ? base : derived;
 }
@@ -267,9 +272,8 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                 // What else?
             } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
                 auto output_shape = compute_output_specs(operation_attributes, input).padded_shape();
-                // Batch dims only, so nothing to check below rank 3. Written as i + 2 < rank
-                // rather than rank - 2: the rank is unsigned, and rank 1 wrapped to 4294967295
-                // and compared the height against dim 0.
+                // Batch dims only, so nothing to check below rank 3. The rank is unsigned, so
+                // i + 2 < rank rather than i < rank - 2, which underflows at rank 1.
                 for (uint32_t i = 0; i + 2 < output_shape.rank(); i++) {
                     TT_FATAL(
                         input_tensor_a.padded_shape()[i] == output_shape[i],
@@ -466,9 +470,7 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
             shard_spec.shape = {
                 shard_extent_or(fused_height, shard_spec.shape[0], input_is_empty),
                 shard_extent_or(
-                    tt::round_up(tt::div_up(output_shape[-1], num_cores), tile_width),
-                    shard_spec.shape[1],
-                    input_is_empty)};
+                    per_core_extent(output_shape[-1], num_cores, tile_width), shard_spec.shape[1], input_is_empty)};
         } else if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
             CoreRange bbox = shard_spec.grid.bounding_box();
             uint32_t grid_cols = bbox.end_coord.x - bbox.start_coord.x + 1;
@@ -478,20 +480,14 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
             }
             shard_spec.shape = {
                 shard_extent_or(
-                    tt::round_up(tt::div_up(fused_height, grid_rows), tile_height),
-                    shard_spec.shape[0],
-                    input_is_empty),
+                    per_core_extent(fused_height, grid_rows, tile_height), shard_spec.shape[0], input_is_empty),
                 shard_extent_or(
-                    tt::round_up(tt::div_up(output_shape[-1], grid_cols), tile_width),
-                    shard_spec.shape[1],
-                    input_is_empty)};
+                    per_core_extent(output_shape[-1], grid_cols, tile_width), shard_spec.shape[1], input_is_empty)};
         } else {
             uint32_t num_cores = shard_spec.num_cores();
             shard_spec.shape = {
                 shard_extent_or(
-                    tt::round_up(tt::div_up(fused_height, num_cores), tile_height),
-                    shard_spec.shape[0],
-                    input_is_empty),
+                    per_core_extent(fused_height, num_cores, tile_height), shard_spec.shape[0], input_is_empty),
                 shard_spec.shape[1]};
         }
         auto mem_config = tt::tt_metal::MemoryConfig(
@@ -539,7 +535,7 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
                 // A single matrix split across cores: no interior padding, untilize copies each
                 // core's shard 1:1, so the output shard height must equal the (tile-aligned) input
                 // shard height. See issue #16620.
-                shard_idx0 = tt::round_up(tt::div_up(fused_height, num_cores), tile_height);
+                shard_idx0 = per_core_extent(fused_height, num_cores, tile_height);
             }
             shard_shape = {
                 shard_extent_or(shard_idx0, shard_spec.shape[0], input_is_empty),
@@ -558,11 +554,9 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
             }
             shard_shape = {
                 shard_extent_or(
-                    tt::round_up(tt::div_up(fused_height, grid_rows), tile.get_height()),
-                    shard_spec.shape[0],
-                    input_is_empty),
+                    per_core_extent(fused_height, grid_rows, tile.get_height()), shard_spec.shape[0], input_is_empty),
                 shard_extent_or(
-                    tt::round_up(tt::div_up(output_shape[-1], grid_cols), tile.get_width()),
+                    per_core_extent(output_shape[-1], grid_cols, tile.get_width()),
                     shard_spec.shape[1],
                     input_is_empty)};
         } else {
