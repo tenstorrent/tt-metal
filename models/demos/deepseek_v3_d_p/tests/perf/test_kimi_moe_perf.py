@@ -147,10 +147,16 @@ _K2_7 = _MoEPerfCase(
 # onto ND-sharded weight placement. Still 34 programs, and main's last three runs read 6,448,580 /
 # 6,404,459 / 6,425,097 ns (jobs 108833542648, 108591989836, 108483307703), so this is a 6.2% speedup
 # against their median.
+#
+# Re-centred 2026-10-06 to 5,815,453 ns (run 37416411631, sha 54d2fcb), one sample, 3.5% below the
+# old midpoint and 0.5% below its lower edge. Still 34 programs, so not a short record window. K2.7
+# dropped in the same run, and the range 53de0ba..54d2fcb carries the CCL cache-hit host dispatch
+# overhead cut (#58517), the likely cause: host lag lands inside RT records (see module docstring).
+# If a later run does not reproduce ~5.82 ms, re-cut from the median of several runs.
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
-    expected_ns=6_026_883,
+    expected_ns=5_815_453,
     # 3% retained: K3 runs second on an already-warm device and four samples on the previous shape
     # spanned just 0.44% peak to peak, so 3% is already generous -- the midpoint is what goes stale
     # here, not the width. Sub-nominal DDR doubles it to 6% via adjust_margin_for_ddr_speed.
