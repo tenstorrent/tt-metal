@@ -91,6 +91,14 @@ struct NocWriteConfig {
     NocCmdBuf cmd_buf = NocCmdBuf::WR_CMD_BUF;
 };
 
+// The NoC and command buffers a receiver forwards on: each packet through the data command buffer, and the credit
+// increment that announces it through the sync command buffer.
+struct NocForwardConfig {
+    tt::tt_metal::NOC noc = tt::tt_metal::NOC::NOC_0;
+    NocCmdBuf data_cmd_buf = NocCmdBuf::WR_CMD_BUF;
+    NocCmdBuf sync_cmd_buf = NocCmdBuf::WR_CMD_BUF;
+};
+
 // A router's L1 credit counter arrays, shared by every VC that uses counter credits. The to_sender arrays are
 // indexed by this router's sender compact index, and the receiver arrays by the peer router's sender compact index
 // (the receiver counts credits for the peer's sender channels).
@@ -151,10 +159,29 @@ struct SenderChannel {
     SenderChannelControlInfo control_info;
 };
 
+// A receiver channel that takes packets from the peer's senders over Ethernet, delivers them locally, and forwards
+// them to sibling routers' senders.
+struct ReceiverChannel {
+    // IDs of the ERISCs that run the channel's step.
+    std::vector<uint32_t> serviced_by;
+    // The VC whose downstream edges the channel's step is given. Null when no ERISC runs the step, or when the step
+    // forwards to no sibling.
+    std::optional<uint32_t> forwards_on;
+    bool forwarding_disabled = false;
+    bool intermesh_ingress = false;
+    NocForwardConfig forward_noc;
+    NocWriteConfig local_write_noc;
+    L1Region ring_buffer;
+    StreamRef pkts_sent;
+    // VC2 only.
+    std::optional<StreamRef> free_slots;
+};
+
 // A router's channels.
 struct Channels {
     // Indexed [vc][channel], over RouterShape's counts.
     std::vector<std::vector<SenderChannel>> senders;
+    std::vector<std::vector<ReceiverChannel>> receivers;
 };
 
 // Information about a router.
