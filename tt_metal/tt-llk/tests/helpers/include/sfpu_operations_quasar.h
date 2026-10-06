@@ -111,6 +111,7 @@
 #include "llk_sfpu/ckernel_sfpu_div_int32_floor.h"  // calculate_div_int32_trunc / calculate_div_int32_floor
 #include "llk_sfpu/ckernel_sfpu_int_sum.h"          // add_int (Dest tile += the next tile) / sum_int_init
 #include "llk_sfpu/ckernel_sfpu_isclose.h"          // calculate_sfpu_isclose / isclose_init
+#include "llk_sfpu/ckernel_sfpu_lcm.h"              // calculate_lcm (int lcm)
 #include "llk_sfpu/ckernel_sfpu_logaddexp.h"        // calculate_sfpu_logaddexp / calculate_sfpu_logaddexp_init
 #include "llk_sfpu/ckernel_sfpu_logaddexp2.h"       // calculate_sfpu_logaddexp2 / calculate_sfpu_logaddexp2_init
 #include "llk_sfpu/ckernel_sfpu_logsigmoid.h"       // calculate_logsigmoid (x, exp(-x) -> logsigmoid(x))
@@ -1525,6 +1526,19 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             is_fp32_dest_acc_en,
             calculate_sfpu_atan2,
             (APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            VectorMode::RC);
+    }
+    else if constexpr (OP == BinaryOp::LCM)
+    {
+        // Compute-API lcm contract: |operand| <= 2^15 - 1.
+        SFPU_BINARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_lcm,
+            (SIGN_MAGNITUDE_FORMAT, 15 /* MAX_INPUT_BITS */, ITERATIONS),
             src0_tile,
             src1_tile,
             dst_tile,

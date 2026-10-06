@@ -246,14 +246,64 @@ def _run_sfpu_binary_llk_golden(
 
 
 # ===========================================================================
-# Family 1 — integer ops (add, mul, gt, lt, le, ge, copy_dest), Int32 only.
+# Family 1 — integer ops (add, mul, gt, lt, le, ge, copy_dest, lcm), Int32 only.
 # Ported from test_sfpu_binary_quasar.py.
 # ===========================================================================
+# lcm contract (Compute API lcm.h): |a|, |b| <= 2^15 - 1, so the result stays below 2^30.
+_LCM_MAX_OPERAND = 32767
+
+# (a, b) pairs planted in both operand tiles: zeros, units, sign mixes, powers of two,
+# shared-factor pairs, and the largest coprime pair (lcm = 32767 * 32766).
+_LCM_EDGE_PAIRS = [
+    (0, 0),
+    (0, 12345),
+    (-12345, 0),
+    (1, 32767),
+    (32767, 1),
+    (32767, 32766),
+    (-32767, 32766),
+    (-32767, -32767),
+    (32767, 32767),
+    (-1, -1),
+    (16384, 8192),
+    (16384, 16383),
+    (-12, 18),
+    (30030, 32760),
+    (27720, -32760),
+    (2, 32767),
+]
+
+
+def _prepare_lcm_stimuli(input_dimensions, src0_idx, src1_idx):
+    """lcm stimuli: uniform over the in-contract range plus planted edge pairs
+    spread across rows and faces of the src0/src1 operand tiles."""
+    spec = StimuliSpec.uniform(
+        low=float(-_LCM_MAX_OPERAND), high=float(_LCM_MAX_OPERAND)
+    )
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
+        stimuli_format_A=DataFormat.Int32,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=DataFormat.Int32,
+        input_dimensions_B=input_dimensions,
+        spec_A=spec,
+        spec_B=spec,
+    )
+    flat = torch.clamp(src_A, -_LCM_MAX_OPERAND, _LCM_MAX_OPERAND).flatten()
+    for i, (a, b) in enumerate(_LCM_EDGE_PAIRS):
+        lane = (i * 67) % MAX_TILE_ELEMENTS
+        flat[src0_idx * MAX_TILE_ELEMENTS + lane] = a
+        flat[src1_idx * MAX_TILE_ELEMENTS + lane] = b
+    return flat.reshape(src_A.shape), tile_cnt_A, src_B
+
+
 def _prepare_int_stimuli(
     formats, input_dimensions, src0_idx, src1_idx, mathop, clamp_inputs
 ):
     """Integer stimuli: uniform over the dtype range, optionally clamped (int MUL
-    clamps to keep the product representable). Both operands live in src_A."""
+    clamps to keep the product representable). Both operands live in src_A.
+    LCM draws from its in-contract range instead (_prepare_lcm_stimuli)."""
+    if mathop == MathOperation.SfpuLcm:
+        return _prepare_lcm_stimuli(input_dimensions, src0_idx, src1_idx)
     data_format = formats.input_format
     iinfo = torch.iinfo(format_dict[data_format])
     spec = StimuliSpec.uniform(low=float(iinfo.min), high=float(iinfo.max - 1))
@@ -283,6 +333,8 @@ INT_SWEEP = dict(
         MathOperation.SfpuElwLe,
         MathOperation.SfpuElwGe,
         MathOperation.SfpuCopyDest,
+        # LCM draws its in-contract operands in _prepare_lcm_stimuli (no clamp).
+        MathOperation.SfpuLcm,
     ],
 )
 
@@ -304,7 +356,7 @@ def test_eltwise_binary_sfpu_int_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU integer ops (add, mul, gt, lt, le, ge, copy_dest), Int32."""
+    """Binary SFPU integer ops (add, mul, gt, lt, le, ge, copy_dest, lcm), Int32."""
     binary_op = mathop.cpp_enum_value
     clamp_inputs = 1000 if mathop == MathOperation.SfpuElwmulInt else None
     _run_sfpu_binary_llk_golden(
