@@ -1267,6 +1267,18 @@ def _install_quasar_s2i_copy(monkeypatch):
     def _s2i(x, *args, **kwargs):
         try:
             if hasattr(x, "is_sharded") and not x.is_sharded():
+                # The distinct-copy add exists only so a caller that does `out = s2i(x); deallocate(x); use(out)`
+                # (attention _all_reduce_qkv_decode, on NARROW decode tensors) gets a buffer distinct from x.
+                # The WIDE lm_head path (lm_head_1d.py:141) appends s2i(out) to a list and concats later with
+                # NO deallocate, so the copy is unnecessary there -- and a wide quasar.add (e.g. [1,1,32,8192])
+                # overflows the 3 MB-L1 variant (static DFB vs L1 clash -> hang). So for wide tensors return
+                # the real (no-op alias) s2i; only narrow tensors take the distinct-copy add.
+                try:
+                    _wide = int(x.shape[-1]) >= 4096
+                except Exception:
+                    _wide = False
+                if _wide:
+                    return orig(x, *args, **kwargs)
                 try:
                     return ttnn.add(x, 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # routed -> quasar.add, new buffer
                 except Exception as e:
