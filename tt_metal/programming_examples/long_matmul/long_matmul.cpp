@@ -156,7 +156,7 @@ static std::string resolve_compute_op() {
         return "matmul";
     }
     std::string op(v);
-    if (kComputeOps.find(op) == kComputeOps.end()) {
+    if (!kComputeOps.contains(op)) {
         std::string valid;
         for (const auto& [name, _] : kComputeOps) {
             valid += (valid.empty() ? "" : ", ") + name;
