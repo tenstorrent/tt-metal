@@ -1056,6 +1056,9 @@ class Model:
         # big programs ('Statically allocated circular buffers ... clash with L1 buffers')
         for e in self._keep["dev_engram"].values():
             e.mesh_config = e.ccl = None
+            e._w_rows = (
+                {}
+            )  # compact weight rows per token count T (built lazily, one per batch size seen): not weights, rebuilt on first use
         RC.reset_module_caches()
         for _ in range(3):
             gc.collect()

@@ -69,7 +69,62 @@ DSV41_LAYERS=0-39 DSV41_SESSION=isl4k_b4,isl4k_b8,isl4k_b16,isl4k_b32,isl4k_b64,
 
 ## Validation (see the final report for the tables)
 
-RESULTS_PLACEHOLDER
+All runs on the 4x8 Blackhole galaxy hosts of the cluster, one device job per host, logs in `/mnt/tt-data/ssinghal/dsv4-logs/pf_reconf_*.log`.
+"Equal to fresh" = per scenario the FIRSTTOK_IDS line and the decoded 64-token text of EVERY user of the session log equal those of a separate fresh process running only that scenario
+(`tools/rc_compare.py`; fresh logs `pf_reconf_base*_<scenario>.log`; for 40 layers the main-tree grid logs `grid_b{4,16,64,128}_G4k.log`, head a9593c4477a / 35b7afdefda).
+
+### 1. Layers 0-3 (Engram layer 1, unified prefill MoE on, indexer on at ISL 3.7k), `isl4k_b4,b8,b16,b32,b64,b128,b4` in ONE process (`cyc4d`)
+Equal to fresh for all 7 scenario runs (4, 8, 16, 32, 64, 128 users, and B=4 again after the whole cycle).
+
+first build ('model built', U=1): alloc 459.8 MiB/bank, free 3423.9, largest block 3423.8
+
+| reconfigure | release s | rebuild s | free MiB/bank before | weights only: alloc / free | after: alloc / free / largest block | L1 B/bank released / after |
+|---|---|---|---|---|---|---|
+| B 4 -> 8 (ctx 8192 -> 8192) | 0.9 | 9.8 | 3394.0 | 408.2 / 3475.5 | 463.4 / 3420.3 / 3419.3 | 0 / 38592 |
+| B 8 -> 16 (ctx 8192 -> 8192) | 0.9 | 9.1 | 3378.3 | 408.2 / 3475.5 | 470.5 / 3413.1 / 3411.4 | 0 / 38848 |
+| B 16 -> 32 (ctx 8192 -> 8192) | 1.1 | 9.0 | 3291.4 | 408.2 / 3475.5 | 481.7 / 3402.0 / 3396.8 | 0 / 6464 |
+| B 32 -> 64 (ctx 8192 -> 8192) | 0.9 | 9.5 | 3378.3 | 408.2 / 3475.5 | 513.5 / 3370.2 / 3367.9 | 0 / 40384 |
+| B 64 -> 128 (ctx 8192 -> 8192) | 1.0 | 8.8 | 3335.6 | 408.2 / 3475.5 | 570.7 / 3313.0 / 3310.4 | 0 / 42432 |
+| B 128 -> 4 (ctx 8192 -> 8192) | 1.1 | 7.5 | 3259.2 | 408.2 / 3475.5 | 459.8 / 3423.9 / 3422.3 | 0 / 38464 |
+
+Weights only = the model after the release (allocated DRAM is the weights, constant 408.2 MiB/bank over six reconfigures, L1 allocated 0 B like a fresh process before its first build);
+the last "after" (B=4 again) has exactly the allocation of the first build (459.8 MiB/bank allocated, 3423.9 free): nothing leaks. (Before the `_w_rows` fix the Engram device layer's per-T
+weight-row cache grew the weights-only number by ~0.2 MiB per new batch size and fragmented the largest free block by ~57 MiB at 4 layers / ~92 MiB at 40 layers; it is now cleared on release.)
+
+### 2. Other cycles (all equal to fresh)
+* layers 2-5 (no Engram layer; compressed ratio-2 / ratio-1 layers with indexer), same 7 scenarios: equal (`cyc25b`).
+* layers 0-3, `gsm8k_b4,b16,b32,b64,b128,b4` (a different real prompt per user, instruct template, up to 384 tokens): equal for all users (`cycg2`). `gsm8k_b8` (U=2 x C=128) fails with
+  "Tensor is not allocated" in `forward_cols` also in a FRESH process (pre-existing, not related to reconfigure; skipped).
+* same batch, longer context (`DSV41_SESSION_CTX_PER_SCENARIO=1`, layers 2-5, `isl4k_b16,isl8k_b16,isl16k_b16,isl4k_b16`: ctx 8192 -> 16384 -> 32768 reconfigures at B=16): equal to fresh for isl8k / isl16k and back at isl4k (`cycctx`):
+
+first build ('model built', U=1): alloc 465.8 MiB/bank, free 3417.9, largest block 3417.7
+
+| reconfigure | release s | rebuild s | free MiB/bank before | weights only: alloc / free | after: alloc / free / largest block | L1 B/bank released / after |
+|---|---|---|---|---|---|---|
+| B 16 -> 16 (ctx 8192 -> 16384) | 1.0 | 8.9 | 3313.6 | 405.5 / 3478.2 | 481.1 / 3402.6 / 3397.3 | 0 / 38848 |
+| B 16 -> 16 (ctx 16384 -> 32768) | 1.0 | 9.9 | 3297.3 | 405.5 / 3478.2 | 511.6 / 3372.1 / 3368.2 | 0 / 38848 |
+
+* speculative decoding (DSV41_SPEC=3, layers 0-3, `gsm8k_b16,b32,b16`): the spec runner is dropped by the reconfigure and rebuilt; B=16 before and after the B=32 detour give identical spec statistics (383 rounds,
+  identical first-divergence lists). (Spec exactness itself is not meaningful at 4 layers: 0/16 identical to plain also without any reconfigure; not re-validated at 40 layers.)
+
+### 3. 40 layers (DSV41_LAYERS=0-39), one process: `isl4k_b4, isl4k_b16, isl4k_b64, isl8k_b16, isl4k_b4` (`s40a`, 81 min in total including the 55 min first build)
+Equal to the grid fresh-process runs at B=4, 16, 64 (isl4k, all users, first tokens `[427, ...]`) and B=4 again after three reconfigures; isl8k_b16 has no fresh reference (self-consistent only).
+
+first build ('model built', U=1): alloc 2955.8 MiB/bank, free 927.9, largest block 927.8
+
+| reconfigure | release s | rebuild s | free MiB/bank before | weights only: alloc / free | after: alloc / free / largest block | L1 B/bank released / after |
+|---|---|---|---|---|---|---|
+| B 4 -> 16 (ctx 8192 -> 16384) | 1.8 | 95.9 | 832.6 | 2549.8 / 1333.9 | 3014.9 / 868.7 / 835.6 | 0 / 38848 |
+| B 16 -> 64 (ctx 16384 -> 8192) | 2.3 | 84.4 | 670.9 | 2550.0 / 1333.7 | 3076.9 / 806.8 / 790.6 | 0 / 40384 |
+| B 64 -> 16 (ctx 8192 -> 16384) | 2.3 | 69.1 | 729.5 | 2550.3 / 1333.4 | 3015.4 / 868.3 / 835.6 | 0 / 38848 |
+| B 16 -> 4 (ctx 16384 -> 8192) | 3.1 | 66.9 | 658.2 | 2550.3 / 1333.4 | 2961.4 / 922.2 / 835.6 | 0 / 38464 |
+
+Reconfigure time at 40 layers: 67-98 s (release 2-3 s) against 60-90 min for a build. The remaining DRAM difference at the end (alloc 2961.4 vs 2955.8 MiB/bank, largest block 835.6 vs 927.8) is the Engram `_w_rows`
+cache described above (fixed afterwards; see `s40b` below if present).
+
+Timings of the scenarios (same session, noisy host): B=4 TTFT 5.9 s (first build) / 2.8 s (after 4 reconfigures; grid 3.4 s), B=16 11.9 s (grid 9.4 s), B=64 45.5 s (grid 39.3 s), decode 43.4 / 43.9 / 63.9 ms/token
+(grid 45.0 / 42.7 / 65.5): no systematic difference after a reconfigure (the first, freshly built B=4 run of the same session was as slow as the reconfigured ones).
+
 
 ## Limits / not done
 
