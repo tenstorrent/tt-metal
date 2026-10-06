@@ -619,7 +619,7 @@ void device_module(nb::module_& m_device) {
         },
         nb::arg("mesh_device").noconvert(),
         nb::arg("device_coord"),
-        "Experimental. Return global-lockstep L1 ownership from the device and mesh allocators, excluding range-lockstep.");
+        "Experimental. Return L1 allocator-ID-0 reservations from device and mesh allocators, including range-lockstep.");
 
     m_device.def(
         "ExperimentalGetL1FreeRanges",

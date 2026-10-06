@@ -78,7 +78,7 @@ def test_whole_device_matches_per_core_query(device):
     ttnn.deallocate(tensor)
 
 
-def test_global_lockstep_query_excludes_per_core_and_range_lockstep(per_core_mesh_device):
+def test_lockstep_query_tracks_id0_and_excludes_per_core(per_core_mesh_device):
     mesh = per_core_mesh_device
     coord = ttnn.MeshCoordinate(0, 0)
     core = ttnn.CoreCoord(0, 0)
@@ -114,7 +114,8 @@ def test_global_lockstep_query_excludes_per_core_and_range_lockstep(per_core_mes
         local_address = local_tensor.experimental_per_core_buffer_address(coord, core)
         assert not _overlaps(ranges, local_address, local_address + 1024)
         range_address = range_tensor.buffer_address()
-        assert not _overlaps(ranges, range_address, range_address + 1024)
+        # Range-lockstep narrows the conflict scan, but still reserves ID0.
+        assert _covers(ranges, range_address, range_address + 1024)
         for occupied in ttnn.experimental_get_l1_occupied_ranges(mesh, coord).values():
             assert all(_covers(occupied, start, end) for start, end in ranges)
     finally:

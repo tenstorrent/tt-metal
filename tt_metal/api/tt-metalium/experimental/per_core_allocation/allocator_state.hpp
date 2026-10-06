@@ -16,8 +16,8 @@ namespace tt::tt_metal::experimental::per_core_allocation {
 
 using AddressRanges = std::vector<std::pair<DeviceAddr, DeviceAddr>>;
 
-// Ordinary global-lockstep ownership from both the physical-device and mesh allocators.
-// Range-lockstep and per-core reservations are deliberately excluded.
+// Allocator-ID-0 reservations from both the physical-device and mesh allocators.
+// Includes range-lockstep, which currently also reserves ID0; excludes per-core allocators.
 AddressRanges get_l1_lockstep_occupied_ranges(
     const distributed::MeshDevice& mesh_device, const distributed::MeshCoordinate& device_coord);
 

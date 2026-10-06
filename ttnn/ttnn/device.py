@@ -234,7 +234,7 @@ def experimental_get_l1_occupied_ranges(mesh_device, device_coord, core=None):
 
 
 def experimental_get_l1_lockstep_occupied_ranges(mesh_device, device_coord):
-    """Global-lockstep L1 ownership from both allocators; excludes range-lockstep and per-core storage."""
+    """L1 allocator-ID-0 reservations from both allocators; includes range-lockstep, excludes per-core banks."""
     return ttnn._ttnn.device.ExperimentalGetL1LockstepOccupiedRanges(mesh_device, device_coord)
 
 
