@@ -82,7 +82,8 @@ _D5_NEAR_ZERO_HEAD = (
 _KNOWN_FAILURES = {
     "qwen38_2_4t-LB-A-real-text-ragged": _D5_NEAR_ZERO_HEAD + " (V head 5, chunk 1)",
     "qwen38_2_4t-LB-B-real-text-single": _D5_NEAR_ZERO_HEAD + " (V head 2)",
-    "qwen38_2_4t-LB-B-real-text-chained3": _D5_NEAR_ZERO_HEAD + " (V head 2)",
+    "qwen38_2_4t-LB-B-real-text-chained3": _D5_NEAR_ZERO_HEAD
+    + " (V head 2); also tt_metal_tracker-g1b.5.17: chunk 1 output peak error 0.70 (11x the other chunks), ungated",
     "qwen38_2_4t-LB-B-real-text-ragged": _D5_NEAR_ZERO_HEAD
     + " (V head 2); tt_metal_tracker-g1b.5.17: long-memory V head 17 state rel RMSE 0.15, recurrent PCC 0.99846",
     **{
