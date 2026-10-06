@@ -1513,6 +1513,7 @@ _BF16_STOCK_SPECIALS = {
     },
 }
 
+
 # Ops whose BF16 setup runs from an init their stock instances share.
 _BF16_SETUP_OPS = [
     MathOperation.Softshrink,
@@ -1556,8 +1557,9 @@ def _special_class(value):
 def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
     if TestConfig.CHIP_ARCH in _BF16_STOCK_BOARDS.get(mathop, ()):
         pytest.skip(f"{mathop.name} keeps the stock kernel on {TestConfig.CHIP_ARCH}")
-    from helpers.ulp import ulp_distance
-    from helpers.ulp_sweep import measurable_mask, nonfinite_failures, sweep_spec
+    from helpers.sfpu_accuracy_budget import Metric, accuracy_contract
+    from helpers.ulp import nonfinite_mismatches, ulp_distance
+    from helpers.ulp_sweep import flushed_inputs, measurable_mask, sweep_spec
 
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     dest_acc = DestAccumulation.No
@@ -1630,7 +1632,13 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
     result = torch.tensor(
         configuration.run().result, dtype=format_dict[formats.output_format]
     )
-    failures = nonfinite_failures(src_A, golden, result, formats.input_format)
+    # Every lane whose input the unpack does not flush must agree with the golden about
+    # being NaN or infinite. Stricter than ulp_sweep.nonfinite_failures, which also excuses
+    # a NaN golden, a store saturating past the output's range and inputs outside the op's
+    # claim: a kernel replacing stock's on every BF16 input is held to the golden there too.
+    failures = nonfinite_mismatches(golden, result) & ~flushed_inputs(
+        src_A, formats.input_format
+    )
     assert (
         not failures.any()
     ), f"{mathop.name}: {int(failures.sum())} lanes disagree on finiteness"
@@ -1658,3 +1666,22 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
     assert passed_test(
         golden, result, formats.output_format, max_ulp=max_ulp, mask=mask
     ), f"{mathop.name}: {over} lanes over the {max_ulp}-ULP budget"
+    # The step budget helpers/sfpu_accuracy_budget.yaml declares for this cell, where it
+    # declares one for this board, judged as test_unary_sfpu_ulp.py judges it.
+    contract = accuracy_contract(
+        mathop,
+        output_format=formats.output_format,
+        input_format=formats.input_format,
+        approx_mode=approx_mode,
+        dest_acc=dest_acc,
+        arch=TestConfig.CHIP_ARCH,
+    )
+    if contract.metric == Metric.ULP:
+        assert passed_test(
+            golden,
+            result,
+            formats.output_format,
+            mask=mask,
+            flush_subnormals=True,
+            **contract.passed_test_kwargs(),
+        ), f"{mathop.name}: over the {contract.max_ulp}-step budget of helpers/sfpu_accuracy_budget.yaml"
