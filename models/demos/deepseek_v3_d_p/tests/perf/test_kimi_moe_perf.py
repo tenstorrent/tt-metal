@@ -117,42 +117,12 @@ _K2_7 = _MoEPerfCase(
     shape_note="384 experts / top-8, 7168 emb",
 )
 
-# K3: 896 experts / top-16, 3584 latent.
-#
-# This case measures the checkpoint's SiTU-GLU on every FFN site and reports 35 programs, on this
-# branch and on unmodified main alike.
+# K3: 896 experts / top-16, 3584 latent. Measures the checkpoint's SiTU-GLU on every FFN site.
 #
 # The midpoint tracks the MoE forward's op order: the number is a sum of per-program critical paths,
 # so issuing dispatch ahead of the shared expert moves it. A midpoint that goes stale downward is
-# fixed by lowering it, never by widening the margin.
-#
-# Re-centred 2026-09-16: device time came in at 6,867,644 ns, 15.4% below the old band's lower edge
-# (previous midpoint 8,369,824, run 33642820055). Per the rule above that is fixed by lowering the
-# midpoint, never by widening the margin. ONE sample, from the failing gate run itself, and the old
-# midpoint it replaces was itself a single sample.
-#
-# A 17.9% drop is far too large to be drift on a shape whose four-sample spread was 0.44%, so it is
-# a real change in the work -- this branch moves the routed expert onto ND-sharded weight placement,
-# which is exactly the kind of change that moves this number, and it is a SPEEDUP. What this sample
-# does NOT carry is the program count: 35 programs on both this branch and main is what separates a
-# real drop from a record window closing early and under-reporting the sum, so if a later run does
-# not reproduce ~6.87 ms, check the logged program count before re-cutting again and take the median
-# of several runs rather than re-lowering off one sample.
-#
-# Re-centred 2026-09-24 to the median of three runs at the new 34-program count (35 -> 34 landed on
-# main between efb4db0 and c87cf14): 6,435,718 (job 107502461878), 6,565,418 (job 107682321819),
-# 6,412,515 ns (job 107749492327); 2.4% spread. The previous midpoint had dropped below the band on all three.
-#
-# Re-centred 2026-09-28 to 6,026,883 ns (job 108828333457), one sample, when the routed expert moved
-# onto ND-sharded weight placement. Still 34 programs, and main's last three runs read 6,448,580 /
-# 6,404,459 / 6,425,097 ns (jobs 108833542648, 108591989836, 108483307703), so this is a 6.2% speedup
-# against their median.
-#
-# Re-centred 2026-10-06 to 5,815,453 ns (run 37416411631, sha 54d2fcb), one sample, 3.5% below the
-# old midpoint and 0.5% below its lower edge. Still 34 programs, so not a short record window. K2.7
-# dropped in the same run, and the range 53de0ba..54d2fcb carries the CCL cache-hit host dispatch
-# overhead cut (#58517), the likely cause: host lag lands inside RT records (see module docstring).
-# If a later run does not reproduce ~5.82 ms, re-cut from the median of several runs.
+# fixed by lowering it, never by widening the margin. Check the logged program count first: a drop
+# with fewer programs is a record window closing early, not a speedup.
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
