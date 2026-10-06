@@ -276,6 +276,42 @@ def test_update_cache_decode_program_cache_hits(in_sharded, input_dtype, device)
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
+@pytest.mark.parametrize("cache_idx", [0, 127])
+def test_update_cache_decode_fp32_dest_acc_multiple_heads_per_core(cache_idx, device):
+    """bfloat16 cache and input with fp32_dest_acc_en, two heads on one core.
+
+    The intermediate buffers are Float32 and the tensors are bfloat16, so the kernel must set the
+    unpack and pack formats again for every head, not only the first.
+    """
+    head_dim = 64
+    max_seq_len = 2048
+    num_users = 32
+    num_heads = 2
+
+    cache_shape = [num_users, num_heads, max_seq_len, head_dim]
+    cache = torch.randn(cache_shape).bfloat16().float()
+    cachett = ttnn.Tensor(cache, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    x = torch.randn([num_users, num_heads, 1, head_dim]).bfloat16().float()
+    xt = ttnn.Tensor(x.permute(2, 1, 0, 3), ttnn.bfloat16).to(ttnn.TILE_LAYOUT)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    input_shard_spec = ttnn.ShardSpec(
+        shard_grid, [xt.volume() // xt.padded_shape[-1], xt.padded_shape[-1]], ttnn.ShardOrientation.ROW_MAJOR
+    )
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    xt = xt.to(device, input_mem_config)
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(fp32_dest_acc_en=True)
+    cachett = ttnn.update_cache(cachett, xt, cache_idx, compute_kernel_config=compute_kernel_config)
+    cache[:, :, cache_idx : cache_idx + 1, :] = x
+
+    tt_got_back = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    eq, output = comp_equal(cache, tt_got_back)
+    logger.info(output)
+    assert eq, output
+
+
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("in_sharded", [False, True])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 def test_fill_cache_program_cache_hits(in_sharded, input_dtype, device):
