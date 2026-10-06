@@ -35,8 +35,8 @@
 #   test_group: Group identifier for selecting multiple related tests at once.
 #   test_tags: Optional list of coarse selectors for workflow_dispatch, matched exactly and
 #              OR-ed with test_type / test_group. Two vocabularies in one list: the model a
-#              leg covers (kimi_k2_7, kimi_k3, glm_5_3, dsv4_flash, minimax_m3)
-#              and the unit under test (moe, gate, mla, hca, swa, sdpa, ccl, block, transformer,
+#              leg covers (kimi_k2_7, kimi_k3, glm_5_3, dsv4_flash, dsv4_pro, minimax_m3)
+#              and the unit under test (moe, gate, mla, hca, swa, csa, sdpa, ccl, block, transformer,
 #              kv_cache, dflash, mtp, runner, determinism). So `moe` runs every MoE leg and `kimi_k3`
 #              every K3 leg. Multiple tokens UNION, they do not intersect: `moe,kimi_k3` is every MoE
 #              leg plus every K3 leg, not the K3 MoE legs.
@@ -709,13 +709,15 @@
 # * Each section runs in its own subshell under `timeout -k 2m <N>m`; a timeout is a FAIL.
 # * The first failed section ends the job with its exit code, and later sections report NOT RUN:
 #   nothing resets the devices between sections (tt-metal#57706).
-- name: "(DeepSeek-V4-Flash, DeepSeek-V4-Pro) HCA chunked accuracy 6k@5k + SWA chunked accuracy 55k@5k + teacher-forced block chunked accuracy 55k@5k"
+- name: "(DeepSeek-V4-Flash, DeepSeek-V4-Pro) HCA chunked accuracy 6k@5k + SWA chunked accuracy 55k@5k + teacher-forced block chunked accuracy 55k@5k + CSA chunked accuracy 13k@5k"
   fabric_profile: torus_xy
   cmd: |
     titles=(
       "(DeepSeek-V4-Flash) HCA chunked accuracy 6k@5k"
       "(DeepSeek-V4-Flash) SWA chunked accuracy 55k@5k"
       "(DeepSeek-V4) teacher-forced block chunked 55k@5k"
+      "(DeepSeek-V4-Flash) CSA chunked accuracy 13k@5k"
+      "(DeepSeek-V4-Pro) CSA chunked accuracy 13k@5k"
     )
     summary=""
     section_start() {
@@ -770,16 +772,36 @@
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
 
+    # Production-width chunked CSA with the real sparse top-k: 5120+5120+3000 actual tokens, fixed
+    # 5120 device width, and the variant's stock index_topk.
+    section_start 4
+    (
+      timeout -k 2m 15m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_csa.py::test_csa_chunked_prefill_mesh -k "flash and 3chunk-production and torus-xy-8x4" -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    section_start 5
+    (
+      timeout -k 2m 25m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_csa.py::test_csa_chunked_prefill_mesh -k "pro and 3chunk-production and torus-xy-8x4" -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
     finish
   test_type: dsv4_prefill_suite
   # Per-section tokens: `-f test-type=<token>` selects this job.
-  test_tags: [dsv4_flash, hca, swa, hca_chunked, swa_mixed, v4_block_chunked]
+  test_tags: [dsv4_flash, dsv4_pro, hca, swa, csa, hca_chunked, swa_mixed, v4_block_chunked, csa_chunked, csa_chunked_pro]
   test_group: module
   skus:
     bh_sc1:
-      # Sum of the section timeouts (6+8+12 = 26). No margin: models/demo/bh_sc1 in
-      # .github/time_budget.yaml is full (1750/1750), so anything above 26 fails verify-time-budgets.
-      timeout: 26
+      # Sum of the section timeouts (6+8+12+15+25 = 66). No margin: models/demo/bh_sc1 in
+      # .github/time_budget.yaml is full (1790/1790), so anything above 66 fails verify-time-budgets.
+      timeout: 66
       tier: 2
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
@@ -916,6 +938,33 @@
       tier: 1
       release_ready: false
   owner_id: U02LLCK5MML # Sasha Vuckovic
+  team: models
+  sp_config: sc1
+
+# Gemma4 layer perf: global chunks 0/1/15/31 and sliding chunks 0/1 at 256k@8k.
+- name: "(Gemma4-31B-it) D_P layer perf 256k@8k"
+  fabric_profile: 1d
+  cmd: |
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export HF_MODEL=google/gemma-4-31B-it
+    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      uv pip install tt-perf-report
+      # A node id, not -k: tracy re-joins the -m argument into one shell command.
+      python3 -m tracy -p -r -v -o generated/profiler --check-exit-code --op-support-count 20000 \
+        -m "pytest models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_perf_chunk_n[blackhole-chunkci-both-sz8192-ctx_256k-8x4] -vv --tb=short --timeout=7200"
+      python3 models/demos/gemma4_d_p/scripts/layer_perf_report.py --profiler-dir generated/profiler
+    '
+  test_type: gemma4_d_p_layer_perf
+  test_group: gemma4_d_p_layer_perf
+  budget_type: demo
+  skus:
+    bh_sc1_high_power:
+      timeout: 60
+  owner_id: U078RU2KP9Q # Muhammad Asif Manzoor
   team: models
   sp_config: sc1
 
@@ -1417,10 +1466,9 @@
 
 # 4-galaxy (SC4) disaggregated prefill: a 4-rank background runner opens the mesh, loads Kimi-2.7,
 # warmup-compiles, and publishes the merged KV chunk table to shared NFS; a device-less producer then
-# reads it back and PCCs it against the golden KV cache. The request runs to 250k so the per-chunk
-# timings cover depth, but only the 55k the golden trace spans is PCC'd -- the tail is timed, not
-# checked. A throwaway warmup request precedes the measured one, so first-chunk compile is not timed.
-- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC4"
+# reads it back and PCCs it against the golden KV cache.
+# A throwaway warmup request precedes the measured one, so first-chunk compile is not timed.
+- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 256k tail@5k + perf 256k@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1451,7 +1499,7 @@
 # its 21 `full` layers), and the pipeline split is layer-aware (18/20/20/20, snapped to `full` starts).
 # Both caches are PCC'd: the producer gates on min(config 0, config 1), so this is the only leg that
 # covers the merged multi-cache KV chunk table and the per-stage index-cache numbering.
-- name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 55k@5k + perf 1M@5k, SC4"
+- name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 1M tail@5k + perf 1M@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1531,7 +1579,7 @@
 
 
 
-- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC1"
+- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 256k tail@5k + perf 256k@5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1552,7 +1600,7 @@
   sp_config: sc1
 
 
-- name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC1"
+- name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 1M tail@5k + perf 1M@5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"

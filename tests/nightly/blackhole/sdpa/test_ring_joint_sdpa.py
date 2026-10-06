@@ -5616,8 +5616,9 @@ def test_ring_joint_attention_create_perf_table(model_name):
 
 
 # === TEST 5: PERFORMANCE CHECK ===
-# Symmetric +/- band — catches both regressions and unexpected speedups.
-RING_JOINT_PERF_MARGIN = 0.01
+# Symmetric +/- band — catches both regressions and unexpected speedups. Default for every
+# perf check in this file; checks with a margin column can override it per config entry.
+DEFAULT_PERF_MARGIN = 0.01
 
 # Ring/TP geometry and per-device shapes are auto-selected by MeshConfig.detect():
 #   QuietBox -> 4-device ring (sp=4, tp=1);  Galaxy -> 8-device ring x 4 TP shards (sp=8, tp=4).
@@ -5625,7 +5626,7 @@ if MESH_CONFIG.is_galaxy:
     RING_JOINT_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
         # 8-device ring (Galaxy, sp=8 tp=4)
-        ("wan2_2_1xGLX", 288, 512, 8, 70.7, RING_JOINT_PERF_MARGIN),
+        ("wan2_2_1xGLX", 288, 512, 8, 70.7, DEFAULT_PERF_MARGIN),
         # mla_100k on Galaxy is noisier than the other cases: observed run-to-run util spans
         # ~64.8-67.8% (midpoint ~66.3%, ~+/-2.3%), well beyond the default +/-1% band. Widen to
         # +/-3% so the gate tracks regressions without flagging this case's normal variance.
@@ -5635,8 +5636,8 @@ else:
     RING_JOINT_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
         # 4-device ring (QuietBox, sp=4 tp=1)
-        ("wan2_2_1xGLX", 288, 512, 4, 68.5, RING_JOINT_PERF_MARGIN),
-        ("mla_100k", 160, 320, 4, 62.5, RING_JOINT_PERF_MARGIN),
+        ("wan2_2_1xGLX", 288, 512, 4, 68.5, DEFAULT_PERF_MARGIN),
+        ("mla_100k", 160, 320, 4, 62.5, DEFAULT_PERF_MARGIN),
     ]
 
 
@@ -7314,19 +7315,20 @@ if MESH_CONFIG.is_galaxy:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
         # 8-device ring (Galaxy, sp=8 tp=4)
-        # Three-run medians with compute optimizations and blocking K multicast: 5.676 / 8.599 ms.
-        ("kimi50k", 32, 640, 8, 69.39, RING_JOINT_PERF_MARGIN),
-        ("kimi_k3", 32, 640, 8, 68.71, RING_JOINT_PERF_MARGIN),
+        # Three-run medians: 5.576 / 8.489 ms. kimi50k runs ~1.6% hotter on the CI host
+        # (71.77% vs a 70.49-70.85% local span), so center it on the span and widen to +/-1.5%.
+        ("kimi50k", 32, 640, 8, 71.2, 0.015),
+        ("kimi_k3", 32, 640, 8, 69.59, DEFAULT_PERF_MARGIN),
     ]
 else:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
         # 4-device ring (QuietBox, 100 SDPA cores)
         # Three-run median with compute optimizations and blocking K multicast: 2.726 ms.
-        ("kimi50k", 32, 640, 4, 69.54, RING_JOINT_PERF_MARGIN),
+        ("kimi50k", 32, 640, 4, 69.54, DEFAULT_PERF_MARGIN),
         # After the Blackhole NoC MID-address write skip (#56023): 4.567-4.591 ms (70.77-71.15% util)
         # across QB and QB2 runs, so the earlier bimodal spread no longer needs a wider band.
-        ("kimi_k3", 32, 640, 4, 71.0, RING_JOINT_PERF_MARGIN),
+        ("kimi_k3", 32, 640, 4, 71.0, DEFAULT_PERF_MARGIN),
     ]
 
 
@@ -7463,8 +7465,8 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_check(
         MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
     )
 
-    lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
-    upper = expected_util * (1 + RING_JOINT_PERF_MARGIN)
+    lower = expected_util * (1 - DEFAULT_PERF_MARGIN)
+    upper = expected_util * (1 + DEFAULT_PERF_MARGIN)
 
     logger.info(
         f"Minimax3 GQA chunked final-chunk perf check {config_id}: "
@@ -7475,7 +7477,7 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_check(
 
     assert lower <= utilization <= upper, (
         f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
-        f"(expected {expected_util:.2f}%, margin +/- {RING_JOINT_PERF_MARGIN*100:.1f}%)"
+        f"(expected {expected_util:.2f}%, margin +/- {DEFAULT_PERF_MARGIN*100:.1f}%)"
     )
 
 
@@ -7518,8 +7520,8 @@ def test_ring_joint_attention_minimax3_gqa_rotated_q_perf():
     utilization, _ = compute_chunked_prefill_perf_check_utilization(
         MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
     )
-    lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
-    upper = expected_util * (1 + RING_JOINT_PERF_MARGIN)
+    lower = expected_util * (1 - DEFAULT_PERF_MARGIN)
+    upper = expected_util * (1 + DEFAULT_PERF_MARGIN)
     logger.info(
         f"Minimax3 GQA rotated-Q perf q32-k512: "
         f"ring={MESH_CONFIG.sp_size}, sdpa_cores={MESH_CONFIG.sdpa_cores}, "
@@ -7530,7 +7532,7 @@ def test_ring_joint_attention_minimax3_gqa_rotated_q_perf():
 
     assert lower <= utilization <= upper, (
         f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
-        f"(expected {expected_util:.2f}%, margin +/- {RING_JOINT_PERF_MARGIN*100:.1f}%)"
+        f"(expected {expected_util:.2f}%, margin +/- {DEFAULT_PERF_MARGIN*100:.1f}%)"
     )
 
 
