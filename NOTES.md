@@ -15,6 +15,13 @@ Next step after the marker:
    relaunch with CONFIGS=<file>. Compare per seed vs baseline.
 4. Table + recommended default set + videos/stills; commit, push, clean /var/tmp/fasth3/t140 bulk.
 
+Run 2 (2026-10-06 03:12 UTC): blx03 rebooted 03:02 and killed the first driver before any t140 job. Relaunched at
+1016c3aac47 (waits for every other smarton job, not only t136/t141; pair cutoff 30 min idle). blx03 pid 31022.
+If the probe wakes and the log has no DONE line, the driver died (reboot): relaunch it the same way; it resumes.
+
 Drops logged:
 - 2026-10-06 02:17-02:19 UTC, blx03 job 212 (smarton, t136 run_ab.sh), chips 8-15 (tray 2) off PCIe, chip 15 UNHEALTHY;
   job 216 (t141) abandoned; resets 214/215 failed, health-gate 217 glx_reset; blx03 rebooted ~02:26 UTC. No t140 job was running.
+- 2026-10-06 ~03:02 UTC: blx03 rebooted (cause not seen; no t140 job running). Killed t140 driver pid 16601.
+- 2026-10-06 03:10 UTC: blx03 job 246 (smarton, t141 e2e) killed -9; chips 8-15 (tray 2) left the bus; broker post-job gate
+  escalated to glx_reset. No t140 job running.
