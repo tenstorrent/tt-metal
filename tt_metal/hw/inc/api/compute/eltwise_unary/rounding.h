@@ -109,8 +109,19 @@ ALWI void trunc_tile(uint32_t idst) {
  */
 // clang-format on
 ALWI void round_tile(uint32_t idst, int32_t decimals) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_round_,
+        (APPROX, 32 /*ITERATIONS*/),
+        idst,
+        VectorMode::None,
+        decimals));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_round_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, decimals));
+#endif
 }
 
 // clang-format off
