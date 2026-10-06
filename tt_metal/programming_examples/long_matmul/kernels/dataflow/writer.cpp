@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 
-// See kernels/compute/mm_power.cpp. Output arrives one BLOCK_M x BLOCK_N block at a time, in
+// See kernels/compute/compute.cpp. Output arrives one BLOCK_M x BLOCK_N block at a time, in
 // row-major order within the block.
 #ifndef BLOCK_M
 #define BLOCK_M 1
@@ -24,7 +24,7 @@ void kernel_main() {
     uint32_t num_iterations = get_arg_val<uint32_t>(3);
     // Number of times each output tile is written. 1 = normal. Higher values re-write the same
     // tile to the same address to load the write-side NoC path up to the reader's read volume;
-    // the host computes this from HIGH_POWER_WRITE_AMPLIFICATION_PCT.
+    // the host computes this from LONG_MATMUL_WRITE_AMPLIFICATION_PCT.
     uint32_t write_repeats = get_arg_val<uint32_t>(4);
     uint32_t blocks_per_row = get_arg_val<uint32_t>(5);  // Nt / kBlockN
     uint32_t Nt = get_arg_val<uint32_t>(6);
@@ -43,7 +43,7 @@ void kernel_main() {
 
             cb_wait_front(cb_id_out, kBlockTiles);
             uint32_t l1_read_addr = get_read_ptr(cb_id_out);
-#ifndef HIGH_POWER_DISABLE_WRITER
+#ifndef LONG_MATMUL_DISABLE_WRITER
             for (uint32_t m = 0; m < kBlockM; m++) {
                 for (uint32_t n = 0; n < kBlockN; n++) {
                     const uint32_t out_tile = (row0 + m) * Nt + (col0 + n);

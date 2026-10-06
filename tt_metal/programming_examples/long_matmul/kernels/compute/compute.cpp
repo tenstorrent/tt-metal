@@ -25,8 +25,8 @@ using std::uint32_t;
 #define BLOCK_N 1
 #endif
 
-// Which per-tile instruction the compute kernel runs, selected by the host from HIGH_POWER_OP.
-// Exactly one HIGH_POWER_OP_* is defined; matmul is the default when the host passes none.
+// Which per-tile instruction the compute kernel runs, selected by the host from LONG_MATMUL_OP.
+// Exactly one LONG_MATMUL_OP_* is defined; matmul is the default when the host passes none.
 //
 // The point of the switch is a controlled comparison: the reader and writer kernels are
 // untouched, so every op streams byte-identical DRAM traffic through the same circular buffers
@@ -42,10 +42,10 @@ using std::uint32_t;
 // unchanged. Unary variants overwrite the destination register each step rather than
 // accumulating into it, which matmul does -- that is a real difference, but it is a property of
 // the instruction, not of this harness.
-#if !defined(HIGH_POWER_OP_MATMUL) && !defined(HIGH_POWER_OP_ADD) && !defined(HIGH_POWER_OP_SILU) && \
-    !defined(HIGH_POWER_OP_EXP) && !defined(HIGH_POWER_OP_SIGMOID) && !defined(HIGH_POWER_OP_GELU) && \
-    !defined(HIGH_POWER_OP_RECIP)
-#define HIGH_POWER_OP_MATMUL 1
+#if !defined(LONG_MATMUL_OP_MATMUL) && !defined(LONG_MATMUL_OP_ADD) && !defined(LONG_MATMUL_OP_SILU) && \
+    !defined(LONG_MATMUL_OP_EXP) && !defined(LONG_MATMUL_OP_SIGMOID) && !defined(LONG_MATMUL_OP_GELU) && \
+    !defined(LONG_MATMUL_OP_RECIP)
+#define LONG_MATMUL_OP_MATMUL 1
 #endif
 
 constexpr uint32_t kBlockM = BLOCK_M;
@@ -65,24 +65,24 @@ void kernel_main() {
     // unpacker/packer for the CBs involved; the op-specific *_init then sets up the math unit.
     // Without the startup call pack_tile() produces nothing, the writer blocks forever and the
     // device hangs, so it must stay in every branch.
-#if defined(HIGH_POWER_OP_MATMUL)
+#if defined(LONG_MATMUL_OP_MATMUL)
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_out);
     matmul_init(cb_in0, cb_in1);
-#elif defined(HIGH_POWER_OP_ADD)
+#elif defined(LONG_MATMUL_OP_ADD)
     compute_kernel_hw_startup(cb_in0, cb_in1, cb_out);
     add_init(cb_in0, cb_in1);
 #else
     compute_kernel_hw_startup(cb_in0, cb_out);
     copy_init(cb_in0);
-#if defined(HIGH_POWER_OP_SILU)
+#if defined(LONG_MATMUL_OP_SILU)
     silu_tile_init();
-#elif defined(HIGH_POWER_OP_EXP)
+#elif defined(LONG_MATMUL_OP_EXP)
     exp_tile_init();
-#elif defined(HIGH_POWER_OP_SIGMOID)
+#elif defined(LONG_MATMUL_OP_SIGMOID)
     sigmoid_tile_init();
-#elif defined(HIGH_POWER_OP_GELU)
+#elif defined(LONG_MATMUL_OP_GELU)
     gelu_tile_init();
-#elif defined(HIGH_POWER_OP_RECIP)
+#elif defined(LONG_MATMUL_OP_RECIP)
     recip_tile_init();
 #endif
 #endif
@@ -104,31 +104,31 @@ void kernel_main() {
                 // Every A tile is combined with every B tile in the slice, so the two slices
                 // are reused kBlockN and kBlockM times respectively before being popped. This
                 // is where the DRAM traffic reduction comes from.
-                // HIGH_POWER_DISABLE_COMPUTE skips the real math while keeping every CB and
+                // LONG_MATMUL_DISABLE_COMPUTE skips the real math while keeping every CB and
                 // tile-register handshake intact, so reader and writer are stimulated exactly as
                 // before and neither deadlocks. Output tiles then contain garbage, which is
                 // harmless: the app never verifies its output.
-#ifndef HIGH_POWER_DISABLE_COMPUTE
+#ifndef LONG_MATMUL_DISABLE_COMPUTE
                 for (uint32_t m = 0; m < kBlockM; m++) {
                     for (uint32_t n = 0; n < kBlockN; n++) {
                         const uint32_t idst = m * kBlockN + n;
-#if defined(HIGH_POWER_OP_MATMUL)
+#if defined(LONG_MATMUL_OP_MATMUL)
                         matmul_tiles(cb_in0, cb_in1, m, n, idst);
-#elif defined(HIGH_POWER_OP_ADD)
+#elif defined(LONG_MATMUL_OP_ADD)
                         add_tiles(cb_in0, cb_in1, m, n, idst);
 #else
                         // No second operand: bring a tile into the destination register and
                         // transform it in place.
                         copy_tile(cb_in0, m, idst);
-#if defined(HIGH_POWER_OP_SILU)
+#if defined(LONG_MATMUL_OP_SILU)
                         silu_tile(idst);
-#elif defined(HIGH_POWER_OP_EXP)
+#elif defined(LONG_MATMUL_OP_EXP)
                         exp_tile(idst);
-#elif defined(HIGH_POWER_OP_SIGMOID)
+#elif defined(LONG_MATMUL_OP_SIGMOID)
                         sigmoid_tile(idst);
-#elif defined(HIGH_POWER_OP_GELU)
+#elif defined(LONG_MATMUL_OP_GELU)
                         gelu_tile(idst);
-#elif defined(HIGH_POWER_OP_RECIP)
+#elif defined(LONG_MATMUL_OP_RECIP)
                         recip_tile(idst);
 #endif
 #endif
@@ -144,7 +144,7 @@ void kernel_main() {
             tile_regs_wait();
             // TRISC2 reserves space in the output circular buffer for the whole block
             cb_reserve_back(cb_out, kBlockTiles);
-#ifndef HIGH_POWER_DISABLE_COMPUTE
+#ifndef LONG_MATMUL_DISABLE_COMPUTE
             for (uint32_t i = 0; i < kBlockTiles; i++) {
                 pack_tile(i, cb_out);
             }

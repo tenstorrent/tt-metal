@@ -130,7 +130,7 @@ struct PowerExperimentConfig {
     uint32_t write_amplification_pct = 0;
     // Which per-tile instruction the compute kernel runs. The reader and writer are identical
     // for every value, so this varies the math unit's work against fixed data movement -- see
-    // kernels/compute/mm_power.cpp.
+    // kernels/compute/compute.cpp.
     std::string op = "matmul";
 };
 
@@ -139,19 +139,19 @@ static bool env_flag(const char* name) {
     return v != nullptr && std::string(v) == "1";
 }
 
-// HIGH_POWER_OP value -> the JIT define the compute kernel branches on.
+// LONG_MATMUL_OP value -> the JIT define the compute kernel branches on.
 static const std::map<std::string, std::string> kComputeOps = {
-    {"matmul", "HIGH_POWER_OP_MATMUL"},
-    {"add", "HIGH_POWER_OP_ADD"},
-    {"silu", "HIGH_POWER_OP_SILU"},
-    {"exp", "HIGH_POWER_OP_EXP"},
-    {"sigmoid", "HIGH_POWER_OP_SIGMOID"},
-    {"gelu", "HIGH_POWER_OP_GELU"},
-    {"recip", "HIGH_POWER_OP_RECIP"},
+    {"matmul", "LONG_MATMUL_OP_MATMUL"},
+    {"add", "LONG_MATMUL_OP_ADD"},
+    {"silu", "LONG_MATMUL_OP_SILU"},
+    {"exp", "LONG_MATMUL_OP_EXP"},
+    {"sigmoid", "LONG_MATMUL_OP_SIGMOID"},
+    {"gelu", "LONG_MATMUL_OP_GELU"},
+    {"recip", "LONG_MATMUL_OP_RECIP"},
 };
 
 static std::string resolve_compute_op() {
-    const char* v = std::getenv("HIGH_POWER_OP");
+    const char* v = std::getenv("LONG_MATMUL_OP");
     if (v == nullptr || *v == '\0') {
         return "matmul";
     }
@@ -161,7 +161,7 @@ static std::string resolve_compute_op() {
         for (const auto& [name, _] : kComputeOps) {
             valid += (valid.empty() ? "" : ", ") + name;
         }
-        TT_THROW("HIGH_POWER_OP must be one of [{}], got '{}'", valid, op);
+        TT_THROW("LONG_MATMUL_OP must be one of [{}], got '{}'", valid, op);
     }
     return op;
 }
@@ -202,10 +202,10 @@ static PowerExperimentConfig resolve_power_experiment() {
     }
 
     // No POWER_CASE: fall back to the individual flags for finer manual control.
-    cfg.disable_reader = env_flag("HIGH_POWER_DISABLE_READER");
-    cfg.disable_compute = env_flag("HIGH_POWER_DISABLE_COMPUTE");
-    cfg.disable_writer = env_flag("HIGH_POWER_DISABLE_WRITER");
-    if (const char* amp = std::getenv("HIGH_POWER_WRITE_AMPLIFICATION_PCT");
+    cfg.disable_reader = env_flag("LONG_MATMUL_DISABLE_READER");
+    cfg.disable_compute = env_flag("LONG_MATMUL_DISABLE_COMPUTE");
+    cfg.disable_writer = env_flag("LONG_MATMUL_DISABLE_WRITER");
+    if (const char* amp = std::getenv("LONG_MATMUL_WRITE_AMPLIFICATION_PCT");
         amp != nullptr && *amp != '\0') {
         cfg.write_amplification_pct = static_cast<uint32_t>(std::stoul(amp));
     }
@@ -239,7 +239,7 @@ int main(int argc, char* argv[]) {
         2.0 * static_cast<double>(M) * static_cast<double>(N) * static_cast<double>(K);
     const double total_flops = flops_per_iter * static_cast<double>(num_iterations);
 
-    fmt::print("=== High Power Matmul Workload ===\n");
+    fmt::print("=== Long Matmul Workload ===\n");
     fmt::print("Matrix: M={} N={} K={} (tiles: {}x{}x{})\n", M, N, K, Mt, Nt, Kt);
     fmt::print("Output tiles: {}  |  Iterations: {}\n", total_output_tiles, num_iterations);
     fmt::print("Math fidelity: HiFi4  |  Data format: Float16_b\n");
@@ -257,20 +257,20 @@ int main(int argc, char* argv[]) {
     // BLOCK_M*BLOCK_N multiplies. DRAM tile reads per multiply fall from 2 to
     // (BLOCK_M + BLOCK_N) / (BLOCK_M * BLOCK_N). 1x1 is the original tile-at-a-time behaviour.
     uint32_t block_m = 1, block_n = 1;
-    if (const char* v = std::getenv("HIGH_POWER_BLOCK_M"); v != nullptr && *v != '\0') {
+    if (const char* v = std::getenv("LONG_MATMUL_BLOCK_M"); v != nullptr && *v != '\0') {
         block_m = static_cast<uint32_t>(std::stoul(v));
     }
-    if (const char* v = std::getenv("HIGH_POWER_BLOCK_N"); v != nullptr && *v != '\0') {
+    if (const char* v = std::getenv("LONG_MATMUL_BLOCK_N"); v != nullptr && *v != '\0') {
         block_n = static_cast<uint32_t>(std::stoul(v));
     }
-    TT_FATAL(block_m >= 1 && block_n >= 1, "HIGH_POWER_BLOCK_M/N must be >= 1");
+    TT_FATAL(block_m >= 1 && block_n >= 1, "LONG_MATMUL_BLOCK_M/N must be >= 1");
     // The whole block lives in the destination registers simultaneously.
     TT_FATAL(
         block_m * block_n <= 8,
-        "HIGH_POWER_BLOCK_M * HIGH_POWER_BLOCK_N ({}) exceeds the 8-tile destination register budget",
+        "LONG_MATMUL_BLOCK_M * LONG_MATMUL_BLOCK_N ({}) exceeds the 8-tile destination register budget",
         block_m * block_n);
-    TT_FATAL(Mt % block_m == 0, "Mt ({}) must be divisible by HIGH_POWER_BLOCK_M ({})", Mt, block_m);
-    TT_FATAL(Nt % block_n == 0, "Nt ({}) must be divisible by HIGH_POWER_BLOCK_N ({})", Nt, block_n);
+    TT_FATAL(Mt % block_m == 0, "Mt ({}) must be divisible by LONG_MATMUL_BLOCK_M ({})", Mt, block_m);
+    TT_FATAL(Nt % block_n == 0, "Nt ({}) must be divisible by LONG_MATMUL_BLOCK_N ({})", Nt, block_n);
 
     const uint32_t blocks_per_row = Nt / block_n;
     const uint32_t total_output_blocks = (Mt / block_m) * blocks_per_row;
@@ -444,16 +444,16 @@ int main(int argc, char* argv[]) {
             const std::string bm = std::to_string(block_m), bn = std::to_string(block_n);
             std::map<std::string, std::string> reader_defines{{"BLOCK_M", bm}, {"BLOCK_N", bn}};
             if (power_cfg.disable_reader) {
-                reader_defines["HIGH_POWER_DISABLE_READER"] = "1";
+                reader_defines["LONG_MATMUL_DISABLE_READER"] = "1";
             }
             std::map<std::string, std::string> compute_defines{{"BLOCK_M", bm}, {"BLOCK_N", bn}};
             compute_defines[kComputeOps.at(power_cfg.op)] = "1";
             if (power_cfg.disable_compute) {
-                compute_defines["HIGH_POWER_DISABLE_COMPUTE"] = "1";
+                compute_defines["LONG_MATMUL_DISABLE_COMPUTE"] = "1";
             }
             std::map<std::string, std::string> writer_defines{{"BLOCK_M", bm}, {"BLOCK_N", bn}};
             if (power_cfg.disable_writer) {
-                writer_defines["HIGH_POWER_DISABLE_WRITER"] = "1";
+                writer_defines["LONG_MATMUL_DISABLE_WRITER"] = "1";
             }
 
             std::vector<uint32_t> reader_ct_args;
@@ -462,7 +462,7 @@ int main(int argc, char* argv[]) {
 
             auto reader_id = tt_metal::CreateKernel(
                 program,
-                OVERRIDE_KERNEL_PREFIX "high_power_matmul/kernels/dataflow/reader_power.cpp",
+                OVERRIDE_KERNEL_PREFIX "long_matmul/kernels/dataflow/reader.cpp",
                 all_cores,
                 DataMovementConfig{
                     .processor = DataMovementProcessor::RISCV_1,
@@ -475,7 +475,7 @@ int main(int argc, char* argv[]) {
 
             auto writer_id = tt_metal::CreateKernel(
                 program,
-                OVERRIDE_KERNEL_PREFIX "high_power_matmul/kernels/dataflow/writer_power.cpp",
+                OVERRIDE_KERNEL_PREFIX "long_matmul/kernels/dataflow/writer.cpp",
                 all_cores,
                 DataMovementConfig{
                     .processor = DataMovementProcessor::RISCV_0,
@@ -485,7 +485,7 @@ int main(int argc, char* argv[]) {
 
             auto compute_id = tt_metal::CreateKernel(
                 program,
-                OVERRIDE_KERNEL_PREFIX "high_power_matmul/kernels/compute/mm_power.cpp",
+                OVERRIDE_KERNEL_PREFIX "long_matmul/kernels/compute/compute.cpp",
                 all_cores,
                 ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .defines = compute_defines});
 
@@ -571,7 +571,7 @@ int main(int argc, char* argv[]) {
             // blocked path this is the only way to notice a tile-indexing mistake: the inputs
             // are seeded deterministically (mt19937(42)) and accumulation order over the shared
             // dimension is identical for every block size, so this checksum must not depend on
-            // HIGH_POWER_BLOCK_M/N.
+            // LONG_MATMUL_BLOCK_M/N.
             {
                 double sum = 0.0, absmax = 0.0;
                 for (const auto& v : result_vec) {
