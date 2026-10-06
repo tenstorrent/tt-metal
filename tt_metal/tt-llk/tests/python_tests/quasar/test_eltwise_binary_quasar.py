@@ -318,6 +318,15 @@ def test_eltwise_binary(
             num_faces=num_faces,
             face_r_dim=tile_shape.face_r_dim,
             num_tiles_per_output=num_tiles_per_accumulation,
+            # This sweep covers (16,16), (32,16) and (1,32) tiles as well as
+            # the full one, and the golden cannot tell from a tensor which of
+            # the harness's two writers produced it. The StimuliConfig below
+            # sets use_dense_tile_dimensions=True unconditionally, which is the
+            # writer that strides by the tile's own size -- the same layout the
+            # golden packs. Saying so here keeps the non-32x32 variants on the
+            # heavyweight golden instead of raising for an ambiguity that is
+            # settled at this call site.
+            dense_layout=True,
         )
 
     if is_perf and perf_report is None:

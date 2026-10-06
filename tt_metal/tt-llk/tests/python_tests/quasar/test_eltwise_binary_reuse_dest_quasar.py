@@ -318,33 +318,36 @@ def test_eltwise_binary_reuse_dest_quasar(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    if not passed_test(golden_tensor, res_tensor, formats.output_format):
-        pytest.fail(
-            describe_mismatch(
-                golden_tensor,
-                res_tensor,
-                context=(
-                    f"{formats.input_format}->{formats.output_format} "
-                    f"{mathop.name} {math_fidelity.name} {reuse_dest_type.name} "
-                    f"{dest_sync_mode.name} in={input_dimensions} "
-                    f"out={output_dimensions} inner_dim={inner_dim} "
-                    f"tiles_in_block={output_tiles_in_block}"
-                ),
-                datums_per_tile=num_faces * face_r_dim * FACE_C_DIM,
-                # Rank failures on whatever lattice the output landed on. For
-                # this sweep that is absolute error: every output here is
-                # Float16 or Float16_b, which have no MX lattice model, and
-                # passed_test judged them with isclose/PCC rather than in
-                # steps. The report says as much when it falls back, so the
-                # ranking never claims a tolerance it does not have.
-                #
-                # Passed anyway, because an MX-output variant is the case that
-                # needs it: a step is relative to each element's magnitude, so
-                # ranking by absolute error there puts large-magnitude datums
-                # that comfortably pass above the one that actually failed.
-                output_format=formats.output_format,
-                chain=generate_golden.last_chain,
-                dest=torch.cat(golden_dest) if golden_dest else None,
-                dest_format=generate_golden.last_dest_format,
-            )
-        )
+    # assert, not pytest.fail: pytest.fail raises Failed rather than
+    # AssertionError, which gives llk_pytest_plugin.py only its generic "Error
+    # type: Failed" report and skips the --record-test-order pass-through. The
+    # message is still built only on failure, because `and` short-circuits.
+    assert passed_test(
+        golden_tensor, res_tensor, formats.output_format
+    ), describe_mismatch(
+        golden_tensor,
+        res_tensor,
+        context=(
+            f"{formats.input_format}->{formats.output_format} "
+            f"{mathop.name} {math_fidelity.name} {reuse_dest_type.name} "
+            f"{dest_sync_mode.name} in={input_dimensions} "
+            f"out={output_dimensions} inner_dim={inner_dim} "
+            f"tiles_in_block={output_tiles_in_block}"
+        ),
+        datums_per_tile=num_faces * face_r_dim * FACE_C_DIM,
+        # Rank failures on whatever lattice the output landed on. For
+        # this sweep that is absolute error: every output here is
+        # Float16 or Float16_b, which have no MX lattice model, and
+        # passed_test judged them with isclose/PCC rather than in
+        # steps. The report says as much when it falls back, so the
+        # ranking never claims a tolerance it does not have.
+        #
+        # Passed anyway, because an MX-output variant is the case that
+        # needs it: a step is relative to each element's magnitude, so
+        # ranking by absolute error there puts large-magnitude datums
+        # that comfortably pass above the one that actually failed.
+        output_format=formats.output_format,
+        chain=generate_golden.last_chain,
+        dest=torch.cat(golden_dest) if golden_dest else None,
+        dest_format=generate_golden.last_dest_format,
+    )
