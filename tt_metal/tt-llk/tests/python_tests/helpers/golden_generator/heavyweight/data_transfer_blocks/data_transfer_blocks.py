@@ -109,6 +109,10 @@ DEST_STORAGE_FORMATS = frozenset(
 )
 
 #: 32-bit Dest formats — valid exactly when ``DestAccumulation.Yes``.
+#: Integer L1 formats that can drive a 32-bit Int32 Dest. Int16 is absent on
+#: purpose: the FPU supports it for MOV only and not in 32-bit Dest mode.
+INT32_DEST_COMPATIBLE = frozenset({DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32})
+
 DEST_32_BIT_FORMATS = frozenset({DataFormat.Float32, DataFormat.Int32})
 
 L1Buffer = Union[Sequence[int], bytes]
@@ -532,7 +536,32 @@ class DataTransferBlocks(ABC):
         self._check_supported(l1_input_format)
         dest_acc = as_dest_acc(dest_acc)
         if l1_input_format.is_integer():
-            return DataFormat.Int32 if dest_acc else l1_input_format
+            # The same pairing resolve_dest_format enforces for an explicit
+            # format: a 32-bit Dest exists exactly when accumulation is on.
+            # Deriving the format is not a reason to skip the check.
+            if dest_acc:
+                if l1_input_format not in INT32_DEST_COMPATIBLE:
+                    raise ValueError(
+                        f"{l1_input_format} cannot drive a 32-bit Dest, so "
+                        f"dest_acc has no valid Dest format for it. The FPU "
+                        f"takes {sorted(f.name for f in INT32_DEST_COMPATIBLE)} "
+                        f"into Int32."
+                    )
+                return DataFormat.Int32
+            if l1_input_format in DEST_32_BIT_FORMATS:
+                raise ValueError(
+                    f"{l1_input_format} is a 32-bit format, so its Dest is "
+                    f"32-bit and dest_acc has to be enabled. With it off there "
+                    f"is no narrower Dest to put it in."
+                )
+            if l1_input_format not in self.supported_dest_formats:
+                raise ValueError(
+                    f"{type(self).__name__} can read {l1_input_format} from L1 "
+                    f"but cannot hold it in Dest, and this golden models no "
+                    f"conversion for it. Dest can hold "
+                    f"{sorted(str(f) for f in self.supported_dest_formats)}."
+                )
+            return l1_input_format
         if dest_acc:
             return DataFormat.Float32
         if l1_input_format in (DataFormat.Float32, DataFormat.Tf32):
