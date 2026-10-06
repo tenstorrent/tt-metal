@@ -22,3 +22,8 @@ Box: blx01 (g15blx01), everything under /var/tmp/fasth3/t170 (nothing under blx0
 - scp the mp4s of baseline5/<cfg>5 (and baseline + winner) to g15 tt-project/data/g15/t170/ (mp4s only),
   run VBench + per-seed PCC/PSNR vs baselines/ltx25_1080p_6s/ref_dv145 (ltx_eval batch --vbench-ref) on g15,
   look at stills, write the table + recommendation, commit, land on ttp/t48-ltx25-integrated.
+- 22:50:39 UTC DROP: blx01 tray 3 (chips 16-23) left PCIe in adaln job 669 (ours, 66 s in, default warmup).
+  Broker recovered; host rebooted ~22:57 and killed the driver. Done: baseline 665, exact_shard 666, lofi 667, gate 668.
+- 23:01 UTC: driver relaunched (pid 14047) with PRIOR_DROP=adaln; adaln = job 685, -t 450 (TO_KNOB default,
+  the relaunch did not re-read the baseline wall; still under the cap). One more adaln drop skips it.
+  Tray 3 now dropped under both warmup configs (625, 640, 669): if it keeps dropping, move the pack to exabox.
