@@ -53,13 +53,26 @@ dispatch_s maintains two timestamp buffers in its own L1 (A/B). On each
 2. Sends a `PUSH_A` or `PUSH_B` state to the reserved profiler tensix via a NOC
    inline dword write
 
-This alternation only hands one in-flight record to the reader at a time;
-dispatch_s never blocks on the profiler.
+The state mailbox on the profiler tensix is a single word and there are only two
+buffers, so a signal must not be sent (and the previously pushed buffer must not be
+reused) until the reader has consumed the previous one. The reader therefore acks
+every signal: after it has read the buffer and cleared its state, it writes the
+state it consumed (`PUSH_A`/`PUSH_B`) into `realtime_profiler_ack` in dispatch_s's
+L1. Before signalling again, dispatch_s waits for `ack == its last signalled state`
+(`wait_realtime_profiler_ack`). The same wait replaces the old fixed delay before
+`TERMINATE`, so the last program's record is guaranteed to be consumed.
+
+Normally the ack is already there (a full command executes between signals), so
+this costs nothing. The wait is bounded (`rt_profiler_ack_spin_limit`): if the
+reader is wedged or backpressured, dispatch_s gives up, signals anyway (records can
+be dropped, as before), and stops waiting until an ack matches again, so a stalled
+profiler can slow dispatch by at most one bounded wait, never hang it.
 
 The **BRISC reader** polls its state mailbox. On `PUSH_A`/`PUSH_B` it issues a
 `noc_async_read` of the 32-byte timestamp pair from the indicated dispatch_s
 buffer into the next ring slot, then advances `write_index` (records for
-unprofiled programs are read but not committed). If the ring is full it spins
+unprofiled programs are read but not committed). It clears its state to `IDLE`
+only if the state is still the one it just handled, then acks. If the ring is full it spins
 (heartbeat `ring_full_wait_count`); in practice this does not happen, because the
 host drains records faster than they are produced. The reader also services host
 clock-sync requests, enqueueing sync-marker records into the same ring.

@@ -37,6 +37,7 @@ FORCE_INLINE void dispatch_subordinate_realtime_profiler() {
     rt_profiler_msg->realtime_profiler_core_noc_xy = 0;
     rt_profiler_msg->realtime_profiler_remote_state_addr = 0;
     rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
+    rt_profiler_msg->realtime_profiler_ack = 0;
 
     // Wait until host explicitly enables RT profiler, or terminate if RT is not used.
     while (rt_profiler_msg->realtime_profiler_core_noc_xy == 0) {

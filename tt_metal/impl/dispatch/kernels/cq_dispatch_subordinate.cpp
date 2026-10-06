@@ -398,8 +398,43 @@ void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id,
     WAYPOINT("NWID");
 }
 
+// Upper bound on ack polls before giving up. BRISC normally services a signal in ~1 us; this only trips if the
+// profiler core is wedged or backpressured (ring full), where we fall back to the lossy pre-ack behavior rather than
+// stalling dispatch behind a diagnostic feature.
+constexpr uint32_t rt_profiler_ack_spin_limit = 1u << 17;
+static bool rt_profiler_ack_degraded = false;
+
+// The mailbox is a single word on the BRISC side and there are only two timestamp buffers, so a new signal may only
+// be sent (and the previously pushed buffer reused) once BRISC has consumed the last one. BRISC acks by writing back
+// the state it consumed; dispatch_s's own realtime_profiler_state is the last state it signalled.
+// Returns false if the ack did not arrive in time.
+FORCE_INLINE
+bool wait_realtime_profiler_ack(volatile tt_l1_ptr realtime_profiler_msg_t* msg) {
+    const uint32_t last_signalled = msg->realtime_profiler_state;
+    // The ack is written over the NoC. On Blackhole the RISC's L1 cache must be invalidated before every read of it,
+    // otherwise a stale line is polled until the timeout.
+    invalidate_l1_cache();
+    if (msg->realtime_profiler_ack == last_signalled) {
+        rt_profiler_ack_degraded = false;
+        return true;
+    }
+    if (rt_profiler_ack_degraded) {
+        return false;
+    }
+    for (uint32_t i = 0; i < rt_profiler_ack_spin_limit; i++) {
+        invalidate_l1_cache();
+        if (msg->realtime_profiler_ack == last_signalled) {
+            return true;
+        }
+    }
+    rt_profiler_ack_degraded = true;
+    return false;
+}
+
 FORCE_INLINE
 void signal_realtime_profiler_and_switch(volatile tt_l1_ptr realtime_profiler_msg_t* msg) {
+    wait_realtime_profiler_ack(msg);
+
     RealtimeProfilerState current_state = static_cast<RealtimeProfilerState>(msg->realtime_profiler_state);
     bool used_buffer_a = (current_state == REALTIME_PROFILER_STATE_PUSH_B);
 
@@ -930,8 +965,8 @@ void kernel_main() {
                 if (rt_profiler_enabled) {
                     signal_realtime_profiler_and_switch(rt_profiler_msg);
                     noc_async_writes_flushed();
-                    for (volatile uint32_t delay = 0; delay < 5000; delay++) {
-                    }
+                    // The final record must be consumed before TERMINATE replaces the state word.
+                    wait_realtime_profiler_ack(rt_profiler_msg);
                 }
 
                 rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_TERMINATE;

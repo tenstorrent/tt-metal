@@ -24,6 +24,7 @@ constexpr uint32_t realtime_profiler_timestamp_size = 2 * sizeof(realtime_profil
 // DISPATCH_CORE_NOC_Y  - NOC Y coordinate of dispatch_s core
 // DISPATCH_DATA_ADDR_A - Address of kernel_start_a in dispatch_s's L1 mailbox
 // DISPATCH_DATA_ADDR_B - Address of kernel_start_b in dispatch_s's L1 mailbox
+// DISPATCH_ACK_ADDR    - Address of realtime_profiler_ack in dispatch_s's L1 mailbox
 // RING_BUFFER_ADDR     - L1 address of the shared ring buffer
 
 // L1 region carved by DispatchMemMap (CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG) on this
@@ -56,6 +57,16 @@ __attribute__((noinline)) void realtime_profiler_read_and_enqueue(bool buffer_a)
     const uint32_t id = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr)[2];
     if (id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
         ring_buffer->write_index++;
+    }
+}
+
+// Tell dispatch_s that `consumed` (PUSH_A/PUSH_B) has been read out of its buffer, so it may signal again and reuse
+// that buffer. Must come after the local state has been cleared.
+__attribute__((noinline)) void realtime_profiler_ack_dispatch(uint32_t consumed) {
+    // DISPATCH_ACK_ADDR is 0 when the host found no dispatch_s core, in which case nothing ever signals us.
+    if constexpr (DISPATCH_ACK_ADDR != 0) {
+        noc_inline_dw_write<InlineWriteDst::L1, /*posted=*/true>(
+            get_noc_addr(DISPATCH_CORE_NOC_X, DISPATCH_CORE_NOC_Y, DISPATCH_ACK_ADDR), consumed);
     }
 }
 
@@ -128,13 +139,14 @@ void kernel_main() {
                 continue;
 
             case REALTIME_PROFILER_STATE_PUSH_A:
-                realtime_profiler_read_and_enqueue(true);
-                rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
-                break;
-
             case REALTIME_PROFILER_STATE_PUSH_B:
-                realtime_profiler_read_and_enqueue(false);
-                rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
+                realtime_profiler_read_and_enqueue(state == REALTIME_PROFILER_STATE_PUSH_A);
+                // Only clear our own request: a newer signal that landed while we were busy must not be lost.
+                invalidate_l1_cache();
+                if (rt_profiler_msg->realtime_profiler_state == state) {
+                    rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
+                }
+                realtime_profiler_ack_dispatch(state);
                 break;
 
             case REALTIME_PROFILER_STATE_TERMINATE: ring_buffer->terminate = 1; return;

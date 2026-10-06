@@ -85,6 +85,9 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
        |                              | 6. See state PUSH_A or PUSH_B    |
        |                              | 7. NOC read timestamp data       |
        | <----------------------------|    from dispatch_s L1 (buf A/B)  |
+       | (before the next signal,     | 7b. Clear state, write           |
+       |  dispatch_s waits for the    |     realtime_profiler_ack        |
+       |  ack) <--------------------- |     (= consumed state)           |
        |                              | 8. Push page to D2H socket       |
        |                              |    (PCIe write to host buffer)   |
        |                              | -------------------------------> | 9. wait_for_pages
@@ -129,7 +132,7 @@ Host and device timestamps are aligned so that Tracy (or other consumers) can re
 
 | Location | Contents (`realtime_profiler_msg_t`) |
 |----------|----------------------------------------|
-| **Dispatch_s L1** | Ping-pong buffers, program_id_fifo, **realtime_profiler_core_noc_xy**, **realtime_profiler_remote_state_addr**, realtime_profiler_state. Host writes NOC XY and the profiler tensix L1 address of `realtime_profiler_state` for NOC signaling. |
+| **Dispatch_s L1** | Ping-pong buffers, program_id_fifo, **realtime_profiler_core_noc_xy**, **realtime_profiler_remote_state_addr**, realtime_profiler_state, **realtime_profiler_ack** (written by the profiler BRISC after it consumes a `PUSH_A`/`PUSH_B`; dispatch_s waits on it before signaling again). Host writes NOC XY and the profiler tensix L1 address of `realtime_profiler_state` for NOC signaling. |
 | **Profiler tensix L1** | **config_buffer_addr**, **realtime_profiler_state**, sync_request, sync_host_timestamp. |
 
 Layout: `tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h`. HAL: `tt::tt_metal::realtime_profiler_msgs`. Not in `mailboxes_t`.
