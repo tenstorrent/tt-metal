@@ -5,6 +5,8 @@
 
 import math
 import os
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -521,6 +523,30 @@ def test_slot_bytes_per_chip_is_exact_and_linear_in_capacity(expect_error):
         assert slot_bytes_per_chip(max_seq_len, ttnn.bfloat16) == 4096 * max_seq_len
     with expect_error(ValueError, "bfloat16 or bfloat8_b"):
         slot_bytes_per_chip(2048, ttnn.float32)
+
+
+def test_default_num_users_follows_the_environment():
+    # A deployment that raises its slot count has to be agreed with by the two places that build a
+    # geometry without being handed one: the shared layout the runtime compares a requested count
+    # against, and the geometry it validates an allocated cache against. When they kept a literal 2
+    # a 4-slot cache allocated correctly was rejected by its own validator.
+    #
+    # Read in a subprocess because the default is resolved at import. Reloading the module in
+    # process would leave every module that already imported PREFILL_LAYOUT holding the old one.
+    script = (
+        "from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import ("
+        "    DEFAULT_NUM_USERS, PREFILL_LAYOUT, PrefillGeometry)\n"
+        "print(DEFAULT_NUM_USERS, PREFILL_LAYOUT.num_users, PrefillGeometry(32768).num_users)"
+    )
+    root = Path(__file__).resolve().parents[5]
+    for requested, expected in ((None, 2), (4, 4), (16, 16), (32, 32)):
+        env = {k: v for k, v in os.environ.items() if k != "PREFILL_NUM_USERS"}
+        if requested is not None:
+            env["PREFILL_NUM_USERS"] = str(requested)
+        done = subprocess.run(
+            [sys.executable, "-c", script], cwd=root, env=env, capture_output=True, text=True, check=True
+        )
+        assert done.stdout.split() == [str(expected)] * 3, done.stdout
 
 
 # The numerator: free DRAM, read at call time. Sizing off a hardware constant would be wrong the

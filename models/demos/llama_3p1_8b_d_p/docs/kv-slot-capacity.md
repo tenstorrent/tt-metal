@@ -221,3 +221,31 @@ cache = allocate_kv_cache(
 )
 live_users = cache.num_users // MIGRATION_SLOTS_PER_USER  # slots [live_users, num_users) are the dsts
 ```
+
+### Setting the count from a deployment
+
+`DEFAULT_NUM_USERS` reads `PREFILL_NUM_USERS`, so a deployment that never calls
+`allocate_kv_cache` itself can still choose its count:
+
+```sh
+PREFILL_NUM_USERS=16
+```
+
+It has to be the default rather than an argument threaded through one call site. Two places build a
+geometry without being handed a count — the shared `PREFILL_LAYOUT` that the runtime compares a
+requested count against, and the geometry inside `TtPrefillRuntime` that validates an allocated
+cache — and while those held a literal 2, a correctly allocated 4-slot cache was rejected by its own
+validator: `Llama KV cache metadata must be num_users=2, ...; got (4, 32, 33792, 4)`.
+
+Exercised end to end with a one-Galaxy prefill feeding a four-Galaxy tt-blaze decode over native KV
+migration at 33,792 positions. GSM8K (200 problems, 0-shot, flexible-extract) does not move with the
+count, and every request was served:
+
+| Slots | Concurrent requests | GSM8K | Served |
+| ---: | ---: | ---: | ---: |
+| 2 | 1 | 0.810 | 200/200 |
+| 4 | 4 | 0.810 | 200/200 |
+| 16 | 16 | 0.810 | 200/200 |
+
+That is the run-time claim this document already makes about the count, measured through a whole
+serving stack rather than a prefill probe.
