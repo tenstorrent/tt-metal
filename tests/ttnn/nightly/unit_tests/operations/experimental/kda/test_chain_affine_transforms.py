@@ -42,8 +42,8 @@ _STEPS = 1
 _PRODUCTION_PERF_MARGIN = 0.05
 _SMALL_CASE = _Case("bh2-k32-v64", batch_heads=2, key_dim=32, value_dim=64)
 _PRODUCTION_PERF_CASE = _Case("p1-bh24-k128-v128", batch_heads=24, key_dim=128, value_dim=128)
-# Measured on a Blackhole Galaxy chip, where reduce_affine_transforms' production case reads 2.6% above its reference.
-_PRODUCTION_PERF_EXPECTED_DURATION_NS = 33_400
+# Measured on the bh_p150b_civ2_viommu CI runner; a Blackhole Galaxy chip reads about 6% slower.
+_PRODUCTION_PERF_EXPECTED_DURATION_NS = 30_700
 
 
 def _chain_affine_transforms_ops(
