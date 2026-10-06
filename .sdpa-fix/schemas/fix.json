@@ -1,22 +1,98 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["fixed", "approach", "confidence", "title", "root_cause", "culprit_sha", "culprit_title", "change_summary", "why_correct", "risk", "threshold_change", "threshold_details", "already_fixed_upstream", "reason_if_not_fixed", "reviewer_focus"],
+  "required": [
+    "fixed",
+    "approach",
+    "confidence",
+    "title",
+    "root_cause",
+    "culprit_sha",
+    "culprit_title",
+    "change_summary",
+    "why_correct",
+    "risk",
+    "threshold_change",
+    "threshold_details",
+    "already_fixed_upstream",
+    "reason_if_not_fixed",
+    "reviewer_focus",
+    "regression",
+    "why",
+    "fix"
+  ],
   "properties": {
-    "fixed": {"type": "boolean"},
-    "approach": {"type": "string", "enum": ["revert", "forward_fix", "threshold_update", "none"]},
-    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
-    "title": {"type": "string", "maxLength": 90},
-    "root_cause": {"type": "string"},
-    "culprit_sha": {"type": "string"},
-    "culprit_title": {"type": "string"},
-    "change_summary": {"type": "string"},
-    "why_correct": {"type": "string"},
-    "risk": {"type": "string"},
-    "threshold_change": {"type": "boolean"},
-    "threshold_details": {"type": "string"},
-    "already_fixed_upstream": {"type": "string"},
-    "reason_if_not_fixed": {"type": "string"},
-    "reviewer_focus": {"type": "array", "items": {"type": "string"}}
+    "fixed": {
+      "type": "boolean"
+    },
+    "approach": {
+      "type": "string",
+      "enum": [
+        "revert",
+        "forward_fix",
+        "threshold_update",
+        "none"
+      ]
+    },
+    "confidence": {
+      "type": "string",
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 90
+    },
+    "root_cause": {
+      "type": "string"
+    },
+    "culprit_sha": {
+      "type": "string"
+    },
+    "culprit_title": {
+      "type": "string"
+    },
+    "change_summary": {
+      "type": "string"
+    },
+    "why_correct": {
+      "type": "string"
+    },
+    "risk": {
+      "type": "string"
+    },
+    "threshold_change": {
+      "type": "boolean"
+    },
+    "threshold_details": {
+      "type": "string"
+    },
+    "already_fixed_upstream": {
+      "type": "string"
+    },
+    "reason_if_not_fixed": {
+      "type": "string"
+    },
+    "reviewer_focus": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "regression": {
+      "type": "string",
+      "maxLength": 300
+    },
+    "why": {
+      "type": "string",
+      "maxLength": 400
+    },
+    "fix": {
+      "type": "string",
+      "maxLength": 300
+    }
   }
 }

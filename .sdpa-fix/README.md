@@ -99,6 +99,37 @@ then regressed again. `rejected` (a human closed the PR) is never retried.
 | `ONLY=<workflow.yaml>` (env) | restrict a manual tick to one pipeline |
 | `NO_FIX=1` (env) | triage + ledger only |
 
+## PR style
+
+Every PR the bot opens has the same short shape (`fixlib.py render`):
+
+- **Warning:** automated, not run on hardware, needs human review. It also
+  says when the PR changes a threshold.
+- **Regression:** a red badge linking the failing run, then one line with the
+  test, the measured value and the expected value or band.
+- **Why:** at most two sentences, the cause and the evidence, naming the
+  culprit PR.
+- **Fix:** what changed, with old → new values.
+- **Validation:** GitHub's live workflow badge for each dispatched leg on the
+  branch, linked to the run.
+- **Review:** at most three checkboxes, plus possibly related PRs.
+
+The agent writes the `regression`, `why` and `fix` fields to these rules
+(`prompts/fix.txt`). Code comments carry no history: no dated notes, no run or
+job ids, no "re-centred …". A threshold change also removes the dated history
+around it. The guard rejects any added comment line that looks like history.
+
+## Shell aliases (~/.bashrc)
+
+| | |
+|---|---|
+| `sdpa-fix-dry` | one dry-run tick |
+| `sdpa-fix` | one live tick: pushes, opens a draft PR, dispatches CI |
+| `sdpa` / `sdpa-dry` | the watcher: one tick / print the digest without posting |
+
+Cron: watcher `0 * * * *`, fixer `10 * * * *`. `ensure-cron.sh` restores both
+after a reboot.
+
 ## Everyday commands
 
 ```bash

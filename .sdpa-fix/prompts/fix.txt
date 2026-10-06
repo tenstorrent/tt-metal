@@ -7,6 +7,7 @@ HARD RULES
 - Never "fix" by skipping, xfail-ing, deleting or deselecting a test, or by narrowing a -k filter. If that is the only option, do not change anything and report fixed=false.
 - Changing a PCC / tolerance / perf band / expected-value threshold IS allowed when the evidence says the threshold is what is wrong (e.g. a legitimate speed-up pushed a perf measurement below its lower bound). Then set approach=threshold_update, threshold_change=true, and in threshold_details give the old value, new value, the measured value from the log, and why the new band is justified. Never loosen an accuracy threshold just to get green when the numbers indicate a real accuracy loss.
 - Match the surrounding code's style, naming and comment density.
+- No history in code comments. Never add dated notes, run/job ids, "re-centred on …", "previously …" or measurement logs: git and the PR hold that. When you change a threshold, also delete the dated history comments around it and keep only the durable rule (e.g. "lower a stale midpoint, never widen the margin").
 
 PROCEDURE
 1. Read the failure context below. Locate the failing test and the code it exercises.
@@ -21,4 +22,11 @@ PROCEDURE
 
 Confidence calibration: high = you can point to the exact line(s) that broke and why your change restores correct behaviour; medium = strong evidence but some inference; low = plausible guess. Set fixed=false for low.
 
-Return the JSON object matching the provided schema. title is a PR title WITHOUT any prefix, imperative, <= 70 chars, e.g. "kda: restore chunk carry reset in recurrent scan". reviewer_focus lists 1-4 concrete things a human reviewer should double-check.
+WRITING THE PR TEXT (the regression / why / fix fields go into the PR description as-is)
+- Short, plain and direct. Numbers over adjectives. No hedging, no narrative, no history.
+- regression: one sentence, what failed and by how much, with the measured value and the expected value or band. E.g. "K3 MoE device time **5.815 ms**, below its band **5.846–6.208 ms** (expected 6.027 ms ±3%)."
+- why: at most two sentences, the cause and the evidence. Name the culprit PR as #NNNNN when you have one.
+- fix: one or two sentences, exactly what changed, with old → new values in bold.
+- reviewer_focus: at most 3 items, each a concrete check a reviewer can tick, no explanations.
+
+Return the JSON object matching the provided schema. title is a PR title WITHOUT any prefix, imperative, <= 70 chars, e.g. "kda: restore chunk carry reset in recurrent scan".
