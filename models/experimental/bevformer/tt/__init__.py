@@ -14,8 +14,7 @@ from .model_preprocessing import (
     create_spatial_cross_attention_parameters,
     create_temporal_self_attention_parameters,
     create_bevformer_encoder_parameters,
-    preprocess_bevformer_encoder_parameters,
-    preprocess_bevformer_layer_parameters,
+    create_bevformer_layer_parameters,
 )
 
 __all__ = [
@@ -28,6 +27,5 @@ __all__ = [
     "create_spatial_cross_attention_parameters",
     "create_temporal_self_attention_parameters",
     "create_bevformer_encoder_parameters",
-    "preprocess_bevformer_encoder_parameters",
-    "preprocess_bevformer_layer_parameters",
+    "create_bevformer_layer_parameters",
 ]

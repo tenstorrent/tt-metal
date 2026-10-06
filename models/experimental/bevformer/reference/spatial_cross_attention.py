@@ -2,205 +2,144 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Spatial Cross Attention (SCA) module for BEVFormer.
+Spatial cross-attention (SCA) in PyTorch.
 
-This module implements the spatial cross-attention mechanism that enables
-BEV queries to extract spatial features from regions of interest across
-multiple camera views using deformable attention.
+This module implements the encoder's cross-attention from the BEV queries into the camera
+features, as upstream's ``SpatialCrossAttention`` and ``MSDeformableAttention3D``
+(``projects/mmdet3d_plugin/bevformer/modules/spatial_cross_attention.py`` in
+fundamentalvision/BEVFormer). It is the reference ``tt/tt_spatial_cross_attention.py`` is checked
+against. Parameter names follow upstream, so a checkpoint's
+``pts_bbox_head.transformer.encoder.layers.<i>.attentions.1`` weights load unchanged.
 
-Based on the original BEVFormer implementation:
-https://github.com/fundamentalvision/BEVFormer/blob/master/projects/mmdet3d_plugin/bevformer/modules/spatial_cross_attention.py
+Each BEV query is gathered ("rebatched") into every camera whose image its pillar's points land
+in (``bev_mask``). There it attends to the four FPN levels around those points: its 8 sampling
+points are split over the pillar's 4 points. The per-camera results are scattered back,
+averaged over the cameras that saw the query, projected, and added to the queries.
+
+Only inference is kept: dropout is dropped.
 """
+
+import math
 
 import torch
 import torch.nn as nn
-from typing import Optional
-from .ms_deformable_attention import MSDeformableAttention
-from models.experimental.bevformer.config import DeformableAttentionConfig
+
+from .ms_deformable_attention import multi_scale_deformable_attn
+
+
+class MSDeformableAttention3D(nn.Module):
+    """Deformable attention whose ``num_points`` are split over the pillar's ``num_Z_anchors``
+    reference points: each anchor gets ``num_points // num_Z_anchors`` offsets. No output
+    projection; SpatialCrossAttention applies one after the cameras are merged."""
+
+    def __init__(self, embed_dims=256, num_heads=8, num_levels=4, num_points=8, batch_first=True):
+        super().__init__()
+        if embed_dims % num_heads != 0:
+            raise ValueError(f"embed_dims ({embed_dims}) must be divisible by num_heads ({num_heads})")
+        self.embed_dims = embed_dims
+        self.num_heads = num_heads
+        self.num_levels = num_levels
+        self.num_points = num_points
+        self.batch_first = batch_first
+        self.sampling_offsets = nn.Linear(embed_dims, num_heads * num_levels * num_points * 2)
+        self.attention_weights = nn.Linear(embed_dims, num_heads * num_levels * num_points)
+        self.value_proj = nn.Linear(embed_dims, embed_dims)
+        self.init_weights()
+
+    def init_weights(self):
+        """Upstream's init: offsets start on a ring of ``num_points`` steps per head, attention uniform."""
+        nn.init.zeros_(self.sampling_offsets.weight)
+        thetas = torch.arange(self.num_heads, dtype=torch.float32) * (2.0 * math.pi / self.num_heads)
+        grid = torch.stack([thetas.cos(), thetas.sin()], -1)
+        grid = (grid / grid.abs().max(-1, keepdim=True)[0]).view(self.num_heads, 1, 1, 2)
+        grid = grid.repeat(1, self.num_levels, self.num_points, 1)
+        for i in range(self.num_points):
+            grid[:, :, i, :] *= i + 1
+        with torch.no_grad():
+            self.sampling_offsets.bias.copy_(grid.view(-1))
+        nn.init.zeros_(self.attention_weights.weight)
+        nn.init.zeros_(self.attention_weights.bias)
+        nn.init.xavier_uniform_(self.value_proj.weight)
+        nn.init.zeros_(self.value_proj.bias)
+
+    def forward(self, query, value, reference_points, spatial_shapes):
+        """``query`` ``(bs, num_query, C)``, ``value`` ``(bs, num_value, C)``, ``reference_points``
+        ``(bs, num_query, num_Z_anchors, 2)`` in [0, 1]; ``spatial_shapes`` ``(num_levels, 2)`` as (h, w)."""
+        bs, num_query, _ = query.shape
+        _, num_value, _ = value.shape
+        assert (spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum() == num_value
+
+        value = self.value_proj(value).view(bs, num_value, self.num_heads, -1)
+        sampling_offsets = self.sampling_offsets(query).view(
+            bs, num_query, self.num_heads, self.num_levels, self.num_points, 2
+        )
+        attention_weights = self.attention_weights(query).view(
+            bs, num_query, self.num_heads, self.num_levels * self.num_points
+        )
+        attention_weights = attention_weights.softmax(-1).view(
+            bs, num_query, self.num_heads, self.num_levels, self.num_points
+        )
+
+        offset_normalizer = torch.stack([spatial_shapes[..., 1], spatial_shapes[..., 0]], -1)
+        num_z_anchors = reference_points.shape[2]
+        sampling_offsets = (sampling_offsets / offset_normalizer[None, None, None, :, None, :]).view(
+            bs, num_query, self.num_heads, self.num_levels, self.num_points // num_z_anchors, num_z_anchors, 2
+        )
+        sampling_locations = reference_points[:, :, None, None, None, :, :] + sampling_offsets
+        sampling_locations = sampling_locations.view(bs, num_query, self.num_heads, self.num_levels, self.num_points, 2)
+        return multi_scale_deformable_attn(value, spatial_shapes, sampling_locations, attention_weights)
 
 
 class SpatialCrossAttention(nn.Module):
-    """
-    Spatial Cross Attention module for BEVFormer.
-
-    This attention mechanism allows BEV queries to extract spatial features
-    from regions of interest across camera views using deformable attention.
-    Each BEV query can attend to multiple camera features at different scales
-    and locations.
-
-    Note: This module expects pre-projected reference points and validity masks.
-    Point sampling/projection from 3D to camera coordinates should be handled
-    by the encoder before calling this attention module.
-
-    Args:
-        embed_dims (int): The embedding dimension.
-        num_cams (int): Number of cameras.
-        init_cfg (dict, optional): Initialization config dict.
-        batch_first (bool): Whether the first dimension of input is batch_size.
-        deformable_attention (dict): Config for MSDeformableAttention.
-        **kwargs: Additional arguments.
-    """
-
-    def __init__(
-        self,
-        embed_dims: int = 256,
-        num_cams: int = 6,
-        init_cfg: Optional[dict] = None,
-        batch_first: bool = False,
-        deformable_attention: Optional[dict] = None,
-        **kwargs,
-    ):
-        super(SpatialCrossAttention, self).__init__()
-
-        if deformable_attention is None:
-            deformable_attention = dict(
-                type="MSDeformableAttention", embed_dims=256, num_levels=4, num_points=8, num_heads=8
-            )
-
+    def __init__(self, embed_dims=256, num_cams=6, num_heads=8, num_levels=4, num_points=8):
+        super().__init__()
         self.embed_dims = embed_dims
         self.num_cams = num_cams
-        self.batch_first = batch_first
-
-        # Initialize MSDeformableAttention using existing implementation
-        # Store deformable attention config for flexible initialization
-        self.deformable_attention_config = deformable_attention or {}
-
-        # Initialize with default config - num_points will be validated in forward()
-        deform_config = DeformableAttentionConfig(
-            embed_dims=self.deformable_attention_config.get("embed_dims", embed_dims),
-            num_heads=self.deformable_attention_config.get("num_heads", 8),
-            num_levels=self.deformable_attention_config.get("num_levels", 4),  # Feature pyramid levels
-            num_points=self.deformable_attention_config.get("num_points", 4),  # Will be validated against depth levels
-            batch_first=batch_first,
+        self.deformable_attention = MSDeformableAttention3D(
+            embed_dims=embed_dims, num_heads=num_heads, num_levels=num_levels, num_points=num_points
         )
-        self.deformable_attention = MSDeformableAttention(deform_config)
-
-        # Output projection layer
         self.output_proj = nn.Linear(embed_dims, embed_dims)
+        nn.init.xavier_uniform_(self.output_proj.weight)
+        nn.init.zeros_(self.output_proj.bias)
 
-    def forward(
-        self,
-        query: torch.Tensor,
-        reference_points_cam: torch.Tensor,
-        bev_mask: torch.Tensor,
-        key: Optional[torch.Tensor] = None,
-        value: Optional[torch.Tensor] = None,
-        residual: Optional[torch.Tensor] = None,
-        query_pos: Optional[torch.Tensor] = None,
-        key_padding_mask: Optional[torch.Tensor] = None,
-        spatial_shapes: Optional[torch.Tensor] = None,
-        level_start_index: Optional[torch.Tensor] = None,
-        **kwargs,
-    ) -> torch.Tensor:
-        """
-        Forward pass of Spatial Cross Attention.
-
-        Args:
-            query (torch.Tensor): BEV queries [B, num_queries, embed_dims].
-            key (torch.Tensor): Multi-camera features [num_cams, H*W, B, embed_dims].
-            value (torch.Tensor): Same as key.
-            residual (torch.Tensor): Residual connection input.
-            query_pos (torch.Tensor): Query positional encoding.
-            key_padding_mask (torch.Tensor): Key padding mask.
-            reference_points_cam (torch.Tensor): Camera projected reference points [num_cams, B, num_queries, num_points_in_pillar, 2].
-            bev_mask (torch.Tensor): Valid mask for camera projections [num_cams, B, num_queries, num_points_in_pillar].
-            spatial_shapes (torch.Tensor): Spatial shapes of multi-scale features.
-            level_start_index (torch.Tensor): Start index of each level.
-            **kwargs: Additional arguments.
-
-        Returns:
-            torch.Tensor: Output features [B, num_queries, embed_dims].
-        """
-        reference_points_cam = reference_points_cam.clamp(-10.0, 10.0)
-        # Handle input defaults
-        if key is None:
-            key = query.clone()
-        if value is None:
-            value = key.clone()
-        if residual is None:
-            inp_residual = query.clone()
-        else:
-            inp_residual = residual.clone()
-
-        # Add query positional encoding
+    def forward(self, query, value, reference_points_cam, bev_mask, spatial_shapes, query_pos=None):
+        """``query`` ``(bs, num_query, C)``; ``value`` ``(num_cams, num_value, bs, C)``;
+        ``reference_points_cam`` ``(num_cams, bs, num_query, D, 2)`` and ``bev_mask``
+        ``(num_cams, bs, num_query, D)`` from point_sampling."""
+        inp_residual = query
+        slots = torch.zeros_like(query)
         if query_pos is not None:
             query = query + query_pos
 
-        bs, num_queries, _ = query.shape
-        # Extract number of depth levels for 3D point sampling
-        # Each BEV query samples points at multiple Z-coordinates (depth levels) in 3D space
-        num_depth_levels = reference_points_cam.size(3)
+        bs, num_query, _ = query.shape
+        depth = reference_points_cam.size(3)
+        # As upstream, the queries a camera sees come from the first sample's mask.
+        indexes = [mask_per_img[0].sum(-1).nonzero().squeeze(-1) for mask_per_img in bev_mask]
+        max_len = max(len(each) for each in indexes)
 
-        # Find valid queries for each camera
-        indexes = []
-        for i, mask_per_img in enumerate(bev_mask):
-            # Sum over depth levels dimension and check if any point is valid
-            index_query_per_img = mask_per_img.sum(-1) > 0  # [B, num_queries]
-            indexes.append(index_query_per_img)
-
-        max_len = max([index.sum().max().item() for index in indexes])
-        if max_len == 0:
-            # No valid points, return original query
-            return inp_residual
-
-        # Initialize output accumulator
-        slots = torch.zeros_like(query)
-
-        # Rebatch queries and reference points for each camera
         queries_rebatch = query.new_zeros([bs, self.num_cams, max_len, self.embed_dims])
-        reference_points_rebatch = reference_points_cam.new_zeros([bs, self.num_cams, max_len, num_depth_levels, 2])
-
-        # Fill rebatched tensors with valid queries
+        reference_points_rebatch = reference_points_cam.new_zeros([bs, self.num_cams, max_len, depth, 2])
         for j in range(bs):
-            for i, index_query_per_img in enumerate(indexes):
-                valid_indices = torch.nonzero(index_query_per_img[j], as_tuple=False).squeeze(-1)
-                if len(valid_indices) > 0:
-                    num_valid = min(len(valid_indices), max_len)
-                    queries_rebatch[j, i, :num_valid] = query[j, valid_indices[:num_valid]]
-                    reference_points_rebatch[j, i, :num_valid] = reference_points_cam[i, j, valid_indices[:num_valid]]
+            for i, reference_points_per_img in enumerate(reference_points_cam):
+                index_query_per_img = indexes[i]
+                queries_rebatch[j, i, : len(index_query_per_img)] = query[j, index_query_per_img]
+                reference_points_rebatch[j, i, : len(index_query_per_img)] = reference_points_per_img[
+                    j, index_query_per_img
+                ]
 
-        num_cams, L, bs, embed_dims = key.shape
-
-        # [num_cams, L, bs, embed_dims] -> [bs * num_cams, L, embed_dims]
-        key = key.permute(2, 0, 1, 3).reshape(bs * self.num_cams, L, self.embed_dims)
-        value = value.permute(2, 0, 1, 3).reshape(bs * self.num_cams, L, self.embed_dims)
-
-        # [bs, num_cams, max_len, embed_dims] -> [bs * num_cams, max_len, embed_dims]
-        queries_batched = queries_rebatch.view(bs * self.num_cams, max_len, self.embed_dims)
-
-        # [bs, num_cams, max_len, num_points_in_pillar, 2] -> [bs * num_cams, max_len, num_points_in_pillar, 2]
-        reference_points_batched = reference_points_rebatch.view(bs * self.num_cams, max_len, num_depth_levels, 2)
-
-        # Apply deformable attention with 3D reference points (matching original BEVFormer)
+        num_cams, num_value, bs, embed_dims = value.shape
+        value = value.permute(2, 0, 1, 3).reshape(bs * self.num_cams, num_value, self.embed_dims)
         queries = self.deformable_attention(
-            query=queries_batched,
-            key=key,
+            query=queries_rebatch.view(bs * self.num_cams, max_len, self.embed_dims),
             value=value,
-            reference_points=reference_points_batched,
+            reference_points=reference_points_rebatch.view(bs * self.num_cams, max_len, depth, 2),
             spatial_shapes=spatial_shapes,
-            level_start_index=level_start_index,
-            **kwargs,
-        )
+        ).view(bs, self.num_cams, max_len, self.embed_dims)
 
-        # Reshape output back to [bs, num_cams, max_len, embed_dims]
-        queries = queries.view(bs, self.num_cams, max_len, self.embed_dims)
-
-        # Aggregate features back to original query positions
         for j in range(bs):
             for i, index_query_per_img in enumerate(indexes):
-                valid_indices = torch.nonzero(index_query_per_img[j], as_tuple=False).squeeze(-1)
-                if len(valid_indices) > 0:
-                    num_valid = min(len(valid_indices), max_len)
-                    slots[j, valid_indices[:num_valid]] += queries[j, i, :num_valid]
+                slots[j, index_query_per_img] += queries[j, i, : len(index_query_per_img)]
 
-        # Count valid queries per camera
-        # Original: count = bev_mask.sum(-1) > 0; count = count.permute(1, 2, 0).sum(-1)
-        count = bev_mask.sum(-1) > 0  # [num_cams, B, num_queries]
-        count = count.permute(1, 2, 0).sum(-1)  # [B, num_queries]
-        count = torch.clamp(count, min=1.0)
-        slots = slots / count[..., None]
-
-        # Output projection
-        slots = self.output_proj(slots)
-
-        return slots + inp_residual
+        count = (bev_mask.sum(-1) > 0).permute(1, 2, 0).sum(-1)
+        slots = slots / torch.clamp(count, min=1.0)[..., None]
+        return self.output_proj(slots) + inp_residual
