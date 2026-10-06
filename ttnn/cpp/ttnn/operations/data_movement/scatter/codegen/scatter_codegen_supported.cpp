@@ -204,8 +204,15 @@ bool prefers_row_major_strategy(
     const Tensor& index_tensor,
     const Tensor& src_tensor,
     const ttnn::Shape& working_input,
-    const ttnn::Shape& working_index) {
+    const ttnn::Shape& working_index,
+    const tt::tt_metal::MemoryConfig& output_mem_config) {
     if (input_tensor.layout() != Layout::TILE) {
+        return false;
+    }
+    // The detour hands the untilized operands to the ROW_MAJOR factories, whose output stick is sized
+    // from the input's own aligned page; supported_execution_controls() rejects that pairing when the
+    // output's buffer type differs, so a detour taken here would only fail in the prim's validate.
+    if (output_mem_config.buffer_type() != input_tensor.memory_config().buffer_type()) {
         return false;
     }
     // The tile-row count of the working shape as the TILE factories see it: every leading dim times
@@ -245,7 +252,18 @@ bool prefers_row_major_strategy(
         /*bf16_reduce=*/false);
 }
 
-bool is_demoted(const Tensor& input_tensor, int32_t dim, const Tensor& index_tensor, const Tensor& src_tensor) {
+bool is_demoted(
+    const Tensor& input_tensor,
+    int32_t dim,
+    const Tensor& index_tensor,
+    const Tensor& src_tensor,
+    const tt::tt_metal::MemoryConfig& output_mem_config) {
+    // supported_by_codegen() has already rejected an out-of-range dim, so the axis is in range here.
+    // Every clause below compares the normalized axis, so `dim=2` and `dim=-2` on a rank-4 tensor
+    // are the same case.
+    const int32_t rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
+    const int32_t axis = dim < 0 ? dim + rank : dim;
+
     // A unit logical row in TILE layout is padded to 32 rows, so input, index, src and output all
     // carry 32x their logical volume through every transpose in the pre/post sandwich and through
     // the kernel itself; the streaming reader additionally scans and rejects the 992 padded-row
@@ -259,21 +277,24 @@ bool is_demoted(const Tensor& input_tensor, int32_t dim, const Tensor& index_ten
     // them separately.
     // A call the row-major detour serves never reaches the TILE factories, so it pays none of this:
     // its unit row is untilized to one logical stick before any kernel runs. The detour's own gate
-    // decides that (prefers_row_major_strategy), on the same working shapes the dispatch scatters.
+    // decides that (prefers_row_major_strategy), on the same working shapes and output placement the
+    // dispatch scatters, so a unit row the detour declines -- including one whose output placement
+    // the detour cannot write -- is demoted rather than sent through the TILE factories.
     if (input_tensor.dtype() == DataType::BFLOAT16 && input_tensor.layout() == Layout::TILE) {
-        const ttnn::Shape working_input = codegen_working_shape(input_tensor.logical_shape(), dim);
-        const ttnn::Shape working_index = codegen_working_shape(index_tensor.logical_shape(), dim);
+        const ttnn::Shape working_input = codegen_working_shape(input_tensor.logical_shape(), axis);
+        const ttnn::Shape working_index = codegen_working_shape(index_tensor.logical_shape(), axis);
         if (working_input[-2] == 1 &&
-            !prefers_row_major_strategy(input_tensor, index_tensor, src_tensor, working_input, working_index)) {
+            !prefers_row_major_strategy(
+                input_tensor, index_tensor, src_tensor, working_input, working_index, output_mem_config)) {
             return true;
         }
     }
 
     // Ungeneralized (ambiguous mechanism) demotion: measured below native on-device for exactly this
-    // input/index/src shape, dim and layout, in both ROW_MAJOR and TILE. No general condition tying
-    // the regression to a broader shape family was identified, so this is an exact-match carve-out
-    // rather than a predicate -- widen it only if a mechanism is found.
-    if (input_tensor.dtype() == DataType::BFLOAT16 && dim == -2 &&
+    // input/index/src shape, scatter axis (the pre-last one) and layout, in both ROW_MAJOR and TILE.
+    // No general condition tying the regression to a broader shape family was identified, so this is
+    // an exact-match carve-out rather than a predicate -- widen it only if a mechanism is found.
+    if (input_tensor.dtype() == DataType::BFLOAT16 && axis == rank - 2 &&
         (input_tensor.layout() == Layout::ROW_MAJOR || input_tensor.layout() == Layout::TILE) &&
         input_tensor.logical_shape() == ttnn::Shape{1, 1, 32, 64} &&
         index_tensor.logical_shape() == ttnn::Shape{1, 1, 16, 64} &&
@@ -282,10 +303,10 @@ bool is_demoted(const Tensor& input_tensor, int32_t dim, const Tensor& index_ten
     }
 
     // Same carve-out class as above, for the ROW_MAJOR-only sibling shape: measured below native
-    // on-device for exactly this input/index/src shape and dim. No general condition tying the
-    // regression to a broader shape family was identified, so this is an exact-match carve-out
+    // on-device for exactly this input/index/src shape and scatter axis. No general condition tying
+    // the regression to a broader shape family was identified, so this is an exact-match carve-out
     // rather than a predicate -- widen it only if a mechanism is found.
-    if (input_tensor.dtype() == DataType::BFLOAT16 && dim == -2 && input_tensor.layout() == Layout::ROW_MAJOR &&
+    if (input_tensor.dtype() == DataType::BFLOAT16 && axis == rank - 2 && input_tensor.layout() == Layout::ROW_MAJOR &&
         input_tensor.logical_shape() == ttnn::Shape{1, 1, 64, 128} &&
         index_tensor.logical_shape() == ttnn::Shape{1, 1, 32, 128} &&
         src_tensor.logical_shape() == ttnn::Shape{1, 1, 32, 128}) {
