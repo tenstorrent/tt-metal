@@ -527,3 +527,126 @@ def test_fit_matmul_config_force_rebuilds_a_config_that_already_fits():
     assert fit_matmul_config(c, 2, 1) is c
     f = fit_matmul_config(c, 2, 1, m_tiles=4, n_tiles=80, force=True)
     assert f.in0_block_w == 1 and (f.per_core_M, f.per_core_N) == (4, 40)
+
+
+def test_fit_matmul_config_blocks_large_per_core_outputs():
+    import ttnn
+
+    from models.experimental.ops.quasar.qwen3_vl.tt.quasar_config import fit_matmul_config
+
+    c = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=38,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+    f = fit_matmul_config(c, 2, 1, m_tiles=32, n_tiles=304)  # demo-size MLP up-projection on 2 cores
+    assert (f.per_core_M, f.per_core_N) == (32, 152)
+    assert (f.out_block_h, f.out_block_w) == (8, 19)  # largest divisors <= 8 rows / 32 columns of tiles
+
+
+class _FakeGrid:
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+
+
+class _FakeDev:
+    def __init__(self, x, y):
+        self._g = _FakeGrid(x, y)
+
+    def compute_with_storage_grid_size(self):
+        return self._g
+
+    def get_num_devices(self):
+        return 1
+
+
+class _FakeTensor:
+    def __init__(self, x, y):
+        self._d = _FakeDev(x, y)
+
+    def device(self):
+        return self._d
+
+
+def test_concat_heads_decode_workaround_only_on_grids_smaller_than_heads():
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    wa = next(w for w in O.WORKAROUNDS if w.name == "concat_heads_decode_small_grid")
+    assert wa.target == "ttnn.experimental.nlp_concat_heads_decode"
+    assert wa.applies((_FakeTensor(2, 1),), {"num_heads": 32})
+    assert not wa.applies((_FakeTensor(8, 8),), {"num_heads": 32})
+    assert not wa.applies((_FakeTensor(2, 1),), {})  # no head count: leave the op alone
+
+
+class _FakeShardTensor(_FakeTensor):
+    def __init__(self, x, y, sharded):
+        super().__init__(x, y)
+        self._sharded = sharded
+
+    def is_sharded(self):
+        return self._sharded
+
+
+class _FakeOut:
+    def __init__(self, shape, x, y):
+        import ttnn
+
+        self.padded_shape = ttnn.Shape(shape)
+        self._grid = ttnn.CoreCoord(x, y)
+
+    def device(self):
+        return self
+
+    def compute_with_storage_grid_size(self):
+        return self._grid
+
+
+def test_with_shard_spec_completes_generic_sharded_configs():
+    import ttnn
+
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    width = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+    spec = O._with_shard_spec(_FakeOut([1, 1, 32, 2560], 2, 1), width).shard_spec
+    assert list(spec.shape) == [32, 1280] and spec.grid.num_cores() == 2
+    spec = O._with_shard_spec(_FakeOut([1, 1, 32, 96], 2, 1), width).shard_spec  # 3 tiles: only 1 core divides
+    assert list(spec.shape) == [32, 96] and spec.grid.num_cores() == 1
+    height = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    spec = O._with_shard_spec(_FakeOut([1, 2, 64, 128], 2, 1), height).shard_spec
+    assert list(spec.shape) == [64, 128] and spec.grid.num_cores() == 2
+
+
+class _FakeRowTensor(_FakeShardTensor):
+    def __init__(self, x, y, width, sharded=False):
+        super().__init__(x, y, sharded)
+        self.padded_shape = [1, 1, 32, width]
+
+
+def test_untilize_single_core_workaround_predicate():
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    wa = next(w for w in O.WORKAROUNDS if w.name == "small_grid_untilize_single_core")
+    assert wa.target == "ttnn.untilize"
+    assert wa.applies((_FakeRowTensor(2, 1, 151936),), {"use_multicore": True})
+    assert not wa.applies((_FakeRowTensor(8, 8, 151936),), {"use_multicore": True})  # full grid: stock
+    assert not wa.applies((_FakeRowTensor(2, 1, 128),), {"use_multicore": True})  # narrow rows fit
+    assert not wa.applies((_FakeRowTensor(2, 1, 151936, sharded=True),), {})  # sharded factories differ
+    assert not wa.applies((_FakeRowTensor(2, 1, 151936),), {"use_multicore": False})  # already single core
+
+
+def test_unshard_linear_workaround_predicate():
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    wa = next(w for w in O.WORKAROUNDS if w.name == "small_grid_unshard_linear")
+    assert wa.target == "ttnn.linear"
+    w = object()
+    assert wa.applies((_FakeShardTensor(2, 1, True), w), {})
+    assert not wa.applies((_FakeShardTensor(8, 8, True), w), {})  # full grid: stock behaviour
+    assert not wa.applies((_FakeShardTensor(2, 1, False), w), {})  # interleaved input: nothing to do
+    assert not wa.applies((_FakeShardTensor(2, 1, True), w), {"program_config": object()})  # explicit config wins

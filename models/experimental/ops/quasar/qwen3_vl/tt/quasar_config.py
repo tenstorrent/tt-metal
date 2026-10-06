@@ -81,6 +81,10 @@ def strip_fp32_dest_acc(args):
     return changed
 
 
+def _largest_divisor(n, at_most):
+    return next(d for d in range(min(n, at_most), 0, -1) if n % d == 0)
+
+
 def fit_matmul_config(cfg, gx, gy, m_tiles=None, n_tiles=None, force=False):
     """Clip a matmul program config to a gx x gy grid; per-core blocks cover the real M/N tiles when given,
     otherwise they grow to keep the original grid's total work."""
@@ -98,13 +102,18 @@ def fit_matmul_config(cfg, gx, gy, m_tiles=None, n_tiles=None, force=False):
             compute_with_storage_grid_size=ttnn.CoreCoord(nx, ny),
         )
     if isinstance(cfg, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig):
+        per_core_M = math.ceil(m_tiles / ny) if m_tiles else math.ceil(cfg.per_core_M * grid.y / ny)
+        per_core_N = math.ceil(n_tiles / nx) if n_tiles else math.ceil(cfg.per_core_N * grid.x / nx)
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(nx, ny),
             in0_block_w=1,  # fewer cores hold bigger output blocks; the smallest K block keeps the CBs in L1
             out_subblock_h=1,  # 1x1 subblocks always divide the rescaled per-core blocks
             out_subblock_w=1,
-            per_core_M=math.ceil(m_tiles / ny) if m_tiles else math.ceil(cfg.per_core_M * grid.y / ny),
-            per_core_N=math.ceil(n_tiles / nx) if n_tiles else math.ceil(cfg.per_core_N * grid.x / nx),
+            # Output computed in blocks so a few cores holding the whole N still fit their CBs in L1.
+            out_block_h=_largest_divisor(per_core_M, 8),
+            out_block_w=_largest_divisor(per_core_N, 32),
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
             transpose_mcast=cfg.transpose_mcast,
             fused_activation=cfg.fused_activation,
             fuse_batch=cfg.fuse_batch,
@@ -225,6 +234,34 @@ class _QuasarArgsMixin:
     def get_mlp_ff2_prg_config(self, mode, seq_len=1, prefetcher=None):
         cfg = super().get_mlp_ff2_prg_config(mode, seq_len, prefetcher)
         return self._fit(cfg, mode, seq_len, self.prefill_len_cutoff, self.dim)
+
+    def get_lm_head_input_mem_config(self, mode, prefetcher=None):
+        # On grids below 8x8 the width-sharded prefill input collides with the LM-head matmul's L1 buffers.
+        gx, gy = self._device_grid()
+        if mode == Mode.PREFILL and gx * gy < 64:
+            return ttnn.DRAM_MEMORY_CONFIG
+        return super().get_lm_head_input_mem_config(mode, prefetcher)
+
+    def _small_grid(self):
+        gx, gy = self._device_grid()
+        return gx * gy < 64
+
+    def get_lm_head_output_mem_config(self, mode, prefetcher=None):
+        # Width-sharded LM-head outputs need the input sharded on the same grid; interleaved on small grids.
+        return (
+            ttnn.DRAM_MEMORY_CONFIG if self._small_grid() else super().get_lm_head_output_mem_config(mode, prefetcher)
+        )
+
+    def get_lm_head_sharded_output_mem_config(self, prefetcher=None):
+        return (
+            ttnn.DRAM_MEMORY_CONFIG if self._small_grid() else super().get_lm_head_sharded_output_mem_config(prefetcher)
+        )
+
+    def get_attn_wo_output_mem_config(self, mode, prefetcher=None):
+        # The decode head merge on small grids yields an interleaved input, which cannot feed a sharded output.
+        return (
+            ttnn.DRAM_MEMORY_CONFIG if self._small_grid() else super().get_attn_wo_output_mem_config(mode, prefetcher)
+        )
 
     # DRAM-sharded weights need one reader core per DRAM bank (12 on WH, more than the emulator's 2 cores), and the
     # Quasar DRAM-sharded matmul is not in yet (#58912): keep weights DRAM interleaved and let ttnn pick the matmul.
