@@ -66,6 +66,12 @@ class DataFormat(Enum):
     UInt16 = DataFormatInfo("UInt16", 2)  # WH/BH specific
     Int8 = DataFormatInfo("Int8", 1)
     UInt8 = DataFormatInfo("UInt8", 1)
+    Int4 = DataFormatInfo(
+        "Int4", Fraction(1, 2)
+    )  # QSR specific - L1-only, sign-magnitude (1b sign + 3b magnitude), 2 datums per byte
+    UInt4 = DataFormatInfo(
+        "UInt4", Fraction(1, 2)
+    )  # QSR specific - L1-only, 4b magnitude, 2 datums per byte
     MxFp8R = DataFormatInfo("MxFp8R", 1)  # QSR specific
     MxFp8P = DataFormatInfo("MxFp8P", 1)  # QSR specific
     MxFp4 = DataFormatInfo(
@@ -118,11 +124,23 @@ class DataFormat(Enum):
             DataFormat.UInt16,
             DataFormat.Int8,
             DataFormat.UInt8,
+            DataFormat.Int4,
+            DataFormat.UInt4,
         }
 
     def needs_int8_math_config(self) -> bool:
         """Checks if the format requires int8 math mode in the ALU."""
-        return self in {DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32}
+        return self in {
+            DataFormat.Int8,
+            DataFormat.UInt8,
+            DataFormat.Int32,
+            DataFormat.Int4,
+            DataFormat.UInt4,
+        }
+
+    def is_4bit_integer(self) -> bool:
+        """Checks if the data format is a 4-bit integer format (L1-only, packer cannot output it)."""
+        return self in {DataFormat.Int4, DataFormat.UInt4}
 
     def is_32_bit(self) -> bool:
         """Checks if the data format is a 32-bit type."""
@@ -218,6 +236,13 @@ class DataFormat(Enum):
             DataFormat.Float16_b,
         }
 
+
+# Representable range of the 4-bit integer formats: Int4 is sign-magnitude
+# (1b sign + 3b magnitude), UInt4 is a 4b magnitude.
+FOUR_BIT_INTEGER_RANGE = {
+    DataFormat.Int4: (-7, 7),
+    DataFormat.UInt4: (0, 15),
+}
 
 # ============================================================================
 # MX (Microscaling) Format Value Maps
@@ -539,6 +564,25 @@ class FormatConfig:
                     f"For L1 input use DataFormat.MxFp4."
                 )
 
+        # Int4/UInt4 exist only as L1 input formats: the unpacker widens them to 8-bit
+        # register formats and the packer cannot produce them.
+        for field_name, value in (
+            ("unpack_A_dst", self.unpack_A_dst),
+            ("unpack_B_dst", self.unpack_B_dst),
+            ("unpack_S_dst", self.unpack_S_dst),
+            ("math", self.math),
+            ("sfpu_src", self.sfpu_src),
+            ("sfpu_dst", self.sfpu_dst),
+            ("pack_src", self.pack_src),
+            ("pack_dst", self.pack_dst),
+            ("pack_S_src", self.pack_S_src),
+            ("pack_S_dst", self.pack_S_dst),
+        ):
+            if value is not None and value.is_4bit_integer():
+                raise ValueError(
+                    f"{value.name} is an L1 input-only format and cannot be used as {field_name}."
+                )
+
     @property
     def output_format(self) -> DataFormat:
         return self.pack_dst
@@ -677,6 +721,8 @@ QUASAR_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.UInt8: 17,
     DataFormat.UInt16: 130,
     DataFormat.Int16: 9,
+    DataFormat.Int4: 23,
+    DataFormat.UInt4: 25,
 }
 
 
