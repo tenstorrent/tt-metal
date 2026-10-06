@@ -64,6 +64,7 @@ constexpr uint32_t cb_prev_mm_out = tt::CBIndex::c_13;   // used for holding pre
 constexpr uint32_t cb_cur_mm_out = tt::CBIndex::c_14;    // used for holding current matmul output
 
 constexpr uint32_t cb_output = tt::CBIndex::c_15;
+constexpr uint32_t cb_gate = tt::CBIndex::c_16;
 
 /**
  * Process a single row of the SDPA computation.
@@ -285,6 +286,9 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     cb_wait_front(alias_cb_prev_sum_exp, onetile);
 
     cb_reserve_back(cb_output, vWt);
+#ifdef HAS_GATE
+    cb_wait_front(cb_gate, vWt);
+#endif
     pack_reconfig_data_format(cb_output);
     for (uint32_t tile_idx = 0; tile_idx < vWt; tile_idx += block_size) {
         tile_regs_acquire();
@@ -306,6 +310,18 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
             mul_binary_tile(block_idx, block_size, block_idx);
         }
 
+#ifdef HAS_GATE
+        reconfig_data_format(cb_gate, cb_gate);
+        copy_init(cb_gate);
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            copy_tile(cb_gate, tile_idx + block_idx, block_size);
+            sigmoid_tile_init();
+            sigmoid_tile(block_size);
+            mul_binary_tile_init();
+            mul_binary_tile(block_idx, block_size, block_idx);
+        }
+#endif
+
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
@@ -319,6 +335,9 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     cb_pop_front(alias_cb_prev_sum_exp, onetile);
     cb_pop_front(alias_cb_prev_mm_out, vWt);
     cb_pop_front(cb_query, qWt);
+#ifdef HAS_GATE
+    cb_pop_front(cb_gate, vWt);
+#endif
 }
 
 void kernel_main() {

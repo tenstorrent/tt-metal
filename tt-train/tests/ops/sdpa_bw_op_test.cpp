@@ -599,6 +599,7 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
         value,
         mask_type,
         mask_type == ttml::metal::AttentionMaskType::Arbitrary ? std::make_optional(attn_mask) : std::nullopt,
+        /*gate=*/std::nullopt,
         dropout_probability,
         /*return_intermediates=*/true);
 
@@ -981,7 +982,14 @@ TEST_F(SDPABackwardTest, ShapeMismatch_GradOutputLastDim) {
     auto value = core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(v_shape, -1.0F, 1.0F, seed), device);
 
     auto fw_result = metal::sdpa_fw(
-        query, key, value, metal::AttentionMaskType::Causal, std::nullopt, 0.0F, /*return_intermediates=*/true);
+        query,
+        key,
+        value,
+        metal::AttentionMaskType::Causal,
+        std::nullopt,
+        /*gate=*/std::nullopt,
+        0.0F,
+        /*return_intermediates=*/true);
     auto attn_output = fw_result[0].value();
     auto intermediates = fw_result[1].value();
 
@@ -1195,6 +1203,7 @@ TEST_F(SDPABackwardTest, NIGHTLY_RingAttentionMergeSimulation) {
         value_tt,
         metal::AttentionMaskType::Causal,
         std::nullopt,
+        /*gate=*/std::nullopt,
         0.0F,
         /*return_intermediates=*/true);
     const auto full_output = full_fw_result[0].value();
@@ -1267,7 +1276,14 @@ TEST_F(SDPABackwardTest, NIGHTLY_RingAttentionMergeSimulation) {
             auto mask_type = (kv_pos == d) ? metal::AttentionMaskType::Causal : metal::AttentionMaskType::None;
 
             auto chunk_result = metal::sdpa_fw(
-                Q_d_tt, K_chunk_tt, V_chunk_tt, mask_type, std::nullopt, 0.0F, /*return_intermediates=*/true);
+                Q_d_tt,
+                K_chunk_tt,
+                V_chunk_tt,
+                mask_type,
+                std::nullopt,
+                /*gate=*/std::nullopt,
+                0.0F,
+                /*return_intermediates=*/true);
 
             auto chunk_output_cpu = core::to_xtensor(chunk_result[0].value());
             auto chunk_inter_cpu = core::to_xtensor(chunk_result[1].value());
@@ -1354,7 +1370,14 @@ TEST_F(SDPABackwardTest, NIGHTLY_RingAttentionMergeSimulation) {
             // Recompute forward for intermediates (same as ring_attention_sdpa backward does)
             auto mask_type = (kv_pos == d) ? metal::AttentionMaskType::Causal : metal::AttentionMaskType::None;
             auto recomputed = metal::sdpa_fw(
-                Q_d_tt, K_chunk_tt, V_chunk_tt, mask_type, std::nullopt, 0.0F, /*return_intermediates=*/true);
+                Q_d_tt,
+                K_chunk_tt,
+                V_chunk_tt,
+                mask_type,
+                std::nullopt,
+                /*gate=*/std::nullopt,
+                0.0F,
+                /*return_intermediates=*/true);
             auto step_intermediates = recomputed[1].value();
             auto step_recomp_output = recomputed[0].value();
 
