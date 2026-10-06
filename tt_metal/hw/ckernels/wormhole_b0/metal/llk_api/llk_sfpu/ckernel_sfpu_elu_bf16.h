@@ -22,8 +22,6 @@ struct EluBf16Config {
     static constexpr uint32_t kLowerBits = 0xc0c80000u;
     static constexpr uint32_t kTerminalBits = 0xbf800000u;
     static constexpr bool kOrdered = true;
-    static constexpr bool kRawIngress = false;
-    static constexpr bool kRawTerminal = false;
     static constexpr uint32_t degree(uint32_t segment) { return kDegree[segment]; }
     static constexpr int park_row(uint32_t index) { return kParkRows[index]; }
     static constexpr float lut(uint32_t index) { return __builtin_bit_cast(float, kLutBits[index]); }
