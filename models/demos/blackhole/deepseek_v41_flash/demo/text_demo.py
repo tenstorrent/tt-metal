@@ -696,12 +696,21 @@ def test_dsv41_demo_session(mesh_device, device_params):
             oom = any(w in str(e) for w in ("Out of Memory", "out of memory", "DRAM", "OOM", "allocate"))
             key = "*" if (oom and os.environ.get("DSV41_PREFILL_SPAD_MAX")) else s.id  # sized for the max context: a DRAM failure holds for every ISL
             failed[key] = min(failed.get(key, 1 << 30), budget_i)
+            import traceback
+
+            logger.error("FAILTRACE " + " <- ".join(l.strip().replace("\n", " ")[:160] for l in traceback.format_exc().splitlines() if l.strip().startswith("File"))[-1500:])
             logger.error(f"=== SCENARIO FAILED {s.id} ROW_TOKENS={budget_i}: {type(e).__name__}: {str(e)[:400]} ===")
             for _, (_, m, _) in cache.items():
                 try:
+                    pm_ = getattr(m, "prefill_model", None)
+                    if pm_ is not None and getattr(pm_, "dyn_trace", None) is not None:
+                        try:  # a failure INSIDE begin/end_trace_capture leaves the capture open: close it, or every later write fails
+                            ttnn.end_trace_capture(mesh_device, pm_.dyn_trace, cq_id=0)
+                        except Exception:  # noqa: BLE001
+                            pass
                     m.release_trace()
-                    if getattr(m, "prefill_model", None) is not None:
-                        m.prefill_model.teardown_dyn()
+                    if pm_ is not None:
+                        pm_.teardown_dyn()
                 except Exception as e2:  # noqa: BLE001
                     logger.error(f"cleanup after failure raised {type(e2).__name__}: {str(e2)[:200]}")
         else:
