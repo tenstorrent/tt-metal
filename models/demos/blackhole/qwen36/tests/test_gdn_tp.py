@@ -4,6 +4,7 @@
 Run:
     MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
       pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
+The prefill conv-path tests at the end (test_conv_paths_*, test_kda_*) use random data and need no checkpoint.
 """
 import os
 
@@ -21,15 +22,22 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     model_path,
     parametrize_batch,
     parametrize_mesh_tp,
+    random_gdn_state_dict,
     replicate_to_device,
     shard_to_device,
     tp_composer,
 )
-from models.demos.blackhole.qwen36.tt.gdn.tp import TPGatedDeltaNet, load_gdn_weights_tp
-from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.blackhole.qwen36.tt.gdn.tp import (
+    TPGatedDeltaNet,
+    kda_channel_chunk_size,
+    kda_conv_prefill,
+    load_gdn_weights_tp,
+)
+from models.demos.blackhole.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE, Qwen36ModelArgs
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_decode_ttnn,
 )
+from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 
 
 @torch.no_grad()
@@ -547,6 +555,174 @@ def test_gdn_tp_fused_chunk_prefill(mesh_device, monkeypatch, reset_seeds, ensur
     assert passing_fd, f"fused chunk prefill disagrees with step-by-step decode: PCC {pcc_fd} < {thr}"
 
 
+def _snapshot_layer_state(gdn, mesh_device):
+    """Host copy of one GDN layer's (rec_state, conv_carry, conv_states)."""
+    comp = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    return (
+        ttnn.to_torch(gdn.rec_state, mesh_composer=comp),
+        ttnn.to_torch(gdn.conv_carry, mesh_composer=comp) if gdn.conv_carry is not None else None,
+        [ttnn.to_torch(c, mesh_composer=comp) for c in gdn.conv_states] if gdn.conv_states is not None else None,
+    )
+
+
+def _restore_layer_state(gdn, mesh_device, snap):
+    rec, carry, convs = snap
+    mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+
+    def _back(t, dtype):
+        return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper)
+
+    r = _back(rec, gdn.rec_state.dtype)
+    ttnn.copy(r, gdn.rec_state)
+    ttnn.deallocate(r)
+    if carry is not None and gdn.conv_carry is not None:
+        c = _back(carry, gdn.conv_carry.dtype)
+        ttnn.copy(c, gdn.conv_carry)
+        ttnn.deallocate(c)
+    if convs is not None and gdn.conv_states is not None:
+        for j, cs in enumerate(convs):
+            cc = _back(cs, gdn.conv_states[j].dtype)
+            ttnn.copy(cc, gdn.conv_states[j])
+            ttnn.deallocate(cc)
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_gdn_chunk_vs_recurrent_attribution(mesh_device, reset_seeds, ensure_gc, request):
+    """Localize the chunk-vs-recurrent divergence that speculative decoding runs into.
+
+    Two facts already established elsewhere:
+      * torch chunk == torch recurrent to >= 0.9999 PCC in exactly the verify regime, including a
+        nonzero carried state (test_gdn_chunk_recurrent_parity, CPU) — so the ALGORITHM is exact;
+      * on device, chunk prefill == step decode over T=128 tokens FROM ZERO STATE
+        (test_gdn_tp_prefill / test_gdn_tp_fused_chunk_prefill).
+
+    Neither covers what verify actually does: a SHORT chunk continuing from a warmed state. A
+    whole-model measurement (tests/test_spec_decode_features.py) shows the two paths' hidden states
+    at cosine 0.93 after a single step from a bit-identical state, which is far too large to be
+    rounding — so the natural suspicion is the carried recurrent/conv state handoff. This narrows it
+    to one GDN layer and three regimes:
+
+        cold  : both paths from zero state over T tokens      (the already-covered case)
+        warm  : both continue from the SAME warmed state      (the verify case)
+        warm1 : ONE real token in a masked bucket             (what verify_forward runs per step)
+
+    MEASURED: all three agree at PCC ~0.99999 (cold 0.999955, warm 0.999991, warm1 0.999965), so
+    the suspicion is wrong — the carried-state handoff is sound and one GDN layer is faithful in
+    exactly the regime verify uses. The model-level gap is instead the COMPOUNDING of per-layer
+    differences of this size: test_spec_decode_tp.py::test_verify_layer_localization measures the
+    hidden PCC decaying 0.999999 (layer 0) -> 0.99990 (layer 31) -> 0.9932 (layer 63) with no jump
+    at any single layer, GDN or attention. Two kernel pairs contribute along the way (the delta-rule
+    scan vs its recurrence, and prefill vs decode SDPA), and 64 residual+RMSNorm stages amplify.
+
+    Consequences, both measured elsewhere rather than assumed:
+      * acceptance barely cares — injecting 30% relative noise into the drafter's hidden costs only
+        ~0.19 committed tokens/iter (tests/mtp_cpu_check.py), and the chunk and recurrent feature
+        sets give the same ceiling;
+      * output text does care — the two paths' greedy trajectories fork within a couple of tokens
+        and the chunk path degenerates into repetition on some prompts, which is why
+        test_spec_decode_align.py pins the base at the recurrent kernel and guards degeneracy.
+
+    This test therefore stands as a regression guard on the per-layer kernels, not as a reproduction
+    of the model-level gap.
+    """
+    os.environ.setdefault("HF_MODEL", model_path())
+    # T must exceed TILE_SIZE (32): at exactly 32 the in-projection takes the decode-sized branch,
+    # which expects a replicated rather than K-sharded activation. verify_forward's real bucket is
+    # 128, so anything above the boundary reproduces the production path.
+    W, T = 128, 64  # warmup tokens, then a short chunk (both 32-multiples for the fused kernel)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    nd = mesh_device.get_num_devices()
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    logger.info(f"devices={nd} gdn layer={li} warmup={W} chunk={T}")
+
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
+    gdn = TPGatedDeltaNet(mesh_device, args, load_gdn_weights_tp(mesh_device, sd, args), tt_ccl)
+    composer = tp_composer(mesh_device)
+
+    warm_x = torch.randn(1, 1, W, args.dim, dtype=torch.bfloat16)
+    x = torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16)
+
+    def _chunk_rows(valid_len=None, n=None):
+        out = gdn.forward_prefill(
+            shard_to_device(mesh_device, x, dim=-1), chunk_size=T, valid_len=valid_len, capture_state=True
+        )
+        rows = ttnn.to_torch(out, mesh_composer=composer)[0, 0].float()
+        return rows[: n if n is not None else T]
+
+    def _decode_rows(n):
+        rows = []
+        for t in range(n):
+            ot = gdn.forward_decode(replicate_to_device(mesh_device, x[:, :, t : t + 1, :]))
+            rows.append(ttnn.to_torch(ot, mesh_composer=composer)[0, 0, 0].float())
+        return torch.stack(rows, dim=0)
+
+    results = {}
+
+    # ---- cold: both paths from zero state ----
+    gdn.reset_state()
+    cold_chunk = _chunk_rows()
+    gdn.reset_state()
+    cold_dec = _decode_rows(T)
+    results["cold"] = (cold_chunk, cold_dec)
+
+    # ---- warm: one prefill establishes the state (populating BOTH conv_carry for the chunk path
+    # and conv_states for the decode path), then each path continues from that exact snapshot ----
+    gdn.reset_state()
+    gdn._stable_state = True  # carry the state in place, as the model does during serving
+    ttnn.deallocate(gdn.forward_prefill(shard_to_device(mesh_device, warm_x, dim=-1), chunk_size=W, capture_state=True))
+    snap = _snapshot_layer_state(gdn, mesh_device)
+
+    _restore_layer_state(gdn, mesh_device, snap)
+    warm_chunk = _chunk_rows()
+    _restore_layer_state(gdn, mesh_device, snap)
+    warm_dec = _decode_rows(T)
+    results["warm"] = (warm_chunk, warm_dec)
+
+    # ---- warm1: a single real token in a masked bucket — verify_forward's per-step shape ----
+    _restore_layer_state(gdn, mesh_device, snap)
+    warm1_chunk = _chunk_rows(valid_len=1, n=1)
+    _restore_layer_state(gdn, mesh_device, snap)
+    warm1_dec = _decode_rows(1)
+    results["warm1"] = (warm1_chunk, warm1_dec)
+
+    for label, (chunk_rows, dec_rows) in results.items():
+        n = chunk_rows.shape[0]
+        pcc = compute_pcc(dec_rows, chunk_rows)
+        cos = torch.nn.functional.cosine_similarity(dec_rows, chunk_rows, dim=-1)
+        per_pos = " ".join(f"t{t}={float(cos[t]):.5f}" for t in range(min(n, 4)))
+        logger.info(f"[{label}] chunk-vs-decode PCC={pcc:.6f} cos(min)={float(cos.min()):.6f} [{per_pos}]")
+
+    cold_pcc = compute_pcc(results["cold"][1], results["cold"][0])
+    warm_pcc = compute_pcc(results["warm"][1], results["warm"][0])
+    warm1_pcc = compute_pcc(results["warm1"][1], results["warm1"][0])
+    logger.info(f"ATTRIBUTION: cold={cold_pcc:.6f} warm={warm_pcc:.6f} warm1={warm1_pcc:.6f}")
+    if cold_pcc > 0.99 and warm_pcc < 0.99:
+        logger.error(
+            "chunk and decode agree from ZERO state but not from a CARRIED state -> the defect is "
+            "in the carried recurrent/conv state handoff, not kernel precision"
+        )
+
+    # Measured at ~0.99999 for all three; hold them near that rather than at a loose 0.99, since the
+    # whole point is that a single layer is far more faithful than the 64-layer stack.
+    thr = get_pcc_threshold(request, default=0.9995)
+    assert cold_pcc > thr, f"cold-start chunk vs decode regressed (PCC={cold_pcc:.6f})"
+    # The warm regimes are what speculative decoding depends on, and torch parity says they are
+    # exact; a drop here would be a real carried recurrent/conv state defect.
+    assert warm_pcc > thr, (
+        f"chunk vs decode from a CARRIED state is only PCC={warm_pcc:.6f} (cold-start is "
+        f"{cold_pcc:.6f}, and torch parity for this regime is >= 0.9999) — the carried "
+        "recurrent/conv state handoff regressed"
+    )
+    assert warm1_pcc > thr, (
+        f"a single-token masked chunk from a carried state is only PCC={warm1_pcc:.6f} — this is "
+        "exactly what verify_forward runs per step"
+    )
+
+
 @torch.no_grad()
 @parametrize_mesh_tp()
 @pytest.mark.parametrize(
@@ -709,3 +885,332 @@ def test_gdn_tp_prefill_fused_vs_phased_bit_exact(mesh_device, T, reset_seeds, e
         f"T={T}: fused layer output differs from phased (max|d|={d.max().item():.3e}, "
         f"first differing row {int(torch.nonzero(d.sum(-1))[0])})"
     )
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "l1_small_size": GDN_CONV1D_L1_SMALL_SIZE,
+            "trace_region_size": 268435456,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 4), id="1x4")], indirect=True)
+@pytest.mark.parametrize("weights", ["checkpoint", "random"])
+def test_gdn_tp_prefill_trace_replay(mesh_device, weights, reset_seeds, ensure_gc, request):
+    """Chunk-outer prefill through ONE captured trace equals the eager chunks, bit for bit.
+
+    Three 2048-token chunks with the persistent carry (_stable_state), first eagerly, then as the
+    model's chunked prefill runs them: state zeroed in place, one forward_prefill captured, the trace
+    replayed three times with each chunk ttnn.copy'd into the persistent input buffer and the baked
+    output read back. Catches anything on the prefill path that allocates or writes from the host
+    inside the trace (constants must be built by reset_state) or whose programs differ per chunk.
+    The property needs no trained weights: the `random` variant runs wherever HF_MODEL holds the
+    model's config.json, the `checkpoint` variant where the layer's safetensors are too.
+    """
+    os.environ.setdefault("HF_MODEL", model_path())
+    T, n_chunks = 2048, 3
+    mesh = mesh_device
+    args = Qwen36ModelArgs(mesh, max_batch_size=1, max_seq_len=T * n_chunks)
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    sd = load_gdn_layer(args.CKPT_DIR, li) if weights == "checkpoint" else random_gdn_state_dict(args, seed=li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh)
+    tw = load_gdn_weights_tp(mesh, sd, args)
+    gdn = TPGatedDeltaNet(mesh, args, tw, tt_ccl)
+    logger.info(f"conv impl={gdn._conv_impl} kda={gdn._gdn_kda_conv} layer={li}")
+    gdn._stable_state = True
+    gdn.reset_state()  # persistent state and the prefill constants, before any capture
+    x = torch.randn(1, 1, T * n_chunks, args.dim, dtype=torch.bfloat16)
+    chunks = [x[:, :, c * T : (c + 1) * T, :] for c in range(n_chunks)]
+    comp = tp_composer(mesh)
+
+    # Persistent K-sharded input buffer (its address is baked into the trace); chunks are copied in.
+    x_buf = shard_to_device(mesh, chunks[0], dim=-1)
+
+    def load_chunk(c):
+        src = shard_to_device(mesh, chunks[c], dim=-1)
+        ttnn.copy(src, x_buf)
+        ttnn.deallocate(src)
+
+    eager = []
+    for c in range(n_chunks):
+        load_chunk(c)
+        out = gdn.forward_prefill(x_buf, chunk_size=args.gdn_chunk_size)
+        eager.append(ttnn.to_torch(out, mesh_composer=comp).float())
+        ttnn.deallocate(out)
+    ttnn.synchronize_device(mesh)
+
+    gdn.reset_state_inplace()
+    ttnn.synchronize_device(mesh)
+    tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+    out_t = gdn.forward_prefill(x_buf, chunk_size=args.gdn_chunk_size)
+    ttnn.end_trace_capture(mesh, tid, cq_id=0)
+    replay = []
+    for c in range(n_chunks):
+        load_chunk(c)
+        ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
+        replay.append(ttnn.to_torch(out_t, mesh_composer=comp).float())
+    ttnn.release_trace(mesh, tid)
+
+    for c in range(n_chunks):
+        eq = torch.equal(eager[c], replay[c])
+        _, pcc = comp_pcc(eager[c], replay[c])
+        logger.info(f"chunk {c}: trace replay == eager: {eq}; pcc {pcc}")
+        assert eq, f"chunk {c}: trace replay differs from eager (pcc {pcc})"
+    logger.info("PASSED: traced chunk-outer GDN prefill matches eager on every chunk")
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Prefill conv paths (the KDA fused op and the FIR) against one torch reference. Random data, no checkpoint;
+# data is replicated to every device of the mesh and asserted on device 0.
+# ---------------------------------------------------------------------------------------------------------------
+
+CONV_K = 4  # conv kernel width; the carry holds K-1 = 3 rows
+CONV_PCC_VS_REF = 0.999
+# The first K-1 rows are the only ones that read the carry, and 3 rows in 2048 do not move a whole-chunk PCC (a
+# dropped carry still scores 0.9996), so their max-abs error is held to a multiple of the other rows' (measured:
+# 0.016 vs 0.045 with the carry, 2.45 without).
+CARRY_ROWS_HEADROOM = 4
+
+# (T, kd, vd, fir) per device: the 27B TP-4 production shape (C = 2560), the 35B-A3B TP-4 shape (C = 2048), the 9B
+# single-device shape (C = 8192; the KDA op only: the FIR's shifted copies do not fit L1 next to the L1 qkv) and a
+# small one (C = 192).
+CONV_SHAPES = [
+    pytest.param(2048, 512, 1536, True, id="T2048-kd512-vd1536"),
+    pytest.param(2048, 512, 1024, True, id="T2048-kd512-vd1024"),
+    pytest.param(2048, 2048, 4096, False, id="T2048-kd2048-vd4096"),
+    pytest.param(64, 64, 64, True, id="T64-kd64-vd64"),
+]
+
+
+def _ref_conv(x, hist, w):
+    """Depthwise causal conv + SiLU in fp32: silu(sum_j w[:, j] * xpad[t + j]) with the K-1 history rows
+    prepended, so tap j multiplies input row t - 3 + j. x [1,T,C], hist [1,3,C] bf16; w [C,K] bf16."""
+    T = x.shape[1]
+    xp = torch.cat([hist.float(), x.float()], dim=1)  # [1, K-1+T, C]
+    return F.silu(sum(w[:, j].float() * xp[:, j : j + T, :] for j in range(CONV_K)))
+
+
+def _split_qkv(t, kd, vd):
+    return t[..., :kd], t[..., kd : 2 * kd], t[..., 2 * kd :]
+
+
+def _dev0(t):
+    """Device 0's copy of a replicated mesh tensor, as a torch tensor."""
+    return ttnn.to_torch(ttnn.get_device_tensors(t)[0])
+
+
+def _pcc(golden, calculated):
+    return comp_pcc(golden, calculated)[1]
+
+
+def _random_inputs(T, C, seed):
+    torch.manual_seed(seed)
+    x = torch.randn(1, T, C).to(torch.bfloat16)
+    hist = torch.randn(1, CONV_K - 1, C).to(torch.bfloat16)  # nonzero carry: exercises the history rows
+    w = (torch.randn(C, CONV_K) * 0.3).to(torch.bfloat16)  # taps [C, CONV_K]; tap j multiplies row t-3+j
+    return x, hist, w
+
+
+def _to_l1(mesh, x):
+    """qkv as the layer hands it to the conv: bf16 TILE in L1, replicated."""
+    return ttnn.from_torch(
+        x,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+
+def _taps(mesh, w):
+    """The KDA / FIR tap contract: four [1, 1, C] bf16 TILE tensors in kernel-position order."""
+    C = w.shape[0]
+    return [replicate_to_device(mesh, w[:, j].reshape(1, 1, C).contiguous()) for j in range(CONV_K)]
+
+
+def _actual_start(mesh):
+    return ttnn.from_torch(
+        torch.tensor([0], dtype=torch.int64),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+    )
+
+
+def _slice3(conv, T, kd, vd):
+    """q | k | v column split of a [1, T, C] conv output (the non-fused paths' epilogue)."""
+    C = 2 * kd + vd
+    q = ttnn.slice(conv, (0, 0, 0), (1, T, kd))
+    k = ttnn.slice(conv, (0, 0, kd), (1, T, 2 * kd))
+    v = ttnn.slice(conv, (0, 0, 2 * kd), (1, T, C))
+    ttnn.deallocate(conv)
+    return q, k, v
+
+
+def _check_contract(name, q, k, v, new_state, T, kd, vd, x):
+    """Output contract shared by every path: q/k/v [1,T,kd|kd|vd] and new_state [1,3,C], all TILE in DRAM;
+    new_state is bit-exactly the last K-1 rows of the bf16 input."""
+    C = 2 * kd + vd
+    for label, t, shape in (
+        ("q", q, (1, T, kd)),
+        ("k", k, (1, T, kd)),
+        ("v", v, (1, T, vd)),
+        ("new_state", new_state, (1, 3, C)),
+    ):
+        assert tuple(t.shape) == shape, f"{name} {label}: shape {tuple(t.shape)} != {shape}"
+        assert t.layout == ttnn.TILE_LAYOUT, f"{name} {label}: layout {t.layout}"
+        assert t.memory_config().buffer_type == ttnn.BufferType.DRAM, f"{name} {label}: {t.memory_config()}"
+    assert torch.equal(
+        _dev0(new_state), x[:, T - (CONV_K - 1) :, :]
+    ), f"{name}: new_state != last {CONV_K - 1} input rows"
+
+
+def _compare(name, got, ref):
+    """PCC (asserted) and max-abs (logged) of q/k/v against the reference triple, and the carry-dependent rows
+    (the first K-1) held to CARRY_ROWS_HEADROOM x the max-abs of the other rows. got/ref: fp32 torch."""
+    pccs = [_pcc(r, g) for r, g in zip(ref, got)]
+    mads = [(g - r).abs().max().item() for r, g in zip(ref, got)]
+    head = max((g[:, : CONV_K - 1] - r[:, : CONV_K - 1]).abs().max().item() for r, g in zip(ref, got))
+    tail = max((g[:, CONV_K - 1 :] - r[:, CONV_K - 1 :]).abs().max().item() for r, g in zip(ref, got))
+    logger.info(
+        f"{name:7s}: pcc q/k/v {pccs[0]:.6f} {pccs[1]:.6f} {pccs[2]:.6f} | max-abs q/k/v "
+        f"{mads[0]:.3e} {mads[1]:.3e} {mads[2]:.3e} | carry rows {head:.3e} vs rest {tail:.3e}"
+    )
+    for label, p in zip("qkv", pccs):
+        assert p >= CONV_PCC_VS_REF, f"{name} {label}: pcc {p:.6f} < {CONV_PCC_VS_REF}"
+    assert (
+        head <= CARRY_ROWS_HEADROOM * tail
+    ), f"{name}: carry rows max-abs {head:.3e} > {CARRY_ROWS_HEADROOM} x the other rows' {tail:.3e}"
+    return pccs, mads
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("T, kd, vd, fir", CONV_SHAPES)
+def test_conv_paths_match_reference(mesh_device, T, kd, vd, fir, reset_seeds, ensure_gc, request):
+    """The KDA fused op and the FIR (where it fits) on the same L1 qkv and the same nonzero TILE carry: each
+    within PCC of the fp32 reference, the carry rows included, and both honour the same output contract."""
+    mesh = mesh_device
+    C = 2 * kd + vd
+    x, hist, w = _random_inputs(T, C, seed=223)
+    ref = [r.contiguous() for r in _split_qkv(_ref_conv(x, hist, w), kd, vd)]
+
+    qkv = _to_l1(mesh, x)
+    carry = replicate_to_device(mesh, hist)  # TILE DRAM, as the layer's conv_carry
+    taps = _taps(mesh, w)
+    start = _actual_start(mesh)
+
+    def run_kda():
+        return kda_conv_prefill(qkv, T, carry, taps, (kd, kd, vd), start)
+
+    def run_fir():
+        conv, ns = _causal_conv1d_fir(
+            qkv,
+            None,
+            None,
+            CONV_K,
+            mesh,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            conv_state=carry,
+            weight_taps=taps,
+            bias_dev=None,
+            valid_len=None,
+        )
+        return (*_slice3(conv, T, kd, vd), ns)
+
+    arms = [("kda", run_kda)] + ([("fir", run_fir)] if fir else [])
+    outs = {}
+    for name, fn in arms:
+        q, k, v, ns = fn()
+        _check_contract(name, q, k, v, ns, T, kd, vd, x)
+        outs[name] = [_dev0(t).float() for t in (q, k, v)]
+        for t in (q, k, v, ns):
+            ttnn.deallocate(t)
+        _compare(name, outs[name], ref)
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_kda_carry_across_chunks(mesh_device, reset_seeds, ensure_gc, request):
+    """Two consecutive T-row chunks through kda_conv_prefill: chunk 1 from an all-zero ROW_MAJOR history (the
+    layer's _kda_zero_history), chunk 2 from chunk 1's TILE new_state. Both must match the reference computed
+    over the concatenated 2T rows."""
+    mesh = mesh_device
+    T, kd, vd = 2048, 512, 1536
+    C = 2 * kd + vd
+    x, _, w = _random_inputs(2 * T, C, seed=224)
+    zeros = torch.zeros(1, CONV_K - 1, C, dtype=torch.bfloat16)
+    ref_full = _ref_conv(x, zeros, w)  # [1, 2T, C]
+
+    history = ttnn.from_torch(
+        zeros,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+    )
+    taps = _taps(mesh, w)
+    start = _actual_start(mesh)
+
+    for ci in range(2):
+        xc = x[:, ci * T : (ci + 1) * T, :]
+        qkv = _to_l1(mesh, xc)
+        q, k, v, ns = kda_conv_prefill(qkv, T, history, taps, (kd, kd, vd), start)
+        ttnn.deallocate(qkv)
+        _check_contract(f"kda chunk{ci}", q, k, v, ns, T, kd, vd, xc)
+        got = [_dev0(t).float() for t in (q, k, v)]
+        for t in (q, k, v):
+            ttnn.deallocate(t)
+        ref = [r.contiguous() for r in _split_qkv(ref_full[:, ci * T : (ci + 1) * T, :], kd, vd)]
+        _compare(f"chunk{ci}", got, ref)
+        history = ns  # TILE: chunk 2 takes the TILE -> ROW_MAJOR branch of kda_conv_prefill
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("T", [1, 4, 8, 12])
+def test_kda_conv_padded_rows_match_reference(mesh_device, T, reset_seeds, ensure_gc, request):
+    """The spec verify's conv (tp._verify_fullbatch): T non-tile-aligned tokens (seed T=1, verify T=K+1),
+    right-padded to 32 rows for the KDA op. The conv is causal, so rows [0, T) must match the reference
+    built from the T real rows alone; the padded tail is never read."""
+    mesh = mesh_device
+    kd, vd = 512, 1536  # 27B at TP4
+    C = 2 * kd + vd
+    x, hist, w = _random_inputs(T, C, seed=225)
+    ref = [r.contiguous() for r in _split_qkv(_ref_conv(x, hist, w), kd, vd)]
+
+    x_l1 = _to_l1(mesh, x)
+    qkv = ttnn.pad(x_l1, [(0, 0), (0, 32 - T), (0, 0)], 0.0)  # same pad call as the verify
+    ttnn.deallocate(x_l1)
+    carry = replicate_to_device(mesh, hist)  # TILE DRAM, like _conv_win_buf's slice
+    q, k, v, ns = kda_conv_prefill(qkv, 32, carry, _taps(mesh, w), (kd, kd, vd), _actual_start(mesh), emit_state=False)
+    assert ns is None, "emit_state=False must not return new_state"
+    for label, t, r in zip("qkv", (q, k, v), ref):
+        p = _pcc(r, _dev0(t).float()[:, :T])
+        logger.info(f"T={T} {label}: pcc {p:.6f}")
+        assert p >= CONV_PCC_VS_REF, f"T={T} {label}: pcc {p:.6f} < {CONV_PCC_VS_REF}"
+    for t in (qkv, q, k, v):
+        ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize(
+    "channels, expected",
+    [(2560, 512), (1280, 320), (5120, 512), (96, 96), (64, 64)],
+)
+def test_kda_channel_chunk_size(channels, expected):
+    """Largest tile-aligned divisor of the channel count not above the cap (pure python)."""
+    assert kda_channel_chunk_size(channels) == expected
+
+
+def test_kda_channel_chunk_size_rejects_unaligned(expect_error):
+    with expect_error(ValueError, "no tile-aligned channel chunk divides 100"):
+        kda_channel_chunk_size(100)

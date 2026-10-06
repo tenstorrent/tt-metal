@@ -614,7 +614,7 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
             // Noop core: zero-filled runtime args, sized to match the active kernel variant so unused
             // cores neither inflate the per-kernel max runtime-arg allocation nor change slot count when a
             // core flips between noop and work across differently-shaped cache hits.
-            const size_t reader_len = row_major_inputs ? 26 : 21;
+            const size_t reader_len = row_major_inputs ? 26 : 23;
             const size_t writer_len = row_major_inputs ? 14 : (b.has_value() ? 11 : 12);
             // A per-tensor quantization (scalar b) carries the scale as a fifth compute arg (see below).
             const size_t compute_len =
@@ -698,8 +698,11 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
                 operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
             if (operation_attributes.binary_op_type == BinaryOpType::WHERE_TTS ||
                 operation_attributes.binary_op_type == BinaryOpType::WHERE_TST) {
+                // The kernel bit-casts float scalars as one fp32 word, so pack them as fp32.
+                const auto value_dtype = b.has_value() ? b->dtype() : a.dtype();
+                const bool int_fill = value_dtype == DataType::INT32 || value_dtype == DataType::UINT32;
                 compute_scalar_value = pack_scalar_runtime_arg(
-                    operation_attributes.scalar.value(), b.has_value() ? b->dtype() : a.dtype(), false);
+                    operation_attributes.scalar.value(), int_fill ? value_dtype : DataType::FLOAT32, false);
             }
             if (row_major_inputs) {
                 freq = 1;
@@ -818,6 +821,8 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
                 bHt * bWt * bC * (bN > 1),
                 bHt * bWt * (bC > 1),
                 b_num_tiles,
+                aWt,
+                bWt,
             };
         }
 
@@ -1387,10 +1392,11 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         // where_tile<DataFormat::X> selector — mirrors get_sfpu_init_fn(WHERE, a_dtype)
         // in binary_ng_utils.cpp so the eltwise_chain `Where` element can pick the
         // exact same DataFormat the legacy BINARY_SFPU_OP macro baked in.
-        const char* where_df = (a_dtype == DataType::INT32)     ? "Int32"
-                               : (a_dtype == DataType::UINT32)  ? "UInt32"
-                               : (a_dtype == DataType::FLOAT32) ? "Float32"
-                                                                : "Float16_b";
+        // Match DEST: with fp32 DEST (e.g. a float32 output), bf16 inputs are held as Float32.
+        const char* where_df = (a_dtype == DataType::INT32)                         ? "Int32"
+                               : (a_dtype == DataType::UINT32)                      ? "UInt32"
+                               : (a_dtype == DataType::FLOAT32 || fp32_dest_acc_en) ? "Float32"
+                                                                                    : "Float16_b";
         compute_kernel_defines["WHERE_DATA_FORMAT"] = where_df;
     }
     compute_kernel_defines["WHERE_TTS"] = (op_type == BinaryOpType::WHERE_TTS) ? "1" : "0";

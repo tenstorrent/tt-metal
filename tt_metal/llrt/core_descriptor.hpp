@@ -71,7 +71,7 @@ inline const std::vector<tt::tt_metal::CoreCoord>& get_logical_fabric_mux_cores(
     return core_desc.logical_fabric_mux_cores;
 }
 
-const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
+const std::tuple<uint32_t, tt_metal::CoreRange>& get_physical_worker_grid_config(
     tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,
     uint8_t num_hw_cqs,

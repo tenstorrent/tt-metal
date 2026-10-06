@@ -15,7 +15,7 @@
       texts
         tokenize             -> input_ids, attention_mask
         the backbone         -> (B, 1, S, H)
-        mean_pool            -> (B, 1, 1, H)   padding excluded
+        mean_pool            -> (B, 1, 1, H)   fp32, padding excluded
         matryoshka_truncate  -> (B, 1, 1, dim) optional
         l2_normalize         -> (B, 1, 1, dim) unit norm
         to_torch             -> (B, dim)
@@ -27,8 +27,9 @@ reference.postprocessing.
 
 This is the host boundary. Every module below it takes and returns device tensors; this class
 takes torch token ids, because that is what a tokenizer produces and what the reference's own
-entry point takes, and because the rotary tables and the attention mask are host builds that
-depend on S, which varies per call.
+entry point takes, and because the attention mask is a host build that depends on S, which varies
+per call. The rotary tables depend on S too, but are kept on the model (RotaryTables) rather than
+rebuilt per call.
 
 encode() mirrors reference/embedding.py and reuses reference/preprocessing.py verbatim for the
 prefixes and tokenization: that stage is pure host text handling with no device equivalent, and
@@ -53,11 +54,11 @@ from models.experimental.nomic_embed_text_v2_moe.reference.preprocessing import 
 )
 from models.experimental.nomic_embed_text_v2_moe.tt import pooling
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
+    LayerNormParameters,
+    RotaryTables,
     additive_attention_mask,
     pooling_mask,
     prepare_token_ids,
-    rotary_tables,
-    to_device,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.embeddings import TtNomicBertEmbeddings
 from models.experimental.nomic_embed_text_v2_moe.tt.encoder import TtNomicBertEncoder
@@ -85,12 +86,14 @@ class TtNomicBertModel(LightweightModule):
             device, config, tt_config, state_dict, f"{state_dict_prefix}embeddings."
         )
         self.encoder = TtNomicBertEncoder(device, config, tt_config, state_dict, f"{state_dict_prefix}encoder.")
-        self.emb_ln_weight = to_device(
-            state_dict[f"{state_dict_prefix}emb_ln.weight"], device, dtype=tt_config.weight_dtype
+        self.emb_ln = LayerNormParameters(
+            state_dict[f"{state_dict_prefix}emb_ln.weight"],
+            state_dict[f"{state_dict_prefix}emb_ln.bias"],
+            device,
+            tt_config.weight_dtype,
         )
-        self.emb_ln_bias = to_device(
-            state_dict[f"{state_dict_prefix}emb_ln.bias"], device, dtype=tt_config.weight_dtype
-        )
+        # The activation dtype, so lowering tt_config.activation_dtype moves the tables with it.
+        self.rotary_tables = RotaryTables(device, config, dtype=tt_config.activation_dtype)
 
     def forward(
         self,
@@ -103,9 +106,10 @@ class TtNomicBertModel(LightweightModule):
         Args:
             input_ids: (B, S) int64 token ids, from reference.preprocessing.tokenize.
             attention_mask: (B, S) int64, 1 for real tokens and 0 for padding. None means no
-                masking, which is equivalent to all-ones and cheaper: an all-ones mask is a
-                proven no-op (test_an_all_ones_mask_is_a_no_op) and materialising it would cost
-                a (B, 1, S, S) tensor, 1 MB at B=2 S=512.
+                masking. An all-ones mask is treated the same way: it is a proven no-op
+                (test_an_all_ones_mask_is_a_no_op), while materialising it would cost a
+                (B, 1, S, S) tensor read by every head of every SDPA call, which doubled SDPA's
+                time at 8x512. SDPA masks the tile padding of S on its own.
             token_type_ids: Accepted for parity with the reference. type_vocab_size is 1, so 0 is
                 the only legal value and the embeddings module has already folded that row into
                 the word table.
@@ -125,21 +129,29 @@ class TtNomicBertModel(LightweightModule):
 
         seqlen = input_ids.shape[-1]
         hidden = self.embeddings(prepare_token_ids(input_ids, self.device))
+        weight, bias = self.emb_ln.for_input(hidden)
         normalized = ttnn.layer_norm(
             hidden,
-            weight=self.emb_ln_weight,
-            bias=self.emb_ln_bias,
+            weight=weight,
+            bias=bias,
             epsilon=self.config.layer_norm_epsilon,
             compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.NORM),
         )
         ttnn.deallocate(hidden)
 
-        # dtype is passed explicitly rather than left to each helper's default, so lowering
-        # tt_config.activation_dtype moves the mask and the rotary tables with it. A mismatch here
-        # surfaces inside SDPA, which rejects a mask whose dtype differs from q/k/v.
-        dtype = self.tt_config.activation_dtype
-        mask = None if attention_mask is None else additive_attention_mask(attention_mask, self.device, dtype=dtype)
-        out = self.encoder(normalized, rotary_tables(self.device, self.config, seqlen, dtype=dtype), mask)
+        # dtype is passed explicitly rather than left to the helper's default, so lowering
+        # tt_config.activation_dtype moves the mask's fill value with it.
+        mask = None
+        if attention_mask is not None and not bool(attention_mask.all()):
+            mask = additive_attention_mask(
+                attention_mask,
+                self.device,
+                dtype=self.tt_config.activation_dtype,
+                mask_dtype=self.tt_config.attention_mask_dtype,
+            )
+        rot_mats = self.rotary_tables(seqlen)
+        out = self.encoder(normalized, rot_mats, mask)
+        self.rotary_tables.release(rot_mats)
         ttnn.deallocate(normalized)
         return out
 
@@ -182,11 +194,7 @@ def encode(
     # Pooling needs a mask even where the backbone did not: padded positions must not enter the
     # mean, because the <pad> embedding is trained and non-zero, so counting it would make one
     # text's embedding depend on how long its batch-mates are.
-    pooled = pooling.mean_pool(
-        hidden,
-        pooling_mask(attention_mask, model.device, dtype=model.tt_config.activation_dtype),
-        compute_kernel_config=kernel_config,
-    )
+    pooled = pooling.mean_pool(hidden, pooling_mask(attention_mask, model.device), compute_kernel_config=kernel_config)
     ttnn.deallocate(hidden)
 
     embeddings = pooling.l2_normalize(
