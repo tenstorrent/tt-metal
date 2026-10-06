@@ -18,8 +18,8 @@
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "llk_bfd_alloc.h"
 #include "experimental/llk_unpack_AB_reduce_runtime_custom.h"
+#include "llk_bfd_alloc.h"
 #include "llk_unpack_common.h"
 #include "params.h"
 
@@ -70,7 +70,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const auto tensor_shape_A = tensor_shape_from_params(params);
 
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(src_format, src_format);
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(src_format, src_format);
 
     _llk_math_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(params.TILE_CNT, tensor_shape_A);
     _llk_math_reduce_block_max_row_runtime_<is_fp32_dest_acc_en>(0 /*dst_index*/, tensor_shape_A);
