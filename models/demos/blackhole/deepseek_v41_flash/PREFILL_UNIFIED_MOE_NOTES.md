@@ -1,0 +1,71 @@
+# Prefill routed experts through ttnn.experimental.deepseek_prefill (DSV41_PREFILL_MOE=unified, default OFF)
+
+Files: `tt/prefill_unified_moe.py` (pipeline, weights, mapping), `tt/prefill_layer.py` (`_moe_unified`, used by the column-split layer only), `tt/dsv41_model.py`
+(`UNI_MOE`, `UNI_LAYERS`), `tests/test_unified_moe.py` (standalone single-layer test), `tools/build_unified_cache.py`, `tools/devrun_pf.sh`.
+
+## Mapping (mesh 4 rows x 8 columns, x replicated over the columns, every row its own users)
+* Dispatch group axis = mesh ROWS (cluster_axis 0, `dispatch_group_size` 4, `seq_len_per_chip` = tokens of the row in the chunk = U*C).
+* The 8 COLUMNS are 8 independent dispatch groups of 48 experts each (12 per chip): expert e -> group (column) e // 48, chip (row) (e % 48) // 12, local slot e % 12
+  (`ExpertMapping`, column-major, models/demos/deepseek_v3_d_p). This is the layout the research report suggested; the standalone test checks it against the moe_compute path
+  and a torch reference.
+* Every column routes the same tokens; dispatch / combine only move tokens between the 4 rows of a column, `post_combine_reduce` keeps the experts of the column's own group,
+  the 8 partial sums are added by a reduce-scatter over the columns (see "Findings" for why it is over the hidden dim + all_to_all, not over tokens).
+
+## Layer flow (column-split layer, per chunk and layer; N = U*C tokens per row, n = N/8 own tokens per column)
+1. own normed hidden rows hh_own [1,1,n,D] (own 32-token chunks of all groups, concatenated)
+2. router on the own rows only (per 32-row slice, as before), routing (expert ids + weights) packed in fp32 row-major pages of 384 values and all-gathered over the columns
+3. all_gather of hh_own over the columns -> [1,1,N,D] in row order [column][own chunk][32] (dispatch does not care about the order)
+4. masked_bincount + offset_cumsum -> dispatch (RM bf16) -> ONE `unified_routed_expert_moe` (ClampedSiluGlu, limit 10, 12 local experts, bf8 weights) -> combine -> post_combine_reduce
+5. ttnn.reduce_scatter over the hidden dim (columns) + all_to_all_async_generic hidden-shard -> own tokens -> [1,1,n,D], sliced into the own 32-token chunks for the mHC expand.
+Shared expert, mHC, attention, Engram are untouched.
+
+## Numerics
+The op is fixed: LoFi, bf8 activations in, bf8 intermediates and bf8 output (compute_kernel_config fidelity / fp32 acc are ignored by the op, measured: identical results and time).
+It applies the swiglu clamp (|up| <= 10, gate <= 10) that the moe_compute path does not (moe_compute has no clamp).
+
+## Findings / pitfalls (all reproduced in tests/test_unified_moe.py with DSV41_UM_DEBUG=1)
+* reduce_scatter_minimal_async over the TOKEN dim of the big partial-sum tensor (also in 256- and 512-row pieces) corrupts some 32-row blocks (nondeterministic positions).
+  The generic `ttnn.reduce_scatter(dim=hidden)` + `all_to_all_async_generic` is exact at N = 256 / 512 / 2048 / 4096 rows (N = 8192 only ran in the 6-layer traced test, not compared).
+* all_gather of tensors that are <= 1 tile wide (routing [n, 12], tile or row-major pages of 12-48 B) drops blocks of rows; gathering 384-value row-major pages is exact.
+* DRAM: the unified weights are a second copy of the bf8 expert weights (497 MB / chip / layer, 19.9 GB / chip for 40 layers); the moe_compute decode weights are the same size, so
+  decode + unified prefill for all 40 layers does NOT fit a 32 GB chip next to KV and the rest. DSV41_UNI_NODECODE=1 skips the moe_compute weights (prefill-only runs);
+  DSV41_UNI_LAYERS=2-9 limits the unified path to a layer subset (decode intact).
+
+## Measurements (BH Galaxy 4x8, bf8 experts, links=2, own-row routing)
+Single layer, standalone test (layer 3, random normal hidden, tokens per mesh row N, MoE section of one layer = router + gathers + experts + reduce):
+| N per row | moe_compute path (T=256 per call) | unified | PCC vs torch clamp (first 16 tokens) |
+| 256 | 2.47 ms | 2.42 ms | 0.99976 (baseline 0.99998) |
+| 512 | 4.88 ms | 2.71 ms | 0.99976 |
+| 2048 | 23.1 ms | 5.8 ms (links=1) | 0.99976 |
+| 4096 | 46.3 ms | 7.7 ms (links=1: 10.0) | 0.99976, 0 bad 32-row blocks vs the baseline output |
+| 8192 | -- | 19.2 ms (links=1 only measured) | |
+Stage times at N=4096, links=2: bincount+cumsum 0.35, dispatch 1.5, experts 1.96, combine 1.07, post_combine_reduce 0.86, router (own rows) 0.7, gathers + reduce-scatter + all_to_all ~2 ms.
+
+Whole model, 40 layers, prefill only (DSV41_PREFILL_MOE=unified DSV41_UNI_NODECODE=1 DSV41_PREFILL_ONLY=1), TTFT of the demo (second call) / total tok/s:
+| scenario | baseline (grid) | unified |
+| isl4k_b16 (ISL 3720) | 20.17 s, 2951 tok/s | 11.99 s, 4965 tok/s |
+| isl8k_b4 (ISL 7443) | 10.99 s, 2708 tok/s | 6.55 s, 4547 tok/s |
+| isl32k_b8 (ISL 30059) | 77.2 s, 3114 tok/s | 44.8 s, 5364 tok/s |
+The replay loop alone: 18.77 -> 10.61 s, 10.88 -> 5.49 s, 74.2 -> 43.4 s.
+Chunk size (6 layers, U=4): replay per row token is flat from 512 to 2048 tokens per user (0.113-0.115 ms for unified, 0.205-0.210 ms for the moe_compute path): a bigger chunk does not help once the experts see >= 256 rows each.
+
+## Unified prefill MoE next to the decode weights (pf_unifit)
+Both expert copies are fully sharded over all 32 chips (384 experts, 12 per chip, no replication): decode moe_compute copy = 497 MB/chip/layer
+(ring layout [8 cores, L, E, groups, K, 4 tiles], N 9 -> 10 tiles padding), unified copy = 451 MB/chip/layer (12 x 3 tensors of 5120x2304 bf8; 56.9 MiB/bank
+measured: 0-3 layers 295.8 -> 523.2 MiB/bank). 40 layers: 2371 MiB/bank (decode) + 2274 MiB/bank (unified) vs ~3880 MiB/bank of DRAM. Re-sharding cannot help (already 1/32 per chip);
+only ONE shared copy (the unified op reading the decode ring layout, or moe_compute reading the unified layout: a kernel change) fits all 40 layers.
+DSV41_UNI_LAYERS=auto (DSV41_UNI_RESERVE_MIB, DSV41_UNI_MAX): hybrid, unified weights added after the model is built for as many layers as fit. tools/memtab_grid.py: grid DRAM headroom table.
+
+## ONE weight copy: the unified op reads the decode ring weights in place (DSV41_UNI_RING=1, pf_onecopy)
+`unified_routed_expert_moe` has a RING_WEIGHTS mode (selected by the weight tensors: rank-6 DRAM HEIGHT_SHARDED = the moe_compute `w0_w1` / `w2`, passed as the same tensor
+EPC times in the gate/up/down lists). Host: `unified_routed_expert_ffn_device_operation.cpp` (validation), `..._program_factory.cpp` (GRID_X = 8 = one N column per ring core /
+DRAM bank, per_core_N 9 (gate/up) and 20 (down), N inferred from the stored shapes, `RING_WEIGHTS` define). Kernels (JIT): `kernels/weight_runs.hpp` `RingWeights`
+(gate/up: per-tile scatter reads of page ((((c*E+e)*G+g)*R+k)*4+t), t = [gate n0, up n0, gate n1, up n1]; down: one 4-tile read per group, K rows of a core stored per 9-row chunk
+rotated by the core id, chunk ch at stored chunk (c - ch) mod 8). Needs 8 live DRAM banks (validated). Decode reads nothing different: the buffers are only read.
+Build: `tools/oc_build.sh` (private relink of only this op's unity TU against the main build's flags/objects into pf_onecopy_build/lib; run with LD_LIBRARY_PATH=<that>/lib, `tools/oc_run.sh`
+does it). Test: `DSV41_UM_RING=2 pytest tests/test_unified_moe.py` (1: ring only, 2: ring + the copy to compare), `DSV41_UM_DECODE=1` checks the decode block before/after.
+Layer 3 (real FFN inputs of the S=128 dump, N=512): PCC ring vs unified-copy 0.99985-0.99994, vs moe_compute baseline 0.99985-0.99987, vs torch 0.99981 (copy: 0.99976).
+Time per layer (router + gathers + experts + RS), per row N tokens: 512: ring 3.45 ms / copy 2.71 / moe_compute 6.29 (2 calls); 2048: 5.45 / 4.73; 4096: 8.52 / 7.72 / 38.5 (16 calls).
+Experts stage at 4096: 2.77 ms (copy 1.95; 64 instead of 88 cores). Decode block T=32 before/after the ring ops: 0.912 / 0.913 ms, output bit-identical.
+40 layers, no second copy, decode weights present (DSV41_UNI_RING=1, no NODECODE), scenario 4096:1024 U=4: first-token logits PCC vs the CPU dump 0.9614, argmax 16/16 (moe_compute baseline 0.9655, 16/16).
+Not done / ideas: DSV41_RING_GRID_Y=10 (80 cores) hangs; gate/up are single-tile reads (issue-bound at few tokens per expert, the 512 gap); 7-bank chips need uneven per-column N.

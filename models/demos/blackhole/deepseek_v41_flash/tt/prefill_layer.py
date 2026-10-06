@@ -336,6 +336,23 @@ class DSV41PrefillLayer:
         self.debug = None  # set to a dict: per-chunk lists of a_c / hh / m / sh are kept (not freed) for diagnostics
 
     colsplit = False  # set by the model per chunk size (colsplit_active)
+    umoe = None  # tt/prefill_unified_moe.py DSV41UnifiedMoE (DSV41_PREFILL_MOE=unified), set by the model builder
+
+    def _moe_unified(self, st, n8):
+        """Routed experts through the deepseek_prefill pipeline for the whole chunk (tt/prefill_unified_moe.py ``moe_cols``): the own 32-token chunks of
+        all n8 groups go through ONE route / all-gather / dispatch / experts / combine / reduce-scatter -> list of the own [1,1,32,D] chunks.
+        """
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_unified_moe import moe_cols
+
+        L, T = self.L, self.T
+        hh_own = ttnn.concat([e[4] for e in st], dim=2) if n8 > 1 else st[0][4]
+        own = moe_cols(self.umoe, L.moe.gate, hh_own, L.mesh_config, L.ccl)  # [1,1,n8*32,D]
+        if n8 > 1:
+            ttnn.deallocate(hh_own)
+        D = own.shape[3]
+        outs = [ttnn.slice(own, [0, 0, g * T, 0], [1, 1, (g + 1) * T, D]) for g in range(n8)]
+        ttnn.deallocate(own)
+        return outs
 
     def forward(self, xs, pres, S, s0=0):
         if self.colsplit:
@@ -515,7 +532,11 @@ class DSV41PrefillLayer:
         _free("a", a)
         _mark("mhc_expand_collapse")
         ms = []
-        for g in range(n8):
+        if (
+            self.umoe is not None
+        ):  # DSV41_PREFILL_MOE=unified: the routed experts of the whole chunk in one count-driven pipeline
+            ms = self._moe_unified(st, n8)
+        for g in range(n8 if self.umoe is None else 0):
             _drain(L, g, 2)
             hh_g = mc.allgather(st[g][4], cc, axis=1, dim=2)  # [1,1,256,D]
             tok_g = ttnn.reshape(ttnn.to_layout(hh_g, ttnn.ROW_MAJOR_LAYOUT), [8 * T, 1, 1, hh_g.shape[3]])

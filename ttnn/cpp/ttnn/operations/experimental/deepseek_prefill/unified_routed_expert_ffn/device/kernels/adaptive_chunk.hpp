@@ -27,7 +27,11 @@
 // is valid in BRISC, NCRISC, and TRISC translation units alike.
 namespace adaptive_chunk {
 
-constexpr uint32_t kGridY = 8;  // M-row cores; a chunk spans per_core_M * kGridY tile-rows
+#ifdef ADAPT_GRID_Y
+constexpr uint32_t kGridY = ADAPT_GRID_Y;  // RING_WEIGHTS mode: 8 columns x ADAPT_GRID_Y rows
+#else
+constexpr uint32_t kGridY = 8;
+#endif  // M-row cores; a chunk spans per_core_M * kGridY tile-rows
 
 // Chunk layout for `count_tiles` tile-rows, given the CB-sized maximum chunk
 // `max_chunk` (= per_core_M_max * kGridY): a run of FULL chunks of max_chunk,
