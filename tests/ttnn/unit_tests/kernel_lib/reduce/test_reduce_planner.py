@@ -72,6 +72,7 @@ class ReduceCase:
     max_identity_only: bool = False
     scalar: float = 1.0
     allow_empty_auxiliary: bool = False
+    math_fidelity: str = "HiFi4"
 
     @property
     def logical_height(self) -> int:
@@ -107,13 +108,30 @@ class ReduceCase:
             return None if self.scalar == 1.0 else self.scalar / (self.reduced_elements * self.calls)
         return self.scalar
 
-    def expected_algorithm(self, arch) -> str:
-        # The helper matrix uses the hardware config's default HiFi4 fidelity.
+    def additive_cutoff(self, arch) -> int:
+        # Reduced-axis tiles at which AccumulateViaAdd starts to win, per (row, col, scalar).
         cutoffs = {
-            ttnn.device.Arch.BLACKHOLE: (10, 4, 4),
-            ttnn.device.Arch.WORMHOLE_B0: (14, 7, 5),
-        }.get(arch, (4, 8, 8))
-        cutoff = cutoffs[DIMS.index(self.dim)]
+            ttnn.device.Arch.BLACKHOLE: {
+                "LoFi": (64, 32, 16),
+                "HiFi2": (30, 16, 8),
+                "HiFi3": (16, 8, 8),
+                "HiFi4": (10, 4, 4),
+            },
+            ttnn.device.Arch.WORMHOLE_B0: {
+                "LoFi": (14, 52, 14),
+                "HiFi2": (14, 52, 8),
+                "HiFi3": (14, 12, 6),
+                "HiFi4": (14, 7, 5),
+            },
+        }
+        return (
+            cutoffs[arch][self.math_fidelity][DIMS.index(self.dim)]
+            if arch in cutoffs
+            else (4, 8, 8)[DIMS.index(self.dim)]
+        )
+
+    def expected_algorithm(self, arch) -> str:
+        cutoff = self.additive_cutoff(arch)
         reduced_tiles = self.cols if self.dim == "REDUCE_ROW" else self.rows
         if self.dim == "REDUCE_SCALAR":
             reduced_tiles = self.rows * self.cols
@@ -555,6 +573,7 @@ def _make_plan(
             arch=device.arch(),
             fp32_dest_acc_en=case.fp32_dest_acc_en,
             dst_full_sync_en=False,
+            math_fidelity=getattr(ttnn.MathFidelity, case.math_fidelity),
         ),
     )
     _assert_plan(case, plan, input_cb_ids, device.arch())
@@ -676,7 +695,7 @@ def _repeated_input_cb_plan(input_tensor, output):
 
 def _compute_config(case: ReduceCase, input_cb_ids: list[int]) -> ttnn.ComputeConfigDescriptor:
     config = ttnn.ComputeConfigDescriptor(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=getattr(ttnn.MathFidelity, case.math_fidelity),
         fp32_dest_acc_en=case.fp32_dest_acc_en,
         dst_full_sync_en=False,
     )
@@ -702,6 +721,9 @@ def _make_logical_chunks(case: ReduceCase) -> list[torch.Tensor]:
             # Exactly representable in both compressed formats, including the
             # nonzero padding which a partial reduction must exclude.
             chunk = torch.randint(1, 4, shape, generator=generator).float()
+        elif case.family == "fidelity":
+            # Small exactly representable values keep LoFi's native path accurate.
+            chunk = (torch.arange(math.prod(shape)).reshape(shape) % 7 - 3).to(torch.bfloat16)
         elif case.family == "empty-auxiliary":
             # Small integer-valued floats keep these folds exact, so removing
             # a CB is checked independently of Fast-mode rounding differences.
@@ -1286,15 +1308,16 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
 @pytest.mark.parametrize("fp32_input", (False, True))
 @pytest.mark.parametrize(
     "input_policy,capacity_multiplier",
-    (("per_tile", 1), ("per_tile", 4), ("bulk", 1), ("bulk", 2)),
+    (("per_tile", 1), ("per_tile", 4), ("per_tile_odd", 9), ("bulk", 1), ("bulk", 2)),
 )
 def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_input, input_policy, capacity_multiplier):
     """Full and tail overrides use the same compiled kernels through repeated FIFO wraps."""
     policy = {
         "per_tile": _PLANNER.ReduceInputPolicy.WAIT_AND_POP_PER_TILE,
+        "per_tile_odd": _PLANNER.ReduceInputPolicy.WAIT_AND_POP_PER_TILE,
         "bulk": _PLANNER.ReduceInputPolicy.BULK_WAIT_BULK_POP,
     }[input_policy]
-    if input_policy == "per_tile" and dim == "REDUCE_COL":
+    if input_policy != "bulk" and dim == "REDUCE_COL":
         algorithm = "REDUCE_TILE"
     input_dtype = ttnn.float32 if fp32_input else ttnn.bfloat16
     for height, width, batches in ((135, 135, 2), (160, 160, 2), (192, 192, 2), (64, 64, 1), (1, 17, 2)):
@@ -1340,6 +1363,10 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
             axes = math.lcm(256 // TILE, tail_axis // TILE)
             group = plan_sequence(axes * 256 // TILE).calls[0].plan.chunk.output_tiles
             capacity = axes * group * capacity_multiplier
+        elif input_policy == "per_tile_odd":
+            # An odd ring holding a whole 8-tile row makes each row cross the FIFO end at most once,
+            # where the additive path realigns its pairs.
+            capacity = capacity_multiplier
         else:
             capacity = (1 if algorithm == "REDUCE_TILE" else 2) * capacity_multiplier
         sequence = plan_sequence(capacity)
@@ -1875,6 +1902,32 @@ def test_reduce_helpers_mixed_auxiliary_format(device, dtype, dim, input_mode, p
     )
     actual, expected = _run_case(device, case)
     torch.testing.assert_close(actual.to(torch.float64), expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("math_fidelity", ["LoFi", "HiFi2", "HiFi3", "HiFi4"])
+@pytest.mark.parametrize("dim", DIMS)
+@pytest.mark.parametrize("offset", [-1, 0])
+@pytest.mark.parametrize("fp32_dest_acc_en", [True, False])
+def test_reduce_fidelity_crossover(device, math_fidelity, dim, offset, fp32_dest_acc_en):
+    """The planner switches to AccumulateViaAdd exactly at each fidelity's cutoff, and both sides compute the mean."""
+    if device.arch() not in (ttnn.device.Arch.BLACKHOLE, ttnn.device.Arch.WORMHOLE_B0):
+        pytest.skip("Cutoffs were measured on Blackhole and Wormhole")
+    probe = ReduceCase(name="probe", family="fidelity", dim=dim, rows=1, cols=1, math_fidelity=math_fidelity)
+    tiles = probe.additive_cutoff(device.arch()) + offset
+    rows, cols = (tiles, 1) if dim == "REDUCE_COL" else (1, tiles)
+    case = ReduceCase(
+        name=f"fidelity-{math_fidelity}-{dim}-{tiles}",
+        family="fidelity",
+        dim=dim,
+        rows=rows,
+        cols=cols,
+        pool="AVG",
+        output_dtype="fp32",
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        math_fidelity=math_fidelity,
+    )
+    actual, expected = _run_case(device, case)
+    torch.testing.assert_close(actual.to(torch.float64), expected.to(torch.float64), rtol=0.01, atol=0.002)
 
 
 @pytest.mark.parametrize("case", ALL_CASES, ids=lambda case: case.name)
