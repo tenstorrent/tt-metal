@@ -358,4 +358,12 @@ void kernel_main() {
     }  // out_num_blocks_w
 
     noc.async_write_barrier();
+
+#ifdef CONFIG_TENSOR_IN_DRAM
+    if constexpr (split_reader_enabled) {
+        // The reader-index page is read through a raw pointer for the whole kernel, so it is popped
+        // here rather than next to the wait that acquired it.
+        dfb_reader_indices_obj.pop_front(1);
+    }
+#endif
 }
