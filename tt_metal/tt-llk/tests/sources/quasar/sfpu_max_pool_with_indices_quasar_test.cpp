@@ -99,7 +99,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::SFPU>();
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>(math_format, math_format);
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
         _llk_math_eltwise_sfpu_init_();
         // After _llk_math_eltwise_sfpu_init_(), which resets the SFPU Control Register init sets.
         init_max_pool_with_indices<APPROX_MODE, MAX_POOL_LAYOUT>();
