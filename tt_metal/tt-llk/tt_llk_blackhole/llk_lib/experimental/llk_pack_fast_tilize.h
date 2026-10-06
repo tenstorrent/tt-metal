@@ -6,11 +6,11 @@
 //
 // Replay buffer layout (BH = 32 entries total):
 //   [0..15]:  Tile replay (16 PACRs, Last=1 on final PACR)
-//   [16..19]: Address-update replay (ADDDMAREG + STALLWAIT + WRCFG + NOP)
+//   [16..19]: Paced address-update replay (ADDDMAREG + STALLWAIT + CFGSHIFTMASK + NOP)
 //
 // MOP: outerloop=unit_dim, innerloop=1.
-//   Each outer iteration packs one tile via tile replay, then advances L1
-//   address via address-update replay in end_ops. No per-tile RISC-V overhead.
+//   Each outer iteration packs one tile via tile replay, then advances L1_Dest_addr by one output tile with a
+//   CFGSHIFTMASK in end_ops, alone or behind a THCON wait (paced). No per-tile RISC-V overhead.
 
 #pragma once
 
@@ -95,20 +95,28 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_load_replay_()
     EMIT_FACE_PACRS(ADDR_MOD_3, 0);
     EMIT_FACE_PACRS(ADDR_MOD_1, 1); // face3: Last=1
 
-    // Address-update replay [16..19]: advance L1_Dest_addr for next tile.
-    // Same pattern as BH pack-untilize (llk_pack_untilize.h:94-108).
+    // Paced address-update replay [16..19]: the THCON wait of an ADDDMAREG spaces the tiles' L1 writes as an unpack-bound
+    // pipeline needs them; L1_Dest_addr += SCRATCH_SEC2 (one output tile).
     TTI_REPLAY(REPLAY_ADDR_UPDATE_OFFSET, REPLAY_ADDR_UPDATE_LEN, 0, 1);
     TTI_ADDDMAREG(0, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR_OFFSET);
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-    TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+    TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
     TTI_NOP;
+}
+
+// Pace the per-tile address update where the pipeline is bound by the unpacker: a 32-bit DEST, a 32-bit input, and
+// two-tile chunks of a 16-bit output, whose faster back-to-back L1 writes would only slow the unpacker's reads.
+inline constexpr bool _llk_pack_fast_tilize_paced_(
+    const bool is_fp32_dest_acc_en, const bool input_32b, const std::uint32_t unit_dim, const std::uint32_t pack_dst_format)
+{
+    return is_fp32_dest_acc_en || input_32b || ((unit_dim == 2) && (datum_size_in_bytes(pack_dst_format) == 2));
 }
 
 #undef EMIT_FACE_PACRS
 
 // Multi-tile MOP: outerloop=unit_dim tiles, each with tile replay + addr update.
 // end_ops fire per outer iteration = per tile.
-inline void _llk_pack_fast_tilize_mop_config_(const std::uint32_t unit_dim)
+inline void _llk_pack_fast_tilize_mop_config_(const std::uint32_t unit_dim, const bool paced = true)
 {
     ckernel::ckernel_template tmp(
         unit_dim, // outerloop: one iteration per tile
@@ -125,8 +133,16 @@ inline void _llk_pack_fast_tilize_mop_config_(const std::uint32_t unit_dim)
     tmp.set_last_inner_loop_instr(TT_OP_ADDRCRZW(p_setadc::PAC, 0, 0, 1, 0, 0b0010));
     tmp.set_last_outer_loop_instr(TT_OP_ADDRCRZW(p_setadc::PAC, 0, 0, 1, 0, 0b0010));
 
-    // end_ops: L1 address advance via replay (runs per outer iteration = per tile).
-    tmp.set_end_ops(lltt::replay_insn(REPLAY_ADDR_UPDATE_OFFSET, REPLAY_ADDR_UPDATE_LEN), TT_OP_NOP);
+    // end_ops: L1 address advance (runs per outer iteration = per tile); the next START_OP separates a bare CFGSHIFTMASK
+    // from the next PACR.
+    if (paced)
+    {
+        tmp.set_end_ops(lltt::replay_insn(REPLAY_ADDR_UPDATE_OFFSET, REPLAY_ADDR_UPDATE_LEN), TT_OP_NOP);
+    }
+    else
+    {
+        tmp.set_end_op(TT_OP_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG1_L1_Dest_addr_ADDR32));
+    }
 
     tmp.program();
 }
@@ -137,7 +153,8 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
     const std::uint32_t pack_dst_format,
     [[maybe_unused]] const std::uint32_t unit_dim,
     [[maybe_unused]] const std::uint32_t num_faces = 4,
-    const std::uint32_t pack_src_format            = (std::uint32_t)DataFormat::Float16_b)
+    const std::uint32_t pack_src_format            = (std::uint32_t)DataFormat::Float16_b,
+    const bool input_32b                           = false)
 {
     // DEST remap (remap_addrs + swizzle_32b) is set by _llk_math_fast_tilize_init_
     // on the math thread (mirrors pack_untilize_dest_init; tracked by
@@ -160,9 +177,10 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
         cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(0);
     }
 
-    // Per-tile L1 advance (used by addr-update replay's ADDDMAREG).
+    // Per-tile L1 advance for the MOP's CFGSHIFTMASK, written to SCRATCH_SEC2 with the strides below.
     const std::uint32_t tile_l1_size = GET_L1_HEADERLESS_TILE_SIZE(pack_dst_format);
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_l1_size), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
+    TT_SETDMAREG(0, UPPER_HALFWORD(tile_l1_size), 0, HI_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
 
     TTI_SETDMAREG(0, 0x000, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
     TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
@@ -190,10 +208,12 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
+    // Scratch index 0b11 of the CFGSHIFTMASK selects SCRATCH_SEC2 on the pack thread.
+    TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR_OFFSET, 0, SCRATCH_SEC2_val_ADDR32);
 
     _llk_pack_fast_tilize_configure_addrmod_();
     _llk_pack_fast_tilize_load_replay_();
-    _llk_pack_fast_tilize_mop_config_(unit_dim);
+    _llk_pack_fast_tilize_mop_config_(unit_dim, _llk_pack_fast_tilize_paced_(is_fp32_dest_acc_en, input_32b, unit_dim, pack_dst_format));
 }
 
 // ===========================================================================
@@ -244,9 +264,10 @@ inline void _llk_pack_fast_tilize_row_end_()
 }
 
 // Reprogram MOP outerloop for a different unit_dim.
-inline void _llk_pack_fast_tilize_reinit_unit_dim_([[maybe_unused]] const std::uint32_t pack_dst_format, const std::uint32_t new_unit_dim)
+template <bool is_fp32_dest_acc_en = false>
+inline void _llk_pack_fast_tilize_reinit_unit_dim_(const std::uint32_t pack_dst_format, const std::uint32_t new_unit_dim, const bool input_32b = false)
 {
-    _llk_pack_fast_tilize_mop_config_(new_unit_dim);
+    _llk_pack_fast_tilize_mop_config_(new_unit_dim, _llk_pack_fast_tilize_paced_(is_fp32_dest_acc_en, input_32b, new_unit_dim, pack_dst_format));
 }
 
 // One call = one row-chunk (one MOP run). num_units loop removed; block

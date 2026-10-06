@@ -20,8 +20,10 @@ inline void llk_pack_fast_tilize_init(
     const std::uint32_t num_faces = get_output_num_faces(output_id);
     const uint32_t use_32bit_dest =
         pack_src_format[output_id] == (uint)DataFormat::Float32 || pack_src_format[output_id] == (uint)DataFormat::Tf32;
+    // pack_dst_format holds every CB's L1 format, the input's included
+    const bool input_32b = pack_dst_format[get_output_id(input_operand)] == (uint)DataFormat::Float32;
     _llk_pack_fast_tilize_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
-        use_32bit_dest, pack_dst_format[output_id], unit_dim, num_faces, pack_src_format[output_id]);
+        use_32bit_dest, pack_dst_format[output_id], unit_dim, num_faces, pack_src_format[output_id], input_32b);
 }
 
 template <bool is_fp32_dest_acc_en>
@@ -34,10 +36,20 @@ inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
         pack_dst_format[output_id], face_r_dim, num_faces, pack_src_format[output_id]);
 }
 
+template <bool is_fp32_dest_acc_en = false>
 inline void llk_pack_fast_tilize_reinit_unit_dim(const std::uint32_t pack_output, const std::uint32_t new_unit_dim) {
     SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(pack_output);
-    _llk_pack_fast_tilize_reinit_unit_dim_(pack_dst_format[output_id], new_unit_dim);
+    _llk_pack_fast_tilize_reinit_unit_dim_<is_fp32_dest_acc_en>(pack_dst_format[output_id], new_unit_dim);
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_fast_tilize_reinit_unit_dim(
+    const std::uint32_t input_operand, const std::uint32_t pack_output, const std::uint32_t new_unit_dim) {
+    SAN_HOOK(unsupported());
+    const std::uint32_t output_id = get_output_id(pack_output);
+    const bool input_32b = pack_dst_format[get_output_id(input_operand)] == (uint)DataFormat::Float32;
+    _llk_pack_fast_tilize_reinit_unit_dim_<is_fp32_dest_acc_en>(pack_dst_format[output_id], new_unit_dim, input_32b);
 }
 
 inline void llk_pack_fast_tilize_block(

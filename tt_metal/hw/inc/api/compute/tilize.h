@@ -349,7 +349,7 @@ ALWI void fast_tilize_block(
 
             if (chunk != prev_chunk) {
                 UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
-                PACK((llk_pack_fast_tilize_reinit_unit_dim(ocb, chunk)));
+                PACK((llk_pack_fast_tilize_reinit_unit_dim<is_fp32_dest_acc_en>(icb, ocb, chunk)));
                 prev_chunk = chunk;
             }
             UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index, chunk, tiles_done)));
