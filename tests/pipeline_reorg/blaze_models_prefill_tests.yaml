@@ -896,7 +896,7 @@
       set -e
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/gemma4_d_p/tests/test_sanity_glx.py \
-        -vv --tb=short --timeout=1800
+        -vv --tb=short --timeout=900
     '
   test_type: gemma4_d_p
   test_tags: [gemma4_d_p, transformer]
@@ -904,7 +904,7 @@
   budget_type: demo
   skus:
     bh_sc1:
-      timeout: 30
+      timeout: 15
       tier: 1
       release_ready: false
   owner_id: U02LLCK5MML # Sasha Vuckovic
@@ -923,7 +923,7 @@
       set -e
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest "models/demos/gemma4_d_p/tests/test_block_cyclic_vs_aligned.py::test_block_cyclic_matches_aligned_256k[chunk8k]" \
-        -vv --tb=short --timeout=1800
+        -vv --tb=short --timeout=900
     '
   test_type: gemma4_d_p_block_cyclic
   test_tags: [gemma4_d_p, transformer, kv_cache]
@@ -931,7 +931,7 @@
   budget_type: demo
   skus:
     bh_sc1:
-      timeout: 30
+      timeout: 15
       tier: 1
       release_ready: false
   owner_id: U02LLCK5MML # Sasha Vuckovic

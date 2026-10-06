@@ -131,16 +131,19 @@ def test_cache_writer_passes_valid_end(monkeypatch, global_cache, device_metadat
         assert call["kv_actual_global"] == (metadata.kv_actual_global if device_metadata else 7008)
 
 
-def test_model_stages_supplied_bounds():
+@pytest.mark.parametrize("tp_degree", [1, 4])
+def test_model_stages_supplied_bounds(monkeypatch, tp_degree):
     calls = []
     model = object.__new__(Gemma4Model)
-    model.mesh_config = SimpleNamespace(cp_degree=8)
+    model.mesh_config = SimpleNamespace(cp_degree=8, tp_degree=tp_degree)
+    model.ccl_manager = None
+    monkeypatch.setattr("models.demos.gemma4_d_p.tt.model.ccl_allgather", lambda tensor, *args, **kwargs: tensor)
     model.prefill_chunk_size, model.max_seq_len = 8192, 16384
     model._prefill_metadata_external = False
     model._rope_prefill_positions = None
     model.prefill_metadata = SimpleNamespace(update=lambda **kwargs: calls.append(kwargs))
     model.layers = []
-    hidden = SimpleNamespace(shape=(1, 1, 1024, 64))
+    hidden = SimpleNamespace(shape=(1, 1, 1024 // tp_degree, 64))
     assert model(hidden, user_id=1, actual_start=7008, actual_end=9000) is hidden
     assert calls == [dict(slot_idx=1, actual_start=7008, actual_end=9000)]
 
