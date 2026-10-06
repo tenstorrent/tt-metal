@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_types.hpp"
+#include "ttnn/kernel_lib/reduce_types.hpp"
 
 namespace ttnn::kernel_lib::reduce_plan_args {
 

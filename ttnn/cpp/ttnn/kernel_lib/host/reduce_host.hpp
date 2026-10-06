@@ -18,8 +18,8 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/arch.hpp>
 
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_types.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args_common.hpp"
+#include "ttnn/kernel_lib/reduce_types.hpp"
+#include "ttnn/kernel_lib/reduce_plan_args_common.hpp"
 
 /**
  * @file reduce_host.hpp

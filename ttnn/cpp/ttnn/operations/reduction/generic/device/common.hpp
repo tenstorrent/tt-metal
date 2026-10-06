@@ -15,7 +15,7 @@
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_types.hpp"
+#include "ttnn/kernel_lib/reduce_types.hpp"
 
 namespace tt::tt_metal {
 class Buffer;

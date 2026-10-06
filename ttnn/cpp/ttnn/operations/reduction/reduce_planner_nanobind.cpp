@@ -16,7 +16,7 @@
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/vector.h>
 
-#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 
 namespace ttnn::operations::reduction::detail {
 namespace {

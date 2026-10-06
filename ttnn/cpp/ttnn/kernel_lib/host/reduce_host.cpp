@@ -16,7 +16,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt_stl/assert.hpp>
 
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args_common.hpp"
+#include "ttnn/kernel_lib/reduce_plan_args_common.hpp"
 
 namespace ttnn::kernel_lib::host {
 
