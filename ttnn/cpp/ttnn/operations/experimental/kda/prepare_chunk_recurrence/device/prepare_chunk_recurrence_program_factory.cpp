@@ -88,6 +88,16 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
 
     const m2::DFBSpecName workspace_3_dfb{"workspace_3"};
     const m2::DFBSpecName workspace_2_dfb{"workspace_2"};
+    // Decay-mode intermediates. Per-channel: the separable factors anchored at G_last/2 and their workspaces. Scalar:
+    // the strictly lower mask, the masked gate strict_lower * g, exp(G) as a column and exp(G_last - G) as a row.
+    const bool scalar_decay = attrs.decay_mode == PrepareChunkRecurrenceDecayMode::Scalar;
+    const std::vector<m2::DFBSpecName> per_channel_decay_dfbs = {
+        workspace_0_dfb, scan_decay_dfb, centered_inverse_decay_dfb, anchor_decay_dfb, workspace_2_dfb};
+    const std::vector<m2::DFBSpecName> scalar_decay_dfbs = {
+        m2::DFBSpecName{"strict_lower"},
+        m2::DFBSpecName{"masked_gate"},
+        m2::DFBSpecName{"cumulative_decay"},
+        m2::DFBSpecName{"suffix_decay"}};
     const m2::TensorParamName Q_TENSOR{"q"};
     const m2::TensorParamName K_TENSOR{"k"};
     const m2::TensorParamName V_TENSOR{"v"};
@@ -104,6 +114,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     const auto fp32 = tt::DataFormat::Float32;
     const auto bf16 = tt::DataFormat::Float16_b;
     const auto gate_format = datatype_to_dataformat_converter(in.g.dtype());
+    // A scalar gate is one FP32 column tile per (head, chunk); a per-channel gate is a row of Kt tiles.
+    const uint32_t gate_tiles = scalar_decay ? Ct : ck;
     std::vector<tt::DataFormat> output_formats;
     output_formats.reserve(outputs.size());
     for (const auto& output : outputs) {
@@ -120,7 +132,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         make_dfb(q_dfb, 2 * ck, bf16),
         make_dfb(k_dfb, 2 * ck, bf16),
         make_dfb(v_dfb, 2 * cv, bf16),
-        make_dfb(g_dfb, 2 * ck, gate_format),
+        make_dfb(g_dfb, 2 * gate_tiles, gate_format),
         make_dfb(beta_dfb, 2 * Ct, fp32),
         make_dfb(eye_dfb, cc, fp32),
         make_dfb(tril_dfb, cc, fp32),
@@ -177,7 +189,11 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
                 m2::TensorBinding{BETA_TENSOR, "beta"},
             },
         .compile_time_args =
-            {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"key_head_group", attrs.num_heads / attrs.num_key_heads}},
+            {{"Ct", Ct},
+             {"Kt", Kt},
+             {"Vt", Vt},
+             {"key_head_group", attrs.num_heads / attrs.num_key_heads},
+             {"scalar_decay", uint32_t(scalar_decay)}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks", "num_heads"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
@@ -244,6 +260,14 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
 
     unpack_modes[workspace_3_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[workspace_2_dfb] = UnpackMode::UnpackToSrc;
+    if (scalar_decay) {
+        for (const auto& name : per_channel_decay_dfbs) {
+            unpack_modes.erase(name);
+        }
+        for (const auto& name : scalar_decay_dfbs) {
+            unpack_modes[name] = UnpackMode::UnpackToSrc;
+        }
+    }
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
         .source =
@@ -307,10 +331,27 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
                   std::memcpy(&bits, &value, sizeof(bits));
                   return bits;
               }()},
-             {"EPS_BITS", 0x358637BDU}},
+             {"EPS_BITS", 0x358637BDU},
+             {"scalar_decay", uint32_t(scalar_decay)}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks"}},
         .hw_config = std::move(compute_hw),
     };
+    if (scalar_decay) {
+        // Replace the per-channel decay intermediates by the scalar ones (one tile each); the per-channel program
+        // keeps its original buffers, bindings, and order.
+        const auto is_per_channel = [&](const m2::DFBSpecName& name) {
+            return std::find(per_channel_decay_dfbs.begin(), per_channel_decay_dfbs.end(), name) !=
+                   per_channel_decay_dfbs.end();
+        };
+        std::erase_if(dfb_specs, [&](const m2::DataflowBufferSpec& dfb) { return is_per_channel(dfb.unique_id); });
+        std::erase_if(
+            compute.dfb_bindings, [&](const m2::DFBBinding& binding) { return is_per_channel(binding.dfb_spec_name); });
+        for (const auto& name : scalar_decay_dfbs) {
+            dfb_specs.push_back(make_dfb(name, cc, fp32));
+            compute.dfb_bindings.push_back(m2::ProducerOf(name, name.get()));
+            compute.dfb_bindings.push_back(m2::ConsumerOf(name, name.get()));
+        }
+    }
 
     m2::KernelRunArgs reader_run{.kernel = READER};
     m2::KernelRunArgs writer_run{.kernel = WRITER};

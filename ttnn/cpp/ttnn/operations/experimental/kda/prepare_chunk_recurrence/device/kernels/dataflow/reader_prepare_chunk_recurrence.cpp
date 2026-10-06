@@ -108,6 +108,7 @@ template <
     uint32_t Kt,
     uint32_t Vt,
     uint32_t key_head_group,
+    uint32_t scalar_decay,
     uint32_t has_actual_start,
     uint32_t has_actual_end,
     uint32_t sp_rank,
@@ -116,6 +117,8 @@ template <
 TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32_t num_chunks, uint32_t num_heads) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
     constexpr uint32_t chunk_value_tiles = Ct * Vt;
+    // Scalar decay: g is laid out like beta, one column tile per (head, chunk). Per-channel: a row of Kt tiles.
+    constexpr uint32_t chunk_gate_tiles = scalar_decay ? Ct : chunk_key_tiles;
 
     const auto q_accessor = TensorAccessor(tensor::q);
     const auto k_accessor = TensorAccessor(tensor::k);
@@ -210,7 +213,11 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         enqueue_head_chunk_read(q_accessor, q, key_head, chunk, num_key_heads, Kt);
         enqueue_head_chunk_read(k_accessor, k, key_head, chunk, num_key_heads, Kt);
         enqueue_head_chunk_read(v_accessor, v, head, chunk, num_heads, Vt);
-        enqueue_head_chunk_read(g_accessor, g, head, chunk, num_heads, Kt);
+        if constexpr (scalar_decay) {
+            enqueue_contiguous_read(g_accessor, g, head_chunk_index * Ct, Ct);
+        } else {
+            enqueue_head_chunk_read(g_accessor, g, head, chunk, num_heads, Kt);
+        }
         enqueue_contiguous_read(beta_accessor, beta, head_chunk_index * Ct, Ct);
         // All five inputs are independent reads on the same NoC. One barrier lets them overlap, then publishes
         // the complete work item atomically to compute.
@@ -218,7 +225,7 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         q.push_back(chunk_key_tiles);
         k.push_back(chunk_key_tiles);
         v.push_back(chunk_value_tiles);
-        g.push_back(chunk_key_tiles);
+        g.push_back(chunk_gate_tiles);
         beta.push_back(Ct);
     }
 }
