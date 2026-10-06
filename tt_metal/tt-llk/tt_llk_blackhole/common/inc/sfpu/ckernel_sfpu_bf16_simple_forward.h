@@ -25,7 +25,7 @@ inline void calculate_simple_forward()
     }
     TTI_REPLAY(0, Config::kBodySlots, 1, 1);
     {
-        sfpi::simple_threshold_pair<ADDR_MOD_7, ADDR_MOD_6, Config::kBodySlots == 11>();
+        sfpi::simple_threshold_pair<ADDR_MOD_7, ADDR_MOD_6, Config::kBodySlots == 11, true>();
     }
 #pragma GCC unroll 8
     for (int row = Config::kRowsPerReplay; row < Iterations; row += Config::kRowsPerReplay)

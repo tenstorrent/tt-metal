@@ -17,8 +17,7 @@ inline void init_simple_forward() {
     // INCRWC and never reads it.
     constexpr bool folds = Config::kKind == 1 && Config::kBodySlots == 11;
     if constexpr (Config::kRowsPerReplay && !folds) {
-        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2 * Config::kRowsPerReplay}}.set(
-            ADDR_MOD_6);
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     }
 }
 }  // namespace ckernel::sfpu::bf16
