@@ -1604,11 +1604,11 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
 // ============================================================================
 // The sign-magnitude paths above (convert_int_representation_inplace / SFPCAST
 // INT_SIGN_MAGN_TO_INT32_2S_COMP) collapse INT32_MIN (0x80000000) to sign-magnitude "-0" (magnitude 0),
-// so it ranks as 0 and is dropped by SFPSWAP. These functions mirror the Wormhole fix (PR #49085):
-// keep the raw two's-complement bits (load plain INT32) and correct ordering in software with the
-// both-negative re-swap in _emit_int32_signed_cswap_. Correct over the full Int32 range, INT32_MIN
-// included. The sign-magnitude functions above are kept for SUM/AVG (which need two's-complement for
-// SFPIADD) and for UInt16/UInt32.
+// so it ranks as 0 and is dropped by SFPSWAP. These functions keep the raw two's-complement bits (load
+// plain INT32) and correct the ordering in software: the column and cross-tile paths with the both-negative
+// re-swap in _emit_int32_signed_cswap_ (as the Wormhole fix, PR #49085), the per-tile row path with an order
+// map on every operand. Correct over the full Int32 range, INT32_MIN included. The sign-magnitude functions
+// above are kept for SUM/AVG (which need two's-complement for SFPIADD) and for UInt16/UInt32.
 
 // Number of SFPU instructions emitted by _emit_int32_signed_cswap_ (one two's-complement compare-and-swap).
 constexpr std::uint32_t INT32_SIGNED_CSWAP_LEN = 5;
@@ -1637,16 +1637,27 @@ inline void _emit_int32_signed_cswap_() {
     TTI_SFPENCC(0, 0, 0, 0);
 }
 
-struct RowFoldInt32Signed {
-    template <std::uint32_t ACC, std::uint32_t SRC>
-    static inline void apply() {
-        _emit_int32_signed_cswap_<ACC, SRC>();
-    }
-};
+// The row path maps each operand to x ^ 0x7FFFFFFF on negative lanes, the inverse of SFPSWAP's sign-magnitude remap
+// (tt-isa SFPSWAP.md), so a plain SFPSWAP orders two's-complement values; the map is its own inverse.
+constexpr std::uint32_t INT32_ORDER_MAP_REG = p_sfpu::LREG12;
+
+// Writes 0x7FFFFFFF to INT32_ORDER_MAP_REG (sfpi::vConstIntPrgm0). Clobbers LREG0.
+inline void load_int32_order_map_mask() {
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xFFFF);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x7FFF);
+    TTI_SFPCONFIG(0, INT32_ORDER_MAP_REG, 0);
+}
+
+template <std::uint32_t LREG>
+inline void int32_order_map() {
+    TTI_SFPSETCC(0, LREG, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+    TTI_SFPXOR(0, INT32_ORDER_MAP_REG, LREG, 0);
+    TTI_SFPENCC(0, 0, 0, 0);
+}
 
 /**
- * @brief Signed-Int32 per-tile row MAX/MIN reduction. Mirrors perform_reduce_row_max_tile but loads
- *        plain INT32 (bits preserved) and uses the signed compare-and-swap so INT32_MIN is handled.
+ * @brief Signed-Int32 per-tile row MAX/MIN reduction. Mirrors perform_reduce_row_max_tile's manual path on
+ *        order-mapped operands; the two results are mapped back before the store. Needs INT32_ORDER_MAP_REG.
  */
 inline void perform_reduce_row_max_tile_int32(std::uint32_t tile_row_offset, std::uint32_t result_store_mode) {
     constexpr InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::INT32;
@@ -1689,17 +1700,26 @@ inline void perform_reduce_row_max_tile_int32(std::uint32_t tile_row_offset, std
                 ADDR_MOD_7,
                 tile_row_offset + face_pair_base + ROWS_PER_FACE + row_offset_second + 2);
 
-            // Vertical reduce via signed compare-and-swap (each is self-contained w.r.t. condition codes,
-            // so unlike the float path they are emitted sequentially rather than interleaved).
-            _emit_int32_signed_cswap_<p_sfpu::LREG0, p_sfpu::LREG2>();
-            _emit_int32_signed_cswap_<p_sfpu::LREG4, p_sfpu::LREG6>();
-            _emit_int32_signed_cswap_<p_sfpu::LREG1, p_sfpu::LREG3>();
-            _emit_int32_signed_cswap_<p_sfpu::LREG5, p_sfpu::LREG7>();
-            _emit_int32_signed_cswap_<p_sfpu::LREG0, p_sfpu::LREG1>();
-            _emit_int32_signed_cswap_<p_sfpu::LREG4, p_sfpu::LREG5>();
+            int32_order_map<p_sfpu::LREG0>();
+            int32_order_map<p_sfpu::LREG1>();
+            int32_order_map<p_sfpu::LREG2>();
+            int32_order_map<p_sfpu::LREG3>();
+            int32_order_map<p_sfpu::LREG4>();
+            int32_order_map<p_sfpu::LREG5>();
+            int32_order_map<p_sfpu::LREG6>();
+            int32_order_map<p_sfpu::LREG7>();
 
-            // Horizontal reduce: consolidate 8 SFPU columns into column 0.
-            horizontal_reduce_merged<RowFoldInt32Signed>();
+            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, 1);
+            TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG6, 1);
+            TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, 1);
+            TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG7, 1);
+            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
+            TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);
+
+            horizontal_reduce_merged<RowFoldSwap>();
+
+            int32_order_map<p_sfpu::LREG0>();
+            int32_order_map<p_sfpu::LREG4>();
 
             TT_SFPSTORE(
                 p_sfpu::LREG0, result_store_mode, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_first);
@@ -1761,9 +1781,10 @@ inline void perform_reduce_row_max_min_int32(std::uint32_t block_ct_dim, std::ui
     constexpr InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::INT32;
 
     // Re-establish the SFPSWAP direction (see perform_reduce_row_max_min): MAX is the default (bit 8 = 0),
-    // MIN sets bit 8. The signed compare-and-swap's VEC_MIN_MAX obeys this bit; its both-negative fix is a
+    // MIN sets bit 8. The cross-tile signed compare-and-swap obeys it too; its both-negative fix is a
     // direction-independent unconditional exchange.
     set_sfpswap_direction<pool_type == PoolType::MIN>();
+    load_int32_order_map_mask();
 
     // Int32 MAX/MIN never widens to a UInt16 output, so the per-tile store always uses the plain mode.
     const std::uint32_t tile_store_mode = static_cast<std::uint32_t>(INSTRUCTION_MODE);
