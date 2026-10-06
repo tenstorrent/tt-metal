@@ -154,6 +154,10 @@ void kernel_main() {
         tile_regs_commit();
 
         dfb_x2_merge.pop_front(num_cores_y);
+        // The zero tile is pushed once by the reader and waited once above, unconditionally. The
+        // unpack_fp32_active path never reads it; the other path reuses the one tile across all
+        // num_cores_y adds. Neither pops it, so pop it once here to balance the buffer.
+        dfb_zero.pop_front(1);
 
         dfb_out_final.reserve_back(onetile);
 
