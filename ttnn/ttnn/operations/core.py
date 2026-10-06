@@ -829,6 +829,9 @@ def as_tensor(
         device (ttnn.MeshDevice, optional): The `ttnn` device. Defaults to `None`.
         memory_config (ttnn.MemoryConfig, optional): The `ttnn` memory configuration. Defaults to `None`.
         cache_file_name (str | pathlib.Path, optional): The cache file name. Defaults to `None`.
+            A cache miss writes the file with a ``DISTRIBUTED_GATHER`` dump, a collective across all ranks. Set
+            ``TTNN_CACHE_DUMP_LOCAL=1`` when ranks own different tensors (e.g. one pipeline stage per rank): each rank
+            then writes its own host-local tensor in ``LOCAL`` mode, so the files must not be shared between ranks.
         preprocess (Callable[[ttnn.Tensor], ttnn.Tensor], optional): The function to preprocess the tensor before serializing/converting to ttnn. Defaults to `None`.
         mesh_mapper (ttnn.CppTensorToMesh, optional): The TensorToMesh to define the mapping from torch to multi-device. Defaults to `None`.
 
@@ -889,7 +892,17 @@ def as_tensor(
             f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
         )
         pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
-        ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor)
+        if os.environ.get("TTNN_CACHE_DUMP_LOCAL") == "1":
+            # The default DISTRIBUTED_GATHER dump is a world collective: every rank must reach it with the same tensor.
+            # Ranks that each own different weights (one mesh per rank, e.g. pipeline stages) miss the cache for
+            # different tensors, the barriers never pair up, and the cold fill deadlocks. Each rank writes its own
+            # host-local tensor instead; the per-process temp file plus rename keeps a concurrent reader from seeing
+            # a partial file.
+            tmp_file_name = f"{cache_file_name}.tmp{os.getpid()}"
+            ttnn._ttnn.tensor.dump_tensor_flatbuffer(tmp_file_name, tensor, ttnn.DumpTensorMode.LOCAL)
+            os.replace(tmp_file_name, cache_file_name)
+        else:
+            ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor)
         if device is not None:
             tensor = tensor.to(device, memory_config)
         return tensor
