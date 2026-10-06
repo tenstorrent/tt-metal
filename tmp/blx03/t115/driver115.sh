@@ -59,6 +59,11 @@ if [ "$DRY_RUN" = 1 ]; then
   exit 0
 fi
 log "start boot=$(uptime -s)"
+# #122 runs after #119: wait (up to 24 h) for the drivers in WAIT_PIDS to exit before the first submit.
+for p in $WAIT_PIDS; do
+  for i in $(seq 1440); do kill -0 $p 2>/dev/null || break; sleep 60; done
+  log "waited for pid $p"
+done
 for C in $COMBOS; do
   TAG=${C//,/_}
   [ -f $V/results/${TAG}_done ] && { log "$C already done"; continue; }
