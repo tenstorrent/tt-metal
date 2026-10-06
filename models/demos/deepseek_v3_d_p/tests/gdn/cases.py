@@ -12,7 +12,8 @@ Layouts (tt-work artifacts/loudbox-linear-prefill-requirements.md, design gdn-on
 * ``LB-A``: 2x4 mesh, SP2 x TP4, 1280 tokens per chunk (640 per SP rank), all heads.
 * ``LB-B``: 8x1 mesh, SP8 x TP1, 5120 tokens per chunk, one Galaxy TP4 rank's heads: K heads ``[0, Hk / 4)`` and
   their V heads (whole K-head groups, ``reference/gdn/head_slice.py``); its oracle is that rank's partial output.
-* ``SP1-1x4``: 1x4 mesh, SP1 x TP4, 640 tokens (the comparison geometry of the current GDN implementation).
+* ``SP1-1x4`` / ``SP1-1x4-T1280``: 1x4 mesh, SP1 x TP4, 640 / 1280 tokens (the comparison geometries of the current
+  GDN implementation, tt_metal_tracker-g1b.5.10).
 * ``1x1``: one chip, 640 tokens, one Galaxy TP4 rank's heads (single-chip direct scan).
 
 Schedules: one chunk, three chained chunks, or a full chunk followed by a ragged one ending inside an SP rank.
@@ -354,6 +355,7 @@ LAYOUTS = {
     "LB-A": ((2, 4), 1, 1280, False),
     "LB-B": ((8, 1), 1, 5120, True),
     "SP1-1x4": ((1, 4), 1, 640, False),
+    "SP1-1x4-T1280": ((1, 4), 1, 1280, False),
     "1x1": ((1, 1), 1, 640, True),
 }
 
@@ -408,6 +410,11 @@ def gdn_case_spec(
 #   (max |G_last| 4073) with strong heads 16, 17, 20; rank 0 holds weak head 9 and strong head 3 (max 1577).
 TEXT_EXPOSED_GALAXY_RANK = {"qwen38_27b": 2, "qwen36_35b": 2, "qwen38_2_4t": 3, "qwen38_flash_next": 1}
 
+# Models and layouts of the comparison with the current GDN implementation (qwen36 TPGatedDeltaNet, which runs the
+# silu-gated 27B and 35B-A3B on 1x4 TP4 only): their real-text cells run on both implementations (g1b.5.10).
+CURRENT_IMPLEMENTATION_MODELS = ("qwen38_27b", "qwen36_35b")
+CURRENT_IMPLEMENTATION_LAYOUTS = ("SP1-1x4", "SP1-1x4-T1280")
+
 
 _REGISTERED_SPECS = (
     # Synthetic weights on seeded random inputs: every model, layout and schedule (tt_metal_tracker-g1b.5.4.3).
@@ -418,6 +425,13 @@ _REGISTERED_SPECS = (
         for model in QWEN_GDN_MODELS
         for layout in ("LB-A", "LB-B")
         for inputs in (RANDN, TEXT)
+        for schedule in SCHEDULES
+    ),
+    # Real text at the 1x4 comparison layouts of the current GDN implementation (g1b.5.10).
+    *(
+        gdn_case_spec(model, layout, schedule, REAL, TEXT)
+        for model in CURRENT_IMPLEMENTATION_MODELS
+        for layout in CURRENT_IMPLEMENTATION_LAYOUTS
         for schedule in SCHEDULES
     ),
     # Real text on the decay-exposed Galaxy rank's heads at LB-B.

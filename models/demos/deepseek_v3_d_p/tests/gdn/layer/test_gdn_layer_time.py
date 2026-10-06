@@ -1,11 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Recorded (not gated) trace-replay time of one ttGDN layer at 640 tokens, synthetic weights.
+"""Recorded (not gated) trace-replay time of one ttGDN layer at one SP rank, synthetic weights.
 
-``1x1`` runs one Galaxy TP4 rank's heads on one chip (single-chip direct scan); ``SP1-1x4`` is the 1x4 TP4
-comparison geometry of the current GDN implementation (tt_metal_tracker-g1b.5.10). Method as the KDA layer perf
-test: one warm forward, one capture, then the median of five synchronized samples of ten back-to-back replays.
-Accuracy is owned by test_gdn_accuracy.py; R12 (several sessions, LoudBox layouts) by g1b.5.9.
+``1x1`` runs one Galaxy TP4 rank's heads on one chip at 640 tokens (single-chip direct scan); ``SP1-1x4`` and
+``SP1-1x4-T1280`` are the 1x4 TP4 comparison geometries (640 / 1280 tokens) of the current GDN implementation
+(tt_metal_tracker-g1b.5.10). Method of the current implementation's timing (qwen36 tests/gdn_baseline
+``test_gdn_baseline_perf``), so both are timed alike: one warm forward, one capture, then the median of five
+synchronized samples of 100 back-to-back replays (10 replays per sample showed host-jitter spread on ~1 ms layers).
+Accuracy is owned by test_gdn_accuracy.py; the LoudBox R12 gate by tests/gdn/perf/test_gdn_layer_perf.py.
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import mak
 
 pytestmark = [run_for_blackhole(), pytest.mark.timeout(900)]
 
-_REPETITIONS = 10
+_REPETITIONS = 100
 _SAMPLES = 5
 
 
@@ -46,7 +48,7 @@ _SAMPLES = 5
             id=f"{model}-{layout}",
         )
         for model in QWEN_GDN_MODELS
-        for layout in ("1x1", "SP1-1x4")
+        for layout in ("1x1", "SP1-1x4", "SP1-1x4-T1280")
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -91,6 +93,7 @@ def test_gdn_layer_trace_time(mesh_device: ttnn.MeshDevice, device_params: dict,
                 "key_heads_per_chip": config.num_key_heads // tensor_parallel_size,
                 "value_heads_per_chip": config.num_value_heads // tensor_parallel_size,
                 "hidden": config.hidden_size,
+                "repetitions": _REPETITIONS,
                 "median_trace_ms": statistics.median(samples_ms),
                 "samples_ms": samples_ms,
             },
