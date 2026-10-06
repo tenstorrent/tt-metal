@@ -1,0 +1,10 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "kolibri-autoport-vllm-registration"
+version = "0.1.0"
+[project.entry-points."vllm.general_plugins"]
+kolibri_autoport = "models.autoports.aleph_alpha_kolibri_1_bf16.tt.vllm_registration:register"
+[tool.setuptools]
+packages = []
