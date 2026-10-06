@@ -2,14 +2,18 @@
 """Host checks for serving boundaries; these do not qualify device execution."""
 
 import importlib.util
+import json
+import os
 import sys
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import torch
 
+from ..tt.checkpoint import MODEL_ID, REVISION, resolve_checkpoint
 from ..tt.precision import load_precision
 
 
@@ -100,3 +104,50 @@ class TestPrecisionContract(unittest.TestCase):
         loaded = load_precision(policy)
         loaded["weight_groups"]["down"] = "bfloat16"
         self.assertEqual(policy["weight_groups"]["down"], "bfloat4_b")
+
+
+class TestCheckpointResolution(unittest.TestCase):
+    def setUp(self):
+        self.directory = TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.path = Path(self.directory.name)
+        (self.path / "config.json").write_text(
+            json.dumps({"model_type": "granite", "architectures": ["GraniteForCausalLM"]})
+        )
+        (self.path / "model.safetensors.index.json").write_text(
+            json.dumps({"weight_map": {"model.embed_tokens.weight": "model-00001.safetensors"}})
+        )
+        for name in ("tokenizer.json", "tokenizer_config.json", "model-00001.safetensors"):
+            (self.path / name).touch()
+
+    def test_explicit_local_directory_does_not_consult_hub(self):
+        download = Mock(side_effect=AssertionError("local checkpoint must not access the hub"))
+        with patch.dict(os.environ, {"HF_MODEL": str(self.path)}), patch.dict(
+            sys.modules, {"huggingface_hub": SimpleNamespace(snapshot_download=download)}
+        ):
+            self.assertEqual(resolve_checkpoint(), self.path)
+        download.assert_not_called()
+
+    def test_default_and_repository_id_resolve_pinned_offline_snapshot(self):
+        for source in (None, MODEL_ID):
+            with self.subTest(source=source):
+                download = Mock(return_value=str(self.path))
+                with patch.dict(os.environ, {}, clear=True), patch.dict(
+                    sys.modules, {"huggingface_hub": SimpleNamespace(snapshot_download=download)}
+                ):
+                    if source is not None:
+                        os.environ["HF_MODEL"] = source
+                    self.assertEqual(resolve_checkpoint(), self.path)
+                download.assert_called_once_with(MODEL_ID, revision=REVISION, local_files_only=True)
+
+    def test_missing_shard_fails_before_device_weight_upload(self):
+        (self.path / "model-00001.safetensors").unlink()
+        with patch.dict(os.environ, {"HF_MODEL": str(self.path)}):
+            with self.assertRaisesRegex(FileNotFoundError, "model-00001.safetensors"):
+                resolve_checkpoint()
+
+    def test_unrelated_architecture_is_rejected(self):
+        (self.path / "config.json").write_text(json.dumps({"model_type": "llama"}))
+        with patch.dict(os.environ, {"HF_MODEL": str(self.path)}):
+            with self.assertRaisesRegex(ValueError, "GraniteForCausalLM"):
+                resolve_checkpoint()

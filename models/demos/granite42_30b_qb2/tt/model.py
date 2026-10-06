@@ -7,20 +7,16 @@ host API boundaries. Weights are loaded one layer at a time at construction.
 
 import json
 import math
-from pathlib import Path
 
 import torch
-from huggingface_hub import snapshot_download
 from safetensors import safe_open
 from transformers import AutoConfig
 
 import ttnn
 
+from .checkpoint import resolve_checkpoint
 from .decoder import GraniteDecoder
 from .precision import layer_policy, load_precision
-
-MODEL_ID = "ibm-granite/granite-4.2-30b"
-REVISION = "9e668ce1c538387ef24d3644e9b0606647762636"
 
 
 class GraniteModel:
@@ -30,8 +26,8 @@ class GraniteModel:
         self.cache_dtype = getattr(ttnn, self.precision["kv_cache_dtype"])
         self.activation_dtype = getattr(ttnn, self.precision["activation_dtype"])
         self.logits_dtype = getattr(ttnn, self.precision["logits_dtype"])
-        self.config = AutoConfig.from_pretrained(MODEL_ID, revision=REVISION, local_files_only=True)
-        self.checkpoint = Path(snapshot_download(MODEL_ID, revision=REVISION, local_files_only=True))
+        self.checkpoint = resolve_checkpoint()
+        self.config = AutoConfig.from_pretrained(self.checkpoint, local_files_only=True)
         self.index = json.loads((self.checkpoint / "model.safetensors.index.json").read_text())["weight_map"]
         self.layers = []
         count = self.config.num_hidden_layers if override_num_layers is None else override_num_layers

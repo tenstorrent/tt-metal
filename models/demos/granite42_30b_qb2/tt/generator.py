@@ -15,7 +15,7 @@ from transformers import AutoTokenizer
 import ttnn
 from models.common.modules.sampling.sampling_1d import Sampling1D
 
-from .model import MODEL_ID, REVISION, GraniteModel
+from .model import GraniteModel
 from .token_history import append_tokens
 
 
@@ -58,7 +58,7 @@ class GraniteGenerator:
             if model is not None
             else GraniteModel(mesh_device, override_num_layers=override_num_layers, precision_config=precision_config)
         )
-        self.tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, revision=REVISION, local_files_only=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model.checkpoint, local_files_only=True)
         if not 1 <= max_seq_len <= self.model.precision["supported_context"]:
             raise ValueError("Invalid configured context")
         self.max_seq_len = max_seq_len

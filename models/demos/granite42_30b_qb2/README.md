@@ -24,6 +24,14 @@ Download the pinned checkpoint into the Hugging Face cache before startup:
 hf download ibm-granite/granite-4.2-30b --revision 9e668ce1c538387ef24d3644e9b0606647762636
 ```
 
+TTI supplies `HF_MODEL` as a local checkpoint directory. The model loads its
+weights, config, and tokenizer from that same directory. The directory must
+contain the original Granite config, indexed safetensor shards, and tokenizer
+files. Its contents are trusted: a local directory does not prove a Hugging Face
+revision. TTI must populate it from the pinned revision above. With `HF_MODEL`
+unset or equal to the model repository ID, the model resolves only that pinned
+snapshot from the offline Hugging Face cache.
+
 Run from the TT-Metal checkout, with its Python environment active:
 
 ```sh
