@@ -5,7 +5,7 @@
 #include "impl/metal2_host_api/program_construction/construct_program.hpp"
 
 #include <algorithm>
-#include <bit>
+#include <bitset>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -49,41 +49,11 @@ namespace tt::tt_metal::experimental {
 // Type Definitions
 // ============================================================================
 
-// Bitmask for tracking processor allocation on a node
-template <uint8_t NUM_CORES>
-struct ProcessorMask {
-    static_assert(NUM_CORES > 0 && NUM_CORES <= 8, "ProcessorMask supports 1-8 processors");
-    static constexpr uint8_t VALID_BITS_MASK = (NUM_CORES == 8) ? 0xFF : ((1 << NUM_CORES) - 1);
+// Processor allocation on a node: bit i set = core i in use.
+using DMProcessorMask = std::bitset<QUASAR_DM_CORES_PER_NODE>;
+using ComputeEngineMask = std::bitset<QUASAR_TENSIX_ENGINES_PER_NODE>;
 
-    uint8_t bits = 0x00;
-
-    // Operators
-    bool operator==(ProcessorMask other) const { return bits == other.bits; }
-    bool operator!=(ProcessorMask other) const { return bits != other.bits; }
-    ProcessorMask operator|(ProcessorMask other) const { return {uint8_t(bits | other.bits)}; }
-    ProcessorMask operator&(ProcessorMask other) const { return {uint8_t(bits & other.bits)}; }
-    ProcessorMask operator~() const { return {uint8_t(~bits & VALID_BITS_MASK)}; }
-    ProcessorMask& operator|=(ProcessorMask other) {
-        bits |= other.bits;
-        return *this;
-    }
-    ProcessorMask& operator&=(ProcessorMask other) {
-        bits &= other.bits;
-        return *this;
-    }
-
-    // Queries
-    uint8_t num_in_use() const { return std::popcount(bits); }
-    uint8_t num_available() const { return NUM_CORES - num_in_use(); }
-    bool is_idx_available(uint8_t idx) const { return (bits & (1 << idx)) == 0; }
-    bool is_idx_in_use(uint8_t idx) const { return (bits & (1 << idx)) != 0; }
-    bool conflicts_with(ProcessorMask other) const { return (bits & other.bits) != 0; }
-};
-
-using DMProcessorMask = ProcessorMask<QUASAR_DM_CORES_PER_NODE>;
-using ComputeEngineMask = ProcessorMask<QUASAR_TENSIX_ENGINES_PER_NODE>;
-
-// Kernel -> ProcessorMask map (Gen2/Quasar only).
+// Kernel -> ComputeEngineMask map (Gen2/Quasar only).
 // DM masks flow through KernelCouplingGroup (equivalence class) rather than per-KernelSpec, so the DM
 // counterpart of this map is defined in the dm_solver namespace and keyed by KernelCouplingGroup*.
 using ComputeEngineMaskMap = std::unordered_map<const KernelSpec*, ComputeEngineMask>;
@@ -105,27 +75,17 @@ using SemaphoreNameToIdMap = std::unordered_map<SemaphoreSpecName, uint32_t>;
 // ============================================================================
 // TODO: move this to it's own file.
 
-// ProcessorMask factory functions
-template <uint8_t NUM_CORES>
-ProcessorMask<NUM_CORES> CreateMask(uint8_t mask) {
-    TT_FATAL(
-        mask <= ProcessorMask<NUM_CORES>::VALID_BITS_MASK,
-        "Mask specifies too many cores for ProcessorMask<{}>: {}",
-        NUM_CORES,
-        mask);
-    return {mask};
-}
-
-template <uint8_t NUM_CORES>
-std::optional<ProcessorMask<NUM_CORES>> ReserveProcessors(uint8_t n, const ProcessorMask<NUM_CORES>& already_in_use) {
-    if (already_in_use.num_available() < n) {
+// Reserve the n lowest-indexed cores not already in use.
+template <std::size_t NUM_CORES>
+std::optional<std::bitset<NUM_CORES>> ReserveProcessors(uint8_t n, const std::bitset<NUM_CORES>& already_in_use) {
+    if (NUM_CORES - already_in_use.count() < n) {
         return std::nullopt;
     }
 
-    ProcessorMask<NUM_CORES> newly_reserved;
-    for (uint8_t i = 0; i < NUM_CORES && n > 0; i++) {
-        if (already_in_use.is_idx_available(i)) {
-            newly_reserved.bits |= (1 << i);
+    std::bitset<NUM_CORES> newly_reserved;
+    for (std::size_t i = 0; i < NUM_CORES && n > 0; i++) {
+        if (!already_in_use.test(i)) {
+            newly_reserved.set(i);
             n--;
         }
     }
@@ -146,7 +106,7 @@ std::pair<DMProcessorMask, DMProcessorMask> ReserveDMProcessors(
 
         // Check for conflict with what's already allocated on the current WorkUnitSpec
         TT_FATAL(
-            !existing.conflicts_with(cumulative_mask),
+            (existing & cumulative_mask).none(),
             "Kernel '{}' requires processors already in use on WorkUnitSpec '{}'. "
             "One of the following must be true: \n"
             " - The ProgramSpec is invalid, and the legality checks were bypassed. \n"
@@ -174,7 +134,7 @@ std::pair<DMProcessorMask, DMProcessorMask> ReserveDMProcessors(
 
 // Assign compute processor mask for a kernel.
 ComputeEngineMask AssignComputeProcessors(const KernelSpec* kernel_spec, const KernelSpecName& kernel_name) {
-    auto reserved = ReserveProcessors(kernel_spec->num_threads, CreateMask<QUASAR_TENSIX_ENGINES_PER_NODE>(0x00));
+    auto reserved = ReserveProcessors(kernel_spec->num_threads, ComputeEngineMask{});
     TT_FATAL(
         reserved.has_value(),
         "Compute kernel '{}' reservation failed. Condition should be unreachable after validation.",
@@ -229,14 +189,14 @@ class NodeUsageTracker {
 public:
     DMProcessorMask& get_used_mask(const NodeCoord& node) {
         if (!node_used_masks_.contains(node)) {
-            node_used_masks_[node] = CreateMask<QUASAR_DM_CORES_PER_NODE>(0x03);  // Reserve DM0, DM1
+            node_used_masks_[node] = DMProcessorMask{0b11};  // Reserve DM0, DM1
         }
         return node_used_masks_[node];
     }
 
     // Compute union of used masks across all target nodes
     DMProcessorMask get_combined_used_mask(const NodeRangeSet& target_nodes) {
-        DMProcessorMask combined_used = CreateMask<QUASAR_DM_CORES_PER_NODE>(0x00);
+        DMProcessorMask combined_used;
         for (const auto& range : target_nodes.ranges()) {
             for (const auto& node : range) {
                 combined_used = combined_used | get_used_mask(node);
@@ -488,11 +448,11 @@ KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec, const Collec
     KernelRiscMaskMap result;
     for (const auto& [group, mask] : group_assignments) {
         for (const KernelSpec* member : group->members) {
-            result[member] = mask.bits;  // DM processors in bits 0-7
+            result[member] = static_cast<uint16_t>(mask.to_ulong());  // DM processors in bits 0-7
         }
     }
     for (const auto& [kernel, mask] : compute_assignments) {
-        result[kernel] = static_cast<uint16_t>(mask.bits) << 8;  // Compute engines in bits 8-15
+        result[kernel] = static_cast<uint16_t>(mask.to_ulong() << 8);  // Compute engines in bits 8-15
     }
     return result;
 }
@@ -1212,7 +1172,7 @@ experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
 std::set<DataMovementProcessor> GetDMProcessorSet(DMProcessorMask mask) {
     std::set<DataMovementProcessor> processors;
     for (uint8_t i = 0; i < QUASAR_DM_CORES_PER_NODE; ++i) {
-        if (mask.is_idx_in_use(i)) {
+        if (mask.test(i)) {
             processors.insert(static_cast<DataMovementProcessor>(i));
         }
     }
@@ -1237,7 +1197,7 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
 
     std::set<QuasarComputeProcessor> processors;
     for (uint8_t engine = 0; engine < QUASAR_TENSIX_ENGINES_PER_NODE; ++engine) {
-        if (mask.is_idx_in_use(engine)) {
+        if (mask.test(engine)) {
             // Add all 4 compute processors for this engine
             for (uint8_t proc = 0; proc < PROCESSORS_PER_ENGINE; ++proc) {
                 uint8_t processor_id = (engine * PROCESSORS_PER_ENGINE) + proc;
@@ -1632,7 +1592,7 @@ Program BuildProgram(
             if (kernel_spec.is_data_movement_kernel()) {
                 auto config = MakeQuasarDataMovementConfig(kernel_spec);
                 config.compile_args = std::move(compile_args);
-                auto processors = GetDMProcessorSet(DMProcessorMask{(uint8_t)(risc_mask & 0xFF)});
+                auto processors = GetDMProcessorSet(DMProcessorMask{static_cast<uint8_t>(risc_mask & 0xFF)});
                 kernel = std::make_shared<experimental::quasar::QuasarDataMovementKernel>(
                     program_impl->get_context_id(),
                     kernel_src,
@@ -1649,7 +1609,7 @@ Program BuildProgram(
             } else {
                 auto config = MakeGen2ComputeConfig(kernel_spec, dfb_name_to_slot, hal);
                 config.compile_args = std::move(compile_args);
-                auto processors = GetComputeProcessorSet(ComputeEngineMask{(uint8_t)(risc_mask >> 8)});
+                auto processors = GetComputeProcessorSet(ComputeEngineMask{static_cast<uint8_t>(risc_mask >> 8)});
                 kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
                     program_impl->get_context_id(),
                     kernel_src,
