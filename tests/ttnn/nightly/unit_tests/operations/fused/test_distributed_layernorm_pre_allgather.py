@@ -1062,13 +1062,27 @@ def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offs
     )
 
 
-@pytest.mark.parametrize("variant", ["layer_norm", "rms_norm", "rms_norm_2d"])
+@pytest.mark.parametrize(
+    "variant, shape",
+    [
+        ("layer_norm", (1, 1, 32, 128)),
+        ("rms_norm", (1, 1, 32, 128)),
+        ("rms_norm_2d", (1, 1, 32, 128)),
+        # The 2D core grid splits the tile rows over up to grid.y cores, so these shapes give a core
+        # more than one tile row. On an 8-row grid they give each core 3, 2, 4 and 3 tile rows, with
+        # 2, 8, 8 and 1 cores splitting each row. With 1 core per row, the merge core has no other
+        # cores in its column.
+        ("rms_norm_2d", (1, 1, 288, 64)),
+        ("rms_norm_2d", (1, 1, 320, 256)),
+        ("rms_norm_2d", (1, 1, 1024, 1024)),
+        ("rms_norm_2d", (1, 1, 288, 32)),
+    ],
+)
 @pytest.mark.parametrize("use_residual", [False, True])
 @pytest.mark.parametrize("fast_and_approximate_mode", [False, True], ids=["sfpu_accurate", "fpu_fast_approx"])
-def test_pre_all_gather_non_welford_fp32_precision(device, variant, use_residual, fast_and_approximate_mode):
+def test_pre_all_gather_non_welford_fp32_precision(device, variant, shape, use_residual, fast_and_approximate_mode):
     """Float32 non-Welford pre_all_gather stats vs an fp64 reference."""
     torch.manual_seed(0)
-    shape = (1, 1, 32, 128)
     torch_input = torch.randn(shape, dtype=torch.float32)
     torch_residual = torch.randn(shape, dtype=torch.float32) if use_residual else None
     golden = torch_input + torch_residual if use_residual else torch_input

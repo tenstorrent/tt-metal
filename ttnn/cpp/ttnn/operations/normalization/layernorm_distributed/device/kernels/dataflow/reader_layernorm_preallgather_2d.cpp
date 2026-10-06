@@ -23,10 +23,17 @@ void kernel_main() {
     const auto NCHt = get_arg(args::NCHt);                // Number of NCH tiles
     const auto Wt = get_arg(args::Wt);                    // Width in tiles
     const auto tile_offset = get_arg(args::tile_offset);  // Tile offset for this core
+    const auto row_stride = get_arg(args::row_stride);    // Tiles between the starts of consecutive input rows
     const bool is_merge_core = get_arg(args::is_merge_core);
     const auto reduce_core_noc_x = get_arg(args::reduce_core_noc_x);
     const auto reduce_core_noc_y = get_arg(args::reduce_core_noc_y);
     const auto y = get_arg(args::y);
+    // Merge core only: the NoC rectangle of the other cores in its column, which it signals when the
+    // gather buffer is free for the next row's partials.
+    const auto workers_noc_x_start = get_arg(args::workers_noc_x_start);
+    const auto workers_noc_y_start = get_arg(args::workers_noc_y_start);
+    const auto workers_noc_x_end = get_arg(args::workers_noc_x_end);
+    const auto workers_noc_y_end = get_arg(args::workers_noc_y_end);
 
     const uint32_t onetile = 1;
 
@@ -42,7 +49,10 @@ void kernel_main() {
     DataflowBuffer dfb_out_buf(dfb::out);
     // Gather buffer on the merge core: every core in the column lands its partial here.
     DataflowBuffer dfb_x2_merge_buf(dfb::x2_merge);
+    // On the merge core: counts the partials that have landed in its gather buffer for the current row.
     Semaphore reducer_sem(sem::reducer);
+    // On the other cores: set by the merge core when its gather buffer can take this core's next partial.
+    Semaphore gather_free_sem(sem::gather_free);
 
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = dfb_inp_buf.get_tile_size();
@@ -64,10 +74,68 @@ void kernel_main() {
         dataflow_kernel_lib::prepare_zero_tile<dfb::zero>();
     }
 
-    uint32_t inp_tile_idx = tile_offset;
+    // Partial statistics use the intermediate format, which is Float32 with fp32_dest_acc_en.
+    const uint32_t o_write_size = dfb_out_buf.get_tile_size();
+    const uint32_t worker_offset = o_write_size * y;
+    // The gather buffer is laid out identically on every core in the column, so this core's own
+    // write pointer gives the same base address the merge core's instance has. Only the merge core
+    // pushes into its gather buffer, and it always pushes the full buffer depth (num_cores_to_wait
+    // tiles), so its write pointer is back at that base at the start of every row.
+    const uint32_t gather_base_addr = dfb_x2_merge_buf.get_write_ptr();
+    UnicastEndpoint reduce_ep;
+
+    // Sends one row's partial statistic to the merge core and, on the merge core, gathers the
+    // column's partials for that row into the gather buffer. The gather buffer holds one row, so the
+    // merge core first waits until its compute has consumed the previous row and then releases the
+    // other cores in the column to write. A core increments the merge core's semaphore only after
+    // receiving that release, so the merge core's reset of the semaphore after each row cannot drop
+    // an increment that belongs to the next row.
+    auto send_partial = [&]() {
+        if (is_merge_core) {
+            dfb_x2_merge_buf.reserve_back(num_cores_to_wait);
+            if constexpr (num_cores_to_wait > 1) {
+                gather_free_sem.inc_multicast(
+                    noc,
+                    workers_noc_x_start,
+                    workers_noc_y_start,
+                    workers_noc_x_end,
+                    workers_noc_y_end,
+                    1,
+                    num_cores_to_wait - 1);
+            }
+        } else {
+            gather_free_sem.wait(1);
+            gather_free_sem.set(0);
+        }
+
+        // wait on the partial output and then write it to the merge core over the NoC. The write
+        // itself lands on the remote core, not here.
+        dfb_out_buf.wait_front(onetile);
+        noc.async_write(
+            dfb_out_buf,
+            reduce_ep,
+            o_write_size,
+            {.offset_bytes = 0},
+            {.noc_x = reduce_core_noc_x, .noc_y = reduce_core_noc_y, .addr = gather_base_addr + worker_offset});
+        noc.async_write_barrier();
+        dfb_out_buf.pop_front(onetile);
+
+        // increase semaphore
+        reducer_sem.up(noc, reduce_core_noc_x, reduce_core_noc_y, 1);
+        noc.async_atomic_barrier();
+
+        if (is_merge_core) {
+            reducer_sem.wait(num_cores_to_wait);
+            dfb_x2_merge_buf.push_back(num_cores_to_wait);
+            reducer_sem.set(0);
+        }
+    };
+
+    uint32_t row_start_tile_idx = tile_offset;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // read input tiles
+        uint32_t inp_tile_idx = row_start_tile_idx;
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             dfb_inp_buf.reserve_back(blk);
 #ifdef FUSE_PRE_ADD
@@ -99,38 +167,18 @@ void kernel_main() {
 #endif
 
         }  // wt loop
+        row_start_tile_idx += row_stride;
 
+        // Send the previous row's partial only after this row's input is in flight to compute, so
+        // the compute kernel does not wait for input while the reader sends the partial and waits
+        // for the column's partials to be gathered.
+        if (ncht > 0) {
+            send_partial();
+        }
     }  // ncht loop
 
-    // wait on the partial output and then write it to the merge core over the NoC
-    dfb_out_buf.wait_front(onetile);
-
-    // Partial statistics use the intermediate format, which is Float32 with fp32_dest_acc_en.
-    uint32_t o_write_size = dfb_out_buf.get_tile_size();
-    uint32_t worker_offset = o_write_size * y;
-
-    UnicastEndpoint reduce_ep;
-    noc.async_write(
-        dfb_out_buf,
-        reduce_ep,
-        o_write_size,
-        {.offset_bytes = 0},
-        {.noc_x = reduce_core_noc_x,
-         .noc_y = reduce_core_noc_y,
-         // The gather buffer is laid out identically on every core in the column, so this core's own
-         // write pointer gives the same base address the merge core's instance has. The write itself
-         // lands on the remote core, not here.
-         .addr = dfb_x2_merge_buf.get_write_ptr() + worker_offset});
-    noc.async_write_barrier();
-    dfb_out_buf.pop_front(onetile);
-
-    // increase semaphore
-    reducer_sem.up(noc, reduce_core_noc_x, reduce_core_noc_y, 1);
-    noc.async_atomic_barrier();
-
-    if (is_merge_core) {
-        reducer_sem.wait(num_cores_to_wait);
-        dfb_x2_merge_buf.push_back(num_cores_to_wait);
-        reducer_sem.set(0);
+    // Send the last row's partial; the loop sends each row's partial one row late.
+    if (NCHt > 0) {
+        send_partial();
     }
 }
