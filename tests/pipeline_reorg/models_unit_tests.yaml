@@ -1196,6 +1196,30 @@
   team: models
   budget_type: unit
 
+# Mock-device memory gate: no Tenstorrent hardware is touched. TT_METAL_MOCK_CLUSTER_DESC_PATH makes
+# tt-metal open the checked-in Wormhole 6U descriptor as a 4x8 mesh with the galaxy's DRAM and L1
+# geometry, keep the real allocator, circular-buffer validation and kernel JIT, and turn every device
+# read and write into a no-op. The test runs the ref2va preset's full init warmup (ladder walk, VAE,
+# audio and prompt-encoder warms) and fails on any rung that does not fit DRAM or any program whose
+# static circular buffers overflow L1. It skips without the mock descriptor or the H3 weights.
+# Nearly all of the time is kernel JIT on the host CPU (~55 min cold on a galaxy host), so a
+# cloud VM may be slower. See models/tt_dit/models/MiniMaxH3_mock_oom.md.
+- name: Minimax H3 Ref2VA Memory Test
+  cmd: |
+    export TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_cluster_desc/6u_cluster_desc.yaml
+    export HF_HOME=/mnt/MLPerf/huggingface  # the H3 weight resolver searches $HF_HOME/hub, not HF_HUB_CACHE
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    export MINIMAX_H3_DRAM_PROBE=1  # per-owner DRAM attribution at each checkpoint, read at import
+    pytest --timeout 7200 -s models/tt_dit/tests/models/minimax_h3/test_mock_oom_minimax_h3.py
+  model: minimax-h3
+  skus:
+    wh_n150:
+      timeout: 130
+      tier: 3
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: unit
+
 # Phi-4-mini: disabled, asserting with 'assert freqs.shape[-1] == ext_factors.shape[-1]'
 # - name: Phi-4-mini unit tests
 #   cmd: |

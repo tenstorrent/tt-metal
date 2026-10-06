@@ -263,24 +263,25 @@ compile-only warms.
 `models/tt_dit/tests/models/minimax_h3/test_mock_oom_minimax_h3.py` turns the recipe into a test.
 It skips unless `TT_METAL_MOCK_CLUSTER_DESC_PATH` is set, so it never takes a galaxy; opens the
 Wormhole 4x8 preset with the ref2va gates' `l1_small_size=16384`; builds the ref2va pipeline with
-`warmup=False`; then calls the constructor's own `_warmup_on_init` with the compile-only warms
-disabled (`MINIMAX_H3_WARMUP_SKIP_DECODE_WARM=1`, prompt-encoder warm stubbed) and
-`MINIMAX_H3_WARMUP_SKIP_OOM_RUNGS=1`, so one walk binds every rung with serving's own warmup
-requests and reports the rungs that do not fit instead of raising on the first. The assert is
-`pipeline.unfittable_rungs == []`. Measured here: 5:11 with a warm kernel cache, 17 rungs bound,
-6.65 GB per device still allocated at the end of the walk.
+serving's constructor defaults and `warmup=False`; then calls the constructor's own `_warmup_on_init`
+with `MINIMAX_H3_WARMUP_SKIP_OOM_RUNGS=1`, so the ladder walk binds every rung with serving's own
+warmup requests and reports the rungs that do not fit instead of raising on the first, and the VAE,
+audio and prompt-encoder warms that follow compile every remaining program through the static
+circular-buffer check (the vocoder conv3d overflow of case 1 fires there). The assert is
+`pipeline.unfittable_rungs == []`; an L1 clash raises from the warm that hits it. Its first form
+stopped after the ladder walk (5:11 with a warm kernel cache, 17 rungs bound, 6.65 GB per device
+still allocated at the end of the walk); the full warmup costs the compile-only warms on top, about
+10 min warm and 55 min cold per the table above.
 
-The test matrix entry is `tests/pipeline_reorg/models_mock_device_tests.yaml`
-(`minimax-h3-ref2va-ladder-mock-wh-4x8`, `cpu_medium`, 100 min for a cold kernel cache). It points
-the descriptor at the checked-in `tt-cluster-descriptors` 6U yaml and sets `MINIMAX_H3_DRAM_PROBE=1`
-so a failure comes with the per-owner attribution. It runs through the existing CPU-only lane,
-`.github/workflows/fabric-cpu-only-tests-impl.yaml`, by passing `tests-yaml-path` to it the way
-`merge-gate.yaml` does for the fabric matrix; which trigger to hang it on (nightly or merge gate)
-is a scheduling decision this page does not make. Two requirements on the runner that the fabric
-lane does not have: the H3 weights (`MINIMAX_H3_MODEL_PATH` or the HuggingFace cache; the test
-skips without them) and, for a run measured in minutes rather than an hour, a populated
-`TT_DIT_CACHE_DIR` and kernel cache. A random-weights mode for the pipeline would lift the
-weights requirement and is the natural next step for a truly CPU-only lane.
+The test matrix entry is `tests/pipeline_reorg/models_unit_tests.yaml` ("Minimax H3 Ref2VA Memory
+Test", model `minimax-h3`, `wh_n150`, tier 3, 130 min for a cold kernel cache on a cloud VM). The
+mock ignores the runner's silicon, so the N150 is only a host with the `/mnt/MLPerf` weights mount;
+the entry points the descriptor at the checked-in `tt-cluster-descriptors` 6U yaml, sets
+`HF_HOME=/mnt/MLPerf/huggingface` because the weight resolver searches `$HF_HOME/hub` (CI exports
+`HF_HUB_CACHE` only), and sets `MINIMAX_H3_DRAM_PROBE=1` so a failure comes with the per-owner
+attribution. Without the weights the test skips. A random-weights mode for the pipeline would lift
+the weights requirement and let the test run on the CPU-only fabric lane
+(`.github/workflows/fabric-cpu-only-tests-impl.yaml`) instead.
 
 The first run of this test was itself a demonstration. It was written with the t2va meshes'
 `l1_small_size=65536`, and 23 s after the mesh opened the vision tower's windowed SDPA failed with
