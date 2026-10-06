@@ -876,8 +876,9 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWTinyTiles) {
     }
 }
 
-// Quasar-only: MxFp4 column-reduce (SUM) exercising the 2x-packed src-register format via GAPOOL.
-// Mirrors the LLK test_reduce_quasar_mxfp4_2x_gapool python test at the metal layer. Only the
+// Quasar-only: MxFp4 column-reduce (SUM) via GAPOOL. Meant to mirror the LLK
+// test_reduce_quasar_mxfp4_2x_gapool python test at the metal layer, but the 2x-packed src-register
+// format also needs an MxFp4 scaler, which this test's reader does not produce (see below). Only the
 // column (H) reduce is valid for MxFp4_2x: it issues GAPOOLs, the only op_mmul-family op (with
 // MVMUL/MVMULDI) that reads the 2x-packed SrcA correctly. Row/Scalar reduce commit per-face
 // results via ELWADDDI (not op_mmul), which reads MxFp4_2x SrcA as zero.
@@ -897,7 +898,9 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4X2) {
         .golden_function = ::unit_tests::compute::gold_reduce_h,
         .result_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
         .math_fidelity = MathFidelity::HiFi4,
-        // MxFp4 + column (H) reduce auto-selects the 2x-packed src-register format on Quasar.
+        // MxFp4 + column (H) reduce selects the 2x-packed src-register format on Quasar only when the
+        // scaler is MxFp4 too; the reader here generates a Float16_b scaler, so this runs the plain
+        // MxFp4 -> Float16_b path. Covering the 2x path needs a reader that writes an MxFp4 scaler tile.
         .input_format = tt::DataFormat::MxFp4,
     };
     run_single_core_reduce_program(this->device(), test_config);
