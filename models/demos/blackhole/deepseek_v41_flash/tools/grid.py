@@ -24,6 +24,11 @@ GROUPS = {
     "G1": ["gsm8k", "isl4k", "isl8k"],
     "G2a": ["isl32k"],
     "G2b": ["isl64k"],
+    "G0": [
+        "gsm8k"
+    ],  # dedicated short-prompt process: gsm8k as the only scenario (multi-scenario sessions inflate its decode ms/token)
+    "G1s2": ["gsm8k", "isl4k", "isl8k"],  # G1s<k>: B=4 only, spec k (k=3 asserts at B=4: T=5 drafter rows)
+    "G1s1": ["gsm8k", "isl4k", "isl8k"],
 }  # user limited ISL to 64k (128k and 256k groups dropped)
 EXTRA = [(128, "S128", ["gsm8k"])]  # B=128 spec k=1 attempt, separate process
 ISL = {
@@ -98,9 +103,11 @@ def scenarios(B, g):
 
 def env_for(B, g, spec=True):
     e = EXTRA_ENV
-    if (B == 128 and g != "G1") or (B == 64 and g.startswith("G2")):
+    if (B == 128 and g not in ("G1", "G0")) or (B == 64 and g.startswith("G2")):
         e += " DSV41_POOL_DTYPE=fp8"  # bf16 pool cannot hold 128 users at >= 32k (recorded in GRID.md)
     k = (1 if g == "S128" else SPEC_K[B]) if spec else 0
+    if g.startswith("G1s"):
+        k = int(g[3:])
     if g.startswith("G2"):
         e += " DSV41_BUILD_SLOTS=10"  # user: run the long-ISL cells fully in parallel (cap raised from 5)
         k = 0  # spec at >= 32k asserts 'spec verify needs the matmul indexer backend' (B=8/16/32 G2 first pass); plain re-run
@@ -111,9 +118,11 @@ def env_for(B, g, spec=True):
 
 def procs():
     out = []
-    order = {"G1": 0, "G2a": 1, "G2b": 2, "G3a": 3, "G3b": 4}
+    order = {"G1": 0, "G2a": 1, "G2b": 2, "G3a": 3, "G3b": 4, "G1s2": 5, "G1s1": 6, "G0": 7}
     for g in sorted(GROUPS, key=lambda x: order[x]):
         for B in BATCHES:
+            if g.startswith("G1s") and B != 4:
+                continue
             out.append((B, g))
     out.append((128, "S128"))
     return out  # G1 before G2 before G3; B=16 first inside each; the B=128 spec attempt last
@@ -318,8 +327,8 @@ def report():
                 status = "FAIL"
             if "spec_k" in c:
                 spec = None
-            elif B == 4:
-                spec = "FAIL: AssertionError mhc_mixes2.py:32 (T=5 drafter rows at U=1, k=3); grid_b4_G1_specfail.log"
+            elif B == 4 and not g.startswith("G1s"):
+                spec = "FAIL (k=3): AssertionError mhc_mixes2.py:32 (T=5 drafter rows at U=1, k=3); grid_b4_G1_specfail.log"
             elif B == 128 and g == "S128":
                 spec = "FAIL: k=1 attempt asserts (T=U*(1+k)=64 rows/mesh row > 32)"
             elif B == 128:
