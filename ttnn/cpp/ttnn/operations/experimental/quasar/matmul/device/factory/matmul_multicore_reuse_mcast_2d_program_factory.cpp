@@ -51,7 +51,7 @@ namespace reuse_mcast_optimized_helpers {
 // create_program_artifacts port (the Metal 2.0 builder in the anonymous namespace below replaces it).
 // [[maybe_unused]] suppresses -Wunused-function pending removal in a follow-up.
 [[maybe_unused]] static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
-    tt::tt_metal::distributed::MeshDevice& device,
+    const tt::tt_metal::distributed::MeshDevice& device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -1551,7 +1551,7 @@ namespace reuse_mcast_optimized_helpers {
 ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t>
 create_program_mcast_in0_in1(
     tt::tt_metal::Program& program,
-    tt::tt_metal::distributed::MeshDevice& device,
+    const tt::tt_metal::distributed::MeshDevice& device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -3286,7 +3286,7 @@ m2::KernelSpec make_compute_kernel(
 // ---------------------------------------------------------------------------------------------------
 ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
     const ttnn::Tensor& a,
-    tt_metal::distributed::MeshDevice& device,
+    const tt_metal::distributed::MeshDevice& device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -4848,7 +4848,7 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt_metal::distributed::MeshDevice* device = a.device();
+    const tt_metal::distributed::MeshDevice& device = a.mesh_tensor().device();
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
@@ -4891,7 +4891,7 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
         in1_tile.get_width());
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device.arch(), compute_kernel_config);
     ////////////////////////////////////////////////////////////////////////////
     //                      Matmul Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -4934,7 +4934,7 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
     ////////////////////////////////////////////////////////////////////////////
     CoreCoord sub_device_start_core = {0, 0};
     if (operation_attributes.sub_device_id.has_value()) {
-        auto sub_device_cores = device->worker_cores(
+        auto sub_device_cores = device.worker_cores(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());
         auto bbox = sub_device_cores.bounding_box();
         sub_device_start_core = bbox.start_coord;
@@ -4945,7 +4945,7 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
     ////////////////////////////////////////////////////////////////////////////
     return reuse_mcast_optimized_helpers::create_program_mcast_in0_in1(
         program,
-        *device,
+        device,
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode,
@@ -5069,7 +5069,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFacto
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt_metal::distributed::MeshDevice& device = in0_tensor.mutable_device();
+    const tt_metal::distributed::MeshDevice& device = in0_tensor.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device.arch(), compute_kernel_config);

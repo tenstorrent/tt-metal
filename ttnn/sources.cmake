@@ -29,6 +29,7 @@ set(TTNN_CORE_SRCS
     core/graph/graph_processor.cpp
     core/graph/graph_trace_utils.cpp
     core/graph/levelized_graph.cpp
+    core/prefetcher_pipe.cpp
     core/reports.cpp
     core/tensor/flatbuffer/tensor_file_layout.cpp
     core/tensor/flatbuffer/tensor_flatbuffer.cpp
@@ -226,6 +227,7 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/metal_v2_artifacts.hpp
     api/ttnn/operation.hpp
     api/ttnn/operation_concepts.hpp
+    api/ttnn/prefetcher_pipe.hpp
     api/ttnn/reports.hpp
     api/ttnn/tensor/host_buffer/functions.hpp
     api/ttnn/tensor/layout/alignment.hpp

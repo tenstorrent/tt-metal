@@ -80,8 +80,10 @@ set(SOURCES
     ops/binary_ops_fw_test.cpp
     ops/binary_ops_bw_test.cpp
     ops/mla_kv_assemble_op_test.cpp
+    ops/multi_head_test.cpp
     ops/variable_matmul_test.cpp
     utils/memory_utils_test.cpp
+    utils/training_utils_test.cpp
     ops/mla_q_rope_op_test.cpp
     ops/gumbel_sample_op_test.cpp
 )
@@ -175,6 +177,15 @@ target_link_libraries(
         TTNN::TTNN
 )
 tt_reuse_precompile_headers(moe_ffn_swiglu_benchmark ttml_pch)
+
+add_executable(swiglu_packed_benchmark benchmark/swiglu_packed_benchmark.cpp)
+target_link_libraries(
+    swiglu_packed_benchmark
+    PUBLIC
+        ttml
+        TTNN::TTNN
+)
+tt_reuse_precompile_headers(swiglu_packed_benchmark ttml_pch)
 ############################################################################################################################
 # Benchmark tests (using Google Benchmark)
 # Only available when building via tt-metal (Build from tt-train would require adding new dependency)
