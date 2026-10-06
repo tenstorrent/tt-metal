@@ -1,0 +1,3 @@
+# host  reason   (host = last octet or full address; lines starting with # are comments). Seeded from the DeepSeek-V4.1-Flash bring-up.
+31  wrong outputs in mesh rows 0-1 (silent data corruption: results from this host are invalid)
+42  hangs on the first command (first device op never returns); use only as a last resort and with hangwatch
