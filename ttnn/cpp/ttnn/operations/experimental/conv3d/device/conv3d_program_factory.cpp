@@ -186,10 +186,16 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     // Circular buffers are placed from the allocator's L1 base (the first byte above the kernel-config
     // ring buffer) up to the end of L1, which is the bound the program's static CB check uses. Same
     // expression the layernorm_distributed factories use.
+    // L1 buffers (sharded / L1-resident tensors) are allocated downward from the top of L1 and a program
+    // whose circular buffers reach into them fails at enqueue ("Statically allocated circular buffers ...
+    // clash with L1 buffers"). Keep a fixed headroom below the top for them: the vocoder's resblock conv
+    // clashed with a tensor 39 KB below the top once the prefetch was allowed to grow into that span.
+    constexpr uint32_t L1_TENSOR_HEADROOM = 128 * 1024;
     const auto* budget_device = input_tensor.device();
-    const uint32_t l1_usable_for_cbs = static_cast<uint32_t>(
+    const uint32_t l1_cb_span = static_cast<uint32_t>(
         budget_device->l1_size_per_core() -
         budget_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
+    const uint32_t l1_usable_for_cbs = l1_cb_span > L1_TENSOR_HEADROOM ? l1_cb_span - L1_TENSOR_HEADROOM : 0;
 
     // Wormhole's sub_h scaling multiplies vol2col_tiled and, with the fp32 operand split, the x_hi/x_lo
     // CBs by out_subblock_h. The H3 audio blockings were swept on Blackhole (sub_h = 1, 72 KB more L1),
