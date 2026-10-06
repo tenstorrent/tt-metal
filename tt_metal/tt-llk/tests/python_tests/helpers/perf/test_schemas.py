@@ -970,9 +970,10 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_eltwise_binary_sfpu_quasar": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "approx_mode",
+            "broadcast_type",
             "data_copy_type",
             "dest_acc",
             "dest_sync",

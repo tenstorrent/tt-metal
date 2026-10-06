@@ -234,6 +234,17 @@ def _run_sfpu_binary_llk_golden(
         golden_tensor, res_tensor, formats.output_format, max_ulp=max_ulp
     )
 
+    if broadcast_type != BroadcastType.None_ and mathop != MathOperation.SfpuElwmul:
+        # passed_test's isclose treats +0.0 and -0.0 as equal. The broadcast stimuli
+        # add a -0.0 bcast value to -0.0 data, which stays -0.0 only if the kernel
+        # kept the bcast value's sign, so check the sign of every zero result too.
+        # MUL is skipped: SFPMUL is a MAD with a +0.0 addend, so x * -0.0 + 0.0 is
+        # +0.0 on hardware (the plain binary MUL does the same).
+        zero = golden_tensor == 0
+        assert torch.equal(
+            torch.signbit(res_tensor[zero]), torch.signbit(golden_tensor[zero])
+        ), "binary_bcast lost the sign of a zero result"
+
     if post_check is not None:
         post_check(res_tensor)
 
@@ -505,34 +516,45 @@ _BCAST_OPS = [
     ("MUL", MathOperation.SfpuElwmul),
 ]
 _BCAST_TYPES = [BroadcastType.Column, BroadcastType.Row]
-# (0, 1, 1) writes the result over the bcast tile, so the ROW hoist and the per-band
-# COL bcast load must both land before that band's store.
-_BCAST_TILE_INDEX_VARIANTS = _TILE_INDEX_VARIANTS + [(0, 1, 1)]
+# (2, 3, 0): disjoint tiles at non-zero data / bcast bases. (0, 1, 1): the result
+# overwrites the bcast tile, so the ROW hoist and the per-band COL bcast load must
+# both land before that band's store. Two layouts keep the matrix at 72 cases.
+_BCAST_TILE_INDEX_VARIANTS = [(2, 3, 0), (0, 1, 1)]
 _BCAST_SPECIALS = [float("inf"), float("-inf"), float("nan")]
+# Spacing of the -0.0 cells along the bcast col / row and across the data tile
+_BCAST_NEG_ZERO_STRIDE = 4
 
 
-def _inject_ignored_bcast_specials(src_A, src1_idx, broadcast_type):
-    """Write +-Inf / NaN into the src1 tile everywhere the broadcast ignores
-    (tile cols 1..31 for COL, rows 1..31 for ROW; tile layout is four 16x16
-    faces). The golden broadcasts them away, so any leak into the result (e.g.
-    0 * Inf = NaN from an arithmetic column mask) fails the comparison."""
+def _inject_bcast_specials(src_A, src0_idx, src1_idx, broadcast_type):
+    """Edit the src1 tile (tile layout: four 16x16 faces) in two ways:
+    - +-Inf / NaN everywhere the broadcast ignores (tile cols 1..31 for COL,
+      rows 1..31 for ROW). The golden broadcasts them away, so any leak into the
+      result (e.g. 0 * Inf = NaN from an arithmetic column mask) fails.
+    - -0.0 in every _BCAST_NEG_ZERO_STRIDE-th retained cell (col 0 / row 0), and
+      in the src0 cells of every _BCAST_NEG_ZERO_STRIDE-th col (COL) / row (ROW),
+      so ADD meets -0.0 + -0.0 = -0.0 at their crossings. The driver's signbit
+      check catches a kernel that turns the broadcast -0.0 into +0.0."""
     flat = src_A.flatten().clone()
     base = src1_idx * MAX_TILE_ELEMENTS
+    data_base = src0_idx * MAX_TILE_ELEMENTS
     face_elems = 16 * 16
     for face in range(MAX_NUM_FACES):
         for r in range(16):
             for c in range(16):
                 tile_r = (face // 2) * 16 + r
                 tile_c = (face % 2) * 16 + c
-                ignored = (
-                    tile_c != 0
-                    if broadcast_type == BroadcastType.Column
-                    else tile_r != 0
-                )
+                is_col = broadcast_type == BroadcastType.Column
+                ignored = tile_c != 0 if is_col else tile_r != 0
+                offset = face * face_elems + r * 16 + c
+                if (tile_c if is_col else tile_r) % _BCAST_NEG_ZERO_STRIDE == 1:
+                    flat[data_base + offset] = -0.0
+                idx = base + offset
                 if ignored:
-                    flat[base + face * face_elems + r * 16 + c] = _BCAST_SPECIALS[
+                    flat[idx] = _BCAST_SPECIALS[
                         (tile_r + tile_c) % len(_BCAST_SPECIALS)
                     ]
+                elif (tile_r + tile_c) % _BCAST_NEG_ZERO_STRIDE == 1:
+                    flat[idx] = -0.0
     return flat.reshape(src_A.shape)
 
 
@@ -542,9 +564,6 @@ def _inject_ignored_bcast_specials(src_A, src1_idx, broadcast_type):
 )
 @pytest.mark.parametrize(
     "binary_op, mathop", _BCAST_OPS, ids=[op for op, _ in _BCAST_OPS]
-)
-@pytest.mark.parametrize(
-    "ignored_specials", [False, True], ids=["finite", "ignored_inf_nan"]
 )
 @parametrize(
     formats_dest_acc=_get_valid_float_formats_dest_acc(),
@@ -558,23 +577,21 @@ def test_eltwise_binary_sfpu_bcast_quasar(
     binary_op,
     mathop,
     broadcast_type,
-    ignored_specials,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU float ADD / SUB / MUL with src1 column or row broadcast.
-    ``ignored_specials`` fills the src1 cells the broadcast ignores with Inf/NaN."""
+    """Binary SFPU float ADD / SUB / MUL with src1 column or row broadcast. The
+    src1 cells the broadcast ignores hold Inf/NaN, and some retained ones -0.0."""
     format_variant = formats_dest_acc
 
     def prepare_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop):
         src_A, tile_cnt_A, src_B = _prepare_float_stimuli(
             formats, input_dimensions, src0_idx, src1_idx, mathop
         )
-        if ignored_specials:
-            src_A = _inject_ignored_bcast_specials(src_A, src1_idx, broadcast_type)
+        src_A = _inject_bcast_specials(src_A, src0_idx, src1_idx, broadcast_type)
         return src_A, tile_cnt_A, src_B
 
     _run_sfpu_binary_llk_golden(
