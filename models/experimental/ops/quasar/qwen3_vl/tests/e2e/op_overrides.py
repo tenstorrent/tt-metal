@@ -313,8 +313,24 @@ FALLBACKS = {
     ]
 }
 
-# target -> "<test id> @ <arch> <commit>", filled in from test_fallbacks.py runs against the real op on WH/BH.
-CERTIFIED: dict = {}
+# target -> where it matched the real op (PCC >= 0.999 on every captured case, bf16, HiFi4, bf16 dest acc).
+CERTIFIED: dict = {
+    "ttnn.linear": "test_fallbacks.py[test_linear-*] (12 cases) @ ttsim WH af544975e4d",
+    "ttnn.rms_norm": "test_fallbacks.py[test_rms_norm-*] (8 cases) @ ttsim WH af544975e4d",
+    "ttnn.layer_norm": "test_fallbacks.py[test_layer_norm-*] (3 cases) @ ttsim WH af544975e4d",
+    "ttnn.add": "test_fallbacks.py[test_add-*] (9 cases) @ ttsim WH af544975e4d",
+    "ttnn.multiply": "test_fallbacks.py[test_multiply-*] (3 cases) @ ttsim WH af544975e4d",
+    "ttnn.transformer.scaled_dot_product_attention": "test_fallbacks.py[test_scaled_dot_product_attention-*] (2 cases) @ ttsim WH af544975e4d",
+    "ttnn.transformer.paged_scaled_dot_product_attention_decode": "test_fallbacks.py[test_paged_scaled_dot_product_attention_decode-*] (1 cases) @ ttsim WH af544975e4d",
+    "ttnn.experimental.minimal_matmul": "test_fallbacks.py[test_minimal_matmul-*] (2 cases) @ ttsim WH af544975e4d",
+    "ttnn.experimental.nlp_create_qkv_heads": "test_fallbacks.py[test_nlp_create_qkv_heads-*] (2 cases) @ ttsim WH af544975e4d",
+    "ttnn.experimental.nlp_create_qkv_heads_decode": "test_fallbacks.py[test_nlp_create_qkv_heads_decode-*] (1 cases) @ ttsim WH af544975e4d",
+    "ttnn.experimental.nlp_concat_heads": "test_fallbacks.py[test_nlp_concat_heads-*] (2 cases) @ ttsim WH af544975e4d",
+    "ttnn.experimental.nlp_concat_heads_decode": "test_fallbacks.py[test_nlp_concat_heads_decode-*] (1 cases) @ ttsim WH af544975e4d",
+    "ttnn.experimental.rotary_embedding_llama": "test_fallbacks.py[test_rotary_embedding_llama-*] (5 cases) @ ttsim WH af544975e4d",
+    "ttnn.experimental.paged_update_cache": "test_fallbacks.py[test_paged_update_cache-*] (1 cases) @ ttsim WH af544975e4d",
+    "ttnn.experimental.paged_fill_cache": "test_fallbacks.py[test_paged_fill_cache-*] (1 cases) @ ttsim WH af544975e4d",
+}
 
 
 def _short(target):

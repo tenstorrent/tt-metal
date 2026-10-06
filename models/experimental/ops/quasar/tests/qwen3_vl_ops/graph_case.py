@@ -1176,15 +1176,10 @@ def _aliased_arg(name, spec, case, args):
     return args[0] if case["args"][0] == spec else None
 
 
-def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
-    """Materialize one captured call, run it, and check the result.
-
-    ``op`` is the callable (``ttnn.linear``, or a small lambda for operators like
-    ``Tensor.__getitem__``); ``case`` is one entry of a generated ``CASES`` list.
-    """
+def build_inputs_for_case(case, mesh_device, *, op_name=None):
+    """Materialize one captured call's inputs: (device args, device kwargs, torch inputs keyed by arg position/name)."""
     op_name = op_name or case["op"]
     torch_inputs: dict[str, torch.Tensor] = {}
-
     args = [_build_value(spec, mesh_device, case, op_name, str(i), torch_inputs) for i, spec in enumerate(case["args"])]
     kwargs = {}
     for name, spec in case["kwargs"].items():
@@ -1192,6 +1187,17 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
         kwargs[name] = (
             alias if alias is not None else _build_value(spec, mesh_device, case, op_name, name, torch_inputs)
         )
+    return args, kwargs, torch_inputs
+
+
+def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
+    """Materialize one captured call, run it, and check the result.
+
+    ``op`` is the callable (``ttnn.linear``, or a small lambda for operators like
+    ``Tensor.__getitem__``); ``case`` is one entry of a generated ``CASES`` list.
+    """
+    op_name = op_name or case["op"]
+    args, kwargs, torch_inputs = build_inputs_for_case(case, mesh_device, op_name=op_name)
 
     out = op(*args, **kwargs)
 
