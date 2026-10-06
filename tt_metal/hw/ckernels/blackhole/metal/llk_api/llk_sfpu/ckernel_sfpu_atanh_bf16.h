@@ -49,5 +49,10 @@ template <int ITERATIONS = 8>
 inline void calculate_atanh_bf16() {
     ckernel::sfpu::bf16::calculate_rational_parity<ckernel::sfpu::AtanhBf16Config, ITERATIONS>();
 }
+inline void init_atanh_bf16() {
+    if (bf16_dest_atanh()) {
+        ckernel::sfpu::bf16::init_rational_parity<ckernel::sfpu::AtanhBf16Config>();
+    }
+}
 
 }  // namespace ckernel::sfpu

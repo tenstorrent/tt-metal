@@ -1512,6 +1512,37 @@ _BF16_STOCK_SPECIALS = {
 }
 
 
+# Ops whose BF16 setup runs from an init their stock instances share.
+_BF16_SETUP_OPS = [
+    MathOperation.Atanh,
+]
+# Every instance of those ops on BF16 and FP32 data, approximate and accurate, either DEST.
+# The setup runs after the shared init, so an instance the BF16 kernel does not replace must
+# still pass the nightly sweep's own check.
+_BF16_SETUP_PARAMS = _sweep_params(
+    [
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+    ],
+    _BF16_SETUP_OPS,
+    [ApproximationMode.No, ApproximationMode.Yes],
+    STANDARD_DIMENSIONS,
+)
+
+
+@pytest.mark.parametrize(
+    ",".join(_UNARY_SWEEP_ARGNAMES),
+    _BF16_SETUP_PARAMS,
+    ids=[build_param_id(_UNARY_SWEEP_ARGNAMES, p) for p in _BF16_SETUP_PARAMS],
+)
+def test_eltwise_unary_sfpu_bf16_setup_keeps_stock(
+    formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions
+):
+    test_eltwise_unary_sfpu(
+        formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions
+    )
+
+
 def _special_class(value):
     sign = "neg" if struct.unpack("<I", struct.pack("<f", value))[0] >> 31 else "pos"
     kind = (
@@ -1537,11 +1568,15 @@ def test_eltwise_unary_sfpu_bf16_exhaustive(mathop, approx_mode, max_ulp):
         input_dimensions_B=dimensions,
         spec_A=sweep_spec(),
     )
-    # The sweep pads with +0 and drops -0. The specials go in that padding, under the
-    # edge sweep's gates for what the golden defines and the pipeline delivers.
+    # The sweep pads with +0. The specials go in that padding, under the edge sweep's
+    # gates for what the golden defines and the pipeline delivers.
     specials = [0.0]
     if negative_zero_delivered(formats.input_format, dest_acc):
         specials.append(-0.0)
+    else:
+        # The kernel reads an undelivered -0 as +0, so the golden must too: rsqrt(-0)
+        # is -inf, which the +0 the pipeline delivers can never return.
+        src_A[(src_A == 0) & torch.signbit(src_A.float())] = 0.0
     nonfinite = mathop in SPECIALS_READY_OPS and specials_safe(
         formats.input_format, formats.output_format, dest_acc
     )

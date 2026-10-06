@@ -1209,12 +1209,17 @@ void init_inverse_hyperbolic() {
     log1p_init<APPROXIMATION_MODE, false, is_fp32_dest_acc_en>();
 }
 
+void init_atanh_bf16();
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void init_atanh() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // atanh routes through calculate_log1p_fp32; the reciprocal it uses is the
     // self-contained _sfpu_reciprocal_gt0_, so log1p owns the program registers.
     log1p_init<APPROXIMATION_MODE, false, is_fp32_dest_acc_en>();
+    if constexpr (!is_fp32_dest_acc_en) {
+        init_atanh_bf16();
+    }
 }
 
 }  // namespace ckernel::sfpu
