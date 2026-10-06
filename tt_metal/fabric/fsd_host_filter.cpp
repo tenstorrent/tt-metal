@@ -209,20 +209,18 @@ void align_factory_descriptor_with_live(
 
 void throw_on_fsd_chips_absent_from_live(
     const ::tt::tt_metal::PhysicalSystemDescriptor& fsd, const ::tt::tt_metal::PhysicalSystemDescriptor& live) {
-    const auto fsd_index = ::tt::tt_metal::build_physical_node_id_index(fsd);
-    const auto live_index = ::tt::tt_metal::build_physical_node_id_index(live);
-
     std::set<std::string> live_hosts;
     for (const auto& hostname : live.get_all_hostnames()) {
         live_hosts.insert(::tt::tt_metal::canonical_cluster_id_for_node_id(hostname));
     }
 
     std::vector<std::string> absent;
-    for (const auto& [node_id, asic_id] : fsd_index.node_id_to_asic_id) {
+    for (const auto& [node_id, unused_asic_id] : fsd.physical_node_to_asic_id()) {
+        (void)unused_asic_id;
         if (!live_hosts.contains(std::string(::tt::tt_metal::cluster_id_view(node_id)))) {
             continue;  // discovery never looked at this host -- see the header
         }
-        if (!live_index.node_id_to_asic_id.contains(node_id)) {
+        if (!live.physical_node_to_asic_id().contains(node_id)) {
             absent.push_back(fmt::format("{}", node_id));
         }
     }

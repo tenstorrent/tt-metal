@@ -17,6 +17,8 @@
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/physical_node_id.hpp>
+#include <tt_stl/strong_type.hpp>
 #include <umd/device/utils/semver.hpp>
 
 namespace YAML {
@@ -56,6 +58,7 @@ struct ASICDescriptor {
     AsicID unique_id;
     ChipId umd_unique_id;
     std::string host_name;
+    PhysicalNodeId physical_node_id;
 };
 
 // Specify an ethernet connection between two ASICs
@@ -176,6 +179,10 @@ public:
     void clear();
     void merge(PhysicalSystemDescriptor&& other);
 
+    // Records one ASIC under its address. Recording the same AsicID again replaces that chip.
+    // Fatal when a different ASIC already occupies the address: the two would be one solver node.
+    void add_asic_descriptor(AsicID asic_id, ASICDescriptor descriptor);
+
     // Discovery setter interface - allows discovery functions to set internal state
     // without requiring friend declarations with MPI types in public header
     void set_discovery_data(const std::string& local_hostname, uint32_t local_rank, bool all_hostnames_unique);
@@ -193,6 +200,12 @@ public:
     std::vector<AsicID> get_asics_connected_to_host(const std::string& hostname) const;
     std::pair<AsicID, uint8_t> get_connected_asic_and_channel(AsicID asic_id, uint8_t chan_id) const;
     AsicID get_asic_id(const std::string& hostname, TrayID tray_id, ASICLocation asic_location) const;
+    // The descriptor's own label for an address, and the reverse. find_* is empty when this
+    // descriptor does not have that chip; get_* is fatal in that case.
+    std::optional<AsicID> find_asic_id(const PhysicalNodeId& node_id) const;
+    AsicID get_asic_id(const PhysicalNodeId& node_id) const;
+    std::optional<PhysicalNodeId> find_physical_node_id(AsicID asic_id) const;
+    const std::unordered_map<PhysicalNodeId, AsicID>& physical_node_to_asic_id() const { return node_id_to_asic_id_; }
 
     // Host Topology Query APIs
     std::vector<std::string> get_host_neighbors(const std::string& hostname) const;
@@ -200,6 +213,7 @@ public:
         const std::string& src_host, const std::string& dst_host) const;
     const HostTopology& get_host_topology() const;
     std::string get_host_name_for_asic(AsicID asic_id) const;
+    PhysicalNodeId get_physical_node_id(AsicID asic_id) const;
     UID get_u_id(const std::string& hostname);
     RackID get_rack_id(const std::string& hostname);
     AisleID get_aisle_id(const std::string& hostname);
@@ -258,6 +272,8 @@ private:
     tt::TargetDevice target_device_type_;
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<AsicID, ASICDescriptor> asic_descriptors_;
+    // Address -> this descriptor's ASIC label. Filled by add_asic_descriptor.
+    std::unordered_map<PhysicalNodeId, AsicID> node_id_to_asic_id_;
     std::unordered_map<std::string, std::string> host_to_mobo_name_;
     std::unordered_map<std::string, uint32_t> host_to_rank_;
     ExitNodeConnectionTable exit_node_connection_table_;

@@ -187,10 +187,31 @@ TEST(FsdHostFilter, AllAbsentHostsAreReportedTogether) {
 }
 
 // Two live hosts under one canonical name make the address join ambiguous, which would attach one
-// machine's cables to the other.
+// machine's cables to the other. Built directly rather than through an FSD so each host sits on its
+// own tray: with the chips at distinct addresses the descriptor's shared-address guard stays quiet
+// and the ambiguity has to reach the filter's own distinctness check.
 TEST(FsdHostFilter, LiveHostsThatCanonicalizeAlikeAreRejected) {
     const FsdFile file(make_fsd({"hosta"}), "fhf_ambiguous_live.textproto");
-    const auto live = descriptor_for({"hosta.dc1.example.com", "hosta.dc2.example.com"});
+
+    PhysicalSystemDescriptor live(tt::TargetDevice::Silicon);
+    auto& graph = live.get_system_graph().asic_connectivity_graph;
+    uint64_t label = 1;
+    for (const std::string host : {"hosta.dc1.example.com", "hosta.dc2.example.com"}) {
+        const AsicID id{label};
+        const TrayID tray{static_cast<uint16_t>(label)};
+        live.add_asic_descriptor(
+            id,
+            ASICDescriptor{
+                tray,
+                ASICLocation{0},
+                BoardType::UNKNOWN,
+                id,
+                static_cast<ChipId>(label),
+                host,
+                make_physical_node_id(host, tray, ASICLocation{0})});
+        graph[host][id];
+        ++label;
+    }
 
     try {
         fsd_host_filter_from_live(file.path(), live);

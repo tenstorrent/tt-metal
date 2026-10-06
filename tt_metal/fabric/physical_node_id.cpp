@@ -11,7 +11,6 @@
 #include <string>
 #include <string_view>
 
-#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal {
@@ -98,31 +97,6 @@ PhysicalNodeId make_physical_node_id(std::string_view cluster_id, TrayID tray, A
     id.tray = tray;
     id.loc = loc;
     return id;
-}
-
-PhysicalNodeId node_id_from_asic_descriptor(const ASICDescriptor& descriptor) {
-    return make_physical_node_id(descriptor.host_name, descriptor.tray_id, descriptor.asic_location);
-}
-
-PhysicalNodeIdIndex build_physical_node_id_index(const PhysicalSystemDescriptor& descriptor) {
-    PhysicalNodeIdIndex index;
-    const auto& asic_descriptors = descriptor.get_asic_descriptors();
-    index.node_id_to_asic_id.reserve(asic_descriptors.size());
-    index.asic_id_to_node_id.reserve(asic_descriptors.size());
-
-    for (const auto& [asic_id, asic_descriptor] : asic_descriptors) {
-        const PhysicalNodeId node_id = node_id_from_asic_descriptor(asic_descriptor);
-        const auto [it, inserted] = index.node_id_to_asic_id.emplace(node_id, asic_id);
-        TT_FATAL(
-            inserted,
-            "Two ASICs in the physical system descriptor share the address {}: ids {} and {}. An address names one "
-            "chip, so this would merge them into a single topology node.",
-            node_id,
-            it->second,
-            asic_id);
-        index.asic_id_to_node_id.emplace(asic_id, node_id);
-    }
-    return index;
 }
 
 PhysicalNodeFields decode_physical_node_id(const PhysicalNodeId& id) {

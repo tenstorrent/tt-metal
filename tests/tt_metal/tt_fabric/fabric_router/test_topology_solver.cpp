@@ -328,9 +328,8 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
     // The graph is keyed on addresses, so name the four ASICs by asking the descriptor for theirs
     // rather than by their labels in the file. That is the whole point of the indirection: the labels
     // here happen to be 100..103, and nothing downstream may depend on that.
-    const auto node_index = tt::tt_metal::build_physical_node_id_index(physical_system_descriptor);
     auto node = [&](std::uint64_t asic_label) {
-        return node_index.asic_id_to_node_id.at(tt::tt_metal::AsicID{asic_label});
+        return physical_system_descriptor.get_physical_node_id(tt::tt_metal::AsicID{asic_label});
     };
 
     // Hand-craft the physical_node_id_to_mesh_rank mapping

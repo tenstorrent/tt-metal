@@ -436,18 +436,16 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
     // labels. Two descriptors of the same system -- one built from a factory system descriptor, one
     // discovered -- label their ASICs differently but agree here, which is what makes the solver erase
     // both to the same dense indices and pick the same placement.
-    const auto node_index = tt::tt_metal::build_physical_node_id_index(physical_system_descriptor);
-
     // Isolated ASICs (no eth links) must still appear so 1x1 / single-chip systems can be seated.
     for (const auto& [asic_id, unused_desc] : physical_system_descriptor.get_asic_descriptors()) {
         (void)unused_desc;
-        flat_adj[node_index.asic_id_to_node_id.at(asic_id)];
+        flat_adj[physical_system_descriptor.get_physical_node_id(asic_id)];
     }
 
     // Go through all connections in the physical system descriptor
     for (const auto& host_name : physical_system_descriptor.get_all_hostnames()) {
         for (const auto& [src_asic_id, asic_connections] : physical_system_descriptor.get_asic_topology(host_name)) {
-            const auto& src_node_id = node_index.asic_id_to_node_id.at(src_asic_id);
+            const auto& src_node_id = physical_system_descriptor.get_physical_node_id(src_asic_id);
             for (const auto& asic_connection : asic_connections) {
                 auto dst_asic_id = asic_connection.first;
 
@@ -455,7 +453,7 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
                 if (src_asic_id == dst_asic_id) {
                     continue;
                 }
-                const auto& dst_node_id = node_index.asic_id_to_node_id.at(dst_asic_id);
+                const auto& dst_node_id = physical_system_descriptor.get_physical_node_id(dst_asic_id);
 
                 const auto& eth_connections = asic_connection.second;
                 // Add each neighbor multiple times based on number of ethernet connections (channels)
@@ -1475,7 +1473,7 @@ void MultiMeshSolutionEnumerator::fill_host_and_asic_positions_from_psd() {
     }
     for (const auto& [asic_id, desc] : physical_system_descriptor_->get_asic_descriptors()) {
         // Keyed by address, matching the physical graph the solver is handed.
-        const auto node_id = tt::tt_metal::node_id_from_asic_descriptor(desc);
+        const auto node_id = desc.physical_node_id;
         if (fill_hosts) {
             config_.hostname_to_asics[desc.host_name].insert(node_id);
         }

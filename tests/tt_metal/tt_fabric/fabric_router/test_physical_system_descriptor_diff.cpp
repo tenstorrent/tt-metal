@@ -50,8 +50,16 @@ PhysicalSystemDescriptor make_descriptor(
 
     for (const auto& asic : asics) {
         const AsicID id{asic.label};
-        descriptor.get_asic_descriptors()[id] = ASICDescriptor{
-            TrayID{asic.tray}, ASICLocation{asic.loc}, asic.board, id, static_cast<ChipId>(asic.label), asic.host};
+        descriptor.add_asic_descriptor(
+            id,
+            ASICDescriptor{
+                TrayID{asic.tray},
+                ASICLocation{asic.loc},
+                asic.board,
+                id,
+                static_cast<ChipId>(asic.label),
+                asic.host,
+                make_physical_node_id(asic.host, TrayID{asic.tray}, ASICLocation{asic.loc})});
         graph[asic.host][id];  // an ASIC with no cables still exists
     }
 
@@ -354,18 +362,15 @@ TEST(PhysicalSystemDescriptorDiff, MissingAsicTakesItsCablesWithIt) {
     EXPECT_TRUE(delta.extra_links.empty());
 }
 
-// The positional join needs each address to name one chip. Two chips at one address would make the
-// join ambiguous, so it is refused rather than silently resolved.
+// The positional join needs each address to name one chip. Two chips at one address would merge
+// into a single topology node, so the descriptor refuses the second insertion outright -- the
+// ambiguity can no longer exist by the time a diff runs.
 TEST(PhysicalSystemDescriptorDiff, DuplicateAddressIsFatal) {
-    const auto duplicate = make_descriptor(
+    EXPECT_ANY_THROW(make_descriptor(
         {
             AsicSpec{"host-a", 1, 0, 1}, AsicSpec{"host-a", 1, 0, 2},  // same address, different label
         },
-        {});
-    const auto clean = make_descriptor({AsicSpec{"host-a", 1, 0, 1}}, {});
-
-    EXPECT_ANY_THROW(diff_physical_system_descriptors(duplicate, clean));
-    EXPECT_ANY_THROW(diff_physical_system_descriptors(clean, duplicate));
+        {}));
 }
 
 }  // namespace

@@ -333,9 +333,8 @@ TEST(PhysicalDescriptorBuilder, IntegrationHostFilterRestrictsToSubset) {
 //
 // The builder still labels ASICs 1..N in file order, because the PSD keys its descriptors by a
 // uint64 AsicID and the packed address does not fit in one. What these tests pin down is that those
-// labels are no longer identity: every consumer that reaches a descriptor through
-// node_id_from_asic_descriptor sees the position-derived address instead, so an FSD-built graph and
-// a live-discovered one describe the same nodes.
+// labels are no longer identity: the address on each chip is ASICDescriptor::physical_node_id,
+// so an FSD-built graph and a live-discovered one describe the same nodes.
 
 // The three ASICs make_two_host_fsd() wires up, as addresses rather than file-order labels.
 std::map<PhysicalNodeId, std::pair<std::string, uint32_t>> two_host_expected_node_ids() {
@@ -364,7 +363,7 @@ TEST(PhysicalDescriptorBuilder, DescriptorsCarryPositionAddressesNotFileOrderLab
     // FSD spells its hosts "hostA"/"hostB" and the ids carry "hosta"/"hostb".
     std::map<PhysicalNodeId, std::pair<std::string, uint32_t>> actual;
     for (const auto& [_, desc] : asics) {
-        const PhysicalNodeId node_id = node_id_from_asic_descriptor(desc);
+        const PhysicalNodeId node_id = desc.physical_node_id;
         const auto fields = decode_physical_node_id(node_id);
         EXPECT_EQ(fields.cluster_id, canonical_cluster_id_for_node_id(desc.host_name));
         EXPECT_EQ(fields.tray, desc.tray_id);
@@ -407,7 +406,7 @@ TEST(PhysicalDescriptorBuilder, FsdAndLiveIdSpacesAgreeOnPhysicalNodeIds) {
             ASICDescriptor live = desc;
             live.unique_id = live_id;  // discovery's key is the UMD chip id, not a file-order label
             live_descs.emplace(live_id, live);
-            node_id_to_live_id[node_id_from_asic_descriptor(desc)] = live_id;
+            node_id_to_live_id[desc.physical_node_id] = live_id;
         }
     }
     ASSERT_EQ(live_descs.size(), fsd_descs.size());
@@ -430,9 +429,9 @@ TEST(PhysicalDescriptorBuilder, FsdAndLiveIdSpacesAgreeOnPhysicalNodeIds) {
     auto adjacency_by_node_id = [](const std::unordered_map<AsicID, ASICDescriptor>& descs, const auto& neighbors_of) {
         std::map<PhysicalNodeId, std::vector<PhysicalNodeId>> adjacency;
         for (const auto& [asic_id, desc] : descs) {
-            auto& neighbors = adjacency[node_id_from_asic_descriptor(desc)];
+            auto& neighbors = adjacency[desc.physical_node_id];
             for (const AsicID neighbor : neighbors_of(asic_id)) {
-                neighbors.push_back(node_id_from_asic_descriptor(descs.at(neighbor)));
+                neighbors.push_back(descs.at(neighbor).physical_node_id);
             }
             std::sort(neighbors.begin(), neighbors.end());
         }
@@ -446,7 +445,7 @@ TEST(PhysicalDescriptorBuilder, FsdAndLiveIdSpacesAgreeOnPhysicalNodeIds) {
         const auto& desc = live_descs.at(live_id);
         const AsicID fsd_id = psd.get_asic_id(desc.host_name, desc.tray_id, desc.asic_location);
         for (const AsicID fsd_neighbor : psd.get_asic_neighbors(fsd_id)) {
-            neighbors.push_back(node_id_to_live_id.at(node_id_from_asic_descriptor(fsd_descs.at(fsd_neighbor))));
+            neighbors.push_back(node_id_to_live_id.at(fsd_descs.at(fsd_neighbor).physical_node_id));
         }
         return neighbors;
     });
@@ -467,7 +466,7 @@ TEST(PhysicalDescriptorBuilder, IntegrationQuietboxNodeIdsAreUniqueAndDecodeBack
 
     std::set<PhysicalNodeId> node_ids;
     for (const auto& [_, desc] : asics) {
-        const PhysicalNodeId node_id = node_id_from_asic_descriptor(desc);
+        const PhysicalNodeId node_id = desc.physical_node_id;
         EXPECT_TRUE(node_ids.insert(node_id).second) << "two ASICs packed to " << node_id;
 
         const auto fields = decode_physical_node_id(node_id);

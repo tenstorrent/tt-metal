@@ -263,11 +263,6 @@ private:
     std::unordered_set<EndpointKey, EndpointKey::Hash> fsd_expected_;
     std::unordered_set<EndpointKey, EndpointKey::Hash> live_present_;
 
-    // Address-to-label translation for each side, kept so a query can accept either descriptor's
-    // ASIC labels.
-    tt::tt_metal::PhysicalNodeIdIndex expected_ids_;
-    tt::tt_metal::PhysicalNodeIdIndex live_ids_;
-
     // All of these point into downed_, so every one is rebuilt whenever that vector changes. The
     // unused set is deliberately not indexed: it is reachable only as a whole, through
     // get_unused_downed_links().

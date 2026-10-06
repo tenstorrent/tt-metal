@@ -3329,13 +3329,12 @@ namespace utils = tt::tt_metal::experimental::tt_fabric;
 // what keeps the expectations readable. Translate back through the descriptor to keep them that way.
 std::vector<std::set<uint64_t>> footprints_of(
     const AssignedMeshes& placements, const tt::tt_metal::PhysicalSystemDescriptor& psd) {
-    const auto node_index = tt::tt_metal::build_physical_node_id_index(psd);
     std::vector<std::set<uint64_t>> footprints;
     footprints.reserve(placements.size());
     for (const auto& placed : placements) {
         std::set<uint64_t> asics;
         for (const auto& asic : placed.placement.asics) {
-            asics.insert(*node_index.node_id_to_asic_id.at(asic));
+            asics.insert(*psd.get_asic_id(asic));
         }
         footprints.push_back(std::move(asics));
     }
@@ -3344,10 +3343,9 @@ std::vector<std::set<uint64_t>> footprints_of(
 
 std::vector<std::set<uint64_t>> mapped_footprints(
     const utils::TopologyMappingResult& mapping, const tt::tt_metal::PhysicalSystemDescriptor& psd) {
-    const auto node_index = tt::tt_metal::build_physical_node_id_index(psd);
     std::map<MeshId, std::set<uint64_t>> per_mesh;
     for (const auto& [fabric_node, asic] : mapping.fabric_node_to_physical) {
-        per_mesh[fabric_node.mesh_id].insert(*node_index.node_id_to_asic_id.at(asic));
+        per_mesh[fabric_node.mesh_id].insert(*psd.get_asic_id(asic));
     }
     std::vector<std::set<uint64_t>> footprints;
     footprints.reserve(per_mesh.size());
@@ -3592,9 +3590,7 @@ std::map<std::pair<uint32_t, uint32_t>, tt::tt_metal::PhysicalNodeId> asic_by_sl
     const tt::tt_metal::PhysicalSystemDescriptor& psd) {
     std::map<std::pair<uint32_t, uint32_t>, tt::tt_metal::PhysicalNodeId> asic_at_slot;
     for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
-        asic_at_slot.emplace(
-            std::pair{*descriptor.tray_id, *descriptor.asic_location},
-            tt::tt_metal::node_id_from_asic_descriptor(descriptor));
+        asic_at_slot.emplace(std::pair{*descriptor.tray_id, *descriptor.asic_location}, descriptor.physical_node_id);
     }
     return asic_at_slot;
 }
@@ -3626,7 +3622,7 @@ utils::TopologyMappingResult map_placement_with_declared_ranks(
     const std::vector<std::vector<LogicalChipId>>& declared_ranks) {
     utils::TopologyMappingConfig config;
     for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
-        config.hostname_to_asics[descriptor.host_name].insert(tt::tt_metal::node_id_from_asic_descriptor(descriptor));
+        config.hostname_to_asics[descriptor.host_name].insert(descriptor.physical_node_id);
     }
     std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
@@ -4383,8 +4379,7 @@ TEST(PhysicalGroupingDescriptorTestsHostSplit, AlignedSplitOnASymmetricTorusComm
     }
     utils::TopologyMappingConfig phase2_config;
     for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
-        phase2_config.hostname_to_asics[descriptor.host_name].insert(
-            tt::tt_metal::node_id_from_asic_descriptor(descriptor));
+        phase2_config.hostname_to_asics[descriptor.host_name].insert(descriptor.physical_node_id);
     }
     std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_ranks;
     for (std::size_t rank = 0; rank < ranks.size(); ++rank) {

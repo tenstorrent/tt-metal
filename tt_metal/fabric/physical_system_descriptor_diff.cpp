@@ -66,24 +66,24 @@ struct CableFacts {
 
 using CableMap = std::unordered_map<CableKey, CableFacts, CableKeyHash>;
 
-CableMap collect_cables(const PhysicalSystemDescriptor& descriptor, const PhysicalNodeIdIndex& index) {
+CableMap collect_cables(const PhysicalSystemDescriptor& descriptor) {
     CableMap cables;
     for (const auto& [host_name, asic_topology] : descriptor.get_system_graph().asic_connectivity_graph) {
         for (const auto& [src_asic, edges] : asic_topology) {
-            const auto src_node = index.asic_id_to_node_id.find(src_asic);
-            if (src_node == index.asic_id_to_node_id.end()) {
+            const auto src_node = descriptor.find_physical_node_id(src_asic);
+            if (!src_node.has_value()) {
                 // An edge naming an ASIC the descriptor never described. Nothing positional to
                 // compare it against, so leave it out rather than invent an address for it.
                 continue;
             }
             for (const auto& [dst_asic, eth_connections] : edges) {
-                const auto dst_node = index.asic_id_to_node_id.find(dst_asic);
-                if (dst_node == index.asic_id_to_node_id.end()) {
+                const auto dst_node = descriptor.find_physical_node_id(dst_asic);
+                if (!dst_node.has_value()) {
                     continue;
                 }
                 for (const auto& eth_connection : eth_connections) {
-                    const CableEnd src_end{src_node->second, eth_connection.src_chan};
-                    const CableEnd dst_end{dst_node->second, eth_connection.dst_chan};
+                    const CableEnd src_end{*src_node, eth_connection.src_chan};
+                    const CableEnd dst_end{*dst_node, eth_connection.dst_chan};
                     // First writer wins: the mirrored record carries the same attributes, and
                     // whichever direction we keep can reconstruct both.
                     cables.emplace(
@@ -147,33 +147,29 @@ void sort_links(AsicTopology& topology) {
 
 PhysicalSystemDelta diff_physical_system_descriptors(
     const PhysicalSystemDescriptor& golden, const PhysicalSystemDescriptor& candidate) {
-    // Fatal on a duplicate address, which is what makes the positional join well defined.
-    const auto golden_index = build_physical_node_id_index(golden);
-    const auto candidate_index = build_physical_node_id_index(candidate);
-
     PhysicalSystemDelta delta;
 
-    for (const auto& [node_id, golden_asic] : golden_index.node_id_to_asic_id) {
-        const auto candidate_asic = candidate_index.node_id_to_asic_id.find(node_id);
-        if (candidate_asic == candidate_index.node_id_to_asic_id.end()) {
+    for (const auto& [node_id, golden_asic] : golden.physical_node_to_asic_id()) {
+        const auto candidate_asic = candidate.find_asic_id(node_id);
+        if (!candidate_asic.has_value()) {
             delta.missing_asics.push_back(golden_asic);
             continue;
         }
         // Same chip, described differently. Tray and location cannot differ here -- they are part
         // of the address, so a chip that moved reads as one address missing and another extra.
         if (golden.get_asic_descriptors().at(golden_asic).board_type !=
-            candidate.get_asic_descriptors().at(candidate_asic->second).board_type) {
+            candidate.get_asic_descriptors().at(*candidate_asic).board_type) {
             delta.mismatched_asics.push_back(golden_asic);
         }
     }
-    for (const auto& [node_id, candidate_asic] : candidate_index.node_id_to_asic_id) {
-        if (!golden_index.node_id_to_asic_id.contains(node_id)) {
+    for (const auto& [node_id, candidate_asic] : candidate.physical_node_to_asic_id()) {
+        if (!golden.physical_node_to_asic_id().contains(node_id)) {
             delta.extra_asics.push_back(candidate_asic);
         }
     }
 
-    const auto golden_cables = collect_cables(golden, golden_index);
-    const auto candidate_cables = collect_cables(candidate, candidate_index);
+    const auto golden_cables = collect_cables(golden);
+    const auto candidate_cables = collect_cables(candidate);
 
     for (const auto& [key, golden_facts] : golden_cables) {
         const auto candidate_cable = candidate_cables.find(key);

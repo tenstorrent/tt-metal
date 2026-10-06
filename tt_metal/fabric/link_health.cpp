@@ -19,7 +19,6 @@ namespace {
 
 using tt::tt_metal::AsicID;
 using tt::tt_metal::PhysicalNodeId;
-using tt::tt_metal::PhysicalNodeIdIndex;
 using tt::tt_metal::PhysicalSystemDescriptor;
 
 // Which way out of each end the cable leaves, for an intra-mesh link. The two ends almost never
@@ -72,47 +71,45 @@ void LinkHealth::refresh(const TopologyMapper* mapper, const PhysicalSystemDescr
 
     // The mapper was built on the expected graph, so its descriptor is the golden side.
     const auto& expected = mapper_->get_physical_system_descriptor();
-    expected_ids_ = tt::tt_metal::build_physical_node_id_index(expected);
-    live_ids_ = tt::tt_metal::build_physical_node_id_index(*live_);
 
     // Presence, as declared by each side. Addressed, not labelled: comparing the expected
     // descriptor's ASIC labels against the live one's would match nothing on the factory path,
     // where one side counts from one and the other carries UMD chip ids, and every expected link
     // would read as down.
-    auto collect_endpoints = [](const PhysicalSystemDescriptor& descriptor, const PhysicalNodeIdIndex& index) {
+    auto collect_endpoints = [](const PhysicalSystemDescriptor& descriptor) {
         std::unordered_set<EndpointKey, EndpointKey::Hash> endpoints;
         for (const auto& [host, topology] : descriptor.get_system_graph().asic_connectivity_graph) {
             for (const auto& [asic, edges] : topology) {
-                const auto address = index.asic_id_to_node_id.find(asic);
-                if (address == index.asic_id_to_node_id.end()) {
+                const auto address = descriptor.find_physical_node_id(asic);
+                if (!address.has_value()) {
                     continue;
                 }
                 for (const auto& [peer, connections] : edges) {
                     for (const auto& connection : connections) {
-                        endpoints.insert(EndpointKey{address->second, connection.src_chan});
+                        endpoints.insert(EndpointKey{*address, connection.src_chan});
                     }
                 }
             }
         }
         return endpoints;
     };
-    fsd_expected_ = collect_endpoints(expected, expected_ids_);
-    live_present_ = collect_endpoints(*live_, live_ids_);
+    fsd_expected_ = collect_endpoints(expected);
+    live_present_ = collect_endpoints(*live_);
 
     const auto delta = tt::tt_metal::diff_physical_system_descriptors(expected, *live_);
 
     // Reserved up front because the indexes below hold pointers into this vector.
     downed_.reserve(count_directed(delta.missing_links));
     for (const auto& [src_asic, edges] : delta.missing_links) {
-        const auto src_address = expected_ids_.asic_id_to_node_id.find(src_asic);
+        const auto src_address = expected.find_physical_node_id(src_asic);
         TT_FATAL(
-            src_address != expected_ids_.asic_id_to_node_id.end(),
+            src_address.has_value(),
             "A missing link names ASIC {}, which the expected descriptor does not describe.",
             src_asic);
         for (const auto& [dst_asic, connections] : edges) {
-            const auto dst_address = expected_ids_.asic_id_to_node_id.find(dst_asic);
+            const auto dst_address = expected.find_physical_node_id(dst_asic);
             TT_FATAL(
-                dst_address != expected_ids_.asic_id_to_node_id.end(),
+                dst_address.has_value(),
                 "A missing link names ASIC {}, which the expected descriptor does not describe.",
                 dst_asic);
             for (const auto& connection : connections) {
@@ -121,23 +118,23 @@ void LinkHealth::refresh(const TopologyMapper* mapper, const PhysicalSystemDescr
                 // Physical identity from the expected side, which is the side that knows what
                 // should be there. The ASIC label, though, is the live UMD id where that chip
                 // exists, since that is the id anything outside this module can act on.
-                record.src_cluster_id = std::string(tt::tt_metal::cluster_id_view(src_address->second));
-                record.src_tray = src_address->second.tray;
-                record.src_loc = src_address->second.loc;
+                record.src_cluster_id = std::string(tt::tt_metal::cluster_id_view(*src_address));
+                record.src_tray = src_address->tray;
+                record.src_loc = src_address->loc;
                 record.src_chan = connection.src_chan;
-                record.dst_cluster_id = std::string(tt::tt_metal::cluster_id_view(dst_address->second));
-                record.dst_tray = dst_address->second.tray;
-                record.dst_loc = dst_address->second.loc;
+                record.dst_cluster_id = std::string(tt::tt_metal::cluster_id_view(*dst_address));
+                record.dst_tray = dst_address->tray;
+                record.dst_loc = dst_address->loc;
                 record.dst_chan = connection.dst_chan;
                 record.medium = connection.port_type;
 
-                const auto live_src = live_ids_.node_id_to_asic_id.find(src_address->second);
-                record.src_asic = live_src == live_ids_.node_id_to_asic_id.end() ? src_asic : live_src->second;
-                const auto live_dst = live_ids_.node_id_to_asic_id.find(dst_address->second);
-                record.dst_asic = live_dst == live_ids_.node_id_to_asic_id.end() ? dst_asic : live_dst->second;
+                const auto live_src = live_->find_asic_id(*src_address);
+                record.src_asic = live_src.has_value() ? *live_src : src_asic;
+                const auto live_dst = live_->find_asic_id(*dst_address);
+                record.dst_asic = live_dst.has_value() ? *live_dst : dst_asic;
 
-                const auto src_node = mapper_->find_fabric_node_id_from_physical_node_id(src_address->second);
-                const auto dst_node = mapper_->find_fabric_node_id_from_physical_node_id(dst_address->second);
+                const auto src_node = mapper_->find_fabric_node_id_from_physical_node_id(*src_address);
+                const auto dst_node = mapper_->find_fabric_node_id_from_physical_node_id(*dst_address);
                 record.logical_resolved = src_node.has_value() && dst_node.has_value();
                 if (record.logical_resolved) {
                     record.src_node = *src_node;
@@ -244,13 +241,13 @@ std::optional<LinkHealth::EndpointKey> LinkHealth::endpoint_for(const FabricNode
 }
 
 std::optional<PhysicalNodeId> LinkHealth::address_of(AsicID asic) const {
-    const auto live = live_ids_.asic_id_to_node_id.find(asic);
-    if (live != live_ids_.asic_id_to_node_id.end()) {
-        return live->second;
+    if (live_ != nullptr) {
+        if (const auto live = live_->find_physical_node_id(asic); live.has_value()) {
+            return live;
+        }
     }
-    const auto expected = expected_ids_.asic_id_to_node_id.find(asic);
-    if (expected != expected_ids_.asic_id_to_node_id.end()) {
-        return expected->second;
+    if (mapper_ != nullptr) {
+        return mapper_->get_physical_system_descriptor().find_physical_node_id(asic);
     }
     return std::nullopt;
 }

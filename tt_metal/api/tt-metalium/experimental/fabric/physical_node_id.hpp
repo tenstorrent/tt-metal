@@ -10,7 +10,6 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
-#include <unordered_map>
 
 #include <fmt/format.h>
 
@@ -87,37 +86,6 @@ std::string canonical_cluster_id_for_node_id(std::string_view cluster_id);
 // truncated -- a truncated id would silently collide with its neighbours), or if tray or loc does
 // not fit in 16 bits.
 PhysicalNodeId make_physical_node_id(std::string_view cluster_id, TrayID tray, ASICLocation loc);
-
-// Declared here rather than alongside ASICDescriptor so there is one place that builds a node id.
-// Forward declared to keep the physical system descriptor out of this header.
-struct ASICDescriptor;
-class PhysicalSystemDescriptor;
-
-// The id of the ASIC a descriptor describes, built from the three address components the descriptor
-// already carries. Both the factory-system-descriptor builder and live discovery fill host_name,
-// tray_id and asic_location, so this is the single seam through which a descriptor becomes a
-// solver key -- pass every descriptor through it instead of reading unique_id, which is 1..N file
-// order on the factory path and a UMD chip id on the live path.
-//
-PhysicalNodeId node_id_from_asic_descriptor(const ASICDescriptor& descriptor);
-
-// The boundary between a descriptor's own ASIC labels and the addresses the mapper is keyed on.
-//
-// PhysicalSystemDescriptor keys its ASICs by AsicID, which is 1..N in file order when the descriptor
-// came from a factory system descriptor and a UMD chip unique id when it came from discovery. Those
-// two label spaces are why the mapper cannot use AsicID as identity. But the descriptor's query APIs
-// (get_asic_neighbors, get_eth_connections, get_tray_id, ...) still take its own label, so code that
-// holds an address and needs to ask the descriptor a question translates through this index.
-//
-// Build it once per descriptor and pass it down; it is a full pass over the descriptors.
-struct PhysicalNodeIdIndex {
-    std::unordered_map<PhysicalNodeId, AsicID> node_id_to_asic_id;
-    std::unordered_map<AsicID, PhysicalNodeId> asic_id_to_node_id;
-};
-
-// Fatal if two ASICs in the descriptor share an address: their node ids would collide, silently
-// merging two chips into one solver node.
-PhysicalNodeIdIndex build_physical_node_id_index(const PhysicalSystemDescriptor& descriptor);
 
 // cluster_id is the NUL-trimmed canonical string stored in the id.
 struct PhysicalNodeFields {
