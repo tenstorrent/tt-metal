@@ -155,3 +155,29 @@ def test_the_decoded_value_is_clamped_to_the_register_range(case, negative):
         assert math.copysign(1.0, decoded) == (-1.0 if negative else 1.0)
     else:
         assert decoded == value
+
+
+# The MxInt decoders land in the same register and take the same range rule,
+# though the gasket spells it out differently: zero when `block_exp == 0` or
+# `i_exp <= num_of_leading_zeros`, where `block_exp = i_exp - leading_zeros`.
+# Together those are `block_exp <= 0`, the `rebiased_to_tf32_exp <= 0` the
+# float formats use. Element 1 is the smallest nonzero datum in each format,
+# so these are the scales where its decoded value crosses the floor.
+MXINT_FLOOR_CASES = [
+    (DataFormat.MxInt8, 0x01, 7, 6),
+    (DataFormat.MxInt4, 0x1, 3, 2),
+    (DataFormat.MxInt2, 0x1, 1, 0),
+]
+
+
+@pytest.mark.parametrize(
+    "fmt, element, holds, flushes",
+    MXINT_FLOOR_CASES,
+    ids=[c[0].name for c in MXINT_FLOOR_CASES],
+)
+def test_mxint_flushes_below_the_register_floor(fmt, element, holds, flushes):
+    """2^-126 survives, 2^-127 does not. Without the rule the smaller value
+    decodes to a finite 2^-127 and keeps shrinking with the scale, down to
+    2^-133 for MxInt8."""
+    assert float(_decode_first(fmt, holds, element)) == 2.0**-126
+    assert float(_decode_first(fmt, flushes, element)) == 0.0

@@ -534,6 +534,14 @@ def _mxint_decode_blocks(scales_e8m0, int_blocks, elem_scale_divisor: float):
     decoded = int_blocks.astype(np.float32) * (
         scale_factors[:, np.newaxis] / elem_scale_divisor
     )
+    # MxInt lands in the same register as the MX-float formats and takes the
+    # same range rule. The gasket spells it differently -- zero when
+    # `block_exp == 0` or `i_exp <= num_of_leading_zeros`, where
+    # `block_exp = i_exp - num_of_leading_zeros` -- but the two together are
+    # `block_exp <= 0`, which is the `rebiased_to_tf32_exp <= 0` the float
+    # formats use. An MxInt8 element of 1 under a scale of 6 or less lands at
+    # or below 2^-127 and has to flush.
+    decoded = _apply_gasket_range(decoded, scales_array == E8M0_NAN_CODE)
     return torch.tensor(decoded.flatten(), dtype=torch.bfloat16)
 
 
