@@ -11,6 +11,10 @@ import time
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill.runners.layer_completion_drainer import (
+    BackgroundCompletionDrain,
+    connect_layer_completion_channel,
+)
 
 
 def apply_manifest_env(manifest: dict) -> None:
@@ -840,7 +844,8 @@ def main() -> None:
     logger.info(f"[migration_driver] attached; payload={payload_bytes}B")
 
     kv_table = producer._read_kv_chunk_table(timeout_s)
-    ack_channel = producer._connect_layer_ack_channel(timeout_s)
+    completion_channel = connect_layer_completion_channel(timeout_s)
+    completion_drain = BackgroundCompletionDrain(completion_channel, num_layers=producer.NUM_LAYERS)
 
     driver.attach()
 
@@ -866,7 +871,8 @@ def main() -> None:
         f"[migration_driver] prefill done wall={stats.wall_s:.1f}s pushes={stats.total_pushes} "
         f"requests={stats.completed}"
     )
-    producer._drain_layer_acks(ack_channel, producer.NUM_LAYERS * stats.total_pushes)
+    completion_drain.wait(producer.NUM_LAYERS * stats.total_pushes)
+    completion_drain.close()
 
     if world_size > 1:
         producer._mr_bcast_resident(mr_rank, stats.resident)

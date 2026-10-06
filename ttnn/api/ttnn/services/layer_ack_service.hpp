@@ -9,13 +9,19 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace tt::tt_metal {
 class D2HStreamService;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::internal {
-class LayerCompletionQueue;
+struct LayerCompletionMessage;
+struct LayerCompletionMessageV2;
+template <typename MsgT>
+class LayerCompletionQueueT;
+using LayerCompletionQueue = LayerCompletionQueueT<LayerCompletionMessage>;
+using LayerCompletionQueueV2 = LayerCompletionQueueT<LayerCompletionMessageV2>;
 }  // namespace tt::tt_metal::internal
 
 namespace tt::tt_metal {
@@ -50,8 +56,10 @@ public:
         uint32_t source_rank,
         uint32_t num_layers,       // GLOBAL total layer count (seq stride)
         uint32_t first_layer_idx,  // this rank's slice offset into the global range
-        uint32_t local_layers,     // layers this rank owns (records emitted per chunk)
-        uint32_t connect_timeout_ms = 30'000);
+        uint32_t local_layers,
+        uint32_t connect_timeout_ms = 30'000,
+        std::vector<uint32_t> ack_layer_ids = {},
+        uint32_t protocol = 1);
     ~LayerAckService();
 
     LayerAckService(const LayerAckService&) = delete;
@@ -77,7 +85,8 @@ private:
     void reader_loop();
 
     D2HStreamService& d2h_service_;
-    std::unique_ptr<internal::LayerCompletionQueue> producer_;  // connected in start()
+    std::unique_ptr<internal::LayerCompletionQueue> producer_;
+    std::unique_ptr<internal::LayerCompletionQueueV2> producer_v2_;
 
     std::string ring_shm_name_;
     uint32_t source_rank_;
@@ -85,8 +94,16 @@ private:
     uint32_t first_layer_idx_;
     uint32_t local_layers_;
     uint32_t connect_timeout_ms_;
+    std::vector<uint32_t> ack_layer_ids_;
+    uint32_t protocol_;
 
     uint64_t record_count_ = 0;  // per-rank monotonic completion counter (k in seq derivation)
+
+    bool have_prev_identity_ = false;
+    uint32_t prev_slot_id_ = 0;
+    uint32_t prev_pos_start_ = 0;
+    uint32_t prev_pos_end_ = 0;
+    uint64_t desync_count_ = 0;
 
     std::thread reader_;
     std::atomic<bool> running_{false};

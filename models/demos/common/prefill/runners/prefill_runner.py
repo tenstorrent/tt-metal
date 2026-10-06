@@ -15,6 +15,11 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
+from models.demos.common.prefill.runners.layer_completion_drainer import current_protocol
+from models.demos.common.prefill.runners.layer_completion_sink import (
+    build_layer_completion_sink,
+    build_layer_completion_sink_v2,
+)
 from models.demos.common.prefill.runners.migration import (
     is_per_host_storage,
     migration_file_export_enabled,
@@ -147,49 +152,7 @@ def _handle_sigterm(signum, frame):
     _shutdown = True
 
 
-LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S = float(os.environ.get("PREFILL_LAYER_COMPLETION_PUSH_TIMEOUT_S", 30.0))
-LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S = 10.0
-LAYER_COMPLETION_PUSH_SPIN_SLEEP_S = 0.001
-
-
-def build_layer_completion_sink(producer, *, source_rank, num_layers, ack_idx_of_layer=None):
-    """`num_layers` and `ack_idx_of_layer` are in ACK space; see the routing block in main().
-
-    The callback is handed a GLOBAL layer index, and `layer_idx` stays global in the pushed record
-    because the router addresses the KV stage with it. Only `seq` is translated.
-    """
-
-    def on_layer_complete(layer_idx: int, request_id: int) -> None:
-        ack_idx = layer_idx if ack_idx_of_layer is None else ack_idx_of_layer[layer_idx]
-        seq = request_id * num_layers + ack_idx
-        if producer.try_push(seq=seq, source_rank=source_rank, layer_idx=layer_idx, request_id=request_id):
-            return
-
-        start = time.monotonic()
-        next_log = start + LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S
-        logger.warning(
-            f"[layer-completion] ring full (seq={seq}); spinning up to "
-            f"{LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:.0f}s for router to drain"
-        )
-        while True:
-            if producer.try_push(seq=seq, source_rank=source_rank, layer_idx=layer_idx, request_id=request_id):
-                logger.info(f"[layer-completion] ring drained after {time.monotonic() - start:.1f}s; pushed seq={seq}")
-                return
-            if _shutdown:
-                raise RuntimeError(f"layer-completion ring full (seq={seq}); shutdown requested while spinning")
-            now = time.monotonic()
-            if now - start >= LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:
-                logger.error(f"[layer-completion] gave up after {now - start:.1f}s spinning on full ring (seq={seq})")
-                raise RuntimeError(
-                    f"layer-completion ring full (seq={seq}); router not draining after "
-                    f"{LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:.0f}s"
-                )
-            if now >= next_log:
-                logger.warning(f"[layer-completion] still spinning on full ring (seq={seq}) after {now - start:.0f}s")
-                next_log += LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S
-            time.sleep(LAYER_COMPLETION_PUSH_SPIN_SLEEP_S)
-
-    return on_layer_complete
+LAYER_COMPLETION_PROTOCOL = current_protocol()
 
 
 def _decode_metadata(metadata_msg: ttnn.Tensor) -> dict:
@@ -740,7 +703,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # that the migration layer needs before it can report WORKER_READY to wait_ready() below.
     use_d2h = os.environ.get("PREFILL_LAYER_ACK_D2H", "0") == "1"
 
-    from ttnn._experimental.layer_completion import LayerCompletionQueue, LayerCompletionRouter
+    from ttnn._experimental.layer_completion import LayerCompletionQueue, LayerCompletionQueueV2, LayerCompletionRouter
 
     ring_base = os.environ.get("PREFILL_LAYER_COMPLETION_RING", "/tt_prefill_layer_completion_ring")
     ring_shm_name = f"{ring_base}_{rank}"
@@ -752,8 +715,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         world_size=num_ranks,
         master_rank=master_rank,
         ring_shm_name=ring_shm_name,
-        scheduler_channel_shm_name=ack_shm_name if rank == master_rank else "",
+        scheduler_shm_name=ack_shm_name if rank == master_rank else "",
         teardown_timeout_ms=30000,
+        protocol=LAYER_COMPLETION_PROTOCOL,
     )
     # ACK space, not layer space, and for BOTH transports below. Each derives a record's identity
     # from a plain dense counter -- LayerAckService from
@@ -782,6 +746,11 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         ]
         ack_idx_of_layer = {layer: idx for idx, layer in enumerate(ack_layer_ids)}
     num_ack_layers = sum(acks_per_rank)
+    my_ack_layer_ids = (
+        []
+        if ack_layer_ids is None
+        else [layer for layer in ack_layer_ids if first_layer_idx <= layer < first_layer_idx + num_my_layers]
+    )
     # Distinct names: `first_layer_idx` / `num_my_layers` are rebound in LAYER space by the
     # migration block further down, and ack indices addressing a KV stage would be silently wrong
     # (6/12/18 instead of 24/48/72 on Kimi-K3).
@@ -816,6 +785,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             num_layers=num_ack_layers,
             first_layer_idx=ack_first_idx,
             local_layers=ack_local_count,
+            ack_layer_ids=my_ack_layer_ids,
+            protocol=LAYER_COMPLETION_PROTOCOL,
         )
         if runtime.config.use_trace:
             runtime.set_d2h_ack_service(d2h_service)
@@ -829,20 +800,24 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 "which the layer-ack path requires at every rank count "
                 "(see docs/ADDING_A_PREFILL_MODEL.md)."
             )
-        producer = LayerCompletionQueue.connect(ring_shm_name, connect_timeout_ms=30000)
+        queue_cls = LayerCompletionQueueV2 if LAYER_COMPLETION_PROTOCOL == 2 else LayerCompletionQueue
+        sink_factory = build_layer_completion_sink_v2 if LAYER_COMPLETION_PROTOCOL == 2 else build_layer_completion_sink
+        producer = queue_cls.connect(ring_shm_name, connect_timeout_ms=30000)
         runtime.set_layer_completion_sink(
-            build_layer_completion_sink(
+            sink_factory(
                 producer,
                 source_rank=rank,
                 num_layers=num_ack_layers,
                 ack_idx_of_layer=ack_idx_of_layer,
+                is_shutdown=lambda: _shutdown,
             )
         )
         source_desc = "host on_layer_complete callback"
     logger.info(
-        f"[migration] layer-completion routing up: rank={rank}/{num_ranks} master={master_rank} "
+        f"[migration] layer-completion routing up (v{LAYER_COMPLETION_PROTOCOL}): "
+        f"rank={rank}/{num_ranks} master={master_rank} "
         f"ring={ring_shm_name} source={source_desc} "
-        + (f"(owns scheduler channel {ack_shm_name})" if rank == master_rank else "(subordinate -> master)")
+        + (f"(owns scheduler shm {ack_shm_name})" if rank == master_rank else "(subordinate -> master)")
     )
 
     migration_endpoint = None

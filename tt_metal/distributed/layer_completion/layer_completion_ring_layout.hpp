@@ -25,14 +25,34 @@
 namespace tt::tt_metal::internal {
 
 inline constexpr std::size_t kLayerCompletionCacheLine = 64;
-inline constexpr uint32_t kLayerCompletionRingMagic = 0x4C435131u;  // 'LCQ1'
+
+template <typename MsgT>
+struct LayerCompletionRingTraits;
+
+template <>
+struct LayerCompletionRingTraits<LayerCompletionMessage> {
+    static constexpr uint32_t magic = 0x4C435131u;
+    static constexpr std::size_t cell_alignment = alignof(LayerCompletionMessage);
+};
+
+template <>
+struct LayerCompletionRingTraits<LayerCompletionMessageV2> {
+    static constexpr uint32_t magic = 0x4C435132u;
+    static constexpr std::size_t cell_alignment = kLayerCompletionCacheLine;
+};
+
+inline constexpr uint32_t kLayerCompletionRingMagic = LayerCompletionRingTraits<LayerCompletionMessage>::magic;
 
 // One ring slot. `sequence` gates ownership (Vyukov): producers wait for
 // sequence==pos, consumers wait for sequence==pos+1.
-struct LayerCompletionCell {
+template <typename MsgT>
+struct alignas(LayerCompletionRingTraits<MsgT>::cell_alignment) LayerCompletionCellT {
     std::atomic<uint64_t> sequence;
-    LayerCompletionMessage msg;
+    MsgT msg;
 };
+
+using LayerCompletionCell = LayerCompletionCellT<LayerCompletionMessage>;
+using LayerCompletionCellV2 = LayerCompletionCellT<LayerCompletionMessageV2>;
 
 struct LayerCompletionRingHeader {
     // Producers CAS to claim the next enqueue slot.
@@ -45,14 +65,34 @@ struct LayerCompletionRingHeader {
     uint32_t magic;
 };
 
-// Cells start on the first LayerCompletionCell-aligned offset past the header.
+template <typename MsgT>
 constexpr std::size_t layer_completion_cells_offset() {
-    return ((sizeof(LayerCompletionRingHeader) + alignof(LayerCompletionCell) - 1) / alignof(LayerCompletionCell)) *
-           alignof(LayerCompletionCell);
+    using Cell = LayerCompletionCellT<MsgT>;
+    return ((sizeof(LayerCompletionRingHeader) + alignof(Cell) - 1) / alignof(Cell)) * alignof(Cell);
 }
 
+template <typename MsgT>
 inline constexpr std::size_t kLayerCompletionRingBytes =
-    layer_completion_cells_offset() +
-    static_cast<std::size_t>(kLayerCompletionRingCapacity) * sizeof(LayerCompletionCell);
+    layer_completion_cells_offset<MsgT>() +
+    static_cast<std::size_t>(kLayerCompletionRingCapacity) * sizeof(LayerCompletionCellT<MsgT>);
+
+static_assert(offsetof(LayerCompletionRingHeader, enqueue_pos) == 0);
+static_assert(offsetof(LayerCompletionRingHeader, dequeue_pos) == kLayerCompletionCacheLine);
+static_assert(offsetof(LayerCompletionRingHeader, capacity) == kLayerCompletionCacheLine + 8);
+static_assert(sizeof(LayerCompletionRingHeader) == 2 * kLayerCompletionCacheLine);
+
+static_assert(alignof(LayerCompletionCell) == 8);
+static_assert(sizeof(LayerCompletionCell) == 32);
+static_assert(offsetof(LayerCompletionCell, msg) == 8);
+static_assert(layer_completion_cells_offset<LayerCompletionMessage>() == 128);
+static_assert(kLayerCompletionRingBytes<LayerCompletionMessage> == 32896);
+
+static_assert(alignof(LayerCompletionCellV2) == kLayerCompletionCacheLine);
+static_assert(sizeof(LayerCompletionCellV2) == kLayerCompletionCacheLine);
+static_assert(offsetof(LayerCompletionCellV2, msg) == 8);
+static_assert(layer_completion_cells_offset<LayerCompletionMessageV2>() % kLayerCompletionCacheLine == 0);
+static_assert(layer_completion_cells_offset<LayerCompletionMessageV2>() == 128);
+static_assert(kLayerCompletionRingBytes<LayerCompletionMessageV2> % kLayerCompletionCacheLine == 0);
+static_assert(kLayerCompletionRingBytes<LayerCompletionMessageV2> == 65664);
 
 }  // namespace tt::tt_metal::internal

@@ -40,14 +40,32 @@ namespace tt::tt_metal::internal {
 
 using tt::tt_metal::distributed::InterProcessCounterChannel;  // api/internal/service/
 
-class LayerCompletionQueue;  // fwd — defined in layer_completion_queue.hpp
+struct LayerCompletionMessage;
+struct LayerCompletionMessageV2;
+template <typename MsgT>
+class LayerCompletionQueueT;
+class LayerCompletionQueueBase;
+using LayerCompletionQueue = LayerCompletionQueueT<LayerCompletionMessage>;
+using LayerCompletionQueueV2 = LayerCompletionQueueT<LayerCompletionMessageV2>;
+
+class SchedulerEgress {
+public:
+    virtual ~SchedulerEgress() = default;
+    virtual void shutdown() = 0;
+};
+
+enum class LayerCompletionProtocol : uint8_t {
+    kCountOnlyV1 = 1,
+    kStructuredV2 = 2,
+};
 
 struct LayerCompletionRouterConfig {
     int rank = 0;
     int world_size = 1;
     int master_rank = 0;
     std::string ring_shm_name;
-    std::string scheduler_channel_shm_name;  // master-only
+    LayerCompletionProtocol protocol = LayerCompletionProtocol::kCountOnlyV1;
+    std::string scheduler_shm_name;
     int poll_idle_us = 100;
     // Master-only safety net: max time to wait at teardown for outstanding subordinate sentinels
     // before giving up and cancelling (so a crashed/stalled rank can't hang the listener join
@@ -71,9 +89,15 @@ private:
     void run_master();
     void run_subordinate();
 
+    template <typename MsgT, typename Forward>
+    void run_master_impl(Forward&& forward);
+
+    template <typename MsgT>
+    void run_subordinate_impl(LayerCompletionQueueT<MsgT>& queue);
+
     LayerCompletionRouterConfig cfg_;
-    std::unique_ptr<LayerCompletionQueue> queue_;          // owner of the host-local ring
-    std::unique_ptr<InterProcessCounterChannel> counter_;  // master-only
+    std::unique_ptr<LayerCompletionQueueBase> queue_;
+    std::unique_ptr<SchedulerEgress> sched_egress_;
     std::thread listener_;
     std::atomic<bool> stop_{false};
     std::atomic<bool> stopped_{false};

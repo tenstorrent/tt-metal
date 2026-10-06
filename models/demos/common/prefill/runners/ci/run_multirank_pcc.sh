@@ -46,7 +46,8 @@ case "${MODEL}" in
   kimi27)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
-    PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
+    RUNNER_ENV="export PREFILL_LAYER_COMPLETION_PROTOCOL=2;"
+    PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; export PREFILL_LAYER_COMPLETION_PROTOCOL=2; \
         export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/deepseek-ai/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-256000-last5120;"
     ;;
   glm53)
