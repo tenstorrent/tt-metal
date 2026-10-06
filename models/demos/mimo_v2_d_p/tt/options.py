@@ -49,9 +49,17 @@ class MiMoRuntimeOptions:
     # Sequence-parallel residual: the MoE block takes this col's normed rows and gathers x / top-k over TP itself
     # (router + untilize on S/TP rows, no block-input all-gather).
     moe_ag_tp_in_gather: bool = True  # MIMO_MOE_AG_TP_IN_GATHER
-    # The MoE block's all-gathers: "fabric" (ttnn.experimental.fabric_all_gather: ~10-20% faster on device, traced; eager
-    # its per-call fence absorbs the chips' launch skew and it loses 2-3 ms per 6 layers on the LoudBox), or "high_bw".
-    moe_ag_gather_op: str = "high_bw"  # MIMO_MOE_AG_GATHER_OP
+    # With moe_ag_tp_in_gather (and tile top-k): gather x / top-k over the whole mesh in one call each (cluster_axis None,
+    # row-major chip order = the TP-then-SP gathers' order) instead of a TP gather followed by an SP gather.
+    # LoudBox 2x4, 48 layers, chunk 4096 @ 52K: 286.8 vs 300.2 ms traced (292.5 vs ~303-306 eager); PCC unchanged.
+    moe_ag_full_mesh_gather: bool = True  # MIMO_MOE_AG_FULL_MESH
+    # The MoE block's all-gathers: "fabric" (ttnn.experimental.fabric_all_gather) or "high_bw". LoudBox 2x4, 48 layers,
+    # chunk 4096 @ 52K: fabric 306.0 / ~311.5 ms traced / eager vs high_bw 313.2 / ~316.5 (small gathers 2-3x faster,
+    # the x gather ~20%). An earlier "fabric loses eager" reading was a host-side token-upload stall that hits either op.
+    moe_ag_gather_op: str = "fabric"  # MIMO_MOE_AG_GATHER_OP
+    # Sequence-parallel residual: the blocks' TP all-gather of their normed input. "fabric" (fabric_all_gather into a
+    # persistent per-shape buffer, ffn.TpGather) or "ttnn" (ttnn.all_gather).
+    tp_gather_op: str = "fabric"  # MIMO_TP_GATHER_OP
     # Row reduce-scatters (attention / MLP / MoE TP out, the > 2-row MoE send-back): "ttnn" (ttnn.reduce_scatter) or
     # "fabric" (the fabric_reduce_scatter example: a line add-and-forward relay at the link rate).
     rs_op: str = "fabric"  # MIMO_RS_OP
@@ -91,6 +99,7 @@ class MiMoRuntimeOptions:
             )
         assert self.moe_ag_tp in (None, "hbw", "rsag"), self.moe_ag_tp
         assert self.moe_ag_gather_op in ("fabric", "high_bw"), self.moe_ag_gather_op
+        assert self.tp_gather_op in ("fabric", "ttnn"), self.tp_gather_op
 
     @property
     def flat_expert(self) -> bool:
@@ -131,7 +140,9 @@ class MiMoRuntimeOptions:
         kw["expert_placement"] = env.get("MIMO_EXPERT_PLACEMENT") or None
         kw["sp_residual"] = flag("MIMO_SP_RESIDUAL", True)
         kw["moe_ag_tp_in_gather"] = flag("MIMO_MOE_AG_TP_IN_GATHER", True)
-        kw["moe_ag_gather_op"] = env.get("MIMO_MOE_AG_GATHER_OP", "high_bw")
+        kw["moe_ag_full_mesh_gather"] = flag("MIMO_MOE_AG_FULL_MESH", True)
+        kw["moe_ag_gather_op"] = env.get("MIMO_MOE_AG_GATHER_OP", "fabric")
+        kw["tp_gather_op"] = env.get("MIMO_TP_GATHER_OP", "fabric")
         kw["rs_op"] = env.get("MIMO_RS_OP", "fabric")
         kw["untilize_width"] = int(env.get("MIMO_UA_W", "32"))
         root = env.get("MIMO_TTNN_CACHE")

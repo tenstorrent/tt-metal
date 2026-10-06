@@ -6,7 +6,7 @@ import ttnn
 from models.demos.mimo_v2_d_p.reference.config import MiMoTextConfig
 from models.demos.mimo_v2_d_p.tt.attention.attention import TtAttention
 from models.demos.mimo_v2_d_p.tt.ccl import resolve_num_links
-from models.demos.mimo_v2_d_p.tt.ffn import TtDenseMLP, TtMoE, TtRMSNorm, all_gather_tp, partition_tp
+from models.demos.mimo_v2_d_p.tt.ffn import TpGather, TtDenseMLP, TtMoE, TtRMSNorm, all_gather_tp, partition_tp
 from models.demos.mimo_v2_d_p.tt.options import MiMoRuntimeOptions
 
 
@@ -30,6 +30,7 @@ class TtDecoderLayer:
         # all-gathers its normed input and reduce-scatters its output (the all-reduce's two halves, same CCL volume)
         self.sp = options.sp_residual and mesh_device.shape[1] > 1
         self.kind = cfg.layer_type(layer_idx)
+        self.tp_gather = TpGather.get(mesh_device) if self.sp and options.tp_gather_op == "fabric" else None
         sub = lambda p: {k[len(p) + 1 :]: v for k, v in layer_sd.items() if k.startswith(p + ".")}
         eps = cfg.layernorm_epsilon
         self.input_norm = TtRMSNorm(mesh_device, layer_sd["input_layernorm.weight"], eps)
@@ -84,10 +85,17 @@ class TtDecoderLayer:
         f.deallocate(True)
         return out
 
+    def _gather_tp(self, h):
+        """all_gather_tp of a block's normed input -> (gathered, owned): owned False is TpGather's persistent buffer,
+        which the caller must not deallocate."""
+        if self.tp_gather is not None and self.tp_gather.supports(h):
+            return self.tp_gather(h), False
+        return all_gather_tp(h, self.mesh_device), True
+
     def forward_sp(self, x, rope, trans_mat, kv_cache, *, cache_layer, kv_actual, user=0, valid_end=None):
         """Sequence-parallel residual: x [1,1,S_local/TP,H] (this col's rows) -> the same rows of the layer's output."""
         h = self.input_norm(x)
-        hf = all_gather_tp(h, self.mesh_device)
+        hf, hf_owned = self._gather_tp(h)
         h.deallocate(True)
         a = self.attn(
             hf,
@@ -100,7 +108,8 @@ class TtDecoderLayer:
             valid_end=valid_end,
             tp_out="scattered",
         )
-        hf.deallocate(True)
+        if hf_owned:
+            hf.deallocate(True)
         r = ttnn.add(x, a)
         a.deallocate(True)
         h = self.post_attn_norm(r)
@@ -108,10 +117,11 @@ class TtDecoderLayer:
             f = self.ffn(h, tp_out="scattered", tp_in="scattered")
             h.deallocate(True)
         else:
-            hf = all_gather_tp(h, self.mesh_device)
+            hf, hf_owned = self._gather_tp(h)
             h.deallocate(True)
             f = self.ffn(hf, tp_out="scattered")
-            hf.deallocate(True)
+            if hf_owned:
+                hf.deallocate(True)
         out = ttnn.add(r, f)
         r.deallocate(True)
         f.deallocate(True)

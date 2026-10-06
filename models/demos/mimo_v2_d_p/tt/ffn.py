@@ -110,6 +110,49 @@ def all_gather_tp(x, mesh_device, num_links=None):
     )
 
 
+class TpGather:
+    """all_gather_tp on ttnn.experimental.fabric_all_gather: [1,1,S/TP,H] DRAM -> [1,1,S,H] in a persistent buffer per
+    (shape, dtype, layout), shared by every layer of the mesh. The result is overwritten by the next gather of the same
+    shape: the caller must not deallocate it or keep it past its block (both hot sites consume it before the next)."""
+
+    _per_mesh = {}
+
+    @classmethod
+    def get(cls, mesh_device):
+        key = id(mesh_device)
+        if key not in cls._per_mesh:
+            cls._per_mesh[key] = cls(mesh_device)
+        return cls._per_mesh[key]
+
+    def __init__(self, mesh_device):
+        self.dev = mesh_device
+        self.out = {}
+        g = mesh_device.compute_with_storage_grid_size()
+        crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))})
+        # caller-owned (zero, left zero by every call): the op then allocates and synchronizes nothing
+        self.sems = [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(2)]
+
+    def supports(self, x):
+        return x.memory_config().buffer_type == ttnn.BufferType.DRAM
+
+    def __call__(self, x):
+        shape = list(x.shape)
+        shape[2] *= self.dev.shape[1]
+        key = (tuple(shape), x.dtype, x.layout)
+        if key not in self.out:
+            self.out[key] = ttnn.allocate_tensor_on_device(
+                ttnn.Shape(shape), x.dtype, x.layout, self.dev, ttnn.DRAM_MEMORY_CONFIG
+            )
+        return ttnn.experimental.fabric_all_gather(
+            x,
+            dim=2,
+            output_tensor=self.out[key],
+            cluster_axis=1,
+            ready_semaphore=self.sems[0],
+            data_valid_semaphore=self.sems[1],
+        )
+
+
 def partition_tp(x, mesh_device):
     """[1,1,S,H] replicated over TP -> this col's [1,1,S/TP,H] row slice (local, no transfer)."""
     if mesh_device.shape[1] == 1:
@@ -490,14 +533,19 @@ class TtMoE:
         if tp_in == "scattered":
             idx_s, w_s = self.gate(x, tiles=True)
             x_s = self.ag.to_rm(x)
-            x_rm, idx4, w_rm = self.ag.gather_tp(x_s, idx_s, w_s)
-            if x_rm is not x_s:
+            if self.ag.full_mesh:  # TP and SP gathers in one full-mesh gather per tensor
+                gx, _, _ = self.ag.gather_full(x_s, idx_s, w_s)
                 own += [x_s, idx_s, w_s]
+            else:
+                x_rm, idx4, w_rm = self.ag.gather_tp(x_s, idx_s, w_s)
+                if x_rm is not x_s:
+                    own += [x_s, idx_s, w_s]
         else:
             tiles = self.ag.tile_topk and self.ag.rows > 1
             idx4, w_rm = self.gate(x, row_major=not tiles, tiles=tiles)
             x_rm = self.ag.to_rm(x)
-        gx, _, _ = self.ag.gather(x_rm, idx4, w_rm)
+        if not (tp_in == "scattered" and self.ag.full_mesh):
+            gx, _, _ = self.ag.gather(x_rm, idx4, w_rm)
         gathered = self.ag.rows > 1  # one mesh row: gather returns x_rm / idx / w themselves (used until the reduce)
         if tp_in == "scattered":
             for t in own:

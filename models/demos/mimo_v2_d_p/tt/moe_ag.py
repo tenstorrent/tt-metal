@@ -232,6 +232,8 @@ class MoeAgBlock:
         if rows > 1 and self.tile_topk:
             self.gidx_t = _dram(mesh_device, [1, 1, T, k], ttnn.uint16, ttnn.TILE_LAYOUT)
             self.gw_t = _dram(mesh_device, [1, 1, T, k], ttnn.bfloat16, ttnn.TILE_LAYOUT)
+        # one full-mesh gather per tensor instead of TP then SP (gather_full)
+        self.full_mesh = options.moe_ag_full_mesh_gather and rows > 1 and cols > 1 and self.tile_topk
         self.plan_op = RoutePlan(mesh_device, tokens=T, k=k, n_global=n_global, gids=gids, rows=buf_rows)
         self.info = chip_info(mesh_device, S)
         split = rows == 2
@@ -313,6 +315,26 @@ class MoeAgBlock:
         self._ag(idx, self.gidx_c, 1)
         self._ag(w, self.gw_c, 1)
         return self.gx_c, self.gidx_c, self.gw_c
+
+    def gather_full(self, x_rm, idx, w):
+        """Sequence-parallel residual in one step: this col's S / TP rows (x_rm ``to_rm``, idx / w TILE) -> the column's
+        T tokens over the whole mesh (cluster_axis None: row-major chip order, chip (r, c) at r S + c S / TP, which is
+        what ``gather_tp`` then ``gather`` produce). Same outputs as ``gather``."""
+        # The inputs' declared distribution says dim 2 is split over TP only (the SP rows were sharded on the token dim
+        # at upload); the full-mesh path validates a dim-2 split over all chips, which is what the bytes already are
+        # (linear chip order). Restore that declaration (as deepseek_v3_d_p's chunked prefill test does for its cache).
+        if not hasattr(self, "_mesh_dim2"):
+            dist = ttnn.MeshShape(self.rows, self.cols)
+            coords = [ttnn.MeshCoordinate([c[i] for i in range(c.dims())]) for c in ttnn.MeshCoordinateRange(dist)]
+            self._mesh_dim2 = ttnn.TensorTopology(dist, [ttnn.PlacementShard(2), ttnn.PlacementShard(2)], coords)
+        for t in (x_rm, idx, w):
+            t.update_tensor_topology(self._mesh_dim2)
+        self._ag(x_rm, self.gx, None)
+        self._ag(idx, self.gidx_t, None)
+        self._ag(w, self.gw_t, None)
+        self.gidx = ttnn.to_layout(self.gidx_t, ttnn.ROW_MAJOR_LAYOUT)
+        self.gw = ttnn.to_layout(self.gw_t, ttnn.ROW_MAJOR_LAYOUT)
+        return self.gx, self.gidx, self.gw
 
     def gather(self, x_rm, idx, w):
         """x_rm (``to_rm``), idx [1, 1, S, K] uint16, w [1, 1, S, K] bf16 (RM, or TILE with ``tile_topk``) -> the
