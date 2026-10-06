@@ -86,8 +86,8 @@ void bind_fused_msda(nb::module_& mod) {
               Not a device tensor: it is a static property of the feature pyramid and is
               needed for address arithmetic inside the reader.
             * :attr:`align_corners`: pixel mapping within the chosen coordinate space
-            * :attr:`locations_in_grid_space`: False (default) treats locations as MSDA/mmcv
-              [0, 1]; True treats them as grid_sample [-1, 1]
+            * :attr:`locations_in_grid_space`: False (default) treats locations as normalized
+              [0, 1] coordinates; True treats them as normalized [-1, 1] coordinates
             * :attr:`memory_config`: output memory config
 
         Returns:
