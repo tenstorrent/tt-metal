@@ -365,7 +365,7 @@ For each comparison perf leaf, declare its metric in `Performance Metric` before
 or measuring. Use `mean(L1_TO_L1)` whenever the selected test supplies it.
 For an isolate-only test, choose only a declared isolate that measures the
 affected operation; state that limited scope. For example, the existing
-`perf_sfpu_reduce_row_max.py` declares only `MATH_ISOLATE`. Select from test
+`perf_sfpu_reduce.py` declares only `MATH_ISOLATE`. Select from test
 source, never from favorable CSV deltas. Keep the declaration on retries;
 a necessary correction requires a documented plan change, not a result waiver.
 Comparison metric preselection is enforced by these instructions and stays outside

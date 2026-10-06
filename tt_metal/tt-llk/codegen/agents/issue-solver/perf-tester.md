@@ -150,13 +150,13 @@ an unavailable backend as `PERF_ENV_ERROR` without a worker retry.
 |---|---|
 | SFPU unary | `perf_eltwise_unary_sfpu.py` |
 | SFPU binary | `perf_eltwise_binary_sfpu.py` |
-| FPU binary | `perf_eltwise_binary_fpu.py` |
-| typecast | `perf_eltwise_typecast.py` |
+| FPU binary | `perf_eltwise_binary.py` |
+| typecast | `perf_eltwise_unary_typecast.py` |
 | fused operation | `perf_fused.py` |
-| SFPU row-max / SDPA reduce | `perf_sfpu_reduce_row_max.py` / `perf_sfpu_reduce_sdpa.py` |
+| SFPU row-max / SDPA reduce | `perf_sfpu_reduce.py` / `perf_sfpu_reduce_sdpa.py` |
 | math matmul / matmul | `perf_math_matmul.py` / `perf_matmul.py` |
 | general reduce | `perf_reduce.py` |
-| math / unpack transpose | `perf_math_transpose.py` / `perf_unpack_transpose.py` |
+| math / unpack transpose | `perf_transpose_dest.py` / `perf_unpack_transpose.py` |
 | pack untilize / destination bank | `perf_pack_untilize.py` / `perf_pack_dest_bank.py` |
 | fast or unpack tilize | `perf_fast_tilize.py`, `perf_fast_tilize_full.py`, or `perf_unpack_tilize.py` |
 | fast untilize | `perf_fast_untilize.py` |
@@ -186,7 +186,7 @@ entry for this architecture and selector. Verify its metric against the test's
 declared `PerfConfig.run_types` in candidate and baseline source. Keep
 `mean(L1_TO_L1)` whenever supplied; an isolate-only module may use only its
 declared isolate when that measures the affected operation. The existing
-`perf_sfpu_reduce_row_max.py` declares only `MATH_ISOLATE`, so its result covers
+`perf_sfpu_reduce.py` declares only `MATH_ISOLATE`, so its result covers
 math cycles, not end-to-end cycles. Record the declaration, source, and scope
 in the existing agent log before measurements. Missing or contradictory
 preselection is `PERF_PLAN_ERROR`; return it for the worker to correct.
