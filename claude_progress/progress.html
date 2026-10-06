@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="sr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>practice_routed_expert progress</title>
+<style>
+  :root { --bg: #ffffff; --fg: #1d1d1f; --muted: #6b6b70; --line: #e2e2e6; --code: #f4f4f6; --ok: #1a7f37; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161618; --fg: #e8e8ea; --muted: #9a9aa2; --line: #2e2e33; --code: #222226; --ok: #4ac26b; }
+  }
+  body { background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; max-width: 860px; margin: 0 auto; padding: 24px 16px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 17px; margin: 28px 0 6px; border-top: 1px solid var(--line); padding-top: 16px; }
+  .muted { color: var(--muted); }
+  .ok { color: var(--ok); font-weight: 600; }
+  code, pre { background: var(--code); border-radius: 4px; font: 13px/1.4 ui-monospace, monospace; }
+  code { padding: 1px 4px; }
+  pre { padding: 8px 10px; overflow-x: auto; }
+  table { border-collapse: collapse; margin: 6px 0; }
+  td, th { border-bottom: 1px solid var(--line); padding: 3px 12px 3px 0; text-align: right; }
+  td:first-child, th:first-child { text-align: left; }
+  ul { padding-left: 20px; margin: 4px 0; }
+</style>
+</head>
+<body>
+
+<h1>practice_routed_expert</h1>
+<p class="muted">Vežba: sopstveni fuzionisani op za jednog Kimi K3 routed experta,
+<code>out = situ_glu(x @ w_gate, x @ w_up) @ w_down</code>.
+Plan: testovi prvo, zatim najprostiji kerneli, pa iterativno brzina.
+Grana <code>jmitrovic/practice_routed</code>.</p>
+
+<h2>2026-10-06 · 1. Testovi</h2>
+<ul>
+  <li>PCC test (12 slučajeva: tiny / k3-t32 / k3-t512 × normal / saturated × bf16 / bf8_bf4) i perf test (practice prema produkcijskom <code>unified_routed_expert_moe</code>, T = 32…5120).</li>
+  <li>Komitovano: <code>32835fe0648</code>. Op tada nije postojao, testovi su samo učitani.</li>
+  <li>Odstupanje od plana: preskočen je zaseban korak sa aktivacijom, odmah se pravi ceo fuzionisani op.</li>
+  <li>Usput popravljen pre-commit: keš virtualenv-a i keš pre-commit-a su bili oštećeni, pa su obrisani.</li>
+</ul>
+
+<h2>2026-10-06 · 2. Najprostiji op</h2>
+<ul>
+  <li><code>ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/practice_routed_expert/</code>, plus registracija u <code>deepseek_prefill/CMakeLists.txt</code> i <code>experimental_nanobind.cpp</code>. Nije komitovano.</li>
+  <li>Jedno jezgro, svaki tile se čita posebno. Gate i up matmul se sabiraju u DEST, pa <code>situ_glu_tile</code> radi na licu mesta. Red H stoji u L1, a down matmul radi nad celim tim redom.</li>
+</ul>
+<pre>cmake --build build_Release --target install
+pytest tests/ttnn/unit_tests/operations/practice_routed_expert/</pre>
+<p><span class="ok">22 passed</span>. Vreme na device-u, medijana 3 pokretanja, bf8 x i bf4 težine:</p>
+<table>
+  <tr><th>T</th><th>practice</th><th>production</th><th>odnos</th></tr>
+  <tr><td>32</td><td>19.1 ms</td><td>110 µs</td><td>172×</td></tr>
+  <tr><td>128</td><td>71.6 ms</td><td>110 µs</td><td>651×</td></tr>
+  <tr><td>512</td><td>262 ms</td><td>142 µs</td><td>1846×</td></tr>
+  <tr><td>2048</td><td>1.05 s</td><td>515 µs</td><td>2032×</td></tr>
+  <tr><td>5120</td><td>2.62 s</td><td>1.28 ms</td><td>2047×</td></tr>
+</table>
+<p class="muted">Produkcijski perf test (<code>test_single_routed_expert_k3_perf</code>) se ovde preskače, jer traži P150 ploču, a ova mašina je Galaxy.</p>
+
+<h2>Sledeće</h2>
+<ul>
+  <li>Izmeriti gde odlazi vreme: reader (čekanje na DRAM) ili compute.</li>
+  <li>Zatim: manje čitanja iz DRAM-a, više jezgara, LoFi.</li>
+</ul>
+
+</body>
+</html>
