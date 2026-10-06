@@ -10,6 +10,12 @@ Geometry: 4x2 Blackhole mesh, FABRIC_2D, SP = 4 over axis 0, TP = 2 over axis 1,
 `models/demos/xing40_a4b_d_p/tests/bringup/contract/`; `server_rules.py` there is the server's planner, pad and
 reshuffle ported to Python, with citations.
 
+**Deployed geometry (2026-10-06): chunk 2048, max seq 4096, 1 slot** (W = 512), to pair with the frozen Xing decode
+(1 slot x 4096 positions; bringup/serving.md section 7). The values live in tt/settings.py (`SERVE_CHUNK` /
+`SERVE_MAX_SEQ` / `SERVE_SLOTS`, env `XING_SERVE_*`) and the contract tests run at them (server_rules.py SCENARIOS
+holds each test's prompts per geometry). The rules below are geometry-free; the worked numbers are for C = 5120,
+M = 56320.
+
 ## Input
 
 **Build.** `prefill_chunk(input, kv, slot_id=, actual_start=, actual_end=, ...)` gets one chunk from the H2D stream:
