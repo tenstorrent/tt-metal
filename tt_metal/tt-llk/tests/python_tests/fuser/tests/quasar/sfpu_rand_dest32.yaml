@@ -1,0 +1,48 @@
+# rand overwrites Dest with hardware-PRNG draws from the harness default interval [1, 3]
+# (sfpu_operations_quasar.h RAND_FROM_BITS / RAND_SCALE_BITS), so its own output has no
+# element-wise golden; test_rand_quasar checks it statistically. Here rand is followed by an op
+# whose result is the same for every draw in [1, 3] (sign, isfinite, x > 0, hardtanh, x > 0.5:
+# all 1), which checks that rand runs inside a fused kernel and writes every element of the tile
+# with an in-range value. The input covers negatives, zero and positives below 1, so any element
+# rand left unwritten, or wrote out of range, changes the result.
+#
+# Uses only existing fuser features: dest_acc is fixed per file (hence the _dest16 / _dest32
+# pair), the float input goes through the FPU datacopy path, and stimuli are finite intervals and
+# points. Sweeping the rand interval or seed, or checking rand's own output, needs fuser support
+# (op template parameters, statistical checks) that does not exist.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Float16_b, Float16, Float32]
+    stimuli:
+      include:
+        - [-8.0, -0.01]
+        - [0.01, 0.99]
+        - [3.01, 8.0]
+        - -1.0
+        - 0.0
+        - 0.5
+        - 1.0
+        - 3.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float32
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32]}
+      - type: "UnarySfpu"
+        operation: [Rand]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+      - type: "UnarySfpu"
+        operation: [Sign, Isfinite, GreaterThanZero, Hardtanh, UnaryGt]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32]}
