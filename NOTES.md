@@ -47,3 +47,8 @@ still frame, write state/ready/g15blx02.READY. On 9: log the drop (broker_slice/
 - Old marker moved to data/g15/driver/DRIVER.done.rc14. Driver restarted: `ttp detach t158-driver2` (run dir state/runs/656);
   it reruns the (cached) prewarm, checks disk, then submits the warm e2e job (job id -> data/g15/driver/job_id_run).
 Next: same as run 654's "Next" (stage table, ltx_eval vs ref_dv145 seed 0, still frame, READY marker).
+
+## Light wake 2026-10-06 (run 657)
+- DRIVER.done = 0 (job 399 completed 20:48 UTC, no drops). Warm gen#1 E2E_WALL_S 6.101: encode 0.20, S1 2.25, upsample 0.14, S2 2.33, VAE 0.57, audio 0.40, export 0.17 (compute 5.89).
+- ltx_eval vs ref_dv145 seed0: FAIL pcc 0.274 / psnr 9.54 (ref is an older-commit DiffVAE reference; not comparable). vs t138 gen#1 (blx03 job 099): pcc 1.000, psnr 99 (bit-identical).
+- READY marker written: tt-project/state/ready/g15blx02.READY. ~/fasth3 99 GB.
