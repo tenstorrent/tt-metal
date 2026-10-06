@@ -6,8 +6,8 @@ Method of the KDA layer perf gate (tests/kda/perf/test_layer_perf.py): productio
 first chunk of the registered synthetic ``single`` case (prepared weight cache, no CPU reference), one warm forward,
 one trace capture, one warm replay, then five synchronized samples of ten back-to-back non-blocking replays; the
 gate reads the median sample (ms per replay). References are the median over five independent sessions (one
-process each, interleaved across cases, host load average below 5 on 32 CPUs) on the recorded revision; the gate
-bounds the median from above only (+3 %), so a speedup never fails it (recalibrate instead).
+process each, interleaved across cases, host load average below 5 on 32 CPUs) on the recorded revision. The gate is two-sided (+-3 %, the KDA gate convention): a regression fails it (needs
+approval), and so does an improvement (recalibrate with evidence).
 
 LB-A: 2x4 mesh, SP2 x TP4, 1280 tokens per chunk. LB-B: 8x1 mesh, SP8 x TP1, 5120 tokens per chunk, one Galaxy TP4
 rank's heads. Opt in with ``KDA_PERF_SKU=bh_loudbox`` (shared with the KDA gates): the references hold for the
@@ -67,20 +67,23 @@ def _perf_reference_ms(model: str, layout: str) -> float:
 
 def _assert_performance(model: str, layout: str, median_wall_ms: float) -> None:
     reference_ms = _perf_reference_ms(model, layout)
+    lower = reference_ms * (1.0 - _PERF_MARGIN)
     upper = reference_ms * (1.0 + _PERF_MARGIN)
-    assert median_wall_ms <= upper, (
-        f"{model} {layout} median trace wall {median_wall_ms:.3f} ms exceeds {upper:.3f} ms "
-        f"(reference {reference_ms:.3f} ms + {_PERF_MARGIN:.0%})"
+    assert lower <= median_wall_ms <= upper, (
+        f"{model} {layout} median trace wall {median_wall_ms:.3f} ms is outside performance range "
+        f"[{lower:.3f}, {upper:.3f}] ms (reference {reference_ms:.3f} ms +- {_PERF_MARGIN:.0%})"
     )
 
 
-def test_gdn_perf_gate_bounds_regressions_only(monkeypatch, expect_error) -> None:
+def test_gdn_perf_gate_uses_two_sided_margin(monkeypatch, expect_error) -> None:
     monkeypatch.setenv("KDA_PERF_SKU", _PERF_SKU)
     reference_ms = _perf_reference_ms("qwen38_27b", "LB-A")
     _assert_performance("qwen38_27b", "LB-A", reference_ms * 1.029)
-    _assert_performance("qwen38_27b", "LB-A", reference_ms * 0.5)
-    with expect_error(AssertionError, "exceeds"):
+    _assert_performance("qwen38_27b", "LB-A", reference_ms * 0.971)
+    with expect_error(AssertionError, "outside performance range"):
         _assert_performance("qwen38_27b", "LB-A", reference_ms * 1.031)
+    with expect_error(AssertionError, "outside performance range"):
+        _assert_performance("qwen38_27b", "LB-A", reference_ms * 0.969)
     monkeypatch.delenv("KDA_PERF_SKU")
     with expect_error(ValueError, "KDA_PERF_SKU"):
         _perf_reference_ms("qwen38_27b", "LB-A")
