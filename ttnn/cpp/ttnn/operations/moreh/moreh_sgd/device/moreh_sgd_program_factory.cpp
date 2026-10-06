@@ -43,7 +43,7 @@ ProgramDescriptor MorehSgdOperation::create_descriptor(
 
     auto compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    auto shape = param_in.logical_shape();
+    auto shape = param_in.padded_shape();
     auto H = shape[-2];
     auto W = shape[-1];
     auto num = param_in.physical_volume() / H / W;

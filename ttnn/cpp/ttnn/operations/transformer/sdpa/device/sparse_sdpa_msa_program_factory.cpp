@@ -105,7 +105,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     const uint32_t out_tile_bytes = tt::tile_size(out_df);
 
     // Work split and the hash-excluded per-dispatch scalars (K/V slot offsets, group strides, per-coordinate
-    // causal chunk_start) come from the helper override_runtime_arguments also uses, so the values baked here
+    // causal geometry) come from the helper override_runtime_arguments also uses, so the values baked here
     // and the ones patched on a cache hit cannot drift.
     const auto dyn = SparseSDPAMsaOperation::compute_dispatch_args(attrs, t, mesh_dispatch_coordinate);
     const tt::tt_metal::CoreCoord grid = dyn.grid;
@@ -313,7 +313,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         reader_rt[RArg::kReaderVGroupStride] = dyn.v_group_tile_stride;
         // Baked per-coordinate (one program per device, so each rank masks against its own global
         // position) and re-applied on cache hits.
-        reader_rt[RArg::kReaderChunkStart] = dyn.chunk_start_local;
+        reader_rt[RArg::kReaderChunkStart] = dyn.causal.chunk_start;
+        reader_rt[RArg::kReaderStraddleRow] = dyn.causal.straddle_row;
+        reader_rt[RArg::kReaderStraddleJump] = dyn.causal.straddle_jump;
         reader_desc.emplace_runtime_args(core, reader_rt);
 
         using WArg = SparseSDPAMsaOperation::WriterArg;

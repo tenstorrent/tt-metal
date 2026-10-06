@@ -133,6 +133,7 @@ private:
     // protected by api_mutex_. Operations that reconfigure global state (e.g. setting subdevices or enabling tracing)
     // on the device may not be thread safe.
     std::mutex api_mutex_;
+    bool command_list_builder_active_ = false;
     bool is_internal_state_initialized = false;
     // Which MetalContext instance this MeshDevice uses
     // To be removed in favor of directly passing around the MetalContext reference.
@@ -264,6 +265,11 @@ public:
     void push_corruptible_allocation_scope();
     void pop_corruptible_allocation_scope();
 
+    // Command List builder lifecycle. The reservation is device-wide; the active
+    // SubDeviceManagerId is captured separately by the builder for validation.
+    SubDeviceManagerId acquire_command_list_builder();
+    void release_command_list_builder();
+
     // IDevice interface implementation
     tt::ARCH arch() const override;
     int id() const override;
@@ -284,9 +290,9 @@ public:
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const override;
     std::vector<CoreCoord> ethernet_cores_from_logical_cores(
         const std::vector<CoreCoord>& logical_cores) const override;
-    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
+    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) const override;
     std::unordered_map<uint32_t, CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(
-        NOC noc, const MeshCoordinate& coord);
+        NOC noc, const MeshCoordinate& coord) const;
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
     CoreCoord logical_core_from_worker_core(const CoreCoord& virtual_coord) const override;
@@ -352,7 +358,7 @@ public:
     // DRISC L1 arena. Consumed by the DRAM-sender GlobalCircularBuffer ctor for
     // pages_sent allocations. Constructed eagerly in initialize_impl() when the
     // HAL exposes programmable DRAM cores; TT_FATAL otherwise.
-    ::tt::tt_metal::DriscL1Arena& drisc_l1_arena();
+    ::tt::tt_metal::DriscL1Arena& drisc_l1_arena() const;
 
     // Lazily-constructed Tensor prefetcher (DRISC) subsystem. The first call materializes
     // the manager bound to this mesh device; subsequent calls return the same instance.

@@ -23,11 +23,9 @@ void ChronologicalSelectionsOperation::validate_on_program_cache_miss(
     TT_FATAL(a.batch_heads > 0 && a.key_dim > 0 && a.value_dim > 0, "chronological_selections: invalid state geometry");
 }
 ChronologicalSelectionsOperation::spec_return_value_t ChronologicalSelectionsOperation::compute_output_specs(
-    const operation_attributes_t& a, const tensor_args_t& in) {
+    const operation_attributes_t&, const tensor_args_t&) {
     return {tt::tt_metal::TensorSpec(
-        Shape(
-            {kda_chronology::selection::record_count(in.actual_start.device()->shape()[a.sequence_parallel_axis]),
-             kda_chronology::selection::record_width}),
+        Shape({kda_chronology::selection::record_count, kda_chronology::selection::record_width}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),

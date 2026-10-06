@@ -31,24 +31,24 @@ void kernel_main() {
 
         cb_out0.wait_front(single_block_size * has_rows);
 
-        for (uint32_t row = 0; row < num_rows; ++row) {
-            const uint32_t k = start_row_id + row;
-            uint32_t total_size = start_column_id + width_size;
-            uint32_t write_size = width_size;
+        // The work split runs over the input padded width.
+        if (start_column_id < unpadded_X_size) {
+            const uint32_t total_size = start_column_id + width_size;
+            const uint32_t write_size =
+                (total_size > unpadded_X_size) ? (unpadded_X_size - start_column_id) : width_size;
 
-            if (total_size > unpadded_X_size) {
-                uint32_t padded_size = total_size - unpadded_X_size;
-                write_size -= padded_size;
+            for (uint32_t row = 0; row < num_rows; ++row) {
+                const uint32_t k = start_row_id + row;
+
+                noc.async_write(
+                    cb_out0,
+                    s,
+                    write_size,
+                    {.offset_bytes = row * width_size},
+                    {.page_id = size_2d + k, .offset_bytes = start_column_id});
+
+                noc.async_write_barrier();
             }
-
-            noc.async_write(
-                cb_out0,
-                s,
-                write_size,
-                {.offset_bytes = row * width_size},
-                {.page_id = size_2d + k, .offset_bytes = start_column_id});
-
-            noc.async_write_barrier();
         }
 
         cb_out0.pop_front(single_block_size * has_rows);

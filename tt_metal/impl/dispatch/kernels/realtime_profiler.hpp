@@ -16,6 +16,10 @@ constexpr uint32_t WALL_CLOCK_HIGH_INDEX = 2;
 // Sync marker ID - used to identify sync packets in real-time profiler stream
 constexpr uint32_t REALTIME_PROFILER_SYNC_MARKER_ID = 0xFFFFFFFF;
 
+// Dispatch-stall marker ID - the BRISC reports a dispatch_s wait for a free record slot with this ID in word 3
+// (words 0-1: stall end time, word 2: stall cycles). Must match the host-side copy.
+constexpr uint32_t REALTIME_PROFILER_DISPATCH_STALL_MARKER_ID = 0xFFFFFFFE;
+
 // CQDispatchSetWriteOffsetCmd::program_host_id and RT timestamp correlation: this value means the
 // dispatch event is not tied to a profiled program (raw streams, preamble defaults). dispatch_d
 // must not push it into the program-id FIFO; dispatch_s passes it to write_buffer_id for non-GO
@@ -61,8 +65,13 @@ bool program_id_fifo_pop(volatile tt_l1_ptr realtime_profiler_msg_t* msg, uint32
     return true;
 }
 
-// Record a real-time profiler timestamp (start or end) to the appropriate ping-pong buffer.
-// Reads mailbox state to determine which buffer to use (opposite of what's being pushed).
+// The record slot dispatch_s is currently filling (see the record ring in realtime_profiler_msgs.h).
+FORCE_INLINE
+volatile realtime_profiler_record_t* open_record(volatile tt_l1_ptr realtime_profiler_msg_t* msg) {
+    return &msg->records[msg->record_wr_idx & (REALTIME_PROFILER_RECORD_SLOTS - 1)];
+}
+
+// Record a real-time profiler timestamp (start or end) into the open record slot.
 // is_start: true for kernel start timestamp, false for kernel end timestamp
 FORCE_INLINE
 void record_realtime_timestamp(volatile tt_l1_ptr realtime_profiler_msg_t* msg, bool is_start) {
@@ -71,19 +80,8 @@ void record_realtime_timestamp(volatile tt_l1_ptr realtime_profiler_msg_t* msg, 
     uint32_t time_lo = p_reg[WALL_CLOCK_LOW_INDEX];
     uint32_t time_hi = p_reg[WALL_CLOCK_HIGH_INDEX];
 
-    // Determine buffer from profiler state: write to buffer NOT being pushed
-    // PUSH_B means real-time profiler is pushing B, so write to A
-    // Otherwise (IDLE, PUSH_A) write to B
-    RealtimeProfilerState state = static_cast<RealtimeProfilerState>(msg->realtime_profiler_state);
-    bool use_buffer_a = (state == REALTIME_PROFILER_STATE_PUSH_B);
-
-    // Get pointer to appropriate timestamp field
-    volatile realtime_profiler_timestamp_t* ts;
-    if (use_buffer_a) {
-        ts = is_start ? &msg->kernel_start_a : &msg->kernel_end_a;
-    } else {
-        ts = is_start ? &msg->kernel_start_b : &msg->kernel_end_b;
-    }
+    volatile realtime_profiler_record_t* record = open_record(msg);
+    volatile realtime_profiler_timestamp_t* ts = is_start ? &record->kernel_start : &record->kernel_end;
 
     ts->time_lo = time_lo;
     ts->time_hi = time_hi;
@@ -100,21 +98,14 @@ uint32_t pop_program_id(volatile tt_l1_ptr realtime_profiler_msg_t* msg) {
     return id;
 }
 
-// Write a program ID to both start and end timestamps of the current write buffer.
+// Write a program ID to both start and end timestamps of the open record slot.
 // For GO_SIGNAL commands: pass the ID from pop_program_id().
 // For non-GO commands: pass REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID so the host filters them out.
 FORCE_INLINE
 void write_buffer_id(volatile tt_l1_ptr realtime_profiler_msg_t* msg, uint32_t id) {
-    RealtimeProfilerState state = static_cast<RealtimeProfilerState>(msg->realtime_profiler_state);
-    bool use_buffer_a = (state == REALTIME_PROFILER_STATE_PUSH_B);
-
-    if (use_buffer_a) {
-        msg->kernel_start_a.id = id;
-        msg->kernel_end_a.id = id;
-    } else {
-        msg->kernel_start_b.id = id;
-        msg->kernel_end_b.id = id;
-    }
+    volatile realtime_profiler_record_t* record = open_record(msg);
+    record->kernel_start.id = id;
+    record->kernel_end.id = id;
 }
 #else
 FORCE_INLINE
