@@ -826,6 +826,7 @@ def as_tensor(
     cache_file_name: Optional[Union[str, pathlib.Path]] = None,
     preprocess: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
     mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
+    cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
 ) -> ttnn.Tensor:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`.
@@ -839,14 +840,16 @@ def as_tensor(
         device (ttnn.MeshDevice, optional): The `ttnn` device. Defaults to `None`.
         memory_config (ttnn.MemoryConfig, optional): The `ttnn` memory configuration. Defaults to `None`.
         cache_file_name (str | pathlib.Path, optional): The cache file name. Defaults to `None`.
-            A cache miss writes the file with a ``DISTRIBUTED_GATHER`` dump, a collective across all ranks. Set
-            ``TTNN_CACHE_DUMP_LOCAL=1`` when ranks own different tensors (e.g. one pipeline stage per rank): each rank
-            then writes its own host-local tensor in ``LOCAL`` mode, so the files must not be shared between ranks.
         preprocess (Callable[[ttnn.Tensor], ttnn.Tensor], optional): The function to preprocess the tensor before serializing/converting to ttnn. Defaults to `None`.
         mesh_mapper (ttnn.CppTensorToMesh, optional): The TensorToMesh to define the mapping from torch to multi-device. Defaults to `None`.
 
             - For Grayskull, the on-device tilizer will truncate mantissa bits for bfp* formats.
             - For Wormhole, the on-device tilizer will raise a runtime error (RTE) for bfp8 but will truncate for bfp4/2 formats.
+        cache_dump_mode (ttnn.DumpTensorMode, optional): How a cache miss writes ``cache_file_name``. Defaults to
+            ``ttnn.DumpTensorMode.DISTRIBUTED_GATHER``, a collective that every rank must reach with the same tensor.
+            Use ``ttnn.DumpTensorMode.LOCAL`` when ranks own different tensors (e.g. one pipeline stage per rank):
+            with ``DISTRIBUTED_GATHER`` their cache misses never pair up and a cold fill deadlocks. ``LOCAL`` writes
+            each rank's host-local tensor, so cache files must not be shared between ranks.
 
     Returns:
         ttnn.Tensor: The resulting `ttnn` tensor.
@@ -902,17 +905,14 @@ def as_tensor(
             f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
         )
         pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
-        if os.environ.get("TTNN_CACHE_DUMP_LOCAL") == "1":
-            # The default DISTRIBUTED_GATHER dump is a world collective: every rank must reach it with the same tensor.
-            # Ranks that each own different weights (one mesh per rank, e.g. pipeline stages) miss the cache for
-            # different tensors, the barriers never pair up, and the cold fill deadlocks. Each rank writes its own
-            # host-local tensor instead; the per-process temp file plus rename keeps a concurrent reader from seeing
-            # a partial file.
+        if cache_dump_mode == ttnn.DumpTensorMode.LOCAL:
+            # Every rank writes its own file here, so a per-process temp file plus rename keeps a concurrent reader
+            # from seeing a partial one.
             tmp_file_name = f"{cache_file_name}.tmp{os.getpid()}"
-            ttnn._ttnn.tensor.dump_tensor_flatbuffer(tmp_file_name, tensor, ttnn.DumpTensorMode.LOCAL)
+            ttnn._ttnn.tensor.dump_tensor_flatbuffer(tmp_file_name, tensor, cache_dump_mode)
             os.replace(tmp_file_name, cache_file_name)
         else:
-            ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor)
+            ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor, cache_dump_mode)
         if device is not None:
             tensor = tensor.to(device, memory_config)
         return tensor
