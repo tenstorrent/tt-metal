@@ -10,6 +10,7 @@ import torch
 from helpers.constraints import is_valid_quasar_fpu_path
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
+    ReshuffleRowsGolden,
     TilizeGolden,
     UnarySFPUGolden,
     UntilizeGolden,
@@ -499,7 +500,7 @@ def prepare_cumsum_inputs(
 # Ops whose result depends on where in the tile a datum sits, so L1 has to hold a real tilized tile.
 # Every other op in this suite is element-wise and cannot tell a tilized buffer from a row-major one,
 # which is why the suite has always written the latter.
-LAYOUT_SENSITIVE_OPS = (MathOperation.Cumsum,)
+LAYOUT_SENSITIVE_OPS = (MathOperation.Cumsum, MathOperation.ReshuffleRows)
 
 
 def prepare_unary_inputs(
@@ -1368,6 +1369,165 @@ def test_cumsum_tilized_dest_quasar(cumsum_formats_dest_acc):
     assert torch.allclose(
         result, expected, rtol=0, atol=1e-3
     ), f"cumsum mismatch:\ngot\n{result}\nexpected\n{expected}"
+
+
+# ---------------------------------------------------------------------------
+# reshuffle_rows: row scatter-add from Dest tile idst into tile idst + 1.
+#
+# Not part of the random sweep above: the op needs a 32-byte destination-row mask in L1 and
+# consumes tiles in (input, accumulator) pairs, so it carries its own stimulus and oracle.
+# The mask is written verbatim into buffer_B; the shared C++ source hands the kernel
+# buffer_B[0] - 16, like embedding_backward does with its CB tile address.
+# ---------------------------------------------------------------------------
+RESHUFFLE_NO_DESTINATION = ReshuffleRowsGolden.NO_DESTINATION
+
+
+def _reshuffle_mixed_mask() -> List[int]:
+    """Seeded mix of repeated targets and skipped rows."""
+    gen = torch.Generator().manual_seed(1234)
+    targets = torch.randint(0, DEFAULT_TILE_R_DIM, (DEFAULT_TILE_R_DIM,), generator=gen)
+    skipped = torch.rand(DEFAULT_TILE_R_DIM, generator=gen) < 0.25  # skip rate
+    return [
+        RESHUFFLE_NO_DESTINATION if skip else int(target)
+        for target, skip in zip(targets.tolist(), skipped.tolist())
+    ]
+
+
+# Each mask names what it pins. The many-to-one masks make every row re-read the quad the
+# previous row just stored (the Dest store -> load hazard); reverse crosses the face-pair
+# boundary (15 <-> 16) and the tile corners (0 <-> 31) and never keeps a row in its own
+# LREG lane.
+RESHUFFLE_MASKS = {
+    "identity": list(range(DEFAULT_TILE_R_DIM)),
+    "reverse": [DEFAULT_TILE_R_DIM - 1 - i for i in range(DEFAULT_TILE_R_DIM)],
+    "all_skip": [RESHUFFLE_NO_DESTINATION] * DEFAULT_TILE_R_DIM,
+    "halves_to_boundary": [
+        MAX_FACE_R_DIM if i < MAX_FACE_R_DIM else MAX_FACE_R_DIM - 1
+        for i in range(DEFAULT_TILE_R_DIM)
+    ],
+    "all_to_last": [DEFAULT_TILE_R_DIM - 1] * DEFAULT_TILE_R_DIM,
+    "mixed": _reshuffle_mixed_mask(),
+}
+
+# Two tile rows of (input, accumulator) pairs: the second pair runs at a non-zero Dest index.
+RESHUFFLE_DIMS = [64, 64]
+
+
+def _reshuffle_stimulus(dimensions) -> torch.Tensor:
+    """
+    Half-integers in [-2, 2]. A full 32-row pile-up plus the accumulator stays within
+    +-66 in steps of 0.5 (at most 8 significant bits), so every partial sum is exact in
+    Float16, Float16_b and Float32 and the oracle can demand bit equality: a single lost or
+    doubled row shows up instead of hiding inside a tolerance.
+    """
+    return torch.randint(-4, 5, tuple(dimensions)).to(torch.float32) / 2
+
+
+def _reshuffle_mask_buffer(mask: List[int]) -> torch.Tensor:
+    """One UInt8 tile whose first 32 bytes are the mask; the rest is the skip sentinel."""
+    buffer = torch.full(
+        (DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM,),
+        RESHUFFLE_NO_DESTINATION,
+        dtype=torch.int32,
+    )
+    buffer[: len(mask)] = torch.tensor(mask, dtype=torch.int32)
+    return buffer
+
+
+@pytest.mark.quasar
+@parametrize(
+    reshuffle_variant_sync_mask=[
+        (variant, DestSync.Half, runtime(mask_name))
+        for variant in generate_quasar_sfpu_format_variants(
+            MathOperation.ReshuffleRows, SFPU_UNARY_FORMATS
+        )
+        for mask_name in RESHUFFLE_MASKS
+    ],
+)
+def test_reshuffle_rows_quasar(reshuffle_variant_sync_mask):
+    """
+    reshuffle_rows against an exact oracle: every accumulator tile must equal its initial
+    value plus the mask-selected input rows, and every input tile must come back unchanged.
+    """
+    (format_variant, dest_sync, mask_name) = reshuffle_variant_sync_mask[0]
+    formats = format_variant.formats
+    dest_acc = format_variant.dest_acc
+    mask = RESHUFFLE_MASKS[mask_name]
+    input_dimensions = RESHUFFLE_DIMS
+
+    src_A = _reshuffle_stimulus(input_dimensions).to(format_dict[formats.input_format])
+    tile_cnt = (input_dimensions[0] // DEFAULT_TILE_R_DIM) * (
+        input_dimensions[1] // DEFAULT_TILE_C_DIM
+    )
+
+    expected = get_golden_generator(ReshuffleRowsGolden)(
+        src_A, mask, input_dimensions, formats.output_format
+    )
+
+    device_src_A = get_golden_generator(TilizeGolden)(
+        src_A, input_dimensions, formats.input_format
+    )
+
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs={
+            "test_name": "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
+            "formats": formats,
+            "templates": [
+                MATH_OP(mathop=MathOperation.ReshuffleRows),
+                APPROX_MODE(ApproximationMode.No),
+                IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
+                DATA_COPY_TYPE(DataCopyType.A2D),
+                UNPACKER_ENGINE_SEL(
+                    UnpackerEngine.UnpDest
+                    if format_variant.unpack_to_dest
+                    else UnpackerEngine.UnpA
+                ),
+                DEST_SYNC(dest_sync),
+                TYPECAST_FORMATS(),
+            ],
+            "runtimes": [
+                TILE_COUNT(tile_cnt),
+                NUM_FACES(MAX_NUM_FACES),
+                TEST_FACE_DIMS(),
+                DEST_INDEX(0),
+                LOOP_FACTOR(1),
+            ],
+            "variant_stimuli": StimuliConfig(
+                device_src_A,
+                formats.input_format,
+                _reshuffle_mask_buffer(mask),
+                DataFormat.UInt8,
+                formats.output_format,
+                tile_count_A=tile_cnt,
+                tile_count_B=1,
+                tile_count_res=tile_cnt,
+                num_faces=MAX_NUM_FACES,
+            ),
+            "unpack_to_dest": format_variant.unpack_to_dest,
+            "dest_acc": dest_acc,
+        },
+    )
+
+    format_variant.apply_formats(configuration.formats_config)
+
+    res_from_L1 = configuration.run().result
+
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = get_golden_generator(UntilizeGolden)(
+        res_tensor, formats.output_format, input_dimensions
+    )
+
+    result = res_tensor.to(torch.float32).reshape(input_dimensions)
+    expected = expected.to(torch.float32).reshape(input_dimensions)
+    mismatched_rows = sorted(
+        {int(r) for r in (result != expected).nonzero()[:, 0].tolist()}
+    )
+    assert torch.equal(result, expected), (
+        f"reshuffle_rows mismatch for mask {mask_name} {mask}: logical rows "
+        f"{mismatched_rows} differ\ngot\n{result}\nexpected\n{expected}"
+    )
 
 
 # ---------------------------------------------------------------------------

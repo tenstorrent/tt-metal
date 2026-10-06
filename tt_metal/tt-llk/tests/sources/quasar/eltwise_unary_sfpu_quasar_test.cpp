@@ -125,6 +125,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
     const std::uint32_t num_faces       = params.num_faces;
     const std::uint32_t DST_INDEX       = params.DST_INDEX;
+    const Operand& buffer_B             = params.buffer_B;
 #endif
 
     const DataFormat src_format     = static_cast<DataFormat>(formats.math);
@@ -197,14 +198,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
                 for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
-                    test_utils::call_unary_sfpu_operation_quasar<
-                        SFPU_UNARY_OPERATION,
-                        dest_sync,
-                        is_fp32_dest_acc_en,
-                        APPROX_MODE,
-                        SFPU_ITERATIONS,
-                        TYPECAST_IN_FORMAT,
-                        TYPECAST_OUT_FORMAT>(DST_INDEX + i, sfpu_in_format);
+                    if constexpr (SFPU_UNARY_OPERATION == SfpuType::reshuffle_rows)
+                    {
+                        // Tiles come in (input, accumulator) pairs: tile i is scattered into tile i + 1,
+                        // steered by the raw row mask in buffer_B (the kernel skips a 16-byte header).
+                        if (i % 2 == 0)
+                        {
+                            test_utils::call_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, dest_sync, is_fp32_dest_acc_en, APPROX_MODE>(
+                                DST_INDEX + i,
+                                sfpu_in_format,
+                                true /*first*/,
+                                5.0f /*fill_const_value, unused*/,
+                                buffer_B[0] - RESHUFFLE_MASK_HEADER_BYTES);
+                        }
+                    }
+                    else
+                    {
+                        test_utils::call_unary_sfpu_operation_quasar<
+                            SFPU_UNARY_OPERATION,
+                            dest_sync,
+                            is_fp32_dest_acc_en,
+                            APPROX_MODE,
+                            SFPU_ITERATIONS,
+                            TYPECAST_IN_FORMAT,
+                            TYPECAST_OUT_FORMAT>(DST_INDEX + i, sfpu_in_format);
+                    }
                 }
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {

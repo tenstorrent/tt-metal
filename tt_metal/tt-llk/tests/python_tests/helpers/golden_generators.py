@@ -5280,6 +5280,51 @@ class TilizeGolden:
 
 
 @register_golden
+class ReshuffleRowsGolden:
+    """
+    Row scatter-add of the reshuffle_rows SFPU op (embedding-backward accumulation).
+
+    The op consumes 32x32 tiles in (input, accumulator) pairs: for every input row ``i`` with
+    ``mask[i] < 32`` it adds the whole row into accumulator row ``mask[i]``; 255 skips the row.
+    Rows are applied in order, so several input rows may land on one accumulator row. The input
+    tile is left unchanged.
+
+    ``operand`` is the logical (untilized) ``[rows, cols]`` tensor; tile ``2k`` is the input
+    and tile ``2k + 1`` (the tile to its right) the accumulator, which matches the row-major
+    tile order of ``tilize_block``. The sums are taken in float32 and rounded to
+    ``data_format`` once at the end, so the caller must pick stimuli whose partial sums are
+    exact in the Dest format.
+    """
+
+    NO_DESTINATION = 255
+
+    def __call__(self, operand, mask, dimensions, data_format):
+        rows, cols = dimensions
+        if rows % TILE_DIM or cols % (2 * TILE_DIM):
+            raise ValueError(
+                f"reshuffle_rows needs whole (input, accumulator) tile pairs, got {dimensions}"
+            )
+        if len(mask) != TILE_DIM:
+            raise ValueError(f"mask must hold {TILE_DIM} entries, got {len(mask)}")
+
+        tiles = (
+            operand.to(torch.float32)
+            .reshape(rows // TILE_DIM, TILE_DIM, cols // TILE_DIM, TILE_DIM)
+            .clone()
+        )
+        for tile_row in range(rows // TILE_DIM):
+            for in_tile in range(0, cols // TILE_DIM, 2):
+                for in_row, out_row in enumerate(mask):
+                    if out_row >= TILE_DIM:
+                        continue
+                    tiles[tile_row, out_row, in_tile + 1] += tiles[
+                        tile_row, in_row, in_tile
+                    ]
+
+        return tiles.reshape(rows, cols).flatten().to(format_dict[data_format])
+
+
+@register_golden
 class PackRowsGolden:
     def __call__(
         self,

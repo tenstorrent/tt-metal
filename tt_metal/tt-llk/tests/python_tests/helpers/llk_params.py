@@ -100,6 +100,8 @@ class MathOperation(Enum):
     Neg = OpSpec("negative", MathOpType.SFPU_UNARY)
     Reciprocal = OpSpec("reciprocal", MathOpType.SFPU_UNARY)
     Relu = OpSpec("relu", MathOpType.SFPU_UNARY)
+    # Row scatter-add of Dest tile idst into tile idst + 1 driven by a 32-byte L1 row mask.
+    ReshuffleRows = OpSpec("reshuffle_rows", MathOpType.SFPU_UNARY)
     Rsqrt = OpSpec("rsqrt", MathOpType.SFPU_UNARY)
     Sigmoid = OpSpec("sigmoid", MathOpType.SFPU_UNARY)
     Sin = OpSpec("sine", MathOpType.SFPU_UNARY)
