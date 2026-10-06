@@ -20,6 +20,7 @@
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/core/to_layout/to_layout_op.hpp"
@@ -1080,6 +1081,14 @@ Tensor pow(
     std::int32_t exponent,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
+    if (exponent == 0 || exponent == 1) {
+        const MemoryConfig memory_config = output_mem_config.value_or(
+            output_tensor.has_value() ? output_tensor->memory_config() : input.memory_config());
+        if (exponent == 0) {
+            return ttnn::full_like(input, 1, input.dtype(), input.layout(), std::nullopt, memory_config, output_tensor);
+        }
+        return ttnn::assign(input, memory_config, input.dtype(), output_tensor);
+    }
     if (is_integer_pow_base(input.dtype())) {
         TT_FATAL(exponent >= 0, "pow: integers to negative integer powers are not allowed, got {}", exponent);
         const MemoryConfig memory_config = output_mem_config.value_or(

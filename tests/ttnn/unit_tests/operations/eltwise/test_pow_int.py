@@ -190,6 +190,36 @@ def test_pow_int_float_valued_exponent(exponent, device):
     assert_equal(actual, torch_pow(torch_input, exponent))
 
 
+@pytest.mark.parametrize("exponent", [0, 1])
+@pytest.mark.parametrize("preallocate", [False, True], ids=["new-output", "preallocated"])
+def test_pow_int_trivial_exponents_row_major(exponent, preallocate, device):
+    torch_input = torch.randint(INT32_MIN, INT32_MAX, DEFAULT_SHAPE, dtype=torch.int32)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = (
+        ttnn.from_torch(torch.full_like(torch_input, 7), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        if preallocate
+        else None
+    )
+
+    actual = ttnn.pow(tt_input, exponent, output_tensor=tt_output)
+
+    assert actual.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert_equal(ttnn.to_torch(actual), torch_pow(torch_input, exponent))
+
+
+def test_pow_int_rejects_row_major_for_nontrivial_exponent(device, expect_error):
+    skip_on_quasar(device)
+    tt_input = ttnn.from_torch(
+        torch.ones(DEFAULT_SHAPE, dtype=torch.int32),
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+
+    with expect_error(RuntimeError, "input must be in TILE layout"):
+        ttnn.pow(tt_input, 2)
+
+
 @pytest.mark.parametrize("ttnn_dtype, exponent", FULL_RANGE_CASES)
 def test_pow_int_full_range_wraps(ttnn_dtype, exponent, device):
     torch_input = random_full_range_input(DEFAULT_SHAPE, ttnn_dtype)

@@ -2072,9 +2072,10 @@ void bind_power(nb::module_& mod, const std::string& note = "") {
                  - TILE
 
             If a floating-point input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
-            Integer input tensors must already be in TILE layout and take a scalar exponent with an integral value;
-            tensor exponents, non-integral exponents, and non-default tile shapes are rejected for them.
-            Integer power is not supported on Quasar.
+            Integer inputs with exponent 0 or 1 may use ROW_MAJOR or TILE layout. For larger exponents, integer inputs
+            must use the default 32x32 TILE layout. Integer inputs require a scalar exponent with an integral value;
+            tensor exponents and non-integral exponents are rejected for them.
+            Integer exponents larger than 1 are not supported on Quasar.
             Integer results wrap modulo 2^32 (2^16 for UINT16) on overflow.
 
             {2}
