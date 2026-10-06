@@ -23,3 +23,21 @@ Blockers to plan around:
   BASE_UPSCALE, BASE_STEPS, BASE_WARM_STEPS=0 for jobs that cannot fit warm+timed).
 - 10 s native 1080p dense 50-step is ~3x the tokens of the 09-30 run; estimate 6-10 min denoise alone and possible OOM.
 Next: once a box is ready, run 6 s (768p+upscale, as 09-30) first, then 10 s, each its own job through that box's queue.
+
+## Step 2 (run 660, 2026-10-06 ~21:00 UTC): running on blx01
+Ready markers appeared for blx01 and g15blx02. g15blx02 is out: ~/fasth3 is at 99 of 100 GB and an H3 weight cache is ~131 GB.
+blx01 has the H3 weights (/mnt/MLPerf/...MiniMax-H3) and 399 GB free on /var/tmp. Code = blx01's existing t48 tree
+(/var/tmp/fasth3/t48 @ bf7db12a149, ltx-rt base, carries the upstream MiniMax-H3 pipeline); no new build.
+Not the fasth3-opt code: that branch diverged by 288 files and needs its own C++ build. So these numbers are the
+ltx-rt/upstream H3 pipeline, dense 50 steps, the same protocol as 09-30 (768p native, first+last keyframes = the 09-30
+seed0 first/last frames, host bicubic upscale to 1920x1080, seed 0).
+Native 1080p 10 s is not run: it would exceed the pipeline's top bucket rung (120832 tokens, admission cap).
+Broker jobs are capped at 600 s (tt-workflows reservation_cap hook), so the run is split:
+capture (dispatch off, kernel manifest) -> offline kernel_prewarm -> fill (weight cache to /var/tmp/fasth3/cache/dit-h3)
+-> time 6 s (2-step warmup + timed 50-step) -> time 10 s.
+Files (blx01:/var/tmp/fasth3/t161; copies in tt-project/t161/blx01): driver.sh, run_t161.sh, test_t161_h3_timing.py.
+Driver log: blx01:/var/tmp/fasth3/t161/driver.log; marker driver.marker. Outputs out_<tag>/ (timings.json,
+seed0_1920x1080.mp4, seed0_1920x1080_mid.png). Kernel cache: /var/tmp/fasth3/cache/tt-metal-cache-h3 (H3 only).
+First job: capture = broker job 623 (started 20:58 UTC; DiT weight conversion ~2.3 tensors/s, 534 tensors).
+Next: on wake read driver.log + out_time6/timings.json + out_time10/timings.json, copy mp4 + mid png to
+tt-project/t161/, report. Cleanup later: dit-h3 cache and tt-metal-cache-h3 on blx01 (project-created).
