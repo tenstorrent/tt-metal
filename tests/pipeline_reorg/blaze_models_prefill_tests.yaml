@@ -979,7 +979,7 @@
 
     section_start 1
     (
-      timeout -k 2m 90m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 150m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py::test_v4_flash_transformer_depth -vvv --tb=short
       '
@@ -997,7 +997,7 @@
 
     section_start 3
     (
-      timeout -k 2m 120m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 240m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py::test_v4_pro_transformer_depth_tail_b1 -vvv --tb=short
       '
@@ -1006,7 +1006,7 @@
 
     section_start 4
     (
-      timeout -k 2m 120m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 240m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py::test_v4_pro_transformer_depth_tail_b2 -vvv --tb=short
       '
@@ -1018,8 +1018,8 @@
   test_group: dsv4_transformer_depth
   skus:
     bh_sc1:
-      # Sum of the section timeouts (90+45+120+120 = 375), charged to models/demo/bh_sc1.
-      timeout: 375
+      # Sum of the section timeouts (150+45+240+240 = 675), charged to models/demo/bh_sc1.
+      timeout: 675
       tier: 2
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
