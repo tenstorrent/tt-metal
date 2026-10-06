@@ -1,3 +1,24 @@
+# #122 bisect of the job-484 hang (combos 141,142,145-150)
+
+- Driver: g14blx03:/var/tmp/fasth3/t115/src/tmp/blx03/t115/driver115.sh, launched 2026-10-06 02:55 UTC, pid in
+  /var/tmp/fasth3/t115/driver.pid, WAIT_PIDS=28542 (#119's driver). Log /var/tmp/fasth3/t115/driver.log, marker
+  `T115_DRIVER_DONE <stage> <rc>`; outcomes /var/tmp/fasth3/t115/outcomes.txt; per-combo logs run115_<tag>.log.
+- rc 0 all done; 6 = hang and broker not healthy 30 min later (stop); 7 = submit failed; 8 = broker never healthy
+  (relaunch the same way; finished combos have results/<tag>_done). Driver gone without marker = blx03 reboot:
+  relaunch with `ssh g14blx03 "WAIT_PIDS= setsid nohup bash <driver> > /var/tmp/fasth3/t115/driver.out 2>&1 < /dev/null &"`.
+- 2026-10-06 03:02 UTC blx03 rebooted (broker power-cycle/glx_reset recovery, not our job; 8/32 chips off PCIe
+  before it). Driver 79490 died before its first submit. Relaunched 03:15 UTC, pid 37098, after adding a
+  health() check that waits while any other smarton job is running or queued (t133 job 251 was queued).
+- 2026-10-06 03:42:42 UTC blx03 rebooted again (broker recovery jobs 257-268: glx_reset health gates failed,
+  bridge-reset chips 8-15 (tray 2) failed, power-cycle with 32/32 chips off PCIe; device back for tenants 03:45 UTC).
+  No job of ours ran; t133 job 251 (project) completed at 03:45. Driver 37098 died. Relaunched 03:48 UTC, pid 21066
+  (old log driver.log.prev-reboot0342).
+- 141 (64,64,3,8,8): PASS, job 269 (03:48-03:50 UTC). 142 (64,64,3,16,4): job 270 submitted 03:50 UTC.
+- Next: read outcomes.txt, fill tt-project/t114/BUG.md, log drops (UTC, job id, chips) in the hand-off,
+  then rm -rf /var/tmp/fasth3/t115/src on blx03.
+
+---
+
 # t115 notes (off-device triage of the job 484 hang, branch ttp/t115-conv3d-hang-triage)
 
 - Suspect: 143 (64,128,6,8,8) and 144 (64,128,6,16,4). They are the only combos in 141-150 whose L1 prefetch

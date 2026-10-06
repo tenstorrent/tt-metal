@@ -78,5 +78,32 @@ This is a code-reading result only. No single combo has been run on its own yet.
 `tmp/blx03/t115/driver115.sh` runs one broker job per blocking: 141, 142, 145-150, with 143/144
 left out on purpose. Each job opens the full mesh and then `create_submesh(2,4)`.
 `SWEEP_ONLY_BLOCKINGS` makes the sweep time just that blocking, and the harness prints the blocking
-before each launch. The driver stops at the first drop or hung job.
+before each launch. A drop reruns the combo (skip after 2 drops in a row); a hung combo is recorded and
+the bisect goes on unless the broker stays unhealthy for 30 min after it.
 `DRY_RUN=1 bash tmp/blx03/t115/driver115.sh` prints the plan without touching a device.
+
+## Bisect status (#122, 2026-10-06)
+
+- Build: blx03 ~/fasth3/t48 @9f2b28b766 (C++ = 64571a953b2, TT_FATAL halo guard compiled). Python overlay
+  ttp/t114 @bc134f7c656 staged at g14blx03:/var/tmp/fasth3/t115/src.
+- Driver launched 02:55 UTC (pid 79490), waiting for #119's driver and for broker health. At launch the
+  broker held the device: 8/32 chips off the bus after a failed glx_reset (02:44 UTC), not our job.
+- Per-combo outcomes: g14blx03:/var/tmp/fasth3/t115/outcomes.txt (filled in here when the run ends).
+- 143 is not run on purpose (task update: 143/144 excluded); a clean TT_FATAL check for it is a followup.
+
+## Bisect result (#122, blx03, 2026-10-06, t48 @64571a953b2 + guard 5bce3778127)
+Each combo ran as its own broker job: full mesh opened, then create_submesh(2,4). Combos 143/144 were excluded.
+
+| combo (Cin,Cout,T,H,W) | job | outcome |
+|---|---|---|
+| 141 (64,64,3,8,8)  | 269 | PASS |
+| 142 (64,64,3,16,4) | 270 | PASS |
+| (64,32,3,4,4)      | 271 | PASS |
+| (64,32,3,8,2)      | 272 | PASS |
+| (64,128,5,4,4)     | 273 | HANG: no output for 300 s, reaped; post-job eth heartbeat frozen (incident 20261006T040240Z_unhealthy_273) |
+| (64,128,5,8,2)     | 276 | HANG, same signature (20261006T041344Z_unhealthy_276) |
+| (64,128,7,4,4)     | 280 | HANG, same signature (20261006T042443Z_unhealthy_280) |
+| (64,128,7,8,2)     | 285 | HANG, same signature (20261006T043535Z_unhealthy_285) |
+
+Between hangs the broker ran its own galaxy recovery (job 275 and similar), and the device passed its health gate before the next combo started. Every combo with Cout=128 still hung on that freshly recovered device, so the hang follows the config and is not left over from a wedged mesh. The guard did not fire: these blockings pass prefetch_shard_fits() but still hang. So the job-484 hang is NOT limited to 143/144. It covers Cin_block=64 with Cout_block=128 (T=5 and T=7 tested). Cout 32 and 64 are fine.
+Combo 143 alone was not run: four reproducible hangs in a row already answer the question, and 143 is expected to hit the TT_FATAL guard before any device dispatch.
