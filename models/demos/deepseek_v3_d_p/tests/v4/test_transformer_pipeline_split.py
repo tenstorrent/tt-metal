@@ -2,12 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pipeline-split PCC for TtV4Transformer: two ranks on one mesh, layer 0 on the first and layer 1 on the
-second, against the unsplit CPU reference.
+"""Pipeline-split PCC for TtV4Transformer: two ranks on one mesh, layer 0 on the first and layers 1-2 on
+the second, against the unsplit CPU reference.
 
 Random weights. The first rank's output is the packed residual streams, handed straight to the second
 rank, so this grades the handoff shape and the per-rank build: embedding only on the first, head and
-norm only on the last, global layer indices on both. Layer 1 is hash-routed, so the second rank is
+norm only on the last, global layer indices on both. Layers 1-2 are hash-routed, so the second rank is
 given the host ids the first rank would read off its token tensor.
 """
 
@@ -37,7 +37,7 @@ _CASES = [
     pytest.param(DeepSeekV4ProConfig, 0.98, id="pro"),
     pytest.param(DeepSeekV4FlashConfig, 0.99, id="flash"),
 ]
-_NUM_LAYERS = 2
+_NUM_LAYERS = 3
 _BOUNDARY = 1
 _SEED = 11
 
@@ -92,6 +92,7 @@ def test_v4_transformer_pipeline_split(mesh_device, device_params, num_links, se
     out = ranks[1](handoff, actual_isl=seq_len, input_ids=input_ids, layer_tap=tap)
 
     assert_layers_and_output(
+        config,
         per_layer,
         ref_layers,
         hidden_to_host(mesh_device, out),

@@ -11,8 +11,6 @@ Subclasses ``MLAPrefillAdapter`` for the shared plumbing and replaces what V4 do
   at a time, and ``allocate_kv_cache`` hands back an empty handle;
 * a pipeline rank other than the first may not start inside the hash-routed layers, which need host
   token ids that only the first rank has.
-
-CSA layers (2, 4, 6, ...) have no device attention yet, so a slice reaching one fails in ``TtV4Block``.
 """
 
 from __future__ import annotations

@@ -45,6 +45,16 @@ def v4_block_modules(config, layer_idx: int) -> dict:
     }
 
 
+def _normal_per_expert(param: torch.Tensor, std: float) -> None:
+    """``param.normal_(0, std)``, drawn one expert at a time in fp32 when ``param`` is not fp32: torch's
+    bf16 ``normal_`` is ~4x slower, and a whole fp32 draw would cost the memory a bf16 MoE saves."""
+    if param.dtype == torch.float32:
+        param.normal_(0.0, std)
+        return
+    for expert in param:
+        expert.copy_(torch.empty(expert.shape).normal_(0.0, std))
+
+
 def build_v4_block_reference(config, layer_idx: int, seed: int = 0, moe_dtype: torch.dtype = torch.float32):
     """A randomised V4 decoder block: the two norms, the layer's attention, and its MoE.
 
@@ -68,10 +78,14 @@ def build_v4_block_reference(config, layer_idx: int, seed: int = 0, moe_dtype: t
         if attn.compressor is not None:
             attn.compressor.position_bias.normal_(0.0, 0.02)
             attn.compressor.kv_norm.weight.uniform_(0.5, 1.5)
+            indexer = getattr(attn.compressor, "indexer", None)
+            if indexer is not None:
+                indexer.position_bias.normal_(0.0, 0.02)
+                indexer.kv_norm.weight.uniform_(0.5, 1.5)
 
         mlp.gate.weight.normal_(0.0, hs)
-        mlp.experts.gate_up_proj.normal_(0.0, hs)
-        mlp.experts.down_proj.normal_(0.0, ds)
+        _normal_per_expert(mlp.experts.gate_up_proj, hs)
+        _normal_per_expert(mlp.experts.down_proj, ds)
         for p in (mlp.shared_experts.gate_proj, mlp.shared_experts.up_proj):
             p.weight.normal_(0.0, hs)
         mlp.shared_experts.down_proj.weight.normal_(0.0, ds)

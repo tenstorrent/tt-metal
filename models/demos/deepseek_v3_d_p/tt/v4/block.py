@@ -17,6 +17,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.reference.mhc.mhc_reference import MHCConfig
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import TtMHCWrap
+from models.demos.deepseek_v3_d_p.tt.mla.compressed_sparse_attention import TtCSA
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA
 from models.demos.deepseek_v3_d_p.tt.mla.sliding_window_attention import TtSWA
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -27,6 +28,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPref
 _ATTENTION = {
     "sliding_attention": TtSWA,
     "heavily_compressed_attention": TtHCA,
+    "compressed_sparse_attention": TtCSA,
 }
 
 # The only gate modes that read the hash table; the rest route by top-k and ignore it, which on a

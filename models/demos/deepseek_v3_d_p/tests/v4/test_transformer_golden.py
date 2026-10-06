@@ -4,7 +4,7 @@
 
 """Chunked-prefill PCC for TtV4Transformer against a vLLM golden, real weights, free-running.
 
-The first two layers of the checkpoint, fed the golden's own prompt a chunk at a time, every layer's
+The first three layers of the checkpoint, fed the golden's own prompt a chunk at a time, every layer's
 output compared against ``decoder_output_layer_{i}`` over the whole prompt. Unlike
 ``test_block_chunked.py`` nothing is teacher-forced: layer 1 consumes layer 0's device output, so the
 error at layer 1 includes everything the embedding, the expand and layer 0 introduced.
@@ -21,7 +21,12 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.hf_config import v4_hf_c
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.tests.v4 import golden
-from models.demos.deepseek_v3_d_p.tests.v4.test_transformer import mesh_params, streams_to_host, upload_tokens
+from models.demos.deepseek_v3_d_p.tests.v4.test_transformer import (
+    layer_floor,
+    mesh_params,
+    streams_to_host,
+    upload_tokens,
+)
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v4 import TtV4Transformer
 from models.demos.deepseek_v3_d_p.tt.v4.weights import V4CheckpointLayers, v4_model_from_checkpoint
@@ -29,7 +34,7 @@ from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 
 CHUNK = PREFILL_CHUNK_TOKENS
 SEQ_CACHE = 55 * 1024  # 56320, the length the golden was captured at
-_NUM_LAYERS = 2  # layer 2 is CSA in both models
+_NUM_LAYERS = 3  # through layer 2, the first CSA layer in both models
 _LAYER_PCC = 0.99
 
 _GOLDEN = {DeepSeekV4ProConfig: golden.V4_PRO, DeepSeekV4FlashConfig: golden.V4_FLASH}
@@ -83,9 +88,9 @@ def run_transformer_golden(mesh_device, device_params, num_links, model_config, 
         truth = trace.decoder_output(i, 0, total).reshape(1, total, n, config.hidden_size)
         _, pcc = comp_pcc(truth.float(), per_layer[i])
         logger.info(f"[v4 transformer golden {model_config.__name__}] layer {i} PCC: {pcc:.6f}")
-        if pcc < _LAYER_PCC:
-            failures.append(f"layer {i} {pcc:.6f}")
-    assert not failures, f"below {_LAYER_PCC}: {', '.join(failures)}"
+        if pcc < layer_floor(config, i, _LAYER_PCC):
+            failures.append(f"layer {i} {pcc:.6f} < {layer_floor(config, i, _LAYER_PCC)}")
+    assert not failures, ", ".join(failures)
 
 
 @pytest.mark.parametrize(

@@ -14,9 +14,9 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.configuration_deepseek_v
 def v4_hf_config(model_cfg: type, num_hidden_layers: Optional[int] = None, max_seq_len: Optional[int] = None):
     """``model_cfg``'s dimensions and layer schedule as a ``DeepseekV4Config``, truncated to ``num_hidden_layers``.
 
-    q_lora_rank, o_groups and rope_parameters are explicit because DeepseekV4Config's defaults are
-    Flash's: a Pro config that left them out would build Pro widths with Flash's latent, grouping and
-    an unscaled compressed rope.
+    q_lora_rank, o_groups, rope_parameters and the index_* fields are explicit because
+    DeepseekV4Config's defaults are Flash's: a Pro config that left them out would build Pro widths
+    with Flash's latent, grouping, an unscaled compressed rope and half Pro's indexer top-k.
     """
     m = model_cfg
     n = m.NUM_LAYERS if num_hidden_layers is None else num_hidden_layers
@@ -46,6 +46,9 @@ def v4_hf_config(model_cfg: type, num_hidden_layers: Optional[int] = None, max_s
         intermediate_size=m.MOE_INTERMEDIATE_SIZE,
         routed_scaling_factor=m.ROUTE_SCALE,
         vocab_size=m.VOCAB_SIZE,
+        index_n_heads=m.INDEX_N_HEADS,
+        index_head_dim=m.INDEX_HEAD_DIM,
+        index_topk=m.INDEX_TOPK,
     )
     cfg._attn_implementation = "eager"  # V4 is eager-only: the sdpa interface silently drops the sinks
     if max_seq_len is not None:

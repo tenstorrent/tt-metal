@@ -9,7 +9,8 @@ test uses (reference.deepseek_v4.model). What this adds over the block test is t
 device embedding and stream expand feeding layer 0, layers chaining their packed streams, the TP-sharded
 head collapse and the final norm. Each layer's output is scored, so a failure names the layer.
 
-Depth stops at 2: layer 2 is CSA in both models, which has no device implementation.
+Depth 3 is the shallowest that reaches every attention kind a model uses: layer 2 is CSA in both,
+after two HCA layers in Pro and two SWA layers in Flash.
 """
 
 import pytest
@@ -36,11 +37,14 @@ from models.demos.deepseek_v3_d_p.tt.v4 import TtV4Transformer
 # reduction longer.
 _CASES = [
     pytest.param(DeepSeekV4ProConfig, 0.98, 1, id="pro-L1"),
-    pytest.param(DeepSeekV4ProConfig, 0.98, 2, id="pro-L2"),
+    pytest.param(DeepSeekV4ProConfig, 0.98, 3, id="pro-L3"),
     pytest.param(DeepSeekV4FlashConfig, 0.99, 1, id="flash-L1"),
-    pytest.param(DeepSeekV4FlashConfig, 0.99, 2, id="flash-L2"),
+    pytest.param(DeepSeekV4FlashConfig, 0.99, 3, id="flash-L3"),
 ]
 _SEED = 42
+# A CSA layer's floor, as TtCSA's own chunked test has it: with production top-k, bf16 can swap
+# near-tied candidates at the selection boundary, which no other attention kind is exposed to.
+CSA_LAYER_PCC = 0.98
 
 
 def mesh_params(payload: int):
@@ -83,19 +87,26 @@ def hidden_to_host(mesh_device, t):
     return full[0].float()
 
 
-def assert_layers_and_output(per_layer, ref_layers, out, ref_out, floor, label):
-    """Every layer's streams and the final output against the reference, each at ``floor``."""
+def layer_floor(config, layer_idx: int, floor: float) -> float:
+    """``floor``, lowered to ``CSA_LAYER_PCC`` on a CSA layer."""
+    if config.layer_types[layer_idx] == "compressed_sparse_attention":
+        return min(floor, CSA_LAYER_PCC)
+    return floor
+
+
+def assert_layers_and_output(config, per_layer, ref_layers, out, ref_out, floor, label):
+    """Every layer's streams against the reference at its ``layer_floor``, and the final output at ``floor``."""
     failures = []
     for i, (dev, ref) in enumerate(zip(per_layer, ref_layers)):
         _, pcc = comp_pcc(ref.float(), dev)
         logger.info(f"[{label}] layer {i} PCC: {pcc:.6f}")
-        if pcc < floor:
-            failures.append(f"layer {i} {pcc:.6f}")
+        if pcc < layer_floor(config, i, floor):
+            failures.append(f"layer {i} {pcc:.6f} < {layer_floor(config, i, floor)}")
     _, pcc = comp_pcc(ref_out.float(), out)
     logger.info(f"[{label}] output PCC: {pcc:.6f}")
     if pcc < floor:
-        failures.append(f"output {pcc:.6f}")
-    assert not failures, f"[{label}] below {floor}: {', '.join(failures)}"
+        failures.append(f"output {pcc:.6f} < {floor}")
+    assert not failures, f"[{label}] {', '.join(failures)}"
 
 
 @pytest.mark.parametrize(
@@ -142,6 +153,7 @@ def test_v4_transformer(mesh_device, device_params, num_links, seq_len, model_co
         layer_tap=lambda _i, h: per_layer.append(streams_to_host(mesh_device, h, config.hc_mult)),
     )
     assert_layers_and_output(
+        config,
         per_layer,
         ref_layers,
         hidden_to_host(mesh_device, out),
