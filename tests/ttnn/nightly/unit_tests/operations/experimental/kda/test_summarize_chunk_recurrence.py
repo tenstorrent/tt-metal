@@ -267,6 +267,99 @@ def test_summarize_chunk_recurrence_subtraction_conditioning(
     _log_summary_subtraction_conditioning(case_id, summary_oracle(host_inputs), outputs)
 
 
+# Outlier value channel in a long-memory, high-beta head (tt_metal_tracker-g1b.5.17, Qwen3.8-2.4T layer 0 V head 17 on
+# real text: one value channel of the state reaches |S| ~ 166 against a head RMS ~ 2). The transition A must not
+# depend on v_beta: formed as F(I) - B - I, the large B column cancels out of A's same column and leaves the chains'
+# rounding there (device: 0.25 against true entries ~1e-2), which E @ carry multiplies by the state. A homogeneous
+# identity-seeded chain keeps E's error independent of B (device on the real head: 4e-3).
+_OUTLIER_CHANNEL = 62
+_OUTLIER_VALUE = 90.0
+# Peak |E error| gate. E's error comes from reading the near-identity transition chain through the source registers
+# (about 2^-9 of the per-chunk erase term, summed over the group); it does not scale with B. On this protocol
+# (|B| up to 197, |E| up to 0.97) the homogeneous chain measured 2.6e-3 and the F(I) - B - I form 0.21 in column 62.
+_OUTLIER_E_MAX_ABS_ERROR = 0.02
+
+
+def _outlier_channel_protocol(heads: int, chunks: int, dim: int, *, seed: int) -> tuple[torch.Tensor, ...]:
+    """Prepared chunk terms of a scalar-decay delta rule (GDN form) in FP64, cast to the production dtypes.
+
+    Unit-norm keys, beta in [0.85, 0.95], per-token log decay ~ -3e-4 (|G_last| ~ 1e-2 per chunk: long memory) and
+    unit-scale values except one channel near _OUTLIER_VALUE.
+    """
+    generator = torch.Generator().manual_seed(seed)
+    tokens = (heads, chunks, CHUNK_SIZE)
+    k = torch.randn(*tokens, dim, generator=generator, dtype=torch.float64)
+    k = k / k.norm(dim=-1, keepdim=True)
+    q = torch.randn(*tokens, dim, generator=generator, dtype=torch.float64)
+    q = q / q.norm(dim=-1, keepdim=True) * dim**-0.5
+    v = torch.randn(*tokens, dim, generator=generator, dtype=torch.float64)
+    v[..., _OUTLIER_CHANNEL] = _OUTLIER_VALUE + 5.0 * v[..., _OUTLIER_CHANNEL]
+    beta = 0.85 + 0.1 * torch.rand(*tokens, generator=generator, dtype=torch.float64)
+    g = -3e-4 * (0.5 + torch.rand(*tokens, generator=generator, dtype=torch.float64))
+    cumulative = torch.cumsum(g, dim=-1)
+    final = cumulative[..., -1:]
+    causal = torch.ones(CHUNK_SIZE, CHUNK_SIZE, dtype=torch.bool).tril()
+    pairwise = torch.exp((cumulative[..., :, None] - cumulative[..., None, :]).masked_fill(~causal, float("-inf")))
+    terms = {
+        "v_beta": beta[..., None] * v,
+        "kd": beta[..., None] * k * torch.exp(cumulative)[..., None],
+        "q_decay": q * torch.exp(cumulative)[..., None],
+        "intra": q @ k.transpose(-1, -2) * pairwise,
+        "k_dec_t": (k * torch.exp(final - cumulative)[..., None]).transpose(-1, -2),
+        "final_decay": torch.expm1(final)[..., None].expand(heads, chunks, dim, 1),
+        "t_inv": torch.linalg.inv(
+            torch.eye(CHUNK_SIZE, dtype=torch.float64)
+            + torch.tril(beta[..., None] * (k @ k.transpose(-1, -2)) * pairwise, diagonal=-1)
+        ),
+    }
+    return tuple(
+        terms[name].to(torch.bfloat16) if name in _PRODUCTION_BF16 else terms[name].float() for name in PROTOCOL_NAMES
+    )
+
+
+def _homogeneous_summary_oracle(protocol: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+    """FP64 (E = A - I, B) of the protocol as given; A from the v_beta-free recurrence, independent of B."""
+    v_beta, kd, _, _, k_dec_t, final_decay, t_inv = (tensor.double() for tensor in protocol)
+    heads, chunks, _, dim = kd.shape
+    identity = torch.eye(dim, dtype=torch.float64).expand(heads, dim, dim)
+    transition, offset = identity.clone(), torch.zeros(heads, dim, v_beta.shape[-1], dtype=torch.float64)
+    for chunk in range(chunks):
+        write = k_dec_t[:, chunk] @ t_inv[:, chunk]
+        step = identity + final_decay[:, chunk] * identity - write @ kd[:, chunk]
+        transition = step @ transition
+        offset = step @ offset + write @ v_beta[:, chunk]
+    return transition - identity, offset
+
+
+def test_summarize_chunk_recurrence_outlier_value_channel(zero_actual_start, device: ttnn.Device) -> None:
+    heads, chunks, dim = 2, 10, 128  # one production summary group (10 chunks) at K = V = 128
+    host_inputs = _outlier_channel_protocol(heads, chunks, dim, seed=517)
+    expected_e, expected_b = _homogeneous_summary_oracle(host_inputs)
+    affine_e, affine_b = (
+        ttnn.to_torch(output).double()
+        for output in run_summary(
+            device_protocol(host_inputs, device),
+            compute_kernel_config=_production_compute_config(device),
+            actual_start=zero_actual_start,
+        )
+    )
+    column_error = (affine_e - expected_e).abs().amax(dim=(0, 1))  # peak |E error| per column
+    worst = int(column_error.argmax())
+    logger.info(
+        f"outlier-channel summary: |B| max {expected_b.abs().max().item():.1f} (column {_OUTLIER_CHANNEL}), "
+        f"|E| max {expected_e.abs().max().item():.4f}; peak |E error| {column_error.max().item():.3e} at column "
+        f"{worst}, column {_OUTLIER_CHANNEL} {column_error[_OUTLIER_CHANNEL].item():.3e}, other columns median "
+        f"{column_error.median().item():.3e}; B peak rel error "
+        f"{((affine_b - expected_b).abs().max() / expected_b.abs().max()).item():.3e}"
+    )
+    assert column_error.max().item() <= _OUTLIER_E_MAX_ABS_ERROR, (
+        f"summary transition E column {worst} peak error {column_error.max().item():.3e} > "
+        f"{_OUTLIER_E_MAX_ABS_ERROR} (|B| column {_OUTLIER_CHANNEL} ~ {expected_b.abs().max().item():.0f}: E must not "
+        "inherit B's rounding)"
+    )
+    assert_accurate(expected_b.float(), affine_b.float(), name="outlier-channel summary B", pcc_threshold=0.9999)
+
+
 def test_summarize_chunk_recurrence_is_device_deterministic(zero_actual_start, device: ttnn.Device) -> None:
     host_inputs, inputs = _regression_protocol(device, seed=1441)
     reference, outputs, mismatch_marker = collect_accuracy_and_determinism_results(

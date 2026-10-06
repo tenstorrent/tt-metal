@@ -128,10 +128,14 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         before or after the split define only their head or tail pair, respectively.
         Unsplit ranks define only head pairs; inactive slots are unspecified.
 
-        It derives the transform through two parallel recurrence evaluations:
+        It derives the transform through two parallel recurrence evaluations, ``F``
+        the chunk recurrence and ``F0`` the same recurrence with ``v_beta = 0``:
 
             B = F(0)
-            A = F(I) - B - I
+            A = F0(I) - I
+
+        ``A`` is not formed as ``F(I) - B - I``: that cancels ``B`` out of every
+        column of ``A`` and leaves the rounding of a large ``B`` column there.
 
         Optional ``actual_end`` is a replicated UINT32 row-major scalar, with
         the same lifetime as ``actual_start``. It defines a nonempty 32-aligned

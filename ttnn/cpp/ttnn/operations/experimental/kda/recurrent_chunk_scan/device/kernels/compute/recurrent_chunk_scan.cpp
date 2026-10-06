@@ -185,6 +185,52 @@ FORCE_INLINE void compute_value_new(
     difference.pop_front(chunk_value_tiles);
 }
 
+// Homogeneous counterpart of compute_value_new for the transition chain: U = t_inv @ (0 - kd @ S). The zero tile is
+// the identity DFB's second tile. Chunk inputs stay resident (the summary's chains share them).
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
+FORCE_INLINE void compute_homogeneous_value(
+    DataflowBuffer& current_state,
+    DataflowBuffer& kd,
+    DataflowBuffer& identity,
+    DataflowBuffer& t_inv,
+    DataflowBuffer& state_projection,
+    DataflowBuffer& difference,
+    DataflowBuffer& corrected_value) {
+    constexpr uint32_t chunk_value_tiles = Ct * Vt;
+    constexpr uint32_t key_value_tiles = Kt * Vt;
+    constexpr uint32_t dst_tiles =
+        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
+
+    current_state.wait_front(key_value_tiles);
+    matrix_multiply<Ct, Kt, Vt>(kd, current_state, state_projection);
+    state_projection.wait_front(chunk_value_tiles);
+    const uint32_t zero_id = identity.get_id();
+    const uint32_t projection_id = state_projection.get_id();
+    const uint32_t difference_id = difference.get_id();
+    reconfig_data_format(zero_id, projection_id);
+    sub_init(zero_id, projection_id);
+    difference.reserve_back(chunk_value_tiles);
+    for (uint32_t first = 0; first < chunk_value_tiles; first += dst_tiles) {
+        const uint32_t count = first + dst_tiles <= chunk_value_tiles ? dst_tiles : chunk_value_tiles - first;
+        tile_regs_acquire();
+        for (uint32_t tile = 0; tile < count; ++tile) {
+            sub_tiles(zero_id, projection_id, 1, first + tile, tile);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t tile = 0; tile < count; ++tile) {
+            pack_tile(tile, difference_id, first + tile);
+        }
+        tile_regs_release();
+    }
+    difference.push_back(chunk_value_tiles);
+    difference.wait_front(chunk_value_tiles);
+    state_projection.pop_front(chunk_value_tiles);
+    matrix_multiply<Ct, Ct, Vt>(t_inv, difference, corrected_value);
+    corrected_value.wait_front(chunk_value_tiles);
+    difference.pop_front(chunk_value_tiles);
+}
+
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
 FORCE_INLINE void compute_chunk_output(
     DataflowBuffer& current_state,
@@ -288,22 +334,25 @@ FORCE_INLINE void update_state(
     }
 }
 
-// Affine summary in complement form: A - I = S_ab - S_b - I, from the FP32 carries of the identity-seeded and the
-// zero-seeded chains, and B = S_b. All of A is emitted before B, in packets of PacketTiles: the writer drains the two
+// Affine summary in complement form: A - I = S_a - I from the FP32 carry of the identity-seeded homogeneous chain
+// (v_beta = 0), and B = S_b from the zero-seeded chain. A must not be formed as F(I) - F(0) - I: both chains carry B,
+// so an outlier value channel (|B| ~ 100 in a long-memory head) cancels out of A's same column and leaves the chains'
+// rounding there (~0.2 against true entries ~1e-2), which E @ carry then multiplies by the state
+// (tt_metal_tracker-g1b.5.17). All of A is emitted before B, in packets of PacketTiles: the writer drains the two
 // outputs in that order, so interleaving them would deadlock once a packet buffer fills. The carries stay at the front.
 template <uint32_t Kt, uint32_t Vt, uint32_t PacketTiles>
 FORCE_INLINE void emit_complement_summary(
-    DataflowBuffer& carry_ab,
+    DataflowBuffer& carry_a,
     DataflowBuffer& carry_b,
     DataflowBuffer& identity,
     DataflowBuffer& out_a,
     DataflowBuffer& out_b) {
     constexpr uint32_t key_value_tiles = Kt * Vt;
     static_assert(key_value_tiles % PacketTiles == 0);
-    const uint32_t ab_id = carry_ab.get_id();
+    const uint32_t a_id = carry_a.get_id();
     const uint32_t b_id = carry_b.get_id();
     const uint32_t identity_id = identity.get_id();
-    carry_ab.wait_front(key_value_tiles);
+    carry_a.wait_front(key_value_tiles);
     carry_b.wait_front(key_value_tiles);
     pack_reconfig_data_format(out_a.get_id());
     // One SFPU init for the whole emission: the interleaved copies reprogram only the datacopy address modifiers.
@@ -314,18 +363,14 @@ FORCE_INLINE void emit_complement_summary(
             const uint32_t tile = packet + offset;
             const bool diagonal = tile / Vt == tile % Vt;
             tile_regs_acquire();
-            reconfig_data_format_srca(ab_id);
-            copy_init(ab_id);
-            copy_tile(ab_id, tile, 0);
-            reconfig_data_format_srca(b_id);
-            copy_init(b_id);
-            copy_tile(b_id, tile, 1);
-            // DST 2 holds I on diagonal tiles and stays zero otherwise (subtracting +0 is exact).
+            reconfig_data_format_srca(a_id);
+            copy_init(a_id);
+            copy_tile(a_id, tile, 0);
+            // DST 1 holds I on diagonal tiles and stays zero otherwise (subtracting +0 is exact).
             reconfig_data_format_srca(identity_id);
             copy_init(identity_id);
-            copy_tile(identity_id, diagonal ? 0 : 1, 2);
+            copy_tile(identity_id, diagonal ? 0 : 1, 1);
             sub_binary_tile(0, 1, 0);
-            sub_binary_tile(0, 2, 0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, out_a.get_id(), offset);
@@ -392,8 +437,7 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         update_state<ChunkInputPolicy::RETAIN, Ct, Kt, Vt>(
             state_ring, state_carry, state_ring, scratch, k_decay_transposed, final_decay, identity, decay_diagonal);
         pack_reconfig_data_format(dfb::scratch);
-        compute_value_new<ChunkInputPolicy::RETAIN, Ct, Kt, Vt>(
-            summary_ring, kd, v_beta, t_inv, scratch, value_new, scratch);
+        compute_homogeneous_value<Ct, Kt, Vt>(summary_ring, kd, identity, t_inv, scratch, value_new, scratch);
         update_state<ChunkInputPolicy::RETAIN, Ct, Kt, Vt>(
             summary_ring,
             summary_carry,
