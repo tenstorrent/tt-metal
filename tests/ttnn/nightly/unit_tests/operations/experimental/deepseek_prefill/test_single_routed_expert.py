@@ -474,6 +474,7 @@ def test_single_routed_expert_k3_saturated(
         _K3_SATURATION_TOKENS,
         KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
         KimiK3Config.MOE_INTERMEDIATE_SIZE,
+        x_row_major=True,
         activation=ttnn.RoutedExpertActivation.SituGlu,
         weight_scale=weight_scale,
         weights_dtype=weights_dtype,
