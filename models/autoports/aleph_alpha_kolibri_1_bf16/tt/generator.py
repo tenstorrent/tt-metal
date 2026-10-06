@@ -7,7 +7,11 @@ from collections import Counter
 from dataclasses import dataclass
 
 import torch
-from readiness_check.contract import Generator
+
+try:
+    from readiness_check.contract import Generator
+except ImportError:  # Serving images (TTI/CI) do not ship the bring-up runtime.
+    from models.autoports.aleph_alpha_kolibri_1_bf16.tt.readiness_contract import Generator
 
 import ttnn
 from models.autoports.aleph_alpha_kolibri_1_bf16.tt.checkpoint import CONTEXT
