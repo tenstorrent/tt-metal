@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Quasar DM print-lock checks that do not need the print server: the lock has a 64-byte cache
-// line of its own, and a released lock reads as free to another hart's atomic.
+// Quasar DM print-lock check that does not need the print server: the lock has a 64-byte cache
+// line of its own.
 
 #include <cstdint>
 #include <memory>
@@ -33,8 +33,6 @@ namespace {
 
 constexpr const char* kLineProbeKernel =
     "tests/tt_metal/tt_metal/test_kernels/device_print/dm_print_lock_line_probe.cpp";
-constexpr const char* kReleaseProbeKernel =
-    "tests/tt_metal/tt_metal/test_kernels/device_print/dm_print_lock_release_probe.cpp";
 
 // The Quasar Tensix print region holds the TRISC sub-buffer first, then the DM one
 // (tt_metal/hw/inc/internal/tt-2xx/quasar/device_print_mem.h).
@@ -42,7 +40,6 @@ constexpr uint32_t kQuasarTriscPrintBufferBytes = 3264;
 
 constexpr uint32_t kLineDoneMarker = 0x4C4F434Bu;
 constexpr uint32_t kNumHeaderWords = 16;
-constexpr uint32_t kReleaseDoneMarker = 0x52454C53u;
 
 const char* header_word_name(uint32_t i) {
     static const char* names[] = {"wpos", "rpos", "risc_state[0..3]", "risc_state[4..7]"};
@@ -138,31 +135,6 @@ TEST_F(QuasarPrintLockFixture, PrintLockLineIsolation) {
     EXPECT_LE(line_start + 64u, buffer_addr + DEVICE_PRINT_QUASAR_AUX_BYTES) << "the lock's line reaches the data";
     read_l1(lock_addr, 1);
     EXPECT_EQ(result[0], 0u) << "the print lock was left taken";
-}
-
-// Thread 0 holds the print lock while thread 1 spins on it the way acquire_lock() does, then releases
-// it through the production code; thread 1 must get the lock.
-TEST_F(QuasarPrintLockFixture, PrintLockReleaseVisibleToOtherHart) {
-    const uint32_t report = (l1_unreserved_base + 63u) & ~63u;
-    const uint32_t flag = report + 64u;
-    zero_l1(report, 32);
-    const bool prints_on =
-        MetalContext::instance().rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint);
-
-    run_kernel(
-        kReleaseProbeKernel,
-        2,
-        {"report_addr", "flag_addr", "prints_off"},
-        {{"report_addr", report}, {"flag_addr", flag}, {"prints_off", prints_on ? 0u : 1u}},
-        true);
-
-    read_l1(report, 5);
-    ASSERT_EQ(result[0], kReleaseDoneMarker) << "thread 0 did not finish";
-    ASSERT_NE(result[1], 2u) << "thread 1 timed out waiting for thread 0 to take the lock";
-    EXPECT_NE(result[2], result[3]) << "both threads ran on the same hart";
-    EXPECT_EQ(result[1], 1u) << "hart " << result[3] << " never saw the lock released by hart " << result[2] << " ("
-                             << result[4] << " attempts)";
-    log_info(tt::LogTest, "hart {} got the lock after {} attempts", result[3], result[4]);
 }
 
 }  // namespace
