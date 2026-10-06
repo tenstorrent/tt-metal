@@ -24,15 +24,14 @@ uniform across SP devices (no per-device offset needed). Causality is encoded en
 selection; sparse_sdpa_msa applies no token mask.
 """
 
-
 import ttnn
 from models.demos.minimax_m3.utils.profiler_utils import zone
 
 from .operations import apply_qk_norm_per_head, apply_rope
 
-# sparse_sdpa_msa kv_cache_blocks: None = streamed, 0 = auto-size the per-core L1 block cache from free L1 (streamed
-# if nothing fits), N = up to N slots. On by default: at small SP consecutive queries on a core re-select mostly the
-# same blocks, so a resident block saves a DRAM re-read; the output is identical either way.
+# sparse_sdpa_msa's per-core L1 block cache for the gathered K/V: None = streamed kernels, 0 = as many slots as
+# fit in free L1, N = up to N. On by default: at small SP consecutive queries on a core re-select mostly the same
+# blocks, so a resident block saves a DRAM re-read. Output is identical either way. Not the model's DRAM KV cache.
 MSA_KV_CACHE_BLOCKS = 0
 
 
@@ -141,7 +140,6 @@ def msa_indexer_sparse(
     block_cyclic_sp_axis=None,
     block_cyclic_chunk_local=None,
     kv_len=None,
-    kv_cache_blocks=MSA_KV_CACHE_BLOCKS,
 ):
     """The MSA op chain over a FULL-context (already-gathered) K/V; index_q/q may stay SP-sharded.
 
@@ -161,8 +159,6 @@ def msa_indexer_sparse(
       of block_size). The indexer scores/writes only columns [0, kv_len) (hash-excluded runtime arg, so a
       growing prefix reuses one program) and top-k ranks only those kv_len/block_size block columns; the
       stale tail past kv_len is never read. None -> T is the valid length (the legacy exact-size gather).
-    kv_cache_blocks: sparse_sdpa_msa's per-core L1 block cache for the gathered K/V (None = off, 0 = auto-sized,
-      N = up to N slots) -- unrelated to ``kv_cache``, the model's DRAM KV cache; see MSA_KV_CACHE_BLOCKS.
     -> out  [1, Hq, Sq, head_dim]
     """
     # Block scores: scaled dot, causal -inf for future, group-sum, block-max-pool. bf16 row-major out.
@@ -205,7 +201,7 @@ def msa_indexer_sparse(
             cluster_axis=cluster_axis,
             block_cyclic_sp_axis=block_cyclic_sp_axis,
             block_cyclic_chunk_local=block_cyclic_chunk_local,
-            kv_cache_blocks=kv_cache_blocks,
+            kv_cache_blocks=MSA_KV_CACHE_BLOCKS,
         )
 
         # sparse_sdpa_msa returns ROW_MAJOR; the model's concat_heads (prefill.py) needs TILE — match the
@@ -230,7 +226,6 @@ def msa_sp_attention_nocache(
     topk_blocks,
     num_groups=1,
     return_block_ids=False,
-    kv_cache_blocks=MSA_KV_CACHE_BLOCKS,
 ):
     """Sharded-query MSA under SP: AllGather only the KEYS; q/index_q stay sharded (S/sp rows/device).
 
@@ -283,7 +278,6 @@ def msa_sp_attention_nocache(
         topk_blocks=topk_blocks,
         device=device,
         cluster_axis=sp_axis,
-        kv_cache_blocks=kv_cache_blocks,
     )
 
 
@@ -326,7 +320,6 @@ def msa_sp_attention_cache_read(
     block_size,
     topk_blocks,
     num_groups=1,
-    kv_cache_blocks=MSA_KV_CACHE_BLOCKS,
 ):
     """Cross-chunk MSA: the current chunk's queries attend the accumulated context, gathered across SP
     straight out of (user, layer) ``slot`` of the packed ``[num_users*num_layers, 1, seq_local, hd]``
@@ -379,5 +372,4 @@ def msa_sp_attention_cache_read(
         block_cyclic_sp_axis=sp_axis,
         block_cyclic_chunk_local=chunk_local,
         kv_len=kv_len,
-        kv_cache_blocks=kv_cache_blocks,
     )
