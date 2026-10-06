@@ -37,7 +37,7 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
     WAYPOINT("NSMD");
 }
 
-// Note GELU gets init'd at each iteration in the pack_compute_activation specialization
+// Note GELU gets init'd at each iteration in its PackActivation specialization
 template <ttnn::experimental::prim::detail::MoEActivationFunction activation>
 inline void pack_init_activation() {};
 
@@ -161,9 +161,93 @@ struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::G
     }
 };
 
-template <ttnn::experimental::prim::detail::MoEActivationFunction activation, uint32_t kPairs = 2>
-inline void pack_compute_activation() {
+// in @ {W0, W1} for one gate/up block-column, then the activation, packed to the in2 tiles
+// [out_tile, out_tile + kPairs). kPairs = 2: a full block-column, 4 tiles wide (W0 c, W1 c, W0 c+1, W1 c+1);
+// kPairs = 1: the half block-column of a ring core with an odd column count, 2 tiles wide. The caller sets
+// matmul_block_init to ct_dim = 2 * kPairs.
+template <
+    ttnn::experimental::prim::detail::MoEActivationFunction activation,
+    uint32_t kPairs,
+    uint32_t num_blocks,
+    uint32_t tiles_per_block,
+    uint32_t Kt,
+    bool has_bias>
+FORCE_INLINE void compute_w0_w1_block_column(
+    uint32_t in_cb_id,
+    uint32_t w0_w1_cb_id,
+    uint32_t ones_tile_cb_id,
+    uint32_t in2_cb_id,
+    uint32_t in0_index,
+    uint32_t out_tile) {
+    constexpr uint32_t ct_dim = 2 * kPairs;
+    CircularBuffer cb_w0_w1(w0_w1_cb_id);
+
+    tile_regs_acquire();
+    [[maybe_unused]] uint32_t k_tracker = 0;
+    for (uint32_t block_id = 0; block_id < num_blocks; ++block_id) {
+        cb_w0_w1.wait_front(tiles_per_block);
+
+        for (uint32_t k = 0; k < tiles_per_block; k += ct_dim) {
+            if constexpr (has_bias) {
+                if (k_tracker == Kt) {
+                    // Bias addition: matmul(ones_tile, bias_row)
+                    matmul_block(
+                        ones_tile_cb_id,
+                        w0_w1_cb_id,
+                        0,
+                        /*in1_index=*/k,
+                        /*idst=*/0,
+                        /*transpose=*/false,
+                        /*ct_dim=*/ct_dim,
+                        /*rt_dim=*/1,
+                        /*kt_dim=*/1);
+                    k_tracker++;
+                    continue;
+                } else if (k_tracker > Kt) {
+                    k_tracker++;
+                    continue;  // skip padding K slots after bias
+                }
+            }
+            if constexpr (!has_bias) {
+                if (k_tracker >= Kt) {
+                    k_tracker++;
+                    continue;  // skip padding K slots
+                }
+            }
+            matmul_block(
+                in_cb_id,
+                w0_w1_cb_id,
+                in0_index++,
+                /*in1_index=*/k,
+                /*idst=*/0,
+                /*transpose=*/false,
+                /*ct_dim=*/ct_dim,
+                /*rt_dim=*/1,
+                /*kt_dim=*/1);
+            k_tracker++;
+        }
+        cb_w0_w1.pop_front(tiles_per_block);
+    }
+
+    tile_regs_commit();
+
+    // The below is equivalent to tile_regs_wait(), but we stall CFG as well, so that the succeeding
+    // TT_SETC16 instruction is also stalled until math thread is done with these dest registers.
+    PACK(TTI_SEMWAIT(
+        p_stall::STALL_TDMA | p_stall::STALL_CFG, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO));
+
+    // Make SFPU access the appropriate half of the destination registers
+    PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+
     PackActivation<activation, kPairs>::compute();
+
+    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+
+    pack_tile</*out_of_order_output=*/true>(0, in2_cb_id, /*output_tile_index=*/out_tile);
+    if constexpr (kPairs == 2) {
+        pack_tile</*out_of_order_output=*/true>(2, in2_cb_id, /*output_tile_index=*/out_tile + 1);
+    }
+    tile_regs_release();
 }
 
 }  // namespace detail
@@ -223,7 +307,6 @@ void kernel_main() {
 
     // CircularBuffer typed wrappers
     CircularBuffer cb_s2c_in(cb_s2c_in_id);
-    CircularBuffer cb_r2c_w0_w1(cb_r2c_w0_w1_id);
     CircularBuffer cb_c2w_rdy(cb_c2w_rdy_id);
     CircularBuffer cb_w2c_rdy(cb_w2c_rdy_id);
     CircularBuffer cb_s2c_in2(cb_s2c_in2_id);
@@ -250,17 +333,16 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // W0 and W1 reading constants
     //-------------------------------------------------------------------------
-    // Per-shape DRAM transaction size of both weight streams (moe_ring::tiles_per_txn_for_shape: 14, or 10)
+    // Per-shape DRAM transaction size of both weight streams (moe_ring::tiles_per_txn_for_shape: 14, or 20)
     constexpr uint32_t txn_tiles = get_named_compile_time_arg_val("tiles_per_txn");
     using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias, shared_expert_tp_factor, txn_tiles>;
 
-    constexpr uint32_t w0_w1_txns_per_block = Cfg::txns_per_block;
-    constexpr uint32_t w0_w1_tiles_per_txn = Cfg::tiles_per_txn;
-    constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28 (10 * 2)
+    // A block is 2 transactions: 28 tiles with 14-tile transactions, 40 with 20-tile ones
+    constexpr uint32_t w0_w1_tiles_per_block = Cfg::tiles_per_block;
 
     // W2 reading constants (base-constant aliases only; derived values come from Cfg)
     constexpr auto w2_tiles_per_iter_w = moe_ring::W2_TILES_PER_A2A_ITER_W;
-    constexpr uint32_t w2_tiles_per_block = Cfg::tiles_per_block;  // 14 * 2 = 28 (10 * 2)
+    constexpr uint32_t w2_tiles_per_block = Cfg::tiles_per_block;
     [[maybe_unused]] constexpr uint32_t w2_tiles_per_iter_h = Cfg::block_tiles_h;
 
     //-------------------------------------------------------------------------
@@ -487,7 +569,7 @@ void kernel_main() {
                 continue;
             }
             const uint32_t chunk_half = chunk_g % chunk_halves;
-            // GELU re-inits its SFPU LUT inside pack_compute_activation on every iteration (the
+            // GELU re-inits its SFPU LUT inside PackActivation on every iteration (the
             // trailing MUL there clobbers it), so it's its own initializer — skip the per-chunk
             // init for GELU to avoid a redundant gelu_init. SILU/SWIGLU init once here.
             if constexpr (activation_type != ttnn::experimental::prim::detail::MoEActivationFunction::GELU) {
@@ -515,91 +597,23 @@ void kernel_main() {
             //---------------------------------------------------------------------
             // Compute in @ {W0,W1}
             //---------------------------------------------------------------------
-            // Compact layout: produce only this core's logical columns (dm0 reads exactly those):
-            // the full pairs here, then the odd column from its half block-column below. The in2
-            // slice keeps the full tiles_per_step stride, so dm1 / the a2a ring / W2 are unchanged.
-            // Shared experts are TP-split + front-packed: produce only the real TpNt prefix
-            // (dm0 reads the matching shortened W0/W1). The unchanged full W2 walk then contracts
-            // real×real in the prefix and (zero in2)×(front-packed zero W2) past it.
+            // Produce this core's gate/up columns (dm0 reads exactly those): the full pairs, then an odd
+            // column from its half block-column, in the same K order. Shared experts take the same path:
+            // w0_w1_prod_cols gives them only the real TpNt prefix of their front-packed columns, and the
+            // zero-fill below covers the rest of the slice.
             const bool is_shared_expert = expert_id >= num_experts - num_shared_experts;
             const uint32_t prod_tiles_per_step = Cfg::w0_w1_prod_cols(ring_core_id, is_shared_expert);
             const uint32_t prod_pair_tiles = prod_tiles_per_step & ~1u;
+            const uint32_t in0_index = chunk_half * num_w0_w1_tiles_h;
             for (uint32_t tile_id = 0; tile_id < prod_pair_tiles; tile_id += 2) {
-                uint32_t in0_index = chunk_half * num_w0_w1_tiles_h;
-
-                tile_regs_acquire();
-                [[maybe_unused]] uint32_t k_tracker = 0;
-                for (uint32_t block_id = 0; block_id < Cfg::w0_w1_blocks_per_col; ++block_id) {
-                    cb_r2c_w0_w1.wait_front(w0_w1_tiles_per_block);
-
-                    for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
-                        if constexpr (has_bias) {
-                            if (k_tracker == num_w0_w1_tiles_h) {
-                                // Bias addition: matmul(ones_tile, bias_row)
-                                matmul_block(
-                                    cb_c2c_ones_tile_id,
-                                    cb_r2c_w0_w1_id,
-                                    0,
-                                    /*in1_index=*/k,
-                                    /*idst=*/0,
-                                    /*transpose=*/false,
-                                    /*ct_dim=*/4,
-                                    /*rt_dim=*/1,
-                                    /*kt_dim=*/1);
-                                k_tracker++;
-                                continue;
-                            } else if (k_tracker > num_w0_w1_tiles_h) {
-                                k_tracker++;
-                                continue;  // skip padding K slots after bias
-                            }
-                        }
-                        if constexpr (!has_bias) {
-                            if (k_tracker >= num_w0_w1_tiles_h) {
-                                k_tracker++;
-                                continue;  // skip padding K slots
-                            }
-                        }
-                        matmul_block(
-                            cb_s2c_in_id,
-                            cb_r2c_w0_w1_id,
-                            in0_index++,
-                            /*in1_index=*/k,
-                            /*idst=*/0,
-                            /*transpose=*/false,
-                            /*ct_dim=*/4,
-                            /*rt_dim=*/1,
-                            /*kt_dim=*/1);
-                        k_tracker++;
-                    }
-                    cb_r2c_w0_w1.pop_front(w0_w1_tiles_per_block);
-                }
-
-                tile_regs_commit();
-
-                // The below is equivalent to tile_regs_wait(), but we stall CFG as well, so that the succeeding
-                // TT_SETC16 instruction is also stalled until math thread is done with these dest registers.
-                PACK(TTI_SEMWAIT(
-                    p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                    semaphore::t6_sem(semaphore::MATH_PACK),
-                    p_stall::STALL_ON_ZERO));
-
-                // Make SFPU access the appropriate half of the destination registers
-                PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-
-                //---------------------------------------------------------------------
-                // Apply activation
-                //---------------------------------------------------------------------
-                ::detail::pack_compute_activation<activation_type>();
-
-                PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-
-                pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2_id, /*output_tile_index=*/in2_base + tile_id);
-                pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2_id, /*output_tile_index=*/in2_base + tile_id + 1);
-                tile_regs_release();
+                ::detail::compute_w0_w1_block_column<
+                    activation_type,
+                    /*kPairs=*/2,
+                    Cfg::w0_w1_blocks_per_col,
+                    w0_w1_tiles_per_block,
+                    num_w0_w1_tiles_h,
+                    has_bias>(cb_s2c_in_id, cb_r2c_w0_w1_id, cb_c2c_ones_tile_id, cb_s2c_in2_id, in0_index, in2_base + tile_id);
             }
-
-            // Odd column: (W0 c, W1 c) from the half block-column, 2 tiles wide x 14 K rows per block.
-            // Same K order as the pairs, so the per-column accumulation is unchanged.
             if (prod_pair_tiles != prod_tiles_per_step) {
                 matmul_block_init(
                     cb_s2c_in_id,
@@ -608,72 +622,14 @@ void kernel_main() {
                     /*ct_dim=*/moe_ring::W0_W1_HALF_BLOCK_TILES_W,
                     /*rt_dim=*/1,
                     /*kt_dim=*/1);
-                uint32_t in0_index = chunk_half * num_w0_w1_tiles_h;
-
-                tile_regs_acquire();
-                [[maybe_unused]] uint32_t k_tracker = 0;
-                for (uint32_t block_id = 0; block_id < Cfg::w0_w1_blocks_per_half_col; ++block_id) {
-                    cb_r2c_w0_w1.wait_front(w0_w1_tiles_per_block);
-
-                    for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += moe_ring::W0_W1_HALF_BLOCK_TILES_W) {
-                        if constexpr (has_bias) {
-                            if (k_tracker == num_w0_w1_tiles_h) {
-                                // Bias addition: matmul(ones_tile, bias_row)
-                                matmul_block(
-                                    cb_c2c_ones_tile_id,
-                                    cb_r2c_w0_w1_id,
-                                    0,
-                                    /*in1_index=*/k,
-                                    /*idst=*/0,
-                                    /*transpose=*/false,
-                                    /*ct_dim=*/moe_ring::W0_W1_HALF_BLOCK_TILES_W,
-                                    /*rt_dim=*/1,
-                                    /*kt_dim=*/1);
-                                k_tracker++;
-                                continue;
-                            } else if (k_tracker > num_w0_w1_tiles_h) {
-                                k_tracker++;
-                                continue;  // skip padding K slots after bias
-                            }
-                        }
-                        if constexpr (!has_bias) {
-                            if (k_tracker >= num_w0_w1_tiles_h) {
-                                k_tracker++;
-                                continue;  // skip padding K slots
-                            }
-                        }
-                        matmul_block(
-                            cb_s2c_in_id,
-                            cb_r2c_w0_w1_id,
-                            in0_index++,
-                            /*in1_index=*/k,
-                            /*idst=*/0,
-                            /*transpose=*/false,
-                            /*ct_dim=*/moe_ring::W0_W1_HALF_BLOCK_TILES_W,
-                            /*rt_dim=*/1,
-                            /*kt_dim=*/1);
-                        k_tracker++;
-                    }
-                    cb_r2c_w0_w1.pop_front(w0_w1_tiles_per_block);
-                }
-
-                tile_regs_commit();
-
-                // tile_regs_wait() with the CFG stall, as in the pair loop above.
-                PACK(TTI_SEMWAIT(
-                    p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                    semaphore::t6_sem(semaphore::MATH_PACK),
-                    p_stall::STALL_ON_ZERO));
-                PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-
-                ::detail::pack_compute_activation<activation_type, /*kPairs=*/1>();
-
-                PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-
-                pack_tile</*out_of_order_output=*/true>(
-                    0, cb_s2c_in2_id, /*output_tile_index=*/in2_base + prod_pair_tiles);
-                tile_regs_release();
-
+                ::detail::compute_w0_w1_block_column<
+                    activation_type,
+                    /*kPairs=*/1,
+                    Cfg::w0_w1_blocks_per_half_col,
+                    w0_w1_tiles_per_block,
+                    num_w0_w1_tiles_h,
+                    has_bias>(
+                    cb_s2c_in_id, cb_r2c_w0_w1_id, cb_c2c_ones_tile_id, cb_s2c_in2_id, in0_index, in2_base + prod_pair_tiles);
                 // Restore the 4-wide matmul for the W2 phase.
                 matmul_block_init(
                     cb_s2c_in_id, cb_r2c_w0_w1_id, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
