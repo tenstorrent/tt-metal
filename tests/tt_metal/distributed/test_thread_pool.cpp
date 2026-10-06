@@ -218,6 +218,17 @@ TEST(ThreadPoolTest, ParallelForPassThrough) {
     std::vector<size_t> calls;
     thread_pool->parallel_for(device_ids, [&calls](size_t call) { calls.push_back(call); });
     EXPECT_EQ(calls, (std::vector<size_t>{0, 1, 2}));
+    // Like the other pools, runs every call before rethrowing the first exception.
+    calls.clear();
+    EXPECT_THROW(
+        thread_pool->parallel_for(
+            device_ids,
+            [&calls](size_t call) {
+                calls.push_back(call);
+                TT_THROW("Failed");
+            }),
+        std::exception);
+    EXPECT_EQ(calls, (std::vector<size_t>{0, 1, 2}));
 }
 
 }  // namespace
