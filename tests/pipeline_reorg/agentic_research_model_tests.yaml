@@ -254,6 +254,123 @@
   team: models
   budget_type: agentic_research
 
+- name: Gemma4 26B A4B QB2 GPQA subset and serving
+  cmd: |
+    set -euo pipefail
+    umask 077
+    run_started=$SECONDS
+
+    cd "${TT_METAL_HOME:?Set TT_METAL_HOME to the tt-metal checkout}"
+    model_dir=models/demos/gemma4_26b_a4b_qb2
+    mkdir -p generated/test_logs generated/test_reports/gemma4_26b_a4b_qb2
+    work=$(mktemp -d)
+    results="$PWD/generated/test_reports/gemma4_26b_a4b_qb2"
+    mark_phase() {
+        printf 'Gemma4 26B CI phase=%s elapsed_seconds=%s\n' "$1" "$((SECONDS - run_started))" \
+            | tee -a "$results/phase-timings.log"
+    }
+    mark_phase setup
+    export HF_HOME="${HF_HOME:-/mnt/MLPerf/huggingface}" MESH_DEVICE=P300x2
+    export EXTRA_MODELS_DIR="$PWD/models/demos" TT_METAL_CACHE="$work/tt-cache"
+    export HF_DATASETS_CACHE="$work/datasets" HF_MODULES_CACHE="$work/hf-modules"
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
+    export VLLM_DEBUG_LOG_API_SERVER_RESPONSE=false
+    export GEMMA4_26B_ALLOW_HOST_SAMPLING=1
+
+    git clone --depth 1 --branch "${VLLM_TT_PLUGIN_REF:-main}" \
+        https://github.com/tenstorrent/vllm-tt-plugin.git "$work/vllm-tt-plugin"
+    git -C "$work/vllm-tt-plugin" rev-parse HEAD > "$results/plugin-revision.txt"
+    unset VLLM_TT_PLUGIN_REF
+    pushd "$work/vllm-tt-plugin"
+    source docs/install-vllm-tt.sh
+    uv pip install 'pytest>=8,<9'
+    popd
+
+    mark_phase host_tests
+    python -m pytest "$model_dir/tests/test_precision_policy.py" "$model_dir/tests/test_benchmark.py" \
+        --junitxml "$results/host.xml"
+    mark_phase host_tests_complete
+
+    tt_config='{"tt":{"fabric_config":"FABRIC_1D","trace_region_size":1000000000,"sample_on_device_mode":"all","trace_mode":"decode_only","enable_model_warmup":false}}'
+    server_pid=
+    startup_log="$work/server.log"
+    cleanup() {
+        if [ -n "$server_pid" ]; then
+            kill -- -"$server_pid" 2>/dev/null || true
+            for attempt in {1..30}; do
+                if ! kill -0 -- -"$server_pid" 2>/dev/null; then break; fi
+                sleep 1
+            done
+            kill -KILL -- -"$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+            server_pid=
+        fi
+    }
+    trap 'cleanup; rm -rf "$work"; mark_phase cleanup_complete' EXIT
+    trap 'exit 143' TERM
+    trap 'exit 130' INT
+
+    mark_phase start_server
+    setsid python -u -m vllm.entrypoints.openai.api_server \
+        --model google/gemma-4-26B-A4B-it \
+        --revision 4d7ae4984b7db7de8f8457170b3f1a419ee76d52 \
+        --tokenizer-revision 4d7ae4984b7db7de8f8457170b3f1a419ee76d52 \
+        --served-model-name google/gemma-4-26B-A4B-it \
+        --hf-overrides '{"architectures":["TTGemma4A4BForCausalLM"]}' \
+        --host 127.0.0.1 --port 8000 --block-size 32 --max-num-seqs 32 \
+        --max-model-len 262144 --max-num-batched-tokens 262144 --max-logprobs -1 \
+        --async-scheduling --no-enable-prefix-caching --no-enable-chunked-prefill \
+        --enable-auto-tool-choice --tool-call-parser gemma4 \
+        --reasoning-parser gemma4 --default-chat-template-kwargs '{"enable_thinking":true}' \
+        --no-enable-log-requests --no-enable-log-outputs \
+        --additional-config "$tt_config" > "$startup_log" 2>&1 &
+    server_pid=$!
+
+    uv venv --python 3.11 "$work/eval-env"
+    UV_TORCH_BACKEND=cpu uv pip install --python "$work/eval-env/bin/python" \
+        -r "$model_dir/tests/requirements-eval.txt"
+    mark_phase prepare_dataset
+    HF_HUB_OFFLINE=0 "$work/eval-env/bin/python" "$model_dir/tests/benchmark.py" \
+        --prepare-only --output-dir "$results"
+
+    wait_started=$SECONDS
+    for ((attempt = 0; SECONDS - wait_started < 1200; attempt++)); do
+        if curl --max-time 2 -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; then break; fi
+        kill -0 "$server_pid"
+        if (( attempt % 15 == 0 )); then
+            python -m models.demos.gemma4_26b_a4b_qb2.tests.startup_status \
+                "$startup_log" "$results/server-startup.json"
+            cat "$results/server-startup.json"
+        fi
+        sleep 4
+    done
+    curl --max-time 2 -fsS http://127.0.0.1:8000/health
+    mark_phase server_ready
+
+    python -m pytest "$model_dir/tests/test_api.py" \
+        --gemma-server-url http://127.0.0.1:8000 --junitxml "$results/api.xml"
+    mark_phase api_tests_complete
+
+    status=0
+    echo "GPQA coverage: 10/198 Diamond questions for CI regression within the time budget."
+    HF_HUB_OFFLINE=0 "$work/eval-env/bin/python" "$model_dir/tests/benchmark.py" \
+        --server-capacity 32 --performance-input-lengths 128 --output-dir "$results" \
+        > "$work/evaluator.log" 2>&1 || status=$?
+    if [ -f "$results/summary.json" ]; then
+        CI=true python -m models.demos.gemma4_26b_a4b_qb2.tests.report "$results/summary.json"
+    fi
+    mark_phase "benchmark_exit_$status"
+    exit "$status"
+  model: gemma4-26b-a4b-qb2
+  model_family: Gemma
+  skus:
+    bh_quietbox_2:
+      timeout: 40
+      tier: 3
+  owner_id: U08BGTAMU1W # Marina Vasiljevic
+  team: models
+  budget_type: agentic_research
+
 - name: Qwen3.8 27B QB2 model, GPQA subset and serving
   cmd: bash models/demos/qwen38_27b_qb2/tests/run_ci.sh
   model: qwen38-27b-qb2

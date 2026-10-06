@@ -35,6 +35,18 @@ targets:
               gpqa_tolerance: 0.2
             owner_id: U03HY7MK4BT
             team: models
+  gemma4-26b-a4b-qb2:
+    skus:
+      p300x2:
+        entries:
+          - status: active
+            perf: {}
+            accuracy:
+              # First 10/198 Diamond questions, 32K output budget; minimum 80%.
+              gpqa: 100
+              gpqa_tolerance: 0.2
+            owner_id: U08BGTAMU1W
+            team: models
   llama3.1-8b-qb2:
     skus:
       p300x2:
