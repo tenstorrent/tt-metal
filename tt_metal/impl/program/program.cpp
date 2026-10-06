@@ -1245,6 +1245,12 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
         "Cannot add a legacy circular buffer to a Metal 2.0 Program; "
         "Metal 2.0 Programs use DataflowBuffers, and cannot be modified after construction.");
 
+    for (uint32_t buffer_index : circular_buffer->config().buffer_indices()) {
+        if (buffer_index >= max_dfbs_) {
+            TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_dfbs_);
+        }
+    }
+
     // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory
     // allocator
     if (not circular_buffer->globally_allocated()) {
@@ -1264,17 +1270,10 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
                 std::bitset<NUM_CIRCULAR_BUFFERS>& cb_indices = this->per_core_cb_indices_[logical_core];
                 std::bitset<NUM_CIRCULAR_BUFFERS>& local_cb_indices = this->per_core_local_cb_indices_[logical_core];
                 std::bitset<NUM_CIRCULAR_BUFFERS>& remote_cb_indices = this->per_core_remote_cb_indices_[logical_core];
-                uint32_t max_dfbs = max_dfbs_;
-                auto add_buffer_indices = [&cb_indices, max_dfbs](
+                auto add_buffer_indices = [&cb_indices](
                                               const std::unordered_set<uint8_t>& buffer_indices,
                                               std::bitset<NUM_CIRCULAR_BUFFERS>& target_cb_indices) {
                     for (uint32_t buffer_index : buffer_indices) {
-                        // TT_ASSERT since we validate when constructing the config that it's within range
-                        TT_ASSERT(
-                            buffer_index < max_dfbs,
-                            "Invalid circular buffer index: {} should be between 0 and {}",
-                            buffer_index,
-                            max_dfbs);
                         if (cb_indices[buffer_index]) {
                             TT_THROW(
                                 "Invalid circular buffer index: Cannot add circular buffer at index {}, another "

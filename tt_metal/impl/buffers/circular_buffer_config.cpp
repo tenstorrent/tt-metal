@@ -9,8 +9,6 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include "buffer.hpp"
-#include "hal.hpp"
-#include "impl/context/metal_context.hpp"
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 
@@ -28,6 +26,16 @@ void validate_unpack_face_geometry(uint32_t face_r_dim, uint32_t num_faces) {
         face_r_dim,
         tt::constants::FACE_HEIGHT);
     TT_FATAL(num_faces > 0, "num_faces must be > 0");
+}
+
+// Bounds an index by the config's per-index array storage. The architecture's limit depends on the
+// Program's environment and is enforced when the config is added to a Program.
+void validate_buffer_index_capacity(uint32_t buffer_index, size_t capacity) {
+    TT_FATAL(
+        buffer_index < capacity,
+        "Buffer index ({}) exceeds max number of circular buffers per core ({})",
+        buffer_index,
+        capacity);
 }
 
 }  // namespace
@@ -77,13 +85,7 @@ CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : tot
     }
 
     auto process_format_descriptor = [this](const CBFormatDescriptor& format_descriptor) {
-        uint32_t max_dfbs = tt::tt_metal::MetalContext::instance().hal().get_num_dataflow_buffers();
-        if (format_descriptor.buffer_index > max_dfbs - 1) {
-            TT_THROW(
-                "Buffer index ({}) exceeds max number of circular buffers per core ({})",
-                format_descriptor.buffer_index,
-                max_dfbs);
-        }
+        validate_buffer_index_capacity(format_descriptor.buffer_index, this->data_formats_.size());
         this->data_formats_[format_descriptor.buffer_index] = format_descriptor.data_format;
         if (this->total_size_ % format_descriptor.page_size != 0) {
             TT_THROW(
@@ -151,10 +153,7 @@ CircularBufferConfig::CircularBufferConfig(
 }
 
 CircularBufferConfig& CircularBufferConfig::set_page_size(uint8_t buffer_index, uint32_t page_size) {
-    uint32_t max_dfbs = tt::tt_metal::MetalContext::instance().hal().get_num_dataflow_buffers();
-    if (buffer_index > max_dfbs - 1) {
-        TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_dfbs);
-    }
+    validate_buffer_index_capacity(buffer_index, this->page_sizes_.size());
     if (!this->buffer_indices_.contains(buffer_index)) {
         TT_THROW(
             "Illegal circular buffer index {}. Page size can only be specified for buffer indices configured "
@@ -240,16 +239,14 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_t
 }
 
 CircularBufferConfig& CircularBufferConfig::set_tile_dims(uint8_t buffer_index, const Tile& tile) {
+    validate_buffer_index_capacity(buffer_index, this->tiles_.size());
     this->tiles_[buffer_index] = tile;
     return *this;
 }
 
 CircularBufferConfig& CircularBufferConfig::set_unpack_face_geometry(
     uint8_t buffer_index, uint32_t face_r_dim, uint32_t num_faces) {
-    uint32_t max_dfbs = tt::tt_metal::MetalContext::instance().hal().get_num_dataflow_buffers();
-    if (buffer_index > max_dfbs - 1) {
-        TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_dfbs);
-    }
+    validate_buffer_index_capacity(buffer_index, this->unpack_face_geometry_.size());
     if (!this->buffer_indices_.contains(buffer_index)) {
         TT_THROW(
             "Illegal circular buffer index {}. Unpack face geometry can only be set for buffer indices configured "
@@ -335,10 +332,7 @@ CircularBufferConfig::Builder CircularBufferConfig::Builder::RemoteBuilder(
 
 CircularBufferConfig::Builder::Builder(CircularBufferConfig& parent, uint8_t buffer_index) :
     parent_(parent), buffer_index_(buffer_index) {
-    uint32_t max_dfbs = tt::tt_metal::MetalContext::instance().hal().get_num_dataflow_buffers();
-    if (buffer_index > max_dfbs - 1) {
-        TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_dfbs);
-    }
+    validate_buffer_index_capacity(buffer_index, parent_.data_formats_.size());
     parent_.buffer_indices_.insert(buffer_index_);
 }
 
@@ -371,18 +365,8 @@ CircularBufferConfig::Builder CircularBufferConfig::remote_index(uint8_t buffer_
 }
 
 void CircularBufferConfig::set_config(const std::map<uint8_t, tt::DataFormat>& data_format_spec) {
-    uint32_t max_dfbs = tt::tt_metal::MetalContext::instance().hal().get_num_dataflow_buffers();
-    if (data_format_spec.size() > max_dfbs) {
-        TT_THROW(
-            "Only {} circular buffer slots are available but data formats are specified for {} indices",
-            max_dfbs,
-            data_format_spec.size());
-    }
-
     for (const auto& [buffer_index, data_format] : data_format_spec) {
-        if (buffer_index > max_dfbs - 1) {
-            TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_dfbs);
-        }
+        validate_buffer_index_capacity(buffer_index, this->data_formats_.size());
         this->data_formats_[buffer_index] = data_format;
         this->buffer_indices_.insert(buffer_index);
         this->local_buffer_indices_.insert(buffer_index);
