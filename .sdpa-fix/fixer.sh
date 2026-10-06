@@ -503,6 +503,11 @@ EOF
      -f description="Automated fix — needs human review before merge" >/dev/null
   gh api "repos/$REPO/statuses/$head_sha" -f state=pending -f context="$CI_STATUS_CONTEXT" \
      -f description="Targeted CI dispatched" >/dev/null
+  # Record the PR NOW: anything below may fail, and a PR the ledger does not
+  # know about would only be found again through the marker search.
+  $FIXLIB mark --state pr_open --attempt --count-daily \
+    --extra "$(jq -nc --arg u "$pr_url" --arg n "$pr_num" --arg b "$branch" --arg p "$pdir" \
+               '{pr:{url:$u, number:($n|tonumber), branch:$b}, proposal:$p, dispatched:[]}')" "${sigs[@]}"
 
   # Dispatch and resolve run ids (gh workflow run does not print one).
   disp_out="[]"
@@ -523,12 +528,12 @@ EOF
                  '. + [$p + {run_id: (if $r=="" then null else $r end), run_url: (if $u=="" then null else $u end)}]' <<<"$disp_out")
   done < <(jq -c '.[]' "$pdir/dispatch.json")
   printf '%s' "$disp_out" | jq . > "$pdir/dispatch.json"
+  $FIXLIB mark --state pr_open --extra "$(jq -nc --argjson d "$disp_out" '{dispatched:$d}')" "${sigs[@]}"
   render
-  gh pr edit "$pr_url" --body-file "$pdir/pr_body.md" >/dev/null
-
-  $FIXLIB mark --state pr_open --attempt --count-daily \
-    --extra "$(jq -nc --arg u "$pr_url" --arg n "$pr_num" --arg b "$branch" --arg p "$pdir" --argjson d "$disp_out" \
-               '{pr:{url:$u, number:($n|tonumber), branch:$b}, proposal:$p, dispatched:$d}')" "${sigs[@]}"
+  # REST, not `gh pr edit`: gh 2.63's edit queries the retired Projects
+  # (classic) API and fails on every PR.
+  gh api -X PATCH "repos/$REPO/pulls/$pr_num" -F "body=@$pdir/pr_body.md" >/dev/null \
+    || log "  WARN: could not update the PR body with run links"
   log "  opened draft $pr_url"
   slack "🛠️ *opened* draft PR #$pr_num (needs human review): *$title*
 • failing: \`$first_test\` ($workflow)

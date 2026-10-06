@@ -34,7 +34,7 @@ walkthrough of the whole flow.
    - kind is `code_regression` or `perf_threshold`, owner is `sdpa_op` or
      `k3_model`, and `fixable` is true;
    - it is still failing in the latest run;
-   - its streak is at least `MIN_STREAK`, or triage pinned a culprit commit.
+   - its streak is at least `MIN_STREAK` (1 by default), or triage pinned a culprit commit.
 
    The fix stage then:
    - **GitHub de-dup.** A PR whose body has the hidden marker
@@ -93,7 +93,7 @@ then regressed again. `rejected` (a human closed the PR) is never retried.
 | | |
 |---|---|
 | `FIX_MODE` | `dryrun` (default) / `live`. Going live re-attempts dry-run proposals once, for real. |
-| `MIN_STREAK` (env) | consecutive failing runs before attempting (2) |
+| `MIN_STREAK` (env) | consecutive failing runs before attempting (1: attempt on the first red run) |
 | `MAX_NEW_PER_DAY` (env), `MAX_FIX_PER_TICK` (env) | caps (3, 1) |
 | `FIX_SLACK=0` (env) | silence Slack posts |
 | `ONLY=<workflow.yaml>` (env) | restrict a manual tick to one pipeline |
