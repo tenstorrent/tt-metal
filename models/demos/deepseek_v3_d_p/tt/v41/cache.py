@@ -275,6 +275,8 @@ class V41PrefillState:
         self.selection = {}
         # DSpark window rings (one per DSpark layer, slot p % window), set by the transformer when DSpark runs
         self.dspark_rings = None
+        # decode (tt/v41/decode.py): the Engram hash history of the request this state holds
+        self.engram_history = None
         self._ccl = get_tt_ccl(mesh_device) if layout.sp > 1 else None
         self._num_links = fabric_num_links()
         self._sp_topology = per_axis_topology()[SP_AXIS]  # Ring only if the opened fabric wraps SP

@@ -110,13 +110,16 @@ class TtV41Decoder:
             self._decode_moe(block, layer, weight_cache_path, routed_expert_weights_dtype)
             for layer, block in zip(model.layers, model.blocks)
         ]
-        self.engram_history = None  # compressed ids of the last tokens, for the Engram hash
         self.on_block = None  # optional callback (layer, streams) after each block, for acceptance checks
         self.trace, self.warmup = trace, warmup
         self.buffers = {}  # the fixed device input buffers, allocated by the first step
         self.window_rows = None  # sparse_sdpa index rows of the (full) window, a constant
-        self.traces: dict[int, _Trace] = {}  # parity -> capture
-        self.eager_steps = 0
+        # per state (keyed by id; a capture reads and writes that state's cache tensors): its captures by parity,
+        # how many eager steps it has run, and its compressor carry buffers (``prepare``); the Engram hash history
+        # is the state's ``engram_history``
+        self.traces: dict[tuple[int, int], _Trace] = {}
+        self.eager_steps: dict[int, int] = {}
+        self.carries: dict[int, dict] = {}
         self.last = {}  # how the last step ran: mode (eager / capture / replay), device_s for replays
 
     # --- construction ----------------------------------------------------------------------------------
@@ -187,7 +190,7 @@ class TtV41Decoder:
             inputs[f"mask{ratio}"] = self._replicated(mask, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=False)
         if self.model.engram:
             hash_ = self.model.engram_hash
-            ids, _ = hash_(torch.tensor([token]), self.engram_history)  # [1, n_layers, 24]
+            ids, _ = hash_(torch.tensor([token]), state.engram_history)  # [1, n_layers, 24]
             chunk = ROWS * self.sp  # prepare_host splits chunk * 24 lookups over the chips in tiles
             inputs["engram"] = {
                 l: e.prepare_host(ids[:, hash_.layer_index(l)].expand(chunk, -1).contiguous(), chunk)
@@ -226,12 +229,36 @@ class TtV41Decoder:
         return self.window_rows
 
     # --- one step ----------------------------------------------------------------------------------------
-    def begin(self, tokens: torch.Tensor) -> None:
-        """Start decoding after ``prefill(tokens)``: seeds the Engram hash history (the last compressed ids)."""
+    def prepare(self, state: V41PrefillState) -> None:
+        """Allocate ``state``'s decode buffers: the compressor carry of every ratio-2 source as a fixed tensor the
+        even step writes (in the graph, ``ttnn.copy``) and the odd step reads. Every state a decoder will serve must
+        be prepared before its first capture: a tensor allocated after a capture may lie on that capture's freed
+        intermediates, and a replay then overwrites it (a second slot's carry under the first slot's
+        replays). ``decode`` prepares a state on its first step when nothing is captured yet."""
+        key = id(state)
+        if key in self.carries:
+            return
+        assert not self.traces, "every state must be prepared before the first capture (see prepare's docstring)"
+        d = self.config.HEAD_DIM
+        self.carries[key] = {
+            layer: tuple(self._replicated(torch.zeros(1, 1, ROWS, d), ttnn.float32) for _ in range(2))
+            for layer in state.compressor_carry
+        }
+
+    def begin(self, tokens: torch.Tensor, state: V41PrefillState) -> None:
+        """Start decoding ``state`` after ``prefill(tokens)`` filled it: seeds its Engram hash history (the last
+        compressed ids) and moves the prefill's compressor carry (an odd prompt) into the state's carry buffers."""
         if self.model.engram:
             hash_ = self.model.engram_hash
             n = hash_.layout.max_ngram_size - 1
-            self.engram_history = hash_.token_map[tokens[-n:].to(torch.int64)].clone()
+            state.engram_history = hash_.token_map[tokens[-n:].to(torch.int64)].clone()
+        self.prepare(state)
+        for layer, carry in state.compressor_carry.items():
+            if carry is None:
+                continue
+            for src, dst in zip(carry, self.carries[id(state)][layer]):
+                ttnn.copy(self._rows(src), dst)
+            state.compressor_carry[layer] = self.carries[id(state)][layer]
 
     def decode(self, token: int, state: V41PrefillState) -> torch.Tensor:
         """Append ``token`` at position ``state.start`` -> fp32 logits ``[vocab]`` of the next position; the state
@@ -250,26 +277,27 @@ class TtV41Decoder:
         t1 = time.time()
         self._stage(inputs)
         t2 = time.time()
-        parity = p % 2
+        key, parity = id(state), p % 2
+        self.prepare(state)
         if not self.trace:
             mode = "eager"
-        elif parity in self.traces:
+        elif (key, parity) in self.traces:
             mode = "replay"
-        elif self.eager_steps >= self.warmup and (parity == 0 or 0 in self.traces):
+        elif self.eager_steps.get(key, 0) >= self.warmup and (parity == 0 or (key, 0) in self.traces):
             mode = "capture"
         else:
             mode = "eager"
         self.last = {"mode": mode, "inputs_s": round(t1 - t0, 4), "stage_s": round(t2 - t1, 4)}
         if mode == "eager":
-            self.eager_steps += 1
+            self.eager_steps[key] = self.eager_steps.get(key, 0) + 1
             logits, (sp_row, _) = self._forward(state, step, self.on_block)
             self._finish(state, step)
             out = self.model.head._tile_to_host(logits, sp_row)[0]
             ttnn.deallocate(logits)
         else:
             if mode == "capture":
-                self.traces[parity] = self._capture(state, step)
-            trace = self.traces[parity]
+                self.traces[(key, parity)] = self._capture(state, step)
+            trace = self.traces[(key, parity)]
             ttnn.synchronize_device(self.mesh_device)  # the staged inputs have landed: time the step alone
             t3 = time.time()
             trace.controller.replay(blocking=False)
@@ -291,7 +319,7 @@ class TtV41Decoder:
                     self.on_block(layer, x)
         t6 = time.time()
         if self.model.engram:
-            self._advance_history(token)
+            self._advance_history(token, state)
         state.advance(1)
         self.last["history_s"] = round(time.time() - t6, 4)
         return out
@@ -301,7 +329,7 @@ class TtV41Decoder:
         replays the captured graphs on the state's current inputs, which advances nothing but rewrites the
         caches' scratch rows and the window carries: call it when done decoding) -> parity -> min seconds."""
         times = {}
-        for parity, trace in self.traces.items():
+        for (_, parity), trace in self.traces.items():
             ttnn.synchronize_device(self.mesh_device)
             best = None
             for _ in range(repeats):
@@ -334,6 +362,10 @@ class TtV41Decoder:
         for source, j in step.writes.items():
             cap = state.geometry.compressed_rows(self.config.compress_ratio(source))
             state.copy_compressed_row(source, cap - 1, j)
+
+    def traced(self, state: V41PrefillState) -> bool:
+        """Whether both parities of ``state``'s step are captured."""
+        return all((id(state), parity) in self.traces for parity in (0, 1))
 
     def release(self) -> None:
         for trace in self.traces.values():
@@ -377,9 +409,9 @@ class TtV41Decoder:
         return ttnn.slice(out, [0, 0, 0, 0], [1, 1, ROWS, out.shape[3]])
 
     # --- Engram -------------------------------------------------------------------------------------------
-    def _advance_history(self, token: int) -> None:
+    def _advance_history(self, token: int, state: V41PrefillState) -> None:
         hash_ = self.model.engram_hash
-        _, self.engram_history = hash_(torch.tensor([token]), self.engram_history)
+        _, state.engram_history = hash_(torch.tensor([token]), state.engram_history)
 
     # --- attention ----------------------------------------------------------------------------------------
     def _attention(self, attn: TtV41Attention, x, state: V41PrefillState, step: _Step, masks: dict):
@@ -454,11 +486,14 @@ class TtV41Decoder:
         kv = compressor._project(xf, compressor.wkv, ttnn.float32)
         score = compressor._project(xf, compressor.wgate, ttnn.float32)
         if (p + 1) % compressor.ratio:
-            state.compressor_carry[layer] = (kv, score)
+            buffers = self.carries[id(state)][layer]
+            for src, dst in zip((kv, score), buffers):
+                ttnn.copy(src, dst)
+            state.compressor_carry[layer] = buffers
             return None
         carry = state.compressor_carry[layer]
         assert carry is not None, f"layer {layer}: no carried projections for position {p - 1}"
-        k0, s0 = (self._rows(t) for t in carry)
+        k0, s0 = (self._rows(t) for t in carry)  # the buffers, or a prefill's row before begin() moved it
         state.compressor_carry[layer] = None
         m = ttnn.maximum(s0, score)
         e0, e1 = ttnn.exp(ttnn.subtract(s0, m)), ttnn.exp(ttnn.subtract(score, m))

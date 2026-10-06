@@ -120,6 +120,7 @@ class TtV41Transformer(LightweightModule):
         images; each layer's ``gate_bias_vl`` comes with its ``layer_weights``."""
         self.mesh_device, self.config = mesh_device, config
         self.layers, self.chunk, self.max_seq_len = list(layers), chunk, max_seq_len
+        self._zero_hosts = {}  # reset_state's zero carries, per spec
         assert self.layers == sorted(set(self.layers)), "layers must be in execution order"
         needed = [l for l in self.layers if l in config.ENGRAM_LAYER_IDS]
         self.engram = dict(engram or {})
@@ -365,6 +366,41 @@ class TtV41Transformer(LightweightModule):
         scored = self._run(request, state, {}, lambda c, forward: forward(), on_block)
         return self._logits(scored), state
 
+    def prefill_into(self, tokens: torch.Tensor, state: V41PrefillState, logit_positions: int = 1) -> torch.Tensor:
+        """``prefill`` of a text prompt into an existing ``state`` (one of ``new_state()``, or one a previous request
+        used: it is reset to what a fresh request starts from, as ``V41PrefillTrace.run`` does), so a request pool can
+        keep its states, and the decode captures made on them, across requests. Returns the logits."""
+        request = self._request(tokens, logit_positions)
+        self.reset_state(state)
+        scored = self._run(request, state, {}, lambda c, forward: forward())
+        return self._logits(scored)
+
+    def new_state(self) -> V41PrefillState:
+        return self._new_state()
+
+    def reset_state(self, state: V41PrefillState) -> None:
+        """``state`` as a fresh request starts from, where the first chunk reads it: position 0, zero window carries
+        (the window slot rows before position 0) and DSpark rings, no compressor carry, no Engram history."""
+        state.start = 0
+        state.selection = {}
+        state.engram_history = None
+        for layer in state.compressor_carry:
+            state.compressor_carry[layer] = None
+        for t in list(state.window_carry.values()) + list(state.dspark_rings or ()):
+            ttnn.copy_host_to_device_tensor(self._zeros(t), t)
+
+    def _zeros(self, t: ttnn.Tensor) -> ttnn.Tensor:
+        """A replicated all-zero host tensor of ``t``'s shape, dtype and layout (cached per spec)."""
+        key = (tuple(t.shape), t.dtype, t.layout)
+        if key not in self._zero_hosts:
+            self._zero_hosts[key] = ttnn.from_torch(
+                torch.zeros(key[0]),
+                dtype=t.dtype,
+                layout=t.layout,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self._zero_hosts[key]
+
 
 class V41PrefillTrace:
     """Trace perf mode of ``TtV41Transformer.prefill`` for text prompts of one length (dev-spec D-G (b)).
@@ -388,7 +424,6 @@ class V41PrefillTrace:
             model._run(request, model._new_state(), self.buffers, lambda c, forward: forward())
         ttnn.synchronize_device(model.mesh_device)
         self.state, self.controllers = model._new_state(), []
-        self._zero_hosts = {}
         self.scored = model._run(request, self.state, self.buffers, self._capture)
 
     def _capture(self, c: int, forward: Callable):
@@ -416,28 +451,12 @@ class V41PrefillTrace:
         assert int(tokens.numel()) == self.total, f"traced for {self.total} tokens, got {tokens.numel()}"
         model = self.model
         request = model._request(tokens, self.logit_positions)
-        self.state.start = 0
-        # the state a fresh request starts from, where the first chunk reads it: zero window carries (the window
-        # slot rows before position 0) and DSpark rings (slots a short prompt does not reach)
-        for t in list(self.state.window_carry.values()) + list(self.state.dspark_rings or ()):
-            ttnn.copy_host_to_device_tensor(self._zeros(t), t)
+        model.reset_state(self.state)
         model._run(
             request, self.state, self.buffers, lambda c, forward: self.controllers[c].replay(blocking=False) or []
         )
         ttnn.synchronize_device(model.mesh_device)
         return model._logits(self.scored), self.state
-
-    def _zeros(self, t: ttnn.Tensor) -> ttnn.Tensor:
-        """A replicated all-zero host tensor of ``t``'s shape, dtype and layout (cached per spec)."""
-        key = (tuple(t.shape), t.dtype, t.layout)
-        if key not in self._zero_hosts:
-            self._zero_hosts[key] = ttnn.from_torch(
-                torch.zeros(key[0]),
-                dtype=t.dtype,
-                layout=t.layout,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.model.mesh_device),
-            )
-        return self._zero_hosts[key]
 
     def release(self) -> None:
         for controller in self.controllers:

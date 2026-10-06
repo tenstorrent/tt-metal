@@ -139,7 +139,7 @@ def test_v41_decode(mesh_device, device_params):
     result["prefill_s"] = round(time.time() - t0, 3)
     dev_logits = logits[-1]
     assert not torch.isnan(dev_logits).any(), "NaN in the device prefill logits"
-    decoder.begin(tokens)
+    decoder.begin(tokens, state)
     if ref is not None:
         t0 = time.time()
         ref_logits = _reference_forward(ref, tokens[None], 0)
