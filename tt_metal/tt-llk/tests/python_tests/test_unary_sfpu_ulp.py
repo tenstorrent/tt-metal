@@ -41,10 +41,14 @@ from helpers.llk_params import (
 from helpers.param_config import get_num_blocks_and_num_tiles_in_block
 from helpers.sfpu_accuracy_budget import (
     _SFPU_ACCURACY_BUDGET,
+    FLUSH_SUBNORMAL_OUTPUTS,
     Metric,
     accuracy_contract,
 )
-from helpers.sfpu_domains import _UNARY_OPS_NOT_SWEPT, sfpu_unary_ops
+from helpers.sfpu_domains import (
+    _UNARY_OPS_NOT_SWEPT,
+    sfpu_unary_ops,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -60,6 +64,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.ulp import ulp_distance, ulp_stats
 from helpers.ulp_sweep import (
+    golden_input,
     measurable_mask,
     nonfinite_failures,
     nonfinite_reason,
@@ -79,12 +84,9 @@ pytestmark = pytest.mark.accuracy
 SWEEP_TILE_COUNT = 64
 SWEEP_DIMENSIONS = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * SWEEP_TILE_COUNT]
 
-#: Subnormal outputs flushed on every format, fp16 included, by the emit's ranking and
-#: the gate's verdict alike. The metric keeps fp16's subnormal band by default, but the
-#: golden keeps IEEE subnormals the pack path does not reproduce: an exact op read 512
-#: steps on Float16_b->Float16 from that band alone. A difference below 6.1e-05 is the
-#: store's, not the op's. One constant, so emit and gate cannot rank differently.
-_FLUSH_SUBNORMALS = True
+#: The emit's ranking and the gate's verdict alike, so they cannot rank differently; the
+#: policy and its reason live with the binary/ternary gate's, which ranks the same way.
+_FLUSH_SUBNORMALS = FLUSH_SUBNORMAL_OUTPUTS
 
 
 def run_sweep(mathop, formats, approx_mode, dest_acc):
@@ -100,7 +102,7 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
     )
     golden = get_golden_generator(UnarySFPUGolden)(
         mathop,
-        src_A,
+        golden_input(src_A, formats.input_format, dest_acc),
         formats.output_format,
         dest_acc,
         formats.input_format,
@@ -302,8 +304,7 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         result,
         out_fmt,
         mask=mask,
-        flush_subnormals=_FLUSH_SUBNORMALS,
-        **contract.passed_test_kwargs(),
+        **contract.passed_test_kwargs(flush_subnormals=_FLUSH_SUBNORMALS),
     ), (
         f"{cell}: failed a {contract.max_ulp}-step budget over {lanes} swept lanes; "
         "the failing lanes are in the ULP-budget log above. Raw maximum before any "
