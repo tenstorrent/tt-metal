@@ -2124,16 +2124,18 @@ def test_copy_rm_legacy_2d_sharded_to_interleaved(
         ([160, 131072], [32, 131072], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
         ([160, 131072], [32, 65536], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
         ([160, 65536], [32, 131072], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
+        # Multi-subblock rows (512 KiB pages) with a partial last shard column of 98304 elements (1.5 subblocks).
+        # Kept small: the former [160, 5210112] (3.3 GB) hit the same edge and only added transfer time.
         (
-            [160, 5210112],
+            [96, 229376],
             [32, 131072],
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
         ),
         # Test for uneven sharding and unaligned shard width
         (
-            [160, 5210112],
-            [96, 1302529],
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            [48, 393216],
+            [32, 98305],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
         ),
     ],
 )
@@ -2167,10 +2169,11 @@ def test_copy_rm_interleaved_to_nd_sharded_large_row(
 @pytest.mark.parametrize(
     "tensor_shape, shard_shape, grid",
     [
+        # Width-sharded shards of 1.5 subblocks (the former [160, 5210112] / [160, 434176] shape was 3.3 GB).
         (
-            [160, 5210112],
-            [160, 434176],
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            [32, 393216],
+            [32, 98304],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
         ),
     ],
 )
@@ -2207,16 +2210,18 @@ def test_copy_rm_interleaved_to_legacy_2D_sharded_large_row(
         ([160, 131072], [32, 131072], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
         ([160, 131072], [32, 65536], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
         ([160, 65536], [32, 131072], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
+        # Multi-subblock rows (512 KiB pages) with a partial last shard column of 98304 elements (1.5 subblocks).
+        # Kept small: the former [160, 5210112] (3.3 GB) hit the same edge and only added transfer time.
         (
-            [160, 5210112],
+            [96, 229376],
             [32, 131072],
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
         ),
         # Test for uneven sharding and unaligned shard width
         (
-            [160, 5210112],
-            [96, 1302529],
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            [48, 393216],
+            [32, 98305],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
         ),
     ],
 )
