@@ -250,13 +250,29 @@ class DSV41PrefillModel:
                     for g, x in enumerate(xs):
                         xg = mc.allgather(x, cc, axis=1, dim=0)  # [8T,1,4,D]: chunk 8g + j at rows jT..
                         outs8 = []
-                        for j in range(self.cols):
-                            xj = ttnn.slice(xg, [j * T, 0, 0, 0], [(j + 1) * T, 1, xg.shape[2], xg.shape[3]])
-                            rj = sl(g * self.cols + j)
-                            outs8.append(
-                                fe(xj, rj if fe.__name__ == "forward_v2" else ttnn.reshape(rj, [T, 1, 1, kin]))
+                        if (
+                            os.environ.get("DSV41_PFA_ENGRAM_BATCH", "0") == "1" and fe.__name__ == "forward_v2"
+                        ):  # ONE T = 8*32 forward per group instead of 8 forwards at T = 32 (same maths, 8x fewer ops / CCLs)
+                            rg = ttnn.to_layout(
+                                ttnn.slice(
+                                    erows_dev[lid], [0, 0, g * self.cols * T, 0], [1, 1, (g + 1) * self.cols * T, kin]
+                                ),
+                                ttnn.TILE_LAYOUT,
                             )
-                        cat8 = ttnn.concat(outs8, dim=0)
+                            cat8 = fe(xg, rg)
+                        else:
+                            for j in range(self.cols):
+                                xj = ttnn.slice(xg, [j * T, 0, 0, 0], [(j + 1) * T, 1, xg.shape[2], xg.shape[3]])
+                                rj = sl(g * self.cols + j)
+                                outs8.append(
+                                    fe(xj, rj if fe.__name__ == "forward_v2" else ttnn.reshape(rj, [T, 1, 1, kin]))
+                                )
+                            cat8 = ttnn.concat(outs8, dim=0)
+                        if (
+                            os.environ.get("DSV41_PROF_EVERY", "0") != "0"
+                        ):  # op-table profiling: drain the device profiler per group
+                            ttnn.synchronize_device(self.md)
+                            ttnn.ReadDeviceProfiler(self.md)
                         rs8 = ttnn.experimental.reduce_scatter_minimal_async(
                             cat8,
                             dim=0,
