@@ -60,9 +60,6 @@ FP32_MANTISSA_BITS = 23
 #: 1 sign + 8 exponent + 10 mantissa, whatever format is stored in it.
 SRC_MANT_BITS = 10
 
-#: Mantissa bits dropped converting Float32 (23 explicit bits) into a src datum.
-FP32_TO_SRC_MANT_TRUNC = FP32_MANTISSA_BITS - SRC_MANT_BITS
-
 #: Explicit mantissa bits a bf16 datum holds, and so what survives a Float16_b
 #: Dest on the way back to a src register.
 BF16_MANT_BITS = 7
