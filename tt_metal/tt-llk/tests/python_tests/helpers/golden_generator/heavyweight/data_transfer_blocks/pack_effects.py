@@ -182,7 +182,10 @@ def _encode_threshold(threshold: float, dest_format: DataFormat) -> float:
     This duplicates the encoding in ``PackGolden`` on purpose: heavyweight owns
     its own model of the packer so the old golden can be retired without
     stranding it. The two were bit-identical across every format and threshold
-    swept when this was written; keep them so, or retire the other one.
+    swept when this was written, and nothing enforces that they stay so -- there
+    is no test comparing them, deliberately, since one would reintroduce the
+    dependency. Treat the agreement as a fact about that moment, not a
+    guarantee, and re-check before relying on either matching the other.
     """
     return _decode_threshold_bits(
         _encode_threshold_bits(threshold, dest_format), dest_format

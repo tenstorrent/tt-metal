@@ -54,8 +54,9 @@ class QuasarDataTransferBlocks(DataTransferBlocks):
     #:
     #: The same facts live in ``constraints._QUASAR_UNPACK_TO_SRCA_FORMATS``.
     #: Kept separately so heavyweight does not depend on the old test-generation
-    #: constraints; they were equivalent for every format in
-    #: ``SUPPORTED_L1_FORMATS`` when this was written. MxFp4's 2x register
+    #: constraints. They were equivalent for every format in
+    #: ``SUPPORTED_L1_FORMATS`` when this was written, and nothing checks that
+    #: they still are. MxFp4's 2x register
     #: formats are omitted because this golden has no storage model for them,
     #: so asking for one should fail rather than quietly produce a plain value.
     #: Quasar's packer inverts the edge-mask register before the gasket applies
