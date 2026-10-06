@@ -514,3 +514,28 @@ def _until(predicate, timeout: float = 30.0) -> None:
             return
         time.sleep(0.02)
     raise AssertionError("condition never became true")
+
+
+def test_the_asgi_module_imports_with_no_mesh_declared_and_fails_at_startup_instead(monkeypatch, expect_error):
+    """`tt-model package` imports the ASGI target inside the finished image to prove the
+    source allowlist ships the server, and that build step has no device, no mesh variable
+    and no HuggingFace cache. Importing has to survive that; SERVING must not."""
+    import asyncio
+
+    for name in ("H3_MESH_SHAPE", "MESH_DEVICE", "TT_METAL_VISIBLE_DEVICES", "H3_WEIGHTS_DIR", "H3_TURBO_PATH"):
+        monkeypatch.delenv(name, raising=False)
+    for module in [m for m in list(sys.modules) if m.startswith(SERVER)]:
+        del sys.modules[module]
+
+    app_module = importlib.import_module(f"{SERVER}.app")
+    assert app_module.app is not None, "the ASGI app must exist for uvicorn to resolve it"
+    assert app_module.CONFIG is None and app_module.ENGINE is None
+    assert isinstance(app_module.CONFIG_ERROR, ValueError)
+    assert "H3_MESH_SHAPE" in str(app_module.CONFIG_ERROR)
+
+    async def start():
+        async with app_module.lifespan(app_module.app):
+            pass
+
+    with expect_error(ValueError, "H3_MESH_SHAPE"):
+        asyncio.run(start())

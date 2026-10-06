@@ -1,0 +1,222 @@
+# MiniMax-H3 (MiniMaxAI/MiniMax-H3) text/image -> video + stereo audio on Tenstorrent Blackhole —
+# CONTAINER (v5.1) package. Authored from the bring-up on a QB2 (2x p300c = 4 chips), tt-metal
+# branch jashan/minimax-h3-p150.
+#   tt-model package --container models/tt_dit/pipelines/minimax_h3/server/tt-model.yaml --out ~/tt-model-builds
+schema: "5.1"
+repo: jashansinghTT/minimax-h3-blackhole
+name: minimax-h3
+kind: tt-dit-server            # uvicorn + the model's own FastAPI app (no vLLM: a video model has
+                               # no tokens, no KV cache and no chat/completions API)
+arch: blackhole
+
+weights:
+  repo: MiniMaxAI/MiniMax-H3
+  revision: 42ed227ee7df40d41602854ae760620d6eb651fe
+  # EXACTLY the diffusers-format partitions the server loads (~144 GB of a ~498 GB repo). The repo's
+  # top-level FL2VA/ and Ref2VA/ trees are self-contained original-format bundles that duplicate the
+  # root partitions and are never read, and `transformer_ref` only serves ref2va, which this package
+  # does not expose. A missing entry here is a first-boot crash; an extra one is a wasted 66 GB.
+  allow_patterns:
+    - model_index.json
+    - modular_model_index.json
+    - "text_encoder/*"         # Qwen3-VL-32B conditioner, first 50 layers (host on p150, device on p300x2)
+    - "transformer/*"          # the 50-block DiT
+    - "vae/*"                  # video VAE (encode for fl2va keyframes, decode for the clip)
+    - "audio_vae/*"            # audio VAE decode
+    - "tokenizer/*"
+    - "processor/*"            # image/video processors, needed by fl2va
+    - "scheduler/*"
+    - "audio_scheduler/*"
+
+source:
+  tt_metal: /home/jashan/tt-metal-h3
+  # Allowlist — exactly what ships. Derived by IMPORTING the app and the pipeline and reading
+  # sys.modules, not by grepping: models/tt_dit uses relative imports, so a `models\.` grep sees
+  # almost nothing. Directory entries rather than the 66 individual files, because several modules
+  # are imported lazily inside functions (the video VAE decoder and its device tile stitcher, the
+  # audio decoder) and a file-level list would miss exactly those.
+  code:
+    - models/common/utility_functions.py   # is_blackhole / nearest_32 etc; the only models/common file in the closure
+    - models/tt_dit/encoders/qwen3vl       # the Qwen3-VL conditioner and its MiniMax-H3 loader
+    - models/tt_dit/experimental           # experimental/lora: the Turbo adapter loader (#57745) and promote.py
+    - models/tt_dit/layers                 # linear/lora/normalization/feedforward/embeddings/audio ops
+    - models/tt_dit/models                 # transformers/minimax_h3, vae/minimax_h3, audio_vae/minimax_h3
+    - models/tt_dit/parallel               # mesh/CCL parallel config and manager
+    - models/tt_dit/pipelines              # pipelines/minimax_h3 (incl. server/), plus cfg.py and events.py
+    - models/tt_dit/utils                  # matmul blockings, substate, cache, conv3d, planar_concat, yuv_d2h, ...
+  ubuntu: "22.04"
+  python: "3.12"
+
+runtime:
+  app: models.tt_dit.pipelines.minimax_h3.server.app:app
+  mesh_shape_env: H3_MESH_SHAPE          # the launcher writes "1x1" / "1x4" here from mesh_device
+  packages:                              # beyond the kind's fastapi/uvicorn/pydantic/pillow default;
+                                         # torch is NOT listed (tt-metal's own pin is inserted by tt-model)
+    - "fastapi>=0.115,<1"
+    - "uvicorn[standard]>=0.30"
+    - "pydantic>=2.9,<3"
+    - "pillow>=10"                       # keyframe decode for fl2va
+    - "numpy>=1.24.4,<2"                 # ttnn's extension modules are built against the numpy 1.x ABI
+    - "safetensors"                      # Turbo adapter and every weight partition
+    - "huggingface_hub"                  # weights + adapter resolution against the mounted /hf cache
+    - "transformers==5.12.1"             # Qwen3VLForConditionalGeneration (host conditioner) + Auto{Tokenizer,ImageProcessor,VideoProcessor}
+    - "tokenizers"
+    - "imageio-ffmpeg>=0.5"              # the ffmpeg binary the engine muxes h264 + AAC with
+    - "loguru"
+    - "pyyaml"
+    # diffusers is deliberately NOT installed: the only import of it is `_prepare_host_vae`, a
+    # reference twin of the device VAE with no call site on any served path. av / torchaudio are
+    # likewise ref2va-only, and ref2va is not exposed by this package.
+
+serve:
+  port: 8000
+  env:
+    H3_WEIGHTS_REVISION: "42ed227ee7df40d41602854ae760620d6eb651fe"
+    # The guidance-distilled Turbo adapter. Pinned by revision for the same reason the weights are:
+    # the LoRA scale and the per-adapter video shift are read from the FILE, so a different file
+    # under the same name is a silently different model. 4 NFE, distilled at video shift 6 / audio 3.
+    H3_TURBO_REPO: "lightx2v/Minimax-h3-Turbo"
+    H3_TURBO_REVISION: "3ec17a324ced54151364f24f8b5fb6bf7e26414f"
+    H3_TURBO_FILE: "minimax_h3_fl2v_turbo_4step_v1.2_768p_bf16.safetensors"
+    H3_MAX_QUEUE: "4"
+    H3_WARMUP: "1"                       # warm at the served shape inside the lifespan, so
+                                         # "Application startup complete" means "ready to generate"
+    H3_PROMPT_CACHE: "1"
+    H3_OUT_KEEP: "32"
+    # One 1344x768 x124 request is ~77-85 s of device work and the VAE decode is one long op.
+    TT_METAL_OPERATION_TIMEOUT_SECONDS: "300.0"
+    # TT_DIT_CACHE_DIR is NOT set here: tt-model mounts the converted-weight cache and sets the
+    # variable beside its mount. Setting it here would point the server at a path with no mount.
+  args: ["--timeout-keep-alive", "75"]   # a generation outlives the default keep-alive
+
+serve_profiles:
+  - name: p150
+    description: One Blackhole chip (P150; on a P300 / QuietBox 2 the first chip). 1344x768, 73 frames.
+    hardware: p150
+    mesh_device: P150
+    env:
+      TT_METAL_VISIBLE_DEVICES: "0"
+  - name: p300x2
+    description: Two p300 boards / QuietBox 2, 4 chips (TP4). 1344x768, 124 frames at the same latency.
+    hardware: p300x2
+    mesh_device: P300x2
+    env: {}                              # the server sets FABRIC_1D itself from the resolved mesh shape
+default_profile: p150
+
+verify:
+  # The kind already imports the ASGI target; these cover what that import does NOT reach, because
+  # the pipeline and every device module behind it are imported lazily at first load — i.e. on a
+  # consumer's first boot, which is too late to learn the allowlist was short.
+  - "import models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3 as p; assert p.MiniMaxH3Pipeline"
+  - "import models.tt_dit.models.vae.minimax_h3.decoder_minimax_h3, models.tt_dit.models.vae.minimax_h3.stitch_device_minimax_h3"
+  - "import models.tt_dit.models.audio_vae.minimax_h3.decoder_minimax_h3_audio"
+  - "import models.tt_dit.experimental.lora.h3_adapter_loader as l; assert l"
+  - "from transformers import AutoTokenizer, AutoImageProcessor, Qwen3VLForConditionalGeneration"
+  # The served point, the Turbo file, the LoRA scale and both shifts are read from this file at
+  # boot; it is loaded with a silent-free `Path(__file__).with_name`, so omitting it from the
+  # allowlist would be a boot crash with no other symptom.
+  - "from pathlib import Path; p = Path('/opt/tt-metal/models/tt_dit/pipelines/minimax_h3/server/config_defaults.json'); assert p.is_file(), 'the served working points are missing'"
+  - "import json; from pathlib import Path; r = json.loads(Path('/opt/tt-metal/models/tt_dit/pipelines/minimax_h3/server/config_defaults.json').read_text()); assert set(r) >= {'p150', 'p300x2'}"
+  # The mux path: no ffmpeg binary means every request fails at the last step, after 80 s of device work.
+  - "import imageio_ffmpeg, os; b = imageio_ffmpeg.get_ffmpeg_exe(); assert os.path.exists(b), b"
+  - "import torch; assert torch.__version__.endswith('+cpu'), torch.__version__"
+  - "import numpy; assert numpy.__version__.startswith('1.'), numpy.__version__"
+
+card:
+  description: >
+    MiniMax-H3 on Tenstorrent Blackhole: a 50-block diffusion transformer that generates video and
+    the matching stereo soundtrack in one pass, conditioned by a Qwen3-VL-32B text/vision encoder.
+    Two validated profiles ship in one image — a single Blackhole chip (`p150`) and a four-chip
+    QuietBox 2 (`p300x2`). Both default to the guidance-distilled lightx2v Turbo adapter at 4
+    forward passes, so a clip is ~80 s rather than the base model's 49 steps. Text-to-video+audio
+    (`t2va`) and first/last-frame-conditioned video+audio (`fl2va`) are exposed; the weights are
+    under the MiniMax-H3 community licence.
+  architecture: 50-block MMDiT, 5376 hidden, 56 heads x 128, joint video + audio latents
+  status: Experimental community bring-up
+  intended_use: >
+    Short generated video clips with synchronised audio, one request at a time, from a text prompt
+    or from a text prompt plus a first (and optionally last) keyframe.
+  out_of_scope_use: >
+    Reference-image-conditioned generation (ref2va) is not exposed — the `transformer_ref`
+    partition is not even downloaded. No batching: the server serves one generation at a time and
+    queues the rest.
+  usage: |
+    `POST /v1/videos/generations` returns **202** and a job object; poll
+    `GET /v1/videos/generations/{id}` until `status` is `completed`, then fetch the mp4 from
+    `GET /v1/videos/generations/{id}/download`. `DELETE /v1/videos/generations/{id}` cancels a
+    queued job at once and a running one between denoise steps. `GET /v1/capabilities` reports
+    this profile's defaults and limits.
+
+    Request fields: `prompt` (required), `mode` (`t2va` | `fl2va`), `width`/`height` or
+    `aspect_ratio`, `num_frames` or `duration_seconds`, `steps`, `seed`, and `image_prompts`
+    (`[{"image": "<base64 png/jpeg>", "position": "first"|"last"}]`, which selects `fl2va`).
+    Canvases are multiples of 32 with a long edge of at most 1344; frame counts are snapped up
+    onto the 17n+5 grid (22, 39, 56, 73, 90, 107, 124, ...) at 24 fps. `steps` counts forward
+    passes, so the Turbo default of 4 is what the shipped adapter was distilled for — raising it
+    does not improve a distilled adapter. The same request at the same `seed` reproduces the same
+    `frames_sha256` / `audio_sha256`.
+
+    Audio is 32 kHz stereo, muxed into the mp4 as AAC beside h264 video.
+  quickstart: |
+    ### Try it
+    ```bash
+    curl -s localhost:20000/v1/health
+    ID=$(curl -s localhost:20000/v1/videos/generations -H 'Content-Type: application/json' \
+      -d '{"prompt":"a red fox trotting through fresh snow at dawn, crisp footsteps crunching","seed":7}' \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+    until [ "$(curl -s localhost:20000/v1/videos/generations/$ID | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')" = completed ]; do sleep 5; done
+    curl -s localhost:20000/v1/videos/generations/$ID/download -o fox.mp4
+    ffprobe -hide_banner fox.mp4        # expect one h264 stream and one 32 kHz stereo AAC stream
+    ```
+    Pick the four-chip profile with `tt-model serve ... --profile p300x2`; it serves 124 frames
+    (5.2 s) instead of 73 (3.0 s) at the same latency. Set `H3_API_KEY` to require
+    `Authorization: Bearer <key>` on everything except the two health probes.
+  performance: |
+    Measured end to end through this package's own server, warm, seeded, on the author's QuietBox 2.
+    Every clip carries both video and its soundtrack; "e2e" is the whole request, encode through mux.
+
+    | | `p150` (1 chip) | `p300x2` (4 chips) |
+    | --- | --- | --- |
+    | default canvas / frames / steps | 1344x768, 73 frames (3.0 s), 4 | 1344x768, 124 frames (5.2 s), 4 |
+    | warm end-to-end, text-to-video+audio | 82.6-84.9 s | 76.9-77.7 s |
+    | warm end-to-end, first-frame-conditioned | 91.2 s (136.8 s on a cold prompt cache) | 81.1 s |
+    | boot to "ready to generate" | 200 s | 165 s |
+    | peak device DRAM | 22.24 GiB | 21.65 GiB per chip |
+    | CLIP score, 5 prompts | 0.329 mean | 0.342 mean |
+    | first-frame fidelity, fl2va (PCC / PSNR vs the keyframe) | 0.9965 / 33.8 dB | 0.9955 / 34.0 dB |
+
+    The two profiles differ in more than chip count: `p150` quantizes the DiT
+    (`bf8_weights_bf8_out_nofp32acc`), precomputes the AdaLN tables on the host and runs the
+    Qwen3-VL conditioner on the CPU, because the conditioner and the DiT do not fit on one chip
+    together. `p300x2` runs both on device at bf16. Full-depth component accuracy against the
+    PyTorch reference, on the served configurations: video PCC 0.9897 and audio 0.9817 on `p150`,
+    video 0.9949 and audio 0.9861 on `p300x2`.
+  limitations: |
+    - **One request at a time.** There is no batching; `H3_MAX_QUEUE` (default 4) bounds the queue
+      and a fuller one returns 429.
+    - **First boot is long.** The boot figures above are for a warm converted-weight cache. A first
+      boot also converts the weights into the mounted cache, which is substantially slower; that
+      cost has not been measured through the container and is not quoted here.
+    - **The weights are a ~144 GB download** on first pull, and the Turbo adapter is fetched from a
+      second repo at boot — so the first boot needs network access even with the weights in place.
+    - **Reference-conditioned generation (ref2va) is not included.**
+    - **Turbo, not the base model.** 4 distilled forward passes in place of 49; faster and lower
+      fidelity than the undistilled schedule, which this package does not serve.
+    - **Audio level is prompt-dependent and can be very quiet.** On a 5 s clip from a sparse prompt
+      the soundtrack can land near the noise floor; one of five bring-up prompts does.
+    - **Only `p150` and `p300x2` were validated**, both on the author's QuietBox 2.
+    - The MiniMax-H3 community licence governs the weights and anything made with them.
+  risks: >
+    Both profiles are deterministic for a given seed and request, but the two profiles are not
+    bit-comparable with each other: different dtype policies and different mesh shapes mean the
+    same prompt and seed give a different sample, not the same clip. Anything that pins output
+    bytes should pin the profile too.
+  licensing: >
+    Model weights are under the MiniMax-H3 community licence (see the weights repo). The TTNN port
+    and the serving code under `code/` are Apache-2.0.
+  license:
+    id: other
+    name: MiniMax Model License Agreement
+    link: https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE
+  pipeline_tag: image-text-to-video
+  base_model: [MiniMaxAI/MiniMax-H3]

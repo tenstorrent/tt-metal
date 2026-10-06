@@ -38,12 +38,26 @@ logging.basicConfig(
 )
 log = logging.getLogger("minimax_h3.server")
 
-CONFIG = build_config()
-ENGINE = H3Engine(CONFIG, log_fn=log.info)
+try:
+    CONFIG = build_config()
+except Exception as exc:  # noqa: BLE001 - re-raised from the lifespan; see below
+    # IMPORTING this module must succeed with no mesh declared and no HuggingFace cache.
+    # `tt-model package` imports the ASGI target inside the finished image to prove the
+    # source allowlist actually ships the server, and that build step has neither a device
+    # nor the weights -- so resolving the config there would fail the build on a question
+    # the build is not being asked. The error is kept and re-raised from the lifespan
+    # instead, which is strictly the same behaviour for anything that SERVES: a container
+    # started with a bad or missing H3_MESH_SHAPE still dies on startup with this exact
+    # exception and a non-zero exit, rather than serving 503s.
+    CONFIG, ENGINE, CONFIG_ERROR = None, None, exc
+else:
+    ENGINE, CONFIG_ERROR = H3Engine(CONFIG, log_fn=log.info), None
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    if CONFIG_ERROR is not None:
+        raise CONFIG_ERROR
     log.info(
         f"MiniMax-H3 server starting: profile {CONFIG.profile}, mesh {CONFIG.mesh_shape}, "
         f"queue_max {CONFIG.queue_max}, out_dir {CONFIG.out_dir}"
