@@ -21,9 +21,9 @@ arm() {  # $1 A|B
     # Only the first A run records the reference (halo-off decode); later runs check against it.
     [ $a = A ] && export LTX_VAE_REF_RECORD=1
     cd $W
-    head=$(git rev-parse --short HEAD)
+    head=$(git rev-parse --short=11 HEAD)
     echo "[t133] arm=$a tag=$tag tree=$head dirty=$(git status --short -uno | wc -l) boot=$(uptime -s) $(date -u +%T)"
-    if [ -n "$rev" ] && [ "$head" != "$rev" ]; then echo "[t133] A tree is not at $rev"; echo "T133_ARM_EXIT[$tag]=5"; exit; fi
+    if [ -n "$rev" ] && [ "$(git rev-parse HEAD)" != "$(git rev-parse "$rev^{commit}")" ]; then echo "[t133] A tree is not at $rev"; echo "T133_ARM_EXIT[$tag]=5"; exit; fi
     timeout 1000 python -m pytest -c $W/pytest.ini --rootdir=$W -sv --timeout=960 \
       tmp/t133/test_t133_4x8.py 2>&1
     echo "T133_ARM_EXIT[$tag]=$?"
