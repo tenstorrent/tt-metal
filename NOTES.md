@@ -34,3 +34,13 @@ grep T119_UPS / T119_VAE / VAE_REF / T119_CONV.
 
 Drop log (2026-10-06): 02:31:46 UTC, broker job 224 (smarton, t141 run_e2e.sh, not t119): chips 8-15 (tray 2) left the PCIe bus. glx_reset at 02:40:52 UTC left 32/32 off-bus; host power-cycle held off. The t119 driver (pid 28540, started 02:42:51) waits for health and has submitted nothing yet.
 Next run: grep T119_UPS / T119_VAE / VAE_REF / T119_HIT / T119_EXIT in /var/tmp/fasth3/t119/run_*.log on blx03, pick winners, commit to t48 if anything changes.
+
+## 2026-10-06 08:47 UTC: moved to the blx03 serial runner (#153)
+Legacy driver119 (pid 28540) died in the 03:42 power-cycle and is gone. Staged src at /var/tmp/fasth3/t119/src
+matches 4e3d3aee651 (run119.sh, test_t119_4x8.py, ab119.py diffed equal). Queued on the runner, in order
+(positions 8-11 behind t140 x4, t155 x2, t136):
+t119-vae-r1, t119-ups1-r1, t119-ups2-r1, t119-ups3-r1 (specs as in tt-project/state/runs/603/migration.md #127).
+Wait on: ssh g14blx03 'bash ~/fasth3/runner/probe.sh t119-ups3-r1'. On wake with no marker: ssh g14blx03 bash ~/fasth3/runner/runner-start.sh.
+Retries get a new ID (-r2) with the same CONFIG. Results: done/<ID>.done (log=), grep T119_UPS / T119_VAE / VAE_REF / T119_HIT.
+Device state at queue time: broker in hold-deadline-escalate (glx_reset); tray 2 (chips 8,9,12,13) dropped in every
+t140 job 05:22-08:46 UTC (broker jobs 311, 331, 351, 371, 389), each followed by a power-cycle. Expect a long wait.
