@@ -193,6 +193,17 @@ constexpr bool uses_reduce_row_block() {
 }
 constexpr uint32_t reduce_row_block_min_tiles = 8;
 
+// Blackhole's reduce_block for a resident SCALAR run (one transpose stage for the run) with an fp32 DEST: with a 16-bit
+// DEST its column-wise accumulation rounds groupnorm's sums worse than per tile reduces (measured).
+template <PoolType reduce_type, ReduceDim reduce_dim, bool is_sfpu, ReduceInputPolicy input_policy>
+constexpr bool uses_reduce_scalar_block() {
+#ifdef ARCH_BLACKHOLE
+    return DST_ACCUM_MODE && !is_sfpu && !waits_per_tile(input_policy) && reduce_dim == ReduceDim::REDUCE_SCALAR;
+#else
+    return false;
+#endif
+}
+
 // =============================================================================
 // Helper Function Implementations
 // =============================================================================
@@ -446,7 +457,18 @@ ALWI void reduce(
                 accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
 
             const uint32_t dst_idx = get_dst_index(accumulate);
-            for (uint32_t ht = 0; ht < Ht; ++ht) {
+            uint32_t ht_start = 0;
+            if constexpr (uses_reduce_scalar_block<reduce_type, reduce_dim, is_sfpu, input_policy>()) {
+                const uint32_t first = waits_bulk(input_policy) ? 0 : batch_offset;
+                const uint32_t runs = (stride == Wt) ? 1 : Ht;
+                const uint32_t run_tiles = (stride == Wt) ? Ht * Wt : Wt;
+                for (uint32_t run = 0; run < runs; ++run) {
+                    reduce_block<reduce_type, reduce_dim>(
+                        input_dfb_id, scaler_dfb_id, first + run * stride, 0, dst_idx, run_tiles, 0);
+                }
+                ht_start = Ht;
+            }
+            for (uint32_t ht = ht_start; ht < Ht; ++ht) {
                 for (uint32_t wt = 0; wt < Wt; ++wt) {
                     if constexpr (waits_per_tile(input_policy)) {
                         // One-at-a-time: wait/pop per tile
