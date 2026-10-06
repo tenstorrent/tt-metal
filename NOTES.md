@@ -31,3 +31,6 @@ grep T119_UPS / T119_VAE / VAE_REF / T119_CONV.
 3. Read `T119_CONV`/`T119_HIT` (was the key hit?), `VAE_REF` (gate: >=40 dB overall, >=35 dB seams), and traced times from
    /var/tmp/fasth3/t119/run_*.log. Compare against #100's 506.2 ms (1150 MHz clamp). Commit winners to t48.
 - Possibly worth dropping the hostfmax clamp on the resume run, or running it as a separate job: it is the only thing that touched every chip just before the open. Not proven to be the cause.
+
+Drop log (2026-10-06): 02:31:46 UTC, broker job 224 (smarton, t141 run_e2e.sh, not t119): chips 8-15 (tray 2) left the PCIe bus. glx_reset at 02:40:52 UTC left 32/32 off-bus; host power-cycle held off. The t119 driver (pid 28540, started 02:42:51) waits for health and has submitted nothing yet.
+Next run: grep T119_UPS / T119_VAE / VAE_REF / T119_HIT / T119_EXIT in /var/tmp/fasth3/t119/run_*.log on blx03, pick winners, commit to t48 if anything changes.
