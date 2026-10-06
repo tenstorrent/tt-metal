@@ -529,6 +529,7 @@ BINARY_SFPU_OPS = {
     MathOperation.SfpuLogaddexp,
     MathOperation.SfpuLogaddexp2,
     MathOperation.SfpuGcd,
+    MathOperation.SfpuLcm,
     MathOperation.SfpuElwRightShift,
     MathOperation.SfpuElwLeftShift,
     MathOperation.SfpuElwLogicalRightShift,
