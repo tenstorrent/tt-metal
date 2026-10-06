@@ -30,6 +30,13 @@ constexpr bool copy_init_shared_with_c0() {
 }
 #endif
 
+#if defined(ARCH_BLACKHOLE)
+// With 32-bit operands the inits stay per tile: addcdiv on float32 measured slower without them.
+constexpr bool init_once = !DST_ACCUM_MODE;
+#else
+constexpr bool init_once = false;
+#endif
+
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t scalar_arg = get_arg_val<uint32_t>(3);
@@ -43,9 +50,11 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_in0.get_id(), dfb_out.get_id());
     copy_init(dfb_in0.get_id());
 #if defined(ARCH_BLACKHOLE)
-    TERNARY_SFPU_OP_INIT();
+    if constexpr (init_once) {
+        TERNARY_SFPU_OP_INIT();
+    }
     constexpr bool shared_copy_init =
-        copy_init_shared_with_c0<tt::CBIndex::c_1>() && copy_init_shared_with_c0<tt::CBIndex::c_2>();
+        init_once && copy_init_shared_with_c0<tt::CBIndex::c_1>() && copy_init_shared_with_c0<tt::CBIndex::c_2>();
 #else
     constexpr bool shared_copy_init = false;
 #endif
@@ -74,9 +83,9 @@ void kernel_main() {
         }
         copy_tile(dfb_in2.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
 
-#if !defined(ARCH_BLACKHOLE)
-        TERNARY_SFPU_OP_INIT();
-#endif
+        if constexpr (!init_once) {
+            TERNARY_SFPU_OP_INIT();
+        }
         TERNARY_SFPU_OP_FUNC(0, 1, 2, 0, scalar_arg);
 
         tile_regs_commit();

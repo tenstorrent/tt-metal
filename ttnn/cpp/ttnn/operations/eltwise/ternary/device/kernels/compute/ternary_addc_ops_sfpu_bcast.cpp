@@ -27,6 +27,13 @@ constexpr bool copy_init_shared_with_c0() {
 }
 #endif
 
+#if defined(ARCH_BLACKHOLE)
+// With 32-bit operands the inits stay per tile: addcdiv on float32 measured slower without them.
+constexpr bool init_once = !DST_ACCUM_MODE;
+#else
+constexpr bool init_once = false;
+#endif
+
 ALWI void process_tile(
     uint32_t cb_in0_id,
     uint32_t cb_in1_id,
@@ -39,7 +46,7 @@ ALWI void process_tile(
     using namespace ckernel;
 #if defined(ARCH_BLACKHOLE)
     constexpr bool shared_copy_init =
-        copy_init_shared_with_c0<tt::CBIndex::c_1>() && copy_init_shared_with_c0<tt::CBIndex::c_2>();
+        init_once && copy_init_shared_with_c0<tt::CBIndex::c_1>() && copy_init_shared_with_c0<tt::CBIndex::c_2>();
 #else
     constexpr bool shared_copy_init = false;
 #endif
@@ -93,9 +100,9 @@ ALWI void process_tile(
         copy_tile(dfb_in2.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
 
         // Use direct addcmul kernel: computes input_a + scalar_arg * input_b * input_c -> DST[0]
-#if !defined(ARCH_BLACKHOLE)
-        TERNARY_SFPU_OP_INIT();
-#endif
+        if constexpr (!init_once) {
+            TERNARY_SFPU_OP_INIT();
+        }
         TERNARY_SFPU_OP_FUNC(0, 1, 2, 0, scalar_arg);
 
         tile_regs_commit();
@@ -151,9 +158,9 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_in0_id, cb_out_id);
     copy_init(cb_in0_id);
-#if defined(ARCH_BLACKHOLE)
-    TERNARY_SFPU_OP_INIT();
-#endif
+    if constexpr (init_once) {
+        TERNARY_SFPU_OP_INIT();
+    }
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
