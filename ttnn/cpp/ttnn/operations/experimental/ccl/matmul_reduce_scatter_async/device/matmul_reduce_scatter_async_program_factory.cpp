@@ -16,28 +16,18 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/experimental/matmul/ccl_fusion/device/ccl_fusion_mcast_2d.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
 
 namespace ttnn::experimental::prim {
 
-MatmulReduceScatterAsyncProgramFactory::cached_mesh_workload_t
-MatmulReduceScatterAsyncProgramFactory::create_mesh_workload(
-    const MatmulReduceScatterAsyncParams& args,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const MatmulReduceScatterAsyncInputs& tensor_args,
-    MatmulReduceScatterAsyncResult& output_tensors) {
-    tt::tt_metal::distributed::MeshWorkload mesh_workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_vars;
+namespace {
 
-    for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(args, coord, tensor_args, output_tensors);
-        mesh_workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_vars.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
-    }
+// The reduce-scatter is the first thing added to each (empty) per-coordinate descriptor, so its reader and writer
+// are kernels 0 and 1. A Program built from the descriptor uses the same indices as kernel handles; the cache-hit
+// override relies on that to find the semaphore slots. build_program_descriptor() checks it.
+constexpr ReduceScatterDescriptorArtifacts kReduceScatterKernels{.reader_kernel_index = 0, .writer_kernel_index = 1};
 
-    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_vars)};
-}
-
-MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyncProgramFactory::create_at(
+tt::tt_metal::ProgramDescriptor build_program_descriptor(
     const MatmulReduceScatterAsyncParams& args,
     const ttnn::MeshCoordinate& mesh_coord,
     const MatmulReduceScatterAsyncInputs& tensor_args,
@@ -57,7 +47,7 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
     bool bcast_batch = args.matmul_struct.bcast_batch.value();
     bool untilize_out = args.matmul_struct.untilize_out;
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::ProgramDescriptor desc;
 
     std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
         tensor_args.input, mesh_coord, 1, args.reduce_scatter_params.topology, args.reduce_scatter_params.cluster_axis);
@@ -80,9 +70,9 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
     auto resolved_reduce_scatter_compute_kernel_config =
         ttnn::ccl::resolve_fp32_acc_compute_kernel_config(std::nullopt, output_tensors.mm.dtype());
 
-    // Reduce Scatter - use the new artifacts-based helper
-    auto reduce_scatter_artifacts = ttnn::experimental::prim::build_ring_reduce_scatter_minimal_async_program_artifacts(
-        program,
+    // Reduce Scatter
+    const auto reduce_scatter_kernels = build_ring_reduce_scatter_minimal_async_program_descriptor(
+        desc,
         output_tensors.mm,
         tensor_args.persistent_intermediate,
         /*penult_intermediate_tensor=*/std::nullopt,  // contiguous intermediate path not supported through here.
@@ -105,6 +95,13 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         std::nullopt,
         args.reduce_scatter_core_grid_offset,
         resolved_reduce_scatter_compute_kernel_config);
+    TT_FATAL(
+        reduce_scatter_kernels.reader_kernel_index == kReduceScatterKernels.reader_kernel_index &&
+            reduce_scatter_kernels.writer_kernel_index == kReduceScatterKernels.writer_kernel_index,
+        "matmul_reduce_scatter_async: the reduce-scatter kernels must be the first two in the descriptor "
+        "(got reader {}, writer {}); the cache-hit override depends on it",
+        reduce_scatter_kernels.reader_kernel_index,
+        reduce_scatter_kernels.writer_kernel_index);
 
     // Create a matmul signal info object that gets populated by the matmul kernel
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =
@@ -117,8 +114,8 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         reduce_scatter_fused_op_signaler->fused_op_signaler_mode);
 
     // Matmul
-    auto matmul_cached_program = ttnn::prim::ccl_fusion::matmul_multi_core_reuse_mcast_2d_optimized_helper(
-        program,
+    ttnn::prim::ccl_fusion::matmul_multi_core_reuse_mcast_2d_optimized_helper(
+        desc,
         tensor_args.input,
         tensor_args.weight,
         tensor_args.bias,
@@ -129,38 +126,50 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         untilize_out,
         matmul_fused_op_signaler);
 
-    return cached_program_t{
-        std::move(matmul_cached_program.program),
-        {.reduce_scatter_artifacts = reduce_scatter_artifacts,
-         .matmul_shared_variables = std::move(matmul_cached_program.shared_variables)}};
+    return desc;
 }
 
-void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
+}  // namespace
+
+tt::tt_metal::WorkloadDescriptor MatmulReduceScatterAsyncProgramFactory::create_workload_descriptor(
+    const MatmulReduceScatterAsyncParams& args,
+    const MatmulReduceScatterAsyncInputs& tensor_args,
+    MatmulReduceScatterAsyncResult& output_tensors,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor workload;
+    const auto coords = tensor_coords.coords();
+    workload.programs.reserve(coords.size());
+    for (const auto& coord : coords) {
+        workload.programs.push_back(
+            {ttnn::MeshCoordinateRange(coord), build_program_descriptor(args, coord, tensor_args, output_tensors)});
+    }
+    return workload;
+}
+
+MatmulReduceScatterAsyncMeshWorkloadFactory::cached_mesh_workload_t
+MatmulReduceScatterAsyncMeshWorkloadFactory::create_mesh_workload(
+    const MatmulReduceScatterAsyncParams& args,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const MatmulReduceScatterAsyncInputs& tensor_args,
+    MatmulReduceScatterAsyncResult& output_tensors) {
+    return descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensor_args, output_tensors);
+}
+
+void MatmulReduceScatterAsyncMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const MatmulReduceScatterAsyncParams& args,
     const MatmulReduceScatterAsyncInputs& tensor_args,
     MatmulReduceScatterAsyncResult& output_tensors) {
-    const auto ccl_args = ReduceScatterProgramArtifacts::collect_runtime_args(
-        true,
-        args.reduce_scatter_params.barrier_semaphore,
-        args.reduce_scatter_params.semaphore,
-        output_tensors.mm,
-        tensor_args.persistent_intermediate,
-        output_tensors.reduce_scatter);
+    // Tensor addresses (matmul in0/in1/bias/output, reduce-scatter intermediate/output, tensor-backed CBs).
+    descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output_tensors);
+
+    // The caller-owned GlobalSemaphores.
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
-
-        std::vector<Tensor> matmul_output_tensors = {output_tensors.mm};
-        ttnn::prim::ccl_fusion::override_mcast_2d_runtime_arguments(
+        apply_ring_reduce_scatter_semaphore_args(
             program,
-            shared_vars.matmul_shared_variables,
-            {.input_tensors = {tensor_args.input, tensor_args.weight},
-             .optional_input_tensors = {tensor_args.bias},
-             .optional_output_tensors = {output_tensors.mm}},
-            matmul_output_tensors);
-
-        // Call reduce scatter runtime arguments override directly using artifacts
-        shared_vars.reduce_scatter_artifacts.override_runtime_arguments(ccl_args);
+            kReduceScatterKernels,
+            args.reduce_scatter_params.barrier_semaphore,
+            args.reduce_scatter_params.semaphore);
     }
 }
 
