@@ -580,6 +580,19 @@ def _run_demo(
                         f"spec gap {generator.spec.gaps[u][dv - 1] if dv > 0 and len(generator.spec.gaps[u]) >= dv else float('nan'):.3f}, "
                         f"rounds {len(mh)}, mean accepted {sum(mh) / max(len(mh), 1):.2f}, tokens {len(gen_sp[u])}"
                     )
+                grp = {}
+                for u in range(batch_size):
+                    grp.setdefault(tuple(int(t) for t in input_tokens_prefill[u][: int(decoding_pos[u])]), []).append(u)
+                bad_p = bad_s = 0
+                for us in grp.values():
+                    for u in us[1:]:
+                        n_ = min(len(plain_gen[u]), len(plain_gen[us[0]]))
+                        bad_p += int(plain_gen[u][:n_] != plain_gen[us[0]][:n_])
+                        n_ = min(len(gen_sp[u]), len(gen_sp[us[0]]), 48)
+                        bad_s += int(gen_sp[u][:n_] != gen_sp[us[0]][:n_])
+                logger.info(
+                    f"SPEC self-consistency: {len(grp)} distinct prompts among {batch_size} users; users differing from the first user of their identical-prompt group: plain {bad_p}, spec {bad_s} (first 48 tokens)"
+                )
                 tok_s_plain = 1000.0 / plain_ms if plain_ms == plain_ms and plain_ms > 0 else float("nan")
                 logger.info(
                     f"=== SPEC k={spec_k if pol is None else pol} (batch {batch_size}): {st['rounds']} rounds, {st['accepted_per_round']:.3f} accepted drafts/round "

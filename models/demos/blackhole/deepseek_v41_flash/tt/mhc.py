@@ -54,6 +54,23 @@ from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import TtMHCWrap, build_consts
 KC = 640  # K-chunk of the projection: S = n*C/KC = 32 cores
 
 
+def _pad_rows(t, T, Tp, dim):
+    pads = [(0, 0)] * 4
+    pads[dim] = (0, Tp - T)
+    return ttnn.pad(t, pads, 0.0)
+
+
+def _slice_rows(t, T, dim):
+    end = list(t.shape)
+    end[dim] = T
+    return ttnn.slice(t, [0, 0, 0, 0], end)
+
+
+def _odd_t(T):
+    """T = 5..7 token rows (B=4 spec drafter: 5 rows per user) run on the T=8 kernels: the partial 4-token group of the collapse / expand kernels is not exact there."""
+    return 8 if 5 <= T <= 7 and os.environ.get("DSV41_MHC_PAD8", "1") == "1" else None
+
+
 class DSV41MHC:
     def __init__(
         self,
@@ -139,8 +156,8 @@ class DSV41MHC:
         T = x.shape[0]
         if _flag("DSV41_MHC_MIXES_V2", "1"):
             if (
-                T % 8 and T > 8
-            ) or T < 4:  # T=12/20 give wrong mixes in the packed kernel (pad to a multiple of 8); T<4 (U=1) pads to 4
+                T % 8 and T != 4
+            ):  # T=12/20 give wrong mixes in the packed kernel (pad to a multiple of 8); T<4 pads to 4; T=5..7 (B=4 spec: drafter 5 rows) pads to 8
                 Tp = 4 if T < 4 else -(-T // 8) * 8
                 xp = ttnn.pad(x, [(0, Tp - T), (0, 0), (0, 0), (0, 0)], 0.0)
                 outs = self.mixes(xp)
@@ -176,6 +193,10 @@ class DSV41MHC:
     def collapse_norm(self, x, pre, w, eps=1e-20):
         """== layer._norm(layer._to_row(collapse(x, pre)), w): bf16(sum_i pre_i x_i) normalised in fp32 (RMS, eps) times
         the fp32 weight ``w`` ([1,1,1,C] tile row), returned as bf16 [1,1,T,C]."""
+        T = x.shape[0]
+        if _odd_t(T):
+            h = self.collapse_norm(_pad_rows(x, T, 8, 0), _pad_rows(pre, T, 8, 0), w, eps)
+            return _slice_rows(h, T, 2)
         w4 = self._norm_weight(w, x.shape[0])
         if _flag("DSV41_MHC_CN_FUSED", "1") and x.shape[0] in (4, 16, 32):
             return mhc_collapse_norm(x, pre, w4, eps)
@@ -185,6 +206,10 @@ class DSV41MHC:
     def collapse_norm_rm(self, x, pre, w, eps=1e-20):
         """collapse_norm that also returns the bf16 ROW_MAJOR [T,1,1,C] copy the MoE dispatch wants:
         -> (h [1,1,T,C] bf16 tile, h_tok [T,1,1,C] bf16 row-major)."""
+        T = x.shape[0]
+        if _odd_t(T):
+            h, h_tok = self.collapse_norm_rm(_pad_rows(x, T, 8, 0), _pad_rows(pre, T, 8, 0), w, eps)
+            return _slice_rows(h, T, 2), _slice_rows(h_tok, T, 0)
         w4 = self._norm_weight(w, x.shape[0])
         if _flag("DSV41_MHC_CN_FUSED", "1") and x.shape[0] in (4, 16, 32):
             return mhc_collapse_norm(x, pre, w4, eps, emit_rm=True)
@@ -194,6 +219,17 @@ class DSV41MHC:
     def expand(self, y, residual, post, comb, y2=None):
         """new_j = post_j * (y [+ y2]) + sum_i comb[i, j] residual_i -> [T,1,n,C] fp32. y: [T,1,1,C] fp32 or [1,1,T,C]
         (token rows) fp32/bf16; optional y2 [1,1,T,C] fp32 (added to y inside the kernel)."""
+        T = residual.shape[0]
+        if _odd_t(T):
+            yd = 2 if y.shape[2] == T and y.shape[0] == 1 else 0
+            out = self.expand(
+                _pad_rows(y, T, 8, yd),
+                _pad_rows(residual, T, 8, 0),
+                _pad_rows(post, T, 8, 0),
+                _pad_rows(comb, T, 8, 0),
+                None if y2 is None else _pad_rows(y2, T, 8, 2),
+            )
+            return _slice_rows(out, T, 0)
         if _flag("DSV41_MHC_EXPAND_V2", "1"):
             return mhc_expand2(y, residual, post, comb, y2)
         return mhc_expand(y, residual, post, comb, y2)

@@ -123,6 +123,16 @@ def _cfg_1d(K, N, max_cores):
     )
 
 
+def _ucfg32():
+    return ttnn.create_sharded_memory_config(
+        shape=(PAD_HEADS, HEAD_DIM),
+        core_grid=ttnn.num_cores_to_corerangeset(32, ttnn.CoreCoord(8, 8), row_wise=True),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
 def _proj_kwargs(name, K, N):
     """Matmul placement per projection (measured in-trace on BH, tests/test_attn_probe_matmul.py): the default config
     runs these single-tile-row matmuls on a handful of cores (K=5120: 80 us); a 2x8 grid / 1D config is 2-4x faster.
@@ -299,11 +309,23 @@ class DSV41Attention:
 
     # ---- helpers --------------------------------------------------------------------------------------
     def _lin(self, x, w, name, **kw):
+        if (
+            int(x.shape[-2]) > 32
+        ):  # spec verify with > 32 rows (DSV41_SPEC_ROWS): the tuned 1D configs are per_core_M = 1 (<= 32 rows)
+            return ttnn.linear(x, w, compute_kernel_config=self.ckc, core_grid=ttnn.CoreGrid(y=8, x=8), **kw)
         return ttnn.linear(x, w, compute_kernel_config=self.ckc, **self._proj[name], **kw)
 
     def _rope_rows(self, x, c, s, name="SW"):
         """x [..., 512] (any leading dims): x * C + (x @ P) * S with full-width tables broadcast over rows."""
-        if AF.flag("DSV41_ATTN_FUSED_ROPE", "1"):
+        # The fused rows-layout kernel rotates every row by the angle of table row 0 (tests/test_attn_fused_rope.py: "all users share row 0"): only valid when all rows
+        # share ONE position. Paged decode with per-user positions (ragged) and spec verify blocks (n rows at different positions, > 32 rows) need per-row angles:
+        # the unfused path is the default now; DSV41_ROPE_ROWS_FUSED=1 restores the fused kernel (uniform single-position decode only).
+        # Choice: plain decode keeps the fused kernel (near-identical streams, 4.6 ms/token faster at B=16); spec verify views set ``per_row_rope`` (rows at different
+        # positions). DSV41_ROPE_ROWS_FUSED=1 forces fused everywhere, =0 forces the per-row path everywhere.
+        fused_rows = os.environ.get("DSV41_ROPE_ROWS_FUSED", "auto")
+        if AF.flag("DSV41_ATTN_FUSED_ROPE", "1") and (
+            fused_rows == "1" or (fused_rows == "auto" and not getattr(self, "per_row_rope", False))
+        ):
             return AF.rope_inplace(x, c, s, 1, rows_layout=True)
         return ttnn.addcmul(ttnn.multiply(x, c), self._lin(x, self.Pf, name), s)
 
@@ -324,6 +346,27 @@ class DSV41Attention:
         )
         tail = kv if lat is None else lat
         cat = ttnn.concat([kv, q, tail, tail], dim=3)
+        if (
+            T > 32
+        ):  # spec verify with > 32 rows (DSV41_SPEC_ROWS): nlp_create_qkv_heads_decode takes <= 32 users per call
+            assert T % 32 == 0
+            cfg32 = _ucfg32()
+            qs, ks = [], []
+            for o in range(0, T, 32):
+                qh, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+                    ttnn.slice(cat, [0, 0, o, 0], [1, 1, o + 32, cat.shape[3]]),
+                    num_heads=NH,
+                    num_kv_heads=1,
+                    memory_config=cfg32,
+                )
+                ttnn.deallocate(v)
+                qs.append(ttnn.to_memory_config(qh, ttnn.DRAM_MEMORY_CONFIG))
+                ttnn.deallocate(qh)
+                ks.append(k)
+            for k2 in ks[1:]:
+                ttnn.deallocate(k2)
+            q_rot = self._rope_heads(ttnn.concat(qs, dim=1), st["Ch"], st["Sh"], fused_users=T)
+            return q_rot, ttnn.clone(q_rot), ks[0]
         qh, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
             cat, num_heads=NH, num_kv_heads=1, memory_config=self._ucfg
         )
@@ -374,6 +417,20 @@ class DSV41Attention:
 
     def _finish(self, o, st):
         """o [1,T,9,512] attention output -> inverse RoPE, grouped output projection, all-reduce -> [1,1,T,5120]."""
+        if self.T > 32:  # spec verify with > 32 rows: nlp_concat_heads_decode takes <= 32 users per call
+            o = self._rope_heads(o, st["Ch"], st["nSh"], fused_users=self.T)
+            cs = []
+            for r in range(0, self.T, 32):
+                oc = ttnn.to_memory_config(ttnn.slice(o, [0, r, 0, 0], [1, r + 32, o.shape[2], o.shape[3]]), _ucfg32())
+                cs.append(
+                    ttnn.to_memory_config(
+                        ttnn.experimental.nlp_concat_heads_decode(oc, num_heads=NH), ttnn.DRAM_MEMORY_CONFIG
+                    )
+                )
+            c = ttnn.concat(cs, dim=2)
+            part = self._lin(self._lin(c, self.wo_a, "OA"), self.wo_b, "OB")
+            out = self.mesh_config.allreduce(part, self.ccl, axis=1)
+            return ttnn.reshape(out, (1, 1, self.T, DIM))
         o = self._rope_inv(o, st)
         c = ttnn.experimental.nlp_concat_heads_decode(o, num_heads=NH)  # [1,1,32,9*512], L1 width sharded
         c = ttnn.to_memory_config(c, ttnn.DRAM_MEMORY_CONFIG)  # wo_a is 2x faster from interleaved DRAM
@@ -385,6 +442,14 @@ class DSV41Attention:
 
     def _rope_heads(self, x, c, s, memory_config=None, fused_users=None):
         """x [1,T,32,512] (DRAM): x * C + (x @ P) * S, tables [1,T,1,512] broadcast over the head rows."""
+        if fused_users is not None and fused_users > 32 and AF.flag("DSV41_ATTN_FUSED_ROPE", "1"):
+            # the rope kernel uses 2 cores per user: <= 32 users per call (spec verify with > 32 rows)
+            parts = []
+            for r in range(0, fused_users, 32):
+                sl = lambda t: ttnn.slice(t, [0, r, 0, 0], [1, r + 32, t.shape[2], t.shape[3]])
+                parts.append(AF.rope_inplace(sl(x), sl(c), sl(s), 32))
+            x = ttnn.concat(parts, dim=1)
+            return x if memory_config is None else ttnn.to_memory_config(x, memory_config)
         if fused_users is not None and AF.flag("DSV41_ATTN_FUSED_ROPE", "1"):
             AF.rope_inplace(x, c, s, fused_users)  # in place on the DRAM tensor
             return x if memory_config is None else ttnn.to_memory_config(x, memory_config)
