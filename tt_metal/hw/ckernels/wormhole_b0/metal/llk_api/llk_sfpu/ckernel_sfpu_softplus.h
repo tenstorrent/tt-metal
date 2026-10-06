@@ -22,7 +22,11 @@ namespace ckernel::sfpu {
 //   softplus(t) = t + f(t)   for t >= 0
 //   softplus(t) = f(-t)      for t < 0
 //
-// FP32: degree-8 polynomial for f(a) on [0, 5] + inline exp + 3-term Taylor tail
+// FP32: f(a) = u*(1 + u*h(u)) for every a >= 0, u = exp(-a), with h a degree-8
+//       fit of (ln(1+u)/u - 1)/u on (0, 1]. One polynomial covers the domain:
+//       the old degree-8 fit in a was thousands of ULP on [0, 5]. exp is
+//       Cody-Waite plus a degree-7 Taylor, and its input is clamped to -2^21
+//       so the magic round cannot wrap on huge negative inputs.
 // BF16: branch-free evaluation in u = exp(-a):
 //         f(a) = ln(1 + u) = u * (1 + u * h(u)),   u in (0, 1]
 //       with h a degree-4 fit of (ln(1+u)/u - 1)/u on [0, 1]. Writing the
@@ -50,18 +54,17 @@ namespace ckernel::sfpu {
 //       49,711 whose exact answer is a normal bf16: max 0.52 ULP end-to-end.
 // ======================================================================
 
-constexpr float SOFTPLUS_POLY_BOUNDARY = 5.0f;
-
-// FP32 residual polynomial: f(a) = ln(1+exp(-a)) on [0, 5], degree 8
-constexpr float SOFTPLUS_POLY_C0 = 6.9310557842e-01f;
-constexpr float SOFTPLUS_POLY_C1 = -4.9926245213e-01f;
-constexpr float SOFTPLUS_POLY_C2 = 1.2186349183e-01f;
-constexpr float SOFTPLUS_POLY_C3 = 5.6753782555e-03f;
-constexpr float SOFTPLUS_POLY_C4 = -1.0528374463e-02f;
-constexpr float SOFTPLUS_POLY_C5 = 2.7290175203e-03f;
-constexpr float SOFTPLUS_POLY_C6 = -3.4358495031e-04f;
-constexpr float SOFTPLUS_POLY_C7 = 2.1285692128e-05f;
-constexpr float SOFTPLUS_POLY_C8 = -4.8245715334e-07f;
+// FP32: h(u) = (ln(1+u)/u - 1)/u on (0, 1], degree 8. H6..H8 live in the
+// programmable constant registers (softplus_init) because Horner starts there.
+constexpr float SOFTPLUS_FP32_H0 = -4.99999970e-01f;
+constexpr float SOFTPLUS_FP32_H1 = 3.33328933e-01f;
+constexpr float SOFTPLUS_FP32_H2 = -2.49875516e-01f;
+constexpr float SOFTPLUS_FP32_H3 = 1.98621094e-01f;
+constexpr float SOFTPLUS_FP32_H4 = -1.58783853e-01f;
+constexpr float SOFTPLUS_FP32_H5 = 1.16265282e-01f;
+constexpr float SOFTPLUS_FP32_H6 = -6.75118119e-02f;
+constexpr float SOFTPLUS_FP32_H7 = 2.56827865e-02f;
+constexpr float SOFTPLUS_FP32_H8 = -4.57976572e-03f;
 
 // BF16: -1/ln2 for y = 127 - a/ln2 (fp32, held in vConstFloatPrgm0), the fp32 exponent
 // bias y is offset by, and the half the Wormhole path shifts y by so that
@@ -98,6 +101,14 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
     constexpr float LN2_HI = -0.6931152343750000f;
     constexpr float LN2_LO = -3.19461832987e-05f;
 
+    // _sfpu_round_to_nearest_int32_ is the 2^23+2^22 bit trick, valid only for
+    // z > -2^22 (x > -2^22*ln(2) ≈ -2.91e6). Past that the int32 bit-subtract
+    // wraps and setexp returns garbage on about [-1.74e7, -8.7e6], where the
+    // true exp is already 0. -2^21 is bf16-exact, still inside that domain, and
+    // the clamped k underflows through the new_exp > 0 flush. The clamp is a
+    // no-op for every nonzero fp32 exp (x > ~-88).
+    x = sfpi::max(x, -2097152.0f);
+
     // Range reduction: x = k*ln(2) + r
     sfpi::vFloat z = x * INV_LN2;
     sfpi::vInt k_int;
@@ -107,7 +118,7 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
     sfpi::vFloat r = k * LN2_HI + x;
     r = k * LN2_LO + r;
 
-    // exp(r) via Taylor polynomial, |r| < 0.5, degree 7 for < 1 ULP
+    // exp(r) via Taylor, |r| < ln2/2, degree 7 for < 1 ULP
     sfpi::vFloat poly = PolynomialEvaluator::eval(
         r, 1.0f, 1.0f, 0.5f, 0.166666667f, 0.0416666667f, 0.00833333333f, 0.00138888889f, 0.000198412698f);
 
@@ -181,15 +192,15 @@ constexpr int SOFTPLUS_VECTORS_PER_ITER = 2;
 
 // Resets the dest counters and loads the programmable constants. Each one holds an fp32
 // constant that would otherwise cost two SFPLOADIs per use. The fp32 path (INP_FLOAT32)
-// holds three of its degree-8 coefficients (all fp32, so any three save the same); the
+// holds H6..H8, the three coefficients Horner consumes first; the
 // bf16 path holds the only three of its constants that are not fp16-exact.
 inline void softplus_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
 
 #ifdef INP_FLOAT32
-    sfpi::vConstFloatPrgm0 = SOFTPLUS_POLY_C0;
-    sfpi::vConstFloatPrgm1 = SOFTPLUS_POLY_C2;
-    sfpi::vConstFloatPrgm2 = SOFTPLUS_POLY_C4;
+    sfpi::vConstFloatPrgm0 = SOFTPLUS_FP32_H8;
+    sfpi::vConstFloatPrgm1 = SOFTPLUS_FP32_H7;
+    sfpi::vConstFloatPrgm2 = SOFTPLUS_FP32_H6;
 #else
     sfpi::vConstFloatPrgm0 = SOFTPLUS_BF16_NEG_ONE_LN2;
     sfpi::vConstFloatPrgm1 = SOFTPLUS_BF16_P1;
@@ -213,34 +224,29 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
     // swap (no copy needed) and the predicated store keeps the identity lanes.
     v_if(t <= threshold) {
 #ifdef INP_FLOAT32
-        // a = |t| via setsgn (clear sign bit, no branch)
+        // a = |t| via setsgn (clear sign bit, no branch). max(t, 0) does not
+        // depend on the exp and is done before that chain.
         sfpi::vFloat a = sfpi::setsgn(t, 0);
-
-        // FP32: f(a) via degree-8 Horner on [0, 5]
-        sfpi::vFloat residual = PolynomialEvaluator::eval(
-            a,
-            sfpi::vConstFloatPrgm0,  // C0
-            SOFTPLUS_POLY_C1,
-            sfpi::vConstFloatPrgm1,  // C2
-            SOFTPLUS_POLY_C3,
-            sfpi::vConstFloatPrgm2,  // C4
-            SOFTPLUS_POLY_C5,
-            SOFTPLUS_POLY_C6,
-            SOFTPLUS_POLY_C7,
-            SOFTPLUS_POLY_C8);
-
-        // Tail: f(a) ≈ exp(-a) for a > 5, via inline Cody-Waite exp +
-        // 3-term Taylor ln(1+e) = e*(1 + e*(-1/2 + e/3))
-        v_if(a > SOFTPLUS_POLY_BOUNDARY) {
-            sfpi::vFloat e = softplus_exp_negative(-a);
-            residual = e * (1.0f + e * (-0.5f + e * 0.333333343f));
-        }
-        v_endif;
-
-        // Reconstruct softplus(t):
-        //   t >= 0: softplus(t) = t + f(t) = max(0,t) + residual
-        //   t < 0:  softplus(t) = f(|t|) = 0 + residual
         sfpi::vFloat sp = sfpi::max(t, 0.0f);
+
+        // f(a) = u*(1 + u*h(u)), u = exp(-a). Covers a >= 0, including the
+        // old tail, so there is no a > 5 branch.
+        sfpi::vFloat u = softplus_exp_negative(-a);
+        sfpi::vFloat h = PolynomialEvaluator::eval(
+            u,
+            SOFTPLUS_FP32_H0,
+            SOFTPLUS_FP32_H1,
+            SOFTPLUS_FP32_H2,
+            SOFTPLUS_FP32_H3,
+            SOFTPLUS_FP32_H4,
+            SOFTPLUS_FP32_H5,
+            sfpi::vConstFloatPrgm2,  // H6
+            sfpi::vConstFloatPrgm1,  // H7
+            sfpi::vConstFloatPrgm0   // H8
+        );
+        sfpi::vFloat residual = u * (1.0f + u * h);
+
+        // t >= 0: softplus(t) = t + f(t). t < 0: softplus(t) = f(|t|).
         sp = sp + residual;
 
         sfpi::vFloat result = beta_reciprocal * sp;
