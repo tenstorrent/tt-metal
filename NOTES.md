@@ -29,3 +29,10 @@ Cleanup after: worktree remove ~/fasth3/t133a, ~/fasth3/t133b; rm ~/fasth3/t133d
 Release build: BUILD_EXIT=0. LTX CPU tests (models/tt_dit/tests/models/ltx/): 207 passed, 393 skipped, 0 failed
 (t48 c4409b1fa24 added tests since the 189-pass baseline). build_Release and .cpmcache removed.
 Remaining: the device A/B above, once device work is allowed.
+
+## Status (#135 run 1, 2026-10-06 02:50 UTC)
+Setup (t133a/t133b builds) and driver started on blx03 (driver pid 39509, boot 02:26:22). Broker was HELD/degraded
+(8/32 chips off-bus, tray 2, recovery failing) and t141/t140/t119 drivers also wait for it; ours queues via
+submit.sh (one project job at a time). Next run: if driver.log has T133_DRIVER_DONE, read T133_CMP lines and act
+(identical + faster: cherry-pick 27a9c2f95c9 onto t48 and push; then cleanup). If the driver died (reboot), relaunch
+it with the same command; finished jobs are skipped.
