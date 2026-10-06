@@ -24,7 +24,7 @@ using namespace ckernel::packer;
  * to dense L1 (contiguous output) in a single _llk_pack_ call.
  *
  * MOP structure:
- *   OUTER = num_tiles (set per call through the MOP instruction word)
+ *   OUTER = num_tiles (runtime-patchable via mop_cfg[0])
  *   INNER = 1
  *   START_OP  = REPLAY(all-but-last PACRs for one tile)
  *   last_inner= last PACR with ADDR_MOD_2 (non-last tile)
@@ -133,7 +133,7 @@ inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_di
     const std::uint32_t start_op = (replay_len > 0) ? lltt::replay_insn(0, replay_len) : TT_OP_NOP;
 
     ckernel::ckernel_template tmp(
-        1,        // OUTER (placeholder: each _llk_pack_block_contiguous_ call overrides it)
+        1,        // OUTER (placeholder — overwritten by mop_cfg[0] in _llk_pack_block_contiguous_)
         1,        // INNER
         TT_OP_NOP // loop_op0 (unused: INNER=1 means only last_inner fires)
     );
@@ -194,10 +194,15 @@ inline void _llk_pack_block_contiguous_(const std::uint32_t tile_index, const st
 {
     set_dst_write_addr(tile_index);
 
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001); // Z = 0
+
     program_packer_destination(address);
 
-    // MOP word bits 19:10: a non-zero outer loop count overrides the programmed one for this run only.
-    TT_MOP(1, num_tiles >> 6, (num_tiles & 0x3F) << 10);
+    // Patch outer loop count to num_tiles before running the MOP.
+    volatile std::uint32_t* mop_cfg = reinterpret_cast<volatile std::uint32_t*>(TENSIX_MOP_CFG_BASE);
+    ckernel::mop_sync();
+    mop_cfg[0] = num_tiles;
+    TTI_MOP(1, 0, 0);
 
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset ch0 and ch1 Z
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset Z/W
 }
