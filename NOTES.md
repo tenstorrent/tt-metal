@@ -25,3 +25,8 @@ Next (one run):
 4. After the job: stage table from tt-project/data/g15/out/run.log, ltx_eval PCC/PSNR of gen#0 vs
    tt-project/baselines/ltx25_1080p_6s/ref_dv145 seed0 (ref used DiffVAE) and vs tt-project/t-e2e/t138 job 099 outputs;
    still frames *_t3s.png. Only on success write tt-project/state/ready/g15blx02.READY.
+
+## Light wake 2026-10-06
+- Both rc files are 0 (runs/645/t158-stage.rc, t158-build2.rc). `du -sh ~/fasth3` = 96G (<100). /home 1.5T free.
+- Not started: prewarm. prewarm_and_submit.sh needs a capture stage that is itself a device job (cold cache), so the
+  prewarm + driver flow needs a standard run to wire up (driver.sh submits run_e2e.sh directly with -t 600).
