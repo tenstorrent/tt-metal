@@ -1,6 +1,6 @@
 #!/bin/bash
 # t119 detached driver on blx03: health -> one broker job per step (run119.sh), one at a time.
-# Final marker "T119_DRIVER_DONE <step> <rc>" in $D. rc 9 = drop/ERROR/reboot during OUR job: stop everything.
+# Final marker "T119_DRIVER_DONE <step> <rc>" in $D.
 S=/var/tmp/fasth3/t119/src; V=/var/tmp/fasth3/t119; D=$V/driver.log; SL=/var/log/tt-device-broker/server.log
 R=/home/smarton/fasth3/tt-metal
 BOOT0=$(uptime -s)
@@ -17,7 +17,8 @@ BADRE='[|] ERROR [|]|ESCALATE|RECOVER'
 gate_fail_since() { awk -v s="$1" -v ok="$OKRE" -v bad="$BADRE" 'substr($0,1,19) > s && ($0 ~ bad || (/HEALTH-GATE/ && $0 !~ ok))' $SL; }
 health() {  # pre-submit: broker up and answering, last health/recovery event is healthy
   systemctl is-active -q tt-device-broker || { log "health: broker inactive"; return 1; }
-  tt-device-mcp status 1 > /dev/null 2>&1 || { log "health: status failed"; return 1; }
+  st=$(tt-device-mcp status 1 2>&1) || { log "health: status failed"; return 1; }
+  echo "$st" | sed -n '/^RUNNING/,/^QUEUED/p' | grep -qiE 'health-gate|fabric-check|recover|reset|upgrade' && { log "health: broker gate/recovery running"; return 1; }
   last=$(grep -E "HEALTH-GATE|$OKRE|ESCALATE|RECOVER|[|] ERROR [|]" $SL | tail -1)
   echo "$last" | grep -q "reset complete + health verified" && return 0
   if echo "$last" | grep -qE "$OKRE" && ! echo "$last" | grep -qE "$BADRE"; then return 0; fi
@@ -27,7 +28,9 @@ wait_health() { for i in $(seq 120); do health && return 0; sleep 60; done; retu
 run_job() {  # $1 name, $2 timeout, $3.. cmd; sets JOB, JRC; returns 9 on drop during our job
   local name=$1 t=$2; shift 2
   wait_health || { log "$name: broker never healthy"; return 8; }
-  for i in $(seq 60); do
+  JOB=$(tt-device-mcp status 1 2>&1 | sed -n "/^RUNNING/,/^RECENT/p" | grep -w smarton | grep -F "run119.sh $ST" | awk '{print $1}' | head -1)
+  [ -n "$JOB" ] && { log "$name re-attach to broker-queued JOB=$JOB"; out=$JOB; src=0; }
+  [ -z "$JOB" ] && for i in $(seq 60); do
     out=$(cd $R && tmp/blx03/submit.sh $t "$@" 2>&1); src=$?
     [ $src = 75 ] && { sleep 60; continue; }; break
   done
@@ -53,18 +56,20 @@ run_job() {  # $1 name, $2 timeout, $3.. cmd; sets JOB, JRC; returns 9 on drop d
   T0=; [ "$JRC" = 0 ] && return 0; return 1
 }
 log "start boot=$BOOT0"
-# No build step: ~/fasth3/t48 on blx03 holds 64571a953b2's C++; c4409b1fa24 and t119 change Python only.
-# s0ups (128,128,1,2,4) is the t48 value: run first and last to bracket drift. A failed arm (TT_FATAL,
-# reference gate) does not stop the rest; a missing reference skips the arms that need it.
-STEPS=${STEPS:-"ref544 s0ups:128,128,1,2,4 s0ups:128,128,3,2,2 s0ups:64,128,3,2,4 s0ups:128,64,3,2,4 s0ups:128,128,1,2,4:rep ref1080 s4res:64,128,10,4,8 s4res:64,128,11,4,8 s4res:128,64,12,4,8"}
+# No build step: ~/fasth3/t48 on blx03 holds 64571a953b2's C++; later t48 commits and t119 change Python only.
+# Full 4x8 jobs, one step each. (128,128,1,2,4) is the t48 ups_initial value and the first arm of every pair.
+# A drop (rc 9) reruns the step once after the broker recovers (re-attaching if the broker re-queued it);
+# a second drop in a row skips the step.
+STEPS=${STEPS:-"vae ups:128,128,1,2,4/64,128,3,2,4 ups:128,128,1,2,4/128,64,3,2,4 ups:128,128,1,2,4/128,128,3,2,2"}
 for ST in $STEPS; do
-  N=${ST//[:,]/_}; RUN=${ST%:rep}
+  N=${ST//[:,\/]/_}
   [ -f $V/results/${N}_done ] && { log "$ST already done"; continue; }
-  case $ST in s0ups*) [ -f $V/results/ref544_done ] || { log "$ST skipped: no ref544"; continue; } ;;
-              s4res*) [ -f $V/results/ref1080_done ] || { log "$ST skipped: no ref1080"; continue; } ;; esac
-  run_job $N 1700 bash $S/tmp/blx03/t119/run119.sh $RUN; rc=$?
-  log "$ST rc=$rc"
-  [ $rc = 9 ] && done_ $N 9
+  for try in 1 2; do
+    run_job $N 1700 bash $S/tmp/blx03/t119/run119.sh $ST; rc=$?
+    log "$ST try=$try rc=$rc"
+    [ $rc = 9 ] || break
+    log "$ST DROP try=$try JOB=$JOB"; BOOT0=$(uptime -s)
+  done
   [ $rc = 8 ] && done_ $N 8
   touch $V/results/${N}_rc$rc
   [ $rc = 0 ] && touch $V/results/${N}_done

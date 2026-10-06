@@ -1,4 +1,18 @@
-# t119 — re-time re-picked conv3d blockings (2x4 submesh, blx03)
+# t119 — re-time re-picked conv3d blockings (blx03)
+
+## 2026-10-06: resumed as full 4x8 jobs (#127, user update #111)
+Scope change, from reading conv3d._BLOCKINGS: on the production 4x8 at 1080p/145f only ONE of the 5 re-picks is
+on the path: (4,8,128,1024,(3,3,3),21,5,4) ups_initial, which is the LATENT UPSAMPLER's initial conv (S1 latent
+17x30 -> 5x4 per chip), not the VAE decoder. The other 4 are T=22 (153f) or 2x4-only (s4_res 147,136,120).
+So the old s0ups arms on the VAE decode test would never have hit their key, and s4res is not production on 4x8.
+New jobs (tmp/blx03/t119/test_t119_4x8.py, one broker job each, full (4,8) mesh, no submesh):
+- vae: halo-off reference decode at 1088x1920 (recorded to /var/tmp/fasth3/vae_ref), then the t48 default
+  decoder eager + traced, VAE_REF gate vs that reference (mesh 4,8 seams). Gives the 4x8 production decode time.
+- ups:A/B x3: latent upsampler, t48 (128,128,1,2,4) vs each of (64,128,3,2,4), (128,64,3,2,4), (128,128,3,2,2);
+  per arm: forward_device and initial_conv timing, PCC/PSNR vs fp32 diffusers, PSNR in +-2 px bands at chip seams.
+Driver: driver119.sh (STEPS, drop -> one rerun, second drop skips). Results: /var/tmp/fasth3/t119/run_*.log,
+grep T119_UPS / T119_VAE / VAE_REF / T119_CONV.
+
 
 ## Status 2026-10-04 18:17 UTC: STOPPED, chip drop during our job
 - Driver: /var/tmp/fasth3/t119/src/tmp/blx03/t119/driver119.sh (staged from a4c75dc718f), log /var/tmp/fasth3/t119/driver.log on g14blx03.
