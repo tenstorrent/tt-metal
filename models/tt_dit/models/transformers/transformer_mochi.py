@@ -47,6 +47,8 @@ class MochiTransformerBlock(Module):
         ccl_manager: CCLManager | None = None,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -118,6 +120,8 @@ class MochiTransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
 
         self.norm2_norm = RMSNorm(**rms_zero_kwargs)
@@ -390,6 +394,8 @@ class MochiTransformer3DModel(Module):
         ccl_manager: CCLManager | None = None,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = True,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -436,6 +442,8 @@ class MochiTransformer3DModel(Module):
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 is_fsdp=is_fsdp,
+                sdpa_precision=sdpa_precision,
+                sdpa_kv_dtype=sdpa_kv_dtype,
             )
             for i in range(num_layers)
         )
@@ -765,6 +773,8 @@ class MochiCheckpoint:
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> MochiTransformer3DModel:
         """Construct a ``MochiTransformer3DModel`` for this checkpoint (weights NOT loaded).
 
@@ -785,6 +795,8 @@ class MochiCheckpoint:
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
 
     def load(

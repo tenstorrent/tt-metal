@@ -533,6 +533,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 audio_cross_pe_cos_full=state.tt_audio_cross_pe_cos_full,
                 audio_cross_pe_sin_full=state.tt_audio_cross_pe_sin_full,
                 audio_attn_mask=state.tt_audio_attn_mask,
+                audio_attn_kv_len=audio_N_real,
                 audio_padding_mask=state.tt_audio_padding_mask,
                 audio_padding_mask_full=state.tt_audio_padding_mask_full,
                 video_padding_mask=state.tt_video_padding_mask,
