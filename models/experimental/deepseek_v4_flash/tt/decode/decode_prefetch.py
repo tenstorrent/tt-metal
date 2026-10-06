@@ -7,11 +7,11 @@
 One *shared* ring per device serves every :class:`~..layers.LinearDecode` and
 :class:`~..layers.BatchedLinearDecode` on it: the attention block's q_b and grouped output
 projection, and the MoE shared expert's down (:data:`DECODE_GCB_GROUP`). Cuts that do not fit
-that ring's 64 receivers get their own -- q_a full-width on 32 (the CSA compressor shares it),
-kv on 16 (HCA shares it), the router gate full-width but hub mode on 8, and the
-hyper-connections' fused ``fn``: :data:`Q_A_GCB`, :data:`KV_GCB`, :data:`ROUTER_GATE_GCB`,
-:data:`HC_FN_GCB`. This module owns the two things agreed model-wide -- the weight layouts and
-the order the matmuls consume them -- so no block can size a buffer against a layout another
+that ring's 64 receivers get their own -- q_a full-width on 32 (the CSA compressor, the
+hyper-connections' fused ``fn`` and the TP1 shared expert's gate/up share it), kv on 16 (HCA
+shares it), and the router gate full-width but hub mode on 8: :data:`Q_A_GCB`, :data:`KV_GCB`,
+:data:`ROUTER_GATE_GCB`. This module owns the two things agreed model-wide -- the weight layouts
+and the order the matmuls consume them -- so no block can size a buffer against a layout another
 block does not use.
 
 Why share rather than size a ring per shape:
@@ -36,13 +36,11 @@ The price is one FIFO ordering contract per ring, and nothing checks it: a matmu
 of turn pops another weight's page and returns wrong results rather than an error.
 :data:`DECODE_GCB_GROUP` is that order for the shared ring.
 
-:data:`HC_FN_GCB` is a *second* buffer on the same prefetch mapping, because the fused ``fn``
-weight's ``[256, 32]`` slab is 8 tiles and has no page in common with the shared ring's 32. It
-is always built from :func:`hc_fn_ring_specs` -- the ``fn`` layout plus the TP4 q_a/kv layouts,
-all three on the same 64 receivers -- so its page (their gcd, 8 tiles) does not depend on which
-weight is built first, and only ``fn`` streams through it (the deployed q_a/kv are full-width,
-on :data:`Q_A_GCB` / :data:`KV_GCB`). One ring, not one per hyper-connection: two per layer
-would overflow the senders' state zone at the third layer.
+:data:`Q_A_GCB` is always built from :func:`q_a_ring_specs` -- every layout that streams through
+it -- so its page (their gcd, 16 tiles) does not depend on which block builds it first. The
+fused ``fn`` is cut 32 ways along K (a ``[512, 32]`` slab, 16 tiles) precisely so that it fits
+that ring; on 64 receivers its 8-tile slab shared no page with anything and needed a ring of
+its own.
 
 Letters: ``K``/``N`` are a weight's in/out features -- a ``[K, N]`` weight, cut into one
 ``[Kc, Nc]`` slab per receiver core; ``D`` = ``hidden_size``, ``I`` = ``moe_intermediate_size``,
@@ -55,16 +53,6 @@ import ttnn
 
 from ..layers import decode_gcb_page_bytes, make_shared_decode_gcb
 from ..system_config import active_system_config
-
-# The hyper-connections' ``fn`` ring, keyed separately from ``DECODE_GCB_GROUP`` because its
-# 8-tile slab shares no page with that group's 32. :func:`ensure_named_gcb` builds it on first
-# use; both hyper-connections of every layer on the device stream through it.
-HC_FN_GCB = "hc_fn"
-# Depth of the 8-tile ring. Both hyper-connections of one layer queue a whole-slab page
-# each, and the next layer on the chip may be staged before the current one has drained;
-# 8 leaves slack without moving the 4.6 KB page into the same class as the shared 18 KB
-# ring.
-HC_FN_GCB_PAGES = 8
 
 # Every prefetched decode weight, by name, with the layout ``decode_weight_layout`` reads.
 # Hardcoded rather than derived from the config because the buffer is built before any layer
@@ -115,16 +103,14 @@ DECODE_LAYOUTS = {
     # width so ``matmul_decode`` runs in hub mode and consumes the decode all-gather replica
     # (ROW_MAJOR HEIGHT_SHARDED A) where it already sits; a K-split cut has to unreplicate it
     # through DRAM and re-shard it first, which is four device ops per step. Deliberately
-    # absent from DECODE_GCB_GROUP, and from :data:`HC_FN_GCB` too: hub mode needs a
-    # full-width cut on 8 receivers, which is neither ring's fixed receiver set. It streams
-    # through :data:`ROUTER_GATE_GCB`.
+    # absent from DECODE_GCB_GROUP: hub mode needs a full-width cut on 8 receivers, which is
+    # not that ring's fixed receiver set. It streams through :data:`ROUTER_GATE_GCB`.
     "router_gate": {"K": 4096, "N": 256, "n_blocks": 8},
     # Both hyper-connections' fused fn projection: K = hc_mult * hidden_size against the
     # 24 pre/post/comb outputs padded to one tile. Large K and a single tile of N, so it
-    # cuts K 64 ways onto the same 64 receivers and reduces onto one output core. Its
-    # [256, 32] slab is 8 tiles, which is why it needs HC_FN_GCB rather than the group
-    # above. Deliberately absent from DECODE_GCB_GROUP.
-    HC_FN_GCB: {"K": 16384, "N": 32, "partial_width_sharded": True, "k_blocks": 64, "n_blocks": 1},
+    # cuts K 32 ways and reduces onto one output core: 32 receivers so its [512, 32] slab
+    # (16 tiles) streams through q_a's ring, one per K shard of its 32-core activation.
+    "hc_fn": {"K": 16384, "N": 32, "partial_width_sharded": True, "k_blocks": 32, "n_blocks": 1},
 }
 
 # The order one layer's matmuls consume the shared buffer, which is the order the requests must
@@ -163,61 +149,31 @@ def decode_gcb_group_specs() -> list:
 Q_A_GCB = "q_a_full"
 KV_GCB = "kv_full"
 ROUTER_GATE_GCB = "router_gate"
-# Those private rings cannot use the shared 16/24-page depth: each has a single
+# The kv and router rings cannot use the shared 16/24-page depth: each has a single
 # spec, so the page is the whole 128-tile slab (72 KB at bf4). 24 such pages does
 # not fit in a Blackhole L1 bank after the shared GCB. Two pages is the streaming
 # floor.
 TP_PRIVATE_GCB_PAGES = 2
+# q_a's ring streams 16-tile pages (see :func:`q_a_ring_specs`); 16 of them hold two
+# 128-tile q_a slabs, the same 144 KB at bf4 as two whole-slab pages.
+Q_A_GCB_PAGES = 16
 
 
-def balanced_qkv_layout(name: str, tp_size: int) -> dict:
-    """A column-parallel ``N / tp_size`` ``q_a`` / ``kv`` layout on 64 receivers, as a
-    ``decode_weight_layout`` dict.
+def q_a_ring_specs() -> list:
+    """The layouts :data:`Q_A_GCB` is sized from, **in the order one layer consumes them**:
+    the attention hyper-connection's ``fn``, q_a, CSA's compressor kv/gate, the FFN
+    hyper-connection's ``fn``, then the TP1 shared expert's gate/up.
 
-    ``n_blocks`` is one tile of local ``N`` per core and ``k_blocks`` takes up the rest of the
-    factor so that ``k_blocks * n_blocks == 64``, the receiver count a GCB is fixed to; the
-    ``[Kc, Nc]`` slab is then 16 tiles for ``q_a`` and 8 for ``kv`` at TP4 (``[512, 32]`` and
-    ``[256, 32]``). Raises for a name that is not q_a/kv, an ``N`` not divisible by ``tp_size``,
-    or a local ``N`` that cannot tile 64 cores. Used only to pin :data:`HC_FN_GCB`'s geometry
-    (see :func:`hc_fn_ring_specs`): the deployed TP4 q_a/kv weights are full-width (replicated)
-    and stream through :data:`Q_A_GCB` / :data:`KV_GCB`.
-    """
-    if name not in ("q_a_proj", "kv_proj"):
-        raise ValueError(f"balanced_qkv_layout is q_a/kv only, not {name}")
-    full = DECODE_LAYOUTS[name]
-    if full["N"] % tp_size:
-        raise ValueError(f"{name} N={full['N']} is not divisible by tp_size={tp_size}")
-    n = full["N"] // tp_size
-    n_blocks = n // ttnn.TILE_SIZE
-    if n_blocks < 1 or 64 % n_blocks:
-        raise ValueError(f"{name} TP{tp_size} local N={n} cannot tile a 64-core ring")
-    return {
-        "K": full["K"],
-        "N": n,
-        "partial_width_sharded": True,
-        "k_blocks": 64 // n_blocks,
-        "n_blocks": n_blocks,
-    }
-
-
-def hc_fn_ring_specs() -> list:
-    """The layouts :data:`HC_FN_GCB` is sized from: the fused ``fn`` layout plus the TP4
-    q_a/kv layouts.
-
-    The ring's page is the gcd of their slabs -- the ``fn`` layout's ``[256, 32]`` slab, 8 tiles
-    (4.6 KB) at bf4 -- which the other two entries do not change; they are listed so that
-    :func:`~..layers.make_shared_decode_gcb` asserts the same receiver count (64) for those cuts
-    too. Only ``fn`` streams through the ring; q_a/kv weights go through :data:`Q_A_GCB` /
-    :data:`KV_GCB`.
-
-    The router gate is *not* here: it is full-width (hub mode), so its B grid is 8
-    receivers rather than the 64 a GCB's receiver set is fixed to. It has its own
-    ring (:data:`ROUTER_GATE_GCB`).
+    All are 32 receivers. The page is the gcd of their slabs: the ``fn`` layout's ``[512, 32]``
+    slab, 16 tiles (9 KB at bf4), which is a whole number of rows of the 128-tile q_a /
+    compressor slabs and of the 256-tile ``[4096, 64]`` gate/up slab. Gate/up stays listed at
+    TP4, where it is off the prefetcher, so the ring's page does not depend on the TP width.
     """
     return [
-        DECODE_LAYOUTS[HC_FN_GCB],
-        balanced_qkv_layout("q_a_proj", 4),
-        balanced_qkv_layout("kv_proj", 4),
+        DECODE_LAYOUTS["hc_fn"],
+        DECODE_LAYOUTS["q_a_proj"],
+        DECODE_LAYOUTS["compressed_sparse_attention"],
+        DECODE_LAYOUTS["shared_gate_proj"],
     ]
 
 
@@ -265,6 +221,15 @@ def ensure_named_gcb(
     return prefetch_buffers[key]
 
 
+def ensure_q_a_gcb(prefetch_buffers: dict, device: ttnn.MeshDevice, weight_dtype: ttnn.DataType):
+    """:data:`Q_A_GCB`, built on first use from :func:`q_a_ring_specs` at :data:`Q_A_GCB_PAGES`.
+
+    The single entry point for that ring, so whichever of its consumers is built first sizes it
+    the same way; pair it with :func:`q_a_page_bytes`.
+    """
+    return ensure_named_gcb(prefetch_buffers, Q_A_GCB, device, q_a_ring_specs(), weight_dtype, Q_A_GCB_PAGES)
+
+
 def decode_prefetch_page_bytes(weight_dtype: ttnn.DataType) -> int:
     """The GCB page size in bytes every prefetched decode weight on the shared ring is streamed
     at: 32 tiles, i.e. 18 KB of a ``[32, 32]`` tile at bf4.
@@ -277,19 +242,12 @@ def decode_prefetch_page_bytes(weight_dtype: ttnn.DataType) -> int:
     return decode_gcb_page_bytes(decode_gcb_group_specs(), weight_dtype)
 
 
-def hc_fn_page_bytes(weight_dtype: ttnn.DataType) -> int:
-    """Page size in bytes every weight on :data:`HC_FN_GCB` streams at: the gcd of
-    :func:`hc_fn_ring_specs` (8 tiles, 4.6 KB at bf4), matching the buffer
-    :func:`ensure_named_gcb` builds from the same list. A page is a whole number of rows of a
-    ``[Kc, Nc]`` slab, so a weight whose slab is several pages is streamed across them."""
-    return decode_gcb_page_bytes(hc_fn_ring_specs(), weight_dtype)
-
-
 def q_a_page_bytes(weight_dtype: ttnn.DataType) -> int:
-    """Page size in bytes for q_a's private 32-receiver full-width ring: its single spec makes
-    the ``[4096, 32]`` slab (128 tiles, 72 KB at bf4) one whole page, streamed at
-    :data:`TP_PRIVATE_GCB_PAGES` pages of depth."""
-    return decode_gcb_page_bytes([DECODE_LAYOUTS["q_a_proj"]], weight_dtype)
+    """Page size in bytes every weight on :data:`Q_A_GCB` streams at: the gcd of
+    :func:`q_a_ring_specs` (16 tiles, 9 KB at bf4), matching the buffer :func:`ensure_q_a_gcb`
+    builds from the same list. A page is a whole number of rows of a ``[Kc, Nc]`` slab, so a
+    weight whose slab is several pages (q_a's 128 tiles are 8) is streamed across them."""
+    return decode_gcb_page_bytes(q_a_ring_specs(), weight_dtype)
 
 
 def router_gate_page_bytes(weight_dtype: ttnn.DataType) -> int:
@@ -317,9 +275,10 @@ def make_decode_prefetch_buffers(
     exists so a caller can still be handed per-weight buffers in a test without the blocks
     caring.
 
-    :data:`HC_FN_GCB` is deliberately *not* built here -- the hyper-connections attach it to
-    this mapping on first use (:func:`ensure_named_gcb`), so a caller with no hyper-connection
-    does not pay for a second ring's L1. That is also why the same mapping has to reach every
+    The private rings (:data:`Q_A_GCB`, :data:`KV_GCB`, :data:`ROUTER_GATE_GCB`) are deliberately
+    *not* built here -- their consumers attach them to this mapping on first use
+    (:func:`ensure_named_gcb`), so a caller without those blocks does not pay for their L1. That
+    is also why the same mapping has to reach every
     layer on the device: a fresh dict per layer would build a GCB per layer and overflow the
     senders' state zone.
 
