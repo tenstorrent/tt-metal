@@ -208,11 +208,11 @@ card:
   limitations: |
     - **One request at a time.** There is no batching; `H3_MAX_QUEUE` (default 4) bounds the queue
       and a fuller one returns 429.
-    - **First boot is long.** The boot figures above are repeat boots on a host that has already
-      served this image once. The first boot after a pull also compiles the kernels for the served
-      shape and reads the converted weights off disk: 451 s on `p150`, 320 s on `p300x2`, measured
-      through this package. A boot that has to CONVERT the weights into an empty mounted cache is
-      slower still; that cost has not been measured through the container and is not quoted here.
+    - **First boot is long.** The boot row above is a repeat boot on a host that has already served
+      this image (200-210 s on `p150`, 160 s on `p300x2`). A first boot also compiles the kernels
+      for the served shape — 451 s on `p150`, 320 s on `p300x2` — and if the mounted weight cache is
+      empty it converts the weights into it as well, which took 851 s on `p150` and wrote 26 GB.
+      All three are measured through this package with the weights already downloaded.
     - **The weights are a ~144 GB download** on first pull, and the Turbo adapter is fetched from a
       second repo at boot — so the first boot needs network access even with the weights in place.
     - **Reference-conditioned generation (ref2va) is not included.**
