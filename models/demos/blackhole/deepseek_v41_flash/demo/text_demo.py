@@ -119,6 +119,7 @@ SCENARIOS = [
     _s(f"{LONG}/input_data_long_16k.json", 4, 32768, 64, "isl16k_b4"),
     _s(f"{LONG}/input_data_long_4k.json", 128, 8192, 32, "isl4k_b128"),
     _s(f"{LONG}/input_data_long_8k.json", 128, 16384, 32, "isl8k_b128"),
+    _s(f"{LONG}/input_data_long_16k.json", 128, 32768, 32, "isl16k_b128"),
     _s(f"{LONG}/input_data_long_64k.json", 128, 70000, 64, "isl64k_b128"),
     _s(f"{LONG}/input_data_long_32k.json", 16, 40000, 64, "isl32k_b16"),
     _s(GSM, 4, 512, 384, "gsm8k_b4", instruct=True, stop_at_eos=True),
@@ -506,6 +507,20 @@ def _run_demo(
                     f"spec gap {generator.spec.gaps[u][dv - 1] if dv > 0 and len(generator.spec.gaps[u]) >= dv else float('nan'):.3f}, "
                     f"rounds {len(mh)}, mean accepted {sum(mh) / max(len(mh), 1):.2f}, tokens {len(gen_sp[u])}"
                 )
+            # self-consistency: users with the IDENTICAL prompt must produce identical streams (batch-position independence); counts users that differ from the first user of their group
+            grp = {}
+            for u in range(batch_size):
+                grp.setdefault(tuple(int(t) for t in input_tokens_prefill[u][: int(decoding_pos[u])]), []).append(u)
+            bad_p = bad_s = 0
+            for us in grp.values():
+                for u in us[1:]:
+                    n_ = min(len(plain_gen[u]), len(plain_gen[us[0]]))
+                    bad_p += int(plain_gen[u][:n_] != plain_gen[us[0]][:n_])
+                    n_ = min(len(gen_sp[u]), len(gen_sp[us[0]]), 48)
+                    bad_s += int(gen_sp[u][:n_] != gen_sp[us[0]][:n_])
+            logger.info(
+                f"SPEC self-consistency: {len(grp)} distinct prompts among {batch_size} users; users differing from the first user of their identical-prompt group: plain {bad_p}, spec {bad_s} (first 48 tokens)"
+            )
             tok_s_plain = 1000.0 / plain_ms if plain_ms == plain_ms and plain_ms > 0 else float("nan")
             logger.info(
                 f"=== SPEC k={spec_k} (batch {batch_size}): {st['rounds']} rounds, {st['accepted_per_round']:.3f} accepted drafts/round "
