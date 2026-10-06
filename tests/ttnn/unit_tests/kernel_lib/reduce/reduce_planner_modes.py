@@ -2,7 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Planner-driven device tests for the reduce compute and dataflow helpers."""
+"""Planner-driven device tests for the reduce compute and dataflow helpers.
+
+The file has no test_ prefix so directory runs (sanity, nightly) skip it: it takes about 14 minutes cold,
+more than the kernel_lib directory budget. Run it by path."""
 
 from dataclasses import dataclass
 import math
