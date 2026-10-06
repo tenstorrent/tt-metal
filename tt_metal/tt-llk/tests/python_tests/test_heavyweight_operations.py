@@ -11,15 +11,35 @@ harness programs or the golden computes on values the kernel never saw.
 import pytest
 import torch
 from helpers.format_config import DataFormat
+from helpers.golden_generator.heavyweight.data_transfer_blocks import (
+    UnmodelledHardwareWarning,
+)
+from helpers.golden_generator.heavyweight.operations.blackhole_operations.blackhole_matmul import (
+    BlackholeMatmulGolden,
+)
+from helpers.golden_generator.heavyweight.operations.quasar_operations.quasar_datacopy import (
+    QuasarDataCopyGolden,
+)
 from helpers.golden_generator.heavyweight.operations.quasar_operations.quasar_eltwise import (
     QuasarEltwiseBinaryGolden,
+)
+from helpers.golden_generator.heavyweight.operations.quasar_operations.quasar_matmul import (
+    QuasarMatmulGolden,
 )
 from helpers.golden_generator.heavyweight.operations.quasar_operations.quasar_reuse_dest import (
     QuasarEltwiseBinaryReuseDestGolden,
 )
+from helpers.golden_generator.heavyweight.operations.wormhole_operations.wormhole_eltwise import (
+    WormholeEltwiseBinaryGolden,
+)
+from helpers.golden_generator.heavyweight.operations.wormhole_operations.wormhole_matmul import (
+    WormholeMatmulGolden,
+)
 from helpers.llk_params import EltwiseBinaryReuseDestType, MathFidelity, MathOperation
+from helpers.tile_constants import MAX_TILE_ELEMENTS
+from helpers.tilize_untilize import tilize_block, untilize_block
 
-TILE = 1024
+TILE = MAX_TILE_ELEMENTS
 
 
 def _elwmul(in_format, out_format, a, b, **kwargs):
@@ -213,3 +233,162 @@ def test_run_l1_refuses_a_buffer_the_chain_never_reads():
     buffers = [_l1(golden, 1), _l1(golden, 2), _l1(golden, 3)]
     with pytest.raises(ValueError, match="never reads.*in2"):
         golden.run_l1(buffers, _config(golden, 2))
+
+
+# ---------------------------------------------------------------------------
+# MatmulGolden
+
+
+def _tilize(matrix):
+    """A logical 32x32 matrix as the face-ordered tile a src register holds."""
+    return tilize_block(
+        matrix.reshape(-1).float(),
+        stimuli_format=DataFormat.Float32,
+        dimensions=[32, 32],
+        tile_dimensions=[32, 32],
+    ).flatten()
+
+
+def _untilize(values):
+    return untilize_block(
+        values.float(),
+        stimuli_format=DataFormat.Float32,
+        dimensions=[32, 32],
+        tile_dimensions=[32, 32],
+    ).reshape(32, 32)
+
+
+def test_matmul_computes_arg0_at_arg1_not_its_transpose():
+    """Operand routing and product order have to agree, and both are load-bearing.
+
+    `OPERAND_REGISTERS` puts arg0 in SrcB and `_product` computes SrcB @ SrcA.
+    Flipping one without the other transposes the result -- wrong everywhere but
+    still plausible, which is how it was last caught. A non-symmetric operand is
+    what makes the two distinguishable at all.
+    """
+    # Small integers and a one-hot shift: every product is exact, so this
+    # tests operand order rather than the fidelity split's accuracy.
+    a = torch.arange(1.0, 32 * 32 + 1).reshape(32, 32) % 7 - 3
+    b = torch.eye(32).roll(1, dims=1)
+    out = QuasarMatmulGolden(MathFidelity.HiFi4).run(
+        [_tilize(a), _tilize(b)],
+        DataFormat.Float32,
+        DataFormat.Float32,
+        dest_acc=True,
+    )
+    got = _untilize(out.flatten())
+    assert torch.equal(got, a @ b), "not arg0 @ arg1"
+    assert not torch.equal(got, b @ a), "operands are interchangeable here"
+
+
+def test_matmul_writes_dest_once_per_k_face_per_phase():
+    """One MVMUL is D[8,16] += B[8,16] * A[16,16], so a 32-wide K takes two,
+    and the MOP nests them inside the fidelity loop (phase-outer, K-face-inner).
+    Summing all 32 K terms before one Dest write would drop a rounding per phase."""
+    golden = QuasarMatmulGolden(MathFidelity.HiFi4)
+    golden.run([torch.ones(TILE)] * 2, DataFormat.Float16_b, DataFormat.Float16_b)
+    math_steps = [s.name for s in golden.last_chain if s.name.startswith("matmul")]
+    assert math_steps == [
+        f"matmul[p{p}k{k}]" + ("+=" if (p, k) != (0, 0) else "")
+        for p in range(4)
+        for k in range(2)
+    ]
+
+
+def test_matmul_refuses_a_tile_that_is_not_32x32():
+    golden = QuasarMatmulGolden(MathFidelity.LoFi)
+    with pytest.raises(ValueError, match="one 32x32 tile at a time"):
+        golden.run(
+            [torch.ones(512)] * 2,
+            DataFormat.Float16_b,
+            DataFormat.Float16_b,
+            num_faces=2,
+        )
+
+
+def test_matmul_fidelity_changes_the_answer():
+    """LoFi keeps 7 mantissa bits of each operand, HiFi4 all four phases, so a
+    product needing the low bits must differ between them."""
+    torch.manual_seed(0)
+    a = torch.randn(32, 32)
+    b = torch.randn(32, 32)
+    runs = {
+        fid: QuasarMatmulGolden(fid).run(
+            [_tilize(a), _tilize(b)],
+            DataFormat.Float32,
+            DataFormat.Float32,
+            dest_acc=True,
+        )
+        for fid in (MathFidelity.LoFi, MathFidelity.HiFi4)
+    }
+    assert not torch.equal(runs[MathFidelity.LoFi], runs[MathFidelity.HiFi4])
+    exact = a @ b
+    assert (_untilize(runs[MathFidelity.HiFi4].flatten()) - exact).abs().max() < (
+        _untilize(runs[MathFidelity.LoFi].flatten()) - exact
+    ).abs().max()
+
+
+# ---------------------------------------------------------------------------
+# DataCopyGolden, the architecture bindings, and chain checking
+
+
+def test_datacopy_round_trips_its_input():
+    out = QuasarDataCopyGolden().run(
+        [torch.full((TILE,), 1.5)], DataFormat.Float16_b, DataFormat.Float16_b
+    )
+    assert out.flatten().tolist() == [1.5] * TILE
+
+
+def test_a_second_operand_a_chain_never_reads_is_refused():
+    """The single-tile path checks this the way run_l1 and the blocked path do."""
+    with pytest.raises(ValueError, match="never reads"):
+        QuasarDataCopyGolden().run(
+            [torch.ones(TILE), torch.ones(TILE)],
+            DataFormat.Float16_b,
+            DataFormat.Float16_b,
+        )
+
+
+@pytest.mark.parametrize(
+    "golden_class",
+    [WormholeMatmulGolden, BlackholeMatmulGolden],
+    ids=lambda c: c.__name__,
+)
+def test_wormhole_and_blackhole_warn_that_fidelity_is_unmodelled(golden_class):
+    """MANTISSA_SPLIT is unset there, so the multiply is exact and math_fidelity
+    is ignored. The warning is the only signal, and it has to survive
+    pytest.ini's ignore::UserWarning -- hence a RuntimeWarning subclass."""
+    golden = golden_class(MathFidelity.HiFi4)
+    with pytest.warns(UnmodelledHardwareWarning, match="exact product"):
+        golden.run([torch.ones(TILE)] * 2, DataFormat.Float16_b, DataFormat.Float16_b)
+
+
+def test_wormhole_promotes_the_outlier_combination_to_a_32_bit_dest():
+    """TestConfig forces dest_acc on for an exponent-B input with a Float16
+    output on every architecture but Quasar, so the device runs a 32-bit Dest
+    whatever the test asked for. Quasar is exempt and keeps the bf16 Dest."""
+    a = torch.full((TILE,), 1 + 2**-7)
+    b = torch.ones(TILE)
+    wh = WormholeEltwiseBinaryGolden(MathOperation.Elwadd, MathFidelity.HiFi4)
+    qs = QuasarEltwiseBinaryGolden(MathOperation.Elwadd, MathFidelity.HiFi4)
+    # Elwadd, so no unmodelled-split warning: the mantissa split applies to a
+    # multiply, and eltwise only warns for Elwmul.
+    out_wh = wh.run([a, b], DataFormat.Float16_b, DataFormat.Float16)
+    out_qs = qs.run([a, b], DataFormat.Float16_b, DataFormat.Float16)
+    assert wh.last_dest_format is DataFormat.Float32
+    assert out_wh.flatten()[0].item() == 1 + 1 + 2**-7
+    assert qs.last_dest_format is DataFormat.Float16_b
+    assert out_qs.flatten()[0].item() == 2.0
+
+
+def test_dry_run_catches_a_step_reading_a_register_nothing_wrote():
+    golden = QuasarMatmulGolden(MathFidelity.LoFi)
+    chain = golden.build_chain(_config(golden, 2))
+    assert chain.dry_run(["in0", "in1"]) == []
+    assert chain.dry_run(["in0"]), "a missing input should be reported"
+
+
+def test_last_chain_and_dest_format_are_readable_before_any_run():
+    golden = QuasarMatmulGolden(MathFidelity.LoFi)
+    assert golden.last_chain is None
+    assert golden.last_dest_format is None

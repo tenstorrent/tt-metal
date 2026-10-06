@@ -117,6 +117,7 @@ class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
         dest_format: Optional[DataFormat] = None,
         num_faces: int = MAX_NUM_FACES,
         face_r_dim: int = MAX_FACE_R_DIM,
+        dense_layout: bool = False,
         trace: Optional[List[StageRecord]] = None,
         dest_out: Optional[List[torch.Tensor]] = None,
         **pack_effects,
@@ -172,7 +173,7 @@ class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
                 f"output_tiles_in_block={output_tiles_in_block} tiles of "
                 f"{per_tile})"
             )
-        check_source_layout(flat_a.numel() // per_tile, geometry)
+        check_source_layout(flat_a.numel() // per_tile, geometry, dense_layout)
         tile_count_out = flat_a.numel() // (per_tile * inner_dim)
 
         packed: List[int] = []
