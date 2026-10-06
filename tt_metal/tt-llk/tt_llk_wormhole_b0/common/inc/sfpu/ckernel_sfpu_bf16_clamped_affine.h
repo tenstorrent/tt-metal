@@ -16,7 +16,7 @@ constexpr std::uint32_t kClampAdvance = ADDR_MOD_2;
 template <typename Config>
 inline void init_clamped_affine()
 {
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     // These ordinary registers must be pinned before recording, as in the
     // selected paired MAD body. They are not clamp operands (SWAP writes both).
     TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, Config::kSlopeBits >> 16);
@@ -42,8 +42,9 @@ inline void clamped_affine_pairs()
     TTI_SFPNOP;
     TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
     TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG3, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-    TTI_SFPSTORE(p_sfpu::LREG2, 0, kClampHold, 0);
-    TTI_SFPSTORE(p_sfpu::LREG3, 0, kClampAdvance, 2);
+    // ADDR_MOD_6 keeps stock's dest += 2, which other unary SFPU ops read, so each store advances.
+    TTI_SFPSTORE(p_sfpu::LREG2, 0, kClampAdvance, 0);
+    TTI_SFPSTORE(p_sfpu::LREG3, 0, kClampAdvance, 0);
 #pragma GCC unroll 4
     for (int pair = 1; pair < Iterations / 2; ++pair)
     {
