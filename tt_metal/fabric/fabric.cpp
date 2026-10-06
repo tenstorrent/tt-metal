@@ -736,7 +736,17 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::t
 // Returns the flat RT args vector for RoutingPlaneConnectionManager::build_from_args().
 size_t fabric_connection_rt_args_size(size_t num_connections) {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    return num_connections * 4 + (fabric_context.is_2D_routing_enabled() ? 3 + num_connections * 2 : 0);
+    // RoutingPlaneConnectionManager consumes four words per connection: direction,
+    // ethernet channel, teardown semaphore, and producer cursor. 2D routing also has
+    // three shared header words and two destination words per connection. No template
+    // option changes this layout.
+    constexpr size_t connection_words = 4;
+    constexpr size_t routing_2d_header_words = 3;
+    constexpr size_t routing_2d_destination_words = 2;
+    return num_connections * connection_words +
+           (fabric_context.is_2D_routing_enabled()
+                ? routing_2d_header_words + num_connections * routing_2d_destination_words
+                : 0);
 }
 
 std::vector<uint32_t> compute_fabric_connection_rt_args(
