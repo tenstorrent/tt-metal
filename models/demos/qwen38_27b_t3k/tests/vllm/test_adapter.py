@@ -27,7 +27,10 @@ class KVPoolConfigurationTests(unittest.TestCase):
 
     def test_pool_ceiling_is_the_derived_budget_and_is_granted(self):
         ceiling = _shared_pool_ceiling()
-        self.assertEqual(ceiling, 885024)
+        # The pool is sized once, before anything knows whether prefix caching will be on, so
+        # it gives up the snapshot store's hard cap unconditionally. Still 3.2x the 256K
+        # context, so no request loses reach for it.
+        self.assertEqual(ceiling, 849664)
         with patch.dict(os.environ, {"QWEN_VLLM_KV_POOL_TOKENS": str(ceiling)}):
             self.assertEqual(Qwen38ForCausalLM.get_max_tokens_all_users(262144), ceiling)
 
@@ -38,7 +41,7 @@ class KVPoolConfigurationTests(unittest.TestCase):
 
     def test_invalid_or_oversized_pool_is_rejected(self):
         # 1050592 is eight 128K requests, which the Blackhole mesh fits and this one does not.
-        for value in ("-1", "0", "262145", "885056", "1050592", "2097152", "1e6", "１２３"):
+        for value in ("-1", "0", "262145", "849696", "1050592", "2097152", "1e6", "１２３"):
             with self.subTest(value=value), patch.dict(os.environ, {"QWEN_VLLM_KV_POOL_TOKENS": value}):
                 with self.assertRaises(ValueError):
                     Qwen38ForCausalLM.get_max_tokens_all_users(262144)
