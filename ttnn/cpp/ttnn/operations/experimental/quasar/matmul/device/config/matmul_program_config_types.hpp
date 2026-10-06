@@ -20,7 +20,7 @@ struct MatmulMultiCoreReuseProgramConfig {
     std::size_t out_subblock_w{};
     std::size_t per_core_M{};
     std::size_t per_core_N{};
-    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
+    std::optional<tt::tt_metal::CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
 struct MatmulMultiCoreReuseMultiCastProgramConfig {
@@ -35,7 +35,7 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     bool transpose_mcast{};
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
     bool fuse_batch = true;
-    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
+    std::optional<tt::tt_metal::CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
 // 1D mcast matmul program config.
@@ -63,10 +63,10 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
     bool mcast_in0{};
     bool gather_in0{};
-    CoreRangeSet hop_cores;
+    tt::tt_metal::CoreRangeSet hop_cores;
     std::size_t num_global_cb_receivers{};
     bool untilize_out{};
-    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
+    std::optional<tt::tt_metal::CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
@@ -84,7 +84,7 @@ struct MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig {
 };
 
 struct MatmulMultiCoreProgramConfig {
-    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
+    std::optional<tt::tt_metal::CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
 // Placement-first config for the Quasar-native matmul (GH#41910): the caller names the clusters and
@@ -93,7 +93,7 @@ struct MatmulMultiCoreProgramConfig {
 // Limits: one NEO/reader/writer per cluster, no bias/activation/untilize, 32x32 tiles only;
 // sharded output needs batch 1 and one C slice per core.
 struct MatmulUnifiedProgramConfig {
-    CoreRangeSet cores;
+    tt::tt_metal::CoreRangeSet cores;
     // C slice (in tiles) each core produces in one go. 0 = auto: the output shard when C is sharded, else the
     // largest divisor piece of the core's share of C (M / N split over the bounding box of `cores`) that fits
     // L1 (#57884).
@@ -129,7 +129,8 @@ using MatmulProgramConfig = std::variant<
 // config.allowed_worker_cores.value() unconditionally.
 inline void normalize_program_config(MatmulProgramConfig& config, const tt::tt_metal::CoreCoord& device_grid) {
     auto make_crs = [](const tt::tt_metal::CoreCoord& grid) {
-        return CoreRangeSet(CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(grid.x - 1, grid.y - 1)));
+        return tt::tt_metal::CoreRangeSet(
+            tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(grid.x - 1, grid.y - 1)));
     };
     std::visit(
         [&](auto& c) {
