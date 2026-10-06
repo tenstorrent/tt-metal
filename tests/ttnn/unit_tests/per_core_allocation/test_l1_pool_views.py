@@ -60,6 +60,36 @@ def test_l1_pool_view_transfer_guards_and_owner_lifetime(per_core_mesh_device):
     torch.testing.assert_close(_read_single_device(after), after_value)
 
 
+def test_l1_pool_packs_views_at_logical_shard_footprint(per_core_mesh_device):
+    coord = ttnn.MeshCoordinate(0, 0)
+    core = ttnn.CoreCoord(0, 0)
+    spec = _single_core_spec(core, width=16)
+    geometry = ttnn.experimental_l1_tensor_geometry(per_core_mesh_device, coord, spec)
+    logical_size = geometry.aligned_shard_size
+    alignment = geometry.allocation_alignment
+    owner_size = ((2 * logical_size + alignment - 1) // alignment) * alignment
+    address = next(
+        start
+        for start, end in ttnn.experimental_get_l1_free_ranges(per_core_mesh_device, coord, core)
+        if end - start >= owner_size
+    )
+    pool = ttnn.experimental_reserve_l1_pool(
+        per_core_mesh_device, [ttnn.L1PoolExtent(coord, core, address, owner_size)]
+    )
+    first = ttnn.experimental_create_l1_pool_tensor(
+        pool, spec, [ttnn.L1PoolPlacement(coord, core, 0, 0)]
+    )
+    second = ttnn.experimental_create_l1_pool_tensor(
+        pool, spec, [ttnn.L1PoolPlacement(coord, core, 0, logical_size)]
+    )
+    first_value = torch.arange(16, dtype=torch.uint8).reshape(1, 16)
+    second_value = first_value + 32
+    ttnn.copy_host_to_device_tensor(ttnn.from_torch(first_value, dtype=ttnn.uint8), first)
+    ttnn.copy_host_to_device_tensor(ttnn.from_torch(second_value, dtype=ttnn.uint8), second)
+    torch.testing.assert_close(_read_single_device(first), first_value)
+    torch.testing.assert_close(_read_single_device(second), second_value)
+
+
 def test_lockstep_pool_view_rejects_different_addresses(per_core_mesh_device):
     coord = ttnn.MeshCoordinate(0, 0)
     cores = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)]
@@ -109,7 +139,8 @@ def test_l1_pool_adopts_and_retains_existing_tensor(per_core_mesh_device):
     pool = ttnn.experimental_reserve_l1_pool(per_core_mesh_device, [], external_tensors=[owner])
     assert len(pool.extents) == 1
     assert pool.extents[0].externally_owned
-    assert pool.extents[0].size == geometry.aligned_shard_size
+    assert pool.extents[0].size == geometry.allocation_shard_size
+    assert geometry.aligned_shard_size <= geometry.allocation_shard_size
     view = ttnn.experimental_create_l1_pool_tensor(
         pool, spec, [ttnn.L1PoolPlacement(coord, core, 0, 0)]
     )

@@ -240,7 +240,7 @@ std::shared_ptr<distributed::MeshBuffer> create_l1_pool_view(
             device_local_config.sharding_args,
             device_local_config.bottom_up,
             device_local_config.sub_device_id);
-        const DeviceAddr required = get_shard_allocation_size(*buffer);
+        const DeviceAddr required = buffer->aligned_size_per_bank();
         const DeviceAddr alignment = buffer->alignment();
         for (const auto& placement : placements) {
             if (placement.device_coord != coord) {

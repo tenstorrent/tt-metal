@@ -62,8 +62,8 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include "distributed/mesh_device_impl.hpp"
-#include "impl/allocator/allocator.hpp"
+#include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
 
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
@@ -81,7 +81,10 @@ using L1PoolPlacement = tt::tt_metal::experimental::per_core_allocation::L1PoolP
 struct L1TensorGeometry {
     DeviceAddr packed_size = 0;
     DeviceAddr page_size = 0;
+    // Bytes a non-owning tensor view may touch on one shard.
     DeviceAddr aligned_shard_size = 0;
+    // Bytes BankManager owns for one independently allocated shard.
+    DeviceAddr allocation_shard_size = 0;
     DeviceAddr page_alignment = 0;
     DeviceAddr allocation_alignment = 0;
     std::vector<CoreCoord> cores;
@@ -117,7 +120,8 @@ L1TensorGeometry l1_tensor_geometry(
     geometry.page_alignment = page_alignment;
     geometry.allocation_alignment = allocation_alignment;
     const DeviceAddr aligned_page = ((geometry.page_size + page_alignment - 1) / page_alignment) * page_alignment;
-    geometry.aligned_shard_size = tt::tt_metal::detail::calculate_bank_size_spread(
+    geometry.aligned_shard_size = pages_per_core * aligned_page;
+    geometry.allocation_shard_size = tt::tt_metal::detail::calculate_bank_size_spread(
         pages_per_core * aligned_page, aligned_page, 1, allocation_alignment);
     return geometry;
 }
@@ -492,6 +496,7 @@ void pytensor_module_types(nb::module_& mod) {
         .def_ro("packed_size", &L1TensorGeometry::packed_size)
         .def_ro("page_size", &L1TensorGeometry::page_size)
         .def_ro("aligned_shard_size", &L1TensorGeometry::aligned_shard_size)
+        .def_ro("allocation_shard_size", &L1TensorGeometry::allocation_shard_size)
         .def_ro("page_alignment", &L1TensorGeometry::page_alignment)
         .def_ro("allocation_alignment", &L1TensorGeometry::allocation_alignment)
         .def_ro("cores", &L1TensorGeometry::cores)
