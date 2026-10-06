@@ -1,0 +1,163 @@
+<!doctype html>
+<!-- SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+     SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLK coverage — what ran?</title>
+  <style>
+    :root { color-scheme: light; --ink:#162639; --muted:#56677b; --border:#dce3eb; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#f4f7fb; color:var(--ink); font:15px/1.55 system-ui,sans-serif; }
+    main { max-width:1400px; margin:auto; padding:32px 24px 70px; }
+    h1 { font-size:32px; margin:0; letter-spacing:-1px; }
+    h2 { font-size:17px; margin:0; overflow-wrap:anywhere; }
+    p { margin:10px 0; }
+    a { color:#1759ac; }
+    code { font:13px/1.6 ui-monospace,monospace; overflow-wrap:anywhere; }
+    .muted,.path { color:var(--muted); }
+    .path { font-size:12px; overflow-wrap:anywhere; margin:4px 0 15px; }
+    .stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:25px 0; }
+    .stat { background:white; border:1px solid var(--border); padding:16px; border-radius:10px; }
+    .stat strong { display:block; font-size:32px; }
+    .stat span { color:var(--muted); font-size:13px; }
+    .guide { background:#eaf2ff; border-left:4px solid #447bd1; padding:12px 16px; border-radius:4px; }
+    .controls { display:flex; gap:12px; flex-wrap:wrap; align-items:end; margin:22px 0 8px; }
+    label { display:flex; flex-direction:column; gap:4px; font-size:12px; font-weight:600; }
+    label.search { flex:1; min-width:240px; }
+    input,select,button { font:inherit; background:white; border:1px solid #bac7d6; border-radius:6px; padding:9px 12px; color:var(--ink); }
+    button { cursor:pointer; }
+    button:hover { background:#eaf2ff; }
+    :focus-visible { outline:3px solid #447bd1; outline-offset:2px; }
+    .legend { display:flex; flex-wrap:wrap; gap:14px; align-items:center; font-size:13px; margin:16px 0; }
+    .header-group { margin:22px 0; background:white; border:1px solid var(--border); border-radius:10px; padding:20px; }
+    .thread { display:inline-block; font-size:12px; color:#31537e; background:#eaf0f8; padding:3px 8px; border-radius:5px; margin-right:12px; }
+    summary { cursor:pointer; padding:12px 8px; overflow-wrap:anywhere; }
+    .function { border-top:1px solid var(--border); }
+    .function>summary { font-weight:600; }
+    .function-body { padding:0 0 12px 22px; }
+    .counts { color:var(--muted); font-size:12px; font-weight:400; margin-left:16px; }
+    .instantiation { border:1px solid var(--border); border-radius:6px; margin:8px 0; }
+    .instance-body { padding:0 16px 16px; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:12px; font-weight:600; margin-right:8px; }
+    .badge.ran { background:#dcf3e6; color:#12643a; }
+    .badge.gaps { background:#fff0ce; color:#855600; }
+    .badge.missed { background:#fce3e3; color:#982d2d; }
+    .badge.absent,.badge.unmeasured { background:#e9e6fa; color:#594491; }
+    .badge.stale { background:#fce3e3; color:#982d2d; }
+    .definition-source,.input-values { overflow:auto; max-height:550px; padding:16px; background:#f4f7fb; font:12px/1.6 ui-monospace,monospace; }
+    .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin:0 8px; }
+    .dot.ran { background:#229760; }.dot.gaps { background:#cf920b; }.dot.missed { background:#c45555; }
+    .source-scroll { overflow:auto; border:1px solid var(--border); border-radius:6px; }
+    .source { border-collapse:collapse; width:100%; font-size:12px; }
+    .source th { text-align:left; padding:8px; background:#edf1f6; white-space:nowrap; }
+    .source td { padding:3px 8px; border-top:1px solid #e8edf2; white-space:nowrap; vertical-align:top; }
+    .source code { white-space:pre; }
+    .source .ran { background:#f0fbf4; }.source .gaps { background:#fff7e5; }.source .missed { background:#fff0f0; }
+    .technical { margin-top:12px; color:var(--muted); font-size:12px; }
+    .configuration-scroll { overflow:auto; border:1px solid var(--border); border-radius:6px; }
+    .configurations { width:100%; border-collapse:collapse; font-size:13px; }
+    .configurations th { background:#edf1f6; text-align:left; padding:10px; white-space:nowrap; }
+    .configurations td { padding:8px 10px; border-top:1px solid var(--border); vertical-align:top; }
+    .configurations tbody tr:nth-child(even) { background:#f8fafc; }
+    .configurations td:not(:last-child) { white-space:nowrap; }
+    .case-details summary { padding:0; color:#1759ac; }
+    .case-details[open] { min-width:280px; max-width:600px; }
+    .case-id { overflow-wrap:anywhere; }
+    .settings { display:grid; grid-template-columns:auto 1fr; gap:4px 16px; font-size:12px; }
+    .settings dt { color:var(--muted); text-transform:capitalize; }
+    .settings dd { margin:0; overflow-wrap:anywhere; }
+    .parameter-gap { color:#982d2d; background:#fff0f0; }
+    .parameter-covered { color:#12643a; background:#f0fbf4; }
+    [hidden] { display:none!important; }
+    #empty { padding:25px; background:white; border:1px dashed var(--border); }
+    @media(max-width:700px) { main{padding:20px 12px}.stats{grid-template-columns:repeat(2,1fr)}.counts{display:block;margin-left:0}.function-body{padding-left:6px}.header-group{padding:12px} }
+  </style>
+</head>
+<body><main>
+  <h1>What did my tests cover?</h1>
+  <p class="muted">LLK execution coverage, grouped by thread, source header, and function.</p>
+  <div class="stats">$stats</div>
+  <div class="guide">
+    <strong>Start here:</strong> open a function, then a template entry to see its green/red source lines.
+    Choose <strong>Ran</strong> to browse everything executed, or <strong>Branch gaps</strong> to find missed runtime decisions.
+    <br><strong>Views:</strong> <b>Test execution</b> shows emitted entries and runtime branches.
+    <b>All source definitions</b> includes unused definitions found independently of the test.
+    <b>Template sweep</b> checks declared bool/enum values automatically. Missing combinations are candidates;
+    compiler and runtime constraints may exclude them.
+    Green means “ran”, not “every legal parameter combination is tested”.
+    An entry is an instantiation in one instrumentation layout; the same signature may have multiple layouts.
+    Cards above describe the whole report; the count below follows your filters.
+  </div>
+  <div class="controls">
+    <label>View<select id="view"><option value="observed">Test execution</option><option value="sweeps">Template sweep</option><option value="baseline">All source definitions</option><option value="runs">Run inputs</option></select></label>
+    <label id="unobserved-label" hidden>Include unobserved templates<input type="checkbox" id="unobserved"></label>
+    <label class="search">Search function, header, template arguments, or test<input id="search" type="search" placeholder="e.g. unpack, sfpu, Sync, true…"></label>
+    <label>Thread<select id="thread"><option value="">All threads</option>$threads</select></label>
+    <label>Show<select id="status"><option value="all">Everything</option><option value="sweep_gap">Candidate template gaps</option><option value="sweep_complete">Finite combinations covered</option><option value="unresolved">Domain unresolved</option><option value="ran">Ran</option><option value="gaps">Branch gaps</option><option value="missed">Measured · zero executions</option><option value="absent">No emitted coverage record</option><option value="unmeasured">Emitted · no runtime data</option><option value="stale">Source snapshot changed</option></select></label>
+    <button type="button" id="expand">Expand functions</button>
+    <button type="button" id="collapse">Collapse all</button>
+  </div>
+  <div class="legend"><span class="badge ran">Ran</span><span class="badge gaps">Ran · branch gaps</span><span class="badge missed">Measured · zero executions</span><span class="badge absent">No emitted coverage record</span><span id="visible" role="status" aria-live="polite"></span></div>
+  <p><a href="instantiations.json">Download report data (JSON)</a></p>
+  <p id="empty" hidden>No functions match these filters.</p>
+  <div class="coverage-panel" data-view="observed">$sections</div>
+  <div class="coverage-panel" data-view="baseline">$baseline</div>
+  <div class="coverage-panel" data-view="sweeps">$sweeps</div>
+  <div class="coverage-panel" data-view="runs"><p class="guide">Inputs supplied to each test run. These are not values sampled at individual LLK calls. Historical streams may lack this metadata.</p>$runs</div>
+  <noscript><p>Enable JavaScript for search and filters. Function and source details can still be opened without it.</p></noscript>
+</main>
+<script>
+  const functions = Array.from(document.querySelectorAll('.function'));
+  const search = document.getElementById('search');
+  const thread = document.getElementById('thread');
+  const status = document.getElementById('status');
+  const view = document.getElementById('view');
+  const unobserved = document.getElementById('unobserved');
+  function matchesStatus(value) {
+    return status.value === 'all' || value === status.value || (status.value === 'ran' && value === 'gaps');
+  }
+  function filter() {
+    const terms = search.value.toLowerCase().trim().split(/\s+/).filter(Boolean);
+    let visible = 0;
+    let total = 0;
+    for (const panel of document.querySelectorAll('.coverage-panel')) panel.hidden = panel.dataset.view !== view.value;
+    for (const fn of functions) {
+      const active = fn.closest('.coverage-panel').dataset.view === view.value &&
+        (view.value !== 'sweeps' || unobserved.checked || fn.dataset.unobserved !== 'true');
+      if (active) total++;
+      const matches = active && terms.every(term => fn.dataset.search.includes(term)) &&
+        (!thread.value || fn.dataset.thread.split(' ').includes(thread.value)) &&
+        fn.dataset.states.split(' ').some(matchesStatus);
+      fn.hidden = !matches;
+      if (matches) visible++;
+      for (const entry of fn.querySelectorAll('.instantiation')) entry.hidden = !matchesStatus(entry.dataset.status);
+    }
+    for (const group of document.querySelectorAll('.header-group')) {
+      group.hidden = !Array.from(group.querySelectorAll('.function')).some(fn => !fn.hidden);
+    }
+    document.getElementById('visible').textContent = view.value === 'runs' ? '' : visible + ' of ' + total + ' entries shown';
+    document.getElementById('empty').hidden = visible !== 0 || total === 0 || view.value === 'runs';
+    for (const control of [search, thread, status]) control.disabled = view.value === 'runs';
+    document.getElementById('unobserved-label').hidden = view.value !== 'sweeps';
+  }
+  search.addEventListener('input', filter);
+  thread.addEventListener('change', filter);
+  status.addEventListener('change', filter);
+  unobserved.addEventListener('change', filter);
+  view.addEventListener('change', () => {status.value = 'all'; thread.value = ''; filter();});
+  for (const button of document.querySelectorAll('[data-inspect]')) button.addEventListener('click', () => {
+    view.value = 'observed'; search.value = button.dataset.inspect; thread.value = ''; status.value = 'all'; filter();
+    for (const fn of functions) if (!fn.hidden) fn.open = true;
+    document.querySelector('.controls').scrollIntoView();
+  });
+  document.getElementById('expand').addEventListener('click', () => {
+    for (const fn of functions) if (!fn.hidden) fn.open = true;
+  });
+  document.getElementById('collapse').addEventListener('click', () => {
+    for (const detail of document.querySelectorAll('details')) detail.open = false;
+  });
+  filter();
+</script>
+</body></html>

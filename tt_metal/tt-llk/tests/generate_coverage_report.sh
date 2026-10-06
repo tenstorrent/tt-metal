@@ -8,4 +8,4 @@ if [ ! -f "$COVERAGE_INFO" ]; then
     echo "Ensure coverage artefcats was generated!" >&2
     exit 1
 fi
-genhtml "$COVERAGE_INFO" --output-directory ../../coverage_report
+genhtml "$COVERAGE_INFO" --branch-coverage --output-directory ../../coverage_report

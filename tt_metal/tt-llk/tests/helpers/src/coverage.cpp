@@ -51,6 +51,13 @@ extern "C"
         const std::uint8_t* data = static_cast<const std::uint8_t*>(_data);
         auto* written            = reinterpret_cast<std::uint32_t*>(__coverage_start);
 
+        const auto capacity = reinterpret_cast<std::uintptr_t>(__coverage_end) - reinterpret_cast<std::uintptr_t>(__coverage_start);
+        if (*written > capacity || length > capacity - *written)
+        {
+            *written = UINT32_MAX; // Sticky overflow sentinel, consumed by the host.
+            return;
+        }
+
         std::uint8_t* mem = __coverage_start + *written;
 
         for (unsigned int i = 0; i < length; i++)

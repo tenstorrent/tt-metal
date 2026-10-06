@@ -16,7 +16,7 @@
 
 // Mailbox addresses
 #ifdef COVERAGE
-static const mailbox_t mailboxes_arr = reinterpret_cast<mailbox_t>(0x6DFB8U);
+static const mailbox_t mailboxes_arr = reinterpret_cast<mailbox_t>(0x8DFB8U);
 #else
 static const mailbox_t mailboxes_arr = reinterpret_cast<mailbox_t>(0x1FFB8U);
 #endif

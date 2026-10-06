@@ -45,7 +45,7 @@ class StimuliConfig:
 
     # === STATIC VARIABLES ===
     STIMULI_L1_ADDRESS_PERF = 0x21000
-    STIMULI_L1_ADDRESS_DEBUG = 0x70000
+    STIMULI_L1_ADDRESS_DEBUG = 0x90000
 
     # Optional L1 buffers between B and Res, in layout order.
     _OPTIONAL_OPERAND_SPECS = (

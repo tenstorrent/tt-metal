@@ -111,25 +111,34 @@ Addresses outlined in the tables below are abstracted away using the following v
 | 0x00000000 - 0x00007FFF | BRISC code |
 | 0x00008000 - 0x0000FFFF | BRISC data memory |
 | 0x00010000 - 0x00011FFF | BRISC GCOV memory |
-| 0x00012000 - 0x00019FFF | TRISC0 (Unpack) code |
-| 0x0001A000 - 0x00021FFF | TRISC0 (Unpack) data memory |
-| 0x00022000 - 0x00023FFF | TRISC0 (Unpack) GCOV memory |
-| 0x00024000 - 0x0002BFFF | TRISC1 (Math) code |
-| 0x0002C000 - 0x00033FFF | TRISC1 (Math) data memory |
-| 0x00034000 - 0x00035FFF | TRISC1 (Math) GCOV memory |
-| 0x00036000 - 0x0003DFFF | TRISC2 (Pack) code |
-| 0x0003E000 - 0x00045FFF | TRISC2 (Pack) data memory |
-| 0x00046000 - 0x00047FFF | TRISC2 (Pack) GCOV memory |
-| 0x00048000 - 0x00063FFF | Reserved |
-| 0x0006E000 - 0x00070000 | Runtime arguments struct |
-| 0x00070000 - 0x00169FFF | Stimuli space |
+| 0x00012000 - 0x00021FFF | TRISC0 (Unpack) code |
+| 0x00022000 - 0x00029FFF | TRISC0 (Unpack) data memory |
+| 0x0002A000 - 0x00031FFF | TRISC0 (Unpack) GCOV memory |
+| 0x00032000 - 0x00041FFF | TRISC1 (Math) code |
+| 0x00042000 - 0x00049FFF | TRISC1 (Math) data memory |
+| 0x0004A000 - 0x00051FFF | TRISC1 (Math) GCOV memory |
+| 0x00052000 - 0x00061FFF | TRISC2 (Pack) code |
+| 0x00062000 - 0x00069FFF | TRISC2 (Pack) data memory |
+| 0x0006A000 - 0x00071FFF | TRISC2 (Pack) GCOV memory |
+| 0x0008DFB8 - 0x0008DFD7 | Coverage mailboxes |
+| 0x0008E000 - 0x0008E3FF | Runtime arguments struct |
+| 0x00090000 - 0x00169FFF | Stimuli space |
 | 0x0016A000 - 0x0016AFF3 | Performance counters data |
 | 0x0016AFF4 - 0x0016AFFF | Profiler barrier |
 | 0x0016B000 - 0x0016B3FF | TRISC0 (Unpack) perf counter memory |
 | 0x0016C000 - 0x0016C3FF | TRISC1 (Math) perf counter memory |
 | 0x0016D000 - 0x0016D3FF | TRISC2 (Pack) perf counter memory |
 | 0x0016DFF0 - 0x0016DFFB | TRISC\[0,1,2] start addresses buffer [1] |
-<center>Wormhole/Blackhole L1 debug layout</center>
+<center>Wormhole L1 debug layout</center>
+
+Blackhole additionally reserves 1 KiB of runtime arguments between each TRISC's
+data and gcov regions. Its TRISC0/1/2 gcov regions start at `0x2A400`, `0x4A800`,
+and `0x6AC00`, ending at `0x72C00`. All three are 32 KiB.
+
+Quasar coverage uses four 128 KiB L1 slots starting at `0x00000`, `0x20000`,
+`0x40000`, and `0x60000`: each contains 64 KiB code, 32 KiB data, and 32 KiB gcov.
+Private memory holds stacks. All debug layouts share the mailbox, runtime-argument,
+and stimuli addresses above, with linker assertions protecting the mailbox boundary.
 
 # Kernel compilation
 This section explains how the TestConfig object, when called, performs compilation of all artifacts necessary to produce `unpack.elf`, `math.elf`, and `pack.elf` files constituting every compiled kernel in our testing infrastructure.

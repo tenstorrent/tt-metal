@@ -659,7 +659,7 @@ class Mailboxes(Enum):
 
 
 class MailboxesCoverage(Enum):
-    Unpacker = 0x6DFB8
+    Unpacker = 0x8DFB8
     Math = Unpacker + 4
     Packer = Unpacker + 8
     BriscCommand0 = Unpacker + 12
@@ -677,7 +677,7 @@ class MailboxesQuasar(Enum):
 
 
 class MailboxesCoverageQuasar(Enum):
-    Unpacker = 0x6DFB8
+    Unpacker = 0x8DFB8
     Math = Unpacker + 4
     Packer = Unpacker + 8
     Sfpu = Unpacker + 12

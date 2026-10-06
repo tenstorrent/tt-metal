@@ -43,7 +43,7 @@ extern "C"
 {
     extern void gcov_dump(void);
 }
-constexpr std::uint32_t mailboxes_start = 0x6DFB8;
+constexpr std::uint32_t mailboxes_start = 0x8DFB8;
 #else
 constexpr std::uint32_t mailboxes_start = 0x1FFB8;
 #endif
@@ -108,6 +108,9 @@ int main(void)
         ckernel::tensix_sync();
     }
 
+#ifdef COVERAGE
+    gcov_dump();
+#endif
     *mailbox = ckernel::KERNEL_COMPLETE;
 }
 
@@ -116,10 +119,6 @@ extern "C" __attribute__((section(".init"), naked, noreturn, no_profile_instrume
     do_crt0();
 
     main();
-
-#ifdef COVERAGE
-    gcov_dump();
-#endif
 
     for (;;)
     {
