@@ -312,7 +312,7 @@ Tensor swiglu(const Tensor& input_a, std::int32_t dim, const std::optional<Memor
     return swiglu_result;
 }
 
-// The 0/1 mask has to be built in the input's own dtype. A bfloat16 mask against an
+// For integer inputs the 0/1 mask has to be built in the input's own dtype. A bfloat16 mask against an
 // integer input promotes the multiply to bfloat16, and the result comes back rounded
 // to 8 mantissa bits -- tril(int32 around 2^30) was off by up to 1023.
 static Tensor trilu_mask(
@@ -330,21 +330,6 @@ static Tensor trilu_mask(
                            input_a.logical_shape(), input_a.padded_shape(), diag, dt, Layout::TILE, input_a.device(), mem)
                      : ttnn::index_tril<std::uint32_t>(
                            input_a.logical_shape(), input_a.padded_shape(), diag, dt, Layout::TILE, input_a.device(), mem);
-    }
-    // float32 needs its own mask as well: tril/triu select with ttnn::where for float32 (see
-    // trilu_select), and where rejects a bfloat16 predicate against a float32 tensor.
-    if (dt == DataType::FLOAT32) {
-        return upper
-                   ? ttnn::index_triu<float>(
-                         input_a.logical_shape(), input_a.padded_shape(), diag, dt, Layout::TILE, input_a.device(), mem)
-                   : ttnn::index_tril<float>(
-                         input_a.logical_shape(),
-                         input_a.padded_shape(),
-                         diag,
-                         dt,
-                         Layout::TILE,
-                         input_a.device(),
-                         mem);
     }
     return upper ? ttnn::index_triu<::bfloat16>(
                        input_a.logical_shape(),
@@ -366,12 +351,15 @@ static Tensor trilu_mask(
 
 // Zero what the mask drops. A float32 multiply runs on the SFPU with fp32 dest, where nothing
 // forces x * 0 = 0, so -inf * 0 and inf * 0 left NaN in the masked triangle instead of zero:
-// float32 selects instead. bfloat16 keeps the multiply because its SFPU multiply already forces
-// x * 0 = 0; block-float is not changed here, and integers have no inf.
+// float32 selects instead, against the same bfloat16 mask (binary_ng takes a bfloat16 predicate
+// with a float32 tensor when both are tiled and the last two dims match). bfloat16 keeps the
+// multiply because its SFPU multiply already forces x * 0 = 0; block-float is not changed here,
+// and integers have no inf.
 static Tensor trilu_select(
     const Tensor& input_a, const Tensor& mask, const std::optional<MemoryConfig>& output_mem_config) {
     if (input_a.dtype() == DataType::FLOAT32) {
-        // multiply tilizes a row-major operand itself; where does not, and the mask is tiled.
+        // multiply tilizes a row-major operand itself and returns TILE; where does not, and the
+        // mask is tiled, so tilize here as multiply would. A tiled input is used as is.
         const Tensor input_tile = input_a.layout() == Layout::TILE ? input_a : ttnn::to_layout(input_a, Layout::TILE);
         return ttnn::where(mask, input_tile, 0.0f, output_mem_config);
     }

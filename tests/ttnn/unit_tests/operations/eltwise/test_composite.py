@@ -277,6 +277,7 @@ def test_unary_composite_clamp_int_ttnn(input_shapes, min_val, max_val, device, 
     (
         (torch.Size([1, 1, 32, 32])),
         (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 1, 30, 50])),
     ),
 )
 @pytest.mark.parametrize(
@@ -284,10 +285,13 @@ def test_unary_composite_clamp_int_ttnn(input_shapes, min_val, max_val, device, 
     ((torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)),
     ids=("float32", "bfloat16"),
 )
+@pytest.mark.parametrize("layout", (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT), ids=("tile", "row_major"))
 @pytest.mark.parametrize("fill", (float("-inf"), float("inf")), ids=("neg_inf", "pos_inf"))
 @pytest.mark.parametrize("diagonal", (0, 1, -1))
 @pytest.mark.parametrize("op", ("tril", "triu"))
-def test_unary_composite_trilu_non_finite_ttnn(input_shapes, torch_dtype, ttnn_dtype, fill, diagonal, op, device):
+def test_unary_composite_trilu_non_finite_ttnn(
+    input_shapes, torch_dtype, ttnn_dtype, layout, fill, diagonal, op, device
+):
     # The masked-out triangle is defined as zero. For float32 the old multiply ran on the SFPU
     # with fp32 dest, where inf * 0 is NaN, so the masked triangle came back NaN. bfloat16 is
     # kept as a regression guard: its SFPU multiply already forces x * 0 = 0, so it passed
@@ -295,12 +299,15 @@ def test_unary_composite_trilu_non_finite_ttnn(input_shapes, torch_dtype, ttnn_d
     #
     # The other tril/triu tests never feed a non-finite value: test_unary_category6_bfloat16.py
     # samples bf16 without special values, and test_tril_triu_integer_dtype.py draws its float
-    # cases from [-4, 4) and its integer cases from arange.
+    # cases from [-4, 4) and its integer cases from arange. Both use tiled inputs; the
+    # row-major case here also runs the tilize in front of the float32 select.
     in_data = torch.full(input_shapes, fill, dtype=torch_dtype)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=layout, device=device)
 
     output = getattr(ttnn, op)(input_tensor, diagonal=diagonal)
     assert output.dtype == ttnn_dtype, f"{op} on {ttnn_dtype} returned {output.dtype}"
+    # multiply tilizes a row-major input and returns TILE, and the float32 select does the same.
+    assert output.layout == ttnn.TILE_LAYOUT, f"{op} on a {layout} input returned {output.layout}"
 
     output_tensor = ttnn.to_torch(output)
     # torch directly, with diagonal positional: the generic golden wrapper drops keyword args.
