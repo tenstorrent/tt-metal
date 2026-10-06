@@ -6,26 +6,39 @@
 
 The reference semantics live in the op's registered golden (ttnn.get_golden_function(op), implemented in
 ttnn/ttnn/operations/transformer_golden.py); this module holds what is not reference semantics: the model shapes, input
-generation, the chained single-token helper, and a vendored copy of FLA's naive recurrence as the oracle the golden is
-checked against."""
+generation, the chained single-token helper, the accuracy gate, and a vendored copy of FLA's naive
+recurrence as the oracle the golden is checked against."""
 
 from dataclasses import dataclass
 
 import torch
 
+from tt_py_test_utils_common.utility_functions import comp_pcc
 from ttnn.operations.transformer_golden import l2_norm
+
+# Accuracy gates: PCC, and max |delta| relative to max |reference| as a gross-error guard. The FPU reads fp32 operands
+# truncated to tf32-class precision (9-10 mantissa bits), so the current kernel sits at up to 5e-3 relative error at
+# every token count (1 to 12) while its PCC stays above 0.99999.
+PCC_MIN = 0.9999
+MAX_ABS_REL = 1e-2
 
 
 @dataclass(frozen=True)
 class Shape:
     num_key_heads: int
     num_value_heads: int
+    supported_today: bool = True  # the current op: rank-3 g only, B * HV <= 110 cores
 
 
-# Per-device head counts of served configurations.
+# Per-device head counts of served configurations. K = V = 128 throughout.
 SHAPES = {
     "qwen27b_tp4": Shape(4, 12),  # Qwen3.6-27B TP 4
+    "qwen27b_tp8": Shape(2, 6),  # Qwen3.6-27B TP 8
+    "qwen35b_a3b_tp4": Shape(4, 8),  # Qwen3.6-35B-A3B TP 4
     "qwen9b_tp1": Shape(16, 32),  # Qwen3.5-9B single chip
+    # Kimi-K3's KDA has H == HV and a per-key decay vector (rank-4 g); the current op takes rank-3 g only, so this
+    # entry is the GDN-shaped stand-in at the served head count until the KDA path lands.
+    "kimi_k3_sp8tp4": Shape(24, 24),  # Kimi-K3 SP 8 x TP 4
 }
 
 
@@ -60,6 +73,13 @@ def chained_decode(fn, q, k, v, g, beta, initial_state=None):
         outs.append(o_t)
         states.append(state)
     return torch.cat(outs, dim=1), torch.stack(states, dim=1)
+
+
+def assert_accuracy(ref, got, label, *, pcc_min=PCC_MIN, max_abs_rel=MAX_ABS_REL):
+    assert torch.isfinite(got).all(), f"{label}: non-finite values"
+    pcc_passed, pcc = comp_pcc(ref, got, pcc_min)
+    max_abs = (ref.to(torch.float64) - got.to(torch.float64)).abs().max().item()
+    assert pcc_passed and max_abs <= max_abs_rel * ref.abs().max().item(), f"{label}: pcc {pcc}, max |delta| {max_abs}"
 
 
 def fla_naive_recurrent_gated_delta_rule(q, k, v, beta, g, scale=None, initial_state=None, output_final_state=False):
