@@ -356,9 +356,10 @@ class DSV41PrefillLayer:
 
     def forward(self, xs, pres, S, s0=0):
         if self.colsplit:
+            n8 = int(xs[0].shape[2]) // self.T if getattr(xs, "packed", False) else len(xs)
             if (
-                pk_mhc_enabled() and self.umoe is None
-            ):  # the packed carrier has no unified-MoE branch (DSV41_PREFILL_MOE=unified takes the plain column-split layer)
+                pk_mhc_enabled() and n8 > 1 and self.umoe is None
+            ):  # n8 == 1 (U=2 x C=128) segfaults in the packed path's all_gather; the packed carrier has no unified-MoE branch
                 return self.forward_cols_pk(xs, pres, S, s0)
             return self.forward_cols(xs, pres, S, s0)
         xs, pres = unpack_streams(xs, pres)
