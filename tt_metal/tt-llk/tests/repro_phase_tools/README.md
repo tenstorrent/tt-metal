@@ -26,3 +26,15 @@ packer's L1 write `tdma.gen_pack_instance(N).packer.o_l1_wren` and `i_l1_req_rea
 `tdma.l1_arbiter_packet_accept`; the RISC-V cores' L1 ports `trisc(N).u_trisc.o_l1_rden`, `o_l1_rdaddr`; and the pack
 core's instruction queue `trisc(2).u_trisc.o_trisc_instrn_buf_wren`, `i_trisc_instrn_buf_req_ready`.
 Run two Versim tests at the same time only from two separate checkouts: the VCD file name is fixed.
+
+## Pack RISC-V fetch and branch predictor
+
+```
+zstdcat run.full.vcd.zst | python3 extract_fetch.py - run.fetch.txt 88000 114000   # pack loop window
+grep -v ^param run.fetch.txt > run.f.txt && python3 to_cycles.py run.fetch.cyc run.f.txt
+python3 analyze_fetch.py run.fetch.cyc
+```
+
+`analyze_fetch.py` prints the cycles per loop pass, branch mispredicts and which branch PCs they hit,
+icache traffic, and a per-cycle strip of two passes. `extract_fetch.py` also writes the 16 branch-predictor
+entries (`bp0`..`bp15`) so the entry each branch writes can be read from the `.cyc` file.
