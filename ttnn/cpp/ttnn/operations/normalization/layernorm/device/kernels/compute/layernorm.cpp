@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #define ELTWISE_BINARY_PER_TILE_HANDOFF true
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
@@ -392,7 +393,7 @@ void kernel_main() {
                     ckl::ReservePolicy::PerBlockSize,
                     ckl::PushPolicy::PerBlockSize,
                     ckl::DataFormatReconfig::Disabled)>{});
-#endif
+#endif  // FUSE_BETA
         }
         dfb_ex2pe.pop_front(1);
         dfb_xmm.pop_front(total_buffer_size);
@@ -418,4 +419,20 @@ void kernel_main() {
         "width or dfb_scaler push/pop counts diverge (issue #48487)");
     constexpr uint32_t num_scaler_tiles = norm::layernorm::reduce_scaler_tile_count(W, tile_width);
     dfb_scaler.pop_front(num_scaler_tiles);
+
+    // The epsilon tile is waited once up front and reused for the whole kernel, so it is popped
+    // once here rather than per block.
+    dfb_eps.pop_front(1);
+
+    // Gamma and beta are each one row of Wt tiles pushed once by the reader and read by tile offset
+    // on every block of every NCHt row. Their chain inputs wait Upfront with PopPolicy::None, so the
+    // chain waits block.start() + block.size() tiles and never pops. Blocks clamp their end to Wt,
+    // so that sum never exceeds Wt and reaches Wt on the last block of a row. Pop Wt once here
+    // rather than per block.
+#ifdef FUSE_GAMMA
+    DataflowBuffer(dfb_gamma_id).pop_front(Wt);
+#endif
+#ifdef FUSE_BETA
+    DataflowBuffer(dfb_beta_id).pop_front(Wt);
+#endif
 }

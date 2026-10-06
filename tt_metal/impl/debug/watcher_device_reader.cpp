@@ -417,7 +417,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
     TT_ASSERT(this->f != nullptr);
 
     if (f != stdout && f != stderr) {
-        log_info(tt::LogMetal, "Watcher checking device {}", device_id);
+        log_debug(tt::LogMetal, "Watcher checking device {}", device_id);
     }
 
     DumpData dump_data;

@@ -8,6 +8,7 @@
 // BRISC: No-op for DRAM streaming (handles mul scalar copy if enabled)
 // TRISC: Performs matmul compute with optional fused SiLU and optional fused mul (16x16 tiles)
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/dram_streaming_experts_matmul.hpp"
