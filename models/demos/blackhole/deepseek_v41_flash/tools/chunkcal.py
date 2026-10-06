@@ -30,6 +30,8 @@ def chunk_of(budget, U):
 
 
 def budgets(B):
+    if os.environ.get("CC_BUDGETS"):
+        return [int(x) for x in os.environ["CC_BUDGETS"].split(",")]
     """effective row-token budgets U*C (a budget below 128 tokens per user is raised to U*128), ascending, distinct; the CURRENT default budgets are included"""
     U = B // 4
     out = sorted({U * chunk_of(b, U) for b in BUDGETS + [4096, 2048]})
@@ -47,8 +49,9 @@ def plan(B, mode="base"):
 
 def flags(B, mode="base"):
     f = "DSV41_PREFILL_ONLY=1 DSV41_CHUNK_FIXED=1"
-    if SPAD_MAX:
-        f += f" DSV41_PREFILL_SPAD_MAX={SPAD_MAX}"
+    spad = int(os.environ.get("CC_SPAD", SPAD_MAX))
+    if spad:
+        f += f" DSV41_PREFILL_SPAD_MAX={spad}"
     if mode == "uni":
         f += " DSV41_PREFILL_MOE=unified DSV41_UNI_NODECODE=1"
     if B == 64:
@@ -58,7 +61,7 @@ def flags(B, mode="base"):
 
 def launch(B, mode, host):
     ids, rt = plan(B, mode)
-    tag = f"{mode}_b{B}"
+    tag = f"{mode}_b{B}{os.environ.get('CC_TAG', '')}"
     log = f"{LOG}/pf_chunkcal_{tag}.log"
     inner = f"{PK}/tools/chunkcal_exec.sh {tag} \"{flags(B, mode)}\" {','.join(ids)} {','.join(rt)}"
     script = f"""cd {WT} && : > {log}
@@ -83,10 +86,13 @@ def parse(path):
                 runs.append(dict(id=m2.group(1), budget=int(m2.group(2)), status="skipped"))
             continue
         r = dict(id=m.group(1), budget=int(m.group(2)), status="ok")
+        if "SKIPPED (budget" in p:
+            continue
+        ft_ = re.search(r"FAILTRACE (.*)", p)
         f = re.search(r"SCENARIO FAILED \S+ ROW_TOKENS=\d+: (.*?) ===", p, re.S)
         if f:
             r["status"] = "FAIL"
-            r["error"] = f.group(1)[:160].replace("\n", " ")
+            r["error"] = f.group(1)[:330].replace("\n", " ").replace("TT_FATAL @ /mnt/tt-data/ssinghal/tests/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:495: false info: ", "")
         t = re.search(r"prefill timing \{(.*?)\} chunk=(\S+)", p)
         if t:
             d = dict((a.strip(), float(b)) for a, b in (x.split(":") for x in t.group(1).split(",")))
@@ -110,6 +116,8 @@ def parse(path):
             int(a): b.strip()
             for a, b in re.findall(r"==USER (\d+) - OUTPUT\n(.*?)(?=\n==USER|\n==REPEAT|\n\d{4}-\d\d-\d\d |\Z)", p, re.S)
         }
+        if r["status"] == "ok" and "replay" not in r and "first" not in r:
+            continue  # header of a skipped / still running scenario
         runs.append(r)
     return runs
 
@@ -125,7 +133,7 @@ def compare(r, ref):
 def report(Bs, modes=("base", "uni")):
     for mode in modes:
         for B in Bs:
-            path = f"{LOG}/pf_chunkcal_{mode}_b{B}.log"
+            path = f"{LOG}/pf_chunkcal_{mode}_b{B}{os.environ.get('CC_TAG', '')}.log"
             if not os.path.exists(path):
                 continue
             U = B // 4
