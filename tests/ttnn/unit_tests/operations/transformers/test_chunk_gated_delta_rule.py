@@ -322,6 +322,65 @@ def _check_vs_recurrent_reference(
     assert ok_s, f"final_state vs recurrent reference: {pcc_s}"
 
 
+@pytest.mark.skipif(not is_blackhole(), reason="chunk_gated_delta_rule is Blackhole-only")
+@pytest.mark.parametrize("num_k_heads, num_v_heads", [(4, 12), (16, 16)], ids=["G3", "G1"])
+@pytest.mark.parametrize("with_initial_state", [False, True], ids=["s0=0", "s0=rand"])
+def test_flat_qk_vs_recurrent_reference(device, num_k_heads, num_v_heads, with_initial_state):
+    """Flat token-major inputs, the model's contract: raw q/k [B, T, H*K] and v [B, T, HV*V]. The
+    prep kernel L2-normalizes q/k over K on the SFPU and folds the scale in (the rank-4 path above
+    takes host-normalized q/k and never compiles that section). Same token-by-token oracle."""
+    torch.manual_seed(20260930)
+    B, T, D = 1, 256, 128
+    G = num_v_heads // num_k_heads
+    q = torch.randn(B, T, num_k_heads * D).to(torch.bfloat16)
+    k = torch.randn(B, T, num_k_heads * D).to(torch.bfloat16)
+    v = torch.randn(B, T, num_v_heads * D).to(torch.bfloat16)
+    beta = torch.sigmoid(torch.randn(B, T, num_v_heads, dtype=torch.float32))
+    g = -torch.nn.functional.softplus(torch.randn(B, T, num_v_heads, dtype=torch.float32)) * 0.5
+    s0 = 0.1 * torch.randn(B, num_v_heads, D, D, dtype=torch.float32) if with_initial_state else None
+
+    def dev(t, dtype):
+        return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    eye, tril, ones, masks = _const_tiles(device)
+    o_tt, fs_tt = ttnn.transformer.chunk_gated_delta_rule(
+        dev(q, ttnn.bfloat16),
+        dev(k, ttnn.bfloat16),
+        dev(v, ttnn.bfloat16),
+        dev(g, ttnn.float32),
+        dev(beta, ttnn.float32),
+        initial_state=dev(s0, ttnn.float32) if s0 is not None else None,
+        output_final_state=True,
+        chunk_size=CHUNK,
+        eye=eye,
+        tril=tril,
+        ones=ones,
+        masks=masks,
+    )
+    o_dev = ttnn.to_torch(o_tt).float().reshape(B, T, num_v_heads, D)
+    fs_dev = ttnn.to_torch(fs_tt).float().reshape(B, num_v_heads, D, D)
+
+    # Reference: the same bf16 values upcast, normalized over the head dim as the kernel does it,
+    # GQA-expanded; the reference applies the default 1/sqrt(K) scale the kernel folds into q.
+    q_ref = l2_norm(q.float().reshape(B, T, num_k_heads, D), dim=-1).repeat_interleave(G, dim=2)
+    k_ref = l2_norm(k.float().reshape(B, T, num_k_heads, D), dim=-1).repeat_interleave(G, dim=2)
+    o_ref, fs_ref = recurrent_gated_delta_rule(
+        q_ref,
+        k_ref,
+        v.float().reshape(B, T, num_v_heads, D),
+        beta,
+        g,
+        initial_state=s0,
+        output_final_state=True,
+        use_qk_l2norm=False,
+    )
+    ok_o, pcc_o = check_with_pcc(o_ref, o_dev, PCC_O)
+    ok_s, pcc_s = check_with_pcc(fs_ref, fs_dev, PCC_STATE)
+    print(f"\nPCC o={pcc_o} final_state={pcc_s}")
+    assert ok_o, f"o vs recurrent reference: {pcc_o}"
+    assert ok_s, f"final_state vs recurrent reference: {pcc_s}"
+
+
 # --------------------------------------------------------------------------------------------
 # Bit-exactness gate for the scan's shared-input multicast.
 #
