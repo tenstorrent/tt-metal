@@ -4,16 +4,17 @@
 
 #pragma once
 
+#include <concepts>
 #include <functional>
+#include <optional>
+#include <sstream>
+#include <string>
+#include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
-#include <type_traits>
 #include <vector>
-#include <string>
-#include <optional>
-#include <string_view>
-#include <sstream>
-#include <concepts>
+
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal {
