@@ -15,14 +15,15 @@ from models.experimental.bevformer.tests.perception_common import (
     random_fpn_levels,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_perception_transformer_parameters
-from models.experimental.bevformer.tt.tt_perception_transformer import TTPerceptionTransformer
+from models.experimental.bevformer.tt.tt_perception_transformer import TtPerceptionTransformer
 
 CASES = [
-    # (name, bev_shape, num_layers, batch_size, yaw_step_deg)
-    ("base", BEV_SHAPES["base"], NUM_LAYERS, 1, 0.0),
+    # (name, bev_shape, num_layers, batch_size, yaw_step_deg, num_frames)
+    ("base", BEV_SHAPES["base"], NUM_LAYERS, 1, 0.0, 2),
     # bs=2: each sample has its own CAN bus, rotation and shift, and the second sample's rig is
-    # turned, so a batch mix-up in any of them shows.
-    ("tiny-bs2", BEV_SHAPES["tiny"], NUM_LAYERS, 2, 40.0),
+    # turned, so a batch mix-up in any of them shows. A third frame refills the frame's buffers
+    # once more, which must reuse every program the second compiled.
+    ("tiny-bs2", BEV_SHAPES["tiny"], NUM_LAYERS, 2, 40.0, 3),
 ]
 
 
@@ -32,22 +33,22 @@ def _to_device(tensor, device):
 
 @torch.no_grad()
 @pytest.mark.parametrize(
-    "name, bev_shape, num_layers, batch_size, yaw_step_deg", CASES, ids=[case[0] for case in CASES]
+    "name, bev_shape, num_layers, batch_size, yaw_step_deg, num_frames", CASES, ids=[case[0] for case in CASES]
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
-def test_perception_transformer(device, reset_seeds, name, bev_shape, num_layers, batch_size, yaw_step_deg):
-    """Two consecutive frames through the encoder's glue: the CAN-bus MLP, the camera and level
-    embeddings, and on the second frame the previous BEV's rotation and the ego shift, with each
-    side's own first-frame BEV as its previous BEV."""
+def test_perception_transformer(device, reset_seeds, name, bev_shape, num_layers, batch_size, yaw_step_deg, num_frames):
+    """Consecutive frames through the encoder's glue: the CAN-bus MLP, the camera and level
+    embeddings, and from the second frame on the previous BEV's rotation and the ego shift, with
+    each side's own previous output as its previous BEV."""
     bev_h, bev_w = bev_shape
     generator = torch.Generator().manual_seed(0)
     torch_model = build_reference_transformer(num_layers)
     levels = random_fpn_levels(batch_size, generator)
     bev_queries = torch.randn(bev_h * bev_w, EMBED_DIMS, generator=generator)
     bev_pos = torch.randn(bev_h * bev_w, batch_size, EMBED_DIMS, generator=generator)
-    frames = frame_metas(batch_size, 2, generator, yaw_step_deg)
+    frames = frame_metas(batch_size, num_frames, generator, yaw_step_deg)
 
-    tt_model = TTPerceptionTransformer(
+    tt_model = TtPerceptionTransformer(
         create_perception_transformer_parameters(torch_model, device),
         device,
         bev_h=bev_h,
@@ -59,6 +60,7 @@ def test_perception_transformer(device, reset_seeds, name, bev_shape, num_layers
     tt_pos = _to_device(bev_pos.permute(1, 0, 2), device)
 
     torch_prev = tt_prev = frame = None
+    num_programs = None
     for i, metas in enumerate(frames):
         torch_output = torch_model.get_bev_features(
             levels, bev_queries, bev_h, bev_w, bev_pos, metas, prev_bev=torch_prev
@@ -68,5 +70,9 @@ def test_perception_transformer(device, reset_seeds, name, bev_shape, num_layers
         tt_output = ttnn.to_torch(tt_prev).float().reshape(torch_output.shape)
         # comp_pcc zeroes NaN and Inf before correlating, so they must be ruled out here.
         assert torch.isfinite(tt_output).all(), f"non-finite values in frame {i}'s BEV"
-        assert_pcc(torch_output, tt_output, 0.997)
+        assert_pcc(torch_output, tt_output, 0.999)
         torch_prev = torch_output
+        if i == 1:
+            num_programs = device.num_program_cache_entries()
+        elif i > 1:
+            assert device.num_program_cache_entries() == num_programs, f"frame {i} compiled new programs"
