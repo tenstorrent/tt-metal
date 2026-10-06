@@ -54,6 +54,7 @@ class _RecurrenceGeometry:
     batch: int
     local_rows: int
     heads: int
+    key_heads: int
     key_dim: int
     value_dim: int
     chunk_size: int
@@ -99,6 +100,12 @@ class _RecurrenceComputeConfig:
     scan: ttnn.DeviceComputeKernelConfig
 
 
+def _per_head_chunks(values: ttnn.Tensor, geometry: _RecurrenceGeometry) -> ttnn.Tensor:
+    """Relayout one value per (head, token) ``[B, T, H]`` to the head-major chunk layout ``[B*H, N, 32, 1]``."""
+    by_head = ttnn.permute(values, (0, 2, 1))
+    return ttnn.reshape(by_head, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, 1))
+
+
 def _prepare_chunk_terms(
     q: ttnn.Tensor,
     k: ttnn.Tensor,
@@ -111,19 +118,16 @@ def _prepare_chunk_terms(
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     sequence_parallel_axis: int,
+    scalar_decay: bool,
 ) -> _PreparedChunks:
-    beta_by_head = ttnn.permute(beta, (0, 2, 1))
-    beta_by_chunk = ttnn.reshape(
-        beta_by_head,
-        (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, 1),
-    )
     outputs = ttnn.experimental.kda.prepare_chunk_recurrence(
         q,
         k,
         v,
-        gate,
-        beta_by_chunk,
+        _per_head_chunks(gate, geometry) if scalar_decay else gate,
+        _per_head_chunks(beta, geometry),
         geometry.heads,
+        num_key_heads=geometry.key_heads,
         memory_config=KDA_PREPARATION_MEMORY_CONFIG,
         compute_kernel_config=compute_config.preparation,
         output_bf16_mask=KDA_PREP_OUTPUT_BF16_MASK,
@@ -518,8 +522,13 @@ class KDARecurrence:
         heads: int,
         key_dim: int,
         value_dim: int,
+        key_heads: int | None = None,
+        scalar_decay: bool = False,
         batch: int = 1,
     ) -> None:
+        """``heads`` are value heads; q and k carry ``key_heads`` (default ``heads``) heads, value head ``h``
+        reading key head ``h // (heads / key_heads)``. ``scalar_decay`` takes one log decay per (value head,
+        token), ``gate [B, T, heads]``, instead of one per key channel, ``gate [B, T, heads * key_dim]``."""
         preparation = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -546,10 +555,14 @@ class KDARecurrence:
         )
         if local_rows <= 0 or local_rows % KDA_CHUNK_SIZE:
             raise ValueError("recurrence local_rows must be positive and divisible by the chunk size")
-        if min(batch, heads, key_dim, value_dim) <= 0:
+        key_heads = heads if key_heads is None else key_heads
+        if min(batch, heads, key_heads, key_dim, value_dim) <= 0:
             raise ValueError("recurrence dimensions must be positive")
+        if heads % key_heads:
+            raise ValueError(f"recurrence value heads {heads} must be a multiple of key heads {key_heads}")
+        self._scalar_decay = scalar_decay
         self._geometry = _RecurrenceGeometry(
-            batch, local_rows, heads, key_dim, value_dim, KDA_CHUNK_SIZE, local_rows // KDA_CHUNK_SIZE
+            batch, local_rows, heads, key_heads, key_dim, value_dim, KDA_CHUNK_SIZE, local_rows // KDA_CHUNK_SIZE
         )
         self._sequence_parallel_axis = sequence_parallel_axis
         self._sequence_parallel = (
@@ -587,10 +600,10 @@ class KDARecurrence:
         if tuple(beta.shape) != (geometry.batch, geometry.local_rows, geometry.heads):
             raise ValueError("recurrence beta shape does not match constructed geometry")
         for name, tensor, width in (
-            ("q", q, geometry.heads * geometry.key_dim),
-            ("k", k, geometry.heads * geometry.key_dim),
+            ("q", q, geometry.key_heads * geometry.key_dim),
+            ("k", k, geometry.key_heads * geometry.key_dim),
             ("v", v, geometry.heads * geometry.value_dim),
-            ("gate", gate, geometry.heads * geometry.key_dim),
+            ("gate", gate, geometry.heads * (1 if self._scalar_decay else geometry.key_dim)),
         ):
             if tuple(tensor.shape) != (geometry.batch, geometry.local_rows, width):
                 raise ValueError(f"recurrence {name} shape does not match constructed geometry")
@@ -610,6 +623,7 @@ class KDARecurrence:
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
+            scalar_decay=self._scalar_decay,
         )
         return prepared, state, geometry
 
