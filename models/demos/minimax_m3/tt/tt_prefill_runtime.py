@@ -40,6 +40,7 @@ from loguru import logger
 import ttnn
 from models.common.utils import block_cyclic_reorder
 from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
+from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
 
 
 @dataclass
@@ -546,7 +547,19 @@ class TtPrefillRuntime:
             head_dim=self.hf_config.head_dim,
             path=path,
             stage_layouts=stage_layouts,
+            index_k_layers=self.msa_layer_ids(),
         )
+
+    def msa_layer_ids(self) -> set[int]:
+        """Global ids of the MSA (block-sparse) layers — the only layers that write an index_k (layers 3-59 on
+        M3). Read through the same helper as ``Layer``, so the table can't disagree with the model."""
+        ids = {i for i, f in enumerate(sparse_attention_freq(self.hf_config) or []) if f}
+        if not ids:
+            logger.warning(
+                "[migration] the config has no MSA layers (sparse_attention_freq missing or use_sparse_attention "
+                "off): the KV chunk table publishes no index_k rows"
+            )
+        return ids
 
     def read_slot_kv(self, kv_cache, slot: int, n_tokens: int | None = None):
         """Read one slot's KV cache from device to host: ``[k, v, index_k]``, one host tensor per cache

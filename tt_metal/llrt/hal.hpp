@@ -58,6 +58,49 @@ std::ostream& operator<<(std::ostream&, const HalProcessorIdentifier&);
 bool operator<(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
 bool operator==(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
 
+enum class HalL1MemAddrType : uint8_t {
+    BASE,
+    BARRIER,
+    MAILBOX,
+    LAUNCH,
+    WATCHER,
+    DPRINT_BUFFERS,
+    PROFILER,
+    KERNEL_CONFIG,  // End is start of unreserved memory
+    UNRESERVED,     // For ethernet and DRAM cores
+    DEFAULT_UNRESERVED,
+    CORE_INFO,
+    GO_MSG,
+    LAUNCH_MSG_BUFFER_RD_PTR,
+    GO_MSG_INDEX,
+    LOCAL,
+    BANK_TO_NOC_SCRATCH,
+    LOGICAL_TO_VIRTUAL_SCRATCH,
+    APP_SYNC_INFO,
+    APP_ROUTING_INFO,
+    RETRAIN_COUNT,
+    RETRAIN_FORCE,
+    CRC_ERR,          // Link status - CRC error count
+    CORR_CW,          // Link status - Corrected Codewords count
+    UNCORR_CW,        // Link status - Uncorrected Codewords count
+    TXQ0_RESEND_CNT,  // Link status - TX queue 0 packet resend count (Blackhole only)
+    TXQ1_RESEND_CNT,  // Link status - TX queue 1 packet resend count (Blackhole only)
+    TXQ2_RESEND_CNT,  // Link status - TX queue 2 packet resend count (Blackhole only)
+    RXQ0_PKT_DROP,    // Link status - RX queue 0 packet drop count (Blackhole only)
+    RXQ1_PKT_DROP,    // Link status - RX queue 1 packet drop count (Blackhole only)
+    RXQ2_PKT_DROP,    // Link status - RX queue 2 packet drop count (Blackhole only)
+    LINK_UP,          // Link status - Link up status
+    FABRIC_TELEMETRY,
+    ROUTING_TABLE,
+    ROUTER_STATE,
+    ROUTER_COMMAND,
+    ETH_FW_MAILBOX,
+    TENSIX_FABRIC_CONNECTIONS,
+    FABRIC_CONNECTION_LOCK,
+    ETH_PTP_TRACE,  // Runtime FW entry/exit PTP stamps (Blackhole only)
+    COUNT           // Keep this last so it always indicates number of enum options
+};
+
 enum class HalDramMemAddrType : uint8_t {
     BARRIER = 0,
     PROFILER = 1,
@@ -414,6 +457,7 @@ private:
     uint32_t neo_tile_counters_buffer_capacity_offset_{};
 
     bool has_remapper_{};
+    bool noc_att_enabled_{};
     uint32_t remapper_global_control_addr_{};
     uint32_t remapper_client_l_config_base_addr_{};
     uint32_t remapper_client_r_config_base_addr_{};
@@ -516,6 +560,7 @@ public:
     uint32_t get_neo_tile_counters_buffer_capacity_offset() const { return neo_tile_counters_buffer_capacity_offset_; }
 
     bool has_remapper() const { return has_remapper_; }
+    bool noc_att_enabled() const { return noc_att_enabled_; }
     uint32_t get_remapper_global_control_addr() const { return remapper_global_control_addr_; }
     uint32_t get_remapper_client_l_config_base_addr() const { return remapper_client_l_config_base_addr_; }
     uint32_t get_remapper_client_r_config_base_addr() const { return remapper_client_r_config_base_addr_; }
