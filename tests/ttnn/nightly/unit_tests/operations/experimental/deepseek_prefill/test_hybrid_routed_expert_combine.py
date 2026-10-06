@@ -13,7 +13,7 @@ writing it holds unrelated data, so a handoff bug fails that slot however close 
 seq 640, because shorter sequences finish every expert before combine reaches it and never exercise
 the wait. Every case runs the threshold the model ships: on (8, 1) balanced leaves every expert under it
 so the fused pass takes them all, hot-expert lifts one into the unified half, and real-L45c3 and real-L11c9
-(8x4 only) replay measured routing from that layer and chunk of each model.
+(Kimi K2.7, 8x4 only) replay measured routing from that layer and chunk.
 
 The perf test times every program replayed from a trace, as the model runs it. Eager, the host writes each
 chip's program in turn and, on 8x4, issues the overlap slower than the device runs it, so a ring's chips
@@ -23,7 +23,6 @@ TtMoe turns this overlap on by default wherever the op exists, so the model suit
 path; this module is pruned from CI and run by hand.
 """
 
-from pathlib import Path
 from types import SimpleNamespace
 
 import functools
@@ -111,17 +110,11 @@ _CAPTURED_COUNTS = {
     },
 }
 # fmt: on
-# Two real cells per model for (8, 4), from the same code_debug prefill, named by layer and chunk. L45c3 is the
-# median-skew cell of both models (busiest expert 7.6x the mean for GLM, 11.7x for Kimi). L11c9 is Kimi's most
-# skewed of its 60 x 11 cells (expert 205 takes 3458 tokens, 32.4x the mean); the same cell is flat for GLM
-# (busiest expert 523 tokens, 3.3x). Unlike balanced and hot-expert, a real cell keeps the model's own top-8
+# Two real Kimi K2.7 cells for (8, 4), from a code_debug prefill, named by layer and chunk. L45c3 is the
+# median-skew cell (busiest expert 11.7x the mean). L11c9 is the most skewed of its 60 x 11 cells (expert 205
+# takes 3458 tokens, 32.4x the mean). Unlike balanced and hot-expert, a real cell keeps the model's own top-8
 # spread across the dispatch groups, so a token lands a variable 0-8 of its experts in each group and the groups
-# carry unequal totals. GLM 5.3 replays the device's top-8 ids token by token, in origin-chip order; Kimi K2.7
-# only has per-expert counts captured, so its tokens are rebuilt from those.
-_GLM53_REAL_ROUTING = {
-    "real-L45c3": Path(__file__).parent / "routing_captures" / "glm53_code_debug_L45_c3.pt",
-    "real-L11c9": Path(__file__).parent / "routing_captures" / "glm53_code_debug_L11_c9.pt",
-}
+# carry unequal totals. Only per-expert counts are captured, so the tokens are rebuilt from those.
 # fmt: off
 _KIMI_K27_REAL_COUNTS = {
     "real-L45c3": (
@@ -160,8 +153,8 @@ _KIMI_K27_REAL_COUNTS = {
     ),
 }
 # fmt: on
-# The real cells every model runs on (8, 4), named by MoE layer and chunk.
-_REAL_CELLS = ("real-L45c3", "real-L11c9")
+# The real cells Kimi K2.7 runs on (8, 4), named by MoE layer and chunk.
+_REAL_CELLS = tuple(_KIMI_K27_REAL_COUNTS)
 # Timed replays per program; the mean wall time per replay is reported.
 _PERF_ITERS = 5
 
@@ -210,7 +203,8 @@ def _mesh_params():
                 )
             )
         for model_id in _MODELS:
-            for threshold_id in ("balanced", "hot-expert") + (_REAL_CELLS if mesh == _FULL_MESH else ()):
+            real_cells = _REAL_CELLS if mesh == _FULL_MESH and model_id == "kimi-k27" else ()
+            for threshold_id in ("balanced", "hot-expert") + real_cells:
                 params.append(
                     pytest.param(
                         mesh,
@@ -366,12 +360,10 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
     # it produced are kept.
     if threshold_id in _REAL_CELLS:
         assert tuple(mesh_device.shape) == _FULL_MESH, "a real cell is whole-mesh routing"
-        if model_id == "glm-53":
-            indices = torch.load(_GLM53_REAL_ROUTING[threshold_id])["expert_ids"].to(torch.int32)
-        else:
-            indices = _spread_indices_from_counts(
-                _KIMI_K27_REAL_COUNTS[threshold_id], dispatch_group_size, _SEQ_LEN_PER_CHIP, num_experts_per_tok
-            )
+        assert model_id == "kimi-k27", "only Kimi K2.7 has real cells"
+        indices = _spread_indices_from_counts(
+            _KIMI_K27_REAL_COUNTS[threshold_id], dispatch_group_size, _SEQ_LEN_PER_CHIP, num_experts_per_tok
+        )
         assert tuple(indices.shape) == (dispatch_group_size, _SEQ_LEN_PER_CHIP, num_experts_per_tok)
         assert int(indices.max()) < num_routed_experts
     else:
