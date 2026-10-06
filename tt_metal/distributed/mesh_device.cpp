@@ -864,7 +864,8 @@ tt_fabric::FabricNodeId MeshDeviceImpl::get_fabric_node_id(const MeshCoordinate&
 }
 
 MeshCommandQueue& MeshDeviceImpl::mesh_command_queue(std::optional<uint8_t> cq_id) const {
-    auto id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
+    // No implicit (thread-local) queue selection in Metal: a missing cq_id means cq 0.
+    const uint8_t id = cq_id.value_or(0);
 
     // If the mesh device has no local devices, return the dummy mesh command queue.
     if (this->get_view().get_devices().empty()) {
@@ -878,7 +879,7 @@ MeshCommandQueue& MeshDeviceImpl::mesh_command_queue(std::optional<uint8_t> cq_i
 }
 
 MeshCommandQueueBase& MeshDeviceImpl::mesh_command_queue_base(std::optional<uint8_t> cq_id) const {
-    auto id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
+    const uint8_t id = cq_id.value_or(0);
 
     // If the mesh device has no local devices, return the dummy mesh command queue.
     if (this->get_view().get_devices().empty()) {

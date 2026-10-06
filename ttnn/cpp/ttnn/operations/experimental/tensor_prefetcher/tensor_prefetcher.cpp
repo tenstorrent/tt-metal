@@ -4,6 +4,7 @@
 
 #include "tensor_prefetcher.hpp"
 
+#include "ttnn/core.hpp"
 #include "ttnn/prefetcher_pipe.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
@@ -72,10 +73,10 @@ void queue_tensor_prefetcher_request(
     }
     // There is no cq_id parameter to consult: a `cq_id`/`queue_id` keyword is consumed by
     // ttnn's operation wrapper before this function runs, and applied by making that queue
-    // the thread's current one. So the knob left here is whether to consider a queue at all
-    // — with capture_into_trace false we hand metal no queue, and the request is sent
-    // immediately even mid trace-capture.
-    auto* trace_cq = capture_into_trace ? &mesh_device->mesh_command_queue() : nullptr;
+    // the thread's current one (ttnn::core::current_mesh_command_queue resolves it). So the
+    // knob left here is whether to consider a queue at all — with capture_into_trace false we
+    // hand metal no queue, and the request is sent immediately even mid trace-capture.
+    auto* trace_cq = capture_into_trace ? &ttnn::core::current_mesh_command_queue(*mesh_device) : nullptr;
     if (has_pipes) {
         tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
             *mesh_device, ttnn::prefetcher_pipe_refs(prefetcher_pipes), device_subset, inputs, trace_cq);
@@ -107,7 +108,9 @@ void wait_for_cq_on_tensor_prefetcher(
     // value, since a keyword cq_id= is consumed by the wrapper and applied by making that
     // queue current. Resolving nullopt to the thread's current queue is what makes the two
     // forms agree; defaulting to 0 would silently fence queue 0 for the keyword form.
-    tt::tt_metal::experimental::WaitForCqOnTensorPrefetcher(mesh_device->mesh_command_queue(cq_id), device_subset);
+    const std::optional<QueueId> queue_id = cq_id.has_value() ? std::optional<QueueId>(QueueId(*cq_id)) : std::nullopt;
+    tt::tt_metal::experimental::WaitForCqOnTensorPrefetcher(
+        ttnn::core::current_mesh_command_queue(*mesh_device, queue_id), device_subset);
 }
 
 void stop_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <tuple>
 #include <variant>
 
@@ -43,11 +44,13 @@ class GlobalCircularBuffer {
 public:
     explicit GlobalCircularBuffer(GlobalCircularBufferImpl impl);
 
+    // `cq_id` is the command queue used for the config write (cq 0 if not provided).
     GlobalCircularBuffer(
         distributed::MeshDevice& device,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
-        BufferType buffer_type = BufferType::L1);
+        BufferType buffer_type = BufferType::L1,
+        std::optional<uint8_t> cq_id = std::nullopt);
 
     GlobalCircularBuffer(const GlobalCircularBuffer& other);
     GlobalCircularBuffer& operator=(const GlobalCircularBuffer& other);

@@ -17,6 +17,8 @@
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
+#include "ttnn/core.hpp"
+
 namespace ttnn::global_circular_buffer {
 
 GlobalCircularBuffer create_global_circular_buffer(
@@ -25,7 +27,12 @@ GlobalCircularBuffer create_global_circular_buffer(
     uint32_t size,
     BufferType buffer_type) {
     auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.create_global_circular_buffer");
-    return tt::tt_metal::experimental::GlobalCircularBuffer(*device, sender_receiver_core_mapping, size, buffer_type);
+    return tt::tt_metal::experimental::GlobalCircularBuffer(
+        *device,
+        sender_receiver_core_mapping,
+        size,
+        buffer_type,
+        ttnn::core::get_current_command_queue_id_for_thread().get());
 }
 
 GlobalCircularBuffer create_global_circular_buffer_for_tensor_prefetcher(
@@ -35,7 +42,12 @@ GlobalCircularBuffer create_global_circular_buffer_for_tensor_prefetcher(
     BufferType buffer_type,
     bool support_multi_receiver_shards) {
     return tt::tt_metal::experimental::CreateGlobalCircularBufferForTensorPrefetcher(
-        *mesh_device, bank_to_receivers, size, buffer_type, support_multi_receiver_shards);
+        *mesh_device,
+        bank_to_receivers,
+        size,
+        buffer_type,
+        support_multi_receiver_shards,
+        ttnn::core::get_current_command_queue_id_for_thread().get());
 }
 
 namespace {
@@ -527,8 +539,8 @@ static GlobalCircularBuffer build_matmul_1d_gcb_krow_major(
 
     validate_gcb_size_cap(size);
 
-    return tt::tt_metal::experimental::CreateGlobalCircularBufferForTensorPrefetcher(
-        *mesh_device, bank_to_receivers, size, buffer_type, /*support_multi_receiver_shards=*/true);
+    return create_global_circular_buffer_for_tensor_prefetcher(
+        mesh_device, bank_to_receivers, size, buffer_type, /*support_multi_receiver_shards=*/true);
 }
 
 // Builds the GCB for a receiver-contiguous (NdShardSpec) weight: num_shards == ring_size, each shard
@@ -571,8 +583,8 @@ static GlobalCircularBuffer build_matmul_1d_gcb_recv_contig(
 
     validate_gcb_size_cap(size);
 
-    return tt::tt_metal::experimental::CreateGlobalCircularBufferForTensorPrefetcher(
-        *mesh_device, bank_to_receivers, size, buffer_type, support_multi_receiver_shards);
+    return create_global_circular_buffer_for_tensor_prefetcher(
+        mesh_device, bank_to_receivers, size, buffer_type, support_multi_receiver_shards);
 }
 
 GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(

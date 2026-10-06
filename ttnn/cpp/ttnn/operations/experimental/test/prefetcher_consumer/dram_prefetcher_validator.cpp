@@ -4,6 +4,7 @@
 
 #include "dram_prefetcher_validator.hpp"
 
+#include "ttnn/core.hpp"
 #include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
 
@@ -470,8 +471,9 @@ void test_tensor_prefetcher_pipe_validator(
 
     tt::tt_metal::distributed::MeshWorkload workload;
     workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
-    tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
+    auto& mesh_cq = ttnn::core::current_mesh_command_queue(*mesh_device);
+    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_cq, workload, /*blocking=*/false);
+    tt::tt_metal::distributed::Finish(mesh_cq);
 }
 
 }  // namespace ttnn::operations::experimental::test

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/services/h2d_socket_service.hpp"
+#include "ttnn/core.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -734,7 +735,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
         ++completion_index;
     }
 
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload_, /*blocking=*/false);
+    EnqueueMeshWorkload(ttnn::core::current_mesh_command_queue(*mesh_device_), *workload_, /*blocking=*/false);
     start_host_push_workers();
 }
 
@@ -816,7 +817,7 @@ H2DStreamService::~H2DStreamService() {
         signal_termination();
 
         if (mesh_device_) {
-            distributed::Finish(mesh_device_->mesh_command_queue());
+            distributed::Finish(ttnn::core::current_mesh_command_queue(*mesh_device_));
         }
 
         // Wait for each kernel to actually return (RUN_MSG_DONE), not just for

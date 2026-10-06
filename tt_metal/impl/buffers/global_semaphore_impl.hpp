@@ -23,11 +23,13 @@ class MeshDevice;
 // This can be updated in the future to be its own container with optimized dispatch functions
 class GlobalSemaphoreImpl {
 public:
+    // `cq_id` is the queue for the initial-value write with fast dispatch (cq 0 if not provided).
     GlobalSemaphoreImpl(
         distributed::MeshDevice& device,
         CoreRangeSet cores,
         std::optional<uint32_t> initial_value,
-        BufferType buffer_type);
+        BufferType buffer_type,
+        std::optional<uint8_t> cq_id = std::nullopt);
 
     // Dedicated constructor for creating a global semaphore **without allocation**.
     // The instantiation of GlobalSemphore will be emplaced onto the address specified.
@@ -52,11 +54,16 @@ public:
 
     DeviceAddr address() const;
 
-    void reset_semaphore_value(uint32_t reset_value) const;
+    // With fast dispatch, resets via command queue `cq_id` (cq 0 if not provided). The queue is not looked up on
+    // slow dispatch / simulator.
+    void reset_semaphore_value(uint32_t reset_value, std::optional<uint8_t> cq_id = std::nullopt) const;
 
 private:
     void setup_buffer(
-        std::optional<uint32_t> initial_value, BufferType buffer_type, std::optional<uint64_t> address);
+        std::optional<uint32_t> initial_value,
+        BufferType buffer_type,
+        std::optional<uint64_t> address,
+        std::optional<uint8_t> cq_id = std::nullopt);
 
     std::shared_ptr<distributed::MeshBuffer> buffer_;
     distributed::MeshDevice* device_;

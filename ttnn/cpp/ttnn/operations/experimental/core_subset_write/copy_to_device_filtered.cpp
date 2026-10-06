@@ -5,6 +5,7 @@
 #include "copy_to_device_filtered.hpp"
 
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/core.hpp"
 #include "ttnn/graph/graph_serialization.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -24,7 +25,7 @@ void copy_to_device_filtered(
     std::optional<QueueId> cq_id) {
     tt::tt_metal::GraphTracker::instance().track_function_start(
         "ttnn::experimental::core_subset_write::copy_to_device_filtered", host_tensor, device_tensor, cq_id);
-    auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
+    auto& cq = ttnn::core::current_mesh_command_queue(*device_tensor.device(), cq_id);
     TT_FATAL(
         tt::tt_metal::is_uniform_write(host_tensor.host_tensor(), *device_tensor.device()),
         "copy_to_device_filtered does not support non-uniform host->device writes.");

@@ -13,20 +13,18 @@
 
 namespace ttnn::operations::trace {
 
+// A missing cq_id resolves to the thread's current command queue (ttnn::core::current_mesh_command_queue).
 MeshTraceId begin_trace_capture(MeshDevice* device, std::optional<QueueId> cq_id) {
     ZoneScoped;
-    QueueId cq_id_value = cq_id.value_or(get_current_command_queue_id_for_thread());
-    return device->begin_mesh_trace(device->mesh_command_queue(cq_id_value.get()));
+    return device->begin_mesh_trace(ttnn::core::current_mesh_command_queue(*device, cq_id));
 }
 void end_trace_capture(MeshDevice* device, MeshTraceId trace_id, std::optional<QueueId> cq_id) {
     ZoneScoped;
-    QueueId cq_id_value = cq_id.value_or(get_current_command_queue_id_for_thread());
-    device->end_mesh_trace(device->mesh_command_queue(cq_id_value.get()), trace_id);
+    device->end_mesh_trace(ttnn::core::current_mesh_command_queue(*device, cq_id), trace_id);
 }
 void execute_trace(MeshDevice* device, MeshTraceId trace_id, std::optional<QueueId> cq_id, bool blocking) {
     ZoneScoped;
-    QueueId cq_id_value = cq_id.value_or(get_current_command_queue_id_for_thread());
-    device->replay_mesh_trace(device->mesh_command_queue(cq_id_value.get()), trace_id, blocking);
+    device->replay_mesh_trace(ttnn::core::current_mesh_command_queue(*device, cq_id), trace_id, blocking);
 }
 void release_trace(MeshDevice* device, MeshTraceId trace_id) {
     ZoneScoped;
