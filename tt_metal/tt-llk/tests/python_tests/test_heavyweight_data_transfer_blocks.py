@@ -656,3 +656,34 @@ def test_a_derived_integer_dest_is_checked_like_an_explicit_one(
 )
 def test_the_legal_integer_dest_pairings_still_resolve(l1_format, dest_acc, expected):
     assert QUASAR.dest_format_for(l1_format, dest_acc) == expected
+
+
+# The unpack-to-Dest path has its own legality table, and it is narrower than
+# the src one: the unpacker does not widen, so no narrow L1 format has a
+# 32-bit Dest target.
+@pytest.mark.parametrize(
+    "l1_format",
+    [DataFormat.Float16_b, DataFormat.Float16, DataFormat.MxFp4, DataFormat.Int8],
+    ids=lambda f: f.name,
+)
+def test_the_unpacker_does_not_widen_into_a_32_bit_dest(l1_format):
+    l1 = QUASAR.pack_to_l1(torch.zeros(TILE), l1_format, **ONE_TILE_GEOMETRY)
+    with pytest.raises(ValueError):
+        QUASAR.l1_to_dest(l1, l1_format, dest_acc=True, **ONE_TILE_GEOMETRY)
+
+
+@pytest.mark.parametrize("fraction", [0.75, 0.6], ids=["0.75ulp", "0.6ulp"])
+def test_unpack_to_dest_truncates_rather_than_rounding(fraction):
+    """There is no rounding stage in the unpack datapath -- unlike the FPU's
+    write to Dest -- so a value above half a bf16 ULP still truncates down."""
+    value = 1.0 + fraction * 2.0**-7
+    l1 = QUASAR.pack_to_l1(
+        torch.full((TILE,), value, dtype=torch.float32),
+        DataFormat.Float32,
+        **ONE_TILE_GEOMETRY,
+    )
+    got = QUASAR.l1_to_dest(
+        l1, DataFormat.Float32, DataFormat.Float16_b, **ONE_TILE_GEOMETRY
+    ).float()[0]
+    assert got.item() == 1.0
+    assert torch.tensor([value]).to(torch.bfloat16).float()[0].item() != 1.0
