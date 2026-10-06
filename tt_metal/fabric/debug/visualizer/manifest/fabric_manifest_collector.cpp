@@ -231,6 +231,20 @@ manifest::NocCmdBuf noc_cmd_buf(size_t cmd_buf) {
     return *value;
 }
 
+// The builder's NoC id, which every RISC must receive as `name`.
+tt::tt_metal::NOC emitted_noc(
+    const std::vector<NamedArgs>& named_ct_args_per_risc, const std::string& name, size_t noc) {
+    check_named_arg(named_ct_args_per_risc, name, static_cast<uint32_t>(noc));
+    return static_cast<tt::tt_metal::NOC>(noc);
+}
+
+// The builder's command buffer id, which every RISC must receive as `name`.
+manifest::NocCmdBuf emitted_cmd_buf(
+    const std::vector<NamedArgs>& named_ct_args_per_risc, const std::string& name, size_t cmd_buf) {
+    check_named_arg(named_ct_args_per_risc, name, static_cast<uint32_t>(cmd_buf));
+    return noc_cmd_buf(cmd_buf);
+}
+
 // A sender channel's indices. The kernel indexes its per-channel tables by the compact index, over this router's
 // own counts, except the free-slots stream table, which it indexes by the fabric position, over the fabric's
 // maximum counts (StreamAssignment).
@@ -241,43 +255,61 @@ struct SenderChannelIndex {
     uint32_t fabric_position;
 };
 
-// What collecting a router's sender channels reads beyond its inputs.
-struct SenderContext {
+// A receiver channel's indices. The kernel indexes every receiver table by the compact index.
+struct ReceiverChannelIndex {
+    uint32_t vc;
+    uint32_t channel;
+    uint32_t compact;
+};
+
+// What collecting a router's channels reads beyond its inputs.
+struct ChannelContext {
     const ManifestRouterInputs& inputs;
     const FabricStaticSizedChannelsAllocator& allocator;
     const builder::RouterProducerSlots producer_slots;
     const bool is_2d_fabric;
+    const bool speedy_vc0;
     // The stream register ids the builder assigned, by compile-time argument name.
     const NamedArgs assigned_streams;
 };
 
 // The stream register the builder assigned under `name`, which every RISC must receive.
-manifest::StreamRef assigned_stream(const SenderContext& ctx, const std::string& name) {
+manifest::StreamRef assigned_stream(const ChannelContext& ctx, const std::string& name) {
     const uint32_t stream_id = get_named_arg(ctx.assigned_streams, name);
     check_named_arg(ctx.inputs.named_ct_args_per_risc, name, stream_id);
     return {.stream_id = stream_id, .schema = manifest::schema_name_of<uint32_t>()};
 }
 
 // A serviced channel polls this register, so it must be allocated.
-void require_allocated(const SenderChannelIndex& index, const char* role, const manifest::StreamRef& stream) {
+void require_allocated(
+    const char* kind, uint32_t vc, uint32_t channel, const char* role, const manifest::StreamRef& stream) {
     TT_FATAL(
         stream.stream_id != k_unused_stream_id,
-        "Fabric manifest: VC{} sender channel {} is serviced, but its {} stream register is not allocated",
-        index.vc,
-        index.channel,
+        "Fabric manifest: VC{} {} channel {} is serviced, but its {} stream register is not allocated",
+        vc,
+        kind,
+        channel,
         role);
 }
 
-// The ERISCs whose IS_SENDER_CHANNEL_<c>_SERVICED is set. A VC1 channel is serviced by none of them unless the kernel
-// defines FABRIC_2D_VC1_SERVICED, since it runs VC1's channel steps only then.
-std::vector<uint32_t> collect_sender_serviced_by(const ManifestRouterInputs& inputs, const SenderChannelIndex& index) {
-    if (index.vc == 1 && !inputs.kernel_defines.contains("FABRIC_2D_VC1_SERVICED")) {
+// The kernel runs VC1's channel steps only under FABRIC_2D_VC1_SERVICED, and VC2's only under FABRIC_2D_VC2_SERVICED.
+bool kernel_runs_vc(const ManifestRouterInputs& inputs, uint32_t vc) {
+    switch (vc) {
+        case 1: return inputs.kernel_defines.contains("FABRIC_2D_VC1_SERVICED");
+        case 2: return inputs.kernel_defines.contains("FABRIC_2D_VC2_SERVICED");
+        default: return true;
+    }
+}
+
+// The ERISCs whose `serviced_name` argument is set, or none when the kernel does not run the VC's steps.
+std::vector<uint32_t> collect_serviced_by(
+    const ManifestRouterInputs& inputs, uint32_t vc, const std::string& serviced_name) {
+    if (!kernel_runs_vc(inputs, vc)) {
         return {};
     }
-    const auto name = fmt::format("IS_SENDER_CHANNEL_{}_SERVICED", index.compact);
     std::vector<uint32_t> serviced_by;
     for (uint32_t risc_id = 0; risc_id < inputs.named_ct_args_per_risc.size(); ++risc_id) {
-        if (get_named_arg(inputs.named_ct_args_per_risc[risc_id], name) != 0) {
+        if (get_named_arg(inputs.named_ct_args_per_risc[risc_id], serviced_name) != 0) {
             serviced_by.push_back(risc_id);
         }
     }
@@ -289,7 +321,7 @@ std::vector<uint32_t> collect_sender_serviced_by(const ManifestRouterInputs& inp
 // is. A 1D router is connected to one sibling, in both directions, so the sibling feeding it is the one it forwards
 // to.
 std::optional<manifest::SenderChannelProducer> collect_sender_producer(
-    const SenderContext& ctx, const SenderChannelIndex& index) {
+    const ChannelContext& ctx, const SenderChannelIndex& index) {
     const auto& erisc_builder = ctx.inputs.erisc_builder;
     const bool static_connection = erisc_builder.sender_channel_connection_liveness_check_disable_array[index.compact];
     check_named_arg(
@@ -343,7 +375,7 @@ std::optional<manifest::SenderChannelProducer> collect_sender_producer(
 // Counter-backed credits are the channel's element of the to_sender counter arrays. Only VC0 with bubble flow control
 // gets first-level acks.
 manifest::SenderChannelCredits collect_sender_credits(
-    const SenderContext& ctx, const SenderChannelIndex& index, bool vc0_bubble_flow_control) {
+    const ChannelContext& ctx, const SenderChannelIndex& index, bool vc0_bubble_flow_control) {
     const bool counters = ctx.inputs.stream_assignment.plan().vc_uses_counters(index.vc);
     const auto credit = [&](manifest::CreditCounterArray array, const char* stream_name) -> manifest::CreditRef {
         if (counters) {
@@ -362,7 +394,7 @@ manifest::SenderChannelCredits collect_sender_credits(
 }
 
 manifest::SenderChannel collect_sender_channel(
-    const SenderContext& ctx, const SenderChannelIndex& index, bool vc0_bubble_flow_control) {
+    const ChannelContext& ctx, const SenderChannelIndex& index, bool vc0_bubble_flow_control) {
     const auto& inputs = ctx.inputs;
     const auto& erisc_builder = inputs.erisc_builder;
     const auto& config = erisc_builder.config;
@@ -370,19 +402,16 @@ manifest::SenderChannel collect_sender_channel(
     const uint32_t c = index.compact;
 
     manifest::SenderChannel sender;
-    sender.serviced_by = collect_sender_serviced_by(inputs, index);
+    sender.serviced_by = collect_serviced_by(inputs, index.vc, fmt::format("IS_SENDER_CHANNEL_{}_SERVICED", c));
     sender.producer = collect_sender_producer(ctx, index);
 
     sender.is_injection_channel = erisc_builder.sender_channel_is_traffic_injection_channel_array.at(c);
     check_named_arg(args, fmt::format("SENDER_CH_{}_IS_INJECTION", c), sender.is_injection_channel ? 1 : 0);
 
-    const auto ack_noc = static_cast<uint32_t>(config.sender_channel_ack_noc_ids[c]);
-    const auto ack_cmd_buf = config.sender_channel_ack_cmd_buf_ids[c];
-    check_named_arg(args, fmt::format("SENDER_CH_{}_ACK_NOC_ID", c), ack_noc);
-    check_named_arg(args, fmt::format("SENDER_CH_{}_ACK_CMD_BUF_ID", c), static_cast<uint32_t>(ack_cmd_buf));
     sender.producer_credit_return = {
-        .noc = static_cast<tt::tt_metal::NOC>(ack_noc),
-        .cmd_buf = noc_cmd_buf(ack_cmd_buf),
+        .noc = emitted_noc(args, fmt::format("SENDER_CH_{}_ACK_NOC_ID", c), config.sender_channel_ack_noc_ids[c]),
+        .cmd_buf = emitted_cmd_buf(
+            args, fmt::format("SENDER_CH_{}_ACK_CMD_BUF_ID", c), config.sender_channel_ack_cmd_buf_ids[c]),
     };
 
     sender.ring_buffer = ring_buffer_region(
@@ -412,22 +441,105 @@ manifest::SenderChannel collect_sender_channel(
 
     // A serviced channel polls its free-slots register and, when its credits are on registers, its credit registers.
     if (!sender.serviced_by.empty()) {
-        require_allocated(index, "free_slots", sender.free_slots);
+        require_allocated("sender", index.vc, index.channel, "free_slots", sender.free_slots);
         if (const auto* stream = std::get_if<manifest::StreamRef>(&sender.credits.completed)) {
-            require_allocated(index, "completed", *stream);
+            require_allocated("sender", index.vc, index.channel, "completed", *stream);
         }
         if (sender.credits.acked.has_value()) {
             if (const auto* stream = std::get_if<manifest::StreamRef>(&*sender.credits.acked)) {
-                require_allocated(index, "acked", *stream);
+                require_allocated("sender", index.vc, index.channel, "acked", *stream);
             }
         }
     }
     return sender;
 }
 
-// Every sender channel in the router's shape, indexed [vc][channel].
-std::vector<std::vector<manifest::SenderChannel>> collect_senders(
-    const ManifestRouterInputs& inputs, const manifest::RouterShape& shape) {
+// The kernel runs VC0's receiver step on channel 0 and VC1's on channel 1. VC2's runs on channel 2 when VC1 has
+// senders and on channel 1 otherwise (VC2_RECEIVER_CHANNEL).
+uint32_t kernel_receiver_channel(const ManifestRouterInputs& inputs, uint32_t vc) {
+    if (vc < 2) {
+        return vc;
+    }
+    return inputs.vc_shape.sender_counts[1] > 0 ? 2 : 1;
+}
+
+// The VC whose downstream edges the kernel gives the receiver's step: its own, except that receiver 0 gets VC1's
+// under FABRIC_2D_VC0_CROSSOVER_TO_VC1. The speedy steps, VC0's in speedy mode and VC2's always, are given none.
+std::optional<uint32_t> collect_forwards_on(const ChannelContext& ctx, uint32_t vc, bool serviced) {
+    if (!serviced || vc == 2 || (vc == 0 && ctx.speedy_vc0)) {
+        return std::nullopt;
+    }
+    if (vc == 0 && ctx.inputs.kernel_defines.contains("FABRIC_2D_VC0_CROSSOVER_TO_VC1")) {
+        return 1;
+    }
+    return vc;
+}
+
+manifest::ReceiverChannel collect_receiver_channel(const ChannelContext& ctx, const ReceiverChannelIndex& index) {
+    const auto& inputs = ctx.inputs;
+    const auto& config = inputs.erisc_builder.config;
+    const auto& args = inputs.named_ct_args_per_risc;
+    const uint32_t c = index.compact;
+
+    manifest::ReceiverChannel receiver;
+    receiver.serviced_by = collect_serviced_by(inputs, index.vc, fmt::format("IS_RECEIVER_CHANNEL_{}_SERVICED", c));
+    const bool serviced = !receiver.serviced_by.empty();
+    TT_FATAL(
+        !serviced || c == kernel_receiver_channel(inputs, index.vc),
+        "Fabric manifest: VC{} receiver channel {} is compact channel {}, but the kernel runs VC{}'s receiver on "
+        "channel {}",
+        index.vc,
+        index.channel,
+        c,
+        index.vc,
+        kernel_receiver_channel(inputs, index.vc));
+    receiver.forwards_on = collect_forwards_on(ctx, index.vc, serviced);
+
+    receiver.forwarding_disabled = emitted_flag(args, fmt::format("DISABLE_RX_CH{}_FORWARDING", c));
+    // 1D kernels get no ingress arguments and treat every receiver as not an ingress.
+    receiver.intermesh_ingress =
+        ctx.is_2d_fabric && emitted_flag(args, fmt::format("IS_RECEIVER_CHANNEL_{}_INTERMESH_INGRESS", c));
+
+    receiver.forward_noc = {
+        .noc = emitted_noc(args, fmt::format("RX_CH_{}_FWD_NOC_ID", c), config.receiver_channel_forwarding_noc_ids[c]),
+        .data_cmd_buf = emitted_cmd_buf(
+            args,
+            fmt::format("RX_CH_{}_FWD_DATA_CMD_BUF_ID", c),
+            config.receiver_channel_forwarding_data_cmd_buf_ids[c]),
+        .sync_cmd_buf = emitted_cmd_buf(
+            args,
+            fmt::format("RX_CH_{}_FWD_SYNC_CMD_BUF_ID", c),
+            config.receiver_channel_forwarding_sync_cmd_buf_ids[c]),
+    };
+    receiver.local_write_noc = {
+        .noc = emitted_noc(
+            args, fmt::format("RX_CH_{}_LOCAL_WRITE_NOC_ID", c), config.receiver_channel_local_write_noc_ids[c]),
+        .cmd_buf = emitted_cmd_buf(
+            args,
+            fmt::format("RX_CH_{}_LOCAL_WRITE_CMD_BUF_ID", c),
+            config.receiver_channel_local_write_cmd_buf_ids[c]),
+    };
+
+    receiver.ring_buffer = ring_buffer_region(
+        inputs,
+        ctx.allocator.get_receiver_channel_base_address(index.vc, index.channel),
+        ctx.allocator.get_receiver_channel_number_of_slots(index.vc, index.channel));
+    receiver.pkts_sent = assigned_stream(ctx, fmt::format("TO_RECEIVER_{}_PKTS_SENT_ID", c));
+    if (index.vc == 2) {
+        receiver.free_slots = assigned_stream(ctx, "VC2_RECEIVER_FREE_SLOTS_STREAM_ID");
+    }
+
+    if (serviced) {
+        require_allocated("receiver", index.vc, index.channel, "pkts_sent", receiver.pkts_sent);
+        if (receiver.free_slots.has_value()) {
+            require_allocated("receiver", index.vc, index.channel, "free_slots", *receiver.free_slots);
+        }
+    }
+    return receiver;
+}
+
+// Every sender and receiver channel in the router's shape, each indexed [vc][channel].
+manifest::Channels collect_channels(const ManifestRouterInputs& inputs, const manifest::RouterShape& shape) {
     const auto& config = inputs.erisc_builder.config;
     const auto* allocator = dynamic_cast<const FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
     TT_FATAL(allocator != nullptr, "Fabric manifest: the router's channel allocator is not statically sized");
@@ -435,16 +547,19 @@ std::vector<std::vector<manifest::SenderChannel>> collect_senders(
         inputs.named_ct_args_per_risc, "CHANNEL_BUFFER_SIZE", static_cast<uint32_t>(config.channel_buffer_size_bytes));
 
     const auto assigned_streams = inputs.stream_assignment.named_args();
-    const SenderContext ctx{
+    const ChannelContext ctx{
         .inputs = inputs,
         .allocator = *allocator,
         .producer_slots = builder::RouterProducerSlots(
             builder::routing_direction_to_eth_direction(inputs.location.direction), inputs.vc_shape.sender_counts),
         .is_2d_fabric = emitted_flag(inputs.named_ct_args_per_risc, "IS_2D_FABRIC"),
+        .speedy_vc0 = emitted_flag(inputs.named_ct_args_per_risc, "ENABLE_SPEEDY_VC0"),
         .assigned_streams = NamedArgs(assigned_streams.begin(), assigned_streams.end()),
     };
 
-    std::vector<std::vector<manifest::SenderChannel>> senders(builder_config::MAX_NUM_VCS);
+    manifest::Channels channels;
+    channels.senders.resize(builder_config::MAX_NUM_VCS);
+    channels.receivers.resize(builder_config::MAX_NUM_VCS);
     for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         for (uint32_t channel = 0; channel < inputs.vc_shape.sender_counts[vc]; ++channel) {
             const SenderChannelIndex index{
@@ -453,10 +568,18 @@ std::vector<std::vector<manifest::SenderChannel>> collect_senders(
                 .compact = inputs.vc_shape.flat_sender_id(vc, channel),
                 .fabric_position = inputs.stream_assignment.sender_flat_base(vc) + channel,
             };
-            senders[vc].push_back(collect_sender_channel(ctx, index, shape.vc0_bubble_flow_control));
+            channels.senders[vc].push_back(collect_sender_channel(ctx, index, shape.vc0_bubble_flow_control));
+        }
+        for (uint32_t channel = 0; channel < inputs.vc_shape.receiver_counts[vc]; ++channel) {
+            const ReceiverChannelIndex index{
+                .vc = vc,
+                .channel = channel,
+                .compact = inputs.vc_shape.flat_receiver_id(vc, channel),
+            };
+            channels.receivers[vc].push_back(collect_receiver_channel(ctx, index));
         }
     }
-    return senders;
+    return channels;
 }
 
 }  // namespace
@@ -470,13 +593,13 @@ manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs) {
     check_credit_transport_args(inputs);
 
     auto shape = collect_shape(inputs);
-    auto senders = collect_senders(inputs, shape);
+    auto channels = collect_channels(inputs, shape);
     return {
         .identity = collect_identity(inputs.location),
         .link = collect_link(inputs),
         .shape = shape,
         .credit_counters = collect_credit_counters(inputs),
-        .channels = {.senders = std::move(senders)},
+        .channels = std::move(channels),
     };
 }
 
