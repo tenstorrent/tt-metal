@@ -113,7 +113,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 #include "experimental/llk_pack_block.h"
 #endif
 #include "params.h"
@@ -151,13 +151,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // sets mop_cfg[0] = num_tiles at runtime, so mop_config only needs
     // the tile shape (face_r_dim, num_faces).
     _llk_pack_block_contiguous_mop_config_<>(params.TEST_FACE_R_DIM, params.num_faces);
+#elif defined(ARCH_WORMHOLE)
+    // Wormhole: full 32x32 tiles only, packed densely.
+    _llk_pack_block_contiguous_mop_config_<>(formats.pack_dst);
 #endif
 
     for (int block = 0; block < num_blocks; block++)
     {
         _llk_packer_wait_for_math_done_();
 
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
         // Single call packs all tiles from sparse DEST to dense L1.
         // num_tiles is passed at runtime — no prior mop_cfg patching needed.
         _llk_pack_block_contiguous_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]), num_tiles_in_block);

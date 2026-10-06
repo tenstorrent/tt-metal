@@ -160,6 +160,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
+#ifdef ARCH_WORMHOLE
+#include "experimental/llk_pack_block.h"
+#endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -177,6 +180,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT);
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+#ifdef ARCH_WORMHOLE
+        // One pack call per DEST block: the per-tile loop runs in the MOP, so the pack RISC-V cannot be the bottleneck.
+        _llk_pack_block_contiguous_mop_config_<false>(formats.pack_dst, PERF_ADDRESS(PERF_OUTPUT, 1) - PERF_ADDRESS(PERF_OUTPUT, 0));
+#endif
         PROFILER_SYNC();
     }
     {
@@ -193,10 +200,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
 
+#ifdef ARCH_WORMHOLE
+                    _llk_pack_block_contiguous_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, PERF_ADDRESS(PERF_OUTPUT, block_start), block_tiles);
+#else
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
                     {
                         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }
+#endif
                 }
             }
         }
@@ -209,10 +220,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
 
                     _llk_packer_wait_for_math_done_();
+#ifdef ARCH_WORMHOLE
+                    _llk_pack_block_contiguous_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, PERF_ADDRESS(PERF_OUTPUT, block_start), block_tiles);
+#else
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
                     {
                         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }
+#endif
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
             }

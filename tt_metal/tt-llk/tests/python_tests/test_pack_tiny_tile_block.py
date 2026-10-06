@@ -13,7 +13,7 @@ sparse-to-dense packing into a contiguous L1 block.
 """
 
 import torch
-from conftest import skip_for_wormhole
+from conftest import skip_for_wormhole, wormhole_only
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     DestAccumulation,
@@ -154,6 +154,34 @@ def test_pack_tiny_tile_block(
 ):
     configuration, golden_tensor, torch_format = _make_config(
         tile_dims, num_tiles, formats, dest_acc
+    )
+
+    res_from_L1 = configuration.run().result
+
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), f"Length mismatch: got {len(res_from_L1)}, expected {len(golden_tensor)}"
+
+    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+
+
+@wormhole_only
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+            DataFormat.Bfp8_b,
+        ]
+    ),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    num_tiles=[1, 2, 3, 4, 8, 16],
+)
+def test_pack_block_wormhole(formats, dest_acc, num_tiles):
+    """Wormhole _llk_pack_block_contiguous_: 32x32 tiles, one call per DEST block."""
+    configuration, golden_tensor, torch_format = _make_config(
+        (32, 32), num_tiles, formats, dest_acc
     )
 
     res_from_L1 = configuration.run().result
