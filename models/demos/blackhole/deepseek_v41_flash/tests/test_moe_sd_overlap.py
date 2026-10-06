@@ -58,10 +58,18 @@ def test_moe_overlap(mesh_device):
     )
     torch.manual_seed(0)
     x = torch.randn(ROWS, N, D).to(torch.bfloat16)
-    if os.environ.get("DSV41_UM_REAL"):
-        assert N == 512
-        d_ = torch.load(f"/mnt/tt-data/ssinghal/dsv4-prefill-s128/layer_{layer}.pt", mmap=True)["prefill"]["ffn_in"]
-        x = d_.float().reshape(ROWS, N, D).to(torch.bfloat16)
+    if os.environ.get(
+        "DSV41_UM_REAL"
+    ):  # real post-norm FFN inputs of the CPU dumps: N=512 (S=128 x 16 users) or N=4096 (one 4096-token user, rolled per row)
+        if N == 512:
+            d_ = torch.load(f"/mnt/tt-data/ssinghal/dsv4-prefill-s128/layer_{layer}.pt", mmap=True)["prefill"]["ffn_in"]
+            x = d_.float().reshape(ROWS, N, D).to(torch.bfloat16)
+        else:
+            assert N == 4096
+            d_ = torch.load(f"/mnt/tt-data/ssinghal/dsv4-prefill-s4096b1f/layer_{layer}.pt", mmap=True)["prefill"][
+                "ffn_in"
+            ]
+            x = torch.stack([d_.float().reshape(N, D).roll(r * 1024, 0) for r in range(ROWS)]).to(torch.bfloat16)
     n_own = N // COLS
     xo = x.reshape(ROWS, N // 256, COLS, 32, D).permute(0, 2, 1, 3, 4).reshape(ROWS, COLS, n_own, D)
     xod = ttnn.from_torch(

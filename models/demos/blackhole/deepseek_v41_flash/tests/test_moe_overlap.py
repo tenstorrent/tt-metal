@@ -59,10 +59,18 @@ def test_moe_overlap(mesh_device):
     )
     torch.manual_seed(0)
     x = torch.randn(ROWS, N, D).to(torch.bfloat16)
-    if os.environ.get("DSV41_UM_REAL"):
-        assert N == 512
-        d_ = torch.load(f"/mnt/tt-data/ssinghal/dsv4-prefill-s128/layer_{layer}.pt", mmap=True)["prefill"]["ffn_in"]
-        x = d_.float().reshape(ROWS, N, D).to(torch.bfloat16)
+    if os.environ.get(
+        "DSV41_UM_REAL"
+    ):  # real post-norm FFN inputs of the CPU dumps: N=512 (S=128 x 16 users) or N=4096 (one 4096-token user, rolled per row)
+        if N == 512:
+            d_ = torch.load(f"/mnt/tt-data/ssinghal/dsv4-prefill-s128/layer_{layer}.pt", mmap=True)["prefill"]["ffn_in"]
+            x = d_.float().reshape(ROWS, N, D).to(torch.bfloat16)
+        else:
+            assert N == 4096
+            d_ = torch.load(f"/mnt/tt-data/ssinghal/dsv4-prefill-s4096b1f/layer_{layer}.pt", mmap=True)["prefill"][
+                "ffn_in"
+            ]
+            x = torch.stack([d_.float().reshape(N, D).roll(r * 1024, 0) for r in range(ROWS)]).to(torch.bfloat16)
     n_own = N // COLS
     xo = x.reshape(ROWS, N // 256, COLS, 32, D).permute(0, 2, 1, 3, 4).reshape(ROWS, COLS, n_own, D)
     xod = ttnn.from_torch(
@@ -186,6 +194,27 @@ def test_moe_overlap(mesh_device):
             except Exception as e:  # noqa
                 print(f"MO workers={wk} failed: {str(e)[:120]}", flush=True)
         shd.workers = 2
+    if os.environ.get("DSV41_MO_TOPO", "1") == "1":
+        # dispatch / combine topology over the 4 rows: Linear (default) vs Ring (wrap link); outputs compared bit-for-bit
+        base_part = um.forward(x_rm, sc_all, ix_all)
+        ttnn.synchronize_device(md)
+        for tp_name, tp in (("ring", ttnn.Topology.Ring), ("linear", ttnn.Topology.Linear)):
+            shd.topology = tp
+
+            def fk():
+                ttnn.deallocate(um.forward(x_rm, sc_all, ix_all))
+
+            try:
+                got = um.forward(x_rm, sc_all, ix_all)
+                ttnn.synchronize_device(md)
+                same = all(torch.equal(dev(base_part, r, c), dev(got, r, c)) for r in (0, 3) for c in (0, 5))
+                print(f"MO topology {tp_name}: output equal to default {same}", flush=True)
+                print(
+                    f"MO time N={N} dispatch+combine topology={tp_name} full MoE: {chain_ms(md, fk):.3f} ms", flush=True
+                )
+            except Exception as e:  # noqa
+                print(f"MO topology {tp_name} failed: {str(e)[:200]}", flush=True)
+        shd.topology = ttnn.Topology.Linear
     for m in modes:
         T(f"reduce mode {m}", lambda m=m: ttnn.deallocate(reduce_scatter_tokens(part, ccl, mode=m, free=False)))
     T(
