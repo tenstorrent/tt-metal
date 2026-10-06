@@ -74,16 +74,12 @@ _MEASURED_FAILURES = {
     # the FP32 gate chain (tt_metal_tracker-g1b.4.13) and the suffix-sum k_dec_t with the FP32 q/k/v convolution
     # carry (tt_metal_tracker-g1b.4.18), measured on device 2026-10-06. Cases fixed by them (synthetic-weak, glm-weak,
     # real-text k3 h1/h24/h28/h36, glm h10/h18; the strong-band state cases synthetic-strong, glm-strong and glm h32,
-    # whose error was the anchored k_dec_t) pass and carry no mark. k3-control and k3-weak failed only on crafted inputs
+    # whose error was the anchored k_dec_t) pass and carry no mark. k3-strong-saturated (in-domain crafted, g1b.4.17)
+    # failed on long-memory rows of a saturated head (key-row error/RMS 0.31) through the HiFi2 recurrent scan; it
+    # passes at the HiFi3 scan (0.12, tt_metal_tracker-g1b.4.19). k3-control and k3-weak failed only on crafted inputs
     # outside the input_layernorm domain (BF16 decay rank at |f_a x| RMS ~75); in-domain they pass (g1b.4.17).
     "synthetic-strong-saturated-h0-1-T1280x1": "strong decay |G_last|=160 (g=-5): output token 31 of a chunk error/RMS "
     "1.0e-1 (control 3.3e-2); output PCC 0.99995; no KDA strong-end fix by decision (tt_metal_tracker-g1b.4.16)",
-    # In-domain crafted input (tt_metal_tracker-g1b.4.17): 87 channels saturated at |G_last|=160 next to 5 long-memory
-    # channels (|G_last| < 1) with beta 0.97.
-    "k3-strong-saturated-h7-8-T1280x1": "final state PCC 0.99929, key rows 90/99 (|G_last| 1.2e-3/1.8e-2, row norm "
-    "8.6x/7.0x RMS) error/RMS 0.31/0.30: a direction error (own 3.7%/4.3%, norm ratio 1.004/1.015, not contraction) "
-    "on long-memory rows of a saturated head; output token 30 error/RMS 0.075. Mechanism not isolated; owned with "
-    "the strong-end numerics, no fix by decision (tt_metal_tracker-g1b.4.16)",
 }
 
 
