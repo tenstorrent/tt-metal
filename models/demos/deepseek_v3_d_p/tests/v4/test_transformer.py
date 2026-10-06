@@ -42,9 +42,10 @@ _CASES = [
     pytest.param(DeepSeekV4FlashConfig, 0.99, 3, id="flash-L3"),
 ]
 _SEED = 42
-# A CSA layer's floor, as TtCSA's own chunked test has it: with production top-k, bf16 can swap
-# near-tied candidates at the selection boundary, which no other attention kind is exposed to.
-CSA_LAYER_PCC = 0.98
+# How far below its model's floor a CSA layer is graded: with production top-k, bf16 can swap
+# near-tied candidates at the selection boundary, which no other attention kind is exposed to, and
+# the swaps compound with the error the layer inherits.
+CSA_LAYER_MARGIN = 0.01
 
 
 def mesh_params(payload: int):
@@ -88,9 +89,9 @@ def hidden_to_host(mesh_device, t):
 
 
 def layer_floor(config, layer_idx: int, floor: float) -> float:
-    """``floor``, lowered to ``CSA_LAYER_PCC`` on a CSA layer."""
+    """``floor``, lowered by ``CSA_LAYER_MARGIN`` on a CSA layer."""
     if config.layer_types[layer_idx] == "compressed_sparse_attention":
-        return min(floor, CSA_LAYER_PCC)
+        return round(floor - CSA_LAYER_MARGIN, 6)
     return floor
 
 
