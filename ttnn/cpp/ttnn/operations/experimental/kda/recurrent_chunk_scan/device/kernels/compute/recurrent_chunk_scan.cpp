@@ -262,6 +262,7 @@ FORCE_INLINE void compute_chunk_output(
 // S_{n+1} = S_n + (diag(final_decay) S_n + k_dec_t @ U_n), final_decay = expm1(G_last) (complement form).
 // Each output tile starts from the FP32 carry copied straight into DST; both products accumulate onto it in DST.
 // The new state is packed to the ring (matmul view) and back to the carry, one key row at a time.
+// The caller owns decay_diagonal (built once per chunk, shared by every chain of that chunk; front-resident here).
 template <ChunkInputPolicy InputPolicy, uint32_t Ct, uint32_t Kt, uint32_t Vt>
 FORCE_INLINE void update_state(
     DataflowBuffer& current_state,
@@ -269,8 +270,6 @@ FORCE_INLINE void update_state(
     DataflowBuffer& destination,
     DataflowBuffer& corrected_value,
     DataflowBuffer& k_decay_transposed,
-    DataflowBuffer& final_decay,
-    DataflowBuffer& identity,
     DataflowBuffer& decay_diagonal) {
     constexpr uint32_t chunk_value_tiles = Ct * Vt;
     constexpr uint32_t key_value_tiles = Kt * Vt;
@@ -281,12 +280,6 @@ FORCE_INLINE void update_state(
 
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
         k_decay_transposed.wait_front(key_chunk_tiles);
-        final_decay.wait_front(Kt);
-    }
-    build_decay_diagonal<Kt>(identity, final_decay, decay_diagonal);
-    decay_diagonal.wait_front(Kt);
-    if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
-        final_decay.pop_front(Kt);
     }
     current_state.wait_front(key_value_tiles);
     carry.wait_front(key_value_tiles);
@@ -326,7 +319,6 @@ FORCE_INLINE void update_state(
         carry.push_back(Vt);
     }
     destination.push_back(key_value_tiles);
-    decay_diagonal.pop_front(Kt);
     current_state.pop_front(key_value_tiles);
     corrected_value.pop_front(chunk_value_tiles);
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
@@ -431,22 +423,19 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         t_inv.wait_front(chunk_chunk_tiles);
         k_decay_transposed.wait_front(key_chunk_tiles);
         final_decay.wait_front(Kt);
+        // Both chains decay by the same chunk diagonal: build it once.
+        build_decay_diagonal<Kt>(identity, final_decay, decay_diagonal);
+        decay_diagonal.wait_front(Kt);
         pack_reconfig_data_format(dfb::scratch);
         compute_value_new<ChunkInputPolicy::RETAIN, Ct, Kt, Vt>(
             state_ring, kd, v_beta, t_inv, scratch, value_new, scratch);
         update_state<ChunkInputPolicy::RETAIN, Ct, Kt, Vt>(
-            state_ring, state_carry, state_ring, scratch, k_decay_transposed, final_decay, identity, decay_diagonal);
+            state_ring, state_carry, state_ring, scratch, k_decay_transposed, decay_diagonal);
         pack_reconfig_data_format(dfb::scratch);
         compute_homogeneous_value<Ct, Kt, Vt>(summary_ring, kd, identity, t_inv, scratch, value_new, scratch);
         update_state<ChunkInputPolicy::RETAIN, Ct, Kt, Vt>(
-            summary_ring,
-            summary_carry,
-            summary_ring,
-            scratch,
-            k_decay_transposed,
-            final_decay,
-            identity,
-            decay_diagonal);
+            summary_ring, summary_carry, summary_ring, scratch, k_decay_transposed, decay_diagonal);
+        decay_diagonal.pop_front(Kt);
         if (split_chunk != 0 && chunk + 1 == split_chunk) {
             emit_complement_summary<Kt, Vt, Vt>(
                 summary_carry, state_carry, identity, summary_head_output, summary_head_state);
@@ -519,8 +508,13 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         compute_value_new<ChunkInputPolicy::CONSUME, Ct, Kt, Vt>(
             state_ring, kd, v_beta, t_inv, scratch, output_intermediate, value_new);
         compute_chunk_output<Ct, Kt, Vt>(state_ring, value_new, q_decay, intra, output_intermediate, scratch, output);
+        final_decay.wait_front(Kt);
+        build_decay_diagonal<Kt>(identity, final_decay, decay_diagonal);
+        decay_diagonal.wait_front(Kt);
+        final_decay.pop_front(Kt);
         update_state<ChunkInputPolicy::CONSUME, Ct, Kt, Vt>(
-            state_ring, state_carry, destination, value_new, k_decay_transposed, final_decay, identity, decay_diagonal);
+            state_ring, state_carry, destination, value_new, k_decay_transposed, decay_diagonal);
+        decay_diagonal.pop_front(Kt);
     }
     state_carry.wait_front(key_value_tiles);
     state_carry.pop_front(key_value_tiles);
