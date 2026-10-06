@@ -21,6 +21,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.reference import ref_layer as R
+from models.demos.blackhole.deepseek_v41_flash.tt import uni_policy
 from models.demos.blackhole.deepseek_v41_flash.tt.decoder import DSV41Decoder
 from models.demos.blackhole.deepseek_v41_flash.tt.device_head import DSV41DeviceEmbedding, DSV41DeviceHead
 from models.demos.blackhole.deepseek_v41_flash.tt.engram import DSV41DeviceEngram, HostEngramRows
@@ -39,9 +40,8 @@ from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import DSV41
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_handoff import GenPrefillModel, PagedStateSink
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import DSV41PrefillLayer, DSV41PrefillMoE
 
-UNI_MOE = (
-    os.environ.get("DSV41_PREFILL_MOE", "") == "unified"
-)  # prefill routed experts via ttnn.experimental.deepseek_prefill (default off)
+# prefill routed experts via ttnn.experimental.deepseek_prefill reading the decode ring weights in place: default ON with automatic fallback
+# (tt/uni_policy.py); DSV41_PREFILL_MOE=off forces the moe_compute prefill path
 
 
 def UNI_LAYERS(layer_ids):
@@ -72,6 +72,9 @@ class Model:
         self.md, self.args, self.log = mesh_device, args, log
         self.rows, self.cols = tuple(mesh_device.shape)
         self.U = args.users_per_row
+        self.uni = uni_policy.decide(
+            mesh_device, self.U, log
+        )  # unified prefill MoE (+ ring weights) on, or the logged fallback
         self.B = self.rows * self.U
         self.max_ctx = max_ctx
         self.layer_ids = list(args.layer_ids)
@@ -137,12 +140,12 @@ class Model:
             pmoe = DSV41PrefillMoE(layer.moe, T=T, buffers=None if first_pmoe is None else first_pmoe.decode.buffers)
             first_pmoe = first_pmoe or pmoe
             pls.append((L, DSV41PrefillLayer(layer, pa, pmoe, T=T)))
-            if UNI_MOE and L in UNI_LAYERS(
+            if self.uni and L in UNI_LAYERS(
                 self.layer_ids
             ):  # deepseek_prefill routed-expert pipeline (tt/prefill_unified_moe.py)
                 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_unified_moe import DSV41UnifiedMoE
 
-                if os.environ.get("DSV41_UNI_RING", "0") == "1":
+                if uni_policy.ring_requested():
                     # ONE weight copy: the unified op reads the decode moe_compute (ring layout) expert weights in place (RING_WEIGHTS mode, needs the
                     # private/updated _ttnncpp); decode and interleaved prefill share the same read-only buffers
                     es = layer.moe.decode.expert_state
@@ -188,7 +191,7 @@ class Model:
         self.trace_id = None
         self.admitted = False
         self.pool_pages_free = None
-        if UNI_MOE and os.environ.get("DSV41_UNI_LAYERS", "all").startswith("auto"):
+        if self.uni and os.environ.get("DSV41_UNI_LAYERS", "all").startswith("auto"):
             self._uni_auto(pls)
         self.log_dram("model built")
         if os.environ.get("DSV41_MEMLOG") in (
@@ -619,7 +622,17 @@ class Model:
         t_start = time.perf_counter()
         S = int(lens.max())
         C = chunk or -(-S // 128) * 128
-        S_pad = max(-(-S // C) * C, s_pad_max or 0)
+        S_pad = -(-S // C) * C
+        # DSV41_PREFILL_SPAD_MAX (tokens): size the chunk trace's per-context tables (sparse / indexer / latent) ONCE for this padded length, so a later
+        # LONGER prompt of the same chunk size replays the same capture instead of re-capturing (and OOMing). Only the real chunks run.
+        spad_env = int(os.environ.get("DSV41_PREFILL_SPAD_MAX", "0") or 0)
+        if (
+            not spad_env and os.environ.get("DSV41_PREFILL_ROW_TOKENS") == "auto2"
+        ):  # auto2: sized once for the build's max context
+            spad_env = int(self.max_ctx)
+        s_pad_max = max(s_pad_max or 0, spad_env)
+        s_pad_max = -(-s_pad_max // C) * C if s_pad_max else None
+        S_dyn = max(S_pad, s_pad_max or 0)
         self.log(f"  prefill_dyn: admit users")
         self.admit_users(lens, max_new_tokens)
         self.sink.set_lengths(lens)
@@ -651,8 +664,10 @@ class Model:
             self._hooks_set = pm
         if "nohead" in bis:
             pm.post_replay_hooks[:] = [h for h in pm.post_replay_hooks if not getattr(h, "is_post_chunk", False)]
-        self.log(f"  prefill_dyn: run chunks (trace={enable_trace}, C={C}, S_pad={S_pad}, bisect={bis!r})")
-        if enable_trace and getattr(pm, "dyn", None) is not None and (pm.dyn.C != C or pm.dyn.S_pad != S_pad):
+        self.log(
+            f"  prefill_dyn: run chunks (trace={enable_trace}, C={C}, S_pad={S_pad}, S_dyn={S_dyn}, bisect={bis!r})"
+        )
+        if enable_trace and getattr(pm, "dyn", None) is not None and (pm.dyn.C != C or pm.dyn.S_pad != S_dyn):
             self.log_dram("before teardown (old S_pad %d)" % pm.dyn.S_pad)
             pm.teardown_dyn()
             pm.dyn_out = None  # the last chunk's output streams (fp32 [32,1,4,5120] tiles: ~320 MiB/bank per 4096 tokens/row) of the captured trace
@@ -661,11 +676,11 @@ class Model:
             self.log_dram("after teardown")
             self.live_tensor_report("after teardown")
         if enable_trace:
-            pm.run_traced_chunks(tp, C, hashes=hashes)
+            pm.run_traced_chunks(tp, C, hashes=hashes, S_pad_max=s_pad_max)
             self.log_dram("after run_traced_chunks")
             self.log("  prefill_dyn: chunks done")
         else:
-            pm.setup_dyn(C, S_pad)
+            pm.setup_dyn(C, S_dyn)
             for _, pl in pm.layers:
                 pl.pa.reset_dyn()
             for ci in range(S_pad // C):

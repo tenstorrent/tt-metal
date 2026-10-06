@@ -304,6 +304,8 @@ def _run_demo(
         prefilled_token, _ = generator.prefill_forward_text(input_tokens_prefill, **prefill_kw)
         profiler.end("inference_prefill", iteration=batch_idx)
         prefilled_token = prefilled_token.view(-1)
+        logger.info("FIRSTTOK_IDS " + json.dumps([int(t) for t in prefilled_token[:batch_size]]))
+        generator.m.log_dram("PF_END (after prefill, trace held)")
         if (
             os.environ.get("DSV41_PREFILL_ONLY") == "1"
         ):  # prefill measurement (DSV41_UNI_NODECODE: no decode possible): TTFT + first tokens, no decode
@@ -609,6 +611,31 @@ def test_dsv41_demo(
     )
 
 
+def _run_demo_wrap(mesh_device, prompts, bs, rep, msl, mgt, pp, sp, dtr, ptr, pch, wu, ins, eos, cache, build_len):
+    if os.environ.get("DSV41_TEST_FAIL_BUDGET") and os.environ.get("DSV41_TEST_FAIL_BUDGET") == os.environ.get(
+        "DSV41_PREFILL_ROW_TOKENS"
+    ):  # test hook of the failure path
+        raise RuntimeError("injected failure")
+    _run_demo(
+        mesh_device,
+        prompts,
+        bs,
+        rep,
+        msl,
+        mgt,
+        pp,
+        sp,
+        dtr,
+        ptr,
+        pch,
+        wu,
+        ins,
+        eos,
+        cache=cache,
+        build_max_seq_len=build_len,
+    )
+
+
 @pytest.mark.timeout(14400)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
@@ -637,6 +664,7 @@ def test_dsv41_demo_session(mesh_device, device_params):
     chosen = [byid[i] for i in ids]
     build_len = max(s.values[3] for s in chosen)
     cache = {}
+    failed = {}
     modes = [
         m for m in os.environ.get("DSV41_PF_ASYNC_LIST", "").split(",") if m
     ]  # per-scenario DSV41_PF_ASYNC (A/B in one process)
@@ -679,6 +707,11 @@ def test_dsv41_demo_session(mesh_device, device_params):
                     if not hasattr(pl_, "_umoe_saved"):
                         pl_._umoe_saved = pl_.umoe
                     pl_.umoe = pl_._umoe_saved if umoes[si % len(umoes)] == "1" else None
+                from models.demos.blackhole.deepseek_v41_flash.tt import uni_policy
+
+                uni_policy.set_in_use(
+                    umoes[si % len(umoes)] == "1" and any(p_.umoe is not None for _, p_ in pm_.layers)
+                )
         if mode:
             os.environ["DSV41_PF_MHC"] = "packed" if set(mode) & set("PREQ") else "0"
             os.environ["DSV41_PF_ROUTE_OWN"] = "1" if set(mode) & set("RE") else "0"
@@ -699,23 +732,59 @@ def test_dsv41_demo_session(mesh_device, device_params):
             + ") ==="
         )
         os.environ["DSV41_RAGGED"] = "1" if s.id.endswith("_ragged") else "2" if s.id.endswith("_ragged_u4") else "0"
-        _run_demo(
-            mesh_device,
-            prompts,
-            bs,
-            rep,
-            msl,
-            mgt,
-            pp,
-            sp,
-            dtr,
-            ptr,
-            pch,
-            wu,
-            ins,
-            eos,
-            cache=cache,
-            build_max_seq_len=build_len,
+        if (
+            os.environ.get("DSV41_SESSION_NOWARM") == "1"
+        ):  # chunk-size calibration: no compile run (total_replay_loop excludes the capture)
+            wu = False
+        cont = (
+            os.environ.get("DSV41_SESSION_CONTINUE") == "1"
+        )  # keep going after a failing scenario (OOM at a large budget)
+        budget_i = (
+            int(os.environ.get("DSV41_PREFILL_ROW_TOKENS") or 0)
+            if (os.environ.get("DSV41_PREFILL_ROW_TOKENS") or "0").isdigit()
+            else 0
         )
-        for _, (_, m, _) in cache.items():
-            m.release_trace()
+        if cont and budget_i >= min(failed.get(s.id, 1 << 30), failed.get("*", 1 << 30)):
+            logger.info(
+                f"=== session scenario {s.id} ROW_TOKENS={budget_i} SKIPPED (budget >= failed {min(failed.get(s.id, 1 << 30), failed.get('*', 1 << 30))}) ==="
+            )
+            continue
+        try:
+            _run_demo_wrap(
+                mesh_device, prompts, bs, rep, msl, mgt, pp, sp, dtr, ptr, pch, wu, ins, eos, cache, build_len
+            )
+        except Exception as e:  # noqa: BLE001
+            if not cont:
+                raise
+            oom = any(w in str(e) for w in ("Out of Memory", "out of memory", "DRAM", "OOM", "allocate"))
+            key = (
+                "*" if (oom and os.environ.get("DSV41_PREFILL_SPAD_MAX")) else s.id
+            )  # sized for the max context: a DRAM failure holds for every ISL
+            failed[key] = min(failed.get(key, 1 << 30), budget_i)
+            import traceback
+
+            logger.error(
+                "FAILTRACE "
+                + " <- ".join(
+                    l.strip().replace("\n", " ")[:160]
+                    for l in traceback.format_exc().splitlines()
+                    if l.strip().startswith("File")
+                )[-1500:]
+            )
+            logger.error(f"=== SCENARIO FAILED {s.id} ROW_TOKENS={budget_i}: {type(e).__name__}: {str(e)[:400]} ===")
+            for _, (_, m, _) in cache.items():
+                try:
+                    pm_ = getattr(m, "prefill_model", None)
+                    if pm_ is not None and getattr(pm_, "dyn_trace", None) is not None:
+                        try:  # a failure INSIDE begin/end_trace_capture leaves the capture open: close it, or every later write fails
+                            ttnn.end_trace_capture(mesh_device, pm_.dyn_trace, cq_id=0)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    m.release_trace()
+                    if pm_ is not None:
+                        pm_.teardown_dyn()
+                except Exception as e2:  # noqa: BLE001
+                    logger.error(f"cleanup after failure raised {type(e2).__name__}: {str(e2)[:200]}")
+        else:
+            for _, (_, m, _) in cache.items():
+                m.release_trace()
