@@ -24,7 +24,7 @@ import functools
 import math
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import torch
@@ -405,9 +405,12 @@ def case_program_config(spec: GDNCaseSpec) -> KDAProgramConfig:
     )
 
 
-def make_gdn_device_case(mesh_device: ttnn.MeshDevice, case: GDNTestCase) -> ttGDN:
+def make_gdn_device_case(
+    mesh_device: ttnn.MeshDevice, case: GDNTestCase, *, summary_group_chunks: int | None = None
+) -> ttGDN:
     """Construct the case's layer on its registered mesh with weights from the prepared cache.
 
+    ``summary_group_chunks`` overrides only the production recurrence group length (schedule comparisons).
     A cache miss fails fast unless ``GDN_CACHE_MISS=compute``, which prepares the host weights in-process.
     """
     spec = case.spec
@@ -425,11 +428,16 @@ def make_gdn_device_case(mesh_device: ttnn.MeshDevice, case: GDNTestCase) -> ttG
         state_dict = case.weights.load_state_dict()
     else:
         raise prepared_cache_miss(spec.name, "weight cache", cache_dir)
+    program_config = case_program_config(spec)
+    if summary_group_chunks is not None:
+        program_config = replace(
+            program_config, recurrence=replace(program_config.recurrence, summary_group_chunks=summary_group_chunks)
+        )
     return ttGDN(
         mesh_device,
         case.config,
         state_dict,
-        program_config=case_program_config(spec),
+        program_config=program_config,
         active_seq_len=spec.chunk_tokens,
         layer_idx=case.weights.layer_idx,
         weight_cache_path=cache_dir if state_dict is None else None,
