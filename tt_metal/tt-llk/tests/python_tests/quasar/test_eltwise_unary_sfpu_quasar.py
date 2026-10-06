@@ -1410,7 +1410,7 @@ RESHUFFLE_MASKS = {
     # Every non-sentinel out-of-range target must be skipped too, not just 255: 32 would alias
     # into accumulator row 16, 47 into row 31, 48+ would walk into the next Dest tile.
     "out_of_range": [
-        [32, 47, 48, 254, 64, 100, 128, 200][i % 8] if i % 2 else i
+        [32, 47, 48, 254, 64, 100, 128, 200][(i // 2) % 8] if i % 2 else i
         for i in range(DEFAULT_TILE_R_DIM)
     ],
 }
