@@ -263,7 +263,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 sfpi_inline void calculate_remainder_int32(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-#pragma GCC unroll 2
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_remainder_int32_body(dst_index_in0, dst_index_in1, dst_index_out);
         sfpi::dst_reg++;
@@ -275,7 +275,7 @@ sfpi_inline void calculate_remainder_int32(
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 sfpi_inline void calculate_remainder_uint32(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-#pragma GCC unroll 2
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_remainder_uint32_body(dst_index_in0, dst_index_in1, dst_index_out);
         sfpi::dst_reg++;
