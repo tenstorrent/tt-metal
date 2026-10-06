@@ -929,3 +929,120 @@ def test_softmax_large_kernel_mask_padded(device, shape, dim):
         ulp_threshold=15,
         check_ulp=True,
     )
+
+
+def _make_broadcast_mask(batch_size, w, dtype):
+    mask = torch.rand(batch_size, 1, 1, w)
+    mask = (mask > 0.5).float()
+    mask = mask.masked_fill(mask == 0, torch.tensor(float("-inf"), dtype=torch.bfloat16))
+    mask = mask.masked_fill(mask == 1, 0)
+    return mask.to(dtype)
+
+
+def _make_causal_mask(w, dtype):
+    # lower-triangular causal mask: -inf above the diagonal, 0 elsewhere
+    causal = torch.zeros((1, 1, w, w), dtype=torch.float32)
+    causal = causal.masked_fill(torch.triu(torch.ones(w, w), diagonal=1).bool(), float("-inf"))
+    return causal.to(dtype)
+
+
+def _run_scale_mask_softmax_padded(device, w, in_dtype, causal):
+    """Regression test for https://github.com/tenstorrent/tt-metal/issues/58495:
+    the fused scale-mask softmax kernel must apply the -inf pad mask to tile-padding
+    columns when the logical width is not a multiple of 32."""
+    torch.manual_seed(0)
+    batch_size = 2
+    # causal masks are square (attention); broadcast masks use h=32 rows
+    h = w if causal else 32
+    scale = 0.125
+
+    torch_input = torch.randn(batch_size, 1, h, w, dtype=torch.bfloat16)
+    if causal:
+        torch_mask = _make_causal_mask(w, torch.bfloat16)
+    else:
+        torch_mask = _make_broadcast_mask(batch_size, w, torch.bfloat16)
+    torch_output = F.softmax(torch_input * scale + torch_mask, dim=-1, dtype=torch.bfloat16)
+
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+    )
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_mask = ttnn.from_torch(torch_mask, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn_output = ttnn.scale_mask_softmax(
+        ttnn_input,
+        scale,
+        ttnn_mask,
+        compute_kernel_config=compute_config,
+        numeric_stable=True,
+        is_causal_mask=causal,
+    )
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    # rows must sum to ~1: padding columns must not leak into the denominator
+    row_sums = ttnn_output.float().sum(dim=-1)
+    assert torch.allclose(row_sums, torch.ones_like(row_sums), atol=0.05), (
+        f"row sums deviate from 1 (w={w}, causal={causal}): {row_sums.flatten()[:8]}"
+    )
+
+    assert_numeric_metrics(
+        torch_output,
+        ttnn_output,
+        pcc_threshold=0.999,
+        rtol=0.05,
+        atol=0.02,
+        frobenius_threshold=0.03,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize("w", [17, 50, 64, 197])
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("causal", [False, True])
+def test_scale_mask_softmax_padded_widths(device, w, in_dtype, causal):
+    _run_scale_mask_softmax_padded(device, w, in_dtype, causal)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize("w", [17, 50, 197])
+def test_scale_mask_softmax_in_place_padded_widths(device, w):
+    """Same pad-mask regression for the in-place variant."""
+    torch.manual_seed(0)
+    batch_size, h = 2, 32
+    scale = 0.125
+
+    torch_input = torch.randn(batch_size, 1, h, w, dtype=torch.bfloat16)
+    torch_mask = _make_broadcast_mask(batch_size, w, torch.bfloat16)
+    torch_output = F.softmax(torch_input * scale + torch_mask, dim=-1, dtype=torch.bfloat16)
+
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+    )
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_mask = ttnn.from_torch(torch_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn_output = ttnn.scale_mask_softmax_in_place(
+        ttnn_input,
+        scale,
+        ttnn_mask,
+        compute_kernel_config=compute_config,
+        numeric_stable=True,
+    )
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    row_sums = ttnn_output.float().sum(dim=-1)
+    assert torch.allclose(row_sums, torch.ones_like(row_sums), atol=0.05), (
+        f"row sums deviate from 1 (w={w}): {row_sums.flatten()[:8]}"
+    )
+    assert_numeric_metrics(
+        torch_output,
+        ttnn_output,
+        pcc_threshold=0.999,
+        rtol=0.05,
+        atol=0.02,
+        frobenius_threshold=0.03,
+    )
