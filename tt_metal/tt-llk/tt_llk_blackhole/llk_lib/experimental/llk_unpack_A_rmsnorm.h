@@ -24,7 +24,11 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest                          = false>
 inline void _llk_unpack_A_rmsnorm_mop_config_(
-    const bool transpose_of_faces, const std::uint32_t num_faces, const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format = 0)
+    const bool transpose_of_faces,
+    const std::uint32_t num_faces,
+    const std::uint32_t unpack_src_format,
+    const std::uint32_t unpack_dst_format = 0,
+    const bool whole_tile                 = false)
 {
     static_assert(
         ((BType == BroadcastType::SCALAR) && acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)), "Not supported configuration!");
@@ -32,6 +36,7 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
         (((BType == BroadcastType::NONE) && (!acc_to_dest) && (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)) || (!unpack_to_dest)),
         "Not supported configuration when unpacking to dest!");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(!(whole_tile && transpose_of_faces), "whole_tile does not combine with transpose_of_faces");
 
     static constexpr std::uint32_t unpack_srca =
         TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
@@ -91,6 +96,26 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
         tmp.set_start_op(unpack_srcb_set_dvalid);
         tmp.program();
     }
+    else if (whole_tile)
+    {
+        // One SrcA bank per tile, for a math pass that sweeps the tile once per fidelity phase.
+        // The x end grows to the tile for this MOP only, so the per-face callers keep theirs.
+        const std::uint32_t tile_x_end = num_faces * FACE_R_DIM * FACE_C_DIM - 1;
+        load_replay_buf(
+            0,
+            2,
+            [tile_x_end]
+            {
+                TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                TT_SETADCXX(p_setadc::UNP_A, tile_x_end, 0x0);
+            });
+        static constexpr std::uint32_t unpack_srca_tile =
+            TT_OP_UNPACR(SrcA, 0, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        ckernel_template tmp(1, num_tiles, unpack_srca_tile, TT_OP_INCADCZW(p_setadc::UNP_A, 0, 0, 0, num_faces));
+        tmp.set_start_op(lltt::replay_insn(0, 2));
+        tmp.set_end_op(TT_OP_SETADCXX(p_setadc::UNP_A, FACE_R_DIM * FACE_C_DIM - 1, 0x0));
+        tmp.program();
+    }
     else
     {
         constexpr std::uint32_t outerloop = 1;
@@ -113,7 +138,8 @@ inline void _llk_unpack_A_rmsnorm_init_(
     const std::uint32_t face_r_dim                  = FACE_R_DIM,
     const std::uint32_t num_faces                   = 4,
     const std::uint32_t unpack_src_format           = 0,
-    const std::uint32_t unpack_dst_format           = 0)
+    const std::uint32_t unpack_dst_format           = 0,
+    const bool whole_tile                           = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
@@ -129,5 +155,5 @@ inline void _llk_unpack_A_rmsnorm_init_(
     config_unpacker_x_end<UNP_SEL>(face_r_dim);
 
     _llk_unpack_A_rmsnorm_mop_config_<num_tiles, BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
-        transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format);
+        transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format, whole_tile);
 }

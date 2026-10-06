@@ -745,6 +745,8 @@ PERF_TEST_SCHEMAS = {
             "mathop",
             "rmsnorm_num_faces",
             "rmsnorm_num_tiles",
+            "rmsnorm_shadow_sfpu",
+            "rmsnorm_whole_tile",
             "tile_cnt",
             "unpack_full_transpose",
             "unpack_to_dest",
@@ -752,6 +754,34 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
         "test_name_aliases": {
             "perf_rmsnorm_bcast_scalar_dest_reuse": "perf_rmsnorm_bcast_scalar_dest_reuse"
+        },
+    },
+    "perf_rmsnorm_bcast_scalar_dest_reuse_sequence": {
+        "version": 1,
+        "columns": [
+            "clear_dest",
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "loop_factor",
+            "marker",
+            "math_fidelity",
+            "rmsnorm_num_faces",
+            "rmsnorm_num_tiles",
+            "rmsnorm_shadow_sfpu",
+            "rmsnorm_whole_tile",
+            "tile_cnt",
+            "unpack_full_transpose",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {
+            "perf_rmsnorm_bcast_scalar_dest_reuse_sequence": "perf_rmsnorm_bcast_scalar_dest_reuse_sequence"
         },
     },
     "perf_rope": {

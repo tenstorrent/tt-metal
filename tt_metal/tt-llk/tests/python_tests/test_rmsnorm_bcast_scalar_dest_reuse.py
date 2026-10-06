@@ -148,7 +148,7 @@ def _skip_unsupported(formats, dest_acc):
         )
 
 
-def _run(
+def _config(
     formats,
     dest_acc,
     mathop,
@@ -157,13 +157,9 @@ def _run(
     num_faces=4,
     clear_dest=False,
     unpack_full_transpose=False,
+    whole_tile=False,
 ):
-    """Compile+run one variant.
-
-    Returns ``(device, seen_A, seed, scalar)``, all as fp32 tensors/scalars quantised the
-    way the device saw them. ``seed`` is the tile the datacopy left in DEST[0] and is what
-    the accumulating ELWMUL path adds onto.
-    """
+    """One variant's configuration and its stimuli."""
     torch.manual_seed(0)
 
     # src_B carries the broadcast scalar at element [0]. Spread over a wide range so a
@@ -188,6 +184,7 @@ def _run(
                 rmsnorm_num_faces=num_faces,
                 clear_dest=clear_dest,
                 unpack_full_transpose=unpack_full_transpose,
+                rmsnorm_whole_tile=whole_tile,
             ),
         ],
         runtimes=[],
@@ -205,6 +202,26 @@ def _run(
         unpack_to_dest=False,
         dest_acc=dest_acc,
     )
+    return configuration, src_A, src_B
+
+
+def _run(formats, dest_acc, mathop, math_fidelity, num_tiles, siblings=(), **kwargs):
+    """Compile+run one variant.
+
+    ``siblings`` are the keyword sets of variants the test runs after this one; they are
+    built first, because a compile-producer pass stops at the first run.
+
+    Returns ``(device, seen_A, seed, scalar)``, all as fp32 tensors/scalars quantised the
+    way the device saw them. ``seed`` is the tile the datacopy left in DEST[0] and is what
+    the accumulating ELWMUL path adds onto.
+    """
+    configuration, src_A, src_B = _config(
+        formats, dest_acc, mathop, math_fidelity, num_tiles, **kwargs
+    )
+    for sibling in siblings:
+        _config(formats, dest_acc, mathop, math_fidelity, num_tiles, **sibling)[
+            0
+        ].prepare()
 
     span = num_tiles * ELEMENTS_PER_TILE
     res_from_L1 = configuration.run().result[:span]
@@ -500,3 +517,207 @@ def test_rmsnorm_bcast_scalar_dest_reuse_unpack_full_transpose(
         f"fidelity={math_fidelity.name}, scalar={scalar:.6f}) -- the transpose-fold path "
         "is the axis blaze's version of rmsnorm.h added"
     )
+
+
+@parametrize(
+    formats=FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4],
+    num_faces=[2, 4],
+    num_tiles=NUM_TILES + [8],
+)
+def test_rmsnorm_bcast_scalar_dest_reuse_whole_tile(
+    formats, dest_acc, math_fidelity, num_faces, num_tiles
+):
+    """The HiFi multiply with one SrcA bank per tile, each fidelity phase sweeping the tile.
+
+    It must give the per-face form's bits exactly: every element sees the same phase products
+    in the same order. The per-face run of the same variant is the reference, and the golden
+    pins both.
+    """
+    _skip_unsupported(formats, dest_acc)
+    if num_tiles == 8 and dest_acc == DestAccumulation.Yes:
+        pytest.skip("8 tiles exceed the 32-bit DEST half")
+
+    common = dict(num_faces=num_faces, clear_dest=True)
+    whole, seen_A, _seed, scalar = _run(
+        formats,
+        dest_acc,
+        MathOperation.Elwmul,
+        math_fidelity,
+        num_tiles,
+        siblings=[dict(whole_tile=False, **common)],
+        whole_tile=True,
+        **common,
+    )
+    per_face, *_ = _run(
+        formats,
+        dest_acc,
+        MathOperation.Elwmul,
+        math_fidelity,
+        num_tiles,
+        whole_tile=False,
+        **common,
+    )
+
+    differing = torch.count_nonzero(whole != per_face).item()
+    assert differing == 0, (
+        f"whole-tile form differs from the per-face form in {differing} elements "
+        f"(fidelity={math_fidelity.name}, num_faces={num_faces}, num_tiles={num_tiles})"
+    )
+
+    covered = num_faces * ELEMENTS_PER_FACE
+    for tile in range(num_tiles):
+        golden = _expected(
+            seen_A[tile * covered : (tile + 1) * covered],
+            scalar,
+            MathOperation.Elwmul,
+            math_fidelity,
+            formats.output_format,
+        )
+        base = tile * ELEMENTS_PER_TILE
+        assert passed_test(
+            golden, whole[base : base + covered], formats.output_format
+        ), (
+            f"whole-tile form wrong in tile {tile} (fidelity={math_fidelity.name}, "
+            f"num_faces={num_faces}, num_tiles={num_tiles}, scalar={scalar:.6f})"
+        )
+
+
+@parametrize(
+    formats=FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4],
+)
+def test_rmsnorm_bcast_scalar_dest_reuse_whole_tile_accumulates_into_dirty_dest(
+    formats, dest_acc, math_fidelity
+):
+    """The whole-tile form keeps the accumulate contract of the test above it."""
+    _skip_unsupported(formats, dest_acc)
+
+    device, seen_A, seed, scalar = _run(
+        formats,
+        dest_acc,
+        MathOperation.Elwmul,
+        math_fidelity,
+        num_tiles=1,
+        clear_dest=False,
+        whole_tile=True,
+    )
+    accumulating = _expected(
+        seen_A,
+        scalar,
+        MathOperation.Elwmul,
+        math_fidelity,
+        formats.output_format,
+        dest_prior=seed,
+    )
+    assert passed_test(accumulating, device, formats.output_format), (
+        f"whole-tile ELWMUL with clear_dest=False did not accumulate onto the seeded DEST "
+        f"(fidelity={math_fidelity.name}, scalar={scalar:.6f})"
+    )
+
+
+def _sequence_config(formats, dest_acc, math_fidelity, whole_tile):
+    torch.manual_seed(0)
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=[32, 32],
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=[32, 32],
+        spec_A=StimuliSpec.uniform(low=-4.0, high=4.0),
+        spec_B=StimuliSpec.uniform(low=-4.0, high=4.0),
+    )
+    configuration = TestConfig(
+        "sources/rmsnorm_bcast_scalar_dest_reuse_sequence_test.cpp",
+        formats,
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            RMSNORM_DEST_REUSE(rmsnorm_whole_tile=whole_tile),
+        ],
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            src_A.flatten(),
+            formats.input_format,
+            src_B.flatten(),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=4,
+        ),
+        unpack_to_dest=False,
+        dest_acc=dest_acc,
+    )
+    return configuration, src_A, src_B
+
+
+def _run_sequence(formats, dest_acc, math_fidelity, whole_tile):
+    configuration, src_A, src_B = _sequence_config(
+        formats, dest_acc, math_fidelity, whole_tile
+    )
+    # The test runs both forms; a compile-producer pass stops at the first run.
+    _sequence_config(formats, dest_acc, math_fidelity, not whole_tile)[0].prepare()
+    res = configuration.run().result[: 4 * ELEMENTS_PER_TILE]
+    device = (
+        torch.tensor(res, dtype=format_dict[formats.output_format])
+        .flatten()
+        .to(torch.float32)
+    )
+    seen_A = round_to_dest_width(
+        src_A.flatten()[:ELEMENTS_PER_TILE].to(torch.float32), dest_acc
+    )
+    seed = round_to_dest_width(
+        src_B.flatten()[:ELEMENTS_PER_TILE].to(torch.float32), dest_acc
+    )
+    return device, seen_A, seed, seed[:1].item()
+
+
+@parametrize(
+    formats=FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4],
+)
+def test_rmsnorm_bcast_scalar_dest_reuse_sequence(formats, dest_acc, math_fidelity):
+    """The callers' order: a LoFi subtract and a HiFi multiply, each with its own init, in both orders.
+
+    DeepSeek sampling and blaze softmax_top_p and softmax_lanes run a LoFi ELWSUB and then HiFi
+    ELWMULs of one tile each, and the next token's subtract after the last multiply. The kernel
+    runs the subtract after the multiply with no other unpack init in between, so a whole-tile
+    multiply that left its unpacker x end behind breaks the subtract. Both forms must give the
+    same bits.
+    """
+    _skip_unsupported(formats, dest_acc)
+
+    whole, seen_A, seed, scalar = _run_sequence(
+        formats, dest_acc, math_fidelity, whole_tile=True
+    )
+    per_face, *_ = _run_sequence(formats, dest_acc, math_fidelity, whole_tile=False)
+
+    differing = torch.count_nonzero(whole != per_face).item()
+    assert differing == 0, (
+        f"whole-tile sequence differs from the per-face one in {differing} elements "
+        f"(fidelity={math_fidelity.name})"
+    )
+
+    product = _expected(
+        seen_A,
+        scalar,
+        MathOperation.Elwmul,
+        math_fidelity,
+        formats.output_format,
+        dest_prior=seed,
+    )
+    difference = seen_A - scalar
+    for section in range(2):
+        base = 2 * section * ELEMENTS_PER_TILE
+        mul_out = whole[base : base + ELEMENTS_PER_TILE]
+        sub_out = whole[base + ELEMENTS_PER_TILE : base + 2 * ELEMENTS_PER_TILE]
+        assert passed_test(product, mul_out, formats.output_format), (
+            f"multiply wrong in section {section} (fidelity={math_fidelity.name}, "
+            f"scalar={scalar:.6f})"
+        )
+        assert passed_test(difference, sub_out, formats.output_format), (
+            f"subtract wrong in section {section} (fidelity={math_fidelity.name}, "
+            f"scalar={scalar:.6f})"
+        )
