@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/buf_rw_note.h"
 #include "internal/debug/noc_zero_guard.h"
 #include "noc_address_backend.h"
 template <typename DSpecT>
@@ -124,8 +125,12 @@ private:
     friend struct noc_traits_t<UnicastEndpoint>;
     friend struct noc_traits_t<MulticastEndpoint>;
 
+    // Every NoC transfer path takes its endpoint addresses from these three helpers, so this is
+    // where op-to-op R/W inference notes a bound tensor: a source is read, a destination written
+    // (api/dataflow/buf_rw_note.h). The notes are section data only: no instructions.
     template <AddressType address_type, typename Src>
     auto get_src_ptr(const Src& src, const src_args_t<Src>& src_args) const {
+        tt_buf_rw::note_if_bound<tt_buf_rw::READ, Src>();
         auto addr = noc_traits_t<Src>::template src_addr<address_type>(src, *this, src_args);
         if constexpr (address_type == AddressType::LOCAL_L1) {
             return addr_underlying_t<address_type>{l1_cached_view(static_cast<uint32_t>(addr))};
@@ -136,6 +141,7 @@ private:
 
     template <AddressType address_type, typename Dst>
     auto get_dst_ptr(const Dst& dst, const dst_args_t<Dst>& dst_args) const {
+        tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, Dst>();
         auto addr = noc_traits_t<Dst>::template dst_addr<address_type>(dst, *this, dst_args);
         if constexpr (address_type == AddressType::LOCAL_L1) {
             return addr_underlying_t<address_type>{l1_cached_view(static_cast<uint32_t>(addr))};
@@ -146,6 +152,7 @@ private:
 
     template <AddressType address_type, typename Dst>
     auto get_dst_ptr_mcast(const Dst& dst, const dst_args_mcast_t<Dst>& dst_args) const {
+        tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, Dst>();
         return addr_underlying_t<address_type>{
             noc_traits_t<Dst>::template dst_addr_mcast<address_type>(dst, *this, dst_args)};
     }
