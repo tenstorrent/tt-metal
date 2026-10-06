@@ -485,7 +485,9 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::ema)
     {
-        init_ema();
+        // In place (OUT_TILE_DELTA = 0): the harness packs the tile it hands the functor. The
+        // production dst + 1 contract is covered by test_sfpu_ema_quasar.py.
+        init_ema<0 /*OUT_TILE_DELTA*/>();
         ema_load_alpha_beta(kEmaAlphaBits, kEmaBetaBits);
     }
     // rsub_scalar_int32 is stateless: its compute API init is SFPU_UNARY_INIT(unused).
@@ -831,13 +833,13 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::ema)
     {
-        // Whole-tile op run in place (the harness packs the tile it hands the functor); every tile
-        // starts a fresh chain.
+        // Whole-tile op, run in place with the OUT_TILE_DELTA init_ema recorded; first = true (the
+        // default) starts a fresh chain at every tile.
         if (first)
         {
             ema_clear_previous_output();
         }
-        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_ema, (0 /* OUT_TILE_DELTA: in place */), dst_index, VectorMode::RC_custom);
+        SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, is_fp32_dest_acc_en, calculate_ema, dst_index, VectorMode::RC_custom);
     }
     else if constexpr (OPERATION == SfpuType::floor)
     {

@@ -2607,11 +2607,18 @@ class UnarySFPUGolden:
         if operation not in (MathOperation.Cumsum, MathOperation.Ema):
             whole_tensor_res = None
         elif skip_tilize:
-            # The caller (the fuser) hands over Dest already tilized: run the recurrence on each
-            # tile's row-major view and return the result in the same tilized order.
-            whole_tensor_res = self._on_row_major_tiles(
-                self.ops[operation], result, tile_dimensions
-            )
+            # The caller (the fuser) hands over Dest already tilized: run the recurrence on the
+            # row-major view and put the result back in tilized order. Float32 throughout so
+            # neither permutation rounds; the single Dest-format rounding is applied below.
+            row_major = untilize_block(
+                result.to(torch.float32), DataFormat.Float32, dimensions
+            ).flatten()
+            whole_tensor_res = tilize_block(
+                self.ops[operation](row_major, dimensions),
+                dimensions,
+                DataFormat.Float32,
+                tile_dimensions=tile_dimensions,
+            ).flatten()
         else:
             whole_tensor_res = self.ops[operation](result, dimensions)
 
@@ -3615,21 +3622,6 @@ class UnarySFPUGolden:
         rows, cols = dimensions[0], dimensions[1]
         tiles = x.reshape(rows // TILE_DIM, TILE_DIM, cols // TILE_DIM, TILE_DIM)
         return torch.cumsum(tiles.to(torch.float32), dim=1).flatten()
-
-    @staticmethod
-    def _on_row_major_tiles(op, tilized, tile_dimensions):
-        """Apply a row-major whole-tensor op to a tilized buffer of 32x32 tiles.
-
-        Tilized order is face-major (faces 0 | 1 over 2 | 3), each face row-major. The tiles are
-        stacked into a [32 * n, 32] row-major tensor, handed to ``op`` and put back in tilized
-        order, so the per-tile ops (_cumsum, _ema) need no tilized variant.
-        """
-        if tuple(tile_dimensions) != TILE_DIMENSIONS:
-            raise ValueError(f"modelled on 32x32 tiles only, got {tile_dimensions}")
-        faces = tilized.reshape(-1, 2, 2, 16, 16)
-        row_major = faces.permute(0, 1, 3, 2, 4).reshape(-1, TILE_DIM)
-        out = op(row_major, tuple(row_major.shape))
-        return out.reshape(-1, 2, 16, 2, 16).permute(0, 1, 3, 2, 4).flatten()
 
     def _ema(self, x, dimensions: tuple[int, int]):
         """Column-wise (top-to-bottom) exponential moving average inside each 32x32 tile.

@@ -6,8 +6,8 @@
 
 #include <cstdint>
 
-#include "llk_math_eltwise_unary_sfpu_init.h"
-#include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_assert.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_ema.h"
 
 namespace ckernel {
@@ -19,7 +19,9 @@ namespace ckernel {
  *       @ref llk_math_ema_sfpu_clear_previous_output before the first
  *       @ref llk_math_ema_sfpu_tile, and run it again before resuming EMA after another SFPU op.
  */
-inline void llk_math_ema_sfpu_init() { llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::init_ema); }
+inline void llk_math_ema_sfpu_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::init_ema<sfpu::EMA_OUTPUT_TILE_DELTA>);
+}
 
 /**
  * @brief Install the EMA smoothing weights for every later tile.
@@ -49,9 +51,14 @@ inline void llk_math_ema_sfpu_clear_previous_output() { sfpu::ema_clear_previous
  *       Feed tiles top-to-bottom: the carry from this call is what the next one continues from.
  */
 inline void llk_math_ema_sfpu_tile(const std::uint32_t input_dst_index) {
-    _llk_math_eltwise_sfpu_start_(input_dst_index);
-    sfpu::calculate_ema<>();
-    _llk_math_eltwise_sfpu_done_();
+    // SFPU_UNARY_CALL bounds-checks the input tile; the output lands one tile further on.
+    constexpr std::uint32_t max_dest_tiles =
+        trisc::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, trisc::DstTileShape::Tile32x32>();
+    LLK_ASSERT(
+        input_dst_index + sfpu::EMA_OUTPUT_TILE_DELTA < max_dest_tiles,
+        "ema_tile: output tile (input_dst_index + 1) must fit in Dest");
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_ema, input_dst_index, VectorMode::RC_custom);
 }
 
 }  // namespace ckernel
