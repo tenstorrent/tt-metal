@@ -7,20 +7,7 @@ from typing import ClassVar, FrozenSet, Mapping
 
 from helpers.format_config import DataFormat
 
-from ..data_transfer_blocks import DataTransferBlocks
-
-#: MX formats replace block float on Quasar.
-_MX_FORMATS = frozenset(
-    {
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
-    }
-)
-
+from ..data_transfer_blocks import MX_FORMATS, DataTransferBlocks
 
 _TO_SRC_FLOAT = frozenset({DataFormat.Tf32, DataFormat.Float16, DataFormat.Float16_b})
 
@@ -34,7 +21,7 @@ class QuasarDataTransferBlocks(DataTransferBlocks):
     also absent: they are src-register storage formats, never L1 formats.
     """
 
-    SUPPORTED_L1_FORMATS: ClassVar[FrozenSet[DataFormat]] = _MX_FORMATS | frozenset(
+    SUPPORTED_L1_FORMATS: ClassVar[FrozenSet[DataFormat]] = MX_FORMATS | frozenset(
         {
             DataFormat.Float32,
             DataFormat.Tf32,
@@ -67,7 +54,7 @@ class QuasarDataTransferBlocks(DataTransferBlocks):
     EDGE_MASK_MASKED_WHEN_SET: ClassVar[bool] = True
 
     UNPACK_TO_SRC_FORMATS: ClassVar[Mapping[DataFormat, FrozenSet[DataFormat]]] = {
-        **{f: _TO_SRC_FLOAT for f in _MX_FORMATS},
+        **{f: _TO_SRC_FLOAT for f in MX_FORMATS},
         DataFormat.Float32: _TO_SRC_FLOAT,
         DataFormat.Tf32: _TO_SRC_FLOAT,
         DataFormat.Float16: _TO_SRC_FLOAT,

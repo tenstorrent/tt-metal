@@ -79,6 +79,13 @@ INT8_MAX_MAGNITUDE = 127
 #: Nothing truncates the mantissa to bf16's 7 bits, so precision in a src
 #: register is ``min(input mantissa bits, 10)`` — the src format sets the
 #: exponent range, not the mantissa width.
+#: The two format families an architecture has one of, derived from the
+#: predicates in :mod:`helpers.format_config` rather than relisted here, so a
+#: new member reaches every architecture without a second copy of the list.
+#: Quasar has MX and no block float; Wormhole and Blackhole the reverse.
+BLOCK_FLOAT_FORMATS = frozenset(f for f in DataFormat if f.is_block_float())
+MX_FORMATS = frozenset(f for f in DataFormat if f.is_mx_format())
+
 SRC_STORAGE_FORMATS = frozenset(
     {DataFormat.Float16, DataFormat.Float16_b, DataFormat.Tf32}
 )
