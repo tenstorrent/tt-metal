@@ -93,6 +93,21 @@ inline void llk_math_eltwise_binary_init(
     const std::uint32_t operand_id = get_operand_id(operand_A);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
+    if constexpr (
+        src_dvalid == SrcDvalid::PerTile &&
+        (src_b_bcast_type == BroadcastType::COL || src_b_bcast_type == BroadcastType::ROW)) {
+        // A row or column broadcast takes the per-tile hand-off only from a full 32x32 B tile, as the unpack init does
+        const std::uint32_t operand_b_id = get_operand_id(operand_B);
+        if (get_operand_face_r_dim(operand_b_id) != FACE_R_DIM || get_operand_num_faces(operand_b_id) != 4) {
+            llk_math_eltwise_binary_init_impl<
+                eltwise_binary_type,
+                src_b_bcast_type,
+                math_fidelity,
+                binary_reuse_dest,
+                SrcDvalid::PerFace>(tensor_shape, acc_to_dest);
+            return;
+        }
+    }
     llk_math_eltwise_binary_init_impl<eltwise_binary_type, src_b_bcast_type, math_fidelity, binary_reuse_dest, src_dvalid>(
         tensor_shape, acc_to_dest);
 }
@@ -170,6 +185,22 @@ inline void llk_math_eltwise_binary(
         StateDiscard<std::uint32_t>(dst_index),
         StateDiscard<bool>(clear_fp32_dst_acc)));
 
+    if constexpr (
+        src_dvalid == SrcDvalid::PerTile &&
+        (src_b_bcast_type == BroadcastType::COL || src_b_bcast_type == BroadcastType::ROW)) {
+        // A row or column broadcast takes the per-tile hand-off only from a full 32x32 B tile, as the unpack init does
+        const std::uint32_t operand_b_id = get_operand_id(operand_B);
+        if (get_operand_face_r_dim(operand_b_id) != FACE_R_DIM || get_operand_num_faces(operand_b_id) != 4) {
+            llk_math_eltwise_binary_impl<
+                eltwise_binary_type,
+                src_b_bcast_type,
+                is_fp32_dest_acc_en,
+                math_fidelity,
+                binary_reuse_dest,
+                SrcDvalid::PerFace>(tensor_shape, dst_index, clear_fp32_dst_acc);
+            return;
+        }
+    }
     llk_math_eltwise_binary_impl<
         eltwise_binary_type,
         src_b_bcast_type,
