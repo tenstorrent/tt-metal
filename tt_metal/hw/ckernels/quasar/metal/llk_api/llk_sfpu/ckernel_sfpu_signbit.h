@@ -32,7 +32,9 @@ inline void init_signbit() { init_zero_comp(); }
  * @brief Element-wise sign-bit test over a tile, written as 1/0 in FMT's native encoding.
  *
  * A bit test, not a compare: the result is bit 31 of the element's LREG image, so @c -0.0 and a
- * negative NaN yield 1 where a @c <0 compare would yield 0. Load, store and result encoding come
+ * negative NaN yield 1 where an IEEE @c <0 compare would yield 0. (Quasar's less_than_zero, see
+ * @ref _zero_comp_pred_, is itself a bit-31 test guarded by @c mag!=0, so on hardware signbit differs
+ * from it only at @c -0.0.) Load, store and result encoding come
  * from @ref zero_comp_traits; the store rides @c ADDR_MOD_6 (dest.incr=2) to advance the dest
  * counter, so the loop needs no dst_reg++.
  *
@@ -40,7 +42,9 @@ inline void init_signbit() { init_zero_comp(); }
  *         symmetry.
  * @tparam FMT: SFPU DataFormat (sfpu_math): Int32/Int16/Int8/UInt16/UInt8, or Float32 for any float
  *         width — the caller must pass Float32 for Float16/Float16_b too, whose DEFAULT sfpmem mode
- *         resolves the actual width from the dest format config. Anything else is a compile error.
+ *         resolves the actual width from the dest format config. Float16/Float16_b themselves are
+ *         rejected: @ref zero_comp_traits only treats Float32 as float, so they would select the
+ *         integer result encoding. Anything else is a compile error.
  * @tparam ITERATIONS: Number of SFP-row pairs to process (8 for a 32×16 face).
  * @note Requires @ref init_signbit to have programmed @c ADDR_MOD_6.
  */
@@ -48,11 +52,12 @@ template <bool APPROXIMATION_MODE, DataFormat FMT, int ITERATIONS = SFPU_ITERATI
 inline void calculate_signbit() {
     constexpr bool is_int_fmt = FMT == DataFormat::Int32 || FMT == DataFormat::Int16 || FMT == DataFormat::Int8 ||
                                 FMT == DataFormat::UInt16 || FMT == DataFormat::UInt8;
-    constexpr bool is_float_fmt =
-        FMT == DataFormat::Float32 || FMT == DataFormat::Float16 || FMT == DataFormat::Float16_b;
+    // Every float width must arrive canonicalized to Float32: zero_comp_traits keys is_float on
+    // Float32 alone, so Float16/Float16_b would silently take the integer result encoding.
+    constexpr bool is_float_fmt = FMT == DataFormat::Float32;
     static_assert(
         is_int_fmt || is_float_fmt,
-        "calculate_signbit: unsupported FMT (expected an integer format or an IEEE float width)");
+        "calculate_signbit: unsupported FMT (expected an integer format, or Float32 for any float width)");
 
     using traits = zero_comp_traits<FMT>;
 
