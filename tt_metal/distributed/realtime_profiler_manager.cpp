@@ -1588,7 +1588,7 @@ void RealtimeProfilerManager::notify_finish_sync_waiters() {
     finish_sync_cv_.notify_all();
 }
 
-void RealtimeProfilerManager::trigger_sync_check() {
+void RealtimeProfilerManager::trigger_sync_check(bool bypass_throttle) {
     constexpr auto kFinishSyncWaitSlack = std::chrono::seconds(1);
     if (devices_.empty() || !tracy_handler_) {
         return;
@@ -1597,7 +1597,7 @@ void RealtimeProfilerManager::trigger_sync_check() {
     const auto now = std::chrono::steady_clock::now();
     const std::chrono::steady_clock::time_point last{
         std::chrono::steady_clock::duration{last_sync_request_at_.load(std::memory_order_relaxed)}};
-    if (now - last < kRtProfilerMinSyncInterval) {
+    if (!bypass_throttle && now - last < kRtProfilerMinSyncInterval) {
         return;
     }
     last_sync_request_at_.store(now.time_since_epoch().count(), std::memory_order_relaxed);

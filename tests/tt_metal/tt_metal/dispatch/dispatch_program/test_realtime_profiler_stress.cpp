@@ -75,8 +75,8 @@ constexpr uint32_t kStressRuntimeId = 0xBEEFu;
 // timestamp got corrupted (e.g. wraparound, swapped halves) under load.
 constexpr double kMaxStressDurationNs = 1'000'000'000.0;
 
-// Quiesce + drain window before unregistering the callback.
-constexpr auto kPostQuiesceDrain = std::chrono::milliseconds(2000);
+// Upper bound for the callback consumer to drain records already published to the host ring.
+constexpr auto kPostQuiesceDrainTimeout = std::chrono::seconds(5);
 
 // Allowed slack for the deterministic startup race where the compute kernel
 // detects dispatch_d's stream-register clearing before dispatch_s has
@@ -151,11 +151,11 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         mesh_device->close();
         GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
     }
-    const auto* rt = mesh_device->impl().get_realtime_profiler();
+    auto* rt = mesh_device->impl().get_realtime_profiler();
     ASSERT_NE(rt, nullptr);
     const uint64_t num_active_devices = rt->num_active_devices();
 
-    uint64_t stress_records = 0;
+    std::atomic<uint64_t> stress_records = 0;
     uint64_t startup_race_skips = 0;
     uint64_t large_negative_skips = 0;
     uint64_t bad_frequency = 0;
@@ -169,7 +169,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
                 if (rec.runtime_id != kStressRuntimeId) {
                     continue;
                 }
-                ++stress_records;
+                stress_records.fetch_add(1, std::memory_order_relaxed);
                 if (rec.end_timestamp < rec.start_timestamp) {
                     const uint64_t neg_delta = rec.start_timestamp - rec.end_timestamp;
                     if (neg_delta <= kStartupRaceSlackCycles) {
@@ -220,7 +220,18 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     } while (std::chrono::steady_clock::now() < replay_deadline);
 
     mesh_device->quiesce_devices();
-    std::this_thread::sleep_for(kPostQuiesceDrain);
+    const uint64_t expected_stress_records =
+        static_cast<uint64_t>(kNumProgramsInTrace) * num_replays * num_active_devices;
+
+    // The blocking replay and quiesce paths use finish_nolock(), so neither inserts the RT profiler's finish-sync
+    // marker. Insert one explicitly to establish that every earlier device record has reached the host ring, then
+    // give this callback's independent consumer time to drain that ring before unregistering it with StopWithoutDrain.
+    rt->trigger_sync_check(/*bypass_throttle=*/true);
+    const auto drain_deadline = std::chrono::steady_clock::now() + kPostQuiesceDrainTimeout;
+    while (stress_records.load(std::memory_order_relaxed) < expected_stress_records &&
+           std::chrono::steady_clock::now() < drain_deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     const uint32_t peak_fifo_pages = rt->peak_fifo_pages();
     const uint32_t fifo_capacity_pages = rt->host_fifo_capacity_pages();
     const uint32_t ring_full_waits = rt->ring_full_wait_count();
@@ -233,8 +244,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     UnregisterProgramRealtimeProfilerCallback(handle);
     mesh_device->release_mesh_trace(trace_id);
 
-    const uint64_t expected_stress_records =
-        static_cast<uint64_t>(kNumProgramsInTrace) * num_replays * num_active_devices;
+    const uint64_t received_stress_records = stress_records.load(std::memory_order_relaxed);
 
     log_info(
         tt::LogTest,
@@ -242,7 +252,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         "mean_publish_batch={:.1f}, peak_fifo={}/{} pages, ring_full_waits={}, record_ring_full_waits={}, "
         "dispatch_stalls={} ({} cycles), {} startup-race skips, {} "
         "large-negative-delta skips (worst delta = {} cycles), {} bad-frequency, {} implausible-duration",
-        stress_records,
+        received_stress_records,
         num_active_devices,
         num_replays,
         max_callback_batch,
@@ -259,7 +269,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         bad_frequency,
         implausible_duration);
 
-    ASSERT_GE(stress_records, expected_stress_records)
+    ASSERT_GE(received_stress_records, expected_stress_records)
         << "expected one record per program run: " << kNumProgramsInTrace << " programs per replay x " << num_replays
         << " replays x " << num_active_devices
         << " active device(s). A shortfall means profiler records were dropped at some point in the pipeline.";
@@ -271,11 +281,11 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         << "device ring reached capacity; the receiver drained it slower than the device filled it";
 
     const uint64_t max_allowed_large_negative =
-        static_cast<uint64_t>(static_cast<double>(stress_records) * kMaxBadTimestampFraction);
+        static_cast<uint64_t>(static_cast<double>(received_stress_records) * kMaxBadTimestampFraction);
     EXPECT_LE(large_negative_skips, max_allowed_large_negative)
         << large_negative_skips << " stress record(s) had end_timestamp < start_timestamp by more than "
         << kStartupRaceSlackCycles << " cycles, exceeding the allowed budget of " << max_allowed_large_negative
-        << " (= " << (kMaxBadTimestampFraction * 100.0) << "% of " << stress_records << " stress records). "
+        << " (= " << (kMaxBadTimestampFraction * 100.0) << "% of " << received_stress_records << " stress records). "
         << "These are torn 64-bit reads or stale-slot residue from BRISC writing the timestamp slot before "
         << "bumping write_index; the production Tracy handler silently drops them. A spike here means the "
         << "corruption rate has become systemic — most likely an off-by-one in the rt_ring_full check or a "
