@@ -578,7 +578,8 @@ def run_sweep(
         combos.sort(key=lambda c: sum(a != b for a, b in zip(c, table_blk)))
     if only_blockings is not None:
         combos = [tuple(b) for b in only_blockings]
-    straddle = [c for c in combos if not vol2col_chunks_fit(*c[2:])]
+    allow_unaligned = os.environ.get("TT_CONV3D_ALLOW_UNALIGNED_VOL2COL") == "1"
+    straddle = [] if allow_unaligned else [c for c in combos if not vol2col_chunks_fit(*c[2:])]
     if straddle:
         print(f"Dropping {len(straddle)} blockings whose vol2col_rm chunks straddle the CB: {straddle}")
         combos = [c for c in combos if c not in straddle]
