@@ -647,6 +647,7 @@ void kernel_main() {
     const uint32_t row_group0 = schedule.row_group;
     const uint32_t band0 = schedule.band_start;
     const uint32_t num_bands = schedule.band_count;
+    const uint32_t band_stride = schedule.band_stride;
     constexpr uint32_t max_bands = schedule_max_bands;
     constexpr uint32_t fused_common_base = indexer_common::reader::Count + fused_physical_sp;
     constexpr uint32_t x_base =
@@ -783,7 +784,7 @@ void kernel_main() {
                     const uint32_t band = band_i;
                     const bool real_band = band < num_bands;
                     if (real_band) {
-                        span.set(group, band0 + band);
+                        span.set(group, band0 + band * band_stride);
                         // Resident q/w are multicasted once at each core's first band. This must
                         // happen even if that core's band falls past kv_len, since another column
                         // may still be waiting at the shared row rendezvous.
