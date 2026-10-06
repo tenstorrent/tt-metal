@@ -180,6 +180,19 @@ constexpr bool manages_cb(ReduceInputPolicy p) {
     return p != ReduceInputPolicy::NoWaitNoPop;
 }
 
+// Blackhole's reduce_block for a ROW SUM or AVG of at least 8 resident tiles (one unpack context per chunk, the scaler held
+// for it), in a kernel that defines REDUCE_ROW_BLOCK before this header: the ops measured faster with it do.
+template <PoolType reduce_type, ReduceDim reduce_dim, bool is_sfpu, ReduceInputPolicy input_policy>
+constexpr bool uses_reduce_row_block() {
+#if defined(ARCH_BLACKHOLE) && defined(REDUCE_ROW_BLOCK)
+    return !is_sfpu && !waits_per_tile(input_policy) && reduce_dim == ReduceDim::REDUCE_ROW &&
+           (reduce_type == PoolType::SUM || reduce_type == PoolType::AVG);
+#else
+    return false;
+#endif
+}
+constexpr uint32_t reduce_row_block_min_tiles = 8;
+
 // =============================================================================
 // Helper Function Implementations
 // =============================================================================
@@ -509,7 +522,15 @@ ALWI void reduce(
                 }
 
                 const uint32_t dst_idx = get_dst_index(accumulate);
-                for (uint32_t wt = 0; wt < Wt; ++wt) {
+                uint32_t wt_start = 0;
+                if constexpr (uses_reduce_row_block<reduce_type, reduce_dim, is_sfpu, input_policy>()) {
+                    if (Wt >= reduce_row_block_min_tiles) {
+                        reduce_block<reduce_type, reduce_dim>(
+                            input_dfb_id, scaler_dfb_id, waits_bulk(input_policy) ? 0 : index_offset, 0, dst_idx, Wt, 0);
+                        wt_start = Wt;
+                    }
+                }
+                for (uint32_t wt = wt_start; wt < Wt; ++wt) {
                     if constexpr (is_sfpu) {
                         constexpr uint32_t sfpu_work_dst = 1;
                         const bool is_first_tile = detail::sfpu_is_first_tile(wt, accumulate);
