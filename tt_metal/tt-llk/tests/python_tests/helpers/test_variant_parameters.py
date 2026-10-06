@@ -412,6 +412,23 @@ class SFPU_UNARY_MAX_MIN_SCALAR(TemplateParameter):
 
 
 @dataclass
+class SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE(TemplateParameter):
+    """Int32 unary max/min: Dest holds sign-magnitude int32 instead of two's complement.
+
+    Emitted as a macro for the same reason as :class:`SFPU_UNARY_MAX_MIN_SCALAR`: the
+    dispatcher in sfpu_operations_quasar.h selects on ``#ifdef``, and unset means the
+    kernel's default two's-complement Dest (SIGN_MAGNITUDE_FORMAT=false).
+    """
+
+    max_min_sign_magnitude: bool = False
+
+    def convert_to_cpp(self) -> str:
+        if not self.max_min_sign_magnitude:
+            return ""
+        return "#define SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE 1"
+
+
+@dataclass
 class SFPU_SHIFT_AMOUNT(TemplateParameter):
     """Shift amount for the *unary* shift ops (LeftShift / RightShift).
 

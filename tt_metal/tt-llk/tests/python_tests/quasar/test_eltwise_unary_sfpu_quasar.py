@@ -61,6 +61,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_FACES,
     SFPU_UNARY_MAX_MIN_SCALAR,
+    SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     TYPECAST_FORMATS,
@@ -515,6 +516,12 @@ LAYOUT_SENSITIVE_OPS = (MathOperation.Cumsum,)
 
 
 _INT32_SMAG_MAX = 2**31 - 1
+_INT32_MIN = -(2**31)
+# Half-width of the Int32 max/min stimulus. It must exceed every |scalar| the sweeps use, so
+# negative stimuli land on both sides of a negative scalar (the both-negative straddle).
+UNARY_MAX_MIN_INT32_SPAN = 5000
+# Half-width of the float max/min stimulus: [0, 1] uniform maps onto [-span, span].
+UNARY_MAX_MIN_FLOAT_SPAN = 4.0
 
 
 def _overlay_edges(values: torch.Tensor, edges: list) -> torch.Tensor:
@@ -533,28 +540,39 @@ def prepare_unary_max_min_inputs(
     mathop: MathOperation,
     input_format: DataFormat,
     scalar,
+    sign_magnitude: bool = False,
 ) -> torch.Tensor:
     """
     Stimuli for unary max/min that straddle *scalar* on both signs.
 
-    Float: the uniform [0, 1] stimulus maps to [-4, 4], overlaid with both zeros, the scalar,
-    its negation and neighbours, so ties and both-negative pairs are driven. Int32: values in
-    [-5000, 5000] (so both-negative pairs sit on either side of a negative scalar), overlaid
-    with the scalar and its neighbours plus both int32 sign-magnitude extremes. INT32_MIN is
-    excluded: sign-magnitude Dest cannot represent it.
+    Float: the uniform [0, 1] stimulus maps to [-UNARY_MAX_MIN_FLOAT_SPAN, +span], overlaid with
+    both zeros, the scalar, its negation and neighbours, so ties and both-negative pairs are
+    driven. Int32: values in [-UNARY_MAX_MIN_INT32_SPAN, +span] (so both-negative pairs sit on
+    either side of a negative scalar), overlaid with the scalar and its neighbours plus the int32
+    extremes. INT32_MIN is only planted for a two's-complement Dest: sign-magnitude cannot
+    represent it.
     """
     torch_format = format_dict[input_format]
     if mathop in UNARY_MAX_MIN_INT32_OPS:
         s = int(scalar)
-        values = torch.randint(-5000, 5001, src_A.shape, dtype=torch.int64)
+        span = UNARY_MAX_MIN_INT32_SPAN
+        assert span > abs(
+            s
+        ), f"Int32 stimulus span {span} must exceed |scalar| {abs(s)}"
+        values = torch.randint(-span, span + 1, src_A.shape, dtype=torch.int64)
         edges = [0, 1, -1, s, s - 1, s + 1, -s, -s - 1, -s + 1]
         edges += [_INT32_SMAG_MAX, -_INT32_SMAG_MAX, 2**30, -(2**30)]
-        edges = [e for e in edges if -_INT32_SMAG_MAX <= e <= _INT32_SMAG_MAX]
+        lowest = -_INT32_SMAG_MAX if sign_magnitude else _INT32_MIN
+        if not sign_magnitude:
+            edges.append(_INT32_MIN)
+        edges = [e for e in edges if lowest <= e <= _INT32_SMAG_MAX]
         return _overlay_edges(values, edges).to(torch_format)
 
     s = float(scalar)
-    values = -4.0 + 8.0 * src_A.to(torch.float32)
-    edges = [0.0, -0.0, s, -s, s - 0.25, s + 0.25, 1.0, -1.0, 4.0, -4.0]
+    span = UNARY_MAX_MIN_FLOAT_SPAN
+    assert span > abs(s), f"float stimulus span {span} must exceed |scalar| {abs(s)}"
+    values = -span + 2.0 * span * src_A.to(torch.float32)
+    edges = [0.0, -0.0, s, -s, s - 0.25, s + 0.25, 1.0, -1.0, span, -span]
     return _overlay_edges(values, edges).to(torch_format)
 
 
@@ -1001,7 +1019,8 @@ def signbit_fpu_route_variants() -> List[QuasarSfpuVariant]:
 
 
 def formats_for_op(cfg: OpConfig) -> List[InputOutputFormat]:
-    """Float formats for every op, plus the integer/UInt16 formats only COMP_FORMAT_OPS sweep."""
+    """Float formats for every op, plus the integer/UInt16 formats only COMP_FORMAT_OPS sweep and the
+    Int32-only format of the integer unary max/min pair."""
     if cfg.mathop == MathOperation.Typecast:
         return [InputOutputFormat(case.src, case.dst) for case in TYPECAST_CASES]
     if cfg.mathop in COMP_FORMAT_OPS:
@@ -1095,6 +1114,7 @@ def test_eltwise_unary_sfpu_quasar(
     is_perf=False,
     perf_report=None,
     max_min_scalar=None,
+    max_min_sign_magnitude=False,
 ):
     """
     Consolidated unary-SFPU test on Quasar. One compile-time-selected op per
@@ -1105,6 +1125,8 @@ def test_eltwise_unary_sfpu_quasar(
     Typecast sweeps explicit (src, dst) format pairs; every other op sweeps the
     shared format matrix. ``max_min_scalar`` overrides the unary max/min scalar
     (via SFPU_UNARY_MAX_MIN_SCALAR); None keeps the dispatcher's fixed default.
+    ``max_min_sign_magnitude`` runs the Int32 max/min pair on a sign-magnitude Dest
+    (SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE); the default is two's complement.
     """
     (
         mathop,
@@ -1151,7 +1173,7 @@ def test_eltwise_unary_sfpu_quasar(
         )
     elif is_max_min:
         src_A = prepare_unary_max_min_inputs(
-            src_A, mathop, formats.input_format, scalar
+            src_A, mathop, formats.input_format, scalar, max_min_sign_magnitude
         )
     else:
         src_A = prepare_unary_inputs(
@@ -1161,17 +1183,17 @@ def test_eltwise_unary_sfpu_quasar(
     num_faces = MAX_NUM_FACES
 
     if not is_perf:
-        if is_max_min and format_dict[formats.input_format].is_floating_point:
-            # A fresh instance, so the scalar override does not leak into the registry singleton.
-            max_min_golden = UnarySFPUGolden()
-            max_min_golden._UNARY_MAX_MIN_VALUE = float(scalar)
-            golden_tensor = max_min_golden(
+        if is_max_min:
+            # Float and Int32 alike: the Int32 pair takes UnarySFPUGolden's exact-integer path.
+            generate_golden = get_golden_generator(UnarySFPUGolden)
+            golden_tensor = generate_golden(
                 mathop,
                 src_A,
                 formats.output_format,
                 dest_acc,
                 formats.input_format,
                 input_dimensions,
+                max_min_scalar=scalar,
             )
         elif format_dict[formats.input_format].is_floating_point:
             generate_golden = get_golden_generator(UnarySFPUGolden)
@@ -1188,7 +1210,7 @@ def test_eltwise_unary_sfpu_quasar(
                 input_dimensions,
             )
         else:
-            # Integer-input ops (Int32/Int16/UInt16 — currently COMP_FORMAT_OPS): apply the
+            # Integer-input COMP_FORMAT_OPS (Int32/Int16/UInt16; Int32 max/min is handled above): apply the
             # UnarySFPUGolden op element-wise instead of through its __call__. __call__ runs a
             # float-only pipeline (float dst, tilize, FTZ) that would mangle integer values; applying
             # the op per element keeps integers intact, and for an element-wise op row-major order
@@ -1198,10 +1220,7 @@ def test_eltwise_unary_sfpu_quasar(
                 # kernel's FP32_TO_FP16B nearest-even step, not an identity bit copy.
                 golden_tensor = src_A.to(torch.float32).to(torch.bfloat16)
             else:
-                int_golden = UnarySFPUGolden()
-                if is_max_min:
-                    int_golden._int_maxmin_scalar = int(scalar)
-                ops = int_golden.ops
+                ops = UnarySFPUGolden().ops
                 op_res = [ops[mathop](x) for x in src_A.flatten().tolist()]
                 golden_tensor = torch.tensor(
                     op_res, dtype=format_dict[formats.output_format]
@@ -1259,6 +1278,11 @@ def test_eltwise_unary_sfpu_quasar(
                 if is_max_min and max_min_scalar is not None
                 else []
             ),
+            *(
+                [SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE(True)]
+                if is_max_min and max_min_sign_magnitude
+                else []
+            ),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -1278,10 +1302,12 @@ def test_eltwise_unary_sfpu_quasar(
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
             # Unpack-to-Dest copies Int32 L1 as two's-complement. Only Int32 → Float16_b
-            # converts 2SC → SM in the kernel; other integer typecasts still pack SM.
+            # converts 2SC → SM in the kernel; other integer typecasts still pack SM. Int32
+            # max/min stages two's complement unless the sign-magnitude Dest variant is selected.
             twos_complement=_is_int32_to_fp16b(
                 formats.input_format, formats.output_format
-            ),
+            )
+            or (mathop in UNARY_MAX_MIN_INT32_OPS and not max_min_sign_magnitude),
         ),
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
@@ -1324,10 +1350,12 @@ def test_eltwise_unary_sfpu_quasar(
 # ---------------------------------------------------------------------------
 # Unary max/min scalar sweep.
 #
-# The main sweep runs the dispatcher's fixed scalars (0.0f, 1000), both non-negative, so the
-# Int32 kernel's negative-scalar branch (which flips the pick on both-negative lanes) and the
-# float compare of two negatives against a negative scalar are never reached there. This sweep
-# sets the scalar through SFPU_UNARY_MAX_MIN_SCALAR and reruns the same body.
+# The main sweep runs the dispatcher's fixed scalars (0.0f, 1000), both non-negative, so a
+# compare of two negatives (input and scalar) is never reached there. This sweep sets the
+# scalar through SFPU_UNARY_MAX_MIN_SCALAR and reruns the same body; the Int32 pair also runs
+# on a sign-magnitude Dest (SIGN_MAGNITUDE_FORMAT). The scalar is a compile-time define that
+# does not interact with dest sync or implied math format, which the main sweep already
+# crosses, so both are pinned here.
 # ---------------------------------------------------------------------------
 UNARY_MAX_MIN_FLOAT_SCALARS = (-0.5, 1.5)
 UNARY_MAX_MIN_INT32_SCALARS = (-1000, -1)
@@ -1342,25 +1370,23 @@ def generate_unary_max_min_scalar_combinations():
             else UNARY_MAX_MIN_FLOAT_SCALARS
         )
         cfg = OP_CONFIG_BY_MATHOP[mathop]
+        sign_magnitude_modes = (
+            (False, True) if mathop in UNARY_MAX_MIN_INT32_OPS else (False,)
+        )
         for variant in generate_quasar_sfpu_format_variants(
             mathop, formats_for_op(cfg)
         ):
             for scalar in scalars:
-                for dest_sync in DEST_SYNC_MODES:
-                    for implied_math_format in (
-                        ImpliedMathFormat.No,
-                        ImpliedMathFormat.Yes,
-                    ):
-                        combinations.append(
-                            (
-                                mathop,
-                                variant,
-                                scalar,
-                                dest_sync,
-                                implied_math_format,
-                                runtime([64, 64]),
-                            )
+                for sign_magnitude in sign_magnitude_modes:
+                    combinations.append(
+                        (
+                            mathop,
+                            variant,
+                            scalar,
+                            sign_magnitude,
+                            runtime([64, 64]),
                         )
+                    )
     return combinations
 
 
@@ -1374,8 +1400,7 @@ def test_unary_max_min_scalar_quasar(unary_max_min_scalar_combination):
         mathop,
         format_variant,
         scalar,
-        dest_sync,
-        implied_math_format,
+        sign_magnitude,
         input_dimensions,
     ) = unary_max_min_scalar_combination[0]
     test_eltwise_unary_sfpu_quasar(
@@ -1383,13 +1408,14 @@ def test_unary_max_min_scalar_quasar(unary_max_min_scalar_combination):
             (
                 mathop,
                 format_variant,
-                dest_sync,
-                implied_math_format,
+                DestSync.Half,
+                ImpliedMathFormat.No,
                 ApproximationMode.No,
                 input_dimensions,
             )
         ],
         max_min_scalar=scalar,
+        max_min_sign_magnitude=sign_magnitude,
     )
 
 

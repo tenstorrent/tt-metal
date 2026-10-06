@@ -809,17 +809,23 @@ void call_unary_sfpu_operation_quasar(
     else if constexpr (OPERATION == SfpuType::unary_max_int32 || OPERATION == SfpuType::unary_min_int32)
     {
         // Two's-complement int32 scalar: SFPU_UNARY_MAX_MIN_SCALAR when the test sets it, else 1000
-        // (matching UnarySFPUGolden INT_MAXMIN_SCALAR).
+        // (matching UnarySFPUGolden INT_MAXMIN_SCALAR). Dest is two's complement unless the test sets
+        // SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE.
 #ifdef SFPU_UNARY_MAX_MIN_SCALAR
         constexpr std::uint32_t UNARY_MAX_MIN_INT32_SCALAR = SFPU_UNARY_MAX_MIN_SCALAR;
 #else
         constexpr std::uint32_t UNARY_MAX_MIN_INT32_SCALAR = 1000;
 #endif
+#ifdef SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE
+        constexpr bool UNARY_MAX_MIN_SIGN_MAGNITUDE = true;
+#else
+        constexpr bool UNARY_MAX_MIN_SIGN_MAGNITUDE = false;
+#endif
         SFPU_UNARY_CALL(
             DST_SYNC,
             is_fp32_dest_acc_en,
             calculate_unary_max_min,
-            (OPERATION == SfpuType::unary_max_int32 /* IS_MAX_OP */, DataFormat::Int32, APPROX, ITERATIONS),
+            (OPERATION == SfpuType::unary_max_int32 /* IS_MAX_OP */, DataFormat::Int32, APPROX, ITERATIONS, UNARY_MAX_MIN_SIGN_MAGNITUDE),
             dst_index,
             VectorMode::RC,
             UNARY_MAX_MIN_INT32_SCALAR);
