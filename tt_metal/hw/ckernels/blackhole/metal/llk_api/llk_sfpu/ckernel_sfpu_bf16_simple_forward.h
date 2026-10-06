@@ -24,24 +24,15 @@ inline void init_simple_forward() {
 template <typename Config, int Iterations = 8>
 inline void calculate_simple_forward() {
     static_assert(Iterations > 0 && Iterations % 2 == 0);
-    {
-        {
-            ::ckernel::sfpu::bf16_sfpi::sfploadi(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, Config::kSlopeBits >> 16);
-            ::ckernel::sfpu::bf16_sfpi::sfploadi(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, Config::kSlopeBits & 65535);
-            ::ckernel::sfpu::bf16_sfpi::sfploadi(
-                p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, Config::kInterceptBits >> 16);
-            ::ckernel::sfpu::bf16_sfpi::sfploadi(
-                p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, Config::kInterceptBits & 65535);
-        }
-        ::ckernel::sfpu::bf16_sfpi::replay(0, Config::kBodySlots, 1, 1);
-        {
-            sfpi::
-                simple_gated_pair<false, (Config::kRawEqual != 0u), Config::kRawEqual, 0, 0, ADDR_MOD_7, ADDR_MOD_6>();
-        }
+    ::ckernel::sfpu::bf16_sfpi::sfploadi(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, Config::kSlopeBits >> 16);
+    ::ckernel::sfpu::bf16_sfpi::sfploadi(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, Config::kSlopeBits & 65535);
+    ::ckernel::sfpu::bf16_sfpi::sfploadi(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, Config::kInterceptBits >> 16);
+    ::ckernel::sfpu::bf16_sfpi::sfploadi(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, Config::kInterceptBits & 65535);
+    ::ckernel::sfpu::bf16_sfpi::replay(0, Config::kBodySlots, 1, 1);
+    sfpi::simple_gated_pair<false, (Config::kRawEqual != 0u), Config::kRawEqual, 0, 0, ADDR_MOD_7, ADDR_MOD_6>();
 #pragma GCC unroll 8
-        for (int row = Config::kRowsPerReplay; row < Iterations; row += Config::kRowsPerReplay) {
-            ::ckernel::sfpu::bf16_sfpi::replay(0, Config::kBodySlots, 0, 0);
-        }
+    for (int row = Config::kRowsPerReplay; row < Iterations; row += Config::kRowsPerReplay) {
+        ::ckernel::sfpu::bf16_sfpi::replay(0, Config::kBodySlots, 0, 0);
     }
 }
 }  // namespace ckernel::sfpu::bf16
