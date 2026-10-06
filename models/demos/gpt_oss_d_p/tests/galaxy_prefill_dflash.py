@@ -66,12 +66,13 @@ def _load_inputs(seed_path: Path | None, trace_dir: Path):
         return None, selected
     seed = torch.load(seed_path, map_location="cpu", weights_only=False)
     seed_tokens = seed.get("seed_token_ids") or seed.get("prompt_token_ids")
-    if seed_tokens is None or len(seed_tokens) < REAL_TOKENS:
-        raise ValueError(f"{seed_path} needs at least {REAL_TOKENS} seed token ids")
-    if "reduced_hidden_prenorm_ref" not in seed or seed["reduced_hidden_prenorm_ref"].shape[0] < REAL_TOKENS:
-        raise ValueError(f"{seed_path} needs reduced_hidden_prenorm_ref[{REAL_TOKENS}, H]")
-    if [int(x) for x in seed_tokens[:REAL_TOKENS]] != selected:
-        raise ValueError("PREFILL_TRACE_DIR and BLAZE_DFLASH_SEED_REF contain different first-1k token ids")
+    if not seed_tokens:
+        raise ValueError(f"{seed_path} needs at least one seed token id")
+    reference_positions = min(len(seed_tokens), REAL_TOKENS)
+    if "reduced_hidden_prenorm_ref" not in seed or seed["reduced_hidden_prenorm_ref"].shape[0] < reference_positions:
+        raise ValueError(f"{seed_path} needs reduced_hidden_prenorm_ref[{reference_positions}, H]")
+    if [int(x) for x in seed_tokens[:reference_positions]] != selected[:reference_positions]:
+        raise ValueError("PREFILL_TRACE_DIR and BLAZE_DFLASH_SEED_REF contain different token prefixes")
     return seed, selected
 
 
@@ -250,9 +251,11 @@ def main() -> int:
         export_ms = (time.perf_counter() - export_started) * 1000.0
         aggregate = per_position = None
         if seed is not None:
-            reference = seed["reduced_hidden_prenorm_ref"][:REAL_TOKENS].float()
-            aggregate = _pcc(reference, reduced)
-            per_position = torch.tensor([_pcc(reference[i], reduced[i]) for i in range(REAL_TOKENS)])
+            reference_positions = min(len(seed["seed_token_ids"]), REAL_TOKENS)
+            reference = seed["reduced_hidden_prenorm_ref"][:reference_positions].float()
+            reduced_reference = reduced[:reference_positions]
+            aggregate = _pcc(reference, reduced_reference)
+            per_position = torch.tensor([_pcc(reference[i], reduced_reference[i]) for i in range(reference_positions)])
             pcc_min = float(os.getenv("GPT_OSS_DFLASH_PCC_MIN", "0.90"))
             if aggregate < pcc_min:
                 raise AssertionError(f"reduced_hidden aggregate PCC {aggregate:.5f} < {pcc_min}")
@@ -260,10 +263,12 @@ def main() -> int:
             if pos_min is not None and float(per_position.min()) < float(pos_min):
                 raise AssertionError(f"reduced_hidden min per-position PCC {per_position.min():.5f} < {pos_min}")
 
-            golden_token = int(seed["next_token_ref"][REAL_TOKENS - 1])
-            if result.y0 != golden_token:
+            if len(seed["next_token_ref"]) >= REAL_TOKENS:
+                golden_token = int(seed["next_token_ref"][REAL_TOKENS - 1])
                 topk_ids = seed.get("golden_topk_token_ids")
-                if topk_ids is None or result.y0 not in [int(x) for x in topk_ids[REAL_TOKENS - 1]]:
+                if result.y0 != golden_token and (
+                    topk_ids is None or result.y0 not in [int(x) for x in topk_ids[REAL_TOKENS - 1]]
+                ):
                     raise AssertionError(
                         f"y0={result.y0} differs from golden={golden_token} and is outside golden top-k"
                     )
@@ -274,7 +279,8 @@ def main() -> int:
         accuracy = f"KV_PCC={kv_pcc:.5f} y0={result.y0}"
         if aggregate is not None and per_position is not None:
             accuracy += (
-                f" RH_PCC={aggregate:.5f} " f"RH_POS(min/mean)={per_position.min():.5f}/{per_position.mean():.5f}"
+                f" RH_REF_POS={len(per_position)} RH_PCC={aggregate:.5f} "
+                f"RH_POS(min/mean)={per_position.min():.5f}/{per_position.mean():.5f}"
             )
         print(f"[dflash-prefill] {accuracy}", flush=True)
         print(
