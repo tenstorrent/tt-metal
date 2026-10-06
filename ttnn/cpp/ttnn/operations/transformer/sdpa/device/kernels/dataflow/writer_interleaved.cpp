@@ -130,11 +130,11 @@ void kernel_main() {
     // Q chunk from it (so the reader streams Q/K/V only).
     if constexpr (use_windowed_mask) {
         const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
-        constexpr uint32_t cu_tile_bytes = get_tile_size(cb_cu_window_in);
+        const uint32_t cu_descriptor_bytes = cu_window_seqlens_eles * sizeof(uint32_t);
         CircularBuffer cb_cu(cb_cu_window_in);
         cb_cu.reserve_back(1);
         noc.async_read(
-            cu_window_reader, CoreLocalMem<uint32_t>(cb_cu.get_write_ptr()), cu_tile_bytes, {.page_id = 0}, {});
+            cu_window_reader, CoreLocalMem<uint32_t>(cb_cu.get_write_ptr()), cu_descriptor_bytes, {.page_id = 0}, {});
         noc.async_read_barrier();
         // Per-device Q origin, if the caller passed it as a tensor. Lands in its own dedicated CB —
         // every other CB here has a producer/consumer contract with another kernel that a writer-side

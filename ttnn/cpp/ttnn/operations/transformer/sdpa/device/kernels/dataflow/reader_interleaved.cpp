@@ -299,8 +299,8 @@ void kernel_main() {
             windowed_q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cu_write_ptr);
         }
         const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
-        constexpr uint32_t cu_tile_bytes = get_tile_size(cb_id_windowed_cu_reader);
-        noc.async_read(cu_window_reader, CoreLocalMem<uint32_t>(cu_write_ptr), cu_tile_bytes, {.page_id = 0}, {});
+        const uint32_t cu_descriptor_bytes = cu_window_seqlens_eles * sizeof(uint32_t);
+        noc.async_read(cu_window_reader, CoreLocalMem<uint32_t>(cu_write_ptr), cu_descriptor_bytes, {.page_id = 0}, {});
         noc.async_read_barrier();
         windowed_cu_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cu_write_ptr);
     }
