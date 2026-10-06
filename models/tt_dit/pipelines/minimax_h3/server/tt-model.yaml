@@ -67,6 +67,10 @@ runtime:
     # diffusers is deliberately NOT installed: the only import of it is `_prepare_host_vae`, a
     # reference twin of the device VAE with no call site on any served path. av / torchaudio are
     # likewise ref2va-only, and ref2va is not exposed by this package.
+  # Frozen by the first build (2026-10-06): torch 2.11.0+cpu, numpy 1.26.4, transformers 5.12.1,
+  # huggingface_hub 1.33.0. With a lock the package list above resolves nothing at build time, so
+  # two builds a week apart install the same environment.
+  lock: requirements.lock
 
 serve:
   port: 8000
