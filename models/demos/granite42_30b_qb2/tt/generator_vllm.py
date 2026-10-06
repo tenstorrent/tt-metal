@@ -26,6 +26,21 @@ class GraniteForCausalLM:
         "max_device_top_k": 32,
     }
 
+    def __init__(self, *, vllm_config=None):
+        if vllm_config is not None:
+            raise RuntimeError("Initialize the TT model through initialize_vllm_model")
+
+    # vLLM checks its generation protocol before the TT plugin selects the
+    # prefill/decode execution path. The GPU entry points are not used by TT.
+    def embed_input_ids(self, input_ids):
+        raise RuntimeError("Use the TT prefill_forward/decode_forward interface")
+
+    def forward(self, input_ids, positions):
+        raise RuntimeError("Use the TT prefill_forward/decode_forward interface")
+
+    def compute_logits(self, hidden_states):
+        raise RuntimeError("The TT generator owns the terminal norm and LM head")
+
     @classmethod
     def get_max_tokens_all_users(cls, **kwargs):
         return 131072

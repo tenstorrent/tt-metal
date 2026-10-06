@@ -39,6 +39,17 @@ class TestServingContract(unittest.TestCase):
         self.adapter.generator.pages_per_row = 8
         self.adapter.generator._bucket.side_effect = lambda n: next(b for b in (1, 8, 16) if n <= b)
 
+    def test_real_vllm_generation_protocol_selects_tt_bridge(self):
+        from vllm.model_executor.models.interfaces_base import is_text_generation_model
+
+        cls = adapter_class()
+        self.assertTrue(is_text_generation_model(cls))
+        with self.assertRaisesRegex(RuntimeError, "initialize_vllm_model"):
+            cls(vllm_config=object())
+        for method, args in (("embed_input_ids", (None,)), ("forward", (None, None)), ("compute_logits", (None,))):
+            with self.subTest(method=method), self.assertRaises(RuntimeError):
+                getattr(self.adapter, method)(*args)
+
     def test_host_logits_exclude_inactive_bucket_rows(self):
         for batch, bucket in ((5, 8), (10, 16)):
             with self.subTest(batch=batch):
