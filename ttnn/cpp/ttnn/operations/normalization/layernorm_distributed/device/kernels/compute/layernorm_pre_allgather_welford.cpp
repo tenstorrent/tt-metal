@@ -54,8 +54,11 @@ void kernel_main() {
 #ifdef ARCH_BLACKHOLE
     // The Blackhole Welford record (replay slots 0 to 15) and the 32-bit transpose record (16 to 31) are disjoint.
     constexpr bool welford_rerecord_per_tile = false;
+    // The fused pre-add keeps the accumulator in LREG4/5 across blocks; only its SFPU add needs it parked in DEST.
+    [[maybe_unused]] constexpr bool welford_state_in_lregs = true;
 #else
     constexpr bool welford_rerecord_per_tile = welford_unpack_fp32_active;
+    [[maybe_unused]] constexpr bool welford_state_in_lregs = false;
 #endif
 
 #ifdef FUSE_PRE_ADD
@@ -98,19 +101,23 @@ void kernel_main() {
 
         // Seed the spill buffers with an initialized (zero) Welford state,
         // since iteration 0 below expects it.
-        tile_regs_acquire();
-        welford_init();
-        welford_save_state(dst1);
-        tile_regs_commit();
-        dfb_mean_spill.reserve_back(1);
-        dfb_m2_spill.reserve_back(1);
-        tile_regs_wait();
-        pack_reconfig_data_format(dfb::mean_spill);
-        pack_tile(dst1, dfb::mean_spill);
-        pack_tile(dst2, dfb::m2_spill);
-        tile_regs_release();
-        dfb_mean_spill.push_back(1);
-        dfb_m2_spill.push_back(1);
+        if constexpr (welford_state_in_lregs) {
+            welford_init();
+        } else {
+            tile_regs_acquire();
+            welford_init();
+            welford_save_state(dst1);
+            tile_regs_commit();
+            dfb_mean_spill.reserve_back(1);
+            dfb_m2_spill.reserve_back(1);
+            tile_regs_wait();
+            pack_reconfig_data_format(dfb::mean_spill);
+            pack_tile(dst1, dfb::mean_spill);
+            pack_tile(dst2, dfb::m2_spill);
+            tile_regs_release();
+            dfb_mean_spill.push_back(1);
+            dfb_m2_spill.push_back(1);
+        }
 
         uint32_t start_N = 0;
         for (auto block : generic::blocks(Wt, blk)) {
@@ -129,8 +136,14 @@ void kernel_main() {
                     reconfig_data_format_srca(dfb::in0, dfb::res);
                     copy_init(dfb::res);
                     copy_tile(dfb::res, i, 1);
+                    if constexpr (welford_state_in_lregs) {
+                        welford_save_state(dst2);
+                    }
                     add_binary_tile_init();
                     add_binary_tile(0, 1, 0);
+                    if constexpr (welford_state_in_lregs) {
+                        welford_restore_state(dst2);
+                    }
                     tile_regs_commit();
                     tile_regs_wait();
                     pack_tile(0, dfb_inp_id);
@@ -156,19 +169,24 @@ void kernel_main() {
             dfb_res.pop_front(block.size());
 
             // --- Welford: reload accumulator, update with block tiles, spill back ---
-            dfb_mean_spill.wait_front(1);
-            dfb_m2_spill.wait_front(1);
+            if constexpr (!welford_state_in_lregs) {
+                dfb_mean_spill.wait_front(1);
+                dfb_m2_spill.wait_front(1);
+            }
             dfb_inp.wait_front(block.size());
             tile_regs_acquire();
-            reconfig_data_format_srca(dfb::in0, dfb::mean_spill);
-            copy_init(dfb::mean_spill);
-            copy_tile(dfb::mean_spill, 0, dst1);
-            reconfig_data_format_srca(dfb::mean_spill, dfb::m2_spill);
-            copy_init(dfb::m2_spill);
-            copy_tile(dfb::m2_spill, 0, dst2);
-            welford_restore_state(dst1);
-
-            reconfig_data_format_srca(dfb::m2_spill, dfb_inp_id);
+            if constexpr (welford_state_in_lregs) {
+                reconfig_data_format_srca(dfb::in0, dfb_inp_id);
+            } else {
+                reconfig_data_format_srca(dfb::in0, dfb::mean_spill);
+                copy_init(dfb::mean_spill);
+                copy_tile(dfb::mean_spill, 0, dst1);
+                reconfig_data_format_srca(dfb::mean_spill, dfb::m2_spill);
+                copy_init(dfb::m2_spill);
+                copy_tile(dfb::m2_spill, 0, dst2);
+                welford_restore_state(dst1);
+                reconfig_data_format_srca(dfb::m2_spill, dfb_inp_id);
+            }
             if constexpr (!welford_rerecord_per_tile) {
                 transpose_init(dfb_inp_id);
                 if constexpr (welford_unpack_fp32_active) {
@@ -190,41 +208,58 @@ void kernel_main() {
                 }
                 start_N += 32;
             }
-            welford_save_state(dst1);
-            tile_regs_commit();
-            dfb_mean_spill.pop_front(1);
-            dfb_m2_spill.pop_front(1);
-            dfb_inp.pop_front(block.size());
-            dfb_mean_spill.reserve_back(1);
-            dfb_m2_spill.reserve_back(1);
-            tile_regs_wait();
-            pack_reconfig_data_format(dfb_inp_id, dfb::mean_spill);
-            pack_tile(dst1, dfb::mean_spill);
-            pack_tile(dst2, dfb::m2_spill);
-            tile_regs_release();
-            dfb_mean_spill.push_back(1);
-            dfb_m2_spill.push_back(1);
+            if constexpr (welford_state_in_lregs) {
+                tile_regs_commit();
+                dfb_inp.pop_front(block.size());
+                tile_regs_wait();
+                tile_regs_release();
+            } else {
+                welford_save_state(dst1);
+                tile_regs_commit();
+                dfb_mean_spill.pop_front(1);
+                dfb_m2_spill.pop_front(1);
+                dfb_inp.pop_front(block.size());
+                dfb_mean_spill.reserve_back(1);
+                dfb_m2_spill.reserve_back(1);
+                tile_regs_wait();
+                pack_reconfig_data_format(dfb_inp_id, dfb::mean_spill);
+                pack_tile(dst1, dfb::mean_spill);
+                pack_tile(dst2, dfb::m2_spill);
+                tile_regs_release();
+                dfb_mean_spill.push_back(1);
+                dfb_m2_spill.push_back(1);
+            }
         }
 
         // Finalize: reload accumulator and write mean and variance to the scratch buffer.
-        dfb_mean_spill.wait_front(1);
-        dfb_m2_spill.wait_front(1);
+        if constexpr (!welford_state_in_lregs) {
+            dfb_mean_spill.wait_front(1);
+            dfb_m2_spill.wait_front(1);
+        }
         tile_regs_acquire();
-        reconfig_data_format_srca(dfb_inp_id, dfb::mean_spill);
-        copy_init(dfb::mean_spill);
-        copy_tile(dfb::mean_spill, 0, dst1);
-        reconfig_data_format_srca(dfb::mean_spill, dfb::m2_spill);
-        copy_init(dfb::m2_spill);
-        copy_tile(dfb::m2_spill, 0, dst2);
-        welford_restore_state(dst1);
+        if constexpr (!welford_state_in_lregs) {
+            reconfig_data_format_srca(dfb_inp_id, dfb::mean_spill);
+            copy_init(dfb::mean_spill);
+            copy_tile(dfb::mean_spill, 0, dst1);
+            reconfig_data_format_srca(dfb::mean_spill, dfb::m2_spill);
+            copy_init(dfb::m2_spill);
+            copy_tile(dfb::m2_spill, 0, dst2);
+            welford_restore_state(dst1);
+        }
         welford_finalize_to_row<W>(dst1, W - 1, *p_reciprocals);
         tile_regs_commit();
-        dfb_mean_spill.pop_front(1);
-        dfb_m2_spill.pop_front(1);
+        if constexpr (!welford_state_in_lregs) {
+            dfb_mean_spill.pop_front(1);
+            dfb_m2_spill.pop_front(1);
+        }
 
         dfb_scratch.reserve_back(2);
         tile_regs_wait();
-        pack_reconfig_data_format(dfb::mean_spill, dfb::scratch);
+        if constexpr (welford_state_in_lregs) {
+            pack_reconfig_data_format(dfb_inp_id, dfb::scratch);
+        } else {
+            pack_reconfig_data_format(dfb::mean_spill, dfb::scratch);
+        }
         pack_tile(dst1, dfb::scratch);
         pack_tile(dst2, dfb::scratch);
         dfb_scratch.push_back(2);
