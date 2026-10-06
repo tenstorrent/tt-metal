@@ -1,14 +1,14 @@
 # t164 — t95 eval pack on g15blx02 (continues #140)
 
 Box: g15blx02 (READY marker; ~/fasth3 93.8 GiB at start, 100 GB cap). Never blx03.
-Code: Python from worktree tt-project/worktrees/t164 (branch ttp/t164-eval-pack-g15 = origin t48 b81bb403d86;
+Code: Python from worktree tt-project/worktrees/t164 (branch ttp/t164-eval-pack-g15 = t48 abfd309e797 merged in;
 models/ identical to t140's overlay), C++ build + kernels from worktrees/t158 (bf7db12a149), caches data/g15
 (job 399's). No knob writes a new weight cache (checked: gate-on-device folds after loading the plain
 transformer/ cache; exact_shard/LoFi leave the VAE C_in_block hash alone; adaln/agmm/hostcopy are runtime only).
 Only new JIT kernels land in data/g15/tt-metal-cache.
 
 Per config: one broker job (run_cfg.sh), warmup + gen#0 (capture, default rapper prompt) + gen#1 (warm, paper
-boat, headline) + gen#2 (warm, fisherman, spread). -t 330 baseline / 400 knobs (job 399 held ~180 s, 0 JIT compiles).
+boat, headline) + gen#2 (warm, fisherman, spread). -t 240 baseline / 400 knobs (job 406, warmup cuts, held 152 s). Warmup cuts on: LTX_WARMUP_T2V_ONLY=1 LTX_WARMUP_ENCODERS=0.
 pytest runs with cwd = the config's output dir: tt-metal resolves relative kernel paths against the cwd before
 TT_METAL_HOME, so running inside the t164 checkout (job 403) recompiled all 2172 kernels from t164 paths.
 Driver: tmp/t164/driver.sh (CONFIGS, TAG), started with `ttp detach t164-<tag>`. Marker data/g15/t164/driver_<tag>/DRIVER.done.
@@ -50,3 +50,14 @@ stills, pick the default set, commit the table + video/still paths on this branc
   /var/lib/tt-device-broker/health/incidents/20261006T213429Z_unhealthy_none). Driver: DROP #1, it reruns the
   baseline after the health gate passes. A second baseline drop stops the pack (marker 6).
 - 2026-10-06 21:40 UTC: phase 2 started (ttp detach t164-phase2; log/rc in state/runs/684/t164-phase2.{log,rc}).
+- 2026-10-06 ~21:40 UTC: host crashed (unclean: the old boot's journal ends 21:40:04, our files were written
+  21:40:13, the box booted 21:42:57). This was during the broker's 60 s settle after its tray-1 reset sweep, before
+  phase 2 launched. My host-side `pytest --collect-only` dry-run (outside the broker) was starting then.
+  Collection only checks a file path in skipif, and conftest's cluster queries live in fixtures, so it most likely
+  did not touch the chips, but its `import ttnn` cannot be excluded. Rule from now on: no host-side ttnn imports
+  while a broker recovery runs, and no dry-runs outside the broker.
+- 21:55 UTC: the broker finished its reset + verify (all 32 chips OK, fabric OK; logged at ERROR level as
+  HOLD-DEADLINE-ESCALATE). driver.sh health() now accepts that line.
+- 21:56 UTC: pack relaunched on t48 abfd309e797 + warmup cuts (TAG=pack3, ttp detach t164-pack4, run dir
+  state/runs/690, PRIOR_DROP=baseline). Baseline = job 422 (-t 240), queued behind ltx-host 421. Phase 2: ttp
+  detach t164-phase2b (PACK_TAG=pack3). Wake probe: `ttp detach --check state/runs/690/t164-phase2b.rc`.
