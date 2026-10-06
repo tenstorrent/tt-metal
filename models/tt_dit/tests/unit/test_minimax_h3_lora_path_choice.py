@@ -5,9 +5,11 @@
 """Host-only tests for WHICH of the two LoRA merge paths a MiniMax-H3 pipeline takes.
 
 This matters more than it looks. The two paths are not equivalent implementations of one operation:
-on the 4-chip mesh the on-device bind was measured to be a complete no-op -- the served config with
-no adapter produced bit-identical video and audio to the served config with one -- so the choice
-decides whether a distillation adapter is applied at all. The DiT dtype and the merge path are also
+on the 4-chip mesh the on-device bind was once a complete no-op -- the served config with no
+adapter produced bit-identical video and audio to the served config with one, because the bound
+delta did not survive a DiT weight page-in. That was repaired in 0a424065c9e, and
+test_lora_reload_minimax_h3.py is the device regression that holds it repaired. The choice still
+decides whether a distillation adapter is applied at all, which is why it is pinned here. The DiT dtype and the merge path are also
 collinear in the shipped rule (a quant profile implies the host fuse), which is why the override
 exists and why it is pinned here: without it no experiment can separate a dtype defect from an
 adapter defect, and it would be easy to "simplify" the env lookup away.
@@ -50,15 +52,15 @@ def test_quantized_weights_fuse_on_host():
 
 
 def test_unquantized_weights_bind_on_device_by_default():
-    """The default for bf16, and the path proven ineffective on the 1x4 -- so this assertion is the
-    record of current behaviour, NOT an endorsement of it. When the bind is repaired this test
-    stays; when the DEFAULT is changed, this is the test that should fail and be updated."""
+    """The default for bf16: the adapter is bound on the device rather than fused on the host.
+    This pins the path choice, not its implementation -- if the DEFAULT is ever changed, this is
+    the test that should fail and be updated."""
     assert _fuses_on_host("adapter.safetensors", None) is False
 
 
 def test_the_override_forces_the_host_fuse_on_unquantized_weights(monkeypatch):
-    """The whole point of the knob: bf16 with the adapter genuinely applied, so that dtype and
-    merge path can be varied independently."""
+    """The whole point of the knob: bf16 with the adapter applied on the HOST instead, so that
+    dtype and merge path can be varied independently."""
     monkeypatch.setenv(FORCE, "1")
     assert _fuses_on_host("adapter.safetensors", None) is True
 
