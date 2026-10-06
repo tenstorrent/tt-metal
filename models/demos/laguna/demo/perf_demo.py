@@ -17,6 +17,8 @@ length gets ``--prompts`` different random prompts (default 1, like tt-metal's s
 more than one the table reports the mean and the per-request range.
 
     TTFT            time from sending the request to the first output token (prefill, plus queueing: none at batch 1)
+                    Each length is first sent once as a 16-token warm-up with the same prompt, so one-time program
+                    builds (DFlash builds one per new prompt length) are not timed.
     decode tok/s    1000 / time per output token after the first (per user; batch 1, so also the total)
 
 Speculative decoding speed depends on how predictable the generated text is, so DFlash varies from prompt to prompt
@@ -272,7 +274,13 @@ def main() -> int:
                 print_examples(mode, examples[mode])
             rows[mode], raw[mode] = {}, {}
             for input_len in input_lens:
+                # Warm-up at this length first: the same seed gives the same random prompts, so programs that depend
+                # on the exact prompt length (DFlash compiles one per new length) are built before the measured run.
+                warm = bench(args.model, input_len, 16, prompts, mode_dir, f"warmup_isl_{input_len}")
                 result = bench(args.model, input_len, args.output_tokens, prompts, mode_dir, f"isl_{input_len}")
+                if (warm.get("input_lens") or []) != (result.get("input_lens") or []):
+                    print(f"[perf demo] warning: warm-up prompt lengths {warm.get('input_lens')} differ from the "
+                          f"measured {result.get('input_lens')}", flush=True)  # fmt: skip
                 summary = summarize(result)
                 rows[mode][input_len], raw[mode][input_len] = summary, result
                 print(
