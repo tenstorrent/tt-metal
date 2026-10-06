@@ -15,3 +15,9 @@ m = importlib.import_module("models.tt_dit.tests.unit.test_distributed_rmsnorm_f
 @pytest.mark.parametrize("model", ["wan", "ltx", "flux"])
 def test_dit_tp1(mesh_device, model):
     m.test_corr_det(mesh_device, model, 1, ttnn.Topology.Linear, None, 1, False)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536, "trace_region_size": 131072}], indirect=True)
+def test_dit_ln_tp1(mesh_device):
+    m.test_layernorm_corr(mesh_device, "wan", 1, ttnn.Topology.Linear, None, 1, False)
