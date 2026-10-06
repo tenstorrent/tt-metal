@@ -8,6 +8,7 @@ txt = open(sys.argv[1]).read()
 parts = re.split(r"(?=\S* ?- === session scenario )", txt)
 segs = [p for p in parts if "=== session scenario" in p[:200]]
 first = {}
+seen = {}
 for s in segs:
     m = re.search(r"=== session scenario (\S+) \((.*?)\) ===(.*?MODE (\S+))?", s)
     sid, flags, mode = m.group(1), m.group(2), m.group(4) or "-"
@@ -23,6 +24,12 @@ for s in segs:
         + (f"TTFT {int(t.group(3))/1000:.2f} s, {t.group(4)} tok/s" if t else "no TTFT")
         + (f", decode {d.group(1)} ms/tok" if d else "")
     )
+    seen.setdefault(sid, []).append(out)
+    if (
+        len(seen[sid]) >= 3
+    ):  # run-to-run determinism: same output as the scenario two entries earlier (same configuration in an A/B/A/B session)
+        o2 = seen[sid][-3]
+        line += f" | repeat-vs-2-earlier: {sum(1 for u in out if out[u] == o2.get(u))}/{len(out)} identical"
     if sid not in first:
         first[sid] = (out, ft)
     else:
