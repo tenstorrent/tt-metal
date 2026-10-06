@@ -10,12 +10,12 @@ measured ms/row-token, see PREFILL_CHUNKCAL_NOTES.md. U = 8 (B = 32) and U = 2 (
 # U -> budget (tokens per mesh row per pass)
 BASE_TABLE = {1: 2048, 2: 4096, 4: 4096, 8: 1024, 16: 2048}
 UNIFIED_TABLE = {
-    1: 1024,
+    1: 2048,
     2: 2048,
-    4: 8192,
-    8: 1024,
+    4: 2048,
+    8: 2048,
     16: 2048,
-}  # unified prefill MoE; U=1/4/16 measured (chunkcal), U=2/8 conservative (= the baseline table's neighbours, to be measured), U>16 below
+}  # unified prefill MoE: 2048 tokens per mesh row for every batch size (user decision 2026-10-06: the earlier 8192 at U=4 ran out of DRAM at 64k; U>16 below)
 MIN_FREE_MIB = 450.0  # free DRAM per bank after the model build below which the budget is halved (one step) to keep the compile-pass headroom
 
 
