@@ -1145,7 +1145,6 @@ TEST_F(DispatchContextFixture, RefusesSubDeviceManagerLoadDuringManualSession) {
     const SubDeviceManagerId manager = mesh->create_sub_device_manager({sub_device}, /*local_l1_size=*/0);
 
     ASSERT_NO_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh.get()));
-    EXPECT_TRUE(experimental::DispatchContext::get().is_fast_dispatch_session_active());
     std::string error;
     try {
         mesh->load_sub_device_manager(manager);
@@ -1159,7 +1158,6 @@ TEST_F(DispatchContextFixture, RefusesSubDeviceManagerLoadDuringManualSession) {
     }
     EXPECT_EQ(mesh->get_active_sub_device_manager_id(), mesh->get_default_sub_device_manager_id());
     ASSERT_NO_THROW(experimental::DispatchContext::get().terminate_fast_dispatch(mesh.get()));
-    EXPECT_FALSE(experimental::DispatchContext::get().is_fast_dispatch_session_active());
 
     ASSERT_FALSE(error.empty()) << "Expected the load to be refused inside a manual Fast Dispatch session.";
     EXPECT_NE(error.find("not supported with manual Fast Dispatch"), std::string::npos) << error;

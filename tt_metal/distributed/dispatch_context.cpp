@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "impl/context/context_types.hpp"
+#include "dispatch_context_internal.hpp"
 #include "mesh_device_impl.hpp"
 #include "mesh_command_queue.hpp"
 #include "fd_mesh_command_queue.hpp"
@@ -165,7 +166,7 @@ DispatchContext& DispatchContext::get() {
     return *dispatch_context_ptr_;
 }
 
-bool DispatchContext::is_fast_dispatch_session_active() const { return num_fd_inits_ > 0; }
+bool is_manual_fast_dispatch_session_active() { return DispatchContext::get().num_fd_inits_ > 0; }
 
 DispatchCoreAxis DispatchContext::get_dispatch_core_axis(distributed::MeshDevice* mesh_device) const {
     return MetalContext::instance(extract_context_id(mesh_device)).get_dispatch_core_config().get_dispatch_core_axis();

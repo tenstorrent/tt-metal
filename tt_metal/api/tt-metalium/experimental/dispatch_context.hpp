@@ -61,8 +61,6 @@ public:
     void initialize_fast_dispatch(distributed::MeshDevice* mesh_device);
     void initialize_fast_dispatch(distributed::MeshDevice* mesh_device, const FastDispatchSetupOptions& options);
     void terminate_fast_dispatch(distributed::MeshDevice* mesh_device);
-    // True between a successful initialize_fast_dispatch and the matching terminate_fast_dispatch.
-    bool is_fast_dispatch_session_active() const;
     void enable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device);
 
     // Configure-without-launch mode: programs are written to L1 but never given the go signal.
@@ -81,6 +79,8 @@ private:
         void operator()(DispatchContext* p) const { delete p; }
     };
     friend struct Deleter;
+    // Internal query used by MeshDeviceImpl (tt_metal/distributed/dispatch_context_internal.hpp); not public API.
+    friend bool is_manual_fast_dispatch_session_active();
 
     // Drops the host-side fast-dispatch state created before the L1 preflight refused, so the
     // mesh is back in Slow Dispatch. Touches Device internals, hence a member.
