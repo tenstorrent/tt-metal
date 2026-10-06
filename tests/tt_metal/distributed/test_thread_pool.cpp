@@ -116,8 +116,9 @@ TEST(ThreadPoolTest, ParallelForRunsEachCallOnce) {
 
 // A call that takes long enough for the workers to wake up runs on them, not only on the caller.
 TEST(ThreadPoolTest, ParallelForUsesWorkers) {
-    auto thread_pool = create_pool_per_device();
-    auto device_ids = one_call_per_device(1);
+    // Two workers on any host: the caller can run all calls of a single worker before it wakes.
+    auto thread_pool = create_device_bound_thread_pool(DEFAULT_CONTEXT_ID, 2);
+    std::vector<uint32_t> device_ids = {0, 1};
     std::vector<std::thread::id> ran_on(device_ids.size());
     thread_pool->parallel_for(device_ids, [&ran_on](size_t call) {
         ran_on[call] = std::this_thread::get_id();
@@ -125,6 +126,29 @@ TEST(ThreadPoolTest, ParallelForUsesWorkers) {
     });
     auto on_caller = std::count(ran_on.begin(), ran_on.end(), std::this_thread::get_id());
     EXPECT_LT(on_caller, static_cast<int64_t>(ran_on.size()));
+}
+
+// Calls for the same device never overlap and run in index order.
+TEST(ThreadPoolTest, ParallelForSameDeviceInOrder) {
+    auto thread_pool = create_pool_per_device();
+    auto device_ids = one_call_per_device(4);
+    uint32_t num_devices = device_ids.size() / 4;
+    std::vector<std::atomic<bool>> busy(num_devices);
+    std::vector<int64_t> last_call(num_devices);
+    std::atomic<uint32_t> violations = 0;
+    for (uint32_t iter = 0; iter < 1000; iter++) {
+        std::fill(last_call.begin(), last_call.end(), -1);
+        thread_pool->parallel_for(device_ids, [&](size_t call) {
+            uint32_t device = device_ids[call];
+            if (busy[device].exchange(true) || last_call[device] >= static_cast<int64_t>(call)) {
+                violations++;
+            }
+            std::this_thread::sleep_for(std::chrono::microseconds(10));
+            last_call[device] = static_cast<int64_t>(call);
+            busy[device] = false;
+        });
+    }
+    EXPECT_EQ(violations.load(), 0u);
 }
 
 TEST(ThreadPoolTest, ParallelForException) {

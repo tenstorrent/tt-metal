@@ -29,8 +29,8 @@ public:
     virtual void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) = 0;
     virtual void wait() = 0;
     // Calls fn(i) for each i in [0, device_ids.size()) and returns once all calls have finished. Calls may run
-    // concurrently, on the workers or on the calling thread. Rethrows the first exception thrown by fn. Independent of
-    // enqueue() and wait().
+    // concurrently, on the workers or on the calling thread, but calls for the same device run one at a time, in index
+    // order. Rethrows the first exception thrown by fn. Independent of enqueue() and wait().
     virtual void parallel_for(ttsl::Span<const uint32_t> device_ids, const std::function<void(size_t)>& fn) = 0;
 };
 
