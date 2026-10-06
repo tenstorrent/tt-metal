@@ -22,6 +22,16 @@ check.
                                         each replayed op onto the warm op at the same position. The device
                                         profiler is flushed after the warm pass and after the capture, then
                                         after every replay (`replay_chunk{c}` signpost before each).
+  test_glm_moe_layer_profile_reuse_traced
+                                     -- the indexer-reuse case: layer 6 (full indexer) feeds layer 7
+                                        (shared, reuses layer 6's top-k indices) its hidden state AND its
+                                        indices, each layer captured by its own controller and replayed back
+                                        to back per chunk. Only layer 7's eager warm pass sits between
+                                        PERF_WARM_START/END, and the test logs layer 7's trace ids
+                                        (`[prof] reuse profile trace ids`), so the parser keeps layer 7 alone
+                                        (parse_traced.py PROFILE_TRACE_IDS=...). Layer 7's output is PCC'd
+                                        against golden decoder_output_layer_7 (chained, so it includes layer
+                                        6's error), its KVPE cache against kv_post_transform_layer_7.
 """
 
 from types import SimpleNamespace
@@ -41,7 +51,10 @@ from models.demos.deepseek_v3_d_p.tests.test_prefill_transformer_chunked import 
     _load_layer_rows,
     _resolve_trace_dir,
 )
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix
+
+# Chunks covering the 55k golden (as many whole chunks as fit), shared with the batch-4 full-model test.
+from models.demos.deepseek_v3_d_p.tests.test_prefill_transformer_chunked_batch4 import CHUNK_CASES, chunk_id
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused, normalized_hadamard_matrix
 from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata, RotarySetup, write_chunk_metadata
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -54,19 +67,21 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gathe
 from tests.ttnn.utils_for_testing import comp_pcc
 
 LAYER = 6  # first full-indexer MoE layer
+# First indexer-reuse ("shared") layer: it owns no indexer and attends with LAYER's top-k indices.
+SHARED_LAYER = 7
 SP_AXIS, TP_AXIS = 0, 1
 # Same capacity factors the full-model drivers use: 8 single-user, 4 for batch 4 (4x the rows).
 DISPATCH_FACTOR = {"b1": 8, "b4": 4}
-# Chunks covering the 55k golden: 11 x 5120, or 27 x 2048 (the 28th 2k chunk would be half padding).
-CHUNK_CASES = {5120: 11, 2048: 27}
 
 
 def _seq_cache(chunk):
     return -(-SEQ_CACHE // chunk) * chunk
 
 
-def _setup(variant, config_only, mesh_device, device_params, num_links, weight_cache_path, mode, chunk, n_chunks):
-    """Block, caches, rope, goldens and per-chunk host inputs for one (mode, chunk) case."""
+def _setup(
+    variant, config_only, mesh_device, device_params, num_links, weight_cache_path, mode, chunk, n_chunks, layer=LAYER
+):
+    """Block, caches, rope, goldens and per-chunk host inputs for one (mode, chunk, layer) case."""
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
     batch = mode == "b4"
@@ -86,25 +101,25 @@ def _setup(variant, config_only, mesh_device, device_params, num_links, weight_c
     trace_dir = _resolve_trace_dir(variant)
     layout = variant.prefill_trace_layout
     x_in = _load_layer_rows(
-        trace_dir, layout, "hidden_states", LAYER - 1, f"decoder_output_layer_{LAYER - 1}", 0, total_len
+        trace_dir, layout, "hidden_states", layer - 1, f"decoder_output_layer_{layer - 1}", 0, total_len
     )
-    ref_out = _load_layer_rows(trace_dir, layout, "hidden_states", LAYER, f"decoder_output_layer_{LAYER}", 0, total_len)
+    ref_out = _load_layer_rows(trace_dir, layout, "hidden_states", layer, f"decoder_output_layer_{layer}", 0, total_len)
     logger.info(
-        f"[prof] layer {LAYER} {mode}: {num_users} user(s) x {n_chunks} chunks of {chunk} "
+        f"[prof] layer {layer} {mode}: {num_users} user(s) x {n_chunks} chunks of {chunk} "
         f"(KV depth per chunk c = c*{chunk}), cache {seq_cache}"
     )
 
     cache_path = weight_cache_path / f"{sp}x{cols}"
     init_checker(cache_path)
     assert TtPrefillBlock.check_cache_complete(
-        cache_path, LAYER, False, GLM53Config.NUM_ROUTED_EXPERTS // (sp * cols), batch_axis=batch, config=config
-    ), f"layer {LAYER} cache incomplete for {mode} at {cache_path}"
+        cache_path, layer, False, GLM53Config.NUM_ROUTED_EXPERTS // (sp * cols), batch_axis=batch, config=config
+    ), f"layer {layer} cache incomplete for {mode} at {cache_path}"
     block = TtPrefillBlock(
         mesh_device=mesh_device,
         config=config,
         model_cfg=GLM53Config,
         state_dict={},
-        layer_idx=LAYER,
+        layer_idx=layer,
         seq_len=chunk,
         dispatch_buffer_capacity_factor=DISPATCH_FACTOR[mode],
         num_links=num_links,
@@ -119,7 +134,7 @@ def _setup(variant, config_only, mesh_device, device_params, num_links, weight_c
         layer_num=1,
         max_seq_len=seq_cache,
         routing_use_l1_small_for_semaphores=True,
-        first_layer_idx=LAYER,
+        first_layer_idx=layer,
         batch_axis=TP_AXIS if batch else None,
     )
     cache_kwargs = {"batch_axis": TP_AXIS} if batch else {"tp_axis": TP_AXIS}
@@ -165,6 +180,7 @@ def _setup(variant, config_only, mesh_device, device_params, num_links, weight_c
         x_hosts.append(x_host.to(torch.bfloat16))
 
     return SimpleNamespace(
+        layer=layer,
         batch=batch,
         sp=sp,
         num_users=num_users,
@@ -194,23 +210,30 @@ def _output_pcc(ctx, out, c, tag):
 
 
 def _check_caches(ctx, mesh_device, mode, chunk, n_chunks, out_pcc):
-    """Caches vs golden, per user, then the teacher-forced single-layer accuracy floors."""
+    """Caches vs golden, per user, then the single-layer accuracy floors. A shared (indexer-reuse) layer owns
+    no index-K cache, so only its KVPE is checked."""
     config = ctx.config
+    layer = ctx.layer
+    has_index = not indexer_layer_is_reused(config, layer)
     kv_lora, idx_dim = config.kv_lora_rank, config.index_head_dim
     g_kv = _load_layer_rows(
-        ctx.trace_dir, ctx.layout, "kv_cache", LAYER, f"kv_post_transform_layer_{LAYER}", 0, ctx.total_len
+        ctx.trace_dir, ctx.layout, "kv_cache", layer, f"kv_post_transform_layer_{layer}", 0, ctx.total_len
     )
-    g_idx = _load_layer_rows(ctx.trace_dir, ctx.layout, "dsa", LAYER, f"indexer_k_layer_{LAYER}", 0, ctx.total_len)
+    g_idx = (
+        _load_layer_rows(ctx.trace_dir, ctx.layout, "dsa", layer, f"indexer_k_layer_{layer}", 0, ctx.total_len)
+        if has_index
+        else None
+    )
     hadamard = normalized_hadamard_matrix(idx_dim).float()
     if ctx.batch:
         cc = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 0), mesh_shape=mesh_device.shape)
         kv_users = [t[0] for t in ttnn.to_torch(ctx.kvpe_cache.storage, mesh_composer=cc).float()]
-        idx_users = [t[0] for t in ttnn.to_torch(ctx.index_cache, mesh_composer=cc).float()]
+        idx_users = [t[0] for t in ttnn.to_torch(ctx.index_cache, mesh_composer=cc).float()] if has_index else []
         stripes = ctx.sp
     else:
         kv_all, stripes = gather_cache_natural(ctx.kvpe_cache.storage, mesh_device, tp_shard_kv=True)
-        idx_all, _ = gather_cache_natural(ctx.index_cache, mesh_device, tp_shard_kv=True)
-        kv_users, idx_users = [kv_all[0]], [idx_all[0]]
+        kv_users = [kv_all[0]]
+        idx_users = [gather_cache_natural(ctx.index_cache, mesh_device, tp_shard_kv=True)[0][0]] if has_index else []
     p = blockcyclic_positions(stripes, chunk, ctx.seq_cache)
     kv_pcc = [min(cache_half_pccs(g_kv, unrotate_cache_layer(k, p, ctx.total_len), kv_lora, True)) for k in kv_users]
     idx_pcc = [
@@ -218,20 +241,20 @@ def _check_caches(ctx, mesh_device, mode, chunk, n_chunks, out_pcc):
         for k in idx_users
     ]
     logger.info(
-        f"[prof] SUMMARY layer {LAYER} {mode} chunk={chunk} x{n_chunks}: block output min PCC "
+        f"[prof] SUMMARY layer {layer} {mode} chunk={chunk} x{n_chunks}: block output min PCC "
         f"{min(out_pcc):.6f} (chunk 0 {out_pcc[0]:.6f}, last {out_pcc[-1]:.6f}); KVPE per user "
         f"{[round(v, 6) for v in kv_pcc]}; index-K per user {[round(v, 6) for v in idx_pcc]}"
     )
     # Teacher-forced single layer: the single-user teacher-forced test's 0.98 floor.
     assert min(out_pcc) >= 0.98, f"block output PCC {min(out_pcc):.6f} < 0.98"
-    assert min(kv_pcc) >= 0.98 and min(idx_pcc) >= 0.98, f"cache PCC KVPE {kv_pcc} index-K {idx_pcc} < 0.98"
+    assert (
+        min(kv_pcc) >= 0.98 and min(idx_pcc, default=1.0) >= 0.98
+    ), f"cache PCC KVPE {kv_pcc} index-K {idx_pcc} < 0.98"
 
 
 _PROFILE_PARAMS = [
     pytest.mark.parametrize("mode", ["b1", "b4"]),
-    pytest.mark.parametrize(
-        "chunk, n_chunks", [pytest.param(c, n, id=f"c{c // 1024}k") for c, n in CHUNK_CASES.items()]
-    ),
+    pytest.mark.parametrize("chunk, n_chunks", [pytest.param(c, n, id=chunk_id(c)) for c, n in CHUNK_CASES.items()]),
     pytest.mark.parametrize(
         "mesh_device, device_params, num_links",
         [
@@ -395,3 +418,140 @@ def test_glm_moe_layer_profile_traced(
     ctx.block.set_trace_controller(None)
     _check_caches(ctx, mesh_device, mode, chunk, n_chunks, out_pcc)
     ctx.block.release_sub_device_managers()
+
+
+@_profile_params
+def test_glm_moe_layer_profile_reuse_traced(
+    variant, config_only, mesh_device, device_params, num_links, weight_cache_path, mode, chunk, n_chunks
+):
+    config = config_only
+    assert not indexer_layer_is_reused(config, LAYER) and indexer_layer_is_reused(config, SHARED_LAYER), (
+        f"expected layer {LAYER} full and {SHARED_LAYER} shared, got "
+        f"{config.indexer_types[LAYER]} / {config.indexer_types[SHARED_LAYER]}"
+    )
+    assert all(indexer_layer_is_reused(config, i) for i in range(LAYER + 1, SHARED_LAYER + 1))
+    full = _setup(variant, config_only, mesh_device, device_params, num_links, weight_cache_path, mode, chunk, n_chunks)
+    shared = _setup(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        num_links,
+        weight_cache_path,
+        mode,
+        chunk,
+        n_chunks,
+        layer=SHARED_LAYER,
+    )
+    mesh_device.enable_program_cache()
+    rep = ttnn.ReplicateTensorToMesh(mesh_device)
+
+    def _meta1(val):
+        return ttnn.from_torch(
+            torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=rep,
+        )
+
+    # Layer 6's input at a fixed address, refreshed per chunk; both layers read the same chunk metadata.
+    x_dev = ttnn.from_torch(
+        full.x_hosts[0],
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=full.mapper,
+    )
+    x_host_tt = [
+        ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=full.mapper) for t in full.x_hosts
+    ]
+    metadata = ChunkMetadata(_meta1(0), _meta1(0), _meta1(chunk), None)
+    common = dict(
+        cache_layer_idx=0,
+        actual_start=None,
+        actual_end=None,  # metadata carries the clamp
+        cache_user_id=0,
+        actual_isl=chunk,
+        metadata=metadata,
+    )
+
+    def _fwd_full():
+        out, _, idx = full.block.forward(
+            x_dev, full.rope, full.kvpe_cache, index_kv_cache=full.index_cache, return_indexer_indices=True, **common
+        )
+        assert idx is not None, f"layer {LAYER} returned no top-k indices"
+        return out, idx
+
+    def _fwd_shared(h, idx):
+        out, _ = shared.block.forward(
+            h, shared.rope, shared.kvpe_cache, index_kv_cache=shared.index_cache, indexer_indices=idx, **common
+        )
+        return out
+
+    ctrl_full, ctrl_shared = SubDeviceTraceController(mesh_device), SubDeviceTraceController(mesh_device)
+    full.block.set_trace_controller(ctrl_full)
+    shared.block.set_trace_controller(ctrl_shared)
+
+    # Warm passes (chunk 0): layer 6 OUTSIDE the warm markers, layer 7 inside, so the region-label template
+    # is layer 7's ops alone. Both compile their metadata-variant programs here.
+    h, idx = _fwd_full()
+    ttnn.synchronize_device(mesh_device)
+    signpost("PERF_WARM_START")
+    warm_out = _fwd_shared(h, idx)
+    ttnn.synchronize_device(mesh_device)
+    signpost("PERF_WARM_END")
+    ttnn.deallocate(warm_out)
+    ttnn.deallocate(h)
+    del idx  # owned by layer 6's MLA; dropped, never deallocated explicitly (see TtPrefillTransformer)
+    ttnn.ReadDeviceProfiler(mesh_device)
+
+    # Two captures: layer 7's trace consumes layer 6's captured output and indices at their fixed addresses.
+    ctrl_full.begin_capture()
+    trace_h, trace_idx = _fwd_full()
+    ctrl_full.end_capture()
+    ctrl_shared.begin_capture()
+    trace_out = _fwd_shared(trace_h, trace_idx)
+    ctrl_shared.end_capture()
+    ttnn.synchronize_device(mesh_device)
+    ttnn.ReadDeviceProfiler(mesh_device)
+    ids_full = [int(t) for k, t in ctrl_full._program if k == ctrl_full._TRACE]
+    ids_shared = [int(t) for k, t in ctrl_shared._program if k == ctrl_shared._TRACE]
+    logger.info(
+        f"[prof] {mode} captured layer {LAYER}: {ctrl_full.num_segments} segments; layer {SHARED_LAYER}: "
+        f"{ctrl_shared.num_segments} segments; {ctrl_shared.trace_bytes() / 1024 / 1024:.2f} MB total"
+    )
+    logger.info(f"[prof] reuse profile trace ids: {','.join(map(str, ids_shared))} (layer {LAYER}: {ids_full})")
+    signpost("PERF_TRACE_REPLAYS")
+
+    out_pcc, full_pcc = [], []
+    for c in range(n_chunks):
+        kv = c * chunk
+        ttnn.copy_host_to_device_tensor(x_host_tt[c], x_dev)
+        write_chunk_metadata(
+            metadata,
+            (0, kv, kv + chunk),
+            hf_config=config,
+            mesh_device=mesh_device,
+            chunk_size_global=chunk,
+            sp_axis=SP_AXIS,
+        )
+        ttnn.synchronize_device(mesh_device)
+        ctrl_full.replay()
+        signpost(f"replay_chunk{c}")
+        ctrl_shared.replay()
+        ttnn.synchronize_device(mesh_device)
+        signpost(f"replay_chunk{c}_end")
+        full_pcc.append(_output_pcc(full, trace_h, c, f"{mode} layer {LAYER} traced (KV {kv})"))
+        out_pcc.append(_output_pcc(shared, trace_out, c, f"{mode} layer {SHARED_LAYER} traced (KV {kv})"))
+        ttnn.ReadDeviceProfiler(mesh_device)
+
+    for ctrl, ctx in ((ctrl_full, full), (ctrl_shared, shared)):
+        ctrl.release()
+        ctx.block.set_trace_controller(None)
+    _check_caches(full, mesh_device, mode, chunk, n_chunks, full_pcc)
+    _check_caches(shared, mesh_device, mode, chunk, n_chunks, out_pcc)
+    for ctx in (full, shared):
+        ctx.block.release_sub_device_managers()

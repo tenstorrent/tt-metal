@@ -13,7 +13,6 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.tt.batch_axis import deinterleave_users, interleave_users
 from models.demos.deepseek_v3_d_p.tt.kv_ack import zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer, indexer_layer_is_reused, resolve_has_indexer
@@ -478,6 +477,7 @@ class TtPrefillBlock(LightweightModule):
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
                 is_balanced=is_balanced,
                 overlap_shared_expert_with_dispatch=self.overlap_shared_expert_with_dispatch,
+                users_gathered=batch_axis is not None,
             )
         else:
             # emb_dim/hidden_dim default to DSv3/Kimi's 7168/18432 in TtFfn; pass the variant's real dims
@@ -501,6 +501,8 @@ class TtPrefillBlock(LightweightModule):
                 situ_beta=getattr(model_cfg, "ACTIVATION_SITU_BETA", None),
                 situ_linear_beta=getattr(model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
                 clamped_silu_glu_limit=getattr(model_cfg, "SWIGLU_LIMIT", None),
+                # Batch-axis: the input holds every user's rows; scatter them back one user per column.
+                reduce_scatter_dim=-2 if batch_axis is not None else -1,
                 **_dense_ffn_kwargs,
             )
 
@@ -526,6 +528,7 @@ class TtPrefillBlock(LightweightModule):
         routing_use_l1_small_for_semaphores=False,
         is_balanced=False,
         overlap_shared_expert_with_dispatch=True,
+        users_gathered=False,
     ):
         mesh_config = extract_mesh_config(mesh_device)
         sp_factor = mesh_device.shape[sp_axis]
@@ -601,6 +604,7 @@ class TtPrefillBlock(LightweightModule):
             overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
             routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
             is_balanced=is_balanced,
+            users_gathered=users_gathered,
         )
 
     def set_trace_controller(self, controller):
@@ -786,12 +790,19 @@ class TtPrefillBlock(LightweightModule):
             kv_intermediates["post_attn_norm"] = ttnn.clone(ffn_norm_out)
 
         if self.batch_axis is not None:
-            # Batch-axis: the FFN / MoE weights are split across the user axis, so hand them every
-            # user's rows with a hidden slice (today's TP layout, num_users x the tokens) and take each
-            # user's rows back afterwards. Padding awareness is off: its per-chip config describes one
-            # user's real-token count, and these rows hold num_users users (processing every row is
-            # always correct).
-            ffn_in = interleave_users(ffn_norm_out, self.batch_axis, self.num_links)
+            # Batch-axis: the FFN / MoE weights are split across the user axis, so every coordinate on
+            # it gathers all users' rows at full width ([u0 | u1 | ...], coordinate order). The FFN /
+            # MoE then reduce-scatters its output over those rows, handing each coordinate its own
+            # user's rows back -- no separate de-interleave. Padding awareness is off: its per-chip
+            # config describes one user's real-token count, and these rows hold num_users users
+            # (processing every row is always correct).
+            ffn_in = ttnn.all_gather(
+                ffn_norm_out,
+                dim=2,
+                cluster_axis=self.batch_axis,
+                num_links=self.num_links,
+                topology=self.topology,
+            )
             if self.is_moe:
                 ffn_out = self._moe_path(
                     ffn_in,
@@ -803,9 +814,8 @@ class TtPrefillBlock(LightweightModule):
                     cache_user_id=cache_user_id,
                 )
             else:
-                ffn_out = self._dense_ffn_path(ffn_in)
+                ffn_out = self.ffn(ffn_in)  # already full width: no TP all-gather
             ttnn.deallocate(ffn_in)
-            ffn_out = deinterleave_users(ffn_out, self.batch_axis, self.num_links)
         elif self.is_moe:
             logger.info(f"MOE path: {ffn_norm_out.shape}")
             ffn_out = self._moe_path(

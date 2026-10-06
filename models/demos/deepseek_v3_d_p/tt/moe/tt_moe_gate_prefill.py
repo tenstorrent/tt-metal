@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+from models.demos.deepseek_v3_d_p.tt.glm_chunk_matmul_configs import TUNED, program_config_from_desc
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_counts
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
@@ -416,6 +417,13 @@ class TtMoEGateConfig:
                     resolved[gate_mm_config_key(*key)] = value
             return resolved
 
+        # Swept GLM-5.3 entries for the 2.5k..4.5k chunk sizes (glm_chunk_matmul_configs.TUNED), only where no
+        # hand-tuned entry exists; keyed like the tables above (rows, K, n_routed_experts).
+        for (table, _, rows), e in TUNED.items():
+            pc = program_config_from_desc(e["desc"]) if table == "gate" else None
+            if pc is not None:
+                self.mm_configs_interleaved.setdefault((rows, e["k"], e["n"]), pc)
+
         self.mm_configs = resolve(self.mm_configs)
         self.mm_configs_interleaved = resolve(self.mm_configs_interleaved)
 
@@ -631,6 +639,9 @@ class TtMoEGatePrefill(LightweightModule):
             )
 
         self.weight = weights["weight"]
+        # TP-sharded input by default; use_full_width_input() switches to full-width input.
+        self._full_width_input = False
+        self._weight_needs_gather = False
         bias_tt = weights["bias_unbroadcasted"]
         torch_weight_fallback = weights["torch_weight"]
         torch_bias_fallback = weights["torch_bias"]
@@ -823,10 +834,39 @@ class TtMoEGatePrefill(LightweightModule):
             ),
         )
 
+    def use_full_width_input(self) -> None:
+        """Switch to full-width (TP-replicated) input: every chip holds the whole [dim, n_routed_experts]
+        weight and computes complete logits, so the per-forward TP all-reduce disappears. For batch-axis
+        callers, whose gate input is every user's rows at full width rather than one user's rows
+        hidden-sharded over TP.
+
+        The K-sharded weight is all-gathered on the FIRST forward, not here: any device work during
+        construction (a collective, or even a readback) hangs model init under the tracy device
+        profiler, and the first forward is always the eager warm-up that precedes a trace capture."""
+        self._full_width_input = True
+        self._weight_needs_gather = self.mesh_device.shape[self.config.ccl_config["TP_AXIS"]] > 1
+
+    def _gather_weight_once(self) -> None:
+        if not self._weight_needs_gather:
+            return
+        sharded = self.weight
+        self.weight = ttnn.all_gather(
+            sharded,
+            dim=0,
+            cluster_axis=self.config.ccl_config["TP_AXIS"],
+            num_links=self.config.ccl_config["NUM_LINKS"],
+            topology=self.config.ccl_config.get("TOPOLOGY", ttnn.Topology.Linear),
+        )
+        ttnn.deallocate(sharded)
+        self._weight_needs_gather = False
+
     def _device_matmul(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """Gate matmul + TP all-reduce on device."""
+        """Gate matmul + TP all-reduce on device (no all-reduce for full-width input)."""
         per_device_dim = x.shape[-1]
-        n_tp_devices = self.mesh_device.shape[1]
+        full_width = self._full_width_input
+        if full_width:
+            self._gather_weight_once()
+        n_tp_devices = 1 if full_width else self.mesh_device.shape[1]
         assert (
             per_device_dim * n_tp_devices == self.config.dim
         ), f"Expected per-device dim {self.config.dim // n_tp_devices}, got {per_device_dim}"
@@ -847,7 +887,7 @@ class TtMoEGatePrefill(LightweightModule):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         tp_axis = self.config.ccl_config["TP_AXIS"]
-        if self.mesh_device.shape[tp_axis] > 1:
+        if self.mesh_device.shape[tp_axis] > 1 and not full_width:
             # Pass persistent CCL semaphores (created once in TT_CCL) so all_reduce_async reuses them
             # instead of internally allocating+leaking global semaphores in main L1 every call. The
             # composite all-reduce needs barrier_semaphores of size 2 ([0]=reduce-scatter, [1]=all-gather),

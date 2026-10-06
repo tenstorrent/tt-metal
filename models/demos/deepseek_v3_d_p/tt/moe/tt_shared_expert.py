@@ -21,6 +21,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.glm_chunk_matmul_configs import lookup, program_config_from_desc
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
@@ -322,6 +323,7 @@ class TtSharedExpert(LightweightModule):
         situ_beta: Optional[float] = None,
         situ_linear_beta: Optional[float] = None,
         clamped_silu_glu_limit: Optional[float] = None,
+        reduce_scatter_dim: int = -1,
     ):
         """
         Initialize TtSharedExpert module.
@@ -346,6 +348,9 @@ class TtSharedExpert(LightweightModule):
                 non-zero, when activation == "situ"; ignored otherwise.
             clamped_silu_glu_limit: the clamp limit (V4: 10.0). Required, and positive, when
                 activation == "clamped_silu_glu"; ignored otherwise.
+            reduce_scatter_dim: Dim the TP-partial output is reduce-scattered over. -1 (default)
+                returns hidden-sharded rows; -2 scatters the rows instead, for batch-axis callers whose
+                input holds one user per mesh column ([u0 | u1 | ...]) at full width.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -384,6 +389,7 @@ class TtSharedExpert(LightweightModule):
         self.situ_beta = situ_beta
         self.situ_linear_beta = situ_linear_beta
         self.clamped_silu_glu_limit = clamped_silu_glu_limit
+        self.reduce_scatter_dim = reduce_scatter_dim
 
         # Shared per-mesh CCL handle. Drives reduce_scatter_minimal_async and owns the shared,
         # stable-address reduce_scatter INTERMEDIATE buffer (one per mesh, reused by all layers'
@@ -554,6 +560,34 @@ class TtSharedExpert(LightweightModule):
             # unary; the gate accumulator has to come out raw and be combined below.
             fuse_silu=self.activation == ACTIVATION_SILU,
         )
+        # Swept overrides for the 2.5k..4.5k chunk sizes (glm_chunk_matmul_configs.TUNED), tuned on this grid.
+        rows = x.padded_shape[-2]
+        tuned_gu = lookup("shared", "moe.shared_gate_up", rows)
+        tuned_down = lookup("shared", "moe.shared_down", rows)
+        if (
+            tuned_gu is not None
+            and tuned_gu["desc"]["kind"] != "default"
+            and tuple(tuned_gu["desc"]["grid"])
+            == (
+                grid.x,
+                grid.y,
+            )
+            and (tuned_gu["k"], tuned_gu["n"]) == (x.padded_shape[-1], self.gate_proj.padded_shape[-1])
+        ):
+            silu = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU) if self.activation == ACTIVATION_SILU else None
+            gate_program_config = program_config_from_desc(tuned_gu["desc"], fused_activation=silu)
+            up_program_config = program_config_from_desc(tuned_gu["desc"])
+        if (
+            tuned_down is not None
+            and tuned_down["desc"]["kind"] != "default"
+            and tuple(tuned_down["desc"]["grid"]) == (grid.x, grid.y)
+            and (tuned_down["k"], tuned_down["n"])
+            == (
+                self.down_proj.padded_shape[-2],
+                self.down_proj.padded_shape[-1],
+            )
+        ):
+            down_program_config = program_config_from_desc(tuned_down["desc"])
 
         # 1) Compute gate and up projections
         gate_out = ttnn.matmul(
@@ -625,7 +659,7 @@ class TtSharedExpert(LightweightModule):
             output = ttnn.experimental.reduce_scatter_minimal_async(
                 output_full,
                 persistent_output_buffers=[rs_intermediate],
-                dim=-1,
+                dim=self.reduce_scatter_dim,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=1),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
                 num_links=self.num_links,

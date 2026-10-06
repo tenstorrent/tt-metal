@@ -55,6 +55,7 @@ class TtReduceModule(LightweightModule):
         cluster_axis: int = 1,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
+        scatter_dim: int = -1,
     ):
         """
         Initialize reduce module.
@@ -67,6 +68,8 @@ class TtReduceModule(LightweightModule):
             cluster_axis: Mesh dimension to reduce across (0=rows, 1=columns)
             num_links: Number of ethernet links to use for collective
             topology: Ring or Linear topology for reduce_scatter
+            scatter_dim: Dim the reduce-scatter splits: -1 (default) hidden-shards the output; -2 splits
+                the rows, for batch-axis callers whose rows hold one user per mesh column.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -74,6 +77,7 @@ class TtReduceModule(LightweightModule):
         self.cluster_axis = cluster_axis
         self.num_links = num_links
         self.topology = topology
+        self.scatter_dim = scatter_dim
 
     def forward(
         self,
@@ -131,7 +135,7 @@ class TtReduceModule(LightweightModule):
         if self.mesh_device.shape[self.cluster_axis] > 1:
             output = ttnn.reduce_scatter(
                 summed,
-                dim=-1,
+                dim=self.scatter_dim,
                 cluster_axis=self.cluster_axis,
                 num_links=self.num_links,
                 topology=self.topology,

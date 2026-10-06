@@ -1036,3 +1036,38 @@ def get_indexer_key_chunk(index_n_heads: int) -> int:
             f"L1-safe k_chunk and add it to DSA_INDEXER_CONFIG (tuned: {sorted(DSA_INDEXER_CONFIG)})."
         )
     return cfg["k_chunk_size"]
+
+
+def _merge_chunk_sweep_configs():
+    """Swept 2.5k..4.5k-chunk entries (glm_chunk_matmul_configs.TUNED) for row counts the hand-tuned tables
+    above do not cover. A hand-tuned entry always wins: only absent (weight, rows) slots are filled."""
+    from models.demos.deepseek_v3_d_p.tt.glm_chunk_matmul_configs import (
+        TUNED,
+        dtype,
+        mem_config,
+        program_config_from_desc,
+    )
+
+    for (table, name, rows), e in TUNED.items():
+        if table == "tp":
+            target, tags = MLA_MATMUL_CONFIG, (_GLM_INDEXER_TAGS if name.startswith("indexer.") else _GLM_TAGS)
+        elif table == "bax":
+            target, tags = MLA_BATCH_AXIS_MATMUL_CONFIG, _GLM_BATCH_AXIS_TAGS
+        else:
+            continue
+        # program_config None = TTNN's own tiling won the sweep. The entry still pins the swept output memory
+        # and dtype; an absent slot would instead take ttMLA's fallback (DRAM output, and for wkv_b1 / wkv_b2
+        # a 1D batched config several times slower than either).
+        target.setdefault(name, {}).setdefault(
+            rows,
+            {
+                **tags,
+                "program_config": program_config_from_desc(e["desc"]),
+                "act_mem_config": mem_config(e["act_mem"]),
+                "out_mem_config": mem_config(e["out_mem"]),
+                "out_dtype": dtype(e["out_dtype"]),
+            },
+        )
+
+
+_merge_chunk_sweep_configs()

@@ -35,7 +35,6 @@ from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import pretrained_m
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.test_prefill_block_chunked import _resolve_trace_dir
-from models.demos.deepseek_v3_d_p.tt.batch_axis import deinterleave_users, interleave_users
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
     indexer_layer_is_reused,
@@ -194,7 +193,7 @@ def test_glm_prefill_block_batch4(
     )
     assert mla.tp_factor == 1 and not mla.tp_shard_kv
 
-    # --- MoE: today's TtMoe, unchanged, sized for the interleaved token count ---
+    # --- MoE: TtMoe in users_gathered mode, sized for every user's rows ---
     effective_cache = weight_cache_path / f"{sp}x{num_users}"
     init_checker(effective_cache)
     experts_per_chip = GLM53Config.NUM_ROUTED_EXPERTS // (sp * num_users)
@@ -220,6 +219,7 @@ def test_glm_prefill_block_batch4(
         weight_cache_path=effective_cache,
         layer_idx=layer_idx,
         routing_use_l1_small_for_semaphores=True,
+        users_gathered=True,
     )
     logger.info(
         f"[batch4] MoE seq_len_per_chip={moe.seq_len_per_chip} "
@@ -297,20 +297,20 @@ def test_glm_prefill_block_batch4(
         x = ttnn.add(x, attn)
         ttnn.deallocate(attn)
 
-        # --- MoE: interleave users -> unchanged TtMoe -> de-interleave ---
+        # --- MoE: gather every user's rows (full width) -> TtMoe -> each column's own rows back ---
         h = ttnn.rms_norm(x, weight=ffn_norm_w, epsilon=config.rms_norm_eps, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         log("ffn_norm (local)", h)
-        moe_in = interleave_users(h, BATCH_AXIS, num_links)
+        moe_in = ttnn.all_gather(h, dim=2, cluster_axis=BATCH_AXIS, num_links=num_links, topology=topology[1])
         ttnn.deallocate(h)
-        log("interleaved MoE input (a2a)", moe_in)
+        log("gathered MoE input (all-gather)", moe_in)
         moe_out, inter = moe(ttnn.squeeze(moe_in, dim=0), return_intermediates=True)
         log("MoE out", moe_out)
         max_rows = _max_dispatched_rows_per_chip(moe, inter, mesh_device)
         capacity = moe.dispatch_module.max_dispatch_buffer_token_size
         logger.info(f"[batch4] chunk {c}: max dispatched rows per chip {max_rows} / capacity {capacity}")
         assert max_rows <= capacity, f"dispatch overflow: {max_rows} rows > capacity {capacity} (tokens dropped)"
-        ffn = deinterleave_users(ttnn.unsqueeze(moe_out, dim=0), BATCH_AXIS, num_links)
-        log("de-interleaved MoE out (a2a)", ffn)
+        ffn = ttnn.unsqueeze(moe_out, dim=0)
+        log("MoE out (own user's rows)", ffn)
         x = ttnn.add(x, ffn)
         ttnn.deallocate(ffn)
         log("block output", x)

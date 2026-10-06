@@ -26,7 +26,7 @@ the single-user chunked test's. Chunks are 5120 (11 cover the trace) or 2048 (27
                                                          users), cache PCC still asserted
   test_glm_prefill_transformer_chunked_batch4_profile -- 7 layers x 2 chunks with signposts, for tracy
 
-A/B knobs (perf sweep only): B4_DISPATCH_FACTOR, B4_OVERLAP_SHARED. Measured on one galaxy, L10 traced:
+A/B knobs (perf sweep only): B4_DISPATCH_FACTOR, B4_OVERLAP_SHARED; B4_PERF_ITERS sets the iteration count. Measured on one galaxy, L10 traced:
 factor 2 vs 4 makes no difference; B4_OVERLAP_SHARED=0 is slower AND corrupts the KVPE cache under trace
 (0.62 vs 0.988) -- a real bug in that configuration, which is not the default.
 """
@@ -175,10 +175,19 @@ def test_glm_build_batch_axis_ttnn_cache(
 # ---------------------------------------------------------------------------
 # Chunked prefill, batch 4
 # ---------------------------------------------------------------------------
-# Chunk sizes and how many of them cover the 55k golden (56320 tokens): 11 x 5120 exactly, or 27 x 2048
-# = 55296 (a 28th 2048-chunk would be half padding). The KV cache is a whole number of chunks (block-cyclic
-# slabs are chunk-sized), so the 2k cache is 28 x 2048 = 57344.
-CHUNK_CASES = {5120: 11, 2048: 27}
+# Chunk sizes and how many of them cover the 55k golden (56320 tokens): as many whole chunks as fit, e.g. 11 x
+# 5120 exactly, or 27 x 2048 = 55296 (a 28th 2048-chunk would be half padding). The KV cache is a whole number
+# of chunks (block-cyclic slabs are chunk-sized), so the 2k cache is 28 x 2048 = 57344. The 2.5k..4.5k sizes
+# are the chunk-size sweep; every one keeps chunk / SP tile-aligned (320..576 rows per chip).
+CHUNK_SIZES = (5120, 2048, 2560, 3072, 3584, 4096, 4608)
+CHUNK_CASES = {c: SEQ_CACHE // c for c in CHUNK_SIZES}
+
+
+def chunk_id(chunk: int) -> str:
+    """Pytest id for a chunk size in units of 1024 tokens: c5k, c2k, c2p5k, ... (no '.', so -k can match it)."""
+    whole, half = divmod(chunk, 1024)
+    assert half in (0, 512), f"chunk {chunk} is not a multiple of 512"
+    return f"c{whole}p5k" if half else f"c{whole}k"
 
 
 def _seq_cache(chunk: int) -> int:
@@ -443,6 +452,9 @@ def run_batch4_chunked(
         f"{tokens / total_s:.0f} tok/s ({num_users} users x {total_len})"
     )
     logger.info(f"[batch4] PERF per-chunk ms: {[round(t * 1000, 1) for t in per_chunk]}")
+    if len(measured) > 1:
+        spread = [round((max(t[c] for t in measured) - min(t[c] for t in measured)) * 1000, 1) for c in range(n_chunks)]
+        logger.info(f"[batch4] PERF per-chunk max-min ms over {len(measured)} iters: {spread}")
 
     failures = []
     if check_layer_pcc:
@@ -505,7 +517,7 @@ def run_batch4_chunked(
     logger.success(f"[batch4] GLM-5.3 L{num_layers} {n_chunks} x {chunk}: all {num_users} users pass")
 
 
-_CHUNK_PARAMS = [pytest.param(c, n, id=f"c{c // 1024}k-chunks{n}") for c, n in CHUNK_CASES.items()]
+_CHUNK_PARAMS = [pytest.param(c, n, id=f"{chunk_id(c)}-chunks{n}") for c, n in CHUNK_CASES.items()]
 
 
 @pytest.mark.parametrize("chunk, n_chunks", _CHUNK_PARAMS)
@@ -569,7 +581,8 @@ def test_glm_prefill_transformer_chunked_batch4_perf(
         chunk=chunk,
         n_chunks=n_chunks,
         use_trace=use_trace,
-        num_iters=2,
+        # Iteration 0 warms up; the reported per-chunk time is the median over the rest (B4_PERF_ITERS, default 2).
+        num_iters=int(os.environ.get("B4_PERF_ITERS", "2")),
     )
 
 

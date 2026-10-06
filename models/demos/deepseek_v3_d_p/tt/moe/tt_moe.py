@@ -230,6 +230,7 @@ class TtMoe(LightweightModule):
         latent_use_norm: bool = True,
         rms_norm_eps: float = 1e-5,
         max_gate_seq_len_per_chip: Optional[int] = None,
+        users_gathered: bool = False,
     ):
         """
         Initialize TtMoe module.
@@ -313,6 +314,12 @@ class TtMoe(LightweightModule):
                 both routed-expert ops read a per-core weight slice as one NoC transaction per
                 K-row; interleaved elsewhere. Passed straight through; the cache is placement-
                 agnostic, so this never invalidates one.
+            users_gathered: Batch-axis input layout. False (default): x is one user's rows, hidden-
+                sharded over the TP axis, and the output comes back the same way. True: x is every
+                user's rows at full width, [u0 | u1 | ...] in mesh-column order (the caller all-gathers
+                the rows over the user axis), and the output is each column's own user's rows at full
+                width. The TP all-gather of x and the gate all-reduce disappear (the gate weight is
+                gathered once at init), and both reduce-scatters split rows instead of hidden.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -331,6 +338,9 @@ class TtMoe(LightweightModule):
         self.routed_emb_dim = emb_dim if routed_emb_dim is None else routed_emb_dim
         self.shared_hidden_dim = hidden_dim if shared_hidden_dim is None else shared_hidden_dim
         self.use_latent_moe = self.routed_emb_dim != emb_dim
+        self.users_gathered = users_gathered
+        # The latent projections' own TP collectives assume hidden-sharded rows.
+        assert not (users_gathered and self.use_latent_moe), "users_gathered does not support LatentMoE"
 
         # Unpack row/col CCL config
         if isinstance(num_links, tuple):
@@ -412,6 +422,8 @@ class TtMoe(LightweightModule):
             is_balanced=is_balanced,
             hash_table=gate_hash_table,
         )
+        if users_gathered:
+            self.gate.use_full_width_input()
 
         self.routing_setup = TtMoERoutingSetup(
             mesh_device,
@@ -556,6 +568,7 @@ class TtMoe(LightweightModule):
             situ_beta=shared_expert_situ_beta,
             situ_linear_beta=shared_expert_situ_linear_beta,
             clamped_silu_glu_limit=shared_expert_clamped_silu_glu_limit,
+            reduce_scatter_dim=-2 if users_gathered else -1,
         )
 
         self.latent_projections = (
@@ -586,6 +599,7 @@ class TtMoe(LightweightModule):
             cluster_axis=1,  # TP axis for reduce-scatter
             num_links=self.col_num_links,
             topology=self.col_topology,
+            scatter_dim=-2 if users_gathered else -1,
         )
 
         # Load debug flags from environment
@@ -846,8 +860,9 @@ class TtMoe(LightweightModule):
         # ========================================
         # Input x is sharded: (dispatch_group_size/axis0, seq_len_per_chip, emb_dim/axis1)
         # Both shared_expert and dispatch need full emb_dim, so all-gather first
-        # Only needed if there are multiple devices in TP axis (axis 1)
-        if self.mesh_device.shape[1] > 1:
+        # Only needed if there are multiple devices in TP axis (axis 1), and not when the caller
+        # already gathered every user's rows at full width (users_gathered).
+        if self.mesh_device.shape[1] > 1 and not self.users_gathered:
             x = ttnn.experimental.all_gather_async(
                 x,
                 dim=-1,  # Gather along emb_dim

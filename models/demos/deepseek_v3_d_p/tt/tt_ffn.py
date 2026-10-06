@@ -65,6 +65,7 @@ class TtFfn(TtSharedExpert):
         situ_beta: Optional[float] = None,
         situ_linear_beta: Optional[float] = None,
         clamped_silu_glu_limit: Optional[float] = None,
+        reduce_scatter_dim: int = -1,
     ):
         """Initialize TtFfn — same signature as before plus the GLU activation, no sub-device parameters."""
         super().__init__(
@@ -83,6 +84,7 @@ class TtFfn(TtSharedExpert):
             situ_beta=situ_beta,
             situ_linear_beta=situ_linear_beta,
             clamped_silu_glu_limit=clamped_silu_glu_limit,
+            reduce_scatter_dim=reduce_scatter_dim,
             # subdevice_id / subdevice_cores intentionally left as defaults (None) —
             # TtFfn's overridden forward() does not use them.
         )
@@ -171,7 +173,7 @@ class TtFfn(TtSharedExpert):
         if self.mesh_device.shape[1] > 1:
             output = ttnn.reduce_scatter(
                 output_full,
-                dim=-1,
+                dim=self.reduce_scatter_dim,
                 cluster_axis=1,
                 num_links=self.num_links,
                 topology=self.topology,

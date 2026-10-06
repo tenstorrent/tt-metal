@@ -77,7 +77,9 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import (
 )
 from tests.ttnn.utils_for_testing import comp_pcc
 
-CHUNK = PREFILL_CHUNK_TOKENS  # 5120 tokens per chunk
+# 5120 tokens per chunk. DS_PREFILL_TEST_CHUNK_TOKENS overrides it for chunk-size perf comparisons (e.g. 2048 with
+# chunks27 for 2k chunks); the default is the production size every gated config is calibrated at.
+CHUNK = int(os.environ.get("DS_PREFILL_TEST_CHUNK_TOKENS", PREFILL_CHUNK_TOKENS))
 SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
 # Default KV cache for the no-PCC perf sweeps; callers needing a longer one pass run_chunked_transformer_
 # updated(seq_cache=...). Kept separate from SEQ_CACHE so the PCC tests (which assert against 55*1024)
@@ -123,7 +125,9 @@ _PADDED_FULL_55K = [
     1536,
     4448,
 ]  # sum == 55 * 1024
-assert sum(_PADDED_FULL_55K) == SEQ_CACHE and all(v % 32 == 0 and 0 < v <= CHUNK for v in _PADDED_FULL_55K)
+assert sum(_PADDED_FULL_55K) == SEQ_CACHE and all(
+    v % 32 == 0 and 0 < v <= PREFILL_CHUNK_TOKENS for v in _PADDED_FULL_55K
+)
 
 # 15k (15360) CI-sized variant of the above. Cost here tracks the CHUNK count, not the token count --
 # every chunk is a full CHUNK-wide padded tile regardless of its isl -- so 6 chunks runs ~3x faster
@@ -135,7 +139,7 @@ assert sum(_PADDED_FULL_55K) == SEQ_CACHE and all(v % 32 == 0 and 0 < v <= CHUNK
 #   * 2592 / 1568 / 800 / 3360 / 1920 are non-1024-aligned -> mid-tile rotation offsets;
 #   * 5120 keeps one exactly-full (unpadded) chunk in the mix.
 _PADDED_MID_15K = [2592, 1568, 5120, 800, 3360, 1920]  # sum == 15 * 1024
-assert sum(_PADDED_MID_15K) == 15 * 1024 and all(v % 32 == 0 and 0 < v <= CHUNK for v in _PADDED_MID_15K)
+assert sum(_PADDED_MID_15K) == 15 * 1024 and all(v % 32 == 0 and 0 < v <= PREFILL_CHUNK_TOKENS for v in _PADDED_MID_15K)
 
 
 def _padded_cache_len(splits):
@@ -166,7 +170,9 @@ def _assert_splits_overrun():
         )
 
 
-_assert_splits_overrun()
+# The padded splits are production-size; a DS_PREFILL_TEST_CHUNK_TOKENS override only serves the no-PCC timing tests.
+if CHUNK == PREFILL_CHUNK_TOKENS:
+    _assert_splits_overrun()
 
 
 def _pad_overrun_summary(seq_len_cache, overruns):
@@ -2855,8 +2861,22 @@ def test_ds_prefill_transformer_chunked_no_pcc(
 )
 @pytest.mark.parametrize(
     "n_chunks",
-    [1, 2, 5, 10, 11, 20],
-    ids=["chunks1", "chunks2", "chunks5", "chunks10", "chunks_eleven", "chunks20"],
+    # 27/22/18/15/13/12 = the 55k golden at 2k/2.5k/3k/3.5k/4k/4.5k chunks (DS_PREFILL_TEST_CHUNK_TOKENS).
+    [1, 2, 5, 10, 11, 20, 27, 22, 18, 15, 13, 12],
+    ids=[
+        "chunks1",
+        "chunks2",
+        "chunks5",
+        "chunks10",
+        "chunks_eleven",
+        "chunks20",
+        "chunks27",
+        "chunks22",
+        "chunks18",
+        "chunks15",
+        "chunks13",
+        "chunks12",
+    ],
 )
 # preload_isl (multiple of CHUNK): pretend the cache already holds this many prior KV tokens so the
 # measured chunks run at KV depth [preload_isl, preload_isl + n_chunks*CHUNK) WITHOUT first running prefill
