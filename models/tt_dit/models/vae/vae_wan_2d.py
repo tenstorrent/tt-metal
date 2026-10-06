@@ -110,6 +110,17 @@ class WanAvgDown2D(Module):
         return x
 
 
+class WanUpBlock2D(VaeUpBlock):
+    """Wan 2.1's up block (``WanUpBlock``), 2D-only."""
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if self.upsampler is not None:
+            rename_substate(state, "upsamplers.0.resample.1", "upsamplers.0.conv")
+            pop_substate(state, "upsamplers.0.time_conv")
+
+        super()._prepare_torch_state(state)
+
+
 class WanResidualUpBlock2D(VaeUpBlock):
     """Wan 2.2's residual up block (``WanResidualUpBlock``), 2D-only."""
 
@@ -198,7 +209,11 @@ class WanResidualDownBlock2D(VaeDownBlock):
 
 
 class WanVaeDecoder2D(Module):
-    """Wan 2.2 VAE decoder on a single frame."""
+    """Wan VAE decoder on a single frame.
+
+    With ``is_residual`` it is the Wan 2.2 decoder, whose up blocks add a shortcut; without it, the
+    Wan 2.1 decoder, whose upsamplers halve the channel count.
+    """
 
     def __init__(
         self,
@@ -209,6 +224,7 @@ class WanVaeDecoder2D(Module):
         dim_mult: Sequence[int],
         num_res_blocks: int,
         out_channels: int,
+        is_residual: bool,
         parallel_config: VaeHWParallelConfig,
         device: ttnn.MeshDevice,
         ccl_manager: CCLManager | None,
@@ -231,14 +247,26 @@ class WanVaeDecoder2D(Module):
 
         self.up_blocks = ModuleList([])
         for i, (in_dim, out_dim) in enumerate(itertools.pairwise(dims)):
-            up_block = WanResidualUpBlock2D(
-                in_channels=in_dim,
-                out_channels=out_dim,
-                num_layers=num_res_blocks + 1,
-                upsample=i != len(dim_mult) - 1,
-                norm=VaeNormDescRms(eps=eps),
-                ctx=ctx,
-            )
+            upsample = i != len(dim_mult) - 1
+            if is_residual:
+                up_block = WanResidualUpBlock2D(
+                    in_channels=in_dim,
+                    out_channels=out_dim,
+                    num_layers=num_res_blocks + 1,
+                    upsample=upsample,
+                    norm=VaeNormDescRms(eps=eps),
+                    ctx=ctx,
+                )
+            else:
+                up_block = WanUpBlock2D(
+                    in_channels=in_dim if i == 0 else in_dim // 2,
+                    out_channels=out_dim,
+                    upsampler_out_channels=out_dim // 2,
+                    num_layers=num_res_blocks + 1,
+                    upsample=upsample,
+                    norm=VaeNormDescRms(eps=eps),
+                    ctx=ctx,
+                )
             self.up_blocks.append(up_block)
 
         self.conv_norm_out = VaeRmsNorm(out_dim, eps=eps, ctx=ctx, activation_fn="silu")
@@ -378,7 +406,7 @@ class WanVaeEncoder2D(Module):
 
 
 class WanVaeDecoder2DAdapter:
-    """Torch-in (BHWC), torch-out (BCHW) decoder for the Wan 2.2 VAE of a checkpoint."""
+    """Torch-in (BHWC), torch-out (BCHW) decoder for the Wan VAE of a checkpoint."""
 
     def __init__(
         self,
@@ -387,6 +415,7 @@ class WanVaeDecoder2DAdapter:
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
         use_torch: bool,
+        load_weights: bool = True,
     ) -> None:
         self._name = checkpoint_name
         self._parallel_config = parallel_config
@@ -401,7 +430,8 @@ class WanVaeDecoder2DAdapter:
         self._latents_shift = torch.tensor(hf_config["latents_mean"])
         self.z_dim: int = hf_config["z_dim"]
         self.patch_size: int = hf_config.get("patch_size") or 1
-        self.spatial_compression_ratio: int = hf_config["scale_factor_spatial"]
+        # Wan 2.1 style configs, such as Qwen-Image's, omit the keys that default to the Wan 2.1 VAE.
+        self.spatial_compression_ratio: int = hf_config.get("scale_factor_spatial", 8)
 
         if use_torch:
             self._torch_vae = AutoencoderKLWan.from_pretrained(
@@ -413,30 +443,60 @@ class WanVaeDecoder2DAdapter:
             self._tt_latents_mean = None
         else:
             self._torch_vae = None
-            self._decoder = WanVaeDecoder2D(
-                base_dim=hf_config["base_dim"],
-                decoder_base_dim=hf_config.get("decoder_base_dim"),
-                z_dim=hf_config["z_dim"],
-                dim_mult=hf_config["dim_mult"],
-                num_res_blocks=hf_config["num_res_blocks"],
-                out_channels=hf_config.get("out_channels", 3),
-                device=self._device,
-                parallel_config=parallel_config,
-                ccl_manager=ccl_manager,
-            )
+            self._decoder = self._build_decoder()
             self._tracer = Tracer(self._rescale_and_decode, device=self._device, clone_prep_inputs=False)
             self._tt_latents_std = tensor.from_torch(torch.tensor(hf_config["latents_std"]), device=self._device)
             self._tt_latents_mean = tensor.from_torch(torch.tensor(hf_config["latents_mean"]), device=self._device)
 
-            cache.load_model(
-                self._decoder,
-                get_torch_state_dict=self._load_torch_state_dict,
-                model_name=self._name.split("/")[-1],
-                subfolder="vae",
-                parallel_config=self._parallel_config,
-                mesh_shape=tuple(self._device.shape),
-                mesh_device=self._device,
-            )
+            if load_weights:
+                self.reload_weights()
+
+    def is_loaded(self) -> bool:
+        return self._torch_vae is not None or (self._decoder is not None and self._decoder.is_loaded())
+
+    def reload_weights(self) -> None:
+        if self.is_loaded():
+            return
+
+        if self._decoder is None:
+            self._decoder = self._build_decoder()
+        cache.load_model(
+            self._decoder,
+            get_torch_state_dict=self._load_torch_state_dict,
+            model_name=self._name.split("/")[-1],
+            subfolder="vae",
+            parallel_config=self._parallel_config,
+            mesh_shape=tuple(self._device.shape),
+            mesh_device=self._device,
+        )
+        ttnn.synchronize_device(self._device)
+
+    def deallocate_weights(self) -> None:
+        """Drops the decoder, which frees its weights. ``reload_weights`` builds a new one.
+
+        Also releases the trace, which would read the weights from their old addresses after a reload.
+        """
+        if self._torch_vae is not None or self._decoder is None:
+            return
+
+        self._tracer.release_trace()
+        self._decoder = None
+        ttnn.synchronize_device(self._device)
+
+    def _build_decoder(self) -> WanVaeDecoder2D:
+        hf_config = self._hf_config
+        return WanVaeDecoder2D(
+            base_dim=hf_config["base_dim"],
+            decoder_base_dim=hf_config.get("decoder_base_dim"),
+            z_dim=hf_config["z_dim"],
+            dim_mult=hf_config["dim_mult"],
+            num_res_blocks=hf_config["num_res_blocks"],
+            out_channels=hf_config.get("out_channels", 3),
+            is_residual=hf_config.get("is_residual", False),
+            device=self._device,
+            parallel_config=self._parallel_config,
+            ccl_manager=self._ccl_manager,
+        )
 
     def _load_torch_state_dict(self) -> dict[str, torch.Tensor]:
         torch_vae = AutoencoderKLWan.from_pretrained(self._name, subfolder="vae")

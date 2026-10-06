@@ -16,7 +16,7 @@ from loguru import logger
 
 import ttnn
 from models.tt_dit.models.transformers.transformer_qwenimage import QwenImageCheckpoint, QwenImageTransformer
-from models.tt_dit.models.vae.vae_qwenimage import QwenImageVAEDecoderAdapter
+from models.tt_dit.models.vae.vae_wan_2d import WanVaeDecoder2DAdapter
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.cfg import CFGCombiner, create_submeshes, submesh_shape
@@ -287,11 +287,12 @@ class QwenImagePipeline(PipelineAPIMixin):
         self._swap_in(self._transformer_loaders[-1])
 
         logger.info("creating VAE decoder...")
-        self._vae = QwenImageVAEDecoderAdapter(
+        self._vae = WanVaeDecoder2DAdapter(
             checkpoint_name=config.checkpoint_name,
             parallel_config=config.vae_parallel_config,
             ccl_manager=self._ccl_managers[-1],
             use_torch=config.use_torch_vae_decoder,
+            load_weights=False,
         )
 
         if not config.dynamic_load_vae:

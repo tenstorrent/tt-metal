@@ -39,7 +39,7 @@ from ....utils.test import line_params_req_exact_devices
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{**line_params_req_exact_devices, "trace_region_size": 150000000}],
+    [{**line_params_req_exact_devices, "l1_small_size": 32768, "trace_region_size": 150000000}],
     ids=["line"],
     indirect=True,
 )
