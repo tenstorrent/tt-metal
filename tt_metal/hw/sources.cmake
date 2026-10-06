@@ -405,4 +405,35 @@ set(HW_JIT_API_HEADERS
     toolchain/erisc-b0-app-sections.ld
     toolchain/erisc-b0-memory.ld
     toolchain/erisc-b0-kernel.ld
+    inc/api/compute/celu_bw.h
+    inc/api/compute/selu_bw.h
+    inc/api/compute/log_sigmoid_bw.h
+    inc/api/compute/softplus_bw.h
+    inc/api/compute/hardsigmoid_bw.h
+    inc/api/compute/hardtanh_bw.h
+    inc/api/compute/leaky_relu_bw.h
+    inc/api/compute/relu6_bw.h
+    inc/api/compute/hardshrink_bw.h
+    inc/api/compute/softshrink_bw.h
+    inc/api/compute/abs_bw.h
+    inc/api/compute/acos_bw.h
+    inc/api/compute/asin_bw.h
+    inc/api/compute/atanh_bw.h
+    inc/api/compute/asinh_bw.h
+    inc/api/compute/logit_bw.h
+    inc/api/compute/logiteps_bw.h
+    inc/api/compute/sqrt_bw.h
+    inc/api/compute/rsqrt_bw.h
+    inc/api/compute/log_bw.h
+    inc/api/compute/log2_bw.h
+    inc/api/compute/log10_bw.h
+    inc/api/compute/log1p_bw.h
+    inc/api/compute/reciprocal_bw.h
+    inc/api/compute/expm1_bw.h
+    inc/api/compute/exp2_bw.h
+    inc/api/compute/square_bw.h
+    inc/api/compute/sinh_bw.h
+    inc/api/compute/cosh_bw.h
+    inc/api/compute/erfinv_bw.h
+    inc/api/compute/multigammaln_bw.h
 )
