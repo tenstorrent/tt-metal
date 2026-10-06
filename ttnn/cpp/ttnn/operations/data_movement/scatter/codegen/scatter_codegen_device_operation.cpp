@@ -108,17 +108,6 @@ void ScatterCodegenDeviceOperation::validate_on_program_cache_miss(
     const auto& index_tensor = tensor_args.index_tensor;
     const auto& src_tensor = tensor_args.src_tensor;
 
-    // operation_attributes_t.page_map is a public field any caller of ttnn::prim::scatter_codegen()
-    // can set directly, bypassing build_scatter_codegen_params()'s own bounds-checked construction.
-    // Its rank prefix indexes a fixed kScatterMaxPageRank-wide block of device-side runtime args
-    // (scatter_common.hpp's map_scatter_input_page), so an out-of-range rank is rejected here rather
-    // than left to overrun that block on the device.
-    TT_FATAL(
-        attributes.page_map[0] >= 1 && attributes.page_map[0] <= kScatterMaxPageRank,
-        "scatter_codegen: operation_attributes_t.page_map rank ({}) must be between 1 and {}.",
-        attributes.page_map[0],
-        kScatterMaxPageRank);
-
     // The prim only ever holds an already-normalized tensor (transpose-to-last-dim already applied),
     // so the scatter axis here is always the last dim; -1 says that without re-deriving rank.
     TT_FATAL(
@@ -126,6 +115,25 @@ void ScatterCodegenDeviceOperation::validate_on_program_cache_miss(
             input_tensor, /*dim=*/-1, index_tensor, src_tensor, attributes.reduction_mode),
         "scatter_codegen: input/index/src tensors are not supported by the codegen prim (see "
         "supported_by_codegen())");
+
+    // operation_attributes_t.page_map is a public field any caller of ttnn::prim::scatter_codegen()
+    // can set directly, bypassing build_scatter_codegen_params()'s own construction. Every reader
+    // folds its page ordinal through it (scatter_common.hpp's map_scatter_input_page) with no further
+    // check: a wrong rank overruns the fixed kScatterMaxPageRank-wide runtime-arg block and a wrong or
+    // zero extent misaddresses pages or divides by zero on the device. The only page map in contract
+    // is the one the tensors themselves describe, so rebuild it with the same builder and require an
+    // exact match. supported_by_codegen() above already bounds the page rank, so the builder's own
+    // TT_FATALs cannot fire before this one for an in-scope call.
+    const bool tiled = input_tensor.layout() == Layout::TILE;
+    const auto expected_page_map =
+        compute_scatter_page_map(input_tensor.logical_shape(), index_tensor.logical_shape(), tiled);
+    TT_FATAL(
+        attributes.page_map == expected_page_map,
+        "scatter_codegen: operation_attributes_t.page_map does not describe the input/index tensors (input {}, "
+        "index {}, {}); build it with build_scatter_codegen_params().",
+        input_tensor.logical_shape(),
+        index_tensor.logical_shape(),
+        tiled ? "TILE" : "ROW_MAJOR");
 
     // Structural preconditions copied from ScatterDeviceOperation::validate_on_program_cache_miss
     // (device/scatter_device_operation.cpp): supported_by_codegen() only answers layout/dtype/
