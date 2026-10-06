@@ -180,6 +180,30 @@ def padding_lanes(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     return flat.reshape(src.shape)
 
 
+def received_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
+    """*src* as the op receives it: what ``quantize_input_to_unpack_format`` hands the
+    golden, and the unpack hands the kernel. The same tensor on every format but a block
+    float.
+
+    The lane checks that ask where an input *is* -- on a singularity, inside the op's
+    claim, inside a tracked issue's lanes -- have to ask it of this value, not of the one
+    generated. On Bfp8_b the shared exponent moves a value across those boundaries: in
+    the sorted sweep 1.0 is the last lane of the block ``0x3F71..0x3F80``, so 0.992 and
+    0.996 both arrive as exactly 1.0, and ``atanh`` of them is the pole.
+    """
+    from helpers.bfp_format_utils import BFP_BLOCK
+    from helpers.golden_generators import quantize_input_to_unpack_format
+
+    # The block quantizer works on whole BFP_BLOCK-lane blocks. A device sweep is a
+    # multiple of that; a host test may hand in a fragment, so pad it with zeros, which
+    # never raise a block's exponent, and drop the padding again.
+    flat = src.detach().flatten()
+    short = (-flat.numel()) % BFP_BLOCK
+    padded = torch.cat([flat, torch.zeros(short, dtype=flat.dtype, device=flat.device)])
+    received = quantize_input_to_unpack_format(padded, input_format)[: flat.numel()]
+    return received.reshape(src.shape)
+
+
 def _normal_input(
     src: torch.Tensor, input_format: DataFormat, output_format=None, dest_acc=None
 ) -> torch.Tensor:
@@ -192,16 +216,14 @@ def _normal_input(
     error (Floor's Float32 -> Float16 cell read 15360 steps, the distance to 1.0).
     Without *output_format* and *dest_acc*, only the stimuli format's cutoff applies.
 
-    Judged on the input as generated *and* as ``quantize_input_to_unpack_format`` hands
-    it to the golden. They differ on a block float: the sweep's one ``-0.0`` shares a
-    Bfp8_b block with the bf16 subnormals ``0x8001..0x800F``, the shared exponent is 0,
-    and the quantizer's forced hidden bit gives the golden ``-2**-127``; ``floor`` of
-    that is -1 against the 0 silicon sees. That one lane was 16,129 steps on every
+    Judged on the input as generated *and* as received (:func:`received_inputs`). They
+    differ on a block float: the sweep's one ``-0.0`` shares a Bfp8_b block with the
+    bf16 subnormals ``0x8001..0x800F``, the shared exponent is 0, and the quantizer's
+    forced hidden bit gives the golden ``-2**-127``; ``floor`` of that is -1 against
+    the 0 silicon sees. That one lane was 16,129 steps on every
     Bfp8_b-input cell of Floor and Signbit, and why Ceil and Trunc read 0 there.
     """
-    from helpers.bfp_format_utils import BFP_BLOCK
     from helpers.data_format_inference import infer_unpack_out
-    from helpers.golden_generators import quantize_input_to_unpack_format
     from helpers.llk_params import DestAccumulation, format_dict
 
     cutoff = torch.finfo(format_dict[stimuli_format_for(input_format)]).smallest_normal
@@ -229,14 +251,7 @@ def _normal_input(
     # this filter while looking, in any printout, like the smallest normal.
     magnitude = src.detach().to(torch.float32).abs()
     survives = ((magnitude >= cutoff) | (magnitude == 0)) & (magnitude <= ceiling)
-    # The block quantizer works on whole BFP_BLOCK-lane blocks. A device sweep is a
-    # multiple of that; a host test may hand in a fragment, so pad it with zeros, which
-    # never raise a block's exponent, and drop the padding again.
-    flat = src.detach().flatten()
-    short = (-flat.numel()) % BFP_BLOCK
-    padded = torch.cat([flat, torch.zeros(short, dtype=flat.dtype, device=flat.device)])
-    quantized = quantize_input_to_unpack_format(padded, input_format)[: flat.numel()]
-    quantized_magnitude = quantized.detach().to(torch.float32).abs().reshape(src.shape)
+    quantized_magnitude = received_inputs(src, input_format).to(torch.float32).abs()
     quantized_subnormal = (quantized_magnitude < cutoff) & (quantized_magnitude != 0)
     return survives & ~quantized_subnormal
 

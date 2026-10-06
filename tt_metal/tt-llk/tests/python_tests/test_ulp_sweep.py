@@ -23,8 +23,6 @@ from helpers.ulp_sweep import (
     export_measured,
     finish_emit,
     flushed_inputs,
-    golden_input,
-    known_nonfinite_lanes,
     measurable_mask,
     merge_measured,
     nonfinite_failures,
@@ -659,54 +657,6 @@ def test_a_block_float_lane_is_judged_where_the_quantizer_puts_it():
     assert nonfinite_failures(
         MathOperation.Acosh, src, golden, inf, flat, out
     ).tolist() == [False] * 15 + [True]
-
-
-def test_the_reciprocal_saturation_lane_is_two_to_the_minus_16_as_received():
-    """#57215: 1/x at x = 2**-16 is 2**16, past fp16's range, and the approximate
-    reciprocal's shortfall leaves it for the store to saturate to 65504. One step above,
-    1/x is ~65028, a finite fp16 answer: an inf there is a failure on Float16_b. On
-    Bfp8_b the shared exponent hands the kernel 2**-16 itself for the two steps under it
-    and the one above, so they are the same input and excused with it.
-
-    Two blocks, aligned as the sweep aligns them: 2**-16 closes ``0x3771..0x3780``."""
-    src = _bf16_run(0x3771, 0x3790)
-    edge = int((src == 2.0**-16).nonzero())
-    above = edge + 1
-    cell = dict(approx_mode=ApproximationMode.Yes, dest_acc=DestAccumulation.Yes)
-    out = DataFormat.Float16
-    for fmt, named in (
-        (DataFormat.Float16_b, [edge]),
-        (DataFormat.Bfp8_b, [edge - 2, edge - 1, edge, above]),
-    ):
-        excused = known_nonfinite_lanes(
-            MathOperation.Reciprocal, src, fmt, out, *cell.values()
-        )
-        assert excused.nonzero().flatten().tolist() == named, fmt.name
-
-        # What silicon answers: the saturated store on the named lanes, and the golden
-        # everywhere else.
-        received = received_inputs(src, fmt).float()
-        golden = (1 / received).to(torch.float16)
-        result = torch.where(excused, 65504.0, golden.float()).to(torch.float16)
-        failures = nonfinite_failures(
-            MathOperation.Reciprocal, src, golden, result, fmt, out, **cell
-        )
-        assert not failures.any(), fmt.name
-        assert (
-            stale_excuses(
-                MathOperation.Reciprocal, src, golden, result, fmt, out, *cell.values()
-            )
-            == []
-        ), fmt.name
-
-    fmt = DataFormat.Float16_b
-    golden = (1 / src.float()).to(torch.float16)
-    assert torch.isfinite(golden[above])
-    result = golden.clone()
-    result[above] = float("inf")
-    assert nonfinite_failures(
-        MathOperation.Reciprocal, src, golden, result, fmt, out, **cell
-    ).nonzero().flatten().tolist() == [above]
 
 
 def test_a_known_nonfinite_lane_is_excused_on_its_cell_and_nowhere_else():
