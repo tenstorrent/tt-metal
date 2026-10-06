@@ -591,3 +591,31 @@ def test_non_finite_into_an_integer_dest_is_not_undefined(value, expected):
     before the clamp rather than left to torch."""
     got = QUASAR._to_dest_storage(torch.tensor([value]), DataFormat.Int8)
     assert got.item() == expected
+
+
+# An integer Dest accumulates exactly on the device. float32 holds integers
+# only to 2^24, so accumulating there drops the low bits of a wide Dest value
+# before it is narrowed back -- and can push an in-range sum past INT32_MAX,
+# where the saturation clamp then pins it.
+INTEGER_ACCUMULATE_CASES = [
+    (16777217, 1, 16777218),
+    (16777217, 0, 16777217),
+    (-16777217, -1, -16777218),
+    (2147483000, 600, 2147483600),
+    # Genuinely out of range, so this one does saturate.
+    (2000000000, 300000000, 2147483647),
+]
+
+
+@pytest.mark.parametrize(
+    "current, addend, expected",
+    INTEGER_ACCUMULATE_CASES,
+    ids=[f"{c[0]}+{c[1]}" for c in INTEGER_ACCUMULATE_CASES],
+)
+def test_integer_dest_accumulates_exactly(current, addend, expected):
+    got = QUASAR.src_to_dest(
+        torch.tensor([addend], dtype=torch.int32),
+        DataFormat.Int32,
+        torch.tensor([current], dtype=torch.int32),
+    )
+    assert got.item() == expected
