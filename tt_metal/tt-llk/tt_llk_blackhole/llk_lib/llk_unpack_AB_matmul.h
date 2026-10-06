@@ -126,9 +126,8 @@ inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face, con
     else if (narrow)
     {
         // SCRATCH_SEC0_val = STRIDE_GPR, then CFG_REG += SCRATCH_SEC0_val (0b011 = add, 32-bit mask, scratch_sel 0): the stride is
-        // read from the GPR every tile as before, without the RDCFG and ADDDMAREG round trip (the GPR holds the Scalar Unit's result
-        // before the thread's next instruction, so no STALLWAIT)
-        TTI_NOP; // spaces the stream by a cycle per tile; without it a pack-bound Float32 output runs slower
+        // read from the GPR every tile as before, without the RDCFG and ADDDMAREG round trip
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON); // THCON writes the stride GPR, and on Blackhole a WRCFG can pass that write
         TTI_WRCFG(STRIDE_GPR, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
         TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0, CFG_REG);
     }
