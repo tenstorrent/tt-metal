@@ -1,6 +1,6 @@
 # BEVFormer
 
-This directory holds the BEVFormer-base image backbone (ResNet101-DCN) and FPN neck, the BEVFormer encoder, the detection decoder, and the detection head with its NMS-free box coder.
+This directory holds BEVFormer-base end to end (`tt/tt_bevformer.py`): the image backbone (ResNet101-DCN) and FPN neck, the perception transformer around the BEVFormer encoder, the detection decoder, and the detection head with its NMS-free box coder.
 
 BEVFormer Encoder is a transformer-based 3D object detection model that creates Bird's-Eye-View (BEV) representations from multi-camera images. The encoder uses spatiotemporal transformers to learn unified BEV representations by combining spatial cross-attention for feature extraction from camera views and temporal self-attention for modeling temporal dependencies.
 
@@ -55,17 +55,53 @@ against upstream's modules, run on CPU with the checkpoint's weights.
 - The plan's device buffers have a fixed capacity per camera. `prepare_frame(img_metas, plan=plan)`
   refills them in place for the next frame, so a trace captured with the plan replays on every
   later frame. By default the first `prepare_frame` sizes the plan for its own frame only; a plan
-  that later frames refill needs a `capacity` covering every rig it will see, a bound for the rig or
-  `full_capacity(bev_h * bev_w)`, which runs the deformable attention on every query per camera
-  (with nuScenes' rig the busiest camera sees about a quarter of the base grid).
+  that later frames refill needs a `capacity` covering every rig it will see: a bound for the rig
+  (with nuScenes' rig the busiest camera sees about a quarter of the base grid), or
+  `full_capacity(bev_h * bev_w)` on smaller grids. `full_capacity` runs the deformable attention on
+  every query per camera and does not fit in DRAM on the 200x200 base grid.
   `tests/perf/test_encoder_perf.py` captures the forward as a trace, which fails on any host read
   or write, and replays it on the next frame.
 - As upstream, with batch size above 1 every sample gathers the queries the first sample's cameras
   see, and the temporal self-attention reads `value[:bs]`; both are exact at batch size 1, which
   BEVFormer runs.
 - The sampling grids are float32, as in the decoder.
+- The camera features are `(bs * num_cams, num_keys, 256)`: each sample's cameras in turn, the
+  FPN's order, with the levels concatenated, as the perception transformer builds them.
 - Parameters come from `tt/model_preprocessing.py` (`create_bevformer_encoder_parameters`) and are
   single use: building an encoder consumes the cross-attentions' sampling-offset weights.
+
+### Perception Transformer
+
+`tt/tt_perception_transformer.py` ports the BEV half of upstream's `PerceptionTransformer`,
+`get_bev_features` (`reference/perception_transformer.py`): the glue around the encoder.
+
+- The BEV queries get the CAN-bus MLP of the frame's ego motion added; each FPN level gets the
+  camera and level embeddings, and the levels are concatenated into the encoder's camera features.
+- The previous frame's BEV is rotated by the heading change about cell (100, 100), upstream's
+  default for every grid size, as torchvision's nearest-neighbour `rotate` does, and the encoder
+  shifts its reference points by the ego translation in cells of the point-cloud range over the
+  grid, as upstream's head passes it.
+- `prepare_frame(img_metas)` turns the frame's CAN bus, ego shift, rotation and cameras into device
+  buffers, refilled in place for later frames, so the forward runs on device only and can be
+  traced. The rotation moves whole cells: the host rotates an image of cell indices with the
+  reference's own `rotate`, and the device gathers the previous BEV's rows by them, which picks
+  exactly the cells the reference picks.
+- `img_metas[b]["can_bus"]` is relative to the previous frame, as upstream's `forward_test` makes
+  it (`reference/bevformer.py`'s `relative_can_bus`).
+- The reference matches upstream's `get_bev_features` exactly with the BEVFormer-base checkpoint,
+  over two frames, at batch sizes 1 and 2.
+
+### Detector
+
+`tt/tt_bevformer.py` runs the detector end to end: backbone and FPN, the perception transformer,
+and the head, for one image shape and batch size (the backbone's convs are pinned to it).
+
+- `prepare_frame(img_metas, frame)` prepares or refills the frame's buffers; the caller carries the
+  previous BEV between frames, as upstream does.
+- The BEV queries and their learned positional encoding depend on the weights only and are
+  uploaded once (`tt/model_preprocessing_bevformer.py`).
+- `reference/bevformer.py`'s `load_bevformer_checkpoint` loads the BEVFormer-base checkpoint
+  strictly, every key but the loss's `code_weights`.
 
 ### Detection Decoder
 
@@ -100,7 +136,7 @@ and, per decoder layer, the classification branch.
   float32 points, scaled from [0, 1] to `pc_range` metres. The class logits are float32, the
   dtype the coder ranks.
 - The encoder side of BEVFormer's `PerceptionTransformer` (BEV queries, positional encoding, can
-  bus, previous BEV) is not part of the head.
+  bus, previous BEV) is not part of the head; see the perception transformer and the detector.
 
 `tt/tt_nms_free_coder.py` ports `NMSFreeCoder`: the top 300 (query, class) pairs of the last
 layer by score, their box predictions decoded to `(cx, cy, cz, w, l, h, yaw, vx, vy)`, and a
@@ -252,6 +288,37 @@ are, at the FPN's four level sizes for 928x1600 images; the camera geometry is n
 **Usage:**
 ```bash
 pytest models/experimental/bevformer/tests/pcc/test_encoder.py
+```
+
+#### test_perception_transformer.py
+Tests the perception transformer over two consecutive frames: the first without a previous BEV, the
+second with each side's own first-frame BEV, rotated and shifted by the ego motion. The base grid
+at batch size 1 and the tiny grid at batch size 2, each sample with its own CAN bus, rotation, shift
+and turned rig, which also runs a third frame and checks it compiles no new programs. PCC 0.999 on
+every frame.
+
+**Usage:**
+```bash
+pytest models/experimental/bevformer/tests/pcc/test_perception_transformer.py
+```
+
+#### test_bevformer.py
+Tests the detector end to end on random camera images over two consecutive frames: the BEV, the
+last decoder layer's class logits and, channel by channel, its box predictions, at PCC 0.95.
+
+It uses dummy weights by default (the backbone's, encoder's and head's tests' weights). With
+`BEVFORMER_CHECKPOINT` set to the BEVFormer-base checkpoint
+([bevformer_r101_dcn_24ep.pth](https://github.com/zhiqi-li/storage/releases/download/v1.0/bevformer_r101_dcn_24ep.pth),
+from upstream's model zoo) it loads the trained weights instead;
+the inputs stay random. With the trained weights the box velocities and yaw are the least precise
+channels, at PCC 0.97 to 0.99, from the backbone's bfloat8_b weights and bfloat16 accumulation
+carried through the encoder and decoder; the other outputs stay above 0.99. The reference runs the
+backbone on the CPU three times, so the test takes several minutes.
+
+**Usage:**
+```bash
+pytest models/experimental/bevformer/tests/pcc/test_bevformer.py
+BEVFORMER_CHECKPOINT=/path/to/bevformer_r101_dcn_24ep.pth pytest models/experimental/bevformer/tests/pcc/test_bevformer.py
 ```
 
 #### test_temporal_self_attention.py

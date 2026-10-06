@@ -6,7 +6,7 @@
 
 What changes from frame to frame and comes from the host, the CAN bus, the ego shift, the
 previous BEV's rotation and the cameras' projections, is prepared by
-:meth:`TTPerceptionTransformer.prepare_frame` into a :class:`PerceptionFrame` whose device
+:meth:`TtPerceptionTransformer.prepare_frame` into a :class:`PerceptionFrame` whose device
 buffers are allocated once and refilled in place, so the forward runs on device only and a trace
 captured with a frame replays on the next one.
 
@@ -22,7 +22,7 @@ import torch
 import ttnn
 from torchvision.transforms.functional import rotate
 
-from ..reference.perception_transformer import CAN_BUS_DIMS, ego_shift
+from ..reference.perception_transformer import CAN_BUS_DIMS, bev_grid_length, ego_shift
 from .tt_common import GRID_DTYPE, layer_norm
 from .tt_encoder import TTBEVFormerEncoder
 from .tt_spatial_cross_attention import SCARebatchPlan
@@ -64,7 +64,7 @@ def rotation_gather(img_metas, bev_h, bev_w, rotate_center):
     return torch.cat(indices).view(1, 1, 1, -1), torch.stack(masks).unsqueeze(-1)
 
 
-class TTPerceptionTransformer:
+class TtPerceptionTransformer:
     """The encoder and its glue over a ``(bev_h, bev_w)`` grid and FPN levels of ``spatial_shapes``.
 
     Owns a :class:`TTBEVFormerEncoder`, so ``params`` are single-use like its own.
@@ -87,7 +87,8 @@ class TTPerceptionTransformer:
     def _host_frame(self, img_metas):
         can_bus = torch.tensor([[list(map(float, meta["can_bus"]))] for meta in img_metas])
         assert can_bus.shape[-1] == CAN_BUS_DIMS, f"can_bus has {can_bus.shape[-1]} values, expected {CAN_BUS_DIMS}"
-        shift = ego_shift(img_metas, self.bev_h, self.bev_w).view(len(img_metas), 1, 1, 2)
+        grid_length = bev_grid_length(self.encoder.pc_range, self.bev_h, self.bev_w)
+        shift = ego_shift(img_metas, self.bev_h, self.bev_w, grid_length).view(len(img_metas), 1, 1, 2)
         rotation_index, rotation_mask = rotation_gather(img_metas, self.bev_h, self.bev_w, self.rotate_center)
         return dict(
             can_bus=(can_bus, ttnn.bfloat16, ttnn.TILE_LAYOUT),
@@ -115,7 +116,7 @@ class TTPerceptionTransformer:
             buffer = getattr(frame, name)
             assert tuple(buffer.shape) == tuple(
                 tensor.shape
-            ), f"{name}: the frame holds {tuple(buffer.shape)}, this one needs {tuple(tensor.shape)}; prepare a new frame"
+            ), f"{name}: the frame holds {tuple(buffer.shape)}, not {tuple(tensor.shape)}; prepare a new frame"
             ttnn.copy_host_to_device_tensor(ttnn.from_torch(tensor, dtype=dtype, layout=layout), buffer)
         return frame
 
@@ -124,6 +125,8 @@ class TTPerceptionTransformer:
         ``(bs * num_cams, num_keys, C)`` with the camera and level embeddings added."""
         levels = []
         for (h, w), feat, embeds in zip(self.spatial_shapes, mlvl_feats, self.params.level_cams_embeds):
+            # The FPN's levels may be L1-sharded, and the first keeps the backbone's dtype; the
+            # per-camera split is a reshape of an interleaved bfloat16 tensor, free in ROW_MAJOR.
             feat = ttnn.to_memory_config(feat, ttnn.DRAM_MEMORY_CONFIG)
             if feat.dtype != ttnn.bfloat16:
                 feat = ttnn.typecast(feat, ttnn.bfloat16)
