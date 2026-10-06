@@ -666,6 +666,8 @@ def test_validate_perf_targets_todo_entry_respects_strict_flag(tmp_path):
 
     non_strict = _run_validator(tmp_path, strict_missing=False)
     assert non_strict.returncode == 0, non_strict.stdout + non_strict.stderr
+    assert "100.0" in non_strict.stdout
+    assert "no-target" in non_strict.stdout
 
     strict = _run_validator(tmp_path, strict_missing=True)
     assert strict.returncode == 1
@@ -1011,3 +1013,145 @@ def test_throughput_only_classifier_payload_fails_missing_accuracy(tmp_path):
     result = _run_validator(tmp_path)
     assert result.returncode == 1, result.stdout + result.stderr
     assert "metric 'top1' missing in benchmark payload" in result.stdout
+
+
+def test_report_shows_measurement_when_entry_missing(tmp_path):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_1.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=128,
+        decode_tsu=110.0,
+    )
+    targets = {"version": 1, "targets": {}}
+    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
+    tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
+
+    result = _run_validator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "110.0" in result.stdout
+    assert "no-target" in result.stdout
+    assert "::error::" not in result.stdout
+
+
+def test_enforce_perf_false_does_not_fail_on_perf_miss(tmp_path):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_1.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=128,
+        decode_tsu=10.0,
+    )
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 1,
+                                "seq_len": 128,
+                                "status": "active",
+                                "enforce_perf": False,
+                                "perf": {"decode_t/s/u": 100.0},
+                                "accuracy": {},
+                            }
+                        ]
+                    }
+                },
+            }
+        },
+    }
+    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
+    tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 3}}, "team": "models"}]
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
+
+    result = _run_validator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "report-only" in result.stdout
+    assert "10.0" in result.stdout
+    assert "100.0" in result.stdout
+    assert "::error::" not in result.stdout
+
+
+def test_enforce_perf_false_still_fails_accuracy(tmp_path):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_1.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=128,
+        decode_tsu=100.0,
+        extra_measurements=[
+            {"step_name": "inference_decode", "name": "top1_token_accuracy", "value": 70.0},
+        ],
+    )
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 1,
+                                "seq_len": 128,
+                                "status": "active",
+                                "enforce_perf": False,
+                                "perf": {"decode_t/s/u": 100.0},
+                                "accuracy": {"top1": 90.0},
+                            }
+                        ]
+                    }
+                },
+            }
+        },
+    }
+    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
+    tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 3}}, "team": "models"}]
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
+
+    result = _run_validator(tmp_path)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "top1" in result.stdout
+    assert "::error::" in result.stdout
+
+
+def test_schema_rejects_non_bool_enforce_perf(tmp_path):
+    validator = _load_validator_module()
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "status": "active",
+                                "enforce_perf": "no",
+                                "perf": {},
+                                "accuracy": {},
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+    }
+    errors = validator._validate_targets_schema(targets)
+    assert any("enforce_perf" in error for error in errors)

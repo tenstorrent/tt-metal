@@ -577,6 +577,86 @@ def load_imagenet_dataset(model_location_generator=None, model_version="ImageNet
     return str(dataset_path)
 
 
+# Canonical metric name -> (benchmark step, measurement name). Keep in sync with
+# METRIC_NAME_MAP in .github/scripts/utils/validate_perf_targets.py. fps stays on
+# report_vision_fps; this map is for the other e2e metrics the validator understands.
+_E2E_METRIC_MEASUREMENTS = {
+    "prefill_t/s": ("inference_prefill", "tokens/s"),
+    "prefill_time_to_first_token": ("inference_prefill", "time_to_token"),
+    "prefill_time_to_token": ("inference_prefill", "time_to_token"),
+    "decode_t/s": ("inference_decode", "tokens/s"),
+    "decode_t/s/u": ("inference_decode", "tokens/s/user"),
+    "prefill_decode_t/s/u": ("inference_prefill_decode", "tokens/s/user"),
+    "rtf": ("inference", "rtf"),
+}
+
+
+def report_e2e_metrics(
+    model_name: str,
+    metrics: dict,
+    *,
+    batch_size: int | None = None,
+    seq_len: int | None = None,
+    model_type: str = "llm",
+):
+    """Emit known e2e perf measurements so the CI validate step can print them.
+
+    `model_name` must be the registry `model:` id (or a string whose CI normalization
+    matches an alias). `prefill_time_to_first_token` is passed in seconds, matching
+    the benchmark `time_to_token` measurement; the YAML target stays in milliseconds.
+    No-op outside CI. Throughput in samples or frames per second goes through
+    report_vision_fps instead.
+    """
+    from models.demos.utils.device_sku import get_current_device_sku_name
+    from models.perf.benchmarking_utils import IS_CI_ENV, BenchmarkData, BenchmarkProfiler
+
+    if not IS_CI_ENV or not metrics:
+        return
+
+    unknown = [name for name in metrics if name not in _E2E_METRIC_MEASUREMENTS]
+    if unknown:
+        raise ValueError(f"Unknown e2e metric(s) {unknown}; known: {sorted(_E2E_METRIC_MEASUREMENTS)}")
+
+    benchmark_profiler = BenchmarkProfiler()
+    benchmark_profiler.start("run")
+    opened_steps: list[str] = []
+    measurements: list[tuple[str, str, float]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for name, value in metrics.items():
+        step_name, measurement_name = _E2E_METRIC_MEASUREMENTS[name]
+        pair = (step_name, measurement_name)
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        if step_name not in opened_steps:
+            benchmark_profiler.start(step_name)
+            opened_steps.append(step_name)
+        measurements.append((step_name, measurement_name, float(value)))
+    for step_name in reversed(opened_steps):
+        benchmark_profiler.end(step_name)
+    benchmark_profiler.end("run")
+
+    benchmark_data = BenchmarkData()
+    for step_name, measurement_name, value in measurements:
+        benchmark_data.add_measurement(benchmark_profiler, 0, step_name, measurement_name, value)
+    benchmark_data.save_partial_run_json(
+        benchmark_profiler,
+        run_type="end_to_end_perf",
+        ml_model_name=model_name,
+        ml_model_type=model_type,
+        device_name=get_current_device_sku_name(),
+        batch_size=batch_size,
+        input_sequence_length=seq_len,
+    )
+
+
+def report_generation_rate(model_name: str, elapsed_s: float, count: float = 1.0) -> None:
+    """Publish count/elapsed_s as the fps measurement (images, frames, or samples per second)."""
+    if elapsed_s <= 0 or count <= 0:
+        return
+    report_vision_fps(model_name, float(count) / float(elapsed_s), max(int(count), 1))
+
+
 def report_vision_fps(model_name: str, fps: float, batch_size: int):
     """Emit an ("inference", "fps") benchmark measurement for a vision e2e test.
 

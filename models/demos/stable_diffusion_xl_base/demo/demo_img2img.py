@@ -204,6 +204,9 @@ def run_demo_inference(
         logger.info(
             f"Image gen for {batch_size} prompts completed in {profiler.times['end_to_end_generation'][-1]:.2f} seconds"
         )
+        from models.demos.utils.common_demo_utils import report_generation_rate
+
+        report_generation_rate("sdxl", profiler.times["end_to_end_generation"][-1], batch_size)
         logger.info(
             f"Denoising loop for {batch_size} prompts completed in {profiler.times['denoising_loop'][-1]:.2f} seconds"
         )

@@ -354,6 +354,20 @@ def test_demo_vision(mesh_device, prompt_file, use_trace, max_generated_tokens, 
     text = tokenizer.decode(generated, skip_special_tokens=True)
     logger.info("=" * 70)
     logger.info(f"  TTFT: {perf['ttft']:.3f}s   Decode: {perf['decode_tok_s']:.1f} tok/s")
+    from models.demos.utils.common_demo_utils import report_e2e_metrics
+
+    # Prompt length, not max_seq_len: the text-demo targets are keyed on the text
+    # sequence, and a vision TTFT must not be checked against those.
+    report_e2e_metrics(
+        "qwen3.6-27b",
+        {
+            "prefill_time_to_first_token": perf["ttft"],
+            "decode_t/s": perf["decode_tok_s"],
+            "decode_t/s/u": perf["decode_tok_s"],
+        },
+        batch_size=1,
+        seq_len=T,
+    )
     logger.info(f"  Generated {len(generated)} tokens")
     logger.info(f"  OUTPUT: {text}")
     logger.info("=" * 70)

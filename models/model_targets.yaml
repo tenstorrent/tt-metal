@@ -4,6 +4,10 @@ description: Centralized perf/accuracy targets for models CI.
 # Entry status semantics:
 # - active: target is enforced by validation and used for perf/accuracy checks.
 # - TODO: explicit gap placeholder; excluded from normal target resolution and treated as missing/TODO by validator.
+#   Measured values are still printed. TODO does not fail CI unless --strict-missing.
+# - enforce_perf: optional bool, default true. false still compares and prints perf
+#   (table status report-only) but does not fail the job. Tier 3 e2e sets this false.
+#   Accuracy on an active entry stays enforced.
 # `prefill_time_to_first_token` values are in milliseconds (ms).
 targets:
   qwen-image-2.1-p150:
@@ -194,6 +198,7 @@ targets:
           - batch_size: 32
             seq_len: 128
             status: active
+            enforce_perf: false
             perf:
               decode_t/s/u: 36.0
               decode_t/s: 1152.0
@@ -208,6 +213,7 @@ targets:
           - batch_size: 32
             seq_len: 128
             status: active
+            enforce_perf: false
             perf:
               prefill_t/s: 1990.0
               decode_t/s/u: 17.16
@@ -218,6 +224,7 @@ targets:
           - batch_size: 32
             seq_len: 1024
             status: active
+            enforce_perf: false
             perf:
               prefill_t/s: 2855.0
               decode_t/s/u: 15.24
@@ -228,6 +235,7 @@ targets:
           - batch_size: 32
             seq_len: 2048
             status: active
+            enforce_perf: false
             perf:
               prefill_t/s: 2450.0
               decode_t/s/u: 13.91
@@ -396,7 +404,7 @@ targets:
             accuracy: {}
 
   gemma-4-26b-a4b:
-    aliases: ["gemma-4-26b-a4b", "google/gemma-4-26B-A4B-it"]
+    aliases: ["gemma-4-26b-a4b", "google/gemma-4-26B-A4B-it", "gemma-4-26b-a4b-it"]
     skus:
       wh_llmbox_perf:
         entries:
@@ -417,7 +425,7 @@ targets:
             note: "TODO gap tracked from active models_e2e_tests.yaml combo"
 
   gemma-4-31b:
-    aliases: ["gemma-4-31b", "google/gemma-4-31B-it"]
+    aliases: ["gemma-4-31b", "google/gemma-4-31B-it", "gemma-4-31b-it"]
     skus:
       wh_llmbox_perf:
         entries:
@@ -434,7 +442,7 @@ targets:
             perf: {}
             accuracy: {}
   gemma-4-e2b:
-    aliases: ["gemma-4-e2b", "google/gemma-4-E2B-it"]
+    aliases: ["gemma-4-e2b", "google/gemma-4-E2B-it", "gemma-4-e2b-it"]
     skus:
       wh_n150:
         entries:
@@ -454,7 +462,7 @@ targets:
             perf: {}
             accuracy: {}
   gemma-4-e4b:
-    aliases: ["gemma-4-e4b", "google/gemma-4-E4B-it"]
+    aliases: ["gemma-4-e4b", "google/gemma-4-E4B-it", "gemma-4-e4b-it"]
     skus:
       wh_n150:
         entries:
@@ -1014,6 +1022,7 @@ targets:
           - batch_size: 32
             seq_len: 32
             status: active
+            enforce_perf: false
             perf:
               prefill_t/s: 135.0
               decode_t/s: 346.0
@@ -1027,6 +1036,7 @@ targets:
           - batch_size: 32
             seq_len: 128
             status: active
+            enforce_perf: false
             perf:
               prefill_t/s: 380.0
               decode_t/s: 346.0
@@ -1340,6 +1350,7 @@ targets:
           - batch_size: 1
             seq_len: 128
             status: active
+            enforce_perf: false
             perf:
               # TTFT is run-to-run unstable and bimodal (observed ~205ms and ~327ms
               # clusters across the last 8 scheduled runs, mean ~296ms). The old 351
@@ -1367,6 +1378,7 @@ targets:
           - batch_size: 32
             seq_len: 2048
             status: active
+            enforce_perf: false
             perf:
               prefill_time_to_first_token: 616
               decode_t/s/u: 19.5
@@ -1735,16 +1747,13 @@ targets:
   vit:
     aliases: ["ViT", "vit", "google/vit-base-patch16-224"]
     skus:
-      # Placeholder coverage for the tier-2 (vit, wh_n150) / (vit, wh_n300) combos
-      # registered in models_e2e_tests.yaml. The demo asserts samples/sec against its
-      # own hardcoded expectation and emits no benchmark payload, and samples/sec is not
-      # in ALLOWED_TARGET_METRIC_NAMES in validate_perf_targets.py, so there is no
-      # measurable metric to declare here yet. Kept as TODO so the combo is on the books.
+      # samples/sec is reported as fps (report_vision_fps). No numeric target yet:
+      # the in-test band stays the gate until a CI baseline is copied here.
       wh_n150:
         entries:
           - batch_size: 8
             seq_len: null
-            status: TODO
+            status: active
             perf: {}
             accuracy: {}
             owner_id: U088413NP0Q # Ashai Reddy Ginuga
@@ -1753,7 +1762,7 @@ targets:
         entries:
           - batch_size: 8
             seq_len: null
-            status: TODO
+            status: active
             perf: {}
             accuracy: {}
             owner_id: U088413NP0Q # Ashai Reddy Ginuga
@@ -1835,6 +1844,7 @@ targets:
           - batch_size: 1
             seq_len: null
             status: active
+            enforce_perf: false
             perf:
               fps: 263.29
               fps_tolerance: 0.10
@@ -1849,6 +1859,7 @@ targets:
           - batch_size: 1
             seq_len: null
             status: active
+            enforce_perf: false
             perf:
               fps: 40.83
               fps_tolerance: 0.10
@@ -1863,6 +1874,7 @@ targets:
           - batch_size: 1
             seq_len: null
             status: active
+            enforce_perf: false
             perf:
               fps: 76.0
               fps_tolerance: 0.10
@@ -1886,4 +1898,360 @@ targets:
             perf: {}
             accuracy: {}
             owner_id: U03HY7MK4BT # Mark O'Connor
+            team: models
+
+  # Models below report a known perf metric and previously had no centralized entry.
+  # Tier 3 sets enforce_perf: false so the number is captured without failing the job.
+  # Tier 1/2 leave perf empty until a measured CI baseline is copied in; an empty perf
+  # block does not fail validation.
+  qwen3-0.6b:
+    aliases: ["Qwen3-0.6B", "Qwen/Qwen3-0.6B"]
+    skus:
+      wh_n150:
+        entries:
+          - status: active
+            enforce_perf: false
+            perf: {}
+            accuracy: {}
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+      bh_p150:
+        entries:
+          - status: active
+            enforce_perf: false
+            perf: {}
+            accuracy: {}
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+  qwen3-1.7b:
+    aliases: ["Qwen3-1.7B", "Qwen/Qwen3-1.7B"]
+    skus:
+      wh_n150:
+        entries:
+          - status: active
+            enforce_perf: false
+            perf: {}
+            accuracy: {}
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+      bh_p150:
+        entries:
+          - status: active
+            enforce_perf: false
+            perf: {}
+            accuracy: {}
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+  qwen3-vl-32b:
+    aliases: ["Qwen3-VL-32B", "Qwen/Qwen3-VL-32B-Instruct", "qwen3-vl-32b-instruct"]
+    skus:
+      wh_llmbox_perf:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08H31YMN4Q # Sanjay Sanjay
+            team: models
+  gemma-4-12b:
+    aliases: ["gemma-4-12b", "google/gemma-4-12B-it", "gemma-4-12b-it"]
+    skus:
+      bh_p150:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U088413NP0Q # Ashai Reddy
+            team: models
+      bh_quietbox_2:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U088413NP0Q # Ashai Reddy
+            team: models
+  shallow-unet:
+    aliases: ["shallow-unet", "unet-shallow"]
+    skus:
+      bh_p150:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U088DBNUKGR # Evan Smal
+            team: models
+  bge_m3:
+    # save_partial_run_json rewrites underscores to hyphens, so the JSON name is bge-m3.
+    aliases: ["bge-m3", "BAAI/bge-m3", "bge_m3"]
+    skus:
+      wh_n150:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U082LLYBLSW # Gabriel Tobar
+            team: models
+  bert-large:
+    aliases: ["bert-large"]
+    skus:
+      wh_n150:
+        entries:
+          - status: active
+            enforce_perf: false
+            perf: {}
+            accuracy: {}
+            owner_id: U024A4EFV6U # Brian Liu
+            team: ttnn
+  distilbert:
+    aliases: ["distilbert"]
+    skus:
+      wh_n150:
+        entries:
+          - status: active
+            enforce_perf: false
+            perf: {}
+            accuracy: {}
+            owner_id: U087S3K319A # Austin Ho
+            team: ttnn
+  squeezebert:
+    aliases: ["squeezebert"]
+    skus:
+      wh_n150:
+        entries:
+          - status: active
+            enforce_perf: false
+            perf: {}
+            accuracy: {}
+            owner_id: U07D5N7QL4U # Joseph Chu
+            team: ttnn
+  efficientdet-d0:
+    aliases: ["efficientdet-d0", "efficientdet_d0"]
+    skus:
+      wh_n150:
+        entries:
+          - status: active
+            enforce_perf: false
+            perf: {}
+            accuracy: {}
+            owner_id: U07J5E9NA9G # Dalar Vartanians
+            team: models
+  xtts-v2:
+    aliases: ["xtts-v2", "xtts_v2"]
+    skus:
+      bh_p150b_civ2:
+        entries:
+          - status: active
+            enforce_perf: false
+            perf: {}
+            accuracy: {}
+            owner_id: U087HGJ455E # Sudhanshu Singhal
+            team: shield
+  panoptic-deeplab:
+    aliases: ["panoptic-deeplab"]
+    skus:
+      bh_p150b_civ2:
+        entries:
+          - status: active
+            enforce_perf: false
+            perf: {}
+            accuracy: {}
+            owner_id: U09LK84G4TF
+            team: shield
+  flux.1-schnell:
+    aliases: ["flux.1-schnell", "flux1schnell"]
+    skus:
+      bh_quietbox_2:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U0ATR08RCQ0 # James Lee
+            team: models
+  flux.1-dev:
+    aliases: ["flux.1-dev", "flux1dev"]
+    skus:
+      bh_quietbox_2:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U0ATR08RCQ0 # James Lee
+            team: models
+  flux.2-dev:
+    aliases: ["flux.2-dev"]
+    skus:
+      bh_quietbox_2:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U0ATR08RCQ0 # James Lee
+            team: models
+      bh_sc1:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U0ATR08RCQ0 # James Lee
+            team: models
+  wan-2.2-t2v:
+    aliases: ["wan-2.2-t2v"]
+    skus:
+      bh_quietbox_2:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U0ATR08RCQ0 # James Lee
+            team: models
+      wh_galaxy_perf:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U0ATR08RCQ0 # James Lee
+            team: models
+      bh_sc1:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U0ATR08RCQ0 # James Lee
+            team: models
+      bh_sc4:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U0ATR08RCQ0 # James Lee
+            team: models
+  wan-2.2-i2v:
+    aliases: ["wan-2.2-i2v"]
+    skus:
+      bh_sc1:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U0ATR08RCQ0 # James Lee
+            team: models
+      bh_sc4:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U0ATR08RCQ0 # James Lee
+            team: models
+  sdxl:
+    aliases: ["sdxl", "stable-diffusion-xl"]
+    skus:
+      wh_n150:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08SXRPCTJ5
+            team: shield
+      wh_n300:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08SXRPCTJ5
+            team: shield
+      bh_p150b_civ2:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08SXRPCTJ5
+            team: shield
+  sd35:
+    aliases: ["sd35", "SD35"]
+    skus:
+      wh_llmbox_perf:
+        entries:
+          - status: active
+            enforce_perf: false
+            perf: {}
+            accuracy: {}
+            owner_id: U0ATR08RCQ0 # James Lee
+            team: models
+  mochi:
+    aliases: ["mochi", "Mochi"]
+    skus:
+      wh_llmbox_perf:
+        entries:
+          - status: active
+            enforce_perf: false
+            perf: {}
+            accuracy: {}
+            owner_id: U0ATR08RCQ0 # James Lee
+            team: models
+      wh_galaxy_perf:
+        entries:
+          - status: active
+            enforce_perf: false
+            perf: {}
+            accuracy: {}
+            owner_id: U0ATR08RCQ0 # James Lee
+            team: models
+  qwenimage:
+    aliases: ["qwenimage", "QwenImage"]
+    skus:
+      bh_quietbox_2:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U0ATR08RCQ0 # James Lee
+            team: models
+  motif:
+    aliases: ["motif", "Motif"]
+    skus:
+      wh_llmbox_perf:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U0ATR08RCQ0 # James Lee
+            team: models
+  ltx-2.3-pro-t2v:
+    aliases: ["ltx-2.3-pro-t2v"]
+    skus:
+      bh_sc1:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U0ATR08RCQ0 # James Lee
+            team: models
+  ltx-2.3-pro-i2v:
+    aliases: ["ltx-2.3-pro-i2v"]
+    skus:
+      bh_sc1:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U0ATR08RCQ0 # James Lee
+            team: models
+  ltx-2.3-fast-t2v:
+    aliases: ["ltx-2.3-fast-t2v"]
+    skus:
+      bh_sc1:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U0ATR08RCQ0 # James Lee
+            team: models
+  ltx-2.3-fast-i2v:
+    aliases: ["ltx-2.3-fast-i2v"]
+    skus:
+      bh_sc1:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U0ATR08RCQ0 # James Lee
             team: models

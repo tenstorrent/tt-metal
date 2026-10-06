@@ -34,7 +34,6 @@ from models.experimental.panoptic_deeplab.tt.tt_custom_pipeline import (
 )
 from models.common.utility_functions import profiler
 
-
 # Default PCC validation thresholds for demo
 # These thresholds are used when validation_thresholds is not provided
 DEMO_VALIDATION_THRESHOLDS = {
@@ -374,6 +373,9 @@ def run_panoptic_deeplab_demo(
     logger.info("=" * 80)
     logger.info(f"  Average execution time: {avg_execution_time_us:.2f} μs")
     logger.info(f"  Average samples per second: {samples_per_second:.2f}")
+    from models.demos.utils.common_demo_utils import report_vision_fps
+
+    report_vision_fps("panoptic-deeplab", samples_per_second, num_inputs)
     logger.info(f"  Total execution time: {total_execution_time * 1e6:.2f} μs ({total_execution_time * 1e3:.2f} ms)")
     logger.info(f"  Number of samples: {num_inputs}")
     logger.info("=" * 80)
