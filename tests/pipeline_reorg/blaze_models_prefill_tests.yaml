@@ -938,6 +938,95 @@
   budget_type: demo
   sp_config: sc1
 
+# Runs only when named: excluded from "all", tags and the nightly by its own test_group (see the
+# dsv4-depth job in blaze-models-prefill-tests.yaml). Sections 3 and 4 are one Pro tail split across
+# two processes; section 4 reads the layer-35 streams section 3 writes to generated/v4_depth_handoff.
+- name: "(DeepSeek-V4-Flash, DeepSeek-V4-Pro) transformer full-depth chunked accuracy 55k@5k vs vLLM golden"
+  fabric_profile: torus_xy
+  cmd: |
+    titles=(
+      "(DeepSeek-V4-Flash) transformer layers 0-42 chunked accuracy 55k@5k vs vLLM golden"
+      "(DeepSeek-V4-Pro) transformer layers 0-9 chunked accuracy 55k@5k vs vLLM golden"
+      "(DeepSeek-V4-Pro) transformer layers 10-35 chunked 55k@5k from golden layer 9"
+      "(DeepSeek-V4-Pro) transformer layers 36-60 chunked accuracy 55k@5k vs vLLM golden"
+    )
+    summary=""
+    section_start() {
+      sec_n=$1
+      sec_title=${titles[$((sec_n - 1))]}
+      sec_t0=$SECONDS
+      echo "::group::[$sec_n/${#titles[@]}] $sec_title"
+    }
+    section_end() {
+      local rc=$1 s=$((SECONDS - sec_t0)) st=PASS note=""
+      echo "::endgroup::"
+      if [ "$rc" -ne 0 ]; then st=FAIL; fi
+      if [ "$rc" -eq 124 ]; then note=", timed out"; fi
+      if [ "$rc" -eq 137 ]; then note=", killed"; fi
+      local line="[$sec_n/${#titles[@]}] $st (exit $rc$note, $((s / 60)).$((s % 60 * 10 / 60)) min) $sec_title"
+      echo "$line"
+      summary+="$line"$'\n'
+    }
+    finish() {
+      local j
+      rm -rf generated/v4_depth_handoff
+      for ((j = sec_n + 1; j <= ${#titles[@]}; j++)); do
+        summary+="[$j/${#titles[@]}] NOT RUN ${titles[$((j - 1))]}"$'\n'
+      done
+      echo "===== DeepSeek-V4 transformer full-depth summary ====="
+      printf '%s' "$summary"
+    }
+
+    section_start 1
+    (
+      timeout -k 2m 90m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py::test_v4_flash_transformer_depth -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    section_start 2
+    (
+      timeout -k 2m 45m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py::test_v4_pro_transformer_depth_head -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    section_start 3
+    (
+      timeout -k 2m 120m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py::test_v4_pro_transformer_depth_tail_b1 -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    section_start 4
+    (
+      timeout -k 2m 120m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py::test_v4_pro_transformer_depth_tail_b2 -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    finish
+  test_type: dsv4_transformer_depth
+  test_group: dsv4_transformer_depth
+  skus:
+    bh_sc1:
+      # Sum of the section timeouts (90+45+120+120 = 375), charged to models/demo/bh_sc1.
+      timeout: 375
+      tier: 2
+      release_ready: false
+  owner_id: U08SXRPCTJ5  # Janko Mitrovic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
 
 # ===== Gemma4-31B D_P =================================================================================
 
