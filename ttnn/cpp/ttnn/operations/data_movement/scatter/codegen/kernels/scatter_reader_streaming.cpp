@@ -48,6 +48,9 @@ void kernel_main() {
     constexpr auto src_ta_args = TensorAccessorArgs<index_ta_args.next_compile_time_args_offset()>();
     constexpr uint32_t reduction_mode = get_named_compile_time_arg_val("reduction_mode");
     constexpr uint32_t value_kind = get_named_compile_time_arg_val("value_kind");
+    // scatter_reduce_value has no bfloat16 (kind 5) arm; a bf16 reduce belongs to
+    // scatter_reader_bf16_reduce_rm.cpp, and here it would drop every update.
+    static_assert(reduction_mode == 0 || value_kind != 5, "bfloat16 reduction is not served by this reader");
     constexpr bool packed_uint16_reject = get_named_compile_time_arg_val("packed_uint16_reject") != 0;
     constexpr bool packed_uint16_4 = get_named_compile_time_arg_val("packed_uint16_4") != 0;
 
