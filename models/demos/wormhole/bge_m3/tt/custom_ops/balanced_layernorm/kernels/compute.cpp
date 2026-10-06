@@ -160,13 +160,20 @@ FORCE_INLINE void rstd() {
     cb_push_back(CB_EX2PE, 1);
 }
 
+// CI measurement only: EB_R3_ROWB_LOFI runs the row-broadcast dest-reuse ops at LoFi (no fidelity phases).
+#ifdef EB_R3_ROWB_LOFI
+#define EB_ROWB_FID ckernel::MathFidelity::LoFi
+#else
+#define EB_ROWB_FID MATH_FIDELITY
+#endif
+
 // DST[idst] <- DST[idst] op row-broadcast(cb[itile]): the stock mul/add_tiles_bcast_rows
 // with the DST tile as SrcA instead of a packed and unpacked fp32 tile. Mirrors
 // binary_reuse_dest_init/tiles (eltwise_binary.h) with BroadcastType::ROW.
 template <EltwiseBinaryType op>
 FORCE_INLINE void row_bcast_reuse_init(uint32_t cb) {
     UNPACK((llk_unpack_A_init<BroadcastType::ROW, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(false, false, cb)));
-    MATH((llk_math_eltwise_binary_init<op, BroadcastType::ROW, MATH_FIDELITY, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+    MATH((llk_math_eltwise_binary_init<op, BroadcastType::ROW, EB_ROWB_FID, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
         cb, cb, false)));
 }
 
@@ -177,7 +184,7 @@ FORCE_INLINE void row_bcast_reuse_tile(uint32_t cb, uint32_t itile, uint32_t ids
           op,
           BroadcastType::ROW,
           DST_ACCUM_MODE,
-          MATH_FIDELITY,
+          EB_ROWB_FID,
           EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb, cb, idst, true)));
 }
 
