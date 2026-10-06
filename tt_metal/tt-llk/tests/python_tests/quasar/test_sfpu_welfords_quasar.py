@@ -6,7 +6,12 @@ from dataclasses import dataclass
 import pytest
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.golden_generators import TILE_DIM, WelfordsGolden, get_golden_generator
+from helpers.golden_generators import (
+    FACE_DIM,
+    TILE_DIM,
+    WelfordsGolden,
+    get_golden_generator,
+)
 from helpers.llk_params import (
     DestAccumulation,
     ImpliedMathFormat,
@@ -47,10 +52,9 @@ LANE_COLUMNS = 8
 QUAD_COLUMN = (
     lambda c: 2 * c,
     lambda c: 2 * c + 1,
-    lambda c: 16 + 2 * c,
-    lambda c: 17 + 2 * c,
+    lambda c: FACE_DIM + 2 * c,
+    lambda c: FACE_DIM + 1 + 2 * c,
 )
-FACE_ROWS = 16
 
 
 @dataclass(frozen=True)
@@ -69,6 +73,31 @@ class Scenario:
     state_group_id: int = 0
     state_dst: int = 0
     save_after_tiles: int = 0
+    # Tiles per Dest section; 0 puts every tile in one section. A smaller value runs the
+    # stream as tile_count / tiles_per_block sections, so the LREG4/LREG5 state has to
+    # survive the section handoffs and bank flips, as it does for a Metal consumer.
+    tiles_per_block: int = 0
+
+    @property
+    def block(self):
+        return self.tiles_per_block or self.tile_count
+
+    def validate(self):
+        assert self.tile_count % self.block == 0, "tile_count must be whole blocks"
+        assert self.final_dst + 1 < self.block, "finalize tiles must fit in one block"
+        assert self.start_row + self.num_rows <= TILE_DIM
+        if self.save_restore:
+            assert 0 < self.save_after_tiles < self.tile_count
+            # The save lands in the current block, so both state tiles must already be folded.
+            assert self.state_dst + 1 < self.save_after_tiles % self.block
+
+    def final_tile(self):
+        """Result tile holding the finalize mean (the variance is the next one)."""
+        return self.tile_count - self.block + self.final_dst
+
+    def state_tile(self):
+        """Result tile holding the saved mean (M2 is the next one)."""
+        return (self.save_after_tiles // self.block) * self.block + self.state_dst
 
 
 SCENARIOS = {
@@ -114,6 +143,27 @@ SCENARIOS = {
         state_group_id=5,
         save_after_tiles=2,
     ),
+    # Three Dest sections of four tiles each (3x a 32-bit half-sync section): the state is
+    # carried in LREG4/LREG5 across two section handoffs.
+    "blocked_3x4_row_nolut": Scenario(tile_count=12, use_lut=False, tiles_per_block=4),
+    # Blocked, with the save/restore in the middle section at a non-zero state_dst, a
+    # partial last tile and the LUT covering all 384 rows.
+    "blocked_3x4_dst1_g2_face_g3_partial_lut": Scenario(
+        tile_count=12,
+        tiles_per_block=4,
+        partial_last_tile=True,
+        start_row=7,
+        num_rows=20,
+        face_layout=True,
+        final_grouped=True,
+        final_group_id=3,
+        final_dst=2,
+        save_restore=True,
+        state_grouped=True,
+        state_group_id=2,
+        state_dst=1,
+        save_after_tiles=7,
+    ),
 }
 
 
@@ -141,10 +191,10 @@ def face_slot_positions(group_id):
     positions = []
     for r in range(GROUP_UNITS):
         unit = GROUP_UNITS * group_id + r
-        face, face_row = divmod(unit, FACE_ROWS)
-        tile_row = (face // 2) * FACE_ROWS + face_row
+        face, face_row = divmod(unit, FACE_DIM)
+        tile_row = (face // 2) * FACE_DIM + face_row
         for c in range(LANE_COLUMNS):
-            tile_col = (face % 2) * FACE_ROWS + 2 * c
+            tile_col = (face % 2) * FACE_DIM + 2 * c
             positions.append((tile_row, tile_col, QUAD_COLUMN[r](c)))
     return positions
 
@@ -173,9 +223,11 @@ def test_sfpu_welfords_quasar(formats, scenario_name):
     The state lives in SFPU registers across calls, so one test folds several tiles and
     checks the finalize output (mean at final_dst, variance at final_dst + 1). Scenarios
     cover the LUT and RISC-V reciprocal paths, partial last tiles, Row and Face layouts,
-    and a save -> clear -> restore round trip, whose saved state is checked too.
+    and a save -> clear -> restore round trip, whose saved state is checked too. The blocked
+    scenarios stream the tiles through several Dest sections.
     """
     scenario = SCENARIOS[scenario_name]
+    scenario.validate()
     dest_acc = (
         DestAccumulation.Yes
         if formats.input_format.is_32_bit()
@@ -226,6 +278,7 @@ def test_sfpu_welfords_quasar(formats, scenario_name):
                 state_group_id=scenario.state_group_id,
                 state_dst=scenario.state_dst,
                 save_after_tiles=scenario.save_after_tiles,
+                tiles_per_block=scenario.tiles_per_block,
             ),
         ],
         runtimes=[
@@ -257,8 +310,8 @@ def test_sfpu_welfords_quasar(formats, scenario_name):
     ).to(torch.float64)
 
     checks = []
-    final_mean_tile = tile_view(res, scenario.final_dst)
-    final_var_tile = tile_view(res, scenario.final_dst + 1)
+    final_mean_tile = tile_view(res, scenario.final_tile())
+    final_var_tile = tile_view(res, scenario.final_tile() + 1)
     if scenario.face_layout:
         group = scenario.final_group_id if scenario.final_grouped else 0
         checks.append(("mean", *face_slot(final_mean_tile, golden["mean"], group)))
@@ -269,8 +322,8 @@ def test_sfpu_welfords_quasar(formats, scenario_name):
 
     if scenario.save_restore:
         group = scenario.state_group_id if scenario.state_grouped else 0
-        saved_mean_tile = tile_view(res, scenario.state_dst)
-        saved_m2_tile = tile_view(res, scenario.state_dst + 1)
+        saved_mean_tile = tile_view(res, scenario.state_tile())
+        saved_m2_tile = tile_view(res, scenario.state_tile() + 1)
         checks.append(
             ("saved_mean", *face_slot(saved_mean_tile, golden["saved_mean"], group))
         )
