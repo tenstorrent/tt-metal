@@ -65,8 +65,6 @@ constexpr std::uint32_t PERF_COUNTERS_LAYOUT_END        = PERF_COUNTERS_VALID_CO
 
 // A literal because BRISC has no llk_profiler namespace; the LLK_PROFILER section asserts it symbolically.
 static_assert(PERF_COUNTERS_LAYOUT_END <= 0x16AFF0u, "Perf counter L1 layout overflows into the profiler region");
-constexpr std::uint32_t PERF_START_OFFSET_ADDR = 0x16AFE0; // L1_TO_L1 start offset: low half pack, high half unpack and math
-static_assert(PERF_COUNTERS_LAYOUT_END <= PERF_START_OFFSET_ADDR, "Start offset word overlaps the perf counter layout");
 
 // On-wire bank IDs are llk::perf::Bank; the order is a contract with the host.
 constexpr std::uint32_t COUNTER_BANK_COUNT = llk::perf::NUM_BANKS;
@@ -649,20 +647,6 @@ struct perf_counter_scoped
             // Let the peers reach their exit barrier before the measured zone opens.
             std::uint32_t settle;
             asm volatile("li %0, 256\n1:\n\taddi %0, %0, -1\n\tbnez %0, 1b" : "=&r"(settle));
-        }
-        if constexpr (RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
-            // Each execution starts the threads at another offset, so the executions sample different packer phases.
-            const std::uint32_t offsets = *reinterpret_cast<volatile std::uint32_t*>(PERF_START_OFFSET_ADDR);
-#if defined(LLK_TRISC_PACK)
-            std::uint32_t spin = offsets & 0xFFFFu;
-#else
-            std::uint32_t spin = offsets >> 16;
-#endif
-            if (spin != 0)
-            {
-                asm volatile("1:\n\taddi %0, %0, -1\n\tbnez %0, 1b" : "+r"(spin));
-            }
         }
         ckernel::fence_compiler();
     }
