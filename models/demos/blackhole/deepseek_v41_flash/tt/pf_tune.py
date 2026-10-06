@@ -31,7 +31,7 @@ import ttnn
 
 _CACHE = {}
 
-# umbrella flag DSV41_PREFILL_OPT=1: the validated best prefill attention / linear settings below become the defaults of the knobs that are not set explicitly
+# umbrella flag DSV41_PREFILL_OPT (default 1; =0 restores the unmodified baseline kernels and numerics): the validated best prefill attention / linear settings below become the defaults of the knobs that are not set explicitly
 # (an explicitly set DSV41_PFA_* variable always wins). Read at call time like every knob.
 _OPT = {
     "DSV41_PFA_ROPE_PE": "1",
@@ -39,14 +39,15 @@ _OPT = {
     "DSV41_PFA_SH_FID": "HiFi2",
     "DSV41_PFA_MM": "minimal",
     "DSV41_PFA_FP4": "fast",
+    "DSV41_PF_MHC": "packed",  # packed mHC carrier + own-chunk routing (tt/mhc_packed.py; DSV41_PF_ROUTE_OWN defaults to 1 with it)
 }
 
 
 def opt_enabled():
-    return os.environ.get("DSV41_PREFILL_OPT", "0") == "1"
+    return os.environ.get("DSV41_PREFILL_OPT", "1") == "1"
 
 
-def _env(name, default=None):
+def _env(name, default=None):  # explicit env var > umbrella default > default
     v = os.environ.get(name)
     if v is None and opt_enabled():
         v = _OPT.get(name)

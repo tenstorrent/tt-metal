@@ -286,7 +286,7 @@ def shared_big(sh, h):
 
 
 def pk_mhc_enabled():
-    return os.environ.get("DSV41_PF_MHC", "0") == "packed"
+    return pf_tune._env("DSV41_PF_MHC", "0") == "packed"
 
 
 class PkList(list):
