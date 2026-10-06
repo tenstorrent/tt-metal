@@ -6,6 +6,7 @@
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/experimental/sdpa.h"
 #include "api/compute/reconfig_data_format.h"
+#include "tests/tt_metal/tt_metal/test_kernels/compute/sdpa_chunk_test_helpers.hpp"
 
 void kernel_main() {
     constexpr std::uint32_t rounds = get_compile_time_arg_val(0);
@@ -33,7 +34,7 @@ void kernel_main() {
     for (std::uint32_t round = 0; round < rounds; ++round) {
         reconfig_full_operand(cb_k, cb_q);
         pack_reconfig_data_format(cb_out);
-        PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
+        ckernel::test_helpers::init_sdpa_chunk_pack_reduce();
         exp_packthread_tile_init<true, scale>();
         sdpa_custom_mm_block_init_pack_short();
         pack_block_contiguous_init(cb_out);
@@ -107,18 +108,13 @@ void kernel_main() {
         // Emit the partial O and max/sum exactly as a distributed SDPA worker.
         // Reciprocal normalization has separate coverage; keeping it out of this
         // layout test avoids BF16 cancellation in the reciprocal-minus-one path.
-        PACK((TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU)));
-        pack_block_contiguous(max_offset / packed_tile_size, cb_stats, 1);
-        cb_push_back(cb_stats, 1);
-        PACK((t6_semaphore_wait_on_zero<p_stall::STALL_PACK>(semaphore::FPU_SFPU)));
-        pack_block_contiguous(0, cb_out, v_tiles);
-        PACK((t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU)));
-        cb_push_back(cb_out, v_tiles);
+        ckernel::test_helpers::pack_sdpa_chunk_partials<v_tiles>(
+            max_offset / packed_tile_size, output_offset / packed_tile_size, cb_stats, cb_out);
         tile_regs_commit();
         tile_regs_wait();
         tile_regs_release();
         sdpa_custom_mm_block_uninit();
-        MATH((t6_semaphore_wait_on_max<p_stall::STALL_SFPU>(semaphore::FPU_SFPU)));
+        ckernel::test_helpers::wait_for_sdpa_chunk_pack();
         cb_pop_front(cb_q, qk_tiles);
     }
 }
