@@ -7,7 +7,6 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
-// #include <cstdint>
 #include <optional>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/system_mesh.hpp>
