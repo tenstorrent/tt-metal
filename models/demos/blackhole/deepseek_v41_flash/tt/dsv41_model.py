@@ -69,7 +69,20 @@ class Model:
     def __init__(self, mesh_device, args, max_ctx, num_pages=None, kv_dtype=ttnn.bfloat16, log=print):
         """args: ``DSV41ModelArgs`` (layer ids, users per row). ``max_ctx``: longest context (prompt + generated) of any user. ``num_pages``: pages of
         128 tokens PER MESH ROW shared by the users of that row (default users_per_row * ceil(max_ctx / 128))."""
-        self.md, self.args, self.log = mesh_device, args, log
+        self.md, self.log = mesh_device, log
+        self._keep = (
+            None  # batch independent state that ``reconfigure`` carries over (filled at the end of every build)
+        )
+        self._build(args, max_ctx, num_pages, kv_dtype)
+
+    def _build(self, args, max_ctx, num_pages, kv_dtype):
+        """Everything of the model: the batch independent weights (attention / shared / mHC / norms, routed experts, embedding, head, Engram device
+        weights + host tables) and the state that depends on the users per row ``U`` / ``max_ctx`` (KV pool, page tables, rings, per-user buffers, MoE
+        dispatch buffers, prefill model, ...). With ``self._keep`` set (``reconfigure``) the weights that do not depend on them are reused.
+        """
+        mesh_device, log = self.md, self.log
+        keep = self._keep
+        self.args, self.kv_dtype = args, kv_dtype
         self.rows, self.cols = tuple(mesh_device.shape)
         self.U = args.users_per_row
         self.uni = uni_policy.decide(
@@ -89,6 +102,8 @@ class Model:
         pages_per_user = -(-(max_ctx + 128) // PAGE_TOKENS)
         self.num_pages = num_pages or self.U * pages_per_user
         t0 = time.time()
+        if keep is None:
+            self.l1_base = self._l1_alloc()
         chain = DSV41DecodeChain(mesh_device, users_per_row=self.U, log=log)  # mesh config, CCL, shared MoE buffers
         self.chain = chain
         self.mc, self.ccl = chain.mesh_config, chain.ccl
@@ -109,7 +124,9 @@ class Model:
         pool = ThreadPoolExecutor(max_workers=2)
         futs = {}
         submit = lambda L: (
-            futs.setdefault(L, pool.submit(load_layer, L, True, max_ctx + 128, self.use_indexer))
+            futs.setdefault(
+                L, pool.submit(load_layer, L, True, max_ctx + 128, self.use_indexer, load_experts=keep is None)
+            )
             if L in self.layer_ids
             else None
         )
@@ -131,6 +148,7 @@ class Model:
                 gate_bias_shift=GATE_CUTOFFS[str(L)],
                 users_per_row=self.U,
                 moe_buffers=chain.moe_buffers,
+                expert_state=None if keep is None else keep["experts"][L],
             )
             if chain.moe_buffers is None:
                 chain.moe_buffers = layer.moe.decode.buffers
@@ -151,7 +169,9 @@ class Model:
                     es = layer.moe.decode.expert_state
                     pls[-1][1].umoe = DSV41UnifiedMoE(mesh_device, L, log=log, ring=(es.tt_w0_w1, es.tt_w2))
                 else:
-                    pls[-1][1].umoe = DSV41UnifiedMoE(mesh_device, L, log=log)
+                    pls[-1][1].umoe = DSV41UnifiedMoE(
+                        mesh_device, L, log=log, weights=None if keep is None else keep["umoe"].get(L)
+                    )
             key = getattr(attn, "ratio", 0)
             if key not in self.step_groups:
                 self.step_groups[key] = DSV41StepState_paged(attn, max_ctx + 64, self.use_indexer)
@@ -168,19 +188,41 @@ class Model:
         engram_ids = [l for l in (1, 14) if l in self.layer_ids]
         self.engram_ids = engram_ids
         self.host_rows = (
-            HostEngramRows(tuple(engram_ids), max_batch_size=self.B, max_seq_len=max_ctx + 1024) if engram_ids else None
+            HostEngramRows(
+                tuple(engram_ids),
+                max_batch_size=self.B,
+                max_seq_len=max_ctx + 1024,
+                tables=None if keep is None else keep["tables"],
+            )
+            if engram_ids
+            else None
         )
         if self.host_rows is not None:
             self.hasher = RaggedNgramHash(self.host_rows.engram.hash)
-            if os.environ.get("DSV41_ENGRAM_RAM", "1") == "1":
+            if os.environ.get("DSV41_ENGRAM_RAM", "1") == "1" and not all(
+                t.in_ram for t in self.host_rows.tables.values()
+            ):
                 t1 = time.time()
                 self.host_rows.load_ram()
                 log(f"Engram tables in process memory ({time.time() - t1:.0f}s)")
-        dev_engram = {l: DSV41DeviceEngram(mesh_device, l, sh, mesh_config=self.mc, ccl=self.ccl) for l in engram_ids}
-        embedding = DSV41DeviceEmbedding(mesh_device, sh.get("embed.weight"), users_per_row=self.U)
-        self.head = DSV41DeviceHead(
-            mesh_device, sh.get("norm.weight").float(), sh.get("head.weight"), norm_eps=R.model_args().norm_eps
-        )
+        if keep is None:
+            dev_engram = {
+                l: DSV41DeviceEngram(mesh_device, l, sh, mesh_config=self.mc, ccl=self.ccl) for l in engram_ids
+            }
+            embedding = DSV41DeviceEmbedding(mesh_device, sh.get("embed.weight"), users_per_row=self.U)
+            self.head = DSV41DeviceHead(
+                mesh_device, sh.get("norm.weight").float(), sh.get("head.weight"), norm_eps=R.model_args().norm_eps
+            )
+        else:  # batch independent device weights of the first build
+            dev_engram = keep["dev_engram"]
+            for (
+                e
+            ) in (
+                dev_engram.values()
+            ):  # the CCL semaphores were released with the rest of the L1 state (see _release_batch_state)
+                e.mesh_config, e.ccl = self.mc, self.ccl
+            embedding = keep["embedding"].rebatch(self.U)
+            self.head = keep["head"]
         self.dec = DSV41Decoder(mesh_device, self.built, embedding, self.head, dev_engram, step_states=self.step_groups)
         self.dec.mesh_config, self.dec.ccl = self.mc, self.ccl
         self.prefill_model = GenPrefillModel(mesh_device, pls, embedding, self.head, dev_engram, self.host_rows, self.U)
@@ -193,6 +235,19 @@ class Model:
         self.pool_pages_free = None
         if self.uni and os.environ.get("DSV41_UNI_LAYERS", "all").startswith("auto"):
             self._uni_auto(pls)
+        self._keep = {
+            "experts": {L: layer.moe.decode.expert_state for L, layer, _ in self.built},
+            "umoe": {  # unified-layout expert weights that are a COPY (not the ring-layout decode weights read in place): batch independent, kept too
+                L: (pl.umoe.gate_projs, pl.umoe.up_projs, pl.umoe.down_projs)
+                for L, pl in pls
+                if getattr(pl, "umoe", None) is not None
+                and pl.umoe.gate_projs[0] is not self._keep_es(L).get("tt_w0_w1", object())
+            },
+            "tables": None if self.host_rows is None else self.host_rows.tables,
+            "dev_engram": dev_engram,
+            "embedding": embedding,
+            "head": self.head,
+        }
         self.log_dram("model built")
         if os.environ.get("DSV41_MEMLOG") in (
             "1",
@@ -259,20 +314,32 @@ class Model:
                             wrapm(pl_.pa.sparse, "attend_dyn", "sparse.attend_dyn")
                             if pl_.pa.sparse.indexer is not None:
                                 wrapm(pl_.pa.sparse.indexer, "select_dyn", "indexer.select_dyn")
-            ob, oe = ttnn.begin_trace_capture, ttnn.end_trace_capture
-            ttnn.begin_trace_capture = lambda *a, **k: (
-                self.log_dram("before begin_trace_capture"),
-                setattr(self, "_capturing", True),
-                ob(*a, **k),
-            )[2]
-            ttnn.end_trace_capture = lambda *a, **k: (
-                oe(*a, **k),
-                setattr(self, "_capturing", False),
-                self.log_dram("after end_trace_capture"),
-            )[0]
+            if getattr(
+                ttnn, "_dsv41_memlog_wrapped", False
+            ):  # a rebuild (reconfigure): the capture wrappers of the first build stay
+                ob, oe = None, None
+            else:
+                ob, oe = ttnn.begin_trace_capture, ttnn.end_trace_capture
+            if ob is not None:
+                ttnn._dsv41_memlog_wrapped = True
+                ttnn.begin_trace_capture = lambda *a, **k: (
+                    self.log_dram("before begin_trace_capture"),
+                    setattr(self, "_capturing", True),
+                    ob(*a, **k),
+                )[2]
+                ttnn.end_trace_capture = lambda *a, **k: (
+                    oe(*a, **k),
+                    setattr(self, "_capturing", False),
+                    self.log_dram("after end_trace_capture"),
+                )[0]
         log(
             f"model built: {len(self.layer_ids)} layers, U={self.U} users/row (batch {self.B}), pool {self.num_pages} pages/row ({time.time() - t0:.0f}s)"
         )
+
+    def _keep_es(self, L):
+        """{'tt_w0_w1': ...} of the routed-expert state of layer L (to tell the ring-layout weights read in place from a separate unified-layout copy)."""
+        es = next(layer.moe.decode.expert_state for l, layer, _ in self.built if l == L)
+        return {"tt_w0_w1": getattr(es, "tt_w0_w1", None)}
 
     def _uni_auto(self, pls):
         """DSV41_UNI_LAYERS=auto: the unified-layout expert weights (~54 MiB/bank/layer) are a SECOND copy next to the moe_compute decode weights, so only
@@ -291,7 +358,8 @@ class Model:
             free = mv.total_bytes_free_per_bank / mib
             if n >= cap or free - per < reserve:
                 break
-            pl.umoe = DSV41UnifiedMoE(self.md, L, log=self.log)
+            kept = (self._keep or {}).get("umoe", {}).get(L)
+            pl.umoe = DSV41UnifiedMoE(self.md, L, log=self.log, weights=kept)
             n += 1
         self.uni_layers = [L for L, pl in pls if pl.umoe is not None]
         self.log(
@@ -306,9 +374,20 @@ class Model:
             return
         ttnn.synchronize_device(self.md)
         mv = ttnn.get_memory_view(self.md, ttnn.BufferType.DRAM)
+        l1 = ttnn.get_memory_view(self.md, ttnn.BufferType.L1)
         self.log(
             f"MEMLOG {tag:40s} allocated {mv.total_bytes_allocated_per_bank / 2**20:8.1f} MiB/bank  free {mv.total_bytes_free_per_bank / 2**20:8.1f}  largest free block {mv.largest_contiguous_bytes_free_per_bank / 2**20:8.1f}"
+            f"  | L1 alloc {l1.total_bytes_allocated_per_bank} B largest free {l1.largest_contiguous_bytes_free_per_bank} B"
         )
+        if os.environ.get(
+            "DSV41_L1_DUMP"
+        ):  # per-buffer allocator dump (generated/reports/<prefix>detailed_memory_usage.csv), one device
+            try:
+                ttnn.dump_device_memory_state(
+                    self.md, prefix=f"{os.environ['DSV41_L1_DUMP']}_{tag.strip().replace(' ', '_')}_"
+                )
+            except Exception as e:  # noqa: BLE001
+                self.log(f"L1 dump failed: {type(e).__name__}: {str(e)[:200]}")
 
     def live_tensor_report(self, tag, top=25):
         """DSV41_MEMLOG=2: the largest live ttnn tensors (python objects) with their referrer types: which allocation survives a teardown."""
@@ -892,6 +971,150 @@ class Model:
         if self.trace_id is not None:
             ttnn.release_trace(self.md, self.trace_id)
             self.trace_id = None
+
+    # ---- one model build, many batch sizes / context lengths ---------------------------------------------------------------------------
+    def _l1_alloc(self):
+        ttnn.synchronize_device(self.md)
+        return ttnn.get_memory_view(self.md, ttnn.BufferType.L1).total_bytes_allocated_per_bank
+
+    def dram_snapshot(self):
+        """(allocated, free, largest free block) in MiB per DRAM bank, after a device synchronise."""
+        ttnn.synchronize_device(self.md)
+        mv = ttnn.get_memory_view(self.md, ttnn.BufferType.DRAM)
+        l1 = ttnn.get_memory_view(self.md, ttnn.BufferType.L1)
+        self.l1_last = (l1.total_bytes_allocated_per_bank, l1.largest_contiguous_bytes_free_per_bank)
+        mib = 2**20
+        return (
+            mv.total_bytes_allocated_per_bank / mib,
+            mv.total_bytes_free_per_bank / mib,
+            mv.largest_contiguous_bytes_free_per_bank / mib,
+        )
+
+    def _release_prefill_traces(self):
+        pm = getattr(self, "prefill_model", None)
+        if pm is None:
+            return
+        pm.teardown_dyn()  # chunk trace, fused / per-column head traces, per-chunk buffers
+        if getattr(pm, "trace_id", None) is not None:  # legacy whole-prefill trace
+            ttnn.release_trace(self.md, pm.trace_id)
+            pm.trace_id = None
+        from models.demos.blackhole.deepseek_v41_flash.tt import reconfigure as RC
+
+        for t in list(getattr(pm, "_bufs", {}).values()):
+            RC.free_tensors(t)
+        pm._bufs = {}
+        pm.dyn_out = None
+        pm.head_out = []
+
+    def _release_batch_state(self, generator_hooks=()):
+        """Release EVERY piece of device state that depends on the users per row / max context, keeping the weights and the Engram host tables
+        (``self._keep``): traces first (a trace owns the intermediate buffers of its capture and replays with fixed addresses), then the objects
+        that own persistent tensors (KV pool, page tables, per-user buffers, prefill input buffers, MoE dispatch buffers + semaphores), the module level
+        caches of device constants, and finally the program cache (programs own L1 semaphores / were specialised to the old shapes).
+        """
+        from models.demos.blackhole.deepseek_v41_flash.tt import reconfigure as RC
+
+        for h in generator_hooks:
+            h()
+        self.release_trace()  # decode trace
+        self._release_prefill_traces()  # (a separate method: no local keeps the old prefill model alive through the gc below)
+        ttnn.synchronize_device(self.md)
+        for name in (
+            "chain",
+            "pool",
+            "sink",
+            "sources",
+            "attns",
+            "built",
+            "step_groups",
+            "dec",
+            "prefill_model",
+            "prefill_sparse",
+            "dec_idx",
+            "index_owner",
+            "host_rows",
+            "hasher",
+            "rows_cat",
+            "last_logits",
+            "uni_layers",
+            "_hooks_set",
+            "_nosink_done",
+            "_warm",
+            "_moe_warm",
+            "_res",
+            "_last_pos",
+            "_want_logits",
+            "engram_kin",
+            "head",
+            "mc",
+            "ccl",
+        ):
+            self.__dict__.pop(name, None)
+        self.trace_id, self.admitted, self.pool_pages_free = None, False, None
+        # EVERY persistent L1 allocation goes (the CCL semaphores too, they are re-created first by the rebuild like in a fresh process): the L1 allocator is
+        # first-fit, so gaps left by buffers of the old batch size would shift the new persistent buffers below the static circular-buffer region of the
+        # big programs ('Statically allocated circular buffers ... clash with L1 buffers')
+        for e in self._keep["dev_engram"].values():
+            e.mesh_config = e.ccl = None
+        RC.reset_module_caches()
+        for _ in range(3):
+            gc.collect()
+        ttnn.synchronize_device(self.md)
+        if os.environ.get("DSV41_RECONFIG_DEBUG") == "1":
+            RC.debug_l1_referrers(self.log, self.md)
+        dbg = os.environ.get("DSV41_RECONFIG_DEBUG") == "1"
+        if dbg:
+            self.log(
+                f"RC_DEBUG before clear_program_cache: {self.md.num_program_cache_entries()} entries, L1 alloc {self._l1_alloc()} B"
+            )
+        if os.environ.get("DSV41_RECONFIG_CLEAR_PCACHE", "1") == "1":
+            self.md.clear_program_cache()  # programs of the old shapes, and the L1 semaphores they own
+        ttnn.synchronize_device(self.md)
+        if dbg:
+            self.log(
+                f"RC_DEBUG after clear_program_cache: {self.md.num_program_cache_entries()} entries, L1 alloc {self._l1_alloc()} B"
+            )
+
+    def reconfigure(self, args, max_ctx, num_pages=None, kv_dtype=None, generator_hooks=()):
+        """Serve another batch size (``args.users_per_row``), max context or KV pool dtype with the SAME weights: releases all batch dependent device
+        state (``_release_batch_state``) and rebuilds it (``_build`` with ``self._keep``: attention / shared-expert / mHC / norm weights are re-read
+        from the checkpoint, the routed-expert weights (95 % of the device bytes), the ring-layout weights read in place by the unified prefill MoE, the
+        embedding / head / Engram device weights and the Engram host tables are NOT touched). Returns a dict with the timings and the free DRAM per bank
+        before / after the release / after the rebuild (MiB). The caller must drop its own references to the old pool / generator state
+        (``generator_hooks``: callables run first, e.g. releasing the speculative runner)."""
+        assert self._keep is not None, "reconfigure needs a completed first build"
+        t0 = time.time()
+        old = (self.B, self.U, self.max_ctx)
+        before = self.dram_snapshot()
+        l1_before = self.l1_last
+        self.log_dram("reconfigure: before release")
+        self._release_batch_state(generator_hooks)
+        t1 = time.time()
+        mid = self.dram_snapshot()
+        l1_mid = self.l1_last
+        self.log_dram("reconfigure: after release")
+        self.timing = {}
+        self._build(args, max_ctx, num_pages, kv_dtype if kv_dtype is not None else self.kv_dtype)
+        t2 = time.time()
+        after = self.dram_snapshot()
+        info = dict(
+            old=old,
+            new=(self.B, self.U, self.max_ctx),
+            release_s=t1 - t0,
+            rebuild_s=t2 - t1,
+            total_s=t2 - t0,
+            dram_before=before,
+            dram_released=mid,
+            dram_after=after,
+        )
+        f = lambda t: f"alloc {t[0]:.1f} / free {t[1]:.1f} / largest block {t[2]:.1f}"
+        l1_after = self.l1_last
+        self.log(
+            f"RECONFIGURE B {old[0]} (U={old[1]}, ctx {old[2]}) -> B {self.B} (U={self.U}, ctx {self.max_ctx}): release {t1 - t0:.1f} s, rebuild {t2 - t1:.1f} s, total {t2 - t0:.1f} s; "
+            f"DRAM MiB/bank before [{f(before)}] | weights only [{f(mid)}] | after [{f(after)}]"
+            f" | L1 B/bank allocated / largest free: before {l1_before[0]} / {l1_before[1]}, released {l1_mid[0]} / {l1_mid[1]} (fresh process at start: {self.l1_base}), after {l1_after[0]} / {l1_after[1]}"
+        )
+        return info
 
 
 def DSV41StepState_paged(attn, max_pos, with_indexer=False):

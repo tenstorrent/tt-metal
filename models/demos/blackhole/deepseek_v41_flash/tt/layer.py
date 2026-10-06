@@ -48,6 +48,7 @@ class DSV41Layer:
         users_per_row=4,
         eps=1e-20,
         moe_buffers=None,
+        expert_state=None,
     ):
         self.mesh_device, self.mesh_config, self.ccl = mesh_device, mesh_config, ccl
         self.T = users_per_row
@@ -70,6 +71,7 @@ class DSV41Layer:
             batch_per_device=users_per_row,
             gate_bias_shift=gate_bias_shift,
             buffers=moe_buffers,
+            expert_state=expert_state,
         )
         # norm weights as fp32 tile rows [1, 1, 1, D]: the norm is composed from small ops (see _norm)
         _d("after moe block (gate+experts+buffers)")

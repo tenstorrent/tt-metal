@@ -22,6 +22,20 @@ def default_page_params(max_seq_len, users_per_row):
     }
 
 
+def _env_setup(kv_dtype):
+    import os
+
+    if (
+        int(os.environ.get("DSV41_SPEC", "0")) > 0
+    ):  # speculative decoding needs the window ring to hold 128 + k rows (tt/spec_paged.py RING_SPEC)
+        os.environ.setdefault(
+            "DSV41_RING_ROWS", "288"
+        )  # >= 128 + 127 (replay warm-up window of the drafter seeding) + k
+    if os.environ.get("DSV41_POOL_DTYPE", "bf16") == "fp8":  # fp8_e4m3 KV pool (halves the pool: batch 128 at 64k)
+        kv_dtype = ttnn.fp8_e4m3
+    return kv_dtype
+
+
 def create_tt_model(
     mesh_device,
     max_batch_size,
@@ -33,18 +47,10 @@ def create_tt_model(
 ):
     """-> (model_args, model, tt_kv_cache, state_dict). ``tt_kv_cache`` is the ``PagedKVPool`` (the one pool prefill writes and decode reads);
     weights are read layer by layer from the checkpoint (no ``state_dict`` object): ``state_dict`` is None."""
-    import os
 
     from models.demos.blackhole.deepseek_v41_flash.tt.dsv41_model import Model
 
-    if (
-        int(os.environ.get("DSV41_SPEC", "0")) > 0
-    ):  # speculative decoding needs the window ring to hold 128 + k rows (tt/spec_paged.py RING_SPEC)
-        os.environ.setdefault(
-            "DSV41_RING_ROWS", "288"
-        )  # >= 128 + 127 (replay warm-up window of the drafter seeding) + k
-    if os.environ.get("DSV41_POOL_DTYPE", "bf16") == "fp8":  # fp8_e4m3 KV pool (halves the pool: batch 128 at 64k)
-        kv_dtype = ttnn.fp8_e4m3
+    kv_dtype = _env_setup(kv_dtype)
 
     args = DSV41ModelArgs(mesh_device, max_batch_size, max_seq_len, layer_ids, paged_attention_config)
     if paged_attention_config is not None:
@@ -57,4 +63,30 @@ def create_tt_model(
         n_layers, log=log
     ):  # cluster-wide cap on concurrent full builds (NFS weight reads), see tt/build_slots.py
         model = Model(mesh_device, args, max_ctx=max_seq_len, num_pages=num_pages, kv_dtype=kv_dtype, log=log)
+    return args, model, model.pool, None
+
+
+def reconfigure_tt_model(
+    model,
+    mesh_device,
+    max_batch_size,
+    max_seq_len,
+    paged_attention_config: PagedAttentionConfig = None,
+    layer_ids=None,
+    kv_dtype=ttnn.bfloat16,
+    log=print,
+    generator_hooks=(),
+):
+    """-> (model_args, model, tt_kv_cache, state_dict) like ``create_tt_model``, but for an EXISTING ``model`` (same layers): its batch dependent device
+    state is released and rebuilt for ``max_batch_size`` / ``max_seq_len`` while the weights stay on the device (``Model.reconfigure``). Takes minutes
+    instead of the 60-90 minutes of a full build and does not run out of DRAM like a second ``create_tt_model`` in the same process.
+    """
+    kv_dtype = _env_setup(kv_dtype)
+    args = DSV41ModelArgs(mesh_device, max_batch_size, max_seq_len, layer_ids, paged_attention_config)
+    assert list(args.layer_ids) == list(model.layer_ids), "reconfigure keeps the weights: the layer set cannot change"
+    if paged_attention_config is not None:
+        assert paged_attention_config.block_size == PAGE_TOKENS, "the DSV4.1 paged pool uses 128-token pages"
+    num_pages = paged_attention_config.max_num_blocks if paged_attention_config is not None else None
+    model.log = log
+    model.reconfigure(args, max_seq_len, num_pages=num_pages, kv_dtype=kv_dtype, generator_hooks=generator_hooks)
     return args, model, model.pool, None

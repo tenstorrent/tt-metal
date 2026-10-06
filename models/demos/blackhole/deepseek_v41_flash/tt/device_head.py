@@ -56,6 +56,21 @@ class DSV41DeviceEmbedding:
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
+    def rebatch(self, users_per_row):
+        """A new embedding for another users-per-row that shares this one's (batch independent) table: only the one-hot ``pre`` is rebuilt."""
+        import copy
+
+        new = copy.copy(self)
+        new.pre = ttnn.from_torch(
+            torch.tensor([1.0, 0.0, 0.0, 0.0]).repeat(users_per_row, 1, 1, 1),
+            device=self.md,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.md),
+        )
+        return new
+
     def upload_tokens(self, token_ids: torch.Tensor):
         """token_ids [B] int -> device tensor [B,1] uint32 sharded over mesh rows (replicated over columns)."""
         rows, cols = tuple(self.md.shape)

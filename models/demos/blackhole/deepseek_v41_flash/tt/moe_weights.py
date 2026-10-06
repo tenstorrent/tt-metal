@@ -74,15 +74,19 @@ def _expert_cache_warm(layer_id: int):
     )
 
 
-def load_moe_layer(layer_id: int, dtype=torch.bfloat16, ckpt_dir=CKPT_DIR, experts=None):
+def load_moe_layer(layer_id: int, dtype=torch.bfloat16, ckpt_dir=CKPT_DIR, experts=None, load_experts=True):
     """Return a dict of host tensors for one MoE layer.
 
     experts: optional iterable of routed expert ids to load (default: all 384; the rest stay zero) —
     handy for single-expert unit tests. Shapes follow TTMoEDecode with L=1.
+    load_experts=False: the routed-expert tensors are not needed (the model already holds the device weights of this layer, tt/dsv41_model.py
+    ``Model.reconfigure``): w0/w1/w2 are None and ``cache_dir`` is None, only the gate + shared-expert tensors are read.
     """
     sh = _Shards(ckpt_dir)
     p = f"layers.{layer_id}.ffn."
-    warm = experts is None and _expert_cache_warm(layer_id)  # packed experts are cached: skip the 384-expert dequant
+    warm = (
+        experts is None and _expert_cache_warm(layer_id)
+    ) or not load_experts  # packed experts are cached: skip the 384-expert dequant
     ids = [] if warm else (list(range(NUM_ROUTED)) if experts is None else list(experts))
     w0 = w1 = w2 = None
     if not warm:
@@ -114,7 +118,7 @@ def load_moe_layer(layer_id: int, dtype=torch.bfloat16, ckpt_dir=CKPT_DIR, exper
         "w0": w0,
         "w1": w1,
         "w2": w2,
-        "cache_dir": expert_cache_dir(layer_id) if experts is None else None,
+        "cache_dir": expert_cache_dir(layer_id) if (experts is None and load_experts) else None,
         "shared_w0": {k: v[0] for k, v in shared.items()},
         "shared_w1": {k: v[1] for k, v in shared.items()},
         "shared_w2": {k: v[2] for k, v in shared.items()},
