@@ -35,5 +35,10 @@ template <int ITERATIONS = 8>
 inline void calculate_expm1_bf16() {
     ckernel::sfpu::bf16::calculate_factored_cw_expm1<ckernel::sfpu::Expm1Bf16Config, ITERATIONS>();
 }
+inline void init_expm1_bf16() {
+    if (bf16_dest_expm1()) {
+        ckernel::sfpu::bf16::init_factored_cw_expm1<ckernel::sfpu::Expm1Bf16Config>();
+    }
+}
 
 }  // namespace ckernel::sfpu

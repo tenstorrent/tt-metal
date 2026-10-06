@@ -201,6 +201,8 @@ inline void calculate_expm1() {
     }
 }
 
+void init_expm1_bf16();
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void expm1_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -211,6 +213,9 @@ void expm1_init() {
     } else {
         sfpi::vConstFloatPrgm1 = -0.6931471805599453f;  // -ln(2)
         sfpi::vConstFloatPrgm2 = 1.666259766e-01f;      // c1
+    }
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE) {
+        init_expm1_bf16();
     }
 }
 
