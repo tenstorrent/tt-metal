@@ -1,4 +1,4 @@
-# MiniMax-M3 — Gate 1 (KV table on disk) rank binding: 1 rank / 1 BH galaxy, REQUEST mode.
+# MiniMax-M3 — Gate 1 (mock migration) rank binding: 1 rank / 1 BH galaxy, REQUEST mode.
 #
 # The runner serializes the KV chunk table + the fabric-node -> ASIC device map and then serves H2D
 # pushes; no migration_endpoint / worker is involved. prefill_producer reads both files back device-lessly

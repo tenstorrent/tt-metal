@@ -428,9 +428,12 @@ class TtPrefillRuntime:
     ) -> str:
         """Build + serialize the GPT-OSS multi-config KV chunk address table (k_h0..N, v_h0..N) to
         ``path`` and return it. Issues no comms — the engine publishes to the migration worker.
-        Single-rank only (``PREFILL_ENABLE_MIGRATION=1`` is rejected for ``num_ranks>1``). Extra kwargs
-        match the DeepSeek/PP runner call site and are ignored for this single-rank GQA path."""
-        del first_layer_idx, num_my_layers, stage_layouts  # single-rank: whole-model table
+        Single-rank only: the table covers the whole model from each config's own ``buffer_address()``,
+        so the layer kwargs are ignored and ``stage_layouts`` must hold exactly one rank."""
+        assert stage_layouts is None or all(
+            len(layout) == 1 for layout in stage_layouts
+        ), f"GPT-OSS KV chunk table is single-rank, got stage layouts from {[len(l) for l in stage_layouts]} ranks"
+        del first_layer_idx, num_my_layers, stage_layouts
         from models.demos.gpt_oss_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
         kv = self._resolve_kv(kv_caches)

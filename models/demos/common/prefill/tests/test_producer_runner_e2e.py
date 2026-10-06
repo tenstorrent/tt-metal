@@ -424,8 +424,8 @@ def _readiness_gates() -> str:
 
 @contextlib.contextmanager
 def _running_runner(tag: str, sc: dict, **extra):
-    """Spin up ONE runner (request mode, KV table left on disk) for a scenario and tear it down. Yields
-    the live _ChildStream once it has published the H2D descriptor + KV table + device map (i.e. it is
+    """Spin up ONE runner (mock-migration, request mode) for a scenario and tear it down. Yields the
+    live _ChildStream once it has published the H2D descriptor + KV table + device map (i.e. it is
     serving). `extra` layers additional env on top of the scenario's own (e.g. a generated prompt trace
     dir) -- same role as `_scenario_env`'s `extra`."""
     os.makedirs(_REPORT_DIR, exist_ok=True)

@@ -1,4 +1,4 @@
-# MiniMax-M3 — pipeline Gate P1 (merged table on disk): 2-stage intra-galaxy pipeline on one 8x4 BH
+# MiniMax-M3 — pipeline Gate P1 (merged mock migration): 2-stage intra-galaxy pipeline on one 8x4 BH
 # galaxy carved into two Z-connected [4,4] sub-meshes (30 layers per stage), REQUEST mode. No migration
 # endpoint/worker; prefill_producer reads the merged table back device-lessly and PCCs vs the golden.
 #
