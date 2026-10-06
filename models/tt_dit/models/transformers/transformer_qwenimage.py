@@ -56,6 +56,8 @@ class QwenImageTransformer(Module):
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
         is_fsdp: bool = False,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -101,6 +103,8 @@ class QwenImageTransformer(Module):
                 padding_config=padding_config,
                 mesh_device=device,
                 is_fsdp=is_fsdp,
+                sdpa_precision=sdpa_precision,
+                sdpa_kv_dtype=sdpa_kv_dtype,
             )
             for i in range(num_layers)
         )
@@ -246,6 +250,8 @@ class QwenImageCheckpoint:
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> QwenImageTransformer:
         """Construct a ``QwenImageTransformer`` for this checkpoint (weights NOT loaded).
 
@@ -276,6 +282,8 @@ class QwenImageCheckpoint:
             parallel_config=parallel_config,
             padding_config=padding_config,
             is_fsdp=is_fsdp,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
 
     def load(
