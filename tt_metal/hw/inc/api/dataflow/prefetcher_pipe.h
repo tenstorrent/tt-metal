@@ -312,7 +312,7 @@ public:
             l1_config, PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE, interface_.receiver.fifo_page_size);
         const CrossNodeReceiverDFBInterface& iface = interface_.receiver;
         if (iface.relay_id != RELAY_DFB_INVALID) {
-            align_local_dfb_to_prefetcher_pipe_receiver_iface(iface.relay_id, iface);
+            align_local_dfb_to_prefetcher_pipe_receiver_iface(iface.relay_id, iface, relay_pages_per_entry_);
         }
     }
 #endif
@@ -454,6 +454,7 @@ public:
         const uint32_t bytes_per_recv = num_rows * row_bytes_per_recv;
         const uint32_t row_stride_in_stage = row_bytes_per_recv * num_recv;
 
+        tt_buf_rw::note_if_bound<tt_buf_rw::READ, Src>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
         uint32_t src_addr = noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(src, noc, src_args);
         uint32_t recv_src_offset = 0;
         for (uint32_t i = 0; i < num_recv; ++i) {
@@ -760,10 +761,14 @@ public:
         // Multi-producer: each pipe-consumer hart gets its own DataflowBuffer view of the
         // same relay id; STRIDED pap partitions producer slots.
         relay_dfb_.emplace(RelayDFBBindingToken{iface.relay_id});
+        // Before anything re-pages the relay: it still has the page size firmware set from the relay's
+        // config, which fixes how many relay pages one pipe entry is.
+        relay_pages_per_entry_ =
+            static_cast<uint16_t>(prefetcher_pipe_relay_pages_per_entry(iface.relay_id, iface.fifo_page_size));
         sync_threads();
         // Align shared local iface once after all producers have constructed.
         if (get_my_thread_id() == 0) {
-            align_local_dfb_to_prefetcher_pipe_receiver_iface(iface.relay_id, iface);
+            align_local_dfb_to_prefetcher_pipe_receiver_iface(iface.relay_id, iface, relay_pages_per_entry_);
 #ifndef ARCH_QUASAR
             const uintptr_t entries_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(iface.relay_id));
             relay_entries_acked_checkpoint_ = static_cast<uint16_t>(reg_read(entries_acked_ptr));
@@ -859,6 +864,8 @@ private:
 
 #if !defined(COMPILE_FOR_TRISC)
     std::optional<DataflowBuffer> relay_dfb_;
+    // Relay pages per pipe entry, fixed at bind_relay() (see prefetcher_pipe_relay_pages_per_entry).
+    uint16_t relay_pages_per_entry_ = 1;
 #ifndef ARCH_QUASAR
     uint16_t relay_entries_acked_checkpoint_ = 0;
 #endif
@@ -931,7 +938,6 @@ private:
     }
 
     FORCE_INLINE void wait_relay_consumed(uint32_t num_entries) {
-        ASSERT(num_entries <= relay_dfb_->get_local_num_entries());
         WAYPOINT("PDCW");
 #ifdef ARCH_QUASAR
         // After the relay.push_back(N), HW posted already marks those entries;
@@ -939,14 +945,17 @@ private:
         (void)num_entries;
         relay_dfb_->wait_relay_consumer_caught_up();
 #else
+        // The relay's consumer acks relay pages, relay_pages_per_entry_ of them per pipe entry.
+        const uint32_t num_pages = num_entries * relay_pages_per_entry_;
+        ASSERT(num_pages <= relay_dfb_->get_local_num_entries());
         const uint16_t relay_dfb_id = relay_dfb_->get_id();
         const uintptr_t entries_acked_ptr = reinterpret_cast<uintptr_t>(get_cb_tiles_acked_ptr(relay_dfb_id));
         uint16_t entries_acked;
         do {
             invalidate_l1_cache();
             entries_acked = static_cast<uint16_t>(reg_read(entries_acked_ptr));
-        } while (static_cast<uint16_t>(entries_acked - relay_entries_acked_checkpoint_) < num_entries);
-        relay_entries_acked_checkpoint_ = static_cast<uint16_t>(relay_entries_acked_checkpoint_ + num_entries);
+        } while (static_cast<uint16_t>(entries_acked - relay_entries_acked_checkpoint_) < num_pages);
+        relay_entries_acked_checkpoint_ = static_cast<uint16_t>(relay_entries_acked_checkpoint_ + num_pages);
 #endif
         WAYPOINT("PDCD");
     }

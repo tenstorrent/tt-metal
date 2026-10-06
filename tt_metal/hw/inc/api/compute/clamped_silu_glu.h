@@ -6,10 +6,10 @@
 
 #include "api/compute/common_globals.h"
 
-// Blackhole only: ckernel_sfpu_clamped_silu_glu.h is placed under the blackhole ckernel tree. Its
-// primitives all have Wormhole counterparts, so enabling Wormhole is a placement and validation
-// task rather than a port.
-#if defined(ARCH_BLACKHOLE)
+// Blackhole and Quasar only: ckernel_sfpu_clamped_silu_glu.h is placed under those ckernel trees.
+// Its primitives all have Wormhole counterparts, so enabling Wormhole is a placement and
+// validation task rather than a port.
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
 
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_clamped_silu_glu.h"
@@ -104,4 +104,4 @@ ALWI void clamped_silu_glu_tile_init_pack() {
 
 }  // namespace ckernel
 
-#endif  // ARCH_BLACKHOLE
+#endif  // ARCH_BLACKHOLE || ARCH_QUASAR

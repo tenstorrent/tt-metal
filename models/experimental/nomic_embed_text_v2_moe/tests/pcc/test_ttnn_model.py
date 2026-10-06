@@ -126,9 +126,7 @@ def pooled_embedding(tt_model, input_ids, attention_mask, matryoshka_dim=None):
     kernel_config = tt_model.tt_config.compute_kernel_config(OpGroup.REDUCE)
     hidden = tt_model(input_ids, attention_mask)
     pooled = pooling.mean_pool(
-        hidden,
-        pooling_mask(attention_mask, tt_model.device, dtype=tt_model.tt_config.activation_dtype),
-        compute_kernel_config=kernel_config,
+        hidden, pooling_mask(attention_mask, tt_model.device), compute_kernel_config=kernel_config
     )
     ttnn.deallocate(hidden)
     return pooling.l2_normalize(
@@ -382,10 +380,11 @@ def test_token_type_ids_must_be_zero(config, tt_model, expect_error):
 
 @pytest.mark.parametrize("batch, seqlen", MODEL_SHAPES)
 def test_no_mask_matches_an_all_ones_mask(config, tt_model, batch, seqlen):
-    """forward(attention_mask=None) skips building a (B, 1, S, S) mask, so it must be equivalent.
+    """forward skips building a (B, 1, S, S) mask when there is none or it keeps every token.
 
-    The saving is real, 1 MB at B=2 S=512 plus the SDPA work, and the equivalence is what
-    test_an_all_ones_mask_is_a_no_op established at module level. This holds the model to it.
+    The saving is real: a mask doubled SDPA's time at 8x512, read by every head of every call.
+    The equivalence is what test_an_all_ones_mask_is_a_no_op established at module level. This
+    holds the model to it.
     """
     input_ids, _ = random_input_ids(batch, seqlen, config)
 
