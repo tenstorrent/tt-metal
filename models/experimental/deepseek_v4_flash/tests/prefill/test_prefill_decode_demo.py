@@ -12,10 +12,10 @@ ring / compressed KV / CSA overlap window / paged HCA pool that decode fills its
 * ``test_prefill_decode_demo``: the first ``DEEPSEEK_V4_DEMO_COUNT`` (20) ``length == "short"`` LongBench
   questions in file order (or exactly ``DEEPSEEK_V4_LONGBENCH_INDICES``), back to back, indexer on; each one's
   verdict and a running tally are printed as it finishes, and a correctness table at the end.
-* ``test_prefill_decode_longbench``: ``DEEPSEEK_V4_LONGBENCH_COUNT`` (8) questions picked at random (seeded) from
-  the ``length == "short"`` multiple-choice items of ``~/smanoj/data.json``, every one answered by the same two
-  models, each loaded once. It reports each question's generated letter against ``answer`` and the accuracy. The
-  passages are far past 2048 tokens, so the CSA lightning indexer is on; it runs inside the prefill traces.
+* ``test_prefill_decode_longbench_known_correct``: an accuracy regression over the 8 LongBench questions
+  (``_KNOWN_CORRECT_LONGBENCH``) that ``test_prefill_decode_demo`` answered correctly, answered by the same two
+  models, each loaded once. It fails unless every one is still answered correctly. The passages are far past 2048
+  tokens, so the CSA lightning indexer is on; it runs inside the prefill traces.
 
 The prefill is traced and pipelined, as in ``test_full_model_prefill_demo.py``
 (:class:`~models.experimental.deepseek_v4_flash.tt.model.TracedPrefill`): one trace per stage replayed for every
@@ -61,13 +61,13 @@ Run it (ttnn venv)::
     DEEPSEEK_V4_CACHE_DIR=/path/to/cache pytest -s \\
       models/experimental/deepseek_v4_flash/tests/prefill/test_prefill_decode_demo.py::test_prefill_decode_demo
 
-The longbench questions (indexer on; the prefill traces replayed)::
+The known-correct longbench questions (indexer on; the prefill traces replayed)::
 
     DEEPSEEK_V4_CACHE_DIR=/path/to/cache pytest -s \\
-      models/experimental/deepseek_v4_flash/tests/prefill/test_prefill_decode_demo.py::test_prefill_decode_longbench
+      models/experimental/deepseek_v4_flash/tests/prefill/test_prefill_decode_demo.py::test_prefill_decode_longbench_known_correct
 
 Knobs (environment): ``DEEPSEEK_V4_E2E_PROMPT_LEN`` (1000 tokens; not a multiple of 128 on purpose, so the tail path
-runs), ``DEEPSEEK_V4_MAX_NEW_TOKENS`` (128), ``DEEPSEEK_V4_E2E_CHUNK`` (1024 = prefill chunk),
+runs), ``DEEPSEEK_V4_MAX_NEW_TOKENS`` (16384: thinking mode needs room for the reasoning block), ``DEEPSEEK_V4_E2E_CHUNK`` (1024 = prefill chunk),
 ``DEEPSEEK_V4_E2E_TEXT`` (a plain user message instead of the book prompt; ``decode_demo`` = the prompt of
 ``tests/decode/test_full_model_decode_demo.py``, exactly 128 tokens),
 ``DEEPSEEK_V4_DECODE_LAYERS`` (bring-up: first N layers in both models; the text is then gibberish, the flow is not),
@@ -78,11 +78,10 @@ next-token logits),
 ``DEEPSEEK_V4_TRACE_REGION_SIZE`` (bytes to reserve for the captured traces -- the 8 prefill stage traces and
 decode's together; unset keeps the ttnn default -- set it, e.g. 500000000, if a capture reports the trace region too
 small), ``DEEPSEEK_V4_L1_SMALL_SIZE`` (bytes of L1_SMALL for the CCL semaphores, 4096 by default).
-LongBench: ``DEEPSEEK_V4_LONGBENCH`` (the question file), ``DEEPSEEK_V4_LONGBENCH_COUNT`` (8),
-``DEEPSEEK_V4_LONGBENCH_SEED`` (0), ``DEEPSEEK_V4_LONGBENCH_MAX_TOKENS`` (65536: a question whose prompt plus the new
-tokens is longer is skipped and another drawn), ``DEEPSEEK_V4_LONGBENCH_INDICES`` (comma-separated question indices
-instead of a random draw, e.g. ``1`` for the one question the test used to run),
-``DEEPSEEK_V4_LONGBENCH_MIN_CORRECT`` (0: the test fails if fewer answers are right).
+LongBench: ``DEEPSEEK_V4_LONGBENCH`` (the question file), ``DEEPSEEK_V4_LONGBENCH_MAX_TOKENS`` (65536, capped below 1M,
+the DSv4 max context: in ``test_prefill_decode_demo`` a question whose prompt plus the new tokens is longer is skipped
+and another drawn; in the known-correct test it fails the test), ``DEEPSEEK_V4_LONGBENCH_INDICES`` (comma-separated
+question indices for ``test_prefill_decode_demo`` instead of the first ``DEEPSEEK_V4_DEMO_COUNT`` in file order).
 """
 
 from __future__ import annotations
@@ -134,6 +133,8 @@ from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
 _MAX_CONTEXT = 2048  # index_topk * CSA rate: the dense CSA / no-indexer-state limit of the state commit
+# LongBench indices of the ``length == "short"`` questions the model answers correctly (of the first 20 in file order).
+_KNOWN_CORRECT_LONGBENCH = [1, 6, 21, 24, 25, 27, 39, 52]
 _NUM_STAGES = 8  # 1 x 4 TP4 stages, one per Galaxy row: decode and prefill share all 32 chips
 _LONGBENCH_FILE = Path(os.path.expanduser(os.environ.get("DEEPSEEK_V4_LONGBENCH", "~/smanoj/data.json")))
 _DEVICE_PARAMS = {
@@ -205,25 +206,32 @@ def test_prefill_decode_demo(mesh_device, reset_seeds) -> None:
 @torch.no_grad()
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"], ids=["fabric_2d"])
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=["mesh_device"], ids=["galaxy_8x4"])
-def test_prefill_decode_longbench(mesh_device, reset_seeds) -> None:
-    """Answer ``DEEPSEEK_V4_LONGBENCH_COUNT`` random short questions of ``data.json``, the models loaded once."""
+def test_prefill_decode_longbench_known_correct(mesh_device, reset_seeds) -> None:
+    """Accuracy regression: the ``_KNOWN_CORRECT_LONGBENCH`` questions, which the model answered correctly in
+    ``test_prefill_decode_demo``'s 20-question run, must all still be answered correctly."""
     from transformers import AutoTokenizer
 
-    count = _env_int("DEEPSEEK_V4_LONGBENCH_COUNT", 8)
-    seed = _env_int("DEEPSEEK_V4_LONGBENCH_SEED", 0)
     max_tokens = _env_int("DEEPSEEK_V4_LONGBENCH_MAX_TOKENS", 65536)
-    indices = os.environ.get("DEEPSEEK_V4_LONGBENCH_INDICES")
-    min_correct = _env_int("DEEPSEEK_V4_LONGBENCH_MIN_CORRECT", 0)
 
     def make_prompts(tokenizer, max_new: int) -> list[_Prompt]:
-        chosen = [int(i) for i in indices.split(",")] if indices else None
-        return _pick_longbench(tokenizer, _LONGBENCH_FILE, count, seed, max_tokens - max_new, chosen)
+        return _pick_longbench(
+            tokenizer,
+            _LONGBENCH_FILE,
+            len(_KNOWN_CORRECT_LONGBENCH),
+            None,
+            max_tokens - max_new,
+            _KNOWN_CORRECT_LONGBENCH,
+        )
 
     results = _run_with_progress(mesh_device, AutoTokenizer, make_prompts, lightning_indexer=True)
     correct = _print_correctness(results)
-    logger.info(f"longbench: seed {seed}")
     assert all(r.generated for r in results)
-    assert correct >= min_correct, f"{correct}/{len(results)} correct < DEEPSEEK_V4_LONGBENCH_MIN_CORRECT={min_correct}"
+    assert len(results) == len(_KNOWN_CORRECT_LONGBENCH), (
+        f"only {len(results)} of {len(_KNOWN_CORRECT_LONGBENCH)} questions were run "
+        f"(a prompt over DEEPSEEK_V4_LONGBENCH_MAX_TOKENS={max_tokens} was skipped)"
+    )
+    wrong = [f"{r.name} (expected {r.expected}, model {r.choice or '?'})" for r in results if r.choice != r.expected]
+    assert not wrong, f"{correct}/{len(results)} correct; wrong: {', '.join(wrong)}"
 
 
 def _run_with_progress(mesh_device, AutoTokenizer, make_prompts, **kwargs) -> list[_Result]:
@@ -251,6 +259,7 @@ def _longbench_prompt(entry: dict) -> str:
         f"(B) {entry['choice_B']}\n"
         f"(C) {entry['choice_C']}\n"
         f"(D) {entry['choice_D']}\n\n"
+        "Think and answer within 2000 tokens in total.\n"
         'Format your response as follows: "The correct answer is (insert answer here)".'
     )
 
@@ -293,7 +302,7 @@ def _pick_longbench(
     prompts = []
     for i in pool:
         entry = data[i]
-        ids = _tokenize_chat(tokenizer, _longbench_prompt(entry))
+        ids = _tokenize_chat(tokenizer, _longbench_prompt(entry), "thinking", "max")  # max thinking mode
         if len(ids) > max_prompt_tokens:
             logger.info(f"longbench[{i}] skipped: {len(ids)} prompt tokens > {max_prompt_tokens}")
             continue
@@ -379,7 +388,7 @@ def _run(
     *,
     lightning_indexer: bool | None = None,
 ) -> list[_Result]:
-    max_new = _env_int("DEEPSEEK_V4_MAX_NEW_TOKENS", 128)
+    max_new = _env_int("DEEPSEEK_V4_MAX_NEW_TOKENS", 2560)
     chunk_size = _env_int("DEEPSEEK_V4_E2E_CHUNK", 1024)
     compare = os.environ.get("DEEPSEEK_V4_E2E_COMPARE", "0") == "1"
     if chunk_size <= 0 or chunk_size % ALIGNMENT:
@@ -473,7 +482,9 @@ def _run(
     bias_slots = None
     build_seconds = prepare_seconds = 0.0
     num_stages = len(dict.fromkeys(placement))
-    max_len = max(r.prefilled for r in results)
+    max_len = _env_int("DEEPSEEK_V4_PREFILL_MAX_LEN", 0) // ALIGNMENT * ALIGNMENT or max(r.prefilled for r in results)
+    # Prefill gathers its RoPE rows for every position up to ``max_len``; decode's table only spans its own ``max_seq``.
+    prefill_rope = rope if max_len <= max_seq else _build_rope(config, max_len)
     if max_len:
         # Decode's ops keep buffers of their own (global semaphores, cached constants) that no snapshot can reach;
         # compiling first allocates them before prefill lays out its memory, so its replays keep off them.
@@ -488,7 +499,7 @@ def _run(
         cache = WeightCache(os.path.join(_CACHE_DIR, os.path.basename(_DEFAULT_MODEL_DIR))) if _CACHE_DIR else None
         t0 = time.perf_counter()
         prefill = decode.build_prefill(
-            rope,
+            prefill_rope,
             checkpoint_weights(loader, config, num_layers),
             lm_head=lm_head,
             cache=cache,
@@ -496,6 +507,8 @@ def _run(
             dense_csa=True,
             # CSA lightning indexer. Traced prefill runs it too.
             lightning_indexer=indexer_on,
+            # Sliding layers attend without an additive mask (CSA / HCA stay masked).
+            maskless=True,
             progress=progress,
         )
         prefill.synchronize("uploads")
