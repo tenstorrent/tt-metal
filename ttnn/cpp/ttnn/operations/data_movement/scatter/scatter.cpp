@@ -253,21 +253,22 @@ scatter::ScatterReductionType get_scatter_reduction_type_from_string(
 }
 
 // The codegen kernels' own reduction_mode convention (scatter_common.hpp's scatter_reduce_value):
-// 0=replace, 1=add, 2=multiply. validate_inputs()'s ALLOWED_REDUCTIONS rejects every other reduce
-// string before this is ever consulted, so 3 (max) / 4 (min) are unreachable here -- unlike
-// ScatterReductionType, whose AMIN/AMAX ordinals do not match this convention, so the two must never
-// be interconverted by casting.
+// 0=replace, 1=add, 2=multiply. Derived from the one string parser this file has rather than
+// re-parsing the string, so a reduce the parser knows but the kernels do not (amax/amin) can never be
+// read as a plain overwrite. ttnn::scatter() consults this through codegen_can_serve() BEFORE
+// validate_inputs() runs, so an unsupported string must fail here on its own. ScatterReductionType's
+// ordinals do not match the kernel convention, so the two are never interconverted by casting.
 uint32_t scatter_reduction_mode(const std::optional<std::string>& opt_reduction_string) {
     if (!opt_reduction_string.has_value()) {
         return 0;
     }
-    if (*opt_reduction_string == "add") {
-        return 1;
+    switch (get_scatter_reduction_type_from_string(opt_reduction_string)) {
+        case scatter::ScatterReductionType::ADD: return 1;
+        case scatter::ScatterReductionType::MULTIPLY: return 2;
+        default:
+            TT_THROW(
+                "scatter: reduce must be either 'add' or 'multiply' (case-sensitive), got {}", *opt_reduction_string);
     }
-    if (*opt_reduction_string == "multiply") {
-        return 2;
-    }
-    return 0;
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
