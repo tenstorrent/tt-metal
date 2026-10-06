@@ -193,10 +193,6 @@ class LinearAttentionSkeleton:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-        # None keeps the op default (BF16 DST, BF16 tap-sum carry).
-        self.convolution_compute_config = (
-            self.kda_compute_config if program_config.fp32_convolution_accumulation else None
-        )
         self.recurrence = KDARecurrence(
             mesh_device,
             program_config.recurrence,
@@ -350,7 +346,10 @@ class LinearAttentionSkeleton:
             sequence_parallel_axis=self.sequence_parallel_axis,
             predecessor_carry=predecessor,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.convolution_compute_config,
+            # FP32 DST carries the tap sum in FP32. The op default (BF16 DST) rounds every partial sum to BF16, which
+            # biased q/k/v by up to ~1 ulp: a 0.70 output error on Qwen3.8-2.4T text (tt_metal_tracker-g1b.5.19),
+            # and for KDA a positive state bias that only masked the prep's k_dec_t contraction (g1b.4.18).
+            compute_kernel_config=self.kda_compute_config,
         )
         return q, k, v, new_state
 
