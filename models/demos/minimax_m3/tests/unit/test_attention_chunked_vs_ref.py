@@ -4,14 +4,15 @@
 """Chunked prefill through the ATTENTION LAYER (Attention.__call__), SP=8 × TP=4, dense + sparse.
 
 End-to-end check of the wired cache-read path: process a 2-chunk sequence two ways through the SAME
-Attention module and assert the second chunk's output matches.
+Attention module and assert both chunks' outputs match.
 
-  * single-shot: one forward over the full 2*chunk sequence (cached_len=0, no-cache path) — the golden.
-  * chunked:     chunk 0 (cached_len=0, writes cache) then chunk 1 (cached_len=chunk, CACHE-READ path),
-                 where chunk 1's queries attend the accumulated [chunk0 ; chunk1] read back from the cache.
+  * single-shot: one forward over the full 2*chunk sequence without a KV cache (no-cache path) — the golden.
+  * chunked:     chunk 0 (cached_len=0, writes cache; dense reads it back at kv_actual 0) then chunk 1
+                 (cached_len=chunk, CACHE-READ path), where chunk 1's queries attend the accumulated
+                 [chunk0 ; chunk1] read back from the cache.
 
 The fundamental correctness property of chunked prefill is "chunked == single-shot over the full
-sequence", so the second chunk's output must match the single-shot's [chunk:2*chunk] slice. Both paths
+sequence", so each chunk's output must match the single-shot's slice. Both paths
 use the model's own ops (device-to-device compare; no torch ref / no Meta-swizzle reconciliation). The
 RoPE for chunk 1 uses absolute positions [chunk:2*chunk] — the chunk's true offset in the sequence.
 """
@@ -156,19 +157,24 @@ def test_attention_chunked(mesh_device, device_params, layer_kind, chunk_local, 
         dts = ttnn.get_device_tensors(out)
         return torch.cat([compose_tp_hidden(dts, r, cols) for r in range(rows)], dim=2)  # [1,1,S,H]
 
-    # --- single-shot golden over the full sequence (fresh cache) ---
-    kvc_ss = allocate_kv_caches(mesh_device, num_layers=1, max_seq_len=total, sp_axis=sp_axis, num_users=1)
-    out_ss = run(x, 0, total, 0, kvc_ss)
+    # --- single-shot golden over the full sequence (no cache) ---
+    out_ss = run(x, 0, total, 0, None)
     ttnn.synchronize_device(mesh_device)
-    golden_c1 = gather_seq(out_ss)[:, :, chunk:total, :]  # [1,1,chunk,H]
+    golden = gather_seq(out_ss)
+    golden_c0 = golden[:, :, :chunk, :]  # [1,1,chunk,H]
+    golden_c1 = golden[:, :, chunk:total, :]
 
     # --- chunked: chunk 0 (writes cache) then chunk 1 (cache-read over [chunk0 ; chunk1]) ---
     kvc = allocate_kv_caches(mesh_device, num_layers=1, max_seq_len=total, sp_axis=sp_axis, num_users=1)
-    run(x[:, :chunk], 0, chunk, 0, kvc)
+    out_c0 = run(x[:, :chunk], 0, chunk, 0, kvc)
+    chunked_c0 = gather_seq(out_c0)  # [1,1,chunk,H]
     out_c1 = run(x[:, chunk:], chunk, total, chunk, kvc)
     ttnn.synchronize_device(mesh_device)
-    chunked_c1 = gather_seq(out_c1)  # [1,1,chunk,H]
+    chunked_c1 = gather_seq(out_c1)
 
+    passing, pcc = comp_pcc(golden_c0, chunked_c0, 0.99)
+    logger.info(f"[{layer_kind}] chunked-prefill chunk0 vs single-shot[0:{chunk}]: pcc={pcc}")
+    assert passing, f"{layer_kind} cold-chunk attention PCC fail: {pcc}"
     passing, pcc = comp_pcc(golden_c1, chunked_c1, 0.99)
     logger.info(f"[{layer_kind}] chunked-prefill chunk1 vs single-shot[{chunk}:{total}]: pcc={pcc}")
     assert passing, f"{layer_kind} chunked attention PCC fail: {pcc}"

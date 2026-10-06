@@ -134,11 +134,11 @@ def dense_sp_attention_nocache(
     program_config,
     compute_kernel_config,
 ):
-    """First-chunk dense SP attention: ring_joint over the chunk's OWN SP-sharded K/V (NO persistent cache).
+    """Cache-less dense SP attention: ring_joint over the chunk's OWN SP-sharded K/V (NO persistent cache).
 
     Each device's query shard attends to the full `logical_n` sequence reconstructed across the SP ring
-    (grouped V, no inflation, is_balanced=False). For the first prefill chunk where there's no prior
-    cache; multi-chunk accumulation uses dense_sp_attention (cache-read). Validated op-level by
+    (grouped V, no inflation, is_balanced=False). Only for callers without a KV cache; with a cache every
+    chunk, cold or not, uses dense_sp_attention (cache-read). Validated op-level by
     tests/unit/test_ring_joint_sp_vs_ref.py. Returns the per-device query-shard output.
 
     n_kv is the GLOBAL KV-head count (e.g. 4); the ring-gather persistent buffer shards it across the TP
