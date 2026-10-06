@@ -231,6 +231,10 @@ void kernel_main() {
                 dfb_x, dfb_scaler, dfb_ex, W, Wt, block_size, tile_width);
 
         // x - E[x]; the mean stays resident for the whole row.
+#ifdef ARCH_QUASAR
+        // Quasar: row_wise_mean left the packer on dfb_ex; reconfig alone does not retarget it (see above).
+        pack_init(dfb_xmm_id);
+#endif
         ckl::sub<
             ckl::input(
                 dfb_x_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
@@ -249,6 +253,9 @@ void kernel_main() {
 
         // Preserve dfb_xmm_id for the normalization pass; the variance path consumes only its square.
         // compute temp = xmm*xmm = (x-E[x])^2
+#if defined(ARCH_QUASAR) && !defined(RMSNORM)
+        pack_init(dfb_xmm2_id);  // Quasar: retarget the packer from dfb_xmm (the RMSNORM path did this above)
+#endif
         ckl::square<
             ckl::input(
                 dfb_xmm_id,
