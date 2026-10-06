@@ -119,6 +119,7 @@ SCENARIOS = [
     _s(f"{LONG}/input_data_long_16k.json", 4, 32768, 64, "isl16k_b4"),
     _s(f"{LONG}/input_data_long_4k.json", 128, 8192, 32, "isl4k_b128"),
     _s(f"{LONG}/input_data_long_8k.json", 128, 16384, 32, "isl8k_b128"),
+    _s(f"{LONG}/input_data_long_16k.json", 128, 18432, 32, "isl16k_b128"),
     _s(f"{LONG}/input_data_long_64k.json", 128, 70000, 64, "isl64k_b128"),
     _s(f"{LONG}/input_data_long_32k.json", 16, 40000, 64, "isl32k_b16"),
     _s(GSM, 4, 512, 384, "gsm8k_b4", instruct=True, stop_at_eos=True),
