@@ -372,6 +372,7 @@ UNARY_SFPU_OPS = {
     MathOperation.RemainderUint32,
     MathOperation.Rdiv,
     MathOperation.TiledProd,
+    MathOperation.Ema,
     MathOperation.Identity,
     MathOperation.CastFp32ToFp16a,
     MathOperation.AltComplexRotate90,

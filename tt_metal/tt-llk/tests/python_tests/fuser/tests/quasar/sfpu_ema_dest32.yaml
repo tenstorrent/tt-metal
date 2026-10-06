@@ -1,0 +1,44 @@
+# ema: column-wise exponential moving average down each 32x32 tile, out[r] = 0.6 * out[r-1] +
+# 0.4 * x[r] with the carry zeroed at every tile (the harness passes first = true per call). The
+# operand is two tiles stacked vertically, so the second tile checks the carry restarts instead of
+# continuing from the first. alpha + beta = 1 keeps every output a convex mix of its column, so
+# the ranges only need to be finite; both signs let the carry and the input cancel. Float32 input is
+# in sfpu_ema_dest32_unpack_to_dest.yaml: the datacopy path narrows it to TF32, and that error, carried
+# down the chain, exceeds the absolute tolerance wherever the outputs cancel towards zero.
+#
+# Generated for the Quasar port of the ema kernel, using only existing fuser features:
+# dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), every float input goes through
+# the FPU datacopy path, and stimuli are finite intervals and points (no inf, NaN, -0 or INT_MIN).
+# Special points sit outside the random ranges, so each is drawn about as often as a unit of range.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [64, 32]
+    format: [Float16_b, Float16]
+    stimuli:
+      include:
+        - [-1000.0, -10.5]
+        - [-9.5, -0.01]
+        - [0.01, 9.5]
+        - [10.5, 1000.0]
+        - -10.0
+        - -1.0
+        - 0.0
+        - 1.0
+        - 10.0
+  - name: "sfpu_out"
+    dims: [64, 32]
+    format: Float32
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [64, 32]}
+      - type: "UnarySfpu"
+        operation: [Ema]
+        approximation_mode: false
+        iterations: 32
+        block_size: [64, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [64, 32]}
