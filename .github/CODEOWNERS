@@ -610,7 +610,7 @@ models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar
 models/demos/wormhole/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
 
 models/experimental/ @tenstorrent/metalium-models-maintainers
-models/experimental/bevformer/ @mbezuljTT @njovanovicTT @tenstorrent/metalium-models-maintainers
+models/experimental/bevformer/ @mbezuljTT @njovanovicTT @ctr-ikasicTT @ctr-mdukicTT @ctr-mmicicTT @tenstorrent/metalium-models-maintainers
 models/experimental/exaone45_vl @changh95 @tenstorrent/metalium-models-maintainers
 models/experimental/llama32_1b_quasar @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-models-maintainers
 /models/experimental/nomic_embed_text_v2_moe/ @avelickovTT @kgrujcic-tt @mbezuljTT @tenstorrent/metalium-models-maintainers
