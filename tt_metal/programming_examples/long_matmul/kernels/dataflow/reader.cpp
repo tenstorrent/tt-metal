@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 
-// See kernels/compute/mm_power.cpp. With a BLOCK_M x BLOCK_N output block, one column slice of
+// See kernels/compute/compute.cpp. With a BLOCK_M x BLOCK_N output block, one column slice of
 // A and one row slice of B feed BLOCK_M * BLOCK_N multiplies, so per multiply this reads
 // (BLOCK_M + BLOCK_N) / (BLOCK_M * BLOCK_N) tiles instead of 2.
 #ifndef BLOCK_M
@@ -54,7 +54,7 @@ void kernel_main() {
                     // Column slice of A: rows row0..row0+kBlockM-1 at inner index k.
                     cb_reserve_back(cb_id_in0, kBlockM);
                     uint32_t l1_addr = get_write_ptr(cb_id_in0);
-#ifndef HIGH_POWER_DISABLE_READER
+#ifndef LONG_MATMUL_DISABLE_READER
                     for (uint32_t m = 0; m < kBlockM; m++) {
                         noc_async_read_tile((row0 + m) * Kt + k, a, l1_addr);
                         l1_addr += in0_tile_bytes;
@@ -67,7 +67,7 @@ void kernel_main() {
                     // Row slice of B: inner index k, columns col0..col0+kBlockN-1.
                     cb_reserve_back(cb_id_in1, kBlockN);
                     uint32_t l1_addr = get_write_ptr(cb_id_in1);
-#ifndef HIGH_POWER_DISABLE_READER
+#ifndef LONG_MATMUL_DISABLE_READER
                     for (uint32_t n = 0; n < kBlockN; n++) {
                         noc_async_read_tile(k * Nt + (col0 + n), b, l1_addr);
                         l1_addr += in1_tile_bytes;

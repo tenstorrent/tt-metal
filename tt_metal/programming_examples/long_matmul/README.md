@@ -1,14 +1,16 @@
-# High Power Matmul Workload
+# Long Matmul Workload
 
 *Read this whole doc before running anything. It's quite small so it won't take much time!*
 
-Sustained HiFi4 matmul (or another per-tile op, see `HIGH_POWER_OP`) swept across a series of
-core grids, for power-draw measurement. Every grid prints its wall-clock start/end time so an
-external telemetry sampler can attribute power samples to it.
+A long-running HiFi4 matmul (or another per-tile op, see `LONG_MATMUL_OP`) swept across a
+series of core grids. The point is not to stress the Tensix as hard as possible, but to keep each
+run going long enough that tt-smi / ARC telemetry, which samples at tens of Hz, collects enough
+samples per grid to give meaningful power numbers. Every grid prints its wall-clock start/end
+time so an external telemetry sampler can attribute its samples to it.
 
-C++ Test: `tt_metal/programming_examples/high_power_matmul/high_power_matmul.cpp`
-Compute kernel: `tt_metal/programming_examples/high_power_matmul/kernels/compute/mm_power.cpp`
-Data Movement kernels: `tt_metal/programming_examples/high_power_matmul/kernels/dataflow`
+C++ Test: `tt_metal/programming_examples/long_matmul/long_matmul.cpp`
+Compute kernel: `tt_metal/programming_examples/long_matmul/kernels/compute/compute.cpp`
+Data Movement kernels: `tt_metal/programming_examples/long_matmul/kernels/dataflow`
 
 ## Build
 
@@ -24,7 +26,7 @@ You can put printing statements inside the kernels to debug/instrument the code,
 ## Run
 
 ```bash
-./build/programming_examples/metal_example_high_power_matmul [M] [N] [K] [iterations] [fixed_tiles_per_core]
+./build/programming_examples/metal_example_long_matmul [M] [N] [K] [iterations] [fixed_tiles_per_core]
 ```
 
 *Defaults*: 256×256×512 (datums, not tiles), HiFi4, 100000 iterations, split mode.
@@ -38,13 +40,13 @@ You can put printing statements inside the kernels to debug/instrument the code,
 Examples:
 ```bash
 # The shape used for the Wormhole-vs-Blackhole energy measurements
-./build/programming_examples/metal_example_high_power_matmul 1024 2048 2048 160
+./build/programming_examples/metal_example_long_matmul 1024 2048 2048 160
 
 # Quick sanity check
-./build/programming_examples/metal_example_high_power_matmul 2048 2048 2048 100
+./build/programming_examples/metal_example_long_matmul 2048 2048 2048 100
 
 # If you wish to print out the iteration progress:
-TT_METAL_DPRINT_CORES=0,0 ./build/programming_examples/metal_example_high_power_matmul 2048 2048 2048 500
+TT_METAL_DPRINT_CORES=0,0 ./build/programming_examples/metal_example_long_matmul 2048 2048 2048 500
 ```
 
 ### The grid sweep
@@ -71,10 +73,10 @@ After each grid an `Output checksum: sum=... absmax=...` line is printed. The wo
 verifies its output, so this is the only signal that the tile indexing is right: with the same
 inputs, shape and op, the checksum must be identical for every grid and every block size.
 
-## Tuning for more power
+## Tuning the workload
 
 - **Larger K** → more compute per output tile (more compute-bound)
-- **More iterations** → longer sustained power draw
+- **More iterations** → longer runs, so more telemetry samples per grid
 - **Larger M×N** → more output tiles across cores
 - **Output blocking** (below) → fewer DRAM reads per FLOP, so the FPUs rather than the NoC set the power
 
@@ -95,10 +97,10 @@ real NoC transfer or FPU work.
 
 | Env var | Effect |
 |---|---|
-| `HIGH_POWER_DISABLE_READER=1` | Reader keeps `cb_reserve_back`/`cb_push_back` on both input CBs but skips `noc_async_read_tile` + barrier. Input tiles hold stale L1 data. |
-| `HIGH_POWER_DISABLE_COMPUTE=1` | Compute keeps its CB and tile-register handshake but skips the math + `pack_tile`. Output tiles hold garbage. |
-| `HIGH_POWER_DISABLE_WRITER=1` | Writer keeps `cb_wait_front`/`cb_pop_front` but skips `noc_async_write_tile` + barrier. Output DRAM stays stale. |
-| `HIGH_POWER_WRITE_AMPLIFICATION_PCT=<pct>` | The reader issues `2*Kt` NoC reads per output tile while the writer issues only 1. This re-writes each output tile `round((pct/100) * 2*Kt)` times (min 1) to load the write path symmetrically; `100` matches the reader's read volume. Unset/0 = normal. |
+| `LONG_MATMUL_DISABLE_READER=1` | Reader keeps `cb_reserve_back`/`cb_push_back` on both input CBs but skips `noc_async_read_tile` + barrier. Input tiles hold stale L1 data. |
+| `LONG_MATMUL_DISABLE_COMPUTE=1` | Compute keeps its CB and tile-register handshake but skips the math + `pack_tile`. Output tiles hold garbage. |
+| `LONG_MATMUL_DISABLE_WRITER=1` | Writer keeps `cb_wait_front`/`cb_pop_front` but skips `noc_async_write_tile` + barrier. Output DRAM stays stale. |
+| `LONG_MATMUL_WRITE_AMPLIFICATION_PCT=<pct>` | The reader issues `2*Kt` NoC reads per output tile while the writer issues only 1. This re-writes each output tile `round((pct/100) * 2*Kt)` times (min 1) to load the write path symmetrically; `100` matches the reader's read volume. Unset/0 = normal. |
 
 ### `POWER_CASE` — the six canonical scenarios
 
@@ -120,12 +122,12 @@ different question: turning amplification off measures the marginal cost of the 
 not the writer's full contribution.
 
 ```bash
-POWER_CASE=2 ./build/programming_examples/metal_example_high_power_matmul 1024 2048 2048 160
+POWER_CASE=2 ./build/programming_examples/metal_example_long_matmul 1024 2048 2048 160
 ```
 
 If `POWER_CASE` is unset the four individual flags are used as-is, for finer manual control.
 
-### `HIGH_POWER_BLOCK_M` / `HIGH_POWER_BLOCK_N` — output blocking with tile reuse
+### `LONG_MATMUL_BLOCK_M` / `LONG_MATMUL_BLOCK_N` — output blocking with tile reuse
 
 By default (1x1) each core computes one output tile at a time and re-reads a full row of A and
 column of B from DRAM for every one of them: 2 tile reads per multiply, an arithmetic intensity
@@ -139,13 +141,13 @@ Constraints: `BLOCK_M * BLOCK_N <= 8` (the destination register budget), and `Mt
 divisible by `BLOCK_M`, `BLOCK_N`. In fixed mode `fixed_tiles_per_core` counts output *blocks*.
 
 ```bash
-HIGH_POWER_BLOCK_M=2 HIGH_POWER_BLOCK_N=4 POWER_CASE=0 \
-  ./build/programming_examples/metal_example_high_power_matmul 1024 2048 2048 160
+LONG_MATMUL_BLOCK_M=2 LONG_MATMUL_BLOCK_N=4 POWER_CASE=0 \
+  ./build/programming_examples/metal_example_long_matmul 1024 2048 2048 160
 ```
 
 The checksum must not change with the block size; if it does, the tile indexing is wrong.
 
-### `HIGH_POWER_OP` — which instruction the compute kernel runs
+### `LONG_MATMUL_OP` — which instruction the compute kernel runs
 
 | Value | Math per tile pair | Unit |
 |---|---|---|
@@ -163,5 +165,5 @@ FLOP counts printed by the program assume matmul (`2*M*N*K` per iteration); for 
 they are a placeholder and the meaningful unit is energy per tile, or per byte moved.
 
 ```bash
-HIGH_POWER_OP=exp POWER_CASE=1 ./build/programming_examples/metal_example_high_power_matmul 1024 2048 2048 160
+LONG_MATMUL_OP=exp POWER_CASE=1 ./build/programming_examples/metal_example_long_matmul 1024 2048 2048 160
 ```
