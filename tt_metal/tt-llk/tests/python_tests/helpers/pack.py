@@ -414,9 +414,12 @@ def _e8m0_scale_factors(scales_e8m0_array):
     """E8M0 scale codes decoded to float32 multipliers, NaN where the code is 0xFF.
 
     0xFF is the reserved NaN scale rather than an exponent, so it decodes to NaN
-    and that NaN then propagates into whatever the caller does with the block --
-    straight through to the output for the MX-float formats, and down to 0 for
-    MxInt, which has no NaN element encoding.
+    and that NaN propagates into whatever the caller does with the block. Where
+    it ends up differs by format: MXFP8 keeps it in the element encoding (0x7E
+    for E5M2, 0x7F for E4M3), while MXFP4 and MxInt zero their elements --
+    fp4 has no NaN nibble and MxInt no NaN at all -- so for those the 0xFF
+    scale is the only surviving record that the block was NaN. Either way the
+    block reads back as NaN, because unpacking takes that from the scale.
 
     A harmless code is substituted before exponentiating because ``exp2(128)``
     overflows float32. Computing it and masking afterwards gives the same
