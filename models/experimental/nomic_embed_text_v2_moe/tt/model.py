@@ -61,6 +61,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.common import (
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.embeddings import TtNomicBertEmbeddings
 from models.experimental.nomic_embed_text_v2_moe.tt.encoder import TtNomicBertEncoder
+from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 
 
 class TtNomicBertModel(LightweightModule):
@@ -102,9 +103,10 @@ class TtNomicBertModel(LightweightModule):
         Args:
             input_ids: (B, S) int64 token ids, from reference.preprocessing.tokenize.
             attention_mask: (B, S) int64, 1 for real tokens and 0 for padding. None means no
-                masking, which is equivalent to all-ones and cheaper: an all-ones mask is a
-                proven no-op (test_an_all_ones_mask_is_a_no_op) and materialising it would cost
-                a (B, 1, S, S) tensor, 1 MB at B=2 S=512.
+                masking. An all-ones mask is treated the same way: it is a proven no-op
+                (test_an_all_ones_mask_is_a_no_op), while materialising it would cost a
+                (B, 1, S, S) tensor read by every head of every SDPA call, which doubled SDPA's
+                time at 8x512. SDPA masks the tile padding of S on its own.
             token_type_ids: Accepted for parity with the reference. type_vocab_size is 1, so 0 is
                 the only legal value and the embeddings module has already folded that row into
                 the word table.
@@ -129,15 +131,18 @@ class TtNomicBertModel(LightweightModule):
             weight=self.emb_ln_weight,
             bias=self.emb_ln_bias,
             epsilon=self.config.layer_norm_epsilon,
-            compute_kernel_config=self.tt_config.compute_kernel_config,
+            compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.NORM),
         )
         ttnn.deallocate(hidden)
 
         # dtype is passed explicitly rather than left to each helper's default, so lowering
-        # tt_config.activation_dtype moves the mask and the rotary tables with it. A mismatch here
-        # surfaces inside SDPA, which rejects a mask whose dtype differs from q/k/v.
+        # tt_config.activation_dtype moves the rotary tables and the mask's fill value with it.
         dtype = self.tt_config.activation_dtype
-        mask = None if attention_mask is None else additive_attention_mask(attention_mask, self.device, dtype=dtype)
+        mask = None
+        if attention_mask is not None and not bool(attention_mask.all()):
+            mask = additive_attention_mask(
+                attention_mask, self.device, dtype=dtype, mask_dtype=self.tt_config.attention_mask_dtype
+            )
         out = self.encoder(normalized, rotary_tables(self.device, self.config, seqlen, dtype=dtype), mask)
         ttnn.deallocate(normalized)
         return out
@@ -153,9 +158,11 @@ def encode(
 ) -> torch.Tensor:
     """Turn text into normalized embeddings on device, the counterpart of reference.embedding.encode.
 
-    Row i is the embedding of texts[i] and is independent of the other rows: padding is masked
-    out at pooling, so a short text gets the same vector whether encoded alone or in a ragged
-    batch. The dot product of two rows is their cosine similarity.
+    Row i is the embedding of texts[i]: padding is masked out at pooling, so a short text gets
+    the same vector, to within 1e-2 in cosine, whether encoded alone or in a ragged batch. It is
+    not bit-identical, since the expert layout is chosen from the batch's token count and a
+    transposed expert pass shares bfloat8_b exponents across 16 neighbouring tokens. The dot
+    product of two rows is their cosine similarity.
 
     Args:
         model: A constructed TtNomicBertModel.
@@ -172,7 +179,7 @@ def encode(
     """
     encoded = tokenize(tokenizer, apply_prompt(texts, prompt_prefix), max_length=max_length)
     attention_mask = encoded["attention_mask"]
-    kernel_config = model.tt_config.compute_kernel_config
+    kernel_config = model.tt_config.compute_kernel_config(OpGroup.REDUCE)
 
     hidden = model(encoded["input_ids"], attention_mask)
 

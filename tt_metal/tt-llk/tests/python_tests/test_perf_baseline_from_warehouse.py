@@ -244,3 +244,87 @@ def test_main_reads_every_row_before_it_closes_the_connection(tmp_path, monkeypa
     ]
     assert bw.main(args) == 0
     assert len(pd.read_csv(out)) == 1
+
+
+class SequenceCursor(CursorMock):
+    """Answers each run lookup with the next of ``answers``: a list of rows."""
+
+    def __init__(self, answers):
+        super().__init__()
+        self._answers = list(answers)
+
+    def fetchall(self):
+        return self._answers.pop(0)
+
+
+def _find_args(**over):
+    args = dict(
+        view=bw.VIEW,
+        arch="wormhole",
+        pipeline="merge_baseline",
+        exclude_workflow_run="",
+        commits="c3,c2,c1",
+        wait_minutes=0,
+        poll_seconds=0,
+    )
+    args.update(over)
+    return type("Args", (), args)
+
+
+def test_pick_run_can_limit_the_commits():
+    cur = CursorMock(many=[("merge_baseline-20260928-1-wormhole", "c3", "t")])
+    run = bw.pick_run(cur, bw.VIEW, "wormhole", "merge_baseline", False, None, ["c3"])
+    sql, params = cur.executed[0]
+    assert "COMMIT_SHA IN (%s)" in sql
+    assert params[-1] == "c3" and run["commit_sha"] == "c3"
+
+
+def test_pick_run_prefers_the_newest_commit_over_the_newest_upload():
+    rows = [("r-late", "c1", "2026-09-28 12:00"), ("r-early", "c2", "2026-09-28 10:00")]
+    run = bw.pick_run(
+        CursorMock(many=rows),
+        bw.VIEW,
+        "wormhole",
+        "merge_baseline",
+        False,
+        None,
+        ["c2", "c1"],
+    )
+    assert run["run_id"] == "r-early"
+
+
+def test_find_run_waits_for_the_commit_it_wants():
+    run = ("merge_baseline-20260928-2-wormhole", "c3", "t")
+    cur = SequenceCursor([[], [], [run]])
+    naps = []
+    found = bw.find_run(cur, _find_args(wait_minutes=5), False, sleep=naps.append)
+    assert found["commit_sha"] == "c3" and "stale" not in found
+    assert len(naps) == 2
+    assert all(params[-1] == "c3" for _, params in cur.executed)
+
+
+def test_find_run_falls_back_to_an_older_commit_and_says_it_is_stale():
+    older = ("merge_baseline-20260927-1-wormhole", "c2", "t")
+    cur = SequenceCursor([[], [older]])
+    found = bw.find_run(cur, _find_args(), False, sleep=lambda s: None)
+    assert found["commit_sha"] == "c2"
+    assert found["stale"] is True and found["expected_commit"] == "c3"
+    assert cur.executed[-1][1][-2:] == ("c2", "c1")
+
+
+def test_find_run_never_takes_a_commit_outside_the_history():
+    cur = SequenceCursor([[]])
+    assert bw.find_run(cur, _find_args(commits="c3"), False) is None
+
+
+def test_find_run_without_commits_takes_the_newest():
+    cur = CursorMock(one=("baseline-20260922-1-wormhole", "abc", "t"))
+    found = bw.find_run(cur, _find_args(commits=None), False)
+    assert found["commit_sha"] == "abc" and "stale" not in found
+    assert len(cur.executed) == 1
+
+
+def test_find_run_with_an_empty_commit_list_finds_no_baseline():
+    cur = CursorMock(one=("merge_baseline-20260928-9-wormhole", "dequeued", "t"))
+    assert bw.find_run(cur, _find_args(commits=""), False) is None
+    assert cur.executed == []

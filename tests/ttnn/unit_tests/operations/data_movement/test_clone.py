@@ -344,6 +344,37 @@ def test_clone_sharded_tilized(
     )
 
 
+def test_clone_sharded_tilized_non_rectangular_grid(device):
+    # Regression: sharded runtime args used a (0,0)-anchored bbox rectangle instead of the shard's real
+    # CoreRangeSet; this is the issue's 10-core L-shaped grid (8 cores along y=0, 2 more along y=1).
+    shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1)),
+        }
+    )
+    shape = [1, 1, 320, 64]  # 10 shards of (32, 64) over the 10-core grid above.
+
+    shard_memory_config = ttnn.create_sharded_memory_config(
+        shape=(32, 64),
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    run_clone(
+        shape=shape,
+        input_memory_config=shard_memory_config,
+        output_memory_config=shard_memory_config,
+        input_dtype="bfloat16",
+        output_dtype=None,
+        tilized=True,
+        compute_kernel_options=None,
+        device=device,
+    )
+
+
 @pytest.mark.parametrize(
     "shape",
     [

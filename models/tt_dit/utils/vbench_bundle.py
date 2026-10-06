@@ -25,15 +25,32 @@ def digest(path):
     return result.hexdigest()
 
 
-def export_bundle(source, destination, *, prompt, thresholds, temporal_width=0):
+def export_bundle(source, destination, *, prompt, thresholds, temporal_width=0, clip_shape=(145, 1088, 1920)):
+    """Copy the five seed clips into ``destination`` with a manifest.
+
+    ``clip_shape`` is the ``[frames, height, width]`` the pipeline was asked to render; every clip
+    must match it exactly, so a wrong render (or a stale clip from another configuration) is
+    rejected here rather than scored. The shape is recorded in the manifest and re-checked by
+    ``read_manifest``.
+    """
     import cv2
+
+    clip_shape = [int(v) for v in clip_shape]
+    if len(clip_shape) != 3 or min(clip_shape) <= 0:
+        raise ValueError(f"clip_shape must be [frames, height, width], got {clip_shape}")
 
     source, destination = Path(source), Path(destination)
     clips = sorted(source.glob("*.mp4"))
     if len(clips) != 5 or set(thresholds) != METRICS:
         raise ValueError("LTX CI requires all five seeds and all five VBench metrics")
     destination.mkdir(parents=True, exist_ok=False)
-    manifest = {"prompt": prompt, "thresholds": thresholds, "temporal_width": temporal_width, "clips": []}
+    manifest = {
+        "prompt": prompt,
+        "thresholds": thresholds,
+        "temporal_width": temporal_width,
+        "clip_shape": clip_shape,
+        "clips": [],
+    }
     for index, clip in enumerate(clips):
         cap = cv2.VideoCapture(str(clip))
         try:
@@ -45,8 +62,8 @@ def export_bundle(source, destination, *, prompt, thresholds, temporal_width=0):
             cap.release()
         # Equal frame counts make the mean of per-clip scores identical to VBench's
         # directory aggregation (subject/background consistency weight by frame).
-        if shape != [145, 1088, 1920]:
-            raise ValueError(f"Unexpected VBench clip shape: {clip}: {shape}")
+        if shape != clip_shape:
+            raise ValueError(f"Unexpected VBench clip shape: {clip}: {shape}, expected {clip_shape}")
         name = f"seed_{index}.mp4"
         shutil.copyfile(clip, destination / name)
         manifest["clips"].append({"name": name, "sha256": digest(destination / name), "shape": shape})
@@ -60,8 +77,12 @@ def read_manifest(bundle):
         raise ValueError("Invalid VBench temporal width")
     if len(manifest["clips"]) != 5 or set(manifest["thresholds"]) != METRICS:
         raise ValueError("Incomplete VBench manifest")
+    # Bundles written before the shape was recorded carry the original 145f 1080p clips.
+    clip_shape = manifest.get("clip_shape", [145, 1088, 1920])
+    if type(clip_shape) is not list or len(clip_shape) != 3 or any(type(v) is not int or v <= 0 for v in clip_shape):
+        raise ValueError("Invalid VBench clip shape")
     for index, clip in enumerate(manifest["clips"]):
-        if clip["name"] != f"seed_{index}.mp4" or clip["shape"] != [145, 1088, 1920]:
+        if clip["name"] != f"seed_{index}.mp4" or clip["shape"] != clip_shape:
             raise ValueError("Invalid VBench clip identity or shape")
     return manifest
 
