@@ -103,8 +103,9 @@ mask path, which is not on the datum path.
 | `Float32` | Not a conversion target — a 19-bit datum cannot hold it, so the unpacker splits it across two lanes (mantissa MSBs low, LSBs high) and every bit survives. | |
 | integer | Passes through unchanged. | |
 
-Truncation, never rounding: `_truncate_src_mantissa` masks off the low
-`FP32_TO_SRC_MANT_TRUNC = 23 - 10 = 13` bits of the float32 mantissa.
+Truncation, never rounding: `_truncate_src_mantissa` calls
+`truncate_mantissa(values, SRC_MANT_BITS)`, which masks off the low
+`23 - 10 = 13` bits of the float32 mantissa.
 
 ## Dest storage
 
