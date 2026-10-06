@@ -7,12 +7,13 @@ M=/mnt/tt-data/ssinghal/tests/tt-metal
 while kill -0 $pid 2>/dev/null; do
   age=$(( ( $(date +%s) - $(stat -c %Y "$log" 2>/dev/null || date +%s) ) / 60 ))
   if [ $age -ge $stall ]; then
+    pkill -USR1 -P $pid; kill -USR1 $pid; sleep 3
     rep=$out/hang_$(hostname -s | tr -dc 0-9 | tail -c 2)_${pid}_$(date +%H%M).txt
     echo "[hangwatch] pid $pid log silent ${age} min -> triage -> $rep" | tee -a "$log"
     ( cd $M && source python_env/bin/activate && export TT_METAL_HOME=$M PYTHONPATH=$M && \
       timeout 300 python tools/tt-triage.py --skip-version-check --disable-progress --disable-colors --llm-output-path=$rep > $rep.console 2>&1 )
     echo "[hangwatch] killing pid $pid (report: $rep)" | tee -a "$log"
-    kill $pid; sleep 5; kill -9 $pid 2>/dev/null
+    pkill -TERM -P $pid; kill $pid; sleep 5; pkill -9 -P $pid; kill -9 $pid 2>/dev/null
     # a killed hung job leaves the device dirty (next job hangs on its first op): reset under the device lock before anyone else starts
     source $M/python_env/bin/activate
     # when started from INSIDE the locked command we already hold the lock (inherited fd): taking it again would deadlock

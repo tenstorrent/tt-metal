@@ -14,8 +14,10 @@ few-layer smoke run), DSV41_ENGRAM_RAM=0 (do not hold the 2 x 95 GB Engram table
 Supported (ISL, batch) combinations and limits: see the ``Supported`` table in the module docstring of tt/dsv41_model.py / the final report.
 """
 
+import faulthandler
 import json
 import os
+import signal
 import time
 
 import pytest
@@ -31,11 +33,16 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.demo.simple_text_demo import load_inputs
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
+faulthandler.register(
+    signal.SIGUSR1, all_threads=True
+)  # hangwatch.sh sends USR1 before killing a stalled job: python stacks into the log
+
 PROMPTS = "models/demos/blackhole/deepseek_v41_flash/demo/sample_prompts"
 LONG = "models/tt_transformers/demo/sample_prompts"
 GREEDY = {"temperature": 0, "top_p": 0.08}
 Q128 = f"{PROMPTS}/input_data_questions_prefill_128.json"
 GSM = f"{PROMPTS}/input_data_gsm8k_128.json"
+STRUCT = f"{PROMPTS}/input_data_struct_16.json"
 SKIP_BIG = "needs the sharded-KV / two-level top-k pieces of the capacity design doc and prefill indexer; not executed (see report)"
 
 
@@ -104,6 +111,9 @@ SCENARIOS = [
     _s(f"{LONG}/input_data_long_64k.json", 1, 70000, 64, "isl64k_b1"),
     _s(f"{LONG}/input_data_long_64k.json", 4, 70000, 64, "isl64k_b4"),
     _s(GSM, 32, 512, 384, "gsm8k_b32", instruct=True, stop_at_eos=True),
+    *[
+        _s(STRUCT, b, 512, 256, f"struct_b{b}", instruct=True, stop_at_eos=True) for b in (8, 16, 32)
+    ],  # high-acceptance workload (JSON / CSV / code / repeated text), spec adaptive-k studies
     _s(f"{LONG}/input_data_long_2k.json", 32, 4096, 64, "isl2k_b32_ragged"),
     _s(f"{LONG}/input_data_long_2k.json", 16, 4096, 64, "isl2k_b16_ragged"),
     _s(f"{LONG}/input_data_long_2k.json", 16, 4096, 64, "isl2k_b16_ragged_u4"),
@@ -184,6 +194,9 @@ def _run_demo(
     cache=None,
     build_max_seq_len=None,
 ):
+    max_generated_tokens = int(
+        os.environ.get("DSV41_MAX_GEN", max_generated_tokens)
+    )  # more rounds per policy window for the spec studies
     mesh_rows = mesh_device.shape[0]
     assert 1 <= batch_size <= 128, "batch_size must be 1..128 (mHC kernels: at most 32 users per mesh row)"
     users_per_row = -(-batch_size // mesh_rows)
@@ -260,6 +273,10 @@ def _run_demo(
     spec_k = int(
         os.environ.get("DSV41_SPEC", "0")
     )  # speculative decoding: k drafts per round (DSpark drafter), 0 = off
+    if spec_k and os.environ.get("DSV41_SPEC_EARLY") == "1" and not hasattr(generator, "spec"):
+        # build the spec runner(s) BEFORE any prefill / decode trace exists: persistent tensors allocated after a captured trace can sit on that trace's scratch memory and
+        # are overwritten by its replays (a later prefill then hangs the spec traces)
+        generator.enable_spec(spec_k)
     profiler.end("generator_setup")
 
     if isinstance(input_prompts, list) and len(input_prompts) == 1:
@@ -493,63 +510,147 @@ def _run_demo(
                 ):  # frees only ~11 MiB/bank and (at ISL > 512) invalidated the decode key slab: off by default
                     generator.m.prefill_model.teardown_dyn()
                 generator.enable_spec(spec_k)
-            eos = tokenizer.eos_token_id if stop_at_eos else None
-            active = torch.tensor([u < batch_size for u in range(padded_batch)])
-            if pre_spec is None:
-                t_sp = time.perf_counter()
-                gen_sp, st = generator.spec_decode(
-                    input_tokens_prefill, decoding_pos, first2, max_generated_tokens, eos=eos, active=active
-                )
-                t_sp = time.perf_counter() - t_sp
-            else:
-                gen_sp, st, t_sp = pre_spec
-            ident, first_div, gaps_div, table, suspects = 0, [], [], [], []
-            for u in range(batch_size):
-                pg = float("nan")
-                ps = [t for t in plain_gen[u]]
-                sp = [t for t in gen_sp[u] if t != eos][: len(ps)]
-                L_ = min(len(ps), len(sp))
-                dv = next((i for i in range(L_) if ps[i] != sp[i]), -1)
-                first_div.append(dv)
-                ident += int(dv == -1)
-                if dv > 0 and len(generator.spec.gaps[u]) >= dv:
-                    pg = plain_gaps[u][dv - 1] if len(plain_gaps[u]) >= dv else float("nan")
-                    gaps_div.append(
-                        f"user {u} token {dv}: top1-top2 gap plain {pg:.3f} / spec {generator.spec.gaps[u][dv - 1]:.3f}"
+            adaptive = os.environ.get("DSV41_SPEC_ADAPT") == "1"
+            policies = (
+                [p_ for p_ in os.environ.get("DSV41_SPEC_POLICIES", "adapt").split(",") if p_] if adaptive else [None]
+            )
+            for pi, pol in enumerate(policies):
+                if (
+                    pi > 0
+                ):  # fresh prefill (the previous spec pass advanced the state); spec traces are released first (re-captured by seed) so the prefill replay cannot clobber them
+                    generator.spec.release()
+                    if (
+                        os.environ.get("DSV41_SPEC_NOREPREFILL") != "1"
+                    ):  # (diagnostic switch: stale state, to see whether the prefill is what hangs the spec compile pass)
+                        first2, _ = generator.prefill_forward_text(input_tokens_prefill, **prefill_kw)
+                        first2 = first2.view(-1)
+                        if (
+                            os.environ.get("DSV41_SPEC_AFTER_PLAIN") == "1"
+                        ):  # diagnostic: is the prefill-after-spec state poisoned? 6 eager plain decode steps vs the first plain stream
+                            cp_, ot_, ok_ = torch.tensor(decoding_pos), first2.clone(), 0
+                            seq_ = [[] for _ in range(padded_batch)]
+                            for _s in range(6):
+                                ot_, _ = generator.decode_forward(
+                                    ot_,
+                                    cp_,
+                                    enable_trace=False,
+                                    sampling_params=device_sampling_params,
+                                    reload_inputs=True,
+                                )
+                                cp_ = cp_ + 1
+                                for u_ in range(padded_batch):
+                                    seq_[u_].append(int(ot_[u_]))
+                            ok_ = sum(int(seq_[u_] == plain_gen[u_][1:7]) for u_ in range(batch_size))
+                            logger.info(
+                                f"REPREFILL_PLAIN_CHECK: {ok_}/{batch_size} users reproduce the first plain stream (6 tokens); first token ok {int((first2[:batch_size] == prefilled_token[:batch_size]).sum())}/{batch_size}; user0 {seq_[0]} vs {plain_gen[0][1:7]}"
+                            )
+                            raise SystemExit("REPREFILL_PLAIN_CHECK done")
+                if pol is not None:
+                    generator.spec.policy = pol
+                eos = tokenizer.eos_token_id if stop_at_eos else None
+                active = torch.tensor([u < batch_size for u in range(padded_batch)])
+                if pre_spec is None:
+                    t_sp = time.perf_counter()
+                    gen_sp, st = generator.spec_decode(
+                        input_tokens_prefill, decoding_pos, first2, max_generated_tokens, eos=eos, active=active
                     )
-                    if pg > 0.1:
-                        suspects.append(f"user {u} (mesh row {u // generator.m.U}) token {dv} plain gap {pg:.3f}")
-                mh = getattr(generator.spec, "m_hist", [[]] * batch_size)[u]
-                table.append(
-                    f"  user {u:3d} row {u // generator.m.U} len {decoding_pos[u]:5d}: first token {'ok' if int(first2[u]) == int(prefilled_token[u]) else 'MISMATCH'}, "
-                    f"first divergence {dv:4d}, plain gap {pg if dv > 0 and len(plain_gaps[u]) >= dv else float('nan'):.3f}, "
-                    f"spec gap {generator.spec.gaps[u][dv - 1] if dv > 0 and len(generator.spec.gaps[u]) >= dv else float('nan'):.3f}, "
-                    f"rounds {len(mh)}, mean accepted {sum(mh) / max(len(mh), 1):.2f}, tokens {len(gen_sp[u])}"
-                )
-            tok_s_plain = 1000.0 / plain_ms if plain_ms == plain_ms and plain_ms > 0 else float("nan")
-            logger.info(
-                f"=== SPEC k={spec_k} (batch {batch_size}): {st['rounds']} rounds, {st['accepted_per_round']:.3f} accepted drafts/round "
-                f"(CPU reference GSM8K: k=3 -> 2.30), P(m>=j) {[round(x, 3) for x in st['p_ge']]} (CPU: 0.905/0.796/0.693/0.598/0.489 conditional-free per position), "
-                f"{st['tok_per_round']:.3f} tokens/round/user, round {st['round_ms']:.1f} ms -> {st['tok_s_user']:.1f} tok/s/user vs plain decode "
-                f"{plain_ms:.1f} ms/token = {tok_s_plain:.1f} tok/s/user (same run) => {st['tok_s_user'] / tok_s_plain:.2f}x ==="
-            )
-            logger.info(
-                f"SPEC exactness vs the plain greedy stream of this run: {ident}/{batch_size} users identical, first divergence per user {first_div}; first token spec==plain: "
-                f"{int((first2[:batch_size] == prefilled_token[:batch_size]).sum())}/{batch_size}; spec wall incl. seeding {t_sp:.1f} s"
-            )
-            logger.info("SPEC divergence near-tie evidence: " + "; ".join(gaps_div))
-            logger.info("SPEC per-user table:\n" + "\n".join(table))
-            if os.environ.get("DSV41_RAGGED") in ("1", "2"):
+                    t_sp = time.perf_counter() - t_sp
+                else:
+                    gen_sp, st, t_sp = pre_spec
+                ident, first_div, gaps_div, table, suspects = 0, [], [], [], []
                 for u in range(batch_size):
-                    logger.info(
-                        f"STREAMDUMP user {u} len {decoding_pos[u]} plain {plain_gen[u][:48]} spec {gen_sp[u][:48]}"
+                    pg = float("nan")
+                    ps = [t for t in plain_gen[u]]
+                    sp = [t for t in gen_sp[u] if t != eos][: len(ps)]
+                    L_ = min(len(ps), len(sp))
+                    dv = next((i for i in range(L_) if ps[i] != sp[i]), -1)
+                    first_div.append(dv)
+                    ident += int(dv == -1)
+                    if dv > 0 and len(generator.spec.gaps[u]) >= dv:
+                        pg = plain_gaps[u][dv - 1] if len(plain_gaps[u]) >= dv else float("nan")
+                        gaps_div.append(
+                            f"user {u} token {dv}: top1-top2 gap plain {pg:.3f} / spec {generator.spec.gaps[u][dv - 1]:.3f}"
+                        )
+                        if pg > 0.1:
+                            suspects.append(f"user {u} (mesh row {u // generator.m.U}) token {dv} plain gap {pg:.3f}")
+                    mh = getattr(generator.spec, "m_hist", [[]] * batch_size)[u]
+                    table.append(
+                        f"  user {u:3d} row {u // generator.m.U} len {decoding_pos[u]:5d}: first token {'ok' if int(first2[u]) == int(prefilled_token[u]) else 'MISMATCH'}, "
+                        f"first divergence {dv:4d}, plain gap {pg if dv > 0 and len(plain_gaps[u]) >= dv else float('nan'):.3f}, "
+                        f"spec gap {generator.spec.gaps[u][dv - 1] if dv > 0 and len(generator.spec.gaps[u]) >= dv else float('nan'):.3f}, "
+                        f"rounds {len(mh)}, mean accepted {sum(mh) / max(len(mh), 1):.2f}, tokens {len(gen_sp[u])}"
                     )
-            logger.info(
-                "SPEC SUSPECTED REAL DIVERGENCES (plain top1-top2 gap > 0.1 at the first divergence): "
-                + ("none" if not suspects else "; ".join(suspects))
-            )
-            for i in range(min(batch_size, int(os.environ.get("DSV41_SPEC_PRINT", "2")))):
-                logger.info(f"==USER {i} - SPEC OUTPUT\n{tokenizer.decode(gen_sp[i]).strip()}\n")
+                tok_s_plain = 1000.0 / plain_ms if plain_ms == plain_ms and plain_ms > 0 else float("nan")
+                logger.info(
+                    f"=== SPEC k={spec_k if pol is None else pol} (batch {batch_size}): {st['rounds']} rounds, {st['accepted_per_round']:.3f} accepted drafts/round "
+                    f"(CPU reference GSM8K: k=3 -> 2.30), P(m>=j) {[round(x, 3) for x in st['p_ge']]} (CPU: 0.905/0.796/0.693/0.598/0.489 conditional-free per position), "
+                    f"{st['tok_per_round']:.3f} tokens/round/user, round {st['round_ms']:.1f} ms -> {st['tok_s_user']:.1f} tok/s/user vs plain decode "
+                    f"{plain_ms:.1f} ms/token = {tok_s_plain:.1f} tok/s/user (same run) => {st['tok_s_user'] / tok_s_plain:.2f}x ==="
+                )
+                logger.info(
+                    f"SPEC exactness vs the plain greedy stream of this run: {ident}/{batch_size} users identical, first divergence per user {first_div}; first token spec==plain: "
+                    f"{int((first2[:batch_size] == prefilled_token[:batch_size]).sum())}/{batch_size}; spec wall incl. seeding {t_sp:.1f} s"
+                )
+                for q_, v_ in st.get("by_policy", {}).items() if str(pol).startswith("cycle:") else []:
+                    logger.info(
+                        "SPEC_RESULT_CYCLE "
+                        + json.dumps(
+                            {
+                                "scenario": os.environ.get("DSV41_CUR_SCENARIO", ""),
+                                "B": batch_size,
+                                "policy": q_,
+                                "rounds": v_["rounds"],
+                                "accepted_per_round": round(v_["accepted_per_round"], 4),
+                                "tok_per_round": round(v_["tok_per_round"], 4),
+                                "round_ms": round(v_["round_ms"], 2),
+                                "spec_tok_s_user": round(v_["tok_s_user"], 2),
+                                "plain_tok_s_user": round(tok_s_plain, 2),
+                                "speedup": round(v_["tok_s_user"] / tok_s_plain, 3),
+                                "k_hist": v_["k_hist"],
+                            }
+                        )
+                    )
+                logger.info(
+                    "SPEC_RESULT "
+                    + json.dumps(
+                        {
+                            "scenario": os.environ.get("DSV41_CUR_SCENARIO", ""),
+                            "B": batch_size,
+                            "policy": pol if pol is not None else f"k{spec_k}",
+                            "rounds": st["rounds"],
+                            "accepted_per_round": round(st["accepted_per_round"], 4),
+                            "tok_per_round": round(st["tok_per_round"], 4),
+                            "round_ms": round(st["round_ms"], 2),
+                            "spec_tok_s_user": round(st["tok_s_user"], 2),
+                            "plain_ms": round(plain_ms, 2),
+                            "plain_tok_s_user": round(tok_s_plain, 2),
+                            "speedup": round(st["tok_s_user"] / tok_s_plain, 3),
+                            "identical": ident,
+                            "p_ge": [round(x, 3) for x in st["p_ge"]],
+                            "k_hist": st.get("k_hist"),
+                            "times": {k_: round(v_, 1) for k_, v_ in st.get("times", {}).items()},
+                            "exp_tokens": round(st.get("mean_expected_tokens", float("nan")), 3),
+                            "max_plain_gap_at_div": max(
+                                [float(x.split("gap ")[1].split()[0]) for x in suspects] or [0.0]
+                            ),
+                        }
+                    )
+                )
+                if hasattr(generator.spec, "conf_report"):
+                    logger.info("SPEC_CONF " + json.dumps({"policy": pol, **generator.spec.conf_report()}))
+                logger.info("SPEC divergence near-tie evidence: " + "; ".join(gaps_div))
+                logger.info("SPEC per-user table:\n" + "\n".join(table))
+                if os.environ.get("DSV41_RAGGED") in ("1", "2"):
+                    for u in range(batch_size):
+                        logger.info(
+                            f"STREAMDUMP user {u} len {decoding_pos[u]} plain {plain_gen[u][:48]} spec {gen_sp[u][:48]}"
+                        )
+                logger.info(
+                    "SPEC SUSPECTED REAL DIVERGENCES (plain top1-top2 gap > 0.1 at the first divergence): "
+                    + ("none" if not suspects else "; ".join(suspects))
+                )
+                for i in range(min(batch_size, int(os.environ.get("DSV41_SPEC_PRINT", "2")))):
+                    logger.info(f"==USER {i} - SPEC OUTPUT\n{tokenizer.decode(gen_sp[i]).strip()}\n")
             generator.spec.release()
 
     profiler.end("run")
@@ -757,6 +858,7 @@ def test_dsv41_demo_session(mesh_device, device_params):
             )
             + ") ==="
         )
+        os.environ["DSV41_CUR_SCENARIO"] = s.id
         os.environ["DSV41_RAGGED"] = "1" if s.id.endswith("_ragged") else "2" if s.id.endswith("_ragged_u4") else "0"
         if (
             os.environ.get("DSV41_SESSION_NOWARM") == "1"

@@ -143,9 +143,22 @@ class Generator:
     def enable_spec(self, k):
         """Build the speculative runner (k drafts verified per round, 1..5) on the model's weights / paged pool. The model must have been built with
         DSV41_RING_ROWS=288 (``tt.common.create_tt_model`` sets it when DSV41_SPEC > 0)."""
-        from models.demos.blackhole.deepseek_v41_flash.tt.spec_model import SpecRunner
+        import os
 
-        self.spec = SpecRunner(self.m, k)
+        from models.demos.blackhole.deepseek_v41_flash.tt.spec_model import (
+            AdaptiveSpec,
+            SpecRunner,
+            default_ks,
+            parse_ks,
+        )
+
+        if (
+            os.environ.get("DSV41_SPEC_ADAPT") == "1"
+        ):  # adaptive verification length: one resident traced runner per candidate k
+            ks = parse_ks(os.environ.get("DSV41_SPEC_SET"), ",".join(map(str, default_ks(self.m.U))))
+            self.spec = AdaptiveSpec(self.m, ks)
+        else:
+            self.spec = SpecRunner(self.m, k)
         return self.spec
 
     def spec_decode(self, tokens, prompt_lens, first_tokens, max_new_tokens, eos=None, active=None):

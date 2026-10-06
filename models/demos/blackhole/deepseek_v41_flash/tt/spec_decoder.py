@@ -99,7 +99,7 @@ class SpecDecoder(SpecVerifier):
     Host inputs per round (``set_packed_inputs``): block tokens ``[t, d_1..d_k]`` per user (user-major rows), positions ``base + j``, Engram rows.
     Device: verify with hidden taps, ``a_j = argmax`` per row, m = #leading drafts with ``x_{j+1} == a_j``, ``prev_cs`` commit (m), write of ``main_kv`` of all
     n rows into the drafter rings, draft of 5 tokens from (``a_m``, frontier ``base + m``). ``self.pack`` = uint32 [1, T + U + 5U] per mesh row:
-    ``a`` (T), ``m`` (U), drafts d_1..d_5 block-index-major (5U); ``self.draft_out['conf']`` stays on the device (diagnostics).
+    ``a`` (T), ``m`` (U), drafts d_1..d_5 block-index-major (5U); the confidence probabilities (65535 * sigmoid, 5U, same order as the drafts) are appended.
     """
 
     def __init__(self, md, layers, embedding, head, drafter, engram=None, step_states=None, n=2):
@@ -219,9 +219,11 @@ class SpecDecoder(SpecVerifier):
         d, drafts = dr.draft_full(t_u32, f_i32)  # drafts [5U,1] uint32 block-index-major
         self.draft_out = d
         m_u32 = ttnn.typecast(ttnn.to_layout(mcount, rm), ttnn.uint32)  # [U,1]
-        self.pack = ttnn.concat(
-            [ttnn.reshape(a, [1, T]), ttnn.reshape(m_u32, [1, U]), ttnn.reshape(drafts, [1, 5 * U])], dim=1
-        )
+        parts = [ttnn.reshape(a, [1, T]), ttnn.reshape(m_u32, [1, U]), ttnn.reshape(drafts, [1, 5 * U])]
+        cq = getattr(dr, "conf_q", None)
+        if cq is not None:  # + confidence head: 65535 * sigmoid(logit) of the 5 drafts per user (drafts' row order)
+            parts.append(cq)
+        self.pack = ttnn.concat(parts, dim=1)
         self.logits = logits
         return self.pack
 
