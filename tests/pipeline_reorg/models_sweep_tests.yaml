@@ -123,7 +123,7 @@
   budget_type: sweep
 
 - name: TT-Transformers MLP module sweep
-  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/mlp
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct tests/scripts/run_tt_transformers_tests.sh --tb=short tests/modules/mlp
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -135,7 +135,7 @@
   budget_type: sweep
 
 - name: TT-Transformers RoPE module sweep
-  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/rope
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct tests/scripts/run_tt_transformers_tests.sh --tb=short tests/modules/rope
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -147,7 +147,7 @@
   budget_type: sweep
 
 - name: TT-Transformers RMSNorm module sweep
-  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/rmsnorm
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct tests/scripts/run_tt_transformers_tests.sh --tb=short tests/modules/rmsnorm
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -159,7 +159,7 @@
   budget_type: sweep
 
 - name: TT-Transformers attention module sweep
-  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d pytest --tb=short models/common/tests/modules/attention
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d tests/scripts/run_tt_transformers_tests.sh --tb=short tests/modules/attention
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -171,7 +171,7 @@
   budget_type: sweep
 
 - name: TT-Transformers embedding module sweep
-  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/embedding_1d pytest --tb=short models/common/tests/modules/embedding
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/embedding_1d tests/scripts/run_tt_transformers_tests.sh --tb=short tests/modules/embedding
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -183,7 +183,7 @@
   budget_type: sweep
 
 - name: TT-Transformers LM head module sweep
-  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d pytest --tb=short models/common/tests/modules/lm_head
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d tests/scripts/run_tt_transformers_tests.sh --tb=short tests/modules/lm_head
   model: tt-transformers-common
   model_family: TTTv2
   skus:
