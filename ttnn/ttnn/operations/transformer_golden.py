@@ -487,7 +487,8 @@ def _decode_attention(
 
     outputs = []
     for batch_index in range(batch):
-        position = int(positions[batch_index % len(positions)])
+        # The non-causal decode reader attends the whole cache; cur_pos only bounds causal decode.
+        position = int(positions[batch_index % len(positions)]) if is_causal else input_tensor_k.shape[-2] - 1
         if position < 0:
             outputs.append(query.new_zeros((1, num_heads, 1, input_tensor_v.shape[-1])))
             continue
@@ -1238,6 +1239,35 @@ def _ring_stats_scratch(input_tensor_q, joint_tensor_q=None):
     return set_golden_comparison_config(stats, method="skip", scope="all")
 
 
+def _circular_cache_in_logical_order(cache, *, chunk_length, query_start, is_causal, sliding_window_size):
+    """Unroll a circular KV cache of chunk-sized slabs, where chunk group g lives in slab g % num_slabs.
+    Evicted groups become zeros, so the attention window must not reach them.
+    """
+
+    if query_start is None or sliding_window_size is None:
+        raise ValueError("circular_kv_cache requires kv_actual_isl and sliding_window_size")
+    capacity = cache.shape[-2]
+    if capacity % chunk_length:
+        raise ValueError(f"Circular cache length {capacity} is not a multiple of the chunk length {chunk_length}")
+    num_slabs = capacity // chunk_length
+    num_groups = math.ceil((query_start + chunk_length) / chunk_length)
+    first_resident_group = max(0, num_groups - num_slabs)
+    window = int(sliding_window_size)
+    earliest_attended_key = query_start - (window - 1 if is_causal else window // 2)
+    if earliest_attended_key < first_resident_group * chunk_length:
+        raise ValueError(
+            f"The sliding window reaches key {earliest_attended_key}, which the circular cache already evicted"
+        )
+
+    logical = cache.new_zeros((*cache.shape[:-2], num_groups * chunk_length, cache.shape[-1]))
+    for group in range(first_resident_group, num_groups):
+        slab = group % num_slabs
+        logical[..., group * chunk_length : (group + 1) * chunk_length, :] = cache[
+            ..., slab * chunk_length : (slab + 1) * chunk_length, :
+        ]
+    return logical
+
+
 def _ring_joint_golden(
     input_tensor_q,
     input_tensor_k,
@@ -1269,11 +1299,6 @@ def _ring_joint_golden(
         raise ValueError(f"Only joint_strategy='rear' is supported, got {joint_strategy!r}")
     if is_cross and is_causal:
         raise ValueError("is_cross=True requires non-causal attention")
-    if circular_kv_cache:
-        raise NotImplementedError(
-            "The ring golden does not model the device's block-cyclic circular KV layout; "
-            "use a logically ordered cache or omit comparison for this mode"
-        )
 
     stats = _ring_stats_scratch(input_tensor_q, joint_tensor_q)
     input_tensor_k, input_tensor_v, actual_kv_length = _ring_runtime_cache_selection(
@@ -1287,6 +1312,17 @@ def _ring_joint_golden(
         kv_cache_num_layers=kv_cache_num_layers,
         kv_cache_layer_idx=kv_cache_layer_idx,
     )
+    if circular_kv_cache:
+        input_tensor_k, input_tensor_v = (
+            _circular_cache_in_logical_order(
+                cache,
+                chunk_length=input_tensor_q.shape[-2],
+                query_start=actual_kv_length,
+                is_causal=is_causal,
+                sliding_window_size=sliding_window_size,
+            )
+            for cache in (input_tensor_k, input_tensor_v)
+        )
 
     logical_n = int(_scalar(logical_n, input_tensor_k.shape[-2]))
     if logical_n < 0:
