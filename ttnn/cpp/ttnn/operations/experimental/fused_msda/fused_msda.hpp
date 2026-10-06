@@ -52,10 +52,10 @@ enum class MSDAReferenceMode : uint8_t {
 // level order. level_start_index is derived from it on host.
 //
 // Coordinate convention (see device/kernels docs and README.md §3):
-//   locations_in_grid_space=false (default): locations are MSDA/mmcv [0, 1]
-//   locations_in_grid_space=true:            locations are grid_sample [-1, 1]
+//   locations_in_grid_space=false (default): locations are normalized to [0, 1]
+//   locations_in_grid_space=true:            locations are normalized to [-1, 1]
 //   align_corners selects the pixel mapping within the chosen space.
-// Out-of-bounds corners contribute zero (padding_mode="zeros").
+// Out-of-bounds corners contribute zero.
 ttnn::Tensor fused_msda(
     const ttnn::Tensor& value,
     const ttnn::Tensor& sampling_locations,
