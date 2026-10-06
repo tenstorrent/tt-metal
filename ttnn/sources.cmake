@@ -122,6 +122,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/h2d_stream_service.cpp
     cpp/ttnn-nanobind/d2h_stream_service.cpp
     cpp/ttnn-nanobind/counter_channel.cpp
+    cpp/ttnn-nanobind/jit_telemetry.cpp
     cpp/ttnn-nanobind/layer_ack_service.cpp
     cpp/ttnn-nanobind/layer_completion.cpp
     cpp/ttnn-nanobind/mesh_socket.cpp

@@ -6,7 +6,9 @@
 
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -368,6 +370,146 @@ TEST_F(JitBuildWindowTest, WindowIsNotRecordedWhileTelemetryIsDisabled) {
 
     tel.enable();
     EXPECT_EQ(window_snapshot().count, count_before);
+}
+
+// --- Captures ---
+
+namespace {
+
+using experimental::jit_telemetry::TokenStats;
+
+std::optional<TokenStats> find_token(const std::vector<TokenStats>& stats, const std::string& name) {
+    for (const auto& s : stats) {
+        if (s.name == name) {
+            return s;
+        }
+    }
+    return std::nullopt;
+}
+
+}  // namespace
+
+TEST_F(BuildCacheTelemetryTest, CaptureSeesOnlyWhatWasRecordedWhileOpen) {
+    auto& tel = BuildCacheTelemetry::inst();
+    auto& token = tel.get_or_register_metric("test.capture.basic", "B");
+    token.record(1000.0);  // before the capture
+
+    const uint64_t id = tel.begin_capture();
+    token.record(30.0);
+    token.record(10.0);
+    const auto samples = tel.end_capture(id);
+    token.record(5000.0);  // after it
+
+    const auto data = find_token(samples, "test.capture.basic");
+    ASSERT_TRUE(data.has_value());
+    EXPECT_EQ(data->count, 2u);
+    EXPECT_DOUBLE_EQ(data->total, 40.0);
+    EXPECT_DOUBLE_EQ(data->min, 10.0);
+    EXPECT_DOUBLE_EQ(data->max, 30.0);
+    EXPECT_EQ(token.snapshot().count, 4u) << "process-wide values must include every record";
+}
+
+TEST_F(BuildCacheTelemetryTest, CaptureOmitsTokensThatRecordedNothing) {
+    auto& tel = BuildCacheTelemetry::inst();
+    tel.get_or_register_metric("test.capture.idle").record(1.0);
+    const uint64_t id = tel.begin_capture();
+    EXPECT_FALSE(find_token(tel.end_capture(id), "test.capture.idle").has_value());
+}
+
+TEST_F(BuildCacheTelemetryTest, NestedCapturesAggregateIndependently) {
+    auto& tel = BuildCacheTelemetry::inst();
+    auto& token = tel.get_or_register_metric("test.capture.nested");
+
+    const uint64_t outer = tel.begin_capture();
+    token.record(1.0);
+    const uint64_t inner = tel.begin_capture();
+    token.record(7.0);
+    const auto inner_samples = tel.end_capture(inner);
+    token.record(3.0);
+    const auto outer_samples = tel.end_capture(outer);
+
+    const auto in = find_token(inner_samples, "test.capture.nested");
+    const auto out = find_token(outer_samples, "test.capture.nested");
+    ASSERT_TRUE(in.has_value() && out.has_value());
+    EXPECT_EQ(in->count, 1u);
+    EXPECT_DOUBLE_EQ(in->max, 7.0);
+    EXPECT_EQ(out->count, 3u);
+    EXPECT_DOUBLE_EQ(out->total, 11.0);
+    EXPECT_DOUBLE_EQ(out->min, 1.0);
+}
+
+TEST_F(BuildCacheTelemetryTest, TokenRegisteredDuringACaptureJoinsIt) {
+    // Per-target tokens are registered on first use.
+    auto& tel = BuildCacheTelemetry::inst();
+    const uint64_t id = tel.begin_capture();
+    per_target_telemetry_token("test.capture.lazy", "TENSIX", "B").record(64.0);
+    const auto data = find_token(tel.end_capture(id), "test.capture.lazy.TENSIX");
+    ASSERT_TRUE(data.has_value());
+    EXPECT_EQ(data->count, 1u);
+    EXPECT_DOUBLE_EQ(data->max, 64.0);
+}
+
+TEST_F(BuildCacheTelemetryTest, CaptureCollectsRecordsFromOtherThreads) {
+    auto& tel = BuildCacheTelemetry::inst();
+    auto& token = tel.get_or_register_metric("test.capture.threads");
+    constexpr int num_threads = 8;
+    constexpr int records_per_thread = 100;
+
+    const uint64_t id = tel.begin_capture();
+    std::vector<std::thread> threads;
+    for (int t = 0; t < num_threads; ++t) {
+        threads.emplace_back([&token, t] {
+            for (int i = 0; i < records_per_thread; ++i) {
+                token.record(static_cast<double>(t));
+            }
+        });
+    }
+    for (auto& th : threads) {
+        th.join();
+    }
+    const auto data = find_token(tel.end_capture(id), "test.capture.threads");
+    ASSERT_TRUE(data.has_value());
+    EXPECT_EQ(data->count, static_cast<uint32_t>(num_threads * records_per_thread));
+    EXPECT_DOUBLE_EQ(data->max, num_threads - 1.0);
+}
+
+TEST_F(BuildCacheTelemetryTest, EndingACaptureTwiceThrows) {
+    auto& tel = BuildCacheTelemetry::inst();
+    const uint64_t id = tel.begin_capture();
+    tel.end_capture(id);
+    EXPECT_ANY_THROW(tel.end_capture(id));
+    EXPECT_ANY_THROW(tel.end_capture(0));
+}
+
+TEST_F(BuildCacheTelemetryTest, CaptureRecordsNothingWhileDisabled) {
+    auto& tel = BuildCacheTelemetry::inst();
+    auto& token = tel.get_or_register_metric("test.capture.disabled");
+    const uint64_t id = tel.begin_capture();
+    tel.disable();
+    token.record(1.0);
+    tel.enable();
+    EXPECT_FALSE(find_token(tel.end_capture(id), "test.capture.disabled").has_value());
+}
+
+TEST_F(BuildCacheTelemetryTest, SnapshotAllReportsProcessWideValues) {
+    auto& tel = BuildCacheTelemetry::inst();
+    auto& token = tel.get_or_register_metric("test.capture.snapshot_all", "B");
+    token.record(12.0);
+    token.record(4.0);
+
+    const auto data = find_token(tel.snapshot_all(), "test.capture.snapshot_all");
+    ASSERT_TRUE(data.has_value());
+    EXPECT_EQ(data->count, 2u);
+    EXPECT_DOUBLE_EQ(data->total, 16.0);
+    EXPECT_DOUBLE_EQ(data->min, 4.0);
+    EXPECT_DOUBLE_EQ(data->max, 12.0);
+    // A token with no values reports 0, not its internal +/-inf.
+    tel.get_or_register_metric("test.capture.snapshot_empty");
+    const auto empty = find_token(tel.snapshot_all(), "test.capture.snapshot_empty");
+    ASSERT_TRUE(empty.has_value());
+    EXPECT_EQ(empty->count, 0u);
+    EXPECT_DOUBLE_EQ(empty->min, 0.0);
+    EXPECT_DOUBLE_EQ(empty->max, 0.0);
 }
 
 }  // namespace tt::tt_metal

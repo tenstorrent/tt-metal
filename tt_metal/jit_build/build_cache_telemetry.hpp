@@ -18,6 +18,8 @@
 #include <utility>
 #include <vector>
 
+#include <tt-metalium/experimental/jit_telemetry.hpp>
+
 namespace tt::tt_metal {
 
 class BuildCacheTelemetry;
@@ -27,6 +29,8 @@ struct TelemetryTokenData {
     double total{0};
     double min_val{std::numeric_limits<double>::infinity()};
     double max_val{-std::numeric_limits<double>::infinity()};
+
+    void add(double value);
 };
 
 // Opaque handle returned by BuildCacheTelemetry::get_or_register_metric().
@@ -51,12 +55,16 @@ private:
     void set_recording_enabled(bool enabled);
     // Replace a cumulative window's snapshot instead of appending overlapping samples.
     void set_single_sample(double value);
+    void open_capture(uint64_t id);
+    TelemetryTokenData close_capture(uint64_t id);
 
     std::string name_;
     std::string unit_{"ms"};
     std::atomic<bool> recording_enabled_{true};
     mutable std::mutex data_mutex_;
     TelemetryTokenData data_;
+    // Open captures and what was recorded into each; guarded by data_mutex_.
+    std::vector<std::pair<uint64_t, TelemetryTokenData>> captures_;
 };
 
 struct BuildCacheTelemetryImpl;  // forward declaration
@@ -125,6 +133,14 @@ public:
 
     void dump_metrics() const;
 
+    // A capture aggregates what every token records, from any thread, between begin_capture() and
+    // end_capture(). Captures may nest or overlap and do not affect the process-wide values.
+    uint64_t begin_capture();
+    // Returns the tokens that recorded into the capture. Throws if `capture_id` is not open.
+    std::vector<experimental::jit_telemetry::TokenStats> end_capture(uint64_t capture_id);
+    // Process-wide values of every token.
+    std::vector<experimental::jit_telemetry::TokenStats> snapshot_all() const;
+
 private:
     BuildCacheTelemetry();
     ~BuildCacheTelemetry();
@@ -135,7 +151,10 @@ private:
     // Names already reported as having conflicting units, so a call site inside a build loop
     // warns once instead of once per build. Guarded by owned_tokens_mutex_.
     std::unordered_set<std::string> unit_conflict_warned_;
-    std::mutex owned_tokens_mutex_;
+    mutable std::mutex owned_tokens_mutex_;
+    // Guarded by owned_tokens_mutex_.
+    std::vector<uint64_t> open_captures_;
+    uint64_t next_capture_id_{1};
     // Registered in the constructor so the const dump_metrics() can record the window span
     // without registering a metric during teardown.
     TelemetryToken* build_window_token_{nullptr};

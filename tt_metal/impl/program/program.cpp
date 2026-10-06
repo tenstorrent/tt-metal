@@ -3588,18 +3588,10 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
-        size_t max_size = get_ringbuffer_size(device, programmable_core_type);
-
-        TT_FATAL(
-            state.offset <= max_size,
-            "Program size ({}) too large for kernel config buffer ({}) on {}",
-            state.offset,
-            max_size,
-            enchantum::to_string(programmable_core_type));
-
         // Recorded here, not per program: `state` is computed once per core type and then copied
         // into every program in the span, so recording inside the loop below would log the same
         // numbers N times for an N-program MeshWorkload (inflating count/total, and making min==max).
+        // Recorded before the size check so a program that does not fit is counted too.
         {
             const auto target = enchantum::to_string(programmable_core_type);
             const auto record_size = [&](std::string_view name, uint32_t bytes) {
@@ -3615,6 +3607,15 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             record_size("program_config_size.kernel_text", state.kernel_text_size);
             record_size("program_config_size.total", state.offset);
         }
+
+        size_t max_size = get_ringbuffer_size(device, programmable_core_type);
+
+        TT_FATAL(
+            state.offset <= max_size,
+            "Program size ({}) too large for kernel config buffer ({}) on {}",
+            state.offset,
+            max_size,
+            enchantum::to_string(programmable_core_type));
 
         for (auto& program : programs) {
             program->set_program_offsets_and_sizes(index, state);

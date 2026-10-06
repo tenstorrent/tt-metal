@@ -354,6 +354,8 @@ from ttnn.profiler import (
     get_all_programs_perf_data,
 )
 
+from ttnn import jit_telemetry
+
 # TODO: remove this after the distributed module is fully integrated
 from ttnn.distributed import *
 

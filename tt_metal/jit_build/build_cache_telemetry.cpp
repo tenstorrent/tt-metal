@@ -16,10 +16,18 @@
 #include <unordered_map>
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 
 #include "env_lib.hpp"
 
 namespace tt::tt_metal {
+
+void TelemetryTokenData::add(double value) {
+    ++count;
+    total += value;
+    min_val = std::min(min_val, value);
+    max_val = std::max(max_val, value);
+}
 
 // --- TelemetryToken ---
 
@@ -34,10 +42,10 @@ void TelemetryToken::record(double value) {
         return;
     }
     std::lock_guard lk(data_mutex_);
-    ++data_.count;
-    data_.total += value;
-    data_.min_val = std::min(data_.min_val, value);
-    data_.max_val = std::max(data_.max_val, value);
+    data_.add(value);
+    for (auto& [id, capture] : captures_) {
+        capture.add(value);
+    }
 }
 
 TelemetryTokenData TelemetryToken::snapshot() const {
@@ -51,6 +59,22 @@ void TelemetryToken::set_single_sample(double value) {
     }
     std::lock_guard lk(data_mutex_);
     data_ = {.count = 1, .total = value, .min_val = value, .max_val = value};
+}
+
+void TelemetryToken::open_capture(uint64_t id) {
+    std::lock_guard lk(data_mutex_);
+    captures_.emplace_back(id, TelemetryTokenData{});
+}
+
+TelemetryTokenData TelemetryToken::close_capture(uint64_t id) {
+    std::lock_guard lk(data_mutex_);
+    const auto it = std::find_if(captures_.begin(), captures_.end(), [id](const auto& c) { return c.first == id; });
+    if (it == captures_.end()) {
+        return {};
+    }
+    const TelemetryTokenData data = it->second;
+    captures_.erase(it);
+    return data;
 }
 
 // --- BuildCacheTelemetry ---
@@ -298,11 +322,66 @@ TelemetryToken& BuildCacheTelemetry::get_or_register_metric(
     auto* token = owned_tokens_.back().get();
     it->second = token;
     token->set_recording_enabled(impl_ != nullptr);
+    for (const uint64_t id : open_captures_) {
+        token->open_capture(id);
+    }
     if (impl_) {
         std::lock_guard reg_lk(impl_->token_registry_mutex);
         impl_->registered_tokens.push_back(token);
     }
     return *token;
+}
+
+namespace {
+
+experimental::jit_telemetry::TokenStats to_stats(const TelemetryToken& token, const TelemetryTokenData& data) {
+    const bool empty = data.count == 0;  // min/max hold +/-inf until the first value
+    return {
+        .name = token.name(),
+        .unit = token.unit(),
+        .count = data.count,
+        .total = data.total,
+        .min = empty ? 0 : data.min_val,
+        .max = empty ? 0 : data.max_val};
+}
+
+}  // namespace
+
+uint64_t BuildCacheTelemetry::begin_capture() {
+    std::lock_guard lk(owned_tokens_mutex_);
+    const uint64_t id = next_capture_id_++;
+    open_captures_.push_back(id);
+    for (auto& token : owned_tokens_) {
+        token->open_capture(id);
+    }
+    return id;
+}
+
+std::vector<experimental::jit_telemetry::TokenStats> BuildCacheTelemetry::end_capture(uint64_t capture_id) {
+    std::lock_guard lk(owned_tokens_mutex_);
+    const auto it = std::find(open_captures_.begin(), open_captures_.end(), capture_id);
+    if (it == open_captures_.end()) {
+        TT_THROW("JIT telemetry capture {} is not open", capture_id);
+    }
+    open_captures_.erase(it);
+    std::vector<experimental::jit_telemetry::TokenStats> stats;
+    for (auto& token : owned_tokens_) {
+        const TelemetryTokenData data = token->close_capture(capture_id);
+        if (data.count > 0) {
+            stats.push_back(to_stats(*token, data));
+        }
+    }
+    return stats;
+}
+
+std::vector<experimental::jit_telemetry::TokenStats> BuildCacheTelemetry::snapshot_all() const {
+    std::lock_guard lk(owned_tokens_mutex_);
+    std::vector<experimental::jit_telemetry::TokenStats> stats;
+    stats.reserve(owned_tokens_.size());
+    for (const auto& token : owned_tokens_) {
+        stats.push_back(to_stats(*token, token->snapshot()));
+    }
+    return stats;
 }
 
 void BuildCacheTelemetry::dump_metrics() const {
@@ -356,5 +435,15 @@ void BuildCacheTelemetry::dump_metrics() const {
             precision);
     }
 }
+
+namespace experimental::jit_telemetry {
+
+uint64_t begin_capture() { return BuildCacheTelemetry::inst().begin_capture(); }
+
+std::vector<TokenStats> end_capture(uint64_t capture_id) { return BuildCacheTelemetry::inst().end_capture(capture_id); }
+
+std::vector<TokenStats> snapshot() { return BuildCacheTelemetry::inst().snapshot_all(); }
+
+}  // namespace experimental::jit_telemetry
 
 }  // namespace tt::tt_metal
