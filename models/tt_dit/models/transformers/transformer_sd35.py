@@ -40,6 +40,8 @@ class SD35TransformerBlock(Module):
         ccl_manager=None,
         parallel_config=None,
         padding_config=None,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ):
         super().__init__()
 
@@ -103,6 +105,8 @@ class SD35TransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
 
         self.norm2 = DistributedLayerNorm(
@@ -334,7 +338,12 @@ class SD35Transformer2DModel(Module):
         ccl_manager=None,
         parallel_config=None,
         padding_config=None,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ):
+        """``sdpa_precision``/``sdpa_kv_dtype`` override the named SDPA recipe of every joint attention
+        (joint SDPA, or ring joint SDPA with sequence parallelism; D64); ``None`` selects
+        ``SD35JointAttention.sdpa_precision_default``."""
         super().__init__()
 
         self.sample_size = sample_size
@@ -396,6 +405,8 @@ class SD35Transformer2DModel(Module):
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 padding_config=padding_config,
+                sdpa_precision=sdpa_precision,
+                sdpa_kv_dtype=sdpa_kv_dtype,
             )
             self.transformer_blocks.append(block)
 
@@ -532,6 +543,8 @@ class SD35Checkpoint:
         *,
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> SD35Transformer2DModel:
         """Construct an ``SD35Transformer2DModel`` for this checkpoint and load its weights."""
         device = ccl_manager.mesh_device
@@ -563,6 +576,8 @@ class SD35Checkpoint:
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
         cache.load_model(
             tt_model=model,

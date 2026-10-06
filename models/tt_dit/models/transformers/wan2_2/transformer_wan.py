@@ -47,8 +47,9 @@ class WanTransformerBlock(Module):
         ccl_manager: CCLManager | None = None,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
-        sdpa_chunk_size_overrides: dict | None = None,
         lora_enabled: bool = False,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -83,8 +84,9 @@ class WanTransformerBlock(Module):
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
             is_self=True,
-            sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
             lora_enabled=lora_enabled,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
 
         self.attn2 = WanAttention(
@@ -96,8 +98,9 @@ class WanTransformerBlock(Module):
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
             is_self=False,
-            sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
             lora_enabled=lora_enabled,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
 
         self.norm2 = (
@@ -276,6 +279,8 @@ class WanTransformer3DModel(Module):
         model_type: str = "t2v",
         output_dtype: ttnn.DataType = ttnn.float32,
         lora_enabled: bool = False,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -337,6 +342,8 @@ class WanTransformer3DModel(Module):
                 parallel_config=parallel_config,
                 is_fsdp=is_fsdp,
                 lora_enabled=lora_enabled,
+                sdpa_precision=sdpa_precision,
+                sdpa_kv_dtype=sdpa_kv_dtype,
             )
             for i in range(num_layers)
         )
@@ -732,6 +739,8 @@ class WanCheckpoint:
         is_fsdp: bool,
         model_type: str,
         lora_enabled: bool = False,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> WanTransformer3DModel:
         """Construct a ``WanTransformer3DModel`` for this checkpoint (weights NOT loaded).
 
@@ -756,6 +765,8 @@ class WanCheckpoint:
             is_fsdp=is_fsdp,
             model_type=model_type,
             lora_enabled=lora_enabled,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
 
     def load(
