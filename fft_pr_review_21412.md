@@ -105,11 +105,36 @@ Code links below point to the #54930 merge commit unless they say otherwise.
     | (1, 1000) | Bluestein | 2477 µs | 46 µs | 53.6× slower |
     | (1, 12288) | Bluestein | 3198 µs | 318 µs | 10.1× slower |
 
+    **Larger inputs do not change the result.** A second run used larger batches and also measured the device with trace capture, which removes host dispatch time. Throughput is given in Mpts/s, millions of input points processed per second. The CPU is an AMD EPYC 7352.
+
+    | Input (B, N) | Device, eager | Device, traced | torch, 1 CPU thread | Traced device / CPU |
+    |---|---|---|---|---|
+    | (64, 1024) | 448 µs | 449 µs (146 Mpts/s) | 104 µs (632 Mpts/s) | 4.3× slower |
+    | (256, 1024) | 1.69 ms | 1.69 ms (155 Mpts/s) | 0.39 ms (681 Mpts/s) | 4.4× slower |
+    | (1024, 1024) | 6.6 ms | 6.6 ms (158 Mpts/s) | 2.1 ms (505 Mpts/s) | 3.2× slower |
+    | (4096, 1024) | 26.4 ms | 26.4 ms (159 Mpts/s) | 21.4 ms (196 Mpts/s) | 1.2× slower |
+    | (16, 65536) | 34.1 ms | 34.3 ms (31 Mpts/s) | 3.5 ms (302 Mpts/s) | 9.9× slower |
+    | (64, 65536) | 136 ms | 137 ms (31 Mpts/s) | 23.7 ms (177 Mpts/s) | 5.8× slower |
+    | (4, 1048576) | 115 ms | 115 ms (37 Mpts/s) | 36.5 ms (115 Mpts/s) | 3.1× slower |
+    | (16, 1048576) | 456 ms | 455 ms (37 Mpts/s) | 106 ms (159 Mpts/s) | 4.3× slower |
+
+    What the second run shows:
+    - **Host dispatch is not the cost.** Traced and eager times are the same, so the time is spent in the device kernels.
+    - **Device throughput is flat once all 64 cores are busy.** It stays at about 155 to 159 Mpts/s for N = 1024 and about 31 to 37 Mpts/s for N = 65536 and N = 2^20, and time grows linearly with input size.
+    - **The one close case comes from the CPU slowing down.** At (4096, 1024) the CPU drops to 196 Mpts/s, probably because the 32 MB input no longer fits in its cache. The device did not get faster.
+    - **The kernels use a small fraction of the hardware.** This is an estimate, using the standard count of about 5·N·log2(N) arithmetic operations per transform. 158 Mpts/s at N = 1024 is about 8 GFLOP/s across 64 cores, or about 0.12 GFLOP/s per core.
+
+    Caveats:
+    - **CPU timings vary between runs.** The single-thread time for (64, 1024) was 372 µs in the first run and 104 µs in the second run, on a shared machine. The conclusion holds with either value.
+    - **Multi-thread CPU runs were not used.** `torch.fft` with all 96 threads was slower than with one thread for these inputs (for example 26 ms against 0.39 ms at (256, 1024)), so single-thread numbers are the baseline. My guess is that this is a threading problem in torch for this input layout. A well-tuned multi-threaded CPU FFT would only widen the gap.
+
     Observations from the code review:
     - **Parallel work:** batch rows are split across up to 64 cores. A single transform with N ≤ 1024 runs on one core.
     - **Per-core work:** each core processes its rows one after another.
     - **Twiddle reads:** each core reads the twiddle row from DRAM again at every stage of every row.
     - **No overlap:** the state buffer holds one row, so DRAM reads, compute and writes do not overlap.
+    - **Scalar data movement:** the reader core moves data one element at a time for the first butterfly stages.
+    - **Extra DRAM round trips:** the two-pass tier writes the full data to DRAM and reads it back for each transpose between passes.
 
 #### Minor issues
 
@@ -142,7 +167,7 @@ Code links below point to the #54930 merge commit unless they say otherwise.
 | FFT and inverse FFT | Done: `ttnn.experimental.fft` and `ttnn.experimental.ifft` |
 | fp32 and bf16 | Done. bf16 accuracy in the two-pass and Bluestein tiers is limited by bf16 intermediate results |
 | Multi-core | Partly. Batch rows and the multi-pass tiers use up to 64 cores. One transform with N ≤ 1024 runs on one core |
-| Efficient | Not shown by any PR. In the timing above the op is slower than one CPU thread at every tested size |
+| Efficient | Not shown by any PR. In the timing above the op is 1.2× to 10× slower than one CPU thread at every tested size, including batches that keep all 64 cores busy |
 
 Other gaps:
 - **Items from the parent issue #11835.** The parent was closed as a duplicate of #21412, so its list arguably carries over:
