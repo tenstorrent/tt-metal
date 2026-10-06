@@ -91,4 +91,3 @@ template <typename T>
 inline constexpr std::string_view long_type_name = detail::long_name<T>();
 
 }  // namespace ttsl
-

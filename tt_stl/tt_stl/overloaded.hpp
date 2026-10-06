@@ -50,4 +50,3 @@ template <typename... Ts>
 overloaded(Ts&&...) -> overloaded<Ts...>;
 
 }  // namespace ttsl
-

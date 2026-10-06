@@ -121,4 +121,3 @@ template <typename T, typename Tag>
 struct std::hash<ttsl::StrongType<T, Tag>> {
     std::size_t operator()(const ttsl::StrongType<T, Tag>& h) const noexcept { return std::hash<T>{}(*h); }
 };
-

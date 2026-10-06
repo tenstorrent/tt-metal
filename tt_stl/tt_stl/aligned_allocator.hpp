@@ -54,4 +54,3 @@ constexpr bool operator==(const aligned_allocator<T, Alignment>&, const aligned_
 }
 
 }  // namespace ttsl
-

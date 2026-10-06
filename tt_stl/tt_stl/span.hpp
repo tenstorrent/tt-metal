@@ -34,4 +34,3 @@ auto as_writable_bytes(Span<T> span) noexcept {
 }
 
 }  // namespace ttsl
-

@@ -17,4 +17,3 @@ concept Reflectable = (std::is_aggregate_v<std::decay_t<T>> and requires {
 });
 
 }  // namespace ttsl::concepts
-

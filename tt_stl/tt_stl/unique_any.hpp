@@ -85,4 +85,3 @@ private:
 // NOLINTEND(modernize-type-traits)
 
 }  // namespace ttsl
-

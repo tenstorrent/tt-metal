@@ -16,4 +16,3 @@ struct SmallVector : public ttsl::detail::llvm::SmallVector<T, PREALLOCATED_SIZE
 };
 
 }  // namespace ttsl
-
