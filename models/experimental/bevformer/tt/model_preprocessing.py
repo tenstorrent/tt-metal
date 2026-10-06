@@ -46,23 +46,6 @@ def convert_parameterdict_to_object(param_dict):
     return params_obj
 
 
-def _convert_sca_parameters_to_object(parameters):
-    """Convert spatial-cross-attention parameters, keeping the nested level nested.
-
-    ``convert_parameterdict_to_object`` is one level deep, which would flatten the
-    nested attention's layers into bare tensors. The nested attention needs its own
-    namespace so its ``output_proj`` is not confused with the SCA's.
-    """
-    params_obj = convert_parameterdict_to_object(parameters)
-
-    deform_parameters = parameters["deformable_attention"] if "deformable_attention" in parameters else None
-    if deform_parameters is not None:
-        params_obj.deformable_attention = convert_parameterdict_to_object(deform_parameters)
-
-    return params_obj
-
-
-# Helper functions for common preprocessing operations
 def _build_ttnn_kwargs(dtype=None, layout=None, weights_mesh_mapper=None, device=None):
     """Build kwargs dict for ttnn.from_torch based on available parameters"""
     kwargs = {}

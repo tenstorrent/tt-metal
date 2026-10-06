@@ -12,7 +12,8 @@ from models.experimental.bevformer.reference.nms_free_coder import NMSFreeCoder
 from models.experimental.bevformer.tests.backbone_common import assert_pcc
 from models.experimental.bevformer.tests.decoder_common import NUM_LAYERS, NUM_QUERY
 from models.experimental.bevformer.tests.head_common import assert_boxes_close
-from models.experimental.bevformer.tt.tt_head import BOX_DTYPE, SCORE_DTYPE
+from models.experimental.bevformer.tt.tt_common import SCORE_DTYPE
+from models.experimental.bevformer.tt.tt_common import GRID_DTYPE
 from models.experimental.bevformer.tt.tt_nms_free_coder import TtNMSFreeCoder
 
 NUM_SCORES = NUM_QUERY * NUM_CLASSES

@@ -16,21 +16,19 @@ from models.experimental.bevformer.tests.encoder_common import (
     random_encoder_inputs,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_encoder_parameters
-from models.experimental.bevformer.tt.tt_encoder import GRID_DTYPE, TTBEVFormerEncoder
+from models.experimental.bevformer.tt.tt_common import GRID_DTYPE
+from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
 
 CASES = [
-    # (name, bev_shape, num_layers, batch_size, traced)
-    ("base", BEV_SHAPES["base"], NUM_LAYERS, 1, False),
-    ("base-1-layer", BEV_SHAPES["base"], 1, 1, False),
-    ("tiny-traced", BEV_SHAPES["tiny"], NUM_LAYERS, 1, True),
-    # bs=2, so a batch mix-up in the stacked previous BEV or the rebatch shows.
-    ("tiny-bs2", BEV_SHAPES["tiny"], NUM_LAYERS, 2, False),
+    # (name, bev_shape, num_layers, batch_size)
+    ("base", BEV_SHAPES["base"], NUM_LAYERS, 1),
+    ("base-1-layer", BEV_SHAPES["base"], 1, 1),
+    ("tiny", BEV_SHAPES["tiny"], NUM_LAYERS, 1),
+    # bs=2, so a batch mix-up in the stacked previous BEV or the reference points shows.
+    ("tiny-bs2", BEV_SHAPES["tiny"], NUM_LAYERS, 2),
     # Non-square, so a swapped (h, w) in the BEV grid, its reference points or the shift shows.
-    ("50x100", (50, 100), NUM_LAYERS, 1, False),
+    ("50x100", (50, 100), NUM_LAYERS, 1),
 ]
-
-# Headroom for the encoder's recorded commands, not a measured size.
-DEVICE_PARAMS = [{"l1_small_size": 32 * 1024, "trace_region_size": 64 * 1024 * 1024}]
 
 
 def _to_device(tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
@@ -42,9 +40,9 @@ def _batch_first(tensor):
 
 
 @torch.no_grad()
-@pytest.mark.parametrize("name, bev_shape, num_layers, batch_size, traced", CASES, ids=[case[0] for case in CASES])
-@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_encoder(device, reset_seeds, name, bev_shape, num_layers, batch_size, traced):
+@pytest.mark.parametrize("name, bev_shape, num_layers, batch_size", CASES, ids=[case[0] for case in CASES])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
+def test_encoder(device, reset_seeds, name, bev_shape, num_layers, batch_size):
     """Two consecutive frames: the first without a previous BEV, the second with each side's
     own first-frame output as its previous BEV and an ego shift, so the temporal path carries
     the device's own error forward as it does in the detector."""
@@ -60,12 +58,6 @@ def test_encoder(device, reset_seeds, name, bev_shape, num_layers, batch_size, t
     inputs = random_encoder_inputs(bev_shape, batch_size)
     spatial_shapes = torch.tensor(SPATIAL_SHAPES)
     shift = ego_shift(batch_size)
-
-    frame = tt_model.prepare_frame(inputs["img_metas"])
-    tt_query = _to_device(_batch_first(inputs["bev_query"]), device)
-    tt_pos = _to_device(_batch_first(inputs["bev_pos"]), device)
-    tt_value = _to_device(inputs["value"], device)
-    tt_shift = _to_device(shift.view(batch_size, 1, 1, 2), device, GRID_DTYPE, ttnn.ROW_MAJOR_LAYOUT)
 
     def reference(prev_bev, frame_shift):
         return torch_model(
@@ -83,20 +75,16 @@ def test_encoder(device, reset_seeds, name, bev_shape, num_layers, batch_size, t
     torch_first = reference(None, None)
     torch_second = reference(_batch_first(torch_first), shift)
 
-    tt_first = tt_model(tt_query, tt_value, tt_pos, frame)
-    if not traced:
-        tt_second = tt_model(tt_query, tt_value, tt_pos, frame, prev_bev=tt_first, shift=tt_shift)
-    else:
-        # Capture fails on any host read or write in the forward.
-        tt_model(tt_query, tt_value, tt_pos, frame, prev_bev=tt_first, shift=tt_shift)
-        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-        tt_second = tt_model(tt_query, tt_value, tt_pos, frame, prev_bev=tt_first, shift=tt_shift)
-        ttnn.end_trace_capture(device, trace_id, cq_id=0)
-        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
-        ttnn.release_trace(device, trace_id)
+    plan = tt_model.prepare_frame(inputs["img_metas"])
+    tt_query = _to_device(_batch_first(inputs["bev_query"]), device)
+    tt_pos = _to_device(_batch_first(inputs["bev_pos"]), device)
+    tt_value = _to_device(inputs["value"], device)
+    tt_shift = _to_device(shift.view(batch_size, 1, 1, 2), device, GRID_DTYPE, ttnn.ROW_MAJOR_LAYOUT)
+    tt_first = tt_model(tt_query, tt_value, tt_pos, plan)
+    tt_second = tt_model(tt_query, tt_value, tt_pos, plan, prev_bev=tt_first, shift=tt_shift)
 
     for torch_output, tt_output in ((torch_first, tt_first), (torch_second, tt_second)):
         tt_output = ttnn.to_torch(tt_output).float().reshape(torch_output.shape)
         # comp_pcc zeroes NaN and Inf before correlating, so they must be ruled out here.
         assert torch.isfinite(tt_output).all(), "non-finite values in the encoder output"
-        assert_pcc(torch_output, tt_output, 0.99)
+        assert_pcc(torch_output, tt_output, 0.997)

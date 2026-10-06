@@ -31,11 +31,11 @@ calling the encoder. Only inference is kept: dropout is dropped.
 import torch
 import torch.nn as nn
 
-from .point_sampling_3d_2d import generate_reference_points, point_sampling_3d_to_2d
+from models.experimental.bevformer.config.head_config import PC_RANGE
+
+from .point_sampling_3d_2d import bev_reference_points, camera_geometry
 from .spatial_cross_attention import SpatialCrossAttention
 from .temporal_self_attention import TemporalSelfAttention
-
-PC_RANGE = (-51.2, -51.2, -5.0, 51.2, 51.2, 3.0)
 
 
 class FFN(nn.Module):
@@ -53,6 +53,9 @@ class FFN(nn.Module):
 
 
 class BEVFormerLayer(nn.Module):
+    """One encoder layer: temporal self-attention (``attentions[0]``), spatial cross-attention
+    (``attentions[1]``) and an FFN, each followed by its LayerNorm (``norms``)."""
+
     def __init__(
         self,
         embed_dims=256,
@@ -103,6 +106,11 @@ class BEVFormerLayer(nn.Module):
 
 
 class BEVFormerEncoder(nn.Module):
+    """The six-layer encoder. ``num_points`` is the spatial cross-attention's sampling points per
+    head and level, split over the ``num_points_in_pillar`` heights of each BEV cell's pillar;
+    ``tsa_num_points`` the self-attention's. ``pc_range`` is the metric box the BEV grid and the
+    pillars cover, shared with the head."""
+
     def __init__(
         self,
         num_layers=6,
@@ -134,29 +142,11 @@ class BEVFormerEncoder(nn.Module):
             ]
         )
 
-    def reference_points_3d(self, bev_h, bev_w, bs, dtype=torch.float32):
-        """Pillar points ``(bs, bev_h * bev_w, num_points_in_pillar, 3)`` in [0, 1], x along bev_w."""
-        z_cfg = dict(num_points=self.num_points_in_pillar, start=self.pc_range[2], end=self.pc_range[5])
-        return generate_reference_points(bev_h, bev_w, z_cfg, batch_size=bs, dtype=dtype)
-
-    @staticmethod
-    def reference_points_2d(bev_h, bev_w, bs, dtype=torch.float32):
-        """BEV cell centres ``(bs, bev_h * bev_w, 1, 2)`` in [0, 1], as (x, y)."""
-        ref_y, ref_x = torch.meshgrid(
-            torch.linspace(0.5, bev_h - 0.5, bev_h, dtype=dtype),
-            torch.linspace(0.5, bev_w - 0.5, bev_w, dtype=dtype),
-            indexing="ij",
-        )
-        ref_2d = torch.stack((ref_x.reshape(-1)[None] / bev_w, ref_y.reshape(-1)[None] / bev_h), -1)
-        return ref_2d.repeat(bs, 1, 1).unsqueeze(2)
-
     def point_sampling(self, bev_h, bev_w, bs, img_metas):
-        """Each BEV pillar's points in every camera, ``(num_cams, bs, num_query, D, 2)``, and
-        whether they land inside the image, ``(num_cams, bs, num_query, D)``."""
-        lidar2img = torch.stack([torch.as_tensor(meta["lidar2img"], dtype=torch.float32) for meta in img_metas])
-        return point_sampling_3d_to_2d(
-            self.reference_points_3d(bev_h, bev_w, bs), self.pc_range, lidar2img, img_metas=img_metas
-        )
+        """Each BEV pillar's points in every camera and whether they land in the image; see
+        ``point_sampling_3d_2d.camera_geometry``."""
+        assert len(img_metas) == bs, f"{len(img_metas)} img_metas for batch size {bs}"
+        return camera_geometry(img_metas, bev_h, bev_w, self.num_points_in_pillar, self.pc_range)
 
     def forward(
         self,
@@ -175,7 +165,7 @@ class BEVFormerEncoder(nn.Module):
         current frame, ``shift`` ``(bs, 2)`` the ego translation in BEV fractions, and
         ``spatial_shapes`` ``(num_levels, 2)`` as (h, w). Returns ``(bs, num_query, C)``."""
         bs = bev_query.shape[1]
-        ref_2d = self.reference_points_2d(bev_h, bev_w, bs, bev_query.dtype)
+        ref_2d = bev_reference_points(bev_h, bev_w, bs, bev_query.dtype)
         reference_points_cam, bev_mask = self.point_sampling(bev_h, bev_w, bs, img_metas)
 
         bev_query = bev_query.permute(1, 0, 2)

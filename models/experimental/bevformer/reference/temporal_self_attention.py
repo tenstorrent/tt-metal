@@ -29,6 +29,9 @@ from .ms_deformable_attention import multi_scale_deformable_attn
 
 
 class TemporalSelfAttention(nn.Module):
+    """Deformable self-attention over ``num_bev_queue`` (2) stacked BEV maps per sample, the
+    previous BEV and the current queries, averaged."""
+
     def __init__(self, embed_dims=256, num_heads=8, num_levels=1, num_points=4, num_bev_queue=2, batch_first=True):
         super().__init__()
         if embed_dims % num_heads != 0:

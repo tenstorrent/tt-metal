@@ -13,21 +13,18 @@ so ``TtBEVFormerHead`` builds its box predictions without running the branches a
 Parameters come from ``model_preprocessing_decoder.create_decoder_parameters``. Forward runs
 on device only.
 
-The cross-attention is ``TTMSDeformableAttention``, one fused MSDA op. Reference points stay
-float32 (``GRID_DTYPE``, the sampling positions' dtype) through the refinement and into the
-op, which forms the sampling location from them in fp32; only the offsets, values and weights
-are bfloat16. In bfloat16 a point in (0.5, 1) moves in steps of 2^-8, 0.8 px on the 200x200
-BEV grid, and the error compounds across layers through the refinement.
+Reference points are float32, as is the sampling grid built from them (``GRID_DTYPE``).
+In bfloat16 a point in (0.5, 1) moves in steps of 2^-8, 0.8 px on the 200x200 BEV grid,
+and the error compounds across layers through the reference-point refinement.
 """
 
 import dataclasses
 import math
 
 import ttnn
-from models.experimental.bevformer.tt.tt_common import layer_norm
-from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention
-
-GRID_DTYPE = ttnn.float32
+from models.experimental.bevformer.config.decoder_config import CODE_XY, CODE_Z
+from models.experimental.bevformer.tt.tt_common import GRID_DTYPE, layer_norm
+from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention, fp32_grid_sample_config
 
 
 INVERSE_SIGMOID_EPS = 1e-5
@@ -82,23 +79,24 @@ class TtDetrTransformerDecoderLayer:
     the cross-attention adds its own.
     """
 
-    def __init__(self, params, device, bev_shape):
+    def __init__(self, params, device, bev_shape, grid_sample_compute_config):
         """``params`` is one entry of ``create_decoder_parameters(...).layers``. The cross-attention
-        samples a ``bev_shape`` ``(bev_h, bev_w)`` map."""
+        samples a ``bev_shape`` ``(bev_h, bev_w)`` map with ``grid_sample_compute_config``."""
         self.params = params
         self.self_attn = TtMultiheadAttention(params.self_attn)
-        # The module hands reference_points to the fused op unconverted, so they stay float32.
         self.cross_attn = TTMSDeformableAttention(
             dataclasses.replace(params.cross_attn.config, batch_first=True),
             device,
             params.cross_attn,
             spatial_shapes=[list(bev_shape)],
+            grid_dtype=GRID_DTYPE,
+            grid_sample_compute_config=grid_sample_compute_config,
         )
         self.ffn = TtFFN(params.ffn)
 
     def __call__(self, query, value, query_pos, reference_points):
         """All batch-first: ``query``/``query_pos`` ``(bs, nq, C)``, ``value`` ``(bs, bev_h * bev_w, C)``,
-        ``reference_points`` ``(bs, nq, 1, 2)`` ``GRID_DTYPE`` in [0, 1]."""
+        ``reference_points`` ``(bs, nq, 1, 2)`` in [0, 1]."""
         norms = self.params.norms
         query = layer_norm(self.self_attn(query, query_pos), norms[0], residual=query)
         query = self.cross_attn(query=query, value=value, query_pos=query_pos, reference_points=reference_points)
@@ -107,13 +105,21 @@ class TtDetrTransformerDecoderLayer:
 
 
 class TtDetectionTransformerDecoder:
-    """Decoder over a ``bev_shape`` ``(bev_h, bev_w)`` BEV map."""
+    """Decoder over a ``bev_shape`` ``(bev_h, bev_w)`` BEV map.
+
+    The cross-attention folds ``bev_shape`` into its sampling-offset Linear, which consumes
+    ``params.layers[*].cross_attn.sampling_offsets``: each instance needs its own
+    ``create_decoder_parameters``, and reusing them raises.
+    """
 
     def __init__(self, params, device, bev_shape, batch_first=False):
         """``params`` comes from ``create_decoder_parameters``; ``batch_first`` selects the
         layout of ``query``, ``query_pos``, ``value`` and the stacked outputs (see ``__call__``)."""
         self.batch_first = batch_first
-        self.layers = [TtDetrTransformerDecoderLayer(p, device, bev_shape) for p in params.layers]
+        grid_sample_compute_config = fp32_grid_sample_config(device)
+        self.layers = [
+            TtDetrTransformerDecoderLayer(p, device, bev_shape, grid_sample_compute_config) for p in params.layers
+        ]
 
     @staticmethod
     def _reg_branch(x, branch):
@@ -148,7 +154,7 @@ class TtDetectionTransformerDecoder:
         intermediate_reference_points = []
         box_codes = []
         for layer, branch in zip(self.layers, reg_branches, strict=True):
-            # Axis 2 is the fused op's pillar axis: R = 1, one point per query for every sample.
+            # The cross-attention's single level is the new axis 2.
             output = layer(output, value, query_pos, ttnn.unsqueeze(reference_points[..., :2], 2))
 
             box_code = self._reg_branch(output, branch)

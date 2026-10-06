@@ -1,15 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-TTNN 3D to 2D point sampling and transformation functions for BEVFormer.
+"""TTNN port of the pillar-point projection (``reference/point_sampling_3d_2d.py``).
 
-This module implements the core point sampling logic using TTNN operations
-to project 3D reference points to 2D camera coordinates. This is a crucial
-component for spatial cross-attention where BEV queries need to sample
-features from specific locations in camera views.
-
-Based on the reference PyTorch implementation but optimized for TTNN.
+Not on the encoder's path: ``TTBEVFormerEncoder.prepare_frame`` projects once per frame in
+float32 on the host (``point_sampling_3d_2d.camera_geometry``), as upstream does, because in
+bfloat16 the projection's homogeneous divide loses the points' precision. This bfloat16 port and
+its test (``tests/pcc/test_point_sampling_3d_2d.py``) remain for on-device projection.
 """
 
 import ttnn
