@@ -11,6 +11,7 @@ with no perf test of their own:
   addcdiv    -> metal llk_sfpu/ckernel_sfpu_addcdiv.h     (out = a + value*b/c)
   lerp       -> metal llk_sfpu/ckernel_sfpu_lerp.h        (out = a + c*(b - a))
   snake_beta -> metal llk_sfpu/ckernel_sfpu_snake_beta.h  (out = x + sin(alpha*x)^2/beta)
+  where      -> llk sfpu/ckernel_sfpu_where.h               (out = a != 0 ? b : c)
 
 These are ternary (3 Dest tiles, plus a scalar for the addc kernels) and do not
 fit the unary/binary harnesses, so they run through a dedicated ternary source.
@@ -226,6 +227,41 @@ def test_perf_sfpu_snake_beta(
     _run(
         formats,
         MathOperation.SfpuSnakeBeta,
+        dest_acc,
+        loop_factor,
+        iterations,
+        input_dimensions,
+    ).run(perf_report)
+
+
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float32,
+        ],
+        same=True,
+    ),
+    dest_acc=[
+        DestAccumulation.Yes,
+        DestAccumulation.No,
+    ],
+    loop_factor=[16],
+    iterations=[32],
+    input_dimensions=[[128, 64]],  # tile_cnt: 8
+)
+def test_perf_sfpu_where(
+    perf_report,
+    formats,
+    dest_acc,
+    loop_factor,
+    iterations,
+    input_dimensions,
+):
+    _run(
+        formats,
+        MathOperation.SfpuWhere,
         dest_acc,
         loop_factor,
         iterations,
