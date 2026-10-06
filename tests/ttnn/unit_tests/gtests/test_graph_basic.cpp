@@ -764,6 +764,17 @@ TEST_P(TensorInfoTest, FullTensorInfoCaptured) {
             ASSERT_TRUE(params.contains(ttnn::graph::kShape));
             ASSERT_TRUE(params.contains(ttnn::graph::kTensorId));
 
+            // Device tensors record a buffer type even without a backing buffer; host tensors record none
+            ASSERT_TRUE(params.contains(ttnn::graph::kStorageType));
+            const auto storage_type = params.at(ttnn::graph::kStorageType).get<std::string>();
+            if (storage_type == "DEVICE") {
+                EXPECT_TRUE(params.contains(ttnn::graph::kBufferType));
+                EXPECT_TRUE(params.contains(ttnn::graph::kMemoryConfig));
+            } else {
+                EXPECT_EQ(storage_type, "HOST");
+                EXPECT_FALSE(params.contains(ttnn::graph::kBufferType));
+            }
+
             // Check for extended tensor info
             if (params.contains(ttnn::graph::kDtype)) {
                 found_tensor_with_full_info = true;

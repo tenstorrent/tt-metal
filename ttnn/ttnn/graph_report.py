@@ -36,7 +36,7 @@ import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Generator, Union
+from typing import Generator, NamedTuple, Optional, Union
 from urllib.parse import urlparse, urlunparse
 
 from loguru import logger
@@ -263,7 +263,8 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
 # 3.1 — buffer_chunks (#46376) plus rank on buffer_chunks for multi-host merges.
 # 3.2 - git hash and remote URL in report_metadata (#43830)
 # 3.3 - rank on local/global_tensor_comparison_records (#45448)
-DATABASE_SCHEMA_VERSION = "3.3"
+# 3.4 - storage_type on tensors; buffer_type is NULL for host tensors instead of 0 (DRAM)
+DATABASE_SCHEMA_VERSION = "3.4"
 PYTHON_IO_SIDECAR_SUFFIX = ".python_io.json"
 COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
 COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
@@ -370,6 +371,60 @@ def _int_param(params, key):
     if v is None:
         return None
     return v if isinstance(v, int) else int(v)
+
+
+class _TensorRow(NamedTuple):
+    """One ``tensors`` row, fields in column order."""
+
+    tensor_id: Union[int, str]
+    shape: Optional[str]
+    dtype: Optional[str]
+    layout: Optional[str]
+    memory_config: Optional[str]
+    device_id: Optional[int]
+    address: Optional[int]
+    buffer_type: Optional[int]
+    rank: int
+    storage_type: Optional[str]
+
+
+_TENSORS_INSERT_SQL = (
+    f"INSERT OR IGNORE INTO tensors ({', '.join(_TensorRow._fields)}) "
+    f"VALUES ({', '.join('?' * len(_TensorRow._fields))})"
+)
+
+
+def _tensor_row_from_params(tensor_id, params: dict, rank: int) -> _TensorRow:
+    """Build a ``tensors`` row from a captured tensor node's params.
+
+    ``buffer_type`` stays None when the capture recorded none: ``0`` is DRAM, so defaulting to it
+    mislabels host tensors. Captures predating ``storage_type`` only emitted ``memory_config`` and
+    ``address`` for device tensors, so either marks one; their absence cannot mark a host tensor,
+    because a deallocated device tensor looked the same.
+    """
+    dtype = params.get("dtype")
+    layout = params.get("layout")
+    if dtype and "::" in dtype:
+        dtype = dtype.replace("::", ".")
+    if layout and "::" in layout:
+        layout = layout.replace("::", ".")
+    memory_config = params.get("memory_config")
+    address = _int_param(params, "address")
+    storage_type = params.get("storage_type")
+    if storage_type is None and (memory_config is not None or address is not None):
+        storage_type = "DEVICE"
+    return _TensorRow(
+        tensor_id=tensor_id,
+        shape=params.get("shape", ""),
+        dtype=dtype,
+        layout=layout,
+        memory_config=memory_config,
+        device_id=_int_param(params, "device_id"),
+        address=address,
+        buffer_type=_int_param(params, "buffer_type"),
+        rank=rank,
+        storage_type=storage_type,
+    )
 
 
 def _tid_int(tid):
@@ -657,6 +712,7 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             address int,
             buffer_type int,
             rank int NOT NULL DEFAULT 0,
+            storage_type text,
             UNIQUE(tensor_id, rank)
         )
     """
@@ -1532,31 +1588,7 @@ def import_graph(
             tensor_id = params.get("tensor_id", "")
             if tensor_id and tensor_id not in tensor_ids_seen:
                 tensor_ids_seen.add(tensor_id)
-                shape = params.get("shape", "")
-                dtype = params.get("dtype")
-                layout = params.get("layout")
-                memory_config = params.get("memory_config")
-
-                if dtype and "::" in dtype:
-                    dtype = dtype.replace("::", ".")
-                if layout and "::" in layout:
-                    layout = layout.replace("::", ".")
-                device_id = _int_param(params, "device_id")
-                address = _int_param(params, "address")
-                buffer_type = _int_param(params, "buffer_type") or 0
-                tensors_batch.append(
-                    (
-                        tensor_id,
-                        shape,
-                        dtype,
-                        layout,
-                        memory_config,
-                        device_id,
-                        address,
-                        buffer_type,
-                        rank,
-                    )
-                )
+                tensors_batch.append(_tensor_row_from_params(tensor_id, params, rank))
 
                 device_tensors_str = params.get("device_tensors")
                 if device_tensors_str:
@@ -1608,9 +1640,8 @@ def import_graph(
             dealloc_tensor_id = None
             if dealloc_address is not None:
                 for t in tensors_batch:
-                    tid, _, _, _, _, _, addr, _, _ = t
-                    if addr == dealloc_address:
-                        dealloc_tensor_id = _tid_int(tid)
+                    if t.address == dealloc_address:
+                        dealloc_tensor_id = _tid_int(t.tensor_id)
                         break
 
             if not function_stack:
@@ -1767,9 +1798,8 @@ def import_graph(
 
     filtered_tensors = []
     for t in tensors_batch:
-        tid, shape, dtype, layout, mem_cfg, dev_id, addr, bt, _tr = t
-        tid_int = _tid_int(tid)
-        if dev_id is None:
+        tid_int = _tid_int(t.tensor_id)
+        if t.device_id is None:
             if tid_int in referenced_tids:
                 filtered_tensors.append(t)
         else:
@@ -1781,7 +1811,7 @@ def import_graph(
     # new tensor IDs after C++ records the output.  These Python-level IDs appear
     # in py_io output_tensor_ids but have no C++ tensor node.  Create tensor
     # entries for them by copying from the nearest tensor at the same address.
-    existing_tids = {_tid_int(t[0]) for t in tensors_batch}
+    existing_tids = {_tid_int(t.tensor_id) for t in tensors_batch}
     io_tids = set()
     for _, _, tid, _ in input_tensors_batch:
         io_tids.add(_tid_int(tid))
@@ -1791,33 +1821,16 @@ def import_graph(
     if missing_tids:
         addr_to_tensor = {}
         for t in tensors_batch:
-            tid_val, shape, dtype, layout, mem_cfg, dev_id, addr, bt, _tr = t
-            if addr is not None and addr not in addr_to_tensor:
-                addr_to_tensor[addr] = t
+            if t.address is not None and t.address not in addr_to_tensor:
+                addr_to_tensor[t.address] = t
         for mtid in missing_tids:
             addr = tensor_address.get(mtid)
             if addr is not None and addr in addr_to_tensor:
-                _, shape, dtype, layout, mem_cfg, dev_id, _, bt, _tr = addr_to_tensor[addr]
-                tensors_batch.append((mtid, shape, dtype, layout, mem_cfg, dev_id, addr, bt, rank))
+                tensors_batch.append(addr_to_tensor[addr]._replace(tensor_id=mtid, address=addr, rank=rank))
             elif mtid in pyid_to_cpp_tensor:
-                cpp_node = pyid_to_cpp_tensor[mtid]
-                p = cpp_node.get("params", {})
-                btv = _int_param(p, "buffer_type") or 0
-                tensors_batch.append(
-                    (
-                        mtid,
-                        str(p.get("shape", "")),
-                        str(p.get("dtype", "")),
-                        str(p.get("layout", "")),
-                        str(p.get("memory_config", "")),
-                        _int_param(p, "device_id"),
-                        _int_param(p, "address"),
-                        btv,
-                        rank,
-                    )
-                )
+                tensors_batch.append(_tensor_row_from_params(mtid, pyid_to_cpp_tensor[mtid].get("params", {}), rank))
 
-    kept_tensor_ids = {_tid_int(t[0]) for t in tensors_batch}
+    kept_tensor_ids = {_tid_int(t.tensor_id) for t in tensors_batch}
 
     # Deduplicate per operation (same op + same tensor = one entry)
     seen_input = set()
@@ -1903,7 +1916,7 @@ def import_graph(
             tensor_producers_batch,
         )
     if tensors_batch:
-        cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
+        cursor.executemany(_TENSORS_INSERT_SQL, tensors_batch)
     tensor_lifetime_records = []
     if record_tensor_lifetime:
         tensor_lifetime_records = compute_tensor_lifetime_records(
@@ -1992,17 +2005,18 @@ def _comparison_record_to_row(record: dict, rank: int = 0) -> tuple:
     )
 
 
-def _tensor_record_to_row(tensor: dict, rank: int = 0) -> tuple:
-    return (
-        int(tensor["tensor_id"]),
-        tensor.get("shape"),
-        tensor.get("dtype"),
-        tensor.get("layout"),
-        tensor.get("memory_config"),
-        tensor.get("device_id"),
-        tensor.get("address"),
-        tensor.get("buffer_type"),
-        rank,
+def _tensor_record_to_row(tensor: dict, rank: int = 0) -> _TensorRow:
+    return _TensorRow(
+        tensor_id=int(tensor["tensor_id"]),
+        shape=tensor.get("shape"),
+        dtype=tensor.get("dtype"),
+        layout=tensor.get("layout"),
+        memory_config=tensor.get("memory_config"),
+        device_id=tensor.get("device_id"),
+        address=tensor.get("address"),
+        buffer_type=tensor.get("buffer_type"),
+        rank=rank,
+        storage_type=tensor.get("storage_type"),
     )
 
 
@@ -2021,7 +2035,7 @@ def import_tensor_comparison_records(cursor: sqlite3.Cursor, comparison_data: di
     ]
 
     if tensors_batch:
-        cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
+        cursor.executemany(_TENSORS_INSERT_SQL, tensors_batch)
     if local_records_batch:
         cursor.executemany(
             """INSERT INTO local_tensor_comparison_records VALUES (?, ?, ?, ?, ?, ?)""", local_records_batch
