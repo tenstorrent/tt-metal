@@ -180,6 +180,7 @@ class TtPrefillTransformer(LightweightModule):
         max_seq_len: Optional[int] = None,
         kv_only_last_layer: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
+        tp_shard_kv: Optional[bool] = None,
         first_layer_idx: int = 0,
         is_first_rank: bool = True,
         is_last_rank: bool = True,
@@ -285,6 +286,7 @@ class TtPrefillTransformer(LightweightModule):
                 max_seq_len=max_seq_len,
                 kv_only=kv_only_last_layer and is_last,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+                tp_shard_kv=tp_shard_kv,
                 sparse_kv_cache_format=sparse_kv_cache_format,
                 overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
                 first_layer_idx=first_layer_idx,
@@ -413,6 +415,11 @@ class TtPrefillTransformer(LightweightModule):
         captured one."""
         for layer in self.layers:
             layer.set_trace_controller(controller)
+
+    def set_tp_shard_kv(self, tp_shard_kv: Optional[bool]):
+        """Switch every layer's KV layout; the cache passed to forward() must be allocated to match."""
+        for layer in self.layers:
+            layer.mla.set_tp_shard_kv(tp_shard_kv)
 
     def release_sub_device_managers(self):
         """Remove every MoE-created overlap sub-device manager and free the MTP SP-rank tensor before closing the

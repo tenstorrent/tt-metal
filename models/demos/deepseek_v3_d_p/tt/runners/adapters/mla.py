@@ -92,7 +92,8 @@ class MLAPrefillAdapter(PrefillModelAdapter):
     def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> MlaKvCaches:
         """Allocate the MLA kvpe KV cache (qk_rope_head_dim + kv_lora_rank per token; one shared cache of
         num_users * num_layers user-major slots). Dense MLA has no indexer cache, so ``index`` stays None.
-        The engine owns the returned cache and passes it into every runtime call."""
+        ``params.tp_shard_kv`` stripes it over SP*TP instead of TP-replicating it. The engine owns the
+        returned cache and passes it into every runtime call."""
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 
         return MlaKvCaches(
@@ -104,8 +105,16 @@ class MLAPrefillAdapter(PrefillModelAdapter):
                 sp_axis=params.sp_axis,
                 num_layers=params.num_layers,
                 num_users=params.num_users,
+                tp_axis=params.tp_axis if self._dense_tp_shard_kv(params) else None,
             )
         )
+
+    def _dense_tp_shard_kv(self, params: PrefillRunParams) -> bool:
+        """The one predicate both the cache allocation and the model's reader key on."""
+        assert (
+            not params.tp_shard_kv or self.supports_tp_shard_kv
+        ), f"tp_shard_kv requested but model {self.name!r} does not support it (supports_tp_shard_kv=False)"
+        return params.tp_shard_kv
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Construct the MLA model and return the runtime. The runtime (TtPrefillRuntime)
@@ -146,6 +155,8 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             sparse_kv_cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
             use_trace=params.use_trace,
             overlap_shared_expert_with_dispatch=params.overlap_shared_expert_with_dispatch,
+            # None keeps the model's derivation (sparse always dedups, dense does not); True opts dense in.
+            tp_shard_kv=True if self._dense_tp_shard_kv(params) else None,
         )
         return TtPrefillRuntime(
             mesh_device=mesh_device,

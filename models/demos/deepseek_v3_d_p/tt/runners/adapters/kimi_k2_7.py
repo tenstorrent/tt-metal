@@ -44,6 +44,9 @@ class KimiK27Adapter(MLAPrefillAdapter):
     # it. No other model may enable PREFILL_DFLASH.
     supports_dflash = True
 
+    # PREFILL_TP_SHARD_KV=1: KVPE cache striped over SP*TP and read in place by ring_mla (needs a 2D fabric).
+    supports_tp_shard_kv = True
+
     # --- test metadata (HF download coordinates + PCC thresholds) ---
     hf_repo_id = "moonshotai/Kimi-K2.7-Code"
     env_var = "KIMI_K2_7_HF_MODEL"
