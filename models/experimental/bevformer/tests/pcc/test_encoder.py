@@ -12,6 +12,7 @@ from models.experimental.bevformer.tests.encoder_common import (
     NUM_LAYERS,
     SPATIAL_SHAPES,
     build_reference_encoder,
+    camera_rows,
     ego_shift,
     random_encoder_inputs,
 )
@@ -81,7 +82,7 @@ def test_encoder(device, reset_seeds, name, bev_shape, num_layers, batch_size, y
     plan = tt_model.prepare_frame(inputs["img_metas"])
     tt_query = _to_device(_batch_first(inputs["bev_query"]), device)
     tt_pos = _to_device(_batch_first(inputs["bev_pos"]), device)
-    tt_value = _to_device(inputs["value"], device)
+    tt_value = _to_device(camera_rows(inputs["value"]), device)
     tt_shift = _to_device(shift.view(batch_size, 1, 1, 2), device, GRID_DTYPE, ttnn.ROW_MAJOR_LAYOUT)
     tt_first = tt_model(tt_query, tt_value, tt_pos, plan)
     tt_second = tt_model(tt_query, tt_value, tt_pos, plan, prev_bev=tt_first, shift=tt_shift)

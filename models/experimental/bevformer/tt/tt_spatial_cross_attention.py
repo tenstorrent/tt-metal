@@ -109,7 +109,8 @@ def _plan_dtypes(num_queries, grid_dtype):
 def full_capacity(num_queries):
     """The capacity that fits any rig: every query, tile-aligned. The deformable attention then runs
     on every query for every camera; with nuScenes' rig the busiest camera sees about a quarter of
-    the base grid, which the default capacity sizes to."""
+    the base grid, which the default capacity sizes to. On the base grid the encoder's deformable
+    attention then needs more DRAM than a device has."""
     return -(-num_queries // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
 
@@ -233,8 +234,8 @@ class TTSpatialCrossAttention:
         )
 
     def __call__(self, query, value, frame):
-        """``query`` bfloat16 ``(bs, num_queries, C)``, ``value`` ``(num_cams, num_keys, bs, C)``,
-        ``frame`` from :meth:`frame_inputs`. Returns ``(bs, num_queries, C)``. Deformable attention
+        """``query`` bfloat16 ``(bs, num_queries, C)``, ``value`` ``(bs * num_cams, num_keys, C)``
+        (each sample's cameras in turn), ``frame`` from :meth:`frame_inputs`. Returns ``(bs, num_queries, C)``. Deformable attention
         scores no key: two Linears on the query predict where to sample and with what weight. No
         positional encoding enters: upstream's encoder adds it in the self-attention only."""
         plan = frame.plan
@@ -252,8 +253,7 @@ class TTSpatialCrossAttention:
         queries = ttnn.reshape(
             ttnn.embedding(plan.query_index, query_rows, layout=ttnn.TILE_LAYOUT), (rows, plan.capacity, embed_dims)
         )
-        num_keys = value.shape[1]
-        value = ttnn.reshape(ttnn.permute(value, (2, 0, 1, 3)), (rows, num_keys, embed_dims))
+        assert value.shape[0] == rows, f"value has {value.shape[0]} camera rows, expected bs * num_cams = {rows}"
         attended = self.deformable_attention(
             query=queries, value=value, reference_points=plan.reference_points, grid_bias=frame.grid_bias
         )
