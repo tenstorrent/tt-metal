@@ -626,8 +626,18 @@ public:
     void enqueue(std::function<void()>&& f, std::optional<uint32_t> /*device_idx*/ = std::nullopt) override { f(); }
     void wait() override {}
     void parallel_for(ttsl::Span<const uint32_t> device_ids, const std::function<void(size_t)>& fn) override {
+        std::exception_ptr exception;
         for (size_t call = 0; call < device_ids.size(); call++) {
-            fn(call);
+            try {
+                fn(call);
+            } catch (...) {
+                if (!exception) {
+                    exception = std::current_exception();
+                }
+            }
+        }
+        if (exception) {
+            std::rethrow_exception(exception);
         }
     }
 };
