@@ -133,12 +133,6 @@ class MotifTransformer(Module):
     ENCODED_TEXT_DIM = 4096
     LATENT_CHANNELS = 16
     K_CHUNK_SIZE_BASE = 1024
-    Q_CHUNK_SIZE = 128
-    # Approximate softmax exponential in joint SDPA. The sp > 1 (ring-joint streaming) path always uses
-    # it, and the sp == 1 path did too until #57180 made the joint kernel honour exp_approx_mode=False:
-    # on Wormhole the accurate bf16-dest exponential added ~0.1 s per denoising step on T3K (+24 %),
-    # while the attention PCC gate (0.996) passes either way (0.99973 approx vs 0.99983 accurate).
-    SDPA_EXP_APPROX_MODE = True
 
     def __init__(
         self,
@@ -149,6 +143,8 @@ class MotifTransformer(Module):
         mesh_device: ttnn.MeshDevice,
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -223,9 +219,8 @@ class MotifTransformer(Module):
                 parallel_config=parallel_config,
                 padding_config=padding_config,
                 mesh_device=mesh_device,
-                attention_k_chunk_size=self.get_k_chunk_size(sp_factor),
-                attention_q_chunk_size=self.Q_CHUNK_SIZE,
-                attention_exp_approx_mode=self.SDPA_EXP_APPROX_MODE,
+                sdpa_precision=sdpa_precision,
+                sdpa_kv_dtype=sdpa_kv_dtype,
             )
             for i in range(config.num_layers)
         )
@@ -265,7 +260,7 @@ class MotifTransformer(Module):
     @classmethod
     def get_k_chunk_size(cls, sp_factor: int) -> int:
         """
-        Get the k chunk size for the attention block based on the sequence parallelism factor for the transformer.
+        Spatial padding multiple for the given sequence-parallel factor; SDPA chooses its own chunks.
         """
         return cls.K_CHUNK_SIZE_BASE // sp_factor
 
@@ -544,6 +539,8 @@ class MotifCheckpoint:
         latents_width: int,
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> MotifTransformer:
         """Construct a ``MotifTransformer`` for this checkpoint and load its weights."""
         device = ccl_manager.mesh_device
@@ -555,6 +552,8 @@ class MotifCheckpoint:
             mesh_device=device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
         cache.load_model(
             model,

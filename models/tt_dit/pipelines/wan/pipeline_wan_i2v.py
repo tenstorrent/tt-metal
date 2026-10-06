@@ -176,9 +176,19 @@ class WanPipelineI2V(WanPipeline):
         scheduler: SchedulerMixin | None = None,
         run_warmup: bool = True,
         lora_enabled: bool = False,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         # initialize without warmup; we warm up below with a sample image_prompt.
-        super().__init__(device=device, config=config, scheduler=scheduler, run_warmup=False, lora_enabled=lora_enabled)
+        super().__init__(
+            device=device,
+            config=config,
+            scheduler=scheduler,
+            run_warmup=False,
+            lora_enabled=lora_enabled,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
+        )
 
         # Like the decoder, one image encoder per size, shared by sizes with the same blockings.
         self._vae_encoders: dict[tuple[int, int], WanEncoder] = {}

@@ -17,6 +17,7 @@ from ...parallel.manager import CCLManager
 from ...reference.ideogram4.constants import QWEN3_VL_ACTIVATION_LAYERS
 from ...utils.mochi import get_rot_transformation_mat
 from ...utils.padding import pad_weight_tensor
+from ...utils.sdpa_recipe import prepare_recipe_inputs, recipe_config, resolve_recipe
 from ...utils.substate import pop_substate
 from ...utils.tensor import bf16_tensor
 
@@ -93,6 +94,8 @@ class Ideogram4TransformerBlock(Module):
         K/V across the SP axis. cos/sin are sharded on sequence to match.
     """
 
+    sdpa_precision_default = ttnn.SDPAPrecision.STANDARD
+
     def __init__(
         self,
         *,
@@ -106,10 +109,20 @@ class Ideogram4TransformerBlock(Module):
         ccl_manager: CCLManager | None = None,
         parallel_config: DiTParallelConfig | None = None,
         padding_config=None,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
         assert hidden_size % num_heads == 0
+        # A segment mask runs the dense recipe with attn_mask (K/V all-gathered under SP).
+        self.sdpa_precision, self.sdpa_kv_dtype = resolve_recipe(
+            sdpa_precision,
+            sdpa_kv_dtype,
+            default=self.sdpa_precision_default,
+            head_dim=hidden_size // num_heads,
+            model="Ideogram4",
+        )
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
         self.num_heads = num_heads
@@ -242,32 +255,21 @@ class Ideogram4TransformerBlock(Module):
             ccl_manager=ccl_manager,
         )
 
-        # SDPA config (fidelity recipe §4 — HiFi2, fp32 acc off; flip on if attn PCC suffers).
-        # head_dim=256 (2x the usual 128) doubles SDPA's per-core K/V/score CBs;
-        # k_chunk_size=512 overflows Blackhole L1 (1.59MB > 1.5MB max). Halve to 256
-        # so the buffers fit. Flash attention is exact regardless of chunk size.
-        self.sdpa_q_chunk_size = 128
-        self.sdpa_k_chunk_size = 256
         device_grid = mesh_device.compute_with_storage_grid_size()
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(device_grid.x, device_grid.y),
-            q_chunk_size=self.sdpa_q_chunk_size,
-            k_chunk_size=self.sdpa_k_chunk_size,
-            exp_approx_mode=False,
-        )
         # Ring SDPA (sequence parallel) reserves the last worker row for the CCL all-gather.
         self.sdpa_worker_grid = (device_grid.x, device_grid.y - 1)
-        self._ring_sdpa_pc_cache = {}
+        self.sdpa_program_config = recipe_config(device_grid)
+        self.ring_sdpa_program_config = recipe_config(self.sdpa_worker_grid)
         # ------------------------------------------------------------------
         # MIXED math fidelity (mirrors Wan2.2): HiFi2 for the heavy per-token
-        # compute (the four big block matmuls + SDPA), HiFi4 for the
+        # compute (the four big block matmuls), HiFi4 for the
         # precision-sensitive ops (RMSNorm/QK-norm run HiFi4 internally, AdaLN
         # modulation matmul, and the once-per-forward model-level projections).
         #
         # Rationale: a blanket HiFi4 (the previous state) doubled matmul/SDPA
         # device time; a blanket HiFi2 dropped whole-model real-weight PCC to
         # ~0.956. The split keeps HiFi4 where the dynamic range hurts and HiFi2
-        # where the flops dominate, halving matmul/SDPA cost while holding PCC.
+        # where the flops dominate, halving matmul cost while holding PCC.
         # ------------------------------------------------------------------
 
         # HiFi2 + fp32 accumulate for the four big matmuls (QKV, O, FF1, FF2).
@@ -277,17 +279,6 @@ class Ideogram4TransformerBlock(Module):
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
-        )
-        # HiFi2 for SDPA. head_dim=256 is precision-heavy, but the fp32_dest_acc
-        # sweep showed fp32_dest_acc={True,False} give the SAME block PCC
-        # (img1024 99.976% / img4096 99.980% either way) and the SAME device
-        # time at 2048px, so we land fp32_dest_acc=False to match Wan. Flip to
-        # True if a future config regresses SDPA correctness.
-        self.sdpa_hifi2_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=MATH_FIDELITY_HIFI2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
         )
         # HiFi4 + fp32 accumulate for the precision-sensitive matmul-class ops
         # (currently the AdaLN modulation projection). RMSNorm / QK-RMSNorm run
@@ -302,9 +293,8 @@ class Ideogram4TransformerBlock(Module):
             packer_l1_acc=True,
         )
 
-        # Wiring: the four big matmuls + SDPA -> HiFi2; AdaLN -> HiFi4.
+        # Wiring: the four big matmuls -> HiFi2; AdaLN -> HiFi4.
         self.matmul_compute_kernel_config = self.mm_hifi2_config
-        self.sdpa_compute_kernel_config = self.sdpa_hifi2_config
         self.adaln_compute_kernel_config = self.hifi4_config
 
         # RoPE (interleaved): the 32x32 transformation matrix that rotates adjacent channel
@@ -313,27 +303,6 @@ class Ideogram4TransformerBlock(Module):
         # Cached 0-element "joint" for ring SDPA (self-attention has no joint tokens). Allocated
         # once here (not per-forward) so trace capture never hits ttnn.zeros' host-write path.
         self.dummy_joint = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
-
-    def _get_ring_sdpa_program_config(self, local_seq_len):
-        """Ring-SDPA program config (fixed q_chunk=128).
-
-        NOTE: a standalone *plain*-SDPA micro-sweep suggested q_chunk=256 was ~1.3x
-        faster at long local seq (4352 @ 2048px). That does NOT hold for the production
-        ring_joint SDPA: its extra joint/CCL circular buffers push q_chunk=256 past L1
-        ("CBs grow to 1712656 B > 1572864 B max L1") and it fails at true 2048px. So we
-        keep the proven q_chunk=128 at every resolution (k_chunk=256, head_dim cap).
-        """
-        qc = self.sdpa_q_chunk_size
-        pc = self._ring_sdpa_pc_cache.get(qc)
-        if pc is None:
-            pc = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=self.sdpa_worker_grid,
-                q_chunk_size=qc,
-                k_chunk_size=self.sdpa_k_chunk_size,
-                exp_approx_mode=False,
-            )
-            self._ring_sdpa_pc_cache[qc] = pc
-        return pc
 
     def _merge_qkv_for_tp(self, qkv_weight: torch.Tensor) -> torch.Tensor:
         """Rearrange the fused reference QKV weight so column-fracturing shards heads.
@@ -569,23 +538,29 @@ class Ideogram4TransformerBlock(Module):
             v_f, num_heads=self.n_local_heads, num_kv_heads=0, transpose_k_heads=False
         )
 
+        # FAST prepares Q/K/V after QK-norm/RoPE and before the ring all-gather / SDPA call.
+        q, k, v = prepare_recipe_inputs(self.sdpa_precision, self.sdpa_kv_dtype, q, k, v)
+
         if self.sp_factor > 1 and attn_mask is None:
             # Sequence parallel, unmasked (full attention): ring SDPA all-gathers K/V
             # across the SP axis. Empty "joint" => plain self-attention over the full seq.
-            empty = self.dummy_joint
             out, _prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q,
                 k,
                 v,
-                empty,
-                empty,
-                empty,
-                persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(k.shape, 2, self.sp_axis),
-                persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(v.shape, 2, self.sp_axis),
+                self.dummy_joint,
+                self.dummy_joint,
+                self.dummy_joint,
+                persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
+                    k.shape, 2, self.sp_axis, dtype=k.dtype
+                ),
+                persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
+                    v.shape, 2, self.sp_axis, dtype=v.dtype
+                ),
                 joint_strategy="rear",
                 logical_n=spatial_sequence_length,
-                program_config=self._get_ring_sdpa_program_config(q.shape[2]),
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                program_config=self.ring_sdpa_program_config,
+                precision=self.sdpa_precision,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_axis),
                 num_links=self.ccl_manager.num_links,
@@ -615,7 +590,7 @@ class Ideogram4TransformerBlock(Module):
                 attn_mask=attn_mask,
                 is_causal=False,
                 program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                precision=self.sdpa_precision,
             )  # [B, n_local_heads, L/sp, head_dim]
 
         out = ttnn.transformer.concatenate_heads(out)  # [B, L/sp, n_local_heads * head_dim] (fractured on heads)
@@ -705,7 +680,12 @@ class Ideogram4Transformer(Module):
         ccl_manager: CCLManager | None = None,
         parallel_config: DiTParallelConfig | None = None,
         padding_config=None,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
+        """``sdpa_precision``/``sdpa_kv_dtype`` override the named SDPA recipe (D256 dense/ring
+        self-attention; a segment mask uses the dense recipe with ``attn_mask``). ``None`` selects
+        ``Ideogram4TransformerBlock.sdpa_precision_default``."""
         super().__init__()
         self.emb_dim = emb_dim
         self.num_layers = num_layers
@@ -740,6 +720,8 @@ class Ideogram4Transformer(Module):
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 padding_config=padding_config,
+                sdpa_precision=sdpa_precision,
+                sdpa_kv_dtype=sdpa_kv_dtype,
             )
             for _ in range(num_layers)
         )
