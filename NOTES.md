@@ -27,3 +27,10 @@ Box: blx01 (g15blx01), everything under /var/tmp/fasth3/t170 (nothing under blx0
 - 23:01 UTC: driver relaunched (pid 14047) with PRIOR_DROP=adaln; adaln = job 685, -t 450 (TO_KNOB default,
   the relaunch did not re-read the baseline wall; still under the cap). One more adaln drop skips it.
   Tray 3 now dropped under both warmup configs (625, 640, 669): if it keeps dropping, move the pack to exabox.
+- Pack done (all 8 configs rc=0: 665-668, 685-688); summary at res/summary_configs.md. Phase-2 pick: exact_shard
+  (the only config beating baseline with PCC 1.0; gate/adaln/all faster but PCC 0.95-0.98, PSNR 21-28 dB).
+  baseline5 OK job 689 (160 s).
+- 23:27:50 UTC DROP: blx01 chips 24-31 (broker: tray [3]) left PCIe in exact_shard5 job 690 (ours, 164 s in).
+  Broker recovered (705 hold ended 23:37:58); host rebooted ~23:34, killing the driver.
+- 23:41 UTC: driver relaunched (pid 62236) with PRIOR_DROP=exact_shard5; exact_shard5 = job 707 (-t 450).
+  A second drop skips it. Next: on DRIVER.done, tmp/t170/score_g15.sh baseline5 exact_shard5 detached on g15.
