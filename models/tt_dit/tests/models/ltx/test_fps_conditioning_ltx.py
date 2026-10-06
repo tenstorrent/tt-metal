@@ -17,9 +17,18 @@ end-to-end behaviour at the served shape (153 frames @ 25 fps) is exercised by
 a future edit would silently break while every device test stayed green.
 """
 
-import pytest
+from types import SimpleNamespace
 
-from ....models.transformers.ltx.rope_ltx import prepare_av_cross_pe, prepare_video_rope
+import pytest
+import torch
+
+from ....models.transformers.ltx.rope_ltx import (
+    prepare_av_cross_pe,
+    prepare_video_rope,
+    video_rope_freqs,
+    video_rope_positions,
+)
+from ....pipelines.ltx import pipeline_ltx, pipeline_ltx_distilled
 from ....pipelines.ltx.pipeline_ltx import LTXPipeline
 from ....utils.patchifiers import AudioLatentShape, VideoPixelShape
 
@@ -117,3 +126,104 @@ def test_rope_builders_still_take_fps(fn):
         f"{fn.__name__}'s fps must stay keyword-only so a positional call cannot silently "
         "bind the wrong argument to it"
     )
+
+
+@pytest.mark.parametrize("fn", [prepare_video_rope, prepare_av_cross_pe])
+def test_rope_builders_have_no_fps_default(fn):
+    """A default fps is how video self-attention RoPE silently ran at 24 fps while serving 25."""
+    import inspect
+
+    assert inspect.signature(fn).parameters["fps"].default is inspect.Parameter.empty
+
+
+@pytest.mark.parametrize("fps", [24.0, 25.0])
+def test_video_rope_matches_diffusers(fps):
+    """Production video self-attention RoPE equals the diffusers LTX-2 reference at the given fps.
+
+    diffusers (like ltx-core) divides the temporal pixel coordinate by fps before the rotary
+    frequencies. Small spatial grid; the served 20 latent frames so the temporal phase spans 6 s.
+    """
+    from diffusers.models.transformers.transformer_ltx2 import LTX2AudioVideoRotaryPosEmbed
+
+    F, H, W = 20, 4, 6
+    ours_cos, ours_sin = video_rope_freqs(
+        F, H, W, inner_dim=4096, num_attention_heads=32, theta=10000.0, max_pos=[20, 2048, 2048], fps=fps
+    )
+    # double_precision matches our builder (bit-exact); the fp32 diffusers path differs by ~5e-3.
+    ref = LTX2AudioVideoRotaryPosEmbed(dim=4096, theta=10000.0, modality="video", rope_type="interleaved")
+    ref_cos, ref_sin = ref(ref.prepare_video_coords(1, F, H, W, torch.device("cpu"), fps=fps))
+    torch.testing.assert_close(ours_cos, ref_cos.float(), atol=1e-6, rtol=0)
+    torch.testing.assert_close(ours_sin, ref_sin.float(), atol=1e-6, rtol=0)
+
+
+def test_video_rope_fps_changes_temporal_phase():
+    """25 vs 24 fps must move the temporal positions (the last latent frame sits at 6.04 s at 24)."""
+    p24 = video_rope_positions(20, 2, 2, fps=24.0)
+    p25 = video_rope_positions(20, 2, 2, fps=25.0)
+    torch.testing.assert_close(p25[:, 0] * 25.0, p24[:, 0] * 24.0)
+    assert not torch.allclose(p24[:, 0], p25[:, 0])
+    torch.testing.assert_close(p24[:, 1:], p25[:, 1:])  # spatial axes are fps-independent
+
+
+class _Captured(Exception):
+    def __init__(self):
+        super().__init__("prepare_video_rope reached")
+
+
+def _capture_video_rope_fps(monkeypatch, module) -> dict:
+    """Stub ``module.prepare_video_rope`` to record its kwargs and abort the caller there."""
+    seen = {}
+
+    def fake(*args, **kwargs):
+        seen.update(kwargs)
+        raise _Captured()
+
+    monkeypatch.setattr(module, "prepare_video_rope", fake)
+    return seen
+
+
+def _pipeline_stub(fps: float) -> SimpleNamespace:
+    return SimpleNamespace(
+        fps=fps,
+        inner_dim=4096,
+        num_attention_heads=32,
+        positional_embedding_theta=10000.0,
+        positional_embedding_max_pos=[20, 2048, 2048],
+        mesh_device=None,
+        parallel_config=None,
+        in_channels=128,
+        transformer=SimpleNamespace(image_conditioning=False),
+        _sp_pad_len=lambda n: n,
+    )
+
+
+def test_distilled_pipeline_passes_fps_to_video_rope(monkeypatch, expect_error):
+    seen = _capture_video_rope_fps(monkeypatch, pipeline_ltx_distilled)
+    with expect_error(_Captured, "prepare_video_rope reached"):
+        pipeline_ltx_distilled.LTXDistilledPipeline._prepare_stage_statics(
+            _pipeline_stub(25.0),
+            SimpleNamespace(tt_video_rope_cos=None),
+            latent_frames=20,
+            latent_h=17,
+            latent_w=30,
+            video_N=10240,
+            video_N_real=10200,
+            audio_N=256,
+            audio_N_real=153,
+            sp_axis=1,
+        )
+    assert seen.get("fps") == 25.0
+
+
+def test_two_stage_pipeline_passes_fps_to_video_rope(monkeypatch, expect_error):
+    seen = _capture_video_rope_fps(monkeypatch, pipeline_ltx)
+    with expect_error(_Captured, "prepare_video_rope reached"):
+        LTXPipeline.call_av(
+            _pipeline_stub(25.0),
+            video_prompt_embeds=None,
+            audio_prompt_embeds=None,
+            num_frames=153,
+            height=1088,
+            width=1920,
+        )
+    assert seen.get("fps") == 25.0

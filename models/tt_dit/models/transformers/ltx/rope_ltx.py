@@ -230,6 +230,44 @@ def pad_video_rope_sp(
     return cos_freq, sin_freq
 
 
+def video_rope_positions(latent_frames: int, latent_height: int, latent_width: int, *, fps: float) -> torch.Tensor:
+    """Pixel-space patch bounds ``(1, 3, N, 2)`` with the temporal axis in seconds.
+
+    The single source of video positions for both the self-attention RoPE and the A/V cross-PE,
+    as in ltx-core, which scales one shared ``positions`` tensor by fps and slices both from it.
+    Building them separately once let the self-attention RoPE fall back to 24 fps at 25.
+    """
+    v_shape = VideoLatentShape(batch=1, channels=128, frames=latent_frames, height=latent_height, width=latent_width)
+    v_coords = video_get_patch_grid_bounds(v_shape)
+    v_positions = get_pixel_coords(v_coords, scale_factors=(8, 32, 32), causal_fix=True).float()
+    v_positions[:, 0, ...] = v_positions[:, 0, ...] / fps  # temporal axis → seconds
+    return v_positions
+
+
+def video_rope_freqs(
+    latent_frames: int,
+    latent_height: int,
+    latent_width: int,
+    *,
+    inner_dim: int,
+    num_attention_heads: int,
+    theta: float,
+    max_pos: list[int],
+    fps: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Host-side video self-attention RoPE ``(1, N, inner_dim)`` cos/sin, INTERLEAVED layout."""
+    return precompute_freqs_cis(
+        video_rope_positions(latent_frames, latent_height, latent_width, fps=fps),
+        dim=inner_dim,
+        out_dtype=torch.float32,
+        theta=theta,
+        max_pos=max_pos,
+        use_middle_indices_grid=True,
+        num_attention_heads=num_attention_heads,
+        rope_type=LTXRopeType.INTERLEAVED,
+    )
+
+
 def prepare_video_rope(
     latent_frames: int,
     latent_height: int,
@@ -241,23 +279,22 @@ def prepare_video_rope(
     max_pos: list[int],
     mesh_device: ttnn.MeshDevice,
     parallel_config: DiTParallelConfig,
-    fps: float = 24.0,
+    fps: float,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Compute video RoPE in INTERLEAVED layout, SP×TP sharded onto the mesh."""
-    v_shape = VideoLatentShape(batch=1, channels=128, frames=latent_frames, height=latent_height, width=latent_width)
-    v_coords = video_get_patch_grid_bounds(v_shape)
-    v_positions = get_pixel_coords(v_coords, scale_factors=(8, 32, 32), causal_fix=True).float()
-    v_positions[:, 0, ...] = v_positions[:, 0, ...] / fps
+    """Compute video RoPE in INTERLEAVED layout, SP×TP sharded onto the mesh.
 
-    cos_freq, sin_freq = precompute_freqs_cis(
-        v_positions,
-        dim=inner_dim,
-        out_dtype=torch.float32,
+    ``fps`` has no default on purpose: a silent 24 here once put self-attention on a 24 fps
+    timeline while the cross-PE and audio ran at the served 25.
+    """
+    cos_freq, sin_freq = video_rope_freqs(
+        latent_frames,
+        latent_height,
+        latent_width,
+        inner_dim=inner_dim,
+        num_attention_heads=num_attention_heads,
         theta=theta,
         max_pos=max_pos,
-        use_middle_indices_grid=True,
-        num_attention_heads=num_attention_heads,
-        rope_type=LTXRopeType.INTERLEAVED,
+        fps=fps,
     )  # (1, N, dim)
 
     cos_freq = reshape_interleaved_to_bhnd(cos_freq, num_attention_heads)
@@ -324,7 +361,7 @@ def prepare_av_cross_pe(
     theta: float,
     mesh_device: ttnn.MeshDevice,
     parallel_config: DiTParallelConfig,
-    fps: float = 24.0,
+    fps: float,
     cross_pe_max_pos: int = 20,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     """Temporal-only cross positional embeddings for A↔V cross-attention.
@@ -340,10 +377,7 @@ def prepare_av_cross_pe(
         (a_q_cos, a_q_sin)  — audio Q in V→A cross-attn (SP×TP sharded).
         (a_k_cos, a_k_sin)  — audio K in A→V cross-attn (TP-only; K side after AllGather).
     """
-    v_shape = VideoLatentShape(batch=1, channels=128, frames=latent_frames, height=latent_height, width=latent_width)
-    v_coords = video_get_patch_grid_bounds(v_shape)
-    v_positions = get_pixel_coords(v_coords, scale_factors=(8, 32, 32), causal_fix=True).float()
-    v_positions[:, 0, ...] = v_positions[:, 0, ...] / fps  # temporal axis → seconds
+    v_positions = video_rope_positions(latent_frames, latent_height, latent_width, fps=fps)
     v_temporal = v_positions[:, 0:1, :]  # (1, 1, video_N, 2)
 
     a_shape = AudioLatentShape(batch=1, channels=8, frames=audio_N_real, mel_bins=16)
