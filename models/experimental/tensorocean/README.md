@@ -58,15 +58,30 @@ pytest models/experimental/tensorocean/tests/test_tensorocean_perf.py
 ## Layout
 
 ```
-reference/optimized_ttnn.py   HPE's TTNN port (unchanged): make_inputs, the float64 reference algorithm, the baseline
-tt/tensorocean.py             optimized version: prepare(), run()
-tt/fused_kernel.py            the fused kernel's host side (program, buffers, per-core arguments)
-tt/fused_plan.py              per-core work split and DRAM layouts
-tt/formulation.py             which 10 cells each edge reads, which edges each output adds (derived from the reference)
-tt/natural_io.py              the per-step inputs in natural layout
-tt/kernels/                   reader, writer, compute (fused kernel); relayout_in, relayout_out (layout conversion)
-tests/                        accuracy and perf tests, shared helpers
-demo/demo.py                  run, check and time a version
+models/experimental/tensorocean/
+├── README.md
+├── reference/
+│   └── optimized_ttnn.py      HPE's TTNN port (unchanged): make_inputs, the float64 reference algorithm, the baseline
+├── tt/
+│   ├── tensorocean.py         optimized version: prepare(), run()
+│   ├── fused_kernel.py        the fused kernel's host side (program, buffers, per-core arguments)
+│   ├── fused_plan.py          per-core work split and DRAM layouts
+│   ├── formulation.py         which 10 cells each edge reads, which edges each output adds (derived from the reference)
+│   ├── natural_io.py          the per-step inputs in natural layout
+│   └── kernels/
+│       ├── reader.cpp         fused kernel: data movement (DRAM → L1, L1 → math unit)
+│       ├── writer.cpp         fused kernel: coefficient multicast, copying, outputs → DRAM
+│       ├── compute.cpp        fused kernel: fluxes and outputs on the SFPU
+│       ├── common.h           constants shared by the three
+│       ├── sfpu_shift.h       SFPU routine for the shifted tracer copies
+│       ├── relayout_in.cpp    natural inputs → the fused kernel's per-core layout
+│       └── relayout_out.cpp   per-core outputs → natural outputs
+├── tests/
+│   ├── common.py              both versions behind one interface, reference, metrics, timing
+│   ├── test_tensorocean_accuracy.py
+│   └── test_tensorocean_perf.py
+└── demo/
+    └── demo.py                run, check and time a version
 ```
 
 ## Notes
