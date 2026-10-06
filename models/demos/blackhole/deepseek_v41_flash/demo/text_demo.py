@@ -78,6 +78,8 @@ def _s(
 
 SCENARIOS = [
     _s(Q128, 16, 512, 64, "prefill_128_b16"),
+    _s(Q128, 8, 512, 64, "prefill_128_b8"),
+    _s(Q128, 64, 512, 64, "prefill_128_b64"),
     _s(Q128, 1, 512, 64, "prefill_128_b1"),
     _s(Q128, 4, 512, 64, "prefill_128_b4"),
     _s(Q128, 32, 512, 64, "prefill_128_b32"),
@@ -217,28 +219,43 @@ def _run_demo(
 
     profiler.start("generator_setup")
     key = (padded_batch, tuple(layer_ids))
-    if cache is not None and key in cache:
+    reconfig_ok = os.environ.get("DSV41_SESSION_RECONFIG", "1") == "1"
+    if cache is not None and key in cache and (max_seq_len <= cache[key][1].max_ctx or not reconfig_ok):
         model_args, model, generator = cache[key]
         assert max_seq_len <= model.max_ctx, "cached model was built for a shorter max_seq_len"
         model_args.max_seq_len = max_seq_len
-    else:
+    else:  # (no cached model, another batch size, or a longer context than the cached model was built for)
         build_len = build_max_seq_len or max_seq_len
         if build_len != max_seq_len:
             page_params = default_page_params(build_len, users_per_row)
             paged_attention_config = PagedAttentionConfig(
                 block_size=page_params["page_block_size"], max_num_blocks=page_params["page_max_num_blocks_per_dp"]
             )
-        model_args, model, tt_kv_cache, _ = create_tt_model(
-            mesh_device,
-            padded_batch,
-            build_len,
-            paged_attention_config,
-            layer_ids=layer_ids,
-            log=lambda m: logger.info(m),
-        )
-        generator = Generator([model], [model_args], mesh_device, tokenizer=model_args.tokenizer)
-        if cache is not None:
+        other = [k for k in cache if k[1] == tuple(layer_ids)] if cache is not None and reconfig_ok else []
+        if other:
+            # a session scenario with ANOTHER batch size (or a longer context): keep the weights of the model that is already built, release + rebuild only the batch dependent
+            # state (Model.reconfigure; a second full build in the process would run out of DRAM)
+            _, model, generator = cache.pop(other[0])
+            model_args = generator.reconfigure(
+                padded_batch,
+                build_len,
+                paged_attention_config,
+                layer_ids=layer_ids,
+                log=lambda m: logger.info(m),
+            )
             cache[key] = (model_args, model, generator)
+        else:
+            model_args, model, tt_kv_cache, _ = create_tt_model(
+                mesh_device,
+                padded_batch,
+                build_len,
+                paged_attention_config,
+                layer_ids=layer_ids,
+                log=lambda m: logger.info(m),
+            )
+            generator = Generator([model], [model_args], mesh_device, tokenizer=model_args.tokenizer)
+            if cache is not None:
+                cache[key] = (model_args, model, generator)
     tokenizer = model_args.tokenizer
     spec_k = int(
         os.environ.get("DSV41_SPEC", "0")
@@ -663,7 +680,15 @@ def test_dsv41_demo_session(mesh_device, device_params):
     ]  # optional prefill-optimisation mode per scenario: id@m (baseline) / @P / @R / @E (see tests/test_prefill_scen_device.py)
     ids = [i.partition("@")[0] for i in ids]
     chosen = [byid[i] for i in ids]
-    build_len = max(s.values[3] for s in chosen)
+    pad_b = lambda bs: -(-bs // mesh_device.shape[0]) * mesh_device.shape[0]
+    per_scenario_ctx = (
+        os.environ.get("DSV41_SESSION_CTX_PER_SCENARIO") == "1"
+    )  # size every build / reconfigure for the scenario's own max_seq_len (a longer context than the cached model's -> reconfigure)
+    build_len_of = (
+        {}
+    )  # padded batch -> longest max_seq_len of its scenarios (a session with several batch sizes reconfigures the model between them)
+    for s_ in chosen:
+        build_len_of[pad_b(s_.values[1])] = max(build_len_of.get(pad_b(s_.values[1]), 0), s_.values[3])
     cache = {}
     failed = {}
     modes = [
@@ -752,7 +777,22 @@ def test_dsv41_demo_session(mesh_device, device_params):
             continue
         try:
             _run_demo_wrap(
-                mesh_device, prompts, bs, rep, msl, mgt, pp, sp, dtr, ptr, pch, wu, ins, eos, cache, build_len
+                mesh_device,
+                prompts,
+                bs,
+                rep,
+                msl,
+                mgt,
+                pp,
+                sp,
+                dtr,
+                ptr,
+                pch,
+                wu,
+                ins,
+                eos,
+                cache,
+                msl if per_scenario_ctx else build_len_of[pad_b(bs)],
             )
         except Exception as e:  # noqa: BLE001
             if not cont:

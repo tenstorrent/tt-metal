@@ -105,9 +105,12 @@ class DSV41MoEBlock:
         gate_bias_shift=0.0,
         shared_in_moe: bool = False,
         buffers=None,
+        expert_state=None,
     ):
         """``shared_in_moe=False`` (default) leaves the shared expert out of ``moe_compute`` (bfp4-only) -- the layer
-        adds it separately in higher precision, see shared_expert.py."""
+        adds it separately in higher precision, see shared_expert.py. ``expert_state``: the already uploaded routed-expert weights of this layer
+        (``_TTMoEDecodeExpertState`` of an earlier block, batch independent): they are reused instead of read from the cache again (Model.reconfigure).
+        """
         text = CONFIG_PATH.read_text()
         # the derived memory configs (dispatch input shards, ...) are computed from batch_per_device when the config is parsed,
         # so the batch size has to be in the YAML text itself (updating the field afterwards leaves them sized for 4 users)
@@ -142,7 +145,9 @@ class DSV41MoEBlock:
             torch_gate_bias=weights["gate_bias"],
             bias_shift=gate_bias_shift,
         )
-        if __import__("os").environ.get("DSV41_UNI_NODECODE") == "1":
+        if expert_state is not None:
+            self.decode = self._weightless_decode(mesh_device, decode_cfg, buffers, expert_state=expert_state)
+        elif __import__("os").environ.get("DSV41_UNI_NODECODE") == "1":
             # PREFILL-ONLY measurement mode (DSV41_PREFILL_MOE=unified): no moe_compute expert weights on the device (DRAM would not fit them next to the
             # unified-layout copy); decode through this block is not possible. Scratch buffers / config as TTMoEDecode.__init__ builds them.
             self.decode = self._weightless_decode(mesh_device, decode_cfg, buffers)
@@ -151,7 +156,7 @@ class DSV41MoEBlock:
         self.decode._mesh = mesh_device
 
     @staticmethod
-    def _weightless_decode(mesh_device, cfg, buffers):
+    def _weightless_decode(mesh_device, cfg, buffers, expert_state=None):
         from types import SimpleNamespace
 
         from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, effective_matmul_ring_size
@@ -160,7 +165,11 @@ class DSV41MoEBlock:
 
         dec = object.__new__(_TailDecode)
         dec.config = cfg
-        dec.expert_state = SimpleNamespace(tt_expert_mapping=None, tt_w0_w1=None, tt_w2=None)
+        dec.expert_state = (
+            expert_state
+            if expert_state is not None
+            else SimpleNamespace(tt_expert_mapping=None, tt_w0_w1=None, tt_w2=None)
+        )
         if buffers is None:
             bd = cfg.buffers.model_dump()
             bd["compute_tilize_drain_core"] = ttnn.experimental.get_moe_tilize_drain_core(
