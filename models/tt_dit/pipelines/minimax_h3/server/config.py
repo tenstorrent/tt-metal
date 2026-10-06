@@ -27,6 +27,29 @@ CONFIG_DEFAULTS = Path(__file__).with_name("config_defaults.json")
 HF_MODEL_DEFAULT = "MiniMaxAI/MiniMax-H3"
 TURBO_REPO_DEFAULT = "lightx2v/Minimax-h3-Turbo"
 
+#: EXACTLY the diffusers-format partitions this server loads: ~144 GB of a ~498 GB repo. The repo's
+#: top-level ``FL2VA/`` and ``Ref2VA/`` trees are self-contained original-format bundles that
+#: duplicate the root partitions and are never read, and ``transformer_ref`` serves only ref2va,
+#: which this server does not expose.
+#:
+#: This list is not an optimization, it is what makes a mounted weight cache work at all. Without
+#: it ``snapshot_download(..., local_files_only=True)`` can never be satisfied by a cache that was
+#: populated from the same list, so every boot falls through to the network and re-downloads the
+#: ~354 GB the server will never open. A missing entry here is a first-boot crash; an extra one is
+#: a wasted download.
+WEIGHT_ALLOW_PATTERNS: tuple[str, ...] = (
+    "model_index.json",
+    "modular_model_index.json",
+    "text_encoder/*",
+    "transformer/*",
+    "vae/*",
+    "audio_vae/*",
+    "tokenizer/*",
+    "processor/*",
+    "scheduler/*",
+    "audio_scheduler/*",
+)
+
 #: Mesh shape -> profile name. These are the only two shapes this server is measured on; a shape
 #: that is not here is a configuration error rather than something to guess a preset for.
 PROFILE_BY_MESH: dict[str, str] = {"1x1": "p150", "1x4": "p300x2"}
@@ -256,7 +279,12 @@ def _resolve_weights_dir(model_id: str, revision: str | None) -> str | None:
         if not local_only and os.environ.get("HF_HUB_OFFLINE", "").strip() not in ("", "0", "false"):
             break
         try:
-            return snapshot_download(model_id, revision=revision, local_files_only=local_only)
+            return snapshot_download(
+                model_id,
+                revision=revision,
+                local_files_only=local_only,
+                allow_patterns=list(WEIGHT_ALLOW_PATTERNS),
+            )
         except Exception:  # noqa: BLE001 - a miss here is not fatal; the pipeline retries its own way
             continue
     return None

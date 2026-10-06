@@ -539,3 +539,57 @@ def test_the_asgi_module_imports_with_no_mesh_declared_and_fails_at_startup_inst
 
     with expect_error(ValueError, "H3_MESH_SHAPE"):
         asyncio.run(start())
+
+
+def test_the_weight_snapshot_is_filtered_to_the_partitions_the_server_loads(monkeypatch):
+    """THE 354 GB BUG. `_resolve_weights_dir` tries the HF cache with `local_files_only=True`
+    first so a container with a mounted cache never reaches the network on a warm boot. With no
+    `allow_patterns` that call can NEVER be satisfied -- the cache was populated from the
+    package's filtered list, so the unfiltered request always misses -- and every boot falls
+    through to an unfiltered download of the whole ~498 GB repo, including the `Ref2VA/` and
+    `transformer_ref/` partitions this server does not expose.
+    """
+    import huggingface_hub
+
+    config = importlib.import_module(f"{SERVER}.config")
+    calls = []
+
+    def fake_snapshot_download(model_id, **kw):
+        calls.append((model_id, kw))
+        if kw.get("local_files_only"):
+            raise FileNotFoundError("not in the cache")
+        return "/hf/snapshot"
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_snapshot_download)
+    monkeypatch.delenv("H3_WEIGHTS_DIR", raising=False)
+    monkeypatch.delenv("MINIMAX_H3_MODEL_PATH", raising=False)
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+
+    assert config._resolve_weights_dir("MiniMaxAI/MiniMax-H3", "deadbeef") == "/hf/snapshot"
+
+    assert [kw["local_files_only"] for _, kw in calls] == [True, False]
+    for _, kw in calls:
+        assert kw["allow_patterns"] == list(config.WEIGHT_ALLOW_PATTERNS)
+    assert not any(p.startswith(("Ref2VA", "FL2VA", "transformer_ref")) for p in config.WEIGHT_ALLOW_PATTERNS)
+
+
+def test_the_allowlist_matches_the_one_the_package_manifest_downloads():
+    """Two copies of this list exist by necessity -- `tt-model` reads the manifest to populate the
+    cache, the server reads its own constant to find it again -- and they have to agree exactly.
+    If the manifest ships less, the first boot crashes on a missing partition; if it ships more,
+    the server's `local_files_only` probe still succeeds, so the extra download is silent.
+    """
+    import re
+    from pathlib import Path
+
+    config = importlib.import_module(f"{SERVER}.config")
+    yaml_text = (Path(config.__file__).with_name("tt-model.yaml")).read_text()
+    block = yaml_text.split("allow_patterns:", 1)[1]
+    manifest = []
+    for line in block.splitlines()[1:]:
+        m = re.match(r'^\s+-\s+"?([^"#\s]+)"?', line)
+        if not m:
+            break
+        manifest.append(m.group(1))
+
+    assert manifest == list(config.WEIGHT_ALLOW_PATTERNS)
