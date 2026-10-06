@@ -48,7 +48,7 @@ ttnn::Shape codegen_working_shape(const ttnn::Shape& logical_shape, int32_t dim)
 
 // Whether a TILE call takes the untilize -> per-stick ROW_MAJOR scatter -> tilize detour instead of
 // the TILE factory. The TILE factories split per-core work by tile row, so a low tile-row count
-// leaves most of the grid idle whatever the row width; below kRowMajorRerouteMaxHt the RM factory's
+// leaves most of the grid idle whatever the row width; at or below kRowMajorRerouteMaxHt the RM factory's
 // per-stick split reaches far more cores, provided the untilized stick is bounded, NOC-aligned and
 // fits L1. `working_input`/`working_index` are the operands' codegen_working_shape()s; the tensors
 // supply dtype, element size, device and placement, none of which the transpose changes.
