@@ -339,7 +339,10 @@ class DSV41PrefillLayer:
 
     def forward(self, xs, pres, S, s0=0):
         if self.colsplit:
-            if pk_mhc_enabled():
+            n8 = int(xs[0].shape[2]) // self.T if getattr(xs, "packed", False) else len(xs)
+            if (
+                pk_mhc_enabled() and n8 > 1
+            ):  # n8 == 1 (one 32-token own chunk per column, e.g. U=2 x C=128) segfaults in the packed path's all_gather: plain column split
                 return self.forward_cols_pk(xs, pres, S, s0)
             return self.forward_cols(xs, pres, S, s0)
         xs, pres = unpack_streams(xs, pres)
