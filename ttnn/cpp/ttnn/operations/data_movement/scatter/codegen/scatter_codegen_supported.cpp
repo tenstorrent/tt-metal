@@ -63,7 +63,12 @@ bool supported_execution_controls(
     // compute_output_specs() hands a caller-supplied destination's spec straight back, so it -- not
     // the input -- decides every CB page and per-transfer size while the kernels still address the
     // input's own geometry. Only a destination matching the spec this op would build for itself
-    // (input's own dtype and layout, and the default tile when that layout is TILE) is in contract.
+    // (input's own logical shape, dtype and layout, and the default tile when that layout is TILE)
+    // is in contract: every factory sizes its page count and per-core split from the input's shape,
+    // so a destination of another shape would be written past its end or left partly unwritten.
+    if (out.logical_shape() != input_tensor.logical_shape()) {
+        return false;
+    }
     if (out.dtype() != input_tensor.dtype() || out.layout() != input_tensor.layout()) {
         return false;
     }
