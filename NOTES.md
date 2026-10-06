@@ -24,3 +24,8 @@ Output/log: g15blx01:/var/tmp/fasth3/t166/out/a/{run.log,*.mp4}.
    /var/tmp/fasth3/t159/out/ same names.
 3. Land 0ee3d31bda9 on t48 (cherry-pick onto <branch>-land from origin/t48, ttp push --detach).
 4. result.json: SHA, env, wall, -t recommendations (measured +50%, <= 600).
+
+## Drop 1 (light wake 21:13 UTC)
+Job 625 killed by broker device recovery at ~21:11 UTC on g15blx01 (wedge; Runtime 94 s, exit -9, our job,
+during warmup stage 1). Log ended 21:10:51. Not re-queued by the broker. Next: when blx01 health check passes,
+resubmit the same job.sh (TAG=a); if it drops again, move to g15blx02.
