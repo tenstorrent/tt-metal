@@ -419,15 +419,20 @@ def test_pipeline_distilled(
             def replay_prompt(gen: int) -> str:
                 return FRESH_LTX_PROMPTS[(gen - 1) % len(FRESH_LTX_PROMPTS)] if fresh else prompt
 
-            logger.info("=== traced steady-state pass (gen #1, pure replay) ===")
-            run(prompt=replay_prompt(1), number=1, seed=seed)
-            check_output_with_clip(replay_prompt(1), 1)
-            check_output_with_vbench(replay_prompt(1), 1)
+            # LTX_E2E_SEEDS=0,1,2: one pure-replay gen per listed seed (gen #1, #2, ...) instead of a
+            # single gen #1 at SEED, so a multi-seed timing and quality sample shares one trace capture.
+            replay_seeds = [int(s) for s in os.environ.get("LTX_E2E_SEEDS", str(seed)).split(",")]
+            for gen, gen_seed in enumerate(replay_seeds, start=1):
+                logger.info(f"=== traced steady-state pass (gen #{gen}, seed {gen_seed}, pure replay) ===")
+                run(prompt=replay_prompt(gen), number=gen, seed=gen_seed)
+                check_output_with_clip(replay_prompt(gen), gen)
+                check_output_with_vbench(replay_prompt(gen), gen)
             # LTX_E2E_EXTRA_REPLAYS=N: N more pure replays of the same gen, so a served queue's
             # steady-state step time (not only the first replay after capture) is on the record.
             for extra in range(int(os.environ.get("LTX_E2E_EXTRA_REPLAYS", "0"))):
-                logger.info(f"=== traced steady-state pass (gen #{extra + 2}, pure replay) ===")
-                run(prompt=replay_prompt(extra + 2), number=extra + 2, seed=seed)
+                gen = len(replay_seeds) + extra + 1
+                logger.info(f"=== traced steady-state pass (gen #{gen}, pure replay) ===")
+                run(prompt=replay_prompt(gen), number=gen, seed=seed)
             # LTX_REF_FRAMES=<path>: one more replay that also writes the raw uint8 frames, kept out of
             # the timed gens because the dump forces the slower float readback instead of the yuv path.
             ref_frames = os.environ.get("LTX_REF_FRAMES")
