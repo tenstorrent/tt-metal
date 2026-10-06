@@ -371,9 +371,11 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     sub_bcast_cols_init(in0_cb, in1_cb);
 
     // Approximate exp skips negative-input clamping for speed. Inputs below about -88 can
-    // produce negative outputs, which packer ReLU clears. Keep this path for partial faces.
-    // The accurate branch below handles full RC tiles.
-    if constexpr (EXP_APPROX_MODE || vector_mode != VectorMode::RC) {
+    // produce negative outputs, which packer ReLU clears. It runs only when the program config
+    // asks for it (exp_approx_mode). Otherwise the accurate branch below runs for full tiles and
+    // for flash-decode's half (16x32) tiles alike: the approximation's error on P (~4% normalized
+    // L2 at scale 1/sqrt(128), #57180) is far above the bf16 rounding floor.
+    if constexpr (EXP_APPROX_MODE) {
         exp_tile_init<true /* approx */, scale_fp32, InputClamping::None>();
     }
     PACK((llk_pack_relu_config(ReluConfig::zero())));
@@ -401,7 +403,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
                 // None visits the full tile in 32 iterations; R/C traverse faces with eight each.
                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 /*ITER*/ : 8 /*ITER*/;
                 constexpr VectorMode vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
-                if constexpr (EXP_APPROX_MODE || vector_mode != VectorMode::RC) {
+                if constexpr (EXP_APPROX_MODE) {
                     exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(
                         j, vector_mode_exp);
                 } else {
