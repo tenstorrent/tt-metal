@@ -24,9 +24,7 @@ inline void calculate_simple_forward()
         TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, pin & 65535);
     }
     TTI_REPLAY(0, Config::kBodySlots, 1, 1);
-    {
-        sfpi::simple_threshold_pair<ADDR_MOD_3, ADDR_MOD_2, true>();
-    }
+    sfpi::simple_threshold_pair<ADDR_MOD_3, ADDR_MOD_2, true>();
 #pragma GCC unroll 8
     for (int row = Config::kRowsPerReplay; row < Iterations; row += Config::kRowsPerReplay)
     {
