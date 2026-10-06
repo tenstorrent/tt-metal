@@ -644,6 +644,181 @@ class Model:
         )
         return first, logits
 
+    # ---- interleaved (chunked, per-user) prefill for continuous batching (tt/generator_vllm.py; INTERLEAVE_NOTES.md) ----------------------------------
+    def _admit_idle(self):
+        """Every user owns at least one page: the decode loop grows the pages of ALL users (``pool.ensure``), including the idle ones."""
+        for b in range(self.B):
+            r, k = self.pool.user_key(b)
+            if k not in self.pool.allocs[r].pages:
+                self.pool.admit(b, 1)
+
+    def release_user(self, b):
+        """A finished / preempted request: free its pages, keep the user admitted with one page (see ``_admit_idle``)."""
+        self.pool.release(b)
+        self.pool.admit(b, 1)
+        self.pool.sync_page_table()
+        getattr(self, "pf_resume", {}).pop(b, None)
+
+    def _export_user_keys(self, ix, k_cache, u, rows_sel, off, n):
+        """Hand-off of the index keys of the users (in-row index ``u``, mesh rows ``rows_sel``) only: slab slots [off, off + n) of the prefill key FIFO -> decode key
+        slab entries [0, n) of user u of those mesh rows. The other mesh rows keep their decode keys (they hold a decoding user at in-row index u): selected on the device
+        with a per-row mask, so a row that is not part of the hand-off rewrites its own keys unchanged (bfp8 -> bf16 -> bfp8 is exact).
+        """
+        IDIM = ix.keys.shape[3]
+        new = ttnn.slice(ix.keys, [u, 0, off, 0], [u + 1, 1, off + n, IDIM])
+        if len(rows_sel) < self.rows:
+            old = ttnn.slice(k_cache, [u, 0, 0, 0], [u + 1, 1, n, IDIM])
+            if old.dtype != ttnn.bfloat16:
+                old = ttnn.typecast(old, ttnn.bfloat16)
+            m = torch.zeros(self.rows, 1, 1, 1)
+            m[list(rows_sel)] = 1.0
+            mask = ttnn.from_torch(
+                m, device=self.md, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mp()
+            )
+            new = ttnn.where(mask, new, old)
+            ttnn.deallocate(mask)
+            ttnn.deallocate(old)
+        if k_cache.dtype != ttnn.bfloat16:
+            new = ttnn.typecast(new, k_cache.dtype)
+        ttnn.experimental.slice_write(new, k_cache, [u, 0, 0, 0], [u + 1, 1, n, IDIM], [1, 1, 1, 1])
+        if not (
+            self.U == 1 and off == 0 and n == ix.keys.shape[2] and new.dtype == ix.keys.dtype
+        ):  # a full-range slice may alias the FIFO
+            ttnn.deallocate(new)
+
+    def _export_keys_users(self, users, ends, s_end):
+        """Index-key hand-off (prefill key FIFOs -> decode key slabs) of the users whose prompt ended inside the window that ended at ``s_end``."""
+        if not self.use_indexer or not getattr(self, "prefill_sparse", None):
+            return
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_sparse import ceil32
+
+        by_u = {}
+        for b in users:
+            by_u.setdefault(b % self.U, []).append(b // self.U)
+        mx = max(ends[b] for b in users)
+        for L, dec in self.dec_idx.items():
+            if L not in self.index_owner:
+                continue  # layers 24..36 alias layer 20's slab
+            sp = self.attns[L].prefill.sparse
+            ix = None if sp is None else sp.indexer
+            if ix is None or ix.key_owner is not None or not getattr(sp, "dyn_on", False):
+                continue
+            r = self.attns[L].ratio
+            off = ix.KL - s_end // r
+            n = min(ceil32(mx // r), s_end // r, dec.k_cache.shape[2])
+            for u, rws in by_u.items():
+                self._export_user_keys(ix, dec.k_cache, u, sorted(rws), off, n)
+        ttnn.synchronize_device(self.md)
+
+    def prefill_interleaved(self, items, chunk, s_pad_max=None, want_logits=False):
+        """Prefill of SOME users (new requests / prompt chunks) through the captured chunk trace while the other users keep their decode state.
+
+        ``items``: [(user b, tokens 1-D [>= end], start, end)]: positions [start, end) of user b are computed. ``start`` must be 0 or the position the previous call for
+        that user ended at (``self.pf_resume[b]``: only valid while the user's carried state is intact, i.e. the previous end was a multiple of ``chunk``).
+        The users are processed in windows of ``chunk`` positions (one trace replay per window, all U users per mesh row run; the users that are not part of the window
+        are masked: no write of the pool / ring / compressor state / carried prefill state (``DSV41_PF_UMASK=1``) / Engram history). A user whose ``end`` is not a multiple of
+        the chunk has its last window padded (its carried state is then no longer resumable: it is the end of its prompt).
+        Returns {user: (greedy token of position end - 1, logits [vocab] fp32 or None)}.
+        """
+        C = int(chunk)
+        assert C % 128 == 0, "chunk must be a multiple of 128"
+        B, pm = self.B, self.prefill_model
+        resume = self.__dict__.setdefault("pf_resume", {})
+        items = [(int(b), torch.as_tensor(t).long(), int(st), int(e)) for b, t, st, e in items]
+        ends = {b: e for b, _, _, e in items}
+        assert len(ends) == len(items), "duplicate users in one prefill call"
+        for b, t, st, e in items:
+            assert 0 < e <= self.max_ctx - 1 and 0 <= st < e and t.numel() >= e, (b, st, e, t.numel())
+            assert (
+                st == 0 or resume.get(b) == st
+            ), f"user {b}: chunk start {st} is not its carried position {resume.get(b)}"
+        max_end = max(ends.values())
+        self.check_context_supported(max_end)
+        S_pad = max(s_pad_max or 0, -(-max_end // C) * C)
+        t_start = time.perf_counter()
+        self._admit_idle()
+        self.sink.set_lengths(torch.zeros(B, dtype=torch.long))  # (capture / compile pass: every user masked)
+        self.sink.bind(C)
+        self.prepare_for_traces(torch.zeros(B, dtype=torch.long))
+        if getattr(self, "_hooks_set", None) is not pm:
+            pm.pre_replay_hooks.append(lambda s0, C_: self.sink.update(s0, C_))
+            pm.post_replay_hooks.append(self._post_chunk)
+            self._hooks_set = pm
+        pm.timing = {}
+        if os.environ.get("DSV41_IL_DEC_FIRST", "0") == "1" and self.trace_id is None and pm.dyn_trace is None:
+            z = torch.zeros(B, dtype=torch.long)
+            self._capture_decode(z, z)  # decode trace BEFORE the prefill trace (nothing is live yet)
+            self.trace_id_first = self.trace_id
+        if pm.capture_dyn(
+            C, S_pad
+        ):  # (re)captured: the carried state of every user is gone, the decode trace shares the freed DRAM
+            resume.clear()
+            self.release_trace()
+            self.log_dram("after capture_dyn")
+        masked = getattr(pm.dyn, "umask", None) is not None
+        for b, t, st, e in items:
+            if st == 0:
+                self.pool.release(b)
+                self.pool.admit(b, e + 1)
+            else:
+                self.pool.grow(b, e + 1)
+        self.pool.sync_page_table()
+        if self.host_rows is not None:
+            cap = self.hasher.st.cache.shape[1]
+            assert -(-max_end // C) * C <= cap, f"Engram history capacity {cap} < padded prompt {-(-max_end // C) * C}"
+        res, self._res, self._want_logits = {}, {}, want_logits
+        n_replays, t_rep, t_host, t_exp, t_hash = 0, 0.0, 0.0, 0.0, 0.0
+        t_pre = time.perf_counter() - t_start
+        for st0 in sorted({st for _, _, st, _ in items}):
+            grp = [it for it in items if it[2] == st0]
+            for s0 in range(st0, max(e for _, _, _, e in grp), C):
+                part = [it for it in grp if it[3] > s0]
+                active, lens = torch.zeros(B, dtype=torch.bool), torch.zeros(B, dtype=torch.long)
+                tok = torch.zeros(B, C, dtype=torch.long)
+                for b, t, st, e in part:
+                    n = min(e - s0, C)
+                    tok[b, :n] = t[s0 : s0 + n]
+                    tok[b, n:] = t[e - 1]
+                    active[b], lens[b] = True, e
+                idx = active.nonzero().reshape(-1)
+                hs = None
+                th0 = time.perf_counter()
+                if self.host_rows is not None:
+                    hs = self.hasher(tok[idx], torch.full((len(idx),), s0, dtype=torch.long), rows=idx)
+                t_hash += time.perf_counter() - th0
+                self.sink.set_lengths(lens)
+                self._last_pos = lens - 1
+                th, td = pm.replay_window(tok, hs, s0, C, active)
+                n_replays, t_host, t_rep = n_replays + 1, t_host + th, t_rep + td
+                done = [b for b, _, _, e in part if e <= s0 + C]
+                te0 = time.perf_counter()
+                if done:
+                    self._export_keys_users(done, ends, s0 + C)
+                t_exp += time.perf_counter() - te0
+                for b, _, _, e in part:
+                    if e <= s0 + C:
+                        resume.pop(b, None)
+                        if e % C == 0:
+                            resume[b] = e
+                    else:
+                        resume[b] = s0 + C
+                if not masked:  # unmasked trace: every user outside this replay had its carried state overwritten
+                    for b in [b for b in resume if b not in {p[0] for p in part}]:
+                        resume.pop(b)
+        for b, _, _, _ in items:
+            res[b] = self._res[b]
+        self.timing = dict(
+            pm.timing,
+            total=time.perf_counter() - t_start,
+            replays=n_replays,
+            replay_s=t_rep,
+            host_s=t_host,
+            pre_s=t_pre,
+            hash_s=t_hash,
+            export_s=t_exp,
+        )
+        return res
+
     def prefill_forward_legacy(self, tokens, prompt_lens, chunk=None, max_new_tokens=0, want_logits=False, hook=None):
         """tokens [B, L] right-padded prompts, prompt_lens [B] -> (first generated token [B] (greedy), logits [B, vocab] fp32 or None). Leaves, for every
         user: KV pages + rings + compressor state of all layers in the decode pool, the Engram token history on the host.

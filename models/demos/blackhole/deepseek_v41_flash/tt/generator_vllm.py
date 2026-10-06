@@ -67,7 +67,8 @@ class DeepseekV41ForCausalLM:
 
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_chunked_prefill": False,
+        # chunked prefill / interleaving of prefill with decode (INTERLEAVE_NOTES.md): only with DSV41_VLLM_INTERLEAVE=1
+        "supports_chunked_prefill": os.environ.get("DSV41_VLLM_INTERLEAVE", "0") == "1",
         "supports_async_decode": False,
         "supports_sample_on_device": True,
         # device sampling = greedy only: temperature > 0 with top_k != 1 falls back to host sampling on the logits this class returns
@@ -92,6 +93,12 @@ class DeepseekV41ForCausalLM:
             os.environ.setdefault(
                 "DSV41_CKPT", ckpt
             )  # tt/model_args.py reads it at import time: set before the model modules are imported
+        if os.environ.get("DSV41_VLLM_INTERLEAVE", "0") == "1":
+            os.environ.setdefault(
+                "DSV41_PF_UMASK", "1"
+            )  # carried prefill state of users outside a replay stays intact (read when the prefill trace is built)
+            if os.environ.get("DSV41_PREFILL_DYN", "1") == "0":
+                raise ValueError("DSV41_VLLM_INTERLEAVE needs the traced chunk prefill (DSV41_PREFILL_DYN != 0)")
         if int(os.environ.get("DSV41_SPEC", "0")) > 0:
             raise ValueError("DSV41_SPEC (speculative decoding) is not part of the vLLM interface; unset it")
         from models.demos.blackhole.deepseek_v41_flash.tt.common import create_tt_model, default_page_params
@@ -120,6 +127,9 @@ class DeepseekV41ForCausalLM:
         self.B = int(self.m.B)
         self.slots = VS.SlotTable(self.max_num_seqs, self.B)
         self.book = VS.TokenBook(self.B, self.max_seq_len + 1024)
+        self.interleave = os.environ.get("DSV41_VLLM_INTERLEAVE", "0") == "1"
+        self.inprog = VS.PrefillTracker()  # users prefilled in chunks and not decoding yet (interleave mode)
+        self.s_pad_cur = 0
         self.s_pad_policy = os.environ.get("DSV41_VLLM_S_PAD", "bucket")
         self.kv_cache = None
         self.timing = {}
@@ -196,6 +206,14 @@ class DeepseekV41ForCausalLM:
                 )
         if max(lens) + 1 > self.max_seq_len:
             raise ValueError(f"prompt of {max(lens)} tokens does not fit max_model_len {self.max_seq_len}")
+        if self.interleave:
+            return self._prefill_interleaved(tokens, lens, empty_slots, start_pos, device_sampling, enable_trace)
+        if start_pos is not None and any(
+            int(x) != 0 for x in (start_pos.tolist() if hasattr(start_pos, "tolist") else start_pos)
+        ):
+            raise ValueError(
+                "prefill with a start position (chunked prefill / prefix caching) needs DSV41_VLLM_INTERLEAVE=1"
+            )
         if empty_slots is None:
             used = {self.slots.phys[s] for s in range(self.max_num_seqs) if self.slots.phys[s] in self.slots.live}
             free = [s for s in range(self.max_num_seqs) if self.slots.phys[s] not in used]
@@ -241,6 +259,81 @@ class DeepseekV41ForCausalLM:
             return first[rows].to(torch.int32).reshape(N)
         return logits[rows].float().reshape(N, 1, -1)
 
+    def _interleave_chunk(self):
+        c = (
+            int(os.environ.get("DSV41_VLLM_CHUNK", "0"))
+            or self.generator.prefill_chunk
+            or self.generator.auto_chunk(self.max_seq_len)
+        )
+        c = int(c or 1024)
+        if c % 128:
+            raise ValueError(f"prefill chunk {c} must be a multiple of 128")
+        return c
+
+    def _prefill_interleaved(self, tokens, ends, empty_slots, start_pos, device_sampling, enable_trace):
+        """Prefill of the new requests / prompt chunks while other requests keep decoding (``Model.prefill_interleaved``): tokens [N, >= max end] (every prompt from
+        position 0), ``ends`` the end position of this chunk of every row (= the prompt length for a whole prompt), ``start_pos`` the start (0 for a new request).
+        A row with start > 0 is a continuation chunk of a request that is prefilled over several steps; the first token returned for a chunk that is not the last one
+        of its prompt is meaningless (the plugin discards it). Positions [start, end) are computed in windows of one chunk (a model-wide constant).
+        """
+        N = len(ends)
+        starts = (
+            [int(x) for x in (start_pos.tolist() if hasattr(start_pos, "tolist") else start_pos)]
+            if start_pos is not None
+            else [0] * N
+        )
+        toks = tokens.reshape(N, -1)
+        if empty_slots is None:
+            used = {self.slots.phys[s] for s in range(self.max_num_seqs) if self.slots.phys[s] in self.slots.live}
+            free = [s for s in range(self.max_num_seqs) if self.slots.phys[s] not in used]
+            if len(free) < N:
+                raise RuntimeError(f"{N} prefills but only {len(free)} free slots")
+            empty_slots = free[:N]
+        empty_slots = [int(s) for s in empty_slots]
+        t0 = time.perf_counter()
+        items, phys = [], []
+        for i in range(N):
+            st, e, slot = starts[i], ends[i], empty_slots[i]
+            if not 0 <= st < e:
+                raise ValueError(f"chunk [{st}, {e}) of row {i} is empty or reversed")
+            p = None
+            if st > 0:
+                p = self.inprog.find(st, toks[i, :st])
+                if p is not None and self.m.__dict__.get("pf_resume", {}).get(p) != st:
+                    p = None  # its carried prefill state was lost (re-captured trace / unmasked trace): recompute from position 0
+                if p is not None:
+                    self.slots.bind(slot, p)
+                    self.slots.live.add(p)
+                else:
+                    logger.warning(
+                        f"DSV4.1 chunk continuation at {st} without carried state: recomputing from position 0"
+                    )
+                    st = 0
+            if p is None:
+                p = self.slots.claim([slot])[0]
+            items.append((p, toks[i], st, e))
+            phys.append(p)
+        if len(set(phys)) != N:
+            raise ValueError(f"duplicate prefill slots {empty_slots}")
+        S = max(ends)
+        chunk = self._interleave_chunk()
+        self.s_pad_cur = max(self.s_pad_cur, VS.s_pad_bucket(S, chunk, self.s_pad_policy))
+        want_logits = not device_sampling
+        logger.info(
+            f"DSV4.1 prefill (interleave): chunks {[(it[2], it[3]) for it in items]} in slots {empty_slots} (users {phys}), chunk {chunk}, "
+            f"S_pad {self.s_pad_cur}, {'host sampling' if want_logits else 'device sampling'}"
+        )
+        res = self.m.prefill_interleaved(items, chunk, s_pad_max=self.s_pad_cur, want_logits=want_logits)
+        for i, p in enumerate(phys):
+            self.book.set_prompt(p, toks[i, : ends[i]].reshape(-1))
+            self.inprog.update(p, ends[i], toks[i])
+        self.timing["prefill"] = time.perf_counter() - t0
+        self._calls["prefill"] += 1
+        logger.info(f"DSV4.1 prefill (interleave) done in {self.timing['prefill']:.2f} s (model: {self.m.timing})")
+        if device_sampling:
+            return torch.tensor([int(res[p][0]) for p in phys], dtype=torch.int32).reshape(N)
+        return torch.stack([res[p][1] for p in phys]).float().reshape(N, 1, -1)
+
     # ---- decode ------------------------------------------------------------------------------------------------------------------------------
     def decode_forward(
         self,
@@ -263,7 +356,11 @@ class DeepseekV41ForCausalLM:
         if slot_remap is not None:
             self.slots.apply_remap(slot_remap)
         W = int(tokens.shape[0])
-        tok_B, pos_B, rows = VS.build_decode_inputs(self.B, self.slots, tokens, start_pos)
+        tok_B, pos_B, rows = VS.build_decode_inputs(
+            self.B, self.slots, tokens, start_pos, parked=self.inprog.parked() if self.interleave else None
+        )
+        for _, p, _ in rows:
+            self.inprog.drop(p)  # decoding now
         if device_sampling:
             if VS.wants_logprobs(sampling_params, [i for i, _, _ in rows]):
                 raise ValueError(
@@ -300,8 +397,14 @@ class DeepseekV41ForCausalLM:
         """The plugin finished / preempted the request of logical ``slot``: free its pages (the model user is reused by the next prefill into that slot)."""
         p = self.slots.release(int(slot))
         if p is not None:
-            self.m.pool.release(p)
+            if hasattr(self.m, "release_user"):
+                self.m.release_user(
+                    p
+                )  # frees the pages, keeps the user admitted with one page (the decode loop grows the pages of every user)
+            else:
+                self.m.pool.release(p)
             self.book.clear(p)
+            self.inprog.drop(p)
 
     def warmup_model_prefill(self, kv_cache=None, enable_trace=True, *args, **kwargs):
         """No-op: the prefill trace is keyed by the (chunk, S_pad) of the first prompt and cannot be captured without one. The first request compiles and captures

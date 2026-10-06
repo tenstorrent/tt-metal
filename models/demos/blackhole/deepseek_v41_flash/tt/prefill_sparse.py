@@ -29,6 +29,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM, LOC
 from models.demos.blackhole.deepseek_v41_flash.tt.indexer import DIM as IDIM
 from models.demos.blackhole.deepseek_v41_flash.tt.indexer import HEADS as IHEADS
 from models.demos.blackhole.deepseek_v41_flash.tt.indexer import TOPK, DSV41DecodeIndexer
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import gate_user_state
 
 SKIP = 0xFFFFFFFF
 PAD_HEADS = 32
@@ -335,7 +336,7 @@ class DSV41PrefillIndexer:
         ttnn.deallocate(wt)
         return out
 
-    def add_keys_dyn(self, lat_pre, tab, Cc):
+    def add_keys_dyn(self, lat_pre, tab, Cc, ctx=None):
         """FIFO variant of ``add_keys``: the keys of the chunk's entries are appended at the END of the slab (tab: (cos, sin, -sin) of the entry positions)."""
         d, U = self.dec, self.U
         x = ttnn.reshape(lat_pre, [1, 1, U * Cc, HEAD_DIM])
@@ -351,9 +352,13 @@ class DSV41PrefillIndexer:
         if (
             L == Cc
         ):  # single-chunk prompt (S_pad == C): the FIFO is just this chunk (a zero-length slice breaks the concat)
-            ttnn.copy(k, self.keys)
+            ttnn.copy(gate_user_state(ctx, k, self.keys), self.keys)
             return
         new = ttnn.concat([ttnn.slice(self.keys, [0, 0, Cc, 0], [U, 1, L, IDIM]), k], dim=2)
+        if getattr(ctx, "umask", None) is not None:
+            gated = gate_user_state(ctx, new, self.keys)
+            ttnn.deallocate(new)
+            new = gated
         ttnn.copy(new, self.keys)
         ttnn.deallocate(new)
 
@@ -673,17 +678,25 @@ class DSV41PrefillSparse:
                 L == Cc
             ):  # single-chunk prompt (S_pad == C): the FIFO is just this chunk (a zero-length slice breaks the concat)
                 new = ttnn.to_layout(lat, ttnn.ROW_MAJOR_LAYOUT)
+                if getattr(ctx, "umask", None) is not None:
+                    gated = gate_user_state(ctx, new, ttnn.slice(kt, [0, 0, 0, 0], [U, 1, L, HEAD_DIM]))
+                    ttnn.deallocate(new)
+                    new = gated
                 ttnn.experimental.slice_write(new, kt, [0, 0, 0, 0], [U, 1, L, HEAD_DIM], [1, 1, 1, 1])
             else:
                 body = ttnn.slice(kt, [0, 0, Cc, 0], [U, 1, L, HEAD_DIM])
                 new = ttnn.concat([body, ttnn.to_layout(lat, ttnn.ROW_MAJOR_LAYOUT)], dim=2)
+                if getattr(ctx, "umask", None) is not None:
+                    gated = gate_user_state(ctx, new, ttnn.slice(kt, [0, 0, 0, 0], [U, 1, L, HEAD_DIM]))
+                    ttnn.deallocate(new)
+                    new = gated
                 ttnn.experimental.slice_write(new, kt, [0, 0, 0, 0], [U, 1, L, HEAD_DIM], [1, 1, 1, 1])
                 ttnn.deallocate(body)
             ttnn.deallocate(new)
         ix = self.indexer
         if ix is not None and ix.key_owner is None:  # key FIFO
             tab = ctx.lat_tabs[r] if r > 1 else ctx.tabs[True]
-            ix.add_keys_dyn(lat_pre, tab, Cc)
+            ix.add_keys_dyn(lat_pre, tab, Cc, ctx)
         full = ttnn.to_layout(ttnn.concat([halo, kv], dim=2), ttnn.ROW_MAJOR_LAYOUT)
         ttnn.experimental.slice_write(full, kt, [0, 0, L, 0], [U, 1, L + WINDOW + C, HEAD_DIM], [1, 1, 1, 1])
         ttnn.deallocate(full)
