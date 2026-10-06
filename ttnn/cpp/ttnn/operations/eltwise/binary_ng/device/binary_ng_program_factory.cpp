@@ -1002,15 +1002,16 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             post_activations.insert(post_activations.begin(), *op_config.postprocess);
         }
 
-        // Blackhole's FPU multiplies bf16 and block-float operands exactly at HiFi2; the HiFi3 and HiFi4 phases add zeros.
-        const auto exact_at_hifi2 = [](DataType dt) {
-            return dt == DataType::BFLOAT16 || dt == DataType::BFLOAT8_B || dt == DataType::BFLOAT4_B;
-        };
+        // At HiFi2 the FPU multiplies 7 significant bits of SrcB (the math right-hand operand) by 10 of SrcA, so a
+        // block-float SrcB times a bf16 or block-float SrcA is exact.
+        const auto block_float = [](DataType dt) { return dt == DataType::BFLOAT8_B || dt == DataType::BFLOAT4_B; };
+        const DataType srca_dtype = scalar_first ? b_dtype : a_dtype;
+        const DataType srcb_dtype = scalar_first ? a_dtype : b_dtype;
         exact_mul_at_hifi2 = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op &&
                              std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
                              std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) == OpConfig::FpuBinaryOp::MUL &&
-                             lhs_activations.empty() && rhs_activations.empty() && exact_at_hifi2(a_dtype) &&
-                             exact_at_hifi2(b_dtype);
+                             lhs_activations.empty() && rhs_activations.empty() && block_float(srcb_dtype) &&
+                             (block_float(srca_dtype) || srca_dtype == DataType::BFLOAT16);
 
         bool is_integer_division =
             (operation_attributes.binary_op_type == BinaryOpType::DIV && a_dtype == DataType::INT32 &&

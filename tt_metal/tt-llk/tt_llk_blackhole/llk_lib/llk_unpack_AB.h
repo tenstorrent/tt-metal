@@ -145,22 +145,64 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
 }
 
 /**
- * @brief Whether the two-operand unpack can hand each operand over as one source bank holding the whole tile: SrcDvalid::PerTile and no
- *        broadcast; it does without transpose and with full 16-row faces. The math init (@ref _llk_math_eltwise_binary_init_) applies the same rule.
+ * @brief Whether the two-operand unpack can hand each operand over as one source bank holding the whole tile: SrcDvalid::PerTile, with or
+ *        without a broadcast; it does without transpose and for the shapes of @ref unpack_AB_tile_shape. The math init
+ *        (@ref _llk_math_eltwise_binary_init_) applies the same rule.
  */
 template <BroadcastType BType, SrcDvalid src_dvalid>
-inline constexpr bool unpack_AB_tile_dvalid = src_dvalid == SrcDvalid::PerTile && BType == BroadcastType::NONE;
+inline constexpr bool unpack_AB_tile_dvalid = src_dvalid == SrcDvalid::PerTile;
 
 /**
- * @brief Configure the MOP that hands each operand over as one source bank (see @ref unpack_AB_tile_dvalid): one UNPACR per operand reads
- *        every face (datum count set by the init) and publishes it once.
+ * @brief Whether a tile takes the whole-tile hand-off: full 16-row faces, and 2 x 2 faces for a column or row broadcast. Matches the math
+ *        side's eltwise_binary_tile_shape.
  */
+template <BroadcastType BType>
+inline bool unpack_AB_tile_shape(const ckernel::TensorShape tensor_shape)
+{
+    constexpr bool needs_2x2_faces = BType == BroadcastType::COL || BType == BroadcastType::ROW;
+    return tensor_shape.face_r_dim == FACE_R_DIM && (!needs_2x2_faces || (tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 2));
+}
+
+/**
+ * @brief Configure the MOP that hands each operand over as one source bank (see @ref unpack_AB_tile_dvalid): one UNPACR reads every face
+ *        of A (datum count set by the init) and publishes it once; B fills its bank in the layout the math MOP reads, then publishes it.
+ *        No broadcast: B's whole tile. Scalar: B's face 0. Column: faces 0, 0, 2, 2, one per 16 rows. Row: faces 0 and 1, twice.
+ *
+ * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ */
+template <BroadcastType BType>
 inline void _llk_unpack_AB_mop_config_tile_()
 {
     static constexpr std::uint32_t unpack_srca_tile = TT_OP_UNPACR(SrcA, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr std::uint32_t unpack_srcb_tile = TT_OP_UNPACR(SrcB, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    ckernel_template tmp(1, 1, unpack_srca_tile, unpack_srcb_tile);
-    tmp.program();
+    static constexpr std::uint32_t unpack_srcb_last = TT_OP_UNPACR(SrcB, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    // B counters back to the tile base for the next call
+    static constexpr std::uint32_t srcb_reset_zw = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b1111);
+
+    if constexpr (BType == BroadcastType::COL)
+    {
+        // AddrMode bits 5:4 step the SrcB row by one face (Ch1 Z), bits 1:0 step the L1 face (Ch0 Z)
+        static constexpr std::uint32_t srcb_same_face = TT_OP_UNPACR(SrcB, 0b00010000, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        static constexpr std::uint32_t srcb_to_face_2  = TT_OP_UNPACR(SrcB, 0b00010010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        ckernel_template tmp(1, 2, srcb_same_face, srcb_to_face_2);
+        tmp.set_start_op(unpack_srca_tile);
+        tmp.set_last_inner_loop_instr(unpack_srcb_last);
+        tmp.set_last_outer_loop_instr(unpack_srcb_last);
+        tmp.set_end_op(srcb_reset_zw);
+        tmp.program();
+    }
+    else if constexpr (BType == BroadcastType::ROW)
+    {
+        static constexpr std::uint32_t srcb_two_faces = TT_OP_UNPACR(SrcB, 0b00100000, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        ckernel_template tmp(1, 1, srcb_two_faces, unpack_srcb_last);
+        tmp.set_start_op(unpack_srca_tile);
+        tmp.set_end_op(srcb_reset_zw);
+        tmp.program();
+    }
+    else
+    {
+        ckernel_template tmp(1, 1, unpack_srca_tile, unpack_srcb_last);
+        tmp.program();
+    }
 }
 
 /**
@@ -191,10 +233,20 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
         LLK_ASSERT(
             transpose == ckernel::Transpose::None,
             "SrcDvalid::PerTile publishes per face for a transposed operand; pair a transposed unpack with SrcDvalid::PerFace on both threads");
-        if (transpose == ckernel::Transpose::None && tensor_shape.face_r_dim == FACE_R_DIM)
+        if (transpose == ckernel::Transpose::None && unpack_AB_tile_shape<BType>(tensor_shape))
         {
-            TT_SETADCXX(p_setadc::UNP_AB, tensor_shape.total_num_faces() * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
-            _llk_unpack_AB_mop_config_tile_();
+            constexpr std::uint32_t face_datums = FACE_R_DIM * FACE_C_DIM;
+            const std::uint32_t tile_datums     = tensor_shape.total_num_faces() * face_datums;
+            if constexpr (BType == BroadcastType::NONE)
+            {
+                TT_SETADCXX(p_setadc::UNP_AB, tile_datums - 1, 0x0);
+            }
+            else
+            {
+                TT_SETADCXX(p_setadc::UNP_A, tile_datums - 1, 0x0);
+                TT_SETADCXX(p_setadc::UNP_B, (BType == BroadcastType::ROW ? 2 * face_datums : face_datums) - 1, 0x0);
+            }
+            _llk_unpack_AB_mop_config_tile_<BType>();
             return;
         }
     }

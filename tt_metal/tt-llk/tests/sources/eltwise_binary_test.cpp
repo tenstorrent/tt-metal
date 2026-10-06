@@ -20,7 +20,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 #if defined(ARCH_BLACKHOLE)
 // Both threads hand each operand tile over as one source bank (SrcDvalid::PerTile), except for a transposed SrcA and the
-// per_face_handoff variant, which use SrcDvalid::PerFace; broadcasts and partial faces fall back inside the LLK for either value.
+// per_face_handoff variant, which use SrcDvalid::PerFace; partial faces fall back inside the LLK for either value.
 #define ELTWISE_BINARY_PER_FACE_DVALID(params) (per_face_handoff || (params).UNPACK_TRANSPOSE_FACES || (params).UNPACK_TRANSPOSE_WITHIN_FACE)
 #define SRC_DVALID_ARG , src_dvalid
 #else
