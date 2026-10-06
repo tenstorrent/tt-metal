@@ -76,6 +76,10 @@ def test_chronological_selections(mesh_device, device_params, sp_axis, bounded):
                 min(rows + 32, capacity),
                 capacity - 64,
                 capacity - 32,
+                # Unaligned ends leave at least three valid rows on the final owner.
+                35,
+                min(rows + 35, capacity),
+                capacity - 1,
                 capacity,
             ]
             cases = [(start, length) for start in (0, 32, 96, rows, rows + 96, 2 * capacity + 32) for length in lengths]
