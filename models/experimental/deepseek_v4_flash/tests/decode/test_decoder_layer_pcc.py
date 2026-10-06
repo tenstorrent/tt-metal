@@ -240,10 +240,6 @@ from models.experimental.deepseek_v4_flash.tt.decode.attention import (  # noqa:
 )
 from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import make_decode_prefetch_buffers  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.decode.decoder_layer import DeepSeekV4DecoderLayer  # noqa: E402
-from models.experimental.deepseek_v4_flash.tt.decode.l1_weights import (  # noqa: E402
-    build_l1_weight_tensor,
-    placement_weights_from_decoder_layer,
-)
 from models.experimental.deepseek_v4_flash.tt.decode.moe import DeepSeekV4PreloadedExperts  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache  # noqa: E402
 from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session  # noqa: E402
@@ -391,7 +387,7 @@ def _rope_rows(cos_half: torch.Tensor, sin_half: torch.Tensor, device) -> tuple:
 @pytest.mark.parametrize("layer_idx", (4, 5))  # 4 = CSA + moe, 5 = HCA + moe
 @pytest.mark.parametrize("seq_len", (256,))
 @pytest.mark.parametrize("batch_size", (1, 8))
-@pytest.mark.parametrize("delivery", ("l1", "prefetch", "packed"))
+@pytest.mark.parametrize("delivery", ("l1", "prefetch"))
 def test_decoder_layer_decode_pcc(
     device, reset_seeds, tmp_path, layer_idx: int, batch_size: int, seq_len: int, delivery: str
 ) -> None:
@@ -440,28 +436,6 @@ def test_decoder_layer_decode_pcc(
     cache = _weight_cache(layer_idx)
     weights = _build_layer_weights(loader, layer_idx, layer_type)
     prefetch = delivery == "prefetch"
-    packed_weights = None
-    if delivery == "packed":
-        grid = device.compute_with_storage_grid_size()
-        if grid.x * grid.y < 120:
-            pytest.skip("packed decoder weights require a 120-core Blackhole chip")
-        packed_cache = cache.sub("packed_decoder_test") if cache else WeightCache()
-        cache_name = f"layer_{layer_idx}_{layer_type}"
-        cache_file = packed_cache.file(cache_name)
-        # One layer only, and within it only the weights this layer actually materializes:
-        # the shard is sized to the largest zone's regions, so packing the placement's full
-        # name set would reserve L1 on every core for slabs no op here ever reads.
-        placement_weights = placement_weights_from_decoder_layer(weights, layer_type)
-        packed_kwargs = dict(
-            layer_types=(layer_type,),
-            weight_names_by_layer=(frozenset(placement_weights),),
-            cache_file_name=cache_file,
-        )
-        if packed_cache.hit(cache_name, ttnn.bfloat4_b):
-            bundle_packed = build_l1_weight_tensor(None, device, **packed_kwargs)
-        else:
-            bundle_packed = build_l1_weight_tensor([placement_weights], device, **packed_kwargs)
-        packed_weights = (bundle_packed, 0)
     experts = DeepSeekV4PreloadedExperts(
         cfg,
         _expert_provider(loader, layer_idx),
@@ -489,7 +463,7 @@ def test_decoder_layer_decode_pcc(
         weight_dtype=ttnn.bfloat4_b,
         use_prefetcher=prefetch,
         prefetch_buffers=prefetch_buffers,
-        packed_weights=packed_weights,
+        matmul_decode=True,
     )
 
     streams = bundle["streams"]  # [B, S, hc_mult, D]

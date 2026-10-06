@@ -7,11 +7,11 @@ from ..common import DeepSeekV4Module, _HIFI4_SDPA, _MASK_NEG, _profile, _signpo
 from .decode_prefetch import (
     DECODE_LAYOUTS,
     KV_GCB,
-    Q_A_GCB,
     ROUTER_GATE_GCB,
     check_decode_layout,
     decode_prefetch_page_bytes,
     ensure_named_gcb,
+    ensure_q_a_gcb,
     kv_page_bytes,
     make_decode_prefetch_buffers,
     q_a_page_bytes,
@@ -714,9 +714,7 @@ def _compressor_projections(
             )
             prefetch["global_cb_page_bytes"] = router_gate_page_bytes(weight_dtype)
         elif layout_name == "compressed_sparse_attention" or layer_type == "compressed_sparse_attention":
-            prefetch["global_cb"] = ensure_named_gcb(
-                prefetch_buffers, Q_A_GCB, device, [DECODE_LAYOUTS["q_a_proj"]], weight_dtype
-            )
+            prefetch["global_cb"] = ensure_q_a_gcb(prefetch_buffers, device, weight_dtype)
             prefetch["global_cb_page_bytes"] = q_a_page_bytes(weight_dtype)
         else:
             prefetch["global_cb"] = ensure_named_gcb(
@@ -868,13 +866,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             prefetch = {"use_prefetcher": use_prefetcher}
             if use_prefetcher:
                 if name == "q_a_proj":
-                    prefetch["global_cb"] = ensure_named_gcb(
-                        prefetch_buffers,
-                        Q_A_GCB,
-                        device,
-                        [DECODE_LAYOUTS["q_a_proj"]],
-                        weight_dtype,
-                    )
+                    prefetch["global_cb"] = ensure_q_a_gcb(prefetch_buffers, device, weight_dtype)
                     prefetch["global_cb_page_bytes"] = q_a_page_bytes(weight_dtype)
                 elif name == "kv_proj":
                     prefetch["global_cb"] = ensure_named_gcb(
@@ -1084,11 +1076,12 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         is checked nowhere -- a matmul that runs out of turn pops another weight's page and
         computes wrong results rather than erroring -- so each ring is queued in the order
         :meth:`decode` consumes it. On the shared 64-receiver GCB that is q_b, then the
-        indexer's q_b when scoring, then ``_attend``'s o_a before o_b. On q_a's private
-        32-receiver ring it is q_a, then CSA's kv/gate. On kv's private 16-receiver ring it
-        is kv, then HCA's kv/gate. The MoE shared expert's gate/up follow CSA on q_a's ring
-        and its down follows o_b on the shared buffer (queued from
-        :meth:`DeepSeekV4SparseMoeBlock.prefetch_weights`).
+        indexer's q_b when scoring, then ``_attend``'s o_a before o_b. On q_a's 32-receiver
+        ring it is q_a, then CSA's kv/gate, after the attention hyper-connection's ``fn``. On
+        kv's private 16-receiver ring it is kv, then HCA's kv/gate. The FFN hyper-connection's
+        ``fn`` and the MoE shared expert's gate/up follow CSA on q_a's ring, and its down
+        follows o_b on the shared buffer (queued from
+        :meth:`~.decoder_layer.DeepSeekV4DecoderLayer.prefetch_weights`).
 
         One prefetcher socket serves every ring, and it does not read the next request
         while the current one is waiting for ring space. o_a and o_b are not popped until
@@ -1568,6 +1561,10 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             ttnn.deallocate(tokens)
         tokens = gathered
         q, kv_new, q_a = self._qkv(tokens, cos, sin)  # q [1,1,B,H*Dh], kv_new [1,1,B,Dh]
+        if b * s > 1:
+            # At B == 1 the packed row already is the one-core row the cache write takes; a
+            # wider batch sits on one core and has to be spread one user per core.
+            kv_new = _one_row_per_user(kv_new)  # [1, B, 1, Dh]
         use_indexer = (
             index_sparse
             and self.layer_type == "compressed_sparse_attention"

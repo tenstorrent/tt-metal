@@ -20,11 +20,11 @@ import torch
 from ..common import DeepSeekV4Module, _profile, width_sharded_l1_config
 from .decode_prefetch import (
     DECODE_LAYOUTS,
-    Q_A_GCB,
     ROUTER_GATE_GCB,
     check_decode_layout,
     decode_prefetch_page_bytes,
     ensure_named_gcb,
+    ensure_q_a_gcb,
     make_decode_prefetch_buffers,
     q_a_page_bytes,
     router_gate_page_bytes,
@@ -147,13 +147,11 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         if use_prefetcher:
             if prefetch_buffers is None:
                 prefetch_buffers = make_decode_prefetch_buffers(device, weight_dtype)
-            # Same 32-receiver FIFO as q_a (and CSA). Queued after those in
-            # :meth:`DeepSeekV4SparseMoeBlock.prefetch_weights`.
+            # Same 32-receiver FIFO as q_a (and CSA and the hyper-connections' fn). Queued
+            # after those in :meth:`DeepSeekV4SparseMoeBlock.prefetch_weights`.
             gate_up_prefetch = {
                 "use_prefetcher": True,
-                "global_cb": ensure_named_gcb(
-                    prefetch_buffers, Q_A_GCB, device, [DECODE_LAYOUTS["q_a_proj"]], weight_dtype
-                ),
+                "global_cb": ensure_q_a_gcb(prefetch_buffers, device, weight_dtype),
                 "global_cb_page_bytes": q_a_page_bytes(weight_dtype),
             }
             down_prefetch = {
@@ -219,7 +217,7 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         :meth:`forward` that uses them.
 
         Queued gate, up, then down: gate/up stream through q_a's 32-receiver FIFO (queued after
-        q_a and CSA), down through the shared 64-core GCB. Under TP, gate/up are DRAM->L1 copies.
+        q_a, CSA and the FFN hyper-connection's ``fn``), down through the shared 64-core GCB. Under TP, gate/up are DRAM->L1 copies.
         Queue order on each ring has to match consume order, here and against the attention block
         (whose weights precede down on the shared buffer, because attention runs first in the
         decoder layer).
@@ -289,7 +287,7 @@ def _make_router_gate(
     tile per core), so it consumes the decode all-gather replica (ROW_MAJOR HEIGHT_SHARDED A)
     where it sits instead of unreplicating it through DRAM and re-sharding it -- that round trip
     was four extra device ops per step. The 8-receiver cut cannot join the shared 64-receiver ring
-    or ``HC_FN_GCB``, so it streams through :data:`ROUTER_GATE_GCB`.
+    or q_a's 32-receiver one, so it streams through :data:`ROUTER_GATE_GCB`.
     """
     if not (use_prefetcher if matmul_decode is None else matmul_decode):
         return Linear(weights["gate.weight"], device, cache.file("gate"))

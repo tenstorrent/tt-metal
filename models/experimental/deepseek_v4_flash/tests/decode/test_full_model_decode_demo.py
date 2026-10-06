@@ -20,8 +20,11 @@ The test has two deployment variants:
 Attention uses q_a/kv, replicated full-width on every rank of a
 stage; head-sharded SDPA, batched local-group O_A and row-parallel O_B.
 MoE shards the intermediate dimension and all-reduces its output. The DRISC
-prefetcher stays on (same as TP1) for every projection that still fits the
-shared GCB.
+prefetcher stays on (same as TP1) and streams through four rings per stage
+device: the shared 64-receiver ring (q_b, o_a, o_b, shared-expert down), q_a's
+32-receiver ring (both hyper-connections' ``fn``, q_a, the CSA compressor),
+kv's 16-receiver ring and the router gate's 8-receiver ring. The per-rank
+shared-expert gate/up (8 cores at TP4) fits none of them and copies DRAM -> L1.
 
 All weights live on device in ``bfloat4_b``. Set ``DEEPSEEK_V4_CACHE_DIR`` to
 reuse the converted ttnn weight tiles across runs, and optionally cap the stack
@@ -53,6 +56,12 @@ import ttnn
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import encode_messages
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
+from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import (
+    DECODE_GCB_GROUP,
+    KV_GCB,
+    Q_A_GCB,
+    ROUTER_GATE_GCB,
+)
 from models.experimental.deepseek_v4_flash.tt.decode.paged_cache import round_context
 from models.experimental.deepseek_v4_flash.tt.quant import dequantize_weight
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
@@ -207,6 +216,33 @@ def _assert_decode_parallelism(model: DeepSeekV4Model, tp_size: int, num_stages:
     logger.info(
         f"parallelism: {model.num_submeshes} pipeline stages x TP{tp_size} " f"({model.pipeline_devices} chips)"
     )
+
+
+def _assert_prefetch_rings(model: DeepSeekV4Model) -> None:
+    """The GCB set the prefetched decode streams through, pinned per stage device.
+
+    Each device holds at most the shared ring plus the q_a, kv and router-gate rings (four
+    of the DRISC senders' ~six state slots), and both hyper-connections' ``fn`` stream through
+    q_a's ring rather than one of their own.
+    """
+    if not model.use_prefetcher:
+        return
+    allowed = set(DECODE_GCB_GROUP) | {Q_A_GCB, KV_GCB, ROUTER_GATE_GCB}
+    for _, buffers in model._prefetch_buffers_by_device.values():
+        assert set(buffers) <= allowed, f"unexpected prefetch rings {sorted(set(buffers) - allowed)}"
+        rings = {id(gcb) for gcb in buffers.values()}
+        assert len(rings) <= 4, f"{len(rings)} GCBs on one device, expected at most 4"
+    for layer in model.layers:
+        q_a_ring = layer.self_attn.q_a_proj.global_cb
+        assert q_a_ring is not None, "q_a must stream through the prefetcher"
+        assert layer.attn_hc.fn.global_cb is q_a_ring, "attention hyper-connection fn must ride q_a's ring"
+        assert layer.ffn_hc.fn.global_cb is q_a_ring, "FFN hyper-connection fn must ride q_a's ring"
+        if model.tp_size > 1:
+            shared = layer.mlp.shared_experts
+            assert (
+                not shared.gate_proj.use_prefetcher and not shared.up_proj.use_prefetcher
+            ), "the per-rank shared-expert gate/up cut matches no ring and must copy DRAM -> L1"
+    logger.info(f"prefetch rings: {len(model._prefetch_buffers_by_device)} device(s), fn on q_a's ring")
 
 
 def _tokenize_chat(tokenizer, text: str, thinking_mode: str = "chat", reasoning_effort: str | None = None) -> list[int]:
@@ -398,6 +434,7 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
         next_id = state["next_id"]
         generated: list[int] = [next_id]
         _assert_decode_parallelism(model, tp_size)
+        _assert_prefetch_rings(model)
         assert model.paged, "traced decode must use the paged KV layout"
 
         # Each step feeds the previously generated token at its absolute position and

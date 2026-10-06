@@ -146,12 +146,14 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         """Stage this layer's prefetched weights ahead of the :meth:`decode_static` that uses them.
 
         Every weight staged here answers that next call on this layer's ``[B,S,hc,D]`` streams.
-        Hyper-connection ``fn`` first (private ring, consumed before attention), then
+        Hyper-connection ``fn`` first (on q_a's ring, consumed before attention), then
         attention (its own four projections and its compressor's pair), then the FFN
-        hyper-connection, then the MoE (router gate on its 8-receiver ring, then the shared
-        expert's down on the shared ring; at TP4 the shared gate/up are per-step DRAM -> L1
-        copies and queue on no ring). The requests queued here must be consumed by this layer's
-        own decode before any later layer queues its own. ``index_sparse`` stages the CSA
+        hyper-connection's ``fn`` (q_a's ring again, after the compressor), then the MoE
+        (router gate on its 8-receiver ring, the shared expert's gate/up on q_a's ring, then
+        its down on the shared ring; at TP4 the shared gate/up are per-step DRAM -> L1 copies
+        and queue on no ring). That order is the consume order on q_a's ring, so it cannot be
+        rearranged per block. The requests queued here must be consumed by this layer's own
+        decode before any later layer queues its own. ``index_sparse`` stages the CSA
         indexer's score projections; the short-sequence trace leaves them unqueued.
         """
         self.attn_hc.prefetch_weights()
