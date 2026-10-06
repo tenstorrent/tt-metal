@@ -100,7 +100,7 @@ mask path, which is not on the datum path.
 |---|---|---|
 | `Float16` | Truncate to 10 bits, **then** cast. Casting straight to fp16 would round, and the unpacker does not round. | 5-bit. Above it saturates to infinity; below the smallest normal flushes to zero, so fp16 subnormals never reach the register. |
 | `Float16_b` · `Tf32` | Truncate to 10 bits. | fp32's range. Clips nothing. |
-| `Float32` | Not a conversion target — a 19-bit datum cannot hold it, so the unpacker splits it across two lanes (mantissa MSBs low, LSBs high) and every bit survives. | |
+| `Float32` | Not a legal SrcA/SrcB target at all — a 19-bit datum cannot hold it, so `l1_to_srcA` refuses it. A `Float32` **input** lands as `Tf32`, `Float16` or `Float16_b`, all of which keep 10 bits. Full fp32 survives only through `l1_to_dest` and `l1_to_srcS`. | |
 | integer | Passes through unchanged. | |
 
 Truncation, never rounding: `_truncate_src_mantissa` calls
@@ -164,6 +164,7 @@ hardware does.
 |---|---|---|
 | integer | the input format | `Int32` |
 | float | 16-bit member of the src family — `Float16` if the src is `Float16`, else `Float16_b` | `Float32` |
+| `Float32` · `Tf32` | **Raises.** The input alone does not decide the family: the device picks `Float16` or `Float16_b` from the *output* format (`infer_unpack_out`), and the two clip differently. Pass the `dest_format` the harness configured, or enable `dest_acc`. | `Float32` |
 
 > **Dest follows the unpacker's src output, never the pack format.** An MX input
 > unpacks to the 8-bit-exponent family, so Dest is bf16 *whatever you pack to*.
@@ -179,7 +180,8 @@ folded in.
 
 | Dest format | What reaches the src register |
 |---|---|
-| `Float16_b` · `Int16` | 7 explicit mantissa bits; the low 3 arrive as **zeros**. A bf16 Dest does not come back with a src register's full 10. |
+| `Float16_b` | 7 explicit mantissa bits; the low 3 arrive as **zeros**. A bf16 Dest does not come back with a src register's full 10. |
+| `Int16` | **Carried unchanged.** It shares the bf16 path, but the format label there is a transport trick rather than a conversion, so 257 comes back 257 — not rounded to 256 the way the row above would suggest. |
 | `Float16` | Passes as fp16 — 10 mantissa bits, 5-bit exponent. |
 | `Int32` | **Saturates to INT8**, clamped to ±127. A wide integer Dest cannot survive the trip, and the clamp is silent. |
 | `Float32` · `Tf32` | 10 mantissa bits and the 8-bit exponent — unless the src register is `Float16`, in which case the exponent is rebiased and values below the fp16 normal range flush to zero. |
@@ -192,6 +194,9 @@ folded in.
 | `_src_format(l1_format)` | The L1 → src-register mapping. Override where an architecture diverges; `src_format()` does the support check first, because the base mapping is built from exponent-family predicates that would otherwise return a plausible answer for a format the hardware cannot read. |
 | `UNPACK_TO_SRC_FORMATS` | Legal `L1 format -> src format` pairs, checked on both the explicit and the defaulted path. Empty means unmodelled at this level, not "everything is legal". |
 | `EDGE_MASK_MASKED_WHEN_SET` | Edge-mask polarity: `True` where a set register bit masks the datum (Quasar), `False` where it keeps it (Wormhole/Blackhole). |
+| `PACK_TO_L1_FORMATS` | Legal `Dest format -> L1 format` pairs for the packer, the mirror of `UNPACK_TO_SRC_FORMATS`. Empty means unmodelled. |
+| `HAS_SRCS` | Whether the architecture has a SrcS register. `True` on Quasar only — Wormhole and Blackhole have no `UNP_S` unpacker and no `_is_srcs_32bit_mode_`, so `l1_to_srcS` and `srcs_format` refuse there rather than answering for a register that does not exist. |
+| `PROMOTES_OUTLIER_TO_32_BIT_DEST` | Whether `TestConfig` forces `dest_acc` on for an exponent-B input with a `Float16` output. `True` everywhere except Quasar, which it skips by name, so on Wormhole/Blackhole a `Float16_b` Dest packed to `Float16` is refused — the device would have run a 32-bit Dest. |
 | `l1_to_srcA` | Concrete in the base. Override only for an architecture whose unpack differs beyond its format metadata. |
 
 ### The format divide
@@ -236,11 +241,11 @@ The packers take different subsets of the tile geometry — `pack_fp16` takes
 none, `pack_bfp8_b` takes faces, the MX packers also take the SrcS layout flag
 and extra rounding controls. Filtering by signature keeps one call site.
 
-The cost: a misspelled geometry key is **silently dropped** on the pack path and
-you get the default. On the unpack path `l1_codec.unpack_from_l1` names every
-parameter with no `**kwargs`, so the same typo raises `TypeError`. Asymmetric,
-and worth knowing if a partial-face case ever looks suspiciously like a
-full-face one.
+The filtering applies to the **codec functions**, not to the entry points.
+`pack_to_l1` and `unpack_from_l1` both name every parameter keyword-only with no
+`**kwargs`, so a misspelled geometry key raises `TypeError` on either path.
+What `_call_accepted` drops is a *correctly spelled* key that a given packer
+does not declare — `num_faces` handed to `pack_fp16`, say.
 
 ### Multi-tile layout
 
@@ -249,11 +254,14 @@ multi-tile tensor and packs tile by tile, matching how it is read back.
 `pack_to_l1` also casts bfloat16 up to float32 first — losslessly, since numpy
 has no bfloat16 and most packers go straight to `.numpy()`.
 
-> **`tile_stride_bytes` defaults to the dense size** of one tile at this
-> geometry, which is what `pack_to_l1` writes. Left to its own devices,
+> **`tile_stride_bytes` defaults to `tile_bytes_for`**, what `pack_to_l1`
+> actually writes at this geometry — which is not the dense datum count: the BFP
+> packers hold a minimum of 16 exponents (48 bytes rather than 34 for a 1×32
+> `Bfp8_b` tile), and `use_srcs` writes 16-byte-aligned slices (1152 bytes rather
+> than 1056, or 1280 under `dest_acc`). Left to its own devices,
 > `unpack_res_tiles` assumes a full 32×32 tile stride for backward
 > compatibility — correct only when the geometry really is 32×32. Pass the
-> device's stride explicitly when reading a buffer laid out that way.
+> device's stride explicitly when reading a buffer laid out some other way.
 
 > **Two source strides, only one of which matches.** `Golden.run` lays tiles out
 > back to back, `datums_per_tile` apart. `write_matrix_w_tile_dimensions`
@@ -353,3 +361,15 @@ which is what `dest_to_l1` puts in its warning.
   which agrees with silicon on everything measured here. Where a conversion
   rule is subtle it is written down as a rule, not reproduced as logic.
 - **Partial-face multi-tile layout** — see the sharp edge above.
+- **Integer SrcS under `dest_acc`.** `srcs_format` carries an integer input
+  through unchanged, while `infer_unpack_out` — the rule the harness programs —
+  returns `Float32` for it once `dest_acc` is on. That `Float32` is the
+  fall-through after an fp16 carve-out and only the carve-out is justified in
+  its comment, so this is an open question, not a settled rule. It is not
+  cosmetic: `_is_srcs_32bit_mode_` keys on the same format, so it also selects
+  the slice layout the buffer is read at. Nothing exercises integer SrcS against
+  silicon on either side; if the harness's version turns out to be right, this
+  method and the layout both have to change.
+- **`Tf32` and `Bfp8` L1 bytes.** Neither has a codec here, on any
+  architecture, so they raise an explicit "no L1 codec" rather than a bare
+  `KeyError`. A gap in the model, not a statement about the hardware.

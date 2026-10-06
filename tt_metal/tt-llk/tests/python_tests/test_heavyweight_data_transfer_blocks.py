@@ -24,6 +24,7 @@ from helpers.golden_generator.heavyweight.data_transfer_blocks import (
     EdgeMaskMode,
     PackEdgeMask,
     QuasarDataTransferBlocks,
+    UnmodelledHardwareWarning,
     WormholeDataTransferBlocks,
     apply_relu,
 )
@@ -60,12 +61,32 @@ def _bits(t):
 
 def test_float32_into_srca_truncates_to_ten_mantissa_bits():
     # 1 + 2^-10 + 2^-11 would round up to 1 + 2^-9; the unpacker truncates.
+    # Tf32 stated explicitly: a Float32 input does not name its own src family.
     l1 = QUASAR.pack_to_l1(
         _tile_of(1 + 2**-10 + 2**-11, -(1 + 2**-10 + 2**-23)), DataFormat.Float32
     )
-    src = QUASAR.l1_to_srcA(l1, DataFormat.Float32)
+    src = QUASAR.l1_to_srcA(l1, DataFormat.Float32, DataFormat.Tf32)
     assert src[0].item() == 1 + 2**-10
     assert src[1].item() == -(1 + 2**-10)
+
+
+def test_a_defaulted_wide_float_src_format_is_refused():
+    """The device picks Float16 or Float16_b from the output format when
+    dest_acc is off, and both clip where Tf32 would not -- so the input alone
+    does not determine the register family, exactly as dest_format_for says."""
+    l1 = QUASAR.pack_to_l1(_tile_of(1.0), DataFormat.Float32)
+    with pytest.raises(ValueError, match="does not determine the src register family"):
+        QUASAR.l1_to_srcA(l1, DataFormat.Float32)
+    # dest_acc on, the device really does use Tf32, so no caller input needed.
+    assert QUASAR.l1_to_srcA(l1, DataFormat.Float32, dest_acc=True)[0].item() == 1.0
+
+
+def test_srcs_is_refused_on_architectures_without_it():
+    """SrcS is Quasar-only: no UNP_S unpacker and no _is_srcs_32bit_mode_ on
+    Wormhole or Blackhole, so the blocks must not answer for it."""
+    for blocks in (WORMHOLE, BLACKHOLE):
+        with pytest.raises(ValueError, match="no SrcS register"):
+            blocks.srcs_format(DataFormat.Float16_b)
 
 
 def test_float16_b_src_keeps_ten_mantissa_bits_not_seven():
@@ -220,10 +241,12 @@ def test_dest_format_follows_the_input_and_dest_acc(l1_format, dest_acc, expecte
     assert QUASAR.dest_format_for(l1_format, dest_acc) == expected
 
 
-@pytest.mark.parametrize("l1_format", [DataFormat.Float32, DataFormat.Tf32])
-def test_a_wide_float_input_with_16_bit_dest_does_not_guess_the_family(l1_format):
-    with pytest.raises(ValueError):
-        QUASAR.dest_format_for(l1_format, False)
+def test_a_wide_float_input_with_16_bit_dest_does_not_guess_the_family():
+    """Tf32 is not parametrized in: it has no L1 codec, so it raises for that
+    reason first and would pass this test without exercising the family check.
+    ``test_a_real_format_without_a_codec_says_so`` covers it."""
+    with pytest.raises(ValueError, match="does not determine the register family"):
+        QUASAR.dest_format_for(DataFormat.Float32, False)
 
 
 @pytest.mark.parametrize(
@@ -561,7 +584,7 @@ def test_dest_to_l1_applies_relu_then_packs():
 
 def test_stochastic_rounding_warns_rather_than_pretending_to_reproduce_it():
     dest = QUASAR.src_to_dest(torch.ones(TILE), DataFormat.Float16_b)
-    with pytest.warns(UserWarning, match="cannot be reproduced"):
+    with pytest.warns(UnmodelledHardwareWarning, match="cannot be reproduced"):
         QUASAR.dest_to_l1(
             dest,
             DataFormat.Float16_b,

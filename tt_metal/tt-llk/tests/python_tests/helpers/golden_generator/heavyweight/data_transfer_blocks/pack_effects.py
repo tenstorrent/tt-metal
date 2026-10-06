@@ -56,6 +56,11 @@ class PackEdgeMask:
             register values. Bit *j* covers datum *j* of a 16-datum row. Whether a
             set bit keeps or masks that datum depends on the architecture, so the
             caller says which -- see ``masked_when_set`` on :meth:`keep`.
+            Required, with no pass-everything default, because there isn't one:
+            0xFFFF passes a row through on Wormhole/Blackhole but masks it on
+            Quasar, whose pass-through is ``EDGE_MASK_ROW_DATUMS_NONE`` (0x0000).
+            A default would read as "no masking" and mean the opposite on one of
+            the two.
         select: which mask each 16-datum row uses. An int uses one mask for every
             row; a sequence gives one index per row, in the order the rows sit in
             the data. The hardware selector is 2 bits **per row**, never per datum
@@ -64,7 +69,7 @@ class PackEdgeMask:
         mode: :class:`EdgeMaskMode` -- zero or negative-saturate.
     """
 
-    masks: Sequence[int] = (0xFFFF,)
+    masks: Sequence[int]
     select: Union[int, Sequence[int]] = 0
     mode: EdgeMaskMode = EdgeMaskMode.ZERO
     #: Rows the selector pattern covers before it repeats, i.e. one tile's
@@ -157,11 +162,18 @@ class PackEdgeMask:
         """Replace masked datums with zero, or with negative saturation."""
         flat = values.reshape(-1)
         keep = self.keep(flat.numel(), masked_when_set=masked_when_set)
-        replacement = (
-            torch.full_like(flat, float("-inf"))
-            if self.mode == EdgeMaskMode.NEG_SATURATE
-            else torch.zeros_like(flat)
-        )
+        if self.mode == EdgeMaskMode.NEG_SATURATE:
+            if not flat.is_floating_point():
+                # -inf has no integer encoding, and what the hardware writes
+                # for an integer Dest is not modelled here. Nothing programs
+                # this mode yet, so say so rather than guess at INT_MIN.
+                raise ValueError(
+                    f"{EdgeMaskMode.NEG_SATURATE.name} is not modelled for an "
+                    f"integer Dest ({flat.dtype}); only {EdgeMaskMode.ZERO.name} is"
+                )
+            replacement = torch.full_like(flat, float("-inf"))
+        else:
+            replacement = torch.zeros_like(flat)
         return torch.where(keep, flat, replacement).reshape(values.shape)
 
 
