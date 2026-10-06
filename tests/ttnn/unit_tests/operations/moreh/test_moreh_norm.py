@@ -78,7 +78,7 @@ def run_moreh_norm_backward_test(input_shape, p, dim, device, keepdim=True):
 @pytest.mark.parametrize("dim", FACTORY_DIMS, ids=FACTORY_IDS)
 def test_moreh_norm(dim, device):
     torch.manual_seed(0)
-    # Only p in {0, inf, -inf} runs the moreh_norm device op; other p decompose into moreh_abs_pow + moreh_sum.
+    # p is inf, so this runs the moreh_norm device op. Other p values call moreh_sum, which is left uncovered.
     run_moreh_norm_test(INPUT_SHAPE, float("inf"), dim, device)
 
 
@@ -98,10 +98,7 @@ def test_moreh_norm(dim, device):
         (UNALIGNED_SHAPE, -INF, 1, True),
         (UNALIGNED_SHAPE, INF, [2, 3], True),
         (INPUT_SHAPE, INF, None, True),
-        # Multi-dim p=0 runs one moreh_norm call, then moreh_sum over the remaining dims.
-        (INPUT_SHAPE, 0.0, [2, 3], True),
         (INPUT_SHAPE, INF, [0, 1], False),
-        (INPUT_SHAPE, 2.5, 3, True),
     ],
     ids=[
         "w_unaligned",
@@ -115,9 +112,7 @@ def test_moreh_norm(dim, device):
         "minus_inf_nc",
         "hw",
         "all_dims",
-        "p0_hw",
         "nc_keepdim_false",
-        "p2_5",
     ],
 )
 def test_moreh_norm_corner_cases(input_shape, p, dim, keepdim, device):

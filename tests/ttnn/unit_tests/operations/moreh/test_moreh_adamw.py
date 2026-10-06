@@ -7,16 +7,9 @@ import torch
 
 import ttnn
 from models.common.utility_functions import comp_allclose_and_pcc
-from tests.ttnn.unit_tests.operations.test_utils import (
-    TILE_HEIGHT,
-    TILE_WIDTH,
-    create_ttnn_tilized_tensor,
-    get_compute_kernel_options,
-)
+from tests.ttnn.unit_tests.operations.test_utils import create_ttnn_tilized_tensor, get_compute_kernel_options
 
 pytestmark = pytest.mark.use_module_device
-
-INPUT_SHAPE = [TILE_HEIGHT, TILE_WIDTH]
 
 
 def run_moreh_adamw_test(shape, lr, betas, eps, weight_decay, step, device, amsgrad=True, fp32_dest_acc_en=False):
@@ -71,13 +64,13 @@ def run_moreh_adamw_test(shape, lr, betas, eps, weight_decay, step, device, amsg
 
 def run_moreh_adamw_inplace_test(lr, step, device):
     # Random moments move by ~0.5 in one step, so a write that misses the aliased outputs fails the check.
-    weight = torch.nn.Parameter(torch.rand(INPUT_SHAPE, dtype=torch.bfloat16))
-    weight.grad = torch.rand(INPUT_SHAPE, dtype=torch.bfloat16)
+    weight = torch.nn.Parameter(torch.rand([32, 32], dtype=torch.bfloat16))
+    weight.grad = torch.rand([32, 32], dtype=torch.bfloat16)
     optimizer = torch.optim.AdamW([weight], lr=lr, betas=(0.5, 0.555), eps=1e-8, weight_decay=0.3, amsgrad=True)
     state = optimizer.state[weight]
     state["step"] = torch.tensor(float(step - 1))
     for name in ["exp_avg", "exp_avg_sq", "max_exp_avg_sq"]:
-        state[name] = torch.rand(INPUT_SHAPE, dtype=torch.bfloat16)
+        state[name] = torch.rand([32, 32], dtype=torch.bfloat16)
 
     tt_grad = create_ttnn_tilized_tensor(weight.grad, device, ttnn.bfloat16)
     tt_tensors = [
@@ -116,19 +109,17 @@ def run_moreh_adamw_inplace_test(lr, step, device):
 @pytest.mark.merge_gate
 def test_moreh_adamw(device):
     torch.manual_seed(0)
-    run_moreh_adamw_test(
-        [TILE_HEIGHT, TILE_WIDTH], lr=1e-2, betas=(0.5, 0.555), eps=1e-8, weight_decay=0.3, step=8, device=device
-    )
+    run_moreh_adamw_test([32, 32], lr=1e-2, betas=(0.5, 0.555), eps=1e-8, weight_decay=0.3, step=8, device=device)
 
 
 @pytest.mark.merge_gate
 @pytest.mark.parametrize(
     "shape, amsgrad, fp32_dest_acc_en",
     [
-        (INPUT_SHAPE, False, False),
+        ([32, 32], False, False),
         # Smaller than one tile in H and W, so the single tile is mostly padding.
         ([5, 3], True, False),
-        (INPUT_SHAPE, True, True),
+        ([32, 32], True, True),
     ],
     ids=["no_amsgrad", "hw_unaligned", "fp32_dest_acc"],
 )
@@ -152,11 +143,11 @@ def test_moreh_adamw_program_cache(device):
     torch.manual_seed(0)
     # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
     device.clear_program_cache()
-    run_moreh_adamw_test(INPUT_SHAPE, lr=1e-2, betas=(0.5, 0.555), eps=1e-8, weight_decay=0.3, step=8, device=device)
+    run_moreh_adamw_test([32, 32], lr=1e-2, betas=(0.5, 0.555), eps=1e-8, weight_decay=0.3, step=8, device=device)
     num_program_cache_entries = device.num_program_cache_entries()
     # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses.
-    tt_placeholder = create_ttnn_tilized_tensor(torch.zeros(INPUT_SHAPE), device, ttnn.bfloat16)
-    run_moreh_adamw_test(INPUT_SHAPE, lr=1e-2, betas=(0.5, 0.555), eps=1e-8, weight_decay=0.3, step=8, device=device)
+    tt_placeholder = create_ttnn_tilized_tensor(torch.zeros([32, 32]), device, ttnn.bfloat16)
+    run_moreh_adamw_test([32, 32], lr=1e-2, betas=(0.5, 0.555), eps=1e-8, weight_decay=0.3, step=8, device=device)
     assert device.num_program_cache_entries() == num_program_cache_entries
 
 
@@ -169,7 +160,7 @@ def test_moreh_adamw_inplace_program_cache(device):
     run_moreh_adamw_inplace_test(lr=1e-2, step=1, device=device)
     num_program_cache_entries = device.num_program_cache_entries()
     # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses.
-    tt_placeholder = create_ttnn_tilized_tensor(torch.zeros(INPUT_SHAPE), device, ttnn.bfloat16)
+    tt_placeholder = create_ttnn_tilized_tensor(torch.zeros([32, 32]), device, ttnn.bfloat16)
     # lr and step are not in the program hash, so this is still a cache hit that must also patch them.
     run_moreh_adamw_inplace_test(lr=2e-2, step=2, device=device)
     assert device.num_program_cache_entries() == num_program_cache_entries

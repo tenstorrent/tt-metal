@@ -7,16 +7,9 @@ import torch
 
 import ttnn
 from models.common.utility_functions import comp_allclose_and_pcc
-from tests.ttnn.unit_tests.operations.test_utils import (
-    TILE_HEIGHT,
-    TILE_WIDTH,
-    create_ttnn_tilized_tensor,
-    get_compute_kernel_options,
-)
+from tests.ttnn.unit_tests.operations.test_utils import create_ttnn_tilized_tensor, get_compute_kernel_options
 
 pytestmark = pytest.mark.use_module_device
-
-INPUT_SHAPE = [TILE_HEIGHT, TILE_WIDTH]
 
 
 def run_moreh_sgd_test(
@@ -73,9 +66,7 @@ def run_moreh_sgd_test(
 def test_moreh_sgd(device):
     torch.manual_seed(0)
     # nesterov=True needs dampening=0 (torch rejects other values); dampening is a scalar, not a kernel branch.
-    run_moreh_sgd_test(
-        [TILE_HEIGHT, TILE_WIDTH], lr=3.0, momentum=7.7, dampening=0.0, weight_decay=2.2, nesterov=True, device=device
-    )
+    run_moreh_sgd_test([32, 32], lr=3.0, momentum=7.7, dampening=0.0, weight_decay=2.2, nesterov=True, device=device)
 
 
 @pytest.mark.merge_gate
@@ -83,13 +74,13 @@ def test_moreh_sgd(device):
     "shape, momentum, dampening, weight_decay, nesterov, momentum_initialized, has_param_out",
     [
         # momentum != 0, momentum_initialized, nesterov and weight_decay != 0 each set a separate kernel define.
-        (INPUT_SHAPE, 0.0, 0.0, 2.2, False, False, True),
-        (INPUT_SHAPE, 7.7, 0.0, 2.2, True, False, True),
-        (INPUT_SHAPE, 7.7, 0.5, 2.2, False, True, True),
-        (INPUT_SHAPE, 7.7, 0.0, 0.0, True, True, True),
-        (INPUT_SHAPE, 7.7, 0.0, 2.2, True, True, False),
-        ([1, 1, TILE_HEIGHT - 2, TILE_WIDTH], 7.7, 0.0, 2.2, True, True, True),
-        ([1, 1, TILE_HEIGHT, TILE_WIDTH + 8], 7.7, 0.0, 2.2, True, True, True),
+        ([32, 32], 0.0, 0.0, 2.2, False, False, True),
+        ([32, 32], 7.7, 0.0, 2.2, True, False, True),
+        ([32, 32], 7.7, 0.5, 2.2, False, True, True),
+        ([32, 32], 7.7, 0.0, 0.0, True, True, True),
+        ([32, 32], 7.7, 0.0, 2.2, True, True, False),
+        ([1, 1, 30, 32], 7.7, 0.0, 2.2, True, True, True),
+        ([1, 1, 32, 40], 7.7, 0.0, 2.2, True, True, True),
     ],
     ids=["no_momentum", "first_step", "dampening", "no_weight_decay", "no_param_out", "h_partial", "w_partial"],
 )
@@ -115,9 +106,9 @@ def test_moreh_sgd_program_cache(device):
     torch.manual_seed(0)
     # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
     device.clear_program_cache()
-    run_moreh_sgd_test(INPUT_SHAPE, lr=3.0, momentum=7.7, dampening=0.0, weight_decay=2.2, nesterov=True, device=device)
+    run_moreh_sgd_test([32, 32], lr=3.0, momentum=7.7, dampening=0.0, weight_decay=2.2, nesterov=True, device=device)
     num_program_cache_entries = device.num_program_cache_entries()
     # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses.
-    tt_placeholder = create_ttnn_tilized_tensor(torch.zeros(INPUT_SHAPE), device, ttnn.bfloat16)
-    run_moreh_sgd_test(INPUT_SHAPE, lr=3.0, momentum=7.7, dampening=0.0, weight_decay=2.2, nesterov=True, device=device)
+    tt_placeholder = create_ttnn_tilized_tensor(torch.zeros([32, 32]), device, ttnn.bfloat16)
+    run_moreh_sgd_test([32, 32], lr=3.0, momentum=7.7, dampening=0.0, weight_decay=2.2, nesterov=True, device=device)
     assert device.num_program_cache_entries() == num_program_cache_entries

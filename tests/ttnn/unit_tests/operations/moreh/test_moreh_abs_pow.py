@@ -16,8 +16,6 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 
 pytestmark = pytest.mark.use_module_device
 
-INPUT_SHAPE = [TILE_HEIGHT, TILE_WIDTH]
-
 
 def run_moreh_abs_pow_test(input_shape, p, device):
     # Magnitudes in [0.5, 2) with random signs: exercises abs() and keeps log(|x|) away from 0.
@@ -45,11 +43,11 @@ def test_moreh_abs_pow(device):
     "input_shape, p",
     [
         # Decimal part 0: the exp(log(|x|) * 0) factor must come out as exactly 1.
-        (INPUT_SHAPE, 3.0),
+        ([TILE_HEIGHT, TILE_WIDTH], 3.0),
         # Floored part 0: the integer power runs with exponent 0.
-        (INPUT_SHAPE, 0.5),
+        ([TILE_HEIGHT, TILE_WIDTH], 0.5),
         # floor(-1.5) = -2 sets p_is_negative: |x|^-1.5 = |x|^0.5 / |x|^2.
-        (INPUT_SHAPE, -1.5),
+        ([TILE_HEIGHT, TILE_WIDTH], -1.5),
         # Spans two tiles in H and W without filling them: exercises the tile loop and the W padding mask.
         ([2, 3, TILE_HEIGHT * 2 - 1, TILE_WIDTH * 2 - 1], 2.5),
     ],
@@ -65,9 +63,9 @@ def test_moreh_abs_pow_program_cache(device):
     torch.manual_seed(0)
     # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
     device.clear_program_cache()
-    run_moreh_abs_pow_test(INPUT_SHAPE, 2.5, device)
+    run_moreh_abs_pow_test([TILE_HEIGHT, TILE_WIDTH], 2.5, device)
     num_program_cache_entries = device.num_program_cache_entries()
     # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses.
-    tt_placeholder = create_ttnn_tilized_tensor(torch.zeros(INPUT_SHAPE), device, ttnn.bfloat16)
-    run_moreh_abs_pow_test(INPUT_SHAPE, 2.5, device)
+    tt_placeholder = create_ttnn_tilized_tensor(torch.zeros([TILE_HEIGHT, TILE_WIDTH]), device, ttnn.bfloat16)
+    run_moreh_abs_pow_test([TILE_HEIGHT, TILE_WIDTH], 2.5, device)
     assert device.num_program_cache_entries() == num_program_cache_entries
