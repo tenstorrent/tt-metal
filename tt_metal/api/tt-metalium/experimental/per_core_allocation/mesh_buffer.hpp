@@ -20,7 +20,6 @@ struct L1PoolExtent {
     DeviceAddr size = 0;
     bool externally_owned = false;
 
-    L1PoolExtent() = default;
     L1PoolExtent(distributed::MeshCoordinate device, CoreCoord core, DeviceAddr address, DeviceAddr size) :
         device_coord(std::move(device)), core_coord(core), address(address), size(size) {}
 };
@@ -31,7 +30,6 @@ struct L1PoolPlacement {
     size_t owner_index = 0;
     DeviceAddr offset = 0;
 
-    L1PoolPlacement() = default;
     L1PoolPlacement(distributed::MeshCoordinate device, CoreCoord core, size_t owner, DeviceAddr offset) :
         device_coord(std::move(device)), core_coord(core), owner_index(owner), offset(offset) {}
 };
