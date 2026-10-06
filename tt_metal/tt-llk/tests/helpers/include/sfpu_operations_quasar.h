@@ -137,6 +137,10 @@
 #ifndef RAND_SCALE_BITS
 #define RAND_SCALE_BITS 0x40000000u // 2.0f
 #endif
+// rand PRNG seed; the RAND_SEED template parameter overrides it.
+#ifndef RAND_SEED
+#define RAND_SEED 0x12345678u
+#endif
 
 namespace test_utils
 {
@@ -471,7 +475,7 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::rand)
     {
-        init_rand<APPROX>(0x12345678u /* seed */);
+        init_rand<APPROX>(static_cast<std::uint32_t>(RAND_SEED));
     }
     // rsub_scalar_int32 is stateless: its compute API init is SFPU_UNARY_INIT(unused).
 }
