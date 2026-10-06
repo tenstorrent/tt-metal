@@ -174,17 +174,37 @@ def cmd_update(a):
                     r["state"] = "resolved_on_main"
                     r["resolved"] = {"run": run, "at": now_iso(), "prev_state": newly_green[-1]["state"]}
                     r["updated"] = now_iso()
-            elif concl == "failure":
-                # Job failed but not on this test: no longer a streak.
-                r["streak"] = 0
-            # cancelled / skipped / absent: no evidence either way.
-        d["triaged"][a.workflow] = {"run_id": a.run_id, "number": run["number"], "at": now_iso()}
+            # failure without this test (infra, another test), cancelled,
+            # skipped or not finished yet: no evidence either way.
+        # Per-job bookkeeping: which jobs of the current run are triaged, and
+        # the latest run in which each job finished (eligibility uses it to
+        # tell "still failing" from "its job has not run again yet").
+        t = d["triaged"].get(a.workflow) or {}
+        ids = t.get("jobs", []) if t.get("run_id") == a.run_id else []
+        new_ids = [x for x in (a.job_ids.split(",") if a.job_ids else []) if x]
+        d["triaged"][a.workflow] = {"run_id": a.run_id, "number": run["number"], "at": now_iso(),
+                                   "jobs": sorted(set(ids + new_ids))}
+        jr = d.setdefault("job_runs", {}).setdefault(a.workflow, {})
+        for n in job_concl:
+            if job_concl[n] in ("success", "failure"):
+                jr[n] = max(jr.get(n, 0), run["number"])
     json.dump({"newly_green": newly_green, "events": events, "seen": sorted(seen)}, sys.stdout)
 
 
 def cmd_triaged(a):
+    """Without --run-id: the last triaged run id. With it: JSON list of that
+    run's already-triaged job ids, or "ALL" for a run triaged as a whole by
+    the pre-per-job fixer."""
     with Ledger() as d:
-        print((d["triaged"].get(a.workflow) or {}).get("run_id", ""))
+        t = d["triaged"].get(a.workflow) or {}
+        if not a.run_id:
+            print(t.get("run_id", ""))
+        elif t.get("run_id") != a.run_id:
+            print("[]")
+        elif "jobs" not in t:
+            print('"ALL"')
+        else:
+            print(json.dumps(t["jobs"]))
 
 
 # --------------------------------------------------------------- eligibility
@@ -202,7 +222,12 @@ def cmd_eligible(a):
                 continue
             if r.get("kind") not in FIXABLE_KINDS or r.get("owner") not in OWNED or not r.get("fixable"):
                 continue
-            if (r.get("last_seen") or {}).get("number") != latest.get(r["workflow"]):
+            last = (r.get("last_seen") or {}).get("number")
+            jr = d.get("job_runs", {}).get(r["workflow"], {}).get(r["job"])
+            if jr is not None:
+                if last is None or last < jr:
+                    continue  # its job ran again since and this test passed
+            elif last != latest.get(r["workflow"]):
                 continue  # not failing in the latest analyzed run any more
             if r.get("streak", 0) < a.min_streak and not r.get("culprit_sha"):
                 continue
@@ -504,7 +529,9 @@ def main():
     u = sp.add_parser("update")
     for k in ("workflow", "run_id", "run_number", "sha", "url", "triage", "jobs"):
         u.add_argument("--" + k.replace("_", "-"), dest=k, required=True)
+    u.add_argument("--job-ids", default="", help="comma-separated ids of the jobs this update covers")
     t = sp.add_parser("triaged"); t.add_argument("--workflow", required=True)
+    t.add_argument("--run-id", default="")
     e = sp.add_parser("eligible")
     e.add_argument("--mode", required=True)
     e.add_argument("--min-streak", type=int, required=True)

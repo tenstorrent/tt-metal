@@ -33,9 +33,10 @@ log "==== fixer tick (mode=$FIX_MODE) ===="
 # Reuse the watcher's own implementations instead of copies, so a fix to one
 # (auth refresh, log extraction) reaches both. Extracted by function name.
 # shellcheck disable=SC1090
-source <(sed -n '/^refresh_oauth_credential() {/,/^}/p; /^fetch_failure_logs() {/,/^}/p' \
+source <(sed -n '/^refresh_oauth_credential() {/,/^}/p; /^fetch_failure_logs() {/,/^}/p; /^job_log_excerpt() {/,/^}/p' \
          "$HOME/.sdpa-watch/watch.sh")
 declare -F refresh_oauth_credential >/dev/null && declare -F fetch_failure_logs >/dev/null \
+  && declare -F job_log_excerpt >/dev/null \
   || { log "FATAL: could not import helpers from watch.sh"; exit 1; }
 
 # ---------- auth (same two modes as the watcher) ----------
@@ -100,13 +101,19 @@ run_jobs_json() {  # all jobs of a run as [{name, conclusion}]; 3 tries (GitHub 
   local i out
   for i in 1 2 3; do
     if out=$(gh api "repos/$REPO/actions/runs/$1/jobs?per_page=100" --paginate \
-               --jq '[.jobs[] | {name, conclusion}]' 2>>"$AGENT_ERR" | jq -s 'add // []'); then
+               --jq '[.jobs[] | {id, name, conclusion}]' 2>>"$AGENT_ERR" | jq -s 'add // []'); then
       printf '%s' "$out"; return 0
     fi
     sleep $((i * 10))
   done
   return 1
 }
+
+# GitHub's run list serves a stale index for branch=/event= filtered queries
+# (2026-10: L2's "latest" main run came back as September's #9871 for days,
+# freezing the digest behind the stale-page guard). Adding a created>= window
+# routes the query to a fresh index. 10 days covers every watched schedule.
+RECENT="&created=>$(date -u -d '-10 days' +%F)"
 
 # ======================================================================
 # Phase A — follow up on open draft PRs (live mode)
@@ -224,32 +231,51 @@ for entry in "${PIPELINES[@]}"; do
   [[ -z "$st" ]] && continue
   run_id=$(jq -r '.run_id' <<<"$st"); run_number=$(jq -r '.run_number' <<<"$st")
   sha=$(jq -r '.sha' <<<"$st"); summary=$(jq -r '.summary' <<<"$st")
-  head1=$(head -n1 <<<"$summary")
-  [[ "$($FIXLIB triaged --workflow "$workflow")" == "$run_id" ]] && continue
   url=$(run_url "$run_id")
-  log "triage: $display run #$run_number"
 
-  tri="$FIX_HOME/runs/$run_id.triage.json"
-  jobs="$FIX_HOME/runs/$run_id.jobs.json"
-  if [[ "$head1" == *❌* || "$head1" == *✅* ]]; then
-    if ! run_jobs_json "$run_id" > "$jobs"; then
-      log "  GitHub API failed listing jobs — skipping $workflow this tick"; continue
+  # Per-job triage: the watcher records the FINISHED in-scope jobs of the run it
+  # reports (possibly still in progress). Each job is triaged once, by job id,
+  # so a slow leg (Blaze SC4) no longer holds back the ones that finished.
+  finished=$(jq -c '.jobs // empty' <<<"$st")
+  if [[ -z "$finished" ]]; then
+    # State written by the pre-per-job watcher: list the run's jobs ourselves.
+    if ! finished=$(run_jobs_json "$run_id" | jq -c --arg p "$job_pattern" \
+          '[.[] | select(.conclusion != null) | select($p == "" or (.name | test($p; "i")))]'); then
+      log "  GitHub API failed listing jobs for $workflow — skipping this tick"; continue
     fi
   fi
-  if [[ "$head1" == *❌* ]]; then
-    logs=$(fetch_failure_logs "$run_id")
-    printf '%s' "$logs" > "$FIX_HOME/runs/$run_id.logs.txt"
+  seen=$($FIXLIB triaged --workflow "$workflow" --run-id "$run_id")
+  [[ "$seen" == '"ALL"' ]] && continue
+  new=$(jq -c --argjson s "$seen" '[.[] | select((.id | tostring) as $i | ($s | index($i)) | not)]' <<<"$finished")
+  [[ "$(jq length <<<"$new")" == "0" ]] && continue
+  new_failed=$(jq -c '[.[] | select(.conclusion == "failure")]' <<<"$new")
+  job_ids=$(jq -r '[.[].id | tostring] | join(",")' <<<"$new")
+  log "triage: $display run #$run_number — $(jq length <<<"$new") newly finished in-scope job(s), $(jq length <<<"$new_failed") failed"
+
+  tri="$FIX_HOME/runs/$run_id.$(date -u +%H%M%S).triage.json"
+  jobs="$FIX_HOME/runs/$run_id.$(date -u +%H%M%S).jobs.json"
+  jq '[.[] | {name, conclusion}]' <<<"$new" > "$jobs"
+  if [[ "$(jq length <<<"$new_failed")" != "0" ]]; then
+    logs=""
+    while IFS=$'\t' read -r jid jname; do
+      logs+="=== JOB: $jname ===
+$(job_log_excerpt "$jid")
+
+"
+    done < <(jq -r '.[] | "\(.id)\t\(.name)"' <<<"$new_failed")
+    # Appended per batch: Phase C reads the latest failing run's excerpts here.
+    printf '%s' "$logs" >> "$FIX_HOME/runs/$run_id.logs.txt"
     prompt="$(cat "$FIX_HOME/prompts/triage.txt")
 
 # Context
 Pipeline: $display ($workflow)
-Run: #$run_number  sha=$sha  $url
+Run: #$run_number  sha=$sha  $url$( [[ "$(jq -r '.partial == true' <<<"$st")" == "true" ]] && echo "  (run still in progress; only these finished jobs are given)")
 Test-focus hint (in-scope rules): $test_hint
 
 Watcher summary of this run:
 $summary
 
-Failing job log excerpts:
+Failing job log excerpts (only jobs not triaged before):
 $(printf '%s' "$logs" | tail -c 80000)"
     set +e
     out=$(cd "$TT_METAL_DIR" && timeout "$TRIAGE_TIMEOUT_SEC" claude --model "$TRIAGE_MODEL" -p \
@@ -264,15 +290,11 @@ $(printf '%s' "$logs" | tail -c 80000)"
     fi
     jq '.structured_output' <<<"$out" > "$tri"
     log "  $(jq -r '.failures | length' "$tri") in-scope failure(s): $(jq -r '[.failures[] | .kind] | group_by(.) | map("\(.[0])×\(length)") | join(", ")' "$tri")"
-  elif [[ "$head1" == *✅* ]]; then
-    echo '{"failures":[]}' > "$tri"
   else
-    # ⚠️ tests did not run / 🚫 collateral / 🟡 agent error: no evidence
-    # about our tests either way — record as seen, change nothing.
-    echo '[]' > "$jobs"; echo '{"failures":[]}' > "$tri"
+    echo '{"failures":[]}' > "$tri"
   fi
   ng=$($FIXLIB update --workflow "$workflow" --run-id "$run_id" --run-number "$run_number" \
-         --sha "$sha" --url "$url" --triage "$tri" --jobs "$jobs")
+         --sha "$sha" --url "$url" --triage "$tri" --jobs "$jobs" --job-ids "$job_ids")
   handle_green "$ng"
   handle_fix_events "$ng"
 done
@@ -338,7 +360,7 @@ while IFS= read -r grp; do
   first_num=$(jq -r 'to_entries[0].value.first_seen.number' <<<"$recs")
   first_sha=$(jq -r 'to_entries[0].value.first_seen.sha' <<<"$recs")
   evq=""; [[ -n "${PIPELINE_EVENT[$workflow]:-}" ]] && evq="&event=${PIPELINE_EVENT[$workflow]}"
-  good_sha=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&status=completed&per_page=30$evq" \
+  good_sha=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH$RECENT&status=completed&per_page=30$evq" \
                --jq "[.workflow_runs[] | select(.run_number < $first_num)] | sort_by(.run_number) | last | .head_sha // empty" \
                2>/dev/null || true)
 
