@@ -220,3 +220,71 @@ def test_lm_head_matmul_under_l1_pressure(qsr_device, pressure_mb, ibw):
     pcc = _pcc(o, ref)
     logger.info(f"[lm_head-3mb-pressure] held={pressure_mb}MB ibw={ibw} DONE PCC={pcc:.4f}")
     assert pcc > 0.99, f"pressure={pressure_mb}MB ibw={ibw}: PCC {pcc}"
+
+
+# Full lm_head op SEQUENCE on 3 MB (fast proxy for the ~2h e2e lm_head): for each vocab chunk,
+#   linear (DRAM 1D-mcast, in0_block_w shrunk for width via the e2e's _ibw_for rule)
+#   -> sharded_to_interleaved (no-op alias on an already-interleaved/DRAM output; the e2e's _s2i skips
+#      the distinct-copy add for WIDE tensors, which is what we mirror by NOT copying)
+#   -> append; then concat(dim=-1) -> [1,1,32,128256] in DRAM.
+# This catches the lm_head dominoes (matmul, s2i-copy, concat) that only appear deep in prefill, without
+# running the whole model. The chunking mirrors lm_head_1d (15x8192 + 1x5376 = 128256).
+_VOCAB = 128256
+_CHUNK = 8192
+
+
+def _ibw_for(kt, per_core_n):  # same rule as test_llama_e2e.py _install_quasar_interleaved_matmul._ibw_for
+    cap = max(1, min(4, 256 // max(int(per_core_n), 1)))
+    best, d = 1, 1
+    while d <= min(kt, cap):
+        if kt % d == 0:
+            best = d
+        d += 1
+    return best
+
+
+@pytest.mark.timeout(3600)
+def test_lm_head_full_sequence_3mb(qsr_device):
+    dev = qsr_device
+    grid = dev.compute_with_storage_grid_size()
+    grid_x = min(int(grid.x), 2)
+    kt = K // 32
+
+    widths = [_CHUNK] * (_VOCAB // _CHUNK) + ([_VOCAB % _CHUNK] if _VOCAB % _CHUNK else [])
+    torch.manual_seed(0)
+    x = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
+    xt = _dram_bf16(x, dev)
+
+    outs, refs = [], []
+    for i, nw in enumerate(widths):
+        w = torch.randn(1, 1, K, nw, dtype=torch.bfloat16)
+        wt = _dram_bf16(w, dev)
+        nt = nw // 32
+        per_core_n = max((nt + grid_x - 1) // grid_x, 1)
+        ibw = _ibw_for(kt, per_core_n)
+        pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(grid_x, 1),
+            in0_block_w=ibw,
+            out_subblock_h=1,
+            out_subblock_w=_out_subblock_w(per_core_n),
+            per_core_M=1,
+            per_core_N=per_core_n,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=(grid_x > 1),
+        )
+        o = ttnn.matmul(xt, wt, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.synchronize_device(dev)  # per-chunk sync to localize any hang to the chunk index
+        logger.info(f"[lm_head-full][chunk {i}/{len(widths)}] width={nw} per_core_N={per_core_n} ibw={ibw} ok")
+        outs.append(o)  # s2i on an already-DRAM output is a no-op alias; wide -> no distinct-copy (mirrors _s2i)
+        refs.append(w)
+        ttnn.deallocate(wt)
+
+    cat = ttnn.concat(outs, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.synchronize_device(dev)
+    o = ttnn.to_torch(cat)
+    ref = torch.cat([x.float().reshape(M, K) @ r.float().reshape(K, r.shape[-1]) for r in refs], dim=-1)
+    pcc = _pcc(o, ref)
+    logger.info(f"[lm_head-full] concat {tuple(o.shape)} PCC={pcc:.4f}")
+    assert tuple(o.shape)[-1] == _VOCAB, f"vocab width {tuple(o.shape)[-1]} != {_VOCAB}"
+    assert pcc > 0.99, f"full lm_head sequence PCC {pcc}"
