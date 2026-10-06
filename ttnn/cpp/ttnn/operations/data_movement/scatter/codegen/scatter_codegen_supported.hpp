@@ -51,19 +51,31 @@ ttnn::Shape codegen_working_shape(const ttnn::Shape& logical_shape, int32_t dim)
 // leaves most of the grid idle whatever the row width; below kRowMajorRerouteMaxHt the RM factory's
 // per-stick split reaches far more cores, provided the untilized stick is bounded, NOC-aligned and
 // fits L1. `working_input`/`working_index` are the operands' codegen_working_shape()s; the tensors
-// supply dtype, element size, device and placement, none of which the transpose changes. The one
-// definition both the dispatch and is_demoted() read: a case this detour serves never pays the
-// TILE factories' padded-row cost that is_demoted() otherwise guards against.
+// supply dtype, element size, device and placement, none of which the transpose changes.
+// `output_mem_config` is the placement the call will write to: the detour lands on the ROW_MAJOR
+// factories, which supported_execution_controls() only admits when the output shares the input's
+// buffer type, so a mismatched placement keeps the TILE factory instead. The one definition both the
+// dispatch and is_demoted() read: a case this detour serves never pays the TILE factories'
+// padded-row cost that is_demoted() otherwise guards against.
 bool prefers_row_major_strategy(
     const Tensor& input_tensor,
     const Tensor& index_tensor,
     const Tensor& src_tensor,
     const ttnn::Shape& working_input,
-    const ttnn::Shape& working_index);
+    const ttnn::Shape& working_index,
+    const tt::tt_metal::MemoryConfig& output_mem_config);
 
 // Perf gate consulted only by ttnn::scatter()'s routing, and only when supported_by_codegen() is
 // true: true means fall back to native despite codegen support. `dim` is the caller's raw
-// (pre-normalization) scatter axis, matching supported_by_codegen()'s convention.
-bool is_demoted(const Tensor& input_tensor, int32_t dim, const Tensor& index_tensor, const Tensor& src_tensor);
+// (pre-normalization) scatter axis, matching supported_by_codegen()'s convention; it is normalized
+// once inside, so the same axis spelled positive or negative demotes identically. `output_mem_config`
+// is the placement the call will write to (the caller's memory_config, else the input's own), which
+// decides whether the row-major detour can serve the call.
+bool is_demoted(
+    const Tensor& input_tensor,
+    int32_t dim,
+    const Tensor& index_tensor,
+    const Tensor& src_tensor,
+    const tt::tt_metal::MemoryConfig& output_mem_config);
 
 }  // namespace ttnn::operations::data_movement::scatter

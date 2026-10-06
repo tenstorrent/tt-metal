@@ -423,7 +423,8 @@ Tensor scatter_codegen_dispatch(
         transformed_index_tensor,
         transformed_source_tensor,
         transformed_input_tensor.logical_shape(),
-        transformed_index_tensor.logical_shape());
+        transformed_index_tensor.logical_shape(),
+        final_memory_config);
     if (rerouted_to_row_major) {
         transformed_input_tensor = ttnn::to_layout(transformed_input_tensor, Layout::ROW_MAJOR);
         transformed_index_tensor = ttnn::to_layout(transformed_index_tensor, Layout::ROW_MAJOR);
@@ -505,10 +506,12 @@ Tensor scatter(
     namespace detail = ttnn::operations::data_movement::detail;
     namespace scatter_ns = ttnn::operations::data_movement::scatter;
 
+    const MemoryConfig final_memory_config{
+        output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
     const bool use_codegen =
         detail::codegen_can_serve(
             input_tensor, dim, index_tensor, source_tensor, output_memory_config, opt_reduction_string) &&
-        !scatter_ns::is_demoted(input_tensor, dim, index_tensor, source_tensor);
+        !scatter_ns::is_demoted(input_tensor, dim, index_tensor, source_tensor, final_memory_config);
 
     return use_codegen ? detail::scatter_codegen_dispatch(
                              input_tensor,
