@@ -4,16 +4,17 @@
 """TTNN port of BEVFormer's encoder (``reference/encoder.py``).
 
 The layers run batch-first, ``(bs, num_query, embed_dims)``; the camera features are
-``(bs * num_cams, num_keys, embed_dims)``, each sample's cameras in turn, as the FPN emits them. Parameters come from
-``model_preprocessing.create_bevformer_encoder_parameters``.
+``(bs * num_cams, num_keys, embed_dims)``: each sample's cameras in turn, the FPN's order, with the
+levels concatenated along ``num_keys``, as ``TtPerceptionTransformer.camera_features`` builds them.
+Parameters come from ``model_preprocessing.create_bevformer_encoder_parameters``.
 
 Camera geometry depends on the cameras only, not on the activations: once per frame,
 :meth:`TTBEVFormerEncoder.prepare_frame` projects the pillar points into the cameras in float32 on
 the host, as upstream's ``point_sampling`` does (``point_sampling_3d_2d.camera_geometry``), and
 fills the spatial cross-attention's rebatch plan, whose per-camera capacity is fixed when it is
 built, so later frames refill it in place. In bfloat16 the projection's homogeneous divide loses
-the points' precision. The forward then runs
-on device only, the cells' reference points and the ego shift included.
+the points' precision. The forward then runs on device only, the cells' reference points and the
+ego shift included.
 """
 
 
@@ -140,7 +141,8 @@ class TTBEVFormerEncoder:
         """The spatial cross-attention's rebatch plan for this frame's cameras (``lidar2img`` and
         ``img_shape`` per sample). Without ``plan``, a new one: by default sized for this frame
         only; a plan that later frames refill needs a ``capacity`` (rows per camera) covering
-        them, a bound for the rig or ``tt_spatial_cross_attention.full_capacity``. With ``plan``,
+        them: a bound for the rig, or ``tt_spatial_cross_attention.full_capacity`` on grids smaller
+        than the base one, where it does not fit in DRAM. With ``plan``,
         refilled in place, which keeps a trace captured with it valid."""
         reference_points_cam, bev_mask = camera_geometry(
             img_metas, self.bev_h, self.bev_w, self.num_points_in_pillar, self.pc_range

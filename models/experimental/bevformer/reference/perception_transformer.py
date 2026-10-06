@@ -17,7 +17,7 @@ Per frame:
    levels are concatenated: the encoder's ``(num_cams, num_keys, bs, C)`` value.
 3. The previous frame's BEV, if any, is rotated per sample by the heading change about
    ``rotate_center`` (torchvision's ``rotate``, nearest), and the encoder shifts its reference
-   points by the ego translation (:func:`ego_shift`).
+   points by the ego translation (:func:`ego_shift`), in cells of :func:`bev_grid_length`.
 4. The encoder builds the BEV map.
 
 ``img_metas[b]["can_bus"]`` is the 18-value CAN-bus vector with its translation ``[:3]`` and heading
@@ -38,13 +38,20 @@ import torch.nn as nn
 from torchvision.transforms.functional import rotate
 
 CAN_BUS_DIMS = 18
-# BEV cell size in metres, (y, x): upstream's ``grid_length`` default, 102.4 m over 200 cells.
-GRID_LENGTH = (0.512, 0.512)
+# Upstream's default for every grid, tiny's 50x50 included, where it lies outside the grid; it is
+# not derived from bev_h and bev_w.
 ROTATE_CENTER = (100, 100)
 
 
-def ego_shift(img_metas, bev_h, bev_w, grid_length=GRID_LENGTH):
-    """The ego translation in BEV-grid fractions, ``(bs, 2)`` as (x, y): upstream's ``shift``."""
+def bev_grid_length(pc_range, bev_h, bev_w):
+    """A BEV cell's size in metres, (y, x): the point-cloud range over the grid, as upstream's head
+    passes ``grid_length`` to ``get_bev_features``."""
+    return ((pc_range[4] - pc_range[1]) / bev_h, (pc_range[3] - pc_range[0]) / bev_w)
+
+
+def ego_shift(img_metas, bev_h, bev_w, grid_length):
+    """The ego translation in BEV-grid fractions, ``(bs, 2)`` as (x, y): upstream's ``shift``, with
+    ``grid_length`` from :func:`bev_grid_length`."""
     shifts = []
     for meta in img_metas:
         can_bus = meta["can_bus"]
@@ -133,5 +140,5 @@ class PerceptionTransformer(nn.Module):
             spatial_shapes,
             img_metas,
             prev_bev=prev_bev,
-            shift=ego_shift(img_metas, bev_h, bev_w),
+            shift=ego_shift(img_metas, bev_h, bev_w, bev_grid_length(self.encoder.pc_range, bev_h, bev_w)),
         )
