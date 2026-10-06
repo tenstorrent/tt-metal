@@ -52,8 +52,17 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
     bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(cb_in0, cb_in1);
+#if defined(ARCH_BLACKHOLE)
+    MATH((llk_math_eltwise_binary_init<
+          EltwiseBinaryType::ELWMUL,
+          BroadcastType::COL,
+          MATH_FIDELITY,
+          EltwiseBinaryReuseDestType::NONE,
+          ckernel::detail::bcast_src_dvalid<EltwiseBinaryType::ELWMUL>>(cb_in0, cb_in1, 1 /*acc_to_dest*/)));
+#else
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
         cb_in0, cb_in1, 1 /*acc_to_dest*/)));
+#endif
     reconfig_data_format(cb_in0, cb_in1);
 
     for (uint32_t group = 0; group < num_groups; ++group) {
