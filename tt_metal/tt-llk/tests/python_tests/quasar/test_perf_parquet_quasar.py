@@ -67,7 +67,6 @@ def test_schema_for_arch_rejects_unsupported_architecture():
 def test_quasar_schema_is_not_wh_bh_schema():
     # The split: Quasar-only columns must not land in the WH/BH published table.
     qsr_only = {c.name for c in QSR_SCHEMA} - {c.name for c in WH_BH_SCHEMA}
-    assert "face_c_dim" in qsr_only
     assert "unpacker_engine_sel" in qsr_only
     assert "implied_math_format" in qsr_only
     assert "vector_mode" in qsr_only
@@ -157,11 +156,10 @@ def test_convert_drops_quasar_columns_on_wh_bh_schema(tmp_path):
     )
 
     assert diag["unknown_columns"]["perf_unpack_tilize_quasar"] == [
-        "face_c_dim",
         "unpacker_engine_sel",
     ]
     names = pq.read_table(tmp_path / "out.parquet").schema.names
-    assert "face_c_dim" not in names
+    assert "face_c_dim" in names
     assert names == [c.name for c in WH_BH_SCHEMA]
 
 
