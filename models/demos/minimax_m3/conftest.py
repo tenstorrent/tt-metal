@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import sys
 
 import pytest
 
@@ -21,3 +22,12 @@ def state_dict(request):
         return {}
     else:
         return ModelArgs.load_state_dict(model_path, dummy_weights=False)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item, nextitem):
+    """Remove the MoE overlap sub-device managers before the test's fixtures close the mesh."""
+    overlap = sys.modules.get("models.demos.minimax_m3.tt.moe.shared_overlap")
+    if overlap is not None:
+        overlap.release_all()
+    return (yield)

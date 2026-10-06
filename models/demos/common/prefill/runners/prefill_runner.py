@@ -671,6 +671,11 @@ def main() -> None:
     )
 
     runtime = ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    if USE_TRACE and getattr(runtime, "capture_trace", None) is None:
+        raise RuntimeError(
+            f"PREFILL_USE_TRACE=1 but runtime {type(runtime).__name__} does not implement "
+            "capture_trace(kv_caches); run with PREFILL_USE_TRACE=0."
+        )
     kv_caches = ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
     runtime.compile(kv_caches)
 
@@ -745,6 +750,12 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # worker attaches to it during its pipeline bring-up and only then issues the KV-manager connect
     # that the migration layer needs before it can report WORKER_READY to wait_ready() below.
     use_d2h = os.environ.get("PREFILL_LAYER_ACK_D2H", "0") == "1"
+    if use_d2h and getattr(runtime, "set_d2h_ack_service", None) is None:
+        raise RuntimeError(
+            f"PREFILL_LAYER_ACK_D2H=1 but runtime {type(runtime).__name__} does not implement "
+            "set_d2h_ack_service(service); it reports layer completion through set_layer_completion_sink "
+            "only, so run with PREFILL_LAYER_ACK_D2H=0."
+        )
 
     from ttnn._experimental.layer_completion import LayerCompletionQueue, LayerCompletionRouter
 

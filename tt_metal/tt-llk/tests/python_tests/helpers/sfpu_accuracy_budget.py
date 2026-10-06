@@ -23,8 +23,10 @@ ULP -- which is how the block floats keep their block-aware lattice compares.
 **Numbers are measured, not guessed**, and every unkeyed number came from
 :data:`MEASURED_ARCH`; a ULP row binds elsewhere only if its own key names that
 architecture. A step budget is enrolled from the exhaustive sweep
-(``test_unary_sfpu_ulp.py --ulp-emit``), not declared against nothing; the rows it does
-not reach keep the declared tolerance, or a sampled measurement no gate reads yet.
+(``test_unary_sfpu_ulp.py --ulp-emit``), not declared against nothing. The rows it does
+not reach keep the declared tolerance, or a sampled measurement: the binary and ternary
+drivers gate theirs, as do the unary signbit, isinf/isnan and threshold sweeps, which
+measured on their own stimuli; any other sampled unary row is read by no gate yet.
 """
 
 from __future__ import annotations
@@ -119,21 +121,35 @@ class AccuracyContract:
     def tolerance_kwargs(self) -> Dict[str, Any]:
         """The contract as ``passed_test`` arguments for a *tolerance-only* caller.
 
-        The functional drivers gate on tolerance and PCC. A step budget is measured by
-        the exhaustive sweep over every value the format has, so it is far wider than
-        the few thousand values a driver samples warrant, and feeding it back would
-        loosen the driver's gate rather than tighten it. An op on the ULP metric
-        therefore keeps today's per-format tolerance here.
+        The unary functional driver gates on tolerance and PCC. A unary step budget is
+        measured by the exhaustive sweep over every value the format has, so it is far
+        wider than the few thousand values that driver samples warrant, and feeding it
+        back would loosen its gate rather than tighten it. An op on the ULP metric
+        therefore keeps today's per-format tolerance here. The binary and ternary
+        drivers, and the unary signbit, isinf/isnan and threshold sweeps
+        (``gate_on_step_budget``), take :meth:`passed_test_kwargs` instead: their rows
+        were measured over their own stimuli.
         """
         if self.metric is Metric.ULP:
             return {}
         return {"custom_atol": self.atol, "custom_rtol": self.rtol}
 
-    def passed_test_kwargs(self) -> Dict[str, Any]:
+    def passed_test_kwargs(
+        self, flush_subnormals: Optional[bool] = None
+    ) -> Dict[str, Any]:
         """The contract as ``passed_test`` keyword arguments, whichever metric it is on,
-        so a call site is one ``**`` expansion and switching metrics is a table edit."""
+        so a call site is one ``**`` expansion and switching metrics is a table edit.
+
+        *flush_subnormals* means what it means to ``passed_test``: ``None`` keeps the
+        metric's per-dtype default, ``True``/``False`` override it for the ULP arm. It
+        only changes anything on an fp16 output, where the golden keeps IEEE fp16
+        subnormals the pack does not reproduce. The tolerance arm has no such notion, so
+        it is dropped there rather than passed on for ``passed_test`` to refuse."""
         if self.metric is Metric.ULP:
-            return {"max_ulp": self.max_ulp, "near_zero_atol": self.near_zero_atol}
+            kwargs = {"max_ulp": self.max_ulp, "near_zero_atol": self.near_zero_atol}
+            if flush_subnormals is not None:
+                kwargs["flush_subnormals"] = flush_subnormals
+            return kwargs
         return {"custom_atol": self.atol, "custom_rtol": self.rtol}
 
 
@@ -438,7 +454,18 @@ def accuracy_contract(
     return resolve_contract(tolerance_rows, query, label=op.name)
 
 
-def assert_within_contract_tolerance(
+#: Subnormal *outputs* flushed when a step budget ranks a result, on every format, fp16
+#: included. The metric keeps fp16's subnormal band by default, but the golden keeps IEEE
+#: subnormals the pack path does not reproduce: a near-cancelling ``a - b`` lands there
+#: 140 steps from a correct kernel, and an exact unary op read 512 steps on
+#: Float16_b->Float16 from that band alone. One policy, named once: every step-budget gate
+#: hands it to ``passed_test_kwargs`` -- the binary and ternary gate
+#: (:func:`assert_against_contract`), the unary step-budget drivers, and the exhaustive
+#: unary sweep's emit and gate -- and their rows were measured that way.
+FLUSH_SUBNORMAL_OUTPUTS = True
+
+
+def assert_against_contract(
     op: MathOperation,
     formats: InputOutputFormat,
     dest_acc: DestAccumulation,
@@ -447,16 +474,16 @@ def assert_within_contract_tolerance(
     *,
     approx_mode: Optional[ApproximationMode] = None,
 ) -> None:
-    """Resolve *op*'s declared contract for the variant that ran, and gate on its
-    tolerance arm only: a resolved step budget is not enforced here (see below).
+    """Resolve *op*'s declared contract for the variant that ran, and gate on it.
 
     The binary and ternary drivers' shared last line, so that the resolution and the
-    caveat below are written once. The numbers live beside the op in the registry, and
+    caveats below are written once. The numbers live beside the op in the registry, and
     an unenrolled op resolves to today's per-format tolerance unchanged; enrolment is a
     table edit rather than a driver edit.
 
-    Tolerance arm only (``tolerance_kwargs``): a step budget is measured by the
-    exhaustive unary sweep, which is the one caller that gates on ``max_ulp``.
+    The whole contract, step budget included: every binary and ternary row was measured
+    over those drivers' own sweeps, so unlike a unary budget from the exhaustive sweep
+    it describes the stimuli it gates. Ranked under :data:`FLUSH_SUBNORMAL_OUTPUTS`.
 
     *approx_mode* is left unset for a kernel that compiles no ``APPROX_MODE`` -- naming
     one would claim a measurement taken for a mode that path does not select. Where the
@@ -478,7 +505,7 @@ def assert_within_contract_tolerance(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **contract.tolerance_kwargs(),
+        **contract.passed_test_kwargs(flush_subnormals=FLUSH_SUBNORMAL_OUTPUTS),
     ):
         raise AssertionError("Assert against golden failed")
 
