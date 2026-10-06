@@ -69,6 +69,8 @@ class PrefillRunParams:
     weight_cache_path: Optional[Path]
     sp_axis: int = 0
     tp_axis: int = 1
+    # Dense KV dedup (PREFILL_TP_SHARD_KV); sparse models always dedup and ignore it.
+    tp_shard_kv: bool = False
     # Explicit semantic cache format selected by model/module configuration. Scaled FP8 is a packed
     # mixed-format row, so it must not be represented or inferred as a bare tensor dtype.
     sparse_kv_cache_format: Optional[object] = None
@@ -141,6 +143,10 @@ class PrefillModelAdapter(ABC):
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
     supports_mtp: bool = False
+    # Opt-in: allocate_kv_cache and build_runtime honor params.tp_shard_kv (the runner asserts).
+    supports_tp_shard_kv: bool = False
+    # PREFILL_TP_SHARD_KV fallback; off until the model is verified with a deduped cache.
+    tp_shard_kv_default: bool = False
 
     def fabric_payload_size(self) -> int:
         """The fabric packet payload the mesh is opened with. It is fixed at mesh open, before the model is

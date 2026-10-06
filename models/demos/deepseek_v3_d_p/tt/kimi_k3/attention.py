@@ -152,6 +152,9 @@ class TtK3MlaAttention(LightweightModule):
     def __init__(self, mla):
         self._mla = mla
 
+    def set_tp_shard_kv(self, tp_shard_kv: Optional[bool]):
+        self._mla.set_tp_shard_kv(tp_shard_kv)
+
     @property
     def layer_idx(self) -> int:
         return self._mla.layer_idx
@@ -294,6 +297,7 @@ def build_attention(
     kv_only: bool = False,
     is_balanced: bool = False,
     first_layer_idx: int = 0,
+    tp_shard_kv: Optional[bool] = None,
 ) -> K3Attention:
     """The one place the hybrid schedule turns into a module.
 
@@ -331,6 +335,7 @@ def build_attention(
                 layer_num=schedule.num_mla_layers,
                 kv_only=kv_only,
                 first_layer_idx=first_layer_idx,
+                tp_shard_kv=tp_shard_kv,
             )
         )
 
