@@ -6,7 +6,7 @@
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
 
-// LOW_PRECISION input rounding: round each value to BITS significant bits (including the leading bit),
+// FAST input rounding: round each value to BITS significant bits (including the leading bit),
 // round-to-nearest-even, so LoFi's truncation of matmul operands to that width loses nothing further.
 // Q uses BITS = 7, K/V BITS = 5. On the FP32 bit pattern, with shift = 24 - BITS:
 //     raw' = (raw + (2^(shift-1) - 1) + bit(raw, shift)) & ~(2^shift - 1)

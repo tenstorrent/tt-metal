@@ -5,7 +5,7 @@
 
 // Final output normalization O * (1/l), broadcast along columns.
 //
-// LOW_PRECISION (SDPA_RECIPE_LOFI) runs its compute config at LoFi, where the FPU multiplier consumes only
+// FAST (SDPA_RECIPE_LOFI) runs its compute config at LoFi, where the FPU multiplier consumes only
 // the top 5 significant bits of SrcA. Its matmuls take inputs already rounded to that width, but O is not,
 // so the O(N*D) normalization runs at HiFi2 (SrcA fully consumed) while the O(N^2*D) matmuls stay LoFi.
 // Every other recipe uses the standard mul_bcast_cols at its compute-config fidelity.

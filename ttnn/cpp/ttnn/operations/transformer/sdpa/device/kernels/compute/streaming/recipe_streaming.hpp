@@ -87,7 +87,7 @@ ALWI void recipe_mm_init(uint32_t in0, uint32_t in1, bool transpose, uint32_t ct
 }
 ALWI void recipe_mm_reinit(uint32_t in0, uint32_t in1, bool transpose, uint32_t ct, uint32_t rt, uint32_t kt) {
 #if defined(SDPA_RECIPE_LOFI) && defined(SDPA_RECIPE_RING)
-    // LOW_PRECISION's ring kernels always re-record: one matmul init in MATH fits them in the kernel config buffer,
+    // FAST's ring kernels always re-record: one matmul init in MATH fits them in the kernel config buffer,
     // and their pack-bound chunks leave MATH the time.
     recipe_mm_init(in0, in1, transpose, ct, rt, kt);
 #else
@@ -346,7 +346,7 @@ void blocked_matmul_and_pack(
 
 // Row maxima combine the current QK block with the previous online maximum.
 //
-// Reference-max state (STANDARD, LOW_PRECISION): P = exp(scale * (s - m_ref)) with m_ref a row's
+// Reference-max state (STANDARD, FAST): P = exp(scale * (s - m_ref)) with m_ref a row's
 // reference max, kept until the true row max exceeds it by theta. O and l live in Float32 L1 (the
 // packer accumulates PV and row sums onto them exactly); a chunk that raises m_ref rescales them once.
 #ifndef SDPA_RECIPE_FP32
@@ -370,7 +370,7 @@ constexpr uint32_t kRefMaxExpOctaves = 28;
 // Rescale threshold: keep m_ref until the row max exceeds it by theta (natural-log units of the
 // scaled scores). theta + 0.72 must stay below tau, so P never saturates.
 constexpr float kRefMaxTheta = 16.0f * 0.69314718055994531f;
-// Fused chunks (SDPA_RECIPE_FUSED: STANDARD and LOW_PRECISION without an attn_mask), see sdpa_fused_chunk.
+// Fused chunks (SDPA_RECIPE_FUSED: STANDARD and FAST without an attn_mask), see sdpa_fused_chunk.
 #if defined(SDPA_RECIPE_FUSED) && !defined(SDPA_RECIPE_MASK)
 #define SDPA_RECIPE_FUSED_ACTIVE 1
 // One BF16 tile: a row group's saturation check (max of its chunk row-sum tiles).
@@ -1041,7 +1041,7 @@ static __attribute__((noinline, noclone)) SDPA_RECIPE_COLD void normalize_row_st
             const uint32_t norm_sum_cb = cur_sum_cb;
 #endif
 #ifdef SDPA_RECIPE_LOFI
-            // The no-MOP matmul the chunks already use: LOW_PRECISION's ring kernels then carry no MOP matmul code.
+            // The no-MOP matmul the chunks already use: FAST's ring kernels then carry no MOP matmul code.
             recipe_mm_init(norm_sum_cb, col_identity_cb, false, N, 1, N);
 #else
             matmul_block_init(norm_sum_cb, col_identity_cb, 0, N, 1, N);

@@ -49,8 +49,8 @@ public:
         uint32_t Sk_chunk_t,
         uint32_t DHt) override {
         TT_FATAL(
-            args.precision && *args.precision != ttnn::transformer::SDPAPrecision::FAST,
-            "The ring recipe program factory serves the named recipes B-E; FAST uses the ring joint compute");
+            args.precision.has_value(),
+            "The ring recipe program factory serves the named recipes");
         program_ = ring_recipes::recipe_compute_program(
             ring_recipes::resolve_precision_policy(
                 ring_recipes::select_recipe(*args.precision, tensor_args.input_k.dtype())),
@@ -167,7 +167,7 @@ public:
     void append_defines(tt::tt_metal::KernelDescriptor::Defines& defines) const override {
         const auto& recipe_defines = program_.kernels.front().defines;
         defines.insert(defines.end(), recipe_defines.begin(), recipe_defines.end());
-        // STANDARD's and LOW_PRECISION's fused chunks (after any L1 fallback in finalize_cbs) stream their ring
+        // STANDARD's and FAST's fused chunks (after any L1 fallback in finalize_cbs) stream their ring
         // checkpoints: compute overlaps the state save/restore of multi-Q workers with its chunks instead of waiting.
         const auto has = [&](const char* name) {
             return std::any_of(
