@@ -32,7 +32,6 @@ from helpers.unpack import (
 
 # One 32-datum block: 1 face of 2 rows x 16 columns.
 UNPACK_GEOMETRY = dict(num_faces=1, face_r_dim=2)
-BLOCK_SIZE = 32
 SCALE_SECTION = 16  # one scale byte, padded to the 16-byte L1 alignment
 NAN_SCALE = 0xFF
 UNIT_SCALE = 127  # 2^0
