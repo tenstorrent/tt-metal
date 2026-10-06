@@ -58,6 +58,7 @@ class Case:
     fidelity: str = "HiFi2"
     fp32_acc: bool = False
     packer_l1_acc: bool = True
+    dst_full_sync: bool = False  # compute config dst_full_sync_en: twice the DST tiles per subblock
     tags: Tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self):
@@ -421,6 +422,7 @@ def cases_from_csv(path):
             fidelity=r["fidelity"],
             fp32_acc=r["fp32_acc"] == "1",
             packer_l1_acc=r["packer_l1_acc"] == "1",
+            dst_full_sync=r.get("dst_full_sync", "0") == "1",
             tags=tuple(t for t in r["tags"].split(";") if t),
         )
     return list(cases.values())

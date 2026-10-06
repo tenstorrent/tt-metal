@@ -149,6 +149,7 @@ FIELDS = [
     "fidelity",
     "fp32_acc",
     "packer_l1_acc",
+    "dst_full_sync",
     "arch",
     "grid",
     "git",
@@ -327,6 +328,7 @@ class CaseRun:
                 math_approx_mode=False,
                 fp32_dest_acc_en=case.fp32_acc,
                 packer_l1_acc=case.packer_l1_acc,
+                dst_full_sync_en=case.dst_full_sync,
             ),
         )
         if case.core_grid == "device":
@@ -561,6 +563,7 @@ def case_fields(case, arch, grid, git):
         fidelity=case.fidelity,
         fp32_acc=int(case.fp32_acc),
         packer_l1_acc=int(case.packer_l1_acc),
+        dst_full_sync=int(case.dst_full_sync),
         arch=arch,
         grid=f"{grid.x}x{grid.y}",
         git=git,

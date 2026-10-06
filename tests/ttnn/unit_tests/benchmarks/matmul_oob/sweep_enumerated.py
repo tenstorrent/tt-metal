@@ -14,7 +14,9 @@ op rejects are recorded with status "invalid" and not run. The result is the swe
   python sweep_enumerated.py --cases-csv cases.csv --out counts.csv --enumerate-only   # configs only, no timing
 
 Rows are appended as they finish, never rewritten: --resume continues an interrupted run (after a hang, reset the device
-first), and --resume --redo REGEX times matching cases again under a new run id. A (problem, origin, config) row
+first), and --resume --redo REGEX times matching cases again under a new run id. Before each config runs, its name
+goes to <out>.pending.json; a resumed run records a config left there (the previous run hung or was killed during it)
+with status "hang" and doesn't run it again (sweep_supervised.sh automates the restart). A (problem, origin, config) row
 appearing more than once means a later run supersedes an earlier one; sweep_data.py keeps the last.
 """
 
@@ -62,9 +64,11 @@ PROBLEM_FIELDS = [
     "fidelity",
     "fp32_acc",
     "packer_l1_acc",
+    "dst_full_sync",
     "arch",
     "grid",
 ]
+OPTIONAL_PROBLEM_FIELDS = {"dst_full_sync"}
 # A program config's fields, one column each ("" where the config type has no such field)
 CONFIG_FIELDS = [
     "in0_block_w",
@@ -87,7 +91,11 @@ FAMILIES = {
 
 
 def problem_id(fields):
-    key = json.dumps({k: str(fields[k]) for k in PROBLEM_FIELDS}, sort_keys=True)
+    # A field added later counts only when set, so the problems from before it keep their ids
+    key = json.dumps(
+        {k: str(fields[k]) for k in PROBLEM_FIELDS if not (k in OPTIONAL_PROBLEM_FIELDS and not fields[k])},
+        sort_keys=True,
+    )
     return hashlib.sha1(key.encode()).hexdigest()[:12]
 
 
@@ -138,15 +146,17 @@ def main():
     if args.filter:
         cases = [c for c in cases if re.search(args.filter, c.name)]
     out_path = Path(args.out)
+    pending_path = out_path.with_suffix(".pending.json")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     done = set()
+    hung_problems = set()  # problems whose legacy run hung: their configs can't be enumerated
     if args.resume and out_path.exists():
         with open(out_path) as f:
-            done = {
-                (r["problem_id"], r["origin"], r["config"])
-                for r in csv.DictReader(f)
-                if not (args.redo and re.search(args.redo, r["case"]))
-            }
+            for r in csv.DictReader(f):
+                if not (args.redo and re.search(args.redo, r["case"])):
+                    done.add((r["problem_id"], r["origin"], r["config"]))
+                    if r["origin"] == "legacy" and r["status"] == "hang":
+                        hung_problems.add(r["problem_id"])
     elif out_path.exists():
         sys.exit(f"{out_path} exists; pass --resume to continue it or choose another --out")
 
@@ -167,12 +177,38 @@ def main():
                 row.update(config_columns(row.get("config", "")))
                 writer.writerow(row)
                 f.flush()
+                pending_path.unlink(missing_ok=True)
                 return row
+
+            def mark(fields, origin, config):
+                """Name the config about to run, so a resumed run can record it if this one never finishes"""
+                pending_path.write_text(json.dumps({"fields": fields, "origin": origin, "config": config}))
+
+            # The previous run stopped during this config (a device hang, or killed): record it so it isn't run again
+            if args.resume and pending_path.exists():
+                pending = json.loads(pending_path.read_text())
+                config = pending["config"]
+                write(
+                    pending["fields"],
+                    pending["origin"],
+                    {
+                        "status": "hang",
+                        "error": "the run stopped during this config (device hang or killed)",
+                        "config": config,
+                        "config_type": config.split("(")[0],
+                    },
+                )
+                done.add((pending["fields"]["problem_id"], pending["origin"], config))
+                if pending["origin"] == "legacy":
+                    hung_problems.add(pending["fields"]["problem_id"])
 
             for i, case in enumerate(cases):
                 t0 = time.time()
                 fields = case_fields(case, arch, grid, git)
                 pid = fields["problem_id"] = problem_id(fields)
+                if pid in hung_problems:
+                    print(f"[{i + 1}/{len(cases)}] {case.name:48s} skipped: its legacy run hung", flush=True)
+                    continue
                 try:
                     run = CaseRun(case, device, args, seen_programs)
                 except (CaseRun.Infeasible, CaseRun.SetupError) as e:
@@ -184,11 +220,13 @@ def main():
                     # The legacy selection's run (no program_config), recording the enumerated configs as it goes
                     _matmul.matmul_record_enumerated_configs(True)
                     _matmul.matmul_last_enumerated_configs(reset=True)
+                    mark(fields, "legacy", "")
                     legacy = run.measure("oob")
                     _matmul.matmul_record_enumerated_configs(False)
                     enumerated, unsupported = _matmul.matmul_last_enumerated_configs(reset=True)
                     if (pid, "legacy", legacy.get("config", "")) not in done:
                         write(fields, "legacy", legacy)
+                    pending_path.unlink(missing_ok=True)
                     if unsupported:
                         write(fields, "unsupported", {"status": "unsupported", "error": unsupported})
                     counts = {}
@@ -204,6 +242,7 @@ def main():
                         else:
                             # v2 mode: bias and activation fusion follow the config (the legacy path would apply
                             # a fused activation a second time)
+                            mark(fields, origin, text)
                             row = run.measure("v2", program_config=config)
                             if row["status"] == "error":
                                 row["status"] = status_of(row["error"])
