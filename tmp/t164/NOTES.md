@@ -61,3 +61,11 @@ stills, pick the default set, commit the table + video/still paths on this branc
 - 21:56 UTC: pack relaunched on t48 abfd309e797 + warmup cuts (TAG=pack3, ttp detach t164-pack4, run dir
   state/runs/690, PRIOR_DROP=baseline). Baseline = job 422 (-t 240), queued behind ltx-host 421. Phase 2: ttp
   detach t164-phase2b (PACK_TAG=pack3). Wake probe: `ttp detach --check state/runs/690/t164-phase2b.rc`.
+- 2026-10-06 22:20 UTC: host rebooted. Detached pack4/phase2b drivers are gone; no PHASE2.done. Broker job 422
+  (baseline) is still queued in the broker (survived), behind a broker glx_reset health gate (22:23 UTC). Next:
+  relaunch the driver so it adopts job 422 (do NOT submit a duplicate baseline) and then runs the remaining configs.
+- 2026-10-06 22:24 UTC: the host reboot at ~22:21 was the broker's own power-cycle (job 434, 22:20:55 UTC,
+  "idle escalation: 32/32 chips off") after its tray-1 (chips 0-7) bridge-resets 427/429/431 and glx_reset gates
+  426/428/430/432 failed from 21:58 on. Broker glx_reset gate 439 started 22:22:59. Job 422 still queued.
+  driver.sh gained ADOPT=<label>:<job> (watch a job a killed driver left queued; if the broker never runs it,
+  submit a fresh one without counting a drop). Relaunched as TAG=pack3 PRIOR_DROP=baseline ADOPT=baseline:422.

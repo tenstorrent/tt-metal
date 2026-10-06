@@ -65,15 +65,29 @@ run_one() {
   label=$1; shift; drops=0
   # PRIOR_DROP=<label>: that label's last job already dropped (an earlier driver run), so one more drop skips it.
   [ "$label" = "${PRIOR_DROP:-}" ] && drops=1
+  # ADOPT=<label>:<job>: an earlier driver (killed by a host reboot) left that label's job queued in the
+  # broker; watch it instead of submitting a duplicate.
+  adopt=""; [ "${ADOPT%%:*}" = "$label" ] && adopt=${ADOPT#*:}
   while :; do
-    wait_ready
-    disk_ok || done_ 14 "~/fasth3 at or over 99 GiB before $label"
-    to=$TO_KNOB; [ "$label" = baseline ] || [ "$label" = baseline5 ] && to=$TO_BASE
-    T0=$(now)
-    out=$(cd $S && tt-device-mcp run-bg "env PYTEST_S=$((to - 30)) bash $T/run_cfg.sh $label $*" -w $S -e $T/env.yaml -t $to 2>&1); src=$?
-    log "$label submit rc=$src -t $to: $(echo "$out" | tr '\n' ' ' | cut -c1-200)"
-    [ $src = 0 ] || done_ 7 "$label submit failed"
-    JOB=$(echo "$out" | grep -oE '[0-9]+' | tail -1); echo "$label $JOB $T0" >> $V/jobs.txt
+    A0=""
+    if [ -n "$adopt" ]; then
+      JOB=$adopt; adopt=""; A0=$(date +%s); log "$label adopting broker job $JOB"
+      # T0 stays at the last poll that saw the job queued, so the drop check covers the whole run.
+      T0=$(now)
+      while tt-device-mcp status -j $JOB 2>&1 | grep -qiE '^Status: *(queued|pending)'; do
+        [ "$(uptime -s)" = "$BOOT0" ] || done_ 9 "host reboot while job $JOB queued"
+        T0=$(now); sleep 30
+      done
+    else
+      wait_ready
+      disk_ok || done_ 14 "~/fasth3 at or over 99 GiB before $label"
+      to=$TO_KNOB; [ "$label" = baseline ] || [ "$label" = baseline5 ] && to=$TO_BASE
+      T0=$(now)
+      out=$(cd $S && tt-device-mcp run-bg "env PYTEST_S=$((to - 30)) bash $T/run_cfg.sh $label $*" -w $S -e $T/env.yaml -t $to 2>&1); src=$?
+      log "$label submit rc=$src -t $to: $(echo "$out" | tr '\n' ' ' | cut -c1-200)"
+      [ $src = 0 ] || done_ 7 "$label submit failed"
+      JOB=$(echo "$out" | grep -oE '[0-9]+' | tail -1); echo "$label $JOB $T0" >> $V/jobs.txt
+    fi
     watch_job
     ok=0
     echo "$ST" | grep -qiE "^Status: *completed" && echo "$ST" | grep -qiE "^Exit: *0" \
@@ -81,6 +95,10 @@ run_one() {
     if [ $ok = 1 ]; then
       [ -n "$EVID" ] && log "$label job $JOB ok, but broker errors after it (drop logged, result kept)"
       log "$label OK job $JOB"; return 0
+    fi
+    # run_cfg.sh truncates run.log at start, so an older run.log means the broker never ran the adopted job.
+    if [ -n "$A0" ] && [ "$(stat -c %Y $DATA/t164/$label/run.log 2>/dev/null || echo 0)" -lt "$A0" ]; then
+      log "$label adopted job $JOB ended without running; submitting a new one"; continue
     fi
     if [ -n "$EVID" ]; then
       drops=$((drops + 1)); log "$label DROP #$drops job $JOB (evidence drop_evidence_$JOB.log)"
