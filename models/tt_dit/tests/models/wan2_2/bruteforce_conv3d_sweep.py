@@ -108,8 +108,7 @@ def estimate_l1_bytes(cin_block, cout_block, t_blk, h_blk, w_blk, kernel_size, C
     matmul_K_t = math.ceil(patch_size / 32)
     matmul_N_t = math.ceil(cout_block / 32)
 
-    vol2col_rm_pages = TILE_HEIGHT if num_patches % TILE_HEIGHT == 0 else min(num_patches, 2 * TILE_HEIGHT)
-    cb_vol2col_rm = padded_patch_bytes * vol2col_rm_pages
+    cb_vol2col_rm = padded_patch_bytes * vol2col_rm_pages(num_patches)
     cb_vol2col_tiled = TILE_SIZE * matmul_K_t
     cb_weight = TILE_SIZE * matmul_K_t * matmul_N_t
 
@@ -149,12 +148,42 @@ L1_PREFETCH_HARD_CAP = 500 * 1024
 DRAM_READ_ALIGNMENT = 64
 
 
+def vol2col_rm_pages(num_patches):
+    """vol2col_rm CB pages, as conv3d_program_factory sizes them.
+
+    Every block must end exactly at the CB end (see vol2col_cb_first_straddle), so a tile-aligned block
+    gets TILE_HEIGHT pages and an unaligned one exactly num_patches pages.
+    """
+    return min(num_patches, TILE_HEIGHT) if num_patches % TILE_HEIGHT == 0 else num_patches
+
+
+def vol2col_cb_first_straddle(num_patches, cb_pages, num_blocks=64):
+    """First block whose vol2col_rm chunk crosses the CB end, or None.
+
+    The reader pushes TILE_HEIGHT-page chunks plus a num_patches % TILE_HEIGHT tail per block, and compute
+    pops the same sizes. cb_push_back and cb_pop_front wrap only when the pointer lands exactly on
+    fifo_limit, so a chunk that crosses it runs on past the CB through L1.
+    """
+    ptr = 0
+    for block in range(num_blocks):
+        left = num_patches
+        while left:
+            chunk = min(left, TILE_HEIGHT)
+            ptr += chunk
+            if ptr == cb_pages:
+                ptr = 0
+            elif ptr > cb_pages:
+                return block
+            left -= chunk
+    return None
+
+
 def vol2col_chunks_fit(t_blk, h_blk, w_blk):
     """True when conv3d_program_factory accepts this block's patch count.
 
-    The reader pushes TILE_HEIGHT-page chunks into a vol2col_rm CB of at most 2 * TILE_HEIGHT pages.
-    Past that, an unaligned patch count makes a chunk straddle the CB end and the reader overruns L1
-    (the Cin64/Cout128 T=5|7 hangs of blx03 job 484), so the factory rejects it.
+    The factory still rejects unaligned blocks over 2 * TILE_HEIGHT patches (the Cin64/Cout128 T=5|7 hangs
+    of blx03 job 484, where a 64-page CB let chunks straddle its end) until the num_patches-page sizing
+    is checked on device, unless TT_CONV3D_ALLOW_UNALIGNED_VOL2COL=1.
     """
     num_patches = t_blk * h_blk * w_blk
     return num_patches <= 2 * TILE_HEIGHT or num_patches % TILE_HEIGHT == 0
@@ -188,8 +217,7 @@ def prefetch_shard_fits(
     N_t = math.ceil(cout_block / 32)
     partial_tile = FP32_TILE_SIZE if (fp32_dest_acc_en and C_in_num_blocks > 1) else TILE_SIZE
 
-    vol2col_rm_pages = min(num_patches, TILE_HEIGHT if num_patches % TILE_HEIGHT == 0 else 2 * TILE_HEIGHT)
-    other = padded_patch_bytes * vol2col_rm_pages + TILE_SIZE * K_t + TILE_SIZE * K_t * N_t
+    other = padded_patch_bytes * vol2col_rm_pages(num_patches) + TILE_SIZE * K_t + TILE_SIZE * K_t * N_t
     other += partial_tile * M_t * N_t + TILE_SIZE * M_t * N_t
     cin_bytes = cin_block * dtype_bytes
     if cin_bytes % DRAM_READ_ALIGNMENT:

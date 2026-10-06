@@ -13,7 +13,9 @@ from ..wan2_2.bruteforce_conv3d_sweep import (
     halo_masks,
     halo_sticks,
     prefetch_shard_fits,
+    vol2col_cb_first_straddle,
     vol2col_chunks_fit,
+    vol2col_rm_pages,
 )
 from .bruteforce_conv3d_sweep_ltx import _SWEEP_LAYERS_LTX25_544P_145F_HALO, _SWEEP_LAYERS_LTX25_544P_145F_HALO_EXACT
 
@@ -132,3 +134,41 @@ def test_table_blockings_fit_vol2col_chunks(table):
     # The T-relaxed lookup clamps T_out_block down, so every smaller T must fit too.
     bad = {k: v for k, v in table.items() if not all(vol2col_chunks_fit(t, *v[3:]) for t in range(1, v[2] + 1))}
     assert bad == {}
+
+
+def _old_vol2col_rm_pages(num_patches):
+    return min(num_patches, 32) if num_patches % 32 == 0 else min(num_patches, 64)
+
+
+@pytest.mark.parametrize(
+    "blocking, hung",
+    # blx03 jobs 273-285: the 64-page sizing straddles exactly for the four blockings that hung.
+    [
+        ((5, 4, 4), True),
+        ((5, 8, 2), True),
+        ((7, 4, 4), True),
+        ((7, 8, 2), True),
+        ((3, 8, 8), False),
+        ((3, 16, 4), False),
+        ((3, 4, 4), False),
+        ((3, 8, 2), False),
+        ((6, 8, 2), False),
+    ],
+)
+def test_vol2col_cb_sizing_straddle_matches_device(blocking, hung):
+    num_patches = blocking[0] * blocking[1] * blocking[2]
+    assert (vol2col_cb_first_straddle(num_patches, _old_vol2col_rm_pages(num_patches)) is not None) == hung
+    assert vol2col_cb_first_straddle(num_patches, vol2col_rm_pages(num_patches)) is None
+
+
+def test_vol2col_rm_pages_never_straddle():
+    bad = [n for n in range(1, 2049) if vol2col_cb_first_straddle(n, vol2col_rm_pages(n)) is not None]
+    assert bad == []
+
+
+def test_vol2col_rm_pages_unchanged_for_guarded_blockings():
+    # Blockings the old guard accepted keep their CB size, so their L1 budget and perf do not move.
+    changed = [
+        n for n in range(1, 2049) if vol2col_chunks_fit(n, 1, 1) and vol2col_rm_pages(n) != _old_vol2col_rm_pages(n)
+    ]
+    assert changed == []
