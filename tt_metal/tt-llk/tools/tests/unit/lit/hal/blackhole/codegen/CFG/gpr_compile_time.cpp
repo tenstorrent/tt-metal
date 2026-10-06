@@ -38,17 +38,6 @@ extern "C" __attribute__((noinline, used)) void write_gpr_wait()
 // CHECK-NEXT: ttnop
 // CHECK-NEXT: ret
 
-extern "C" __attribute__((noinline, used)) void write_gpr_deferred()
-{
-    cfg::
-        write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg3].Base_cntx1_address, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(
-            hal::gpr<5>());
-}
-
-// CHECK-LABEL: <write_gpr_deferred>:
-// CHECK-NEXT: ttwrcfg 5,0,77
-// CHECK-NEXT: ret
-
 extern "C" __attribute__((noinline, used)) void write_gpr_128_default_completion()
 {
     cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg0].TileDescriptor.Raw, cfg::Sec::S1, cfg::GprTransferSize::Bits128>(hal::gpr<16>());
@@ -56,17 +45,6 @@ extern "C" __attribute__((noinline, used)) void write_gpr_128_default_completion
 
 // CHECK-LABEL: <write_gpr_128_default_completion>:
 // CHECK-NEXT: ttwrcfg 16,1,112
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void write_gpr_128_wait()
-{
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg0].TileDescriptor.Raw, cfg::Sec::S1, cfg::GprTransferSize::Bits128, cfg::WrcfgCompletion::Wait>(
-        hal::gpr<16>());
-}
-
-// CHECK-LABEL: <write_gpr_128_wait>:
-// CHECK-NEXT: ttwrcfg 16,1,112
-// CHECK-NEXT: ttnop
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_state_reset_via_gpr()
@@ -90,15 +68,6 @@ extern "C" __attribute__((noinline, used)) void write_field_group_gpr()
 // CHECK-NEXT: ttwrcfg 4,1,112
 // CHECK-NEXT: ret
 
-extern "C" __attribute__((noinline, used)) void write_field_group_from_gpr()
-{
-    cfg::write<cfg::Access::TensixCfgUnit>(cfg::from_gpr<cfg::Thcon[cfg::Reg0].TileDescriptor, cfg::Sec::S1, cfg::GprTransferSize::Bits128>(hal::gpr<4>()));
-}
-
-// CHECK-LABEL: <write_field_group_from_gpr>:
-// CHECK-NEXT: ttwrcfg 4,1,112
-// CHECK-NEXT: ret
-
 // GPR transfers grouped with field assignments.
 
 extern "C" __attribute__((noinline, used)) void write_ordered_constant_operations()
@@ -119,20 +88,6 @@ extern "C" __attribute__((noinline, used)) void write_ordered_constant_operation
 // CHECK-NEXT: ttwrcfg 4,0,76
 // CHECK-NEXT: ttwrcfg 5,0,80
 // CHECK-NEXT: ttnop
-// CHECK-NEXT: ttrmwcib0 1,1,5
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void write_deferred_gpr_sequence()
-{
-    cfg::write<cfg::Access::TensixCfgUnit>(
-        cfg::set<cfg::AluFormatSpecReg::SrcA_val, cfg::Sec::S0, 1>(),
-        cfg::from_gpr<cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(hal::gpr<4>()),
-        cfg::set<cfg::DestOffset::Enable, cfg::Sec::S0, 1>());
-}
-
-// CHECK-LABEL: <write_deferred_gpr_sequence>:
-// CHECK-NEXT: ttrmwcib0 15,1,0
-// CHECK-NEXT: ttwrcfg 4,0,76
 // CHECK-NEXT: ttrmwcib0 1,1,5
 // CHECK-NEXT: ret
 

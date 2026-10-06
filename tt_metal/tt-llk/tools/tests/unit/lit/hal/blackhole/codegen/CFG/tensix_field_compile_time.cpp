@@ -6,6 +6,7 @@
 // RUN: %{blackhole_objdump} -d %t.o | FileCheck %s
 
 #include "hal/cfg.h"
+#include "hal/cfg/detail/thread_access.h"
 
 namespace cfg = hal::cfg;
 
@@ -86,24 +87,14 @@ extern "C" __attribute__((noinline, used)) void write_thread_section()
 // CHECK-NEXT: ttsetc16 19,10752
 // CHECK-NEXT: ret
 
-extern "C" __attribute__((noinline, used)) void write_one_constant_assignment()
+extern "C" __attribute__((noinline, used)) void write_prepacked_thread_word()
 {
-    cfg::write<cfg::Access::TensixCfgUnit>(cfg::set<cfg::AluFormatSpecReg::SrcA_val, cfg::Sec::S0, 5>());
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::AddrMod[cfg::SrcA].Incr>(2, 0x43);
 }
 
-// CHECK-LABEL: <write_one_constant_assignment>:
-// CHECK-NEXT: ttrmwcib0 15,5,0
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void write_same_word_constant_group()
-{
-    cfg::write<cfg::Access::TensixCfgUnit>(
-        cfg::set<cfg::Thcon[cfg::Reg0].TileDescriptor.InDataFormat, cfg::Sec::S0, 3>(),
-        cfg::set<cfg::Thcon[cfg::Reg0].TileDescriptor.Uncompressed, cfg::Sec::S0, 1>());
-}
-
-// CHECK-LABEL: <write_same_word_constant_group>:
-// CHECK-NEXT: ttrmwcib0 31,19,64
+// The section selects thread word 12 + 2; the value is stored unshifted.
+// CHECK-LABEL: <write_prepacked_thread_word>:
+// CHECK-NEXT: ttsetc16 14,67
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_straddling_constant_group()

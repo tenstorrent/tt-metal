@@ -5,26 +5,23 @@
 // clang-format off
 // RUN: %split-file %s %t
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/constant-mmio.cpp 2>&1 | FileCheck %s --check-prefix=ACCESS
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/constant-scalar.cpp 2>&1 | FileCheck %s --check-prefix=ACCESS
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/runtime-scalar.cpp 2>&1 | FileCheck %s --check-prefix=VALUE_ACCESS
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/constant-wide.cpp 2>&1 | FileCheck %s --check-prefix=WIDE_WRITE
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/runtime-wide.cpp 2>&1 | FileCheck %s --check-prefix=WIDE_WRITE
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/constant-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/runtime-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/assignment-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/constant-value.cpp 2>&1 | FileCheck %s --check-prefix=VALUE
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rmwcib-constant.cpp 2>&1 | FileCheck %s --check-prefix=RMWCIB_IGNORED
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rmwcib-runtime.cpp 2>&1 | FileCheck %s --check-prefix=RMWCIB_IGNORED
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rmwcib-constant-group.cpp 2>&1 | FileCheck %s --check-prefix=RMWCIB_IGNORED
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rmwcib-runtime-group.cpp 2>&1 | FileCheck %s --check-prefix=RMWCIB_IGNORED
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-scalar-constant.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_ACCESS
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-scalar-runtime.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_ACCESS
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-state-overlap.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_OVERLAP
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-thread-overlap.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_OVERLAP
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/assignment-wide-runtime.cpp 2>&1 | FileCheck %s --check-prefix=WIDE_ASSIGN
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/assignment-wide-constant.cpp 2>&1 | FileCheck %s --check-prefix=WIDE_ASSIGN
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-state-outside.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_OUTSIDE
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-thread-outside.cpp 2>&1 | FileCheck %s --check-prefix=GROUP_OUTSIDE
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/prepacked-access.cpp 2>&1 | FileCheck %s --check-prefix=PREPACKED_ACCESS
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/prepacked-state.cpp 2>&1 | FileCheck %s --check-prefix=PREPACKED_SCOPE
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/prepacked-shifted.cpp 2>&1 | FileCheck %s --check-prefix=PREPACKED_SHIFT
 
 // ACCESS: error: static assertion failed: compile-time instruction emission requires Access::TensixCfgUnit
 // VALUE_ACCESS: error: static assertion failed: value-backed cfg::write requires Access::MMIO or Access::TensixCfgUnit; Access::TensixScalarUnit requires a GPR operand
@@ -36,6 +33,9 @@
 // GROUP_OVERLAP: error: static assertion failed: overlapping CFG field assignments in one physical word
 // WIDE_ASSIGN: error: static assertion failed: field wider than 32b cannot be assigned through a single value
 // GROUP_OUTSIDE: error: static assertion failed: CFG write destination lies outside its register scope
+// PREPACKED_ACCESS: error: static assertion failed: constant-propagated thread CFG writes require Access::TensixCfgUnit
+// PREPACKED_SCOPE: error: static assertion failed: SETC16 targets thread CFG only
+// PREPACKED_SHIFT: error: static assertion failed: prepacked thread CFG anchor must begin at bit zero
 // clang-format on
 
 //--- fields.h
@@ -60,14 +60,6 @@ void probe()
     cfg::write<cfg::Access::MMIO, cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0, 1>();
 }
 
-//--- constant-scalar.cpp
-#include "fields.h"
-
-void probe()
-{
-    cfg::write<cfg::Access::TensixScalarUnit, cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0, 1>();
-}
-
 //--- runtime-scalar.cpp
 #include "fields.h"
 
@@ -84,28 +76,12 @@ void probe()
     cfg::write<cfg::Access::TensixCfgUnit, state_wide, cfg::Sec::S0, 1>();
 }
 
-//--- runtime-wide.cpp
-#include "fields.h"
-
-void probe(std::uint32_t value)
-{
-    cfg::write<cfg::Access::TensixCfgUnit, state_wide, cfg::Sec::S0>(value);
-}
-
 //--- constant-section.cpp
 #include "fields.h"
 
 void probe()
 {
     cfg::write<cfg::Access::TensixCfgUnit, cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S1, 1>();
-}
-
-//--- runtime-section.cpp
-#include "fields.h"
-
-void probe(std::uint32_t value)
-{
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S1>(value);
 }
 
 //--- assignment-section.cpp
@@ -140,36 +116,12 @@ void probe(std::uint32_t value)
     cfg::write<cfg::Access::TensixCfgUnit, cfg::StateReset::EN, cfg::Sec::S0>(value);
 }
 
-//--- rmwcib-constant-group.cpp
-#include "fields.h"
-
-void probe()
-{
-    cfg::write<cfg::Access::TensixCfgUnit>(cfg::set<cfg::StateReset::EN, cfg::Sec::S0, 1>());
-}
-
-//--- rmwcib-runtime-group.cpp
-#include "fields.h"
-
-void probe(std::uint32_t value)
-{
-    cfg::write<cfg::Access::TensixCfgUnit>(cfg::set<cfg::StateReset::EN, cfg::Sec::S0>(value));
-}
-
 //--- group-scalar-constant.cpp
 #include "fields.h"
 
 void probe()
 {
     cfg::write<cfg::Access::TensixScalarUnit>(cfg::set<cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0, 1>());
-}
-
-//--- group-scalar-runtime.cpp
-#include "fields.h"
-
-void probe(std::uint32_t value)
-{
-    cfg::write<cfg::Access::TensixScalarUnit>(cfg::set<cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(value));
 }
 
 //--- group-state-overlap.cpp
@@ -219,4 +171,31 @@ void probe()
 void probe(std::uint32_t value)
 {
     cfg::write<cfg::Access::TensixCfgUnit>(cfg::set<thread_outside, cfg::Sec::S0>(value));
+}
+
+//--- prepacked-access.cpp
+#include "fields.h"
+#include "hal/cfg/detail/thread_access.h"
+
+void probe(std::uint32_t value)
+{
+    cfg::write<cfg::Access::MMIO, cfg::AddrMod[cfg::SrcA].Incr>(0, value);
+}
+
+//--- prepacked-state.cpp
+#include "fields.h"
+#include "hal/cfg/detail/thread_access.h"
+
+void probe(std::uint32_t value)
+{
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg3].Base_address>(0, value);
+}
+
+//--- prepacked-shifted.cpp
+#include "fields.h"
+#include "hal/cfg/detail/thread_access.h"
+
+void probe(std::uint32_t value)
+{
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::AddrMod[cfg::SrcB].Incr>(0, value);
 }

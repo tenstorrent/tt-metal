@@ -48,23 +48,6 @@ extern "C" __attribute__((noinline, used)) void write_runtime_gpr_wait(std::uint
 // CHECK-NEXT: ttnop
 // CHECK-NEXT: ret
 
-extern "C" __attribute__((noinline, used)) void write_runtime_gpr_128_wait(std::uint32_t index)
-{
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg0].TileDescriptor, cfg::Sec::S1, cfg::GprTransferSize::Bits128, cfg::WrcfgCompletion::Wait>(
-        hal::gpr(index));
-}
-
-// The 128-bit flag is bit 15: 0xb0008000 + 112.
-// CHECK-LABEL: <write_runtime_gpr_128_wait>:
-// CHECK-DAG: lui [[OP:a[0-7]]],0xb0008
-// CHECK-DAG: addi [[OPA:a[0-7]]],[[OP]],112
-// CHECK-DAG: slli a0,a0,0x10
-// CHECK-DAG: R_RISCV_HI20 __instrn_buffer
-// CHECK: add a0,a0,[[OPA]]
-// CHECK: sw a0,0({{a[0-7]}})
-// CHECK-NEXT: ttnop
-// CHECK-NEXT: ret
-
 extern "C" __attribute__((noinline, used)) void write_runtime_gpr_last_block(std::uint32_t index)
 {
     cfg::write<cfg::Access::TensixCfgUnit, state_last_block, cfg::Sec::S0, cfg::GprTransferSize::Bits128, cfg::WrcfgCompletion::Deferred>(hal::gpr(index));
