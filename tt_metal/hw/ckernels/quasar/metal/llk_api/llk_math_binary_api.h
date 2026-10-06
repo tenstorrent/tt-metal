@@ -46,16 +46,19 @@ inline void llk_math_eltwise_binary_init(
 
     _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
         srcA_format, srcB_format);
-    if constexpr (src_b_bcast_type == BroadcastType::NONE) {
-        _llk_math_eltwise_binary_init_<eltwise_binary_type, effective_math_fidelity, binary_reuse_dest>(
-            tensor_shape_A, acc_to_dest);
-    } else {
-        static_assert(
-            binary_reuse_dest == EltwiseBinaryReuseDestType::NONE,
-            "Quasar: dest reuse (binary_reuse_dest) is not supported on the broadcast eltwise binary init path");
-        _llk_math_eltwise_binary_broadcast_init_<eltwise_binary_type, src_b_bcast_type, effective_math_fidelity>(
-            tensor_shape_A);
-    }
+    with_effective_math_fidelity<effective_math_fidelity>(srcA_format, srcB_format, [&](auto fidelity) {
+        constexpr MathFidelity programmed_math_fidelity = decltype(fidelity)::value;
+        if constexpr (src_b_bcast_type == BroadcastType::NONE) {
+            _llk_math_eltwise_binary_init_<eltwise_binary_type, programmed_math_fidelity, binary_reuse_dest>(
+                tensor_shape_A, acc_to_dest);
+        } else {
+            static_assert(
+                binary_reuse_dest == EltwiseBinaryReuseDestType::NONE,
+                "Quasar: dest reuse (binary_reuse_dest) is not supported on the broadcast eltwise binary init path");
+            _llk_math_eltwise_binary_broadcast_init_<eltwise_binary_type, src_b_bcast_type, programmed_math_fidelity>(
+                tensor_shape_A);
+        }
+    });
 }
 
 /**

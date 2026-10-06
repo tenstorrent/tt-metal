@@ -73,16 +73,19 @@ inline void llk_math_matmul_init(
             srcA_format, srcB_format);
     }
     const bool src_2x = is_2x_format(srcA_format) && is_2x_format(srcB_format);
-    if (src_2x) {
-        _llk_math_matmul_init_<math_fidelity, false /*EN_DI*/, true /*EN_X2*/>(
-            ct_dim, rt_dim, src_b_shape, src_a_shape);
-    } else {
-        LLK_ASSERT(
-            ckernel::validate_matmul_tensor_shapes_(src_b_shape, src_a_shape),
-            "unsupported SrcB/input0 and SrcA/input1 TensorShape pair for matmul");
-        _llk_math_matmul_init_<math_fidelity, false /*EN_DI*/, false /*EN_X2*/>(
-            ct_dim, rt_dim, src_b_shape, src_a_shape);
-    }
+    with_effective_math_fidelity<math_fidelity>(srcA_format, srcB_format, [&](auto fidelity) {
+        constexpr ckernel::MathFidelity programmed_math_fidelity = decltype(fidelity)::value;
+        if (src_2x) {
+            _llk_math_matmul_init_<programmed_math_fidelity, false /*EN_DI*/, true /*EN_X2*/>(
+                ct_dim, rt_dim, src_b_shape, src_a_shape);
+        } else {
+            LLK_ASSERT(
+                ckernel::validate_matmul_tensor_shapes_(src_b_shape, src_a_shape),
+                "unsupported SrcB/input0 and SrcA/input1 TensorShape pair for matmul");
+            _llk_math_matmul_init_<programmed_math_fidelity, false /*EN_DI*/, false /*EN_X2*/>(
+                ct_dim, rt_dim, src_b_shape, src_a_shape);
+        }
+    });
 }
 
 /**

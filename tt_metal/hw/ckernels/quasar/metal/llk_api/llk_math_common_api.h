@@ -4,6 +4,7 @@
 
 #pragma once
 #include <cstdint>
+#include <type_traits>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_template.h"
@@ -59,6 +60,32 @@ inline void llk_math_reconfig_remap(const bool /*remap_enable*/) {}
 template <EltwiseBinaryType eltwise_binary_type, MathFidelity math_fidelity>
 inline constexpr MathFidelity get_effective_math_fidelity() {
     return (eltwise_binary_type == EltwiseBinaryType::ELWMUL) ? math_fidelity : MathFidelity::LoFi;
+}
+
+/**
+ * @brief Whether a Src register format holds 8-bit integers.
+ */
+inline constexpr bool is_int8_src_format(const DataFormat format) {
+    return (format == DataFormat::Int8) || (format == DataFormat::UInt8) || (format == DataFormat::Int8_2x) ||
+           (format == DataFormat::UInt8_2x);
+}
+
+/**
+ * @brief Calls fn with the math fidelity to program for operands in these Src register formats.
+ *
+ * Integer operands have no mantissa slices to split across fidelity phases: every phase multiplies them in full and
+ * adds the whole product to Dest again, so HiFi2/3/4 give two, three or four times the product. So int8 runs at LoFi.
+ *
+ * @tparam math_fidelity: The requested math fidelity
+ * @param fn: Generic callable taking std::integral_constant<MathFidelity, F> for the fidelity F to program
+ */
+template <MathFidelity math_fidelity, typename Fn>
+inline void with_effective_math_fidelity(const DataFormat srca_format, const DataFormat srcb_format, Fn&& fn) {
+    if (is_int8_src_format(srca_format) && is_int8_src_format(srcb_format)) {
+        fn(std::integral_constant<MathFidelity, MathFidelity::LoFi>{});
+    } else {
+        fn(std::integral_constant<MathFidelity, math_fidelity>{});
+    }
 }
 
 /**

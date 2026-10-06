@@ -25,6 +25,15 @@ inline bool operands_use_2x_format(const std::uint32_t operand0, const std::uint
     return is_2x_format(format0) && is_2x_format(format1);
 }
 
+// Calls fn with the fidelity to program for these operands (see with_effective_math_fidelity). Init, execute and
+// reinit all decide it the same way, so the execute issues the phases init recorded.
+template <ckernel::MathFidelity math_fidelity, typename Fn>
+inline void with_no_mop_matmul_math_fidelity(const std::uint32_t operandA, const std::uint32_t operandB, Fn&& fn) {
+    const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(get_operand_id(operandA)));
+    const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(get_operand_id(operandB)));
+    with_effective_math_fidelity<math_fidelity>(srcA_format, srcB_format, fn);
+}
+
 /**
  * @brief Initialize a matrix multiply of Input 0 * Input 1 -> SrcB * SrcA that runs without a MOP.
  *
@@ -72,11 +81,14 @@ inline void llk_math_matmul_init_no_mop(
     _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
         srcA_format, srcB_format);
 
-    if (operands_use_2x_format(operandA, operandB)) {
-        _llk_math_matmul_init_no_mop_<math_fidelity, true /*EN_X2*/>(ct_dim, rt_dim);
-    } else {
-        _llk_math_matmul_init_no_mop_<math_fidelity, false /*EN_X2*/>(ct_dim, rt_dim);
-    }
+    with_no_mop_matmul_math_fidelity<math_fidelity>(operandA, operandB, [&](auto fidelity) {
+        constexpr ckernel::MathFidelity programmed_math_fidelity = decltype(fidelity)::value;
+        if (operands_use_2x_format(operandA, operandB)) {
+            _llk_math_matmul_init_no_mop_<programmed_math_fidelity, true /*EN_X2*/>(ct_dim, rt_dim);
+        } else {
+            _llk_math_matmul_init_no_mop_<programmed_math_fidelity, false /*EN_X2*/>(ct_dim, rt_dim);
+        }
+    });
 }
 
 /**
@@ -112,11 +124,14 @@ inline void llk_math_matmul_no_mop(
     LLK_ASSERT(dst_index == 0, "non-default dst_index not supported on Quasar");
 
     // Re-derive 2x-ness so the execute issues the same MVMUL count that init recorded.
-    if (operands_use_2x_format(operandA, operandB)) {
-        _llk_math_matmul_block_no_mop_<math_fidelity, true /*EN_X2*/>(ct_dim, rt_dim);
-    } else {
-        _llk_math_matmul_block_no_mop_<math_fidelity, false /*EN_X2*/>(ct_dim, rt_dim);
-    }
+    with_no_mop_matmul_math_fidelity<math_fidelity>(operandA, operandB, [&](auto fidelity) {
+        constexpr ckernel::MathFidelity programmed_math_fidelity = decltype(fidelity)::value;
+        if (operands_use_2x_format(operandA, operandB)) {
+            _llk_math_matmul_block_no_mop_<programmed_math_fidelity, true /*EN_X2*/>(ct_dim, rt_dim);
+        } else {
+            _llk_math_matmul_block_no_mop_<programmed_math_fidelity, false /*EN_X2*/>(ct_dim, rt_dim);
+        }
+    });
 }
 
 /**
@@ -150,9 +165,12 @@ inline void llk_math_matmul_reinit_no_mop(
         THROTTLE_LEVEL == 0,
         "Quasar no-mop matmul only supports THROTTLE_LEVEL == 0; Quasar has no throttled MVMUL sequences");
 
-    if (operands_use_2x_format(operandA, operandB)) {
-        _llk_math_matmul_init_no_mop_<math_fidelity, true /*EN_X2*/>(ct_dim, rt_dim);
-    } else {
-        _llk_math_matmul_init_no_mop_<math_fidelity, false /*EN_X2*/>(ct_dim, rt_dim);
-    }
+    with_no_mop_matmul_math_fidelity<math_fidelity>(operandA, operandB, [&](auto fidelity) {
+        constexpr ckernel::MathFidelity programmed_math_fidelity = decltype(fidelity)::value;
+        if (operands_use_2x_format(operandA, operandB)) {
+            _llk_math_matmul_init_no_mop_<programmed_math_fidelity, true /*EN_X2*/>(ct_dim, rt_dim);
+        } else {
+            _llk_math_matmul_init_no_mop_<programmed_math_fidelity, false /*EN_X2*/>(ct_dim, rt_dim);
+        }
+    });
 }
