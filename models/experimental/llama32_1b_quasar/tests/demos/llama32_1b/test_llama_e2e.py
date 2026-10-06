@@ -309,22 +309,6 @@ def _install_quasar_interleaved_matmul(monkeypatch, mesh_device):
     gx, gy = min(int(dev.x), 2), 1
     mm_core_grid = ttnn.CoreGrid(y=gy, x=gx)
 
-    # 3 MB-L1 Quasar variant (opted in via LLAMA_QSR_WORKER_L1_SIZE; see demo._ttnn_mesh_device_param_from_env):
-    # the wide lm_head 1D-mcast matmul's dominant L1 user is the in1 (weights) CB = in0_block_w * per_core_N
-    # tiles (double-buffered). At in0_block_w=4, per_core_N=128 that is 1024 tiles (~2 MB bf16) — razor-thin
-    # against the variant's ~2.83 MB allocatable L1, which hangs the matmul. When L1 is small, cap in0_block_w
-    # so the weights CB stays ~<=1 MB (correctness preserved — just more K-blocks). Unset -> 4 MB, unchanged.
-    _small_l1 = bool(os.environ.get("LLAMA_QSR_WORKER_L1_SIZE", "").strip())
-    # Per-core weights-CB ceiling (pre-double-buffer tiles): in0_block_w * per_core_N <= this on small L1,
-    # so the double-buffered CB is <= 2x this (~1 MB bf16 at 256), leaving room for in0/out/partials.
-    _WEIGHTS_CB_TILE_CAP = 256
-
-    def _ibw_for(kt, per_core_n):
-        cap = 4  # validated TEN-4746-safe ceiling on the 4 MB path
-        if _small_l1:
-            cap = max(1, min(4, _WEIGHTS_CB_TILE_CAP // max(int(per_core_n), 1)))
-        return _blk(kt, 1, cap)
-
     def _blk(v, sub, cap):
         # largest divisor of v that is a multiple of `sub` and <= cap
         best, d = sub, sub
@@ -333,6 +317,19 @@ def _install_quasar_interleaved_matmul(monkeypatch, mesh_device):
                 best = d
             d += sub
         return best
+
+    def _ibw_for(kt, per_core_n):
+        # in0_block_w, capped so the weights CB (= in0_block_w * per_core_N tiles, double-buffered) stays
+        # small enough to coexist with resident L1 on the 3 MB-L1 Quasar variant. The wide lm_head 1D-mcast
+        # matmul (per_core_N=128) at in0_block_w=4 needs ~2.56 MB of static DFBs and CLASHES with as little
+        # as 0.5 MB of resident L1 (TT_THROW "Statically allocated dataflow buffers ... clash"); at
+        # in0_block_w=2 it survives >= 1.5 MB. So cap in0_block_w*per_core_N <= 256 (double-buffered CB
+        # <= ~1 MB): per_core_N=128 -> 2, narrow decode matmuls keep <= 4. Confirmed by
+        # debug_ops/test_quasar_lm_head_matmul_3mb.py::test_lm_head_matmul_under_l1_pressure. Still <= 4 so
+        # the TEN-4746 large-in0_block_w path is avoided. On the 4 MB emulator this only adds K-blocks to
+        # the wide matmuls (correctness unchanged); it is not gated on device size to avoid a fragile probe.
+        cap = max(1, min(4, 256 // max(int(per_core_n), 1)))
+        return _blk(kt, 1, cap)
 
     def _wrap(orig):
         def _mm(input_tensor, weight, *args, **kwargs):
@@ -363,9 +360,7 @@ def _install_quasar_interleaved_matmul(monkeypatch, mesh_device):
                     # 1D mcast_in0 (decode): in0 broadcast, each core owns per_core_N of the output.
                     nc = gx * gy
                     per_core_n = max((nt + nc - 1) // nc, 1)
-                    # in0_block_w PINNED <=4 (avoids the TEN-4746 large-in0_block_w path); shrunk further on
-                    # the small-L1 variant so the per_core_N-wide weights CB fits (_ibw_for).
-                    ibw = _ibw_for(kt, per_core_n)
+                    ibw = _ibw_for(kt, per_core_n)  # <=4, shrunk for wide matmuls so DFBs fit small-L1
                     osw = _blk(per_core_n, 1, 4)
                     kwargs["program_config"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                         compute_with_storage_grid_size=(gx, gy),
@@ -382,7 +377,7 @@ def _install_quasar_interleaved_matmul(monkeypatch, mesh_device):
                     # 2D mcast (prefill / lm_head): M across grid.y, N across grid.x; out_block streams to L1.
                     per_core_m = max((mt + gy - 1) // gy, 1)
                     per_core_n = max((nt + gx - 1) // gx, 1)
-                    ibw = _ibw_for(kt, per_core_n)  # <=4, shrunk on small-L1 so the weights CB fits
+                    ibw = _ibw_for(kt, per_core_n)  # <=4, shrunk for wide matmuls so DFBs fit small-L1
                     osw = _blk(per_core_n, 1, 4)
                     kwargs["program_config"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                         compute_with_storage_grid_size=(gx, gy),

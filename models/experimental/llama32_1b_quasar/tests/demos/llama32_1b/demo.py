@@ -263,21 +263,6 @@ def _ttnn_mesh_device_param_from_env() -> dict:
         "trace_region_size": 50_000_000,
         "num_command_queues": 1,
     }
-    # 3 MB-L1 Quasar variant: the physical part has only 3 MB L1 per compute node (vs 4 MB). The
-    # emulator reports the reduced size to the L1 banking allocator, but device creation (device.cpp)
-    # otherwise defaults `worker_l1_size` to the HAL's 4 MB value — so the two disagree and top-of-L1
-    # structures (mcast semaphores, kernel-config region) are placed in the non-existent [3 MB, 4 MB)
-    # window, which hangs the wide lm_head mcast matmul. Pass `worker_l1_size` explicitly, the same way
-    # the resnet50/quasar functional test sets `l1_small_size` via the device params, so device.cpp is
-    # told the real size and the allocator + device agree. Opt in on the 3 MB variant with
-    #   LLAMA_QSR_WORKER_L1_SIZE=3145728   (3 * 1024 * 1024; decimal or 0x-hex accepted)
-    # Leave it unset on the 4 MB emulator to keep the default worker_l1_size (behaviour unchanged).
-    _wl1 = os.environ.get("LLAMA_QSR_WORKER_L1_SIZE", "").strip()
-    if _wl1:
-        try:
-            param["worker_l1_size"] = int(_wl1, 0)
-        except ValueError:
-            pytest.skip(f"LLAMA_QSR_WORKER_L1_SIZE must be an integer byte count, got {_wl1!r}")
     # TTTv2 multi-device executor dispatch (and the on-device sampling all-gather) stalls without
     # an explicit 1D fabric; the root conftest does not auto-enable it. Mirror the sibling
     # models/common/models/llama32_1b/demo.py wiring: FABRIC_1D on any >1-device mesh.
