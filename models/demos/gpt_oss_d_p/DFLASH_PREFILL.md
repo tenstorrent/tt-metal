@@ -75,6 +75,11 @@ python models/demos/gpt_oss_d_p/tests/galaxy_prefill_dflash.py
 The Galaxy rung preserves the existing target-KV PCC gate, checks aggregate
 and per-position pre-norm feature PCC, checks final `y0`/top-k, reports
 disabled/enabled latency and export cost, and writes a consumer fixture.
+Use a 1k-position seed to gate the complete feature trajectory and final token.
+`PREFILL_TPS_ITERS=N PREFILL_TSU_MIN=3000` makes the synchronized enabled-path
+median an executable throughput gate rather than a one-run characterization.
+`GPT_OSS_KV_PCC_MIN` and `GPT_OSS_DFLASH_PCC_MIN` set the corresponding
+correctness floors; all failures are reported together.
 
 The reload owner feeds that fixture through bulk drafter-KV priming. Set
 `PREFILL_DFLASH_COMPAT_CONTROL` to the current prefill-by-decode result and
