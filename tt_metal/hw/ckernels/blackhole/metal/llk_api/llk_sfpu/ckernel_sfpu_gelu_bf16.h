@@ -53,5 +53,10 @@ template <int ITERATIONS = 8>
 inline void calculate_gelu_bf16() {
     ckernel::sfpu::bf16::calculate_zone_affine_even_decay<ckernel::sfpu::GeluBf16Config, ITERATIONS>();
 }
+inline void init_gelu_bf16() {
+    if (bf16_dest_gelu()) {
+        ckernel::sfpu::bf16::init_zone_affine_even_decay<ckernel::sfpu::GeluBf16Config>();
+    }
+}
 
 }  // namespace ckernel::sfpu
