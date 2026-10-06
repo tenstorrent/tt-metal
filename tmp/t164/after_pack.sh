@@ -1,5 +1,5 @@
 #!/bin/bash
-# t164 phase 2 on g15blx02, after the pack driver (TAG=pack2): pick the 1-2 configs with the lowest mean
+# t164 phase 2 on g15blx02, after the pack driver (TAG=pack3): pick the 1-2 configs with the lowest mean
 # gen1/gen2 warm e2e that beat the baseline by 20 ms and pass a loose "not broken" gate against the baseline
 # clips (PCC >= 0.95, PSNR >= 25 dB on gen1 and gen2; VBench and the visual check do the real judging).
 # Then run baseline5 and <config>5 as 5-seed jobs (default prompt, seeds 0-4, the ref_dv145 protocol), and
@@ -10,7 +10,7 @@ T=/home/smarton/fasth3/tt-metal/tt-project/worktrees/t164/tmp/t164
 S=/home/smarton/fasth3/tt-metal/tt-project/worktrees/t164
 DATA=/home/smarton/fasth3/tt-metal/tt-project/data/g15
 REF=/home/smarton/fasth3/tt-metal/tt-project/baselines/ltx25_1080p_6s/ref_dv145
-PACK=$DATA/t164/driver_pack2/DRIVER.done; PACK_RC=${PACK_RC:?rc file of the detached pack driver}
+PACK=$DATA/t164/driver_${PACK_TAG:-pack3}/DRIVER.done; PACK_RC=${PACK_RC:?rc file of the detached pack driver}
 P=$DATA/t164/phase2; mkdir -p $P
 reason="died"
 trap 'echo "$? $reason" > $P/PHASE2.done' EXIT

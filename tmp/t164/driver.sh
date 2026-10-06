@@ -11,10 +11,10 @@ DATA=/home/smarton/fasth3/tt-metal/tt-project/data/g15
 CONFIGS=${CONFIGS:-$T/configs.txt}; TAG=${TAG:-pack}
 V=$DATA/t164/driver_$TAG; mkdir -p $V
 SL=/var/log/tt-device-broker/server.log; D=$V/driver.log; BOOT0=$(uptime -s)
-# Job 399 (same build, caches, default config, warm JIT) held the device ~180 s; limits are measured time +50%,
-# with room for in-place recompiles of kernels job 403 rebuilt from the t164 tree.
+# Job 406 (same build, caches and warmup cuts, gen#0 + 5 warm gens) held the device 152 s; the baseline
+# limit is that +50%.
 # Knob configs add in-window JIT compiles for their changed kernels (unmeasured), so they get 400 s.
-TO_BASE=${TO_BASE:-330}; TO_KNOB=${TO_KNOB:-400}
+TO_BASE=${TO_BASE:-240}; TO_KNOB=${TO_KNOB:-400}
 log() { echo "$(date -u '+%F %T') $*" >> $D; }
 done_() { log "T164_DRIVER_DONE $1 $2"; echo "$1 $2" > $V/DRIVER.done; exit 0; }
 now() { date -u '+%F %T'; }
@@ -61,6 +61,8 @@ watch_job() {
 # run_one <label> <flags...>: returns 0 ok, 1 failed, 2 skipped after two drops in a row.
 run_one() {
   label=$1; shift; drops=0
+  # PRIOR_DROP=<label>: that label's last job already dropped (an earlier driver run), so one more drop skips it.
+  [ "$label" = "${PRIOR_DROP:-}" ] && drops=1
   while :; do
     wait_ready
     disk_ok || done_ 14 "~/fasth3 at or over 99 GiB before $label"

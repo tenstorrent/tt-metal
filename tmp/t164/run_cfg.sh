@@ -2,7 +2,7 @@
 # One eval-pack config as one g15blx02 broker job: 4x8 ring, 1088x1920/145f, traced, fresh prompts.
 # One pytest process: pipeline warmup, gen#0 (trace capture, default prompt), gen#1 (first warm replay,
 # the headline, same protocol as job 399), plus LTX_E2E_EXTRA_REPLAYS more warm replays for spread.
-# Python from the t164 worktree (= t48 HEAD models/), C++ build and kernels from the t158 tree (bf7db12a14),
+# Python from the t164 worktree (= t48 abfd309e797 models/), C++ build and kernels from the t158 tree (bf7db12a14),
 # caches from data/g15 (job 399's): nothing new is built or converted.
 # pytest runs from $OUT: tt-metal resolves relative kernel paths against the cwd before TT_METAL_HOME, so a
 # cwd inside a full checkout compiles that tree's kernels into new JIT cache entries (job 403: 2172 compiles,
@@ -21,6 +21,8 @@ export LTX25_VIDEO_VAE=$LTX_CHECKPOINT
 export LTX25_ROOT=/mnt/MLPerf/huggingface/hub/models--Lightricks--LTX-2.5/snapshots/28dac7acdc1f78a70e98687db261a949754f8941
 export NO_PROMPT=1 SEED=0 RUN_WARMUP=1 LTX_TRACED=1 RUN_VBENCH=0 RUN_CLIP=0
 export LTX_E2E_EXTRA_REPLAYS=1 LTX_FRESH_PROMPTS=1 LTX_TIME_STAGES=1 LTX_CONV3D_BLOCKING_MESH=4,8
+# Warmup cuts: t2v trace families only, no encoder warmup (gen#0 runs the encoders before the timed gens).
+export LTX_WARMUP_T2V_ONLY=1 LTX_WARMUP_ENCODERS=0
 export TT_METAL_CACHE=$DATA/tt-metal-cache TT_DIT_CACHE_DIR=$DATA/dit-ltx25
 for kv in "$@"; do export "$kv"; done
 export LTX_OUT_DIR=$OUT
