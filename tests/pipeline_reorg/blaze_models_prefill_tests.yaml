@@ -1451,7 +1451,7 @@
     # One run gates PCC and throughput both. The gate reads the deepest probe (@55k) from the
     # runner-side perf JSON, taken during the measured request so the KV readback sits outside it.
     # The band spans a 44% spread across two galaxies; re-cut it once the CI pool has several runs.
-    export PREFILL_EXPECTED_TPS=29000
+    export PREFILL_EXPECTED_TPS=36900
     export PREFILL_PERF_MARGIN=0.25
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh mistral4
   test_type: mistral4_pp4_kv_pcc
