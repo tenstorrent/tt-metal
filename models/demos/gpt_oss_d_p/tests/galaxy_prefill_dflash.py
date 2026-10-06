@@ -20,6 +20,7 @@ Optional:
   GPT_OSS_DFLASH_PCC_MIN     aggregate pre-norm PCC floor (default 0.90)
   GPT_OSS_DFLASH_POS_PCC_MIN optional per-position PCC floor
   PREFILL_TPS_ITERS          disabled/enabled timing repetitions (default 1)
+  PREFILL_TSU_MIN            synchronized enabled-path tokens/s floor
 """
 
 from __future__ import annotations
@@ -233,6 +234,9 @@ def main() -> int:
                 ttnn.deallocate(result.reduced_hidden)
             result = next_result
         assert result is not None
+        enabled_median = statistics.median(enabled_times)
+        enabled_tsu = REAL_TOKENS / enabled_median
+        tsu_min = os.environ.get("PREFILL_TSU_MIN")
 
         # Existing target-KV proof remains the authoritative target-cache gate.
         kv_pcc = runtime.kv_cache_pcc_check(
@@ -242,14 +246,16 @@ def main() -> int:
             real_len=REAL_TOKENS,
             chunk_size=PADDED_TOKENS,
         )
+        gate_failures = []
         kv_min = os.environ.get("GPT_OSS_KV_PCC_MIN")
         if kv_min is not None and kv_pcc < float(kv_min):
-            raise AssertionError(f"target KV PCC {kv_pcc:.5f} < {kv_min}")
+            gate_failures.append(f"target KV PCC {kv_pcc:.5f} < {kv_min}")
 
         export_started = time.perf_counter()
         reduced = _to_host_reduced(mesh, result)[:REAL_TOKENS]
         export_ms = (time.perf_counter() - export_started) * 1000.0
         aggregate = per_position = None
+        golden_token = None
         if seed is not None:
             reference_positions = min(len(seed["seed_token_ids"]), REAL_TOKENS)
             reference = seed["reduced_hidden_prenorm_ref"][:reference_positions].float()
@@ -258,10 +264,10 @@ def main() -> int:
             per_position = torch.tensor([_pcc(reference[i], reduced_reference[i]) for i in range(reference_positions)])
             pcc_min = float(os.getenv("GPT_OSS_DFLASH_PCC_MIN", "0.90"))
             if aggregate < pcc_min:
-                raise AssertionError(f"reduced_hidden aggregate PCC {aggregate:.5f} < {pcc_min}")
+                gate_failures.append(f"reduced_hidden aggregate PCC {aggregate:.5f} < {pcc_min}")
             pos_min = os.environ.get("GPT_OSS_DFLASH_POS_PCC_MIN")
             if pos_min is not None and float(per_position.min()) < float(pos_min):
-                raise AssertionError(f"reduced_hidden min per-position PCC {per_position.min():.5f} < {pos_min}")
+                gate_failures.append(f"reduced_hidden min per-position PCC {per_position.min():.5f} < {pos_min}")
 
             if len(seed["next_token_ref"]) >= REAL_TOKENS:
                 golden_token = int(seed["next_token_ref"][REAL_TOKENS - 1])
@@ -269,7 +275,7 @@ def main() -> int:
                 if result.y0 != golden_token and (
                     topk_ids is None or result.y0 not in [int(x) for x in topk_ids[REAL_TOKENS - 1]]
                 ):
-                    raise AssertionError(
+                    gate_failures.append(
                         f"y0={result.y0} differs from golden={golden_token} and is outside golden top-k"
                     )
 
@@ -282,15 +288,23 @@ def main() -> int:
                 f" RH_REF_POS={len(per_position)} RH_PCC={aggregate:.5f} "
                 f"RH_POS(min/mean)={per_position.min():.5f}/{per_position.mean():.5f}"
             )
+            if len(per_position) >= REAL_TOKENS:
+                accuracy += f" RH_LAST_PCC={per_position[REAL_TOKENS - 1]:.5f}"
+        if golden_token is not None:
+            accuracy += f" y0_ref={golden_token}"
         print(f"[dflash-prefill] {accuracy}", flush=True)
         print(
             f"[dflash-prefill] latency disabled/enabled median="
             f"{statistics.median(disabled_times) * 1000:.1f}/"
-            f"{statistics.median(enabled_times) * 1000:.1f} ms; "
+            f"{enabled_median * 1000:.1f} ms ({enabled_tsu:.1f} tokens/s); "
             f"feature_export={export_ms:.1f} ms; enqueue_breakdown={result.timings_ms}",
             flush=True,
         )
         print(f"[dflash-prefill] consumer fixture={handoff_out} spec_trace={spec_trace}", flush=True)
+        if tsu_min is not None and enabled_tsu < float(tsu_min):
+            gate_failures.append(f"enabled prefill throughput {enabled_tsu:.1f} tokens/s < {tsu_min}")
+        if gate_failures:
+            raise AssertionError("; ".join(gate_failures))
         ttnn.deallocate(result.reduced_hidden)
     finally:
         ttnn.close_mesh_device(mesh)
