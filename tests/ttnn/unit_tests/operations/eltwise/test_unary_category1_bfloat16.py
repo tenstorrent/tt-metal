@@ -743,7 +743,17 @@ def test_log_with_sqrt_in_sfpu_chain(device, generated_first):
     else:
         expected = ttnn.get_golden_function(ttnn.log)(middle, device=device)
     checked &= torch.isfinite(expected) & (expected.abs() > SMALLEST_NORMAL_BF16)
-    assert checked.sum() > 1024
+    # Coverage is measured against the composition's own domain: erfinv after log, say, is
+    # defined on a few hundred inputs only. A wrong shared constant empties it.
+    golden_op = lambda tensor: ttnn.get_golden_function(ttnn.log)(tensor, device=device)
+    golden_partner = lambda tensor: ttnn.get_golden_function(ttnn.sqrt)(tensor, device=device)
+    golden_first, golden_second = (golden_op, golden_partner) if generated_first else (golden_partner, golden_op)
+    reference_middle = golden_first(input_tensor).to(torch.bfloat16)
+    reference = golden_second(reference_middle)
+    normal = lambda tensor: torch.isfinite(tensor) & (tensor.abs() > SMALLEST_NORMAL_BF16)
+    domain = normal(reference_middle) & normal(reference)
+    assert domain.any()
+    assert checked.sum() >= 0.9 * domain.sum()
 
     if generated_first:
         # Exactly the stock op's own result, which itself meets torch as its suites require.
@@ -776,7 +786,17 @@ def test_log_with_erfinv_in_sfpu_chain(device, generated_first):
     else:
         expected = ttnn.get_golden_function(ttnn.log)(middle, device=device)
     checked &= torch.isfinite(expected) & (expected.abs() > SMALLEST_NORMAL_BF16)
-    assert checked.sum() > 1024
+    # Coverage is measured against the composition's own domain: erfinv after log, say, is
+    # defined on a few hundred inputs only. A wrong shared constant empties it.
+    golden_op = lambda tensor: ttnn.get_golden_function(ttnn.log)(tensor, device=device)
+    golden_partner = lambda tensor: ttnn.get_golden_function(ttnn.erfinv)(tensor, device=device)
+    golden_first, golden_second = (golden_op, golden_partner) if generated_first else (golden_partner, golden_op)
+    reference_middle = golden_first(input_tensor).to(torch.bfloat16)
+    reference = golden_second(reference_middle)
+    normal = lambda tensor: torch.isfinite(tensor) & (tensor.abs() > SMALLEST_NORMAL_BF16)
+    domain = normal(reference_middle) & normal(reference)
+    assert domain.any()
+    assert checked.sum() >= 0.9 * domain.sum()
 
     if generated_first:
         # Exactly the stock op's own result, which itself meets torch as its suites require.
@@ -786,3 +806,46 @@ def test_log_with_erfinv_in_sfpu_chain(device, generated_first):
         assert_with_ulp(expected_result=golden[torch_checked], actual_result=result[torch_checked], ulp_threshold=2)
     else:
         assert_with_ulp(expected_result=expected[checked], actual_result=result[checked], ulp_threshold=1)
+
+
+def test_log_bf16_unflushed_zero_and_subnormal_inputs(device):
+    """TT-NN's copy into DEST keeps -0 and subnormal BF16 inputs, which the LLK sweep's unpack delivers as +0.
+
+    Each such input and +0 must store torch's result: its class as the BF16 pack stores it (NaN as
+    +inf, -0 as +0, a subnormal result as 0) and a finite result within 1 ULP of torch's float64
+    value. STOCK lists, per board, the inputs where the kernel stores its stock kernel's word
+    instead, as {word: [(first input, last input), ...]} over the input bits.
+    """
+    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
+    if board not in ("blackhole", "wormhole_b0"):
+        pytest.skip(f"ttnn.log keeps its stock kernel on {board}")
+    STOCK = {
+        "blackhole": {0xFF80: [(0x0001, 0x007F), (0x8001, 0x807F)]},
+        "wormhole_b0": {0xFF80: [(0x0001, 0x007F), (0x8001, 0x807F)]},
+    }
+    words = torch.cat([torch.arange(0x80), torch.arange(0x8000, 0x8080)]).to(torch.int16)
+    x = words.view(torch.bfloat16).repeat(4).reshape(1, 1, 32, 32)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tiny = torch.finfo(torch.bfloat16).tiny
+
+    def stored(t):
+        t = t.to(torch.bfloat16).to(torch.float64).flatten()
+        t = torch.where(torch.isnan(t), torch.full_like(t, float("inf")), t)
+        return torch.where(t.abs() < tiny, torch.zeros_like(t), t)
+
+    actual = stored(ttnn.to_torch(ttnn.log(tt_x)))
+    x64 = x.flatten().to(torch.float64)
+    reference = ttnn.get_golden_function(ttnn.log)(x64).to(torch.float64).flatten()
+    rounded = stored(reference)
+    spacing = 2.0 ** (torch.floor(torch.log2(reference.abs().clamp(min=tiny))) - 7)
+    close = torch.isfinite(reference) & (actual != 0) & ((actual - reference).abs() < spacing)
+    ok = (actual == rounded) | close
+    bits = words.repeat(4).to(torch.int32) & 0xFFFF
+    for word, ranges in STOCK.get(board, {}).items():
+        value = stored(torch.tensor([word], dtype=torch.int32).to(torch.int16).view(torch.bfloat16))
+        for first, last in ranges:
+            ok |= (bits >= first) & (bits <= last) & (actual == value)
+    assert ok.all(), (
+        f"{(~ok).sum().item()} of {ok.numel()} inputs off torch and stock; first input 0x{bits[~ok][0].item():04x} "
+        f"stored {actual[~ok][0].item()!r}, torch {reference[~ok][0].item()!r}"
+    )
