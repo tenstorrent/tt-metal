@@ -522,14 +522,14 @@ class TestTriage:
         result = self.run_triage_script("dump_semaphores.py")
         assert result is not None, "Expected semaphore rows for the hung core"
 
-        # The hang app gives (0,0) a program semaphore at 7, which the writer bumps twice, and a GlobalSemaphore at 3.
+        # The hang app bumps (0,0)'s program semaphore 7 -> 9 and one GlobalSemaphore 5 -> 6; the one at 3 is untouched.
         location = OnChipCoordinate.create("0,0", result[0].device_description.device)
         rows = {
             (row.result.kind, row.result.id, row.result.value, row.result.initial)
             for row in result
             if row.location == location
         }
-        assert rows == {("program", 0, 9, 7), ("global", None, 3, 3)}, f"Unexpected semaphores on (0,0): {rows}"
+        assert rows == {("program", 0, 9, 7), ("global", None, 6, 5)}, f"Unexpected semaphores on (0,0): {rows}"
 
     def test_dump_watcher_ringbuffer(self):
         self.run_triage_script("dump_watcher_ringbuffer.py")

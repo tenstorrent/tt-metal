@@ -32,6 +32,7 @@ from models.demos.common.prefill.runners.runner_utils import (
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_rows as d2d_rows_for
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_width as d2d_width
 from models.demos.common.prefill.runners.runner_utils import make_h2d_spec, num_mtp_tokens, open_mesh_device
+from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
 
 
 def _apply_manifest_env():
@@ -207,8 +208,13 @@ def mtp_provided_levels(mtp_tokens, meta: dict) -> int:
     if meta["actual_end"] < meta["actual_start"] + CHUNK_SIZE:
         return 0
     assert mtp_tokens is not None, "MTP is on but no lookahead tensor arrived with this chunk"
-    last_chip = ttnn.get_device_tensors(mtp_tokens)[-1]
-    ids = ttnn.to_torch(last_chip).view(torch.int32).flatten()
+    lookahead = mtp_lookahead_positions(meta["actual_start"], _sp, CHUNK_SIZE // _sp, meta["actual_end"], MTP_LEVELS)
+    chips = [c for c, slots in enumerate(lookahead) if slots[0] == meta["actual_end"]]
+    assert len(chips) == 1, f"expected one chip whose lookahead starts at {meta['actual_end']}, got {chips}"
+    device_tensors = ttnn.get_device_tensors(mtp_tokens)
+    assert len(device_tensors) == _sp * _tp, f"got {len(device_tensors)} device tensors for a {_sp}x{_tp} mesh"
+    # H2D_MAPPER_CONFIG shards SP over mesh axis 0 and device tensors are row-major, so chip c is device c * _tp
+    ids = ttnn.to_torch(device_tensors[chips[0] * _tp]).view(torch.int32).flatten()
     assert ids.numel() >= MTP_LEVELS, f"lookahead row is {ids.numel()} ids, need at least {MTP_LEVELS}"
     provided = 0
     for tok in ids[:MTP_LEVELS].tolist():

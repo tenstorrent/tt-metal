@@ -134,6 +134,7 @@ DB_SCHEMA = [
     Column("reduce_pool_type", "string", True, "configuration"),
     Column("relu_config", "int64", True, "configuration"),
     Column("reuse_dest_type", "string", True, "configuration"),
+    Column("sfpu_bcast_dim", "string", True, "configuration"),
     Column("srca_reuse_count", "int64", True, "configuration"),
     Column("stable_sort", "string", True, "configuration"),
     Column("ternary_mathop", "string", True, "configuration"),
