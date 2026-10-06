@@ -354,16 +354,18 @@ void kernel_main() {
                         n_tile,
                         n_tile_end);
                 } else {
+#ifndef MM_NO_IN
                     in1_receiver_semaphore.set(INVALID);
                     in1_sender_semaphore.up(noc, in1_sender_noc_x, in1_sender_noc_y, 1);
                     in1_receiver_semaphore.wait(VALID);
+#endif
                 }
 
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
                 dfb_in1.push_back(in1_block_num_tiles);
 
-                if (!is_sink_core) {
+                if (!is_sink_core && !kMmNoIn) {
                     in1_sender_semaphore.wait(1);
                     in1_sender_semaphore.set(0);
 

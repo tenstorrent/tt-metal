@@ -14,6 +14,8 @@
 // refreshes every tensor binding on a program-cache hit.
 //
 
+#include <cstdlib>
+
 #include "minimal_matmul_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
@@ -303,6 +305,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     // Transpose core grid if the output is wide (M > N)
     // If transpose core grid, we parallelize M on cores_x and N on cores_y and swap the NOCs and RISCVs
     bool transpose_core_grid = M > N;
+    if (std::getenv("TT_MM_NO_TRANSPOSE") != nullptr) {
+        transpose_core_grid = false;
+    }
 
     auto in0_noc = transpose_core_grid ? large_input_noc : small_input_noc;
     auto in0_risc = transpose_core_grid ? large_input_risc : small_input_risc;
@@ -512,6 +517,18 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         // - If ternary_b / gate is bfloat16 then use mul_tiles_bcast (row broadcast) (workaround)
         if (fused_ternary_input_b.value().dtype() == DataType::FLOAT32) {
             defines["TERNARY_B_IS_FLOAT32"] = "1";
+        }
+    }
+
+    // Perf-isolation only: MM_SKIP_DM removes DRAM reads, the relay mcast and the output write;
+    // MM_SKIP_COMPUTE removes the MACs and the output pack. Both keep every DFB and semaphore
+    // operation, so neither can deadlock.
+    if (std::getenv("MM_SKIP_COMPUTE") != nullptr) {
+        defines["MM_SKIP_COMPUTE"] = "1";
+    }
+    for (const char* v : {"MM_SKIP_DM", "MM_SKIP_IN", "MM_SKIP_OUT"}) {
+        if (std::getenv(v) != nullptr) {
+            defines[v] = "1";
         }
     }
 

@@ -30,6 +30,21 @@ FORCE_INLINE uint32_t out_tile_index(uint32_t i, uint32_t j, uint32_t row_tiles)
 }
 
 #ifdef DYNAMIC_M
+// Perf isolation. MM_SKIP_IN removes the input DRAM reads AND the relay mcast (only injector
+// cores read, so the two are one pipeline); MM_SKIP_OUT removes the output DRAM write.
+// MM_SKIP_DM is both. Every DFB and semaphore op is kept, so none of these can deadlock.
+#if defined(MM_SKIP_DM) || defined(MM_SKIP_IN)
+#define MM_NO_IN 1
+#endif
+#if defined(MM_SKIP_DM) || defined(MM_SKIP_OUT)
+#define MM_NO_OUT 1
+#endif
+#ifdef MM_NO_IN
+constexpr bool kMmNoIn = true;
+#else
+constexpr bool kMmNoIn = false;
+#endif
+
 template <typename AccessorT>
 FORCE_INLINE uint32_t read_scalar_u32(const AccessorT& accessor, uint32_t l1_addr) {
     Noc noc;
@@ -92,6 +107,9 @@ void read_in0_block_sync(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
+#ifdef MM_NO_IN
+    return;
+#endif
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
@@ -153,6 +171,9 @@ void read_in1_block_sync(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
+#ifdef MM_NO_IN
+    return;
+#endif
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
     Noc noc;
@@ -194,6 +215,9 @@ void write_block_sync(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
+#ifdef MM_NO_OUT
+    return;
+#endif
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
@@ -347,6 +371,9 @@ void write_block_sync_granular(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
+#ifdef MM_NO_OUT
+    return;
+#endif
     Noc noc;
     for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
         dfb_out.wait_front(N_block_tiles);
@@ -415,6 +442,9 @@ void write_block_sync_split(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
+#ifdef MM_NO_OUT
+    return;
+#endif
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
@@ -482,6 +512,9 @@ void write_block_sync_granular_split(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
+#ifdef MM_NO_OUT
+    return;
+#endif
     Noc noc;
     const uint32_t chunk_idx_start = d1_start / N_tiles_per_chunk;
     const uint32_t tile_idx_in_chunk_start = d1_start % N_tiles_per_chunk;

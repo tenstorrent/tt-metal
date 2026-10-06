@@ -404,16 +404,18 @@ void kernel_main() {
                         (k_block + 1) * K_block_tiles);
                 } else {
                     // Get from previous device
+#ifndef MM_NO_IN
                     in0_receiver_semaphore.set(INVALID);
                     in0_sender_semaphore.up(noc, in0_sender_noc_x, in0_sender_noc_y, 1);
                     in0_receiver_semaphore.wait(VALID);
+#endif
                 }
 
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
                 dfb_in0.push_back(in0_block_num_tiles);
 
-                if (!is_sink_core) {
+                if (!is_sink_core && !kMmNoIn) {
                     in0_sender_semaphore.wait(1);
                     in0_sender_semaphore.set(0);
 

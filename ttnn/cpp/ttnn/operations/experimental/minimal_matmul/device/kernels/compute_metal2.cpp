@@ -515,6 +515,7 @@ void kernel_main() {
                 dfb_in0.wait_front(in0_block_num_tiles);
                 dfb_in1.wait_front(in1_block_num_tiles);
 
+#ifndef MM_SKIP_COMPUTE
                 matmul_blocks(
                     dfb::in0,
                     dfb::in1,
@@ -525,6 +526,7 @@ void kernel_main() {
                     K_block_tiles,
                     current_subblock_h,
                     current_subblock_w);
+#endif
 
                 if (k_block == K_num_blocks - 1) {
                     /**
@@ -573,7 +575,13 @@ void kernel_main() {
             dfb_out.reserve_back(out_block_num_tiles);
             dfb_intermediate.wait_front(out_block_num_tiles);
 #ifndef FUSE_BIAS
+#ifdef MM_SKIP_COMPUTE
+            for (uint32_t m = 0; m < M_block_tiles; m++) {
+                dfb_out.push_back(N_block_tiles);
+            }
+#else
             copy_and_pack_block(dfb::intermediate, dfb::out, M_block_tiles, N_block_tiles);
+#endif
 #else
             dfb_in2.wait_front(N_block_tiles);
             add_bias_block(dfb::intermediate, dfb::in2, dfb::out, M_block_tiles, N_block_tiles);
