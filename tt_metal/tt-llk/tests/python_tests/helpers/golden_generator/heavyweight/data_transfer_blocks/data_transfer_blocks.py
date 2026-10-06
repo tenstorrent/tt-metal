@@ -126,6 +126,37 @@ def truncate_mantissa(values: torch.Tensor, keep_bits: int) -> torch.Tensor:
     return (raw & ~((1 << (FP32_MANTISSA_BITS - keep_bits)) - 1)).view(torch.float32)
 
 
+def saturate_to_integer(
+    values: torch.Tensor, dtype: torch.dtype, dest_format: DataFormat
+) -> torch.Tensor:
+    """Clamp into `dtype`'s range, then narrow -- the hardware saturates.
+
+    A plain cast wraps instead: a Dest result of 200 narrowed to Int8 lands as
+    -56, so a later clamp in the packer sees -56 where it should have seen 127.
+    A float beyond int32's range is worse, because the cast is undefined.
+
+    Signed formats clamp to ``[min + 1, max]``: the register is sign-magnitude,
+    so the most negative two's-complement value has no encoding. Unsigned
+    formats use the full range.
+
+    The same rule as ``golden_generators.saturate_integer``, duplicated for the
+    reason the rest of this package duplicates -- heavyweight owns its model of
+    the hardware so the old golden can be retired without stranding it.
+    """
+    info = torch.iinfo(dtype)
+    low = info.min if dest_format.name.startswith("U") else info.min + 1
+    if values.is_floating_point():
+        # float64 for the clamp: int32's max is not representable in float32,
+        # so clamping there rounds the bound *up* to 2^31 and the cast is
+        # undefined again -- the very thing being fixed. float64 holds every
+        # bound these formats use exactly. NaN survives a clamp and makes the
+        # cast undefined too, so map it first.
+        values = torch.nan_to_num(
+            values.double(), nan=0.0, posinf=float(info.max), neginf=float(low)
+        )
+    return values.clamp(low, info.max).to(dtype)
+
+
 def flush_subnormals(values: torch.Tensor) -> torch.Tensor:
     """Zero anything below `values`'s own smallest normal.
 
@@ -568,10 +599,10 @@ class DataTransferBlocks(ABC):
         """
         if not isinstance(values, torch.Tensor):
             values = torch.tensor(values)
-        narrowed = values.to(format_dict[dest_format])
-        if not narrowed.is_floating_point():
-            return narrowed
-        return flush_subnormals(narrowed)
+        target = format_dict[dest_format]
+        if not target.is_floating_point:
+            return saturate_to_integer(values, target, dest_format)
+        return flush_subnormals(values.to(target))
 
     def pack_to_l1(
         self, tensor: torch.Tensor, l1_format: DataFormat, **geometry
