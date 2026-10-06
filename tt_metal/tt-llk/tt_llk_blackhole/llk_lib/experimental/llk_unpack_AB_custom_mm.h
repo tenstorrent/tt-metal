@@ -326,7 +326,7 @@ inline void _llk_unpack_AB_custom_mm_(
 {
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
-    const std::uint32_t block_increment = read_transposed ? kt_dim * tile_size_a : tile_size_a;
+    const std::uint32_t block_increment = read_transposed && ct_dim > 1 ? kt_dim * tile_size_a : tile_size_a;
     const std::uint32_t inner_increment = read_transposed ? -(((ct_dim - 1) * kt_dim) - 1) * tile_size_a : tile_size_a;
 
     const std::uint32_t address_a = base_address_a + tile_size_a * tile_index_a;

@@ -331,18 +331,6 @@ def test_sdpa_custom_mm_read_transposed(request, shape):
     """
     _skip_on_simulator(request)
     (M, K, N) = shape[0] if len(shape) == 1 and isinstance(shape[0], tuple) else shape
-    # read_transposed on a single output c-tile is a semantic no-op (nothing to reorder),
-    # and this experimental LLK's ct_dim==1 MOP fast path is written for the canonical
-    # contiguous read (block_increment == inner_increment); read_transposed makes
-    # block_increment = kt*tile, which that fast path is not shaped for. The LLK is correct
-    # for its real (model-level) usage -- ct_dim==1 + read_transposed simply isn't a
-    # combination the standalone unit test can drive, so skip it; ct>=2 shapes give the
-    # real read_transposed coverage.
-    if N // DEFAULT_TILE_C_DIM == 1:
-        pytest.skip(
-            "read_transposed is a no-op for ct_dim==1 and the LLK's ct==1 fast path is "
-            "shaped for the canonical contiguous read; not drivable standalone"
-        )
     _run(M, K, N, signal_granularity=1, read_transposed=True, mm_transpose=False)
 
 
@@ -391,9 +379,7 @@ class SDPA_MASK_REENTRY(TemplateParameter):
 @parametrize(
     M=[1, 8],
     ct=[1, 3, 8],
-    # The ct==1 fast path requires contiguous reads, as in the existing
-    # test_sdpa_custom_mm_read_transposed contract above.
-    read_transposed=lambda ct: [False, True] if ct > 1 else [False],
+    read_transposed=[False, True],
 )
 def test_sdpa_custom_mm_mask_extent_restore(request, M, ct, read_transposed):
     """Mask every output face, then reuse the restored SrcB geometry on the next matmul."""
