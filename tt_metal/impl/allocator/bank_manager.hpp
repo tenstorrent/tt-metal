@@ -107,6 +107,21 @@ public:
         // on the path that does not go through a mesh allocator.
         const std::optional<std::unordered_set<uint32_t>>& scoped_dependent_allocators = std::nullopt);
 
+    // Reserve one exact interval after applying the same dependency and persistent-range
+    // exclusions as allocate_buffer(). Returns false when the interval is stale or occupied.
+    bool allocate_buffer_at_address(
+        DeviceAddr address,
+        DeviceAddr size,
+        DeviceAddr page_size,
+        const CoreRangeSet& compute_grid,
+        std::optional<uint32_t> num_shards,
+        AllocatorDependencies::AllocatorID allocator_id,
+        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges = {});
+
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> get_available_ranges(
+        AllocatorDependencies::AllocatorID allocator_id,
+        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges = {});
+
     void deallocate_buffer(
         DeviceAddr address, AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
     void deallocate_all();
@@ -184,6 +199,14 @@ private:
 
     // Track allocations per allocator
     ttsl::SmallVector<std::unordered_set<DeviceAddr>> allocated_buffers_{};
+    // Reference counts only for allocations introduced through mark_allocated(). This lets an
+    // adopted external lockstep buffer hold a second mirror lease while its original MeshBuffer
+    // may be explicitly deallocated.
+    struct MirroredAllocation {
+        DeviceAddr size = 0;
+        size_t refcount = 0;
+    };
+    ttsl::SmallVector<std::unordered_map<DeviceAddr, MirroredAllocation>> mirrored_allocations_{};
     ttsl::SmallVector<std::unique_ptr<allocator::Algorithm>> allocators_{};
 
     // Per-allocator cache of: merged allocated ranges of all other dependent allocators

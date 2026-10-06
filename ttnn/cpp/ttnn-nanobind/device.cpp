@@ -611,6 +611,17 @@ void device_module(nb::module_& m_device) {
         nb::arg("device_coord"),
         get_l1_occupied_ranges_doc.data());
 
+    m_device.def(
+        "ExperimentalGetL1FreeRanges",
+        [](const MeshDevice& mesh_device, const distributed::MeshCoordinate& device_coord, const CoreCoord& core) {
+            return tt::tt_metal::experimental::per_core_allocation::get_l1_free_ranges(
+                mesh_device, device_coord, core);
+        },
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("device_coord"),
+        nb::arg("core"),
+        "Experimental. Return exact allocator-managed free L1 [start, end) ranges for one core.");
+
     constexpr std::string_view synchronize_device_doc = R"doc(
                 Synchronize the device with host by waiting for all operations to complete.
                 If cq_id is provided then only the operations associated with that cq_id are waited for,

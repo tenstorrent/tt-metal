@@ -4,6 +4,7 @@
 
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
+#include "impl/allocator/allocator.hpp"
 #include "impl/buffers/buffer_impl.hpp"
 #include "impl/buffers/buffer_sharding_args_impl.hpp"
 #include <tt_stl/assert.hpp>
@@ -30,6 +31,17 @@ DeviceAddr get_shard_base_address(const Buffer& buffer, CoreCoord core) {
         return get_per_core_address(buffer, core);
     }
     return buffer.address();
+}
+
+DeviceAddr get_shard_allocation_size(const Buffer& buffer) {
+    TT_FATAL(buffer.is_l1(), "Shard allocation size requires an L1 buffer");
+    const auto& allocator = buffer.impl().allocator_;
+    const uint32_t banks = buffer.num_cores().value_or(allocator->get_num_banks(BufferType::L1));
+    return tt::tt_metal::detail::calculate_bank_size_spread(
+        buffer.aligned_size(),
+        buffer.aligned_page_size(),
+        banks,
+        allocator->get_l1_allocation_alignment());
 }
 
 void copy_per_core_addresses(Buffer& dst, const Buffer& src) {

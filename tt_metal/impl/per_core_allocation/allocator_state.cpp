@@ -70,6 +70,33 @@ AddressRanges get_l1_occupied_ranges(
     return occupied_ranges(hybrid_allocators(mesh_device, device_coord), core);
 }
 
+AddressRanges get_l1_free_ranges(
+    const distributed::MeshDevice& mesh_device,
+    const distributed::MeshCoordinate& device_coord,
+    const CoreCoord& core) {
+    const auto allocators = hybrid_allocators(mesh_device, device_coord);
+    const AllocatorImpl* device_allocator = allocators.front();
+    const auto* bank_ids = device_allocator->find_bank_ids(BufferType::L1, core);
+    TT_FATAL(bank_ids != nullptr && !bank_ids->empty(), "get_l1_free_ranges: core {} has no L1 bank", core.str());
+
+    AddressRanges external_occupied;
+    auto append = [&external_occupied](const AddressRanges& ranges) {
+        external_occupied.insert(external_occupied.end(), ranges.begin(), ranges.end());
+    };
+    for (const AllocatorImpl* allocator : allocators) {
+        append(allocator->persistent_l1().occupied_ranges(core));
+        if (allocator != device_allocator) {
+            append(allocator->get_l1_allocated_ranges(BankManager::AllocatorDependencies::AllocatorID{0}));
+            if (const auto* other_bank_ids = allocator->find_bank_ids(BufferType::L1, core)) {
+                append(allocator->get_l1_allocated_ranges(
+                    BankManager::AllocatorDependencies::AllocatorID{other_bank_ids->front() + 1}));
+            }
+        }
+    }
+    return device_allocator->get_l1_available_ranges(
+        BankManager::AllocatorDependencies::AllocatorID{bank_ids->front() + 1}, external_occupied);
+}
+
 std::unordered_map<CoreCoord, AddressRanges> get_l1_occupied_ranges(
     const distributed::MeshDevice& mesh_device, const distributed::MeshCoordinate& device_coord) {
     const auto allocators = hybrid_allocators(mesh_device, device_coord);

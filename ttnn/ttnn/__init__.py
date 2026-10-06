@@ -323,6 +323,7 @@ from ttnn.device import (
     get_memory_view,
     get_allocator_base_address,
     experimental_get_l1_occupied_ranges,
+    experimental_get_l1_free_ranges,
     get_max_worker_l1_unreserved_size,
     get_dram_alignment,
     get_l1_alignment,
@@ -345,6 +346,14 @@ from ttnn.device import (
     init_device_compute_kernel_config,
     SetRootDir,
 )
+
+L1Pool = ttnn._ttnn.L1Pool
+L1PoolExtent = ttnn._ttnn.L1PoolExtent
+L1PoolPlacement = ttnn._ttnn.L1PoolPlacement
+L1TensorGeometry = ttnn._ttnn.L1TensorGeometry
+experimental_reserve_l1_pool = ttnn._ttnn.experimental_reserve_l1_pool
+experimental_create_l1_pool_tensor = ttnn._ttnn.experimental_create_l1_pool_tensor
+experimental_l1_tensor_geometry = ttnn._ttnn.experimental_l1_tensor_geometry
 
 from ttnn.profiler import (
     start_tracy_zone,

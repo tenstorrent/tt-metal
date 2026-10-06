@@ -314,6 +314,23 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                const ttnn::Shape& shape,
                DataType dtype,
                Layout layout,
+               const MemoryConfig& memory_config,
+               const std::optional<Tile>& tile) {
+                new (t) tt::tt_metal::TensorSpec(
+                    shape, TensorLayout(dtype, PageConfig(layout, tile), memory_config));
+            },
+            nb::arg("shape"),
+            nb::arg("dtype"),
+            nb::arg("layout"),
+            nb::arg("memory_config"),
+            nb::arg("tile") = nb::none(),
+            "Create TensorSpec from a complete MemoryConfig, preserving experimental allocation flags.")
+        .def(
+            "__init__",
+            [](tt::tt_metal::TensorSpec* t,
+               const ttnn::Shape& shape,
+               DataType dtype,
+               Layout layout,
                TensorMemoryLayout memory_layout,
                const std::optional<ShardSpec>& shard_spec,
                BufferType buffer_type,

@@ -42,6 +42,11 @@ public:
     virtual ~AllocatorImpl();
 
     DeviceAddr allocate_buffer(Buffer* buffer);
+    DeviceAddr reserve_buffer(
+        Buffer* buffer,
+        const std::unordered_map<CoreCoord, DeviceAddr>& addresses,
+        const std::unordered_map<CoreCoord, std::vector<std::pair<DeviceAddr, DeviceAddr>>>&
+            additional_occupied_ranges = {});
 
     // Set/clear device allocators for HYBRID mode mesh-level lockstep allocation.
     // When set, allocate_buffer() queries these allocators' per-bank ranges
@@ -106,6 +111,7 @@ public:
     // Alignment can be pulled out of the AllocatorConfig but this getter is a helper
     // so client code does not need to condition based on BufferType
     std::uint32_t get_alignment(BufferType buffer_type) const;
+    std::uint32_t get_l1_allocation_alignment() const;
 
     // This a proxy of get_config().worker_l1_size,
     // this helper function is made for reports.cpp in TTNN and act as a transient member function
@@ -145,6 +151,9 @@ public:
     // Used at mesh-level allocation time to query device per-bank state.
     std::vector<std::pair<DeviceAddr, DeviceAddr>> get_l1_allocated_ranges(
         BankManager::AllocatorDependencies::AllocatorID allocator_id) const;
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> get_l1_available_ranges(
+        BankManager::AllocatorDependencies::AllocatorID allocator_id,
+        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges = {}) const;
 
     // Mirror a lockstep allocation (from the mesh-level allocator) into this allocator's lockstep sub-allocator.
     // This marks the region as occupied so per-bank allocators avoid it.

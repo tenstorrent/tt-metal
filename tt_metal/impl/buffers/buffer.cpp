@@ -624,6 +624,32 @@ std::shared_ptr<Buffer> BufferImpl::create(
     return buffer;
 }
 
+std::shared_ptr<Buffer> BufferImpl::create_reserved(
+    IDevice* device,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    const BufferType buffer_type,
+    const BufferShardingArgs& sharding_args,
+    const std::unordered_map<CoreCoord, DeviceAddr>& addresses,
+    const std::unordered_map<CoreCoord, std::vector<std::pair<DeviceAddr, DeviceAddr>>>& additional_occupied_ranges) {
+    auto buffer = std::make_shared<Buffer>(BufferImpl(
+        device,
+        size,
+        page_size,
+        buffer_type,
+        sharding_args,
+        /*bottom_up=*/std::nullopt,
+        /*sub_device_id=*/std::nullopt,
+        true));
+    TT_FATAL(size != 0, "Cannot reserve an empty buffer");
+    buffer->impl().address_ =
+        buffer->impl().allocator_->reserve_buffer(buffer.get(), addresses, additional_occupied_ranges);
+    TT_ASSERT(buffer->impl().address_ <= std::numeric_limits<uint32_t>::max());
+    buffer->impl().allocation_status_ = AllocationStatus::ALLOCATED;
+    GraphTracker::instance().track_allocate(buffer.get());
+    return buffer;
+}
+
 std::shared_ptr<Buffer> BufferImpl::view(Buffer& self, const BufferRegion& region) {
     TT_FATAL(region.offset % self.page_size() == 0, "Region offset must be a multiple of page size");
     TT_FATAL(region.size % self.page_size() == 0, "Region size must be a multiple of page size");

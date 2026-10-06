@@ -21,6 +21,12 @@ using AddressRanges = std::vector<std::pair<DeviceAddr, DeviceAddr>>;
 AddressRanges get_l1_occupied_ranges(
     const distributed::MeshDevice& mesh_device, const distributed::MeshCoordinate& device_coord, const CoreCoord& core);
 
+// Exact allocator-managed free L1 intervals on one core, including allocator shrink bounds and
+// excluding lockstep, per-core and persistent reservations. The L1-small partition is outside
+// these allocator bounds; trace storage is in DRAM and does not overlap L1.
+AddressRanges get_l1_free_ranges(
+    const distributed::MeshDevice& mesh_device, const distributed::MeshCoordinate& device_coord, const CoreCoord& core);
+
 // Same query for every core that owns an L1 bank on the device.
 std::unordered_map<CoreCoord, AddressRanges> get_l1_occupied_ranges(
     const distributed::MeshDevice& mesh_device, const distributed::MeshCoordinate& device_coord);

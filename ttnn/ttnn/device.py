@@ -233,6 +233,11 @@ def experimental_get_l1_occupied_ranges(mesh_device, device_coord, core=None):
     return ttnn._ttnn.device.ExperimentalGetL1OccupiedRanges(mesh_device, device_coord, core)
 
 
+def experimental_get_l1_free_ranges(mesh_device, device_coord, core):
+    """Return exact allocator-managed free L1 ``(start, end)`` ranges for one core."""
+    return ttnn._ttnn.device.ExperimentalGetL1FreeRanges(mesh_device, device_coord, core)
+
+
 SubDevice = ttnn._ttnn.device.SubDevice
 SubDeviceId = ttnn._ttnn.device.SubDeviceId
 SubDeviceManagerId = ttnn._ttnn.device.SubDeviceManagerId

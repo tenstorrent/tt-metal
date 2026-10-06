@@ -316,6 +316,61 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
     return address;
 }
 
+DeviceAddr AllocatorImpl::reserve_buffer(
+    Buffer* buffer,
+    const std::unordered_map<CoreCoord, DeviceAddr>& addresses,
+    const std::unordered_map<CoreCoord, std::vector<std::pair<DeviceAddr, DeviceAddr>>>& additional_occupied_ranges) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    TT_FATAL(config_->allocator_mode == AllocatorMode::HYBRID, "Exact per-core reservation requires HYBRID mode");
+    TT_FATAL(buffer->buffer_type() == BufferType::L1, "Exact per-core reservation supports only L1");
+    TT_FATAL(buffer->impl().per_core_allocation_, "Exact reservation requires per-core allocation");
+    TT_FATAL(buffer->has_shard_spec(), "Exact reservation requires a shard spec");
+    verify_safe_allocation();
+
+    const auto& spec = buffer->shard_spec().tensor_shard_spec;
+    const auto cores = corerange_to_cores(spec.grid, std::nullopt, spec.orientation == ShardOrientation::ROW_MAJOR);
+    TT_FATAL(cores.size() == addresses.size(), "Exact reservation must provide one address per shard core");
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    std::vector<std::pair<AllocatorID, DeviceAddr>> placed;
+    try {
+        for (const auto& core : cores) {
+            const auto it = addresses.find(core);
+            TT_FATAL(it != addresses.end(), "Exact reservation is missing core {}", core.str());
+            const auto* bank_ids = find_bank_ids(BufferType::L1, core);
+            TT_FATAL(bank_ids != nullptr && !bank_ids->empty(), "Core {} has no L1 bank", core.str());
+            const AllocatorID id{bank_ids->front() + 1};
+            auto occupied = persistent_l1_.occupied_ranges(core);
+            if (const auto ranges = additional_occupied_ranges.find(core); ranges != additional_occupied_ranges.end()) {
+                occupied.insert(occupied.end(), ranges->second.begin(), ranges->second.end());
+            }
+            TT_FATAL(
+                l1_manager_->allocate_buffer_at_address(
+                    it->second,
+                    buffer->aligned_size_per_bank(),
+                    buffer->aligned_page_size(),
+                    config_->compute_grid,
+                    1,
+                    id,
+                    occupied),
+                "Exact L1 interval at {} on core {} is no longer free",
+                it->second,
+                core.str());
+            placed.emplace_back(id, it->second);
+        }
+    } catch (...) {
+        for (const auto& [id, address] : placed) {
+            l1_manager_->deallocate_buffer(address, id);
+        }
+        throw;
+    }
+    buffer->impl().set_per_core_addresses(addresses);
+    allocated_buffers_.insert(buffer);
+    if (tracking_enabled_ && !unsafe_tracked_ids_by_manager_and_trace_.empty()) [[unlikely]] {
+        record_allocation_if_unsafe(buffer);
+    }
+    return addresses.at(cores.front());
+}
+
 void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto address = buffer->address();
@@ -402,6 +457,13 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_l1_allocated_r
     std::lock_guard<std::mutex> lock(mutex_);
     auto state = l1_manager_->extract_state(allocator_id);
     return state.allocated_regions;
+}
+
+std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_l1_available_ranges(
+    BankManager::AllocatorDependencies::AllocatorID allocator_id,
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return l1_manager_->get_available_ranges(allocator_id, additional_occupied_ranges);
 }
 
 void AllocatorImpl::mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size) {
@@ -523,6 +585,10 @@ uint32_t AllocatorImpl::get_alignment(BufferType buffer_type) const {
             TT_THROW("Unsupported buffer type!");
         }
     }
+}
+
+uint32_t AllocatorImpl::get_l1_allocation_alignment() const {
+    return config_->allocator_mode == AllocatorMode::HYBRID ? config_->dram_alignment : config_->l1_alignment;
 }
 
 size_t AllocatorImpl::get_worker_l1_size() const { return config_->worker_l1_size; }

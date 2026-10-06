@@ -26,6 +26,9 @@ void copy_per_core_addresses(Buffer& dst, const Buffer& src);
 // Buffer::address() for ordinary lockstep buffers, so callers need no mode check.
 DeviceAddr get_shard_base_address(const Buffer& buffer, CoreCoord core);
 
+// Allocator-owned bytes for one shard, including HYBRID's allocation alignment.
+DeviceAddr get_shard_allocation_size(const Buffer& buffer);
+
 // BufferShardingArgs free functions.
 
 BufferShardingArgs& set_per_core_allocation(BufferShardingArgs& args, bool enable);

@@ -54,6 +54,18 @@ public:
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
 
+    // Creates an owning per-core buffer at caller-selected addresses. The allocator validates
+    // and atomically reserves every address on this device before returning.
+    static std::shared_ptr<Buffer> create_reserved(
+        IDevice* device,
+        DeviceAddr size,
+        DeviceAddr page_size,
+        BufferType buffer_type,
+        const BufferShardingArgs& sharding_args,
+        const std::unordered_map<CoreCoord, DeviceAddr>& addresses,
+        const std::unordered_map<CoreCoord, std::vector<std::pair<DeviceAddr, DeviceAddr>>>&
+            additional_occupied_ranges = {});
+
     std::shared_ptr<Buffer> view(Buffer& self, const BufferRegion& region);
 
     bool is_allocated() const { return allocation_status_ == AllocationStatus::ALLOCATED; }

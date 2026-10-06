@@ -1289,3 +1289,45 @@ TEST(OverlappedAllocators, CPU_NonzeroAllocOffset) {
         AllocatorID{0});
     EXPECT_EQ(alloc0_addr3, alloc0_addr2 + alloc_size_4K);
 }
+
+TEST(OverlappedAllocators, CPU_ExactReservationHonorsDependenciesAndReleases) {
+    BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {AllocatorID{1}}}}};
+    auto manager = get_bank_manager_with_allocator_dependencies(64 * 1024, 1024, deps);
+    const CoreRangeSet empty_grid(std::vector<CoreRange>{});
+
+    EXPECT_TRUE(manager.allocate_buffer_at_address(8 * 1024, 4 * 1024, 1024, empty_grid, std::nullopt, AllocatorID{1}));
+    EXPECT_FALSE(manager.allocate_buffer_at_address(8 * 1024, 1024, 1024, empty_grid, std::nullopt, AllocatorID{0}));
+    EXPECT_FALSE(manager.allocate_buffer_at_address(10 * 1024, 1024, 1024, empty_grid, std::nullopt, AllocatorID{0}));
+
+    manager.deallocate_buffer(8 * 1024, AllocatorID{1});
+    EXPECT_TRUE(manager.allocate_buffer_at_address(8 * 1024, 4 * 1024, 1024, empty_grid, std::nullopt, AllocatorID{0}));
+}
+
+TEST(OverlappedAllocators, CPU_ExactReservationHonorsAdditionalOccupiedRanges) {
+    BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {AllocatorID{1}}}}};
+    auto manager = get_bank_manager_with_allocator_dependencies(64 * 1024, 1024, deps);
+    const CoreRangeSet empty_grid(std::vector<CoreRange>{});
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>> persistent{{16 * 1024, 20 * 1024}};
+
+    EXPECT_FALSE(manager.allocate_buffer_at_address(
+        16 * 1024, 1024, 1024, empty_grid, std::nullopt, AllocatorID{1}, persistent));
+    EXPECT_TRUE(manager.allocate_buffer_at_address(
+        20 * 1024, 1024, 1024, empty_grid, std::nullopt, AllocatorID{1}, persistent));
+}
+
+TEST(OverlappedAllocators, CPU_MirrorLeaseIsReferenceCounted) {
+    BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {AllocatorID{1}}}}};
+    auto manager = get_bank_manager_with_allocator_dependencies(64 * 1024, 1024, deps);
+    const CoreRangeSet empty_grid(std::vector<CoreRange>{});
+
+    manager.mark_allocated(AllocatorID{0}, 24 * 1024, 4 * 1024);
+    EXPECT_ANY_THROW(manager.mark_allocated(AllocatorID{0}, 24 * 1024, 8 * 1024));
+    manager.mark_allocated(AllocatorID{0}, 24 * 1024, 4 * 1024);
+    manager.mark_deallocated(AllocatorID{0}, 24 * 1024);
+    EXPECT_FALSE(manager.allocate_buffer_at_address(
+        24 * 1024, 1024, 1024, empty_grid, std::nullopt, AllocatorID{1}));
+
+    manager.mark_deallocated(AllocatorID{0}, 24 * 1024);
+    EXPECT_TRUE(manager.allocate_buffer_at_address(
+        24 * 1024, 1024, 1024, empty_grid, std::nullopt, AllocatorID{1}));
+}

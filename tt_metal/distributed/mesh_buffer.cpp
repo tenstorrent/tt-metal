@@ -334,7 +334,7 @@ void MeshBuffer::initialize_device_buffers() {
         device_local_config_.buffer_type == BufferType::L1 &&
         mesh_device->impl().metal_env().get_rtoptions().get_allocator_mode_hybrid()) {
         auto* backing = get_backing_buffer();
-        auto alloc_size = backing->aligned_size_per_bank();
+        auto alloc_size = per_core_allocation::get_shard_allocation_size(*backing);
         for (const auto& [coord, device_buffer] : buffers_) {
             if (mesh_device->impl().is_local(coord)) {
                 auto* device = mesh_device->impl().get_device(coord);

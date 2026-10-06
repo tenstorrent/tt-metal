@@ -9,6 +9,7 @@
 #include <optional>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -78,11 +79,21 @@ class MeshBuffer;
 
 // Forward declaration for experimental per-core allocation friend
 namespace tt::tt_metal::experimental::per_core_allocation {
+class L1Pool;
+struct L1PoolPlacement;
+std::shared_ptr<void> retain_l1_pool_owner(
+    const tt::tt_metal::distributed::MeshBuffer&,
+    const std::vector<tt::tt_metal::distributed::MeshCoordinate>&);
 std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_on_single_device(
     const tt::tt_metal::distributed::MeshBufferConfig& mesh_buffer_config,
     const tt::tt_metal::distributed::DeviceLocalBufferConfig& device_local_config,
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const tt::tt_metal::distributed::MeshCoordinate& coord);
+std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_l1_pool_view(
+    const std::shared_ptr<L1Pool>&,
+    const tt::tt_metal::distributed::MeshBufferConfig&,
+    const tt::tt_metal::distributed::DeviceLocalBufferConfig&,
+    const std::vector<L1PoolPlacement>&);
 }  // namespace tt::tt_metal::experimental::per_core_allocation
 
 namespace tt::tt_metal::distributed {
@@ -192,8 +203,12 @@ private:
         std::shared_ptr<Buffer> backing_buffer;
     };
     struct ExternallyOwnedState {};
+    struct OwnerPinnedViewState {
+        std::shared_ptr<void> owner_pin;
+    };
     struct DeallocatedState {};
-    using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
+    using MeshBufferState =
+        std::variant<OwnedBufferState, ExternallyOwnedState, OwnerPinnedViewState, DeallocatedState>;
     MeshBufferState state_;
 
     friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(
@@ -201,6 +216,14 @@ private:
         const tt::tt_metal::distributed::DeviceLocalBufferConfig&,
         tt::tt_metal::distributed::MeshDevice*,
         const tt::tt_metal::distributed::MeshCoordinate&);
+    friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_l1_pool_view(
+        const std::shared_ptr<tt::tt_metal::experimental::per_core_allocation::L1Pool>&,
+        const tt::tt_metal::distributed::MeshBufferConfig&,
+        const tt::tt_metal::distributed::DeviceLocalBufferConfig&,
+        const std::vector<tt::tt_metal::experimental::per_core_allocation::L1PoolPlacement>&);
+    friend std::shared_ptr<void> tt::tt_metal::experimental::per_core_allocation::retain_l1_pool_owner(
+        const tt::tt_metal::distributed::MeshBuffer&,
+        const std::vector<tt::tt_metal::distributed::MeshCoordinate>&);
 };
 
 class [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-22.")]] AnyBuffer {
