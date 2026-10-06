@@ -212,6 +212,8 @@ class QwenImagePipeline(PipelineAPIMixin):
         height: int = 1024,
         cfg_enabled: bool = True,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> QwenImagePipeline:
         config = QwenImagePipelineConfig.default(
             mesh_shape=mesh_device.shape,
@@ -220,13 +222,15 @@ class QwenImagePipeline(PipelineAPIMixin):
             cfg_enabled=cfg_enabled,
             checkpoint_name=checkpoint_name,
         )
-        return cls(device=mesh_device, config=config)
+        return cls(device=mesh_device, config=config, sdpa_precision=sdpa_precision, sdpa_kv_dtype=sdpa_kv_dtype)
 
     def __init__(
         self,
         *,
         device: ttnn.MeshDevice,
         config: QwenImagePipelineConfig,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         if config.dynamic_load_encoder or config.dynamic_load_vae:
             assert cache.cache_dir_is_set(), (
@@ -283,6 +287,8 @@ class QwenImagePipeline(PipelineAPIMixin):
                 ccl_manager=mgr,
                 parallel_config=self._parallel_config,
                 is_fsdp=self._is_fsdp,
+                sdpa_precision=sdpa_precision,
+                sdpa_kv_dtype=sdpa_kv_dtype,
             )
             for mgr in self._ccl_managers
         ]

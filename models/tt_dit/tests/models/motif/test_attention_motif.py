@@ -120,8 +120,6 @@ def test_attention_motif(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
-        k_chunk_size=MotifTransformer.get_k_chunk_size(sp_factor),
-        exp_approx_mode=MotifTransformer.SDPA_EXP_APPROX_MODE,
     )
 
     converted_state_dict = dict(torch_model.state_dict())
