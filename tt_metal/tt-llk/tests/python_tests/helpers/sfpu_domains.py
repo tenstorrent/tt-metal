@@ -400,6 +400,12 @@ _OP_DOMAIN_REGISTRY: Dict[
             distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=1e3
         )
     ),
+    # log10: log_with_base at another scalar, same domain.
+    MathOperation.Log10: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=1e3
+        )
+    ),
     # log1p: domain x > -1; log1p(x) = log(1 + x)
     MathOperation.Log1p: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.99, high=10.0)
@@ -1449,6 +1455,8 @@ _OP_SINGULARITIES: Dict[
     # log family: log(0) = -inf and negative arguments are undefined.
     MathOperation.Log: {Operand.A: ((0.0, _ABOVE),)},
     MathOperation.LogWithBase: {Operand.A: ((0.0, _ABOVE),)},
+    # log10: log_with_base at another scalar, same domain.
+    MathOperation.Log10: {Operand.A: ((0.0, _ABOVE),)},
     MathOperation.Log1p: {Operand.A: ((-1.0, _ABOVE),)},  # log1p(x) = log(1 + x)
     # sqrt / rsqrt: 0 is the edge of the domain, and rsqrt's pole as well.
     MathOperation.Sqrt: {Operand.A: ((0.0, _ABOVE),)},
