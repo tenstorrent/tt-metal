@@ -572,3 +572,30 @@ def test_interleaved_prefill_balances_rows_with_few_prefill_slots(interleave_gen
     gen.prefill_forward(t2[:, :512], prompt_lens=[512], start_pos=[0], empty_slots=[1], sampling_params=None)
     users = [c[0][0][0] for c in m.calls]
     assert users[0] // 2 != users[1] // 2  # the second concurrent prompt goes to another mesh row
+
+
+def test_prefill_slot_allocation_and_eviction():
+    """Model._slot_alloc (pure host logic): one prefill slot per mesh row (Up = 1), 2 decode users per row."""
+    from models.demos.blackhole.deepseek_v41_flash.tt.dsv41_model import Model
+
+    class M:
+        pass
+
+    m = M()
+    m.Up, m.U, m.rows = 1, 2, 4
+    alloc = lambda wave, resume: Model._slot_alloc(m, [(b, None, st, 0) for b, st in wave], resume)
+    resume = {}
+    assert alloc([(0, 0), (2, 0), (4, 0), (6, 0)], resume) == {
+        0: 0,
+        2: 1,
+        4: 2,
+        6: 3,
+    }  # one new request on every mesh row
+    resume.update({0: 512, 2: 512})  # users 0 and 2 are in progress (aligned chunk end): their slots hold carried state
+    assert alloc([(0, 512)], resume) == {0: 0}  # user 0 continues in its slot
+    assert alloc([(1, 0)], resume) == {
+        1: 0
+    }  # another request on mesh row 0 takes the only slot: user 0 is evicted and has to recompute
+    assert 0 not in resume and 2 in resume and 0 not in m.pf_slot_of
+    assert alloc([(3, 0)], resume) == {3: 1} and 2 not in resume  # same for row 1
+    assert alloc([(1, 0)], resume) == {1: 0}  # a restarted prompt of the slot's own owner keeps the slot
