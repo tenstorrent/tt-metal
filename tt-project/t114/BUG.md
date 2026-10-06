@@ -78,5 +78,15 @@ This is a code-reading result only. No single combo has been run on its own yet.
 `tmp/blx03/t115/driver115.sh` runs one broker job per blocking: 141, 142, 145-150, with 143/144
 left out on purpose. Each job opens the full mesh and then `create_submesh(2,4)`.
 `SWEEP_ONLY_BLOCKINGS` makes the sweep time just that blocking, and the harness prints the blocking
-before each launch. The driver stops at the first drop or hung job.
+before each launch. A drop reruns the combo (skip after 2 drops in a row); a hung combo is recorded and
+the bisect goes on unless the broker stays unhealthy for 30 min after it.
 `DRY_RUN=1 bash tmp/blx03/t115/driver115.sh` prints the plan without touching a device.
+
+## Bisect status (#122, 2026-10-06)
+
+- Build: blx03 ~/fasth3/t48 @9f2b28b766 (C++ = 64571a953b2, TT_FATAL halo guard compiled). Python overlay
+  ttp/t114 @bc134f7c656 staged at g14blx03:/var/tmp/fasth3/t115/src.
+- Driver launched 02:55 UTC (pid 79490), waiting for #119's driver and for broker health. At launch the
+  broker held the device: 8/32 chips off the bus after a failed glx_reset (02:44 UTC), not our job.
+- Per-combo outcomes: g14blx03:/var/tmp/fasth3/t115/outcomes.txt (filled in here when the run ends).
+- 143 is not run on purpose (task update: 143/144 excluded); a clean TT_FATAL check for it is a followup.

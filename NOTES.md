@@ -1,3 +1,16 @@
+# #122 bisect of the job-484 hang (combos 141,142,145-150)
+
+- Driver: g14blx03:/var/tmp/fasth3/t115/src/tmp/blx03/t115/driver115.sh, launched 2026-10-06 02:55 UTC, pid in
+  /var/tmp/fasth3/t115/driver.pid, WAIT_PIDS=28542 (#119's driver). Log /var/tmp/fasth3/t115/driver.log, marker
+  `T115_DRIVER_DONE <stage> <rc>`; outcomes /var/tmp/fasth3/t115/outcomes.txt; per-combo logs run115_<tag>.log.
+- rc 0 all done; 6 = hang and broker not healthy 30 min later (stop); 7 = submit failed; 8 = broker never healthy
+  (relaunch the same way; finished combos have results/<tag>_done). Driver gone without marker = blx03 reboot:
+  relaunch with `ssh g14blx03 "WAIT_PIDS= setsid nohup bash <driver> > /var/tmp/fasth3/t115/driver.out 2>&1 < /dev/null &"`.
+- Next: read outcomes.txt, fill tt-project/t114/BUG.md, log drops (UTC, job id, chips) in the hand-off,
+  then rm -rf /var/tmp/fasth3/t115/src on blx03.
+
+---
+
 # t115 notes (off-device triage of the job 484 hang, branch ttp/t115-conv3d-hang-triage)
 
 - Suspect: 143 (64,128,6,8,8) and 144 (64,128,6,16,4). They are the only combos in 141-150 whose L1 prefetch
