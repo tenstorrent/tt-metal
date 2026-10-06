@@ -270,6 +270,7 @@ void begin_worker_completion_tracking(uint32_t sub_device_index) {
     const uint32_t sub_device_mask = 1U << sub_device_index;
     ASSERT((tracked_sub_device_mask & sub_device_mask) == 0);
     ASSERT(workers_per_sub_device[sub_device_index] != 0);
+    ASSERT(workers_per_sub_device[sub_device_index] <= overlay::fds_signalling::num_worker_lanes);
 
     const uint32_t group_id = overlay::fds_signalling::go_group_for_sub_device(sub_device_index);
     uint32_t workers_with_stale_completion = overlay::fds_signalling::dispatch_read_group_status(group_id);
