@@ -215,7 +215,7 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_t
     TT_FATAL(
         address_offset <= bank_size, "address_offset ({}) exceeds buffer bank size ({})", address_offset, bank_size);
     if (address_offset != 0) {
-        const uint32_t l1_alignment = hal::get_l1_alignment();
+        const uint32_t l1_alignment = buffer.alignment();
         TT_FATAL(
             address_offset % l1_alignment == 0,
             "address_offset ({}) must be aligned to L1 alignment ({})",

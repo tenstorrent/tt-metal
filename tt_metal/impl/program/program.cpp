@@ -2616,7 +2616,8 @@ void detail::ProgramImpl::add_semaphore(
     const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
     TT_FATAL(this->compiled_.empty(), "Cannot add semaphore to an already compiled program {}", this->id);
     validate_semaphore_id(crs, semaphore_id, core_type);
-    semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, core_type));
+    const uint32_t l1_alignment = MetalContext::instance(context_id_).hal().get_alignment(HalMemType::L1);
+    semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, l1_alignment, core_type));
 }
 
 uint32_t detail::ProgramImpl::create_semaphore(const CoreRangeSet& crs, uint32_t initial_value, CoreType core_type) {
