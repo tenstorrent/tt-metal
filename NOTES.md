@@ -6,6 +6,9 @@
 - rc 0 all done; 6 = hang and broker not healthy 30 min later (stop); 7 = submit failed; 8 = broker never healthy
   (relaunch the same way; finished combos have results/<tag>_done). Driver gone without marker = blx03 reboot:
   relaunch with `ssh g14blx03 "WAIT_PIDS= setsid nohup bash <driver> > /var/tmp/fasth3/t115/driver.out 2>&1 < /dev/null &"`.
+- 2026-10-06 03:02 UTC blx03 rebooted (broker power-cycle/glx_reset recovery, not our job; 8/32 chips off PCIe
+  before it). Driver 79490 died before its first submit. Relaunched 03:15 UTC, pid 37098, after adding a
+  health() check that waits while any other smarton job is running or queued (t133 job 251 was queued).
 - Next: read outcomes.txt, fill tt-project/t114/BUG.md, log drops (UTC, job id, chips) in the hand-off,
   then rm -rf /var/tmp/fasth3/t115/src on blx03.
 

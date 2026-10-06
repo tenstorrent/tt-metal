@@ -19,6 +19,8 @@ health() {  # broker up and answering, nothing HELD, last health/recovery event 
   systemctl is-active -q tt-device-broker || { log "health: broker inactive"; return 1; }
   st=$(tt-device-mcp status 1 2>&1) || { log "health: status failed"; return 1; }
   echo "$st" | grep -q "device HELD" && { log "health: device held"; return 1; }
+  # One project job at a time: wait while any other smarton job is running or queued.
+  echo "$st" | sed '/^RECENT/,$d' | grep -q "smarton" && { log "health: other project job queued/running"; return 1; }
   last=$(grep -E "HEALTH-GATE|$OKRE|ESCALATE|RECOVER|[|] ERROR [|]" $SL | tail -1)
   echo "$last" | grep -q "reset complete + health verified" && return 0
   if echo "$last" | grep -qE "$OKRE" && ! echo "$last" | grep -qE "$BADRE"; then return 0; fi
