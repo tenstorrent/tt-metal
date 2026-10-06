@@ -177,16 +177,15 @@ void bind_moe_compute(nb::module_& mod) {
           ``mux_core_range_set`` and ``optional_cross_device_semaphore`` are accepted and unused.
           On a multi-device mesh every coordinate must receive the same replicated token set and
           routing metadata (expert indices, scores and mapping) and returns the partial of its own
-          experts: the rows its experts own hold their results and every other row of the
-          ``[k, tokens, hidden]`` output is written as zero, so the caller sums the partials
-          across the other axis directly (a reused ``optional_output_tensor`` needs no clearing:
-          the whole output is what the op wrote). The output is written one
-          token row (2 x H bytes) per page, so its memory config (``output_memory_config``, or the
-          ``optional_output_tensor``'s) must be row-major INTERLEAVED or HEIGHT_SHARDED with whole
-          rows per shard, DRAM or L1; WIDTH_SHARDED, BLOCK_SHARDED and ND sharding are rejected
-          (a row would span several pages). Nothing is staged in the combine cores' L1, so the
-          matmul-output tensor (slot 4) is not written on this path. That form does not support
-          shared experts.
+          experts: only the rows its experts own are written, as with the combine, and the other
+          rows of the ``[k, tokens, hidden]`` output keep what the buffer held, so a caller that
+          sums the partials across the other axis passes a zeroed ``optional_output_tensor``.
+          The output is written one token row (2 x H bytes) per page, so its memory config
+          (``output_memory_config``, or the ``optional_output_tensor``'s) must be row-major
+          INTERLEAVED or HEIGHT_SHARDED with whole rows per shard, DRAM or L1; WIDTH_SHARDED,
+          BLOCK_SHARDED and ND sharding are rejected (a row would span several pages). Nothing is
+          staged in the combine cores' L1, so the matmul-output tensor (slot 4) is not written on
+          this path. That form does not support shared experts.
 
         With ``compute_only=True``, ``cluster_axis``, ``topology``, ``num_links``,
         ``mux_core_range_set``, ``optional_output_tensor``, and

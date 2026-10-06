@@ -6,8 +6,8 @@
 Single-card MoE compute test (1x1 mesh, cluster_axis=None). Runs on both WH
 and BH; other arches are skipped at fixture time. A few tests use a (1, 4) mesh with
 cluster_axis=0: an axis of extent 1 has nothing to combine, so the op takes its local output
-path at every device (no combine kernels, no fabric) and returns one partial per device whose
-non-owned rows are zero; the mesh_device fixture skips them on a single card.
+path at every device (no combine kernels, no fabric) and returns one partial per device that
+writes only the rows of its own experts; the mesh_device fixture skips them on a single card.
 
 This test exercises both paths of `ttnn.experimental.moe_compute` on a single device:
   - `compute_only=True`: bypasses the fused selective_reduce_combine stage entirely.
@@ -168,7 +168,7 @@ def _run_moe_compute_single_card_test(
     expect_error=None,
     ccl_knobs=False,
     local_output_memory_config=None,
-    check_non_owned_rows_zero=False,
+    check_writes_owned_rows_only=False,
 ):
     """
     Single-card MoE compute test body. The op is called with cluster_axis=op_cluster_axis:
@@ -193,11 +193,11 @@ def _run_moe_compute_single_card_test(
     bitwise equal to the interleaved output of the same inputs: the writer addresses the
     output through a TensorAccessor built from the given buffer, one token row per page.
 
-    check_non_owned_rows_zero (1xN local output only): the output contract is that every row of
-    [k, T, H] is what the op wrote, the rows of the experts a device holds carrying its results
-    and every other row being exactly zero, so the per-device partials sum directly. Checked on
-    an op-allocated output, on a caller tensor pre-filled with a sentinel, and on that same
-    tensor reused after a routing change (its rows then hold the previous routing's results).
+    check_writes_owned_rows_only (1xN local output only): the output contract is that a device
+    writes the rows of the experts it holds and leaves every other row of [k, T, H] as the buffer
+    held it, like the combine. Checked on an op-allocated output (owned rows only), on a caller
+    tensor pre-filled with a sentinel, and on that same tensor reused after a routing change
+    (its other rows then hold the previous routing's results, bit for bit).
 
     The matmul ring size is auto-detected from the live DRAM-bank count (12 on WH, 7/8 on
     BH) — the same ``effective_matmul_ring_size(mesh_device)`` the public op uses — and is used
@@ -810,17 +810,16 @@ def _run_moe_compute_single_card_test(
                 ttnn.deallocate(placed_output)
                 ttnn.synchronize_device(mesh_device)
 
-        if check_non_owned_rows_zero:
-            # The output contract on a 1xN mesh: every row of [k, T, H] is what the op wrote. The
-            # rows of the experts a device holds carry its results; every other row is zero (the
-            # writer zero-fills them before its first row write), so the partials sum directly.
-            # Checked bitwise (an int16 view: -0.0 or NaN cannot pass as zero) on an op-allocated
-            # output, on a caller tensor pre-filled with a sentinel, and on that same tensor
-            # reused after a routing change, when its rows hold the previous routing's results
-            # exactly where the new routing may own nothing.
-            assert multi_device_local and local_output_path, "check_non_owned_rows_zero needs the 1xN local output path"
+        if check_writes_owned_rows_only:
+            # The output contract on a 1xN mesh: a device writes the rows of the experts it holds
+            # and leaves every other row of [k, T, H] as the buffer held it. Owned rows are checked
+            # against the golden; the other rows, when their previous content is known, bitwise (an
+            # int16 view: NaN != NaN and -0.0 == 0.0 cannot hide a write) against that content.
+            assert (
+                multi_device_local and local_output_path
+            ), "check_writes_owned_rows_only needs the 1xN local output path"
 
-            def assert_partial_output(tt_output, slot_owner, goldens, what):
+            def assert_partial_output(tt_output, slot_owner, goldens, what, previous_bits=None):
                 output_ref, output_data_map = goldens
                 for device_idx, device_tensor in enumerate(ttnn.get_device_tensors(tt_output)):
                     rows = ttnn.to_torch(device_tensor, mesh_composer=None)
@@ -836,19 +835,21 @@ def _run_moe_compute_single_card_test(
                         f"{what}: device {device_idx} owns {num_owned} of {owned.numel()} slots; the check needs "
                         "both owned and non-owned rows"
                     )
-                    non_owned_bits = rows.contiguous().view(torch.int16)[~owned]
-                    nonzero = int((non_owned_bits != 0).sum())
-                    assert nonzero == 0, (
-                        f"{what}: device {device_idx} has {nonzero} non-zero bf16 values in the {num_non_owned} rows "
-                        "its experts do not own"
-                    )
+                    if previous_bits is not None:
+                        non_owned_bits = rows.contiguous().view(torch.int16)[~owned]
+                        changed = int((non_owned_bits != previous_bits[device_idx][~owned]).sum())
+                        assert changed == 0, (
+                            f"{what}: device {device_idx} changed {changed} bf16 values in the {num_non_owned} rows "
+                            "its experts do not own"
+                        )
                     passed = validate_combine_torch(
                         layer_id, rows, (output_ref, output_data_map * owned.unsqueeze(0)), base_pcc_threshold
                     )
                     assert passed, f"{what}: device {device_idx} owned rows do not match the golden"
+                    other_rows = "unchanged" if previous_bits is not None else "not checked"
                     logger.info(
                         f"{what}: device {device_idx} owned rows ({num_owned}) match the golden, "
-                        f"{num_non_owned} non-owned rows exactly zero"
+                        f"{num_non_owned} other rows {other_rows}"
                     )
 
             slot_owner = owner_of_slots(expert_indices_flat)
@@ -868,11 +869,14 @@ def _run_moe_compute_single_card_test(
                 dtype=ttnn.bfloat16,
                 mesh_mapper=token_mesh_mapper,
             )
+            sentinel_bits = per_device_bf16_bits(sentinel_tensor)
             sentinel_outputs = run_moe_compute_once(sentinel_tensor)
             assert (
                 sentinel_outputs[5].buffer_address() == sentinel_tensor.buffer_address()
             ), "slot 5 must be the caller's optional_output_tensor"
-            assert_partial_output(sentinel_outputs[5], slot_owner, combine_goldens, "Sentinel-filled caller tensor")
+            assert_partial_output(
+                sentinel_outputs[5], slot_owner, combine_goldens, "Sentinel-filled caller tensor", sentinel_bits
+            )
             deallocate_l1_moe_compute_outputs(sentinel_outputs)
 
             # A routing change: new tokens, indices and scores over the same weights, run through the
@@ -943,6 +947,7 @@ def _run_moe_compute_single_card_test(
                 mesh_mapper=token_mesh_mapper,
             )
             logger.info("\n========== Running op, caller tensor reused after a routing change ==========")
+            previous_bits = per_device_bf16_bits(sentinel_tensor)
             reused_outputs = run_moe_compute_once(
                 sentinel_tensor,
                 tilize_input_tensor=tt_input_b,
@@ -953,7 +958,11 @@ def _run_moe_compute_single_card_test(
                 reused_outputs[5].buffer_address() == sentinel_tensor.buffer_address()
             ), "slot 5 must be the caller's optional_output_tensor"
             assert_partial_output(
-                reused_outputs[5], slot_owner_b, combine_goldens_b, "Caller tensor reused after a routing change"
+                reused_outputs[5],
+                slot_owner_b,
+                combine_goldens_b,
+                "Caller tensor reused after a routing change",
+                previous_bits,
             )
             deallocate_l1_moe_compute_outputs(reused_outputs)
             for tensor in (sentinel_tensor, tt_input_b, tt_indices_b, tt_scores_b):
@@ -1282,15 +1291,14 @@ def test_moe_compute_multi_device_local_axis(mesh_device, mesh_shape, expect_err
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 4), (1, 4))], indirect=["mesh_device"])
-def test_moe_compute_multi_device_local_axis_zero_fills_non_owned_rows(mesh_device, mesh_shape, expect_error):
-    """The local output on a 1x4 mesh is one partial per device whose every row is what the op
-    wrote: the rows of the experts a device holds carry its results and every other row is exactly
-    zero, so the caller sums the partials without a zero-filled sink. Checked on an op-allocated
-    output, on a caller tensor pre-filled with 1.0, and on that tensor reused after a routing
-    change (its rows then hold the previous routing's results). The mesh_device fixture skips this
-    on machines with fewer than four devices."""
+def test_moe_compute_multi_device_local_axis_writes_owned_rows_only(mesh_device, mesh_shape, expect_error):
+    """The local output on a 1x4 mesh is one partial per device that writes only the rows of the
+    experts the device holds and leaves the other rows as the buffer held them, like the combine.
+    Checked on an op-allocated output, on a caller tensor pre-filled with 1.0, and on that tensor
+    reused after a routing change (its other rows then hold the previous routing's results). The
+    mesh_device fixture skips this on machines with fewer than four devices."""
     if mesh_device.get_num_devices() < 2:
-        pytest.skip("the non-owned-row check needs at least two devices")
+        pytest.skip("the owned-row check needs at least two devices")
     hidden_size = 2048
     ring_n = effective_matmul_ring_size(mesh_device)
     _run_moe_compute_single_card_test(
@@ -1309,7 +1317,7 @@ def test_moe_compute_multi_device_local_axis_zero_fills_non_owned_rows(mesh_devi
         compute_only=False,
         op_cluster_axis=0,
         expect_error=expect_error,
-        check_non_owned_rows_zero=True,
+        check_writes_owned_rows_only=True,
     )
 
 
@@ -1417,7 +1425,7 @@ def test_moe_compute_local_axis_rejects_width_sharded_output(mesh_device, mesh_s
     """The local output path writes one token row per TensorAccessor page. A WIDTH_SHARDED (or
     BLOCK / ND sharded) row-major [k, T, H] output has (1, shard width) pages, so a row would span
     several pages and a core's slice would need a column-page split that is not implemented
-    (the combine writer has the same limitation); the op says so before any kernel launch.
+    (the combine's own validation applies the same rule); the op says so before any kernel launch.
     Shapes are those of _minimal_rejection_inputs (k=8, T=32, H=7168)."""
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))])
     width_sharded = ttnn.MemoryConfig(
@@ -1425,7 +1433,7 @@ def test_moe_compute_local_axis_rejects_width_sharded_output(mesh_device, mesh_s
         ttnn.BufferType.L1,
         ttnn.ShardSpec(grid, [8 * 32, 7168 // 16], ttnn.ShardOrientation.ROW_MAJOR),
     )
-    with expect_error(RuntimeError, r"does not split a row across column pages"):
+    with expect_error(RuntimeError, r"a row is not split across column pages"):
         _call_moe_compute_for_rejection(mesh_device, cluster_axis=0, output_memory_config=width_sharded)
 
 
