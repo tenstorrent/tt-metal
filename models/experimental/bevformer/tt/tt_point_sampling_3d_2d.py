@@ -196,13 +196,13 @@ def point_sampling_3d_to_2d_ttnn(
 
     if use_signpost:
         signpost(header="Point Sampling Boundary Validation")
-    # Clamp to [-10, 10] and create validity masks
+    # Inside the image, open bounds as upstream. The clamp only keeps far points finite.
     reference_points_cam_clamped = ttnn.clamp(reference_points_cam, -10.0, 10.0)
     valid_x = ttnn.logical_and(
-        (reference_points_cam_clamped[..., 0:1] >= 0.0), (reference_points_cam_clamped[..., 0:1] <= 1.0)
+        (reference_points_cam_clamped[..., 0:1] > 0.0), (reference_points_cam_clamped[..., 0:1] < 1.0)
     )
     valid_y = ttnn.logical_and(
-        (reference_points_cam_clamped[..., 1:2] >= 0.0), (reference_points_cam_clamped[..., 1:2] <= 1.0)
+        (reference_points_cam_clamped[..., 1:2] > 0.0), (reference_points_cam_clamped[..., 1:2] < 1.0)
     )
 
     bev_mask = ttnn.logical_and(bev_mask, valid_x)
