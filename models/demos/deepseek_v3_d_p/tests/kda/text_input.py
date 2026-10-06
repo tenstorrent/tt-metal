@@ -143,7 +143,7 @@ def _sha256(hidden: torch.Tensor) -> str:
 
 def _token_ids(model: str, tokens: int) -> list[int]:
     spec = TEXT_INPUT_MODELS[model]
-    token_ids = _encoder(spec)(_corpus_body())[spec.window_start : spec.window_start + tokens]
+    token_ids = _encoder(spec)(corpus_body())[spec.window_start : spec.window_start + tokens]
     if len(token_ids) != tokens:
         raise ValueError(f"corpus has {len(token_ids)} tokens after {spec.window_start}, need {tokens}")
     return token_ids
@@ -217,7 +217,8 @@ def _hyper_connection_collapse(
     return (pre.unsqueeze(-1) * streams).sum(dim=1).to(embeddings.dtype)
 
 
-def _corpus_body() -> str:
+def corpus_body() -> str:
+    """Body of the pinned corpus (after its "*** START OF" line), downloaded once into the shared oracle cache."""
     path = oracle_cache_root() / "text_corpus" / Path(CORPUS_URL).name
 
     def download() -> bytes:

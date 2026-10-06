@@ -44,6 +44,11 @@ from models.demos.deepseek_v3_d_p.tests.gdn.checkpoint_utils import (
     gdn_state_dict_sha256,
     load_gdn_layer_state_dict,
 )
+from models.demos.deepseek_v3_d_p.tests.gdn.text_input import (
+    build_gdn_text_input,
+    gdn_text_input_cache_path,
+    load_gdn_text_input,
+)
 from models.demos.deepseek_v3_d_p.tt.gdn.config import gdn_program_config
 from models.demos.deepseek_v3_d_p.tt.gdn.gdn import ttGDN
 from models.demos.deepseek_v3_d_p.tt.gdn.weights import GDNWeights
@@ -300,15 +305,23 @@ class GDNTestCase:
         return self.chunk_hidden(chunk)[0, : self.spec.chunk_valid_tokens[chunk]]
 
 
-def build_gdn_case(spec: GDNCaseSpec) -> GDNTestCase:
-    """Build a case deterministically; identical in the preparation step and the device test."""
+def build_gdn_case(spec: GDNCaseSpec, *, compute_missing_input: bool | None = None) -> GDNTestCase:
+    """Build a case deterministically; identical in the preparation step and the device test.
+
+    A real-text input (``tests/gdn/text_input.py``) is loaded from the prepared cache; a miss builds it when
+    ``compute_missing_input`` (default: ``GDN_CACHE_MISS=compute``) and otherwise fails fast.
+    """
     weights = spec.weight_source()
-    if spec.inputs == TEXT:
-        # The case is expressible so the accuracy beads (tt_metal_tracker-g1b.5.6 / .7 / .8 / .11) register their
-        # cells here; building the embedded real-text window (layer-0 input norm, Flash-Next hyper-connection mix,
-        # as g1b.5.12's gdn_decay_range_qwen.py) is theirs to add.
-        raise NotImplementedError(f"{spec.name}: real-text GDN inputs are not built yet (g1b.5.6/.7/.8/.11)")
     tokens = spec.chunk_tokens * len(spec.chunk_valid_tokens)
+    if spec.inputs == TEXT:
+        hidden = load_gdn_text_input(spec.model, weights.layer_idx, tokens)
+        if hidden is None:
+            if not (compute_on_cache_miss() if compute_missing_input is None else compute_missing_input):
+                raise prepared_cache_miss(
+                    spec.name, "text input", gdn_text_input_cache_path(spec.model, weights.layer_idx, tokens)
+                )
+            hidden = build_gdn_text_input(spec.model, weights.layer_idx, tokens)
+        return GDNTestCase(spec=spec, weights=weights, hidden=hidden)
     hidden = torch.randn(
         1,
         tokens,

@@ -9,6 +9,8 @@ replay the output and the persisted carries are compared with the chained CPU re
 relative RMSE and norm ratio, D5 worst V-head state error). The schedule then runs a second time under the trace
 and once eagerly; both must reproduce the first replay bit for bit (R10 repetition, R11 trace == eager).
 
+Weights and inputs: synthetic weights on seeded random inputs for every model and layout; for the Qwen models at
+LB-A and LB-B also the real layer-0 weights on random inputs and on real text (R13; local only, never CI).
 Layouts and schedules: tests/gdn/cases.py. CPU references and weight caches come from the CPU preparation step
 (``python -m models.demos.deepseek_v3_d_p.tests.gdn.prepare --case <name>``); this test only loads them.
 """
@@ -22,6 +24,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
+from models.demos.deepseek_v3_d_p.reference.gdn.qwen_models import QWEN_GDN_MODELS
 from models.demos.deepseek_v3_d_p.tests.gdn.cases import (
     GDN_MODELS,
     LAYOUTS,
@@ -47,6 +50,12 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import acc
 pytestmark = [run_for_blackhole(), pytest.mark.timeout(1800)]
 
 
+# (weights, inputs): synthetic weights on seeded random inputs for every model and layout; real layer-0 weights on
+# random inputs and on real text (tests/gdn/text_input.py) at the LoudBox layouts. Real weights are local only.
+_SYNTHETIC = (("synthetic", "randn"),)
+_REAL = (("real", "randn"), ("real", "text"))
+
+
 def _params() -> list:
     return [
         pytest.param(
@@ -54,11 +63,16 @@ def _params() -> list:
             gdn_device_params(LAYOUTS[layout][0]),
             model,
             layout,
+            weights,
+            inputs,
             schedule,
-            id=f"{model}-{layout}-synthetic-{schedule}",
+            id=f"{model}-{layout}-synthetic-{schedule}"
+            if weights == "synthetic"
+            else f"{model}-{layout}-real-{inputs}-{schedule}",
         )
         for model in GDN_MODELS
         for layout in LAYOUTS
+        for weights, inputs in _SYNTHETIC + (_REAL if model in QWEN_GDN_MODELS and layout in ("LB-A", "LB-B") else ())
         for schedule in SCHEDULES
     ]
 
@@ -94,12 +108,20 @@ def _run_schedule(
 
 
 @pytest.mark.parametrize(
-    "mesh_device,device_params,model,layout,schedule", _params(), indirect=["mesh_device", "device_params"]
+    "mesh_device,device_params,model,layout,weights,inputs,schedule",
+    _params(),
+    indirect=["mesh_device", "device_params"],
 )
 def test_gdn_layer_accuracy(
-    mesh_device: ttnn.MeshDevice, device_params: dict, model: str, layout: str, schedule: str
+    mesh_device: ttnn.MeshDevice,
+    device_params: dict,
+    model: str,
+    layout: str,
+    weights: str,
+    inputs: str,
+    schedule: str,
 ) -> None:
-    spec = registered_gdn_case(model, layout, schedule)
+    spec = registered_gdn_case(model, layout, schedule, weights, inputs)
     mesh_device = layout_mesh(mesh_device, spec.mesh_shape)
     case = build_gdn_case(spec)
     references = cpu_references(case)
@@ -190,7 +212,15 @@ def test_gdn_layer_accuracy(
                 "chunk_valid_tokens": list(spec.chunk_valid_tokens),
                 "value_heads_per_chip": case.config.num_value_heads // spec.mesh_shape[spec.tensor_parallel_axis],
                 "min_pcc": min(row["pcc"] for row in rows),
+                "weights": weights,
+                "inputs": inputs,
                 "max_output_rel_rmse": max(row["rel_rmse"] for row in rows if row["tensor"] == "output"),
+                "max_output_rel_linf": max(row["rel_linf"] for row in rows if row["tensor"] == "output"),
+                "max_recurrent_rel_linf": max(row["rel_linf"] for row in recurrent_rows),
+                "output_norm_ratio_range": [
+                    min(row["norm_ratio"] for row in rows if "norm_ratio" in row),
+                    max(row["norm_ratio"] for row in rows if "norm_ratio" in row),
+                ],
                 "worst_head_state_rel_rmse": max(row["worst_head_rel_rmse"] for row in recurrent_rows),
                 "trace_repeat_bit_identical": not repeat_mismatches,
                 "trace_equals_eager": not eager_mismatches,
