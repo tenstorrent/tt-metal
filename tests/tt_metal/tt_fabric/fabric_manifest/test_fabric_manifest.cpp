@@ -6,17 +6,21 @@
 // manifest and runs under 1D and 2D.
 
 #include <gtest/gtest.h>
+#include <enchantum/enchantum.hpp>
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include <algorithm>
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -27,6 +31,7 @@
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
@@ -307,7 +312,10 @@ void check_routers_match_active_channels(const json& manifest) {
 void check_router_blocks(const std::vector<RouterEntry>& routers) {
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
-        EXPECT_EQ(keys_of(*entry.router), (std::set<std::string>{"identity", "link", "shape", "credit_counters"}));
+        EXPECT_EQ(
+            keys_of(*entry.router),
+            (std::set<std::string>{"identity", "link", "shape", "credit_counters", "channels"}));
+        EXPECT_EQ(keys_of(entry.router->at("channels")), (std::set<std::string>{"senders"}));
     }
 }
 
@@ -561,6 +569,231 @@ void check_router_credit_counters(const std::vector<RouterEntry>& routers) {
     }
 }
 
+const std::set<std::string> k_region_keys = {"address", "size", "schema", "cleared_by_host"};
+const std::set<std::string> k_array_region_keys = {
+    "address", "size", "num_elements", "size_per_element", "schema", "cleared_by_host"};
+
+void expect_value_region(const json& region, const std::string& schema, uint32_t size) {
+    EXPECT_EQ(keys_of(region), k_region_keys);
+    EXPECT_EQ(region.at("schema"), schema);
+    EXPECT_EQ(region.at("size"), size);
+}
+
+// Stream ids past the hardware's registers are the builder's "not allocated" sentinel.
+void expect_stream(const json& stream, bool must_be_allocated) {
+    EXPECT_EQ(keys_of(stream), (std::set<std::string>{"stream_id", "register", "schema"}));
+    EXPECT_EQ(stream.at("register"), lower_enum_name(manifest::StreamRegister::BUF_SPACE_AVAILABLE));
+    EXPECT_EQ(stream.at("schema"), "u32");
+    if (must_be_allocated) {
+        EXPECT_LT(stream.at("stream_id").get<uint32_t>(), StreamRegAssignments::num_eth_stream_registers);
+    }
+}
+
+// On L1 counters, a credit is the sender's own element of the router's counter array, which is indexed by the
+// router's sender compact index. On stream registers, it is a register.
+void expect_credit(
+    const json& credit,
+    const json& router,
+    manifest::CreditCounterArray array,
+    bool uses_counters,
+    uint32_t compact,
+    bool serviced) {
+    if (!uses_counters) {
+        expect_stream(credit, serviced);
+        return;
+    }
+    EXPECT_EQ(keys_of(credit), (std::set<std::string>{"array", "index"}));
+    EXPECT_EQ(credit.at("array"), fmt::format("credit_counters/{}", lower_enum_name(array)));
+    EXPECT_EQ(credit.at("index"), compact);
+    const json::json_pointer pointer("/" + credit.at("array").get<std::string>());
+    ASSERT_TRUE(router.contains(pointer)) << credit.at("array");
+    EXPECT_LT(compact, router.at(pointer).at("num_elements").get<uint32_t>());
+}
+
+// The router's L1 regions that this unit's blocks describe must not overlap.
+void expect_regions_disjoint(std::vector<std::tuple<uint32_t, uint32_t, std::string>> regions) {
+    std::ranges::sort(regions);
+    for (size_t i = 1; i < regions.size(); ++i) {
+        const auto& [address, size, name] = regions[i - 1];
+        const auto& [next_address, next_size, next_name] = regions[i];
+        EXPECT_LE(address + size, next_address) << name << " overlaps " << next_name;
+    }
+}
+
+// The last component of a router path, e.g. "E0" for "M0/C7/E0".
+std::string key_of_path(const std::string& path) { return path.substr(path.rfind('/') + 1); }
+
+// A router's sender channels, over its shape. Each one's producer is the chip's worker on a VC's first channel, or a
+// different router on the same chip and routing plane, feeding at most one channel per VC; in 1D a router and its
+// producer feed each other. Credits are on the backing the mesh's credit transport names, and only VC0 with bubble
+// flow control gets first-level acks.
+void check_router_senders(const json& manifest, const std::vector<RouterEntry>& routers) {
+    const auto& fabric_context = manifest.at("fabric_context");
+    const bool is_2d = fabric_context.at("is_2d_routing").get<bool>();
+    const auto channel_buffer_size = fabric_context.at("channel_buffer_size_bytes").get<uint32_t>();
+    const auto num_nocs = tt::tt_metal::MetalContext::instance().hal().get_num_nocs();
+    std::set<std::string> cmd_bufs;
+    for (const auto cmd_buf : enchantum::values<manifest::NocCmdBuf>) {
+        cmd_bufs.insert(lower_enum_name(cmd_buf));
+    }
+
+    for (const auto& entry : routers) {
+        SCOPED_TRACE(entry.path);
+        const auto& router = *entry.router;
+        const auto& shape = router.at("shape");
+        const auto& senders = router.at("channels").at("senders");
+        const auto& transport = manifest.at("meshes").at(mesh_key(entry.node.mesh_id)).at("credit_transport");
+        const auto num_active_eriscs = shape.at("num_active_eriscs").get<uint32_t>();
+        const bool vc0_bubble_flow_control = shape.at("vc0_bubble_flow_control").get<bool>();
+        const auto chip_prefix = entry.path.substr(0, entry.path.rfind('/') + 1);
+
+        std::vector<std::tuple<uint32_t, uint32_t, std::string>> regions;
+        for (const auto& [name, array] : router.at("credit_counters").items()) {
+            regions.emplace_back(
+                array.at("address").get<uint32_t>(), array.at("size").get<uint32_t>(), "credit_counters/" + name);
+        }
+
+        std::set<std::string> expected_vc_keys;
+        uint32_t compact = 0;
+        for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            const auto count = shape.at("senders_per_vc").at(vc).get<uint32_t>();
+            if (count == 0) {
+                continue;
+            }
+            const auto vc_key = fmt::format("vc{}", vc);
+            expected_vc_keys.insert(vc_key);
+            ASSERT_TRUE(senders.contains(vc_key));
+            ASSERT_EQ(senders.at(vc_key).size(), count);
+            const bool uses_counters = transport.at(vc_key).at("backing") == "l1_counter";
+
+            std::set<std::string> producers;
+            for (uint32_t ch = 0; ch < count; ++ch, ++compact) {
+                const auto ch_key = fmt::format("ch{}", ch);
+                const auto channel_path = fmt::format("senders/{}/{}", vc_key, ch_key);
+                SCOPED_TRACE(channel_path);
+                ASSERT_TRUE(senders.at(vc_key).contains(ch_key));
+                const auto& sender = senders.at(vc_key).at(ch_key);
+                EXPECT_EQ(
+                    keys_of(sender),
+                    (std::set<std::string>{
+                        "serviced_by",
+                        "producer",
+                        "is_injection_channel",
+                        "producer_credit_return",
+                        "ring_buffer",
+                        "free_slots",
+                        "credits",
+                        "control_info"}));
+
+                std::optional<uint32_t> previous_risc;
+                for (const auto& risc : sender.at("serviced_by")) {
+                    const auto name = risc.get<std::string>();
+                    ASSERT_TRUE(name.starts_with("erisc")) << name;
+                    const auto risc_id = static_cast<uint32_t>(std::stoul(name.substr(5)));
+                    EXPECT_LT(risc_id, num_active_eriscs);
+                    if (previous_risc.has_value()) {
+                        EXPECT_GT(risc_id, *previous_risc);
+                    }
+                    previous_risc = risc_id;
+                }
+                const bool serviced = !sender.at("serviced_by").empty();
+
+                const auto& producer = sender.at("producer");
+                const bool worker_fed = producer == "worker";
+                if (worker_fed) {
+                    EXPECT_EQ(ch, 0u);
+                    EXPECT_TRUE(vc == 0 || vc == 2);
+                } else if (!producer.is_null()) {
+                    const auto producer_path = producer.get<std::string>();
+                    EXPECT_TRUE(producer_path.starts_with(chip_prefix)) << producer_path;
+                    EXPECT_NE(producer_path, entry.path);
+                    EXPECT_EQ(key_of_path(producer_path).substr(1), entry.router_key.substr(1)) << producer_path;
+                    EXPECT_TRUE(producers.insert(producer_path).second) << producer_path << " feeds two channels";
+                    const json* producer_router = find_router(manifest, producer_path);
+                    ASSERT_NE(producer_router, nullptr) << producer_path;
+                    if (!is_2d) {
+                        const json::json_pointer pointer(
+                            fmt::format("/channels/senders/{}/{}/producer", vc_key, ch_key));
+                        ASSERT_TRUE(producer_router->contains(pointer)) << producer_path;
+                        EXPECT_EQ(producer_router->at(pointer), entry.path);
+                    }
+                }
+
+                const auto& injection = sender.at("is_injection_channel");
+                ASSERT_TRUE(injection.is_boolean());
+                if (injection.get<bool>()) {
+                    EXPECT_TRUE(builder_config::bubble_flow_control_enabled_on_vc(vc));
+                }
+
+                const auto& credit_return = sender.at("producer_credit_return");
+                EXPECT_EQ(keys_of(credit_return), (std::set<std::string>{"noc", "cmd_buf"}));
+                EXPECT_LT(credit_return.at("noc").get<uint32_t>(), num_nocs);
+                EXPECT_TRUE(cmd_bufs.contains(credit_return.at("cmd_buf").get<std::string>()))
+                    << credit_return.at("cmd_buf");
+
+                const auto& ring = sender.at("ring_buffer");
+                EXPECT_EQ(keys_of(ring), k_array_region_keys);
+                EXPECT_EQ(ring.at("schema"), "packet_ring");
+                EXPECT_EQ(ring.at("size_per_element"), channel_buffer_size);
+                EXPECT_GE(ring.at("num_elements").get<uint32_t>(), 1u);
+                EXPECT_EQ(
+                    ring.at("size").get<uint32_t>(),
+                    ring.at("num_elements").get<uint32_t>() * ring.at("size_per_element").get<uint32_t>());
+
+                expect_stream(sender.at("free_slots"), serviced);
+
+                const auto& credits = sender.at("credits");
+                const bool acked = vc == 0 && vc0_bubble_flow_control;
+                EXPECT_EQ(
+                    keys_of(credits),
+                    acked ? (std::set<std::string>{"acked", "completed"}) : (std::set<std::string>{"completed"}));
+                if (acked) {
+                    expect_credit(
+                        credits.at("acked"),
+                        router,
+                        manifest::CreditCounterArray::TO_SENDER_ACK,
+                        uses_counters,
+                        compact,
+                        serviced);
+                }
+                expect_credit(
+                    credits.at("completed"),
+                    router,
+                    manifest::CreditCounterArray::TO_SENDER_COMPLETION,
+                    uses_counters,
+                    compact,
+                    serviced);
+
+                const auto& control_info = sender.at("control_info");
+                EXPECT_EQ(
+                    keys_of(control_info), (std::set<std::string>{"connection", "conn_info", "buffer_index_sem"}));
+                expect_value_region(control_info.at("connection"), "u32", sizeof(uint32_t));
+                expect_value_region(
+                    control_info.at("conn_info"),
+                    "struct:EDMChannelWorkerLocationInfo",
+                    sizeof(EDMChannelWorkerLocationInfo));
+                expect_value_region(
+                    control_info.at("buffer_index_sem"),
+                    "struct:SenderChannelProducerCursor",
+                    sizeof(SenderChannelProducerCursor));
+
+                for (const auto& [name, region] :
+                     {std::pair<std::string, const json*>{"ring_buffer", &ring},
+                      {"control_info/connection", &control_info.at("connection")},
+                      {"control_info/conn_info", &control_info.at("conn_info")},
+                      {"control_info/buffer_index_sem", &control_info.at("buffer_index_sem")}}) {
+                    regions.emplace_back(
+                        region->at("address").get<uint32_t>(),
+                        region->at("size").get<uint32_t>(),
+                        fmt::format("{}/{}", channel_path, name));
+                }
+            }
+        }
+        EXPECT_EQ(keys_of(senders), expected_vc_keys);
+        expect_regions_disjoint(std::move(regions));
+    }
+}
+
 }  // namespace
 
 // ============ Tests ============
@@ -594,6 +827,18 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(lower_enum_name(L1CreditCounterReason::MULTI_TXQ), "multi_txq");
     EXPECT_EQ(lower_enum_name(L1CreditCounterReason::EXPRESS), "express");
     EXPECT_EQ(lower_enum_name(L1CreditCounterReason::NO_COMPLETION_REGISTER), "no_completion_register");
+
+    EXPECT_EQ(lower_enum_name(manifest::CreditCounterArray::TO_SENDER_ACK), "to_sender_ack");
+    EXPECT_EQ(lower_enum_name(manifest::CreditCounterArray::TO_SENDER_COMPLETION), "to_sender_completion");
+    EXPECT_EQ(lower_enum_name(manifest::CreditCounterArray::RECEIVER_ACK), "receiver_ack");
+    EXPECT_EQ(lower_enum_name(manifest::CreditCounterArray::RECEIVER_COMPLETION), "receiver_completion");
+
+    EXPECT_EQ(lower_enum_name(manifest::StreamRegister::BUF_SPACE_AVAILABLE), "buf_space_available");
+
+    EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::WR_CMD_BUF), "wr_cmd_buf");
+    EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::RD_CMD_BUF), "rd_cmd_buf");
+    EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::WR_REG_CMD_BUF), "wr_reg_cmd_buf");
+    EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::AT_CMD_BUF), "at_cmd_buf");
 
     EXPECT_EQ(schema_name(field::Uint{}, 4), "u32");
     EXPECT_EQ(schema_name(field::Uint{}, 1), "u8");
@@ -638,5 +883,8 @@ TEST_F(Fabric2DManifestFixture, CreditTransport) { check_credit_transport(manife
 
 TEST_F(Fabric1DManifestFixture, RouterCreditCounters) { check_router_credit_counters(routers_); }
 TEST_F(Fabric2DManifestFixture, RouterCreditCounters) { check_router_credit_counters(routers_); }
+
+TEST_F(Fabric1DManifestFixture, RouterSenders) { check_router_senders(manifest_, routers_); }
+TEST_F(Fabric2DManifestFixture, RouterSenders) { check_router_senders(manifest_, routers_); }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
