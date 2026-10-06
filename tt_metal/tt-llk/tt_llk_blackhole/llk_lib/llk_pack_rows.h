@@ -136,8 +136,7 @@ inline void _llk_pack_rows_init_(const std::uint32_t num_rows)
  * This function performs the actual row packing operation:
  * 1. Sets the W counter to the tile_index to select which dest tile to read from
  * 2. Programs the packer destination address in L1 where data will be written
- * 3. Executes the MOP template
- * 4. Reset Z counters after pack operation
+ * 3. Executes the MOP template (its address modifiers never move Z, so no counter reset follows)
  *
  * @param tile_index: Index of the tile in the destination register to read from.
  * @param address: L1 memory address where the packed rows will be written.
@@ -149,12 +148,9 @@ inline void _llk_pack_rows_(const std::uint32_t tile_index, const std::uint32_t 
     // Set the tile index in dest to read from
     set_dst_write_addr(tile_index);
 
-    ckernel::packer::program_packer_destination(address);
+    ckernel::packer::program_packer_destination<false>(address);
 
     ckernel::ckernel_template::run();
-
-    // Reset Z counters after pack operation
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
 }
 
 /**
