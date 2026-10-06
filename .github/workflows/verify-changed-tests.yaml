@@ -282,7 +282,7 @@ jobs:
               || ((startsWith(matrix.leg.sku, 'bh_') || startsWith(matrix.leg.sku, 'sim_bh')) && 'blackhole')
               || 'wormhole_b0' }}
         LOGURU_LEVEL: INFO
-        TT_LOGGER_LEVEL: warn
+        TT_LOGGER_LEVEL: info
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         TT_METAL_HOME: ${{ matrix.leg.gate_packages && '/usr/libexec/tt-metalium' || '/work' }}

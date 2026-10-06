@@ -31,6 +31,7 @@ SparseKVFormat = ttnn._ttnn.operations.transformer.SparseKVFormat
 ChunkGdnMonoProgramConfig = ttnn._ttnn.operations.transformer.ChunkGdnMonoProgramConfig
 ChunkGdnPhasedProgramConfig = ttnn._ttnn.operations.transformer.ChunkGdnPhasedProgramConfig
 ChunkGdnFusedProgramConfig = ttnn._ttnn.operations.transformer.ChunkGdnFusedProgramConfig
+ChunkGdnWyInverse = ttnn._ttnn.operations.transformer.ChunkGdnWyInverse
 
 
 def _golden_function(
@@ -89,7 +90,7 @@ ttnn.attach_golden_function(
 )
 
 
-def _golden_function(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask, **_):
+def _golden_function(input_tensor: ttnn.Tensor, *, head_size=None, attention_mask=None, **_):
     import torch
 
     if head_size is not None:
