@@ -42,6 +42,7 @@ PADDED_TOKENS = 1024
 ROWS, COLS = 4, 8
 NUM_LAYERS = 36
 TARGET_LAYERS = (1, 9, 17, 25, 33)
+HANDOFF_FORMAT_VERSION = 1
 
 
 def _pcc(reference: torch.Tensor, actual: torch.Tensor) -> float:
@@ -92,27 +93,40 @@ def _to_host_reduced(mesh, result) -> torch.Tensor:
 def _write_consumer_fixture(
     path: Path, seed: dict | None, token_ids: list[int], result, reduced_pre: torch.Tensor
 ) -> Path:
-    """Emit the native handoff plus a directly runnable first-proposal trace.
+    """Emit the native handoff plus a directly runnable proposal trace.
 
-    The trace carries pre-norm features because device KV injection applies
-    ``hidden_norm``. One duplicate tail row lets the FSM finish its first round;
-    it is not part of the prompt and does not affect the first proposal.
+    The prompt's first 1k rows are always the true-prefill output. If the
+    independent seed contains a post-prompt margin, append it so proposal
+    acceptance can commit future target rows. Otherwise one duplicate tail row
+    still permits a first-proposal-only run.
     """
 
-    next_token = torch.full((REAL_TOKENS + 1,), int(result.y0), dtype=torch.int64)
+    requested_margin = int(os.getenv("PREFILL_DFLASH_TRACE_MARGIN", "8"))
+    extra_reduced = reduced_pre[-1:]
+    if seed is not None and seed["reduced_hidden_prenorm_ref"].shape[0] > REAL_TOKENS:
+        extra_reduced = seed["reduced_hidden_prenorm_ref"][REAL_TOKENS : REAL_TOKENS + requested_margin].float()
+    trace_reduced = torch.cat([reduced_pre, extra_reduced], dim=0).contiguous()
+    next_token = torch.full((trace_reduced.shape[0],), int(result.y0), dtype=torch.int64)
     if seed is not None and seed.get("next_token_ref") is not None:
         available = min(len(seed["next_token_ref"]), len(next_token))
         next_token[:available] = torch.as_tensor(seed["next_token_ref"][:available], dtype=torch.int64)
     next_token[REAL_TOKENS - 1] = int(result.y0)
     trace = {
         "prompt_token_ids": list(token_ids),
-        "reduced_hidden": torch.cat([reduced_pre, reduced_pre[-1:]], dim=0).contiguous(),
+        "reduced_hidden": trace_reduced,
         "next_token": next_token,
         "block_size": int(os.getenv("PREFILL_DFLASH_BLOCK_SIZE", "8")),
         "hidden_dim": int(reduced_pre.shape[-1]),
         "target_layer_ids": TARGET_LAYERS,
     }
     payload = {
+        "format_version": HANDOFF_FORMAT_VERSION,
+        "producer": {
+            "model": "gpt-oss-120b",
+            "path": "true_prefill",
+            "feature_contract": "fc_only_prenorm",
+            "reference": "independent_hf_teacher_forced" if seed is not None else None,
+        },
         "handoff": {
             "slot_id": result.slot_id,
             "actual_start": result.actual_start,
@@ -154,10 +168,27 @@ def _gate_consumer_compatibility() -> None:
         raise ValueError("set both PREFILL_DFLASH_COMPAT_CONTROL and PREFILL_DFLASH_COMPAT_RESULT")
     control = torch.load(control_raw, map_location="cpu", weights_only=False)
     consumed = torch.load(result_raw, map_location="cpu", weights_only=False)
+
+    def decode_contract(blob):
+        # Native run_spec_decode --result-out schema: one dataclass-as-dict per turn.
+        if isinstance(blob, list):
+            turns = blob
+            return {
+                "first_proposal": turns[0]["rounds"][0]["proposals"],
+                "accepted_tokens": [token for turn in turns for rnd in turn["rounds"] for token in rnd["accepted"]],
+                "prompt_kv_pcc": None,
+            }
+        return blob
+
+    control = decode_contract(control)
+    consumed = decode_contract(consumed)
     for key in ("first_proposal", "accepted_tokens"):
         if list(consumed[key]) != list(control[key]):
             raise AssertionError(f"DFlash compatibility mismatch for {key}")
-    kv_pcc = float(consumed["prompt_kv_pcc"])
+    kv_pcc = consumed.get("prompt_kv_pcc")
+    if kv_pcc is None:
+        return
+    kv_pcc = float(kv_pcc)
     kv_floor = float(os.getenv("GPT_OSS_DFLASH_DRAFT_KV_PCC_MIN", "0.99"))
     if kv_pcc < kv_floor:
         raise AssertionError(f"prompt-primed drafter KV PCC {kv_pcc:.5f} < {kv_floor}")

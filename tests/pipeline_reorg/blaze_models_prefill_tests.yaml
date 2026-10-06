@@ -1232,6 +1232,45 @@
 
 # ===== GPT-OSS-120B ==================================================================================
 
+# True-prefill DFlash producer gate. This is the GPT-OSS counterpart of Kimi's
+# single-Galaxy DFlash module gate: all 36 target layers run at 1k, target KV
+# and independent-HF reduced-hidden are checked, and a versioned consumer
+# handoff is emitted. DFlash consumption is gated in the Blaze Galaxy job.
+- name: "(GPT-OSS-120B) DFlash true-prefill accuracy + perf 1k"
+  fabric_profile: torus_xy
+  cmd: |
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+    export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
+    export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
+    export TT_HF_DRAFT_MODEL=/mnt/models/blaze/openai/gpt-oss-120b-DFlash
+    export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
+    export BLAZE_DFLASH_SEED_REF=/mnt/models/blaze/openai/gpt-oss-120b/cache/dflash/seed_1016.pt
+    export PREFILL_DFLASH_HANDOFF_OUT=/tmp/gptoss_dflash_true_prefill_1k.pt
+    export GPT_OSS_WEIGHTS_FROM_CACHE=1
+    export PREFILL_TOPOLOGY=linear
+    export PREFILL_TPS_ITERS=3
+    export PREFILL_TSU_MIN=3000
+    export GPT_OSS_KV_PCC_MIN=0.85
+    export GPT_OSS_DFLASH_PCC_MIN=0.89
+    mpirun --pernode --tag-output bash -lc '
+      set -e
+      python3 models/demos/gpt_oss_d_p/tests/galaxy_prefill_dflash.py
+    '
+  test_type: gpt_oss_dflash_prefill
+  test_tags: [gpt_oss, dflash, kv_cache]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 45
+      tier: 2
+      release_ready: false
+  owner_id: U08HM8SL5U4 # Maciek Dragula
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
 # GPT-OSS-120B prefill suite: sections run serially on one allocation; each is time-bounded and
 # runs regardless of the others, and the job fails if any section fails.
 #
