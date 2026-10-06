@@ -3,6 +3,7 @@
 
 
 import os
+import struct
 from itertools import chain, product
 
 import pytest
@@ -53,6 +54,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_RELU_MAX_THRESHOLD,
     SFPU_RELU_MIN_INT_THRESHOLD,
     SFPU_SHIFT_AMOUNT,
     TILE_COUNT,
@@ -873,6 +875,116 @@ def test_eltwise_unary_sfpu_relu_min_int_threshold(
     )
 
 
+# Cat F: relu_max's threshold, which SFPU_RELU_MAX_THRESHOLD makes reachable, probed where the
+# kernel's two SFPSWAP folds (max(min(x, t), 0)) meet the values a sign-magnitude total order
+# ranks differently from IEEE: both NaN signs, both zeros, the infinities, the subnormal extremes,
+# and the threshold itself with its two fp neighbours. The thresholds are the ones production
+# passes -- relu6's 6.0 -- plus the two the sweep's fixed 5.0 cannot reach: zero, where the
+# relu clamp alone decides, and a negative one, where every lane must come out +0.0.
+#
+# The gate is exact bits, not the op's tolerance: relu_max's result is always one of its input,
+# the threshold or +0.0, so there is no rounding to allow for, and a tolerance would pass a -0.0
+# for a +0.0 and a flushed subnormal for the subnormal.
+_RELU_MAX_THRESHOLDS = [6.0, 0.0, -1.0, -0.0]
+
+_FP32_MIN_SUBNORMAL = struct.unpack("<f", struct.pack("<I", 0x00000001))[0]
+_FP32_MAX_SUBNORMAL = struct.unpack("<f", struct.pack("<I", 0x007FFFFF))[0]
+_NEGATIVE_NAN = struct.unpack("<f", struct.pack("<I", 0xFFC00000))[0]
+
+
+def _relu_max_probe_spec(threshold, formats, dest_acc):
+    """The probe values for one (threshold, pipeline), as a per-face custom spec.
+
+    Each group is added only where the pipeline delivers it intact, on the same rules the
+    edge sweep uses: specials_safe() for the non-finites and negative_zero_delivered() for
+    -0.0. The subnormals go in on the unpack-to-dest path (32-bit input, dest_acc=Yes) only;
+    measured on Blackhole they read back as +0.0 there too (both signs, both extremes), and
+    the golden's FTZ model (_flush_subnormals_of_dtype) says the same, so what the probe pins
+    is that the flush is unchanged, not that a subnormal survives.
+    """
+    torch_format = format_dict[formats.input_format]
+    t = torch.tensor([threshold], dtype=torch_format)
+    above = torch.nextafter(t, torch.tensor([float("inf")], dtype=torch_format)).item()
+    below = torch.nextafter(t, torch.tensor([float("-inf")], dtype=torch_format)).item()
+
+    values = [
+        threshold,
+        above,
+        below,
+        -threshold,
+        2.0 * threshold,
+        0.0,
+        1.0,
+        -1.0,
+        3.0,
+        -3.0,
+    ]
+    if specials_safe(formats.input_format, formats.output_format, dest_acc):
+        values += [float("inf"), float("-inf"), float("nan"), _NEGATIVE_NAN]
+    if negative_zero_delivered(formats.input_format, dest_acc):
+        values.append(-0.0)
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes:
+        values += [
+            _FP32_MIN_SUBNORMAL,
+            -_FP32_MIN_SUBNORMAL,
+            _FP32_MAX_SUBNORMAL,
+            -_FP32_MAX_SUBNORMAL,
+        ]
+    return StimuliSpec.custom(values=values, seed=0)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    threshold=_RELU_MAX_THRESHOLDS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_relu_max_threshold(
+    formats: list[InputOutputFormat],
+    threshold: float,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    """relu_max against production's thresholds, checked bit for bit on the probe table.
+
+    The golden is sfpu_relu_max: min under the SFPU's total order, then the relu clamp, so
+    it pins the order of the two folds as well as the values -- a kernel that clamped first
+    would return the threshold for a negative threshold and keep a -NaN, and fail here.
+    """
+    _skip_coverage_unsupported(MathOperation.ReluMax)
+    _skip_bh_unless_fp32(formats, dest_acc)
+
+    res_tensor, golden_tensor = eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        MathOperation.ReluMax,
+        FastMode.No,
+        input_dimensions,
+        spec_A=_relu_max_probe_spec(threshold, formats, dest_acc),
+        relu_max_threshold=threshold,
+    )
+
+    torch_format = format_dict[formats.output_format]
+    int_format = torch.int32 if torch_format == torch.float32 else torch.int16
+    res_bits = res_tensor.to(torch_format).contiguous().view(int_format)
+    golden_bits = (
+        golden_tensor.to(torch_format).contiguous().view(int_format)
+        if isinstance(golden_tensor, torch.Tensor)
+        else torch.tensor(golden_tensor, dtype=torch_format).view(int_format)
+    )
+    mismatch = torch.nonzero(res_bits != golden_bits).flatten()
+    mask = 0xFFFFFFFF if int_format == torch.int32 else 0xFFFF
+    assert mismatch.numel() == 0, (
+        f"{mismatch.numel()} lane(s) differ from sfpu_relu_max bit for bit; first: "
+        + ", ".join(
+            f"[{i}] got {int(res_bits[i]) & mask:#x} want {int(golden_bits[i]) & mask:#x}"
+            for i in mismatch[:8].tolist()
+        )
+    )
+
+
 # Cat E: the shift amount itself, which SFPU_SHIFT_AMOUNT makes reachable. The amounts are
 # shared with the binary shift sweep through sfpu_domains.SHIFT_EDGE_AMOUNTS.
 _UNARY_SHIFT_OPS = [MathOperation.LeftShift, MathOperation.RightShift]
@@ -1136,6 +1248,7 @@ def eltwise_unary_sfpu(
     spec_A=None,
     shift_amount=None,
     relu_min_int_threshold=None,
+    relu_max_threshold=None,
     twos_complement=False,
 ):
     torch.manual_seed(0)
@@ -1179,6 +1292,11 @@ def eltwise_unary_sfpu(
             if relu_min_int_threshold is None
             else {"relu_min_int_threshold": relu_min_int_threshold}
         ),
+        **(
+            {}
+            if relu_max_threshold is None
+            else {"relu_max_threshold": relu_max_threshold}
+        ),
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
@@ -1206,6 +1324,11 @@ def eltwise_unary_sfpu(
                 []
                 if relu_min_int_threshold is None
                 else [SFPU_RELU_MIN_INT_THRESHOLD(relu_min_int_threshold)]
+            ),
+            *(
+                []
+                if relu_max_threshold is None
+                else [SFPU_RELU_MAX_THRESHOLD(relu_max_threshold)]
             ),
         ],
         runtimes=[
@@ -1264,6 +1387,10 @@ def eltwise_unary_sfpu(
         formats.output_format,
         **contract.tolerance_kwargs(),
     ), "Assert against golden failed"
+
+    # For callers that want a stricter gate than the op's tolerance (an exact-bits check on
+    # a probe table, say); the sweeps above ignore it.
+    return res_tensor, golden_tensor
 
 
 # Test exponential with APPROX_MODE=true, FAST_MODE=true, and CLAMP_NEGATIVE=true/false

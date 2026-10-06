@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Config for one GLM-5.2 MTP module.
+"""Config for one GLM-5.3 MTP module.
 
 Values are read straight out of the HF checkout's config.json: glm_moe_dsa is not
 AutoConfig-loadable on the transformers versions here.

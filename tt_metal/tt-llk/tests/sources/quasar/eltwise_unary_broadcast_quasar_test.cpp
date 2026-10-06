@@ -61,7 +61,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         // Record the descriptor under the engine UNPACKER_ENGINE_SEL actually drives (UNP_B -> UNPACR1/Unp1).
         constexpr auto unp_res = (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B) ? ckernel::trisc::BfdResource::Unp1 : ckernel::trisc::BfdResource::Unp0;
-        ckernel::trisc::bfd_alloc_and_program<unp_res>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_A_src);
+        const auto bfd_unpack  = ckernel::trisc::bfd_alloc_and_program<unp_res>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_A_src);
 
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
         {
@@ -72,8 +72,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
-        _llk_unpack_unary_broadcast_operands_init_<UNPACKER_ENGINE_SEL, BROADCAST_TYPE, is_fp32_dest_acc_en, unpack_to_dest>(
-            ckernel::trisc::bfd_current<unp_res>(), num_tiles_per_unpack);
+        _llk_unpack_unary_broadcast_operands_init_<UNPACKER_ENGINE_SEL, BROADCAST_TYPE, is_fp32_dest_acc_en, unpack_to_dest>(bfd_unpack, num_tiles_per_unpack);
 
         PROFILER_SYNC();
     }
@@ -88,7 +87,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 const std::uint32_t dvalids_per_tile =
                     (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : static_cast<std::uint32_t>(num_faces_r_dim_A * num_faces_c_dim_A);
-                _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(LOOP_FACTOR * num_blocks * tiles_in_block * dvalids_per_tile);
+                if constexpr (is_fp32_dest_acc_en)
+                {
+                    // 32-bit dest math is ELWADD, which also needs SrcA: one per tile, ahead of its SrcB faces
+                    for (std::uint32_t tile = 0; tile < LOOP_FACTOR * num_blocks * tiles_in_block; tile++)
+                    {
+                        _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(1);
+                        _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(dvalids_per_tile);
+                    }
+                }
+                else
+                {
+                    _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(LOOP_FACTOR * num_blocks * tiles_in_block * dvalids_per_tile);
+                }
             }
             else
             {
@@ -210,7 +221,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
             if constexpr (!unpack_to_dest)
             {
                 const std::uint32_t dvalids_per_tile = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : num_faces;
-                _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * num_blocks * tiles_in_block * dvalids_per_tile);
+                if constexpr (is_fp32_dest_acc_en)
+                {
+                    // 32-bit dest also unpacks one SrcA per tile, which has to be consumed too
+                    for (std::uint32_t tile = 0; tile < LOOP_FACTOR * num_blocks * tiles_in_block; tile++)
+                    {
+                        _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(dvalids_per_tile);
+                        _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(1);
+                    }
+                }
+                else
+                {
+                    _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * num_blocks * tiles_in_block * dvalids_per_tile);
+                }
             }
             else
             {
@@ -269,7 +292,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res                 = params.buffer_Res;
 #endif
 
-
     {
         ZONE_SCOPED("INIT")
         // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
@@ -292,9 +314,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        const auto bfd_pack =
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape, 1 /*num_tiles*/);
+        _llk_pack_init_(bfd_pack, tensor_shape, 1 /*num_tiles*/);
         PROFILER_SYNC();
     }
     {

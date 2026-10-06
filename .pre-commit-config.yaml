@@ -138,12 +138,29 @@ repos:
       files: ^tests/tt_metal/tt_fabric/test_infra/golden/.*bandwidth.*\.csv$
 - repo: local
   hooks:
+    - id: lint-pipeline-cmds
+      name: Pipeline cmd blocks stop at the first failed test command
+      entry: python3 .github/scripts/utils/lint_pipeline_cmds.py
+      language: system
+      pass_filenames: false
+      files: ^(tests/pipeline_reorg/.*\.yaml|\.github/pipeline_cmd_lint_baseline\.yaml|\.github/scripts/utils/lint_pipeline_cmds\.py)$
+- repo: local
+  hooks:
     - id: triage-type-check
       name: tt-triage type checks
       entry: tools/triage/run_type_checks.sh
       language: system
       pass_filenames: false
       files: ^tools/triage/
+- repo: local
+  hooks:
+    - id: compile-agentic-workflows
+      name: Regenerate agentic workflow lock files
+      entry: python3 .github/scripts/utils/update_agentic_workflows.py
+      language: system
+      files: ^\.github/workflows/[^/]+\.(md|lock\.yml)$
+      pass_filenames: true
+      require_serial: true
 
 # ---- LLK hooks (tt_metal/tt-llk/) ----
 # LLK lives at tt_metal/tt-llk/ and has its own formatting standards.

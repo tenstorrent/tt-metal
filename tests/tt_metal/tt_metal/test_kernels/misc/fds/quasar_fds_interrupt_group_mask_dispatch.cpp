@@ -91,7 +91,7 @@ void kernel_main() {
     }
 
     overlay::FdsDispatch::fds_clear_go();
-    overlay::FdsDispatch::fds_go(/*ad_enable=*/false, kGroupId);
+    overlay::FdsDispatch::fds_go(kGroupId);
 
     // Status rather than count, so the wait does not depend on the enable register this test is
     // manipulating.

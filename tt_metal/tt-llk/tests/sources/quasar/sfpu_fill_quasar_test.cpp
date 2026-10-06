@@ -55,13 +55,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Source descriptor: buffer_A in L1, L1-side format = formats.unpack_A_src,
     // face geometry from the harness. reg_data_format = unpack_A_dst is the
     // DEST-side (post-conversion) format.
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+    const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
         ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
 
     // Configure unpacker → init unary operand path → unpack tile 0 from L1 into DEST.
     _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, params.TILE_CNT);
+    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, params.TILE_CNT);
     _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
 
     // Release DEST section to the SFPU consumer.
@@ -162,12 +161,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Destination descriptor: buffer_Res in L1, L1-side format = formats.pack_dst,
     // face geometry from the harness. reg_data_format = pack_src is the DEST-side
     // format the packer reads.
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+    const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
         ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
 
     // Configure pack engine 0 → init → pack tile from DST_INDEX into buffer_Res → release section.
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-    _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, params.TILE_CNT);
+    _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, params.TILE_CNT);
     _llk_pack_(params.DST_INDEX, 0 /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
