@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cstring>
 #include <functional>
+#include <optional>
+#include <span>
 #include <unordered_set>
 
 #include "host_tensor_impl.hpp"
@@ -200,7 +202,10 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 void h2d_as_replicate_tensor_on_1x1_mesh(
-    const HostTensor& host_tensor, MeshTensor& device_tensor, distributed::MeshCommandQueue& command_queue) {
+    const HostTensor& host_tensor,
+    MeshTensor& device_tensor,
+    distributed::MeshCommandQueue& command_queue,
+    std::span<const distributed::MeshCoordinate> target_coords) {
     const auto host_buffer = host_tensor.buffer().get_shard(distributed::MeshCoordinate(0, 0));
     auto data_to_write = host_buffer->view_bytes();
     const auto expected_packed_buffer_size_bytes = device_tensor.tensor_spec().compute_packed_buffer_size_bytes();
@@ -217,50 +222,50 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
     const bool use_pinned =
         ::tt::tt_metal::CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(*mesh_device, data_to_write.size());
 
-    if (use_pinned) {
-        // Replication fans a single 1x1 host shard out to the whole mesh, but only the chips owned
-        // by this host can be pinned/written; restrict the pin and the transfers to those so the
-        // remote coordinates are a complete no-op here.
-        const auto& view = mesh_device->get_view();
-        std::vector<distributed::MeshCoordinate> local_coords;
-        local_coords.reserve(mesh_device->shape().mesh_size());
-        distributed::MeshCoordinateRangeSet local_range;
-        for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
-            if (view.impl().is_local(coord)) {
-                local_coords.push_back(coord);
-                local_range.merge(distributed::MeshCoordinateRange(coord, coord));
-            }
+    // Replicate only to coordinates represented by the destination tensor. Full-mesh tensors
+    // still name every coordinate, while pool views may own buffers on a strict subset.
+    const auto& view = mesh_device->get_view();
+    std::vector<distributed::MeshCoordinate> local_coords;
+    local_coords.reserve(target_coords.size());
+    distributed::MeshCoordinateRangeSet local_range;
+    for (const auto& coord : target_coords) {
+        TT_FATAL(view.contains(coord), "Destination tensor coordinate {} is outside its MeshDevice", coord);
+        if (view.impl().is_local(coord)) {
+            local_coords.push_back(coord);
+            local_range.merge(distributed::MeshCoordinateRange(coord, coord));
         }
-
-        HostBuffer pinned_buffer(*host_buffer);
-        auto pinned_memory = local_coords.empty() ? nullptr
-                                                  : experimental::PinnedMemoryCache::instance().try_pin(
-                                                        *mesh_device,
-                                                        local_range,
-                                                        pinned_buffer,
-                                                        /*map_to_noc=*/true,
-                                                        experimental::PinnedMemoryDeviceAccess::ReadOnly);
-
-        if (pinned_memory) {
-            std::vector<distributed::ShardDataTransfer> transfers;
-            transfers.reserve(local_coords.size());
-            for (const auto& coord : local_coords) {
-                auto xfer = distributed::ShardDataTransfer{coord}
-                                .host_data(const_cast<void*>(static_cast<const void*>(data_to_write.data())))
-                                .region(BufferRegion(0, data_to_write.size()));
-                experimental::ShardDataTransferSetPinnedMemory(xfer, pinned_memory);
-                transfers.push_back(std::move(xfer));
-            }
-            command_queue.enqueue_write_shards(mesh_buffer, transfers, /*blocking=*/true);
-        } else {
-            command_queue.enqueue_write_mesh_buffer(mesh_buffer, data_to_write.data(), /*blocking=*/false);
-        }
-    } else {
-        command_queue.enqueue_write_mesh_buffer(mesh_buffer, data_to_write.data(), /*blocking=*/false);
     }
 
-    const auto& mesh_device_shape = mesh_buffer->device()->shape();
-    auto topology = TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape);
+    std::optional<HostBuffer> pinned_buffer;
+    std::shared_ptr<experimental::PinnedMemory> pinned_memory;
+    if (use_pinned) {
+        pinned_buffer.emplace(*host_buffer);
+        pinned_memory = local_coords.empty() ? nullptr
+                                             : experimental::PinnedMemoryCache::instance().try_pin(
+                                                   *mesh_device,
+                                                   local_range,
+                                                   *pinned_buffer,
+                                                   /*map_to_noc=*/true,
+                                                   experimental::PinnedMemoryDeviceAccess::ReadOnly);
+    }
+
+    std::vector<distributed::ShardDataTransfer> transfers;
+    transfers.reserve(local_coords.size());
+    for (const auto& coord : local_coords) {
+        auto transfer = distributed::ShardDataTransfer{coord}
+                            .host_data(const_cast<void*>(static_cast<const void*>(data_to_write.data())))
+                            .region(BufferRegion(0, data_to_write.size()));
+        if (pinned_memory) {
+            experimental::ShardDataTransferSetPinnedMemory(transfer, pinned_memory);
+        }
+        transfers.push_back(std::move(transfer));
+    }
+    command_queue.enqueue_write_shards(mesh_buffer, transfers, /*blocking=*/pinned_memory != nullptr);
+
+    auto topology = get_tensor_topology(device_tensor);
+    if (target_coords.size() == mesh_device->shape().mesh_size()) {
+        topology = TensorTopology::create_fully_replicated_tensor_topology(mesh_device->shape());
+    }
     const auto& old_spec = host_tensor.tensor_spec();
     device_tensor = mesh_tensor_from_buffer_with_topology(
         std::move(*mesh_buffer),
@@ -288,14 +293,13 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
     const auto& host_storage_shape = host_tensor.buffer().shape();
     const auto& dst_device_shape = device_tensor.device().shape();
 
-    // Special case of replicating tensors on 1x1 mesh across the entire mesh device.
+    // Special case of replicating one host shard across the destination tensor's coordinates.
     if (host_storage_shape.mesh_size() < dst_device_shape.mesh_size() &&
         host_storage_shape == distributed::MeshShape(1, 1)) {
-        CMAKE_UNIQUE_NAMESPACE::h2d_as_replicate_tensor_on_1x1_mesh(host_tensor, device_tensor, cq);
-
-        // All coordinates of the MeshDevice
-        distributed::MeshCoordinateRange range(device_tensor.device().shape());
-        return {range.begin(), range.end()};
+        auto target_coords = get_tensor_topology(device_tensor).mesh_coords();
+        CMAKE_UNIQUE_NAMESPACE::h2d_as_replicate_tensor_on_1x1_mesh(
+            host_tensor, device_tensor, cq, target_coords);
+        return target_coords;
     }
 
     auto mesh_buffer = device_tensor.impl().raw_mesh_buffer();

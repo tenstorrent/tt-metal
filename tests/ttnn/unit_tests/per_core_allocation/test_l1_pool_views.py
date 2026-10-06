@@ -209,5 +209,8 @@ def test_l1_pool_view_uses_only_placement_devices(mesh_device):
     view = ttnn.experimental_create_l1_pool_tensor(
         pool, spec, [ttnn.L1PoolPlacement(coord, core, 0, 0)]
     )
+    value = torch.arange(256, dtype=torch.uint8).reshape(1, 256)
+    ttnn.copy_host_to_device_tensor(ttnn.from_torch(value, dtype=ttnn.uint8), view)
     assert list(view.device_coords()) == [coord]
     assert len(ttnn.get_device_tensors(view)) == 1
+    torch.testing.assert_close(_read_single_device(view), value)
