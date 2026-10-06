@@ -56,25 +56,58 @@ constexpr std::uint32_t LCM_GCD_REPLAY_LEN = 16;
 constexpr std::uint32_t LCM_TAIL_REPLAY_SLOT = LCM_GCD_REPLAY_SLOT + LCM_GCD_REPLAY_LEN;
 constexpr std::uint32_t LCM_TAIL_REPLAY_LEN = 15;
 
-// (15 + 1) / 2 replays at the largest MAX_INPUT_BITS; `#pragma GCC unroll` needs a non-dependent value.
-constexpr int LCM_MAX_REPLAY_COUNT = 8;
+// Operand magnitude ceiling in bits: q * |b| must stay below 2^31 and SFPMUL24 reads only the low 23 bits.
+constexpr int LCM_MAX_INPUT_BITS = 15;
+
+// GCD replays for an n-bit operand budget; see _calculate_lcm_gcd_sfp_rows_ for the bound.
+constexpr int lcm_gcd_replay_count(const int max_input_bits) { return max_input_bits / 2; }
+
+// Replays at the largest budget; `#pragma GCC unroll` needs a non-dependent value.
+constexpr int LCM_MAX_REPLAY_COUNT = lcm_gcd_replay_count(LCM_MAX_INPUT_BITS);
 
 /**
- * @brief Replay the recorded binary-GCD reduction body enough times to reach its fixed point.
+ * @brief One Stein reduction step: strip a's extra trailing zeros, then (a, b) <- (max - min, min).
  *
- * Each replay covers two Stein iterations, and each iteration removes at least one bit from the
- * larger operand, so (MAX_INPUT_BITS + 1) / 2 replays always suffice. The count is fixed rather
- * than data-dependent: every SFPU lane runs the same number of replays, and a lane that has
- * already converged keeps reducing to the same value.
+ * On entry LREG_NEG_A = -a and LREG1 = b, with b holding exactly k trailing zeros; LREG3 = k - 31.
+ * On exit LREG_OUT = -(max - min), LREG1 = min. Lanes with a == 0 are retired in the CC by SFPLZ
+ * and stay retired until the tail's SFPENCC, which is what keeps their gcd in LREG1 intact.
+ *
+ * @tparam LREG_NEG_A: LREG holding -a on entry; used as scratch.
+ * @tparam LREG_OUT: LREG receiving -(max - min); holds a scratch copy of a on the way.
+ */
+template <std::uint32_t LREG_NEG_A, std::uint32_t LREG_OUT>
+inline void _calculate_lcm_gcd_step_() {
+    TTI_SFPABS(LREG_NEG_A, LREG_OUT, sfpi::SFPABS_MOD1_INT);                     // out = a
+    TTI_SFPAND(LREG_OUT, LREG_NEG_A);                                            // neg_a = lowest set bit of a
+    TTI_SFPLZ(LREG_NEG_A, LREG_NEG_A, sfpi::SFPLZ_MOD1_CC_NE0);                  // = 31 - tz(a); retire a == 0 lanes
+    TTI_SFPIADD(0 /* imm12 */, p_sfpu::LREG3, LREG_NEG_A, LCM_IADD_MOD_ADD);     // = k - tz(a), always <= 0
+    TTI_SFPSHFT(0 /* imm12 */, LREG_NEG_A, LREG_OUT, LCM_SHFT_MOD_VAR_LOGICAL);  // out = a >> (tz(a) - k)
+    TTI_SFPSWAP(LCM_SWAP_IMM12, LREG_OUT, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // lreg1 = min, out = max
+    TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);             // post-SFPSWAP stall slot
+    TTI_SFPIADD(0 /* imm12 */, p_sfpu::LREG1, LREG_OUT, LCM_IADD_MOD_SUB);                 // out = min - max
+}
+
+/**
+ * @brief Replay the recorded binary-GCD reduction body enough times for LREG1 to reach the gcd.
+ *
+ * Divide out 2^k: after each step's shift both operands are odd, and (max - min, min) followed by
+ * the next shift at least halves their sum, so the reduction converges logarithmically. For
+ * |a|, |b| < 2^n LREG1 reaches g within n - 1 steps, i.e. n / 2 replays of the two-step body
+ * (checked exhaustively over every operand pair for n = 1..15; tight at (3, 2^n - 3)). Later
+ * steps would only drive a to 0, and the tail never reads a.
+ *
+ * The count is fixed rather than data-dependent: every lane runs the same replays. A lane whose
+ * a has reached 0 must not run the body again — min(0, g) would zero LREG1 — so the SFPLZ
+ * CC_NE0 retirement in each step is load-bearing, not an optimisation.
  *
  * @tparam MAX_INPUT_BITS: Operand magnitude budget in bits; sets the replay count.
- * @note Call only while the two-iteration body is live in replay slot @c LCM_GCD_REPLAY_SLOT —
+ * @note Call only while the two-step body is live in replay slot @c LCM_GCD_REPLAY_SLOT —
  *       @ref calculate_lcm records it. On entry LREG2 = -a, LREG1 = b, LREG3 = k - 31; on exit
  *       LREG1 holds the gcd and the lanes whose operand hit zero are retired in the CC.
  */
 template <int MAX_INPUT_BITS>
 inline void _calculate_lcm_gcd_sfp_rows_() {
-    constexpr int LCM_GCD_REPLAY_COUNT = (MAX_INPUT_BITS + 1) / 2;
+    constexpr int LCM_GCD_REPLAY_COUNT = lcm_gcd_replay_count(MAX_INPUT_BITS);
 
 #pragma GCC unroll LCM_MAX_REPLAY_COUNT
     for (int r = 0; r < LCM_GCD_REPLAY_COUNT; r++) {
@@ -88,13 +121,17 @@ inline void _calculate_lcm_gcd_sfp_rows_() {
  * Runs in three stages per row pair: a binary (Stein) GCD driven from the replay buffer, an exact
  * integer quotient q = |a| / g computed in fp32 from an SFPNONLINEAR reciprocal seed refined by two
  * Newton-Raphson steps, and an exact q * |b| product recombined from the two SFPMUL24 halves. The
- * result is always non-negative, and lcm(0, x) = lcm(x, 0) = 0 falls out of the GCD stage.
+ * result is always non-negative.
+ *
+ * Zeros come from the tail, not the GCD stage: lcm(0, x) has g = |x| and q = 0, and lcm(x, 0) has
+ * g = |x| and |b| = 0. For lcm(0, 0), g = 0, so the reciprocal seed is 1/0 and q is garbage; the
+ * result is still 0 only because SFPMUL24 by |b| = 0 zeroes both product halves.
  *
  * @tparam SIGN_MAGNITUDE_FORMAT: Dest holds sign-magnitude Int32 (e.g. an Int8 copy_tile through an
  *         fp32 accumulating FPU) rather than two's complement; converts both operands on load.
- * @tparam MAX_INPUT_BITS: Operand magnitude budget in bits, 1..15. Caps the GCD replay count. 15 is
- *         the ceiling: q * |b| must stay below 2^31 and SFPMUL24 reads only the low 23 bits.
- * @tparam ITERATIONS: SFPU loop iterations over the Dest tile; each covers two Dest rows.
+ * @tparam MAX_INPUT_BITS: Operand magnitude budget in bits, 1..LCM_MAX_INPUT_BITS. Caps the GCD
+ *         replay count.
+ * @tparam ITERATIONS: 2-row SFPU iterations per face (8 for a 16-row face); runs once per face.
  * @tparam TILE_SHAPE: Dest tile shape, used to derive the per-tile stride.
  * @param dst_index_in0: Dest tile index of operand a.
  * @param dst_index_in1: Dest tile index of operand b.
@@ -106,12 +143,13 @@ inline void _calculate_lcm_gcd_sfp_rows_() {
  */
 template <
     bool SIGN_MAGNITUDE_FORMAT = false,
-    int MAX_INPUT_BITS = 15,
+    int MAX_INPUT_BITS = LCM_MAX_INPUT_BITS,
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void calculate_lcm(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-    static_assert(MAX_INPUT_BITS > 0 && MAX_INPUT_BITS <= 15, "lcm operands must fit a 15-bit magnitude budget");
+    static_assert(
+        MAX_INPUT_BITS > 0 && MAX_INPUT_BITS <= LCM_MAX_INPUT_BITS, "lcm operands must fit a 15-bit magnitude budget");
 
     constexpr std::uint32_t tile_stride = 1U << trisc::get_dest_tile_size_log2(TILE_SHAPE);
     const std::uint32_t in0_offset = dst_index_in0 * tile_stride;
@@ -121,34 +159,9 @@ inline void calculate_lcm(
     // The next 16 instructions are captured into the replay buffer, not executed.
     lltt::record(LCM_GCD_REPLAY_SLOT, LCM_GCD_REPLAY_LEN);
 
-    // Phase A: LREG2 = -a on entry, LREG0 = -a' on exit.
-    TTI_SFPABS(p_sfpu::LREG2, p_sfpu::LREG0, sfpi::SFPABS_MOD1_INT);   // lreg0 = a
-    TTI_SFPAND(p_sfpu::LREG0, p_sfpu::LREG2);                          // lreg2 = lowest set bit of a
-    TTI_SFPLZ(p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPLZ_MOD1_CC_NE0);  // lreg2 = 31 - tz(a); retire lanes with a == 0
-    TTI_SFPIADD(0 /* imm12 */, p_sfpu::LREG3, p_sfpu::LREG2, LCM_IADD_MOD_ADD);  // lreg2 = k - tz(a), always <= 0
-    TTI_SFPSHFT(
-        p_sfpu::LREG0 /* imm12: dest index; inert while the amount comes from lreg_c */,
-        p_sfpu::LREG2,
-        p_sfpu::LREG0,
-        LCM_SHFT_MOD_VAR_LOGICAL);  // lreg0 = a >> (tz(a) - k)
-    TTI_SFPSWAP(
-        LCM_SWAP_IMM12, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // lreg1 = min, lreg0 = max
-    TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);          // post-SFPSWAP stall slot
-    TTI_SFPIADD(0 /* imm12 */, p_sfpu::LREG1, p_sfpu::LREG0, LCM_IADD_MOD_SUB);         // lreg0 = min - max = -a'
-
-    // Phase B: the same eight instructions with LREG0 and LREG2 trading roles.
-    TTI_SFPABS(p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPABS_MOD1_INT);
-    TTI_SFPAND(p_sfpu::LREG2, p_sfpu::LREG0);
-    TTI_SFPLZ(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPLZ_MOD1_CC_NE0);
-    TTI_SFPIADD(0 /* imm12 */, p_sfpu::LREG3, p_sfpu::LREG0, LCM_IADD_MOD_ADD);
-    TTI_SFPSHFT(
-        p_sfpu::LREG2 /* imm12: dest index; inert while the amount comes from lreg_c */,
-        p_sfpu::LREG0,
-        p_sfpu::LREG2,
-        LCM_SHFT_MOD_VAR_LOGICAL);
-    TTI_SFPSWAP(LCM_SWAP_IMM12, p_sfpu::LREG2, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-    TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);
-    TTI_SFPIADD(0 /* imm12 */, p_sfpu::LREG1, p_sfpu::LREG2, LCM_IADD_MOD_SUB);
+    // Two steps with LREG2 and LREG0 trading roles: -a in LREG2 on entry and exit.
+    _calculate_lcm_gcd_step_<p_sfpu::LREG2, p_sfpu::LREG0>();
+    _calculate_lcm_gcd_step_<p_sfpu::LREG0, p_sfpu::LREG2>();
 
     // Likewise recorded, not executed: the once-per-row quotient and product tail.
     lltt::record(LCM_TAIL_REPLAY_SLOT, LCM_TAIL_REPLAY_LEN);
