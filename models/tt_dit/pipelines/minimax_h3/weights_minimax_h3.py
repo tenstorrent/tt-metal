@@ -150,8 +150,7 @@ def resolve_weights_dir(
     return snapshot
 
 
-# An adapter deployment reaches the pipeline through these when the caller passes nothing: the
-# serving runner builds the pipeline from the mesh, the weights directory and the output type alone.
+# Fallbacks for the Turbo factory's adapter arguments when the caller passes nothing.
 LORA_PATH_ENV = "MINIMAX_H3_LORA_PATH"
 LORA_STRENGTH_ENV = "MINIMAX_H3_LORA_STRENGTH"
 VIDEO_SHIFT_ENV = "MINIMAX_H3_VIDEO_SHIFT"

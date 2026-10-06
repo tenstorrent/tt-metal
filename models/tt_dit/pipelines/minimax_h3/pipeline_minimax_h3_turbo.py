@@ -17,21 +17,16 @@ at 9. The model card's shift for the file goes in `video_shift`; the 768p varian
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 from loguru import logger
 
-from ...experimental.lora.h3_adapter_loader import load_h3_adapter_into
+import ttnn
+
+from ...experimental.lora.h3_adapter_loader import H3AdapterHandle, load_h3_adapter_into
 from ...experimental.lora.promote import lora_modules
 from .pipeline_minimax_h3 import AUDIO_SHIFT, VIDEO_SHIFT, MiniMaxH3Pipeline
 from .weights_minimax_h3 import LORA_PATH_ENV, resolve_adapter_settings
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
-    import ttnn
-
-    from ...experimental.lora.h3_adapter_loader import H3AdapterHandle
 
 #: Forward counts the published adapters were distilled for; `num_inference_steps` is one more.
 TURBO_NUM_FORWARDS = (4, 8)

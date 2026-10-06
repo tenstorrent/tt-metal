@@ -131,7 +131,7 @@ from .policy import (
 )
 from .references import encode_references, prepare_references, reference_condition_shapes, split_condition_blocks
 from .scheduler import MiniMaxH3Scheduler
-from .weights_minimax_h3 import LORA_PATH_ENV, resolve_weights_dir
+from .weights_minimax_h3 import resolve_weights_dir
 
 # ImageNet statistics; the video VAE emits normalized RGB and the pipeline reverts it. Imported from
 # `conditioning` rather than restated: the keyframe path normalizes *into* the VAE with these and the
@@ -677,20 +677,9 @@ class MiniMaxH3Pipeline:
         `tp_axis`/`sp_axis`/`num_links`/`topology` to override it.
 
         `trace_denoise` defaults to the mesh preset; `bucket_ladder`, `arena_caps` and `adaln_slot_roles`
-        default to the task's envelope.
-
-        A deployment that names an adapter through `MINIMAX_H3_LORA_PATH` gets the Turbo pipeline from
-        here: the serving runner builds from a mesh, a weights directory and an output type alone, so the
-        environment is the only way an adapter can reach it. `subclass_kwargs` go to the constructor of
-        whichever subclass is being built.
+        default to the task's envelope. `subclass_kwargs` go to the constructor of whichever subclass is
+        being built.
         """
-        if cls is MiniMaxH3Pipeline and os.environ.get(LORA_PATH_ENV):
-            # Nothing but the parameters is bound yet, so `locals()` is exactly the call to forward.
-            # The import comes after, since it would otherwise bind a name into this frame too.
-            forwarded = {k: v for k, v in locals().items() if k not in ("cls", "subclass_kwargs")}
-            from .pipeline_minimax_h3_turbo import MiniMaxH3TurboPipeline
-
-            return MiniMaxH3TurboPipeline.create_pipeline(**forwarded, **subclass_kwargs)
         transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
         weights_dir = resolve_weights_dir(
             transformer_subfolder,
