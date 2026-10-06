@@ -5,6 +5,7 @@
 set -uo pipefail
 cd /work
 OPT=$1; shift
+if [[ "${1:-}" == "--nodes-file" ]]; then mapfile -t NODES < "$2"; shift 2; set -- "$@" "${NODES[@]}"; fi
 O=/tmp/ebset; mkdir -p $O
 export PYTHONPATH=/work:/work/tests/eb_r3_ci:${PYTHONPATH:-}
 declare -a FILES
