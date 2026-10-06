@@ -426,28 +426,29 @@ class SFPU_DROPOUT_PARAMS(TemplateParameter):
     p = 0 with the dispatcher's default seed and scale 2.0, the deterministic ``x * scale`` the
     unified sweep checks.
 
-    ``probability`` is ``p * INT_MAX`` (0 .. DROPOUT_PROBABILITY_MAX); ``scale`` is emitted as
-    its exact fp32 bit pattern.
+    ``dropout_probability`` is ``p * INT_MAX`` (0 .. DROPOUT_PROBABILITY_MAX);
+    ``dropout_scale`` is emitted as its exact fp32 bit pattern. The fields carry a ``dropout_``
+    prefix because every parameter field name becomes a perf-CSV column and must be unique.
     """
 
-    probability: int = 0
-    seed: int = DROPOUT_SEED
-    scale: float = DROPOUT_SCALE
+    dropout_probability: int = 0
+    dropout_seed: int = DROPOUT_SEED
+    dropout_scale: float = DROPOUT_SCALE
 
     def __post_init__(self):
         assert (
-            0 <= self.probability <= DROPOUT_PROBABILITY_MAX
-        ), f"dropout probability {self.probability:#x} outside 0 .. {DROPOUT_PROBABILITY_MAX:#x}"
+            0 <= self.dropout_probability <= DROPOUT_PROBABILITY_MAX
+        ), f"dropout probability {self.dropout_probability:#x} outside 0 .. {DROPOUT_PROBABILITY_MAX:#x}"
         assert (
-            0 <= self.seed <= 0xFFFFFFFF
-        ), f"dropout seed {self.seed:#x} is not 32-bit"
+            0 <= self.dropout_seed <= 0xFFFFFFFF
+        ), f"dropout seed {self.dropout_seed:#x} is not 32-bit"
 
     def convert_to_cpp(self) -> str:
-        scale_bits = struct.unpack("<I", struct.pack("<f", self.scale))[0]
+        scale_bits = struct.unpack("<I", struct.pack("<f", self.dropout_scale))[0]
         return "\n".join(
             (
-                f"#define SFPU_DROPOUT_PROBABILITY {self.probability:#010x}u",
-                f"#define SFPU_DROPOUT_SEED {self.seed:#010x}u",
+                f"#define SFPU_DROPOUT_PROBABILITY {self.dropout_probability:#010x}u",
+                f"#define SFPU_DROPOUT_SEED {self.dropout_seed:#010x}u",
                 f"#define SFPU_DROPOUT_SCALE_BITS {scale_bits:#010x}u",
             )
         )

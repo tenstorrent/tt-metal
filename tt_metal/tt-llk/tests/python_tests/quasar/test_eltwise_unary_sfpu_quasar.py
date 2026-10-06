@@ -1572,6 +1572,8 @@ def test_typecast_fp32_to_uint16_edge_cases_quasar(dest_sync):
 #   * p = 0.3 also uses the real caller scale 1 / (1 - p), whose fp32 low half is non-zero, so
 #     the kernel's lower-16-bit scale load is checked (scale 2.0 has a zero low half). It runs on
 #     Float32 only so output rounding cannot hide a wrong low half;
+#   * drop_half_lockup_seed seeds with all ones, the XNOR-LFSR lock-up state, which
+#     init_prng_seed must remap;
 #   * reseeding: the same seed twice must give the same mask, and a different seed a different
 #     one, which fails if dropout_init does not actually reseed the PRNG.
 # ---------------------------------------------------------------------------
@@ -1600,17 +1602,33 @@ DROPOUT_SCALE_REAL = 1.0 / (
 
 # The alternate seed for the reseed check.
 DROPOUT_SEED_ALT = 0x1234ABCD
+DROPOUT_SEED_LFSR_LOCKUP = 0xFFFFFFFF
 
 
-# (name, probability operand, expected dropped fraction band, scale)
+# (name, probability operand, expected dropped fraction band, scale, seed)
 DROPOUT_PROBABILITY_CASES = (
-    ("drop_all", DROPOUT_PROBABILITY_MAX, (1.0, 1.0), DROPOUT_SCALE),
-    ("drop_half", DROPOUT_PROBABILITY_MAX // 2, (0.4, 0.6), DROPOUT_SCALE),
+    ("drop_all", DROPOUT_PROBABILITY_MAX, (1.0, 1.0), DROPOUT_SCALE, DROPOUT_SEED),
+    (
+        "drop_half",
+        DROPOUT_PROBABILITY_MAX // 2,
+        (0.4, 0.6),
+        DROPOUT_SCALE,
+        DROPOUT_SEED,
+    ),
     (
         "drop_real_scale",
         int(DROPOUT_P_REAL * DROPOUT_PROBABILITY_MAX),
         (0.2, 0.4),
         DROPOUT_SCALE_REAL,
+        DROPOUT_SEED,
+    ),
+    # All ones is the XNOR-LFSR lock-up seed; init_prng_seed must remap it, or the stream is stuck.
+    (
+        "drop_half_lockup_seed",
+        DROPOUT_PROBABILITY_MAX // 2,
+        (0.4, 0.6),
+        DROPOUT_SCALE,
+        DROPOUT_SEED_LFSR_LOCKUP,
     ),
 )
 # drop_real_scale checks the scale's low half, so it runs where the output keeps it.
@@ -1745,7 +1763,7 @@ def test_dropout_probability_quasar(dropout_case_variant_dims):
     """
     (
         _,
-        (case_name, probability, (min_frac, max_frac), scale),
+        (case_name, probability, (min_frac, max_frac), scale, seed),
         variant,
         input_dimensions,
     ) = dropout_case_variant_dims[0]
@@ -1757,7 +1775,9 @@ def test_dropout_probability_quasar(dropout_case_variant_dims):
         src_A,
         src_B,
         tile_cnt,
-        SFPU_DROPOUT_PARAMS(probability=probability, scale=scale),
+        SFPU_DROPOUT_PARAMS(
+            dropout_probability=probability, dropout_scale=scale, dropout_seed=seed
+        ),
     )
     result = _dropout_result(configuration, variant, src_A)
 
@@ -1799,7 +1819,7 @@ def test_dropout_reseed_quasar(dropout_variant):
             src_A,
             src_B,
             tile_cnt,
-            SFPU_DROPOUT_PARAMS(probability=probability, seed=seed),
+            SFPU_DROPOUT_PARAMS(dropout_probability=probability, dropout_seed=seed),
         )
         for seed in seeds
     ]
