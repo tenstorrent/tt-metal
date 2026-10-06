@@ -251,6 +251,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "params.h"
+#if defined(ARCH_WORMHOLE) && defined(LLK_PACK_BLOCK)
+#include "experimental/llk_pack_block.h"
+#define PACK_BLOCK 1
+#else
+#define PACK_BLOCK 0
+#endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -265,12 +271,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int DST_INDEX                    = params.DST_INDEX;
     const Operand& buffer_Res              = params.buffer_Res;
 #endif
+#if PACK_BLOCK
+    // Experiment: block pack for full 4-face tiles; the output tiles are equally spaced in L1.
+    const bool use_block = !tilize_en && num_faces == 4 && NUM_TILES_IN_BLOCK > 1;
+#endif
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<false, tilize_en>>(
             formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_init_wrapper_<llk_test_pack_mode_v<false, tilize_en>, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+#if PACK_BLOCK
+        if (use_block)
+        {
+            _llk_pack_block_mop_config_<false>(L1_ADDRESS(buffer_Res[1]) - L1_ADDRESS(buffer_Res[0]));
+        }
+#endif
         PROFILER_SYNC();
     }
     {
@@ -302,6 +318,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (int block_num = 0; block_num < NUM_BLOCKS; ++block_num)
                 {
                     _llk_packer_wait_for_math_done_();
+#if PACK_BLOCK
+                    if (use_block)
+                    {
+                        _llk_pack_block_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
+                            DST_INDEX, L1_ADDRESS(buffer_Res[block_num * NUM_TILES_IN_BLOCK]), NUM_TILES_IN_BLOCK);
+                        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                        continue;
+                    }
+#endif
                     for (std::uint32_t tile_num = 0; tile_num < NUM_TILES_IN_BLOCK; ++tile_num)
                     {
                         LLK_ASSERT(
