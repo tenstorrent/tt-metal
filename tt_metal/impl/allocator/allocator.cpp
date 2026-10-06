@@ -865,6 +865,8 @@ DeviceAddr Allocator::get_base_allocator_addr(const HalMemType& mem_type) const 
 
 uint32_t Allocator::get_alignment(BufferType buffer_type) const { return impl_->get_alignment(buffer_type); }
 
+DeviceAddr Allocator::get_l1_allocation_alignment() const { return impl_->get_l1_allocation_alignment(); }
+
 Statistics Allocator::get_statistics(const BufferType& buffer_type) const { return impl_->get_statistics(buffer_type); }
 
 size_t Allocator::get_worker_l1_size() const { return impl_->get_worker_l1_size(); }

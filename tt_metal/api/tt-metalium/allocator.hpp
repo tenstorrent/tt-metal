@@ -44,6 +44,7 @@ public:
         BufferType buffer_type, const CoreCoord& logical_core) const;
     DeviceAddr get_base_allocator_addr(const HalMemType& mem_type) const;
     uint32_t get_alignment(BufferType buffer_type) const;
+    DeviceAddr get_l1_allocation_alignment() const;
     // This a proxy of get_config().worker_l1_size,
     // this helper function is made for reports.cpp in TTNN and act as a transient member function.
     size_t get_worker_l1_size() const;

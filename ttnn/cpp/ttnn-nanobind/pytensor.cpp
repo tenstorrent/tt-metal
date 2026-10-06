@@ -62,8 +62,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include "tt_metal/distributed/mesh_device_impl.hpp"
-#include "tt_metal/impl/allocator/allocator.hpp"
+#include <tt-metalium/allocator.hpp>
 
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
@@ -95,7 +94,8 @@ L1TensorGeometry l1_tensor_geometry(
     distributed::MeshDevice& mesh_device,
     const distributed::MeshCoordinate& device_coord,
     const TensorSpec& spec) {
-    TT_FATAL(mesh_device.impl().is_local(device_coord), "Tensor geometry requires a local device");
+    auto* device = mesh_device.get_device(device_coord);
+    TT_FATAL(device != nullptr, "Tensor geometry requires a local device");
     TT_FATAL(spec.memory_config().buffer_type() == BufferType::L1, "Tensor geometry requires L1 memory");
     auto args = spec.compute_buffer_sharding_args();
     TT_FATAL(is_sharded(args.buffer_layout()), "Tensor geometry requires a sharded TensorSpec");
@@ -114,7 +114,7 @@ L1TensorGeometry l1_tensor_geometry(
             shard.grid(), std::nullopt, shard.orientation() == ShardOrientation::ROW_MAJOR);
         pages_per_core = shard.num_pages();
     }
-    const auto& allocator = mesh_device.impl().get_device(device_coord)->allocator_impl();
+    const auto& allocator = device->allocator();
     const DeviceAddr page_alignment = allocator->get_alignment(BufferType::L1);
     const DeviceAddr allocation_alignment = allocator->get_l1_allocation_alignment();
     geometry.page_alignment = page_alignment;
