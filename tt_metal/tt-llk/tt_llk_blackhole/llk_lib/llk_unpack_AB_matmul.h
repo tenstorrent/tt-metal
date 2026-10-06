@@ -75,11 +75,17 @@ inline constexpr bool _llk_unpack_AB_matmul_narrow_format_(const std::uint32_t u
  * @param unpA_src_format: Unpacker input (L1) data format of in1, the operand unpacked into SrcA, as given to
  *                         @ref _llk_unpack_hw_configure_.
  * @param unpB_src_format: Unpacker input (L1) data format of in0, the operand unpacked into SrcB.
+ * @param fp32_dest_acc_en: Whether DEST holds 32-bit data; such a kernel keeps the GPR advance for every format (the
+ *                          narrow body's THCON wait slows its pack-bound blocks).
  */
 inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
-    const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t unpA_src_format, const std::uint32_t unpB_src_format)
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t unpA_src_format,
+    const std::uint32_t unpB_src_format,
+    const bool fp32_dest_acc_en)
 {
-    return _llk_unpack_AB_matmul_narrow_format_((ct_dim >= rt_dim) ? unpA_src_format : unpB_src_format);
+    return !fp32_dest_acc_en && _llk_unpack_AB_matmul_narrow_format_((ct_dim >= rt_dim) ? unpA_src_format : unpB_src_format);
 }
 
 /**
