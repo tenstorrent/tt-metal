@@ -36,6 +36,7 @@ from loguru import logger
 import ttnn
 
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+from ....pipelines.minimax_h3.weights_minimax_h3 import resolve_weights_dir
 from .common import MESH_4X8_RING_WH
 from .common_av import weights_dir
 
@@ -54,6 +55,15 @@ MESHES = [
     for param in [MESH_4X8_RING_WH]
     for shape, params in [param.values]
 ]
+
+
+def _weights_dir():
+    """The ref2va snapshot. Locally a missing snapshot skips; with MINIMAX_H3_REQUIRE_WEIGHTS=1 (the CI entry)
+    it raises WeightsNotFoundError instead, so a runner without the weights mount fails the gate rather than
+    turning it green by skipping."""
+    if os.environ.get("MINIMAX_H3_REQUIRE_WEIGHTS") == "1":
+        return resolve_weights_dir("transformer_ref")
+    return weights_dir("transformer_ref")
 
 
 def _dram_line(mesh_device: ttnn.MeshDevice, label: str) -> str:
@@ -79,7 +89,7 @@ def test_ref2va_warmup_fits_on_mock(mesh_device, monkeypatch):
     # Serving's constructor arguments: the default yuv420 output keeps the VAE decode warm in the walk.
     pipeline = MiniMaxH3Pipeline.create_pipeline(
         mesh_device=mesh_device,
-        weights_dir=weights_dir("transformer_ref"),
+        weights_dir=_weights_dir(),
         task="ref2va",
         warmup=False,
     )
