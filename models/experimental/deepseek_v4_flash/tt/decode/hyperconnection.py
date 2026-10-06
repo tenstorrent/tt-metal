@@ -21,24 +21,15 @@ import torch
 import ttnn
 
 from ..common import FULL_TILE, SINGLE_USER_TILE, DeepSeekV4Module, _profile, width_sharded_l1_config, with_tile_height
-from .decode_prefetch import (
-    DECODE_LAYOUTS,
-    HC_FN_GCB,
-    HC_FN_GCB_PAGES,
-    check_decode_layout,
-    ensure_named_gcb,
-    hc_fn_page_bytes,
-    hc_fn_ring_specs,
-)
+from .decode_prefetch import DECODE_LAYOUTS, check_decode_layout, ensure_q_a_gcb, q_a_page_bytes
 from ..layers import Linear, LinearDecode, _rms_norm_unweighted
 from ..weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _memo
 
 # Partial-K cut for the fused ``fn`` matmul, read off the layout registry rather than
 # repeated here: the GCB is sized from that entry before any layer exists, so a second
 # copy of the number is a buffer sized for a cut the layer does not build. At the model's
-# K = hc*D = 16384 it is a [256, 32] slab on 64 B cores, the receiver count every other
-# decode weight uses.
-_HC_FN_K_BLOCKS = DECODE_LAYOUTS[HC_FN_GCB]["k_blocks"]
+# K = hc*D = 16384 it is a [512, 32] slab on q_a's 32 B cores.
+_HC_FN_K_BLOCKS = DECODE_LAYOUTS["hc_fn"]["k_blocks"]
 # Cores the single-user fused program width-shards the collapse over (see
 # :meth:`DeepSeekV4HyperConnection.forward`).
 _HC_COLLAPSE_CORES = 8
@@ -79,9 +70,10 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         :class:`LinearDecode` (``K = hc*D``, ``N`` = the ``2*hc + hc*hc`` pre/post/comb
         parameters padded to one tile) that returns the three slices concatenated; ``base`` is
         sliced into the ``[1,1,1,hc]`` ``pre_b`` / ``post_b`` rows and the ``[1,1,1,hc*hc]``
-        ``comb_b`` row. ``use_prefetcher`` streams ``fn`` through :data:`HC_FN_GCB` -- which has
-        to be the caller's device-wide ``prefetch_buffers`` mapping, because one GCB per
-        hyper-connection overflows the DRISC senders' state zone at the third layer.
+        ``comb_b`` row. ``use_prefetcher`` streams ``fn`` through q_a's ring
+        (:data:`~.decode_prefetch.Q_A_GCB`) -- which has to come from the caller's device-wide
+        ``prefetch_buffers`` mapping, because one GCB per hyper-connection overflows the DRISC
+        senders' state zone at the third layer.
         """
         self.device = device
         self.hc = config.hc_mult
@@ -109,12 +101,12 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         # ``LinearDecode`` over ``_HC_FN_K_BLOCKS`` B cores, ``n_blocks=1`` reducing the
         # K-partials onto one output core.
         #
-        # Under the prefetcher this weight streams through ``HC_FN_GCB`` -- a second ring,
-        # because its 8-tile slab has no page in common with the shared group's 32 -- and
-        # every hyper-connection on the device shares that one ring. Attaching it to the
-        # caller's ``prefetch_buffers`` is what makes them share: a GCB costs ~176 B of the
-        # DRISC senders' 1 KB state zone, so one per hyper-connection overflows it at the
-        # third layer.
+        # Under the prefetcher this weight streams through q_a's 32-receiver ring, queued
+        # around the attention / MoE weights on it in consume order (see
+        # ``DeepSeekV4DecoderLayer.prefetch_weights``). Taking it from the caller's
+        # ``prefetch_buffers`` is what makes every hyper-connection share that ring: a GCB
+        # costs ~176 B of the DRISC senders' 1 KB state zone, so one per hyper-connection
+        # overflows it at the third layer.
         k = hc * self.hidden
         n = ((2 * hc + hc * hc + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
@@ -127,26 +119,24 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
             return w
 
         prefetch = {}
+        # The DRAM -> L1 path caches the weight folded by its K cut, so the cut is part of
+        # that cache name; the prefetcher path caches it unfolded.
+        cache_name = "fn.decode"
         if use_prefetcher:
-            layout = check_decode_layout(HC_FN_GCB, k, n)
+            check_decode_layout("hc_fn", k, n)
             if prefetch_buffers is None:
                 prefetch_buffers = {}
             prefetch = {
                 "use_prefetcher": True,
-                "global_cb": ensure_named_gcb(
-                    prefetch_buffers,
-                    HC_FN_GCB,
-                    device,
-                    hc_fn_ring_specs(),
-                    weight_dtype,
-                    num_pages=HC_FN_GCB_PAGES,
-                ),
-                "global_cb_page_bytes": hc_fn_page_bytes(weight_dtype),
+                "global_cb": ensure_q_a_gcb(prefetch_buffers, device, weight_dtype),
+                "global_cb_page_bytes": q_a_page_bytes(weight_dtype),
             }
+        else:
+            cache_name = f"fn.k{_HC_FN_K_BLOCKS}.decode"
         self.fn = LinearDecode(
             fn_weight,
             device,
-            cache.file("fn.decode"),
+            cache.file(cache_name),
             dtype=weight_dtype,
             K=k,
             N=n,
@@ -182,7 +172,7 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         """Stage the fused ``fn`` weight ``[K, N]`` = ``[hc*D, 32]`` ahead of the :meth:`forward`
         that uses it.
 
-        With the prefetcher this queues :data:`HC_FN_GCB`; without it, ``fetch_weights`` copies
+        With the prefetcher this queues on q_a's ring; without it, ``fetch_weights`` copies
         the weight into L1 here instead.
         """
         self.fn.fetch_weights()
