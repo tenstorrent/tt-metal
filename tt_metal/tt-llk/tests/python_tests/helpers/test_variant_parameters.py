@@ -1968,8 +1968,9 @@ class WELFORDS(TemplateParameter):
     """Compile-time schedule of the Quasar Welford test (sfpu_welfords_quasar_test.cpp).
 
     Every tile is folded into the running state in order; the last one covers only rows
-    [start_row, start_row + num_rows) when partial_last_tile is set. The tiles pass through
-    Dest in blocks of tiles_per_block (0 = one block), one Dest section each. With
+    [welfords_start_row, welfords_start_row + welfords_num_rows) when partial_last_tile is
+    set. The tiles pass through Dest in blocks of tiles_per_block (0 = one block), one Dest
+    section each. With
     save_restore the state is saved to tile state_dst (mean) / state_dst + 1 (M2) of the
     current block before global tile save_after_tiles, cleared, and restored. The finalize,
     in the last block, writes mean to final_dst and variance to final_dst + 1.
@@ -1977,8 +1978,8 @@ class WELFORDS(TemplateParameter):
 
     reciprocal_size: int = 0
     partial_last_tile: bool = False
-    start_row: int = 0
-    num_rows: int = 32
+    welfords_start_row: int = 0
+    welfords_num_rows: int = 32
     face_layout: bool = False
     final_grouped: bool = False
     final_group_id: int = 0
@@ -1997,8 +1998,8 @@ class WELFORDS(TemplateParameter):
         lines: list[str] = [
             f"constexpr std::size_t WELFORDS_RECIP_SIZE = {self.reciprocal_size};",
             f"constexpr bool WELFORDS_PARTIAL_LAST_TILE = {b(self.partial_last_tile)};",
-            f"constexpr std::uint32_t WELFORDS_START_ROW = {self.start_row};",
-            f"constexpr std::uint32_t WELFORDS_NUM_ROWS = {self.num_rows};",
+            f"constexpr std::uint32_t WELFORDS_START_ROW = {self.welfords_start_row};",
+            f"constexpr std::uint32_t WELFORDS_NUM_ROWS = {self.welfords_num_rows};",
             f"constexpr bool WELFORDS_FACE_LAYOUT = {b(self.face_layout)};",
             f"constexpr bool WELFORDS_FINAL_GROUPED = {b(self.final_grouped)};",
             f"constexpr std::uint32_t WELFORDS_FINAL_GROUP_ID = {self.final_group_id};",

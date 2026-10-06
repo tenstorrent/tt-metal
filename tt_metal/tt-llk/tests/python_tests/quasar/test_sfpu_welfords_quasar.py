@@ -273,8 +273,8 @@ def test_sfpu_welfords_quasar(formats, scenario_name):
             WELFORDS(
                 reciprocal_size=reciprocal_size,
                 partial_last_tile=scenario.partial_last_tile,
-                start_row=scenario.start_row,
-                num_rows=scenario.num_rows,
+                welfords_start_row=scenario.start_row,
+                welfords_num_rows=scenario.num_rows,
                 face_layout=scenario.face_layout,
                 final_grouped=scenario.final_grouped,
                 final_group_id=scenario.final_group_id,
