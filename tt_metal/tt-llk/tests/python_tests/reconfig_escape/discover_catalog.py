@@ -155,31 +155,52 @@ def _reset_card():
         raise RuntimeError(f"tt-smi -r failed (rc={proc.returncode}): {proc.stderr}")
 
 
-def capture_pristine(worktree, arch, test_file, test_id, port, timeout, out_path):
+def capture_pristine(worktree, arch, test_id, timeout, out_path):
+    """Captures the clean hardware state after a reset."""
     _reset_card()
-    cmd = [
-        "bash",
-        os.path.join(worktree, ".claude/scripts/run_test.sh"),
-        "run",
-        "--worktree",
-        worktree,
-        "--arch",
-        arch,
-        "--test",
-        test_file,
-        "--test-id",
-        test_id,
-        "--maxfail",
-        "1",
-        "--port",
-        str(port),
-        "--timeout",
-        str(timeout),
-    ]
-    env = {**os.environ, "LLK_CFG_SNAPSHOT": out_path}
-    subprocess.run(cmd, env=env, capture_output=True, text=True)
+    test_dir = os.path.join(worktree, "tests", "python_tests")
+    env = {**pytest_env(worktree), "CHIP_ARCH": arch, "LLK_CFG_SNAPSHOT": out_path}
+
+    cproc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            test_id,
+            "--compile-producer",
+            f"--timeout={timeout}",
+        ],
+        cwd=test_dir,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    if cproc.returncode != 0:
+        raise RuntimeError(
+            f"pristine capture: compile failed for {test_id} (rc={cproc.returncode}); "
+            f"stderr:\n{cproc.stderr[-4000:]}"
+        )
+
+    rproc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            test_id,
+            "--compile-consumer",
+            "--maxfail=1",
+            f"--timeout={timeout}",
+        ],
+        cwd=test_dir,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
     if not os.path.exists(out_path):
-        raise RuntimeError(f"pristine capture failed for {test_id}")
+        raise RuntimeError(
+            f"pristine capture failed for {test_id} (run rc={rproc.returncode}); "
+            f"stderr:\n{rproc.stderr[-4000:]}"
+        )
 
 
 def pytest_env(worktree):
@@ -422,13 +443,10 @@ def main():
 
     pristine_snap_path = os.path.join(args.out_dir, "pristine.snapshot.json")
     pristine_restore_path = os.path.join(args.out_dir, "pristine.restore.json")
-    probe_test_file = sampled[0].split("::", 1)[0]
     capture_pristine(
         args.worktree,
         args.arch,
-        probe_test_file,
         sampled[0],
-        5556,
         args.timeout,
         pristine_snap_path,
     )
