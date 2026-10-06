@@ -3,9 +3,10 @@
 
 """toy_scaled_add: out = a + alpha * (b * gamma), gamma an optional row broadcast down the rows.
 
-One ttnn.generic_op dispatch per call. The program (circular buffers, kernels, work split) is built in
-toy_scaled_add_program_descriptor.py; this file owns the support contract (INPUT_TAGGERS / SUPPORTED /
-EXCLUSIONS / validate()) and the public entry point.
+The operation is the native C++ ttnn.toy_scaled_add (ttnn/cpp/ttnn/operations/toy_scaled_add), which checks this
+support contract and refuses inputs outside it with the same exceptions. This file keeps the contract tables
+(INPUT_TAGGERS / SUPPORTED / EXCLUSIONS / PROPERTIES), validate() for checking the contract without dispatching,
+and the public entry point. The generic_op version stays in toy_scaled_add_generic.py, on the same kernels.
 
     a, b    tiled with 32 x 32 tiles, same padded shape, bfloat16 or float32; both interleaved, or both
             height-sharded on L1 with one shard spec (shard width = the full row, whole tiles high)
@@ -23,17 +24,11 @@ ValueError.
 from __future__ import annotations
 
 import math
-from typing import Optional
-
 import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .toy_scaled_add_program_descriptor import (
-    TILE,
-    create_height_sharded_descriptor,
-    create_interleaved_descriptor,
-)
+from .toy_scaled_add_program_descriptor import TILE
 
 
 # ---------------------------------------------------------------------------
@@ -174,34 +169,7 @@ def validate(a, b, *, gamma=None, dtype=None, memory_config=None, output_tensor=
 
 
 # ---------------------------------------------------------------------------
-# Public entry point
+# Public entry point: the registered C++ operation
 # ---------------------------------------------------------------------------
 
-
-def toy_scaled_add(
-    a: ttnn.Tensor,
-    b: ttnn.Tensor,
-    *,
-    alpha: float = 1.0,
-    gamma: Optional[ttnn.Tensor] = None,
-    dtype: Optional[ttnn.DataType] = None,
-    memory_config: Optional[ttnn.MemoryConfig] = None,
-    compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None,
-    output_tensor: Optional[ttnn.Tensor] = None,
-) -> ttnn.Tensor:
-    dtype, output_memory_config = validate(
-        a, b, gamma=gamma, dtype=dtype, memory_config=memory_config, output_tensor=output_tensor
-    )
-    if output_tensor is None:
-        output_tensor = ttnn.allocate_tensor_on_device(
-            a.shape, dtype, ttnn.TILE_LAYOUT, a.device(), output_memory_config
-        )
-
-    create = (
-        create_height_sharded_descriptor
-        if output_memory_config.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        else create_interleaved_descriptor
-    )
-    descriptor = create(a, b, gamma, output_tensor, alpha, compute_kernel_config)
-    io_tensors = [a, b] + ([gamma] if gamma is not None else []) + [output_tensor]
-    return ttnn.generic_op(io_tensors, descriptor)
+toy_scaled_add = ttnn.toy_scaled_add
