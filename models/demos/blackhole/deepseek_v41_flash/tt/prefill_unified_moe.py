@@ -94,7 +94,9 @@ class UnifiedMoEShared:
             os.environ.get("DSV41_UNI_LINKS", "2")
         )  # fabric links of dispatch / combine / offset_cumsum (2 available per row hop)
         self.workers = int(os.environ.get("DSV41_UNI_WORKERS", "2"))  # worker cores per sender of the dispatch op
-        self.topology = ttnn.Topology.Linear
+        self.topology = (
+            ttnn.Topology.Ring if os.environ.get("DSV41_UNI_TOPO", "linear") == "ring" else ttnn.Topology.Linear
+        )  # dispatch / combine over the 4 rows (ring: wrap link of the column)
         self.l1_small = (
             os.environ.get("DSV41_UNI_L1SMALL", "1") == "1"
         )  # global semaphores of the CCL ops in L1_SMALL (device opened with l1_small_size > 0)
