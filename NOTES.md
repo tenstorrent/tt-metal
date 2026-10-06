@@ -40,3 +40,10 @@ Next (one run):
 - Started with `ttp detach t158-driver` (run dir state/runs/654).
 Next: on DRIVER.done "0 ...": stage table from data/g15/out/run.log, ltx_eval vs ref_dv145 seed 0 and vs t138 gen#1,
 still frame, write state/ready/g15blx02.READY. On 9: log the drop (broker_slice/drop_evidence), rerun once.
+
+## Standard wake 2026-10-06 (run 656)
+- Capture job 397 rc 0 (20:36-20:40 UTC, no drops); offline prewarm built 3653 targets; driver then stopped rc 14 (~/fasth3 at 100 GiB).
+- Freed ~/fasth3/tt-metal/.cpmcache (3 GB, project-created 09-30, re-downloadable). ~/fasth3 now 96 GiB.
+- Old marker moved to data/g15/driver/DRIVER.done.rc14. Driver restarted: `ttp detach t158-driver2` (run dir state/runs/656);
+  it reruns the (cached) prewarm, checks disk, then submits the warm e2e job (job id -> data/g15/driver/job_id_run).
+Next: same as run 654's "Next" (stage table, ltx_eval vs ref_dv145 seed 0, still frame, READY marker).
