@@ -194,7 +194,7 @@ card:
     | default canvas / frames / steps | 1344x768, 73 frames (3.0 s), 4 | 1344x768, 124 frames (5.2 s), 4 |
     | warm end-to-end, text-to-video+audio | 82.6-84.9 s | 76.9-77.7 s |
     | warm end-to-end, first-frame-conditioned | 91.2 s (136.8 s on a cold prompt cache) | 81.1 s |
-    | boot to "ready to generate" | 200 s | 165 s |
+    | boot to "ready to generate" | 210 s | 160 s |
     | peak device DRAM | 22.24 GiB | 21.65 GiB per chip |
     | CLIP score, 5 prompts | 0.329 mean | 0.342 mean |
     | first-frame fidelity, fl2va (PCC / PSNR vs the keyframe) | 0.9965 / 33.8 dB | 0.9955 / 34.0 dB |
@@ -208,9 +208,11 @@ card:
   limitations: |
     - **One request at a time.** There is no batching; `H3_MAX_QUEUE` (default 4) bounds the queue
       and a fuller one returns 429.
-    - **First boot is long.** The boot figures above are for a warm converted-weight cache. A first
-      boot also converts the weights into the mounted cache, which is substantially slower; that
-      cost has not been measured through the container and is not quoted here.
+    - **First boot is long.** The boot figures above are repeat boots on a host that has already
+      served this image once. The first boot after a pull also compiles the kernels for the served
+      shape and reads the converted weights off disk: 451 s on `p150`, 320 s on `p300x2`, measured
+      through this package. A boot that has to CONVERT the weights into an empty mounted cache is
+      slower still; that cost has not been measured through the container and is not quoted here.
     - **The weights are a ~144 GB download** on first pull, and the Turbo adapter is fetched from a
       second repo at boot — so the first boot needs network access even with the weights in place.
     - **Reference-conditioned generation (ref2va) is not included.**
@@ -230,7 +232,7 @@ card:
     and the serving code under `code/` are Apache-2.0.
   license:
     id: other
-    name: MiniMax Model License Agreement
+    name: minimax-model-license-agreement
     link: https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE
   pipeline_tag: image-text-to-video
   base_model: [MiniMaxAI/MiniMax-H3]
