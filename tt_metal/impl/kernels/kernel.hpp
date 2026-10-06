@@ -759,6 +759,8 @@ public:
 
     bool get_trisc2_rvv_enabled() const override { return this->config_.enable_trisc2_rvv; }
 
+    bool get_sfpu_replay_optimization_disabled() const override;
+
 private:
     const ComputeConfig config_;
 
