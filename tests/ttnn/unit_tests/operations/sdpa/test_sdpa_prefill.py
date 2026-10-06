@@ -817,3 +817,88 @@ def test_sdpa_output_concat_heads(device, b, nh, s, d, pad_rows):
     assert out_torch.shape == ref_torch.shape == (b, s, dim)
     n_diff = int((out_torch[:, :valid] != ref_torch[:, :valid]).sum())
     assert torch.equal(out_torch[:, :valid], ref_torch[:, :valid]), f"{n_diff} of the valid elements differ"
+
+
+# --- Per-phase matmul fidelity: SDPAProgramConfig.qk_math_fidelity / pv_math_fidelity on the streaming kernel ---
+PHASE_FIDELITY_SHAPE = (1, 8, 1024, 128)  # b, nh, s, d
+PHASE_FIDELITY_CHUNKS = (256, 512)  # q_chunk_size, k_chunk_size
+
+
+def phase_fidelity_inputs():
+    """bf16-rounded fp32 q, k, v so the torch reference and the device see the same values."""
+    torch.manual_seed(0)
+    return tuple(torch.randn(PHASE_FIDELITY_SHAPE).bfloat16().float() for _ in range(3))
+
+
+def phase_fidelity_device_tensors(device, q, k, v):
+    return tuple(ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for t in (q, k, v))
+
+
+def phase_fidelity_program_config(device, **fidelity):
+    q_chunk_size, k_chunk_size = PHASE_FIDELITY_CHUNKS
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+        **fidelity,
+    )
+
+
+def run_phase_fidelity_sdpa(device, tensors, program_config):
+    """HiFi2 compute config on the streaming path, non-causal like the torch reference; fp32 host copy of the output."""
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
+    )
+    tq, tk, tv = tensors
+    out = ttnn.transformer.scaled_dot_product_attention(
+        tq, tk, tv, is_causal=False, program_config=program_config, compute_kernel_config=compute_kernel_config
+    )
+    return ttnn.to_torch(out).float()
+
+
+@pytest.mark.parametrize(
+    "qk_fidelity, pv_fidelity, min_pcc",
+    [(None, None, 0.999), (None, ttnn.MathFidelity.LoFi, 0.9994), (ttnn.MathFidelity.LoFi, None, 0.9990)],
+    ids=["compute-config", "lofi-pv", "lofi-qk"],
+)
+def test_sdpa_per_phase_math_fidelity(device, qk_fidelity, pv_fidelity, min_pcc):
+    """One phase at LoFi overrides the HiFi2 compute config for that phase only; None keeps the config's fidelity."""
+    q, k, v = phase_fidelity_inputs()
+    ref = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+    program_config = phase_fidelity_program_config(device, qk_math_fidelity=qk_fidelity, pv_math_fidelity=pv_fidelity)
+    out = run_phase_fidelity_sdpa(device, phase_fidelity_device_tensors(device, q, k, v), program_config)
+    assert torch.isfinite(out).all(), "SDPA returned nonfinite values"
+    passing, msg = comp_pcc(ref, out, min_pcc)
+    assert passing, msg
+
+
+def test_sdpa_per_phase_math_fidelity_program_cache(device):
+    """Each distinct phase override compiles its own program; repeating one hits the cache."""
+    device.enable_program_cache()
+    tensors = phase_fidelity_device_tensors(device, *phase_fidelity_inputs())
+    configs = [
+        phase_fidelity_program_config(device),
+        phase_fidelity_program_config(device, pv_math_fidelity=ttnn.MathFidelity.LoFi),
+        phase_fidelity_program_config(device, qk_math_fidelity=ttnn.MathFidelity.LoFi),
+    ]
+    entries = device.num_program_cache_entries()
+    for program_config in configs:
+        run_phase_fidelity_sdpa(device, tensors, program_config)
+        entries += 1
+        assert (
+            device.num_program_cache_entries() == entries
+        ), f"{program_config} did not add exactly one program cache entry"
+    for program_config in configs:
+        run_phase_fidelity_sdpa(device, tensors, program_config)
+    assert device.num_program_cache_entries() == entries, "Repeated configs must hit the program cache"
+
+
+def test_sdpa_rejects_two_phase_fidelities(device, expect_error):
+    """At most one phase may be overridden; the compute kernel config changes both."""
+    tensors = phase_fidelity_device_tensors(device, *phase_fidelity_inputs())
+    program_config = phase_fidelity_program_config(
+        device, qk_math_fidelity=ttnn.MathFidelity.LoFi, pv_math_fidelity=ttnn.MathFidelity.LoFi
+    )
+    with expect_error(RuntimeError, "set at most one of qk_math_fidelity and pv_math_fidelity"):
+        run_phase_fidelity_sdpa(device, tensors, program_config)

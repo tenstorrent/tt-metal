@@ -58,4 +58,48 @@ int compute_sdpa_ideal_cycles(
         batch_size, num_heads_q, valid_pairs, DH, DV, math_fidelity, num_cores);
 }
 
+int compute_sdpa_ideal_cycles_for_valid_pairs(
+    uint32_t batch_size,
+    uint32_t num_heads_q,
+    double valid_pairs,
+    uint32_t DH,
+    uint32_t DV,
+    tt::tt_metal::MathFidelity qk_math_fidelity,
+    tt::tt_metal::MathFidelity pv_math_fidelity,
+    int num_cores) {
+    if (qk_math_fidelity == pv_math_fidelity) {
+        return compute_sdpa_ideal_cycles_for_valid_pairs(
+            batch_size, num_heads_q, valid_pairs, DH, DV, qk_math_fidelity, num_cores);
+    }
+    if (valid_pairs <= 0.0 || num_cores <= 0) {
+        return 0;
+    }
+    using tt::tt_metal::operation::OpPerformanceModel;
+    const double pairs = valid_pairs * static_cast<double>(num_heads_q) * static_cast<double>(batch_size);
+    const double weighted_flops =
+        kFlopsPerFma * pairs *
+        (static_cast<double>(DH) * static_cast<double>(OpPerformanceModel::fidelity_multiplier(qk_math_fidelity)) +
+         static_cast<double>(DV) * static_cast<double>(OpPerformanceModel::fidelity_multiplier(pv_math_fidelity)));
+    return static_cast<int>(std::ceil(weighted_flops / (static_cast<double>(num_cores) * kTensixMulAddsPerCycleLofi)));
+}
+
+int compute_sdpa_ideal_cycles(
+    uint32_t batch_size,
+    uint32_t num_heads_q,
+    uint32_t Sq,
+    uint32_t Sk,
+    uint32_t DH,
+    uint32_t DV,
+    bool is_causal,
+    tt::tt_metal::MathFidelity qk_math_fidelity,
+    tt::tt_metal::MathFidelity pv_math_fidelity,
+    int num_cores) {
+    double valid_pairs = static_cast<double>(Sq) * static_cast<double>(Sk);
+    if (is_causal) {
+        valid_pairs /= 2.0;
+    }
+    return compute_sdpa_ideal_cycles_for_valid_pairs(
+        batch_size, num_heads_q, valid_pairs, DH, DV, qk_math_fidelity, pv_math_fidelity, num_cores);
+}
+
 }  // namespace ttnn::operations::transformer::sdpa

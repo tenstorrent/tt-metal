@@ -72,7 +72,8 @@ int compute_chunked_causal_sdpa_ideal_cycles(
     uint32_t ring_size,
     uint32_t DH,
     uint32_t DV,
-    tt::tt_metal::MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity qk_math_fidelity,
+    tt::tt_metal::MathFidelity pv_math_fidelity,
     int num_cores) {
     if (ring_size == 0 || num_cores <= 0 || q_global == 0) {
         return 0;
@@ -82,7 +83,7 @@ int compute_chunked_causal_sdpa_ideal_cycles(
     const double prefix_k = static_cast<double>(prefix_k_global);
     const double valid_pairs_per_device = (q * prefix_k + (q * (q + 1.0) / 2.0)) / static_cast<double>(ring_size);
     return operations::transformer::sdpa::compute_sdpa_ideal_cycles_for_valid_pairs(
-        batch_size, num_heads_q, valid_pairs_per_device, DH, DV, math_fidelity, num_cores);
+        batch_size, num_heads_q, valid_pairs_per_device, DH, DV, qk_math_fidelity, pv_math_fidelity, num_cores);
 }
 
 int compute_sliding_window_sdpa_ideal_cycles(
@@ -94,7 +95,8 @@ int compute_sliding_window_sdpa_ideal_cycles(
     uint32_t window_size,
     uint32_t DH,
     uint32_t DV,
-    tt::tt_metal::MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity qk_math_fidelity,
+    tt::tt_metal::MathFidelity pv_math_fidelity,
     int num_cores) {
     if (ring_size == 0 || num_cores <= 0 || q_rows_per_device == 0 || window_size == 0) {
         return 0;
@@ -111,7 +113,7 @@ int compute_sliding_window_sdpa_ideal_cycles(
         valid_pair_prefix(static_cast<uint64_t>(q_global_start) + global_q_rows) - valid_pair_prefix(q_global_start);
     const double valid_pairs_per_device = valid_pairs_global / static_cast<double>(ring_size);
     return operations::transformer::sdpa::compute_sdpa_ideal_cycles_for_valid_pairs(
-        batch_size, num_heads_q, valid_pairs_per_device, DH, DV, math_fidelity, num_cores);
+        batch_size, num_heads_q, valid_pairs_per_device, DH, DV, qk_math_fidelity, pv_math_fidelity, num_cores);
 }
 
 void validate_ring_joint_all_gather_on_program_cache_miss(
@@ -1201,10 +1203,16 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
 
     CoreCoord grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                      : output_tensor.device()->compute_with_storage_grid_size();
-    // QK^T and softmax @ V dominate the modeled cycles, so use their fidelity when it is overridden.
-    const auto matmul_fidelity =
-        args.program_config.has_value() ? args.program_config->matmul_math_fidelity : std::nullopt;
-    tt::tt_metal::MathFidelity fidelity = matmul_fidelity.value_or(ttnn::get_math_fidelity(args.compute_kernel_config));
+    // QK^T and softmax @ V dominate the modeled cycles: each phase at its own knob, else matmul_math_fidelity, else
+    // the compute kernel config's.
+    const tt::tt_metal::MathFidelity compute_fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
+    tt::tt_metal::MathFidelity qk_fidelity = compute_fidelity;
+    tt::tt_metal::MathFidelity pv_fidelity = compute_fidelity;
+    if (args.program_config.has_value()) {
+        const auto& pc = *args.program_config;
+        qk_fidelity = pc.qk_math_fidelity.value_or(pc.matmul_math_fidelity.value_or(compute_fidelity));
+        pv_fidelity = pc.pv_math_fidelity.value_or(pc.matmul_math_fidelity.value_or(compute_fidelity));
+    }
 
     const uint32_t B = q_shape[0];
     const uint32_t NQH = q_shape[1];
@@ -1231,7 +1239,8 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
             args.sliding_window_size.value(),
             DH,
             DV,
-            fidelity,
+            qk_fidelity,
+            pv_fidelity,
             active_cores);
         return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, ideal_cycles);
     }
@@ -1242,7 +1251,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
         const uint32_t new_q_global = logical_n - prefix_k;
         const uint32_t ring_size = static_cast<uint32_t>(args.ring_size);
         int ideal_cycles = compute_chunked_causal_sdpa_ideal_cycles(
-            B, NQH, new_q_global, prefix_k, ring_size, DH, DV, fidelity, grid.x * grid.y);
+            B, NQH, new_q_global, prefix_k, ring_size, DH, DV, qk_fidelity, pv_fidelity, grid.x * grid.y);
         return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, ideal_cycles);
     }
 
@@ -1253,7 +1262,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
 
     // Single attention pass over concatenated dimensions
     int ideal_cycles = operations::transformer::sdpa::compute_sdpa_ideal_cycles(
-        B, NQH, cat_Sq, cat_Sk, DH, DV, args.is_causal, fidelity, grid.x * grid.y);
+        B, NQH, cat_Sq, cat_Sk, DH, DV, args.is_causal, qk_fidelity, pv_fidelity, grid.x * grid.y);
 
     return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, ideal_cycles);
 }

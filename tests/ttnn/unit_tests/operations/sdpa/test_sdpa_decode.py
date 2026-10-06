@@ -517,3 +517,15 @@ def test_sdpa_decode_broadcast_mask_batch(device, b, nh, nkv, s, d, dtype, grid_
         grid_size=grid_size,
         mask_dtype=mask_dtype,
     )
+
+
+def test_sdpa_decode_rejects_phase_fidelity(device, expect_error):
+    """Decode runs at the compute kernel config's fidelity, so the prefill kernel's per-phase knobs are refused."""
+    q = torch.randn(1, 1, 8, 64)
+    k = torch.randn(1, 2, 64, 64)
+    tq, tk, tv = (ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for t in (q, k, k))
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=(2, 2), q_chunk_size=32, k_chunk_size=32, pv_math_fidelity=ttnn.MathFidelity.LoFi
+    )
+    with expect_error(RuntimeError, "does not support qk_math_fidelity / pv_math_fidelity"):
+        ttnn.transformer.scaled_dot_product_attention_decode(tq, tk, tv, is_causal=False, program_config=program_config)

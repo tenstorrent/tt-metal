@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sdpa_decode_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_phase_fidelity.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -20,6 +21,8 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    ttnn::operations::transformer::sdpa::reject_phase_fidelity(
+        operation_attributes.program_config, "scaled_dot_product_attention_decode");
     bool use_mla = operation_attributes.use_mla.value_or(false);
     const uint32_t spec_T = operation_attributes.spec_multi_pos_tiles;
     const bool spec_multi_pos = spec_T > 0;

@@ -46,4 +46,28 @@ int compute_sdpa_ideal_cycles_for_valid_pairs(
     tt::tt_metal::MathFidelity math_fidelity,
     int num_cores);
 
+// The same two models with the QK^T matmul (DH) and the softmax @ V matmul (DV) at their own fidelities
+// (SDPAProgramConfig::qk_math_fidelity / pv_math_fidelity).
+int compute_sdpa_ideal_cycles(
+    uint32_t batch_size,
+    uint32_t num_heads_q,
+    uint32_t Sq,
+    uint32_t Sk,
+    uint32_t DH,
+    uint32_t DV,
+    bool is_causal,
+    tt::tt_metal::MathFidelity qk_math_fidelity,
+    tt::tt_metal::MathFidelity pv_math_fidelity,
+    int num_cores);
+
+int compute_sdpa_ideal_cycles_for_valid_pairs(
+    uint32_t batch_size,
+    uint32_t num_heads_q,
+    double valid_pairs,
+    uint32_t DH,
+    uint32_t DV,
+    tt::tt_metal::MathFidelity qk_math_fidelity,
+    tt::tt_metal::MathFidelity pv_math_fidelity,
+    int num_cores);
+
 }  // namespace ttnn::operations::transformer::sdpa

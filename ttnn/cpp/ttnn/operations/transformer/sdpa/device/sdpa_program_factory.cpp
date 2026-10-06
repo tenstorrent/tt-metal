@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_phase_fidelity.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_interleaved_cb_ids.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
@@ -478,6 +479,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
     const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en);
+    ttnn::operations::transformer::sdpa::validate_phase_fidelity(
+        program_config, use_streaming_compute, "scaled_dot_product_attention");
 
     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
     // A user-provided dense mask on the streaming path takes its own per-chunk apply
@@ -728,6 +731,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         k_partial_col,                                // arg 28: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 29: unified zigzag remap
         static_cast<uint32_t>(is_windowed),           // arg 30: K-range narrowing (bounds from the ctrl CB)
+        // Per-phase matmul fidelity (compute_streaming.hpp); the CB block follows.
+        ttnn::operations::transformer::sdpa::matmul_fidelity_ct_arg(
+            program_config.has_value() ? program_config->qk_math_fidelity : std::nullopt,
+            program_config.has_value() ? program_config->pv_math_fidelity : std::nullopt,
+            math_fidelity),
     };
 
     std::map<std::string, std::string> defines_map;

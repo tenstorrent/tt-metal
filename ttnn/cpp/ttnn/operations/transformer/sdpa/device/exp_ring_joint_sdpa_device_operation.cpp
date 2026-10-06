@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_phase_fidelity.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -24,6 +25,8 @@ namespace ttnn::prim {
 
 void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args) {
+    ttnn::operations::transformer::sdpa::reject_phase_fidelity(
+        args.program_config, "exp_ring_joint_scaled_dot_product_attention");
     const auto& input_tensor_q = tensor_args.input_q;
 
     const bool has_joint = tensor_args.joint_q.has_value();

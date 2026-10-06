@@ -32,50 +32,58 @@ constexpr bool reduce_trigger_supported = false;
 constexpr bool reduce_trigger_supported = true;
 #endif
 
-// SDPA_MATMUL_FIDELITY overrides the fidelity of the QK^T and softmax @ V matmuls. A LoFi replay image is
-// specific to the matmul's shape, so each PV setup re-records it instead of reusing the last one whenever a LoFi
-// image can be live: a LoFi override, or a LoFi compute config, whose normalize_row records a LoFi image between
-// two PV setups. HiFi levels all record the same image, so HiFi over HiFi can reuse it.
-#ifdef SDPA_MATMUL_FIDELITY
-constexpr bool sdpa_matmul_fidelity_set = true;
-constexpr MathFidelity sdpa_matmul_fidelity = static_cast<MathFidelity>(SDPA_MATMUL_FIDELITY);
-#else
-constexpr bool sdpa_matmul_fidelity_set = false;
-constexpr MathFidelity sdpa_matmul_fidelity = MathFidelity::LoFi;
-#endif
-// The compute config's fidelity as seen by every TRISC (MATH_FIDELITY exists only on math and pack).
-#ifdef SDPA_COMPUTE_LOFI
-constexpr bool sdpa_compute_lofi = true;
-#else
-constexpr bool sdpa_compute_lofi = false;
-#endif
+// Per-phase matmul fidelity of the QK^T and softmax @ V matmuls, packed into one compute kernel compile-time arg by the
+// program factories (sdpa_phase_fidelity.hpp): byte 0 the QK^T phase and byte 1 the PV phase, each MathFidelity + 1
+// when the phase differs from the compute kernel config's fidelity and 0 when it runs at that fidelity through the
+// ordinary helpers; bit 16 when the compute kernel config is LoFi, which MATH_FIDELITY cannot tell the unpack TRISC.
+// A LoFi replay image is specific to the matmul's shape, so each PV setup re-records it instead of reusing the last
+// one whenever a LoFi image can be live: a LoFi phase, or a LoFi compute config, whose normalize_row records a LoFi
+// image between two PV setups. HiFi levels all record the same image, so HiFi over HiFi can reuse it.
+constexpr uint32_t kSdpaMatmulFidelityDefault = 0;
+constexpr uint32_t kSdpaPhaseFidelityUnset = 0;
+constexpr uint32_t sdpa_phase_fidelity_code(MathFidelity fidelity) { return static_cast<uint32_t>(fidelity) + 1u; }
+constexpr uint32_t sdpa_qk_fidelity_code(uint32_t matmul_fidelity) { return matmul_fidelity & 0xFFu; }
+constexpr uint32_t sdpa_pv_fidelity_code(uint32_t matmul_fidelity) { return (matmul_fidelity >> 8) & 0xFFu; }
+constexpr bool sdpa_compute_is_lofi(uint32_t matmul_fidelity) { return ((matmul_fidelity >> 16) & 1u) != 0; }
+constexpr MathFidelity sdpa_phase_fidelity(uint32_t phase_code) { return static_cast<MathFidelity>(phase_code - 1u); }
 
-ALWI void sdpa_mm_init(uint32_t in0_cb, uint32_t in1_cb, bool transpose, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
-    if constexpr (sdpa_matmul_fidelity_set) {
-        mm_no_mop_init_short_fidelity<sdpa_matmul_fidelity>(in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
+template <uint32_t phase_code>
+ALWI void sdpa_mm_init(
+    uint32_t in0_cb, uint32_t in1_cb, bool transpose, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
+    if constexpr (phase_code != kSdpaPhaseFidelityUnset) {
+        mm_no_mop_init_short_fidelity<sdpa_phase_fidelity(phase_code)>(
+            in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
     } else {
         mm_no_mop_init_short(in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
     }
 }
 
+template <uint32_t phase_code>
 ALWI void sdpa_mm_reinit(
     uint32_t in0_cb, uint32_t in1_cb, bool transpose, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
-    if constexpr (sdpa_matmul_fidelity_set) {
-        mm_no_mop_reinit_short_fidelity<sdpa_matmul_fidelity>(in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
+    if constexpr (phase_code != kSdpaPhaseFidelityUnset) {
+        mm_no_mop_reinit_short_fidelity<sdpa_phase_fidelity(phase_code)>(
+            in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
     } else {
         mm_no_mop_reinit_short(in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
     }
 }
 
+template <uint32_t matmul_fidelity>
 ALWI void sdpa_pv_mm_setup(
     uint32_t in0_cb, uint32_t in1_cb, bool transpose, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
-    if constexpr ((sdpa_matmul_fidelity_set && sdpa_matmul_fidelity == MathFidelity::LoFi) || sdpa_compute_lofi) {
-        sdpa_mm_init(in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
+    constexpr uint32_t lofi = sdpa_phase_fidelity_code(MathFidelity::LoFi);
+    constexpr bool lofi_image_possible = sdpa_qk_fidelity_code(matmul_fidelity) == lofi ||
+                                         sdpa_pv_fidelity_code(matmul_fidelity) == lofi ||
+                                         sdpa_compute_is_lofi(matmul_fidelity);
+    if constexpr (lofi_image_possible) {
+        sdpa_mm_init<sdpa_pv_fidelity_code(matmul_fidelity)>(in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
     } else {
-        sdpa_mm_reinit(in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
+        sdpa_mm_reinit<sdpa_pv_fidelity_code(matmul_fidelity)>(in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
     }
 }
 
+template <uint32_t phase_code>
 ALWI void sdpa_matmul_block_no_mop(
     uint32_t in0_cb,
     uint32_t in1_cb,
@@ -86,8 +94,8 @@ ALWI void sdpa_matmul_block_no_mop(
     uint32_t ct_dim,
     uint32_t rt_dim,
     uint32_t kt_dim) {
-    if constexpr (sdpa_matmul_fidelity_set) {
-        matmul_block_no_mop_fidelity<sdpa_matmul_fidelity>(
+    if constexpr (phase_code != kSdpaPhaseFidelityUnset) {
+        matmul_block_no_mop_fidelity<sdpa_phase_fidelity(phase_code)>(
             in0_cb, in1_cb, in0_index, in1_index, idst, transpose, ct_dim, rt_dim, kt_dim);
     } else {
         matmul_block_no_mop(in0_cb, in1_cb, in0_index, in1_index, idst, transpose, ct_dim, rt_dim, kt_dim);
@@ -397,7 +405,7 @@ ALWI void pack_contiguous_rows(
  * noinline on Wormhole: keeps sdpa_inner_loop_step's frame off the TR0 stack to stay within budget
  * for the ring cases (it would otherwise overflow). WH-only to avoid the call overhead elsewhere.
  */
-template <bool transpose, uint32_t in1_stride, uint32_t out_num_cols>
+template <bool transpose, uint32_t in1_stride, uint32_t out_num_cols, uint32_t phase_code = kSdpaPhaseFidelityUnset>
 #if defined(ARCH_WORMHOLE)
 __attribute__((noinline))
 #endif
@@ -419,7 +427,7 @@ void blocked_matmul_and_pack(
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
     for (uint32_t inner = 0; inner < inner_dim; ++inner) {
-        sdpa_matmul_block_no_mop(
+        sdpa_matmul_block_no_mop<phase_code>(
             in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, matmul_stride);
         in0_index++;
         in1_index += in1_stride;
@@ -446,7 +454,7 @@ void blocked_matmul_and_pack(
  * tiles starting at inner_start. Each batch is packed out in one go (the caller enables L1
  * accumulation when it splits the inner dimension across calls).
  */
-template <uint32_t vDHt, uint32_t dst_size, uint32_t subblock_h>
+template <uint32_t vDHt, uint32_t dst_size, uint32_t subblock_h, uint32_t matmul_fidelity = kSdpaMatmulFidelityDefault>
 void inplace_v_matmul_pack_batched(
     uint32_t in0_cb,
     uint32_t in1_cb,
@@ -465,14 +473,14 @@ void inplace_v_matmul_pack_batched(
     // consecutive columns are KT_stride tiles apart: stretch the srcA per-tile address step to a
     // K^T row for the duration of the V matmul, then restore it.
     constexpr uint32_t cols_per_batch = vDHt < dst_size / subblock_h ? vDHt : dst_size / subblock_h;
-    sdpa_pv_mm_setup(in0_cb, in1_cb, false, cols_per_batch, subblock_h, KT_stride);
+    sdpa_pv_mm_setup<matmul_fidelity>(in0_cb, in1_cb, false, cols_per_batch, subblock_h, KT_stride);
     matmul_set_in1_column_stride(in1_cb, KT_stride);
     configure_row_pack_width(out_cb, cols_per_batch);
     for (uint32_t vs0 = 0; vs0 < vDHt; vs0 += cols_per_batch) {
         const uint32_t cols = vDHt - vs0 < cols_per_batch ? vDHt - vs0 : cols_per_batch;
         if constexpr (vDHt % cols_per_batch != 0) {
             if (cols != cols_per_batch) {
-                sdpa_pv_mm_setup(in0_cb, in1_cb, false, cols, subblock_h, KT_stride);
+                sdpa_pv_mm_setup<matmul_fidelity>(in0_cb, in1_cb, false, cols, subblock_h, KT_stride);
                 matmul_set_in1_column_stride(in1_cb, KT_stride);
                 configure_row_pack_width(out_cb, cols);
             }
@@ -481,7 +489,8 @@ void inplace_v_matmul_pack_batched(
         uint32_t in0_index = in0_index_start + inner_start;
         uint32_t in1_index = vs0 * KT_stride + inner_start;
         for (uint32_t inner = 0; inner < inner_dim; ++inner) {
-            sdpa_matmul_block_no_mop(in0_cb, in1_cb, in0_index, in1_index, 0, false, cols, subblock_h, KT_stride);
+            sdpa_matmul_block_no_mop<sdpa_pv_fidelity_code(matmul_fidelity)>(
+                in0_cb, in1_cb, in0_index, in1_index, 0, false, cols, subblock_h, KT_stride);
             in0_index++;
             in1_index++;
         }
@@ -1364,7 +1373,8 @@ template <
     bool has_q_base_tiles = false,
     // Circular sliding KV cache: mask K origins come from the work plan, not from
     // inverting local cache rows (ambiguous once chunk groups alias one local slab).
-    bool circular_kv_cache = false>
+    bool circular_kv_cache = false,
+    uint32_t matmul_fidelity = kSdpaMatmulFidelityDefault>
 static void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
@@ -1430,7 +1440,8 @@ static void sdpa_inner_loop_step(
 
         sdpa_maybe_pack_reconfig_data_format<cb_normalized_out, cb_qkt_im>();
         sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_identity_scale_in, cb_q_in>();
-        sdpa_mm_init(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
+        sdpa_mm_init<sdpa_qk_fidelity_code(matmul_fidelity)>(
+            cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
         // Configure pack once before the kt loop for cb_qkt_im. Both sub_exp
         // and blocked_matmul_and_pack skip their internal configure (same cb+width).
         // sub_exp's configure_single_tile_pack(reduce_cb) clobbers the global to 1,
@@ -1486,11 +1497,12 @@ static void sdpa_inner_loop_step(
                     /*skip_pack_configure=*/true);
                 sdpa_maybe_pack_reconfig_data_format<cb_recip_scratch, cb_qkt_im>();
                 sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in>();
-                sdpa_mm_reinit(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
+                sdpa_mm_reinit<sdpa_qk_fidelity_code(matmul_fidelity)>(
+                    cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
             }
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
-                blocked_matmul_and_pack<true, KT_stride, KT_stride>(
+                blocked_matmul_and_pack<true, KT_stride, KT_stride, sdpa_qk_fidelity_code(matmul_fidelity)>(
                     cb_q_in,
                     cb_kt_in,
                     cb_qkt_im,
@@ -1711,7 +1723,8 @@ static void sdpa_inner_loop_step(
                         // cb_qkt_im rows are laid out at KT_stride even when this kt_sub only consumes a
                         // narrower logical width. Keep unpack init on the physical stride; inner_dim below
                         // still limits how many V rows are multiplied.
-                        sdpa_pv_mm_setup(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
+                        sdpa_pv_mm_setup<matmul_fidelity>(
+                            cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
                         configure_row_pack_width(out_cb, qktv_subblock_w);
                         if constexpr (qktv_first_group_reads_inplace_row) {
                             // UNPACK half of the rendezvous posted above.
@@ -1720,7 +1733,7 @@ static void sdpa_inner_loop_step(
                         }
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             const uint32_t qktv_in1_index = kt_sub * matmul_inner * vDHt + v_index_offset;
-                            blocked_matmul_and_pack<false, vDHt, vDHt>(
+                            blocked_matmul_and_pack<false, vDHt, vDHt, sdpa_pv_fidelity_code(matmul_fidelity)>(
                                 cb_qkt_im,
                                 cb_v_in,
                                 out_cb,
@@ -1781,7 +1794,7 @@ static void sdpa_inner_loop_step(
                         MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                         sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                             out_cb, out_cb);
-                        inplace_v_matmul_pack_batched<vDHt, dst_size, qktv_h>(
+                        inplace_v_matmul_pack_batched<vDHt, dst_size, qktv_h, matmul_fidelity>(
                             cb_qkt_im,
                             cb_v_in,
                             out_cb,
@@ -1897,7 +1910,7 @@ static void sdpa_inner_loop_step(
                     out_cb, out_cb);
                 // See the q_subblock-0 V matmul above: active_Sk can be narrower than the physical
                 // cb_qkt_im row stride, but the unpacker is configured for the physical layout.
-                sdpa_pv_mm_setup(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
+                sdpa_pv_mm_setup<matmul_fidelity>(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
                 // Configure once before v_subblock loop; skip inside.
                 configure_row_pack_width(out_cb, qktv_subblock_w);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
@@ -1907,7 +1920,11 @@ static void sdpa_inner_loop_step(
                     // path and kt_inplace_v is effectively false here. The ternary is kept symmetric
                     // with the q_subblock-0 site so the addressing forms stay paired.
                     const uint32_t qktv_in1_index = kt_inplace_v ? (v_subblock * KT_stride) : v_index_offset;
-                    blocked_matmul_and_pack<false, kt_inplace_v ? 1 : vDHt, vDHt>(
+                    blocked_matmul_and_pack<
+                        false,
+                        kt_inplace_v ? 1 : vDHt,
+                        vDHt,
+                        sdpa_pv_fidelity_code(matmul_fidelity)>(
                         cb_qkt_im,
                         cb_v_in,
                         out_cb,
@@ -2079,7 +2096,8 @@ template <
     uint32_t cb_attention_sink = INVALID_CB,
     bool use_provided_mask = false,
     bool use_windowed_narrowing = false,
-    uint32_t cb_windowed_k_range = INVALID_CB>
+    uint32_t cb_windowed_k_range = INVALID_CB,
+    uint32_t matmul_fidelity = kSdpaMatmulFidelityDefault>
 void sdpa_standard_v2(
     const uint32_t q_chunks_per_core,
     const uint32_t k_num_chunks,
@@ -2233,7 +2251,10 @@ void sdpa_standard_v2(
                 sliding_window_size,
                 use_attention_sink,
                 cb_attention_sink,
-                use_provided_mask>(
+                use_provided_mask,
+                false,  // has_q_base_tiles
+                false,  // circular_kv_cache
+                matmul_fidelity>(
                 prev,
                 cur,
                 is_last,
@@ -2454,6 +2475,7 @@ template <
     bool rotated_q_split_enabled = false,
     // Dense chunked prefill: skip K chunks past this device's last Q row (the reader mirrors it).
     bool causal_k_skip = false,
+    uint32_t matmul_fidelity = kSdpaMatmulFidelityDefault,
     typename MaskCtx = LightweightMaskContext>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
@@ -3002,7 +3024,8 @@ void sdpa_ring_v2(
                 cb_attention_sink,
                 false,              // use_provided_mask
                 use_l1_state_fifo,  // has_q_base_tiles: head-serial passes read Q at q_base_tiles
-                circular_kv_cache>(
+                circular_kv_cache,
+                matmul_fidelity>(
                 q_prev,
                 q_cur,
                 is_last_k_of_last_ring_iter,

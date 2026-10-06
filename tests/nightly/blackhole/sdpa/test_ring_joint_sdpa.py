@@ -1689,6 +1689,8 @@ def run_ring_joint_sdpa_chunked(
     attention_sink_values: torch.Tensor = None,
     max_k_splits: int = 1,
     matmul_math_fidelity=None,
+    qk_math_fidelity=None,
+    pv_math_fidelity=None,
     segmented_accumulation: bool = False,
     math_fidelity=None,
     kv_mean_offset: float = 0.0,
@@ -1893,6 +1895,8 @@ def run_ring_joint_sdpa_chunked(
                 exp_approx_mode=False,
                 max_k_splits=max_k_splits,
                 matmul_math_fidelity=matmul_math_fidelity,
+                qk_math_fidelity=qk_math_fidelity,
+                pv_math_fidelity=pv_math_fidelity,
                 segmented_accumulation=segmented_accumulation,
             )
             for q_chunk, k_chunk in qk_configs
@@ -1904,6 +1908,8 @@ def run_ring_joint_sdpa_chunked(
             base = dict(
                 max_k_splits=max_k_splits,
                 matmul_math_fidelity=matmul_math_fidelity,
+                qk_math_fidelity=qk_math_fidelity,
+                pv_math_fidelity=pv_math_fidelity,
                 segmented_accumulation=segmented_accumulation,
             )
             base.update(overrides)
@@ -1924,6 +1930,8 @@ def run_ring_joint_sdpa_chunked(
                 feature_baselines["K split"] = feature_baseline(max_k_splits=1)
             if matmul_math_fidelity is not None:
                 feature_baselines["matmul_math_fidelity"] = feature_baseline(matmul_math_fidelity=None)
+            if qk_math_fidelity is not None or pv_math_fidelity is not None:
+                feature_baselines["per-phase fidelity"] = feature_baseline(qk_math_fidelity=None, pv_math_fidelity=None)
             if segmented_accumulation and max_k_splits == 1:
                 feature_baselines["segmented accumulation"] = feature_baseline(segmented_accumulation=False)
         feature_differs = {}
@@ -7872,6 +7880,42 @@ def test_ring_joint_attention_hifi_matmul_on_lofi_compute_config():
         math_fidelity=ttnn.MathFidelity.LoFi,
         matmul_math_fidelity=ttnn.MathFidelity.HiFi2,
     )
+
+
+@pytest.mark.timeout(900)
+def test_ring_joint_attention_gemma4_global_pv_lofi_matmul_accuracy():
+    """Only the softmax @ V matmul at LoFi (SDPAProgramConfig.pv_math_fidelity), QK^T at the compute config's HiFi2:
+    the per-phase knob the MiniMax-H3 denoiser uses, on the packed K/V cache at the unsplit Gemma4 config."""
+    tokens_per_device = 1024
+    chunk_size = tokens_per_device * MESH_CONFIG.sp_size
+    run_ring_joint_sdpa_chunked(
+        MESH_CONFIG,
+        replace(GEMMA4_GLOBAL_CHUNKED_MODEL, d_k=640),
+        chunk_size=chunk_size,
+        total_seq=5 * chunk_size,
+        qk_configs=[(96, 256)],
+        use_ring_mla=True,
+        pv_math_fidelity=ttnn.MathFidelity.LoFi,
+    )
+
+
+def test_ring_joint_attention_rejects_two_phase_fidelities(expect_error):
+    """At most one phase may be overridden; the compute kernel config changes both."""
+    tokens_per_device = 256
+    chunk_size = tokens_per_device * MESH_CONFIG.sp_size
+    # run_ring_joint_sdpa_chunked reports a raising op call through pytest.fail, keeping the op's message.
+    with expect_error(pytest.fail.Exception, "set at most one of qk_math_fidelity and pv_math_fidelity"):
+        run_ring_joint_sdpa_chunked(
+            MESH_CONFIG,
+            replace(GEMMA4_GLOBAL_CHUNKED_MODEL, d_k=640),
+            chunk_size=chunk_size,
+            total_seq=chunk_size,
+            qk_configs=[(64, 256)],
+            use_ring_mla=True,
+            qk_math_fidelity=ttnn.MathFidelity.LoFi,
+            pv_math_fidelity=ttnn.MathFidelity.LoFi,
+            do_check=False,
+        )
 
 
 def test_ring_joint_attention_segmented_accumulation_rejects_several_q_chunks_per_core(expect_error):

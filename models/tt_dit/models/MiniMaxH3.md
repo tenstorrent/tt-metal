@@ -441,6 +441,19 @@ one model's measurement is not evidence about LTX, Wan or Ideogram-4, which keep
 the video not at all (40-48 dB PSNR frame-to-frame, identical anchor and CLIP numbers), so this is
 conditioner fidelity rather than output quality.
 
+## Opt-in lossy denoise knobs
+
+Everything below is off unless set and leaves the numerics unchanged when unset. Each knob is lossy: it trades
+per-forward precision for denoise time, with the loss measured against an fp32 CPU reference forward of the
+transformer rather than against the 50-step clip (whose PSNR against a reference run only distinguishes
+bit-identical from broken, because any bf16-level difference diverges over the sampling trajectory).
+
+| env | effect |
+|---|---|
+| `MINIMAX_H3_FAST=1` | the recipe: `MINIMAX_H3_BF8_WEIGHTS=qkv,ff1` and `MINIMAX_H3_SDPA_PV_FIDELITY=LoFi` (explicit settings win) |
+| `MINIMAX_H3_BF8_WEIGHTS=qkv,ff1[,out,ff2]` | typecast those linears' weights to bfloat8_b after loading (`out`/`ff2` need a bf8 residual for the fused addcmul, so they are normally left bf16) |
+| `MINIMAX_H3_SDPA_PV_FIDELITY` / `MINIMAX_H3_SDPA_QK_FIDELITY` / `MINIMAX_H3_SDPA_FIDELITY` | ring-SDPA matmul fidelity for the PV phase, the QK^T phase, or the whole kernel (`SDPAProgramConfig.pv_math_fidelity` / `qk_math_fidelity`, or the compute kernel config). LoFi on PV keeps the logits at HiFi2; at most one per-phase knob may be set (`MINIMAX_H3_SDPA_FIDELITY` changes both), and LoFi on both phases degrades the output; not yet applied on the quad-galaxy exp-ring SDPA path, which keeps the compute kernel config's fidelity |
+
 ## Audio decode precision
 
 The audio VAE constructs in **accurate mode by default**: `MiniMaxH3AudioDecoder` /
