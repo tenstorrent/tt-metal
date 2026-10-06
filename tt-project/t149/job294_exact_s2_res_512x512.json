@@ -1,0 +1,89 @@
+{
+  "C_in": 512,
+  "C_out": 512,
+  "kernel": [
+    3,
+    3,
+    3
+  ],
+  "T": 75,
+  "H": 36,
+  "W": 32,
+  "h_factor": 4,
+  "w_factor": 8,
+  "num_combos": 3,
+  "num_ok": 1,
+  "num_fail": 2,
+  "elapsed_s": 0.4353935718536377,
+  "table_blocking": [
+    64,
+    256,
+    1,
+    8,
+    4
+  ],
+  "table_us": 12716.61889995812,
+  "halo": {
+    "h_factor": 2,
+    "w_factor": 4,
+    "logical_h": 68,
+    "logical_w": 120
+  },
+  "table_key": [
+    75,
+    34,
+    30
+  ],
+  "table_padded_us": 14246.14620000284,
+  "output_check": null,
+  "best_blocking": null,
+  "best_us": 12716.61889995812,
+  "top_20": [
+    {
+      "blocking": [
+        64,
+        128,
+        6,
+        8,
+        2
+      ],
+      "us": 16409.053499955917,
+      "status": "ok"
+    }
+  ],
+  "all_results": [
+    {
+      "blocking": [
+        64,
+        128,
+        6,
+        8,
+        2
+      ],
+      "us": 16409.053499955917,
+      "status": "ok"
+    },
+    {
+      "blocking": [
+        64,
+        128,
+        5,
+        4,
+        4
+      ],
+      "us": null,
+      "status": "fail"
+    },
+    {
+      "blocking": [
+        64,
+        32,
+        5,
+        4,
+        4
+      ],
+      "us": null,
+      "status": "fail"
+    }
+  ]
+}

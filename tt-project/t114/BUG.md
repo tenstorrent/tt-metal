@@ -180,3 +180,26 @@ the T-relaxed path can clamp to.
 - No model code builds a Conv3dConfig outside these tables.
 
 Production decode cannot hit this hang. It came only from sweep combos, so no table blocking needs replacing.
+
+## Device check of the guard (#151, blx03 job 294, 2026-10-06 04:54 UTC)
+
+- Build: blx03 ~/fasth3/t48 = c4409b1fa2 + the C++ guard from aa4ade43a28, committed there as bf7db12a14 and
+  rebuilt incrementally (guard string confirmed in `_ttnncpp.so`). Python: the t115 overlay bc134f7c656, which has
+  no Python-side `vol2col_chunks_fit()` filter, so the C++ guard is what rejects the blockings.
+- One broker job: full mesh opened, then `create_submesh(2,4)`. exact_s2_res conv3d (C_in = C_out = 512, k=3,
+  T=75, H=36, W=32, halo mode). `SWEEP_ONLY_BLOCKINGS="64,128,6,8,2;64,128,5,4,4;64,32,5,4,4"`, passing one first.
+  Scripts: `tmp/blx03/t151/` (build151.sh, driver151.sh, run151.sh).
+
+| blocking | patches | expected | outcome |
+|---|---|---|---|
+| (64,128,6,8,2) | 96, aligned | runs | PASS, 16409 us/op traced (table (64,256,1,8,4) = 12717 us) |
+| (64,128,5,4,4) | 80, unaligned | TT_FATAL, no hang | TT_FATAL at `conv3d_program_factory.cpp:189` in `create_descriptor`, before dispatch. No hang (it hung in job 273 without the guard) |
+| (64,32,5,4,4) | 80, unaligned | rejected | TT_FATAL, same message |
+
+- The process kept going after both TT_FATALs and exited 0 (1 ok, 2 failed). Job ran 16 s.
+- Post-job gate: host-pci OK 32/32, ARC heartbeat advancing on all 32 chips, no reset needed. No drop, no tray-2
+  (chip 12) event during the job.
+- Result JSON: `tt-project/t149/job294_exact_s2_res_512x512.json`; log g14blx03:/var/tmp/fasth3/t151/run151_job294.log.
+
+The guard works on device: it turns the hang into a host-side error, and an aligned 96-patch blocking with
+Cout_block=128 still runs.
