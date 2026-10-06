@@ -35,10 +35,8 @@ inline void calculate_exp2()
     // The NaN fix is issued between two recorded parts: the whole body would
     // not fit the 32-slot replay buffer.
     [[maybe_unused]] constexpr std::uint32_t scale_slots = 4; // read only with the -NaN terminal
-    {
-        TTI_REPLAY(0, replay_slots, 1, 1);
-        sfpi::exp2_paired_body<Config::kDegree, true, kExpHold>();
-    }
+    TTI_REPLAY(0, replay_slots, 1, 1);
+    sfpi::exp2_paired_body<Config::kDegree, true, kExpHold>();
     // The complete primitive already owns the target special classes.
     TTI_SFPSTORE(p_sfpu::LREG0, 0, kExpHold, 0);
     TTI_SFPSTORE(p_sfpu::LREG3, 0, kExpAdvance, 2);
