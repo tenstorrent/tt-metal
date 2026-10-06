@@ -28,6 +28,8 @@ health() {
   echo "$st" | grep -qi 'upgrade' && { log "health: broker upgrade running"; return 1; }
   echo "$st" | sed -n '/^RUNNING/,/^QUEUED/p' | grep -qiE '🔧|health-gate|fabric-check|recover|bridge-reset|power-cycle' && { log "health: broker gate/recovery running"; return 1; }
   last=$(grep -E "HEALTH-GATE|$OKRE|ESCALATE|RECOVER|[|] ERROR [|]" $SL | tail -1)
+  # The broker logs the end of its own reset-and-verify at ERROR level; that line means the gate passed.
+  echo "$last" | grep -qE 'reset complete \+ health verified' && return 0
   if echo "$last" | grep -qE "$OKRE" && ! echo "$last" | grep -qE "$BADRE"; then return 0; fi
   log "health: last event not healthy: ${last:0:200}"; return 1
 }
