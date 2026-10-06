@@ -31,7 +31,8 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 imp
 )
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import V4_MESH_CONFIGS
+from models.demos.deepseek_v3_d_p.tests.pcc.v4_test_utils import V4_CACHE_PCC, report_chunk_pccs
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtHCACompressor
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -46,9 +47,6 @@ _COMPRESSOR_SHAPES = [900, 2048, 5120]
 # Single-shot floors are higher than the chunked ones: one pass accumulates nothing. The block's is per
 # variant and lives in _VARIANTS; the compressor's holds for both.
 _COMPRESSOR_PCC = 0.999
-# The stored entries, checked at the end of a chunked run. They are written once and never recomputed, so
-# this holds ~0.9997 no matter how deep the run goes.
-_CACHE_PCC = 0.998
 
 
 def _config(model_config, num_hidden_layers=4):
@@ -95,41 +93,9 @@ _MODEL_CONFIGS_LONG = [pytest.param(cfg, long, id=name) for name, cfg, _, long, 
 _MODEL_CONFIGS_FORWARD = [pytest.param(cfg, fwd, id=name) for name, cfg, _, _, fwd in _VARIANTS]
 
 
-# Blackhole runs a mesh config only when it uses every chip, so one shape per box class.
-_MESH_CONFIGS = [
-    pytest.param(
-        (2, 2),
-        fabric2d_device_params(),
-        ttnn.Topology.Linear,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
-        id="fabric2d-mesh-2x2",
-    ),
-    pytest.param(
-        (4, 2),
-        fabric2d_device_params(),
-        ttnn.Topology.Linear,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-        id="fabric2d-mesh-4x2",
-    ),
-    pytest.param(
-        (8, 4),
-        torus_xy_device_params(),
-        ttnn.Topology.Ring,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="torus-xy-8x4",
-    ),
-]
-
-
-def _report_chunk_pccs(pccs, floor):
-    """Log every chunk's PCC, then let the worst one decide. Asserting inside the loop stops at the first
-    chunk under the floor, and PCC can dip and recover -- reporting first means one run tells the whole
-    story instead of one chunk per run."""
-    for it, kv_actual, valid, pcc in pccs:
-        log = logger.warning if pcc < floor else logger.info
-        log(f"  iter {it} (kv_actual={kv_actual} valid={valid}): PCC {pcc:.6f}")
-    worst_it, _, _, worst = min(pccs, key=lambda row: row[3])
-    assert worst >= floor, f"worst chunk PCC {worst:.6f} (iter {worst_it}) is below the floor {floor}"
+# Shared with CSA and with the perf leg; see mesh_configs.V4_MESH_CONFIGS. Aliased rather than
+# imported under its own name because test_ttnn_hca_perf.py imports _MESH_CONFIGS from here.
+_MESH_CONFIGS = V4_MESH_CONFIGS
 
 
 # The compressed-cache write must compile nothing per chunk: fill_cache keeps update_idx out of its
@@ -383,7 +349,7 @@ def test_hca_chunked_prefill_mesh(
 
     signpost("HCA_START")
     kv_actual = 0
-    pccs = []  # (iter, kv_actual, valid, pcc); _report_chunk_pccs judges them after the run
+    pccs = []  # (iter, kv_actual, valid, pcc); report_chunk_pccs judges them after the run
     programs = mesh_device.num_program_cache_entries()
     for it, valid in enumerate(iters_valid):
         # Fixed device width every chunk; a short final chunk is padded up to it.
@@ -420,7 +386,7 @@ def test_hca_chunked_prefill_mesh(
         kv_actual += valid
     signpost("HCA_END")
 
-    _report_chunk_pccs(pccs, chunked_pcc)
+    report_chunk_pccs(pccs, chunked_pcc)
     assert state.kv_actual == total
     assert state.entry_count == sum(v // compress_rate for v in iters_valid)
 
@@ -433,7 +399,7 @@ def test_hca_chunked_prefill_mesh(
         mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig([0, 1], ttnn.MeshShape(1, 1))),
     )[:, :, : state.entry_count]
     assert cache.shape == ref_entries.shape, f"cache {tuple(cache.shape)} vs ref {tuple(ref_entries.shape)}"
-    cache_passed, cache_msg = assert_with_pcc(ref_entries.to(torch.float32), cache.to(torch.float32), pcc=_CACHE_PCC)
+    cache_passed, cache_msg = assert_with_pcc(ref_entries.to(torch.float32), cache.to(torch.float32), pcc=V4_CACHE_PCC)
     logger.debug(f"  compressed cache PCC: {cache_msg}")
     assert cache_passed, f"compressed cache mismatch: {cache_msg}"
 
@@ -484,7 +450,7 @@ def test_hca_long_chunked_prefill_mesh(
 
     signpost("HCA_START")
     kv_actual = 0
-    pccs = []  # (iter, kv_actual, valid, pcc); _report_chunk_pccs judges them after the run
+    pccs = []  # (iter, kv_actual, valid, pcc); report_chunk_pccs judges them after the run
     programs = mesh_device.num_program_cache_entries()
     for it, valid in enumerate(iters_valid):
         real = hidden[:, kv_actual : kv_actual + valid]
@@ -529,7 +495,7 @@ def test_hca_long_chunked_prefill_mesh(
         kv_actual += valid
     signpost("HCA_END")
 
-    _report_chunk_pccs(pccs, long_pcc)
+    report_chunk_pccs(pccs, long_pcc)
     assert state.kv_actual == total
     assert state.entry_count == sum(v // compress_rate for v in iters_valid)
 
@@ -542,7 +508,7 @@ def test_hca_long_chunked_prefill_mesh(
         mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig([0, 1], ttnn.MeshShape(1, 1))),
     )[:, :, : state.entry_count]
     assert cache.shape == ref_entries.shape, f"cache {tuple(cache.shape)} vs ref {tuple(ref_entries.shape)}"
-    cache_passed, cache_msg = assert_with_pcc(ref_entries.to(torch.float32), cache.to(torch.float32), pcc=_CACHE_PCC)
+    cache_passed, cache_msg = assert_with_pcc(ref_entries.to(torch.float32), cache.to(torch.float32), pcc=V4_CACHE_PCC)
     logger.debug(f"  compressed cache PCC: {cache_msg}")
     assert cache_passed, f"compressed cache mismatch: {cache_msg}"
 
