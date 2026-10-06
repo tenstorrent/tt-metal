@@ -38,7 +38,11 @@ class KDARecurrenceProgramConfig:
     # per chunk) over 10240 chunks. HiFi3 adds the SrcB low-bit phase and matches HiFi4 (worst class 0.42% both;
     # tt_metal_tracker-g1b.7, tt_metal_tracker-g1b.4.15, test_weak_decay_chain T5).
     affine_prefix_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi3
-    scan_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
+    # HiFi3: at HiFi2 the scan's SrcB keeps 7 significant bits and contracted the state 0.5-1.1% per head. HiFi3
+    # matches HiFi4 within 2% (outputs -25..-34% rel RMSE on real K3/GLM LoudBox cells, single-rank state -36..-42%)
+    # at <= +0.07% layer time: the scan runs at ~8% FPU utilization (tt_metal_tracker-g1b.4.19). At sequence-parallel
+    # layouts the persisted state comes from the summary and the affine prefix, so the scan sets only the output there.
+    scan_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi3
 
     def __post_init__(self) -> None:
         if self.local_scan_strategy not in ("direct", "grouped"):

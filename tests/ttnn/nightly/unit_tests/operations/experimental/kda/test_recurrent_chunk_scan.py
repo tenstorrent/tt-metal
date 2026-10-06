@@ -257,7 +257,7 @@ def _production_inputs(
 def _production_compute_config(device: ttnn.Device) -> ttnn.DeviceComputeKernelConfig:
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.HiFi3,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
@@ -451,7 +451,7 @@ def test_recurrent_chunk_scan_production_performance(zero_actual_start, device: 
         state,
         outputs,
         measured_ns=duration_ns,
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.HiFi3,
     )
     logger.info(
         f"recurrent chunk scan production {case.case_id}: measured_ns={duration_ns:.0f}, "
