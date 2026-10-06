@@ -55,6 +55,17 @@ costs the compute of U x C tokens per row, whatever the number of users that hav
   which is invisible to the plugin). The whole-batch `prefill_forward` is routed through the same machinery when Up < U. Up = 1 means 4 concurrent prompts (one per mesh row) per
   replay at no filler cost, independent of the batch size (the trace does not depend on U any more), and a smaller prefill scratch (halo, latent / key FIFOs: x Up / U).
 
+## 2b. Measurements (host .47, random prompts, `tests/test_interleave_device.py`; logs /mnt/tt-data/ssinghal/dsv4-logs/pf_pf_interleave_*.log)
+
+| config | what | result |
+|---|---|---|
+| 40 layers, B=16 (U=4), ISL 3712, chunk 512, `DSV41_PREFILL_UP=1`, indexer on | 15 users decode, a 16th prompt prefilled in 8 chunk steps between decode steps | decode logits of the 15 users bit-identical to the uninterrupted run (8 steps + 4 joint steps), decode state (pool, rings, prev_cs, index keys) bit-identical before / after each of the 8 windows, first-token logits of the chunked prompt bit-identical to a one-call prefill; adapter run (slot changes between chunks, parking) same first token |
+| same | time per interleaved chunk step | 0.70 - 0.79 s (replay 0.62 s = 512 row-tokens at 1.2 ms, host 0.05 s, key export 0.01 - 0.12 s); 8 steps = 5.9 s for the whole prompt vs 5.7 s in one call; decode step of the 15 running users 52 ms (device sampling) |
+| same, Up = U = 4 (estimate: replay x4 at fixed row-tokens/replay) | chunk step | about 2.5 s (4 layers: 0.34 s vs 0.08 s measured) |
+| baseline (grid, 40 layers, B=16, ISL 3.7k) | one new request = whole-batch prefill | TTFT 20.2 s; with the decode indexer on and other requests live the old adapter additionally re-prefilled them |
+| 4 layers, B=128 (U=32), `DSV41_PREFILL_UP=1` | 127 requests in one prefill call / one new prompt in chunks | 22 s / chunk steps 0.4 s (0.13 s after the logits read-back fix); decode bit-identical, state untouched |
+| 12 layers, B=16, ISL 3712 | 15 requests in one call (4 waves x 8 windows) | 139 s incl. 64 s compile + capture; chunk steps 0.56 - 0.65 s before the read-back fix (replay 0.19 s) |
+
 ## 3. Serving recipe (tt-inference-server / vllm-tt-plugin)
 
 Environment of the server process (the capability is read when the bundle module is imported, so it must be set before the plugin loads it):
