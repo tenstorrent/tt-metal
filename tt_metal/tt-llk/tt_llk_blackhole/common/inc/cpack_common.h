@@ -315,22 +315,13 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
-    // Channel-1 (L1 output) X/Y strides are zero for every pack mode: the pack addrmods advance
-    // y_dst and rely on it. Only the fast-untilize strided pack sets a Y stride, in its own init.
+    // Channel-1 (L1 output) strides are zero for every pack mode: output placement comes from
+    // L1_Dest_addr and the packer's write pointer. Only the fast-untilize strided pack sets a
+    // channel-1 (Y) stride, in its own init.
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
+    TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
     TTI_NOP;
     TTI_NOP;
-
-    if constexpr (pack_mode == PackMode::Tilize)
-    {
-        const std::uint32_t z_stride_ch1 = FACE_R_DIM * y_stride;
-        TT_SETDMAREG(0, LOWER_HALFWORD((z_stride_ch1 << PCK0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)), 0, LO_16(p_gpr_pack::TMP1));
-        TT_SETDMAREG(0, UPPER_HALFWORD((z_stride_ch1 << PCK0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)), 0, HI_16(p_gpr_pack::TMP1));
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-        TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
-        TTI_NOP;
-        TTI_NOP;
-    }
 }
 
 inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)

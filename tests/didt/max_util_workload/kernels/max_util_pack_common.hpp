@@ -16,19 +16,15 @@ ALWI void didt_pack_bfloat16_tiles(uint32_t num_loops, uint32_t num_tiles, uint3
 
     addr_mod_pack_t{
         .y_src = {.incr = 4},
-        .y_dst = {.incr = 4},
     }
         .set(ADDR_MOD_0);
     addr_mod_pack_t{
         .y_src = {.incr = 0, .clr = 1, .cr = 0},
-        .y_dst = {.incr = 0, .clr = 1, .cr = 0},
         .z_src = {.incr = 0, .clr = 1},
-        .z_dst = {.incr = 0, .clr = 1},
     }
         .set(ADDR_MOD_1);
     addr_mod_pack_t{
         .y_src = {.incr = 0, .clr = 1, .cr = 0},
-        .y_dst = {.incr = 4, .clr = 0, .cr = 0},
         .z_src = {.incr = 1, .clr = 0},
     }
         .set(ADDR_MOD_2);
