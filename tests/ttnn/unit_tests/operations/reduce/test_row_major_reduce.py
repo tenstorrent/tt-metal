@@ -16,11 +16,12 @@ from models.common.utility_functions import torch_random
 @pytest.mark.parametrize(
     "input_shape, dim, keepdim",
     [
-        # Test cases from rm_reduce.py
-        ((512, 1024, 1, 2), -1, False),
-        ((512, 1024, 1, 2), -1, True),
-        ((512, 1024, 1, 2), -2, False),
-        ((512, 1024, 1, 2), -2, True),
+        # Test cases from rm_reduce.py, scaled down from (512, 1024, 1, 2): the degenerate H=1/W=2 slab
+        # pads each row to a full tile, so the original was ~512x tile inflation (up to ~4 min per case on ttsim)
+        ((32, 32, 1, 2), -1, False),
+        ((32, 32, 1, 2), -1, True),
+        ((32, 32, 1, 2), -2, False),
+        ((32, 32, 1, 2), -2, True),
         # Additional row-major compatible shapes
         ((1, 128, 256), -1, False),
         ((1, 128, 256), -1, True),
@@ -75,10 +76,10 @@ def test_mean_row_major(device, input_shape, dim, keepdim):
     "input_shape, dim, keepdim",
     [
         # Test cases similar to rm_reduce.py
-        ((512, 1024, 1, 2), -1, False),
-        ((512, 1024, 1, 2), -1, True),
-        ((512, 1024, 1, 2), -2, False),
-        ((512, 1024, 1, 2), -2, True),
+        ((32, 32, 1, 2), -1, False),
+        ((32, 32, 1, 2), -1, True),
+        ((32, 32, 1, 2), -2, False),
+        ((32, 32, 1, 2), -2, True),
         # Additional row-major compatible shapes
         ((1, 128, 256), -1, False),
         ((1, 128, 256), -1, True),
@@ -157,8 +158,8 @@ def test_sum_global_row_major(device, input_shape):
 @pytest.mark.parametrize(
     "input_shape, dim, keepdim",
     [
-        ((512, 1024, 1, 2), -1, False),
-        ((512, 1024, 1, 2), -1, True),
+        ((32, 32, 1, 2), -1, False),
+        ((32, 32, 1, 2), -1, True),
         ((1, 128, 256), -1, False),
         ((64, 512), -1, False),
         ((32, 64, 128), -1, False),
@@ -232,7 +233,7 @@ def test_min_row_major(device, input_shape, dim, keepdim):
 @pytest.mark.parametrize(
     "input_shape, dim",
     [
-        ((512, 1024, 1, 2), -1),
+        ((32, 32, 1, 2), -1),
         ((1, 128, 256), -1),
         ((64, 512), -1),
         ((32, 64, 128), -1),
@@ -270,7 +271,7 @@ def test_std_row_major(device, input_shape, dim):
 @pytest.mark.parametrize(
     "input_shape, dim",
     [
-        ((512, 1024, 1, 2), -1),
+        ((32, 32, 1, 2), -1),
         ((1, 128, 256), -1),
         ((64, 512), -1),
         ((32, 64, 128), -1),
