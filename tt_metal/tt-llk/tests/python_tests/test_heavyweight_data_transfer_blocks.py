@@ -38,6 +38,9 @@ BLACKHOLE = BlackholeDataTransferBlocks()
 
 TILE = 1024
 ONE_TILE_GEOMETRY = dict(num_faces=4, face_r_dim=16)
+# Two faces of a single row: a 1x32 tile, the smallest shape where BFP's
+# 16-exponent minimum pads the stride beyond the datum count.
+ONE_ROW_TILE_GEOMETRY = dict(num_faces=2, face_r_dim=1)
 
 
 def _tile_of(*values):
@@ -320,13 +323,13 @@ def test_multi_tile_buffers_round_trip_tile_by_tile():
     "l1_format, geometry, expected_bytes",
     [
         # BFP holds at least 16 exponents: 48 bytes for a 1x32 tile, not 34.
-        (DataFormat.Bfp8_b, dict(num_faces=2, face_r_dim=1), 48),
+        (DataFormat.Bfp8_b, ONE_ROW_TILE_GEOMETRY, 48),
         # MX dense vs the SrcS per-slice layout, and its 32-bit variant.
-        (DataFormat.MxFp8R, dict(num_faces=4, face_r_dim=16), 1056),
-        (DataFormat.MxFp8R, dict(num_faces=4, face_r_dim=16, use_srcs=True), 1152),
+        (DataFormat.MxFp8R, ONE_TILE_GEOMETRY, 1056),
+        (DataFormat.MxFp8R, dict(ONE_TILE_GEOMETRY, use_srcs=True), 1152),
         (
             DataFormat.MxFp8R,
-            dict(num_faces=4, face_r_dim=16, use_srcs=True, dest_acc=True),
+            dict(ONE_TILE_GEOMETRY, use_srcs=True, dest_acc=True),
             1280,
         ),
     ],
@@ -339,7 +342,7 @@ def test_tile_stride_accounts_for_padding_and_layout(
 
 def test_multi_tile_bfp8_reads_every_tile_at_the_padded_stride():
     """A datum-count stride (34 B) would misalign every tile after the first."""
-    geometry = dict(num_faces=2, face_r_dim=1)
+    geometry = ONE_ROW_TILE_GEOMETRY
     tiles = [torch.full((32,), float(v)) for v in (0.5, -2.0, 8.0)]
     l1 = WORMHOLE.pack_to_l1(torch.cat(tiles), DataFormat.Bfp8_b, **geometry)
     assert len(l1) == 3 * 48
