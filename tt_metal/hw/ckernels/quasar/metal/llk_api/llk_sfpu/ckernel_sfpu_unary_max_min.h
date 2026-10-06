@@ -30,6 +30,10 @@ constexpr std::uint32_t UNARY_MAX_MIN_INT32_MIN_BITS = 0x80000000u;
  *   - vFloat compares as fp32 (imm12 = 1), which orders both-negative pairs correctly and follows the
  *     SFPU total order (-NaN < -Inf < ... < -0 < +0 < ... < +Inf < +NaN);
  *   - vInt compares as two's-complement int32 (imm12 = 0), which is exact for every int32 pair.
+ * This is sfpi >= 7.83 behaviour (sfpi_lib.h min_max passes SFPSWAP_IMM_TYPE_FLOAT for vFloat); the
+ * objdump of both instantiations shows `sfpswap ...,1,1` (float) and `sfpswap ...,0,1` (Int32). The
+ * note in ckernel_sfpu_gelu.h that sfpi omits the float-compare bit predates it. On an older sfpi, the
+ * float path would mis-order both-negative pairs; the negative-scalar test variants catch that.
  *
  * @tparam IS_MAX_OP: true selects max, false selects min.
  * @tparam FMT: math-side DataFormat. Int32 takes the integer path; every float format takes the fp32
