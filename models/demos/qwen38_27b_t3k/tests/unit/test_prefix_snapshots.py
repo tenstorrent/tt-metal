@@ -55,6 +55,7 @@ class PrefixSnapshotTests(unittest.TestCase):
         self.copies = []
         self.ops = SimpleNamespace(
             zeros_like=lambda tensor: f"zeros({tensor})",
+            clone=lambda tensor: f"clone({tensor})",
             copy=lambda source, target: self.copies.append((source, target)),
             concat=lambda parts, **kw: ("concat", tuple(parts)),
         )
@@ -89,8 +90,8 @@ class PrefixSnapshotTests(unittest.TestCase):
         self.assertEqual(held, 4096)
         # One row per conv and recurrent on every layer, taken from slot 2.
         self.assertEqual(len(rows), 2 * self.LAYERS)
-        self.assertEqual(rows[(0, "conv")], "conv0[2]")
-        self.assertEqual(rows[(2, "recurrent")], "rec2[2]")
+        self.assertEqual(rows[(0, "conv")], "clone(conv0[2])")
+        self.assertEqual(rows[(2, "recurrent")], "clone(rec2[2])")
 
     def test_the_store_refuses_rather_than_evicting_something_still_referenced(self):
         self.gen._slot_prefix_len[0] = 64
@@ -124,7 +125,7 @@ class PrefixSnapshotTests(unittest.TestCase):
         self.assertTrue(all(kind == "concat" for kind, _ in rebuilt))
         # Slot 3's position carries the saved row; the other rows are the slot's own.
         first = rebuilt[0][1]
-        self.assertEqual(first[3], "conv0[0]")
+        self.assertEqual(first[3], "clone(conv0[0])")
         self.assertEqual(first[1], "conv0[1]")
         self.assertEqual(len(parts), 2 * self.LAYERS)
 
