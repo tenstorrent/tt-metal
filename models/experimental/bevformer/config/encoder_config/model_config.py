@@ -8,7 +8,7 @@ The presets pair a dataset (camera rig, image size, point-cloud range, from data
 model sizes for the multi-scale deformable attention. They do not configure the encoder: its
 BEVFormer-base configuration is the defaults of ``reference/encoder.py``'s ``BEVFormerEncoder``
 (spatial cross-attention ``num_points=8``, self-attention ``tsa_num_points=4``, FFN 512), and the
-encoder tests take only the presets' camera rigs.
+encoder tests take only the presets' camera rigs and point-cloud ranges.
 """
 
 from dataclasses import dataclass, field

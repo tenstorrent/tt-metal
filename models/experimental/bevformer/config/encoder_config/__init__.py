@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Encoder configuration for BEVFormer models."""
+"""Dataset and model presets for the deformable-attention and point-sampling tests; the encoder tests take their camera rigs and point-cloud ranges."""
 
 from .data_config import DatasetConfig, BEVFormerDataConfig, get_dataset_config, list_available_datasets, DEFAULT_CONFIG
 
