@@ -32,7 +32,7 @@ def baseline_config():
             sampling_logits_dtype="float32",
             sampling_parameter_dtype="bfloat16",
             sampling_index_dtype="uint32",
-            max_context=1048576,
+            max_context=262144,
         ),
     )
 
