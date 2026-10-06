@@ -347,13 +347,13 @@ from ttnn.device import (
     SetRootDir,
 )
 
-L1Pool = ttnn._ttnn.L1Pool
-L1PoolExtent = ttnn._ttnn.L1PoolExtent
-L1PoolPlacement = ttnn._ttnn.L1PoolPlacement
-L1TensorGeometry = ttnn._ttnn.L1TensorGeometry
-experimental_reserve_l1_pool = ttnn._ttnn.experimental_reserve_l1_pool
-experimental_create_l1_pool_tensor = ttnn._ttnn.experimental_create_l1_pool_tensor
-experimental_l1_tensor_geometry = ttnn._ttnn.experimental_l1_tensor_geometry
+L1Pool = ttnn._ttnn.tensor.L1Pool
+L1PoolExtent = ttnn._ttnn.tensor.L1PoolExtent
+L1PoolPlacement = ttnn._ttnn.tensor.L1PoolPlacement
+L1TensorGeometry = ttnn._ttnn.tensor.L1TensorGeometry
+experimental_reserve_l1_pool = ttnn._ttnn.tensor.experimental_reserve_l1_pool
+experimental_create_l1_pool_tensor = ttnn._ttnn.tensor.experimental_create_l1_pool_tensor
+experimental_l1_tensor_geometry = ttnn._ttnn.tensor.experimental_l1_tensor_geometry
 
 from ttnn.profiler import (
     start_tracy_zone,
