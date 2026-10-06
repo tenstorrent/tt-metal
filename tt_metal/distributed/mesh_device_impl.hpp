@@ -195,9 +195,13 @@ private:
     std::unique_ptr<TensorPrefetcherManager> tensor_prefetcher_;
 
     // The one pinned host region backing this mesh's D2H2H2D's D2H sockets. Lazily constructed on the
-    // first host_region() call; torn down in close_impl() so the pin is released while the
+    // first host_region() call; released in close_impl() so the pin is dropped while the
     // cluster is still live, which a process-lifetime singleton could not guarantee.
-    std::unique_ptr<experimental::HostRegion> host_region_;
+    // SHARED, not unique: every RingAlias holds a handle and calls clear_aliases() from its
+    // destructor, which may run after this mesh is closed or gone. close_impl() releases the
+    // pin but keeps this reference, so there is only ever one region per mesh; the object
+    // lives until its last holder does.
+    std::shared_ptr<experimental::HostRegion> host_region_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
     // Recursively quiesce all submeshes.
@@ -371,8 +375,10 @@ public:
     // experimental::StartTensorPrefetcher / StopTensorPrefetcher delegate here.
     TensorPrefetcherManager& tensor_prefetcher(MeshDevice* mesh_device);
     // Created on first use. One per mesh: the region is provisioned against this device's
-    // PCIe endpoint, so two meshes cannot share one.
-    experimental::HostRegion& host_region();
+    // PCIe endpoint, so two meshes cannot share one. A handle, so a holder that may outlive
+    // this mesh (RingAlias) keeps the object valid; see host_region_. After close() it
+    // returns the released region, or TT_FATALs if none was ever created.
+    std::shared_ptr<experimental::HostRegion> host_region();
 
     // Returns the logical DRAM core for `bank_id` on `device` whose physical NoC coord isn't
     // already claimed by the SOC descriptor as a worker_endpoint or eth_endpoint — i.e. one

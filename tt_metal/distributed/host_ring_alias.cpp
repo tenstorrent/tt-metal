@@ -25,7 +25,8 @@ uint64_t arena_offset_for(AliasArena a, uint32_t core) {
 }  // namespace
 
 struct RingAlias::Impl {
-    HostRegion* region = nullptr;
+    // Shared: unmap() runs from the destructor, which can follow the mesh's close().
+    std::shared_ptr<HostRegion> region;
     AliasArena arena = AliasArena::Tx;
     std::vector<uint8_t*> base;
     std::vector<size_t> bytes;
@@ -34,7 +35,7 @@ struct RingAlias::Impl {
         // This arena only, and unconditionally: it also runs from map()'s rollback, where a
         // half-declared set leaves provision() skipping bytes nothing is mapped over.
         // Null only if map() failed before binding the region, which declares nothing.
-        if (region != nullptr) {
+        if (region) {
             region->clear_aliases(arena);
         }
         for (size_t c = 0; c < base.size(); ++c) {
@@ -62,16 +63,23 @@ RingAlias::RingAlias() : impl_(std::make_unique<Impl>()) {}
 RingAlias::~RingAlias() { impl_->unmap(); }
 
 std::unique_ptr<RingAlias> RingAlias::map(
-    HostRegion& region_in, uint8_t* region_base, AliasArena arena, const std::vector<Slot>& slots,
+    std::shared_ptr<HostRegion> region_in,
+    uint8_t* region_base,
+    AliasArena arena,
+    const std::vector<Slot>& slots,
     std::string& err) {
     err.clear();
+    if (!region_in) {
+        err = "ring-alias: no host region";
+        return nullptr;
+    }
     if (region_base == nullptr) {
         err = "ring-alias: no region base; there is nothing to overlay onto";
         return nullptr;
     }
     // Pinning captures the physical pages; MAP_FIXED afterwards swaps them out from under
     // both the pin and the MR, with nothing reporting it.
-    HostRegion& region = region_in;  // named for readability below
+    HostRegion& region = *region_in;  // named for readability below
     if (region.is_provisioned()) {
         err =
             "ring-alias: the region is already provisioned and therefore pinned; the overlay "
@@ -89,7 +97,7 @@ std::unique_ptr<RingAlias> RingAlias::map(
     std::unique_ptr<RingAlias> a(new RingAlias());
     Impl& im = *a->impl_;
     // Before anything below can fail: the rollback path runs unmap(), which needs it.
-    im.region = &region;
+    im.region = std::move(region_in);
     im.arena = arena;
     im.base.assign(slots.size(), nullptr);
     im.bytes.assign(slots.size(), 0);

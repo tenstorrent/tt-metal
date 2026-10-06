@@ -1076,9 +1076,12 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     // Release the pinned host region first: it names pages the NIC was told about, and
     // unpinning must happen while the cluster is still live. release() runs ahead of the
     // overlays being unmapped, which is why this cannot wait for the destructor.
+    // Released, NOT reset: a later host_region() returns this same object, so a leg and the
+    // mesh never hold two different regions. It dies with its last holder -- this mesh or a
+    // RingAlias -- and clear_aliases() on a released region is safe. release() is idempotent,
+    // so the second close_impl() from ~MeshDevice is harmless.
     if (host_region_) {
         host_region_->release();
-        host_region_.reset();
     }
 
     // Tear down RT profiler after the CQ has shut down (so dispatch_s has already issued
@@ -1801,11 +1804,14 @@ TensorPrefetcherManager& MeshDeviceImpl::tensor_prefetcher(MeshDevice* mesh_devi
     return *tensor_prefetcher_;
 }
 
-experimental::HostRegion& MeshDeviceImpl::host_region() {
+std::shared_ptr<experimental::HostRegion> MeshDeviceImpl::host_region() {
     if (!host_region_) {
-        host_region_ = std::make_unique<experimental::HostRegion>();
+        // A closed mesh has no live PCIe endpoint to provision against; a fresh region here
+        // would only hide the caller's mistake.
+        TT_FATAL(is_initialized(), "host_region() on a closed mesh: there is no PCIe endpoint to provision against");
+        host_region_ = std::make_shared<experimental::HostRegion>();
     }
-    return *host_region_;
+    return host_region_;
 }
 
 CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const {
