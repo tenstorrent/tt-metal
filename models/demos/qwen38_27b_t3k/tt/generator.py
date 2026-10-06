@@ -51,6 +51,11 @@ def configure_fabric(*, payload_bytes=None):
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING, router_config=router)
 
 
+# One live snapshot per serving slot. Each costs 19.24 MB per device, so the whole set is about
+# 5% of the state budget left beside a two-context KV pool.
+MAX_PREFIX_SNAPSHOTS = MAX_SERVING_BATCH
+
+
 def validate_prefix_continuity(starts, slots, prefix_lens):
     """Refuse a prefill chunk that does not continue the prefix its own slot holds.
 
@@ -121,6 +126,8 @@ class Qwen38Generator:
         )
         self.positions = self.page_table = self.logits = None
         self._slot_prefix_len = []
+        self._state_snapshots = {}
+        self._next_snapshot_handle = 0
         self.prefill_signatures = set()
         self.page_host = None
         self.counters = Counter()
@@ -372,6 +379,7 @@ class Qwen38Generator:
             batch_size=batch, capacity=min(self.model.context, ((capacity + 31) // 32) * 32)
         )
         self._slot_prefix_len = [0] * self.cache.batch_size
+        self._state_snapshots.clear()
         self.positions = self.model.upload(
             torch.zeros(batch, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
         )
@@ -600,37 +608,94 @@ class Qwen38Generator:
         for slot, end in zip(slots, ends):
             self._slot_prefix_len[slot] = int(end)
 
-    def reset_recurrent_slots(self, slots):
-        """Start new requests without clearing any scheduler-owned attention pages."""
-        for slot in slots:
-            self._slot_prefix_len[slot] = 0
+    def _write_recurrent_slots(self, slots, make_row):
+        """Replace the named slots' GDN rows, leaving every other row as it was.
+
+        `make_row(index, name, current)` supplies the replacement for one layer's row: zeros to
+        start a request, a saved row to restore one. There is no partial-row device write, so
+        every row is sliced and the whole tensor rebuilt.
+        """
         resident = getattr(self.model, "_resident_decode_bucket", None)
         if resident is not None and resident[1] == (0,) and list(slots) == [0] and self.model._resident_decode_valid:
-            # The owned slot-zero prefill trace uses this same B1 state. Reset
-            # it directly; publishing/resetting/regathering all 16 rows would
-            # add latency without preserving any live request in slot zero.
-            for state in resident[2].layers:
+            # The owned slot-zero prefill trace uses this same B1 state. Write it
+            # directly; publishing/rewriting/regathering all 16 rows would add
+            # latency without preserving any live request in slot zero.
+            for index, state in enumerate(resident[2].layers):
                 for name in ("conv", "recurrent"):
                     tensor = getattr(state, name)
                     if tensor is not None:
-                        ttnn.copy(ttnn.zeros_like(tensor), tensor)
+                        ttnn.copy(make_row(index, name, tensor), tensor)
             return
-        if getattr(self.model, "_resident_decode_bucket", None) is not None:
+        if resident is not None:
             self.model.suspend_decode_bucket(discard_slots=slots)
         if getattr(self, "_recurrent_reset_warmed", None) is not self.cache:
             self._release_traces(keep_prefill=True)
-        for state in self.cache.layers:
+        for index, state in enumerate(self.cache.layers):
             for name in ("conv", "recurrent"):
                 tensor = getattr(state, name)
                 if tensor is None:
                     continue
                 parts = [tensor[i : i + 1] for i in range(self.cache.batch_size)]
                 for slot in slots:
-                    parts[slot] = ttnn.zeros_like(parts[slot])
+                    parts[slot] = make_row(index, name, parts[slot])
                 ttnn.copy(ttnn.concat(parts, dim=0) if len(parts) > 1 else parts[0], tensor)
         # All row slices and the same-shaped zero/concat/copy programs are now
         # warm. Their transient outputs die here, before any decode replay.
         self._recurrent_reset_warmed = self.cache
+
+    @property
+    def prefix_snapshot_capacity(self):
+        """How many prefixes the caller may keep alive at once."""
+        return MAX_PREFIX_SNAPSHOTS
+
+    def save_slot_state(self, slot):
+        """Clone one slot's GDN state. Returns a handle, or None if there is nothing to keep.
+
+        The recurrent state is only meaningful as the summary of a specific token prefix, so the
+        length it represents travels with it and is reinstated on restore.
+        """
+        if not 0 <= slot < self.cache.batch_size:
+            raise ValueError("Snapshot slot lies outside the bound cache")
+        held = self._slot_prefix_len[slot]
+        if held <= 0 or len(self._state_snapshots) >= MAX_PREFIX_SNAPSHOTS:
+            return None
+        if getattr(self.model, "_resident_decode_bucket", None) is not None:
+            # The resident bucket, not the scheduler cache, holds the live rows.
+            self.model.suspend_decode_bucket()
+        rows = {}
+        for index, state in enumerate(self.cache.layers):
+            for name in ("conv", "recurrent"):
+                tensor = getattr(state, name)
+                if tensor is not None:
+                    # A slice does not alias its source, so this is already an owned copy.
+                    rows[(index, name)] = tensor[slot : slot + 1]
+        handle = self._next_snapshot_handle
+        self._next_snapshot_handle += 1
+        self._state_snapshots[handle] = (held, rows)
+        self.counters["prefix_snapshots_saved"] += 1
+        return handle
+
+    def restore_slot_state(self, slot, handle):
+        """Put a saved prefix back into a slot. False when the handle is gone."""
+        if not 0 <= slot < self.cache.batch_size:
+            raise ValueError("Restore slot lies outside the bound cache")
+        entry = self._state_snapshots.get(handle)
+        if entry is None:
+            return False
+        held, rows = entry
+        self._write_recurrent_slots([slot], lambda index, name, current: rows[(index, name)])
+        self._slot_prefix_len[slot] = held
+        self.counters["prefix_snapshots_restored"] += 1
+        return True
+
+    def free_slot_state(self, handle):
+        self._state_snapshots.pop(handle, None)
+
+    def reset_recurrent_slots(self, slots):
+        """Start new requests without clearing any scheduler-owned attention pages."""
+        for slot in slots:
+            self._slot_prefix_len[slot] = 0
+        self._write_recurrent_slots(slots, lambda index, name, current: ttnn.zeros_like(current))
 
     def remap_recurrent_slots(self, remap):
         """Move constant-size request state on device when the scheduler compacts rows."""
@@ -911,6 +976,7 @@ class Qwen38Generator:
         self.remaining_steps = None
         self.cache = cache
         self._slot_prefix_len = [0] * cache.batch_size
+        self._state_snapshots.clear()
         self.owns_cache = False
         self.positions = self.model.upload(
             torch.zeros(cache.batch_size, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT

@@ -71,6 +71,7 @@ class ServingPrefillTraceTests(unittest.TestCase):
                 "bind_cache",
                 "_prefill_trace_logits",
                 "reset_recurrent_slots",
+                "_write_recurrent_slots",
                 "_begin_prefix",
                 "_end_prefix",
             ],
@@ -82,6 +83,7 @@ class ServingPrefillTraceTests(unittest.TestCase):
             model=SimpleNamespace(config=SimpleNamespace(vocab_size=250000)),
             page_table=SimpleNamespace(shape=(4, 256)),
             _slot_prefix_len=[0] * 4,
+            _state_snapshots={},
             tokens=object(),
             positions=object(),
             rope_indices=object(),
@@ -99,6 +101,7 @@ class ServingPrefillTraceTests(unittest.TestCase):
         self.gen._refresh_table = lambda table: self.events.append(("table", table))
         self.gen._sampling_step = lambda output: self.events.append(("sample", output))
         self.gen._release_traces = MethodType(self.methods["_release_traces"], self.gen)
+        self.gen._write_recurrent_slots = MethodType(self.methods["_write_recurrent_slots"], self.gen)
         self.gen._begin_prefix = MethodType(self.methods["_begin_prefix"], self.gen)
         self.gen._end_prefix = MethodType(self.methods["_end_prefix"], self.gen)
         self.gen._prepare_serving_prefill_sampling = MethodType(
