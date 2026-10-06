@@ -1,0 +1,1 @@
+- 23:46 UTC: DRIVER.done '0': exact_shard5 job 707 rc=0 (no second drop). Phase-2 scoring launched on g15 (ttp detach t170score, rc at state/runs/703/t170score.rc; marker data/g15/t170/SCORE.done). Next: table + recommendation + stills, land.
