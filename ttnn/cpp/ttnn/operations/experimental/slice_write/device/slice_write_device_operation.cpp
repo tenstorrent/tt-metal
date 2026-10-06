@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <tt_stl/assert.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/core/caller_owned_topology.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 using namespace tt::tt_metal;
@@ -108,10 +109,19 @@ Tensor SliceWriteDeviceOperation::create_output_tensors(
 
 std::vector<tt::tt_metal::TensorTopology> SliceWriteDeviceOperation::compute_output_topologies(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    // In-place: the output is the caller's tensor, and writing a slice into it does not change how it is
-    // distributed across the mesh. The default output-topology inference unions input and output and would
-    // relabel a Replicate output with a sharded input's placement. Keep the output's own label.
-    return {tensor_args.output.tensor_topology()};
+    // In-place partial write into the caller's output. Its label stays while it still describes the data: an
+    // input that is replicated, or sharded only along mesh axes the output is sharded along too, writes a slice
+    // whose per-device differences the output's label already declares, so the output's distribution is as
+    // labelled. An input sharded along a mesh axis on which the output is replicated writes a different slice on
+    // every device there; a Replicate label kept on the output would then be false, and the flatbuffer serialiser
+    // deduplicates the shards of a Replicate axis. The shared rule declines in that case and the hook returns {}
+    // so the framework's union (the input's label) is applied -- to the returned handle and, since it aliases the
+    // output's storage, to the caller's handle. See caller_owned_topology.hpp.
+    if (const auto label = ttnn::operations::core::caller_owned_output_topology(
+            tensor_args.output, {&tensor_args.input}, "slice_write")) {
+        return {*label};
+    }
+    return {};
 }
 
 }  // namespace ttnn::experimental::prim

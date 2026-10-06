@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/core/caller_owned_topology.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
@@ -66,11 +67,19 @@ Tensor ShardedToInterleavedPartialDeviceOperation::create_output_tensors(
 
 std::vector<tt::tt_metal::TensorTopology> ShardedToInterleavedPartialDeviceOperation::compute_output_topologies(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    // In-place: the output is the caller's cache, and writing one slice into it does not change how the cache is
-    // distributed across the mesh. The default output-topology inference unions both inputs and, because
-    // input_tensor is declared first, would relabel the cache with the input's placement (e.g. Shard over a
-    // Replicate cache). Keep the cache's own label, as update_padded_kv_cache does.
-    return {tensor_args.cache_tensor.tensor_topology()};
+    // In-place partial write into the caller's cache. The cache's own label stays while it still describes the
+    // data: an input that is replicated, or sharded only along mesh axes the cache is sharded along too, writes a
+    // slice whose per-device differences the cache's label already declares, so the cache's distribution is as
+    // labelled (cf. update_padded_kv_cache). An input sharded along a mesh axis on which the cache is replicated
+    // writes a different slice on every device there; a Replicate label kept on the cache would then be false, and
+    // the flatbuffer serialiser deduplicates the shards of a Replicate axis. The shared rule declines in that case
+    // and the hook returns {} so the framework's union (the input's label) is applied -- to the returned handle
+    // and, since it aliases the cache's storage, to the caller's handle. See caller_owned_topology.hpp.
+    if (const auto label = ttnn::operations::core::caller_owned_output_topology(
+            tensor_args.cache_tensor, {&tensor_args.input_tensor}, "sharded_to_interleaved_partial")) {
+        return {*label};
+    }
+    return {};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<ShardedToInterleavedPartialDeviceOperation::tensor_return_value_t>

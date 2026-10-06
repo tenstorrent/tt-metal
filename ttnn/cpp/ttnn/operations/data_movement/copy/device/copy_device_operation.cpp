@@ -4,11 +4,14 @@
 
 #include "copy_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/core/caller_owned_topology.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // common_tm_bw_model
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_align.hpp>
+
+#include <algorithm>
 
 namespace ttnn::prim {
 
@@ -200,20 +203,37 @@ CopyDeviceOperation::tensor_return_value_t CopyDeviceOperation::create_output_te
 
 std::vector<tt::tt_metal::TensorTopology> CopyDeviceOperation::compute_output_topologies(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
-    const tt::tt_metal::TensorTopology& src = tensor_args.input.tensor_topology();
+    const Tensor& src = tensor_args.input;
     if (!tensor_args.preallocated_output.has_value()) {
         // Fresh output: a copy of the source is distributed exactly like the source.
-        return {src};
+        return {src.tensor_topology()};
     }
-    // Preallocated output: on every mesh coordinate the op performs dst[coord] := src[coord], so afterwards dst
-    // holds src's per-device contents and therefore src's distribution. The default inference would instead union
-    // src and dst, keeping a stale Shard label on a dst that is now replicated, or (worse) a Replicate label on a
-    // dst that now holds per-device shards, which the serialiser dedups to a single shard.
-    // When src spans fewer mesh coordinates than dst only that sub-mesh of dst is rewritten, so dst's own label is
-    // the only one still describing the whole tensor; keep it. Validation already forces src and dst onto the same
-    // device.
-    const tt::tt_metal::TensorTopology& dst = tensor_args.preallocated_output->tensor_topology();
-    return {src.mesh_coords() == dst.mesh_coords() ? src : dst};
+    // Preallocated output: on every mesh coordinate src occupies the op performs dst[coord] := src[coord].
+    // Validation already forces src and dst onto the same device.
+    //
+    // Full coverage -- src and dst span the same SET of mesh coordinates -- means every device of dst now holds
+    // src's shard for that device, so dst's data is distributed exactly like src and the output adopts src's
+    // topology, coordinate order included (that order is the topology's logical-to-physical mapping). The sets are
+    // compared with std::is_permutation, not vector equality: two full-mesh tensors may list the same devices in a
+    // different mesh_coords() order, and that is still a full overwrite, not a sub-mesh write.
+    //
+    // Partial coverage -- src occupies a strict subset of dst's coordinates -- rewrites only those devices, so no
+    // single label of dst's describes all of its shards any more. The shared caller-owned rule decides; it declines
+    // (nullopt) for an operand on a different coordinate set, and the hook then returns {} so the framework's union
+    // labels the result. That is the data-preserving choice: a label that still said Replicate over shards that now
+    // differ would let the flatbuffer serialiser deduplicate them. In this case launch() has already replaced the
+    // returned tensor by a new one restricted to src's coordinates, so the caller's own dst handle keeps its label.
+    const Tensor& dst = *tensor_args.preallocated_output;
+    const auto& src_coords = src.tensor_topology().mesh_coords();
+    const auto& dst_coords = dst.tensor_topology().mesh_coords();
+    if (std::is_permutation(src_coords.begin(), src_coords.end(), dst_coords.begin(), dst_coords.end())) {
+        return {src.tensor_topology()};
+    }
+    if (const auto label =
+            ttnn::operations::core::caller_owned_output_topology(dst, {&src}, "copy (preallocated output)")) {
+        return {*label};
+    }
+    return {};
 }
 
 CopyDeviceOperation::tensor_return_value_t copy(
