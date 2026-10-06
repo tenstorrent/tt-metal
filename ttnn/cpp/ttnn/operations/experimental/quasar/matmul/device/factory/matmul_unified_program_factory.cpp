@@ -91,18 +91,16 @@ UnifiedMatmulPlan size_dfbs(
     plan.C_partials_format = plan.packer_l1_acc_en
                                  ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                  : (fp32_dest_acc_en ? tt::DataFormat::Float32 : plan.C_format);
-    // A thread's share of the C slice (its subblocks back to back) is one C_slice / C_partials entry when there
-    // are several threads: Quasar addresses tiles from the thread's tile-counter cursor, which a single entry
-    // keeps at one address, so block packs and unpacks see a contiguous buffer and the packer's L1 accumulation
-    // lands on the same addresses every K chunk. With one thread an entry is a tile, as a Gen1 CB page is.
+    // A thread's share of the C slice (its subblocks back to back, padded to the busiest thread's) is
+    // C_entries_per_thread one-tile entries of C_slice and C_partials, pushed and popped as one batch per K chunk:
+    // every thread then moves the same credits, and its C_partials entries come back to the same addresses every
+    // K chunk, where the packer's L1 accumulation needs them.
     const uint32_t num_subblocks =
         (plan.C_slice_M_padded_tiles / plan.subblock_M_tiles) * (plan.C_slice_N_padded_tiles / plan.subblock_N_tiles);
-    const uint32_t share_tiles =
+    plan.C_entries_per_thread =
         tt::div_up(num_subblocks, plan.num_compute_threads) * plan.subblock_M_tiles * plan.subblock_N_tiles;
-    plan.C_entries_per_thread = plan.num_compute_threads > 1 ? 1 : share_tiles;
-    const uint32_t entry_tiles = share_tiles / plan.C_entries_per_thread;
-    plan.C_entry_bytes = entry_tiles * tt::tile_size(plan.C_format);
-    plan.C_partials_entry_bytes = entry_tiles * tt::tile_size(plan.C_partials_format);
+    plan.C_entry_bytes = tt::tile_size(plan.C_format);
+    plan.C_partials_entry_bytes = tt::tile_size(plan.C_partials_format);
     plan.C_slice_entries = plan.C_entries_per_thread * plan.num_compute_threads;
     plan.C_partials_entries = plan.C_entries_per_thread * plan.num_compute_threads;
 

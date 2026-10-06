@@ -111,11 +111,19 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                             // after any copy_init.
                             reconfig_data_format_srca(dfb::B_slice, dfb::C_partials);
                             copy_init(dfb::C_partials);
-                            copy_block(
-                                dfb::C_partials,
-                                /*start_in_tile_index=*/entry_tile,
-                                /*start_dst_tile_index=*/0,
-                                subblock_tiles);
+                            if constexpr (num_compute_threads == 1) {
+                                copy_block(
+                                    dfb::C_partials,
+                                    /*start_in_tile_index=*/entry_tile,
+                                    /*start_dst_tile_index=*/0,
+                                    subblock_tiles);
+                            } else {
+                                // This thread's entries are every num_compute_threads-th one; Quasar's unpack indexes
+                                // a STRIDED DFB densely (only the packer steps the stride, #56195).
+                                for (uint32_t tile = 0; tile < subblock_tiles; ++tile) {
+                                    copy_tile(dfb::C_partials, (entry_tile + tile) * num_compute_threads, tile);
+                                }
+                            }
                             reconfig_data_format_srca(dfb::C_partials, dfb::B_slice);
                             matmul_block_init(
                                 dfb::A_slice,
