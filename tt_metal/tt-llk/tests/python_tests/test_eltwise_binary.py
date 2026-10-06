@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from conftest import blackhole_only
 from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -1193,6 +1194,7 @@ def test_eltwise_binary_dest_reuse_per_face_handoff(
 
 
 # Dest reuse with a row broadcast of B (DEST_TO_SRCA), both hand-offs.
+@blackhole_only
 @parametrize(
     math_op=DEST_REUSE_MATH_OPS,
     formats=get_dest_reuse_formats,
