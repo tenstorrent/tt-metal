@@ -124,3 +124,46 @@ Two Gemma-specific steps:
 
 Both are properties of the trained weights (norm weights, the residual stream's layout, the attention heads), not of
 any implementation: Hugging Face's own bf16 run loses the same way (0.958 vs HF fp32).
+
+## 9. Attention settings sweep (2026-10-06, chip/attn_sweep.py, merged code 065d1b0167f)
+Each setting patched at runtime, model built once. End to end: gate text (128 prefill + 128 decode) and book (512 + 499),
+PCC vs HF fp32 (reference/hf_gate_fp32_ref.py, book_logits_hf_fp32.pt). Isolated (SWEEP_ISO=128): decode positions 0-127
+with every layer fed HF's exact fp32 input; error = 1 - PCC averaged over the 30 layers, x1e-4. The chip is deterministic
+(baseline run twice: identical to the last digit).
+
+| Setting | Attention error | Layer-output error | Same 8 experts | Gate PCC vs fp32 | Book PCC vs fp32 |
+|---|---|---|---|---|---|
+| baseline | 2.557 | 1.611 | 92.66% | 0.97347 | 0.93876 |
+| sdpa_hifi4_exact | 2.548 | 1.528 | 93.2% | 0.97058 | 0.94008 |
+| sdpa_hifi2_exact | 2.562 | 1.643 | 92.73% | 0.97405 | 0.93639 |
+| sdpa_hifi4_approx | 2.549 | 1.656 | 92.97% | 0.97384 | 0.93387 |
+| sdpa_kchunk32 | 2.534 | 1.63 | 92.79% | 0.97465 | 0.94047 |
+| sdpa_kchunk128 | 2.588 | 1.573 | 93.12% | 0.96411 | 0.93957 |
+| sdpa_cores_per_head1 | 2.58 | 1.598 | 92.89% | 0.9698 | 0.94322 |
+| sdpa_cores_per_head4 | 2.557 | 1.611 | 92.66% | 0.97347 | 0.93785 |
+| qkv_hifi2 | 1.892 | 1.379 | 93.49% | 0.97284 | 0.93669 |
+| qkv_hifi4 | 1.889 | 1.474 | 93.49% | 0.97636 | 0.94413 |
+| qkv_default_config | 2.294 | 1.606 | 93.36% | 0.96784 | 0.93821 |
+| qkv_hifi4_kblock1 | 1.889 | 1.477 | 93.39% | 0.96641 | 0.94184 |
+| qkv_hifi4_kblock11 | 1.889 | 1.469 | 93.54% | 0.9736 | 0.94354 |
+| qkv_lofi_kblock1 | 3.042 | 1.789 | 92.68% | 0.9693 | 0.94308 |
+| oproj_hifi4 | 2.539 | 1.628 | 92.47% | 0.97084 | 0.94306 |
+| oproj_hifi4_kblock1 | 2.539 | 1.628 | 92.47% | 0.9695 | 0.9343 |
+| oproj_hifi4_kblock16 | 2.539 | 1.628 | 92.5% | 0.97154 | 0.94155 |
+| headnorm_decode_fp32 | 2.239 | 1.441 | 93.75% | 0.96525 | 0.94475 |
+| combo_qkv_hifi4_kchunk32 | 1.86 | 1.405 | 93.39% | 0.96972 | 0.94295 |
+| combo_max_precision | 1.575 | 1.374 | 93.83% | 0.96781 | 0.94223 |
+| combo_max_precision_kchunk32 | 1.548 | 1.438 | 93.46% | 0.969 | 0.9385 |
+
+Settings run end to end only (pass 1): exp_approx_mode and the reduce-scatter + all-gather all-reduce give bit-identical
+results to the baseline; decode k_chunk 256 and prefill k_chunk 256 exceed L1; prefill k_chunk 32: gate 0.97342, book 0.94219;
+prefill q_chunk 32/128: gate unchanged, book 0.9357; prefill QKV HiFi4: gate 0.97438, book 0.93351.
+
+- Real precision gains (isolated): QKV matmul off LoFi (sliding layers: tuned program config without a compute config makes
+  ttnn pick LoFi) to HiFi2/HiFi4 + fp32 accumulation: attention error -26%; decode per-head Q/K/V norm with fp32
+  accumulation: -12%; all four precision changes together: -38%. SDPA precision / chunking / core split: within +-1%.
+- Order (K blocking) changes nothing once accumulation is fp32; with bf16 accumulation smaller K blocks are worse (3.04).
+- End to end every change moves PCC by +-0.003-0.01 with random sign, including pure order changes; none reaches 0.99 and
+  the most precise combination scores below the baseline on the gate text. Attention precision is not the limit: the
+  layer-output error falls only 15% for a 38% attention gain and expert agreement only 92.7% -> 93.8%; the experts' own
+  error (about 11e-4) is ~4x attention's.

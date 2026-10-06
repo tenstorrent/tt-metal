@@ -54,11 +54,14 @@ fp32 switches (off by default): `GEMMA4_FP32_ACTIVATIONS=1 GEMMA4_ROUTER_TOPK_ON
 - `hf_fp32.py`, `hf_fp32_eager.py`: HF in fp32
 - `hf_eager_save.py`: HF bf16, eager attention
 - `hf_per_layer_ref.py`: per-layer fp32 reference for the per-layer PCC scripts
+- `hf_gate_fp32_ref.py`: fp32 reference on the accuracy gate's tokens
 - `cross_version.py`: transformers 5.18 vs 5.12.1 (`~/venvs/hf-5.18`)
 - `chat_ids.py`, `chat_hf.py`, `hf_sanity.py`, `gemma_top_guesses.py`: sanity checks
 
 **`chip/`**: QB2
 - `run_merge_validation.sh <label>`: gate, token accuracy, per-layer PCC, perf
+- `attn_sweep.py <label> [settings]`: attention precision/order sweep, model built once (`SWEEP_ISO=128` adds isolated per-layer error)
+- `prefill_fp32_off.py <script|pytest> ...`: run with main's prefill fp32 norms switched off
 - `tt_token_accuracy.py`: tt-metal standard protocol (512 prefill, 500 decode, book text)
 - `tt_decode_only_accuracy.py`: same, decode only
 - `tt_per_layer_pcc.py`, `tt_per_layer_pcc_decode.py`: per-layer / per-op PCC (prefill path / decode path)
