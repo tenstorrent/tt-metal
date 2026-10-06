@@ -1090,7 +1090,7 @@ def test_eltwise_binary_dest_reuse(
         BroadcastType.Column,
         BroadcastType.Scalar,
     ],
-    math_op=[MathOperation.Elwmul, MathOperation.Elwadd, MathOperation.Elwsub],
+    math_op=lambda formats: get_eltwise_binary_math_ops(formats),
     math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
     transpose_srca=[Transpose.No],
     tile_dimensions=[[32, 32]],
