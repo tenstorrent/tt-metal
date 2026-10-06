@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
+#include "ttnn/operations/core/caller_owned_topology.hpp"
 #include <tt-metalium/work_split.hpp>
 using uint32_t = std::uint32_t;
 using namespace tt::tt_metal;
@@ -571,12 +572,25 @@ Tensor LayerNormDeviceOperation::create_output_tensors(
 
 std::vector<tt::tt_metal::TensorTopology> LayerNormDeviceOperation::compute_output_topologies(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // In place, the returned tensor IS the caller's input: its distribution over the mesh does not change, so
-    // it must keep the caller's topology. The framework default would instead union the input with
-    // weight/bias/residual and relabel a replicated input as sharded whenever one of those is sharded
-    // (cf. update_padded_kv_cache).
+    // In place, the returned tensor IS the caller's input. Its label stays while it still describes the data:
+    // with weight / bias / residual / stats that are replicated, or sharded only along axes the input is sharded
+    // along too, nothing diverges and the caller's label is kept. An operand sharded along an axis the input is
+    // replicated on makes every device compute a different result there, so the label must follow the data:
+    // the hook falls back to the framework union, which the aliased caller's handle then reads too. See
+    // caller_owned_topology.hpp.
     if (is_inplace(operation_attributes)) {
-        return {tensor_args.input.tensor_topology()};
+        const auto ptr = [](const std::optional<Tensor>& t) { return t.has_value() ? &*t : nullptr; };
+        if (const auto label = ttnn::operations::core::caller_owned_output_topology(
+                tensor_args.input,
+                {ptr(tensor_args.residual_input_tensor),
+                 ptr(tensor_args.weight),
+                 ptr(tensor_args.bias),
+                 ptr(tensor_args.stats),
+                 ptr(tensor_args.recip_tensor)},
+                "layer_norm (in place)")) {
+            return {*label};
+        }
+        return {};
     }
     // Out of place the output is a fresh tensor. norm(input + residual) with a sharded residual is a
     // legitimate two-activation op whose output is per-device distinct, so the union of all inputs is the

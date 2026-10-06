@@ -6,6 +6,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/core/caller_owned_topology.hpp"
 
 using namespace tt::tt_metal;
 
@@ -107,10 +108,16 @@ Tensor SliceWriteDeviceOperation::create_output_tensors(
 
 std::vector<tt::tt_metal::TensorTopology> SliceWriteDeviceOperation::compute_output_topologies(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    // In-place partial write: every device overwrites output[start:end:step] with its own input shard, so the
-    // output's distribution over the mesh is unchanged and the caller's label stays correct
-    // (cf. update_padded_kv_cache).
-    return {tensor_args.output.tensor_topology()};
+    // In-place partial write into the caller's output. Its label stays while it still describes the data: an
+    // input that is replicated, or sharded only along axes the output is sharded along too, leaves the output's
+    // distribution as labelled. An input sharded along an axis the output is replicated on writes a different
+    // slice on every device there, so the label must follow the data and the hook falls back to the framework
+    // union. See caller_owned_topology.hpp.
+    if (const auto label = ttnn::operations::core::caller_owned_output_topology(
+            tensor_args.output, {&tensor_args.input}, "slice_write (quasar)")) {
+        return {*label};
+    }
+    return {};
 }
 
 }  // namespace ttnn::prim::qsr

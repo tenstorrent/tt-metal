@@ -12,6 +12,7 @@
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/caller_owned_topology.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
 
@@ -374,11 +375,18 @@ SoftmaxDeviceOperation::tensor_return_value_t SoftmaxDeviceOperation::create_out
 
 std::vector<tt::tt_metal::TensorTopology> SoftmaxDeviceOperation::compute_output_topologies(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    // In place, the returned tensor IS the caller's input: its distribution over the mesh does not change, so
-    // it must keep the caller's topology. The framework default would instead union the input with the mask
-    // and relabel a replicated input as sharded whenever the mask is sharded (cf. update_padded_kv_cache).
+    // In place, the returned tensor IS the caller's input. Its label stays while it still describes the data:
+    // with a mask that is replicated, or sharded only along axes the input is sharded along too, nothing diverges
+    // and the caller's label is kept. A mask sharded along an axis the input is replicated on makes every device
+    // compute a different result there, so the label must follow the data: the hook falls back to the framework
+    // union (the mask's label), which the aliased caller's handle then reads too. See caller_owned_topology.hpp.
     if (is_inplace(attributes)) {
-        return {tensor_args.input_tensor.tensor_topology()};
+        const Tensor* mask = tensor_args.mask.has_value() ? &*tensor_args.mask : nullptr;
+        if (const auto label = ttnn::operations::core::caller_owned_output_topology(
+                tensor_args.input_tensor, {mask}, "softmax (in place)")) {
+            return {*label};
+        }
+        return {};
     }
     // Out of place the output is a fresh tensor. softmax(input * scale + mask) is a genuinely two-input op,
     // so the union of input and mask is the right label (a sharded mask makes the output per-device
