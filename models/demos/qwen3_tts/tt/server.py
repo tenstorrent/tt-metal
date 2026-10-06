@@ -1304,7 +1304,13 @@ def sample_from_tt_vocab_logits(
     return out
 
 
-SUPPORTED_PREFILL_LENS = list(PREFILL_SEQS)
+# Largest Talker prefill bucket. The swept prefill program configs overflow L1 at 1024
+# on N150 ("static circular buffers clash with L1 buffers" while warming bucket 1024),
+# and the server never needs it: ~70 tokens of ICL overhead plus the text for at most
+# 256 frames (~20 s of speech) stays well under 512. Longer prompts raise instead of
+# silently using a too-small bucket.
+MAX_PREFILL_BUCKET = int(os.environ.get("QWEN3_TTS_MAX_PREFILL_BUCKET", "512"))
+SUPPORTED_PREFILL_LENS = [b for b in PREFILL_SEQS if b <= MAX_PREFILL_BUCKET]
 
 
 def get_padded_prefill_len(seq_len: int) -> int:
@@ -1312,7 +1318,10 @@ def get_padded_prefill_len(seq_len: int) -> int:
     for bucket in SUPPORTED_PREFILL_LENS:
         if seq_len <= bucket:
             return bucket
-    return SUPPORTED_PREFILL_LENS[-1]
+    raise ValueError(
+        f"prompt of {seq_len} tokens exceeds the largest prefill bucket "
+        f"{SUPPORTED_PREFILL_LENS[-1]} (QWEN3_TTS_MAX_PREFILL_BUCKET); shorten the text or reference"
+    )
 
 
 def build_prefill_attn_mask(
@@ -3148,7 +3157,7 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
     # Hoists what used to be per-request alloc + capture inside run_inference.
     # Per-request handling now reduces to: zero-reset KV cache + execute trace.
     # Buckets match the Talker prefill traces above.
-    TRACE_DECODE_BUCKETS = (32, 64, 96, 128, 192, 256, 384, 512, 1024)
+    TRACE_DECODE_BUCKETS = tuple(SUPPORTED_PREFILL_LENS)
     print(f"  Allocating persistent Talker KV caches + decode traces for buckets {TRACE_DECODE_BUCKETS}...")
     trace_decode_embed_tt = ttnn.from_torch(
         torch.zeros(1, 1, 1, talker_h, dtype=torch.bfloat16),
