@@ -32,11 +32,15 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 imp
 def build_v4_model_reference(config, seed: int = 0) -> dict:
     """A randomised V4 stack of ``config.num_hidden_layers`` layers.
 
-    Each layer is ``build_v4_block_reference(config, i, seed + i)``. The head gets what the model
-    prescribes (``DeepseekV4PreTrainedModel._init_weights``: fn ~ N(0, initializer_range), base zero,
-    scale one) and the final norm a gain away from 1.0, for the reason the block's norms do.
+    Each layer is ``build_v4_block_reference(config, i, seed + i)`` with a bf16 MoE: in fp32 a Pro
+    layer's experts alone are ~100 GB of host memory. The head gets what the model prescribes
+    (``DeepseekV4PreTrainedModel._init_weights``: fn ~ N(0, initializer_range), base zero, scale one)
+    and the final norm a gain away from 1.0, for the reason the block's norms do.
     """
-    layers = [build_v4_block_reference(config, i, seed=seed + i) for i in range(config.num_hidden_layers)]
+    layers = [
+        build_v4_block_reference(config, i, seed=seed + i, moe_dtype=torch.bfloat16)
+        for i in range(config.num_hidden_layers)
+    ]
     torch.manual_seed(seed + config.num_hidden_layers)
     embed = nn.Embedding(config.vocab_size, config.hidden_size).eval()
     hc_head = DeepseekV4HyperHead(config).eval()

@@ -58,8 +58,8 @@ def test_v4_transformer_chunked(mesh_device, device_params, num_links, n_chunks,
     input_ids = torch.randint(0, config.vocab_size, (1, total))
     ref_out, ref_layers = v4_model_forward(ref, config, input_ids)
 
-    # The fp32 reference is the bulk of host memory (~100 GB per Pro layer); only the bf16 weights
-    # and the attention modules have to outlive it.
+    # The reference's bf16 experts (~50 GB per Pro layer) are shared with the state dict, not copied;
+    # dropping the reference frees the rest of it.
     state_dict = v4_model_state_dict(ref, config)
     del ref
     model = TtV4Transformer(

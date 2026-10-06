@@ -59,8 +59,8 @@ def test_v4_transformer_pipeline_split(mesh_device, device_params, num_links, se
 
     topology = per_axis_topology(device_params["fabric_config"])
     slices = ((0, _BOUNDARY, True, False), (_BOUNDARY, _NUM_LAYERS - _BOUNDARY, False, True))
-    # The fp32 reference is the bulk of host memory (~100 GB per Pro layer); only the bf16 weights
-    # and the attention modules have to outlive it.
+    # The reference's bf16 experts (~50 GB per Pro layer) are shared with the state dict, not copied;
+    # dropping the reference frees the rest of it.
     state_dicts = [
         v4_model_state_dict(ref, config, first_layer_idx=first, num_layers=count) for first, count, _, _ in slices
     ]

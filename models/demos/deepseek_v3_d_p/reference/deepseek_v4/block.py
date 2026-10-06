@@ -45,15 +45,20 @@ def v4_block_modules(config, layer_idx: int) -> dict:
     }
 
 
-def build_v4_block_reference(config, layer_idx: int, seed: int = 0):
+def build_v4_block_reference(config, layer_idx: int, seed: int = 0, moe_dtype: torch.dtype = torch.float32):
     """A randomised V4 decoder block: the two norms, the layer's attention, and its MoE.
 
     Random, and deliberately not near-identity: the norm gains are drawn away from 1.0 and the sinks
     from N(0,1), so a PCC pass cannot come from weights that make the block an identity map.
+
+    ``moe_dtype`` is the MoE's parameter dtype; everything else stays fp32. The MoE is nearly all of a
+    layer's host memory, and the device is handed bf16 copies of its weights either way.
     """
     torch.manual_seed(seed)
     ref = v4_block_modules(config, layer_idx)
     attn, mlp = ref["attn"], ref["mlp"]
+    # Cast before the draws, so the fp32 allocation is never touched.
+    mlp.to(moe_dtype)
     hidden, inter, n_exp = config.hidden_size, config.intermediate_size, config.num_local_experts
     hs, ds = hidden**-0.5, inter**-0.5
     with torch.no_grad():
@@ -182,5 +187,6 @@ def v4_block_forward(ref, config, hidden_states, input_ids):
             comb.to(dtype).transpose(-1, -2), h
         )
         post, comb, collapsed = ref["ffn_hc"](h)
-        mlp_out = mlp(ref["ffn_norm"](collapsed), input_ids=input_ids)
+        moe_dtype = mlp.experts.gate_up_proj.dtype
+        mlp_out = mlp(ref["ffn_norm"](collapsed).to(moe_dtype), input_ids=input_ids).to(dtype)
         return post.to(dtype).unsqueeze(-1) * mlp_out.unsqueeze(-2) + torch.matmul(comb.to(dtype).transpose(-1, -2), h)
