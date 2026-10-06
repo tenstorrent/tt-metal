@@ -549,6 +549,10 @@ def unpack_mxint8(
 
     Layout: [scales padded to 16B][signed-int8 elements padded to 16B], one E8M0
     scale per 32-element block. Decoded value = (int8 / 64) × 2^(scale_e8m0 − 127).
+
+    A 0xFF block scale NaNs the whole block, zeros included -- the packer emits
+    it for a block whose datums are all NaN, since MxInt elements have no NaN
+    encoding of their own.
     """
     if use_srcs:
         raise NotImplementedError("use_srcs=True not yet implemented for unpack_mxint8")
@@ -585,6 +589,10 @@ def unpack_mxint4(
     Layout: [scales padded to 16B][packed nibbles padded to 16B], one E8M0
     scale per 32-element block, 2 elements per byte (low nibble = even index).
     Decoded value = (int4 / 4) × 2^(scale_e8m0 − 127).
+
+    A 0xFF block scale NaNs the whole block, zeros included -- the packer emits
+    it for a block whose datums are all NaN, since MxInt elements have no NaN
+    encoding of their own.
     """
     if use_srcs:
         raise NotImplementedError("use_srcs=True not yet implemented for unpack_mxint4")
@@ -634,6 +642,10 @@ def unpack_mxint2(
     Layout: [scales padded to 16B][packed crumbs padded to 16B], one E8M0
     scale per 32-element block, 4 elements per byte (crumb layout: bits[1:0]
     = even-most index, then [3:2], [5:4], [7:6]). Decoded value = int2 × 2^(scale_e8m0 − 127).
+
+    A 0xFF block scale NaNs the whole block, zeros included -- the packer emits
+    it for a block whose datums are all NaN, since MxInt elements have no NaN
+    encoding of their own.
     """
     if use_srcs:
         raise NotImplementedError("use_srcs=True not yet implemented for unpack_mxint2")

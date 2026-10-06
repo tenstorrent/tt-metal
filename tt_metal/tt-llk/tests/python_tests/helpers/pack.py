@@ -428,7 +428,15 @@ def _pack_mxfp8(
 
     Element count must be a multiple of MX_FORMAT_BLOCK_SIZE (32).
 
-    Uses ml_dtypes for FP8 element conversion and E8M0 scale encoding.
+    ml_dtypes converts the FP8 elements; the E8M0 scale comes from
+    :func:`_mx_shared_exponents`.
+
+    The shared scale is ``floor(log2(amax)) - elem_exp_max_unbiased``, a floor
+    rather than a round, so the block's largest datum can need a significand
+    the element format cannot hold and is clamped to its max normal -- 1.99
+    packs and reads back as 1.75. Inf saturates the same way rather than
+    surviving as Inf, and a block of all NaN is encoded by the reserved 0xFF
+    scale instead.
 
     Args:
         tensor: Input tensor (first face_r_dim * FACE_C_DIM * num_faces elements used)
@@ -554,6 +562,11 @@ def pack_mxfp8r(
     Returns:
         List of packed bytes in FULLY SEPARATED layout: [all_scales][all_elements]
         Scale count = (face_r_dim * 16 * num_faces) // 32 (one per OCP 32-datum block).
+
+    The shared scale is a floor, so the largest datum in a block saturates to
+    the element format's max normal rather than rounding up to it, and Inf
+    saturates there too; an all-NaN block takes the reserved 0xFF scale. See
+    :func:`_pack_mxfp8`.
     """
     assert tensor.numel() <= MAX_TILE_ELEMENTS, (
         f"pack_mxfp8r handles at most one tile ({MAX_TILE_ELEMENTS} elements), "
@@ -605,6 +618,11 @@ def pack_mxfp8p(
     Returns:
         List of packed bytes in FULLY SEPARATED layout: [all_scales][all_elements]
         Scale count = (face_r_dim * 16 * num_faces) // 32 (one per OCP 32-datum block).
+
+    The shared scale is a floor, so the largest datum in a block saturates to
+    the element format's max normal rather than rounding up to it, and Inf
+    saturates there too; an all-NaN block takes the reserved 0xFF scale. See
+    :func:`_pack_mxfp8`.
     """
     assert tensor.numel() <= MAX_TILE_ELEMENTS, (
         f"pack_mxfp8p handles at most one tile ({MAX_TILE_ELEMENTS} elements), "
