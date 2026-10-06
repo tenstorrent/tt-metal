@@ -287,6 +287,7 @@ class TtMiniMaxMoE(LightweightModule):
                 if overlap is not None:
                     overlap.load()
                     loaded = True
+                # TtDispatchModule.forward reads subdevice_id at call time (it takes no per-call override).
                 self.dispatch_module.subdevice_id = overlap.dispatch_sd_id if overlap is not None else None
                 dispatched_buffer, metadata = self.dispatch_module(
                     x,
