@@ -48,6 +48,14 @@ struct ReduceScatterProgramArtifacts {
     }
 };
 
+// Returned by build_ring_reduce_scatter_minimal_async_program_descriptor: where the reduce-scatter's reader and
+// writer kernels landed in the caller's ProgramDescriptor. A Program built from that descriptor uses the same
+// indices as kernel handles, which is how apply_ring_reduce_scatter_semaphore_args finds them on a cache hit.
+struct ReduceScatterDescriptorArtifacts {
+    size_t reader_kernel_index = 0;
+    size_t writer_kernel_index = 0;
+};
+
 struct ReduceScatterMinimalAsyncParams {
     uint32_t dim;
     uint32_t num_links;

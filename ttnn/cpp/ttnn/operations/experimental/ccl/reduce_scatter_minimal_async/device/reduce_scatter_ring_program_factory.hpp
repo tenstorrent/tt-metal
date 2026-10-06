@@ -10,6 +10,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -64,5 +65,42 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config);
+
+// ProgramDescriptor form of build_ring_reduce_scatter_minimal_async_program_artifacts: appends the same CBs,
+// kernels, semaphores (and fabric mux kernels) to `desc`. Tensor addresses are recorded as buffer bindings;
+// the GlobalSemaphore addresses are not in the program hash, so the caller re-applies them on every cache hit
+// with apply_ring_reduce_scatter_semaphore_args().
+ReduceScatterDescriptorArtifacts build_ring_reduce_scatter_minimal_async_program_descriptor(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const Tensor& input_tensor,
+    const Tensor& intermediate_tensor,
+    const std::optional<Tensor>& penult_intermediate_tensor,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    Tensor& output_tensor,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
+    ttnn::ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    CoreCoord core_grid_offset,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config);
+
+// Cache-hit refresh for a Program built from build_ring_reduce_scatter_minimal_async_program_descriptor: writes
+// the current barrier / semaphore addresses into the reader's and writer's common runtime args.
+void apply_ring_reduce_scatter_semaphore_args(
+    tt::tt_metal::Program& program,
+    const ReduceScatterDescriptorArtifacts& artifacts,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const std::vector<GlobalSemaphore>& semaphore);
 
 }  // namespace ttnn::experimental::prim

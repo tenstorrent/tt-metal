@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bitset>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
@@ -177,6 +178,41 @@ void ReduceScatterFusedOpSignaler::init_reduce_scatter(
     }
 
     initialized_reduce_scatter = true;
+}
+
+void ReduceScatterFusedOpSignaler::init_reduce_scatter(
+    ProgramDescriptor& desc, const IDevice* device, const CoreRangeSet& core_range_to_signal) {
+    this->fused_op_receiver_cores_noc.clear();
+    for (const auto& range : core_range_to_signal.ranges()) {
+        for (const auto& core : grid_to_cores(range.start_coord, range.end_coord, true)) {
+            this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+        }
+    }
+    this->fused_op_receiver_signal_semaphores.push_back(add_semaphore_descriptor(desc, core_range_to_signal));
+    this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
+    this->fused_op_signaler_mode =
+        this->num_fused_op_cores_to_signal > 1 ? FusedOpSignalerMode::MULTI : FusedOpSignalerMode::SINGLE;
+    initialized_reduce_scatter = true;
+}
+
+uint32_t add_semaphore_descriptor(
+    ProgramDescriptor& desc, const CoreRangeSet& cores, uint32_t initial_value, tt::CoreType core_type) {
+    // Mirrors tt::tt_metal::NUM_SEMAPHORES (tt_metal/impl/buffers/semaphore.hpp), which no public header exposes.
+    constexpr uint32_t kSemaphoresPerCore = 16;
+    std::bitset<kSemaphoresPerCore> used;
+    for (const auto& sem : desc.semaphores) {
+        if (sem.core_type == core_type && sem.id < kSemaphoresPerCore && sem.core_ranges.intersects(cores)) {
+            used.set(sem.id);
+        }
+    }
+    for (uint32_t id = 0; id < kSemaphoresPerCore; id++) {
+        if (!used.test(id)) {
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = id, .core_type = core_type, .core_ranges = cores, .initial_value = initial_value});
+            return id;
+        }
+    }
+    TT_THROW("No semaphore id is free on every core of {}", cores.str());
 }
 
 void ReduceScatterFusedOpSignaler::init_fused_op() { initialized_fused_op = true; }

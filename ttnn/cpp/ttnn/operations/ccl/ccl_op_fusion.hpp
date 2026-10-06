@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -113,11 +114,26 @@ struct ReduceScatterFusedOpSignaler {
         tt::tt_metal::Program& program,
         const tt::tt_metal::IDevice* device,
         const std::variant<tt::tt_metal::CoreRange, tt::tt_metal::CoreRangeSet>& core_range_to_signal);
+    // ProgramDescriptor form of the overload above: the signal semaphore becomes a SemaphoreDescriptor on
+    // core_range_to_signal, with an id that is free on every core of that range.
+    void init_reduce_scatter(
+        tt::tt_metal::ProgramDescriptor& desc,
+        const tt::tt_metal::IDevice* device,
+        const tt::tt_metal::CoreRangeSet& core_range_to_signal);
 
     void init_fused_op();
 
     void push_reduce_scatter_fused_op_rt_args(std::vector<uint32_t>& out_rt_args);
 };
+
+// Adds a SemaphoreDescriptor on `cores` to `desc` and returns its id: the lowest id that no semaphore already
+// in `desc` uses on any of those cores. This is what tt::tt_metal::CreateSemaphore(program, cores, ...) does
+// for a Program, so a descriptor-built program gets the same kind of id assignment.
+uint32_t add_semaphore_descriptor(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const tt::tt_metal::CoreRangeSet& cores,
+    uint32_t initial_value = 0,
+    tt::CoreType core_type = tt::CoreType::WORKER);
 
 enum class MatmulFusedOpSignalerType {
     ALL_GATHER,
