@@ -38,9 +38,18 @@ AllGatherProgramArtifacts::RuntimeArgs AllGatherProgramArtifacts::collect_runtim
 
 namespace {
 
-// Reader is pushed first and writer second, so these stay the kernel handles on the built Program.
-constexpr tt::tt_metal::KernelHandle kReaderKernelIndex = 0;
-constexpr tt::tt_metal::KernelHandle kWriterKernelIndex = 1;
+// The default factory builds each program from an empty descriptor, so its reader and writer are kernels 0 and 1.
+constexpr AllGatherDescriptorArtifacts kDefaultKernels{.reader_kernel_index = 0, .writer_kernel_index = 1};
+
+// barrier, semaphore_0, semaphore_1: the last three AllGatherCommonArgs slots.
+std::array<uint32_t, 3> all_gather_semaphore_args(
+    const std::optional<GlobalSemaphore>& barrier_semaphore, const std::vector<GlobalSemaphore>& semaphore) {
+    return {
+        barrier_semaphore.has_value() ? static_cast<uint32_t>(barrier_semaphore->address()) : 0u,
+        static_cast<uint32_t>(semaphore.at(0).address()),
+        static_cast<uint32_t>(semaphore.at(1).address()),
+    };
+}
 
 uint32_t all_gather_async_core_count_per_link(
     uint32_t num_workers_per_direction,
@@ -102,7 +111,10 @@ uint32_t default_workers(
         num_links);
 }
 
-tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_descriptor(
+}  // namespace
+
+AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_descriptor(
+    tt::tt_metal::ProgramDescriptor& desc,
     const Tensor& input_tensor,
     const MeshCoordinate& sender_device_coord,
     const std::optional<MeshCoordinate>& forward_coord,
@@ -117,14 +129,13 @@ tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_d
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
     const bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid) {
-    tt::tt_metal::ProgramDescriptor desc;
-
     // Tensor Info
     TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor buffer is null");
     TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor buffer is null");
@@ -183,7 +194,18 @@ tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_d
         is_first_chip,
         is_last_chip);
 
-    constexpr bool fuse_op = false;
+    /* All gather fusion */
+    const bool fuse_op = fused_op_signaler.has_value();
+
+    // Need a separate signaler for the sender workers, to handle the first tensor slice that is locally available
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_sender_workers;
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_forward;
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_backward;
+    if (fuse_op) {
+        fused_op_signaler_sender_workers = fused_op_signaler.value();
+        fused_op_signaler_forward = fused_op_signaler.value();
+        fused_op_signaler_backward = fused_op_signaler.value();
+    }
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
@@ -225,8 +247,8 @@ tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_d
     std::vector<CoreRange> termination_master_core_ranges;
     termination_master_core_ranges.reserve(num_links * num_directions_per_link);
 
-    [[maybe_unused]] std::set<CoreRange> sender_forward_core_ranges;
-    [[maybe_unused]] std::set<CoreRange> sender_backward_core_ranges;
+    std::set<CoreRange> sender_forward_core_ranges;
+    std::set<CoreRange> sender_backward_core_ranges;
 
     const auto mux_connection_valid = [&backward_coord, &forward_coord](const uint32_t dir) {
         return (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
@@ -327,6 +349,17 @@ tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_d
     }
     if (num_mux_cores_per_direction_per_link) {
         writer_compute_defines.emplace_back("USE_WORKER_MUX", "1");
+    }
+
+    if (fuse_op) {
+        auto sender_workers_forward = corerange_to_cores(sender_forward_core_ranges, std::nullopt, true);
+        auto sender_workers_backward = corerange_to_cores(sender_backward_core_ranges, std::nullopt, true);
+        fused_op_signaler_forward->init_all_gather(
+            desc, mesh_device, sender_forward_core_ranges, sender_workers_forward);
+        fused_op_signaler_backward->init_all_gather(
+            desc, mesh_device, sender_backward_core_ranges, sender_workers_backward);
+        fused_op_signaler_sender_workers->init_all_gather(
+            desc, mesh_device, sender_forward_core_ranges, sender_workers_forward);
     }
 
     const uint32_t l1_unreserved_base_address =
@@ -457,8 +490,6 @@ tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_d
     reader_kernel_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
     const tt::tt_metal::KernelHandle reader_kernel_index = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
     desc.kernels.push_back(std::move(reader_kernel_desc));
-    TT_FATAL(
-        reader_kernel_index == kReaderKernelIndex, "Reader kernel must be descriptor index {}", kReaderKernelIndex);
 
     // Create Writer kernels
     std::vector<uint32_t> sender_writer_compile_args = {
@@ -517,8 +548,6 @@ tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_d
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
     const tt::tt_metal::KernelHandle writer_kernel_index = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
     desc.kernels.push_back(std::move(writer_kernel_desc));
-    TT_FATAL(
-        writer_kernel_index == kWriterKernelIndex, "Writer kernel must be descriptor index {}", kWriterKernelIndex);
 
     // create mux kernel
     std::optional<tt::tt_metal::KernelHandle> mux_kernel_index;
@@ -595,6 +624,12 @@ tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_d
                 uint32_t start_pages_read_in_row = input_tile_id_start % input_tensor_Wt;
                 uint32_t start_row_offset = input_tile_id_start / input_tensor_Wt * output_tensor_Wt;
 
+                uint32_t self_write_done_semaphore = 0;
+                if (fuse_op) {
+                    self_write_done_semaphore =
+                        ttnn::experimental::ccl::add_semaphore_descriptor(desc, CoreRangeSet(CoreRange(core)));
+                }
+
                 std::vector<uint32_t> reader_rt_args = {
                     dir,                      // direction RT ARG
                     input_tile_id_start,      // input_tile_id_start RT ARG
@@ -608,6 +643,22 @@ tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_d
                 }
                 if (output_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(output_tensor, reader_rt_args);
+                }
+                if (fuse_op) {
+                    reader_rt_args.push_back(self_write_done_semaphore);
+                    if (dir) {
+                        fused_op_signaler_forward->push_all_gather_fused_op_rt_args(
+                            reader_rt_args,
+                            num_workers_per_direction * num_links,
+                            worker + (link * num_workers_per_direction),
+                            1);
+                    } else {
+                        fused_op_signaler_backward->push_all_gather_fused_op_rt_args(
+                            reader_rt_args,
+                            num_workers_per_direction * num_links,
+                            worker + (link * num_workers_per_direction),
+                            0);
+                    }
                 }
                 desc.kernels[reader_kernel_index].runtime_args.emplace_back(core, std::move(reader_rt_args));
 
@@ -666,32 +717,57 @@ tt::tt_metal::ProgramDescriptor build_all_gather_async_minimal_default_program_d
                     }
                 }
 
+                if (fuse_op) {
+                    writer_rt_args.push_back(self_write_done_semaphore);
+                    fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
+                        writer_rt_args,
+                        num_workers_per_direction * num_links,
+                        worker + (link * num_workers_per_direction),
+                        1);
+                }
                 desc.kernels[writer_kernel_index].runtime_args.emplace_back(core, std::move(writer_rt_args));
             }
         }
     }
 
-    // Common bindings: input, output, barrier, forward semaphore, backward semaphore.
-    using Args = ttnn::ccl::AllGatherCommonArgs;
-    tt::tt_metal::KernelDescriptor::RTArgList common_args;
-    common_args.reserve(Args::count);
-    common_args.push_back(input_tensor.buffer());
-    common_args.push_back(output_tensor.buffer());
-    // Caller-owned semaphores stay out of the program hash. override_runtime_arguments rewrites these slots.
-    const uint32_t barrier_addr =
-        barrier_semaphore.has_value() ? static_cast<uint32_t>(barrier_semaphore->address()) : 0u;
-    const uint32_t semaphore_0 = static_cast<uint32_t>(semaphore.at(0).address());
-    const uint32_t semaphore_1 = static_cast<uint32_t>(semaphore.at(1).address());
-    common_args.push_back(barrier_addr);  // smuggled-rta-ok: semaphore, override
-    common_args.push_back(semaphore_0);   // smuggled-rta-ok: semaphore, override
-    common_args.push_back(semaphore_1);   // smuggled-rta-ok: semaphore, override
-    desc.kernels[reader_kernel_index].emplace_common_runtime_args(common_args);
-    desc.kernels[writer_kernel_index].emplace_common_runtime_args(common_args);
+    // Common args, in AllGatherCommonArgs order: input, output, barrier, sem0, sem1. The tensor addresses are buffer
+    // bindings (patched by the framework on cache hits). The semaphore addresses come from the caller, who may cycle
+    // them between calls, and are not in the program hash: the caller re-applies them on every cache hit with
+    // apply_all_gather_async_minimal_default_semaphore_args().
+    const auto semaphore_args = all_gather_semaphore_args(barrier_semaphore, semaphore);
+    for (const size_t kernel_index : {reader_kernel_index, writer_kernel_index}) {
+        tt::tt_metal::KernelDescriptor::RTArgList common_args;
+        common_args.reserve(ttnn::ccl::AllGatherCommonArgs::count);
+        common_args.push_back(input_tensor.buffer());
+        common_args.push_back(output_tensor.buffer());
+        for (const uint32_t semaphore_arg : semaphore_args) {
+            common_args.push_back(semaphore_arg);  // smuggled-rta-ok: re-applied via
+                                                   // apply_all_gather_async_minimal_default_semaphore_args()
+        }
+        desc.kernels[kernel_index].emplace_common_runtime_args(common_args);
+    }
 
-    return desc;
+    return AllGatherDescriptorArtifacts{
+        .reader_kernel_index = reader_kernel_index,
+        .writer_kernel_index = writer_kernel_index,
+    };
 }
 
-}  // namespace
+void apply_all_gather_async_minimal_default_semaphore_args(
+    tt::tt_metal::Program& program,
+    const AllGatherDescriptorArtifacts& artifacts,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const std::vector<GlobalSemaphore>& semaphore) {
+    using Args = ttnn::ccl::AllGatherCommonArgs;
+    static_assert(
+        Args::semaphore_0 == Args::barrier + 1 && Args::semaphore_1 == Args::barrier + 2 &&
+        Args::count == Args::barrier + 3);
+    const auto semaphore_args = all_gather_semaphore_args(barrier_semaphore, semaphore);
+    for (const size_t kernel_index : {artifacts.reader_kernel_index, artifacts.writer_kernel_index}) {
+        auto& common_args = tt::tt_metal::GetCommonRuntimeArgs(program, kernel_index);
+        std::copy(semaphore_args.begin(), semaphore_args.end(), common_args.data() + Args::barrier);
+    }
+}
 
 namespace experimental::prim {
 
@@ -717,7 +793,10 @@ tt::tt_metal::WorkloadDescriptor DefaultMeshWorkloadFactory::create_workload_des
 
         log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_async_minimal_default is called");
 
-        auto desc = build_all_gather_async_minimal_default_program_descriptor(
+        tt::tt_metal::ProgramDescriptor desc;
+        std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> no_fused_op_signaler;
+        const auto kernels = build_all_gather_async_minimal_default_program_descriptor(
+            desc,
             input_tensor,
             coord,
             forward_coord,
@@ -732,12 +811,19 @@ tt::tt_metal::WorkloadDescriptor DefaultMeshWorkloadFactory::create_workload_des
             operation_attributes.barrier_semaphore,
             operation_attributes.using_persistent_buffers,
             operation_attributes.sub_device_id,
+            no_fused_op_signaler,
             operation_attributes.chunks_per_sync,
             operation_attributes.num_workers_per_link,
             operation_attributes.num_buffers_per_channel,
             CoreCoord(0, 0),
             operation_attributes.reverse_order,
             operation_attributes.sub_core_grid);
+        TT_FATAL(
+            kernels.reader_kernel_index == kDefaultKernels.reader_kernel_index &&
+                kernels.writer_kernel_index == kDefaultKernels.writer_kernel_index,
+            "all_gather_async: reader and writer must be kernels {} and {}",
+            kDefaultKernels.reader_kernel_index,
+            kDefaultKernels.writer_kernel_index);
         workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
     return workload_descriptor;
@@ -749,21 +835,8 @@ void DefaultMeshWorkloadFactory::override_runtime_arguments(
     const AllGatherAsyncInputs& /*tensor_args*/,
     Tensor& /*output_tensor*/,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_coordinate*/) {
-    using Args = ttnn::ccl::AllGatherCommonArgs;
-    const uint32_t barrier_addr = operation_attributes.barrier_semaphore.has_value()
-                                      ? static_cast<uint32_t>(operation_attributes.barrier_semaphore->address())
-                                      : 0u;
-    const uint32_t semaphore_0 = static_cast<uint32_t>(operation_attributes.semaphore.at(0).address());
-    const uint32_t semaphore_1 = static_cast<uint32_t>(operation_attributes.semaphore.at(1).address());
-
-    const auto write_common = [&](tt::tt_metal::KernelHandle kernel_id) {
-        auto& common_args = tt::tt_metal::GetCommonRuntimeArgs(program, kernel_id);
-        common_args[Args::barrier] = barrier_addr;
-        common_args[Args::semaphore_0] = semaphore_0;
-        common_args[Args::semaphore_1] = semaphore_1;
-    };
-    write_common(kReaderKernelIndex);
-    write_common(kWriterKernelIndex);
+    ttnn::apply_all_gather_async_minimal_default_semaphore_args(
+        program, kDefaultKernels, operation_attributes.barrier_semaphore, operation_attributes.semaphore);
 }
 
 }  // namespace experimental::prim
