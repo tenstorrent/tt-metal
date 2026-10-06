@@ -22,7 +22,10 @@ import torch
 from helpers.format_config import DataFormat
 from helpers.llk_params import MathFidelity, format_dict
 
-from ..data_transfer_blocks.data_transfer_blocks import truncate_mantissa
+from ..data_transfer_blocks.data_transfer_blocks import (
+    UnmodelledHardwareWarning,
+    truncate_mantissa,
+)
 
 #: Phases each MathFidelity runs. The FPU decomposes a multiply into partial
 #: products (AH_BH, AL_BH, AH_BL, AL_BL) accumulated across passes, and
@@ -43,6 +46,22 @@ PHASE_OPERAND_HALVES = (
 )
 
 
+def fidelity_phases(math_fidelity: MathFidelity) -> range:
+    """The phase indices a multiply at `math_fidelity` runs.
+
+    Trivial on its own; it exists so the invariant that goes with it is written
+    once. **Every phase reads the original srcA/srcB**, not the previous
+    phase's sliced operands. Feeding a phase the previous phase's output zeroes
+    every phase after the first, which turns fidelity into a silent no-op --
+    the result still looks plausible, just more accurate than the device.
+
+    The operations do not share the loop itself: matmul nests a K-face loop
+    inside each phase (one Dest write per MVMUL) and eltwise does not, so they
+    have genuinely different shapes.
+    """
+    return range(FIDELITY_PHASES[math_fidelity])
+
+
 def warn_unmodelled_split(op_name: str, golden_name: str) -> None:
     """Say so when a multiply falls back to the exact product.
 
@@ -56,6 +75,12 @@ def warn_unmodelled_split(op_name: str, golden_name: str) -> None:
     the per-phase masks never cover SrcA's least significant bit -- the four
     phases reach mantissa bits 9..1 and bit 0 participates in none of them -- so
     even HiFi4 is not the exact product there. HiFi4 is merely the closest.
+
+    ``stacklevel=2`` points at the ``build_chain`` that made the choice, not at
+    the calling test. That is deliberate: ``build_chain`` is reached from
+    ``run`` and from ``_run_blocked``, which sit at different depths, so no
+    fixed level lands in the test from both -- and the chain builder is the
+    honest location anyway, since that is where the fallback was selected.
     """
     warnings.warn(
         f"{golden_name} computes {op_name} as an exact product: this "
@@ -63,7 +88,8 @@ def warn_unmodelled_split(op_name: str, golden_name: str) -> None:
         f"math_fidelity is ignored and the result is more accurate than the "
         f"device at every fidelity, HiFi4 included. Treat it as a reference, "
         f"not as an exact golden.",
-        stacklevel=3,
+        UnmodelledHardwareWarning,
+        stacklevel=2,
     )
 
 
