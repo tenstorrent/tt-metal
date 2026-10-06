@@ -81,12 +81,19 @@ def test_prefill_prof(mesh_device):
         pmoe = DSV41PrefillMoE(layer.moe, T=T, buffers=None if first_moe is None else first_moe.decode.buffers)
         first_moe = first_moe or pmoe
         pls.append((L, DSV41PrefillLayer(layer, attn.prefill, pmoe, T=T)))
-        if os.environ.get("DSV41_PREFILL_MOE") == "unified":
+        from models.demos.blackhole.deepseek_v41_flash.tt import uni_policy
+
+        if uni_policy.decide(md, U, log):
             from models.demos.blackhole.deepseek_v41_flash.tt.dsv41_model import UNI_LAYERS
             from models.demos.blackhole.deepseek_v41_flash.tt.prefill_unified_moe import DSV41UnifiedMoE
 
             if L in UNI_LAYERS(LAYERS):
-                pls[-1][1].umoe = DSV41UnifiedMoE(md, L, log=log)
+                es = layer.moe.decode.expert_state
+                pls[-1][1].umoe = (
+                    DSV41UnifiedMoE(md, L, log=log, ring=(es.tt_w0_w1, es.tt_w2))
+                    if uni_policy.ring_requested()
+                    else DSV41UnifiedMoE(md, L, log=log)
+                )
         gc.collect()
         log(f"PROF layer {L} built")
     from models.demos.blackhole.deepseek_v41_flash.tt.prefill_sparse import attach_prefill_sparse

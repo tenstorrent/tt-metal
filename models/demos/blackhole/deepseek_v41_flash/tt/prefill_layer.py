@@ -75,7 +75,10 @@ def colsplit_active(U, C):
     """Column split of the token-wise work over the 8 mesh columns needs the grouped MoE (G=8) and a multiple of 8 chunks of 32 tokens per mesh row
     (U users x C tokens). Otherwise the layer falls back to the replicated path (grouped MoE when the chunk count allows, else T=32 slices).
     """
-    ok = moe_g_for(U) == 8 and (U * C) % 256 == 0
+    from models.demos.blackhole.deepseek_v41_flash.tt import uni_policy
+
+    # the unified prefill MoE does not use the grouped (G=8) moe_compute program, so it also column-splits the users-per-row values that keep G=1 there (U=8)
+    ok = (moe_g_for(U) == 8 or uni_policy.in_use()) and (U * C) % 256 == 0
     if COLSPLIT_MODE == "0":
         return False
     if COLSPLIT_MODE == "1":

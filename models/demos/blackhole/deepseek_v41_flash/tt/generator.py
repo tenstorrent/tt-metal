@@ -32,18 +32,29 @@ class Generator:
         """
         import os
 
+        from models.demos.blackhole.deepseek_v41_flash.tt import uni_policy
         from models.demos.blackhole.deepseek_v41_flash.tt.common import get_padded_prefill_len
 
         fixed = False
         if budget_tokens_per_row is None:
             env = os.environ.get("DSV41_PREFILL_ROW_TOKENS")
-            if env == "auto2":  # prompt-length independent rule of the calibration (tt/chunk_rule.py): ONE chunk per batch size, fixed at startup
+            if (
+                env == "auto2"
+            ):  # prompt-length independent rule of the calibration (tt/chunk_rule.py): ONE chunk per batch size, fixed at startup
                 from models.demos.blackhole.deepseek_v41_flash.tt.chunk_rule import auto2_budget
 
                 budget_tokens_per_row, fixed = auto2_budget(self.m.U), True
+            elif (
+                not env and uni_policy.in_use()
+            ):  # unified prefill MoE (default): the calibrated budget per users-per-row (tt/chunk_rule.py UNIFIED_TABLE)
+                from models.demos.blackhole.deepseek_v41_flash.tt.chunk_rule import auto2_budget
+
+                budget_tokens_per_row = auto2_budget(self.m.U, unified=True)
             else:
                 budget_tokens_per_row = int(env) if env else (4096 if max_len <= 16384 and self.m.U <= 4 else 2048)
-        fixed = fixed or os.environ.get("DSV41_CHUNK_FIXED") == "1"  # never collapse to a prompt-sized single chunk (calibration sweeps)
+        fixed = (
+            fixed or os.environ.get("DSV41_CHUNK_FIXED") == "1"
+        )  # never collapse to a prompt-sized single chunk (calibration sweeps)
         c = max(128, (budget_tokens_per_row // self.m.U) // 128 * 128)
         return c if fixed else (None if c >= get_padded_prefill_len(max_len) else c)
 

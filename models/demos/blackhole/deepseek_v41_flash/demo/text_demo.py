@@ -612,10 +612,27 @@ def test_dsv41_demo(
 
 
 def _run_demo_wrap(mesh_device, prompts, bs, rep, msl, mgt, pp, sp, dtr, ptr, pch, wu, ins, eos, cache, build_len):
-    if os.environ.get("DSV41_TEST_FAIL_BUDGET") == os.environ.get("DSV41_PREFILL_ROW_TOKENS"):  # test hook of the failure path
+    if os.environ.get("DSV41_TEST_FAIL_BUDGET") and os.environ.get("DSV41_TEST_FAIL_BUDGET") == os.environ.get(
+        "DSV41_PREFILL_ROW_TOKENS"
+    ):  # test hook of the failure path
         raise RuntimeError("injected failure")
     _run_demo(
-        mesh_device, prompts, bs, rep, msl, mgt, pp, sp, dtr, ptr, pch, wu, ins, eos, cache=cache, build_max_seq_len=build_len
+        mesh_device,
+        prompts,
+        bs,
+        rep,
+        msl,
+        mgt,
+        pp,
+        sp,
+        dtr,
+        ptr,
+        pch,
+        wu,
+        ins,
+        eos,
+        cache=cache,
+        build_max_seq_len=build_len,
     )
 
 
@@ -690,6 +707,11 @@ def test_dsv41_demo_session(mesh_device, device_params):
                     if not hasattr(pl_, "_umoe_saved"):
                         pl_._umoe_saved = pl_.umoe
                     pl_.umoe = pl_._umoe_saved if umoes[si % len(umoes)] == "1" else None
+                from models.demos.blackhole.deepseek_v41_flash.tt import uni_policy
+
+                uni_policy.set_in_use(
+                    umoes[si % len(umoes)] == "1" and any(p_.umoe is not None for _, p_ in pm_.layers)
+                )
         if mode:
             os.environ["DSV41_PF_MHC"] = "packed" if set(mode) & set("PREQ") else "0"
             os.environ["DSV41_PF_ROUTE_OWN"] = "1" if set(mode) & set("RE") else "0"
@@ -710,10 +732,18 @@ def test_dsv41_demo_session(mesh_device, device_params):
             + ") ==="
         )
         os.environ["DSV41_RAGGED"] = "1" if s.id.endswith("_ragged") else "2" if s.id.endswith("_ragged_u4") else "0"
-        if os.environ.get("DSV41_SESSION_NOWARM") == "1":  # chunk-size calibration: no compile run (total_replay_loop excludes the capture)
+        if (
+            os.environ.get("DSV41_SESSION_NOWARM") == "1"
+        ):  # chunk-size calibration: no compile run (total_replay_loop excludes the capture)
             wu = False
-        cont = os.environ.get("DSV41_SESSION_CONTINUE") == "1"  # keep going after a failing scenario (OOM at a large budget)
-        budget_i = int(os.environ.get("DSV41_PREFILL_ROW_TOKENS") or 0) if (os.environ.get("DSV41_PREFILL_ROW_TOKENS") or "0").isdigit() else 0
+        cont = (
+            os.environ.get("DSV41_SESSION_CONTINUE") == "1"
+        )  # keep going after a failing scenario (OOM at a large budget)
+        budget_i = (
+            int(os.environ.get("DSV41_PREFILL_ROW_TOKENS") or 0)
+            if (os.environ.get("DSV41_PREFILL_ROW_TOKENS") or "0").isdigit()
+            else 0
+        )
         if cont and budget_i >= min(failed.get(s.id, 1 << 30), failed.get("*", 1 << 30)):
             logger.info(
                 f"=== session scenario {s.id} ROW_TOKENS={budget_i} SKIPPED (budget >= failed {min(failed.get(s.id, 1 << 30), failed.get('*', 1 << 30))}) ==="
@@ -727,11 +757,20 @@ def test_dsv41_demo_session(mesh_device, device_params):
             if not cont:
                 raise
             oom = any(w in str(e) for w in ("Out of Memory", "out of memory", "DRAM", "OOM", "allocate"))
-            key = "*" if (oom and os.environ.get("DSV41_PREFILL_SPAD_MAX")) else s.id  # sized for the max context: a DRAM failure holds for every ISL
+            key = (
+                "*" if (oom and os.environ.get("DSV41_PREFILL_SPAD_MAX")) else s.id
+            )  # sized for the max context: a DRAM failure holds for every ISL
             failed[key] = min(failed.get(key, 1 << 30), budget_i)
             import traceback
 
-            logger.error("FAILTRACE " + " <- ".join(l.strip().replace("\n", " ")[:160] for l in traceback.format_exc().splitlines() if l.strip().startswith("File"))[-1500:])
+            logger.error(
+                "FAILTRACE "
+                + " <- ".join(
+                    l.strip().replace("\n", " ")[:160]
+                    for l in traceback.format_exc().splitlines()
+                    if l.strip().startswith("File")
+                )[-1500:]
+            )
             logger.error(f"=== SCENARIO FAILED {s.id} ROW_TOKENS={budget_i}: {type(e).__name__}: {str(e)[:400]} ===")
             for _, (_, m, _) in cache.items():
                 try:
