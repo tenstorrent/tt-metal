@@ -191,6 +191,9 @@ def _run_demo(
     cache=None,
     build_max_seq_len=None,
 ):
+    max_generated_tokens = int(
+        os.environ.get("DSV41_MAX_GEN", max_generated_tokens)
+    )  # more rounds per policy window for the spec studies
     mesh_rows = mesh_device.shape[0]
     assert 1 <= batch_size <= 128, "batch_size must be 1..128 (mHC kernels: at most 32 users per mesh row)"
     users_per_row = -(-batch_size // mesh_rows)
