@@ -1207,6 +1207,9 @@
 - name: Minimax H3 Ref2VA Memory Test
   cmd: |
     export TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_cluster_desc/6u_cluster_desc.yaml
+    # setup-job exports TT_METAL_WATCHER=2 for every job (any value enables it); mock device reads return 0,
+    # so the watcher's first poll reads an invalid watcher.enable and aborts the process at mesh open.
+    unset TT_METAL_WATCHER
     export HF_HOME=/mnt/MLPerf/huggingface  # the H3 weight resolver searches $HF_HOME/hub, not HF_HUB_CACHE
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
     export MINIMAX_H3_DRAM_PROBE=1  # per-owner DRAM attribution at each checkpoint, read at import
