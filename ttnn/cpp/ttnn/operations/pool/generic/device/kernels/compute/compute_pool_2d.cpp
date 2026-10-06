@@ -255,4 +255,10 @@ void kernel_main() {
             curr_scalar_dfb.pop_front(1);
         }
     }
+
+    // With one scalar per core the tile is waited once before the loop and reused by every
+    // iteration, so it is popped here rather than per iteration.
+    if constexpr (one_scalar_per_core) {
+        in_scalar_dfb_0.pop_front(1);
+    }
 }

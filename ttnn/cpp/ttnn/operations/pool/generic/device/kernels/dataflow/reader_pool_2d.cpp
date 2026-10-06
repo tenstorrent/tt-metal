@@ -363,4 +363,28 @@ void kernel_main() {
             }
         }
     }
+
+    // The pop shouldn't happen until after the loop above, because
+    // read_kernel_with_top_left_index copies from the same CB (passed into the function
+    // via clear_value_cb_id).
+    if constexpr (is_avg_pool || need_to_initialize_in_cb) {
+        // Reader 0 fills and pushes the clear tile; reader 1 is its consumer so it pops it.
+        if constexpr (reader_id == 1) {
+            clear_value_dfb.pop_front(1);
+        }
+    }
+
+    // Both config buffers are read through a raw pointer throughout the kernel rather than
+    // through the buffer object, so they are waited once up front and popped here. Each pop
+    // carries the same conditions as its wait.
+    if constexpr (config_in_dram) {
+        if (reader_id != 0) {
+            reader_indices_dfb.pop_front(1);
+        }
+    }
+    if constexpr (!one_scalar_per_core && config_in_dram) {
+        if (reader_id != 0) {
+            config_dfb.pop_front(1);
+        }
+    }
 }  // kernel_main()
