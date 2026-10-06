@@ -2739,14 +2739,16 @@ void assemble_device_commands(
                 local_cb_updates.push_back(
                     {circular_buffer.get(),
                      payload + UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index,
-                     buffer_index});
+                     buffer_index,
+                     circular_buffer->config_generation()});
             }
             for (const uint32_t buffer_index : circular_buffer->remote_buffer_indices()) {
                 remote_cb_updates.push_back(
                     {circular_buffer.get(),
                      payload + remote_offset_index +
                          (max_dfbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG,
-                     buffer_index});
+                     buffer_index,
+                     circular_buffer->config_generation()});
             }
         }
     }
@@ -2984,6 +2986,32 @@ void reserve_space_in_kernel_config_buffer(
         std::make_move_iterator(reservation.second.begin()), std::make_move_iterator(reservation.second.end() - 2));
 }
 
+void update_circular_buffer_configs(ProgramCommandSequence& cached_program_command_sequence) {
+    // Update CB configs through destinations cached when the command sequence was assembled. The values
+    // themselves stay owned by the CircularBuffer, whose page_size()/num_pages() carry the divisibility
+    // and 16-bit page-count checks.
+    for (auto& update : cached_program_command_sequence.local_cb_config_updates) {
+        CircularBufferImpl& circular_buffer = *update.circular_buffer;
+        if (update.last_config_generation == circular_buffer.config_generation()) {
+            continue;
+        }
+        update.dst[0] = circular_buffer.address();
+        update.dst[1] = circular_buffer.size();
+        update.dst[2] = circular_buffer.num_pages(update.buffer_index);
+        update.dst[3] = circular_buffer.page_size(update.buffer_index);
+        update.last_config_generation = circular_buffer.config_generation();
+    }
+    for (auto& update : cached_program_command_sequence.remote_cb_config_updates) {
+        CircularBufferImpl& circular_buffer = *update.circular_buffer;
+        if (update.last_config_generation == circular_buffer.config_generation()) {
+            continue;
+        }
+        update.dst[0] = circular_buffer.config_address();
+        update.dst[1] = circular_buffer.page_size(update.buffer_index);
+        update.last_config_generation = circular_buffer.config_generation();
+    }
+}
+
 void update_program_dispatch_commands(
     ProgramImpl& program,
     ProgramCommandSequence& cached_program_command_sequence,
@@ -3059,21 +3087,7 @@ void update_program_dispatch_commands(
             sizeof(uint32_t));
     }
 
-    // Update CB configs through destinations cached when the command sequence was assembled. The values
-    // themselves stay owned by the CircularBuffer, whose page_size()/num_pages() carry the divisibility
-    // and 16-bit page-count checks.
-    for (const auto& update : cached_program_command_sequence.local_cb_config_updates) {
-        CircularBufferImpl& circular_buffer = *update.circular_buffer;
-        update.dst[0] = circular_buffer.address();
-        update.dst[1] = circular_buffer.size();
-        update.dst[2] = circular_buffer.num_pages(update.buffer_index);
-        update.dst[3] = circular_buffer.page_size(update.buffer_index);
-    }
-    for (const auto& update : cached_program_command_sequence.remote_cb_config_updates) {
-        CircularBufferImpl& circular_buffer = *update.circular_buffer;
-        update.dst[0] = circular_buffer.config_address();
-        update.dst[1] = circular_buffer.page_size(update.buffer_index);
-    }
+    update_circular_buffer_configs(cached_program_command_sequence);
 
     {
         uint32_t dfb_i = 0;
@@ -3416,72 +3430,70 @@ void update_traced_program_dispatch_commands(
 }
 
 namespace {
-template <typename WriteData>
-void for_each_program_command(
+template <typename ProcessChunk>
+void for_each_program_command_sequence_chunk_impl(
     const ProgramCommandSequence& program_command_sequence,
     bool stall_first,
     bool stall_before_program,
     bool send_binary,
-    const WriteData& write_data_to_cq) {
+    const ProcessChunk& process_chunk) {
+    auto process_commands = [&](const auto& commands) {
+        if (commands.size_bytes() != 0) {
+            process_chunk(commands.data(), commands.size_bytes());
+        }
+    };
+
     // Write the preamble
-    write_data_to_cq(
-        program_command_sequence.preamble_command_sequence.data(),
-        program_command_sequence.preamble_command_sequence.size_bytes());
+    process_commands(program_command_sequence.preamble_command_sequence);
 
     const auto curr_stall_seq_idx = program_command_sequence.current_stall_seq_idx;
     if (stall_first) {
         // Must stall before writing kernel config data
-        write_data_to_cq(
-            program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
-            program_command_sequence.stall_command_sequences[curr_stall_seq_idx].size_bytes());
+        process_commands(program_command_sequence.stall_command_sequences[curr_stall_seq_idx]);
     }
 
     // TODO: We can pack multiple RT args into one fetch q entry
     for (const auto& cmds : program_command_sequence.runtime_args_command_sequences) {
-        write_data_to_cq(cmds.data(), cmds.size_bytes());
+        process_commands(cmds);
     }
 
     // Write the program config buffer
-    write_data_to_cq(
-        program_command_sequence.program_config_buffer_command_sequence.data(),
-        program_command_sequence.program_config_buffer_command_sequence.size_bytes());
+    process_commands(program_command_sequence.program_config_buffer_command_sequence);
 
     // Need to stall before writing the program binary?
     if (stall_before_program) {
         // Didn't stall before kernel config data, stall before remaining commands
-        write_data_to_cq(
-            program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
-            program_command_sequence.stall_command_sequences[curr_stall_seq_idx].size_bytes());
+        process_commands(program_command_sequence.stall_command_sequences[curr_stall_seq_idx]);
     }
 
     if (send_binary) {
         // Write the program binary
         if (program_command_sequence.prefetcher_cache_used) {
-            write_data_to_cq(
-                program_command_sequence.program_binary_setup_prefetcher_cache_command.data(),
-                program_command_sequence.program_binary_setup_prefetcher_cache_command.size_bytes());
+            process_commands(program_command_sequence.program_binary_setup_prefetcher_cache_command);
         }
-        write_data_to_cq(
-            program_command_sequence.program_binary_command_sequence.data(),
-            program_command_sequence.program_binary_command_sequence.size_bytes());
+        process_commands(program_command_sequence.program_binary_command_sequence);
     } else {
         // Write the wait barrier before writing launch messages.
-        write_data_to_cq(
-            program_command_sequence.wait_barrier_command_sequence.data(),
-            program_command_sequence.wait_barrier_command_sequence.size_bytes());
+        process_commands(program_command_sequence.wait_barrier_command_sequence);
     }
 
     // Write the launch message
-    write_data_to_cq(
-        program_command_sequence.launch_msg_command_sequence.data(),
-        program_command_sequence.launch_msg_command_sequence.size_bytes());
+    process_commands(program_command_sequence.launch_msg_command_sequence);
 
     // Write the go signal
-    write_data_to_cq(
-        program_command_sequence.go_msg_command_sequence.data(),
-        program_command_sequence.go_msg_command_sequence.size_bytes());
+    process_commands(program_command_sequence.go_msg_command_sequence);
 }
 }  // namespace
+
+void for_each_program_command_sequence_chunk(
+    const ProgramCommandSequence& program_command_sequence,
+    bool stall_first,
+    bool stall_before_program,
+    bool send_binary,
+    const std::function<void(const void*, uint32_t)>& process_chunk) {
+    for_each_program_command_sequence_chunk_impl(
+        program_command_sequence, stall_first, stall_before_program, send_binary, process_chunk);
+}
 
 void pack_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
@@ -3492,7 +3504,7 @@ void pack_program_command_sequence(
     const auto size = program_command_sequence.get_one_shot_fetch_size(stall_first, stall_before_program, send_binary);
     packed.resize(size / sizeof(uint32_t));
     uint32_t offset = 0;
-    for_each_program_command(
+    for_each_program_command_sequence_chunk_impl(
         program_command_sequence,
         stall_first,
         stall_before_program,
@@ -3537,7 +3549,7 @@ void write_program_command_sequence(
     }
     uint32_t one_shot_write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
 
-    auto write_data_to_cq = [&](void* data, uint32_t size_bytes) {
+    auto write_data_to_cq = [&](const void* data, uint32_t size_bytes) {
         if (!size_bytes) {
             return;
         }
@@ -3555,7 +3567,7 @@ void write_program_command_sequence(
         }
     };
 
-    for_each_program_command(
+    for_each_program_command_sequence_chunk_impl(
         program_command_sequence, stall_first, stall_before_program, send_binary, write_data_to_cq);
 
     if (one_shot) {

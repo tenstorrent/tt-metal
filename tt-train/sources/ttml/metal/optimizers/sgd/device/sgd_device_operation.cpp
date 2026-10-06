@@ -102,6 +102,11 @@ SGDDeviceOperation::tensor_return_value_t SGDDeviceOperation::create_output_tens
     return tensor_args.param;
 }
 
+std::vector<tt::tt_metal::TensorTopology> SGDDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    return {tensor_args.param.tensor_topology()};
+}
+
 ttsl::hash::hash_t SGDDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& param_tensor = tensor_args.param;

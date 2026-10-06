@@ -40,6 +40,7 @@ from loguru import logger
 import ttnn
 from models.common.utils import block_cyclic_reorder
 from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
+from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
 
 
 @dataclass
@@ -74,6 +75,9 @@ class TtPrefillRuntimeConfig:
     # The runner picks the per-layer ack transport from this: traced runs use the host callback, untraced
     # ones the D2H service. M3 has no traced path, so it stays False.
     use_trace: bool = False
+    # MoE layers: run the shared expert on its own sub-device concurrently with dispatch (the runner's
+    # PrefillRunParams.overlap_shared_expert_with_dispatch). Off: it runs before the MoE on the full grid.
+    overlap_shared_expert: bool = True
 
     @property
     def sp_factor(self) -> int:
@@ -157,6 +161,7 @@ class TtPrefillRuntime:
             layer_indices=self.config.layer_indices,
             is_first_rank=self.config.is_first_rank,
             is_last_rank=self.config.is_last_rank,
+            overlap_shared_expert=self.config.overlap_shared_expert,
         )
         self.model_built = True
 
@@ -225,6 +230,15 @@ class TtPrefillRuntime:
         # capacity-sized: drop them so re-targets do not accumulate dead DRAM (~0.7 GB/chip per capacity at 1M).
         self.model.ccl_manager.release_scratch_buffers()
         self.compiled = False
+
+    def release_sub_device_managers(self) -> None:
+        """Remove the MoE overlap sub-device manager before the mesh is closed. Idempotent."""
+        if self.model_built:
+            self.model.release_sub_device_managers()
+
+    def release_trace(self) -> None:
+        """The prefill runner's pre-close hook. M3 has no trace; this releases the sub-device managers."""
+        self.release_sub_device_managers()
 
     def make_placeholder_activation(self) -> ttnn.Tensor:
         """Zero hidden-state activation matching the decoder-layer-boundary residual and the D2D receiver
@@ -537,7 +551,19 @@ class TtPrefillRuntime:
             head_dim=self.hf_config.head_dim,
             path=path,
             stage_layouts=stage_layouts,
+            index_k_layers=self.msa_layer_ids(),
         )
+
+    def msa_layer_ids(self) -> set[int]:
+        """Global ids of the MSA (block-sparse) layers — the only layers that write an index_k (layers 3-59 on
+        M3). Read through the same helper as ``Layer``, so the table can't disagree with the model."""
+        ids = {i for i, f in enumerate(sparse_attention_freq(self.hf_config) or []) if f}
+        if not ids:
+            logger.warning(
+                "[migration] the config has no MSA layers (sparse_attention_freq missing or use_sparse_attention "
+                "off): the KV chunk table publishes no index_k rows"
+            )
+        return ids
 
     def read_slot_kv(self, kv_cache, slot: int, n_tokens: int | None = None):
         """Read one slot's KV cache from device to host: ``[k, v, index_k]``, one host tensor per cache
