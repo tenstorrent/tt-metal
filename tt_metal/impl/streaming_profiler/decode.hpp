@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <new>
@@ -82,13 +83,11 @@ public:
     }
 
     // `dev` must outlive the decoder. It produces only records of `types`, and steps over the other packets.
-    StreamDecoder(const CaptureContext::Device& dev, experimental::streaming_profiler::RecordType types);
-    // Size `out` with out_capacity(). A later call may repair each lane's last record in place, so keep the output
-    // writable until it is marked delivered.
-    Produced decode_frames(const uint32_t* frames, std::span<const uint32_t> frame_words, Out out);
-
-    // Marks the oldest undelivered decode_frames output as delivered. Outputs are delivered in decode order.
-    void mark_delivered() { delivered_seq_++; }
+    StreamDecoder(const CaptureContext::Device& dev, uint32_t types);
+    // Decodes the frames into `out` and returns what it produced. Size `out` with out_capacity(). `undelivered` is how
+    // many of the earlier outputs the caller still holds, which it delivers oldest first. A call may repair a lane's
+    // last record in place in any of those, so they must stay writable until delivered.
+    Produced decode_frames(size_t undelivered, const uint32_t* frames, std::span<const uint32_t> frame_words, Out out);
 
 private:
     std::vector<SpscLane> lanes_;
@@ -103,33 +102,14 @@ private:
     uint64_t decoded_seq_ = 0;
 };
 
-}  // namespace tt::tt_metal::streaming_profiler
-
-namespace tt::tt_metal::experimental::streaming_profiler {
-inline void detail::construct_timestamped_data(
-    void* at, const PointRecord& point, int64_t tsc, uint64_t value_count, const uint64_t* values) {
-    new (at) TimestampedData(point, tsc, value_count, values);
-}
-}  // namespace tt::tt_metal::experimental::streaming_profiler
-
-namespace tt::tt_metal::streaming_profiler {
-
-// Constructs the TimestampedData held in the decoded bytes at `record`, placed at host TSC `tsc`. The record borrows
-// its values from the consumer's arena, which reclaims both without running ~TimestampedData.
-inline void construct_timestamped_data(uint8_t* record, int64_t tsc) {
-    experimental::streaming_profiler::PointRecord point;
-    uint64_t value_count = 0;
-    uint64_t* values = nullptr;
-    std::memcpy(&point, record, sizeof(point));
-    std::memcpy(&value_count, record + profiler::kSpscSharedBytes, sizeof(value_count));
-    std::memcpy(&values, record + profiler::kSpscSharedBytes + sizeof(value_count), sizeof(values));
-    // A memmove onto itself implicitly creates the uint64_t objects that the decoder's vector stores wrote as bytes.
-    experimental::streaming_profiler::detail::construct_timestamped_data(
-        record,
-        point,
-        tsc,
-        value_count,
-        static_cast<const uint64_t*>(std::memmove(values, values, value_count * sizeof(uint64_t))));
+// Starts a TimestampedData's lifetime in the decoded bytes at `record`, keeping their values. TimestampedData has a
+// destructor, so the memmove that creates zones and events in place can't create it. The record borrows its values from
+// the consumer's arena, which reclaims both without running ~TimestampedData.
+inline void construct_timestamped_data(uint8_t* record) {
+    std::array<std::byte, sizeof(experimental::streaming_profiler::TimestampedData)> bytes;
+    std::memcpy(bytes.data(), record, bytes.size());
+    new (record) experimental::streaming_profiler::TimestampedData;
+    std::memcpy(record, bytes.data(), bytes.size());
 }
 
 }  // namespace tt::tt_metal::streaming_profiler

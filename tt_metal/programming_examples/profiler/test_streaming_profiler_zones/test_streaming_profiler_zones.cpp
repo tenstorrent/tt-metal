@@ -12,6 +12,7 @@
 // Each RISC times bursts against its wall clock and the host prints cycles per marker; the K = 0 run with the
 // same --benchdelay is the loop's own cost to subtract. Measure on a 1x1 grid with a paced --benchdelay (20 is
 // enough) and no "profiler stalls" or "FAILED TO START" in the log, or the number is the stall.
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -71,11 +72,18 @@ int main(int argc, char** argv) {
         std::atomic<uint64_t> zones{0}, points{0}, stalls{0};
     } totals;
     using experimental::streaming_profiler::Batch;
-    using experimental::streaming_profiler::RecordType;
+    using experimental::streaming_profiler::Event;
+    using experimental::streaming_profiler::Processor;
+    using experimental::streaming_profiler::TimestampedData;
+    using experimental::streaming_profiler::Zone;
     auto callback = experimental::streaming_profiler::RegisterCallback(
-        [&](const Batch<RecordType::All>& batch) {
-            totals.zones += batch.zones().size();
-            totals.points += batch.events().size() + std::ranges::distance(batch.timestamped_data());
+        [&](const Batch<Zone, TimestampedData, Event>& batch) {
+            // Counts only the Tensix grid's zones, which are the workload's. Whether an eth core's last firmware zone
+            // ships depends on teardown timing.
+            totals.zones += std::ranges::count_if(batch.records<Zone>(), [](const Zone& zone) {
+                return zone.core().processor != Processor::ERISC0 && zone.core().processor != Processor::ERISC1;
+            });
+            totals.points += batch.records<Event>().size() + batch.records<TimestampedData>().size();
             totals.stalls += batch.stall_count();
         },
         "zones-example");

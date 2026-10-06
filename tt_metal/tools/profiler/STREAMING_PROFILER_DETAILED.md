@@ -230,7 +230,7 @@ From `<tt-metalium/experimental/streaming_profiler.hpp>` (namespace
 `tt::tt_metal::experimental::streaming_profiler`):
 
 ```cpp
-Callback zones = RegisterCallback([](const Batch<RecordType::Zones>& batch) { /* ... */ }, "my-tool");
+Callback zones = RegisterCallback([](const Batch<Zone>& batch) { /* ... */ }, "my-tool");
 // destroying `zones`, or zones.reset(), unregisters the callback
 ```
 
@@ -288,8 +288,8 @@ The ops-CSV consumer in `tt_metal/impl/streaming_profiler/ops_csv.{hpp,cpp}` is 
 reference.
 
 ```cpp
-void MyConsumer::operator()(const Batch<RecordType::Zones>& batch) {
-    for (const Zone& zone : batch.zones()) {
+void MyConsumer::operator()(const Batch<Zone>& batch) {
+    for (const Zone& zone : batch.records<Zone>()) {
         // zone.site().name, zone.core() (chip, coordinate, processor), zone.runtime_id(); device cycles in
         // zone.start_device_cycles() / zone.end_device_cycles(), host time via zone.start_time() / zone.duration()
     }
