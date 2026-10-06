@@ -21,7 +21,14 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_xy_device_params,
     tp_axis_is_wrapped,
 )
-from models.demos.deepseek_v3_d_p.tests.kda.cases import build_kda_case, make_kda_device_case, registered_kda_case
+from models.demos.deepseek_v3_d_p.tests.kda.cases import (
+    LB_A,
+    LB_B,
+    build_kda_case,
+    loudbox_kda_case,
+    make_kda_device_case,
+    registered_kda_case,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import cpu_references
 from models.demos.deepseek_v3_d_p.tests.kda.utils import check_kimi_k3_accuracy, deallocate_state
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
@@ -47,6 +54,17 @@ _PERF_REFERENCE_MS = {
     "SP4xTP2": 9.991,
 }
 _GALAXY_PERF_REFERENCE_MS = 3.690
+# LoudBox Galaxy-proxy layouts at 640 tokens per SP rank (tests/kda/cases.py LB_A / LB_B): LB-A 2x4 SP2xTP4 T=1280,
+# LB-B 8x1 SP8xTP1 T=5120 with one TP4 shard's heads; synthetic weights, production program config on the 11x10
+# LoudBox worker grid. Calibration at PLACEHOLDER: median across PLACEHOLDER independent sessions, each using the
+# median of five warm synchronized 10-replay samples (tt_metal_tracker-g1b.4.8).
+_LOUDBOX_MESH_SHAPES = {"LB-A": LB_A[0], "LB-B": LB_B[0]}
+_LOUDBOX_PROXY_REFERENCE_MS = {
+    ("kimi_k3", "LB-A"): 2.855,
+    ("kimi_k3", "LB-B"): 3.282,
+    ("glm_5_3_flash", "LB-A"): 1.917,
+    ("glm_5_3_flash", "LB-B"): 2.304,
+}
 
 
 def _perf_reference_ms(layout: str) -> float:
@@ -65,8 +83,8 @@ def _synthetic_perf_reference_ms(layout: str) -> float:
     return _perf_reference_ms(layout)
 
 
-def _assert_synthetic_performance(layout: str, median_wall_ms: float) -> None:
-    reference_ms = _synthetic_perf_reference_ms(layout)
+def _assert_synthetic_performance(layout: str, median_wall_ms: float, reference_ms: float | None = None) -> None:
+    reference_ms = _synthetic_perf_reference_ms(layout) if reference_ms is None else reference_ms
     lower = reference_ms * (1.0 - _PERF_MARGIN)
     upper = reference_ms * (1.0 + _PERF_MARGIN)
     assert lower <= median_wall_ms <= upper, (
@@ -305,3 +323,45 @@ def test_synthetic_kimi_k3_perf(
             "the Galaxy reference assumes the TP ring"
         )
     _assert_synthetic_performance(layout, median_wall_ms)
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params,model,layout",
+    [
+        pytest.param(_LOUDBOX_MESH_SHAPES[layout], fabric_1d_device_params(), model, layout, id=f"{model}-{layout}")
+        for model, layout in _LOUDBOX_PROXY_REFERENCE_MS
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_synthetic_loudbox_proxy_perf(
+    mesh_device: ttnn.MeshDevice,
+    device_params: dict,
+    model: str,
+    layout: str,
+) -> None:
+    """Gate checkpoint-free production KDA latency at the LoudBox proxies of Galaxy per-chip work."""
+    if os.environ.get("KDA_PERF_SKU") != _PERF_SKU:
+        raise ValueError(f"set KDA_PERF_SKU={_PERF_SKU} to opt in to this hardware-specific performance gate")
+    reference_ms = _LOUDBOX_PROXY_REFERENCE_MS[(model, layout)]
+    case = build_kda_case(loudbox_kda_case("synthetic", layout, "single", model=model))
+    layer, hidden_tt = make_kda_device_case(mesh_device, case)
+    samples_ms, _ = _trace_wall_samples_ms(mesh_device, layer, hidden_tt, _REPETITIONS)
+    median_wall_ms = statistics.median(samples_ms)
+    grid = mesh_device.compute_with_storage_grid_size()
+    result = {
+        "model": model,
+        "layout": layout,
+        "case": case.spec.name,
+        "fabric_config": ttnn.get_fabric_config().name,
+        "worker_grid": [grid.x, grid.y],
+        "weights": "deterministic synthetic",
+        "repetitions": _REPETITIONS,
+        "trace_wall_samples_ms": samples_ms,
+        "median_trace_wall_ms": median_wall_ms,
+        "timing_sample_count": _TIMING_SAMPLES,
+        "reference_trace_wall_ms": reference_ms,
+        "perf_margin_pct": _PERF_MARGIN * 100.0,
+        "galaxy_reference_ms": _GALAXY_PERF_REFERENCE_MS,
+    }
+    print("KDA_LOUDBOX_PROXY_PERF=" + json.dumps(result, sort_keys=True))
+    _assert_synthetic_performance(f"{model} {layout}", median_wall_ms, reference_ms)
