@@ -48,9 +48,11 @@ inline void newton_reciprocal_pair()
     TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
     TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LREG0,
                       sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B); // fp32 -> bf16 RNE
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
+    // ADDR_MOD_2 (ADDR_MOD_6 past the SFPU's +4 base) keeps stock's dest += 2, which other unary
+    // SFPU ops read, so each store advances.
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_2, 0);
     TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG4, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-    TTI_SFPSTORE(p_sfpu::LREG4, 0, ADDR_MOD_2, 2); // dest += 4
+    TTI_SFPSTORE(p_sfpu::LREG4, 0, ADDR_MOD_2, 0);
 }
 
 template <typename Config, int Iterations = 8>

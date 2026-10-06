@@ -13,6 +13,6 @@ inline void init_newton_reciprocal() {
     static_assert(
         Config::kC0Bits == 0x3ea57ebbu && Config::kC1Bits == 0x3fba2e90u && Config::kC2Bits == 0x4007c1f2u &&
         Config::kMagic == 0x7f800000u);
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 }  // namespace ckernel::sfpu::bf16
