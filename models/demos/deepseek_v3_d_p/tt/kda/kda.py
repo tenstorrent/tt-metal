@@ -274,14 +274,14 @@ class ttKDA:
         if not self._is_sequence_parallel:
             batch, rows, width = qkv.shape
             new_state = (
-                selections.select_local_final_history(qkv)
+                selections.select_local_final_history(qkv, incoming_layer_carry)
                 if selections is not None
                 else ttnn.slice(qkv, (0, rows - (config.conv_kernel_size - 1), 0), (batch, rows, width))
             )
             predecessor = incoming_layer_carry
         else:
             predecessor, new_state = exchange_convolution_carry(
-                qkv, sequence_parallel_axis=self.sequence_parallel_axis, selections=selections
+                qkv, incoming_layer_carry, sequence_parallel_axis=self.sequence_parallel_axis, selections=selections
             )
         q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
             qkv,
