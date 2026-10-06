@@ -3742,7 +3742,9 @@ def prepare_device_decoder(
     """
     from models.demos.qwen3_tts.reference.functional import DECODER_BACKEND_CONTEXT_FRAMES
 
-    step = 64
+    from models.demos.qwen3_tts.tt.speech_tokenizer import DECODE_MIN_BUCKET
+
+    step = DECODE_MIN_BUCKET  # must match TtSpeechTokenizerDecoder's smallest bucket
     if icl_continue:
         max_ref_frames = DECODER_BACKEND_CONTEXT_FRAMES
     max_bucket = decode_bucket_for(max_ref_frames, max_new_tokens, step=step)

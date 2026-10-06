@@ -35,6 +35,7 @@ from models.demos.qwen3_tts.tt.ttnn_conv_decoder import TTNNConv1d, backend_comp
 # on-device-exp path, kept for A/B comparison.
 LEGACY_NUMERICS = os.environ.get("TT_QWEN3_DECODE_NUMERICS", "hifi") == "legacy"
 SNAKE_EPS = 1e-9
+DECODE_MIN_BUCKET = int(os.environ.get("TT_QWEN3_DECODE_MIN_BUCKET", "32"))
 
 
 @contextmanager
@@ -1104,7 +1105,9 @@ class TtSpeechTokenizerDecoder(LightweightModule):
         # Numerics variant for this instance (see _variant_scope); None = env defaults.
         self.variant = None
 
-        self.decode_bucket_step = 64
+        # Smallest decode bucket (frames). 32 halves the back-end work for short
+        # requests (12 context + <= 20 generated frames) versus the old 64.
+        self.decode_bucket_step = DECODE_MIN_BUCKET
         self._cache_by_bucket = {}
         self._cache = {}  # points at the active bucket's cache during forward
 
