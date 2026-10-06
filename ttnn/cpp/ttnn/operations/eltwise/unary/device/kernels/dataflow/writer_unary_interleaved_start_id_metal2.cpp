@@ -32,8 +32,9 @@ void kernel_main() {
     const uint32_t page_bytes = dfb.get_entry_size();
 
 #ifdef OUT_SHARDED
+    // Output is sharded in place; the wait is only a readiness handshake. Pop to
+    // leave the DFB balanced.
     dfb.wait_front(num_pages);
-    // Pop the same number of pages that were waited for.
     dfb.pop_front(num_pages);
 #else
 
