@@ -4859,7 +4859,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     kernels.push_back(KernelSpec{
         .unique_id = IN1_READER,
         .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-                  "reader_bmm_tile_layout_in1_ring_all_gather_metal2.cpp",
+                  "reader_bmm_tile_layout_in1_prefetcher_pipe_metal2.cpp",
         .dfb_bindings =
             {
                 DFBBinding{

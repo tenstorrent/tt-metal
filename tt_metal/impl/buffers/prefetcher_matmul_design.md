@@ -559,8 +559,10 @@ Whoever changes prefetcher or receiver code must preserve these:
   alignment is in `tt_metal/hw/inc/internal/prefetcher_pipe_init.h`.
 - Gather-in0 over PrefetcherPipes: `create_program_gather_in0_artifacts` in the same factory file,
   with the `_metal2` forks of the ring kernels (`reader_bmm_tile_layout_in0_ring_all_gather_metal2.cpp`,
-  `reader_bmm_tile_layout_in1_ring_all_gather_metal2.cpp`,
-  `bmm_large_block_zm_fused_bias_activation_gathered_metal2.cpp`).
+  `bmm_large_block_zm_fused_bias_activation_gathered_metal2.cpp`) and the pipe-only in1 reader
+  `reader_bmm_tile_layout_in1_prefetcher_pipe_metal2.cpp`.
+- Both in1 readers drain the pipes through `kernels/dataflow/prefetcher_pipe_in1_window.hpp`, which
+  holds the one-block lookahead window the host sizes the ring for.
 - Worker-core prefetcher:
   `ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/dram_prefetcher_program_factory.cpp`,
   `kernels/reader_dram.cpp`, `kernels/writer_l1.cpp`.

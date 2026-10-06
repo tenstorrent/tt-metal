@@ -1133,7 +1133,8 @@ void validate_dram_sender_global_cb_gather_in0_geometry_recv_contig(
 // A DRAM-sender global_cb into mcast_in0, or PrefetcherPipes into mcast_in0 or a streaming gather_in0,
 // delivers one in1 K-block at a time into a window the reader streams through with one block of
 // lookahead: it publishes the current block to compute while the previous one drains, so the window has
-// to hold two.
+// to hold two. The pipe readers' side of this is kIn1PipeWindowBlocks in
+// kernels/dataflow/prefetcher_pipe_in1_window.hpp.
 constexpr uint32_t kLookaheadMinResidentBlocks = 2;
 
 // One in1 K-block: `k_block_tiles` of K by one worker's per_core_N output columns.
