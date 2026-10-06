@@ -9,10 +9,6 @@ from models.common.utility_functions import is_wormhole_b0
 from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim
 
 
-def _auto_output_width_shard_dim_for_device(device, hidden_size):
-    return auto_output_width_shard_dim(hidden_size)
-
-
 @pytest.mark.parametrize(
     "hidden_size, token_parallel",
     [
@@ -22,7 +18,7 @@ def _auto_output_width_shard_dim_for_device(device, hidden_size):
     ],
 )
 def test_get_moe_combine_cores_count(device, hidden_size, token_parallel):
-    data_parallel = _auto_output_width_shard_dim_for_device(device, hidden_size)
+    data_parallel = auto_output_width_shard_dim(hidden_size)
     cores = ttnn.experimental.get_moe_combine_cores(device, token_parallel, data_parallel, hidden_size)
     assert len(cores) == token_parallel * data_parallel
 
@@ -30,7 +26,7 @@ def test_get_moe_combine_cores_count(device, hidden_size, token_parallel):
 def test_get_moe_combine_cores_within_worker_grid(device):
     hidden_size = 4096
     token_parallel = 4
-    data_parallel = _auto_output_width_shard_dim_for_device(device, hidden_size)
+    data_parallel = auto_output_width_shard_dim(hidden_size)
     grid = device.compute_with_storage_grid_size()
 
     cores = ttnn.experimental.get_moe_combine_cores(device, token_parallel, data_parallel, hidden_size)
@@ -46,7 +42,7 @@ def test_get_moe_combine_cores_within_worker_grid(device):
 def test_get_moe_combine_cores_width_shard_auto_helper(device):
     hidden_size = 4096
     token_parallel = 4
-    expected_width = _auto_output_width_shard_dim_for_device(device, hidden_size)
+    expected_width = auto_output_width_shard_dim(hidden_size)
 
     cores = ttnn.experimental.get_moe_combine_cores(device, token_parallel, expected_width, hidden_size)
     assert len(cores) == token_parallel * expected_width
@@ -56,7 +52,7 @@ def test_get_moe_combine_cores_disjoint_from_tilize(device):
     """Combine cores must be spatially disjoint from the tilize drain core."""
     hidden_size = 4096
     token_parallel = 4
-    data_parallel = _auto_output_width_shard_dim_for_device(device, hidden_size)
+    data_parallel = auto_output_width_shard_dim(hidden_size)
 
     cores = ttnn.experimental.get_moe_combine_cores(device, token_parallel, data_parallel, hidden_size)
     drain = ttnn.experimental.get_moe_tilize_drain_core(device, token_parallel, data_parallel, hidden_size)
@@ -68,7 +64,7 @@ def test_get_moe_combine_cores_disjoint_from_tilize(device):
 def test_get_moe_tilize_drain_core_structural(device):
     hidden_size = 4096
     token_parallel = 4
-    data_parallel = _auto_output_width_shard_dim_for_device(device, hidden_size)
+    data_parallel = auto_output_width_shard_dim(hidden_size)
 
     drain_core = ttnn.experimental.get_moe_tilize_drain_core(device, token_parallel, data_parallel, hidden_size)
     grid = device.compute_with_storage_grid_size()
@@ -88,7 +84,7 @@ def test_get_moe_combine_cores_avoids_mux_cores(device):
     """Combine and tilize cores must not overlap a caller-specified mux region."""
     hidden_size = 4096
     token_parallel = 4
-    data_parallel = _auto_output_width_shard_dim_for_device(device, hidden_size)
+    data_parallel = auto_output_width_shard_dim(hidden_size)
     mux = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 3))])
 
     cores = ttnn.experimental.get_moe_combine_cores(
@@ -118,7 +114,7 @@ def test_moe_worker_mcast_bbox_consistent_with_mux_placement(device):
     """
     hidden_size = 4096
     token_parallel = 4
-    data_parallel = _auto_output_width_shard_dim_for_device(device, hidden_size)
+    data_parallel = auto_output_width_shard_dim(hidden_size)
     grid = device.compute_with_storage_grid_size()
 
     # Block the eastern 2 columns — the combine strip's preferred location

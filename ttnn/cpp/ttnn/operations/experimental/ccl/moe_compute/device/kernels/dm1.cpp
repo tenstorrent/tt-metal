@@ -131,11 +131,9 @@ void kernel_main() {
     // Combine columns [combine_col_begin, combine_col_end) overlapped by this core's w2 width slice.
     // The ring size need not be a multiple of width_shard_dim, so a slice may straddle columns.
     // Must match the per-combine-core contributor lists built by the program factory.
+    // output_width_tiles_core >= 1 (validated hidden_tiles >= ring size).
     const uint32_t combine_col_begin = width_tile_base / combine_shard_width_tiles;
-    const uint32_t combine_col_end =
-        (output_width_tiles_core == 0)
-            ? combine_col_begin
-            : (width_tile_base + output_width_tiles_core - 1) / combine_shard_width_tiles + 1;
+    const uint32_t combine_col_end = (width_tile_base + output_width_tiles_core - 1) / combine_shard_width_tiles + 1;
     const uint32_t num_combine_cols = combine_col_end - combine_col_begin;
     Semaphore<> combine_sem(matmul_combine_sync_semaphore_id);
     // Device 2.0 migration: legacy primitive retained: raw L1 semaphore address used as the

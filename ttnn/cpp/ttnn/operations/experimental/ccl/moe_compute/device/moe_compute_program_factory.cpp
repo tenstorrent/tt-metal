@@ -1486,12 +1486,10 @@ MoEComputeMeshWorkloadFactory::create_at(
         for (uint32_t ring_pos = 0; ring_pos < matmul_num_cores; ++ring_pos) {
             const uint32_t w2_tiles =
                 moe_ring::w2_shard_tiles(hidden_tiles, ring_pos, intermediate_tiles, matmul_num_cores);
-            if (w2_tiles > 0) {
-                const uint32_t col_begin = w2_offset_tiles / output_shard_width_tiles;
-                const uint32_t col_end = (w2_offset_tiles + w2_tiles - 1) / output_shard_width_tiles + 1;
-                for (uint32_t col = col_begin; col < col_end; ++col) {
-                    compute_cores_by_combine_column.at(col).push_back(ring_pos2core[ring_pos]);
-                }
+            const uint32_t col_begin = w2_offset_tiles / output_shard_width_tiles;
+            const uint32_t col_end = (w2_offset_tiles + w2_tiles - 1) / output_shard_width_tiles + 1;
+            for (uint32_t col = col_begin; col < col_end; ++col) {
+                compute_cores_by_combine_column.at(col).push_back(ring_pos2core[ring_pos]);
             }
             w2_offset_tiles += w2_tiles;
         }

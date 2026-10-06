@@ -173,6 +173,14 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         matmul_num_cores);
 
     const uint32_t hidden_tiles = hidden_size / 32;
+    // Every ring core must own a non-empty w2 width slice: dm1 and the program factory derive the
+    // combine columns a core feeds from its last tile.
+    TT_FATAL(
+        hidden_tiles >= matmul_num_cores,
+        "hidden_size ({}) must yield at least 1 tile per ring core ({} tiles < {} cores)",
+        hidden_size,
+        hidden_tiles,
+        matmul_num_cores);
     TT_FATAL(
         hidden_tiles % combine_data_parallel_cores == 0,
         "hidden_tiles ({}) must be divisible by num_data_parallel_cores ({}) "

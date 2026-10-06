@@ -618,7 +618,9 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         uint32_t token_parallel_idx = 0;
         uint32_t dest_token_segment_offset_bytes = 0;
         auto data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
-        uint32_t data_parallel_idx = 0;
+        auto compute_cores_by_column_iter = (compute_cores_by_combine_column.has_value())
+                                                ? std::make_optional(compute_cores_by_combine_column->cbegin())
+                                                : std::nullopt;
         for (const auto& sender_core : sender_cores) {
             const bool is_init_sync_core = sender_core == sender_cores.at(0);
 
@@ -644,9 +646,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
 
             // Double-buffered source (fused moe_compute): add compute core coordinates for
             // semaphore increments upon release of buffer segment.
-            if (compute_cores_by_combine_column.has_value()) {
-                detail::append_compute_core_rt_args(
-                    *mesh_device, compute_cores_by_combine_column->at(data_parallel_idx), writer_runtime_args);
+            if (compute_cores_by_column_iter.has_value()) {
+                detail::append_compute_core_rt_args(*mesh_device, **compute_cores_by_column_iter, writer_runtime_args);
             }
 
             SetRuntimeArgs(program, unary_writer_kernel_id, sender_core, writer_runtime_args);
@@ -655,10 +656,14 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
                 data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
                 dest_token_segment_offset_bytes = 0;
                 ++token_parallel_idx;
-                data_parallel_idx = 0;
+                if (compute_cores_by_column_iter.has_value()) {
+                    compute_cores_by_column_iter = std::make_optional(compute_cores_by_combine_column->cbegin());
+                }
             } else {
                 dest_token_segment_offset_bytes += source_token_segment_size_bytes;
-                ++data_parallel_idx;
+                if (compute_cores_by_column_iter.has_value()) {
+                    ++(*compute_cores_by_column_iter);
+                }
             }
         }
 
@@ -770,7 +775,9 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     uint32_t link_worker_idx = 0, token_parallel_idx = 0, dest_token_segment_offset_bytes = 0;
     auto core_map_iter = mux_neigbor_core_maps.cbegin();
     auto data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
-    uint32_t data_parallel_idx = 0;
+    auto compute_cores_by_column_iter = (compute_cores_by_combine_column.has_value())
+                                            ? std::make_optional(compute_cores_by_combine_column->cbegin())
+                                            : std::nullopt;
     for (const auto& sender_core : sender_cores) {
         const bool is_init_sync_core = sender_core == sender_cores.at(0);
         std::vector<uint32_t> reader_runtime_args = {
@@ -793,9 +800,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
 
         // if the input is double buffered, coming from fused moe_compute, add the core coordinates of the compute cores
         // which get semaphore increments upon release of buffer segment.
-        if (compute_cores_by_combine_column.has_value()) {
-            detail::append_compute_core_rt_args(
-                *mesh_device, compute_cores_by_combine_column->at(data_parallel_idx), writer_runtime_args);
+        if (compute_cores_by_column_iter.has_value()) {
+            detail::append_compute_core_rt_args(*mesh_device, **compute_cores_by_column_iter, writer_runtime_args);
         }
 
         const bool is_termination_master = (sender_core == *termination_master_core_iter);
@@ -828,10 +834,14 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
             data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
             dest_token_segment_offset_bytes = 0;
             ++token_parallel_idx;
-            data_parallel_idx = 0;
+            if (compute_cores_by_column_iter.has_value()) {
+                compute_cores_by_column_iter = std::make_optional(compute_cores_by_combine_column->cbegin());
+            }
         } else {
             dest_token_segment_offset_bytes += source_token_segment_size_bytes;
-            ++data_parallel_idx;
+            if (compute_cores_by_column_iter.has_value()) {
+                ++(*compute_cores_by_column_iter);
+            }
         }
 
         if (++link_worker_idx == num_workers_per_link) {

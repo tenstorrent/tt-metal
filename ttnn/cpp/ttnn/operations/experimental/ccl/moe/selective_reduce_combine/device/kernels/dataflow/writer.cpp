@@ -60,10 +60,12 @@ private:
     uint32_t idx;
 
 public:
-    DoubleBuffer(const Noc& /*noc*/, const uint32_t /*sync_semaphore_addr*/, size_t& /*rt_arg_count*/) : idx(0) {};
-
-    // No compute cores signal us when the source is not double-buffered.
-    static constexpr uint32_t num_compute_cores() { return 0; }
+    DoubleBuffer(
+        const Noc& /*noc*/,
+        const uint32_t /*compute_cores_per_combine_core*/,
+        const uint32_t /*sync_semaphore_addr*/,
+        size_t& /*rt_arg_count*/) :
+        idx(0) {};
 
     auto& operator++() {
         ++idx;
@@ -84,18 +86,19 @@ private:
     bool idx;
 
 public:
-    // Runtime args: [num_compute_cores, x0, y0, x1, y1, ...]. The count varies per combine core
-    // because a compute core's width slice may straddle combine columns.
-    DoubleBuffer(const Noc& noc, const uint32_t sync_semaphore_addr, size_t& rt_arg_count) :
+    // Runtime args: [x0, y0, x1, y1, ...] for each of the compute_cores_per_combine_core cores.
+    DoubleBuffer(
+        const Noc& noc,
+        const uint32_t compute_cores_per_combine_core,
+        const uint32_t sync_semaphore_addr,
+        size_t& rt_arg_count) :
         noc(noc),
-        compute_cores_per_combine_core(get_arg_val<uint32_t>(rt_arg_count)),
+        compute_cores_per_combine_core(compute_cores_per_combine_core),
         sync_semaphore_addr(sync_semaphore_addr),
-        core_coords_ptr(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_addr(rt_arg_count + 1))),
+        core_coords_ptr(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_addr(rt_arg_count))),
         idx(false) {
-        rt_arg_count += 1 + 2 * compute_cores_per_combine_core;
+        rt_arg_count += 2 * compute_cores_per_combine_core;
     };
-
-    uint32_t num_compute_cores() const { return compute_cores_per_combine_core; }
 
     DoubleBuffer& operator++() {
         noc.async_writes_flushed();
@@ -213,9 +216,13 @@ void kernel_main() {
 
     const auto compute_sync_semaphore_addr = get_semaphore(compute_sync_semaphore_id);
 
+    // Double-buffered source only: number of compute cores feeding this combine core. It varies per
+    // combine core because a compute core's width slice may straddle combine columns.
+    const uint32_t compute_cores_per_combine_core = double_buffer_source ? get_arg_val<uint32_t>(rt_arg_count++) : 0;
+
     // rt_arg_count is incremented
-    detail::DoubleBuffer<double_buffer_source> db(noc1_obj, compute_sync_semaphore_addr, rt_arg_count);
-    const uint32_t compute_cores_per_combine_core = db.num_compute_cores();
+    detail::DoubleBuffer<double_buffer_source> db(
+        noc1_obj, compute_cores_per_combine_core, compute_sync_semaphore_addr, rt_arg_count);
 
     const auto output_addrgen = TensorAccessor(output_ta_args, output_base_addr);
 
