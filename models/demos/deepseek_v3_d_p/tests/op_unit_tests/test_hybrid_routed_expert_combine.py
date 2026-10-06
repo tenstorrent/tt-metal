@@ -19,13 +19,12 @@ The perf test times every program replayed from a trace, as the model runs it. E
 chip's program in turn and, on 8x4, issues the overlap slower than the device runs it, so a ring's chips
 start hundreds of microseconds apart and the overlap waits on its late neighbours.
 
-TtMoe turns this overlap on by default wherever the op exists, so the model suites cover the production
-path; this module is pruned from CI and run by hand.
+TtMoe runs this overlap in every traced Blackhole prefill, so CI runs the 8x4 accuracy cases on a BH Galaxy
+(Disaggregated prefill op unit tests); the perf cases, the 8x1 cases and dg0-only are run by hand.
 """
 
 from types import SimpleNamespace
 
-import functools
 import time
 
 import pytest
@@ -55,9 +54,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import validate_combine_output
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
-from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
-
-pytestmark = pytest.mark.uncollect_if(pred=ci_pruning.no_production_counterpart)
 
 _FULL_MESH = (8, 4)
 _MESHES = {
@@ -179,29 +175,13 @@ def _device_params(fabric_cfg):
     return params
 
 
-@functools.cache
-def _num_devices():
-    return ttnn.get_num_devices()
-
-
 def _mesh_params():
     params = []
     for mesh, fabric_cfg in _MESHES.items():
         topo = "ring" if fabric_cfg == ttnn.FabricConfig.FABRIC_2D_TORUS_Y else f"mesh-{mesh[0]}x{mesh[1]}"
-        # requires_mesh_topology is only enforced by the deepseek_v3_d_p model tests' conftest, which does not
-        # reach this directory, so a mesh that is not the whole system is skipped here. The fabric of a smaller
-        # mesh cannot come up alone (every router must handshake with a live partner), and the mesh fixture would
-        # throw before the test starts. A string condition is evaluated at setup, before that fixture, and only
-        # for these cases, so collection never queries the devices.
-        marks = [pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=topo)]
-        if mesh != _FULL_MESH:
-            marks.append(
-                pytest.mark.skipif(
-                    f"_num_devices() != {mesh[0] * mesh[1]}",
-                    reason=f"a standalone {mesh[0]}x{mesh[1]} needs exactly {mesh[0] * mesh[1]} chips; "
-                    "on a Galaxy the 8x1-galaxy cases run the same work",
-                )
-            )
+        # The package conftest skips a mesh that is not the whole Blackhole system: a smaller mesh's fabric
+        # cannot come up alone, since every router must handshake with a live partner.
+        marks = pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=topo)
         for model_id in _MODELS:
             real_cells = _REAL_CELLS if mesh == _FULL_MESH and model_id == "kimi-k27" else ()
             for threshold_id in ("balanced", "hot-expert") + real_cells:
