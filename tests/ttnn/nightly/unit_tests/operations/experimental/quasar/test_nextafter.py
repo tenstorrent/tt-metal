@@ -9,8 +9,9 @@ The quasar binding carried a copy of the composite implementation that ttnn.next
 #56050 replaced it with the SFPU kernel, and that copy had two independent defects:
 
   * it stepped by tt::tt_metal::hal::get_eps(), a fixed FLT_EPSILON, rather than by one ULP of the
-    operand. FLT_EPSILON is one ULP only on [1, 2); for bfloat16 it is smaller than half a ULP
-    everywhere, so the step was absorbed and the op returned its input for every input; and
+    operand. FLT_EPSILON is one ULP only on [1, 2) in float32. In bfloat16 it is below half a ULP
+    above roughly 2**-15, so the step was absorbed there and the op returned its input, and
+    larger than a ULP below 2**-16, so it overshot by many ULPs; and
   * the two arms were the wrong way round: a > b added epsilon and a < b subtracted it, moving the
     result away from the target instead of towards it.
 
@@ -96,9 +97,10 @@ def test_quasar_nextafter_direction(device, dtype):
 def test_quasar_nextafter_step_is_one_ulp(device, dtype):
     """The step has to scale with the operand rather than being a fixed distance.
 
-    A fixed FLT_EPSILON is one ULP only on [1, 2) in float32, and is below half a ULP everywhere in
-    bfloat16. Asserting `actual != a` is what catches the absorbed step: an exact comparison alone
-    would also pass if the op happened to round back onto the operand.
+    A fixed FLT_EPSILON is one ULP only on [1, 2) in float32, and in bfloat16 it is below half a ULP
+    above roughly 2**-15, which covers every operand here. Asserting `actual != a` is what catches
+    the absorbed step: an exact comparison alone would also pass if the op happened to round back
+    onto the operand.
     """
     torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
 
