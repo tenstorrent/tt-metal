@@ -37,22 +37,3 @@ jobs:
         uses: re-actors/alls-green@release/v1
         with:
           jobs: ${{ toJSON(needs) }}
-
-  report-status:
-    name: "Report status"
-    runs-on: ubuntu-slim
-    if: always()
-    needs: llk-e2e-summary
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 20
-        with:
-          fetch-depth: 1
-      - name: Report status
-        uses: ./.github/actions/report-failure
-        with:
-          test_name: "LLK e2e tests"
-          slack_bot_token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
-          slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
-          status: ${{ needs.llk-e2e-summary.result }}
