@@ -77,6 +77,7 @@
 #include "llk_sfpu/ckernel_sfpu_trigonometry.h"
 #include "llk_sfpu/ckernel_sfpu_typecast.h"
 #include "llk_sfpu/ckernel_sfpu_unary_comp.h"
+#include "llk_sfpu/ckernel_sfpu_unary_max_min.h"
 #include "llk_sfpu/ckernel_sfpu_unary_power.h"
 #include "llk_sfpu/ckernel_sfpu_unary_shift.h"
 #include "llk_sfpu/ckernel_sfpu_xielu.h"
@@ -786,6 +787,42 @@ void call_unary_sfpu_operation_quasar(
             VectorMode::RC,
             static_cast<std::uint32_t>(0xBF800000),  // min = -1.0 (fp32)
             static_cast<std::uint32_t>(0x3F800000)); // max = +1.0 (fp32)
+    }
+    else if constexpr (OPERATION == SfpuType::unary_max || OPERATION == SfpuType::unary_min)
+    {
+        // Scalar as fp32 bits: SFPU_UNARY_MAX_MIN_SCALAR when the test sets it, else 0.0f (matching
+        // UnarySFPUGolden UNARY_MAX_MIN_VALUE). Float32 serves every float Dest width.
+#ifdef SFPU_UNARY_MAX_MIN_SCALAR
+        constexpr std::uint32_t UNARY_MAX_MIN_FLOAT_SCALAR = SFPU_UNARY_MAX_MIN_SCALAR;
+#else
+        constexpr std::uint32_t UNARY_MAX_MIN_FLOAT_SCALAR = 0x00000000; // 0.0 (fp32)
+#endif
+        SFPU_UNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_unary_max_min,
+            (OPERATION == SfpuType::unary_max /* IS_MAX_OP */, DataFormat::Float32, APPROX, ITERATIONS),
+            dst_index,
+            VectorMode::RC,
+            UNARY_MAX_MIN_FLOAT_SCALAR);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_max_int32 || OPERATION == SfpuType::unary_min_int32)
+    {
+        // Two's-complement int32 scalar: SFPU_UNARY_MAX_MIN_SCALAR when the test sets it, else 1000
+        // (matching UnarySFPUGolden INT_MAXMIN_SCALAR).
+#ifdef SFPU_UNARY_MAX_MIN_SCALAR
+        constexpr std::uint32_t UNARY_MAX_MIN_INT32_SCALAR = SFPU_UNARY_MAX_MIN_SCALAR;
+#else
+        constexpr std::uint32_t UNARY_MAX_MIN_INT32_SCALAR = 1000;
+#endif
+        SFPU_UNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_unary_max_min,
+            (OPERATION == SfpuType::unary_max_int32 /* IS_MAX_OP */, DataFormat::Int32, APPROX, ITERATIONS),
+            dst_index,
+            VectorMode::RC,
+            UNARY_MAX_MIN_INT32_SCALAR);
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {

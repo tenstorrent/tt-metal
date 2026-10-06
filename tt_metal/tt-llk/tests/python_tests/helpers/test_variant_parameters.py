@@ -396,6 +396,22 @@ class SFPU_RELU_MAX_THRESHOLD(TemplateParameter):
 
 
 @dataclass
+class SFPU_UNARY_MAX_MIN_SCALAR(TemplateParameter):
+    """Scalar that unary max/min compares Dest against, as a uint32 bit pattern.
+
+    Float ops take the raw fp32 bits; the Int32 ops take a *signed* Python int and emit
+    its two's-complement pattern, which is the kernel's scalar contract. Emitted as a macro
+    for the same reason as :class:`SFPU_SHIFT_AMOUNT`: sfpu_operations_quasar.h selects on
+    ``#ifdef``, and unset means the dispatcher's fixed 0.0f / 1000.
+    """
+
+    max_min_scalar_bits: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"#define SFPU_UNARY_MAX_MIN_SCALAR {self.max_min_scalar_bits & 0xFFFFFFFF}u"
+
+
+@dataclass
 class SFPU_SHIFT_AMOUNT(TemplateParameter):
     """Shift amount for the *unary* shift ops (LeftShift / RightShift).
 
