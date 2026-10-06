@@ -6,11 +6,11 @@ import pytest
 import ttnn
 
 from models.common.utility_functions import is_wormhole_b0
-from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, effective_matmul_ring_size
+from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim
 
 
 def _auto_output_width_shard_dim_for_device(device, hidden_size):
-    return auto_output_width_shard_dim(hidden_size, matmul_ring_size=effective_matmul_ring_size(device))
+    return auto_output_width_shard_dim(hidden_size)
 
 
 @pytest.mark.parametrize(

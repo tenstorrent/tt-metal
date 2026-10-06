@@ -42,7 +42,27 @@ std::vector<uint32_t> data_parallel_split(
         }
     }
 
+    TT_FATAL(
+        token_size_bytes == 0,
+        "selective_reduce_combine: {} data-parallel core(s) cannot cover the token: {} bytes left over "
+        "(each segment is limited to {} bytes by the fabric packet size); increase num_data_parallel_cores",
+        num_data_parallel_cores,
+        token_size_bytes,
+        max_segment_size_bytes);
+
     return data_parallel_sizes_bytes;
+}
+
+// Writer runtime args for a double-buffered (fused moe_compute) source: the number of compute
+// cores feeding this combine core, followed by their physical (x, y) coordinates.
+void append_compute_core_rt_args(
+    const MeshDevice& mesh_device, const std::vector<CoreCoord>& compute_cores, std::vector<uint32_t>& rt_args) {
+    rt_args.push_back(static_cast<uint32_t>(compute_cores.size()));
+    for (const auto& core : compute_cores) {
+        const auto physical = mesh_device.worker_core_from_logical_core(core);
+        rt_args.push_back(physical.x);
+        rt_args.push_back(physical.y);
+    }
 }
 
 SelectiveReduceCombineWorkerLayout compute_worker_layout(
@@ -338,8 +358,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const std::optional<GlobalSemaphore>& cross_device_semaphore,
     const uint32_t metadata_sync_semaphore_id,
     const uint32_t compute_sync_semaphore_id,
-    const uint32_t compute_cores_per_combine_core,
-    const std::optional<std::vector<CoreCoord>>& compute_cores_by_ring_id) {
+    const std::optional<std::vector<std::vector<CoreCoord>>>& compute_cores_by_combine_column) {
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
     using namespace ttnn::ccl;
@@ -375,7 +394,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
 
     const uint32_t num_devices_total = mesh_view.num_devices();
-    const bool double_buffer_source = compute_cores_by_ring_id.has_value();
+    const bool double_buffer_source = compute_cores_by_combine_column.has_value();
 
     // physical experts per device, replicated shared experts are counted per device
     const uint32_t experts_per_device = dense_token_maps_tensor.logical_shape()[0];
@@ -575,7 +594,6 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
             {"dense_token_maps_stride_elm", dense_token_maps_stride_elm},
             {"alignment", l1_alignment},
             {"compute_sync_semaphore_id", writer_compute_sync_semaphore_id},
-            {"compute_cores_per_combine_core", compute_cores_per_combine_core},
             {"double_buffer_source", double_buffer_source},
         };
 
@@ -600,9 +618,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         uint32_t token_parallel_idx = 0;
         uint32_t dest_token_segment_offset_bytes = 0;
         auto data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
-        auto compute_cores_by_ring_iter = (compute_cores_by_ring_id.has_value())
-                                              ? std::make_optional(compute_cores_by_ring_id->cbegin())
-                                              : std::nullopt;
+        uint32_t data_parallel_idx = 0;
         for (const auto& sender_core : sender_cores) {
             const bool is_init_sync_core = sender_core == sender_cores.at(0);
 
@@ -628,15 +644,9 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
 
             // Double-buffered source (fused moe_compute): add compute core coordinates for
             // semaphore increments upon release of buffer segment.
-            if (compute_cores_by_ring_iter.has_value()) {
-                auto coords =
-                    std::ranges::subrange(
-                        *compute_cores_by_ring_iter, (*compute_cores_by_ring_iter) + compute_cores_per_combine_core) |
-                    std::views::transform(
-                        [&](const auto& c) { return mesh_device->worker_core_from_logical_core(c); }) |
-                    std::ranges::views::transform([](const auto& c) { return std::array{c.x, c.y}; }) |
-                    std::ranges::views::join;
-                std::ranges::copy(coords, std::back_inserter(writer_runtime_args));
+            if (compute_cores_by_combine_column.has_value()) {
+                detail::append_compute_core_rt_args(
+                    *mesh_device, compute_cores_by_combine_column->at(data_parallel_idx), writer_runtime_args);
             }
 
             SetRuntimeArgs(program, unary_writer_kernel_id, sender_core, writer_runtime_args);
@@ -645,14 +655,10 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
                 data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
                 dest_token_segment_offset_bytes = 0;
                 ++token_parallel_idx;
-                if (compute_cores_by_ring_iter.has_value()) {
-                    compute_cores_by_ring_iter = std::make_optional(compute_cores_by_ring_id->cbegin());
-                }
+                data_parallel_idx = 0;
             } else {
                 dest_token_segment_offset_bytes += source_token_segment_size_bytes;
-                if (compute_cores_by_ring_iter.has_value()) {
-                    (*compute_cores_by_ring_iter) += compute_cores_per_combine_core;
-                }
+                ++data_parallel_idx;
             }
         }
 
@@ -720,8 +726,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"topology", static_cast<uint32_t>(topology)},
         {"num_mux_workers_per_link", neighbors.size()},
         {"compute_sync_semaphore_id", writer_compute_sync_semaphore_id},
-        {"compute_cores_per_combine_core", compute_cores_per_combine_core},
-        {"double_buffer_source", compute_cores_by_ring_id.has_value()}};
+        {"double_buffer_source", double_buffer_source}};
 
     std::vector<uint32_t> writer_compile_time_args;
     ttnn::ccl::fabric_mux_connection_ct_args(
@@ -765,8 +770,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     uint32_t link_worker_idx = 0, token_parallel_idx = 0, dest_token_segment_offset_bytes = 0;
     auto core_map_iter = mux_neigbor_core_maps.cbegin();
     auto data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
-    auto compute_cores_by_ring_iter =
-        (compute_cores_by_ring_id.has_value()) ? std::make_optional(compute_cores_by_ring_id->cbegin()) : std::nullopt;
+    uint32_t data_parallel_idx = 0;
     for (const auto& sender_core : sender_cores) {
         const bool is_init_sync_core = sender_core == sender_cores.at(0);
         std::vector<uint32_t> reader_runtime_args = {
@@ -789,15 +793,9 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
 
         // if the input is double buffered, coming from fused moe_compute, add the core coordinates of the compute cores
         // which get semaphore increments upon release of buffer segment.
-        if (compute_cores_by_ring_iter.has_value()) {
-            auto coords =
-                std::ranges::subrange(
-                    *compute_cores_by_ring_iter, (*compute_cores_by_ring_iter) + compute_cores_per_combine_core) |
-                std::views::transform([&](const auto& c) { return mesh_device->worker_core_from_logical_core(c); }) |
-                std::ranges::views::transform([](const auto& c) { return std::array{c.x, c.y}; }) |
-                std::ranges::views::join;
-
-            std::ranges::copy(coords, std::back_inserter(writer_runtime_args));
+        if (compute_cores_by_combine_column.has_value()) {
+            detail::append_compute_core_rt_args(
+                *mesh_device, compute_cores_by_combine_column->at(data_parallel_idx), writer_runtime_args);
         }
 
         const bool is_termination_master = (sender_core == *termination_master_core_iter);
@@ -830,15 +828,10 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
             data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
             dest_token_segment_offset_bytes = 0;
             ++token_parallel_idx;
-            if (compute_cores_by_ring_iter.has_value()) {
-                compute_cores_by_ring_iter = std::make_optional(compute_cores_by_ring_id->cbegin());
-            }
-
+            data_parallel_idx = 0;
         } else {
             dest_token_segment_offset_bytes += source_token_segment_size_bytes;
-            if (compute_cores_by_ring_iter.has_value()) {
-                (*compute_cores_by_ring_iter) += compute_cores_per_combine_core;
-            }
+            ++data_parallel_idx;
         }
 
         if (++link_worker_idx == num_workers_per_link) {
