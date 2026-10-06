@@ -237,10 +237,9 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Recentered to CI run 36356786056 / job 108727344674. Main had already drifted ~13 ms under the
-    # previous centre on every chunk (jobs 108833541819, 108591991106, 108483306778 read 0.530s at
-    # chunk 0); ND-sharded routed-expert weights take a flat ~5 ms more per chunk.
-    (78, 11, 10): [0.525, 0.521, 0.534, 0.528, 0.542, 0.540, 0.539, 0.543, 0.558, 0.564, 0.574],
+    # Recentered to CI run 36882661594 / job 110557773564: fused prefill RMSNorm takes ~13-15 ms off
+    # every chunk versus the previous centre (run 36356786056 / job 108727344674).
+    (78, 11, 10): [0.510, 0.509, 0.521, 0.516, 0.527, 0.526, 0.525, 0.530, 0.543, 0.550, 0.559],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
