@@ -118,9 +118,9 @@ class TtHcWeights:
         self.clamp = (float(clamp[0]), float(clamp[1]))
         self.ckc = hifi4(mesh)
         # fn^T in the chip-major (c, j, k) row order, padded to 32 output columns; rows split over mesh columns
-        # (axis 1), replicated over mesh rows (axis 0): chip (r, c) holds its [4 x H/2, 32] block.
+        # (axis 1), replicated over mesh rows (axis 0): chip (r, c) holds its [4 x H/TP, 32] block.
         fn_t = torch.zeros(HC * hidden, W, dtype=torch.float32)
-        fn_t[:, :NG] = streams_cols_to_chip_major(fn.float(), hidden).T
+        fn_t[:, :NG] = streams_cols_to_chip_major(fn.float(), hidden, mesh.shape[1]).T
         self.fn_t = ttnn.from_torch(
             fn_t.reshape(1, 1, HC * hidden, W),
             dtype=ttnn.float32,

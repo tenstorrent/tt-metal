@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Xing4.0 activation layout on the 4x2 mesh (plan.md): SP=4 over rows (axis 0) x TP=2 over columns (axis 1).
+"""Xing4.0 activation layout on an SP x TP mesh (plan.md): SP over rows (axis 0) x TP over columns (axis 1), both
+taken from mesh.shape (4x2 on the LoudBox: S/4 rows and 1792 hidden columns per chip).
 
-Chip (r, c) holds chunk rows [r S/4, (r+1) S/4) and hidden columns [1792 c, 1792 (c+1)) of every one of the 4 mHC
-streams, packed stream-major along the last dim: the per-chip residual is [1, 1, S/4, 4 x 1792] fp32; local column
-j*1792 + k = global flat column j*3584 + c*1792 + k (the reference's token-major [S * 4, H] viewed as [S, 4H]).
+Chip (r, c) holds chunk rows [r S/SP, (r+1) S/SP) and hidden columns [w c, w (c+1)), w = H/TP, of every one of the 4
+mHC streams, packed stream-major along the last dim: the per-chip residual is [1, 1, S/SP, 4 x w] fp32; local column
+j*w + k = global flat column j*H + c*w + k (the reference's token-major [S * 4, H] viewed as [S, 4H]).
 
 The host helpers here are the harness boundary only (component / swap / hybrid); never call them in a forward.
 """
@@ -17,21 +18,21 @@ import torch
 import ttnn
 
 HC = 4  # hc_mult: mHC residual streams
-TP = 2  # mesh columns (axis 1): hidden split
-SP = 4  # mesh rows (axis 0): sequence split
 
 
-def streams_cols_to_chip_major(t: torch.Tensor, hidden: int) -> torch.Tensor:
-    """[..., HC * hidden] in stream order (j, h) -> [..., TP * HC * hidden/TP] in (c, j, k) order, so a plain split
-    of the last dim over mesh columns hands chip column c its [HC x hidden/TP] block."""
+def streams_cols_to_chip_major(t: torch.Tensor, hidden: int, tp: int) -> torch.Tensor:
+    """[..., HC * hidden] in stream order (j, h) -> [..., tp * HC * hidden/tp] in (c, j, k) order, so a plain split
+    of the last dim over the tp mesh columns hands chip column c its [HC x hidden/tp] block."""
+    assert hidden % tp == 0, (hidden, tp)
     lead = t.shape[:-1]
-    return t.reshape(*lead, HC, TP, hidden // TP).transpose(-3, -2).reshape(*lead, HC * hidden)
+    return t.reshape(*lead, HC, tp, hidden // tp).transpose(-3, -2).reshape(*lead, HC * hidden)
 
 
-def chip_major_to_streams_cols(t: torch.Tensor, hidden: int) -> torch.Tensor:
+def chip_major_to_streams_cols(t: torch.Tensor, hidden: int, tp: int) -> torch.Tensor:
     """Inverse of streams_cols_to_chip_major."""
+    assert hidden % tp == 0, (hidden, tp)
     lead = t.shape[:-1]
-    return t.reshape(*lead, TP, HC, hidden // TP).transpose(-3, -2).reshape(*lead, HC * hidden)
+    return t.reshape(*lead, tp, HC, hidden // tp).transpose(-3, -2).reshape(*lead, HC * hidden)
 
 
 def _mapper(mesh, dims):
@@ -43,11 +44,11 @@ def _composer(mesh):
 
 
 def streams_to_device(mesh, x: torch.Tensor, hidden: int, dtype=ttnn.float32) -> ttnn.Tensor:
-    """Host streams [S * 4, H] (token-major) or [S, 4H] -> device [1, 1, S/4, 4 x H/2] per chip, TILE, DRAM."""
+    """Host streams [S * 4, H] (token-major) or [S, 4H] -> device [1, 1, S/SP, 4 x H/TP] per chip, TILE, DRAM."""
     host = x.float().reshape(-1, HC * hidden)
     s = host.shape[0]
     assert s % mesh.shape[0] == 0, f"{s} rows do not split over {mesh.shape[0]} mesh rows"
-    host = streams_cols_to_chip_major(host, hidden).reshape(1, 1, s, HC * hidden)
+    host = streams_cols_to_chip_major(host, hidden, mesh.shape[1]).reshape(1, 1, s, HC * hidden)
     return ttnn.from_torch(
         host,
         dtype=dtype,
@@ -59,10 +60,10 @@ def streams_to_device(mesh, x: torch.Tensor, hidden: int, dtype=ttnn.float32) ->
 
 
 def streams_to_host(mesh, t: ttnn.Tensor, hidden: int) -> torch.Tensor:
-    """Device [1, 1, S/4, 4 x H/2] per chip -> host [S * 4, H] (token-major, the reference's block boundary)."""
+    """Device [1, 1, S/SP, 4 x H/TP] per chip -> host [S * 4, H] (token-major, the reference's block boundary)."""
     full = ttnn.to_torch(t, mesh_composer=_composer(mesh))
     s = full.shape[-2]
-    return chip_major_to_streams_cols(full.reshape(s, HC * hidden), hidden).reshape(s * HC, hidden)
+    return chip_major_to_streams_cols(full.reshape(s, HC * hidden), hidden, mesh.shape[1]).reshape(s * HC, hidden)
 
 
 def row_split_to_host(mesh, t: ttnn.Tensor, width: int | None = None) -> torch.Tensor:

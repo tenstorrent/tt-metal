@@ -64,6 +64,22 @@ TABLE = {
         "owner decision 2026-10-01 after P.3's A/B: experts 256.6 -> 242.4 ms, s56320 top5 1.0, final hidden 0.99803 "
         "with the bfp8 KV cache; hifi4 = the previous path",
     ),
+    # ---- serving geometry (the deployment's PREFILL_CHUNK_SIZE / PREFILL_MAX_SEQ_LEN / PREFILL_NUM_USERS and the
+    # tt-d-gen prefill worker's chunk_size / max_seq_len / max_slots; the contract tests run at these)
+    "SERVE_CHUNK": Setting(
+        2048,
+        None,
+        "prefill chunk (tokens) for the frozen Xing decode (tt-blaze xchin/xing4-integration @ 17edc80257: 1 slot x "
+        "4096 positions, rebuilding its kernels costs hours): divides SERVE_MAX_SEQ, a multiple of 32 x SP; 5120 = "
+        "the bring-up target",
+    ),
+    "SERVE_MAX_SEQ": Setting(
+        4096,
+        None,
+        "max sequence (tokens) per slot = the decode's cache depth (XING_MAX_SEQ default 4096); 56320 = the bring-up "
+        "target",
+    ),
+    "SERVE_SLOTS": Setting(1, None, "KV slots (max_slots) = the decode's XING_N_SLOTS (default 1)"),
     # ---- harness variables (names kept, see ENV_NAMES)
     "HYBRID": Setting(
         False, None, "debug: hybrid harness (CPU reference + DEVICE_STEPS on device, host in/out per step)"

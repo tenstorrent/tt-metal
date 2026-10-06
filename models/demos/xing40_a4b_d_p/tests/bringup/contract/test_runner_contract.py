@@ -4,32 +4,34 @@
 """Serving contract, runner test: the whole model through the adapter only, driven by tt-d-gen's real engine
 (serving_contract.md, every section). Modelled on gemma4_d_p/tests/test_prefill_migration.py.
 
-A subprocess runs tt-metal's prefill_runner.main (runner_case.py) for all 40 layers on the 4x2 mesh with FABRIC_2D,
-2 slots, D2H layer acks (PREFILL_LAYER_ACK_D2H=1), and mock migration on the migration-enabled path (the table built
+A subprocess runs tt-metal's prefill_runner.main (runner_case.py) for all 40 layers on the 4x2 mesh with FABRIC_2D at
+the serving geometry (server_rules: XING_SERVE_CHUNK / XING_SERVE_MAX_SEQ, 2048 / 4096 by default), 2 slots (the
+deployment's 1-slot table is the runner smoke's), D2H layer acks (PREFILL_LAYER_ACK_D2H=1), and mock migration on the migration-enabled path (the table built
 with first_layer_idx / num_my_layers / stage_layout, no KV Manager). The feeder, chosen by use_engine:
   engine    tt-d-gen's BackendRuntime (PREFILL role, device_prefill_pipeline on the runner's H2D service and
             /tt_prefill_layer_acks_<id>), run by testing/dgen_prefill_driver.py under tt-d-gen's Python, when
             testing/dgen_engine.find_build finds a build. It admits ENGINE_CASE (below) and the engine decides slots,
             chunks, prefix reuse and interleave; the test checks what it did against server_rules (the plan per slot,
-            the remount at 2944, the interleave) and every request's PREFILL_DONE (each chunk retired on 40 acks).
+            the remount, the interleave) and every request's PREFILL_DONE (each chunk retired on 40 acks).
   producer  fallback, only with serving.require_engine: false (or BRINGUP_DGEN=0) and no build: producer_case.py, tt-metal's
-            prefill_producer sending server_rules.interleave of
-            slot 0: 3000 -> (0, 3000); 56000 from resident 2944 -> (2944, 8064) ... (49024, 54144), (51200, 56000)
-            slot 1: 12345 -> (0, 5120), (5120, 10240), (10240, 12345); 20000 from 12288 -> (12288, 17408), (17408, 20000)
+            prefill_producer sending server_rules.interleave of server_rules.SCENARIOS "producer"; at 2048 / 4096:
+            slot 0: 1000 -> (0, 1000); 4000 from resident 960 -> (960, 3008), (2048, 4000)
+            slot 1: 1500 -> (0, 1500); 3500 from resident 1472 -> (1472, 3500)
 The output names the feeder that ran.
 
 The KV is read through the exported table over UMD (what a KV Manager ships) and checked here on the CPU with the
 server's own code (tt-d-gen tools/launch_harness/tables.py, kv_manager/tools/kv_dump_compare.py). Pass:
   - the runner's fabric: model_config.FABRIC_PAYLOAD_SIZE in [4352, 15232] B (runner_utils.py:41-53)
-  - table: tables.read_table / layout accept it; layers exactly 0..39; >= 2 slots; every (slot, layer, pos < 56320)
+  - table: tables.read_table / layout accept it; layers exactly 0..39; >= 2 slots; every (slot, layer, pos < max_seq)
     record present with one size; no two records on one address; every device-group replica holds the same bytes
   - acks: 40 per chunk (layers_per_chunk = 40): the engine retires every chunk (PREFILL_DONE for every request, no
     stranded acks), or the producer drains 40 x 17
   - each slot's final [0, end) vs the golden kv_latent, kv_dump_compare per-channel PCC >= max(0.93 server, 0.97 spec);
     the pad rows of each slot's last record zero
   - slot A after turn 1 (engine: right before its follow-up's first chunk; producer: at its acks) vs the golden, its
-    reused prefix [0, 2944) byte-identical at the end (bytecmp), its last block [2944, 3000) PCC >= 0.99
-  - the pulled-back chunk: layer-0 rows [51200, 54144) byte-identical to what the earlier chunk wrote
+    reused prefix [0, resident) byte-identical at the end (bytecmp), its last block [resident, turn 1) PCC >= 0.99
+  - the pulled-back chunk: layer-0 rows [max_seq - chunk, end of the chunk before it) byte-identical to what that
+    earlier chunk wrote
 Fail fast (run_child): the run is killed ~3 s after the feeder exits non-zero, after 60 s without progress once it
 exits 0, when nothing grows for 240 s, or after 900 s (XING_CONTRACT_AFTER_PRODUCER_S / _STALL_S / _RUN_S). The
 precompile pass (UP_FRONT_COLLECT=1) skips the body.
@@ -209,15 +211,19 @@ def tail(p: Path, n: int = 40) -> str:
 
 # The engine case: what tt-d-gen's engine does with these admits is deterministic (checked against
 # te.mock_prefill_pipeline): every prompt is a prefix of the one golden token stream, so a second request admitted
-# while another slot holds a longer prefix goes cold, never remounts. Hence one follow-up turn, on slot A:
-#   a   3000 cold                       -> (0, 3000)                                    mid-chunk end
-#   a2  56320 after a, remount at 2944  -> (2944, 8064) ... (49024, 54144), (51200, 56320)   pulled-back last chunk
-#   b   12345 after a, cold, other slot -> (0, 5120), (5120, 10240), (10240, 12345)     interleaved with a2
-ENGINE_CASE = (("a", 3000, None), ("a2", R.MAX_SEQ, "a"), ("b", 12345, "a"))
+# while another slot holds a longer prefix goes cold, never remounts. Hence one follow-up turn, on slot A
+# (server_rules.SCENARIOS; chunk 2048 / max_seq 4096 shown, 5120 / 56320 in brackets):
+#   a   1000 [3000] cold                  -> (0, 1000)                                    mid-record end
+#   a2  4096 after a, remount at 960      -> (960, 3008), (2048, 4096)                    pulled-back last chunk
+#       [56320, remount at 2944           -> (2944, 8064) ... (49024, 54144), (51200, 56320)]
+#   b   1500 [12345] after a, cold, other -> (0, 1500) [(0, 5120) ... (10240, 12345)]     interleaved with a2
+T1, B = R.scenario()["turn1"], R.scenario()["b"]
+ENGINE_CASE = (("a", T1, None), ("a2", R.MAX_SEQ, "a"), ("b", B, "a"))
+A2_RES, A2_PLAN = R.follow_up(T1, R.MAX_SEQ)
 # Taken by the runner right before the named chunk runs (runner_case.py), on that chunk's slot.
 ENGINE_SNAPSHOTS = {
-    "snap_s0_t0": {"before": [2944, 2944 + R.CHUNK], "lo": 0, "hi": 3000},
-    "snap_overlap": {"before": [R.MAX_SEQ - R.CHUNK, R.MAX_SEQ], "lo": R.MAX_SEQ - R.CHUNK, "hi": 2944 + 10 * R.CHUNK},
+    "snap_s0_t0": {"before": list(A2_PLAN[0]), "lo": 0, "hi": T1},
+    "snap_overlap": {"before": list(A2_PLAN[-1]), "lo": A2_PLAN[-1][0], "hi": A2_PLAN[-2][1]},
 }
 
 
@@ -236,7 +242,7 @@ def engine_checks(out: Path, res: dict) -> tuple[list[str], dict]:
     for n, length, _ in ENGINE_CASE:
         if rq.get(n, {}).get("done_position") != length:
             fails.append(f"request {n}: PREFILL_DONE at {rq.get(n, {}).get('done_position')}, prompt {length}")
-    want_res = R.follow_up_resident(3000, R.MAX_SEQ)
+    want_res = A2_RES
     a2 = rq.get("a2", {})
     if a2.get("slot") != slot["a"] or a2.get("resident") != want_res:
         fails.append(
@@ -248,8 +254,8 @@ def engine_checks(out: Path, res: dict) -> tuple[list[str], dict]:
     # the chunks the runner was handed, per slot, are the server's plan (prefill_writer.cpp)
     chunks = res.get("chunks", [])
     want = {
-        slot["a"]: R.chunk_plan(3000) + R.chunk_plan(R.MAX_SEQ, want_res),
-        slot["b"]: R.chunk_plan(12345),
+        slot["a"]: R.chunk_plan(T1) + A2_PLAN,
+        slot["b"]: R.chunk_plan(B),
     }
     for sl, plan in want.items():
         got = [(c[1], c[2]) for c in chunks if c[0] == sl]
@@ -304,10 +310,12 @@ def test_runner_contract(tmp_path):
         efails, slots = engine_checks(out, res)
         fails += efails
         slot_a, snaps, follow = slots["a"], res.get("snapshots", {}), R.MAX_SEQ
+        t1 = T1
         overlap = ENGINE_SNAPSHOTS["snap_overlap"]
     else:
-        slot_a, snaps, follow = 0, pj.get("snapshots", {}), 56000
+        slot_a, snaps, follow = 0, pj.get("snapshots", {}), PC.TURNS[0][1]
         overlap = PC.SNAPSHOTS["snap_overlap"]
+        t1 = PC.TURNS[0][0]
         if pj.get("acks_drained") != pj.get("acks_expected"):
             fails.append(f"acks: {pj.get('acks_drained')} drained, {pj.get('acks_expected')} expected (40 per chunk)")
     tfails, geom = E.table_rules(str(out / "table.pb"), R.NUM_LAYERS, NUM_USERS)
@@ -341,20 +349,20 @@ def test_runner_contract(tmp_path):
     if snaps.get("snap_s0_t0", {}).get("taken"):
         a = kvc.load_dump(str(out / "snap_s0_t0"), slot=slot_a, chunk_bytes=cbytes)
         for layer in layers:
-            got = kvc.reassemble(a, layer, 0, 3000, **gk)
+            got = kvc.reassemble(a, layer, 0, t1, **gk)
             fails += R.kv_pcc_failures(
-                kvc, got, R.golden_kv(g, layer)[:3000].numpy(), layer, thr, f"slot {slot_a} after turn 1"
+                kvc, got, R.golden_kv(g, layer)[:t1].numpy(), layer, thr, f"slot {slot_a} after turn 1"
             )
-        prefix = R.follow_up_resident(3000, follow)
+        prefix = R.follow_up_resident(t1, follow)
         r = kvc.compare(a, finals[slot_a], method="bytecmp", layers=layers, start=0, end=prefix, **gk)
         if r["status"] != "passed":
             fails.append(f"slot {slot_a} reused prefix [0, {prefix}) bytes changed after turn 1: {r['findings'][:3]}")
         r = kvc.compare(
-            a, finals[slot_a], method="pcc", layers=layers, start=prefix, end=3000, threshold=R.LAST_BLOCK_PCC, **gk
+            a, finals[slot_a], method="pcc", layers=layers, start=prefix, end=t1, threshold=R.LAST_BLOCK_PCC, **gk
         )
         if r["status"] != "passed":
             fails.append(
-                f"slot {slot_a} last block [{prefix}, 3000) PCC < {R.LAST_BLOCK_PCC}: "
+                f"slot {slot_a} last block [{prefix}, {t1}) PCC < {R.LAST_BLOCK_PCC}: "
                 f"{[x for x in r['findings'] if not x['passed']][:4]}"
             )
     if snaps.get("snap_overlap", {}).get("taken"):

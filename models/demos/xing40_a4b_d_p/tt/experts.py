@@ -20,7 +20,8 @@ rows), the pipeline of hy4_preview_d_p/tt/experts.py:TtHy4Experts with 4 chips p
          hidden half -> experts_out [1,1,S/4,H/2] fp32 (the residual's column split, like tt/mlp.py)
 
 Weights: bf16 in the checkpoint, bfp8 on device (never bfp4), read one expert at a time and cached under
-generated/xing40_a4b_d_p/tt_cache/experts. Per-expert cap = the chunk (a token picks an expert once); the flat
+generated/xing40_a4b_d_p/tt_cache/experts/<rows>x<cols> (each tensorbin stacks one local slot over the whole mesh, so a
+cache is only valid for the mesh shape that wrote it). Per-expert cap = the chunk (a token picks an expert once); the flat
 dispatch buffer has capacity factor 4 (all 4 of a token's experts on one chip). expert_token_counts / region offsets
 are [1, 64] (global ids, known issues).
 
@@ -169,7 +170,7 @@ class TtExperts:
             dtype=ttnn.uint32,
         )
         gidx = ttnn.squeeze(ttnn.squeeze(gidx, 0), 0)
-        cache_path = CACHE_ROOT / "experts" if cache else None
+        cache_path = CACHE_ROOT / "experts" / f"{rows}x{cols}" if cache else None
         prefix = f"layer_{layer}.experts.{weights_dtype.name}" if cache else None
         if cache:
             from models.demos.deepseek_v3_d_p.utils import fast_cache_checker
