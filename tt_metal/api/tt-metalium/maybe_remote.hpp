@@ -13,7 +13,6 @@
 #include <sstream>
 #include <concepts>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace tt::tt_metal {
 
