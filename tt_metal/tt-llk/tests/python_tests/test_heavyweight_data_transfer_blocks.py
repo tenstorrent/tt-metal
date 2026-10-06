@@ -30,7 +30,7 @@ from helpers.golden_generator.heavyweight.data_transfer_blocks import (
 from helpers.golden_generator.heavyweight.data_transfer_blocks.l1_codec import (
     tile_bytes_for,
 )
-from helpers.llk_params import PackerReluType, StochasticRounding
+from helpers.llk_params import DestAccumulation, PackerReluType, StochasticRounding
 
 QUASAR = QuasarDataTransferBlocks()
 WORMHOLE = WormholeDataTransferBlocks()
@@ -687,3 +687,51 @@ def test_unpack_to_dest_truncates_rather_than_rounding(fraction):
     ).float()[0]
     assert got.item() == 1.0
     assert torch.tensor([value]).to(torch.bfloat16).float()[0].item() != 1.0
+
+
+# DestAccumulation has no __bool__, so the enum passed through **geometry used
+# to pick the 32-bit SrcS layout for BOTH members -- 1280 bytes where No wants
+# 1152 -- and the read back then decoded one tile in the wrong layout without
+# complaining.
+@pytest.mark.parametrize(
+    "dest_acc, expected_bytes",
+    [
+        (False, 1152),
+        (DestAccumulation.No, 1152),
+        (True, 1280),
+        (DestAccumulation.Yes, 1280),
+    ],
+    ids=["bool-False", "enum-No", "bool-True", "enum-Yes"],
+)
+def test_geometry_dest_acc_accepts_the_enum(dest_acc, expected_bytes):
+    packed = QUASAR.pack_to_l1(
+        torch.zeros(TILE),
+        DataFormat.MxFp8R,
+        use_srcs=True,
+        dest_acc=dest_acc,
+        **ONE_TILE_GEOMETRY,
+    )
+    assert len(packed) == expected_bytes
+
+
+def test_the_enum_and_the_bool_round_trip_identically():
+    values = torch.randn(TILE)
+    out = []
+    for dest_acc in (False, DestAccumulation.No):
+        buf = QUASAR.pack_to_l1(
+            values,
+            DataFormat.MxFp8R,
+            use_srcs=True,
+            dest_acc=dest_acc,
+            **ONE_TILE_GEOMETRY,
+        )
+        out.append(
+            QUASAR.unpack_from_l1(
+                buf,
+                DataFormat.MxFp8R,
+                use_srcs=True,
+                dest_acc=dest_acc,
+                **ONE_TILE_GEOMETRY,
+            ).float()
+        )
+    assert torch.equal(out[0], out[1])
