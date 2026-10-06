@@ -1177,15 +1177,15 @@ ISINF_ISNAN_MATHOPS = [
 ]
 
 
-# The predicates a bf16 input at dest_acc=Yes cannot answer. That unpack path delivers both
-# NaN and -inf to the LREG as +inf, and which predicates that breaks follows from it rather
-# than being a blanket property of the pipeline: is_nan reads 0 where the golden says 1,
-# is_neg_inf reads 0 where it says 1, and is_inf reads 1 where it says 0. The other two
-# survive precisely because +inf is what arrives -- is_pos_inf is untouched, and is_finite
-# agrees by luck of the mapping, since isfinite(+inf) and isfinite(NaN) are both 0.
+# The predicates a bf16 input at dest_acc=Yes cannot answer. That unpack path hands the
+# SFPU a NaN as -inf (measured on Wormhole: Identity writes -inf on every NaN lane, while
+# +inf and -inf arrive intact), and which predicates that breaks follows from it rather
+# than being a blanket property of the pipeline: on the NaN lanes is_nan reads 0 where the
+# golden says 1, and is_inf and is_neg_inf read 1 where it says 0. The other two survive
+# because -inf answers them as NaN would -- isposinf and isfinite are 0 for both.
 #
 # Skipping the whole op list here withheld those two as well; they are swept now, so a
-# regression in the +inf path is caught on a bf16 input instead of only on Float32.
+# regression in the inf path is caught on a bf16 input instead of only on Float32.
 _ISINF_ISNAN_BF16_DEST_UNSUPPORTED = [
     MathOperation.Isinf,
     MathOperation.Isneginf,
@@ -1203,8 +1203,8 @@ def isinf_isnan_skip_reason(formats, mathop, dest_acc):
         and mathop in _ISINF_ISNAN_BF16_DEST_UNSUPPORTED
     ):
         return (
-            "bf16->fp32 dest unpack delivers NaN and -inf as +inf, so this "
-            "predicate cannot be evaluated on this pipeline"
+            "bf16->fp32 dest unpack delivers NaN as -inf, so this predicate "
+            "cannot be evaluated on this pipeline"
         )
     return None
 
@@ -1239,8 +1239,8 @@ def test_eltwise_unary_sfpu_isinf_isnan(
 ):
     _skip_bh_unless_fp32(formats, dest_acc)
 
-    # bf16->fp32 dest unpack (non-32-bit input + dest_acc=Yes) delivers NaN and -inf as
-    # +inf, which only the three predicates below can see; the rest are swept here.
+    # bf16->fp32 dest unpack (non-32-bit input + dest_acc=Yes) delivers NaN as -inf,
+    # which only the three predicates below can see; the rest are swept here.
     # See _ISINF_ISNAN_BF16_DEST_UNSUPPORTED.
     reason = isinf_isnan_skip_reason(formats, mathop, dest_acc)
     if reason:

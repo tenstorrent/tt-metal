@@ -25,7 +25,7 @@ from itertools import product
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
@@ -45,6 +45,7 @@ from helpers.sfpu_accuracy_budget import (
     _load_table,
     _winner,
     accuracy_contract,
+    assert_against_contract,
     enrolled_ops,
     resolve_contract,
     usable_budget_ceiling,
@@ -236,6 +237,48 @@ def test_a_contract_translates_to_passed_test_arguments(contract, by_ulp, by_tol
         assert flushed == {**by_ulp, "flush_subnormals": True}
     else:
         assert flushed == by_ulp
+
+
+@pytest.mark.parametrize(
+    "arch, gated",
+    [(ChipArchitecture.WORMHOLE, True), (ChipArchitecture.BLACKHOLE, False)],
+    ids=lambda v: getattr(v, "name", str(v)),
+)
+def test_the_binary_gate_enforces_the_whole_contract(arch, gated, monkeypatch):
+    """`assert_against_contract` is the binary and ternary drivers' gate, and they run
+    only on hardware, so this is the one host check that it takes the step budget and
+    not just the tolerance: a one-step drift on SfpuElwEq, exact at 0 steps on Wormhole,
+    fails there and passes the tolerance it falls back to off Wormhole. It also ranks
+    with subnormal outputs flushed: an fp16-subnormal golden that the pack writes as 0
+    is no step of SfpuElwsub's error."""
+    import helpers.chip_architecture as chip
+
+    monkeypatch.setattr(chip, "get_chip_architecture", lambda: arch)
+    lanes = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
+    bf16 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    golden = torch.ones(lanes, dtype=torch.bfloat16)
+    drifted = golden.clone()
+    drifted[0] = 1.0 + 2.0**-7  # one bf16 step above 1.0
+
+    def eq_gate():
+        assert_against_contract(
+            MathOperation.SfpuElwEq, bf16, DestAccumulation.No, golden, drifted
+        )
+
+    if gated:
+        with _refuses("Assert against golden failed", AssertionError):
+            eq_gate()
+    else:
+        eq_gate()
+
+    fp16 = InputOutputFormat(DataFormat.Float16, DataFormat.Float16)
+    golden = torch.ones(lanes, dtype=torch.float16)
+    golden[0] = 3.0e-5  # an fp16 subnormal: ~500 steps from 0 unflushed
+    flushed = golden.clone()
+    flushed[0] = 0.0
+    assert_against_contract(
+        MathOperation.SfpuElwsub, fp16, DestAccumulation.No, golden, flushed
+    )
 
 
 @pytest.mark.parametrize("method", ["passed_test_kwargs", "tolerance_kwargs"])
@@ -653,8 +696,6 @@ OUT_KEYED_ONLY = frozenset(
         MathOperation.SfpuAddcmul,
         MathOperation.SfpuAtan2,
         MathOperation.SfpuBinaryFmod,
-        MathOperation.SfpuBinaryMax,
-        MathOperation.SfpuBinaryMin,
         MathOperation.SfpuBinaryRemainder,
         MathOperation.SfpuElwadd,
         MathOperation.SfpuElwdiv,
@@ -709,12 +750,13 @@ EXACT_BY_CONSTRUCTION = (
 INTEGER_VALUED = (MathOperation.Floor, MathOperation.Ceil, MathOperation.Trunc)
 
 #: Ops whose correct result is the *only* result: an integer, a predicate's 1.0/0.0, a
-#: sign's -1/0/1, a pass-through-or-zero selection, a constant, a clamp, or a single IEEE
-#: add. One step here is the contract breaking, not the pack path. Listed by what the op
-#: computes, not read back from the table, which would agree with it by construction.
-#: ReluMax, ReluMin and Frac stay out: each carries a `max_ulp: 1` wildcard row from the
-#: 2026-09-18 sample, which would have to be split by input first -- on a wildcard the
-#: guard below cannot tell a narrowing cell's pack step from drift.
+#: sign's -1/0/1, a pass-through-or-zero selection, an operand selection, a constant, a
+#: clamp, or a single IEEE add. One step here is the contract breaking, not the pack path.
+#: Listed by what the op computes, not read back from the table, which would agree with
+#: it by construction. ReluMax, ReluMin and Frac stay out: each carries a `max_ulp: 1`
+#: wildcard row from the 2026-09-18 sample, which would have to be split by input first --
+#: on a wildcard the guard below cannot tell a narrowing cell's pack step from drift.
+#: SfpuBinaryMax/Min had the same wildcards and are keyed by input now.
 EXACT_ZERO_BY_CONSTRUCTION = (
     *INTEGER_VALUED,
     MathOperation.Fill,
@@ -739,6 +781,8 @@ EXACT_ZERO_BY_CONSTRUCTION = (
     MathOperation.SfpuIsclose,
     MathOperation.SfpuMask,
     MathOperation.SfpuAddTopRow,
+    MathOperation.SfpuBinaryMax,
+    MathOperation.SfpuBinaryMin,
 )
 
 #: The subset whose every result is exact in every format -- a predicate's 1.0/0.0 or a
@@ -752,6 +796,8 @@ EXACT_IN_EVERY_FORMAT = tuple(
         MathOperation.Threshold,
         MathOperation.SfpuMask,
         MathOperation.SfpuAddTopRow,
+        MathOperation.SfpuBinaryMax,
+        MathOperation.SfpuBinaryMin,
     )
 )
 
@@ -952,7 +998,8 @@ def test_every_driven_variant_of_an_exact_op_is_gated():
     the one it is promoted to. A variant the driver skips never runs, so it must resolve
     to *no* step budget: one there claims a measurement nobody took -- which is how a
     re-sort that dropped Isinf/Isnan/Isneginf's `not measured` rows showed up. The swept
-    cells of the unary exact ops are held by the test after this one."""
+    cells of the unary exact ops are held by
+    `test_every_swept_cell_of_an_exact_op_is_gated_or_waived`."""
     from helpers.data_format_inference import effective_dest_acc
 
     ungated, claimed = [], []
@@ -995,18 +1042,28 @@ def test_every_driven_variant_of_an_exact_op_is_gated():
 
 
 def test_every_exact_op_is_driven_by_a_gate():
-    """The two tests above hold only the ops something drives: an exact op neither swept
-    nor run by a step-budget driver would be checked by nothing but the existence of a
-    row."""
-    driven = {op for _, op, _, _, _ in _exact_op_driver_variants()}
+    """`test_every_driven_variant_of_an_exact_op_is_gated` and
+    `test_every_swept_cell_of_an_exact_op_is_gated_or_waived` hold only the ops something
+    drives: an exact op neither swept nor run by a step-budget driver would be checked
+    by nothing but the existence of a row. Driven means on a variant a step budget can
+    gate and the driver does not skip, the same filter the first of those applies: an
+    op left with only Int32 outputs, or only skipped variants, is driven by nothing."""
+    driven = {
+        op
+        for driver, op, formats, _, dest in _exact_op_driver_variants()
+        if has_ulp_gate(formats.output_format)
+        and formats.output_format not in _ULP_PROXY_DTYPES
+        and not _exact_driver_skip(driver, op, formats, dest)
+    }
     unreached = set(EXACT_ZERO_BY_CONSTRUCTION) - driven - set(_swept_exact_ops())
     assert not unreached, sorted(op.name for op in unreached)
 
 
 #: Swept cells of an exact-by-construction op that the table holds on the tolerance
 #: metric, with what was measured there. Each would be a real deviation on an op that
-#: should be exact, with no cause established yet; the test below keeps the list from
-#: growing unnoticed, and fails when an entry is no longer needed. Empty today. The
+#: should be exact, with no cause established yet;
+#: `test_every_swept_cell_of_an_exact_op_is_gated_or_waived` keeps the list from growing
+#: unnoticed, and fails when an entry is no longer needed. Empty today. The
 #: classes it used to hold were the sweep's, not the ops': Abs/Neg/Identity's 512-step
 #: Float16 cells were the metric keeping fp16 subnormals the pack does not reproduce,
 #: and Floor's and Signbit's 14,337/16,129-step Bfp8_b cells were the one -0.0 lane the

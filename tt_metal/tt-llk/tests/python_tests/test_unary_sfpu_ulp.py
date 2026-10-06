@@ -41,12 +41,12 @@ from helpers.llk_params import (
 from helpers.param_config import get_num_blocks_and_num_tiles_in_block
 from helpers.sfpu_accuracy_budget import (
     _SFPU_ACCURACY_BUDGET,
+    FLUSH_SUBNORMAL_OUTPUTS,
     Metric,
     accuracy_contract,
 )
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
-    negative_zero_delivered,
     sfpu_unary_ops,
 )
 from helpers.stimuli_config import StimuliConfig
@@ -64,6 +64,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.ulp import ulp_distance, ulp_stats
 from helpers.ulp_sweep import (
+    golden_input,
     measurable_mask,
     nonfinite_failures,
     nonfinite_reason,
@@ -83,12 +84,9 @@ pytestmark = pytest.mark.accuracy
 SWEEP_TILE_COUNT = 64
 SWEEP_DIMENSIONS = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * SWEEP_TILE_COUNT]
 
-#: Subnormal outputs flushed on every format, fp16 included, by the emit's ranking and
-#: the gate's verdict alike. The metric keeps fp16's subnormal band by default, but the
-#: golden keeps IEEE subnormals the pack path does not reproduce: an exact op read 512
-#: steps on Float16_b->Float16 from that band alone. A difference below 6.1e-05 is the
-#: store's, not the op's. One constant, so emit and gate cannot rank differently.
-_FLUSH_SUBNORMALS = True
+#: The emit's ranking and the gate's verdict alike, so they cannot rank differently; the
+#: policy and its reason live with the binary/ternary gate's, which ranks the same way.
+_FLUSH_SUBNORMALS = FLUSH_SUBNORMAL_OUTPUTS
 
 
 def run_sweep(mathop, formats, approx_mode, dest_acc):
@@ -102,28 +100,9 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
         input_dimensions_B=SWEEP_DIMENSIONS,
         spec_A=sweep_spec(),
     )
-    # The walk's one data zero is -0.0, and the unpack drops the sign: the kernel is
-    # handed +0.0 -- except on the unpack-to-dest path, which keeps it
-    # (`negative_zero_delivered`, the same rule the edge tests use rather than a second
-    # copy of it). So the golden is computed on what the kernel receives, or every op
-    # whose answer depends on the sign of zero -- signbit's 1.0 against 0.0 is 16129
-    # bf16 steps, rsqrt's -inf against +inf a non-finite failure -- reads one lane as
-    # a whole-cell error that is the unpack's, not the op's. The dedicated signed-zero
-    # tests in test_eltwise_unary_sfpu.py hold that path to account.
-    #
-    # Not for a block-float input: the golden quantizes that itself, and in the
-    # shared-exponent-0 block the zero lane sits in, the forced hidden bit turns it into
-    # -2**-127 as -0.0 and +2**-127 (~6e-39) as +0.0 -- neither of them zero, so canonicalizing moved Ceil/Sqrt/Log/Rsqrt's
-    # Bfp8_b cells rather than fixing them.
-    golden_src = (
-        src_A
-        if stimuli_format != formats.input_format
-        or negative_zero_delivered(formats.input_format, dest_acc)
-        else torch.where(src_A == 0, torch.zeros_like(src_A), src_A)
-    )
     golden = get_golden_generator(UnarySFPUGolden)(
         mathop,
-        golden_src,
+        golden_input(src_A, formats.input_format, dest_acc),
         formats.output_format,
         dest_acc,
         formats.input_format,

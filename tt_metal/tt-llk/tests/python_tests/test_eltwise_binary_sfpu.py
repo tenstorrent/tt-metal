@@ -81,14 +81,14 @@ def fp32_no_dest_acc_skip_reason(formats, dest_acc):
     exclusions cannot drift from the skip."""
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
         return (
-            "32-bit inputs need a 32-bit dest, i.e. dest_acc=Yes: the hardware cannot "
-            "unpack them into SrcA/SrcB"
+            "32-bit inputs need dest_acc=Yes here: sfpu_binary unpacks a 32-bit input "
+            "straight to Dest (unpack_to_dest), which needs a 32-bit Dest"
         )
     return None
 
 
 def _skip_fp32_no_dest_acc(formats, dest_acc):
-    """32-bit inputs need a 32-bit dest, i.e. dest_acc=Yes."""
+    """sfpu_binary unpacks a 32-bit input straight to Dest, which needs dest_acc=Yes."""
     reason = fp32_no_dest_acc_skip_reason(formats, dest_acc)
     if reason:
         pytest.skip(reason)

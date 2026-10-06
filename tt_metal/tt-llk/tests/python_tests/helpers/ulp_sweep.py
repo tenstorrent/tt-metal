@@ -156,6 +156,33 @@ def received_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor
     return received.reshape(src.shape)
 
 
+def golden_input(src: torch.Tensor, input_format: DataFormat, dest_acc) -> torch.Tensor:
+    """*src* as the golden should see it: with its zeros made +0.0 where the unpack
+    drops the sign, so the golden is computed on what the kernel receives.
+
+    The walk's one data zero is -0.0, and the kernel is handed +0.0 -- except on the
+    unpack-to-dest path, which keeps it (``negative_zero_delivered``, the same rule the
+    edge tests use rather than a second copy of it). Otherwise an op whose finite answer
+    depends on the sign of zero reads one lane as a whole-cell error that is the
+    unpack's, not the op's: ``signbit`` answers 1.0 against 0.0, 16129 bf16 steps. (A
+    pole's ``-inf`` against ``+inf``, ``rsqrt(-0)``, was never a failure here: the
+    singularity exclusion drops it.) The dedicated signed-zero tests in
+    test_eltwise_unary_sfpu.py hold that path to account.
+
+    Not for a block-float input: the golden quantizes that itself, and in the
+    shared-exponent-0 block the zero lane sits in, the forced hidden bit turns it into
+    -2**-127 as -0.0 and +2**-127 (~6e-39) as +0.0 -- neither of them zero, so
+    canonicalizing moved Ceil/Sqrt/Log/Rsqrt's Bfp8_b cells rather than fixing them.
+    """
+    from helpers.sfpu_domains import negative_zero_delivered
+
+    if stimuli_format_for(input_format) != input_format or negative_zero_delivered(
+        input_format, dest_acc
+    ):
+        return src
+    return torch.where(src == 0, torch.zeros_like(src), src)
+
+
 def flushed_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     """Lanes whose input the unpack path flushes to zero and the golden does not.
 
@@ -381,12 +408,17 @@ def _known_lanes() -> Dict:
         high=65504.0,
         why="inf where the answer is x itself, in the top four fp16 values, on a 16-bit Dest",
     )
+    # The same top-of-fp16 window for an op that answers 65408 finite: #58607's lanes
+    # start one fp16 step above it, at 65440.
+    above_65408 = {**top_of_fp16, "low": 65440.0}
 
     def store_saturates(at: float, **fields):
         """#57215: the Float16 store saturates a value just past 65504 to 65504 rather
         than to an infinity, on a 32-bit Dest packed to Float16, where the golden's fp16
-        rounding answers inf. Only at the one input *at* whose answer is 2**16. The
-        bounds are on the input as received, so on Bfp8_b they also name every bf16
+        rounding answers inf. Only at the one input *at* whose exact answer rounds past
+        fp16's range (2**16 for Reciprocal and SqrtCustom, 65535 for Tanhshrink, which
+        fp16 rounds to inf as it does anything from 65520). The bounds are on the input
+        as received, so on Bfp8_b they also name every bf16
         value the block quantizer maps onto *at* -- the quantization preimage, not a
         wider defect -- without spelling it out."""
         return (
@@ -410,9 +442,7 @@ def _known_lanes() -> Dict:
             ),
             MathOperation.GeluTanh: (KnownNonfiniteLanes(**top_of_fp16),),
             # Silu answers 65408 itself; #58607 lists only the three lanes above it.
-            MathOperation.Silu: (
-                KnownNonfiniteLanes(**{**top_of_fp16, "low": 65440.0}),
-            ),
+            MathOperation.Silu: (KnownNonfiniteLanes(**above_65408),),
             MathOperation.Square: (
                 KnownNonfiniteLanes(
                     **{
@@ -429,22 +459,21 @@ def _known_lanes() -> Dict:
             MathOperation.Tanhshrink: (
                 KnownNonfiniteLanes(
                     **{
-                        **top_of_fp16,
-                        "low": 65440.0,
+                        **above_65408,
                         "magnitude": True,
                         "why": "inf where the answer is x - tanh(x), in the top fp16 values, on a 16-bit Dest",
                     }
                 ),
-                # x - tanh(x) for |x| at 2**16 is just past fp16's range.
+                # x - tanh(x) at |x| = 2**16 is 65535, which fp16 rounds to inf.
                 *store_saturates(
-                    2.0**16,
+                    at=2.0**16,
                     magnitude=True,
                     why="+-65504 where x - tanh(x) is just past fp16's range and the store saturates instead of overflowing",
                 ),
             ),
             # sqrt(x) for x at 2**32 is 2**16.
             MathOperation.SqrtCustom: store_saturates(
-                2.0**32,
+                at=2.0**32,
                 why="65504 where sqrt(x) is just past fp16's range and the store saturates instead of overflowing",
             ),
             # 1/x is 2**16 at |x| = 2**-16 and ~65793-66052 a step or two under it: past
@@ -453,7 +482,7 @@ def _known_lanes() -> Dict:
             # (65504, 2**16), where the store saturates instead -- hence approx=Yes; the
             # exact kernel agrees with the golden on these lanes.
             MathOperation.Reciprocal: store_saturates(
-                2.0**-16,
+                at=2.0**-16,
                 approx=ApproximationMode.Yes,
                 magnitude=True,
                 why="+-65504 where 1/x is past fp16's range and the store saturates instead of overflowing",
