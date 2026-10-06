@@ -26,6 +26,14 @@ from models.demos.deepseek_v3_d_p.tests.kda.cases import (
     loudbox_kda_case,
     registered_kda_case,
 )
+from models.demos.deepseek_v3_d_p.tests.kda.decay_extremes import (
+    DECAY_EXTREME_CASES,
+    case_config,
+    case_input_norm_weight,
+    case_weights,
+    check_reachable_input,
+    crafted_hidden,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import (
     cpu_reference_cache_path,
     cpu_references,
@@ -224,3 +232,19 @@ def test_load_only_text_input_miss_fails_fast_and_cached_input_is_used(
     assert torch.equal(build_kda_case(spec).hidden, hidden)
     assert text_input_cache_path(spec.model, 2, spec.chunk_tokens) != path
     assert text_input_cache_path(spec.model, 1, 2 * spec.chunk_tokens) != path
+
+
+def test_decay_extreme_inputs_are_input_norm_outputs(expect_error) -> None:
+    """A crafted layer input is w * u with per-token RMS(u) = 1 (an input_layernorm output); the builder's check
+    rejects any token with RMS(x / w) > 1."""
+    weight = torch.tensor([0.5, 0.25])
+    check_reachable_input(torch.tensor([[[0.5, -0.25], [0.25, 0.125]]]), weight)  # RMS(u) = 1 and 0.5
+    with expect_error(ValueError, "token 1 has RMS"):
+        check_reachable_input(torch.tensor([[[0.5, -0.25], [0.5, 0.5]]]), weight)  # u = [1, 2]: RMS 1.58
+
+    case = DECAY_EXTREME_CASES["synthetic-weak-h0-1-T1280x8"]  # nonzero beta target, so a nonzero center
+    config = case_config(case)
+    weight = case_input_norm_weight(case, config)
+    hidden = crafted_hidden(case, case_weights(case), config, weight)
+    token_rms = (hidden.double()[0] / weight).square().mean(dim=-1).sqrt()
+    assert torch.allclose(token_rms, torch.ones_like(token_rms), atol=2.0**-8)
