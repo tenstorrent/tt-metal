@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Prove preparation preserves an externally owned paged cache exactly."""
 
+import pytest
 import torch
 
 import ttnn
@@ -8,7 +9,8 @@ import ttnn
 from ..tt.generator import GraniteGenerator
 
 
-def test_external_cache_preserved():
+@pytest.mark.parametrize("trace_prefill", [False, True])
+def test_external_cache_preserved(trace_prefill):
     torch.set_num_threads(4)
     torch.manual_seed(814)
     from ..tt.generator_vllm import GraniteForCausalLM
@@ -50,7 +52,9 @@ def test_external_cache_preserved():
             return values
 
         before = snapshot()
-        gen = GraniteGenerator(mesh, override_num_layers=1, kv_cache=cache, batch_buckets=(1, 8, 16))
+        gen = GraniteGenerator(
+            mesh, override_num_layers=1, kv_cache=cache, batch_buckets=(1, 8, 16), trace_prefill=trace_prefill
+        )
         gen.prepare()
         after = snapshot()
         assert all(torch.equal(a, b) for pa, pb in zip(before, after) for a, b in zip(pa, pb))
