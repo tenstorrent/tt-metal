@@ -70,32 +70,23 @@ def _dump(case_name: str, name: str, tensor: torch.Tensor) -> None:
 # Failures measured on today's code (Blackhole, 2026-10-05, tt_metal_tracker-g1b.7.1). Each passes the K3 acceptance
 # output PCC (0.9995) except k3-control; the targeted gates catch them.
 _MEASURED_FAILURES = {
-    # Remaining failures after the weak-decay fix (tt_metal_tracker-g1b.7: complement-form decay, FP32 state carry)
-    # and the FP32 gate chain (tt_metal_tracker-g1b.4.13), measured on device 2026-10-05. Cases fixed by them
-    # (synthetic-weak, glm-weak, real-text k3 h1/h24/h28/h36, glm h10/h18) pass and carry no mark.
+    # Remaining failures after the weak-decay fix (tt_metal_tracker-g1b.7: complement-form decay, FP32 state carry),
+    # the FP32 gate chain (tt_metal_tracker-g1b.4.13) and the suffix-sum k_dec_t with the FP32 q/k/v convolution
+    # carry (tt_metal_tracker-g1b.4.18), measured on device 2026-10-06. Cases fixed by them (synthetic-weak, glm-weak,
+    # real-text k3 h1/h24/h28/h36, glm h10/h18; the strong-band state cases synthetic-strong, glm-strong and glm h32,
+    # whose error was the anchored k_dec_t) pass and carry no mark.
     "synthetic-strong-saturated-h0-1-T1280x1": "strong decay |G_last|=160 (g=-5): output token 31 of a chunk error/RMS "
-    "9.6e-2 (control 3.3e-2); output PCC 0.99994; no KDA strong-end fix by decision (tt_metal_tracker-g1b.4.16)",
-    "synthetic-strong-h0-1-T1280x1": "strong decay |G_last|~150 (fractional gates): final state key row 16 error/RMS "
-    "0.275 (gate 0.27). The strong-band state error depends on the BF16 gate bit pattern: 0.051 with the old BF16 gate "
-    "chain, 0.180 with the exact gate; no KDA strong-end fix by decision (tt_metal_tracker-g1b.4.16, g1b.4.13)",
+    "1.0e-1 (control 3.3e-2); output PCC 0.99995; no KDA strong-end fix by decision (tt_metal_tracker-g1b.4.16)",
     "k3-weak-h24-25-T1280x8": "tt_metal_tracker-g1b.4.12: K3 weak decay |G_last| ~1.6e-3, beta ~3e-4: final state PCC "
-    "0.99693, key row 97 error/RMS 0.733 (0.99939 / 0.271 before the folded gate of g1b.4.13). Cause (device stage "
+    "0.99694, key row 97 error/RMS 0.736 (0.99939 / 0.271 before the folded gate of g1b.4.13). Cause (device stage "
     "substitution): BF16 decay_rank (f_a x, RMS 76 from the out-of-domain crafted input; real text ~1) amplified by K3 "
     "f_b, and with g1b.4.13 also the BF16 A f_b weights; an FP32 rank projection with unfolded FP32 logits gave "
     "0.99997 / 0.065. Decision: tt_metal_tracker-g1b.4.17",
-    "glm-strong-h50-51-T1280x1": "GLM layer 0, strong decay |G_last|~150 (fractional gates): final state norm ratio "
-    "0.966 (control 0.987), key row error/RMS 0.215; exact gate 0.972; no KDA strong-end fix by decision "
-    "(tt_metal_tracker-g1b.4.16)",
-    "k3-control-h48-49-T1280x1": "tt_metal_tracker-g1b.4.11: output PCC 0.99928 < 0.9995, token error/RMS 0.153 (0.99943 "
+    "k3-control-h48-49-T1280x1": "tt_metal_tracker-g1b.4.11: output PCC 0.99926 < 0.9995, token error/RMS 0.156 (0.99943 "
     "/ 0.116 before g1b.4.13). Cause (device stage substitution): BF16 decay_rank (f_a x) and BF16 A f_b weights "
     "amplified by K3 f_b (cond 1.2e5) because the crafted input drives |f_a x| to RMS 72 (real text ~1), outside any "
     "real layer input (RMS <= 0.27); with an exact gate the case passes (0.99990 / 0.064). Decision on re-crafting vs "
     "FP32 rank: tt_metal_tracker-g1b.4.17",
-    # Real text (tt_metal_tracker-g1b.7.2).
-    "glm-text-h32-33-T1280x4": "GLM layer 0 head 32 strong band: final state rows 8 and 81 (median |G_last| 140 and "
-    "156, 5.5x RMS row norm) own error 6.7%: key row error/RMS 0.371, norm ratio 0.962. Identical with the exact gate "
-    "and exact q/k/v (device recurrence floor in the strong band); passed only with the old BF16 gate chain (0.153). "
-    "No KDA strong-end fix by decision (tt_metal_tracker-g1b.4.16, g1b.4.13)",
 }
 
 

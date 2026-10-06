@@ -59,10 +59,6 @@ class KDAProgramConfig:
     # Use the projection matmul schedules tuned at _TUNED_PROJECTION_ROWS; False keeps the
     # auto-selected ttnn.linear configs.
     tuned_projection_matmuls: bool = False
-    # Carry the q/k/v causal-convolution tap sum in FP32 (FP32 DST) instead of BF16. GDN needs it on real text
-    # (tt_metal_tracker-g1b.5.19); for KDA it lowered output error but raised recurrent-state error, so KDA keeps
-    # the BF16 carry until that is understood (tt_metal_tracker-g1b.4.18).
-    fp32_convolution_accumulation: bool = False
 
     def __post_init__(self) -> None:
         if self.qkv_channel_chunk_size <= 0 or self.qkv_channel_chunk_size % ttnn.TILE_SIZE:

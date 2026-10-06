@@ -79,7 +79,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     const m2::DFBSpecName workspace_1_dfb{"workspace_1"};
     const m2::DFBSpecName final_decay_dfb{"final_decay"};
     const m2::DFBSpecName k_decay_transposed_dfb{"k_decay_transposed"};
-    const m2::DFBSpecName anchor_decay_dfb{"anchor_decay"};
+    const m2::DFBSpecName key_suffix_decay_dfb{"key_suffix_decay"};
+    const m2::DFBSpecName strict_upper_dfb{"strict_upper"};
     const m2::DFBSpecName normalized_q_dfb{"normalized_q"};
     const m2::DFBSpecName normalized_k_dfb{"normalized_k"};
     const m2::DFBSpecName tile_workspace_0_dfb{"tile_workspace_0"};
@@ -88,11 +89,17 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
 
     const m2::DFBSpecName workspace_3_dfb{"workspace_3"};
     const m2::DFBSpecName workspace_2_dfb{"workspace_2"};
-    // Decay-mode intermediates. Per-channel: the separable factors anchored at G_last/2 and their workspaces. Scalar:
+    // Decay-mode intermediates. Per-channel: the separable factors anchored at G_last/2, the strictly upper mask,
+    // exp(G_last - G) per key channel and their workspaces. Scalar:
     // the strictly lower mask, the masked gate strict_lower * g, exp(G) as a column and exp(G_last - G) as a row.
     const bool scalar_decay = attrs.decay_mode == PrepareChunkRecurrenceDecayMode::Scalar;
     const std::vector<m2::DFBSpecName> per_channel_decay_dfbs = {
-        workspace_0_dfb, scan_decay_dfb, centered_inverse_decay_dfb, anchor_decay_dfb, workspace_2_dfb};
+        workspace_0_dfb,
+        scan_decay_dfb,
+        centered_inverse_decay_dfb,
+        key_suffix_decay_dfb,
+        strict_upper_dfb,
+        workspace_2_dfb};
     const std::vector<m2::DFBSpecName> scalar_decay_dfbs = {
         m2::DFBSpecName{"strict_lower"},
         m2::DFBSpecName{"masked_gate"},
@@ -150,7 +157,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         make_dfb(workspace_1_dfb, ck, fp32),
         make_dfb(final_decay_dfb, 2 * Kt, output_formats[5]),
         make_dfb(k_decay_transposed_dfb, 2 * kc, output_formats[4]),
-        make_dfb(anchor_decay_dfb, kv, fp32),
+        make_dfb(key_suffix_decay_dfb, ck, fp32),
+        make_dfb(strict_upper_dfb, cc, fp32),
         make_dfb(normalized_q_dfb, ck, fp32),
         make_dfb(normalized_k_dfb, ck, fp32),
         // Row workspaces publish whole Kt-tile rows. Keep one-tile reductions and
@@ -251,7 +259,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     unpack_modes[workspace_1_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[final_decay_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[k_decay_transposed_dfb] = UnpackMode::UnpackToSrc;
-    unpack_modes[anchor_decay_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[key_suffix_decay_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[strict_upper_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[normalized_q_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[normalized_k_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[tile_workspace_0_dfb] = UnpackMode::UnpackToSrc;
@@ -295,8 +304,10 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
                 m2::DFBBinding{akk_dfb, "akk", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{workspace_1_dfb, "workspace_1", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{workspace_1_dfb, "workspace_1", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{anchor_decay_dfb, "anchor_decay", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{anchor_decay_dfb, "anchor_decay", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{key_suffix_decay_dfb, "key_suffix_decay", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{key_suffix_decay_dfb, "key_suffix_decay", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{strict_upper_dfb, "strict_upper", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{strict_upper_dfb, "strict_upper", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{normalized_q_dfb, "normalized_q", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{normalized_q_dfb, "normalized_q", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{normalized_k_dfb, "normalized_k", m2::DFBEndpointType::PRODUCER},
