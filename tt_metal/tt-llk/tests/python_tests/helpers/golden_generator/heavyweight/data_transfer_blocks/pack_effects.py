@@ -23,6 +23,7 @@ from typing import Optional, Sequence, Union
 import torch
 from helpers.format_config import DataFormat
 from helpers.llk_params import PackerReluType, StochasticRounding
+from helpers.tile_constants import MAX_FACE_R_DIM
 
 #: Datums per row of the edge-mask geometry — each mask is 16 bits wide.
 EDGE_MASK_WIDTH = 16
@@ -99,7 +100,7 @@ class PackEdgeMask:
         select = [
             (word >> (2 * row)) & 0x3
             for word in face_select_words
-            for row in range(EDGE_MASK_WIDTH)
+            for row in range(MAX_FACE_R_DIM)
         ]
         return cls(masks=masks, select=select, mode=mode)
 
