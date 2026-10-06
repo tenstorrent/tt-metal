@@ -44,6 +44,8 @@ class MiniMaxH3TokenRefinerBlock(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         use_persistent_ccl_buffers: bool = True,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -74,6 +76,10 @@ class MiniMaxH3TokenRefinerBlock(Module):
             is_fsdp=is_fsdp,
             is_sequence_parallel=False,
             use_persistent_ccl_buffers=use_persistent_ccl_buffers,
+            # Dense SDPA over the replicated text stream: recipe-eligible at D128. A windowed call
+            # (cu_window_seqlens pad fence) stays on legacy SDPA; see MiniMaxH3Attention._sdpa_kwargs.
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
         )
         self.norm2 = DistributedRMSNorm(
             embedding_dim=hidden_size,
@@ -149,6 +155,8 @@ class MiniMaxH3TokenRefiner(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         use_persistent_ccl_buffers: bool = True,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
@@ -166,6 +174,8 @@ class MiniMaxH3TokenRefiner(Module):
                     parallel_config=parallel_config,
                     is_fsdp=is_fsdp,
                     use_persistent_ccl_buffers=use_persistent_ccl_buffers,
+                    sdpa_precision=sdpa_precision,
+                    sdpa_kv_dtype=sdpa_kv_dtype,
                 )
                 for _ in range(num_layers)
             ]
