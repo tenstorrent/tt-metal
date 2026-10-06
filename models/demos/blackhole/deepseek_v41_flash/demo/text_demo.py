@@ -643,6 +643,7 @@ def test_dsv41_demo_session(mesh_device, device_params):
     rowtok = [
         m for m in os.environ.get("DSV41_ROWTOK_LIST", "").split(",") if m
     ]  # per-scenario DSV41_PREFILL_ROW_TOKENS (chunk-size sweep in one process)
+    umoes = [m for m in os.environ.get("DSV41_PF_UMOE_LIST", "").split(",") if m]
     ab = os.environ.get(
         "DSV41_PFA_AB"
     )  # "flagsA|flagsB|...": prefill-tuning flags (tt/pf_tune.py, KEY=val joined by ",") of scenario i, cycling; "-" = baseline. Same build, same host: a paired A/B
@@ -666,6 +667,18 @@ def test_dsv41_demo_session(mesh_device, device_params):
                 if getattr(m, "prefill_model", None) is not None:
                     m.prefill_model.teardown_dyn()
             logger.info(f"=== PFA_AB scenario {si} {s.id}: flags '{spec}' ===")
+        if (
+            umoes
+        ):  # per-scenario DSV41_PF_UMOE_LIST: 1 = unified prefill MoE (build with DSV41_PREFILL_MOE=unified), 0 = the moe_compute prefill path, same build
+            for _, (_, m, _) in cache.items():
+                pm_ = getattr(m, "prefill_model", None)
+                if pm_ is None:
+                    continue
+                pm_.teardown_dyn()
+                for _, pl_ in pm_.layers:
+                    if not hasattr(pl_, "_umoe_saved"):
+                        pl_._umoe_saved = pl_.umoe
+                    pl_.umoe = pl_._umoe_saved if umoes[si % len(umoes)] == "1" else None
         if mode:
             os.environ["DSV41_PF_MHC"] = "packed" if set(mode) & set("PREQ") else "0"
             os.environ["DSV41_PF_ROUTE_OWN"] = "1" if set(mode) & set("RE") else "0"
