@@ -216,6 +216,10 @@ BufferShardingArgs TensorLayoutImpl::compute_buffer_sharding_args(const tt::tt_m
     std::optional<ShardSpecBuffer> shard_spec_buffer;
     std::optional<BufferDistributionSpec> distribution_spec;
 
+    // Skip the legacy path when the config originates from a shard_spec. The nd_shard_spec is copied from the
+    // same spec and overwrites the result in the nd path below. Keep the legacy path for configs originating
+    // from an nd_shard_spec since its derived shard_spec is validated separately with different inputs.
+    // These checks are not covered by the nd path. The legacy result is overwritten.
     const bool nd_shard_spec_will_overwrite =
         memory_config_.nd_shard_spec().has_value() && !memory_config_.created_with_nd_shard_spec();
 
