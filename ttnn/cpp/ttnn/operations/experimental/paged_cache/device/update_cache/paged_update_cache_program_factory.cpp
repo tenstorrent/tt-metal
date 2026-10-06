@@ -295,6 +295,10 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
     if (is_paged_cache) {
         optional_resource_defines.emplace("IS_PAGED_CACHE", "1");
     }
+    if (is_paged_cache && page_table->element_size() == sizeof(uint16_t)) {
+        // Sharded page tables are UINT16 (see validate_on_program_cache_miss); the kernels default to UINT32.
+        optional_resource_defines.emplace("PAGE_TABLE_ENTRY_UINT16", "1");
+    }
 
     // ---------------- Reader ----------------
 
