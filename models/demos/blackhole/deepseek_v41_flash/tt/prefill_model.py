@@ -16,10 +16,8 @@ from concurrent.futures import ThreadPoolExecutor
 import torch
 
 import ttnn
-from models.demos.blackhole.deepseek_v41_flash.tt import pf_tune
-from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d, recording, replay
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import clear_chunk_caches, pad_len
-from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active, unpack_streams
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active
 
 T = 32
 ER_RM = (
@@ -42,11 +40,6 @@ def from_chunks(ch, rows, users, Sp, S, tail):
     """inverse of ``to_chunks`` for host chunks [rows*T, ...] -> [rows*users, S, *tail]."""
     xr = torch.stack([c.reshape(rows, T, *tail) for c in ch], dim=1).reshape(rows, users * Sp, *tail)
     return xr.reshape(rows * users, Sp, *tail)[:, :S]
-
-
-def engram_own():
-    """DSV41_PF_ENGRAM_OWN=1: column-split Engram on the own chunks only (forward_v2_own); read at call time."""
-    return os.environ.get("DSV41_PF_ENGRAM_OWN", "0") == "1"
 
 
 class DSV41PrefillModel:
@@ -128,11 +121,25 @@ class DSV41PrefillModel:
     def _host(self, t, dtype, layout):
         return ttnn.from_torch(t.contiguous(), dtype=dtype, layout=layout, mesh_mapper=self.shard)
 
-    def prep_inputs(self, tokens, hashes=None):
-        """CPU part of a chunk's inputs (safe to run in a worker thread): tokens [B, C] (padded) and the Engram row gather -> host tensors."""
+    def prep_inputs(self, tokens, hashes=None, active=None):
+        """CPU part of a chunk's inputs (safe to run in a worker thread): tokens [B, C] (padded) and the Engram row gather -> host tensors.
+        ``active`` (LongTensor of user indices, interleaved prefill): ``hashes`` then holds only those users ([len(active), C, ...]) and only their rows are
+        gathered from the Engram tables (the other users are masked fillers: zero rows)."""
         B, C = tokens.shape
         rows, R = self.rows, self.U * C
         out = {"tok": tokens.reshape(rows * R, 1).to(torch.int32)}
+        if active is not None:
+            act = torch.as_tensor(active).long()
+            for lid in self.engram:
+                t1 = time.perf_counter()
+                full = torch.zeros(B, C, self.engram[lid].kin, dtype=torch.bfloat16)
+                if len(act):
+                    full[act] = self.host_rows.rows(lid, hashes).to(torch.bfloat16)
+                out[lid] = full.reshape(rows, 1, R, full.shape[-1])
+                self.timing["host_rows_gather_dequant"] = (
+                    self.timing.get("host_rows_gather_dequant", 0.0) + time.perf_counter() - t1
+                )
+            return out
         for lid in self.engram:
             t1 = time.perf_counter()
             if (
@@ -158,16 +165,16 @@ class DSV41PrefillModel:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=self.shard_rc,
             )
-            h2d(htok, tok)
+            ttnn.copy_host_to_device_tensor(htok, tok)
         else:
-            h2d(self._host(prepped["tok"], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), tok)
+            ttnn.copy_host_to_device_tensor(self._host(prepped["tok"], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), tok)
         for lid, dev in er.items():
             t1 = time.perf_counter()
             h = self._host(
                 prepped[lid], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT if ER_RM else ttnn.TILE_LAYOUT
             )  # row-major upload: the 32-token slices are tilized on the device (host tilize was ~0.7 s per 16k-token chunk)
             t2 = time.perf_counter()
-            h2d(h, dev)
+            ttnn.copy_host_to_device_tensor(h, dev)
             t3 = time.perf_counter()
             self.timing["host_tilize"] = self.timing.get("host_tilize", 0.0) + t2 - t1
             self.timing["h2d_copy"] = self.timing.get("h2d_copy", 0.0) + t3 - t2
@@ -208,14 +215,11 @@ class DSV41PrefillModel:
             self._moe_warm = True  # eager, before the first prefill compile / capture (see DSV41PrefillMoE.warmup)
             seen = set()
             for _, pl_ in self.layers:
-                if getattr(pl_, "umoe", None) is not None and os.environ.get("DSV41_UNI_NODECODE") == "1":
-                    continue  # prefill-only unified mode: no moe_compute weights to warm the baseline program with
                 if id(pl_.pmoe) not in seen:
                     seen.add(id(pl_.pmoe))
                     pl_.pmoe.warmup()
         for lid, pl in self.layers:
             if lid in self.engram:
-                xs, pres = unpack_streams(xs, pres)
                 t0 = time.perf_counter()
                 fe = (
                     self.engram[lid].forward
@@ -228,52 +232,19 @@ class DSV41PrefillModel:
                 )  # (to_layout is a no-op for tile rows)
                 if (
                     self.cs
-                    and engram_own()
-                    and fe.__name__ == "forward_v2"
-                    and self.engram[lid].mesh_config is not None
-                ):
-                    # own chunks only: one kv matmul per 8-chunk group + all_to_all of the kv shards (no gather of x, no 8 calls, no reduce_scatter)
-                    new = []
-                    for g, x in enumerate(xs):
-                        rg = ttnn.to_layout(
-                            ttnn.slice(
-                                erows_dev[lid], [0, 0, g * self.cols * T, 0], [1, 1, (g + 1) * self.cols * T, kin]
-                            ),
-                            ttnn.TILE_LAYOUT,
-                        )
-                        new.append(self.engram[lid].forward_v2_own(x, rg))
-                        ttnn.deallocate(rg)
-                elif (
-                    self.cs
                 ):  # own-token chunks -> replicated 8-chunk groups -> Engram -> back (reduce_scatter of 8 identical copies, x1/8 exact)
                     mc, cc = pl.L.mesh_config, pl.L.ccl
                     new = []
                     for g, x in enumerate(xs):
                         xg = mc.allgather(x, cc, axis=1, dim=0)  # [8T,1,4,D]: chunk 8g + j at rows jT..
                         outs8 = []
-                        if (
-                            pf_tune._env("DSV41_PFA_ENGRAM_BATCH", "0") == "1" and fe.__name__ == "forward_v2"
-                        ):  # ONE T = 8*32 forward per group instead of 8 forwards at T = 32 (same maths, 8x fewer ops / CCLs)
-                            rg = ttnn.to_layout(
-                                ttnn.slice(
-                                    erows_dev[lid], [0, 0, g * self.cols * T, 0], [1, 1, (g + 1) * self.cols * T, kin]
-                                ),
-                                ttnn.TILE_LAYOUT,
+                        for j in range(self.cols):
+                            xj = ttnn.slice(xg, [j * T, 0, 0, 0], [(j + 1) * T, 1, xg.shape[2], xg.shape[3]])
+                            rj = sl(g * self.cols + j)
+                            outs8.append(
+                                fe(xj, rj if fe.__name__ == "forward_v2" else ttnn.reshape(rj, [T, 1, 1, kin]))
                             )
-                            cat8 = fe(xg, rg)
-                        else:
-                            for j in range(self.cols):
-                                xj = ttnn.slice(xg, [j * T, 0, 0, 0], [(j + 1) * T, 1, xg.shape[2], xg.shape[3]])
-                                rj = sl(g * self.cols + j)
-                                outs8.append(
-                                    fe(xj, rj if fe.__name__ == "forward_v2" else ttnn.reshape(rj, [T, 1, 1, kin]))
-                                )
-                            cat8 = ttnn.concat(outs8, dim=0)
-                        if (
-                            os.environ.get("DSV41_PROF_EVERY", "0") != "0"
-                        ):  # op-table profiling: drain the device profiler per group
-                            ttnn.synchronize_device(self.md)
-                            ttnn.ReadDeviceProfiler(self.md)
+                        cat8 = ttnn.concat(outs8, dim=0)
                         rs8 = ttnn.experimental.reduce_scatter_minimal_async(
                             cat8,
                             dim=0,
@@ -307,9 +278,7 @@ class DSV41PrefillModel:
             xs, pres = outs, pouts
             sync("layers", t0)
             if hook is not None:
-                xs, pres = unpack_streams(xs, pres)
                 hook(lid, xs, pres)
-        xs, pres = unpack_streams(xs, pres)
         if dyn:
             self.dyn_out = (xs, pres)
             return None
@@ -384,7 +353,7 @@ class DSV41PrefillModel:
             n = T * (self.cols if self.cs else 1)
             sel = torch.zeros(1, 1, 1, n)
             sel[0, 0, 0, (c % self.cols) * T + off if self.cs else off] = 1.0
-            h2d(
+            ttnn.copy_host_to_device_tensor(
                 ttnn.from_torch(
                     sel, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(self.md)
                 ),
@@ -564,6 +533,18 @@ class DSV41PrefillModel:
             ratios.add(pl.pa.ratio)
             rope_src.setdefault(pl.pa.compressed, pl.pa.a)
         self.dyn = DynCtx(self.md, C, S_pad, ratios, rope_src)
+        # interleaved prefill (DSV41_PF_UMASK=1): per-user 0/1 mask [U,1,1,1] (per mesh row, persistent, refreshed before every replay) that gates every write of
+        # the carried per-user prefill state (halo, latent / index-key FIFOs) INSIDE the trace, so users that are not part of a replay keep their state
+        self.dyn.umask = None
+        if os.environ.get("DSV41_PF_UMASK", "0") == "1":
+            self.dyn.umask = ttnn.from_torch(
+                torch.ones(self.rows * self.U, 1, 1, 1),
+                device=self.md,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self.shard,
+            )
         for _, pl in self.layers:
             pl.pa.alloc_dyn(self.dyn)
         self.dyn_trace = None
@@ -590,14 +571,75 @@ class DSV41PrefillModel:
     def begin_chunk(self, s0, C):
         """Host side of a chunk: refresh every per-chunk persistent tensor (RoPE tables, masks, latent offsets) and call the registered hooks
         (e.g. the paged-state sink's own uploads) right before the replay."""
-        t0 = time.perf_counter()
         self.dyn.update(s0)
-        t1 = time.perf_counter()
+        if getattr(self.dyn, "umask", None) is not None:
+            act = getattr(self, "active_mask", None)
+            m = torch.ones(self.rows * self.U) if act is None else torch.as_tensor(act).float()
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    m.reshape(-1, 1, 1, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self.shard
+                ),
+                self.dyn.umask,
+            )
         for h in self.pre_replay_hooks:
             h(s0, C)
+
+    # ---- interleaved prefill: capture on dummy inputs, then replay one window (s0) at a time -------------------------------------------------
+    def dummy_inputs(self, C):
+        out = {"tok": torch.zeros(self.rows * self.U * C, 1, dtype=torch.int32)}
+        for lid, e in self.engram.items():
+            out[lid] = torch.zeros(self.rows, 1, self.U * C, e.kin, dtype=torch.bfloat16)
+        return out
+
+    def capture_dyn(self, C, S_pad):
+        """Compile + capture the chunk trace for (C, S_pad) on DUMMY inputs with every user masked (no real state is written), so that real windows are only ever
+        replayed (``replay_window``). Returns True when a (re)capture happened (the caller must drop everything that depends on the carried state).
+        """
+        assert C % 128 == 0
+        if self.dyn is not None and self.dyn.C == C and self.dyn.S_pad == S_pad and self.dyn_trace is not None:
+            return False
+        assert (
+            type(self).last_logits is not DSV41PrefillModel.last_logits
+        ), "interleaved prefill needs the ragged hand-off head (GenPrefillModel)"
+        t0 = time.perf_counter()
+        self.teardown_dyn()
+        self.setup_dyn(C, S_pad)
+        bufs = self.alloc_inputs(C)
+        self.active_mask = torch.zeros(self.rows * self.U)
+        self.upload_inputs(self.dummy_inputs(C), bufs)
+        self.begin_chunk(0, C)
+        self.forward_device(bufs, C, 0, C, dyn=True)  # compile pass (eager)
+        ttnn.synchronize_device(self.md)
+        xs0, pres0 = self.dyn_out
+        for x in list(xs0) + list(pres0):
+            ttnn.deallocate(x)
+        for _, pl in self.layers:
+            pl.pa.reset_dyn()  # before any capture only
+        ttnn.synchronize_device(self.md)
+        self.dyn_trace = ttnn.begin_trace_capture(self.md, cq_id=0)
+        self.forward_device(bufs, C, 0, C, dyn=True)
+        ttnn.end_trace_capture(self.md, self.dyn_trace, cq_id=0)
+        ttnn.synchronize_device(self.md)
+        self.timing["compile_and_capture"] = time.perf_counter() - t0
+        return True
+
+    def replay_window(self, tokens, hashes, s0, C, active):
+        """One replay of the captured chunk trace for the window of positions [s0, s0 + C): tokens [B, C] (fillers 0), hashes of the active users only,
+        ``active`` bool [B]. Returns (host seconds, device seconds)."""
+        t0 = time.perf_counter()
+        self.active_mask = torch.as_tensor(active).bool()
+        act = self.active_mask.nonzero().reshape(-1)
+        self.upload_inputs(self.prep_inputs(tokens, hashes, act), self._bufs[C])
+        self.begin_chunk(s0, C)
+        t1 = time.perf_counter()
+        ttnn.execute_trace(self.md, self.dyn_trace, cq_id=0, blocking=False)
+        ttnn.synchronize_device(self.md)
         t2 = time.perf_counter()
-        self.timing["w_dynupd"] = self.timing.get("w_dynupd", 0.0) + t1 - t0
-        self.timing["w_prehooks"] = self.timing.get("w_prehooks", 0.0) + t2 - t1
+        for hk in self.post_replay_hooks:
+            hk(s0, C)
+        self.timing["host_per_chunk"] = self.timing.get("host_per_chunk", 0.0) + t1 - t0
+        self.timing["replay_per_chunk"] = self.timing.get("replay_per_chunk", 0.0) + t2 - t1
+        return t1 - t0, t2 - t1
 
     def run_traced_chunks(self, tokens, chunk, hashes=None, S_pad_max=None):
         """tokens [B, S] -> logits [B, vocab] of the last prompt token. One trace of the chunk forward (C = ``chunk`` tokens per user, multiple of
@@ -623,27 +665,12 @@ class DSV41PrefillModel:
         def prep(ci):
             return self.prep_inputs(tk[:, ci * C : (ci + 1) * C], None if hs is None else hs[:, ci * C : (ci + 1) * C])
 
-        def prep_rec(ci):
-            """prep + ALL the host work of the chunk's uploads (Engram rows tensors, rope tables, masks, sink index tables) in the worker thread; the
-            device copies are only recorded and replayed by the main thread."""
-            t0 = time.perf_counter()
-            pre = prep(ci)
-            t1 = time.perf_counter()
-            with recording() as ops:
-                self.upload_inputs(pre, bufs)
-                t2 = time.perf_counter()
-                self.begin_chunk(ci * C, C)
-            t3 = time.perf_counter()
-            tm = self.timing
-            tm["w_prep"] = tm.get("w_prep", 0.0) + t1 - t0
-            tm["w_upload"] = tm.get("w_upload", 0.0) + t2 - t1
-            tm["w_begin"] = tm.get("w_begin", 0.0) + t3 - t2
-            return ops
-
         pool = ThreadPoolExecutor(1)
+        fut = pool.submit(prep, 0)
         if self.dyn_trace is None:  # compile pass (eager, chunk 0), then capture
             t0 = time.perf_counter()
-            self.upload_inputs(prep(0), bufs)
+            self.upload_inputs(fut.result(), bufs)
+            fut = pool.submit(prep, 1) if n > 1 else None
             self.begin_chunk(0, C)
             self.forward_device(bufs, S, 0, C, dyn=True)
             ttnn.synchronize_device(self.md)
@@ -680,70 +707,29 @@ class DSV41PrefillModel:
             ttnn.end_trace_capture(self.md, self.dyn_trace, cq_id=0)
             ttnn.synchronize_device(self.md)
             self.timing["compile_and_capture"] = time.perf_counter() - t0
-        MODE = os.environ.get(
-            "DSV41_PF_ASYNC", "1"
-        )  # "1" async, "0" sync (host work still prepared in the worker), "legacy": the original loop
-        legacy = MODE == "legacy"
-        fut = pool.submit(prep if legacy else prep_rec, 0)
+            fut = pool.submit(prep, 0)
         t_run = time.perf_counter()
-        # Asynchronous replay loop (DSV41_PF_ASYNC=1): the per-chunk uploads and the trace are enqueued on CQ 0 (in-order: a chunk's uploads only land
-        # after the previous replay finished), so the host work of chunk i+1 (index tables, Engram rows, uploads) overlaps the replay of chunk i. The
-        # host runs at most 1 replay ahead (event of replay ci-1 awaited before chunk ci's copies). Chunks whose post hooks read the replay's outputs
-        # (ragged last-token head) synchronize as before. DSV41_PF_ASYNC=0 restores the per-chunk synchronize_device.
-        events = []
-        PF_ASYNC = MODE == "1"  # traced chunk replays enqueued without a per-chunk device sync
         for ci in range(n):
             t0 = time.perf_counter()
-            if PF_ASYNC and ci >= 1:
-                # host copies block (holding the GIL) until the queue reaches them, i.e. until the previous replay is done: wait for it in a
-                # GIL-free call so the worker thread keeps preparing chunk ci+1, then the copies are only a few ms
-                ttnn.event_synchronize(events[ci - 1])
-            t_ev = time.perf_counter()
-            ops = fut.result()
+            pre = fut.result()
             if ci + 1 < n:
-                fut = pool.submit(prep if legacy else prep_rec, ci + 1)
-            t_g = time.perf_counter()
-            if legacy:
-                self.upload_inputs(ops, bufs)
-                t_u = time.perf_counter()
-                self.begin_chunk(ci * C, C)
-                t1 = time.perf_counter()
-            else:
-                replay(ops)
-                del ops
-                t_u = time.perf_counter()
-                t1 = t_u
+                fut = pool.submit(prep, ci + 1)
+            self.upload_inputs(pre, bufs)
+            self.begin_chunk(ci * C, C)
+            t1 = time.perf_counter()
             ttnn.execute_trace(self.md, self.dyn_trace, cq_id=0, blocking=False)
-            need = (not PF_ASYNC) or any(
-                getattr(hk, "needs_sync", lambda s0_, C_: True)(ci * C, C) for hk in self.post_replay_hooks
-            )
-            if PF_ASYNC:
-                events.append(ttnn.record_event(self.md, 0))
-            if need:
-                ttnn.synchronize_device(self.md)
-                for (
-                    hk
-                ) in (
-                    self.post_replay_hooks
-                ):  # e.g. the ragged last-token head: dyn_out = (xs, pres) is valid for THIS chunk only
-                    hk(ci * C, C)
+            ttnn.synchronize_device(self.md)
             t2 = time.perf_counter()
-            if os.environ.get(
-                "DSV41_PROF_REPLAY"
-            ):  # device-profiler drain after every replay (profiling runs only; excluded from the timing)
-                ttnn.ReadDeviceProfiler(self.md)
-            tm = self.timing
-            tm["dev_wait"] = tm.get("dev_wait", 0.0) + t_ev - t0
-            tm["gather_wait"] = tm.get("gather_wait", 0.0) + t_g - t_ev
-            tm["upload"] = tm.get("upload", 0.0) + t_u - t_g
-            tm["begin_chunk"] = tm.get("begin_chunk", 0.0) + t1 - t_u
-            tm["host_per_chunk"] = tm.get("host_per_chunk", 0.0) + t1 - t_ev
-            tm["replay_per_chunk"] = tm.get("replay_per_chunk", 0.0) + t2 - t1 + t_ev - t0
+            for (
+                hk
+            ) in (
+                self.post_replay_hooks
+            ):  # e.g. the ragged last-token head: dyn_out = (xs, pres) is valid for THIS chunk only
+                hk(ci * C, C)
+            self.timing["host_per_chunk"] = self.timing.get("host_per_chunk", 0.0) + t1 - t0
+            self.timing["replay_per_chunk"] = self.timing.get("replay_per_chunk", 0.0) + t2 - t1
             if n > 4 and (ci + 1) % 8 == 0:
-                print(f"  traced chunk {ci + 1}/{n} enqueued at {time.perf_counter() - t_run:.1f} s", flush=True)
-        t0 = time.perf_counter()
-        ttnn.synchronize_device(self.md)
-        self.timing["replay_per_chunk"] += time.perf_counter() - t0
+                print(f"  traced chunk {ci + 1}/{n} done at {time.perf_counter() - t_run:.1f} s", flush=True)
         pool.shutdown()
         t0 = time.perf_counter()
         if type(self).last_logits is DSV41PrefillModel.last_logits:

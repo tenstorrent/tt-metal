@@ -78,6 +78,16 @@ class SlotTable:
         self.live.update(out)
         return out
 
+    def bind(self, logical: int, phys: int) -> None:
+        """A chunk continuation arrives in logical slot ``logical`` (the plugin re-picks the state slot of a partly prefilled request every step) while its model user is
+        ``phys``: make the slot map point at ``phys`` (swap with the logical slot that currently maps to it, so the map stays a permutation).
+        """
+        cur = self.phys[logical]
+        if cur == phys:
+            return
+        j = self.phys.index(phys)
+        self.phys[j], self.phys[logical] = cur, phys
+
     def release(self, logical: int) -> int | None:
         """The request in logical slot ``logical`` finished / was preempted: free its physical slot. Returns it (None when the slot held no request)."""
         if not 0 <= logical < self.n_logical:
@@ -124,6 +134,33 @@ class TokenBook:
         self.n[p] = 0
 
 
+class PrefillTracker:
+    """Users whose prompt is being prefilled in chunks (or just finished and not yet decoding), by physical slot: {phys: (end position, prompt tokens [:end])}.
+    The plugin gives a chunk continuation no stable id (its state slot is re-picked every step), so a continuation is recognised by its token prefix. While such a user
+    is not part of a decode step the decode loop feeds it the PARKED position ``end`` (a position nothing of its prompt state lives at) instead of token 0 at position 0
+    (position 0 would overwrite its ring row 0, its first latent and its Engram history of the first token)."""
+
+    def __init__(self):
+        self.users: dict[int, tuple[int, torch.Tensor]] = {}
+
+    def update(self, p: int, end: int, tokens: torch.Tensor) -> None:
+        self.users[p] = (int(end), tokens[: int(end)].clone().reshape(-1).long())
+
+    def find(self, start: int, prefix: torch.Tensor):
+        """physical slot of the in-progress user whose processed prefix is exactly ``prefix`` (``start`` tokens), else None."""
+        prefix = prefix.reshape(-1).long()
+        for p, (end, toks) in self.users.items():
+            if end == start and toks.numel() == start and torch.equal(toks, prefix):
+                return p
+        return None
+
+    def drop(self, p: int) -> None:
+        self.users.pop(p, None)
+
+    def parked(self) -> dict[int, int]:
+        return {p: end for p, (end, _) in self.users.items()}
+
+
 def build_prefill_batch(B, phys_new, tokens, prompt_lens, live_context=None):
     """-> (tokens_B [B, L] int64, lens_B [B] int64, active_B [B] bool, index_of {physical slot: row in ``tokens``}).
 
@@ -154,9 +191,10 @@ def build_prefill_batch(B, phys_new, tokens, prompt_lens, live_context=None):
     return toks, lens_b, act, index_of
 
 
-def build_decode_inputs(B, slots: SlotTable, tokens, start_pos):
+def build_decode_inputs(B, slots: SlotTable, tokens, start_pos, parked=None):
     """Plugin decode inputs (row i = logical slot i; ``start_pos`` -1 = padding row) -> model inputs.
-    -> (tok_B [B] int64, pos_B [B] int64, rows [(logical row, physical slot, position)]). Unused physical slots feed token 0 at position 0.
+    -> (tok_B [B] int64, pos_B [B] int64, rows [(logical row, physical slot, position)]). Unused physical slots feed token 0 at position 0, except the PARKED ones
+    ({physical slot: position}, users that are being prefilled in chunks and are not decoding yet): token 0 at their parked position.
     """
     tok = tokens.reshape(-1).long()
     pos = start_pos.reshape(-1).long()
@@ -173,6 +211,10 @@ def build_decode_inputs(B, slots: SlotTable, tokens, start_pos):
         p = slots.physical(i)
         tok_b[p], pos_b[p] = tok[i], pos[i]
         rows.append((i, p, int(pos[i])))
+    taken = {p for _, p, _ in rows}
+    for p, pp in (parked or {}).items():
+        if p not in taken:
+            pos_b[p] = int(pp)
     return tok_b, pos_b, rows
 
 
