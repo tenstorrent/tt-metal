@@ -91,7 +91,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    static_assert(SOFTMAX_K >= 2 && SOFTMAX_K <= 16, "softmax_k operates on the 16 columns of one face");
+    static_assert(SOFTMAX_K >= 1 && SOFTMAX_K <= 16, "softmax_k operates on the 16 columns of one face");
 
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
