@@ -199,8 +199,6 @@ void kernel_main() {
     constexpr auto out_subblock_h = get_arg(args::out_subblock_h);              // inner row block size in tiles
     constexpr auto out_subblock_w = get_arg(args::out_subblock_w);              // inner column block size in tiles
     constexpr auto out_subblock_num_tiles = get_arg(args::out_subblock_num_tiles);  // out_subblock_h * out_subblock_w;
-    // one math MOP per row of the sub block (Blackhole) where its tile count and the k steps of a block hide the per-row work
-    constexpr bool row_mop = out_subblock_num_tiles >= 8 && in0_block_w > 1;
     constexpr auto batch = get_arg(args::batch);                                    // batch dim
     constexpr auto out_block_num_tiles = get_arg(args::out_block_num_tiles);        // number of tiles in out_block
     constexpr bool untilize_out = get_arg(args::untilize_out);                      // untilize output
@@ -227,6 +225,15 @@ void kernel_main() {
     constexpr uint32_t in1_dfb_id = dfb::in1;
     constexpr uint32_t out_dfb_id = dfb::out;
     constexpr uint32_t mm_partials_dfb_id = dfb::intermed0;
+#ifdef ARCH_BLACKHOLE
+    // one math MOP per row of the sub block where its tile count and the k steps of a block hide the per-row work, except
+    // where a 16-bit DEST is packed to Float32 and the packer needs the FPU-idle cycles
+    constexpr bool row_mop = out_subblock_num_tiles >= 8 && in0_block_w > 1 &&
+                             (DST_ACCUM_MODE || (unpack_src_format[out_dfb_id] != (uint8_t)DataFormat::Float32 &&
+                                                 unpack_src_format[mm_partials_dfb_id] != (uint8_t)DataFormat::Float32));
+#else
+    constexpr bool row_mop = false;
+#endif
     // Buffer view the cross-block reload copies through: the UnpackToDestFp32-marked alias of the
     // partials buffer when it is also read as an FPU operand (fused bias), otherwise the partials
     // buffer itself.

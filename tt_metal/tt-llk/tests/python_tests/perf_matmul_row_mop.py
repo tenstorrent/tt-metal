@@ -27,7 +27,8 @@ from helpers.test_variant_parameters import (
 )
 from perf_matmul import matmul_combos
 
-# The row MOP is selected by callers for blocks of eight or more tiles; perf_matmul has the same rows on the tile MOP.
+# The blocks the bmm kernel runs on the row MOP: eight tiles or more, more than one k step, and not a Float32 output packed
+# from a 16-bit DEST; perf_matmul has the same rows on the tile MOP.
 ROW_MOP_MIN_TILES = 8
 
 
@@ -44,8 +45,16 @@ def _row_mop_combos():
     )
     out = []
     for combo in combos:
-        dims = generate_tile_dims(combo[3])
-        if dims.rt_dim * dims.ct_dim >= ROW_MOP_MIN_TILES:
+        formats, dest_acc, dims = combo[0], combo[1], generate_tile_dims(combo[3])
+        float32_from_16bit_dest = (
+            formats.output_format == DataFormat.Float32
+            and dest_acc == DestAccumulation.No
+        )
+        if (
+            dims.rt_dim * dims.ct_dim >= ROW_MOP_MIN_TILES
+            and dims.kt_dim > 1
+            and not float32_from_16bit_dest
+        ):
             out.append(combo)
     return out
 
