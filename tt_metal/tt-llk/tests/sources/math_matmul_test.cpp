@@ -53,8 +53,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifdef ARCH_BLACKHOLE
-    // with a 16-bit DEST an 8-bit streamed operand is streamed at its data rate (Wormhole's init has no such argument)
-    const bool stream_narrow = _llk_unpack_AB_matmul_stream_narrow_(CT_DIM, RT_DIM, formats.unpack_A_src, formats.unpack_B_src, is_fp32_dest_acc_en);
+    // an 8-bit streamed operand is streamed at its data rate (Wormhole's init has no such argument)
+    const bool stream_narrow = _llk_unpack_AB_matmul_stream_narrow_(CT_DIM, RT_DIM, formats.unpack_A_src, formats.unpack_B_src);
 #define MATMUL_STREAM_NARROW_ARG(narrow) , narrow
 #else
 #define MATMUL_STREAM_NARROW_ARG(narrow)
