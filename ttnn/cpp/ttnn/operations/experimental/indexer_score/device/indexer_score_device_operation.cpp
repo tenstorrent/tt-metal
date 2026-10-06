@@ -949,7 +949,8 @@ ttnn::Tensor launch_indexer_score(
             q.logical_shape()[3] / tt::constants::TILE_WIDTH,
             tile_bytes(q),
             tile_bytes(k),
-            ttnn::operations::experimental::indexer_score::program::cb_l1_budget(q)));
+            ttnn::operations::experimental::indexer_score::program::cb_l1_budget(q),
+            key_compression_ratio));
 
     // Block-cyclic (per-SP-shard) K layout -- interface matches ttnn.transformer.sparse_sdpa: the caller
     // names the MESH AXIS the cache was striped over (block_cyclic_sp_axis) and passes the per-shard chunk
