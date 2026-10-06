@@ -70,6 +70,7 @@ def build_reference_encoder(num_layers=NUM_LAYERS, seed=0):
 
 
 def _smooth(batch, channels, h, w, generator):
+    """``(batch, channels, h, w)`` noise, bilinear over a grid of ``FEATURE_CELLS``-cell steps."""
     coarse = torch.randn(
         batch, channels, math.ceil(h / FEATURE_CELLS), math.ceil(w / FEATURE_CELLS), generator=generator
     )
@@ -92,16 +93,17 @@ def random_bev(bev_shape, batch_size, generator=None):
     return (bev / bev.std()).flatten(2).permute(2, 0, 1).contiguous()
 
 
-def random_encoder_inputs(bev_shape, batch_size=1, seed=0):
+def random_encoder_inputs(bev_shape, batch_size=1, seed=0, yaw_step_deg=0.0):
     """Sequence-first BEV queries and positions ``(num_query, bs, C)``, camera features and the
-    cameras' ``img_metas``. The queries and positions are white, as the learned embeddings are."""
+    cameras' ``img_metas`` (see :func:`img_metas` for ``yaw_step_deg``). The queries and positions are
+    white, as the learned embeddings are."""
     generator = torch.Generator().manual_seed(seed)
     num_query = bev_shape[0] * bev_shape[1]
     return dict(
         bev_query=torch.randn(num_query, batch_size, EMBED_DIMS, generator=generator),
         bev_pos=torch.randn(num_query, batch_size, EMBED_DIMS, generator=generator),
         value=random_camera_features(batch_size, generator),
-        img_metas=img_metas(batch_size),
+        img_metas=img_metas(batch_size, yaw_step_deg=yaw_step_deg),
     )
 
 
@@ -119,8 +121,11 @@ def img_metas(batch_size, preset="nuscenes_base", yaw_step_deg=0.0):
 
 
 def pc_range(preset="nuscenes_base"):
+    """A preset's point-cloud range, the box its camera geometry projects pillars from."""
     return tuple(get_preset_config(preset).dataset_config.pc_range)
 
 
 def ego_shift(batch_size):
-    return torch.tensor(EGO_SHIFT).repeat(batch_size, 1)
+    """``(bs, 2)`` ego translations in BEV fractions: ``EGO_SHIFT`` times ``b + 1`` for sample ``b``,
+    so a shift taken from the wrong sample shows."""
+    return torch.tensor(EGO_SHIFT) * torch.arange(1, batch_size + 1, dtype=torch.float32)[:, None]

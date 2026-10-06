@@ -49,6 +49,7 @@ class FFN(nn.Module):
         )
 
     def forward(self, x):
+        """``x + layers(x)``."""
         return x + self.layers(x)
 
 
@@ -125,6 +126,12 @@ class BEVFormerEncoder(nn.Module):
         pc_range=PC_RANGE,
     ):
         super().__init__()
+        self.embed_dims = embed_dims
+        self.num_heads = num_heads
+        self.num_levels = num_levels
+        self.num_points = num_points
+        self.num_cams = num_cams
+        self.tsa_num_points = tsa_num_points
         self.num_points_in_pillar = num_points_in_pillar
         self.pc_range = list(pc_range)
         self.layers = nn.ModuleList(
