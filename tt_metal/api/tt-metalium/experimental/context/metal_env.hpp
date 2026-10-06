@@ -38,14 +38,6 @@ struct FabricConfigDescriptor {
 //
 // Only one MetalEnv for the physical cluster may exist at a time due to UMD limitations. There is no limit on the
 // number of mock clusters.
-//
-// Fabric is not part of this descriptor. It is often chosen from queries against the environment (architecture,
-// device count), so it is set afterwards with MetalEnv::configure_fabric, before the topology is materialized.
-//
-//     MetalEnv env({.mock_cluster_desc_path = "blackhole_P150.yaml"});
-//     if (env.get_num_available_devices() > 1) {
-//         env.configure_fabric({.fabric_config = tt_fabric::FabricConfig::FABRIC_2D});
-//     }
 struct MetalEnvDescriptor {
     std::optional<std::string> mock_cluster_desc_path = std::nullopt;
 

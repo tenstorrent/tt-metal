@@ -12,7 +12,6 @@
 #include <optional>
 #include <unordered_set>
 #include "metal_env_impl.hpp"
-#include "metal_env_accessor.hpp"
 #include "metal_context.hpp"
 #include "device/device_manager.hpp"
 #include "distributed/mesh_device_impl.hpp"
