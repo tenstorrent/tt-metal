@@ -68,8 +68,8 @@ def test_interleaved_prefill(mesh_device):
     layer_ids = list(range(int(a), int(b or a) + 1))
     B = 4 * U
     new = B - 1
-    max_ctx = max(ISL, NEWLEN) + STEPS + POST + 64
     S_pad = -(-max(ISL, NEWLEN) // CHUNK) * CHUNK
+    max_ctx = max(max(ISL, NEWLEN) + STEPS + POST + 64, S_pad)  # (the RoPE tables reach max_ctx + 128 >= S_pad)
     pp = default_page_params(max_ctx, U)
     args, m, pool, _ = create_tt_model(
         md,
@@ -333,7 +333,7 @@ def test_interleaved_prefill(mesh_device):
         run_ad = [u for u in run_users if u != 14]
         pos_ad, cur = {u: lens[u] for u in run_ad}, {u: first_ad[u] for u in run_ad}
         chunks_ad, f_ad = new_chunks(), None
-        free_slots = [15, 14, 15, 14, 15]
+        free_slots = [15, 14] * (len(chunks_ad) // 2 + 1)
         t_chunk, t_dec = [], []
         for k in range(STEPS):
             tk = torch.zeros(B, 1, dtype=torch.int32)

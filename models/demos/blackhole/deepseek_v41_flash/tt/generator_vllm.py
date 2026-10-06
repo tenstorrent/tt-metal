@@ -115,6 +115,10 @@ class DeepseekV41ForCausalLM:
 
         a, _, b = os.environ.get("DSV41_LAYERS", "0-39").partition("-")
         layer_ids = list(range(int(a), int(b or a) + 1))
+        if os.environ.get("DSV41_VLLM_INTERLEAVE", "0") == "1":
+            # the prefill windows cover positions up to S_pad (a multiple of the chunk) and the RoPE tables of the model reach max_ctx + 128: round the model context up
+            chunk = int(os.environ.get("DSV41_VLLM_CHUNK", "512"))
+            max_seq_len = -(-int(max_seq_len) // chunk) * chunk
         U = B // VS.MESH_ROWS
         page_params = default_page_params(max_seq_len, U)
         paged = PagedAttentionConfig(
@@ -269,11 +273,8 @@ class DeepseekV41ForCausalLM:
 
     def _interleave_chunk(self):
         c = (
-            int(os.environ.get("DSV41_VLLM_CHUNK", "0"))
-            or self.generator.prefill_chunk
-            or self.generator.auto_chunk(self.max_seq_len)
-        )
-        c = int(c or 1024)
+            int(os.environ.get("DSV41_VLLM_CHUNK", "0")) or self.generator.prefill_chunk or 512
+        )  # (initialize_vllm_model rounds the model context up to it)
         if c % 128:
             raise ValueError(f"prefill chunk {c} must be a multiple of 128")
         return c

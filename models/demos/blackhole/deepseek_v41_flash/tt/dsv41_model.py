@@ -570,10 +570,17 @@ class Model:
             if not todo:
                 continue
             devs = ttnn.get_device_tensors(ttnn.from_device(tk))
-            full = pm.head.gather_logits(lg).reshape(rows, 32, -1) if self._want_logits else None
+            lgd = ttnn.get_device_tensors(lg) if self._want_logits else None
             for r, off, b in todo:
                 tok = int(ttnn.to_torch(devs[r * cols]).reshape(-1)[off])
-                self._res[b] = (tok, None if full is None else full[r, off].clone())
+                row = None
+                if (
+                    lgd is not None
+                ):  # only the vocab shards of the mesh row of this user (8 devices x [32, vocab / 8]), not the logits of every row / token
+                    row = torch.cat(
+                        [ttnn.to_torch(lgd[r * cols + c]).reshape(32, -1)[off].float() for c in range(cols)]
+                    )
+                self._res[b] = (tok, row)
 
     def prefill_forward_dyn(
         self, tokens, prompt_lens, chunk, max_new_tokens, want_logits, enable_trace, s_pad_max, active=None
@@ -813,6 +820,10 @@ class Model:
         max_end = max(ends.values())
         self.check_context_supported(max_end)
         S_pad = max(s_pad_max or 0, -(-max_end // C) * C)
+        assert S_pad <= self.max_ctx + 128, (
+            f"padded prompt length {S_pad} (chunk {C}) exceeds the RoPE tables of the model (max_ctx {self.max_ctx} + 128): build the model with "
+            f"max_ctx >= {S_pad - 128} (a multiple of the chunk is the simplest)"
+        )
         t_start = time.perf_counter()
         self._admit_idle()
         self.sink.set_lengths(torch.zeros(B, dtype=torch.long))  # (capture / compile pass: every user masked)
