@@ -12,6 +12,7 @@
 #include "cmath_common.h"
 #include "llk_math_eltwise_sfpu_common.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_typecast_int16_fp32.h"
 #include "sfpu/ckernel_sfpu_typecast_int32_fp16b.h"
 
 namespace ckernel {
@@ -163,6 +164,7 @@ inline void _calculate_typecast_arith_sfp_rows_() {
  * @tparam ITERATIONS: Number of SFPU passes (each covers SFP_ROWS rows) needed to span the tile.
  * @note Call @ref init_typecast first to program the ADDR_MOD_6 the generic path stores through.
  *       Int32 → Float16_b is the dedicated TTI kernel, which walks Dest via ADDR_MOD_7 instead.
+ *       UInt16 → Float32 is the dedicated SFPI kernel, which walks Dest via sfpi::dst_reg++.
  */
 template <DataFormat SRC_FMT, DataFormat DST_FMT, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_typecast() {
@@ -170,6 +172,12 @@ inline void calculate_typecast() {
         // Production Int32 L1 is two's-complement through Unpack-to-Dest. The dedicated TTI
         // kernel converts 2SC → SM before the int→fp32 cast and names the FP16B store.
         _calculate_typecast_int32_to_fp16b_<ITERATIONS>();
+        return;
+    }
+    if constexpr (SRC_FMT == DataFormat::UInt16 && DST_FMT == DataFormat::Float32) {
+        // UInt16 in a 32-bit Dest word: load the low 16 bits zero-extended and store fp32.
+        // The reverse cast is a different kernel and is not handled here.
+        _calculate_typecast_uint16_to_fp32_<ITERATIONS>();
         return;
     }
 #pragma GCC unroll 8
