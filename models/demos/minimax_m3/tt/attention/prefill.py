@@ -242,8 +242,9 @@ def attention_forward(
             k_chunk_size=512,
             exp_approx_mode=False,  # Pavle's minimax3_gqa_causal_perf
         )
+        # HiFi2: the call is math-bound at q128; K and V sit in SrcA and keep full precision.
         sp_kcfg = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
+            math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
         )
         if cached_len > 0:
             # Cache-read: ring_joint over the accumulated prefix in the cache (the seam already wrote this

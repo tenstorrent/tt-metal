@@ -59,8 +59,7 @@ def make_q_chunk(q, kv_actual, mesh_device, chunk_local, on_device=True):
 
 
 def sdpa_configs(mesh_device):
-    """The M3 dense SDPA program / compute configs (minimax3_gqa_causal_perf in
-    tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py)."""
+    """The M3 dense SDPA program / compute configs of the cache-read path (attention/prefill.py)."""
     grid = mesh_device.compute_with_storage_grid_size()
     prog = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),
@@ -69,7 +68,7 @@ def sdpa_configs(mesh_device):
         exp_approx_mode=False,
     )
     kcfg = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
+        math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
     )
     return prog, kcfg
 
