@@ -114,8 +114,10 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
  */
-template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
+// Coefficient overload preserves the clamped exp21f algorithm and permits
+// fused callers to retain the three polynomial constants across a vector sweep.
+template <bool is_fp32_dest_acc_en, typename C0, typename C1, typename C2>
+sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val, C0 c0, C1 c1, C2 c2) {
     // This function computes exp(x) by leveraging mathematic properties of exp(x):
     // That is, exp(x) = 2**(x / ln2) = 2**(x_i) * 2**(x_f) where
     // - z_i = trunc(x / ln2) (integer part)
@@ -149,7 +151,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
 
     // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 2^23]
     // This uses a 2nd degree polynomial adjustment of the fractional part
-    frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
+    frac = PolynomialEvaluator::eval(frac, c0, c1, c2);
 
     // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
     sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
@@ -163,6 +165,11 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
     }
 
     return y;
+}
+
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
+    return _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(val, EXP_21F_BF16_C0, EXP_21F_BF16_C1, EXP_21F_BF16_C2);
 }
 
 /*
