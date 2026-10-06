@@ -3427,6 +3427,8 @@ class DeepSeekV4PrefillModel(DeepSeekV4Module):
     meshes the layers run on (1 for a single device), and ``dense_csa`` lifts the CSA length limit without
     the lightning indexer (see :class:`~.prefill.attention.DeepSeekV4PrefillAttention`); ``lightning_indexer``
     runs the real indexer on CSA layers instead (the model's exact attention at any length, eager and traced).
+    ``maskless`` runs the sliding layers without an additive mask (dense causal sliding-window SDPA); the traced
+    prefill then captures a second, first-chunk trace per stage.
 
     ``embedding_weight`` (a ROW_MAJOR ``[V, D]`` table on ``device``) and ``lm_head`` (a :class:`~.layers.Linear`
     on the last layer's device) reuse tensors another model already holds instead of uploading copies.
@@ -3450,6 +3452,7 @@ class DeepSeekV4PrefillModel(DeepSeekV4Module):
         layer_devices: Optional[Sequence[ttnn.MeshDevice]] = None,
         dense_csa: bool = False,
         lightning_indexer: bool = False,
+        maskless: bool = False,
         progress: Optional[Callable[..., None]] = None,
         embedding_weight: Optional[ttnn.Tensor] = None,
         lm_head: Optional[Linear] = None,
@@ -3532,6 +3535,7 @@ class DeepSeekV4PrefillModel(DeepSeekV4Module):
                     tp_size=tp_size,
                     dense_csa=dense_csa,
                     lightning_indexer=lightning_indexer,
+                    maskless=maskless,
                 )
             )
             note(f"layer {i + 1}/{num_layers}: built (attention, router, shared expert, hyper-connections)")
@@ -3853,20 +3857,21 @@ class DeepSeekV4PrefillModel(DeepSeekV4Module):
 # with it. So the traced path makes each of those static:
 #
 # * State in place. Each layer owns persistent :class:`~.prefill.attention.PrefillStaticBuffers`: the K=V
-#   ``tail``, the CSA overlap window and a *FIFO* of compressed entries anchored at its end (a chunk drops the
-#   oldest rows of the window it reads and appends its own; SDPA does not care about key order, the mask names
-#   the rows).
+#   ``tail``, the CSA overlap window and the compressed entries, front-anchored as in decode's caches (entry ``w``
+#   in row ``w``; a chunk writes its entries at rows ``start / rate + w``, named by the packet, with
+#   ``indexed_fill``).
 # * Per-chunk inputs made in the trace from the packet. The RoPE rows are gathered (``ttnn.embedding``) from
-#   whole-prompt tables at the packet's positions, and a mask is a per-layer-type constant plus a column cut
-#   that depends only on the chunk's start
-#   (:meth:`~.prefill.attention.DeepSeekV4PrefillAttention.mask_tables_host`). Nothing is allocated between
-#   captures: allocating on a device that holds a trace is unsafe.
-# * One shape. Every chunk is ``C = chunk_size`` tokens, and every layer reads its *whole* FIFO: the SDPA key axis
+#   whole-prompt tables at the packet's positions, and a mask is a per-layer-type constant plus a cut made from the
+#   chunk's start by a threshold compare
+#   (:meth:`~.prefill.attention.DeepSeekV4PrefillAttention.mask_tables_host`); mask-free sliding layers need none,
+#   but attend differently on a prompt's first chunk, so their stages capture a second trace for it. Nothing is
+#   allocated between captures: allocating on a device that holds a trace is unsafe.
+# * One shape. Every chunk is ``C = chunk_size`` tokens, and every layer reads its *whole* entry buffer: the SDPA key axis
 #   is ``sliding_window + C + capacity``, the rows not yet filled masked out. So one trace per stage serves every
 #   chunk of every prompt of up to ``max_len`` tokens, at the price of attending over the masked rows early on.
 # * Padding. A prompt's last chunk is padded at its end (with repeats of its own tokens). Attention is causal, so
 #   no real token sees the padding; what the padding does leave behind is the state after it, the head's last
-#   token and the FIFOs' last rows, so the packet names the chunk's last real token (the head picks it), the last
+#   token and the entry rows past the prompt's, so the packet names the chunk's last real token (the head picks it), the last
 #   chunk's ``[tail | chunk]`` window and Ca overlap rows are kept (``PrefillStaticBuffers``), and
 #   :meth:`TracedPrefill._export_states` slices the real state out of them and drops the padding's entries.
 #
@@ -3893,7 +3898,7 @@ class _StageIO:
     """Persistent per-stage device tensors: the D2D receive buffer, the mask constants and the head's row ramp."""
 
     streams_in: Optional[ttnn.Tensor]  # [1, C, hc, D] bf16 ROW_MAJOR (stages after the first)
-    masks: dict  # layer_type -> (static [1, 1, C, K] bf16, threshold [1, 1, 1, K] fp32), K = sw + C + capacity
+    masks: dict  # layer_type -> (static [1, 1, C, K] bf16, threshold [1, 1, C, K] fp32), K = sw + C + capacity
     index_pads: dict = field(default_factory=dict)  # layer_type -> [1, 1, kv_len, index_head_dim] zero key pad
     ramp: Optional[ttnn.Tensor] = None  # [1, 1, 1, C] fp32 TILE 0 .. C - 1 (last stage): the head's one-hot row
 
@@ -3914,6 +3919,7 @@ class _Stage:
     recv: object = None  # receiver socket from the previous stage
     send: object = None  # sender socket to the next stage
     trace: Optional[int] = None
+    first_trace: Optional[int] = None  # the prompt's first chunk, when a mask-free sliding layer is on the stage
 
 
 class TracedPrefill:
@@ -3926,13 +3932,14 @@ class TracedPrefill:
         self.compiled = False
         self.stages: list[_Stage] = []
         self.buffers: dict = {}
-        self._entry_capacity: dict = {}  # layer type -> FIFO rows, every one of which each chunk reads
+        self._entry_capacity: dict = {}  # layer type -> entry rows, every one of which each chunk reads
         self._max_len = 0
         self._prompt_len = 0  # the last run's prompt length
         self._chunk_size = 0
         self._pkt_socket = None
         self._out_socket = None
         self._pkt_entry: dict = {}  # compress rate -> packet offset of the chunk's entry positions
+        self._pkt_rows: dict = {}  # compress rate -> packet offset of the rows the chunk's entries are written to
         self._pkt_last = 0  # packet offset of the chunk's last real token (its index in the chunk)
         self._pkt_w = 0
         self._pkt_page_bytes = 0
@@ -3963,13 +3970,16 @@ class TracedPrefill:
 
         ``[0, C)`` the token ids, ``[C, 2C)`` the token positions ``start + i`` (slot ``C`` doubles as the chunk's
         start), then per compress rate ``r`` the ``C / r`` positions ``start + w * r`` of the chunk's compressed
-        entries, then one slot: the index in the chunk of its last real token (the head's token). The row is one
-        H2D socket page, so its width is rounded up to the PCIe alignment.
+        entries and the ``C / r`` rows ``start / r + w`` they are written to, then one slot: the index in the chunk
+        of its last real token (the head's token). The row is one H2D socket page, so its width is rounded up to
+        the PCIe alignment.
         """
         offset = 2 * chunk_size
-        self._pkt_entry = {}
+        self._pkt_entry, self._pkt_rows = {}, {}
         for rate in sorted({self.config.compress_rates[lt] for lt in self._entry_capacity}):
             self._pkt_entry[rate] = offset
+            offset += chunk_size // rate
+            self._pkt_rows[rate] = offset
             offset += chunk_size // rate
         self._pkt_last = offset
         offset += 1
@@ -3990,6 +4000,8 @@ class TracedPrefill:
         row[c : 2 * c] = start + torch.arange(c, dtype=torch.int32)
         for rate, offset in self._pkt_entry.items():
             row[offset : offset + c // rate] = start + rate * torch.arange(c // rate, dtype=torch.int32)
+        for rate, offset in self._pkt_rows.items():
+            row[offset : offset + c // rate] = start // rate + torch.arange(c // rate, dtype=torch.int32)
         row[self._pkt_last] = t - 1
         return packet
 
@@ -4076,12 +4088,15 @@ class TracedPrefill:
         for lt in stage.types:
             attn = self._representative(stage, lt)
             cap = self._entry_capacity.get(lt, 0)
+            indexed = lt == COMPRESSED_SPARSE_ATTENTION and attn.use_indexer
+            if attn.maskless:
+                continue
             static, threshold = attn.mask_tables_host(t, cap)
             masks[lt] = (
                 attn._to_device(static.reshape(1, 1, t, -1)),
-                attn._to_device(threshold.reshape(1, 1, 1, -1), dtype=ttnn.float32),
+                attn._to_device(threshold.reshape(1, 1, t, -1), dtype=ttnn.float32),
             )
-            if lt == COMPRESSED_SPARSE_ATTENTION and attn.use_indexer:
+            if indexed:
                 # chunk_start_idx (= cap) must sit strictly inside the key pad; pad past the chunk too.
                 index_pads[lt] = attn._zeros_rm(_round_up(cap + t, 64), attn.index_head_dim)
         ramp = None
@@ -4130,9 +4145,10 @@ class TracedPrefill:
         self._out_socket.set_page_size(self._out_plan[1] * 2)
 
     # ------------------------------------------------------------------ the traced body
-    def _step_inputs(self, stage: _Stage, pkt: ttnn.Tensor) -> tuple:
+    def _step_inputs(self, stage: _Stage, pkt: ttnn.Tensor, first_chunk: bool = False) -> tuple:
         """``(ids, step, made)``: the chunk's ``[1, C]`` uint32 ids and :class:`PrefillStaticStep`, built on device
-        from the packet ``pkt``, and every tensor made here (for the caller to free once the layers have run)."""
+        from the packet ``pkt``, and every tensor made here (for the caller to free once the layers have run).
+        ``first_chunk`` builds the first-chunk trace's step (see :meth:`_first_chunk_trace`)."""
         t = c = self._chunk_size
         io = stage.io
         caps = {lt: self._entry_capacity.get(lt, 0) for lt in stage.types}
@@ -4160,22 +4176,27 @@ class TracedPrefill:
         ids = slots(0, t)
         positions = slots(c, t)
         rope = {kind: gather(tables, positions, t) for kind, tables in stage.rope.items()}
-        entry_rope = {}
+        entry_rope, entry_rows = {}, {}
         for rate in self._rates(stage):
             n = t // rate
             entry_rope[rate] = gather(stage.rope["compress"], slots(self._pkt_entry[rate], n), n)
+            entry_rows[rate] = ttnn.reshape(slots(self._pkt_rows[rate], n), [n])  # a view: slots() frees it
 
-        start = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, c], [1, 1, 1, c + 1]), [1, 1, 1, 1])
-        start_f = keep(ttnn.typecast(ttnn.to_layout(start, ttnn.TILE_LAYOUT), ttnn.float32))
         masks, index_cuts, index_pads = {}, {}, {}
+        start_f = None
+        if io.masks:
+            start = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, c], [1, 1, 1, c + 1]), [1, 1, 1, 1])
+            start_f = keep(ttnn.typecast(ttnn.to_layout(start, ttnn.TILE_LAYOUT), ttnn.float32))
         for lt in stage.types:
+            if lt not in io.masks:  # mask-free sliding layer
+                continue
             cap = caps[lt]
             static, threshold = io.masks[lt]
             cut = ttnn.typecast(ttnn.multiply(ttnn.gt(threshold, start_f), _MASK_NEG), ttnn.bfloat16)
-            masks[lt] = keep(ttnn.add(static, cut))  # [1, 1, T, K] + the [1, 1, 1, K] start-dependent cut
+            masks[lt] = keep(ttnn.add(static, cut))  # [1, 1, T, K] + the [1, 1, T, K] start-dependent cut
             ttnn.deallocate(cut)
             if lt == COMPRESSED_SPARSE_ATTENTION and self._representative(stage, lt).use_indexer:
-                # The indexer's causal cut over the FIFO rows is the mask's entry columns.
+                # The indexer's causal cut over the entry rows is the mask's entry columns.
                 index_cuts[lt] = keep(ttnn.slice(masks[lt], [0, 0, 0, sw + t], [1, 1, t, sw + t + cap]))
                 index_pads[lt] = io.index_pads[lt]
         step = PrefillStaticStep(
@@ -4185,6 +4206,8 @@ class TracedPrefill:
             caps=caps,
             index_cuts=index_cuts,
             index_pads=index_pads,
+            entry_rows=entry_rows,
+            first_chunk=first_chunk,
         )
         return ids, step, made
 
@@ -4198,7 +4221,15 @@ class TracedPrefill:
         ttnn.deallocate(hit)
         return select
 
-    def _stage_forward(self, stage: _Stage) -> None:
+    def _first_chunk_trace(self, stage: _Stage) -> bool:
+        """Whether ``stage`` needs its own trace for a prompt's first chunk.
+
+        A mask-free sliding layer attends over the chunk alone on the first chunk and over ``[tail | chunk]`` after
+        it (the empty tail stands for positions before 0, and only a mask could hide it), and a trace bakes that in.
+        """
+        return any(self.model.layers[li].self_attn.maskless for li in stage.layers)
+
+    def _stage_forward(self, stage: _Stage, first_chunk: bool = False) -> None:
         """One stage over one chunk: receive, embed (first stage), the stage's layers, send on.
 
         Stage 0 receives the packet from the host (H2D) and broadcasts it over its TP ranks; a later stage receives
@@ -4221,7 +4252,7 @@ class TracedPrefill:
         else:
             ttnn.experimental.recv_direct_async(io.streams_in, stage.recv)
             ttnn.experimental.recv_direct_async(stage.pkt, stage.recv)
-        ids, step, made = self._step_inputs(stage, pkt)
+        ids, step, made = self._step_inputs(stage, pkt, first_chunk)
         streams = model.embed(ids) if stage.first else ttnn.to_layout(io.streams_in, ttnn.TILE_LAYOUT)
         for li in stage.layers:
             out = model.layers[li].forward_static(streams, self.buffers[li], step, ids)
@@ -4270,7 +4301,7 @@ class TracedPrefill:
 
         The traces then serve every prompt of up to ``max_len`` tokens (see the section comment). Must run before
         the model does anything else that allocates on its devices per prompt (eager prefills included).
-        ``max_len`` and ``chunk_size`` are multiples of ``ALIGNMENT``; ``max_len`` sizes the FIFOs every chunk reads.
+        ``max_len`` and ``chunk_size`` are multiples of ``ALIGNMENT``; ``max_len`` sizes the entry buffers every chunk reads.
         """
         self.compile(max_len, chunk_size)
         self.capture()
@@ -4287,24 +4318,32 @@ class TracedPrefill:
                 raise ValueError(f"{name}={value} must be a positive multiple of {ALIGNMENT}")
         if self.prepared or self.compiled:
             raise RuntimeError("traced prefill is already prepared; another plan needs another TracedPrefill")
+        if any(layer.self_attn.maskless for layer in model.layers) and chunk_size < self.config.sliding_window:
+            raise ValueError(
+                f"mask-free traced prefill needs chunk_size >= sliding_window ({self.config.sliding_window}), "
+                f"got {chunk_size}"
+            )
         self._max_len, self._chunk_size = max_len, chunk_size
         model._tag = "traced prepare"
         model._note("traced prefill: allocating persistent buffers and sockets", important=True)
         self._allocate(max_len, chunk_size)
         self._stop_prefetcher()
+        first_traces = sum(self._first_chunk_trace(stage) for stage in self.stages)
         logger.info(
             f"[traced-prefill] prompts of up to {max_len} tokens in chunks of {chunk_size}: one trace x "
-            f"{len(self.stages)} stage(s); entry buffers {self._entry_capacity}; packet {self._pkt_page_bytes} B"
+            f"{len(self.stages)} stage(s) (+{first_traces} first-chunk); entry buffers {self._entry_capacity}; "
+            f"packet {self._pkt_page_bytes} B"
         )
 
         # Pass 1: the compile run, while no trace exists (a compile run allocates freely). It executes, so it takes
         # a packet and sends logits, drained here. Every stage is issued before the read, since a stage's send parks
-        # until the next stage posts its receive.
-        self._pkt_socket.write_tensor(self._packet(torch.zeros(chunk_size, dtype=torch.long), 0))
-        for stage in self.stages:
-            model._note(f"traced prefill: compiling stage {stage.index}", important=True)
-            self._stage_forward(stage)
-        self._read_logits()
+        # until the next stage posts its receive. The first-chunk variant, if any stage has one, compiles too.
+        for first_chunk in (False, True) if first_traces else (False,):
+            self._pkt_socket.write_tensor(self._packet(torch.zeros(chunk_size, dtype=torch.long), 0))
+            for stage in self.stages:
+                model._note(f"traced prefill: compiling stage {stage.index}", important=True)
+                self._stage_forward(stage, first_chunk and self._first_chunk_trace(stage))
+            self._read_logits()
         for stage in self.stages:
             ttnn.synchronize_device(stage.device)
         self.compiled = True
@@ -4320,11 +4359,15 @@ class TracedPrefill:
         self._stop_prefetcher()
         for stage in self.stages:
             model._note(f"traced prefill: capturing stage {stage.index}", important=True)
-            tid = ttnn.begin_trace_capture(stage.device, cq_id=0)
-            with _trace_capture_guard():
-                self._stage_forward(stage)
-            ttnn.end_trace_capture(stage.device, tid, cq_id=0)
-            stage.trace = tid
+            for first_chunk in (False, True) if self._first_chunk_trace(stage) else (False,):
+                tid = ttnn.begin_trace_capture(stage.device, cq_id=0)
+                with _trace_capture_guard():
+                    self._stage_forward(stage, first_chunk)
+                ttnn.end_trace_capture(stage.device, tid, cq_id=0)
+                if first_chunk:
+                    stage.first_trace = tid
+                else:
+                    stage.trace = tid
         self.prepared = True
         model._note("traced prefill: ready", important=True)
 
@@ -4350,9 +4393,10 @@ class TracedPrefill:
         """Release the stage traces and close the sockets; the model cannot replay until :meth:`prepare` runs again."""
         for stage in self.stages:
             ttnn.synchronize_device(stage.device)
-            if stage.trace is not None:
-                ttnn.release_trace(stage.device, stage.trace)
-            stage.trace = None
+            for tid in (stage.trace, stage.first_trace):
+                if tid is not None:
+                    ttnn.release_trace(stage.device, tid)
+            stage.trace = stage.first_trace = None
             stage.send = stage.recv = None
         self._pkt_socket = self._out_socket = None
         self.prepared = self.compiled = False
@@ -4360,9 +4404,10 @@ class TracedPrefill:
     def _replay(self, chunks: queue.Queue) -> None:
         """Replay-thread body: post every stage's trace for each queued chunk index, until ``None`` arrives."""
         try:
-            for _ in iter(chunks.get, None):
+            for index in iter(chunks.get, None):
                 for stage in self.stages:
-                    ttnn.execute_trace(stage.device, stage.trace, cq_id=0, blocking=False)
+                    tid = stage.first_trace if index == 0 and stage.first_trace is not None else stage.trace
+                    ttnn.execute_trace(stage.device, tid, cq_id=0, blocking=False)
         except Exception:
             logger.exception("[traced-prefill] replay thread failed; the host will wait on the sockets forever")
             raise
@@ -4462,8 +4507,8 @@ class TracedPrefill:
     def _export_states(self) -> list[PrefillAttentionState]:
         """Per-layer :class:`PrefillAttentionState` of the prompt just run (for the decode commit).
 
-        ``compressed_kv`` / ``idx_keys`` are slices of the FIFOs' rows holding the prompt's ``prompt_len // rate``
-        entries (the padding's entries come after them). When the last chunk was padded, ``kv_tail`` and the CSA
+        ``compressed_kv`` / ``idx_keys`` are the first ``prompt_len // rate`` rows of the front-anchored entry buffers
+        (the padding's entries come after them). When the last chunk was padded, ``kv_tail`` and the CSA
         overlaps are sliced out of that chunk's kept window and Ca rows at its last real token; otherwise they are the
         persistent tensors themselves. Consume the states before the next run, then :meth:`free_states`.
         """
@@ -4485,15 +4530,13 @@ class TracedPrefill:
             state = PrefillAttentionState(seq_len=n, kv_tail=tail)
             if not attn.is_sliding:
                 rate = attn.rate
-                emitted, padding = (n + pad) // rate, pad // rate
-                total = bufs.entries.shape[2]
-                state.compressed_kv = rows(bufs.entries, total - emitted, total - padding)
+                entries = n // rate
+                state.compressed_kv = rows(bufs.entries, 0, entries)
                 if attn.is_csa:
                     state.csa_prev_kv = overlap(bufs.prev_kv, bufs.ca_kv, rate)
                     state.csa_prev_gate = overlap(bufs.prev_gate, bufs.ca_gate, rate)
                 if bufs.idx_keys is not None:
-                    total = bufs.idx_keys.shape[2]
-                    state.idx_keys = rows(bufs.idx_keys, total - emitted, total - padding)
+                    state.idx_keys = rows(bufs.idx_keys, 0, entries)
                     state.idx_prev_kv = overlap(bufs.idx_prev_kv, bufs.idx_ca_kv, rate)
                     state.idx_prev_gate = overlap(bufs.idx_prev_gate, bufs.idx_ca_gate, rate)
             states.append(state)
@@ -4505,7 +4548,7 @@ class TracedPrefill:
         They were allocated while the traces exist, so they must be gone before the next replay.
         """
         for li, state in enumerate(states):
-            # By buffer, not by object: a slice spanning a whole FIFO (the longest prepared prompt, chunk-aligned) is
+            # By buffer, not by object: a slice spanning a whole entry buffer (the longest prepared prompt, chunk-aligned) is
             # a no-op that returns a new tensor object on the persistent buffer.
             persistent = {t.buffer_address() for t in vars(self.buffers[li]).values() if isinstance(t, ttnn.Tensor)}
             for name, tensor in vars(state).items():

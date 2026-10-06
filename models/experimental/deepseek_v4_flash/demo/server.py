@@ -464,7 +464,7 @@ _REPLAY_RATE_MIN_TOKENS = 64
 # position, so a turn that starts on a cold cache is slow for that prefix and then
 # speeds up mid-reply when the causal variant takes over. Averaged over the whole
 # reply that prefix hides the rate the turn actually settled at.
-DECODE_RATE_WINDOW = 16
+DECODE_RATE_WINDOW = 64
 
 
 def _make_sampler(temperature, top_p):
@@ -945,6 +945,9 @@ class _Turn:
         self.t_admit = 0.0
         self.t_prefill_done = 0.0
         self.t_done = 0.0
+        # Rate of the latest prefill chunk only (the TUI shows this, not the cumulative mean).
+        self.prefill_chunk_rate = 0.0
+        self._chunk_t = 0.0
         # One mark per generated token, for the trailing-window rate. Bounded, so the
         # window slides rather than growing into a whole-reply average.
         self._marks: deque[float] = deque(maxlen=max(2, rate_window) + 1)
@@ -963,6 +966,16 @@ class _Turn:
         if not self.t_prefill_done:
             return 0.0
         return max((self.t_done or time.perf_counter()) - self.t_prefill_done, 0.0)
+
+    def mark_prefill_chunk(self, done: int) -> None:
+        """Record that ``done`` prompt tokens are prefilled; sets :attr:`prefill_chunk_rate`
+        from the chunk just finished (not the cumulative average)."""
+        now = time.perf_counter()
+        start = self._chunk_t or self.t_admit or now
+        if done > self.fed and now > start:
+            self.prefill_chunk_rate = (done - self.fed) / (now - start)
+        self._chunk_t = now
+        self.fed = done
 
     def mark_token(self) -> None:
         """Record that a generated token was dispatched, for :attr:`decode_rate`."""
@@ -1000,9 +1013,8 @@ class _Turn:
             "generated": len(self.generated),
             "max_tokens": self.max_tokens,
             "prefill_seconds": self.prefill_seconds,
-            "prefill_rate": self.fed / self.prefill_seconds if self.prefill_seconds > 0 else 0.0,
+            "prefill_rate": self.prefill_chunk_rate,
             "decode_rate": self.decode_rate,
-            "mean_decode_rate": self.mean_decode_rate,
             "cancelled": self.cancelled.is_set(),
         }
 
@@ -1490,7 +1502,7 @@ class _Scheduler:
         turn.t_admit = turn.t_admit or time.perf_counter()
 
         def progress(done: int) -> None:
-            turn.fed = done
+            turn.mark_prefill_chunk(done)
 
         row = self.server.prefiller.run(user, turn.ids[:n], on_progress=progress)
         turn.fed = turn.prefilled_on_device = n
