@@ -743,7 +743,10 @@ def test_rsqrt_with_log_in_sfpu_chain(device, generated_first):
     else:
         expected = ttnn.get_golden_function(ttnn.rsqrt)(middle, device=device)
     checked &= torch.isfinite(expected) & (expected.abs() > SMALLEST_NORMAL_BF16)
-    assert checked.sum() > 1024
+    # ``checked`` depends only on standalone results, never on the chain's, so it can only say the
+    # comparisons below see enough lanes. Two rows: erfinv after log is defined on 368 inputs, and
+    # stock erfinv flushes tiny inputs that torch maps to tiny outputs.
+    assert checked.sum() >= 64
 
     if generated_first:
         # Exactly the stock op's own result, which itself meets torch as its suites require.
