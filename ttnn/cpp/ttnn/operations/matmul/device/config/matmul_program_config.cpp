@@ -71,6 +71,22 @@ inline uint32_t get_per_core_factor(
     return 1;
 }
 
+// Longest K block, in tiles, that the all-DRAM 2D path picks when the grid width does not divide Kt. With the default
+// compute config accuracy falls as the block grows: PCC against fp32 for a 1024-cube bf16 matmul is 0.99992 at 8 tiles
+// and 0.99984 at 16, and the matmul unit tests ask for 0.9999.
+constexpr uint32_t MAX_AUTO_IN0_BLOCK_W = 8;
+
+// K block for a Kt that the grid width does not divide: the largest divisor of Kt up to MAX_AUTO_IN0_BLOCK_W.
+// get_multi_dim_per_core_factor still shrinks the result to fit L1.
+uint32_t get_in0_block_w_for_indivisible_kt(uint32_t Kt) {
+    for (uint32_t w = std::min(MAX_AUTO_IN0_BLOCK_W, Kt); w > 1; w--) {
+        if (Kt % w == 0) {
+            return w;
+        }
+    }
+    return 1;
+}
+
 std::vector<uint32_t> get_multi_dim_per_core_factor(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -1321,8 +1337,9 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 }
             }
             if (all_dram_interleaved) {
-                in0_block_w = !transpose_mcast ? (Kt % num_cores_x == 0 ? Kt / num_cores_x : 1)
-                                               : (Kt % num_cores_x == 0 ? Kt / num_cores_y : 1);
+                in0_block_w = !transpose_mcast
+                                  ? (Kt % num_cores_x == 0 ? Kt / num_cores_x : get_in0_block_w_for_indivisible_kt(Kt))
+                                  : (Kt % num_cores_x == 0 ? Kt / num_cores_y : 1);
                 per_core_M = !transpose_mcast ? tt::div_up(Mt, num_cores_y) : tt::div_up(Mt, num_cores_x);
                 per_core_N = !transpose_mcast ? tt::div_up(Nt, num_cores_x) : tt::div_up(Nt, num_cores_y);
 
