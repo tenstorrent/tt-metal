@@ -155,7 +155,7 @@ def _build_hidden(model: str, layer_idx: int, token_ids: list[int], checkpoint_d
     text_config = config.get("text_config", config)
     embeddings = _embedding_rows(spec, checkpoint_dir, token_ids)
     layer_prefix = f"{spec.model_root}layers.{layer_idx}."
-    norm_weight = _checkpoint_tensor(spec, checkpoint_dir, f"{layer_prefix}input_layernorm.weight")
+    norm_weight = input_norm_weight(model, layer_idx, checkpoint_dir)
     if spec.hyper_connection_streams:
         if layer_idx != 0:
             raise ValueError("hyper-connection text inputs are exact only for layer 0")
@@ -168,6 +168,16 @@ def _build_hidden(model: str, layer_idx: int, token_ids: list[int], checkpoint_d
             text_config,
         )
     return _rms_norm(embeddings, norm_weight, text_config["rms_norm_eps"]).unsqueeze(0).contiguous()
+
+
+def input_norm_weight(model: str, layer_idx: int, checkpoint_dir: Path) -> torch.Tensor:
+    """The layer's ``input_layernorm`` weight ``w`` [hidden] (bf16) from the pinned checkpoint.
+
+    Every input the layer receives in the model is ``w * u`` with per-token RMS(u) <= 1 (the normalized residual
+    stream), so ``w`` bounds the reachable layer input.
+    """
+    spec = TEXT_INPUT_MODELS[model]
+    return _checkpoint_tensor(spec, checkpoint_dir, f"{spec.model_root}layers.{layer_idx}.input_layernorm.weight")
 
 
 def chunk_decay_extremes(hidden: torch.Tensor, weights: dict[str, torch.Tensor], config) -> dict[str, float]:

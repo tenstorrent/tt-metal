@@ -68,25 +68,22 @@ def _dump(case_name: str, name: str, tensor: torch.Tensor) -> None:
 
 
 # Failures measured on today's code (Blackhole, 2026-10-05, tt_metal_tracker-g1b.7.1). Each passes the K3 acceptance
-# output PCC (0.9995) except k3-control; the targeted gates catch them.
+# output PCC (0.9995); the targeted gates catch them.
 _MEASURED_FAILURES = {
     # Remaining failures after the weak-decay fix (tt_metal_tracker-g1b.7: complement-form decay, FP32 state carry),
     # the FP32 gate chain (tt_metal_tracker-g1b.4.13) and the suffix-sum k_dec_t with the FP32 q/k/v convolution
     # carry (tt_metal_tracker-g1b.4.18), measured on device 2026-10-06. Cases fixed by them (synthetic-weak, glm-weak,
     # real-text k3 h1/h24/h28/h36, glm h10/h18; the strong-band state cases synthetic-strong, glm-strong and glm h32,
-    # whose error was the anchored k_dec_t) pass and carry no mark.
+    # whose error was the anchored k_dec_t) pass and carry no mark. k3-control and k3-weak failed only on crafted inputs
+    # outside the input_layernorm domain (BF16 decay rank at |f_a x| RMS ~75); in-domain they pass (g1b.4.17).
     "synthetic-strong-saturated-h0-1-T1280x1": "strong decay |G_last|=160 (g=-5): output token 31 of a chunk error/RMS "
     "1.0e-1 (control 3.3e-2); output PCC 0.99995; no KDA strong-end fix by decision (tt_metal_tracker-g1b.4.16)",
-    "k3-weak-h24-25-T1280x8": "tt_metal_tracker-g1b.4.12: K3 weak decay |G_last| ~1.6e-3, beta ~3e-4: final state PCC "
-    "0.99694, key row 97 error/RMS 0.736 (0.99939 / 0.271 before the folded gate of g1b.4.13). Cause (device stage "
-    "substitution): BF16 decay_rank (f_a x, RMS 76 from the out-of-domain crafted input; real text ~1) amplified by K3 "
-    "f_b, and with g1b.4.13 also the BF16 A f_b weights; an FP32 rank projection with unfolded FP32 logits gave "
-    "0.99997 / 0.065. Decision: tt_metal_tracker-g1b.4.17",
-    "k3-control-h48-49-T1280x1": "tt_metal_tracker-g1b.4.11: output PCC 0.99926 < 0.9995, token error/RMS 0.156 (0.99943 "
-    "/ 0.116 before g1b.4.13). Cause (device stage substitution): BF16 decay_rank (f_a x) and BF16 A f_b weights "
-    "amplified by K3 f_b (cond 1.2e5) because the crafted input drives |f_a x| to RMS 72 (real text ~1), outside any "
-    "real layer input (RMS <= 0.27); with an exact gate the case passes (0.99990 / 0.064). Decision on re-crafting vs "
-    "FP32 rank: tt_metal_tracker-g1b.4.17",
+    # In-domain crafted input (tt_metal_tracker-g1b.4.17): 87 channels saturated at |G_last|=160 next to 5 long-memory
+    # channels (|G_last| < 1) with beta 0.97.
+    "k3-strong-saturated-h7-8-T1280x1": "final state PCC 0.99929, key rows 90/99 (|G_last| 1.2e-3/1.8e-2, row norm "
+    "8.6x/7.0x RMS) error/RMS 0.31/0.30: a direction error (own 3.7%/4.3%, norm ratio 1.004/1.015, not contraction) "
+    "on long-memory rows of a saturated head; output token 30 error/RMS 0.075. Mechanism not isolated; owned with "
+    "the strong-end numerics, no fix by decision (tt_metal_tracker-g1b.4.16)",
 }
 
 
