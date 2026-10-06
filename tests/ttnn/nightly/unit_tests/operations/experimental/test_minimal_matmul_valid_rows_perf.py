@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import os
 import pytest
 import torch
@@ -99,6 +100,13 @@ def test_valid_rows_perf_table():
 
 CAPS = [512, 1024, 2048, 4096, 8192]
 FIXED_ROWS = 512
+GRID = (11, 10)
+
+
+def _runtime_m_blocks(m_cap, valid_rows, mbs, grid=GRID):
+    m_cap_t, n_t, valid_t = m_cap // 32, N // 32, math.ceil(valid_rows / 32)
+    m_cores = grid[0] if m_cap_t > n_t else grid[1]
+    return math.ceil(math.ceil(valid_t / m_cores) / mbs)
 
 
 @pytest.mark.parametrize("cap", CAPS)
@@ -149,7 +157,7 @@ def test_run_mblock_sweep(device, mbs):
         N_block_size=8,
         subblock_h=2,
         subblock_w=2,
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        compute_with_storage_grid_size=ttnn.CoreCoord(*GRID),
     )
     tt_valid = _uint32_scalar(device, FIXED_ROWS)
     tt_slot = _uint32_scalar(device, 0)
@@ -171,7 +179,7 @@ def test_run_mblock_sweep(device, mbs):
 
 def test_mblock_sweep_table():
     print("")
-    print(f"| M_cap=4096 valid_rows={FIXED_ROWS} M_block_size | M_blocks_per_core | min us | mean us |")
+    print(f"| M_cap=4096 valid_rows={FIXED_ROWS} M_block_size | runtime M blocks/core | min us | mean us |")
     print("|---|---|---|---|")
     for mbs in [8, 14, 16]:
         subdir = f"mm_mbs_{mbs}"
@@ -184,4 +192,4 @@ def test_mblock_sweep_table():
             subdir, float_columns=["CORE COUNT", "DEVICE KERNEL DURATION [ns]"], sum_vals=False, has_signposts=False
         )
         d = r["DEVICE KERNEL DURATION [ns]"]
-        print(f"| {mbs} | {-(-13 // mbs)} | {d.min()/1000:.2f} | {d.mean()/1000:.2f} |")
+        print(f"| {mbs} | {_runtime_m_blocks(4096, FIXED_ROWS, mbs)} | {d.min()/1000:.2f} | {d.mean()/1000:.2f} |")

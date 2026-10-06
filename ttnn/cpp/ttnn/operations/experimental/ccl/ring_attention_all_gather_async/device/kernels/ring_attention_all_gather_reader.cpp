@@ -213,8 +213,11 @@ void kernel_main() {
             const uint32_t slot_id =
                 trace_metadata::read_metadata_scalar_u32(meta_noc, meta_args, slot_id_addr, cb_meta.get_write_ptr());
             for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-                const uint32_t cache_batch_idx = trace_metadata::bounded_cache_batch_idx(
-                    slot_id, kv_cache_num_layers, kv_cache_layer_idx, input_cache_batch_extent[input_idx]);
+                const uint32_t cache_batch_idx =
+                    input_cache_batch_extent[input_idx] == 1
+                        ? 0
+                        : trace_metadata::bounded_cache_batch_idx(
+                              slot_id, kv_cache_num_layers, kv_cache_layer_idx, input_cache_batch_extent[input_idx]);
                 input_batch_base[input_idx] = cache_batch_idx * input_batch_head_count[input_idx] *
                                               input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
             }

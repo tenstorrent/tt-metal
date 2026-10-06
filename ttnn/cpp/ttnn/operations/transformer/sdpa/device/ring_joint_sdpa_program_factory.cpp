@@ -649,7 +649,7 @@ void apply_ring_joint_scalar_runtime_args(
                         const uint32_t Ht = shape[2] / tt::constants::TILE_HEIGHT;
                         const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
                         const uint32_t input_batch_base =
-                            ag_rt::input_batch_base_pages(kv_cache_batch_idx, num_heads, Ht, Wt);
+                            ag_rt::input_batch_base_pages(shape[0] == 1 ? 0 : kv_cache_batch_idx, num_heads, Ht, Wt);
                         const uint32_t idx = header_count + in * descriptor_field_count + batch_base_offset;
                         if (core_args.size() > idx) {  // skip cores that don't run this kernel
                             write_runtime_arg(core_args, idx, input_batch_base, "all_gather_reader.input_batch_base");
@@ -1776,6 +1776,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    if (indexed_kv_cache && tensor_args.input_v.has_value() && tensor_args.input_v->logical_shape()[0] == 1) {
+        defines["V_SINGLE_SLOT"] = "1";
+    }
     defines["SLIDING_HALO_SLOT_COUNT"] =
         std::to_string(has_sliding_window ? gathered_padded_Nt / chunked_sliding_halo_layout.halo_tile_rows : 0);
 
@@ -2871,10 +2874,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             reader_common_args.push_back(tensor_args.slot_id->buffer());
             reader_common_args.push_back(args.kv_cache_num_layers);
             reader_common_args.push_back(args.kv_cache_layer_idx);
-            reader_common_args.push_back(std::min(
-                tensor_args.input_k.logical_shape()[0],
-                tensor_args.input_v.has_value() ? tensor_args.input_v->logical_shape()[0]
-                                                : tensor_args.input_k.logical_shape()[0]));
+            const uint32_t k_cache_batch = tensor_args.input_k.logical_shape()[0];
+            const uint32_t v_cache_batch =
+                tensor_args.input_v.has_value() ? tensor_args.input_v->logical_shape()[0] : k_cache_batch;
+            reader_common_args.push_back(v_cache_batch == 1 ? k_cache_batch : std::min(k_cache_batch, v_cache_batch));
             reader_common_args.push_back(tensor_args.kv_actual_isl->buffer());
         }
         append_logical_length_common_args(reader_common_args);

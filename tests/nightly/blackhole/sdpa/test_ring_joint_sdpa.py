@@ -1687,6 +1687,7 @@ def run_ring_joint_sdpa_chunked(
     reserve_llk_kernel_config: bool = True,
     circular_kv_cache: bool = False,
     attention_sink_values: torch.Tensor = None,
+    v_single_slot: bool = False,
 ):
     """
     Validate ring joint SDPA chunked-prefill, or verify deterministic replay.
@@ -1956,7 +1957,7 @@ def run_ring_joint_sdpa_chunked(
                 ),
             )
             persistent_output_buffer_v = ttnn.from_torch(
-                torch.zeros(kv_buffer_batch, nhv, seq_len, d_v),
+                torch.zeros(1 if v_single_slot else kv_buffer_batch, nhv, seq_len, d_v),
                 dtype=kv_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
@@ -2089,6 +2090,8 @@ def run_ring_joint_sdpa_chunked(
                 V_input = torch.randn(cache_batch, nhv, e, d_v, dtype=V_balanced.dtype) * 100
                 K_input[kv_cache_batch_idx : kv_cache_batch_idx + 1] = K_balanced
                 V_input[kv_cache_batch_idx : kv_cache_batch_idx + 1] = V_balanced
+                if v_single_slot:
+                    V_input = V_balanced
             else:
                 K_input = K_balanced
                 V_input = V_balanced
@@ -2100,7 +2103,7 @@ def run_ring_joint_sdpa_chunked(
                 kv_cache_batch_idx_arg,
                 upload_q(Q_chunk),
                 upload_k(K_input, memory_config=k_memory_config),
-                upload_v(V_input, memory_config=v_memory_config),
+                upload_v(V_input, memory_config=None if v_single_slot else v_memory_config),
             )
 
         def get_persistent_buffers(shared_persistent_buffers, chunk_persistent_buffers):
@@ -3581,6 +3584,41 @@ def test_ring_joint_attention_chunked_nd_sharded_indexed_kv_cache_accuracy(fp32_
         k_chunk_size=model.k_chunk_sizes[0],
         indexed_nd_sharded_kv_cache=True,
         fp32_dest_acc_en=fp32_dest_acc_en,
+    )
+
+
+def test_ring_joint_attention_chunked_indexed_k_single_slot_v_accuracy():
+    """Indexed K cache (slot 1 of 2) with a batch-1 per-head V that is read and gathered from slot 0."""
+    mesh_config = MESH_CONFIG
+    local_heads = 4
+    chunk_seq_len = 64
+    total_seq_len = 128
+    model = ModelConfig(
+        name="mla_indexed_k_single_slot_v",
+        nhq=local_heads,
+        nhk=1,
+        nhv=local_heads,
+        d_q=64,
+        d_k=64,
+        d_v=32,
+        is_causal=True,
+        q_dtype=ttnn.bfloat16,
+        kv_dtype=ttnn.bfloat16,
+        q_chunk_sizes=[32],
+        k_chunk_sizes=[32],
+        seq_len=total_seq_len,
+    )
+    run_ring_joint_sdpa_chunked(
+        mesh_config,
+        model,
+        chunk_size=chunk_seq_len * mesh_config.sp_size,
+        total_seq=total_seq_len * mesh_config.sp_size,
+        pcc_threshold=DEFAULT_PCC_THRESHOLD,
+        rmse_threshold=DEFAULT_RMSE_THRESHOLD,
+        q_chunk_size=model.q_chunk_sizes[0],
+        k_chunk_size=model.k_chunk_sizes[0],
+        indexed_nd_sharded_kv_cache=True,
+        v_single_slot=True,
     )
 
 

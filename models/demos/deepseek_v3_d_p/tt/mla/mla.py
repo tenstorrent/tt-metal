@@ -498,6 +498,9 @@ class ttMLA:
         # kv_only (last layer) never reaches SDPA, so it needs no ring/gather buffers. Sparse (DSA) uses
         # sparse_sdpa + the transient _gather_kvpe_prefix gather — neither the ring_mla chunked scratch nor
         # the ring-joint-SDPA buffers — so it allocates none of these regardless of is_chunked.
+        self.unrolled_v = (
+            self.is_chunked and not kv_only and not self._has_indexer and os.environ.get("MLA_UNROLLED_V") == "1"
+        )
         if kv_only or self._has_indexer:
             pass
         elif self.is_chunked:
@@ -511,6 +514,10 @@ class ttMLA:
                 seq_len=seq_len,
                 kvpe_dim=self.kv_lora_rank + self.qk_rope_head_dim,
             )
+            if self.unrolled_v:
+                self._chunked_v_buf = self.tt_ccl.get_mla_chunked_v_buffer(
+                    seq_len=seq_len, num_heads=self.num_heads, v_head_dim=self.v_head_dim, tp_axis=self.tp_axis
+                )
         else:
             # All-gather K/V outputs + dummy joint_q/kv/v placeholders are uniform across layers
             # (config + seq_len + mesh), so they're owned once per model by TT_CCL and shared by every
@@ -553,6 +560,8 @@ class ttMLA:
             self.q_b_proj_weight = weights["q_b_proj"]
             self.wkv_b1_weight = weights["wkv_b1"]
             self.wkv_b2_weight = weights["wkv_b2"]
+            if self.unrolled_v:
+                self.wv_unrolled_weight = self._build_unrolled_v_weight(self.wkv_b2_weight)
             self.o_proj_weight = weights["o_proj"]
             if self._use_gate:
                 self.g_proj_weight = weights["g_proj"]
@@ -1049,6 +1058,17 @@ class ttMLA:
             # Capped at the capacity ring_mla accepts: the last chunk's pad rows can sit past the cache
             # end, and only pad rows read them.
             ring_logical_n = min(kv_actual_isl + chunk_size_global, kvpe_cache.storage.shape[2] * self.sp_factor)
+        if self.unrolled_v:
+            return self._unrolled_v_attn(
+                tt_q=tt_q,
+                kvpe_cache=kvpe_cache,
+                ring_logical_n=ring_logical_n,
+                seq_len_local=seq_len_local,
+                cache_batch_idx=cache_batch_idx,
+                cache_layer_idx=cache_layer_idx,
+                metadata=metadata,
+                meta_slot_kwargs=meta_slot_kwargs,
+            )
         attn_out, _ = ttnn.transformer.ring_mla(
             tt_q,
             kvpe_cache.storage,
@@ -1081,6 +1101,114 @@ class ttMLA:
             compute_kernel_config=self.default_compute_kernel_config,
             **self._get_mm_kwargs("wkv_b2", seq_len_local),
         )
+        return attn_out
+
+    def _build_unrolled_v_weight(self, wkv_b2: ttnn.Tensor) -> ttnn.Tensor:
+        """[1, H_local, kv_lora_rank, v_head_dim] -> [1, 1, kv_lora_rank, H_local * v_head_dim], head-major along N."""
+        w = ttnn.to_layout(ttnn.typecast(wkv_b2, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
+        w = ttnn.permute(w, (0, 2, 1, 3))
+        heads_local = wkv_b2.shape[1]
+        w = ttnn.reshape(w, (1, 1, self.kv_lora_rank, heads_local * self.v_head_dim))
+        return ttnn.typecast(ttnn.to_layout(w, ttnn.TILE_LAYOUT), ttnn.bfloat8_b)
+
+    def _unrolled_v_sdpa_program_config(self, seq_len_local: int) -> ttnn.SDPAProgramConfig:
+        q_chunk_size = next(q for q in (128, 64, 32) if seq_len_local % q == 0)
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=512,
+            exp_approx_mode=False,
+        )
+
+    def _expand_v(self, kvpe_cache, ring_logical_n, seq_len_local, cache_batch_idx, cache_layer_idx, metadata):
+        """V = latent @ W_UV over the filled local cache rows, written head-major [1, H_local, cap_local, v_head_dim]."""
+        cap_local = kvpe_cache.storage.shape[2]
+        chunk_size_global = seq_len_local * self.sp_factor
+        if metadata is not None:
+            valid_rows, addend, slot = metadata[1], chunk_size_global, metadata[0]
+            num_layers, layer_idx = self.layer_num, cache_layer_idx
+        else:
+            local_rows = min(-(-ring_logical_n // chunk_size_global) * seq_len_local, cap_local)
+            valid_rows = ttnn.from_torch(
+                torch.tensor([[[[local_rows]]]], dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            addend, slot = 0, None
+            num_layers, layer_idx = kvpe_cache.storage.shape[0], cache_batch_idx
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        return ttnn.experimental.minimal_matmul(
+            kvpe_cache.storage,
+            self.wv_unrolled_weight,
+            config=ttnn.MinimalMatmulConfig(
+                M_block_size=20,
+                K_block_size=2,
+                N_block_size=3,
+                subblock_h=1,
+                subblock_w=3,
+                compute_with_storage_grid_size=ttnn.CoreCoord(min(grid.x, 11), min(grid.y, 10)),
+            ),
+            compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            ),
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            valid_rows_tensor=valid_rows,
+            valid_rows_addend=addend,
+            slot_tensor=slot,
+            kv_num_layers=num_layers,
+            kv_layer_idx=layer_idx,
+            out_head_dim=self.v_head_dim,
+            in0_k_prefix=True,
+        )
+
+    def _unrolled_v_attn(
+        self,
+        *,
+        tt_q,
+        kvpe_cache,
+        ring_logical_n,
+        seq_len_local,
+        cache_batch_idx,
+        cache_layer_idx,
+        metadata,
+        meta_slot_kwargs,
+    ):
+        tt_v = self._expand_v(kvpe_cache, ring_logical_n, seq_len_local, cache_batch_idx, cache_layer_idx, metadata)
+        attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            tt_q,
+            kvpe_cache.storage,
+            tt_v,
+            None,
+            None,
+            None,
+            persistent_output_buffer_k=self._chunked_kv_buf,
+            persistent_output_buffer_v=self._chunked_v_buf,
+            joint_strategy="rear",
+            logical_n=ring_logical_n,
+            program_config=self._unrolled_v_sdpa_program_config(seq_len_local),
+            compute_kernel_config=self.default_compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
+            num_links=self.ccl_num_links,
+            cluster_axis=self.sp_axis,
+            mesh_device=self.mesh_device,
+            topology=self.sp_ccl_topology,
+            ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
+            use_column_major_ccl=True,
+            is_causal=True,
+            scale=self.scale,
+            is_balanced=self.is_balanced,
+            **meta_slot_kwargs,
+        )
+        ttnn.deallocate(tt_v)
         return attn_out
 
     def _q_a_latent(

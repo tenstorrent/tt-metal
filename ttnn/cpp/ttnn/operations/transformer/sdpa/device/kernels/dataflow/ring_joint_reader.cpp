@@ -754,7 +754,11 @@ void kernel_main() {
     const auto local_k_generator = PaddedAddrGenerator(local_k_reader, input_k_tile_logical);
     const auto gathered_k_generator = PaddedAddrGenerator(gathered_k_reader, gathered_k_input_tile_logical);
     const auto local_v_reader = TensorAccessor(v_args, v_addr);
+#ifdef V_SINGLE_SLOT
+    const auto input_v_tile_logical = TensorTileShape(1, NHV, kv_local_padded_Nt, vDHt);
+#else
     const auto input_v_tile_logical = TensorTileShape(kv_batch_dim, NHV, kv_local_padded_Nt, vDHt);
+#endif
     const auto gathered_v_reader = TensorAccessor(gathered_v_args, gathered_v_addr);
     const auto gathered_v_input_tile_logical = TensorTileShape(gathered_kv_batch_dim, NHV, gathered_padded_Nt, vDHt);
     const auto local_v_generator = PaddedAddrGenerator(local_v_reader, input_v_tile_logical);
@@ -1257,7 +1261,11 @@ void kernel_main() {
                 } else if constexpr (!v_shares_k_buffer) {
                     // V: either read locally (injector or not participant) or receive from chain.
                     const uint32_t nv = nq / q_heads_per_v;
+#ifdef V_SINGLE_SLOT
+                    const Slice v_slice(0, nv, k_slice.d2_start, k_slice.d2_end, 0, vDHt);
+#else
                     const Slice v_slice(k_slice.d0, nv, k_slice.d2_start, k_slice.d2_end, 0, vDHt);
+#endif
                     CircularBuffer cb_v(cb_v_in);
                     cb_v.reserve_back(v_cb_entry_tiles);
                     uint32_t cb_v_start_address = cb_v.get_write_ptr();

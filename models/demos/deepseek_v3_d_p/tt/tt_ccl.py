@@ -335,6 +335,26 @@ class TT_CCL:
         self.mla_ring_attention_buffers[key] = buffers
         return buffers
 
+    def get_mla_chunked_v_buffer(self, *, seq_len, num_heads, v_head_dim, tp_axis, dtype=ttnn.bfloat8_b):
+        """Gathered per-head V scratch for chunked prefill with V unrolled ahead of the SDPA, TP-sharded on heads."""
+        import torch
+
+        key = ("v", seq_len, num_heads, v_head_dim, tp_axis, dtype)
+        if key not in self.mla_chunked_kv_buffers:
+            shard_dims = [None, None]
+            shard_dims[tp_axis] = 1
+            self.mla_chunked_kv_buffers[key] = ttnn.from_torch(
+                torch.zeros(1, num_heads, seq_len, v_head_dim),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard_dims
+                ),
+            )
+        return self.mla_chunked_kv_buffers[key]
+
     def get_mla_chunked_kv_buffer(self, *, cache_batch, seq_len, kvpe_dim, dtype=ttnn.bfloat8_b):
         """Lazily allocate (once per mesh) and return the combined gathered-KV scratch buffer used by
         the chunked-prefill ring_mla op (persistent_output_buffer_kv). It's scratch -- each layer's

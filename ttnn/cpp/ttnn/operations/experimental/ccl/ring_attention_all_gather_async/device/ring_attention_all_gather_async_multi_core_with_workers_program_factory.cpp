@@ -1107,14 +1107,15 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             uint32_t batch_head_size = full_batch_head_size;
             uint32_t input_batch_base = 0;
             if (input_batch_slice_idx.has_value()) {
+                const uint32_t slice_idx = input_tensor_shape[kBatchDimension] == 1 ? 0 : *input_batch_slice_idx;
                 TT_FATAL(
-                    *input_batch_slice_idx < input_tensor_shape[kBatchDimension],
+                    slice_idx < input_tensor_shape[kBatchDimension],
                     "input_batch_slice_idx={} out of range for input batch={}",
-                    *input_batch_slice_idx,
+                    slice_idx,
                     input_tensor_shape[kBatchDimension]);
                 batch_head_size = num_heads;
                 input_batch_base = ttnn::ring_attention_all_gather_async_detail::input_batch_base_pages(
-                    *input_batch_slice_idx, num_heads, input_tensor_Ht, input_tensor_Wt);
+                    slice_idx, num_heads, input_tensor_Ht, input_tensor_Wt);
             }
 
             tensor_descriptor_args.push_back(input_tensor_Wt);   // 0 == input_tensor_Wt

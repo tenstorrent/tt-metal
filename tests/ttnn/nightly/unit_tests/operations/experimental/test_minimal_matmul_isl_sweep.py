@@ -23,6 +23,7 @@ CLOCK_GHZ = 1.35
 BF8_TILE_BYTES = 1088  # 1024 data + 64 exponent
 DRAM_BPS = 512 * 1024**3  # 512 GiB/s
 ITERS = 30
+M_CAP = int(__import__("os").environ.get("ISL_SWEEP_M_CAP", 262144 // SP))
 
 ISLS = [5120, 10240, 20480, 32768, 51200, 65536, 98304, 131072, 196608, 262144]
 L1, DRAM = ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
@@ -66,7 +67,10 @@ def test_run_case(device, case):
     )
     torch.manual_seed(0)
     tt_cache = ttnn.from_torch(
-        torch.randn(1, 1, m, K, dtype=torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+        torch.randn(1, 1, M_CAP or m, K, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
     )
     tt_w = ttnn.from_torch(
         torch.randn(K, N, dtype=torch.bfloat16), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device

@@ -262,7 +262,8 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
             args.kv_cache_layer_idx,
             args.kv_cache_num_layers);
         TT_FATAL(
-            K_cache_batch % args.kv_cache_num_layers == 0 && V_cache_batch % args.kv_cache_num_layers == 0,
+            K_cache_batch % args.kv_cache_num_layers == 0 &&
+                (V_cache_batch == 1 || V_cache_batch % args.kv_cache_num_layers == 0),
             "KV cache batch (K={}, V={}) must be divisible by kv_cache_num_layers={}",
             K_cache_batch,
             V_cache_batch,
@@ -270,7 +271,7 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
         if (args.has_indexed_kv_cache()) {
             const auto cache_batch_idx = args.cache_batch_idx().value();
             TT_FATAL(
-                cache_batch_idx < K_cache_batch && cache_batch_idx < V_cache_batch,
+                cache_batch_idx < K_cache_batch && (V_cache_batch == 1 || cache_batch_idx < V_cache_batch),
                 "cache batch {} (kv_cache_batch_idx={} * kv_cache_num_layers={} + kv_cache_layer_idx={}) is outside "
                 "the KV cache batch (K={}, V={})",
                 cache_batch_idx,
