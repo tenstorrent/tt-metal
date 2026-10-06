@@ -7,6 +7,13 @@ Measurement, not a gate. At 640 rows per SP rank the production config uses two 
 the same prepared synthetic weights, differing only in ``summary_group_chunks``, warms both twice, captures one
 trace each, and times them in interleaved ABBA blocks of 10 replays, so both arms see the same operating state.
 No CPU reference: the two arms' first-replay outputs are compared with each other.
+
+The schedules differ only in how group states are composed, so their outputs differ by rounding. Measured on GDN
+(g1b.5.15, eager forward against the prepared FP32 reference): 27B LB-A output PCC vs reference G1 0.999941 /
+G2 0.999941 (relative RMSE 0.01130 / 0.01128), G1 vs G2 PCC 0.9999948 (relative RMSE 0.0032); 2.4T LB-B 0.999943 /
+0.999944 (0.01175 / 0.01173), G1 vs G2 0.9999962 (0.0028). The first group's tokens are bit-identical. The
+agreement gate therefore sits between that rounding gap (0.999994-0.999997 on every Qwen shape) and the reference
+error (~6e-5 from 1); reference accuracy itself is owned by test_gdn_accuracy.py.
 """
 
 from __future__ import annotations
@@ -36,8 +43,8 @@ pytestmark = [run_for_blackhole(), pytest.mark.timeout(900)]
 _REPETITIONS = 10
 _ABBA_BLOCKS = 4
 _GROUP_CHUNKS = (20, 10)
-# Both schedules compute the same recurrence; only the group stitching order of the fp32 state differs.
-_SCHEDULE_PCC = 0.9999999
+# Same recurrence; only the rounding of the group-state composition differs (see the module docstring).
+_SCHEDULE_PCC = 0.99999
 
 
 def _host_output(output: ttnn.Tensor) -> torch.Tensor:
