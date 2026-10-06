@@ -82,20 +82,18 @@ inline void _configure_alu_formats_(DataFormat srcA_format, DataFormat srcB_form
     cfg[DISABLE_IMPLIED_SRCA_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
     cfg[DISABLE_IMPLIED_SRCB_FMT_SEC0_Base_ADDR32 + TRISC_ID] = !EN_IMPLIED_MATH_FORMAT;
 
-    alu_config_u alu_config = {0};
+    alu_config_u alu_config               = {0};
+    const std::uint8_t SRCA_FORMAT_MASKED = masked_data_format(to_underlying(srcA_format));
+    const std::uint8_t SRCB_FORMAT_MASKED = masked_data_format(to_underlying(srcB_format));
 
-    if constexpr (!EN_IMPLIED_MATH_FORMAT)
-    {
-        const std::uint8_t SRCA_FORMAT_MASKED = masked_data_format(to_underlying(srcA_format));
-        const std::uint8_t SRCB_FORMAT_MASKED = masked_data_format(to_underlying(srcB_format));
-
-        alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_val      = SRCA_FORMAT_MASKED;
-        alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_override = 0x1;
-        alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_val      = SRCB_FORMAT_MASKED;
-        alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_override = 0x1;
-        alu_config.f.ALU_FORMAT_SPEC_REG0_SrcA         = SRCA_FORMAT_MASKED;
-        alu_config.f.ALU_FORMAT_SPEC_REG1_SrcB         = SRCB_FORMAT_MASKED;
-    }
+    // Set the Src formats even when they are implied: the FPU then takes the unpackers' formats instead, but these are
+    // the only configuration that says whether a 16-bit Dest holds Float16 or Float16_b.
+    alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_val      = SRCA_FORMAT_MASKED;
+    alu_config.f.ALU_FORMAT_SPEC_REG_SrcA_override = !EN_IMPLIED_MATH_FORMAT;
+    alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_val      = SRCB_FORMAT_MASKED;
+    alu_config.f.ALU_FORMAT_SPEC_REG_SrcB_override = !EN_IMPLIED_MATH_FORMAT;
+    alu_config.f.ALU_FORMAT_SPEC_REG0_SrcA         = SRCA_FORMAT_MASKED;
+    alu_config.f.ALU_FORMAT_SPEC_REG1_SrcB         = SRCB_FORMAT_MASKED;
 
     alu_config.f.ALU_ACC_CTRL_Fp32_enabled      = EN_32BIT_DEST;
     alu_config.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = EN_32BIT_DEST;
