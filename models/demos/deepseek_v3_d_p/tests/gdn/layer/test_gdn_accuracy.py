@@ -74,29 +74,6 @@ def _cell_id(model: str, layout: str, weights: str, inputs: str, rank: int) -> s
     return f"{model}-{layout}-real-{inputs}" + (f"-rank{rank}" if rank else "")
 
 
-_D5_NEAR_ZERO_HEAD = (
-    "tt_metal_tracker-g1b.5.18: D5 divides by the head's own expected state RMS; a full-forgetting head whose last "
-    "valid token has a tiny beta has an expected state of ~1e-6 (absolute error <= 4.5e-4)"
-)
-# Cells that fail a §6.3 gate for a cause tracked in its own bead (strict: a fix makes them XPASS and fail).
-_KNOWN_FAILURES = {
-    "qwen38_2_4t-LB-A-real-text-ragged": _D5_NEAR_ZERO_HEAD + " (V head 5, chunk 1)",
-    "qwen38_2_4t-LB-B-real-text-single": _D5_NEAR_ZERO_HEAD + " (V head 2)",
-    "qwen38_2_4t-LB-B-real-text-chained3": _D5_NEAR_ZERO_HEAD + " (V head 2)",
-    "qwen38_2_4t-LB-B-real-text-ragged": _D5_NEAR_ZERO_HEAD + " (V head 2)",
-    **{
-        f"qwen38_2_4t-LB-B-real-text-rank3-{schedule}": _D5_NEAR_ZERO_HEAD + " (local V head 22)"
-        for schedule in SCHEDULES
-    },
-}
-
-
-def _known_failure(cell: str) -> list:
-    if cell not in _KNOWN_FAILURES:
-        return []
-    return [pytest.mark.xfail(strict=True, raises=AssertionError, reason=_KNOWN_FAILURES[cell])]
-
-
 def _params() -> list:
     return [
         pytest.param(
@@ -109,7 +86,6 @@ def _params() -> list:
             rank,
             schedule,
             id=f"{_cell_id(model, layout, weights, inputs, rank)}-{schedule}",
-            marks=_known_failure(f"{_cell_id(model, layout, weights, inputs, rank)}-{schedule}"),
         )
         for model, layout, weights, inputs, rank in _cells()
         for schedule in SCHEDULES
@@ -265,7 +241,8 @@ def test_gdn_layer_accuracy(
                     min(row["norm_ratio"] for row in rows if "norm_ratio" in row),
                     max(row["norm_ratio"] for row in rows if "norm_ratio" in row),
                 ],
-                "worst_head_state_rel_rmse": max(row["worst_head_rel_rmse"] for row in recurrent_rows),
+                "worst_head_state_d5": max(row["worst_head_d5"] for row in recurrent_rows),
+                "worst_head_state_rel_rmse_raw": max(row["worst_head_rel_rmse_raw"] for row in recurrent_rows),
                 "trace_repeat_bit_identical": not repeat_mismatches,
                 "trace_equals_eager": not eager_mismatches,
                 "passed": not failures,

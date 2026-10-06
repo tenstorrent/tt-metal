@@ -23,6 +23,11 @@ OUTPUT_REL_RMSE_THRESHOLD = 0.0316
 OUTPUT_NORM_RATIO_TOLERANCE = 0.02
 # D5 (user-approved): worst V-head final-state relative RMSE; aggregate PCC missed a head-localized K3 failure.
 HEAD_STATE_REL_RMSE_THRESHOLD = 0.10
+# D5 denominator floor (user-approved, tt_metal_tracker-g1b.5.18): each head's error is divided by
+# max(head reference RMS, this fraction x the median head reference RMS of the same state). A full-forgetting head
+# whose last valid token has a tiny beta has an expected state of ~1e-6, so its own RMS made D5 explode (58.5) on
+# absolute errors three orders below a typical head; the floor keeps D5 relative for every normal head.
+HEAD_STATE_SCALE_FLOOR_FRACTION = 0.01
 # Trace capture needs a trace region on every mesh, including 1x1 where the fixture sets none.
 _TRACE_REGION_SIZE = 64 * 1024 * 1024
 
@@ -112,11 +117,17 @@ def expected_tensor(output: torch.Tensor, state: GDNReferenceState, name: str) -
     return state.conv.bfloat16()
 
 
-def per_head_relative_rmse(expected: torch.Tensor, actual: torch.Tensor) -> torch.Tensor:
-    """Relative RMSE of each V head of a ``[HV, K, V]`` state."""
+def per_head_state_errors(expected: torch.Tensor, actual: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Raw and D5 relative RMSE of each V head of a ``[HV, K, V]`` state.
+
+    Raw divides each head's RMSE by that head's own expected RMS. D5 (the gated metric) divides by
+    ``max(head RMS, HEAD_STATE_SCALE_FLOOR_FRACTION x median head RMS)`` over the heads of ``expected``.
+    """
     difference = (actual.float() - expected.float()).pow(2).mean((-1, -2)).sqrt()
     scale = expected.float().pow(2).mean((-1, -2)).sqrt()
-    return difference / scale.clamp_min(torch.finfo(torch.float32).tiny)
+    tiny = torch.finfo(torch.float32).tiny
+    floor = HEAD_STATE_SCALE_FLOOR_FRACTION * scale.median()
+    return difference / scale.clamp_min(tiny), difference / scale.clamp_min(floor).clamp_min(tiny)
 
 
 def chunk_gate_rows(
@@ -144,23 +155,27 @@ def chunk_gate_rows(
                     f"chunk {chunk} output norm ratio {ratio:.4f} outside 1 +- {OUTPUT_NORM_RATIO_TOLERANCE}"
                 )
         if kind == "recurrent":
-            head_errors = torch.stack(
-                [per_head_relative_rmse(state.recurrent, snapshot_tensors[name]) for name in names]
-            )
-            worst_head = int(head_errors.max(0).values.argmax())
-            row["head_rel_rmse"] = [round(float(error), 6) for error in head_errors.max(0).values]
+            # [rank, head] raw and D5 errors.
+            per_rank_errors = [per_head_state_errors(state.recurrent, snapshot_tensors[name]) for name in names]
+            raw = torch.stack([errors[0] for errors in per_rank_errors])
+            d5 = torch.stack([errors[1] for errors in per_rank_errors])
+            worst_head = int(d5.max(0).values.argmax())
+            worst_rank = int(d5[:, worst_head].argmax())
+            row["head_rel_rmse_raw"] = [round(float(error), 6) for error in raw.max(0).values]
+            row["head_d5"] = [round(float(error), 6) for error in d5.max(0).values]
             row["worst_head"] = worst_head
-            worst_rank = int(head_errors[:, worst_head].argmax())
             row["worst_head_rank"] = names[worst_rank]
             row["worst_head_rms"] = {
                 "expected": float(state.recurrent[worst_head].float().pow(2).mean().sqrt()),
                 "actual": float(snapshot_tensors[names[worst_rank]][worst_head].float().pow(2).mean().sqrt()),
             }
-            row["worst_head_rel_rmse"] = float(head_errors.max())
-            if row["worst_head_rel_rmse"] > HEAD_STATE_REL_RMSE_THRESHOLD:
+            row["worst_head_d5"] = float(d5.max())
+            row["worst_head_rel_rmse_raw"] = float(raw.max())
+            row["worst_raw_head"] = int(raw.max(0).values.argmax())
+            if row["worst_head_d5"] > HEAD_STATE_REL_RMSE_THRESHOLD:
                 failures.append(
-                    f"chunk {chunk} V head {worst_head} state rel RMSE {row['worst_head_rel_rmse']:.4f} > "
-                    f"{HEAD_STATE_REL_RMSE_THRESHOLD} (D5)"
+                    f"chunk {chunk} V head {worst_head} state D5 {row['worst_head_d5']:.4f} > "
+                    f"{HEAD_STATE_REL_RMSE_THRESHOLD} (raw rel RMSE {float(raw[worst_rank, worst_head]):.4f})"
                 )
         rows.append(row)
     return rows, failures
