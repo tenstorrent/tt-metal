@@ -727,8 +727,20 @@ def _apply_dest_reuse_op(
     return result.to(torch_format)
 
 
+def _row_broadcast_tile(tile, face_r_dim):
+    """Row broadcast of a tilized 32x32 tile: row 0 of faces 0 and 1 fills faces 0 and 2, and 1 and 3."""
+    faces = tile.reshape(4, face_r_dim, FACE_C_DIM)
+    top = [faces[f, 0:1, :].expand(face_r_dim, FACE_C_DIM) for f in (0, 1)]
+    return torch.cat([top[0], top[1], top[0], top[1]]).flatten()
+
+
 def _compute_dest_reuse_golden(
-    math_op, reuse_dest_type, math_fidelity, formats, prepared
+    math_op,
+    reuse_dest_type,
+    math_fidelity,
+    formats,
+    prepared,
+    broadcast_type=BroadcastType.None_,
 ):
     """Simulate seeded dest reuse (seed first tile, then fold via DEST_TO_SRCA/B)."""
     tile_elements = prepared["tile_elements"]
@@ -757,6 +769,8 @@ def _compute_dest_reuse_golden(
             end = start + tile_elements
             a_tile = src_A[start:end].to(torch_format)
             b_tile = src_B[start:end].to(torch_format)
+            if broadcast_type == BroadcastType.Row:
+                b_tile = _row_broadcast_tile(b_tile, prepared["face_r_dim"])
 
             if i == 0:
                 srcA, srcB = a_tile, b_tile
@@ -936,6 +950,7 @@ def _run_eltwise_binary_dest_reuse_test(
     run_types=None,
     loop_factor=1,
     per_face_handoff=False,
+    broadcast_type=BroadcastType.None_,
 ):
     prepared = _prepare_dest_reuse_inputs(
         formats,
@@ -946,7 +961,7 @@ def _run_eltwise_binary_dest_reuse_test(
         dest_acc=dest_acc,
     )
     golden_tensor = _compute_dest_reuse_golden(
-        math_op, reuse_dest_type, math_fidelity, formats, prepared
+        math_op, reuse_dest_type, math_fidelity, formats, prepared, broadcast_type
     )
 
     if is_perf and perf_report is None:
@@ -959,7 +974,7 @@ def _run_eltwise_binary_dest_reuse_test(
         "formats": formats,
         "templates": [
             MATH_FIDELITY(math_fidelity),
-            BROADCAST_TYPE(BroadcastType.None_),
+            BROADCAST_TYPE(broadcast_type),
             MATH_OP(mathop=math_op),
             DEST_SYNC(dest_sync),
             EN_DEST_REUSE(),
@@ -1174,4 +1189,53 @@ def test_eltwise_binary_dest_reuse_per_face_handoff(
         input_dimensions,
         output_dimensions,
         per_face_handoff=True,
+    )
+
+
+# Dest reuse with a row broadcast of B (DEST_TO_SRCA), both hand-offs.
+@parametrize(
+    math_op=DEST_REUSE_MATH_OPS,
+    formats=get_dest_reuse_formats,
+    dest_acc=[DestAccumulation.No],
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
+    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    tile_dimensions=[[32, 32]],
+    input_dimensions=lambda dest_acc, dest_sync, formats, tile_dimensions: get_dest_reuse_input_dimensions(
+        dest_acc, dest_sync, formats, tile_dimensions
+    ),
+    output_dimensions=lambda dest_acc, dest_sync, formats, tile_dimensions, input_dimensions: get_dest_reuse_output_dimensions(
+        dest_acc,
+        dest_sync,
+        formats,
+        tile_dimensions,
+        input_dimensions,
+    ),
+    per_face_handoff=[False, True],
+)
+def test_eltwise_binary_dest_reuse_row_bcast(
+    math_op,
+    formats,
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    math_fidelity,
+    tile_dimensions,
+    input_dimensions,
+    output_dimensions,
+    per_face_handoff,
+):
+    _run_eltwise_binary_dest_reuse_test(
+        EltwiseBinaryReuseDestType.DEST_TO_SRCA,
+        math_op,
+        formats,
+        dest_acc,
+        dest_sync,
+        unpack_to_dest,
+        math_fidelity,
+        tile_dimensions,
+        input_dimensions,
+        output_dimensions,
+        per_face_handoff=per_face_handoff,
+        broadcast_type=BroadcastType.Row,
     )
