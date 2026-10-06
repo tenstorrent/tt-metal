@@ -109,6 +109,7 @@ def load_bevformer_checkpoint(model, state_dict):
     ``pts_bbox_head`` holds the BEV queries, the positional encoding and the whole transformer;
     here the decoder and its reference-point Linear are the head's and the rest of the BEV side is
     the detector's."""
+    # The first matching prefix wins, so the more specific ones come first.
     renames = (
         ("pts_bbox_head.transformer.decoder.", "head.decoder."),
         ("pts_bbox_head.transformer.reference_points.", "head.reference_points."),
