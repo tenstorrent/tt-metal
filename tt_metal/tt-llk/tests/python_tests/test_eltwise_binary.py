@@ -924,7 +924,12 @@ def test_eltwise_binary_int8_format(
 @parametrize(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     formats=lambda dest_acc: _get_valid_formats(dest_acc),
-    broadcast_type=[BroadcastType.None_],
+    broadcast_type=[
+        BroadcastType.None_,
+        BroadcastType.Row,
+        BroadcastType.Column,
+        BroadcastType.Scalar,
+    ],
     math_op=[MathOperation.Elwmul, MathOperation.Elwadd, MathOperation.Elwsub],
     math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
     transpose_srca=[Transpose.No],
