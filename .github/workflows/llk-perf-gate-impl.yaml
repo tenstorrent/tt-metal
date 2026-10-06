@@ -510,6 +510,24 @@ jobs:
               ;;
           esac
 
+      - name: Record the gate status
+        if: ${{ !cancelled() && steps.slack.outputs.status != '' }}
+        env:
+          ARCH: ${{ inputs.arch }}
+          STATUS: ${{ steps.slack.outputs.status }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: |
+          # The daily PR gate summary reads this, because a pass posts no message of its own.
+          python3 -c "import json, os; json.dump({'arch': os.environ['ARCH'], 'status': os.environ['STATUS'], 'pr': os.environ.get('PR_NUMBER') or None}, open('gate_status.json', 'w'))"
+      - name: Upload the gate status
+        if: ${{ !cancelled() && steps.slack.outputs.status != '' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: llk-perf-gate-status-${{ inputs.arch }}
+          path: gate_status.json
+          retention-days: 7
+          overwrite: true
+
       - name: Gate verdict
         if: always()
         run: |

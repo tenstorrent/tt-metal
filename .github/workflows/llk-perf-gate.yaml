@@ -153,7 +153,8 @@ jobs:
       min_cycles: "30"
       fail_on_regression: false
       # A labelled PR posts only a regression or a skip; passes cluttered the channel.
-      slack_on_pass: false
+      # pr-gate-digest still reports the passes once a day. A manual compare posts all.
+      slack_on_pass: ${{ github.event_name != 'pull_request' }}
       measure_result: >-
         ${{ needs.measure.result }},${{ needs.measure-branch-point.result }}
       current_artifact_pattern: >-
@@ -167,6 +168,37 @@ jobs:
       baseline_run_id: ${{ inputs.baseline_run_id || '' }}
       pr_number: ${{ inputs.pr_number || '' }}
     secrets: inherit
+
+  pr-gate-digest:
+    name: "PR gate: daily summary"
+    # One message a day, also when nothing ran, so a PR gate that stops working is seen.
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+          sparse-checkout: tt_metal/tt-llk/perf
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.10'
+      - name: Summarise the last 24 h of PR gate runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
+          SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+        run: |
+          python3 tt_metal/tt-llk/perf/pr_gate_digest.py \
+            --repo "$GITHUB_REPOSITORY" --channel "$SLACK_CHANNEL_ID" --out digest_payload.json
+          RESPONSE=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            -H "Content-type: application/json; charset=utf-8" \
+            --data @digest_payload.json)
+          case "$RESPONSE" in
+            *'"ok":true'*) echo "Posted the PR gate summary." ;;
+            *) echo "::error::Slack rejected the PR gate summary: ${RESPONSE}"; exit 1 ;;
+          esac
 
   nightly-measure:
     name: "Nightly: measure the suite (non speed-of-light)"
