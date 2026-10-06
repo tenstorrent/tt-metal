@@ -7,9 +7,9 @@
 // maps every tile back to its position in C and writes it by tile index through the tensor accessor.
 // Tiles past the true C slice (subblock padding) or past M_tiles / N_tiles are popped but not
 // written; padding overshoot may overlap a neighbouring core's C slice, so both clips are needed.
-// Each compute thread's share of C_slice (C_entries_per_thread entries) holds the subblocks that thread
-// took (every num_compute_threads-th one, in walk order) back to back; each wait/pop here consumes one
-// thread's share.
+// Each compute thread's share of C_slice (C_entries_per_thread one-tile entries) holds the subblocks that
+// thread took (every num_compute_threads-th one, in walk order) back to back; each wait/pop here consumes one
+// thread's share, whose consecutive entries are the DFB's stride apart.
 // Compile-time args are the template parameters, runtime args the function parameters.
 
 #include <stdint.h>
@@ -50,9 +50,10 @@ TT_KERNEL void writer(uint32_t first_C_slice, uint32_t num_C_slices) {
     }
     const auto C = TensorAccessor(tensor::C);
     Noc noc;
-    // A subblock sits in the entry row-major in tiles, as the compute packs it. get_tile_size is one tile's
-    // size, also when an entry holds several tiles.
+    // A subblock sits in the share row-major in tiles, as the compute packs it, one tile per entry. With several
+    // compute threads each owns every num_compute_threads-th entry, so a share's entries are a stride apart.
     const uint32_t C_tile_bytes = get_tile_size(dfb::C_slice);
+    const uint32_t C_entry_stride_bytes = C_slice.get_stride_size();
 
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
         const uint32_t C_batch_first_tile = batch * C_batch_stride_tiles;
@@ -81,7 +82,7 @@ TT_KERNEL void writer(uint32_t first_C_slice, uint32_t num_C_slices) {
                             const uint32_t C_row_first_tile =
                                 C_batch_first_tile + (C_m_tile + subblock_m_tile) * N_tiles + C_n_tile;
                             const uint32_t row_offset_bytes =
-                                (entry_tile + subblock_m_tile * subblock_N_tiles) * C_tile_bytes;
+                                (entry_tile + subblock_m_tile * subblock_N_tiles) * C_entry_stride_bytes;
                             for (uint32_t subblock_n_tile = 0;
                                  subblock_n_tile < subblock_N_tiles && n_tile + subblock_n_tile < C_slice_N_tiles &&
                                  C_n_tile + subblock_n_tile < N_tiles;
@@ -90,7 +91,7 @@ TT_KERNEL void writer(uint32_t first_C_slice, uint32_t num_C_slices) {
                                     C_slice,
                                     C,
                                     C_tile_bytes,
-                                    {.offset_bytes = row_offset_bytes + subblock_n_tile * C_tile_bytes},
+                                    {.offset_bytes = row_offset_bytes + subblock_n_tile * C_entry_stride_bytes},
                                     {.page_id = C_row_first_tile + subblock_n_tile});
                             }
                         }
