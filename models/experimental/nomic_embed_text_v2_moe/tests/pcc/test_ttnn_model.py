@@ -126,9 +126,7 @@ def pooled_embedding(tt_model, input_ids, attention_mask, matryoshka_dim=None):
     kernel_config = tt_model.tt_config.compute_kernel_config(OpGroup.REDUCE)
     hidden = tt_model(input_ids, attention_mask)
     pooled = pooling.mean_pool(
-        hidden,
-        pooling_mask(attention_mask, tt_model.device, dtype=tt_model.tt_config.activation_dtype),
-        compute_kernel_config=kernel_config,
+        hidden, pooling_mask(attention_mask, tt_model.device), compute_kernel_config=kernel_config
     )
     ttnn.deallocate(hidden)
     return pooling.l2_normalize(

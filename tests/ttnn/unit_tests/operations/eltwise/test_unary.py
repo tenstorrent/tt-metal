@@ -2535,10 +2535,6 @@ def test_unary_logit_edge_cases(input_shape, torch_dtype, ttnn_dtype, device, ep
     output_tensor = ttnn.to_torch(output_tensor)
     golden_function = ttnn.get_golden_function(ttnn.logit)
     golden_tensor = golden_function(in_data, eps=eps)
-    if eps is None and ttnn_dtype == ttnn.bfloat16:
-        # Without eps, BF16 logit is within one ULP of the exact result, which torch's BF16
-        # arithmetic misses by up to 6 ULP near x = 0.45.
-        golden_tensor = golden_function(in_data.to(torch.float64)).to(torch.bfloat16)
 
     if ttnn_dtype == ttnn.bfloat16:
         assert torch.equal(

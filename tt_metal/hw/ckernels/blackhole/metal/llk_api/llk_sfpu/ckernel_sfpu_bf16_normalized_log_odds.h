@@ -19,7 +19,6 @@ inline void init_normalized_log_odds() {
     sfpi::vConstFloatPrgm1 = Config::kLut[6];
     sfpi::vConstFloatPrgm2 = Config::kLut[5];
     sfpi::vConstFloatPrgm0 = Config::kLut[4];
-    ckernel::addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ckernel::ADDR_MOD_6);
 }
 template <typename Config, int Iterations = 32>
 inline void calculate_normalized_log_odds() {

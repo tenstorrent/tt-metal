@@ -9,13 +9,11 @@ namespace ckernel::sfpu {
 struct LogitBf16Config {
     static constexpr unsigned kLogDegree = 2u;
     static constexpr unsigned kCorrectionDegree = 1u;
-    static constexpr unsigned kIntervalCount = 2u;
     static constexpr unsigned kPositiveFirst = 32385u;
     static constexpr unsigned kPositiveEnd = 32640u;
     static constexpr unsigned kNegativeFirst = 65153u;
     static constexpr unsigned kNegativeEnd = 65408u;
     static constexpr unsigned kPatternCount = 510u;
-    static constexpr bool kBf16 = true;
     static constexpr std::array<float, 7> kLut = {
         __builtin_bit_cast(float, 0x00000000u),
         __builtin_bit_cast(float, 0x3f800000u),

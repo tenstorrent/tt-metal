@@ -83,11 +83,10 @@ inline void normalized_log_odds_tile(const std::array<float, LUT_SIZE>& lut, Pre
         v_endif;
         vUInt raw_u16 = dst_reg[d].mode<DataLayout::U16>();
         vUInt raw_exponent = raw_u16 & vUInt(0x00ffu);
-        if constexpr (Config::kIntervalCount != 0) {
+        {
             // TT-NN's logit stores -inf for finite inputs of magnitude at least
             // kPositiveFirst; this kernel keeps that class, one interval of BF16
             // words mirrored by sign that ends where the exponent field is all ones.
-            static_assert(Config::kIntervalCount == 2u);
             static_assert(
                 Config::kPositiveEnd == 0x7f80u && Config::kNegativeFirst == (Config::kPositiveFirst | 0x8000u) &&
                 Config::kNegativeEnd == (Config::kPositiveEnd | 0x8000u) &&
@@ -103,9 +102,7 @@ inline void normalized_log_odds_tile(const std::array<float, LUT_SIZE>& lut, Pre
         }
         v_if(raw_exponent == 0u) { result = -std::numeric_limits<float>::infinity(); }
         v_endif;
-        if constexpr (Config::kBf16) {
-            result = convert<vFloat16b>(result, RoundMode::Nearest);
-        }
+        result = convert<vFloat16b>(result, RoundMode::Nearest);
         dst_reg[d] = result;
     }
 }

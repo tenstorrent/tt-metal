@@ -19,7 +19,7 @@ their output to L1 when it fits. The expert matmuls run in one of two layouts pe
 ttnn.matmul; transposed on large ones, w1 through minimal_matmul and w2 through a 2D ttnn.matmul.
 minimal_matmul takes no batched second operand, so the router and w2 keep ttnn.matmul.
 
-The two matmuls a GELU follows, fc1 above _SMALL_M_TILES and the transposed w1, run as 2D
+The two matmuls a GELU follows, fc1 above SMALL_M_TILES and the transposed w1, run as 2D
 multicast ttnn.matmul instead when the GELU is fused into them (gelu_on_packer): that program
 applies it from the packer, where it partly overlaps the matmul.
 """
@@ -135,7 +135,7 @@ def dense_minimal_config(
 
 # Up to this many tile rows of M = B * S the dense projections run as ttnn.linear with a
 # multicast program config: minimal_matmul measured 1.1x to 2x slower there, at M of 1 to 32.
-_SMALL_M_TILES = 32
+SMALL_M_TILES = 32
 
 # Up to this many tile rows a 1D program that multicasts the activation from one core can beat
 # the 2D split, when it spreads N over more cores; past it that one sender is the bound.
@@ -146,7 +146,7 @@ _ONE_D_M_TILES = 4
 def dense_small_m_config(
     m_tiles: int, k_tiles: int, n_tiles: int, grid: ttnn.CoreCoord, compute_kernel_config
 ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
-    """Program config for a dense projection with M at most _SMALL_M_TILES tiles, batch folded.
+    """Program config for a dense projection with M at most SMALL_M_TILES tiles, batch folded.
 
     The 2D split puts M over the grid's rows and N over its columns. The 1D one (mcast_in0) gives
     every core all of M and N / cores columns, so at a narrow M it reaches up to N cores against
@@ -189,14 +189,15 @@ def dense_small_m_config(
 
 
 # The dense outputs written to L1 rather than DRAM. The output write was 46% to 70% of these
-# matmuls' DRAM traffic, and moving it measured QKV -22%, out_proj -13% and fc1 -19% at 8x512;
-# fc2's output is a sixth of its traffic and it gained 1%.
-_L1_OUTPUT_GROUPS = frozenset({OpGroup.QKV, OpGroup.ATTN_OUT, OpGroup.FC1})
+# matmuls' DRAM traffic, and moving it measured QKV -22%, out_proj -13% and fc1 -19% at 8x512.
+# fc2's output is a sixth of its own traffic, 1% on fc2, but norm2 then reads it from L1: 0.78 ->
+# 0.71 ms a forward at 8x512.
+_L1_OUTPUT_GROUPS = frozenset({OpGroup.QKV, OpGroup.ATTN_OUT, OpGroup.FC1, OpGroup.FC2})
 
 # An L1 output takes its share of every bank away from the circular buffers of each op that runs
 # while it is alive, and fc1's is joined by the GELU output of the same size. So it is taken only
 # when it fits beside its own matmul's buffers and is at most a quarter of the budget, a margin
-# that leaves half of L1 to the consumers' buffers. At 8x512 the three outputs take 4% to 16%.
+# that leaves half of L1 to the consumers' buffers. At 8x512 the four outputs take 4% to 16%.
 _L1_OUTPUT_SHARE = 4
 
 
@@ -229,7 +230,7 @@ def dense_gelu_config(
     variant: ttnn.GeluVariant,
     compute_kernel_config,
 ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
-    """2D multicast program for a dense projection with its GELU fused, above _SMALL_M_TILES.
+    """2D multicast program for a dense projection with its GELU fused, above SMALL_M_TILES.
 
     M over the grid's rows and N over its columns, each core's N share in one block of up to 13
     rows, K in blocks of 4. Measured for fc1 at 8x512: 259.7 us, within 1% at K blocks of 2 or 3,
@@ -270,12 +271,12 @@ def dense_linear(
     """gelu(x @ weight + bias) for a (B, 1, S, K) activation, or the bare projection if gelu is None.
 
     M counts each sequence at its tile-padded length, as both programs fold the batch into M.
-    Above _SMALL_M_TILES the groups in _L1_OUTPUT_GROUPS return an L1-interleaved tensor when it
+    Above SMALL_M_TILES the groups in _L1_OUTPUT_GROUPS return an L1-interleaved tensor when it
     fits (see _L1_OUTPUT_SHARE), and a DRAM one otherwise. An input already in L1 takes twice its
     share of the banks out of the budget the blocking is planned in: its producer ran out of
     place, and the buffer that producer freed sits above it, where no circular buffer can reach.
 
-    Above _SMALL_M_TILES a GELU is fused into the matmul: into a 2D multicast ttnn.linear when
+    Above SMALL_M_TILES a GELU is fused into the matmul: into a 2D multicast ttnn.linear when
     gelu_on_packer, into minimal_matmul otherwise. At or below it, it runs as its own op on the
     small-M program's output and keeps that output's placement.
     """
@@ -284,7 +285,7 @@ def dense_linear(
     k_tiles = ttnn.core.divup(k, ttnn.TILE_SIZE)
     n_tiles = ttnn.core.divup(weight.shape[-1], ttnn.TILE_SIZE)
     compute_kernel_config = tt_config.compute_kernel_config(group)
-    if m_tiles <= _SMALL_M_TILES:
+    if m_tiles <= SMALL_M_TILES:
         out = ttnn.linear(
             x,
             weight,
@@ -350,6 +351,7 @@ def dense_linear(
 def router_program_config(
     tokens: int,
     k_tiles: int,
+    n_tiles: int,
     activation_dtype: ttnn.DataType,
     weight_dtype: ttnn.DataType,
     output_dtype: ttnn.DataType,
@@ -357,9 +359,9 @@ def router_program_config(
     cb_bytes: int,
     compute_kernel_config,
 ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None:
-    """(1, 1, T, 768) x (768, 8), bf16 into fp32 weights: the fewest tile rows per core.
+    """(1, 1, T, 768) x (768, 32 n_tiles), bf16 into fp32 weights: the fewest tile rows per core.
 
-    N is a single tile, so only M can be spread; at T = 4096 that is two rows each on 64 cores.
+    N is a tile or two, so only M can be spread; at T = 4096 that is two rows each on 64 cores.
     The router takes the whole batch in one call, so a core's rows grow with T: K runs in blocks
     of 8 tiles while the buffers fit, fewer above, and past that ttnn picks its own config (None).
     """
@@ -370,7 +372,7 @@ def router_program_config(
             d
             for d in _divisors(k_tiles)
             if d <= 8
-            and _multicast_footprint(per_core_m, 1, d, activation_dtype, weight_dtype, output_dtype) <= cb_bytes
+            and _multicast_footprint(per_core_m, n_tiles, d, activation_dtype, weight_dtype, output_dtype) <= cb_bytes
         ),
         default=None,
     )
@@ -379,12 +381,13 @@ def router_program_config(
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=k_block,
-        out_subblock_h=_largest_divisor_at_most(per_core_m, dest_tiles(compute_kernel_config)),
-        out_subblock_w=1,
+        # A subblock as wide as the core's N share: narrower ones must be one tile tall.
+        out_subblock_h=_largest_divisor_at_most(per_core_m, dest_tiles(compute_kernel_config) // n_tiles),
+        out_subblock_w=n_tiles,
         out_block_h=per_core_m,
-        out_block_w=1,
+        out_block_w=n_tiles,
         per_core_M=per_core_m,
-        per_core_N=1,
+        per_core_N=n_tiles,
         fuse_batch=False,
         mcast_in0=False,
     )

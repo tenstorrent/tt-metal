@@ -3142,7 +3142,8 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const DFBNameToSlotMap& dfb_name_to_slot,
     const std::unordered_map<DFBSpecName, bool>& dfb_name_to_is_relay,
     const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id,
-    const std::unordered_map<DFBSpecName, const DataflowBufferSpec*>& dfb_by_name) {
+    const std::unordered_map<DFBSpecName, const DataflowBufferSpec*>& dfb_by_name,
+    const DFBNameToIdMap& dfb_name_to_id) {
     tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
@@ -3160,7 +3161,20 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
         if (!handle.is_relay) {
             handle.llk_metadata = LLKMetadataFromDfb(*dfb_by_name.at(dfb_binding.dfb_spec_name));
         }
-        out.emplace(dfb_binding.accessor_name, handle);
+        // Borrowed-memory DFB: remember the tensor it is and this kernel's side, for op-to-op R/W inference.
+        if (const auto& borrowed_from = dfb_by_name.at(dfb_binding.dfb_spec_name)->borrowed_from) {
+            handle.borrowed_dfb_id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
+            handle.borrowed_tensor_parameter_name = borrowed_from->get();
+            handle.produces = dfb_binding.endpoint_type == DFBEndpointType::PRODUCER;
+            handle.consumes = !handle.produces;
+        }
+        // A self-loop pair may bind one DFB as PRODUCER and as CONSUMER under the same accessor name; that is one
+        // handle, on both sides.
+        auto [it, inserted] = out.try_emplace(dfb_binding.accessor_name, handle);
+        if (!inserted) {
+            it->second.produces |= handle.produces;
+            it->second.consumes |= handle.consumes;
+        }
     }
     return out;
 }
@@ -3863,7 +3877,12 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 
         // Make the local accessor name -> DFB device slot map for this kernel
         const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles = MakeDataflowBufferBindingHandles(
-            kernel_spec, dfb_name_to_slot, dfb_name_to_is_relay, dfb_name_to_prefetcher_pipe_id, collected.dfb_by_name);
+            kernel_spec,
+            dfb_name_to_slot,
+            dfb_name_to_is_relay,
+            dfb_name_to_prefetcher_pipe_id,
+            collected.dfb_by_name,
+            dfb_name_to_id);
         const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
             MakeSemaphoreBindingHandles(kernel_spec, semaphore_binders, semaphore_name_to_id, semaphore_name_to_scope);
 
