@@ -37,5 +37,10 @@ template <int ITERATIONS = 8>
 inline void calculate_softplus_bf16() {
     ckernel::sfpu::bf16::calculate_abs_exp_correction<ckernel::sfpu::SoftplusBf16Config, ITERATIONS>();
 }
+inline void init_softplus_bf16() {
+    if (bf16_dest_softplus()) {
+        ckernel::sfpu::bf16::init_abs_exp_correction<ckernel::sfpu::SoftplusBf16Config>();
+    }
+}
 
 }  // namespace ckernel::sfpu

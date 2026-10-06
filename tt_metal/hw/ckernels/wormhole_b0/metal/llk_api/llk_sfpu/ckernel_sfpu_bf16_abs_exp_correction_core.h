@@ -118,10 +118,12 @@ template <uint32_t NumDegree, uint32_t DenDegree, typename Config, typename Exp,
 inline __attribute__((always_inline)) vFloat
 abs_residual_correction(vFloat x, Exp exp, [[maybe_unused]] Reciprocal reciprocal) {
     vFloat t;
-    vFloat coordinate = setsgn(x, 0);
-    vFloat coordinate_bound = __builtin_bit_cast(float, Config::kBoundBits);
-    ordered_min_max(coordinate, coordinate_bound);
-    t = exp(coordinate);
+    {
+        vFloat coordinate = setsgn(x, 0);
+        vFloat coordinate_bound = __builtin_bit_cast(float, Config::kBoundBits);
+        ordered_min_max(coordinate, coordinate_bound);
+        t = exp(coordinate);
+    }
     vFloat quotient;
     quotient = Config::kNumerator[NumDegree];
 #pragma GCC unroll 8

@@ -164,8 +164,16 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
 bool bf16_dest_softplus();
 template <int ITERATIONS>
 void calculate_softplus_bf16();
+void init_softplus_bf16();
 // Whether BF16 DEST runs the generated softplus kernel as one call over the whole tile.
 inline constexpr bool softplus_bf16_whole_tile = true;
+// Sets up the generated BF16 softplus kernel for the instance it serves.
+template <bool bf16_kernel>
+inline void softplus_bf16_tile_init() {
+    if constexpr (bf16_kernel) {
+        init_softplus_bf16();
+    }
+}
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_softplus(std::uint32_t param0, std::uint32_t param1, std::uint32_t param2) {

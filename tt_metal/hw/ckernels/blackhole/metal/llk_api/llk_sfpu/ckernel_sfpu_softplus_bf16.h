@@ -21,7 +21,7 @@ struct SoftplusBf16Config {
     static constexpr bool kSquareDecay = false;
 };
 }  // namespace ckernel::sfpu
-#include "sfpu/ckernel_sfpu_bf16_abs_exp_correction.h"
+#include "ckernel_sfpu_bf16_abs_exp_correction.h"
 
 namespace ckernel::sfpu {
 
@@ -36,6 +36,11 @@ inline bool bf16_dest_softplus() {
 template <int ITERATIONS = 8>
 inline void calculate_softplus_bf16() {
     ckernel::sfpu::bf16::calculate_abs_exp_correction<ckernel::sfpu::SoftplusBf16Config, ITERATIONS>();
+}
+inline void init_softplus_bf16() {
+    if (bf16_dest_softplus()) {
+        ckernel::sfpu::bf16::init_abs_exp_correction<ckernel::sfpu::SoftplusBf16Config>();
+    }
 }
 
 }  // namespace ckernel::sfpu

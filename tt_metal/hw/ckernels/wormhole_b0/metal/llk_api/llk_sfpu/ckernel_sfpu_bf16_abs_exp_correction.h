@@ -24,15 +24,20 @@ inline void init_abs_exp_correction() {
 template <typename Config, int Iterations = 32>
 inline void calculate_abs_exp_correction() {
     static_assert(Iterations == 32, "parked correction coefficients require the complete tile");
-    // Residual composite kernels keep their per-call initializer.
-    init_abs_exp_correction<Config>();
     sfpi::abs_exp_park_coefficients<Config>();
     auto exp = [](sfpi::vFloat x) {
         constexpr bool split_scale_bias = false;
-        sfpi::vFloat multiplier = sfpi::vConstFloatPrgm0;
-        return sfpi::
-            correction_exp_leaf<Config::kExpDegree, false, false, true, Config::kResidualFold, true, split_scale_bias>(
-                x, multiplier, 127.0f, Config::kExpCoefficients);
+        {
+            sfpi::vFloat multiplier = sfpi::vConstFloatPrgm0;
+            return sfpi::correction_exp_leaf<
+                Config::kExpDegree,
+                false,
+                false,
+                true,
+                Config::kResidualFold,
+                true,
+                split_scale_bias>(x, multiplier, 127.0f, Config::kExpCoefficients);
+        }
     };
     auto reciprocal = [](sfpi::vFloat x) {
         return sfpi::correction_finite_reciprocal(x, [](sfpi::vFloat v) { return sfpu_reciprocal_iter<1>(v); });

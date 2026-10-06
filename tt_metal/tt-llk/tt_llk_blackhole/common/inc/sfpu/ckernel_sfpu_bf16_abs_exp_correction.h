@@ -18,33 +18,24 @@ namespace sfpi
 
 namespace ckernel::sfpu::bf16
 {
-template <typename Config>
-inline void init_abs_exp_correction()
-{
-    sfpi::vConstFloatPrgm0 = Config::kMultiplier;
-    sfpi::vConstFloatPrgm1 = Config::kExpCoefficients[Config::kExpDegree] * sfpi::correction_exp_scale(Config::kExpDegree);
-    sfpi::vConstFloatPrgm2 = Config::kExpCoefficients[Config::kExpDegree - 1] * sfpi::correction_exp_scale(Config::kExpDegree - 1);
-}
-
 template <typename Config, int Iterations = 32>
 inline void calculate_abs_exp_correction()
 {
     static_assert(Iterations == 32, "parked correction coefficients require the complete tile");
-    // Residual composite kernels keep their per-call initializer.
-    init_abs_exp_correction<Config>();
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    sfpi::abs_exp_residual_pins<Config>();
-    constexpr std::uint32_t slots = 27u + (__builtin_bit_cast(std::uint32_t, Config::kNumerator[0]) == 0x3f800000u ? 0u : 1u);
-    TTI_REPLAY(0, slots, 1, 1);
-    sfpi::abs_exp_residual_core<Config, ADDR_MOD_7>();
-    sfpi::abs_exp_residual_suffix<Config, ADDR_MOD_6>();
-#pragma GCC unroll 32
-    for (int row = 1; row < Iterations; ++row)
     {
-        TTI_REPLAY(0, slots, 0, 0);
+        sfpi::abs_exp_residual_pins<Config>();
+        constexpr std::uint32_t slots = 27u + (__builtin_bit_cast(std::uint32_t, Config::kNumerator[0]) == 0x3f800000u ? 0u : 1u);
+        TTI_REPLAY(0, slots, 1, 1);
+        sfpi::abs_exp_residual_core<Config, ADDR_MOD_7>();
         sfpi::abs_exp_residual_suffix<Config, ADDR_MOD_6>();
+#pragma GCC unroll 32
+        for (int row = 1; row < Iterations; ++row)
+        {
+            TTI_REPLAY(0, slots, 0, 0);
+            sfpi::abs_exp_residual_suffix<Config, ADDR_MOD_6>();
+        }
+        return;
     }
-    return;
     sfpi::abs_exp_park_coefficients<Config>();
     auto exp = [](sfpi::vFloat x)
     {
