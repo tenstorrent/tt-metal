@@ -49,10 +49,10 @@ def test_spec_mtp(mesh_device):
     ref = torch.load(REF)
     S = ref["S"]
     B0 = ref["ring"][0].shape[0]
-    B = B0 * tile
+    B = int(os.environ.get("DSV41_NUSERS", B0 * tile))  # DSV41_NUSERS=4 -> 1 user per mesh row (B=4)
     U = B // rows
     T_d = BLOCK * U
-    rep = lambda t: t.repeat(tile, *([1] * (t.dim() - 1)))
+    rep = lambda t: t.repeat(tile, *([1] * (t.dim() - 1)))[:B]
     log = lambda m: print(m, flush=True)
     sh = _Shards()
     t0 = time.time()
