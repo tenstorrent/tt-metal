@@ -549,3 +549,45 @@ def test_stochastic_rounding_warns_rather_than_pretending_to_reproduce_it():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         QUASAR.dest_to_l1(dest, DataFormat.Float16_b, DataFormat.Float16_b)
+
+
+# An integer Dest narrows by saturation, not by wrapping. A plain torch cast
+# gives 200 -> -56 for Int8, and a float beyond int32's range casts to an
+# undefined value; the hardware clamps instead.
+INTEGER_SATURATION_CASES = [
+    (DataFormat.Int8, 200.0, 127),
+    (DataFormat.Int8, -200.0, -127),
+    # Sign-magnitude: the most negative two's-complement value has no encoding.
+    (DataFormat.Int8, -128.0, -127),
+    (DataFormat.Int16, 40000.0, 32767),
+    (DataFormat.Int16, -40000.0, -32767),
+    # Beyond float32's ability to even name int32's max, so the clamp has to
+    # happen in a wider type or the cast is undefined.
+    (DataFormat.Int32, 3e38, 2147483647),
+    (DataFormat.Int32, -3e38, -2147483647),
+    # Unsigned uses the full range, with no sign-magnitude adjustment.
+    (DataFormat.UInt8, 300.0, 255),
+    (DataFormat.UInt8, -5.0, 0),
+]
+
+
+@pytest.mark.parametrize(
+    "dest_format, value, expected",
+    INTEGER_SATURATION_CASES,
+    ids=[f"{c[0].name}-{c[1]:g}" for c in INTEGER_SATURATION_CASES],
+)
+def test_integer_dest_saturates_instead_of_wrapping(dest_format, value, expected):
+    got = QUASAR._to_dest_storage(torch.tensor([value]), dest_format)
+    assert got.item() == expected
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [(float("nan"), 0), (float("inf"), 127), (float("-inf"), -127)],
+    ids=["nan", "inf", "-inf"],
+)
+def test_non_finite_into_an_integer_dest_is_not_undefined(value, expected):
+    """A NaN survives a clamp and makes the cast undefined, so it is mapped
+    before the clamp rather than left to torch."""
+    got = QUASAR._to_dest_storage(torch.tensor([value]), DataFormat.Int8)
+    assert got.item() == expected
