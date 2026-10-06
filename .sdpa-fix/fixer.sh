@@ -60,16 +60,38 @@ SLACK_BOT_TOKEN=""
 # message (its ts lives in the watcher's state.json), so PR activity sits next
 # to the failure it is about instead of cluttering the channel. Falls back to
 # a top-level post if the watcher has not posted a digest yet.
+# Make GitHub references clickable in Slack mrkdwn: full PR URLs become
+# <url|#N>, bare #N (4-6 digits) become PR links, and `commit:<sha>` tokens
+# become commit links showing the first 10 chars. CI runs are written as
+# <run-url|run:N> by the callers: run numbers must never pass through the
+# bare-#N rule (L2's run numbers are 5 digits, like PR numbers).
+linkify() {
+  local base="https://github.com/$REPO"
+  sed -E \
+    -e "s#$base/pull/([0-9]+)#<$base/pull/\\1|PR_\\1>#g" \
+    -e "s#(^|[^|/&A-Za-z0-9_])\\#([0-9]{4,6})\\b#\\1<$base/pull/\\2|PR_\\2>#g" \
+    -e "s#commit:([0-9a-f]{10})([0-9a-f]*)#<$base/commit/\\1\\2|\\1>#g" \
+    -e "s#\\|PR_([0-9]+)>#|\\#\\1>#g" \
+    -e "s#run:([0-9]+)#run \\#\\1#g"
+}
+
 slack() {
   [[ "$FIX_SLACK" == "1" && -n "$SLACK_BOT_TOKEN" && -n "${SLACK_CHANNEL_ID:-}" ]] || { log "  (slack) $1"; return 0; }
   local resp thread
   thread=$(jq -r --arg ch "$SLACK_CHANNEL_ID" 'if (._slack.channel // "") == $ch then (._slack.ts // "") else "" end' \
              "$WATCH_STATE" 2>/dev/null || true)
-  resp=$(jq -nc --arg ch "$SLACK_CHANNEL_ID" --arg t "$1" --arg th "$thread" \
+  resp=$(jq -nc --arg ch "$SLACK_CHANNEL_ID" --arg t "$(linkify <<<"$1")" --arg th "$thread" \
            '{channel:$ch, text:$t, unfurl_links:false} + (if $th != "" then {thread_ts:$th} else {} end)' \
          | curl -sS -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
                 -H 'Content-Type: application/json; charset=utf-8' --data @- https://slack.com/api/chat.postMessage)
-  [[ "$(jq -r '.ok // false' <<<"$resp")" == "true" ]] || log "  WARN: slack post failed: $resp"
+  if [[ "$(jq -r '.ok // false' <<<"$resp")" == "true" ]]; then
+    # Keep every message's ts: the bot has no history scope, so this is the
+    # only way to chat.update a message later.
+    jq -nc --arg ts "$(jq -r .ts <<<"$resp")" --arg th "$thread" --arg t "${1:0:160}" --arg at "$(ts)" \
+       '{at:$at, ts:$ts, thread:$th, text:$t}' >> "$FIX_HOME/slack_posts.jsonl"
+  else
+    log "  WARN: slack post failed: $resp"
+  fi
 }
 
 run_url() { echo "https://github.com/$REPO/actions/runs/$1"; }
@@ -110,7 +132,7 @@ followup() {
         msha=$(gh pr view "$url" --json mergeCommit --jq '.mergeCommit.oid' 2>/dev/null || echo "")
         $FIXLIB mark --state merged --extra "$(jq -nc --arg f "$msha" '{fix_sha:$f}')" "${sigs[@]}"
         slack "🟣 *merged* autofix #$num: $url
-waiting for the next \`$(jq -r .wf <<<"$g")\` run that contains \`${msha:0:10}\` to confirm it is green"
+merge commit:$msha · waiting for the next \`$(jq -r .wf <<<"$g")\` run that contains it to confirm it is green"
         continue ;;
       CLOSED) $FIXLIB mark --state rejected "${sigs[@]}"; log "  PR $url closed by a human — signature(s) rejected"; continue ;;
     esac
@@ -184,13 +206,13 @@ handle_fix_events() {
     typ=$(jq -r .type <<<"$ev"); test=$(jq -r '.test | sub(".*::"; "")' <<<"$ev")
     pr=$(jq -r '.pr.url // empty' <<<"$ev"); fsha=$(jq -r '.fix_sha // ""' <<<"$ev")
     rnum=$(jq -r .run.number <<<"$ev"); rurl=$(jq -r .run.url <<<"$ev")
-    who="${pr:-\`${fsha:0:10}\`}"
+    who="${pr:-commit:$fsha}"
     if [[ "$typ" == "verified" ]]; then
       log "  verified green after fix: $test"
-      slack "✅ *verified*: \`$test\` passed in run #$rnum ($rurl), which contains the fix $who. Nothing more to add."
+      slack "✅ *verified*: \`$test\` passed in <$rurl|run:$rnum>, which contains the fix $who. Nothing more to add."
     else
       log "  STILL FAILING after fix: $test"
-      slack "❌ *still failing after fix*: \`$test\` failed in run #$rnum ($rurl) even though it contains $who. Back in the autofix queue."
+      slack "❌ *still failing after fix*: \`$test\` failed in <$rurl|run:$rnum> even though it contains $who. Back in the autofix queue."
     fi
   done < <(jq -c '.events[]?' <<<"$ng")
 }
@@ -384,7 +406,7 @@ $logs"
       $FIXLIB mark --state fixed_upstream --attempt \
         --extra "$(jq -nc --arg p "$pdir" --arg r "$upstream" --arg f "$fsha" '{proposal:$p, reason:$r, fix_sha:$f}')" "${sigs[@]}"
       slack "📌 *already fixed on main*: \`$first_test\` ($workflow)
-fixed by $upstream · waiting for the next run that contains \`${fsha:0:10}\` to confirm it is green"
+fixed by $upstream · commit:$fsha · waiting for the next run that contains it to confirm it is green"
     else
       log "  no fix: $reason"
       $FIXLIB mark --state no_fix --attempt --extra "$(jq -nc --arg p "$pdir" --arg r "$reason" '{proposal:$p, reason:$r}')" "${sigs[@]}"

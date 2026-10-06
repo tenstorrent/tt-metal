@@ -551,14 +551,16 @@ autofix_note() {
     [[ "$(cut -d'|' -f2 <<<"$e")" == "$display" ]] && { wf="${e%%|*}"; break; }
   done
   [[ -n "$wf" ]] || return 0
-  jq -r --arg w "$wf" '
+  jq -r --arg w "$wf" --arg gh "https://github.com/$REPO" '
+    def prlink: if . == null or . == "" then "" else "<\(.)|#\(split("/") | last)>" end;
+    def linkprs: gsub("#(?<n>[0-9]{4,6})"; "<\($gh)/pull/\(.n)|#\(.n)>");
     [.sigs[] | select(.workflow == $w)
-     | if .state == "pr_open"   then "🛠️ draft PR \(.pr.url) — targeted CI running"
-       elif .state == "ci_passed" then "🛠 draft PR \(.pr.url) — targeted CI ✅, awaiting your review"
-       elif .state == "ci_failed" then "🛠 draft PR \(.pr.url) — targeted CI ❌, needs a human"
+     | if .state == "pr_open"   then "🛠️ draft PR \(.pr.url | prlink) — targeted CI running"
+       elif .state == "ci_passed" then "🛠️ draft PR \(.pr.url | prlink) — targeted CI ✅, awaiting your review"
+       elif .state == "ci_failed" then "🛠️ draft PR \(.pr.url | prlink) — targeted CI ❌, needs a human"
        elif .state == "proposed_dryrun" then "🛠 autofix proposal (dry run): \(.verdict_title // "see proposals/")"
-       elif .state == "fixed_upstream" then "📌 already fixed on main: \(.reason // "") — awaiting a run that contains it"
-       elif .state == "merged" then "🟣 fix merged \(.pr.url // "") — awaiting a run that contains \((.fix_sha // "")[0:10])"
+       elif .state == "fixed_upstream" then "📌 already fixed on main: \((.reason // "") | linkprs) — awaiting a run that contains it"
+       elif .state == "merged" then "🟣 fix merged \(.pr.url | prlink) — awaiting a run that contains \((.fix_sha // "")[0:10])"
        elif .state == "verified" then "✅ verified green after fix: `\(.test | sub(".*::"; ""))`"
        elif .state == "no_fix" then "🛠 autofix: no safe fix for `\(.test | sub(".*::"; ""))`"
        else empty end] | unique | .[]' "$AUTOFIX_LEDGER" 2>/dev/null || true
