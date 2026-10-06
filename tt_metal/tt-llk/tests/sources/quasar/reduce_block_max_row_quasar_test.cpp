@@ -35,28 +35,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Allocate + program a buffer descriptor per unpacker from the per-TRISC BFD partition
     // (SrcA operand tiles -> Unp0/UNPACR0, SrcB scaler face -> Unp1/UNPACR1).
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-        tensor_shape_A, L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
-        tensor_shape_A, L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src);
+    const auto bfd_a =
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape_A, L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
+    const auto bfd_b =
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape_A, L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src);
 
     // Configure unpacker engines with their SrcReg (destination) formats.
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
         static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
 
     // Block of TILE_CNT operand tiles (SrcA) + one scaler face (SrcB) -> one reduced result tile.
-    _llk_unpack_AB_reduce_block_max_row_init_runtime_(
-        params.TILE_CNT,
-        false /*respect_trigger*/,
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
-        tensor_shape_A);
-    _llk_unpack_AB_reduce_block_max_row_runtime_(
-        params.TILE_CNT,
-        0 /*operand tile start*/,
-        0 /*scaler tile*/,
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
-        tensor_shape_A);
+    _llk_unpack_AB_reduce_block_max_row_init_runtime_(params.TILE_CNT, false /*respect_trigger*/, bfd_a, bfd_b, tensor_shape_A);
+    _llk_unpack_AB_reduce_block_max_row_runtime_(params.TILE_CNT, 0 /*operand tile start*/, 0 /*scaler tile*/, bfd_b, tensor_shape_A);
 }
 
 #endif
@@ -107,10 +97,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const auto tensor_shape_A = tensor_shape_from_params(params);
 
     // Allocate + program the pack buffer descriptor from the per-TRISC BFD partition (Pack0 -> PACR0).
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-        tensor_shape_A, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
+    const auto bfd_pack =
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape_A, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-    _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape_A, 1 /*num_tiles_per_pack*/);
+    _llk_pack_init_(bfd_pack, tensor_shape_A, 1 /*num_tiles_per_pack*/);
     _llk_pack_reduce_mask_config_<ReduceDim::REDUCE_ROW>(tensor_shape_A);
 
     // Block reduce produces a single result tile.

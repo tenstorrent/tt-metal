@@ -35,8 +35,8 @@
 #   test_group: Group identifier for selecting multiple related tests at once.
 #   test_tags: Optional list of coarse selectors for workflow_dispatch, matched exactly and
 #              OR-ed with test_type / test_group. Two vocabularies in one list: the model a
-#              leg covers (kimi_k2_7, kimi_k3, glm_5_3, dsv4_flash, minimax_m3)
-#              and the unit under test (moe, gate, mla, hca, swa, sdpa, ccl, block, transformer,
+#              leg covers (kimi_k2_7, kimi_k3, glm_5_3, dsv4_flash, dsv4_pro, minimax_m3)
+#              and the unit under test (moe, gate, mla, hca, swa, csa, sdpa, ccl, block, transformer,
 #              kv_cache, dflash, mtp, runner, determinism). So `moe` runs every MoE leg and `kimi_k3`
 #              every K3 leg. Multiple tokens UNION, they do not intersect: `moe,kimi_k3` is every MoE
 #              leg plus every K3 leg, not the K3 MoE legs.
@@ -709,13 +709,15 @@
 # * Each section runs in its own subshell under `timeout -k 2m <N>m`; a timeout is a FAIL.
 # * The first failed section ends the job with its exit code, and later sections report NOT RUN:
 #   nothing resets the devices between sections (tt-metal#57706).
-- name: "(DeepSeek-V4-Flash, DeepSeek-V4-Pro) HCA chunked accuracy 6k@5k + SWA chunked accuracy 55k@5k + teacher-forced block chunked accuracy 55k@5k"
+- name: "(DeepSeek-V4-Flash, DeepSeek-V4-Pro) HCA chunked accuracy 6k@5k + SWA chunked accuracy 55k@5k + teacher-forced block chunked accuracy 55k@5k + CSA chunked accuracy 13k@5k"
   fabric_profile: torus_xy
   cmd: |
     titles=(
       "(DeepSeek-V4-Flash) HCA chunked accuracy 6k@5k"
       "(DeepSeek-V4-Flash) SWA chunked accuracy 55k@5k"
       "(DeepSeek-V4) teacher-forced block chunked 55k@5k"
+      "(DeepSeek-V4-Flash) CSA chunked accuracy 13k@5k"
+      "(DeepSeek-V4-Pro) CSA chunked accuracy 13k@5k"
     )
     summary=""
     section_start() {
@@ -770,16 +772,36 @@
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
 
+    # Production-width chunked CSA with the real sparse top-k: 5120+5120+3000 actual tokens, fixed
+    # 5120 device width, and the variant's stock index_topk.
+    section_start 4
+    (
+      timeout -k 2m 15m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_csa.py::test_csa_chunked_prefill_mesh -k "flash and 3chunk-production and torus-xy-8x4" -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    section_start 5
+    (
+      timeout -k 2m 25m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_csa.py::test_csa_chunked_prefill_mesh -k "pro and 3chunk-production and torus-xy-8x4" -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
     finish
   test_type: dsv4_prefill_suite
   # Per-section tokens: `-f test-type=<token>` selects this job.
-  test_tags: [dsv4_flash, hca, swa, hca_chunked, swa_mixed, v4_block_chunked]
+  test_tags: [dsv4_flash, dsv4_pro, hca, swa, csa, hca_chunked, swa_mixed, v4_block_chunked, csa_chunked, csa_chunked_pro]
   test_group: module
   skus:
     bh_sc1:
-      # Sum of the section timeouts (6+8+12 = 26). No margin: models/demo/bh_sc1 in
-      # .github/time_budget.yaml is full (1750/1750), so anything above 26 fails verify-time-budgets.
-      timeout: 26
+      # Sum of the section timeouts (6+8+12+15+25 = 66). No margin: models/demo/bh_sc1 in
+      # .github/time_budget.yaml is full (1790/1790), so anything above 66 fails verify-time-budgets.
+      timeout: 66
       tier: 2
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
