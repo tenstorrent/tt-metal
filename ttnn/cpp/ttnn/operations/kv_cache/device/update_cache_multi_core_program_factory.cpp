@@ -493,12 +493,9 @@ tt::tt_metal::experimental::ProgramRunArgs UpdateCacheMultiCoreProgramFactory::o
     const TensorParamName CACHE{"cache"};
     const TensorParamName INPUT{"input"};
 
-    // Runs on every program-cache hit. compute_program_hash excludes update_idx / batch_offset /
-    // compute_kernel_config, so the args they drive are NOT stable across hits and must be re-applied:
-    //   - reader/writer cache_start_id (per core), and writer Wbytes / offset / batch_read_offset.
-    // Buffer addresses refresh through the typed tensor channel (the borrowed input DFB re-resolves
-    // from the INPUT TensorArgument). Everything else (Wt, B, per-core head count, cache_*_num_tiles,
-    // input_start_id, batch_start_id) is shape-derived — covered by the hash, so a hit means it matches.
+    // On a cache hit, re-apply the args driven by update_idx / batch_offset, which the hash excludes:
+    // cache_start_id, offset and batch_read_offset (Wbytes is hashed, set here for convenience).
+    // Buffer addresses refresh via the tensor arguments; all other args are covered by the hash.
     const auto dyn = compute_update_cache_dynamic_args(operation_attributes, tensor_args);
 
     KernelRunArgs reader_run_args{.kernel = READER};
