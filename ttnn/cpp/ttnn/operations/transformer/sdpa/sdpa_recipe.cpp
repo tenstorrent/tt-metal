@@ -10,6 +10,7 @@
 #include <set>
 
 #include <tt-metalium/allocator.hpp>
+#include <internal/kernel_build_options.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/generic/generic_op.hpp"
@@ -145,6 +146,13 @@ ProgramDescriptor recipe_compute_program(
              {"SDPA_RECIPE_QK_W", std::to_string(recipe_subblock_width(k_tiles))},
              {"SDPA_RECIPE_PV_W", std::to_string(recipe_subblock_width(d_tiles))}},
         .config = compute_config};
+    // B-E record their exp programs in the replay buffer once and replay them per tile from other functions;
+    // the SFPI compiler's replay optimization would overwrite them (tenstorrent/tt-metal#58433). FAST is the
+    // legacy kernel and keeps its build.
+    // Internal-only, temporary workaround (tt_metal/api/internal): drop this define once the compiler fix lands.
+    if (policy.selection.recipe != Recipe::A) {
+        compute.defines.emplace_back(tt::tt_metal::internal::DISABLE_SFPU_REPLAY_OPTIMIZATION_DEFINE, "1");
+    }
     if (fp32) {
         compute.defines.emplace_back("SDPA_RECIPE_FP32", "1");
     }
