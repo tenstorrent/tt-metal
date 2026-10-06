@@ -382,25 +382,23 @@ def _known_lanes() -> Dict:
         why="inf where the answer is x itself, in the top four fp16 values, on a 16-bit Dest",
     )
 
-    def store_saturates(float16_b: float, bfp8_b: Tuple[float, float], **fields):
+    def store_saturates(at: float, **fields):
         """#57215: the Float16 store saturates a value just past 65504 to 65504 rather
         than to an infinity, on a 32-bit Dest packed to Float16, where the golden's fp16
-        rounding answers inf. One entry per input, because the inputs reaching that band
-        differ: a Float16_b input reaches the kernel as it is, so only the one value
-        whose answer is 2**16 lands there; a Bfp8_b input is block-quantized first, so
-        its window is every bf16 value the quantizer maps onto that one -- the
-        quantization preimage, not a wider defect."""
-        shared = dict(
-            issue="#57215", output=DataFormat.Float16, dest=DestAccumulation.Yes
-        )
-        return tuple(
+        rounding answers inf. Only at the one input *at* whose answer is 2**16. The
+        bounds are on the input as received, so on Bfp8_b they also name every bf16
+        value the block quantizer maps onto *at* -- the quantization preimage, not a
+        wider defect -- without spelling it out."""
+        return (
             KnownNonfiniteLanes(
-                **shared, inputs=(fmt,), low=bounds[0], high=bounds[1], **fields
-            )
-            for fmt, bounds in (
-                (DataFormat.Float16_b, (float16_b, float16_b)),
-                (DataFormat.Bfp8_b, bfp8_b),
-            )
+                issue="#57215",
+                inputs=(DataFormat.Float16_b, DataFormat.Bfp8_b),
+                output=DataFormat.Float16,
+                dest=DestAccumulation.Yes,
+                low=at,
+                high=at,
+                **fields,
+            ),
         )
 
     _KNOWN_NONFINITE_LANES.update(
@@ -439,16 +437,14 @@ def _known_lanes() -> Dict:
                 ),
                 # x - tanh(x) for |x| at 2**16 is just past fp16's range.
                 *store_saturates(
-                    float16_b=2.0**16,
-                    bfp8_b=(65024.0, 66048.0),
+                    2.0**16,
                     magnitude=True,
                     why="+-65504 where x - tanh(x) is just past fp16's range and the store saturates instead of overflowing",
                 ),
             ),
             # sqrt(x) for x at 2**32 is 2**16.
             MathOperation.SqrtCustom: store_saturates(
-                float16_b=2.0**32,
-                bfp8_b=(4.26e9, 4.33e9),
+                2.0**32,
                 why="65504 where sqrt(x) is just past fp16's range and the store saturates instead of overflowing",
             ),
             # 1/x is 2**16 at |x| = 2**-16 and ~65793-66052 a step or two under it: past
@@ -457,8 +453,7 @@ def _known_lanes() -> Dict:
             # (65504, 2**16), where the store saturates instead -- hence approx=Yes; the
             # exact kernel agrees with the golden on these lanes.
             MathOperation.Reciprocal: store_saturates(
-                float16_b=2.0**-16,
-                bfp8_b=(1.51e-5, 1.54e-5),
+                2.0**-16,
                 approx=ApproximationMode.Yes,
                 magnitude=True,
                 why="+-65504 where 1/x is past fp16's range and the store saturates instead of overflowing",
