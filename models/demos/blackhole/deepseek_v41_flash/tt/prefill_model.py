@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 import torch
 
 import ttnn
+from models.demos.blackhole.deepseek_v41_flash.tt import pf_tune
 from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d, recording, replay
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import clear_chunk_caches, pad_len
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active, unpack_streams
@@ -251,7 +252,7 @@ class DSV41PrefillModel:
                         xg = mc.allgather(x, cc, axis=1, dim=0)  # [8T,1,4,D]: chunk 8g + j at rows jT..
                         outs8 = []
                         if (
-                            os.environ.get("DSV41_PFA_ENGRAM_BATCH", "0") == "1" and fe.__name__ == "forward_v2"
+                            pf_tune._env("DSV41_PFA_ENGRAM_BATCH", "0") == "1" and fe.__name__ == "forward_v2"
                         ):  # ONE T = 8*32 forward per group instead of 8 forwards at T = 32 (same maths, 8x fewer ops / CCLs)
                             rg = ttnn.to_layout(
                                 ttnn.slice(
