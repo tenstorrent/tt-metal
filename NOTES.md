@@ -1,33 +1,19 @@
-# t140 — eval pack, 4x8 1080p (blx03)
+# t170 — t95/t164 eval pack on blx01 (follow-up of #164)
 
-Branch ttp/t140-eval-pack-4x8. Overlay staged at g14blx03:/var/tmp/fasth3/t140/src (REV file), C++ build from blx03 ~/fasth3/t48.
-Collect-only of test_pipeline_distilled -k bh_4x8sp1tp0_ring passes (1/8).
+Branch ttp/t170-... = ttp/t164-eval-pack-g15 @ a4b6a835d1a (+ t170 scripts in tmp/t170).
+Box: blx01 (g15blx01), everything under /var/tmp/fasth3/t170 (nothing under blx01 /home).
+- tree/: hardlinked /var/tmp/fasth3/t48 (bf7db12a149) models/ + the 8 python files that differ in a4b6a835d1a
+  (OVERLAY_COMMIT). Build, kernels, JIT cache: t48 tree + /var/tmp/fasth3/cache (job 621's, warm).
+- Default warmup (no LTX_WARMUP_T2V_ONLY/ENCODERS cuts: those dropped tray 3 on blx01 in jobs 625/640).
+- driver.sh: pack (configs.txt) -> post.py PCC/PSNR vs own baseline -> pick 1-2 -> baseline5 + <cfg>5
+  (seeds 0-4, default prompt) -> post.py. Marker /var/tmp/fasth3/t170/driver_pack/DRIVER.done; pid in driver.pid.
+  Results /var/tmp/fasth3/t170/res/<label>/, summaries res/summary_configs{,5}.md.
+- Timeouts: baseline 300 s; knobs = 1.5 x measured baseline wall + 120 (<= 600); one retry at 600 on timeout.
 
-Driver: /var/tmp/fasth3/t140/src/tmp/t140/driver.sh, launched via tt-project/harness/templates/blx03-launch.sh t140.
-- Waits for the t136 and t141 drivers to finish (or 2 h idle), then runs tmp/t140/configs.txt, one broker job per config,
-  each after the blx03 health gate. Job ids: /var/tmp/fasth3/t140/jobs.txt. Per-config output: /var/tmp/fasth3/t140/<label>/.
-- Done marker: `T140_DRIVER_DONE` in /var/tmp/fasth3/t140/driver.log. Relaunching skips configs with T140_EXIT=0.
+## Run log
+- 2026-10-06 22:35 UTC: driver started on blx01 (pid 203047). Baseline = broker job 665.
 
-Next step after the marker:
-1. rsync g14blx03:/var/tmp/fasth3/t140/<label>/ (run.log, mp4, png, broker slices) to tt-project/t140/.
-2. `python3 tmp/t140/post.py tt-project/t140` -> summary.md/json (warm e2e, stages, PCC/PSNR vs baseline).
-3. 5-seed phase: write a second configs file (baseline + 1-2 best + any PCC/PSNR drop) with LTX_E2E_SEEDS=0,1,2,3,4,
-   relaunch with CONFIGS=<file>. Compare per seed vs baseline.
-4. Table + recommended default set + videos/stills; commit, push, clean /var/tmp/fasth3/t140 bulk.
-
-Run 2 (2026-10-06 03:12 UTC): blx03 rebooted 03:02 and killed the first driver before any t140 job. Relaunched at
-1016c3aac47 (waits for every other smarton job, not only t136/t141; pair cutoff 30 min idle). blx03 pid 31022.
-If the probe wakes and the log has no DONE line, the driver died (reboot): relaunch it the same way; it resumes.
-
-Run 3 (2026-10-06 03:45 UTC): blx03 power-cycled 03:42 and killed driver pid 31022 again before any t140 job.
-Relaunched (same src ae7aaf3b1d2), blx03 pid 8381. The launcher's ssh hung after launch (killed by timeout after 2 min); driver unaffected.
-
-Drops logged:
-- 2026-10-06 02:17-02:19 UTC, blx03 job 212 (smarton, t136 run_ab.sh), chips 8-15 (tray 2) off PCIe, chip 15 UNHEALTHY;
-  job 216 (t141) abandoned; resets 214/215 failed, health-gate 217 glx_reset; blx03 rebooted ~02:26 UTC. No t140 job was running.
-- 2026-10-06 ~03:02 UTC: blx03 rebooted (cause not seen; no t140 job running). Killed t140 driver pid 16601.
-- 2026-10-06 03:10 UTC: blx03 job 246 (smarton, t141 e2e) killed -9; chips 8-15 (tray 2) left the bus; broker post-job gate
-  escalated to glx_reset. No t140 job running.
-- 2026-10-06 03:16-03:42 UTC: recovery from the job-246 drop failed: bridge-reset of chips 8-15 (tray 2) failed 4x
-  (broker jobs 254/256/258/260), the broker's galaxy-reset health gates failed (255/257/259/261), broker power-cycled the
-  galaxy (job 263, 03:42 UTC, 32/32 chips off). Killed t140 driver pid 31022. No t140 job was running.
+## Next (after DRIVER.done)
+- scp the mp4s of baseline5/<cfg>5 (and baseline + winner) to g15 tt-project/data/g15/t170/ (mp4s only),
+  run VBench + per-seed PCC/PSNR vs baselines/ltx25_1080p_6s/ref_dv145 (ltx_eval batch --vbench-ref) on g15,
+  look at stills, write the table + recommendation, commit, land on ttp/t48-ltx25-integrated.
