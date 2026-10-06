@@ -286,8 +286,11 @@ class Qwen38Generator:
             if not 0 <= slot < kv_cache.batch_size or not 0 <= start < end <= min(tokens.shape[1], kv_cache.capacity):
                 raise ValueError("Serving prompt positions or slots exceed the bound cache")
         validate_prefix_continuity(starts, slots, self._slot_prefix_len)
-        self._begin_prefix(slots)
         if len(ends) == 1 and slots == [0] and starts == [0] and ends[0] <= 4096:
+            # Only this branch writes the slot itself; the one below delegates to prefill_forward,
+            # which marks and clears each row it touches. Marking here too would leave the slot
+            # indeterminate under that call, and a continuation chunk matches no such slot.
+            self._begin_prefix(slots)
             self._refresh_table(page_table)
             output = self._prefill_for_generate(tokens[:, : ends[0]], trace_sampling=True)
             if self.prefill_sample_trace is None:

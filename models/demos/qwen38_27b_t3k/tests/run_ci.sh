@@ -26,6 +26,9 @@ trap 'exit 143' TERM
 trap 'exit 130' INT
 
 export EXTRA_MODELS_DIR="$PWD/models/demos" MESH_DEVICE="T3K"
+# qwen38_27b_qb2 registers TTQwen38ForCausalLM too, and bundles are taken first-wins from
+# a sorted listing, so qb2 would serve every request this script makes about t3k.
+export TT_MODEL_CLASS_OVERRIDES="TTQwen38ForCausalLM=models.demos.qwen38_27b_t3k.tt.generator_vllm:Qwen38ForCausalLM"
 export HF_HOME="${HF_HOME:-/mnt/MLPerf/huggingface}"
 export HF_DATASETS_CACHE="$work/datasets" HF_MODULES_CACHE="$work/hf-modules"
 export TT_METAL_CACHE="$work/tt-cache" TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
