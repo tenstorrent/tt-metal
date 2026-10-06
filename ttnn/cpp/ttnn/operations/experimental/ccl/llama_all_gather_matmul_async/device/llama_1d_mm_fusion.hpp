@@ -8,12 +8,16 @@
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::llama_matmul {
 
-ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_fusion_helper(
-    tt::tt_metal::Program& program,
+// Appends the fused all-gather + gather_in0 ring matmul's kernels, CBs and semaphores to `desc`. Tensor addresses are
+// buffer bindings and the tensor-backed CBs carry their buffers, so a WorkloadDescriptor op built from it needs no
+// matmul-specific cache-hit refresh.
+void matmul_multi_core_agmm_fusion_helper(
+    tt::tt_metal::ProgramDescriptor& desc,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
     const std::optional<const Tensor>& bias,
@@ -27,12 +31,4 @@ ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_f
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     uint32_t start_cb_index,
     std::optional<CoreRangeSet> restricted_cores);
-
-void override_agmm_fusion_program_parameters(
-    const ttnn::prim::matmul_mcast_1d_common_override_variables_t& override_variables,
-    const ttnn::prim::MatmulParams& operation,
-    tt::tt_metal::Program& program,
-    const std::vector<ttnn::Tensor>& input_tensors,
-    const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
-    const std::vector<ttnn::Tensor>& output_tensors);
 }  // namespace ttnn::operations::llama_matmul

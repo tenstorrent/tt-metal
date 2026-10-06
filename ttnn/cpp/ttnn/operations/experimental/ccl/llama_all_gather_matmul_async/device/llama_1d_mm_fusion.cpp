@@ -29,9 +29,8 @@ namespace ttnn::operations::llama_agmm_fusion_helpers {
 
 enum class CORE_TYPE : uint32_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
-static ttnn::prim::matmul_mcast_1d_common_override_variables_t
-process_agmm_fusion_program_and_create_override_variables(
-    tt_metal::Program& program,
+static void process_agmm_fusion_program_descriptor(
+    tt::tt_metal::ProgramDescriptor& desc,
     const ttnn::Tensor& /*a*/,
     const std::vector<ttnn::Tensor>& b_tensors,
     tt_metal::distributed::MeshDevice& device,
@@ -181,7 +180,7 @@ process_agmm_fusion_program_and_create_override_variables(
     // All multicast steps send exactly the same amount: multicast_chunk_width_in_tiles
 
     /* semaphores */
-    auto in0_signal_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in0_signal_semaphore_id = ttnn::experimental::ccl::add_semaphore_descriptor(desc, all_cores, INVALID);
 
     uint32_t in0_num_subblocks = (per_core_M / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -201,10 +200,9 @@ process_agmm_fusion_program_and_create_override_variables(
             .set_page_size(src0_cb_index, in0_single_tile_size)
             .set_tile_dims(src0_cb_index, in0_tile)
             .set_globally_allocated_address(*in0_buffer);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
+    desc.cbs.push_back(ttnn::experimental::ccl::make_cb_descriptor(src0_cb_config, all_cores, nullptr, in0_buffer));
 
     uint32_t src1_cb_index = base_cb_index + 1;
-    tt::tt_metal::CBHandle cb_src1;
     uint32_t remote_cb_index = tt::CBIndex::c_31;
     if (use_global_cb) {
         uint32_t in1_block_size_bytes = in1_single_tile_size * in1_block_num_tiles;
@@ -214,7 +212,8 @@ process_agmm_fusion_program_and_create_override_variables(
             .set_page_size(in1_block_size_bytes)
             .set_data_format(in1_data_format);
         remote_cb_config.index(src1_cb_index).set_page_size(in1_single_tile_size).set_data_format(in1_data_format);
-        cb_src1 = tt_metal::experimental::CreateCircularBuffer(program, all_cores, remote_cb_config, *global_cb);
+        desc.cbs.push_back(ttnn::experimental::ccl::make_cb_descriptor(
+            remote_cb_config, all_cores, nullptr, nullptr, &global_cb.value()));
     } else {
         tt_metal::CircularBufferConfig src1_cb_config =
             tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
@@ -223,7 +222,8 @@ process_agmm_fusion_program_and_create_override_variables(
         if (!in1_is_dram_interleaved && !in1_is_dram_sharded) {
             src1_cb_config = src1_cb_config.set_globally_allocated_address(*in1_buffer);
         }
-        cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
+        desc.cbs.push_back(ttnn::experimental::ccl::make_cb_descriptor(
+            src1_cb_config, all_cores, nullptr, src1_cb_config.globally_allocated_address() ? in1_buffer : nullptr));
     }
 
     uint32_t src2_cb_index = base_cb_index + 2;
@@ -238,14 +238,14 @@ process_agmm_fusion_program_and_create_override_variables(
     tt_metal::CircularBufferConfig sync_cb_config =
         tt_metal::CircularBufferConfig(sync_cb_size_bytes, {{sync_cb_index, DataFormat::UInt16}})
             .set_page_size(sync_cb_index, sync_cb_size_bytes);
-    tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
+    desc.cbs.push_back(ttnn::experimental::ccl::make_cb_descriptor(sync_cb_config, all_cores));
 
     uint32_t sync_cb2_index = base_cb_index + 4;
     uint32_t sync_cb2_size_bytes = 16;
     tt_metal::CircularBufferConfig sync_cb2_config =
         tt_metal::CircularBufferConfig(sync_cb2_size_bytes, {{sync_cb2_index, DataFormat::UInt16}})
             .set_page_size(sync_cb2_index, sync_cb2_size_bytes);
-    tt_metal::CreateCircularBuffer(program, all_cores, sync_cb2_config);
+    desc.cbs.push_back(ttnn::experimental::ccl::make_cb_descriptor(sync_cb2_config, all_cores));
 
     uint32_t output_cb_index = base_cb_index + 5;  // output operands start at index 16
     uint32_t interm0_cb_index = base_cb_index + 6;
@@ -269,7 +269,7 @@ process_agmm_fusion_program_and_create_override_variables(
                                 .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                 .set_tile_dims(interm0_cb_index, output_tile);
 
-        tt_metal::CreateCircularBuffer(program, all_cores, interm0_cb_config);
+        desc.cbs.push_back(ttnn::experimental::ccl::make_cb_descriptor(interm0_cb_config, all_cores));
 
         for (uint32_t i = 0; i < out_buffers.size(); ++i) {
             const auto& out_buffer = out_buffers[i];
@@ -287,8 +287,8 @@ process_agmm_fusion_program_and_create_override_variables(
                                    .set_page_size(output_cb_index, output_single_tile_size)
                                    .set_tile_dims(output_cb_index, output_tile)
                                    .set_globally_allocated_address(*out_buffer);
-            auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
-            cb_outputs.push_back(cb_output);
+            desc.cbs.push_back(
+                ttnn::experimental::ccl::make_cb_descriptor(output_cb_config, all_cores, nullptr, out_buffer));
             output_cb_indices.push_back(output_cb_index);
             interm_cb_indices.push_back(interm0_cb_index);
         }
@@ -316,8 +316,8 @@ process_agmm_fusion_program_and_create_override_variables(
                                    .set_tile_dims(output_cb_index, output_tile)
                                    .set_tile_dims(interm0_cb_index, output_tile)
                                    .set_globally_allocated_address(*out_buffer);
-            auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
-            cb_outputs.push_back(cb_output);
+            desc.cbs.push_back(
+                ttnn::experimental::ccl::make_cb_descriptor(output_cb_config, all_cores, nullptr, out_buffer));
             output_cb_indices.push_back(output_cb_index);
             interm_cb_indices.push_back(interm0_cb_index);
         }
@@ -445,11 +445,11 @@ process_agmm_fusion_program_and_create_override_variables(
     if (fused_op_signaler.has_value() && fused_op_signaler.value().fused_op_type ==
                                              ttnn::experimental::ccl::MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER) {
         ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
-        signaler.init_llama_rs_cores_mm(all_cores, program, &device, 0);
+        signaler.init_llama_rs_cores_mm(all_cores, desc, &device, 0);
     }
     /* Create the kernels */
-    auto mm_kernel_in0_id = tt_metal::CreateKernel(
-        program,
+    const size_t mm_kernel_in0_id = ttnn::experimental::ccl::add_kernel_descriptor(
+        desc,
         "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/"
         "reader_bmm_tile_layout_in0_ring_all_gather.cpp",  // Keep same kernel name
         all_cores,
@@ -459,8 +459,8 @@ process_agmm_fusion_program_and_create_override_variables(
             .noc_mode = noc_mode,
             .compile_args = in0_multicast_receiver_compile_time_args});  // NEW ARGS
     // Each core needs to signal to all RS cores, need to get a count of how many cores are in all_cores
-    auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
-        program,
+    const size_t mm_kernel_in1_sender_writer_id = ttnn::experimental::ccl::add_kernel_descriptor(
+        desc,
         "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/"
         "reader_bmm_tile_layout_in1_ring_all_gather.cpp",
         all_cores,
@@ -471,8 +471,8 @@ process_agmm_fusion_program_and_create_override_variables(
             .compile_args = in1_sender_writer_compile_time_args,
             .defines = mm_in1_kernel_defines});
 
-    auto mm_kernel = tt_metal::CreateKernel(
-        program,
+    const size_t mm_kernel = ttnn::experimental::ccl::add_kernel_descriptor(
+        desc,
         "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/compute/"
         "bmm_large_block_zm_fused_bias_activation_gathered.cpp",
         all_cores,
@@ -502,7 +502,7 @@ process_agmm_fusion_program_and_create_override_variables(
             // in0
             std::vector<uint32_t> mm_kernel_in0_args;
             mm_kernel_in0_args.push_back(static_cast<std::uint32_t>(core_type));
-            tt_metal::SetRuntimeArgs(program, mm_kernel_in0_id, core, mm_kernel_in0_args);
+            desc.kernels[mm_kernel_in0_id].runtime_args.emplace_back(core, mm_kernel_in0_args);
 
             // in1
             std::vector<uint32_t> mm_kernel_in1_sender_writer_args;
@@ -514,12 +514,13 @@ process_agmm_fusion_program_and_create_override_variables(
                 signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, &device);
             }
 
-            tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_kernel_in1_sender_writer_args);
+            desc.kernels[mm_kernel_in1_sender_writer_id].runtime_args.emplace_back(
+                core, mm_kernel_in1_sender_writer_args);
 
             // compute
             std::vector<uint32_t> mm_kernel_args;
             mm_kernel_args.push_back(static_cast<std::uint32_t>(core_type));
-            tt_metal::SetRuntimeArgs(program, mm_kernel, core, mm_kernel_args);
+            desc.kernels[mm_kernel].runtime_args.emplace_back(core, mm_kernel_args);
         }
     }
 
@@ -567,13 +568,13 @@ process_agmm_fusion_program_and_create_override_variables(
 
         // No need for unpadded widths array since no padding and uniform chunks
         // Add fused op semaphores directly
-        tt_metal::SetRuntimeArgs(program, mm_kernel_in0_id, core, mm_in0_args);
+        desc.kernels[mm_kernel_in0_id].runtime_args.emplace_back(core, mm_in0_args);
 
         /* in1 */
         std::vector<uint32_t> mm_in1_args = {
             static_cast<std::uint32_t>(core_type),
-            in1_buffer->address(),  // in1_tensor_addr
-            i,                      // ring_idx
+            0u,  // in1_tensor_addr: buffer binding on in1_buffer, below
+            i,   // ring_idx
         };
         if (in1_is_dram_sharded) {
             if (core.x <= 3) {
@@ -603,7 +604,8 @@ process_agmm_fusion_program_and_create_override_variables(
             ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
             signaler.push_llama_rs_rt_args_for_mm(mm_in1_args, core, in1_noc, &device);
         }
-        tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_in1_args);
+        ttnn::experimental::ccl::emplace_runtime_args_with_buffers(
+            desc.kernels[mm_kernel_in1_sender_writer_id], core, mm_in1_args, {{1, in1_buffer}});
 
         /* compute */
         std::vector<uint32_t> mm_kernel_compute_args = {
@@ -612,7 +614,7 @@ process_agmm_fusion_program_and_create_override_variables(
         };
         // No need for unpadded widths since all steps process uniform 1/4 chunks
 
-        tt_metal::SetRuntimeArgs(program, mm_kernel, core, mm_kernel_compute_args);
+        desc.kernels[mm_kernel].runtime_args.emplace_back(core, mm_kernel_compute_args);
     }
 
     // Runtime args for hop cores
@@ -626,7 +628,7 @@ process_agmm_fusion_program_and_create_override_variables(
             static_cast<std::uint32_t>(i),  // Core index
             // Hop cores may not be needed for multicast approach
         };
-        tt_metal::SetRuntimeArgs(program, mm_kernel_in0_id, core, mm_in0_args);
+        desc.kernels[mm_kernel_in0_id].runtime_args.emplace_back(core, mm_in0_args);
 
         // in1
         std::vector<uint32_t> mm_kernel_in1_sender_writer_args;
@@ -637,77 +639,20 @@ process_agmm_fusion_program_and_create_override_variables(
             ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
             signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, &device);
         }
-        tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_kernel_in1_sender_writer_args);
+        desc.kernels[mm_kernel_in1_sender_writer_id].runtime_args.emplace_back(core, mm_kernel_in1_sender_writer_args);
 
         // compute
         std::vector<uint32_t> mm_kernel_args;
         mm_kernel_args.push_back(static_cast<std::uint32_t>(core_type));
-        tt_metal::SetRuntimeArgs(program, mm_kernel, core, mm_kernel_args);
+        desc.kernels[mm_kernel].runtime_args.emplace_back(core, mm_kernel_args);
     }
-    std::vector<tt::tt_metal::CBHandle> shared_cbs = {cb_src0, cb_src1};
-    shared_cbs.insert(shared_cbs.end(), cb_outputs.begin(), cb_outputs.end());
-
-    return ttnn::prim::matmul_mcast_1d_common_override_variables_t{
-        {mm_kernel_in1_sender_writer_id},
-        shared_cbs,
-        false,
-        CoreCoord{0, 0},
-        all_cores_vec,
-        0,
-        ttnn::prim::Matmul1DType::GATHER_IN0};
-}  // end of process_agmm_fusion_program_and_create_override_variables
+}  // end of process_agmm_fusion_program_descriptor
 }  // namespace ttnn::operations::llama_agmm_fusion_helpers
 
 namespace ttnn::operations::llama_matmul {
 
-void override_agmm_fusion_program_parameters(
-    const ttnn::prim::matmul_mcast_1d_common_override_variables_t& override_variables,
-    const ttnn::prim::MatmulParams& operation,
-    tt_metal::Program& program,
-    const std::vector<ttnn::Tensor>& input_tensors,
-    const std::vector<std::optional<const ttnn::Tensor>>& /*optional_input_tensors*/,
-    const std::vector<ttnn::Tensor>& output_tensors) {
-    const auto& global_cb = operation.global_cb;
-
-    auto* src_buffer_a = input_tensors[0].buffer();
-    auto* src_buffer_b = input_tensors[1].buffer();
-
-    bool src0_sharded = input_tensors[0].is_sharded();
-    bool src1_sharded = input_tensors[1].is_sharded();
-    bool out_sharded = output_tensors[0].is_sharded();
-
-    // Manually unroll sender core
-    if (src0_sharded) {
-        UpdateDynamicCircularBufferAddress(program, override_variables.cbs[0], *src_buffer_a);
-    }
-    if (src1_sharded) {
-        if (!global_cb.has_value() && !src_buffer_b->is_dram()) {
-            UpdateDynamicCircularBufferAddress(program, override_variables.cbs[1], *src_buffer_b);
-        }
-    }
-    if (out_sharded) {
-        for (uint32_t i = 0; i < override_variables.cbs.size() - 2; ++i) {
-            // cbs 0 and 1 contain cb_src0 and cb_src1
-            // the rest contains the actual output cbs
-            const auto& cb_output = override_variables.cbs[i + 2];
-            const auto& out_buffer = output_tensors[i].buffer();
-            UpdateDynamicCircularBufferAddress(program, cb_output, *out_buffer);
-        }
-    }
-
-    if (not src1_sharded) {
-        auto& writer_runtime_args_by_core = GetRuntimeArgs(program, override_variables.kernels.at(0));
-        for (const auto& core : override_variables.cores) {
-            auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
-
-            /* in1 */
-            writer_runtime_args[1] = src_buffer_b->address();
-        }
-    }
-}
-
-static ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_fusion_(
-    tt_metal::Program& program,
+static void matmul_multi_core_agmm_fusion_(
+    tt::tt_metal::ProgramDescriptor& desc,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
     const std::optional<const Tensor>& bias,
@@ -868,8 +813,8 @@ static ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_multi_core
     for (const auto& output_tensor : output_tensors) {
         out_buffers.push_back(output_tensor.buffer());
     }
-    return llama_agmm_fusion_helpers::process_agmm_fusion_program_and_create_override_variables(
-        program,
+    llama_agmm_fusion_helpers::process_agmm_fusion_program_descriptor(
+        desc,
         a,
         b_tensors,
         *device,
@@ -910,8 +855,8 @@ static ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_multi_core
         fused_op_signaler);
 }
 
-ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_fusion_helper(
-    tt_metal::Program& program,
+void matmul_multi_core_agmm_fusion_helper(
+    tt::tt_metal::ProgramDescriptor& desc,
     const Tensor& a,
     const std::vector<Tensor>& b_tensors,
     const std::optional<const Tensor>& bias,
@@ -932,8 +877,8 @@ ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_f
     TT_FATAL(!config.mcast_in0, "Only GATHER_IN0 is supported. MCAST_IN0 has been removed.");
     TT_FATAL(config.gather_in0, "Only GATHER_IN0 is supported. This function requires gather_in0=true.");
 
-    return matmul_multi_core_agmm_fusion_(
-        program,
+    matmul_multi_core_agmm_fusion_(
+        desc,
         a,
         b_tensors,
         bias,
