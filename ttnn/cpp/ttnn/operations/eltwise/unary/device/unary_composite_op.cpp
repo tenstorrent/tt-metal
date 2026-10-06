@@ -331,6 +331,21 @@ static Tensor trilu_mask(
                      : ttnn::index_tril<std::uint32_t>(
                            input_a.logical_shape(), input_a.padded_shape(), diag, dt, Layout::TILE, input_a.device(), mem);
     }
+    // float32 needs its own mask as well: tril/triu select with ttnn::where for float32 (see
+    // trilu_select), and where rejects a bfloat16 predicate against a float32 tensor.
+    if (dt == DataType::FLOAT32) {
+        return upper
+                   ? ttnn::index_triu<float>(
+                         input_a.logical_shape(), input_a.padded_shape(), diag, dt, Layout::TILE, input_a.device(), mem)
+                   : ttnn::index_tril<float>(
+                         input_a.logical_shape(),
+                         input_a.padded_shape(),
+                         diag,
+                         dt,
+                         Layout::TILE,
+                         input_a.device(),
+                         mem);
+    }
     return upper ? ttnn::index_triu<::bfloat16>(
                        input_a.logical_shape(),
                        input_a.padded_shape(),
@@ -349,16 +364,30 @@ static Tensor trilu_mask(
                        mem);
 }
 
+// Zero what the mask drops. A float32 multiply runs on the SFPU with fp32 dest, where nothing
+// forces x * 0 = 0, so -inf * 0 and inf * 0 left NaN in the masked triangle instead of zero:
+// float32 selects instead. bfloat16 keeps the multiply because its SFPU multiply already forces
+// x * 0 = 0; block-float is not changed here, and integers have no inf.
+static Tensor trilu_select(
+    const Tensor& input_a, const Tensor& mask, const std::optional<MemoryConfig>& output_mem_config) {
+    if (input_a.dtype() == DataType::FLOAT32) {
+        // multiply tilizes a row-major operand itself; where does not, and the mask is tiled.
+        const Tensor input_tile = input_a.layout() == Layout::TILE ? input_a : ttnn::to_layout(input_a, Layout::TILE);
+        return ttnn::where(mask, input_tile, 0.0f, output_mem_config);
+    }
+    return ttnn::multiply(input_a, mask, std::nullopt, output_mem_config);
+}
+
 // tril : select lower triangular region of input matrix
 Tensor tril(const Tensor& input_a, std::int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor index_l = trilu_mask(input_a, diag, /*upper=*/false, output_mem_config);
-    return ttnn::multiply(input_a, index_l, std::nullopt, output_mem_config);
+    return trilu_select(input_a, index_l, output_mem_config);
 }
 
 // triu : select upper triangular region of input matrix
 Tensor triu(const Tensor& input_a, std::int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor index_u = trilu_mask(input_a, diag, /*upper=*/true, output_mem_config);
-    return ttnn::multiply(input_a, index_u, std::nullopt, output_mem_config);
+    return trilu_select(input_a, index_u, output_mem_config);
 }
 
 // polygamma ψ^(n)(x): implemented via a fused SFPU kernel using a finite-sum + tail approximation.
