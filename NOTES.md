@@ -29,3 +29,10 @@ Output/log: g15blx01:/var/tmp/fasth3/t166/out/a/{run.log,*.mp4}.
 Job 625 killed by broker device recovery at ~21:11 UTC on g15blx01 (chips 16-23 left the PCIe bus, tray 3; Runtime 94 s, exit -9, our job,
 during warmup stage 1). Log ended 21:10:51. Not re-queued by the broker. Next: when blx01 health check passes,
 resubmit the same job.sh (TAG=a); if it drops again, move to g15blx02.
+
+## Standard wake 21:14 UTC
+blx01 broker still in recovery: its health-gate job 629 (galaxy reset) running; its bridge-reset jobs 627/628 for chips 16-23 failed (exit 8).
+No submit while recovery runs. Probe: tmp/probe_blx01.sh (exit 0 once nothing is running on the blx01 broker).
+On wake: check `tt-device-mcp status` on g15blx01 shows the recovery/fabric-check completed OK and no other job of ours runs,
+then resubmit: ssh g15blx01 "tt-device-mcp run-bg 'env TAG=a bash /var/tmp/fasth3/t166/job.sh' -w /var/tmp/fasth3/t48 -e /var/tmp/fasth3/t159/env.yaml -t 600".
+If recovery failed or chips 16-23 stay missing: move to g15blx02 (needs an overlay tree under ~/fasth3, python files only).
