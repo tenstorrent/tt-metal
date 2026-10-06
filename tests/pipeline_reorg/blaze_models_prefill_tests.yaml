@@ -941,7 +941,6 @@
     export PREFILL_CHUNKED=1
     export PREFILL_CHUNK_SIZE=5120
     export PREFILL_TPS_ITERS=1
-    export M3_INDEX_K_TP_SHARD=1
     mpirun --pernode --tag-output bash -lc '
       python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
     '
@@ -978,7 +977,6 @@
     export PREFILL_CHUNKED=1
     export PREFILL_CHUNK_SIZE=5120
     export PREFILL_TPS_ITERS=5
-    export M3_INDEX_K_TP_SHARD=1
     export PREFILL_SKIP_PCC=1
     export PREFILL_REQUIRE_HIGH_POWER=1
     export PREFILL_EXPECTED_TPS=10675.4
