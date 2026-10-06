@@ -33,6 +33,8 @@ public:
      * Build a ComputeMeshRouterBuilder with all necessary components.
      * Handles its own config lookup based on location and fabric context.
      *
+     * @param fabric_context The fabric context; must outlive the returned builder
+     * @param dispatch_core_type Core type the device's dispatch runs on
      * @param device The device to build on
      * @param program The fabric program
      * @param local_node The local fabric node ID
@@ -41,6 +43,8 @@ public:
      * @return A unique_ptr to the constructed ComputeMeshRouterBuilder
      */
     static std::unique_ptr<ComputeMeshRouterBuilder> build(
+        const FabricContext& fabric_context,
+        CoreType dispatch_core_type,
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
         FabricNodeId local_node,
@@ -112,6 +116,7 @@ public:
 private:
     // Private constructor - use build() factory method
     ComputeMeshRouterBuilder(
+        const FabricContext& fabric_context,
         FabricNodeId local_node,
         const RouterLocation& location,
         std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder,

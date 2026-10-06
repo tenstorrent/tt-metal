@@ -20,7 +20,6 @@ struct TanhshrinkBf16Config {
     static constexpr uint32_t kBoundBits = 0x40400000u;
     static constexpr uint32_t kScaleBits = 0x3f800000u;
     static constexpr uint32_t kBiasBits = 0xbf800000u;
-    static constexpr bool kNegativeNanTerminal = false;
 };
 }  // namespace ckernel::sfpu
 #include "ckernel_sfpu_bf16_cascade_signed_abs_affine.h"

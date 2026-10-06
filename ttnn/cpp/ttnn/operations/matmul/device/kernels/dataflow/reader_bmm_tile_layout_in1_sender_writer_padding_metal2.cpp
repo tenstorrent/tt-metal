@@ -60,6 +60,13 @@
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
 
+#ifdef ENABLE_PREFETCHER_PIPE
+#ifdef ARCH_QUASAR
+#error "PrefetcherPipe weight delivery into this matmul has not been brought up on Quasar"
+#endif
+#include "api/dataflow/prefetcher_pipe.h"
+#endif
+
 void kernel_main() {
     // READER
 #if defined(FUSE_OP_ALL_GATHER) || defined(FUSE_OP_REDUCE_SCATTER)
@@ -233,7 +240,17 @@ void kernel_main() {
     constexpr uint32_t output_single_tile_size_bytes = get_tile_size(dfb::out);
 
 //  READER
-#ifdef IN1_SHARDED
+#if defined(ENABLE_PREFETCHER_PIPE)
+    // in1 is a relay laid over this worker's PrefetcherPipe ring, so the prefetcher's K-blocks arrive
+    // already in place: this kernel only turns a delivered entry (one K-block) into in1 credit for
+    // compute (its tiles, one relay page each) and, once compute is done with it, that entry's credit
+    // back into an ack to the sender. One accessor names every pipe; the one present on this worker is
+    // the one bound here. bind_relay() aligns in1 to the pipe's durable cursor (firmware resets it at
+    // launch) and makes pop_front wait for compute. The pipe lives to the end of kernel_main; its
+    // destructor stores the cursor back.
+    experimental::PrefetcherPipe pipe(pipe::in1);
+    auto in1_relay = pipe.bind_relay();
+#elif defined(IN1_SHARDED)
     dfb_in1.reserve_back(in1_block_num_tiles * num_blocks_inner_dim);
     dfb_in1.push_back(in1_block_num_tiles * num_blocks_inner_dim);
 #elif !defined(ENABLE_GLOBAL_CB)
@@ -243,7 +260,7 @@ void kernel_main() {
     // so they need in1's raw base address. It comes off the binding, never through a runtime arg.
     const uint32_t in1_tensor_addr = s1.get_bank_base_address();
 #endif  // IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED
-#endif  // IN1_SHARDED / ENABLE_GLOBAL_CB
+#endif  // ENABLE_PREFETCHER_PIPE / IN1_SHARDED / ENABLE_GLOBAL_CB
 
 #ifdef ENABLE_GLOBAL_CB
     // NOT CONVERTED TO METAL 2.0 -- a GlobalCircularBuffer ("remote CB") is not a DataflowBuffer and
@@ -368,7 +385,13 @@ void kernel_main() {
                         fused_op_receiver.update_current_block_start_tile_id(
                             block, in1_tensor_current_inner_dim_block_start_tile_id, in1_batch_tile_id);
 #endif  // FUSE_OP_ALL_GATHER
-#if defined(ENABLE_GLOBAL_CB)
+#if defined(ENABLE_PREFETCHER_PIPE)
+                        // One K-block of lookahead over the pipe: publish this block to compute, then
+                        // hand the previous block's entry back to the sender once compute has drained
+                        // it. One pipe entry is one K-block, published as its in1_block_num_tiles tiles.
+                        in1_relay.reserve_back(in1_block_num_tiles);
+                        pipe.wait_front(block == 0 ? 1u : 2u);
+#elif defined(ENABLE_GLOBAL_CB)
                         // The tensor prefetcher pushes this receiver's K-blocks in natural order.
                         // Keep one block of lookahead: publish the current block to compute, then
                         // wait for the unpack engine to drain the previous block before returning
@@ -489,7 +512,7 @@ void kernel_main() {
 
                         // Barrier! make sure the reads are done
                         noc.async_read_barrier();
-#endif  // IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED / IN1_SHARDED
+#endif  // ENABLE_PREFETCHER_PIPE / ENABLE_GLOBAL_CB / IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED / IN1_SHARDED
 
 #ifndef SKIP_MCAST
                         // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr
@@ -535,9 +558,17 @@ void kernel_main() {
                             in1_mcast_num_cores);
 #endif  // SKIP_MCAST
 
-#ifndef IN1_SHARDED
+#if defined(ENABLE_PREFETCHER_PIPE)
+                        // pop_front waits for compute to have popped that block's tiles out of in1
+                        // before acking it, so no free-space spin is needed. Publish only through the relay
+                        // view: pushing dfb_in1 as well would double the credit compute sees.
+                        in1_relay.push_back(in1_block_num_tiles);
+                        if (block >= 1) {
+                            pipe.pop_front(1, noc);
+                        }
+#elif !defined(IN1_SHARDED)
                         dfb_in1.push_back(in1_block_num_tiles);
-#endif  // IN1_SHARDED
+#endif  // ENABLE_PREFETCHER_PIPE / IN1_SHARDED
 #ifdef ENABLE_GLOBAL_CB
                         if (block >= 1) {
                             while (!dfb_in1.pages_reservable_at_back(in1_fifo_tiles - in1_block_num_tiles)) {
@@ -547,14 +578,18 @@ void kernel_main() {
                         }
 #endif
                     }
-#ifdef ENABLE_GLOBAL_CB
+#if defined(ENABLE_PREFETCHER_PIPE)
+                    if (num_blocks_inner_dim > 0) {
+                        pipe.pop_front(1, noc);
+                    }
+#elif defined(ENABLE_GLOBAL_CB)
                     if (num_blocks_inner_dim > 0) {
                         while (!dfb_in1.pages_reservable_at_back(in1_fifo_tiles)) {
                             invalidate_l1_cache();
                         }
                         experimental::remote_cb_pop_front(remote_cb_id, 1);
                     }
-#endif
+#endif  // ENABLE_PREFETCHER_PIPE / ENABLE_GLOBAL_CB
 #ifdef FUSE_BIAS
                     // Only read bias on first batch, or we have multiple output blocks
                     if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {

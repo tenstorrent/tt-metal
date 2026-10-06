@@ -96,8 +96,16 @@ def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer
                     dtype=kv_cache_dtype,
                     # Separate cache files for K and V to avoid collision.
                     # ``tensor_idx`` distinguishes shared buffers that have the
-                    # same shape but back different layer subsets.
-                    cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}_t{tensor_idx}",
+                    # same shape but back different layer subsets. A ``None``
+                    # tt_cache_path disables disk caching of these zero-filled
+                    # tensors entirely (callers whose DP ranks share one cache
+                    # dir opt out: concurrent create/load of the same file is
+                    # a torn-read crash, and caching zeros buys little).
+                    cache_file_name=(
+                        tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}_t{tensor_idx}"
+                        if tt_cache_path is not None
+                        else None
+                    ),
                 )
                 for kv in ["k", "v"]
             ]
@@ -1250,6 +1258,8 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
         "supports_async_decode": True,
         "supports_sample_on_device": True,
         "max_device_top_k": 32,
+        "supports_compact_host_logits": True,
+        "supports_selective_host_readback": True,
     }
 
     def __init__(self, *args, **kwargs):
