@@ -61,23 +61,45 @@ void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& ten
     // multi-process data-parallel vLLM server) sees either no file or a complete one, never a
     // half-written file that load_tensor_flatbuffer would accept and then crash on. Two writers
     // racing on the same name each produce a complete file; the last rename wins.
-    const std::string temp_file_name = fmt::format("{}.tmp.{}.{}", file_name, getpid(), next_temp_file_id());
-    FILE* output_file = fopen(temp_file_name.c_str(), "wb");
+    //
+    // The temporary file is created exclusively: containers sharing one cache can share a pid, so
+    // the name alone is not unique. It takes the destination's permissions when a destination
+    // exists, so replacing a restricted cache file does not widen access. A writer killed outright
+    // leaves its temporary file behind; the name does not end in .tensorbin, so cache listings
+    // that glob for tensorbins never pick it up.
+    mode_t file_mode = 0666;
+    struct stat destination_stat{};
+    if (stat(file_name.c_str(), &destination_stat) == 0) {
+        file_mode = destination_stat.st_mode & 07777;
+    }
+    std::string temp_file_name;
+    int fd = -1;
+    do {
+        temp_file_name = fmt::format("{}.tmp.{}.{}", file_name, getpid(), next_temp_file_id());
+        fd = open(temp_file_name.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, file_mode);
+    } while (fd == -1 && errno == EEXIST);
+    TT_FATAL(fd != -1, "Cannot create \"{}\": errno={} \"{}\"", temp_file_name, errno, strerror(errno));
+    FILE* output_file = nullptr;
+    bool renamed = false;
+    auto cleanup = ttsl::make_cleanup([&output_file, &fd, &temp_file_name, &renamed]() {
+        if (output_file != nullptr) {
+            if (fclose(output_file) != 0) {
+                log_warning(tt::LogAlways, "Failed to close \"{}\"", temp_file_name);
+            }
+        } else if (fd != -1) {
+            close(fd);
+        }
+        if (!renamed) {
+            unlink(temp_file_name.c_str());
+        }
+    });
+    output_file = fdopen(fd, "wb");
     TT_FATAL(
         output_file != nullptr,
         "Cannot open \"{}\" for writing: errno={} \"{}\"",
         temp_file_name,
         errno,
         strerror(errno));
-    bool renamed = false;
-    auto cleanup = ttsl::make_cleanup([f = output_file, &temp_file_name, &renamed]() {
-        if (f && fclose(f) != 0) {
-            log_warning(tt::LogAlways, "Failed to close \"{}\"", temp_file_name);
-        }
-        if (!renamed) {
-            unlink(temp_file_name.c_str());
-        }
-    });
 
     std::vector<SerializedTensorBuffer> buffers;
     flatbuffers::FlatBufferBuilder builder;
@@ -87,6 +109,12 @@ void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& ten
     write_tensor_file(output_file, temp_file_name, builder, buffers);
 
     TT_FATAL(fflush(output_file) == 0, "Cannot flush \"{}\": errno={} \"{}\"", temp_file_name, errno, strerror(errno));
+    // Close before publishing: a deferred write error (ENOSPC, a network file system) surfaces at
+    // fclose, and only a fully written file may be renamed into place.
+    const int close_rc = fclose(output_file);
+    output_file = nullptr;
+    fd = -1;
+    TT_FATAL(close_rc == 0, "Cannot close \"{}\": errno={} \"{}\"", temp_file_name, errno, strerror(errno));
     TT_FATAL(
         rename(temp_file_name.c_str(), file_name.c_str()) == 0,
         "Cannot rename \"{}\" to \"{}\": errno={} \"{}\"",

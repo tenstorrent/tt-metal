@@ -137,10 +137,30 @@ def test_dump_tensor_leaves_only_the_final_file(tmp_path):
 
 
 def test_dump_tensor_replaces_an_existing_file_atomically(tmp_path):
+    """Replacing a file must publish the new content without touching the inode a loaded tensor
+    is still mapped from; an in-place writer would truncate under that reader."""
     file_name, torch_tensor = _dump_host_tensor(tmp_path)
-    file_name.write_bytes(b"stale")
-    _dump_host_tensor(tmp_path)
+    original = ttnn.load_tensor(str(file_name))
+    replacement = torch_tensor + 1
+    ttnn.dump_tensor(str(file_name), ttnn.Tensor(replacement, ttnn.float32))
     assert sorted(p.name for p in tmp_path.iterdir()) == [file_name.name]
+    assert torch.equal(ttnn.to_torch(original), torch_tensor)
+    assert torch.equal(ttnn.to_torch(ttnn.load_tensor(str(file_name))), replacement)
+
+
+def test_dump_tensor_keeps_the_replaced_files_permissions(tmp_path):
+    """The temporary file is created with the destination's mode, so replacing a 0600 cache file
+    under umask 022 does not publish it as 0644; a new file still follows the umask."""
+    file_name, torch_tensor = _dump_host_tensor(tmp_path)
+    file_name.chmod(0o600)
+    old_umask = os.umask(0o022)
+    try:
+        _dump_host_tensor(tmp_path)
+        fresh, _ = _dump_host_tensor(tmp_path, name="fresh.tensorbin")
+    finally:
+        os.umask(old_umask)
+    assert file_name.stat().st_mode & 0o777 == 0o600
+    assert fresh.stat().st_mode & 0o777 == 0o644
     assert torch.equal(ttnn.to_torch(ttnn.load_tensor(str(file_name))), torch_tensor)
 
 
