@@ -140,6 +140,8 @@ class SpecWindowAttention(_PagedMixin, DSV41Attention):
 
 
 class SpecCompressedAttention(_PagedMixin, DSV41CompressedAttention):
+    per_row_rope = True
+
     def __init__(
         self,
         mesh_device,
