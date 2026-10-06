@@ -204,7 +204,8 @@ inline void _llk_math_compressed_custom_mm_(
         }
         else
         {
-            TTI_STALLWAIT(ckernel::p_stall::STALL_MATH, ckernel::p_stall::SRCB_VLD);
+            // Wait for math to drain first, so SRCB_VLD is tested on the bank the previous MVMUL's CLR_AB flipped to
+            TTI_STALLWAIT(ckernel::p_stall::STALL_MATH, ckernel::p_stall::MATH | ckernel::p_stall::SRCB_VLD);
             TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
         }
         index++;

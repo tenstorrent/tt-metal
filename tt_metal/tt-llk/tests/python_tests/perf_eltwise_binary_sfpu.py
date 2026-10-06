@@ -59,6 +59,7 @@ def get_dest_accum_modes(formats):
         MathOperation.SfpuElwdiv,
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuElwpow,
+        MathOperation.SfpuXlogy,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
     loop_factor=[
