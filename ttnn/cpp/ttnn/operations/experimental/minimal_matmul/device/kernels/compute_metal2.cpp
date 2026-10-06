@@ -362,6 +362,7 @@ void add_bias_and_addcmul_block(
 }
 
 // Slightly modified from compute_common.hpp
+template <bool row_mop>
 void matmul_blocks(
     const DFBBindingToken in0_dfb,
     const DFBBindingToken in1_dfb,
@@ -384,7 +385,7 @@ void matmul_blocks(
             uint32_t in1_index = in1_index_offset;
 
             for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
-                matmul_block(
+                matmul_block<row_mop>(
                     in0_dfb,
                     in1_dfb,
                     in0_index,
@@ -427,6 +428,12 @@ void kernel_main() {
     constexpr auto N_blocks_per_core = get_arg(args::N_blocks_per_core);
     constexpr auto subblock_h = get_arg(args::subblock_h);
     constexpr auto subblock_w = get_arg(args::subblock_w);
+#if defined(ARCH_BLACKHOLE) && !defined(SFPU_OP_INIT_ACTIVATION)
+    // one math MOP per sub block row; not with a fused activation, whose SFPU init runs once before the matmul inits
+    constexpr bool row_mop = subblock_h * subblock_w >= 8 && K_block_tiles > 1;
+#else
+    constexpr bool row_mop = false;
+#endif
 
     const auto M_start_tile = get_arg(args::M_start_tile);
     const auto M_end_tile = get_arg(args::M_end_tile);
@@ -491,7 +498,7 @@ void kernel_main() {
             // configured for the previous output stage's operands (see #55052).
             reconfig_data_format(dfb::in1, dfb::in0);
             pack_reconfig_data_format(dfb::intermediate);
-            matmul_block_init(
+            matmul_block_init<row_mop>(
                 dfb::in0,
                 dfb::in1,
                 false /*transpose*/,
@@ -504,7 +511,7 @@ void kernel_main() {
                 dfb_in0.wait_front(in0_block_num_tiles);
                 dfb_in1.wait_front(in1_block_num_tiles);
 
-                matmul_blocks(
+                matmul_blocks<row_mop>(
                     dfb::in0,
                     dfb::in1,
                     dfb::intermediate,
