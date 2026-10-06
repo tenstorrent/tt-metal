@@ -85,9 +85,9 @@
 #   div family (whole file) ......... fp32 remainder/fmod, div_no_nan scalar memory-config
 #                                     plumbing, int32 div paths, output-dtype and mixed-dtype
 #                                     paths (bf16 fmod/remainder moved out, see item 3)
-#   ternary ......................... mac, lerp, addcmul, addcdiv
+#   ternary ......................... moved to item 3
 #
-# 3. Checks from the two category test files, standing in for basic-case coverage this gate used
+# 3. Checks from the category test files, standing in for basic-case coverage this gate used
 #    to get for free from tests since deleted upstream:
 #   test_floor_div (category5) ...... replaces the deleted test_binary_floor_div_ttnn; a full
 #                                     2048x2048 sweep
@@ -100,6 +100,9 @@
 #                                     t-s; replaces the test_binary_logical_and__ttnn /
 #                                     _or__ttnn / _xor_ttnn selectors, all three dead here since
 #                                     #57637 moved this coverage to test_binary_category3_bfloat16.py
+#   test_ternary_category1_bfloat16
+#     (whole file) .................. mac, lerp, addcmul, addcdiv and where.
+#
 #   test_floor_div/test_modulo_ops together add ~2s of test time on top of this job's own device
 #   bring-up (measured in isolation), since the divide/remainder/fmod kernels are already warm
 #   from the rest of this selection; test_logical_ops (+ scalar) adds ~7s on its own (60 cases,
@@ -137,11 +140,12 @@
     tests/ttnn/unit_tests/operations/eltwise/test_composite.py
     tests/ttnn/unit_tests/operations/eltwise/test_elt_binary.py
     tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py
-    tests/ttnn/unit_tests/operations/eltwise/test_binary_category5_bfloat16.py
-    tests/ttnn/unit_tests/operations/eltwise/test_binary_category3_bfloat16.py
     tests/ttnn/unit_tests/operations/eltwise/test_binary_category1_bfloat16.py
     tests/ttnn/unit_tests/operations/eltwise/test_binary_category2_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category3_bfloat16.py
     tests/ttnn/unit_tests/operations/eltwise/test_binary_category4_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category5_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_ternary_category1_bfloat16.py
     -k "(subtile or where_bcast or program_cache_different_broadcast_shapes
     or test_where_tss or test_where_tst or test_where_tts
     or test_gelu or test_silu or test_01_volume_sin
@@ -150,8 +154,7 @@
     or test_binary_atan2_ttnn or test_floor_div or test_modulo_ops
     or test_logical_ops or test_binary_nextafter_ttnn
     or test_binary_left_shift or test_binary_right_shift
-    or test_mac_ttnn or test_lerp_ttnn
-    or test_ternary_addcmul_ttnn or test_ternary_addcdiv_ttnn
+    or test_ternary_category1_bfloat16
     or test_unary_composite_mish_ttnn or test_unary_composite_tril_ttnn
     or test_unary_composite_triu_ttnn
     or test_bias_gelu
