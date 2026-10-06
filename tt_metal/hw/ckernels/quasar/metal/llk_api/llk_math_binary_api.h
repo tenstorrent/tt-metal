@@ -83,6 +83,9 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary(std::uint32_t dst_index, [[maybe_unused]] const bool clear_fp32_dst_acc = true) {
     constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
+    LLK_ASSERT(
+        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        "llk_math_eltwise_binary: dst_index exceeds dest capacity");
 
     WAYPOINT("MBIW");
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
@@ -129,6 +132,9 @@ inline void llk_math_eltwise_binary(
     static_assert(
         eltwise_binary_type == EltwiseBinaryType::ELWMUL || math_fidelity == MathFidelity::LoFi,
         "Math fidelity must be LoFi for non-ELWMUL ops");
+    LLK_ASSERT(
+        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        "llk_math_eltwise_binary: dst_index exceeds dest capacity");
 
     WAYPOINT("MBIW");
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {

@@ -109,6 +109,9 @@ inline void llk_math_reduce(const std::uint32_t dst_index, const ckernel::Tensor
                 tensor_shape.num_faces_c_dim == DEFAULT_TENSOR_SHAPE.num_faces_c_dim,
             "Int reduce: only default 32x32 tensor_shape supported");
     }
+    LLK_ASSERT(
+        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        "llk_math_reduce: dst_index exceeds dest capacity");
     _llk_math_reduce_<type, dim, is_int_fpu_en>(dst_index, tensor_shape);
 }
 
