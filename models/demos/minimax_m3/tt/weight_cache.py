@@ -23,10 +23,7 @@ from loguru import logger
 import ttnn
 from models.demos.minimax_m3.utils.general_utils import is_sparse_attention_layer
 
-# How every M3 weight-cache miss is written (ttnn.as_tensor's cache_dump_mode). The prefill runs one pipeline stage
-# per rank, so ranks build different weights; as_tensor's default DISTRIBUTED_GATHER is a world collective whose
-# barriers never pair up across them, and a multi-rank cold cache fill deadlocks. LOCAL writes each rank's own
-# host-local tensor (one mesh per rank, distinct files per stage).
+# Each pipeline rank builds its own layers, so each writes its own cache files.
 CACHE_DUMP_MODE = ttnn.DumpTensorMode.LOCAL
 
 # ttnn's cache_file_name suffix uses these dtype tags (e.g. ..._dtype_BFLOAT8_B_layout_TILE.tensorbin).
