@@ -229,7 +229,8 @@ def _get_plan(mesh_device, cluster_axis, num_links, M, K, N, scatter_dim, a_dtyp
     )
     xport_cores = pl.fwd_ports + pl.bwd_ports + pl.finals
     all_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in xport_cores + compute_cores])
-    sems = tuple(ttnn.create_global_semaphore(mesh_device, all_set, 0) for _ in range(5))
+    # arrival fwd / bwd, ready fence, block ready, block ack x 3 (fwd ports, bwd ports, finals)
+    sems = tuple(ttnn.create_global_semaphore(mesh_device, all_set, 0) for _ in range(7))
     ttnn.synchronize_device(mesh_device)  # every counter zero before any chip's first call increments a neighbour's
     plan = dict(
         G=G,

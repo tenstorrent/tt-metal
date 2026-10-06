@@ -1,0 +1,6 @@
+{"event":"hypothesis","detail":"pcc 0.954: relays add a later block partial; shared sem_block_ack lets a bwd-port ack release the fwd-port slot early","ts":"2026-10-06T19:34:01+00:00"}
+{"event":"fix_applied","detail":"one ack counter per consumer kind (fwd ports, bwd ports, finals)","ts":"2026-10-06T19:34:01+00:00"}
+{"event":"test_run","result":"dev pass 53/53, non-dev 1 fail (test_maxed_precision pcc 0.992)","classification":"race","ts":"2026-10-06T19:34:01+00:00"}
+{"event":"hypothesis","detail":"lstsq over all device x block partials: line-end port reads hand-off slot of compute idx 1 before pack (stale = previous call own block). Cumulative ready counter: fast cores next-block signals substitute for a slow core current-block signal","ts":"2026-10-06T19:34:01+00:00"}
+{"event":"fix_applied","detail":"compute core signals next block of a kind only after the kind consumers acked all earlier blocks of the kind","ts":"2026-10-06T19:34:01+00:00"}
+{"event":"test_run","result":"dev 53 pass, non-dev 53 pass x2, debug 3 pass","ts":"2026-10-06T19:34:01+00:00"}

@@ -323,7 +323,8 @@ def create_mesh_program_descriptor(
     compute_config,
 ):
     """groups: {coord: (p, prev_coord|None, next_coord|None)}; links: {(coord, peer): [link ids]}."""
-    sem_arr_fwd, sem_arr_bwd, sem_ready_fence, sem_block_ready, sem_block_ack = sems
+    sem_arr_fwd, sem_arr_bwd, sem_ready_fence, sem_block_ready = sems[:4]
+    sem_block_ack = sems[4:7]  # one ack counter per consumer kind: fwd ports, bwd ports, finals
     G = blk.G
     L = num_links
     cm, cn = blk.core_m_tiles, blk.core_n_tiles
@@ -373,11 +374,11 @@ def create_mesh_program_descriptor(
             ttnn.cb_descriptor_from_sharded_tensor(CB_PARTIAL_HANDOFF, handoff),
         ]
         # per compute-order index: block, consumer kind (0 fwd ports, 1 bwd ports, 2 finals), cumulative acks
-        order_rt, cum = [], 0
+        order_rt, cum = [], [0, 0, 0]  # cumulative acks per consumer kind (each kind acks in order)
         for j in order:
             kind = 2 if j == p else (0 if j > p else 1)
-            cum += 2 * L if kind == 2 else L
-            order_rt += [j, kind, cum]
+            cum[kind] += 2 * L if kind == 2 else L
+            order_rt += [j, kind, cum[kind]]
 
         a_groups = {1: [], 0: []}
         w_groups = {1: [], 0: []}
@@ -397,7 +398,7 @@ def create_mesh_program_descriptor(
                         min(cm, blk.blk_m_tiles - row0),
                         blk.blk_m_tiles if blk.scatter_dim == -2 else 0,
                         sem_block_ready,
-                        sem_block_ack,
+                        *sem_block_ack,
                     ]
                     + order_rt
                     + consumers
@@ -506,7 +507,7 @@ def create_mesh_program_descriptor(
         # ---------------- transport row ----------------
         line_rt = [m for m in mcoords] + [n for n in ncoords]
 
-        def xport_reader_rt(first, stride, full, entries, arr_a, arr_b):
+        def xport_reader_rt(first, stride, full, entries, arr_a, arr_b, ack_sem):
             return (
                 [
                     scr_addr,
@@ -522,7 +523,7 @@ def create_mesh_program_descriptor(
                     n_cc,
                     arr_a,
                     arr_b,
-                    sem_block_ack,
+                    ack_sem,
                     x0,
                     y0,
                     x1,
@@ -596,7 +597,9 @@ def create_mesh_program_descriptor(
                 core = port_list[l]
                 full = _count_segs(l, L, xp.segs_per_block)
                 entries = [(cidx[j] % HANDOFF_DEPTH, j, 0) for j in blocks]
-                rt = xport_reader_rt(l, L, full, entries, sem_arr_fwd, sem_arr_fwd)
+                rt = xport_reader_rt(
+                    l, L, full, entries, sem_arr_fwd, sem_arr_fwd, sem_block_ack[0 if d == "fwd" else 1]
+                )
                 (rd_relay if relay else rd_end)[core.x][core.y] = rt
                 (relay_ports if relay else end_ports).append(core)
                 if relay:
@@ -644,7 +647,7 @@ def create_mesh_program_descriptor(
             first = i // 2 + (i % 2) * L
             n = _count_segs(first, 2 * L, xp.segs_per_block)
             rd_final[core.x][core.y] = xport_reader_rt(
-                first, 2 * L, n, [(cidx[p] % HANDOFF_DEPTH, p, G)], sem_arr_fwd, sem_arr_bwd
+                first, 2 * L, n, [(cidx[p] % HANDOFF_DEPTH, p, G)], sem_arr_fwd, sem_arr_bwd, sem_block_ack[2]
             )
             add_final[core.x][core.y] = [n * xp.seg_tiles]
             wr_final[core.x][core.y] = [

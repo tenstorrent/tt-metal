@@ -12,7 +12,10 @@
 //   many producers -> few consumers with cumulative counters):
 //   - when block `signalled` is fronted in cb_partial_handoff: one noc_semaphore_inc of sem_block_ready on each of
 //     its consumers (the L ports of its direction, or the 2L finals for the chip's own block);
-//   - when sem_block_ack has reached the cumulative ack count of block `popped`: pop its hand-off slot.
+//   - when the ack counter of block `popped`'s consumer kind has reached that kind's cumulative ack count up to and
+//     including the block: pop its hand-off slot. One counter per consumer kind (fwd ports, bwd ports, finals): each
+//     kind acks its own blocks in order, but the kinds run independently, so a single shared counter could release a
+//     slot on another kind's acks before its own readers are done.
 // Both are non-blocking polls, run after every K-block transfer and inside every wait of this kernel, so a remote
 // wait never stalls the operand stream; only the final drain blocks.
 
@@ -49,33 +52,52 @@ void kernel_main() {
     const uint32_t a_valid_rows = get_arg_val<uint32_t>(arg++);      // <= core_m_tiles (ragged last m-line)
     const uint32_t a_block_row_step = get_arg_val<uint32_t>(arg++);  // blk_m_tiles for scatter_dim=-2, else 0
     const uint32_t ready_sem_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t ack_sem_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t order_idx = arg;  // num_blocks x [block j, consumer kind (0 fwd, 1 bwd, 2 finals), cumulative acks]
+    const uint32_t ack_sem_base = arg;  // 3 ack counters (L1 addresses), one per consumer kind
+    arg += 3;
+    const uint32_t order_idx = arg;  // num_blocks x [block j, consumer kind (0 fwd, 1 bwd, 2 finals), kind's cum. acks]
     arg += 3 * num_blocks;
     const uint32_t consumers_idx = arg;  // 4L packed NoC coords (x << 16 | y): fwd ports, bwd ports, finals
     arg += 4 * num_links;
 
     const auto a_acc = TensorAccessor(a_args, a_addr, a_tile_bytes);
-    volatile tt_l1_ptr uint32_t* ack = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ack_sem_addr);
 
     uint32_t signalled = 0, popped = 0;
-    // handoff_block + release_block, non-blocking.
-    auto poll = [&]() {
-        if (signalled < num_blocks &&
-            cb_pages_available_at_front(cb_partial_handoff, (signalled - popped + 1) * block_tiles)) {
-            const uint32_t kind = get_arg_val<uint32_t>(order_idx + 3 * signalled + 1);
-            const uint32_t first = kind == 0 ? 0 : (kind == 1 ? num_links : 2 * num_links);
-            const uint32_t count = kind == 2 ? 2 * num_links : num_links;
-            for (uint32_t c = 0; c < count; ++c) {
-                const uint32_t xy = get_arg_val<uint32_t>(consumers_idx + first + c);
-                noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFF, ready_sem_addr), 1);
-            }
-            ++signalled;
+    auto kind_ack = [&](uint32_t kind) {
+        return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(ack_sem_base + kind));
+    };
+    // handoff_block: signal block `signalled` to its consumers once it is fronted.
+    auto try_signal = [&]() {
+        if (signalled >= num_blocks ||
+            !cb_pages_available_at_front(cb_partial_handoff, (signalled - popped + 1) * block_tiles)) {
+            return;
         }
-        if (popped < signalled && *ack >= get_arg_val<uint32_t>(order_idx + 3 * popped + 2)) {
+        const uint32_t kind = get_arg_val<uint32_t>(order_idx + 3 * signalled + 1);
+        const uint32_t first = kind == 0 ? 0 : (kind == 1 ? num_links : 2 * num_links);
+        const uint32_t count = kind == 2 ? 2 * num_links : num_links;
+        // A consumer counts ready signals cumulatively from every compute core, so no core may signal its next block
+        // before the consumer is done with its current one (else a fast core's next-block signal could stand in for a
+        // slow core's missing current-block signal): wait until this kind's consumers have acked every earlier block
+        // of the kind.
+        if (kind_ack(kind) < get_arg_val<uint32_t>(order_idx + 3 * signalled + 2) - count) {
+            return;
+        }
+        for (uint32_t c = 0; c < count; ++c) {
+            const uint32_t xy = get_arg_val<uint32_t>(consumers_idx + first + c);
+            noc_semaphore_inc(get_noc_addr(xy >> 16, xy & 0xFFFF, ready_sem_addr), 1);
+        }
+        ++signalled;
+    };
+    // release_block: pop block `popped` once its consumers have acked it.
+    auto try_release = [&]() {
+        if (popped < signalled && kind_ack(get_arg_val<uint32_t>(order_idx + 3 * popped + 1)) >=
+                                      get_arg_val<uint32_t>(order_idx + 3 * popped + 2)) {
             cb_pop_front(cb_partial_handoff, block_tiles);
             ++popped;
         }
+    };
+    auto poll = [&]() {
+        try_signal();
+        try_release();
     };
     auto reserve_polling = [&](uint32_t pages) {
         while (!cb_pages_reservable_at_back(cb_act_operand, pages)) {
@@ -124,7 +146,15 @@ void kernel_main() {
         poll();
     }
     // Re-arm: every semaphore is zero between calls.
-    const uint32_t total_acks = get_arg_val<uint32_t>(order_idx + 3 * (num_blocks - 1) + 2);
-    noc_semaphore_inc(get_noc_addr(ack_sem_addr), 0u - total_acks);
+    // re-arm each kind's counter by its total (the cumulative count of its last block)
+    uint32_t totals[3] = {0, 0, 0};
+    for (uint32_t b = 0; b < num_blocks; ++b) {
+        totals[get_arg_val<uint32_t>(order_idx + 3 * b + 1)] = get_arg_val<uint32_t>(order_idx + 3 * b + 2);
+    }
+    for (uint32_t kind = 0; kind < 3; ++kind) {
+        if (totals[kind] > 0) {
+            noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(ack_sem_base + kind)), 0u - totals[kind]);
+        }
+    }
     noc_async_atomic_barrier();
 }
