@@ -172,15 +172,12 @@ constexpr uint32_t div_up() {
 constexpr uint32_t W0_W1_TXNS_PER_BLOCK = 2;
 // Tokens per expert chunk: one tile row of activations (the kernels' "tokens_per_chunk" compile arg).
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
-// The DRAM transaction size in tiles is a per-shape compile-time parameter (tiles_per_txn_for_shape below; the host
-// passes it to the kernels as the "tiles_per_txn" named compile arg and they build MoeRingConfig with it). Every block
-// height derives from it (MoeRingConfig::block_tiles_h / half_block_tiles_h): there are deliberately no fixed
-// 14-tile *_TILES_H / *_TILES_PER_TXN constants, so code written for the fixed geometry fails to compile rather than
-// read 28-tile blocks from a 20-tile stream.
-constexpr uint32_t DEFAULT_TILES_PER_TXN = 14;  // 8,064 B BF4; 28-tile blocks, 4 wide x 7 K rows
-constexpr uint32_t ALT_TILES_PER_TXN = 20;      // 11,520 B BF4 (one NoC packet); 40-tile blocks, 4 wide x 10 K rows
+// DRAM transaction sizes in tiles. The host picks one per shape (tiles_per_txn_for_shape) and passes it to the kernels
+// as the "tiles_per_txn" compile arg; every block height derives from it (block_tiles_h, half_block_tiles_h).
+constexpr uint32_t DEFAULT_TILES_PER_TXN = 14;  // 8,064 B BF4 (one Wormhole NoC packet); blocks 4 wide x 7 K rows
+constexpr uint32_t ALT_TILES_PER_TXN = 20;      // 11,520 B BF4 (one Blackhole NoC packet); blocks 4 wide x 10 K rows
 
-// probably don't need this for W0_W1 and W2 because it's the same
+// Block width in tiles, both weight streams
 constexpr uint32_t W0_W1_BLOCK_TILES_W = 4;
 
 // Half block-column: the odd gate/up column of a ring core that owns an odd column count is stored as
@@ -188,9 +185,9 @@ constexpr uint32_t W0_W1_BLOCK_TILES_W = 4;
 // stored 4-tile row holds two consecutive K rows (W0 k, W1 k, W0 k+1, W1 k+1).
 constexpr uint32_t W0_W1_HALF_BLOCK_TILES_W = W0_W1_BLOCK_TILES_W / 2;
 
-// Let's call this a constant
+// W2 output tiles per a2a iteration
 constexpr uint32_t W2_TILES_PER_A2A_ITER_W = 4;
-// Half-width last a2a iteration (ALT_TILES_PER_TXN only, when every core has 1 or 2 output tiles left for it):
+// Half-width last a2a iteration (20-tile transactions only, when every core has 1 or 2 output tiles left for it):
 // 2 output tiles wide, twice the K rows per block, two consecutive K rows per stored 4-tile row.
 constexpr uint32_t W2_HALF_A2A_ITER_TILES_W = W2_TILES_PER_A2A_ITER_W / 2;
 
@@ -240,10 +237,8 @@ constexpr uint32_t even_stride_at_least_a2a_width(uint32_t tiles) {
 }
 
 // Per-shape choice of the W0/W1 column layout. Compact (each ring core stores only its own shard_tiles(Nt, c)
-// columns) when that shortens the critical path: the busiest core owns fewer columns than the uniform even stride
-// (1-3 columns, or an odd count). Otherwise (e.g. 6/5 or 8/7 columns) the busiest core does the same work either way
-// and every core keeps the uniform stride, byte-identical to the per-core stride layout: compacting such shapes only
-// added cross-bank reads and half-width passes (GLM-4.5-Air 4096/1408, Nemotron-3-Nano 2688/1856 measured ~1 % slower).
+// columns) only when that shortens the critical path: the busiest core owns fewer columns than the uniform even
+// stride. Otherwise every core keeps the uniform stride, byte-identical to the per-core stride layout.
 constexpr bool w0_w1_compact_for_shape(uint32_t Nt, uint32_t n_cores) {
     const uint32_t max_cols = (Nt + n_cores - 1) / n_cores;
     return max_cols < even_stride_at_least_a2a_width(max_cols);
@@ -331,22 +326,18 @@ constexpr uint32_t half_block_tiles_h(uint32_t tiles_per_txn) {
     return W0_W1_TXNS_PER_BLOCK * tiles_per_txn / W0_W1_HALF_BLOCK_TILES_W;
 }
 
-// The per-shape DRAM transaction size (tiles) of both weight streams. 20-tile transactions store the
-// Qwen3.8-Flash-Next expert (hidden 2560 = 80 tiles, intermediate 640 = 20 tiles, no bias) on the 8-bank ring, where
-// the layout has no padding at all (gate/up K 80 = 8 x 10 and 4 x 20, W2 K 20 = 2 x 10 and 1 x 20; 80 blocks =
-// 10 per bank; W2 a2a iterations 4 + 4 + a half). Other rings and every other shape keep the 14-tile layout: 14
-// tiles is one 8 KB Wormhole NoC packet, and the 20-tile blocks with padded bank pieces and no half-width W2
-// iteration (12 cores: 7 blocks per bank + 4 pad, W2 4 + 3) produced wrong outputs on a Wormhole chip. Mirrored by
-// moe_compute_utils.py::_tiles_per_txn.
+// The per-shape DRAM transaction size (tiles) of both weight streams. 20 tiles only for the 2560/640 expert
+// (80/20 tiles, no bias) on the 8-core ring, where that layout has no padding (gate/up K 80 = 8 x 10, W2 K 20 =
+// 2 x 10, 10 blocks per bank, W2 a2a iterations 4 + 4 + a half); 14 tiles everywhere else. Other rings are not
+// supported at 20 tiles (wrong outputs on a 12-core ring). Mirrored by moe_compute_utils.py::_tiles_per_txn.
 constexpr uint32_t tiles_per_txn_for_shape(uint32_t Ht, uint32_t Nt, bool has_bias, uint32_t num_cores) {
     return (Ht == 80 && Nt == 20 && !has_bias && num_cores == 8) ? ALT_TILES_PER_TXN : DEFAULT_TILES_PER_TXN;
 }
 
-// Blocks the weight CB (c_3) holds: as many as fit in the 3-block budget of 14-tile transactions (84 tiles), and at
-// least 3 (3 for 14-tile and for 20-tile transactions, 4 for 10). dm0 keeps all but one of them in flight as DRAM
-// reads, so smaller transactions keep about the same bytes in flight. The streaming decode ring adds a fourth block
-// (the factory's "weight_slots" named arg, moe_compute_program_factory.cpp): the prefill ring forms' L1 has no room
-// for it (their feed halves are larger), the decode ring's has.
+// Blocks the weight CB (c_3) holds: as many as fit in three 14-tile-transaction blocks (84 tiles), at least 3.
+// dm0 keeps all but one of them in flight as DRAM reads.
+// Streaming decode adds a fourth block via the factory's "weight_slots" argument. Prefill rings use the
+// default count because their larger feed halves leave no L1 room for the extra block.
 constexpr uint32_t weight_cb_slots(uint32_t tiles_per_txn) {
     const uint32_t fit = (3 * W0_W1_TXNS_PER_BLOCK * DEFAULT_TILES_PER_TXN) / (W0_W1_TXNS_PER_BLOCK * tiles_per_txn);
     return fit < 3 ? 3 : fit;
@@ -363,8 +354,8 @@ constexpr uint32_t w0_w1_bank_blocks_per_expert(
     return detail::div_up(expert_blocks, num_banks);
 }
 
-// W2 a2a iterations: ceil(max W2 output tiles per core / 4). With ALT_TILES_PER_TXN the last one is half width
-// when it has 1 or 2 output tiles; 14-tile layouts keep 4-wide iterations only (unchanged).
+// W2 a2a iterations: ceil(max W2 output tiles per core / 4). With 20-tile transactions the last one is half width
+// when it has 1 or 2 output tiles; 14-tile layouts keep 4-wide iterations only.
 constexpr uint32_t w2_num_a2a_iters(uint32_t Ht, uint32_t n_cores) {
     return detail::div_up(detail::div_up(Ht, n_cores), W2_TILES_PER_A2A_ITER_W);
 }
@@ -453,7 +444,7 @@ struct MoeRingConfig {
     static constexpr uint32_t num_a2a_iters =
         (max_w2_tiles_per_core + W2_TILES_PER_A2A_ITER_W - 1) / W2_TILES_PER_A2A_ITER_W;
     static constexpr uint32_t w2_tiles_per_expert_w = num_a2a_iters * W2_TILES_PER_A2A_ITER_W;
-    // With ALT_TILES_PER_TXN the last a2a iteration is half width (2 output tiles, w2_blocks_per_half_a2a_iter
+    // With 20-tile transactions the last a2a iteration is half width (2 output tiles, w2_blocks_per_half_a2a_iter
     // blocks of 2 wide x half_block_tiles_h) when every core's last iteration has at most 2 output tiles. The
     // output rows keep the w2_tiles_per_expert_w pitch: the half iteration still packs 4 DEST tiles, the two it does
     // not compute are zero (the packer clears the DEST half at every tile_regs_release) and dm1 copies only

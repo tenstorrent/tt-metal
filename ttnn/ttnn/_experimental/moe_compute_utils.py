@@ -26,7 +26,8 @@ in ``moe_ring_common.h``.
 
 - ``W0_W1_BLOCK_TILES_W = 4``     — W0/W1 read block width in tiles
 - ``W2_TILES_PER_A2A_ITER_W = 4`` — W2 a2a-iter width in tiles
-- ``BLOCK_TILES_H = 7``           — tiles per DRAM read transaction (height)
+- Block height: 7 tiles with the default 14-tile DRAM transaction (``BLOCK_TILES_H``), 10 with the
+  20-tile transaction; ``_tiles_per_txn`` picks the transaction size per shape
 
 Other tile counts (W0/W1 shard sizes, W2 groups per core, etc.) are now
 computed from ``hidden_size`` and ``intermediate_size`` via the shard formulas
@@ -49,12 +50,15 @@ in a kernel-specific format and set ``has_bias=True`` on the ``moe_compute`` cal
 
 **Output shapes**
 
-- ``prepare_w0_w1_tensor_for_moe_compute``: ``(num_cores, L, E, groups_per_core, K_padded, 4*TILE_SIZE)``
-- ``prepare_w0_w1_tensor_with_bias``: K_padded includes the bias tile row plus padding
-- ``prepare_w2_tensor_for_moe_compute``: ``(num_cores, L, E, w2_groups_per_core, N_padded, 4*TILE_SIZE)``
+- ``prepare_w0_w1_tensor_for_moe_compute``: ``(num_banks, L, E, bank_blocks_per_expert, block_rows, 4*TILE_SIZE)``
+  (each ring core stores only its own gate/up columns), or ``(num_cores, L, E, groups_per_core, K_padded,
+  4*TILE_SIZE)`` when every core stores the same even column count with 14-tile transactions
+- ``prepare_w0_w1_tensor_with_bias``: the padded K includes the bias tile row
+- ``prepare_w2_tensor_for_moe_compute``: ``(num_cores, L, E, w2_groups_per_core, N_padded, 4*TILE_SIZE)``, or
+  ``(num_cores, L, E, w2_blocks_per_core, block_rows, 4*TILE_SIZE)`` when the last a2a iteration is half width
 - ``prepare_w2_tensor_with_bias``: N_padded includes the bias tile row plus padding
 
-The leading ``num_cores`` dimension (typically 12) corresponds to DRAM bank layout.
+The leading dimension is the DRAM bank, one per ring core (12 on Wormhole, 7 or 8 on Blackhole).
 
 **DRAM sharding**
 
@@ -325,11 +329,10 @@ W0_W1_BLOCK_TILES_W = 4  # matches moe_ring_common.h:W0_W1_BLOCK_TILES_W
 W2_TILES_PER_A2A_ITER_W = 4  # matches moe_ring_common.h:W2_TILES_PER_A2A_ITER_W
 BLOCK_TILES_H = 7  # block height for the default 14-tile transaction; see _block_tiles_h
 # Half block-column (the odd gate/up column of a ring core with an odd column count): 2 tiles wide
-# (W0 c, W1 c) x 14 K rows per 28-tile block. Matches moe_ring_common.h:W0_W1_HALF_BLOCK_TILES_{W,H}.
+# (W0 c, W1 c), twice the block height (_half_block_tiles_h). Matches moe_ring_common.h:W0_W1_HALF_BLOCK_TILES_W.
 W0_W1_HALF_BLOCK_TILES_W = 2
-W0_W1_HALF_BLOCK_TILES_H = 14
 # DRAM transaction geometry (moe_ring_common.h): a block is 2 transactions; the transaction size is per shape
-# (_tiles_per_txn): 14 tiles, or 20 for the Qwen3.8-Flash-Next expert. Half-width last W2 a2a iteration (20-tile
+# (_tiles_per_txn): 14 tiles, or 20 for the 2560/640 expert shape. Half-width last W2 a2a iteration (20-tile
 # transactions only): 2 output tiles wide (W2_HALF_A2A_ITER_TILES_W).
 W0_W1_TXNS_PER_BLOCK = 2
 DEFAULT_TILES_PER_TXN = 14
@@ -504,9 +507,9 @@ def _w2_core_blocks_per_expert(Ht: int, k_w2_tiles: int, num_cores: int, tiles_p
 
 def _tiles_per_txn(Ht: int, Nt: int, has_bias: bool, num_cores: int) -> int:
     """The per-shape DRAM transaction size in tiles of both weight streams (moe_ring_common.h:tiles_per_txn_for_shape):
-    20 for the Qwen3.8-Flash-Next expert (hidden 2560 = 80 tiles, intermediate 640 = 20 tiles, no bias) on the 8-bank
-    ring, whose layout then has no padding at all; 14 (one 8 KB Wormhole NoC packet) on every other ring and for every
-    other shape (DeepSeek, GPT-OSS, ...)."""
+    20 for the 2560/640 expert (hidden 2560 = 80 tiles, intermediate 640 = 20 tiles, no bias) on the 8-bank ring, whose
+    layout then has no padding at all; 14 (one 8 KB Wormhole NoC packet) on every other ring and for every other
+    shape."""
     return ALT_TILES_PER_TXN if (Ht, Nt, has_bias, num_cores) == (80, 20, False, 8) else DEFAULT_TILES_PER_TXN
 
 
@@ -686,9 +689,10 @@ def prepare_w0_w1_tensor_for_moe_compute(
     Compact layout (see ``_w0_w1_compact_layout``): ring core c stores only its ``shard_map[c]`` columns --
     full 4-wide block-columns (W0 c, W1 c, W0 c+1, W1 c+1) over K padded to whole blocks (7 K rows for 14-tile
     transactions, 10 for 20), then, for an odd count, the last column as a 2-wide half block-column over K padded to
-    whole half blocks (14 or 20 K rows) with two consecutive K tile rows side by side per stored tile row. Per (layer, expert) the cores' slices are laid back to back
-    and cut into num_banks equal pieces (zero-padded); piece b is the per-(layer, expert) unit of bank b's
-    shard. ttnn.from_torch with HEIGHT_SHARDED over num_banks shards then puts piece b in bank b.
+    whole half blocks (14 or 20 K rows) with two consecutive K tile rows side by side per stored tile row. Per
+    (layer, expert) the cores' slices are laid back to back and cut into num_banks equal pieces (zero-padded);
+    piece b is the per-(layer, expert) unit of bank b's shard. ttnn.from_torch with HEIGHT_SHARDED over num_banks
+    shards then puts piece b in bank b.
     """
     import torch
 
@@ -912,7 +916,8 @@ def prepare_w0_w1_tensor_with_bias(
         shard_map: List of shard sizes for each core
 
     Returns:
-        torch_w0_w1_paired: Prepared tensor with bias of shape (num_cores, L, E, groups_per_core, K_padded, 4*ttnn.TILE_SIZE)
+        torch_w0_w1_paired: Prepared tensor with bias, shaped as ``prepare_w0_w1_tensor_for_moe_compute`` returns
+        it for 14-tile transactions, with the bias tile row in the padded K
 
     See also:
         Module docstring for full layout contract and constants that must match
