@@ -5,7 +5,7 @@
 #
 #   sim   Versim (needs /proj_sw); hw = the Wormhole card in this machine
 #   K     spin iteration at which the math RISC-V does one L1 load during the pack loop (0 = no load).
-#         A runtime value: the host writes it to L1 0x16AFE0, so the ELF is the same for every K.
+#         A runtime value: the host writes it to L1 0x16AFE4, so the ELF is the same for every K.
 #   NOPS  4-byte nops in the Wormhole _llk_pack_init_ (a code change that does no work). Default 0.
 #   TAIL  spin iterations unpack and math wait before ending their zone (6000 = they stay idle past the
 #         pack loop; 0 = they end during it). Default 6000.
