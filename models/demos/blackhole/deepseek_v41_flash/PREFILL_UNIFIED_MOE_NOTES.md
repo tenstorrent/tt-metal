@@ -69,3 +69,22 @@ Time per layer (router + gathers + experts + RS), per row N tokens: 512: ring 3.
 Experts stage at 4096: 2.77 ms (copy 1.95; 64 instead of 88 cores). Decode block T=32 before/after the ring ops: 0.912 / 0.913 ms, output bit-identical.
 40 layers, no second copy, decode weights present (DSV41_UNI_RING=1, no NODECODE), scenario 4096:1024 U=4: first-token logits PCC vs the CPU dump 0.9614, argmax 16/16 (moe_compute baseline 0.9655, 16/16).
 Not done / ideas: DSV41_RING_GRID_Y=10 (80 cores) hangs; gate/up are single-tile reads (issue-bound at few tokens per expert, the 512 gap); 7-bank chips need uneven per-column N.
+
+## Default ON (unified prefill MoE + ring weights) and the C++ rebuild procedure
+Policy (tt/uni_policy.py): `DSV41_PREFILL_MOE` unset / `auto` / `unified` = unified prefill MoE reading the decode ring weights in place (`DSV41_UNI_RING`, default 1); `DSV41_PREFILL_MOE=off`
+(or 0 / none / baseline / moe_compute) = the old moe_compute prefill path. The model logs ONE line and uses the old path when the loaded _ttnncpp has no ring mode (it scans the mapped library),
+the chip has no 8 live DRAM banks, or (U=1) `uni_policy.U1_DEFAULT_ON` is False and DSV41_UNI_U1 != 1; per chunk `colsplit_active(U, C)` (U*C % 256 and, for the unified path, any U) decides
+whether the layers use the unified op or their moe_compute path. With the unified path the column split also applies to U=8 (no DSV41_MOE_G=8 needed): the unified op does not use the grouped
+moe_compute program that hangs at 8 users/row. Chunk budget without DSV41_PREFILL_ROW_TOKENS: `chunk_rule.auto2_budget(U, unified=True)` (UNIFIED_TABLE {1:1024, 2:2048, 4:8192, 8:1024, 16:2048}, U>16: 128*U);
+U=2/8 entries are conservative guesses. `DSV41_UNI_NODECODE=1` (prefill-only measurement mode) implies the copy path (no ring).
+
+### Rebuilding the op after a C++ change (no full build; ~25 s, safe for running jobs)
+The op (`ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn`) is ONE unity translation unit of `_ttnncpp.so`; its kernels are JIT (a kernel .cpp edit needs no build at all).
+1. Never run `ninja` in build_Release (it re-runs CMake and rebuilds everything stale).
+2. `tools/oc_main_rebuild.sh <tree> <tag>` replays the op's compile and the _ttnncpp link command ninja recorded (`ninja -t commands`, saved in /mnt/tt-data/ssinghal/wt/pf_onecopy_build/oc_{compile,link}_cmd.txt),
+   writes the new object / library under a temp name in the same directory, checks the new library contains the ring-mode marker, hard-links the old files as `*.pre_<tag>` (backup), and renames the new ones
+   over `build_Release/lib/_ttnncpp.so`, `build_Release/ttnn/_ttnncpp.so` and the unity .o (rename = new inode: running processes keep the old library mapped, a new process sees the old or the new complete file).
+3. The python bindings (`ttnn/ttnn/_ttnn.so`) only need relinking when `unified_routed_expert_ffn_types.hpp` / the nanobind TU change (they did not here); `import ttnn` works unchanged.
+4. Private variant for development (does not touch the main build): `tools/oc_build.sh` builds from a worktree into pf_onecopy_build/lib; run with `LD_LIBRARY_PATH=/mnt/tt-data/ssinghal/wt/pf_onecopy_build/lib`.
+5. Verify with the one-layer test from the tree only: `DSV41_UM_RING=2 DSV41_UM_REAL=1 DSV41_UM_N=512 pytest models/demos/blackhole/deepseek_v41_flash/tests/test_unified_moe.py` (ring vs copy PCC 0.9998+).
+Done for the main build on 2026-10-06 (old library kept as build_Release/lib/_ttnncpp.so.pre_ring1); verified on host .34 with only the main build (PCC ring vs copy 0.99985-0.99994, 3.72 ms/layer at N=512).

@@ -306,6 +306,48 @@ def _run_demo(
         prefilled_token = prefilled_token.view(-1)
         logger.info("FIRSTTOK_IDS " + json.dumps([int(t) for t in prefilled_token[:batch_size]]))
         generator.m.log_dram("PF_END (after prefill, trace held)")
+        if (
+            os.environ.get("DSV41_PREFILL_ONLY") == "1"
+        ):  # prefill measurement (DSV41_UNI_NODECODE: no decode possible): TTFT + first tokens, no decode
+            prefill_t = profiler.get_duration("inference_prefill")
+            real_tokens = sum(decoding_pos[:batch_size])
+            logger.info(f"PREFILL_ONLY first tokens {prefilled_token[:batch_size].tolist()}")
+            logger.info(
+                f"TTFT (whole batch of {batch_size} users, ISL max {max(decoding_pos[:batch_size])}): {prefill_t * 1000:.0f} ms "
+                f"-> prefill {real_tokens / prefill_t:.0f} tok/s ({prefill_t / batch_size * 1000:.0f} ms/user amortised)"
+            )
+            if hasattr(generator.m, "prefill_model"):
+                logger.info(f"prefill timing {getattr(generator.m.prefill_model, 'timing', {})}")
+            if os.environ.get(
+                "DSV41_PREFILL_LOGITS"
+            ):  # one more prefill (not timed) returning the logits of every user's last token
+                _, lg_ = generator.prefill_forward_text(input_tokens_prefill, return_logits=True, **prefill_kw)
+                lg_ = lg_[:batch_size].float()
+                torch.save(lg_, os.environ["DSV41_PREFILL_LOGITS"])
+                for u_ in range(min(batch_size, 2)):
+                    v_, i_ = lg_[u_].topk(5)
+                    logger.info(
+                        f"PREFILL_ONLY user {u_} top5 ids {i_.tolist()} logits {[round(float(x), 3) for x in v_]}"
+                    )
+            for rt_ in [
+                int(x) for x in os.environ.get("DSV41_ROWTOK_SWEEP", "").split(",") if x
+            ]:  # chunk-size sweep: DSV41_PREFILL_ROW_TOKENS per entry, 2 calls each
+                os.environ["DSV41_PREFILL_ROW_TOKENS"] = str(rt_)
+                try:
+                    for rep_ in range(2):
+                        t_ = time.perf_counter()
+                        generator.prefill_forward_text(input_tokens_prefill, **prefill_kw)
+                        dt_ = time.perf_counter() - t_
+                    tm_ = generator.m.timing
+                    nrow_ = rt_ // users_per_row * users_per_row  # tokens per row per chunk
+                    logger.info(
+                        f"ROWTOK_SWEEP row_tokens={rt_} chunk={max(128, rt_ // users_per_row // 128 * 128)}: TTFT {dt_ * 1e3:.0f} ms, {real_tokens / dt_:.0f} tok/s, "
+                        f"replay_loop {tm_.get('total_replay_loop', float('nan')):.2f} s, replay {tm_.get('replay_per_chunk', float('nan')):.2f} s, host {tm_.get('host_per_chunk', float('nan')):.2f} s"
+                    )
+                except Exception as e_:
+                    logger.info(f"ROWTOK_SWEEP row_tokens={rt_} FAILED: {type(e_).__name__}: {str(e_)[:300]}")
+                    break
+            return
         pre_spec = None
         if spec_k and os.environ.get("DSV41_SPEC_DIAG") == "1":
             # DIAG: row-0 logits of the first spec round (position S, token = first) vs ONE plain decode step on the same prefill state, tail replay vs full replay seeding
@@ -570,10 +612,27 @@ def test_dsv41_demo(
 
 
 def _run_demo_wrap(mesh_device, prompts, bs, rep, msl, mgt, pp, sp, dtr, ptr, pch, wu, ins, eos, cache, build_len):
-    if os.environ.get("DSV41_TEST_FAIL_BUDGET") == os.environ.get("DSV41_PREFILL_ROW_TOKENS"):  # test hook of the failure path
+    if os.environ.get("DSV41_TEST_FAIL_BUDGET") and os.environ.get("DSV41_TEST_FAIL_BUDGET") == os.environ.get(
+        "DSV41_PREFILL_ROW_TOKENS"
+    ):  # test hook of the failure path
         raise RuntimeError("injected failure")
     _run_demo(
-        mesh_device, prompts, bs, rep, msl, mgt, pp, sp, dtr, ptr, pch, wu, ins, eos, cache=cache, build_max_seq_len=build_len
+        mesh_device,
+        prompts,
+        bs,
+        rep,
+        msl,
+        mgt,
+        pp,
+        sp,
+        dtr,
+        ptr,
+        pch,
+        wu,
+        ins,
+        eos,
+        cache=cache,
+        build_max_seq_len=build_len,
     )
 
 
@@ -598,6 +657,10 @@ def test_dsv41_demo_session(mesh_device, device_params):
     DSV41_SESSION=gsm8k_b16,prefill_128_b16,same_prompt_b16 pytest demo/text_demo.py -k session"""
     ids = os.environ.get("DSV41_SESSION", "prefill_128_b16,gsm8k_b16").split(",")
     byid = {s.id: s for s in SCENARIOS}
+    omodes = [
+        i.partition("@")[2] for i in ids
+    ]  # optional prefill-optimisation mode per scenario: id@m (baseline) / @P / @R / @E (see tests/test_prefill_scen_device.py)
+    ids = [i.partition("@")[0] for i in ids]
     chosen = [byid[i] for i in ids]
     build_len = max(s.values[3] for s in chosen)
     cache = {}
@@ -608,10 +671,11 @@ def test_dsv41_demo_session(mesh_device, device_params):
     rowtok = [
         m for m in os.environ.get("DSV41_ROWTOK_LIST", "").split(",") if m
     ]  # per-scenario DSV41_PREFILL_ROW_TOKENS (chunk-size sweep in one process)
+    umoes = [m for m in os.environ.get("DSV41_PF_UMOE_LIST", "").split(",") if m]
     ab = os.environ.get(
         "DSV41_PFA_AB"
     )  # "flagsA|flagsB|...": prefill-tuning flags (tt/pf_tune.py, KEY=val joined by ",") of scenario i, cycling; "-" = baseline. Same build, same host: a paired A/B
-    for si, s in enumerate(chosen):
+    for si, (s, mode) in enumerate(zip(chosen, omodes)):
         prompts, bs, rep, msl, mgt, pp, sp, dtr, ptr, pch, wu, ins, eos = s.values
         if modes:
             os.environ["DSV41_PF_ASYNC"] = modes[si % len(modes)]
@@ -631,14 +695,55 @@ def test_dsv41_demo_session(mesh_device, device_params):
                 if getattr(m, "prefill_model", None) is not None:
                     m.prefill_model.teardown_dyn()
             logger.info(f"=== PFA_AB scenario {si} {s.id}: flags '{spec}' ===")
+        if (
+            umoes
+        ):  # per-scenario DSV41_PF_UMOE_LIST: 1 = unified prefill MoE (build with DSV41_PREFILL_MOE=unified), 0 = the moe_compute prefill path, same build
+            for _, (_, m, _) in cache.items():
+                pm_ = getattr(m, "prefill_model", None)
+                if pm_ is None:
+                    continue
+                pm_.teardown_dyn()
+                for _, pl_ in pm_.layers:
+                    if not hasattr(pl_, "_umoe_saved"):
+                        pl_._umoe_saved = pl_.umoe
+                    pl_.umoe = pl_._umoe_saved if umoes[si % len(umoes)] == "1" else None
+                from models.demos.blackhole.deepseek_v41_flash.tt import uni_policy
+
+                uni_policy.set_in_use(
+                    umoes[si % len(umoes)] == "1" and any(p_.umoe is not None for _, p_ in pm_.layers)
+                )
+        if mode:
+            os.environ["DSV41_PF_MHC"] = "packed" if set(mode) & set("PREQ") else "0"
+            os.environ["DSV41_PF_ROUTE_OWN"] = "1" if set(mode) & set("RE") else "0"
+            os.environ["DSV41_PF_ENGRAM_OWN"] = "1" if set(mode) & set("EQ") else "0"
+            for _, (_, m_, _) in cache.items():  # force a new prefill trace capture in the new mode
+                pm_ = getattr(m_, "prefill_model", None)
+                if pm_ is not None and getattr(pm_, "dyn", None) is not None:
+                    pm_.teardown_dyn()
+                    pm_.dyn_out = None
+                    pm_.head_out = []
         logger.info(
-            f"=== session scenario {s.id} (DSV41_PF_ASYNC={os.environ.get('DSV41_PF_ASYNC')}, ROW_TOKENS={os.environ.get('DSV41_PREFILL_ROW_TOKENS')}) ==="
+            f"=== session scenario {s.id} (DSV41_PF_ASYNC={os.environ.get('DSV41_PF_ASYNC')}, ROW_TOKENS={os.environ.get('DSV41_PREFILL_ROW_TOKENS')}"
+            + (
+                f" MODE {mode}: PF_MHC={os.environ['DSV41_PF_MHC']} ROUTE_OWN={os.environ['DSV41_PF_ROUTE_OWN']} ENGRAM_OWN={os.environ['DSV41_PF_ENGRAM_OWN']}"
+                if mode
+                else ""
+            )
+            + ") ==="
         )
         os.environ["DSV41_RAGGED"] = "1" if s.id.endswith("_ragged") else "2" if s.id.endswith("_ragged_u4") else "0"
-        if os.environ.get("DSV41_SESSION_NOWARM") == "1":  # chunk-size calibration: no compile run (total_replay_loop excludes the capture)
+        if (
+            os.environ.get("DSV41_SESSION_NOWARM") == "1"
+        ):  # chunk-size calibration: no compile run (total_replay_loop excludes the capture)
             wu = False
-        cont = os.environ.get("DSV41_SESSION_CONTINUE") == "1"  # keep going after a failing scenario (OOM at a large budget)
-        budget_i = int(os.environ.get("DSV41_PREFILL_ROW_TOKENS") or 0) if (os.environ.get("DSV41_PREFILL_ROW_TOKENS") or "0").isdigit() else 0
+        cont = (
+            os.environ.get("DSV41_SESSION_CONTINUE") == "1"
+        )  # keep going after a failing scenario (OOM at a large budget)
+        budget_i = (
+            int(os.environ.get("DSV41_PREFILL_ROW_TOKENS") or 0)
+            if (os.environ.get("DSV41_PREFILL_ROW_TOKENS") or "0").isdigit()
+            else 0
+        )
         if cont and budget_i >= min(failed.get(s.id, 1 << 30), failed.get("*", 1 << 30)):
             logger.info(
                 f"=== session scenario {s.id} ROW_TOKENS={budget_i} SKIPPED (budget >= failed {min(failed.get(s.id, 1 << 30), failed.get('*', 1 << 30))}) ==="
@@ -652,11 +757,20 @@ def test_dsv41_demo_session(mesh_device, device_params):
             if not cont:
                 raise
             oom = any(w in str(e) for w in ("Out of Memory", "out of memory", "DRAM", "OOM", "allocate"))
-            key = "*" if (oom and os.environ.get("DSV41_PREFILL_SPAD_MAX")) else s.id  # sized for the max context: a DRAM failure holds for every ISL
+            key = (
+                "*" if (oom and os.environ.get("DSV41_PREFILL_SPAD_MAX")) else s.id
+            )  # sized for the max context: a DRAM failure holds for every ISL
             failed[key] = min(failed.get(key, 1 << 30), budget_i)
             import traceback
 
-            logger.error("FAILTRACE " + " <- ".join(l.strip().replace("\n", " ")[:160] for l in traceback.format_exc().splitlines() if l.strip().startswith("File"))[-1500:])
+            logger.error(
+                "FAILTRACE "
+                + " <- ".join(
+                    l.strip().replace("\n", " ")[:160]
+                    for l in traceback.format_exc().splitlines()
+                    if l.strip().startswith("File")
+                )[-1500:]
+            )
             logger.error(f"=== SCENARIO FAILED {s.id} ROW_TOKENS={budget_i}: {type(e).__name__}: {str(e)[:400]} ===")
             for _, (_, m, _) in cache.items():
                 try:

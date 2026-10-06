@@ -6,18 +6,25 @@ shorter) prompt replays the same capture instead of re-capturing / OOMing. A pro
 Table = largest budget that fits next to the 64k-sized trace on a 32-chip BH Galaxy (bf16 pool, 40 layers, Engram on) and is within ~3% of the best
 measured ms/row-token, see PREFILL_CHUNKCAL_NOTES.md. U = 8 (B = 32) and U = 2 (B = 8) use the replicated MoE path (no column split), U in {1, 4, 16} the column split.
 """
-import os
 
 # U -> budget (tokens per mesh row per pass)
 BASE_TABLE = {1: 2048, 2: 4096, 4: 4096, 8: 1024, 16: 2048}
-UNIFIED_TABLE = {1: 1024, 4: 8192, 16: 2048}  # DSV41_PREFILL_MOE=unified (column-split layers only: U in {1, 4, 16})
+UNIFIED_TABLE = {
+    1: 1024,
+    2: 2048,
+    4: 8192,
+    8: 1024,
+    16: 2048,
+}  # unified prefill MoE; U=1/4/16 measured (chunkcal), U=2/8 conservative (= the baseline table's neighbours, to be measured), U>16 below
 MIN_FREE_MIB = 450.0  # free DRAM per bank after the model build below which the budget is halved (one step) to keep the compile-pass headroom
 
 
 def auto2_budget(U, free_dram_mib=None, unified=None):
     """Row-token budget (tokens per mesh row per traced-chunk pass) for U users per mesh row; chunk per user = budget // U."""
     if unified is None:
-        unified = os.environ.get("DSV41_PREFILL_MOE", "") == "unified"
+        from models.demos.blackhole.deepseek_v41_flash.tt import uni_policy
+
+        unified = uni_policy.in_use()
     table = UNIFIED_TABLE if unified else BASE_TABLE
     if U > 16:  # B=128 does not fit at >= 32k: the smallest chunk
         return 128 * U
