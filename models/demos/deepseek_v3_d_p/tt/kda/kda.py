@@ -152,7 +152,6 @@ class ttKDA:
         decay_rank: ttnn.Tensor,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Evaluate the decay and write gates consumed by the recurrence."""
-        weights = self.weights
         # Preserve the sigmoid result at the FP32 precision required by chunk preparation.
         beta_for_recurrence = ttnn.sigmoid(
             ttnn.typecast(
@@ -162,16 +161,18 @@ class ttKDA:
             ),
             memory_config=KDA_OUTPUT_MEMORY_CONFIG,
         )
+        return self._activate_decay(decay_rank), beta_for_recurrence
+
+    def _softplus_decay(self, decay_rank: ttnn.Tensor) -> ttnn.Tensor:
+        # FP32 logits and constants; only the per-token gate (the chunk preparation input) is BF16.
         gate = ttnn.linear(
             decay_rank,
-            weights.decay_output_projection,
-            bias=weights.decay_bias_flat,
+            self.weights.decay_output_projection,
+            bias=self.weights.decay_bias_flat,
+            dtype=ttnn.float32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self._skeleton.matmul_compute_config,
         )
-        return self._activate_decay(gate), beta_for_recurrence
-
-    def _softplus_decay(self, gate: ttnn.Tensor) -> ttnn.Tensor:
         return ttnn.multiply(
             self.weights.decay_scale_flat,
             gate,
@@ -182,12 +183,29 @@ class ttKDA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _bounded_decay(self, gate: ttnn.Tensor) -> ttnn.Tensor:
-        gate = ttnn.multiply(
-            self.weights.decay_scale_flat, gate, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    def _bounded_decay(self, decay_rank: ttnn.Tensor) -> ttnn.Tensor:
+        # lower_bound * sigmoid(A (f_b r + dt_bias)) with A folded into the weights (tt/kda/weights.py): FP32 logits
+        # and FP32 offset A dt_bias, rounded once to the BF16 gate. BF16 logits and constants biased the gate by
+        # +0.9% / +1.6% (K3 / GLM real text) and gave K3 layers.1 head 28 an output error of 0.106 x RMS; the offset
+        # is a separate FP32 add because as a matmul bias it left a residual mean dG/G of +2e-3
+        # (tt_metal_tracker-g1b.4.13).
+        logits = ttnn.linear(
+            decay_rank,
+            self.weights.decay_output_projection,
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self._skeleton.matmul_compute_config,
         )
-        gate = ttnn.sigmoid(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return ttnn.multiply(gate, self.config.gate_lower_bound, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.add(
+            logits,
+            self.weights.decay_bias_flat,
+            activations=[
+                ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
+                ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, self.config.gate_lower_bound),
+            ],
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def forward(
         self,
