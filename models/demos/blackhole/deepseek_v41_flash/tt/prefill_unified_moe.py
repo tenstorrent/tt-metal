@@ -120,6 +120,25 @@ def _cache_complete(layer_id):
     )
 
 
+def _wmc(md, n_dim, k_dim):
+    """Weight memory config. DSV41_UM_SHARD_H (K tile rows per ND shard, 0 = op default of 1) is an experiment knob: a shard as tall as K pins
+    every N-column of the op to ONE DRAM bank for all K rows (the access pattern of the moe_compute decode ring layout).
+    """
+    cfg = routed_expert_weight_memory_config(md, n_dim, dram_nd_sharded=True)
+    h = int(os.environ.get("DSV41_UM_SHARD_H", "0"))
+    if h <= 0:
+        return cfg
+    sp = cfg.nd_shard_spec
+    return ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=ttnn.Shape([min(h, k_dim // 32) * 32, sp.shard_shape[-1]]),
+            grid=sp.grid,
+            orientation=sp.orientation,
+        ),
+    )
+
+
 def build_expert_weights(md, layer_id, log=print, cache_only=False):
     """-> (gate_projs, up_projs, down_projs), lists of EPC per-device tensors (K, N) bf8 DRAM ND-sharded.
     Host cache miss: dequantise the checkpoint (fp4 + e8m0 scales -> bf16), the same source and rounding as the moe_compute cache.
@@ -163,11 +182,7 @@ def build_expert_weights(md, layer_id, log=print, cache_only=False):
                 del t
                 continue
             t = ttnn.squeeze(ttnn.squeeze(t, dim=0), dim=0)
-            outs[proj].append(
-                ttnn.to_device(
-                    t, md, memory_config=routed_expert_weight_memory_config(md, t.shape[-1], dram_nd_sharded=True)
-                )
-            )
+            outs[proj].append(ttnn.to_device(t, md, memory_config=_wmc(md, t.shape[-1], t.shape[-2])))
         if not warm:
             log(f"unified moe weights layer {layer_id}: expert slot {l + 1}/{EPC} built")
     return None if cache_only else (outs["gate"], outs["up"], outs["down"])
