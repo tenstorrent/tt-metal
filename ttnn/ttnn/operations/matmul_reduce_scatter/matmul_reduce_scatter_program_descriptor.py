@@ -38,6 +38,7 @@ L1_RESERVE = 64 * 1024  # L1 kept free on compute cores beyond the CBs and the h
 XPORT_CB_BYTES = 112 * 1024  # transport CB sizing (reference)
 XPORT_GROUP_MAX = 8
 INC_EVERY = 8  # arrival-counter increment cadence (blackhole-fabric rule 4)
+XPORT_ADD_BLOCK_MAX = 4  # transport add: max tiles per CB handshake / DEST batch (fp32 DEST half-sync holds 4)
 
 NOC0 = ttnn.NOC.NOC_0
 NOC1 = ttnn.NOC.NOC_1
@@ -348,6 +349,8 @@ def create_mesh_program_descriptor(
     w_pages = blk.Kt * cn if blk.w_resident else OPERAND_DEPTH * blk.k_block_tiles * cn
     acc_dtype = ttnn.float32 if blk.acc_tile_bytes == 4096 else ttnn.bfloat16
     xport_pages = xp.cap_segs * xp.seg_tiles
+    # transport add block: the largest divisor of the transport CB ring <= the DEST batch (blocks never straddle the wrap)
+    xport_add_block = next(d for d in _divisors_desc(xport_pages) if d <= XPORT_ADD_BLOCK_MAX)
 
     # compute-rectangle virtual bounds for the ack multicast (NoC0: start = min corner)
     x0, y0 = virt(rect.start)
@@ -571,6 +574,7 @@ def create_mesh_program_descriptor(
                     CB_XPORT_SUM,
                     has_a,
                     has_b,
+                    xport_add_block,
                 ],
                 runtime_args=rt,
                 # every cross-device addition accumulates in fp32 (requirement, independent of the user's config)

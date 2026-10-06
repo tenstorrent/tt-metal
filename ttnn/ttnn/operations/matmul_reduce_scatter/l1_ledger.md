@@ -76,3 +76,27 @@ multicast injected; links 6.9 MB on the busiest direction (70.9 us at 2 × 48.5 
 > DRAM-scratch fused DRAM bound stays below the binding term (FOCUS 66.9 < links 70.9 us; GLM 89.3 <
 > compute 118.9; MiMo 91.1 < links 129.7), so R1 does not move the roofline; the landing address is a
 > per-stream runtime arg and every arrival read is already counter-gated, so R5 stays reachable.
+
+## Implementation notes (ttnn-implementer, Phase 0)
+
+Departures from the planner's inventory / contract, as built:
+
+| Item | Design | Built | Why |
+|------|--------|-------|-----|
+| Transport CB indices | 0 / 1 / 2 / 16 | `cb_xport_partial` 4, `cb_xport_arrival_a` 5, `cb_xport_arrival_b` 6, `cb_xport_sum` 16 | disjoint from the compute-core CB indices 0-3 (both sets live in one program per chip); capacities unchanged (`2·xport_group·seg_tiles`) |
+| `sem_block_ack` | 1 counter, cumulative over all consumers | 3 counters (fwd ports, bwd ports, finals), each cumulative over its own kind | consumer kinds ack independently; a single counter released a slot on another kind's acks (wrong relay sums, found on device). Global semaphores: 7 instead of 5 (+8 B L1 per core) |
+| ready signalling | signal block idx when fronted | also gated on the kind's acks of all earlier blocks of the kind | with cumulative counting a fast core's next-block signal stood in for a slow core's missing one (stale hand-off read, non-dev only) |
+| relay / final add | `n = xport_group·seg_tiles` per handshake | `eltwise_chain` with `PerBlockSize` lifecycles, block = largest divisor of the transport CB ring ≤ 4 (fp32 DEST half-sync) | block never straddles the CB wrap; the reader pushes whole segments, the add consumes whole blocks |
+| segment ownership | scratch bank set | block-local segment index (`seg % L` ports, `seg % 2L` finals) | consistent for sender, relay and final regardless of the slot's base page; `num_banks % 2L == 0` asserted |
+| transport CB batching | `xport_group` per barrier | `xport_group`, plus a flush at the CB wrap and at every block end | no partially-filled batch is held across a block-ready wait (cross-chip progress) |
+
+Measured (Blackhole LoudBox 2x4, FABRIC_2D, live max payload 4352 B → `seg_tiles` = 2), FOCUS
+`640×2048×7168`, axis 1, `-1`, L = 2, bf8b W, HiFi2, bf16 DEST: **197-213 us** steady state per device
+(unfused baseline 394 us). Ablations: matmul compute stubbed → 192-208 us; transport reader data
+reads stubbed → 192-204 us; blocked vs per-tile transport add → no change. Binding stage: the fabric
+send path — 840 packets of 4 KiB per link per call at ~208 ns/packet ≈ 19.7 GB/s per link, ~84% of
+the bare FABRIC_2D 4352 B one-hop stream (24.8 GB/s). The design's 118 us target assumes 14336 B
+packets at 48.5 GB/s; under this payload the link floor alone is ≈ 3.44 MB / 21-25 GB/s ≈ 140-165 us.
+Remaining lever: lamp L5 (ports under their Ethernet cores; the Ethernet channel is available on the
+host as the first `setup_fabric_connection` RT arg, so no probe dispatch is needed) — needs per-chip
+transport placement.

@@ -21,20 +21,25 @@ void kernel_main() {
     constexpr uint32_t cb_xport_sum = get_compile_time_arg_val(3);
     constexpr uint32_t has_a = get_compile_time_arg_val(4);
     constexpr uint32_t has_b = get_compile_time_arg_val(5);
-    const uint32_t num_tiles = get_arg_val<uint32_t>(0);  // segments of this core x seg_tiles
+    constexpr uint32_t add_block = get_compile_time_arg_val(6);  // tiles per CB handshake / DEST batch
+    const uint32_t num_tiles = get_arg_val<uint32_t>(0);         // segments of this core x seg_tiles
 
     constexpr uint32_t cb_second = has_a ? cb_arrival_a : cb_arrival_b;
+    constexpr auto in_cfg = [](uint32_t cb) {
+        return input(cb, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, InputTileMapping::Block);
+    };
+    const auto shape = IterationShape::tiles(num_tiles).block_size(add_block);
     compute_kernel_hw_startup(cb_xport_partial, cb_second, cb_xport_sum);
     if constexpr (has_a && has_b) {
         eltwise_chain(
-            IterationShape::tiles(num_tiles),
-            BinaryFpu<BinaryFpuOp::Add, input(cb_xport_partial), input(cb_arrival_a)>{},
-            DestReuseBinary<BinaryFpuOp::Add, input(cb_arrival_b), DestReuseType::DEST_TO_SRCA>{},
-            PackTile<output(cb_xport_sum)>{});
+            shape,
+            BinaryFpu<BinaryFpuOp::Add, in_cfg(cb_xport_partial), in_cfg(cb_arrival_a)>{},
+            DestReuseBinary<BinaryFpuOp::Add, in_cfg(cb_arrival_b), DestReuseType::DEST_TO_SRCA>{},
+            PackTile<output(cb_xport_sum, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
     } else {
         eltwise_chain(
-            IterationShape::tiles(num_tiles),
-            BinaryFpu<BinaryFpuOp::Add, input(cb_xport_partial), input(cb_second)>{},
-            PackTile<output(cb_xport_sum)>{});
+            shape,
+            BinaryFpu<BinaryFpuOp::Add, in_cfg(cb_xport_partial), in_cfg(cb_second)>{},
+            PackTile<output(cb_xport_sum, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
     }
 }
