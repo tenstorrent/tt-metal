@@ -7,7 +7,6 @@
 #include "ttnn/operations/reduction/generic/device/common.hpp"
 
 #include <algorithm>
-#include <bit>
 #include <optional>
 #include <string>
 
@@ -110,21 +109,6 @@ static uint32_t compute_h_slices(
     return std::max(std::min(slices_to_fill_grid, slices_at_min_work), 1u);
 }
 
-// The fewest fidelity phases that give HiFi4's result for this scaler: a phase multiplies 5 mantissa bits of SrcA (the
-// scaler of a W reduce) or 7 of SrcB (the scaler otherwise), hidden bit included.
-static tt::tt_metal::MathFidelity exact_reduce_fidelity(tt::tt_metal::ReduceOpDim reduce_dim, float scaler) {
-    const uint32_t bits = std::bit_cast<uint32_t>(scaler);
-    const uint32_t exponent = (bits >> 23) & 0xff;
-    const uint32_t mantissa = bits & 0x7fffff;
-    if (exponent == 0xff || (exponent == 0 && mantissa != 0)) {
-        return tt::tt_metal::MathFidelity::HiFi4;
-    }
-    if (reduce_dim == tt::tt_metal::ReduceOpDim::W) {
-        return (mantissa & 0x7ffff) == 0 ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
-    }
-    return (mantissa & 0x1ffff) == 0 ? tt::tt_metal::MathFidelity::HiFi2 : tt::tt_metal::MathFidelity::HiFi4;
-}
-
 Tensor reduce(
     const Tensor& input_tensor,
     tt::tt_metal::ReduceOpMath reduce_math,
@@ -166,18 +150,6 @@ Tensor reduce(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
     ttnn::verify_numerical_configuration(arch, compute_kernel_config);
-
-    // Blackhole's default config reduces SUM and AVG at the fewest fidelity phases that keep HiFi4's result.
-    const bool exact_default_fidelity = !compute_kernel_config.has_value() && arch == tt::ARCH::BLACKHOLE;
-    auto config_for =
-        [&](tt::tt_metal::ReduceOpMath math, tt::tt_metal::ReduceOpDim dim, float tile_scaler, bool sfpu) {
-            ttnn::DeviceComputeKernelConfig call_config = config;
-            if (exact_default_fidelity && !sfpu &&
-                (math == tt::tt_metal::ReduceOpMath::SUM || math == tt::tt_metal::ReduceOpMath::AVG)) {
-                call_config.math_fidelity = exact_reduce_fidelity(dim, tile_scaler);
-            }
-            return call_config;
-        };
 
     // Dense row-major reduce: a fast path that consumes ROW_MAJOR input directly (no host tilize)
     // and is currently restricted to mean (AVG) / sum (SUM) on 4D BF16/FLOAT32 tensors with
@@ -344,7 +316,7 @@ Tensor reduce(
             1.0f,
             output_mem_config,
             out_w_dtype,
-            config_for(prim_reduce_math, tt::tt_metal::ReduceOpDim::W, 1.0f, use_sfpu_reduce),
+            config,
             sub_core_grids,
             negate,
             /*post_mul_scaler=*/1.0f,
@@ -364,7 +336,7 @@ Tensor reduce(
             reduce_scaler,
             output_mem_config,
             out_final_dtype,
-            config_for(prim_reduce_math, tt::tt_metal::ReduceOpDim::H, reduce_scaler, use_sfpu_reduce),
+            config,
             sub_core_grids,
             negate,
             /*post_mul_scaler=*/post_mul,
@@ -407,7 +379,7 @@ Tensor reduce(
                 /*scaler=*/1.0f,
                 output_mem_config,
                 tt::tt_metal::DataType::FLOAT32,
-                config_for(tt::tt_metal::ReduceOpMath::SUM, tt::tt_metal::ReduceOpDim::H, 1.0f, use_sfpu_reduce),
+                config,
                 sub_core_grids,
                 /*negate=*/false,
                 /*post_mul_scaler=*/1.0f,
@@ -425,8 +397,7 @@ Tensor reduce(
                 reduce_scaler,
                 output_mem_config,
                 output_dtype.value_or(input_tensor.dtype()),
-                config_for(
-                    tt::tt_metal::ReduceOpMath::SUM, tt::tt_metal::ReduceOpDim::H, reduce_scaler, use_sfpu_reduce),
+                config,
                 sub_core_grids,
                 /*negate=*/false,
                 /*post_mul_scaler=*/post_mul,
@@ -473,7 +444,7 @@ Tensor reduce(
                 /*scaler=*/1.0f,
                 output_mem_config,
                 tt::tt_metal::DataType::FLOAT32,
-                config_for(tt::tt_metal::ReduceOpMath::SUM, tt::tt_metal::ReduceOpDim::H, 1.0f, use_sfpu_reduce),
+                config,
                 sub_core_grids,
                 /*negate=*/false,
                 /*post_mul_scaler=*/1.0f,
@@ -502,7 +473,7 @@ Tensor reduce(
                 s2_scaler,
                 output_mem_config,
                 output_dtype.value_or(input_tensor.dtype()),
-                config_for(tt::tt_metal::ReduceOpMath::SUM, tt::tt_metal::ReduceOpDim::H, s2_scaler, s2_use_sfpu),
+                config,
                 sub_core_grids,
                 /*negate=*/false,
                 /*post_mul_scaler=*/s2_mul,
@@ -523,7 +494,7 @@ Tensor reduce(
         reduce_scaler,
         output_mem_config,
         output_dtype.value_or(input_tensor.dtype()),
-        config_for(prim_reduce_math, reduce_dim, reduce_scaler, use_sfpu_reduce),
+        config,
         sub_core_grids,
         negate,
         /*post_mul_scaler=*/post_mul,
