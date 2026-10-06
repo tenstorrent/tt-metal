@@ -57,6 +57,7 @@
 #include "llk_sfpu/ckernel_sfpu_recip.h"
 #include "llk_sfpu/ckernel_sfpu_relu.h"
 #include "llk_sfpu/ckernel_sfpu_remainder.h"
+#include "llk_sfpu/ckernel_sfpu_reshuffle_rows.h"
 #include "llk_sfpu/ckernel_sfpu_rounding_ops.h"
 #include "llk_sfpu/ckernel_sfpu_rpow.h"
 #include "llk_sfpu/ckernel_sfpu_rsqrt.h"
@@ -491,6 +492,10 @@ void init_unary_sfpu_operation_quasar()
         ema_load_alpha_beta(kEmaAlphaBits, kEmaBetaBits);
     }
     // rsub_scalar_int32 is stateless: its compute API init is SFPU_UNARY_INIT(unused).
+    else if constexpr (OPERATION == SfpuType::reshuffle_rows)
+    {
+        reshuffle_rows_init();
+    }
 }
 
 /**
@@ -620,6 +625,8 @@ void call_signbit_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_form
  * @param first Whether this tile starts a fresh top-to-bottom accumulation chain; only cumsum
  *        and ema read it. Defaults to true so each tile is independent.
  * @param fill_const_value Constant written by fill; other operations ignore it.
+ * @param idx_addr L1 byte address of the destination-row mask minus its 16-byte header; only
+ *        reshuffle_rows reads it (input tile at dst_index, accumulator at dst_index + 1).
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
  */
 template <
@@ -634,7 +641,8 @@ void call_unary_sfpu_operation_quasar(
     std::uint32_t dst_index,
     DataFormat sfpu_format                        = DataFormat::Float32,
     [[maybe_unused]] const bool first             = true,
-    [[maybe_unused]] const float fill_const_value = 5.0f)
+    [[maybe_unused]] const float fill_const_value = 5.0f,
+    [[maybe_unused]] const std::uint32_t idx_addr = 0)
 {
     constexpr std::uint32_t kReluThresholdBits = 0x40A00000u; // 5.0f
     if constexpr (OPERATION == SfpuType::abs)
@@ -839,6 +847,11 @@ void call_unary_sfpu_operation_quasar(
             ema_clear_previous_output();
         }
         SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, is_fp32_dest_acc_en, calculate_ema, dst_index, VectorMode::RC_custom);
+    }
+    else if constexpr (OPERATION == SfpuType::reshuffle_rows)
+    {
+        // Whole-tile scatter-add from tile dst_index into tile dst_index + 1, run once per tile.
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_reshuffle_rows, (APPROX), dst_index, VectorMode::RC_custom, idx_addr);
     }
     else if constexpr (OPERATION == SfpuType::floor)
     {
