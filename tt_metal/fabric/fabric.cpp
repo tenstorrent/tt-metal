@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/buffers/semaphore.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include <umd/device/types/xy_pair.hpp>
@@ -745,24 +746,6 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
     const std::vector<uint32_t>& teardown_sem_args,
     const std::vector<uint32_t>& buffer_index_sem_args,
     bool sem_args_are_l1_addresses) {
-    if (sem_args_are_l1_addresses) {
-        // Both are 16 B NoC targets: the EDM remotely increments the teardown flag and block-reads
-        // a 16 B SenderChannelProducerCursor into the buffer-index address.
-        constexpr uint32_t k_sem_address_alignment = 16;
-        const std::pair<const std::vector<uint32_t>&, const char*> arrays[] = {
-            {teardown_sem_args, "teardown_sem_args"}, {buffer_index_sem_args, "buffer_index_sem_args"}};
-        for (const auto& [values, name] : arrays) {
-            for (size_t i = 0; i < values.size(); i++) {
-                TT_FATAL(
-                    values[i] % k_sem_address_alignment == 0,
-                    "{}[{}] ({:#x}) must be {} B aligned",
-                    name,
-                    i,
-                    values[i],
-                    k_sem_address_alignment);
-            }
-        }
-    }
     TT_FATAL(
         teardown_sem_args.size() == dst_nodes.size(),
         "teardown_sem_args size ({}) must match dst_nodes size ({})",
@@ -777,6 +760,59 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
         connection_link_indices.empty() ||
             (connection_link_indices.size() == 1 || connection_link_indices.size() == dst_nodes.size()),
         "connection_link_indices must be empty or have size 1 or the same size as dst_nodes");
+
+    const std::pair<const std::vector<uint32_t>&, const char*> sem_arg_arrays[] = {
+        {teardown_sem_args, "teardown_sem_args"}, {buffer_index_sem_args, "buffer_index_sem_args"}};
+    if (sem_args_are_l1_addresses) {
+        // Both are 16 B NoC targets: the EDM remotely increments the teardown flag and block-reads
+        // a 16 B SenderChannelProducerCursor into the buffer-index address.
+        constexpr uint32_t k_sem_address_alignment = 16;
+        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        const uint32_t l1_unreserved_base = hal.get_dev_addr(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
+        const uint32_t l1_end = l1_unreserved_base + hal.get_dev_size(
+                                                         tt::tt_metal::HalProgrammableCoreType::TENSIX,
+                                                         tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
+        for (const auto& [values, name] : sem_arg_arrays) {
+            for (size_t i = 0; i < values.size(); i++) {
+                TT_FATAL(
+                    values[i] % k_sem_address_alignment == 0,
+                    "{}[{}] ({:#x}) must be {} B aligned",
+                    name,
+                    i,
+                    values[i],
+                    k_sem_address_alignment);
+                TT_FATAL(
+                    values[i] >= l1_unreserved_base,
+                    "{}[{}] ({:#x}) is below the unreserved L1 base ({:#x}); it looks like a program "
+                    "semaphore id, but sem_args_are_l1_addresses says these are addresses",
+                    name,
+                    i,
+                    values[i],
+                    l1_unreserved_base);
+                TT_FATAL(
+                    values[i] <= l1_end - k_sem_address_alignment,
+                    "{}[{}] ({:#x}) must leave its {} B landing zone below the Tensix L1 end ({:#x})",
+                    name,
+                    i,
+                    values[i],
+                    k_sem_address_alignment,
+                    l1_end);
+            }
+        }
+    } else {
+        for (const auto& [values, name] : sem_arg_arrays) {
+            for (size_t i = 0; i < values.size(); i++) {
+                TT_FATAL(
+                    values[i] < tt::tt_metal::NUM_SEMAPHORES,
+                    "{}[{}] ({}) exceeds the maximum program semaphore id ({})",
+                    name,
+                    i,
+                    values[i],
+                    tt::tt_metal::NUM_SEMAPHORES - 1);
+            }
+        }
+    }
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
