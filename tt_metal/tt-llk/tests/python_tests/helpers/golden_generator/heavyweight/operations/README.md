@@ -80,12 +80,19 @@ A dataclass. Four fields, one of which does the work.
 |---|---|---|
 | `name` | `str` | Display only — the trace and `Chain.__repr__`. Factories build it as `f"l1_to_srcA({source})"` so a trace says *which* buffer. |
 | `run` | `Callable[[Registers], None]` | The work. Takes the whole namespace, returns nothing — a step **writes into** the registers rather than returning a result. |
-| `reads` | `Sequence[str]` = `()` | Declaration. Used by `dry_run` **only**; no effect at run time. |
+| `reads` | `Sequence[str]` = `()` | Declaration, and it is consumed: `dry_run` checks it, `Chain.unread` inverts it, and `run`/`run_l1`/`_run_blocked` raise on a staged value no step reads. |
 | `writes` | `Sequence[str]` = `()` | Declaration. Used by `dry_run` and to decide what the trace prints. |
 
-`reads` and `writes` are **not enforced**. `run` can touch any slot. A step that
-touches an undeclared slot still works, but its trace omits the change and
-`dry_run` stops being sound.
+`reads` and `writes` are **not enforced against what `run` actually touches** —
+`run` can reach any slot, and one that touches an undeclared slot still works,
+but its trace omits the change and `dry_run` stops being sound.
+
+The declarations are read by two checks, in opposite directions:
+
+| Check | Catches |
+|---|---|
+| `Chain.dry_run(available)` | A step reading a register nothing wrote — a typo or an out-of-order chain, found without running any arithmetic. |
+| `Chain.unread(available)` | The quieter mistake: a value *staged* that no step ever reads, so the run completes and answers from less input than it was given. `run`, `run_l1` and `_run_blocked` all raise on it. |
 
 Steps are built by closure, so configuration lives inside `run` rather than in
 extra fields:
@@ -177,12 +184,13 @@ tensor (shape, dtype, finite range), `1056 B` for a list or bytes, `repr`
 otherwise. `__str__` pads to fixed columns so records line up:
 
 ```
- 0. l1_to_dest(seed)         -> dest       (1024,) torch.float16 [8.637e-05, 0.9995]
- 1. dest_to_srcA(dest)       -> srcA       (1024,) torch.float32 [8.637e-05, 0.9995]
- 2. l1_to_srcB(in1)          -> srcB       (1024,) torch.float16 [0.002256, 1]
- 3. reuse_dest:elwmul        -> dest       (1024,) torch.float16 [0, 0.9883]
+ 0. l1_to_srcA(seed)         -> srcA       (1024,) torch.float32 [8.637e-05, 0.9995]
+ 1. datacopy(A2D)            -> dest       (1024,) torch.float16 [8.637e-05, 0.9995]
+ 2. dest_to_srcA(dest)       -> srcA       (1024,) torch.float32 [8.637e-05, 0.9995]
+ 3. l1_to_srcB(in1)          -> srcB       (1024,) torch.float16 [0.002256, 1]
+ 4. reuse_dest:elwmul        -> dest       (1024,) torch.float16 [0, 0.9883]
  ...
- 7. dest_to_l1(out)          -> out        1056 B
+ 8. dest_to_l1(out)          -> out        1056 B
 ```
 
 Read it as a story — above, Dest's minimum collapses to 0 at step 3, so you know
@@ -227,7 +235,7 @@ read), `into` (slot written), `index` (which entry of `cfg.in_formats` applies).
 
 | Factory | Default `source` → `into` | Notes |
 |---|---|---|
-| `l1_to_srcA(cfg, source="in0", into="srcA", index=0, src_format=None)` | `in0` → `srcA` | `src_format` overrides the storage format the unpacker lands it in; `None` lets the architecture choose. |
+| `l1_to_srcA(cfg, source="in0", into="srcA", index=0, src_format=None)` | `in0` → `srcA` | `src_format` overrides the storage format the unpacker lands it in. `None` goes through `_default_src_format`: the architecture's mapping, except that a Float32/Tf32 input under a Float16/Float16_b Dest takes the Dest format's family instead. |
 | `l1_to_srcB(cfg, source="in1", into="srcB", index=1, src_format=None)` | `in1` → `srcB` | |
 | `l1_to_srcS(cfg, source="in0", into="srcS", index=0, src_format=None)` | `in0` → `srcS` | Buffer must have been packed with `use_srcs=True`. SrcS's own format rules apply, with `dest_acc` taken from the width of `cfg.dest_format`. |
 | `l1_to_dest(cfg, source="in0", into="dest", index=0)` | `in0` → `dest` | Seeds Dest from L1, bypassing the src registers, so it keeps more mantissa. |
@@ -235,7 +243,7 @@ read), `into` (slot written), `index` (which entry of `cfg.in_formats` applies).
 | `dest_to_srcB(cfg, source="dest", into="srcB", src_format=None)` | `dest` → `srcB` | |
 | `dest_to_l1(cfg, into="out", source="dest")` | `dest` → `out` | Applies Dest precision, ReLU, edge mask, then really packs. |
 
-### `src_to_dest(cfg, fn, *, reads=("srcA",), into="dest", accumulate=False)`
+### `src_to_dest(cfg, fn, *, reads=("srcA",), into="dest", accumulate=False, name=None)`
 
 The only factory taking a function. `fn(regs) -> Tensor` supplies the arithmetic
 — the operation's business — while the block decides how the result lands in a
@@ -246,14 +254,15 @@ Dest slot.
 | `fn` | Reads whatever slots it needs out of `regs`. |
 | `reads` | Declared for the trace and `dry_run`; must match what `fn` touches. |
 | `into` | Dest slot. |
-| `accumulate` | Add to Dest's existing contents instead of replacing, and **round to Dest precision on every pass** — the FPU has an accumulate-enable bit, not a wide accumulator. The step's trace name gains `+=`. |
+| `accumulate` | Add to Dest's existing contents instead of replacing, and **round to Dest precision on every pass** — the FPU has an accumulate-enable bit, not a wide accumulator. The step's trace name gains `+=`, and `into` joins `reads`. |
+| `name` | Trace label. Defaults to the operation's name, which is right for the step that *is* the operation; pass it where a chain has a second src-to-Dest step that is something else — the datacopy seeding a reuse-dest chain, or matmul's per-phase, per-K-face writes. |
 
-> **Known gap.** With `accumulate=True` the step reads Dest via `regs.get(into)`
-> but `reads` does not include it, so `dry_run` cannot see that dependency — and
-> because `get` returns `None` rather than raising, an accumulating step placed
-> before anything wrote Dest **silently degrades to replace**. Safe in the shipped
-> ops (eltwise phase 0 uses `accumulate=False`; reuse-dest seeds with
-> `l1_to_dest`), but worth knowing when adding an op.
+> **Closed.** This used to degrade silently: the step read Dest through
+> `regs.get(into)`, which returns `None` rather than raising, and `reads` did not
+> name `into`, so an accumulating step placed before anything wrote Dest became a
+> plain replace with a plausible result. It now adds `into` to `reads` when
+> accumulating and subscripts `regs[into]`, so `dry_run` sees the dependency and
+> a too-early accumulate raises.
 
 ### Running
 
@@ -403,12 +412,13 @@ in Dest. The only difference is that the partial product is a *matrix* product.
 | `MANTISSA_SPLIT` | `(srcA_bits, srcB_bits)`. Quasar `(7, 7)`. `None` → the product is computed exactly and fidelity is ignored. |
 | `OPERAND_REGISTERS` | Which src register each stimulus lands in, in argument order. `("srcB", "srcA")` on every architecture. |
 | `models_fidelity` | True when `MANTISSA_SPLIT` is set. |
-| `_product(srcA, srcB)` | The one place operand order lives, so a subclass inverting it overrides neither `apply` nor `partial_product`. |
+| `_product(srcA, srcB, geometry, k_face)` | The one place operand order lives, so a subclass inverting it overrides neither `apply` nor `partial_product`. `k_face` picks the 16-wide slice of the inner dimension. |
+| `K_FACES` | How many MVMULs cover one tile's inner dimension — 2, since SrcA's face is 16×16. One Dest write each. |
 
 `TILE_DIM` (32) is a module constant in `matmul.py`, not a class member — it
 is the tile edge every op assumes, not something an architecture overrides.
 
-### Accumulation: exact within a pass, rounded once at the Dest write
+### Accumulation: exact within one MVMUL, rounded at every Dest write
 
 Two things the RTL rules out, both of which would be natural to assume:
 
@@ -422,8 +432,22 @@ Two things the RTL rules out, both of which would be natural to assume:
   rounds once. `_product` therefore sums in float64, so the model does not
   introduce a float32 accumulation error the hardware does not have.
 
-Only the accumulated sum reaches Dest, where `src_to_dest` applies Dest
-precision and the no-denormal rule as usual.
+But a single MVMUL is only `D[8,16] += B[8,16] * A[16,16]`, so a 32-wide inner
+dimension takes **two** of them, and the second accumulates onto a Dest the
+first has already rounded. `ADDR_MOD_3` advances K and rewinds Dest to the start
+of the tile for exactly that, and the MOP nests the K-face replay inside the
+fidelity-phase loop — `ckernel_template(1, FIDELITY_PHASES, TT_OP_REPLAY(...))`
+in `_llk_math_matmul_mop_config_` — so the order is **phase-outer,
+K-face-inner**.
+
+The chain therefore emits one `src_to_dest` per (phase, K face) pair: 8 Dest
+writes at HiFi4, not 4. Summing all 32 K terms before one Dest write drops a
+rounding per phase. Measured on random bf16 input at `dest_acc=False`, that is
+**263 of 1024 datums differing, 209 of them by exactly one bf16 ULP**; at
+`dest_acc=True` the wider Dest absorbs it and nothing changes.
+
+Each write goes through `src_to_dest`, which applies Dest precision and the
+no-denormal rule as usual.
 
 ### Operand order
 
@@ -505,9 +529,9 @@ Float32 sources.
 ### Fidelity details
 
 `split_mantissa`, the phase tables and the pre-carry flush all live in
-[`fidelity.py`](#fidelitypy) — see that section. `EltwiseBinaryGolden` keeps
-`split_mantissa` as a class member because the split is documented per
-operation, but it delegates to the shared implementation.
+[`fidelity.py`](#fidelitypy) — see that section. `EltwiseBinaryGolden` has no
+`split_mantissa` member of its own; `partial_product` reaches the split through
+`fidelity.operand_halves`.
 
 `partial_product(regs, *, phase, dest_format=None)` takes the phase's operand
 halves, multiplies them element-wise, and applies the pre-carry flush when
@@ -533,10 +557,14 @@ and the feedback happens through the **operand** — one src register is loaded
 from Dest rather than from L1.
 
 ```
-l1_to_dest(seed)
+l1_to_srcA(seed), datacopy(A2D)               # the seed reaches Dest through SrcA
 repeat: dest_to_srcA, l1_to_srcB, math        # or the srcB mirror
 dest_to_l1
 ```
+
+The seed goes in through SrcA and a datacopy rather than `l1_to_dest`, because
+that is the route the kernel takes: it pays the src register's quantization on
+the way in, which `l1_to_dest` would skip.
 
 The round trip is lossy on purpose: Dest is wider than a src register, so feeding
 it back re-quantizes, and the chain models that where the hardware does it rather
@@ -607,6 +635,13 @@ datacopy / eltwise / matmul for Wormhole and Blackhole.
   the device measures 71); a fitted `2^-15` magnitude flush (fit the numbers
   well, no mechanism); per-operand mantissa asymmetry (WH/BH only, Quasar is
   symmetric); and mask-versus-subtract in the split (provably equivalent).
+- **The WH/BH per-phase mantissa split.** `MANTISSA_SPLIT` is set for Quasar
+  only, so a Wormhole or Blackhole multiply — matmul and Elwmul alike — runs as
+  a single exact product and `math_fidelity` is ignored. That is wrong at
+  *every* fidelity, HiFi4 included, since their per-phase masks never cover
+  SrcA's least significant bit. Constructing one of those goldens warns. The
+  lightweight golden does model these masks, so this is a gap here, not a gap
+  in the suite.
 - **Whether the matmul AL×BL phase is observable** — this model says HiFi3 ==
   HiFi4; the lightweight golden says otherwise. Unresolved for matmul, though
   hardware agrees with this model for eltwise.
