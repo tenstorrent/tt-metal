@@ -1,0 +1,50 @@
+[
+ {
+  "prompt": "Generate a JSON array of 25 user records. Each record has the fields id (integer), name, email, age and city. Output only the JSON."
+ },
+ {
+  "prompt": "Output a CSV table with 30 rows of fake sales data with the columns date, product, quantity, unit_price, total. Output only the CSV."
+ },
+ {
+  "prompt": "Write a Python class `Vector3` with __init__, __add__, __sub__, __mul__, __repr__, dot, cross, norm and normalize methods, each with a docstring and type hints."
+ },
+ {
+  "prompt": "Repeat the following sentence exactly 20 times, one per line, with no other text: The quick brown fox jumps over the lazy dog near the old stone bridge."
+ },
+ {
+  "prompt": "List the integers from 1 to 120 separated by commas, with no other text."
+ },
+ {
+  "prompt": "Write an HTML page containing a table with 15 rows and 4 columns (id, name, price, stock) filled with sample data. Output only the HTML."
+ },
+ {
+  "prompt": "Print the multiplication table from 1x1 to 12x12, one product per line in the format `a x b = c`, with no other text."
+ },
+ {
+  "prompt": "Write 20 SQL INSERT statements for a table employees(id, first_name, last_name, department, salary). Output only SQL."
+ },
+ {
+  "prompt": "Write a C function for each of the following operations on arrays of ints: sum, product, min, max, mean, reverse, sort (bubble sort), and binary search. Include comments."
+ },
+ {
+  "prompt": "Output a YAML Kubernetes Deployment manifest for a web service with 3 replicas, resource limits, readiness and liveness probes, and 5 environment variables."
+ },
+ {
+  "prompt": "Write the Fibonacci numbers F(1) to F(40) one per line in the format `F(n) = value`, with no other text."
+ },
+ {
+  "prompt": "Generate a JSON object that describes 12 countries; for each give name, capital, population, continent, and a list of 3 official languages or main languages. Output only the JSON."
+ },
+ {
+  "prompt": "Write a Markdown table listing the 30 first chemical elements with columns number, symbol, name and atomic mass. Output only the table."
+ },
+ {
+  "prompt": "Write unit tests with pytest for a stack class with push, pop, peek, is_empty and size. Write at least 10 test functions with similar structure."
+ },
+ {
+  "prompt": "Write a bash script that defines 12 functions named backup_1 ... backup_12, each copying a different directory to a backup location with logging, then calls all of them."
+ },
+ {
+  "prompt": "Write a JSON Lines log file with 25 lines, each a JSON object with timestamp, level, service, message and request_id."
+ }
+]
