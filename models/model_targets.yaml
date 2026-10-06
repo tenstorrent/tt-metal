@@ -1663,18 +1663,34 @@ targets:
         entries:
           - batch_size: null
             seq_len: null
-            status: TODO
-            perf: {}
-            accuracy: {}
+            status: active
+            perf:
+              prefill_time_to_token: 0.31
+              prefill_time_to_token_tolerance: 0.5
+              decode_t/s/u: 17.5
+              decode_t/s: 17.5
+            accuracy:
+              top1: 85.85
+              top1_tolerance: 0.02
+              top5: 99.93
+              top5_tolerance: 0.01
             owner_id: U09LNK7BT1Q # Andrija Cicovic
             team: models
       bh_p150:
         entries:
           - batch_size: null
             seq_len: null
-            status: TODO
-            perf: {}
-            accuracy: {}
+            status: active
+            perf:
+              prefill_time_to_token: 0.147
+              prefill_time_to_token_tolerance: 0.5
+              decode_t/s/u: 28.45
+              decode_t/s: 28.45
+            accuracy:
+              top1: 85.16
+              top1_tolerance: 0.02
+              top5: 99.86
+              top5_tolerance: 0.01
             owner_id: U09LNK7BT1Q # Andrija Cicovic
             team: models
 
@@ -1685,18 +1701,34 @@ targets:
         entries:
           - batch_size: null
             seq_len: null
-            status: TODO
-            perf: {}
-            accuracy: {}
+            status: active
+            perf:
+              prefill_time_to_token: 0.21
+              prefill_time_to_token_tolerance: 0.5
+              decode_t/s/u: 20.1
+              decode_t/s: 20.1
+            accuracy:
+              top1: 84.46
+              top1_tolerance: 0.02
+              top5: 99.58
+              top5_tolerance: 0.01
             owner_id: U09LNK7BT1Q # Andrija Cicovic
             team: models
       bh_p150:
         entries:
           - batch_size: null
             seq_len: null
-            status: TODO
-            perf: {}
-            accuracy: {}
+            status: active
+            perf:
+              prefill_time_to_token: 0.146
+              prefill_time_to_token_tolerance: 0.5
+              decode_t/s/u: 32.3
+              decode_t/s: 32.3
+            accuracy:
+              top1: 85.39
+              top1_tolerance: 0.02
+              top5: 99.75
+              top5_tolerance: 0.01
             owner_id: U09LNK7BT1Q # Andrija Cicovic
             team: models
 
