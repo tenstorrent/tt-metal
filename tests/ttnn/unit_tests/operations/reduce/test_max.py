@@ -169,3 +169,41 @@ def test_max_fp32_fast_and_approximate_mode(device, input_shape, dim, scalar, fa
         assert_allclose(torch_output_tensor, output_tensor, rtol=1e-3, atol=1e-2)
     else:
         assert_equal(torch_output_tensor, output_tensor)
+
+
+# Tall TILE shapes: Ht above the split bar, with a trailing slice past Ht.
+_TILE_H_SPLIT_SHAPES = [
+    (1, 1, 3216, 128),  # Ht=101, non-aligned H
+    (2, 3, 1024, 40),  # NC=6, Ht=32
+    (1, 1, 3136, 145),  # non-aligned W: RM writer's last-tile clamp
+    (1, 1, 1024, 1),  # W=1: stage-2 scaler must still fold all 32 rows
+]
+
+
+@pytest.mark.parametrize(
+    "dtype, fast_and_approximate_mode",
+    [(ttnn.bfloat16, False), (ttnn.float32, False), (ttnn.float32, True)],
+    ids=["bf16", "fp32_sfpu", "fp32_fpu"],
+)
+@pytest.mark.parametrize("shape", _TILE_H_SPLIT_SHAPES)
+def test_max_h_axis_split(device, dtype, fast_and_approximate_mode, shape):
+    """H reduce on tall TILE input — tiled stage 1, RM stage 2."""
+    torch.manual_seed(0)
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    # Negative input: an overhang filled with zero would win the max.
+    torch_input = -(torch.rand(shape, dtype=torch_dtype) + 1.0)
+    torch_ref = torch.amax(torch_input.float(), dim=-2).to(torch_dtype)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    # A value that would win if implicit tile padding reached the reduce.
+    tt_input = ttnn.fill_implicit_tile_padding(tt_input, 42.0)
+
+    tt_output = ttnn.max(tt_input, dim=-2, fast_and_approximate_mode=fast_and_approximate_mode)
+    assert tt_output.layout == ttnn.TILE_LAYOUT
+    output = ttnn.to_torch(tt_output)
+
+    if fast_and_approximate_mode:
+        # FPU truncates to tf32, so the selected value is off by up to one tf32 ulp.
+        torch.testing.assert_close(output, torch_ref, rtol=2**-10, atol=0)
+    else:
+        assert_equal(torch_ref, output)
