@@ -38,6 +38,10 @@ namespace tt::tt_metal::internal {
 std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(
     tt::tt_fabric::FabricApiType api_type = tt::tt_fabric::FabricApiType::Linear);
 
+// Number of runtime-argument words emitted for the given connection count in the
+// currently opened fabric context.
+size_t fabric_connection_rt_args_size(size_t num_connections);
+
 // Compute fabric connection RT args without any PD mutation.
 // Pure computation — resolves routing + assembles RT args; the semaphore values are copied
 // through verbatim. sem_args_are_l1_addresses says they are raw L1 addresses rather than

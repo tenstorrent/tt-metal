@@ -173,6 +173,7 @@ from ttnn._ttnn.fabric import (
     setup_routing_plane_connection,
     get_fabric_kernel_defines,
     fabric_connection_rt_args,
+    fabric_connection_rt_args_size,
     compute_fabric_connection_rt_args,
 )
 

@@ -733,6 +733,11 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::t
 // The two per-connection semaphore values are copied through verbatim; sem_args_are_l1_addresses
 // only says what they are, so they can be validated here.
 // Returns the flat RT args vector for RoutingPlaneConnectionManager::build_from_args().
+size_t fabric_connection_rt_args_size(size_t num_connections) {
+    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    return num_connections * 4 + (fabric_context.is_2D_routing_enabled() ? 3 + num_connections * 2 : 0);
+}
+
 std::vector<uint32_t> compute_fabric_connection_rt_args(
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
@@ -777,7 +782,7 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
     const auto& fabric_context = control_plane.get_fabric_context();
 
     std::vector<uint32_t> worker_args;
-    worker_args.reserve(dst_nodes.size() * 4 + (fabric_context.is_2D_routing_enabled() ? 3 + dst_nodes.size() * 2 : 0));
+    worker_args.reserve(fabric_connection_rt_args_size(dst_nodes.size()));
 
     for (size_t i = 0; i < dst_nodes.size(); i++) {
         const auto& dst_node = dst_nodes[i];
@@ -825,6 +830,13 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
             worker_args.push_back(static_cast<uint16_t>(*dst_node.mesh_id));
         }
     }
+
+    TT_FATAL(
+        worker_args.size() == fabric_connection_rt_args_size(dst_nodes.size()),
+        "Fabric connection RT-arg layout emitted {} words, expected {} for {} connections",
+        worker_args.size(),
+        fabric_connection_rt_args_size(dst_nodes.size()),
+        dst_nodes.size());
 
     return worker_args;
 }
