@@ -135,12 +135,25 @@ def should_compute_direct_golden(subject: str = "this golden") -> bool:
     would raise on it (or silently cache a previous test's golden), and
     ``--use-stimuli`` would recompute instead of loading the cached value,
     quietly defeating the point of the run.
+
+    **The skip is deliberate, and liftable.** ``GeneratorProxy`` is not tied to
+    the registry: it wraps any object and proxies its callables through
+    ``__getattr__``, and its cache keys on ``sha256(PYTEST_CURRENT_TEST)``, so
+    wrapping a directly-built golden would make both modes work rather than
+    skip. It is not done here because that would put a
+    ``helpers.golden_generators`` import back into the heavyweight path, which
+    is kept clear so the old golden can be retired without stranding the new
+    one -- and because no in-tree flow runs these modes today: nothing outside
+    ``llk_pytest_plugin.py`` defines them and no CI job passes them. Lift this
+    when something does, by wrapping at the call site.
+    ``test_generalized_moe_gate.py`` skips them for a related reason.
     """
     if TestConfig.STIMULI_MODE != StimuliMode.INLINE:
         pytest.skip(
             f"{subject} is constructed directly rather than through "
             f"get_golden_generator, so it bypasses GeneratorProxy, which "
-            f"--stimuli-only and --use-stimuli both depend on"
+            f"--stimuli-only and --use-stimuli both depend on. Deliberate; "
+            f"see should_compute_direct_golden for how to lift it"
         )
     return TestConfig.BUILD_MODE != BuildMode.PRODUCE
 

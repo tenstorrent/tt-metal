@@ -279,8 +279,12 @@ def heavyweight_golden_applies(
     been validated against silicon on.
 
     The multi-tile exclusion is not cosmetic: a multi-tile matmul is a block
-    matmul over the inner dimension and ``MatmulGolden.build_chain`` has no
-    notion of K-blocking, so it raises rather than returning something.
+    matmul over the inner dimension, which the heavyweight golden has no notion
+    of. It raises rather than returning something -- from
+    ``heavyweight ... MatmulGolden._as_tile`` at ``run`` time, when a register
+    turns out to hold more than one tile, not from ``build_chain``. (The
+    ``MatmulGolden`` imported in this file is the legacy one from
+    ``helpers.golden_generators``, which does serve the whole sweep.)
     """
     return (
         rt_dim == ct_dim == kt_dim == 1
