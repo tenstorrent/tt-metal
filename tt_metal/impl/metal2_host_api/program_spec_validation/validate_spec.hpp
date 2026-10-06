@@ -25,4 +25,9 @@ namespace tt::tt_metal::experimental {
 void ValidateProgramSpec(
     const ProgramSpec& spec, const CollectedSpecData& collected, MetalContext& metal_ctx, const Allocator& allocator);
 
+// TODO:
+// These are moved out of CollectSpecData.
+// I should moe this into ValidateProgramSpec.
+void PostCollectionValidate(const ProgramSpec& spec, const CollectedSpecData& collected);
+
 }  // namespace tt::tt_metal::experimental

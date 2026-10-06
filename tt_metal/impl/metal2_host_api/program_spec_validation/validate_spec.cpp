@@ -167,7 +167,6 @@ void ValidatePrefetcherPipeSpec(const ProgramSpec& spec, const CollectedSpecData
     }
 
     for (const auto& pipe : spec.advanced_options.prefetcher_pipe_parameters) {
-        const auto& users = collected.prefetcher_pipe_users.at(pipe.unique_id);
         auto receiver_it = receiver_kernel_of.find(pipe.unique_id);
         const KernelSpec* receiver_kernel = receiver_it == receiver_kernel_of.end() ? nullptr : receiver_it->second;
 
@@ -195,9 +194,13 @@ void ValidatePrefetcherPipeSpec(const ProgramSpec& spec, const CollectedSpecData
         if (receiver_kernel != nullptr) {
             take_lanes(receiver_kernel);
         }
-        for (const DataflowBufferSpec* relay : users.relays) {
-            for (const auto& rec : collected.dfb_endpoints.at(relay->unique_id).producers) {
-                take_lanes(rec.kernel);
+        // A pipe bound only by kernels (no relay DFB) has no entry.
+        if (const auto relays_it = collected.prefetcher_pipe_relays.find(pipe.unique_id);
+            relays_it != collected.prefetcher_pipe_relays.end()) {
+            for (const DataflowBufferSpec* relay : relays_it->second) {
+                for (const auto& rec : collected.dfb_endpoints.at(relay->unique_id).producers) {
+                    take_lanes(rec.kernel);
+                }
             }
         }
         if (lanes.has_value() && *lanes > 1) {
@@ -1569,6 +1572,341 @@ void ValidateProgramSpec(
     // not validated:
     //  - Kernels' effective node sets ARE the union of their containing WorkUnitSpecs' target_nodes
     //  - DFBs' allocation node sets are the union of their binding kernels' node sets
+}
+
+//////////////////////////////////////////////////
+// PostCollectionValidate
+//////////////////////////////////////////////////
+
+namespace {
+
+template <typename KernelId>
+void ValidateAccessorNameLength(const KernelId& kernel_id, std::string_view kind, std::string_view name) {
+    TT_FATAL(
+        name.size() <= MAX_ACCESSOR_NAME_LENGTH,
+        "Kernel '{}' {} accessor_name '{}' is {} characters; an accessor_name must be at most {} characters",
+        kernel_id,
+        kind,
+        name,
+        name.size(),
+        MAX_ACCESSOR_NAME_LENGTH);
+}
+
+}  // namespace
+
+void PostCollectionValidate(const ProgramSpec& spec, const CollectedSpecData& collected) {
+    // ------------------------------------------------------------------------
+    // DFB bindings: accessor names, self-loop pairs, role aliasing
+    // ------------------------------------------------------------------------
+    for (const auto& kernel : spec.kernels) {
+        // Track per-accessor-name signatures within this kernel. Reusing a single
+        // accessor_name across two DFBBindings is permitted as a "self-loop pair":
+        // both bindings target the same DFB with opposite endpoint types (one PRODUCER,
+        // one CONSUMER). This lets a kernel that both produces and consumes the same DFB
+        // use a single device-side accessor name instead of two aliasing wrappers.
+        struct AccessorBindingInfo {
+            DFBSpecName dfb_spec_name;
+            bool has_producer = false;
+            bool has_consumer = false;
+        };
+        std::unordered_map<std::string, AccessorBindingInfo> accessor_bindings;
+        // Track, per DFB, which endpoint roles this kernel has already bound. Within a kernel a DFB
+        // may be bound at most once per role; the only multi-binding form is the self-loop pair (one
+        // PRODUCER + one CONSUMER, whose accessor names may differ). A second binding of the same
+        // role under a different accessor name is the forbidden "one buffer, two names" aliasing
+        // (see the check below). Scoped to the kernel so it resets per iteration — a DFB legitimately
+        // carries different accessor names on different kernels (producer 'out', consumer 'in'), so
+        // this must not be global.
+        struct DFBBoundRoles {
+            bool has_producer = false;
+            bool has_consumer = false;
+        };
+        std::unordered_map<DFBSpecName, DFBBoundRoles> dfb_bound_roles;
+        for (const auto& dfb_binding : kernel.dfb_bindings) {
+            auto [it, inserted] = accessor_bindings.try_emplace(
+                dfb_binding.accessor_name, AccessorBindingInfo{dfb_binding.dfb_spec_name});
+            AccessorBindingInfo& info = it->second;
+            if (inserted) {
+                TT_FATAL(
+                    IsValidCppIdentifier(dfb_binding.accessor_name),
+                    "Kernel '{}' DFB accessor_name '{}' must be a valid C++ identifier",
+                    kernel.unique_id,
+                    dfb_binding.accessor_name);
+                ValidateAccessorNameLength(kernel.unique_id, "DFB", dfb_binding.accessor_name);
+            } else {
+                TT_FATAL(
+                    info.dfb_spec_name == dfb_binding.dfb_spec_name,
+                    "Kernel '{}' uses accessor_name '{}' for two different DFBs ('{}' and '{}'). "
+                    "Reusing a name is only permitted when both bindings target the same DFB (self-loop pair).",
+                    kernel.unique_id,
+                    dfb_binding.accessor_name,
+                    info.dfb_spec_name,
+                    dfb_binding.dfb_spec_name);
+            }
+            const bool is_producer = (dfb_binding.endpoint_type == DFBEndpointType::PRODUCER);
+            bool& seen_this_type = is_producer ? info.has_producer : info.has_consumer;
+            TT_FATAL(
+                !seen_this_type,
+                "Kernel '{}' has duplicate {} binding for accessor_name '{}'",
+                kernel.unique_id,
+                is_producer ? "PRODUCER" : "CONSUMER",
+                dfb_binding.accessor_name);
+            seen_this_type = true;
+
+            // Forbid binding the same DFB twice in the same role within this kernel (e.g. two CONSUMER
+            // bindings under different accessor names). The legitimate multi-binding form is the
+            // self-loop pair — one PRODUCER + one CONSUMER — which this allows regardless of whether
+            // the two bindings share an accessor name. The same-role same-name case is already caught
+            // above (duplicate {PRODUCER,CONSUMER} binding for accessor_name); this closes the
+            // different-name gap. "One buffer, two names" in kernel code must be a handle alias
+            // (constexpr auto x = dfb::y) over a single binding, not a second binding — two accessors /
+            // DataflowBuffer objects for one FIFO break the object<->DFB identity that device-side
+            // debug tooling relies on.
+            DFBBoundRoles& bound_roles = dfb_bound_roles[dfb_binding.dfb_spec_name];
+            bool& role_already_bound = is_producer ? bound_roles.has_producer : bound_roles.has_consumer;
+            TT_FATAL(
+                !role_already_bound,
+                "Kernel '{}' has two {} bindings to DFB '{}' under different accessor names. Within a "
+                "kernel a DFB may be bound at most once per role (the only multi-binding form is the "
+                "self-loop pair: one PRODUCER + one CONSUMER). To refer to one buffer by multiple names "
+                "in kernel code, alias the handle (constexpr auto x = dfb::y) instead of adding a second binding.",
+                kernel.unique_id,
+                is_producer ? "PRODUCER" : "CONSUMER",
+                dfb_binding.dfb_spec_name);
+            role_already_bound = true;
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Cross-node DFBs: unbound
+    // ------------------------------------------------------------------------
+    // Every declared cross-node DFB must be bound by some kernel (local DFBs are checked in collection).
+    for (const auto& cross_node_dfb : spec.cross_node_dataflow_buffers) {
+        const DFBSpecName& name = cross_node_dfb.dfb_spec.unique_id;
+        TT_FATAL(
+            collected.dfb_endpoints.contains(name),
+            "CrossNodeDataflowBufferSpec '{}' is defined but not bound by any kernel",
+            name);
+    }
+
+    // ------------------------------------------------------------------------
+    // Semaphore bindings: accessor names
+    // ------------------------------------------------------------------------
+    for (const auto& kernel : spec.kernels) {
+        std::unordered_set<std::string> accessor_names;
+        for (const auto& binding : kernel.semaphore_bindings) {
+            auto [it, inserted] = accessor_names.insert(binding.accessor_name);
+            TT_FATAL(
+                inserted,
+                "Kernel '{}' has duplicate semaphore accessor_name '{}'",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                IsValidCppIdentifier(binding.accessor_name),
+                "Kernel '{}' semaphore accessor_name '{}' must be a valid C++ identifier",
+                kernel.unique_id,
+                binding.accessor_name);
+            ValidateAccessorNameLength(kernel.unique_id, "semaphore", binding.accessor_name);
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Scratchpads: sizes, accessor names, unbound
+    // ------------------------------------------------------------------------
+    for (const auto& scratchpad : spec.scratchpads) {
+        TT_FATAL(
+            scratchpad.size_per_node != 0,
+            "ScratchpadSpec '{}' has size_per_node == 0; a scratchpad must reserve a non-zero number of bytes "
+            "(did you forget to set size_per_node?).",
+            scratchpad.unique_id);
+    }
+    for (const auto& kernel : spec.kernels) {
+        std::unordered_set<std::string> accessor_names;
+        for (const auto& binding : kernel.scratchpad_bindings) {
+            auto [it, inserted] = accessor_names.insert(binding.accessor_name);
+            TT_FATAL(
+                inserted,
+                "Kernel '{}' has duplicate scratchpad accessor_name '{}'",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                IsValidCppIdentifier(binding.accessor_name),
+                "Kernel '{}' scratchpad accessor_name '{}' must be a valid C++ identifier",
+                kernel.unique_id,
+                binding.accessor_name);
+            ValidateAccessorNameLength(kernel.unique_id, "scratchpad", binding.accessor_name);
+        }
+    }
+    // Every declared scratchpad must be bound by some kernel: an unbound scratchpad would reserve L1
+    // that no kernel can reach.
+    for (const auto& scratchpad : spec.scratchpads) {
+        TT_FATAL(
+            collected.scratchpad_binders.contains(scratchpad.unique_id),
+            "ScratchpadSpec '{}' is declared but not bound by any kernel.",
+            scratchpad.unique_id);
+    }
+
+    // ------------------------------------------------------------------------
+    // Tensor bindings: accessor names, binding sequences, unused parameters
+    // ------------------------------------------------------------------------
+    for (const auto& kernel : spec.kernels) {
+        // A tensor binding is legal on both DM and compute kernels:
+        //   - a DM kernel can use the binding token to construct a TensorAccessor or LocalTensorAccessor
+        //   - a compute kernel can only use LocalTensorAccessor (NOC-free, local-L1 only)
+
+        std::unordered_set<std::string> accessor_names;
+        for (const auto& binding : kernel.tensor_bindings) {
+            auto [it, inserted] = accessor_names.insert(binding.accessor_name);
+            TT_FATAL(
+                inserted,
+                "Kernel '{}' has duplicate tensor accessor_name '{}'",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                IsValidCppIdentifier(binding.accessor_name),
+                "Kernel '{}' tensor accessor_name '{}' must be a valid C++ identifier",
+                kernel.unique_id,
+                binding.accessor_name);
+            ValidateAccessorNameLength(kernel.unique_id, "tensor", binding.accessor_name);
+        }
+
+        std::unordered_set<std::string> reserved_type_aliases;
+        reserved_type_aliases.reserve(accessor_names.size());
+        for (const auto& binding_name : accessor_names) {
+            reserved_type_aliases.insert(binding_name + "_t");
+        }
+
+        std::unordered_set<std::string> sequence_names;
+        for (const auto& sequence : kernel.advanced_options.tensor_binding_sequences) {
+            TT_FATAL(
+                IsValidCppIdentifier(sequence.sequence_name),
+                "Kernel '{}' tensor binding sequence_name '{}' must be a valid C++ identifier",
+                kernel.unique_id,
+                sequence.sequence_name);
+            TT_FATAL(
+                !accessor_names.contains(sequence.sequence_name),
+                "Kernel '{}' tensor binding sequence_name '{}' collides with a TensorBinding accessor_name",
+                kernel.unique_id,
+                sequence.sequence_name);
+            TT_FATAL(
+                !reserved_type_aliases.contains(sequence.sequence_name),
+                "Kernel '{}' tensor binding sequence_name '{}' collides with generated type alias '{}'",
+                kernel.unique_id,
+                sequence.sequence_name,
+                sequence.sequence_name);
+            auto [sit, sinserted] = sequence_names.insert(sequence.sequence_name);
+            TT_FATAL(
+                sinserted,
+                "Kernel '{}' has duplicate tensor binding sequence_name '{}'",
+                kernel.unique_id,
+                sequence.sequence_name);
+
+            std::unordered_set<std::string> member_names;
+            for (const auto& member : sequence.members) {
+                TT_FATAL(
+                    accessor_names.contains(member),
+                    "Kernel '{}' tensor binding sequence '{}' references unknown tensor accessor_name '{}'",
+                    kernel.unique_id,
+                    sequence.sequence_name,
+                    member);
+                auto [mit, minserted] = member_names.insert(member);
+                TT_FATAL(
+                    minserted,
+                    "Kernel '{}' tensor binding sequence '{}' has duplicate member '{}'",
+                    kernel.unique_id,
+                    sequence.sequence_name,
+                    member);
+            }
+        }
+    }
+
+    // Every declared TensorParameter must be referenced by some kernel binding or a DFB
+    // borrowed_from. (Same usage requirement as DFBs; an unused tensor parameter is a user error.)
+    // A borrowed-memory DFB uses its backing TensorParameter via DataflowBufferSpec::borrowed_from
+    // (resolved by name at runtime) even when no kernel binds it, so that counts as a use. Only local
+    // DFBs are walked: borrowed memory is a local-L1 feature (cross-node DFBs are runtime-unsupported).
+    // Existence of the borrowed_from referent is validated in ValidateProgramSpec's borrowed-DFB checks.
+    std::unordered_set<TensorParamName> used_tensor_parameters;
+    for (const auto& kernel : spec.kernels) {
+        for (const auto& binding : kernel.tensor_bindings) {
+            used_tensor_parameters.insert(binding.tensor_parameter_name);
+        }
+    }
+    for (const auto& dfb : spec.dataflow_buffers) {
+        if (dfb.borrowed_from.has_value()) {
+            used_tensor_parameters.insert(*dfb.borrowed_from);
+        }
+    }
+    for (const auto& tensor_parameter : spec.tensor_parameters) {
+        TT_FATAL(
+            used_tensor_parameters.contains(tensor_parameter.unique_id),
+            "TensorParameter '{}' is defined but not bound by any kernel",
+            tensor_parameter.unique_id);
+    }
+
+    // ------------------------------------------------------------------------
+    // PrefetcherPipes: accessor names, relays, unused parameters
+    // ------------------------------------------------------------------------
+    for (const auto& kernel : spec.kernels) {
+        std::unordered_set<std::string> accessor_names;
+        // A kernel binds a given pipe at most once, within and across accessors: a second binding
+        // would be a second device object over the same credit counters (two names for one pipe is a
+        // handle alias, not a binding).
+        std::unordered_set<PrefetcherPipeParamName> bound_pipes;
+        for (const auto& binding : kernel.advanced_options.prefetcher_pipe_bindings) {
+            auto [it, inserted] = accessor_names.insert(binding.accessor_name);
+            TT_FATAL(
+                inserted,
+                "Kernel '{}' has duplicate PrefetcherPipe accessor_name '{}'",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                IsValidCppIdentifier(binding.accessor_name),
+                "Kernel '{}' PrefetcherPipe accessor_name '{}' must be a valid C++ identifier",
+                kernel.unique_id,
+                binding.accessor_name);
+            ValidateAccessorNameLength(kernel.unique_id, "PrefetcherPipe", binding.accessor_name);
+            TT_FATAL(
+                !binding.pipe_parameter_names.empty(),
+                "Kernel '{}' PrefetcherPipe accessor '{}' names no PrefetcherPipeParameter",
+                kernel.unique_id,
+                binding.accessor_name);
+            for (const auto& pipe_name : binding.pipe_parameter_names) {
+                auto [pit, pinserted] = bound_pipes.insert(pipe_name);
+                TT_FATAL(
+                    pinserted,
+                    "Kernel '{}' binds PrefetcherPipeParameter '{}' more than once (latest under accessor_name '{}'). "
+                    "A kernel may bind a given pipe at most once.",
+                    kernel.unique_id,
+                    pipe_name,
+                    binding.accessor_name);
+            }
+        }
+    }
+    for (const auto& cross_node_dfb : spec.cross_node_dataflow_buffers) {
+        TT_FATAL(
+            cross_node_dfb.dfb_spec.advanced_options.prefetcher_pipe_relays.empty(),
+            "CrossNodeDataflowBufferSpec '{}' sets prefetcher_pipe_relays; only a local DFB can relay a "
+            "PrefetcherPipe",
+            cross_node_dfb.dfb_spec.unique_id);
+    }
+    // Every declared PrefetcherPipeParameter must be used by a kernel binding or a relay DFB.
+    // (An unused pipe parameter would demand a run arg nothing reads.)
+    std::unordered_set<PrefetcherPipeParamName> used_pipes;
+    for (const auto& kernel : spec.kernels) {
+        for (const auto& binding : kernel.advanced_options.prefetcher_pipe_bindings) {
+            used_pipes.insert(binding.pipe_parameter_names.begin(), binding.pipe_parameter_names.end());
+        }
+    }
+    for (const auto& [pipe_name, relays] : collected.prefetcher_pipe_relays) {
+        used_pipes.insert(pipe_name);
+    }
+    for (const auto& pipe_parameter : spec.advanced_options.prefetcher_pipe_parameters) {
+        TT_FATAL(
+            used_pipes.contains(pipe_parameter.unique_id),
+            "PrefetcherPipeParameter '{}' is defined but not bound by any kernel or relay DFB",
+            pipe_parameter.unique_id);
+    }
 }
 
 }  // namespace tt::tt_metal::experimental

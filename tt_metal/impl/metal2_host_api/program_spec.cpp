@@ -26,11 +26,12 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.name);
     MetalContext& metal_ctx = mesh_device.impl().metal_context();
 
-    // Step 1a: Collect derived data (builds lookup tables, checks structural invariants)
+    // Step 1a: Collect derived data (builds lookup tables, checks name uniqueness and references)
     CollectedSpecData collected = CollectSpecData(spec);
 
     // Step 1b: Validate semantic rules (can be skipped for trusted inputs)
     if (!skip_validation) {
+        PostCollectionValidate(spec, collected);
         ValidateProgramSpec(spec, collected, metal_ctx, *mesh_device.allocator());
     }
 
