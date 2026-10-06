@@ -27,9 +27,10 @@ constexpr std::uint32_t GCD_LZ_MOD_CC_NE0 = 0x2;                     // SFPLZ co
 constexpr std::uint32_t GCD_SHFT_MOD_INPLACE_VAR_LOGICAL = 0x0;  // SFPSHFT dest <<= lreg_c (negative -> right), logical
 constexpr std::uint32_t GCD_SETCC_IMM12_INT32 = 0x0;  // p_sfpu::cc::FP32_SM32_EN clear: SFPSETCC tests src as INT32
 constexpr std::uint32_t GCD_SETCC_MOD_EQ0 = 0x6;      // SFPSETCC CC.Res = (src == 0)
-// SFPSWAP imm12[1:0] selects the compare domain. The ISA page's field table and its pseudocode
-// disagree on the polarity; 0 is the value the unified Int32 test confirms on hardware, including
-// operand pairs whose bit patterns land in the FP32 NaN range (> 0x7F800000).
+// SFPSWAP imm12 bit 0 selects the compare domain, 0 = two's-complement int32, 1 = fp32; bits 11:1
+// are reserved (tt_llk_quasar/instructions/assembly.yaml, SFPSWAP imm12_math). The int32 compare
+// matters: operands above 0x7F800000 are NaN bit patterns in fp32, and the Quasar emulator test
+// plants such pairs.
 constexpr std::uint32_t GCD_SWAP_IMM12_INT32 = 0x0;
 constexpr std::uint32_t GCD_ENCC_IMM12_ENABLE = 0x1;      // SFPENCC imm12[0] = 1: enable CC
 constexpr std::uint32_t GCD_ENCC_MOD_SET_EN = 0x2;        // SFPENCC CC.En <- imm12[0], CC.Res = 1
@@ -42,12 +43,16 @@ constexpr std::uint32_t GCD_LREG_B = p_sfpu::LREG1;
 constexpr std::uint32_t GCD_LREG_TMP = p_sfpu::LREG2;
 constexpr std::uint32_t GCD_LREG_KBIAS = p_sfpu::LREG3;  // k - 31, where 2^k = lsb(a | b)
 
+// Operand magnitude bound in bits: every two's-complement int32 except -2^31, which Quasar
+// SFPABS saturates to 2^31 - 1.
+constexpr std::uint32_t GCD_MAX_INPUT_BITS = 31;
+
+constexpr std::uint32_t GCD_REPLAY_DEPTH = 32;
 constexpr std::uint32_t GCD_STEP_INSTRS = 8;  // instructions emitted by _emit_gcd_step_
 constexpr std::uint32_t GCD_REPLAY_START = 0;
 constexpr std::uint32_t GCD_REPLAY_LEN = 2 * GCD_STEP_INSTRS;  // one ping-pong pair of Stein steps
-static_assert(GCD_REPLAY_LEN <= 31, "replay length must fit the log2(depth) len field");
+static_assert(GCD_REPLAY_LEN < GCD_REPLAY_DEPTH, "replay length must fit the log2(depth) len field");
 
-constexpr std::uint32_t GCD_REPLAY_DEPTH = 32;
 constexpr std::uint32_t GCD_PROLOGUE_START = GCD_REPLAY_START + GCD_REPLAY_LEN;
 constexpr std::uint32_t GCD_PROLOGUE_LEN = 15;  // instructions emitted by _emit_gcd_prologue_
 static_assert(GCD_PROLOGUE_START + GCD_PROLOGUE_LEN <= GCD_REPLAY_DEPTH, "prologue must fit after the recorded pair");
@@ -113,8 +118,9 @@ inline void _emit_gcd_step_() {
 /**
  * @brief Record the iteration pair and the prologue into the replay buffer.
  *
- * @note Call once per @ref calculate_gcd invocation, before the row loop; every
- *       @ref _calculate_gcd_sfp_rows_ call replays what this records.
+ * @note Called by @ref calculate_gcd on entry, before the row loop; every
+ *       @ref _calculate_gcd_sfp_rows_ call replays what this records. Overwrites math-thread
+ *       replay slots 0-30.
  */
 inline void _record_gcd_replay_() {
     lltt::record(GCD_REPLAY_START, GCD_REPLAY_LEN);
@@ -128,10 +134,13 @@ inline void _record_gcd_replay_() {
 /**
  * @brief Compute gcd(|a|, |b|) for one SFP row pair, with a in GCD_LREG_A and b in GCD_LREG_B.
  *
- * Runs MAX_INPUT_BITS - 1 Stein iterations, which is enough for any operand magnitude below
- * 2^MAX_INPUT_BITS: each iteration removes at least one bit from max(a, b).
+ * Runs GCD_MAX_INPUT_BITS - 1 Stein iterations. max(a, b) does not shrink every step:
+ * (2^30 + 3, 2^30 + 1) becomes (2^30 + 1, 2) after one step. What does hold is that a + b
+ * (with a's extra trailing zeros stripped) at least halves every step, so for magnitudes below
+ * 2^GCD_MAX_INPUT_BITS b reaches the gcd within GCD_MAX_INPUT_BITS - 1 steps, and the final update
+ * of a is never needed. The budget has no slack: (2147483645, 3), (1073741821, 1073741827) and
+ * (715827883, 1431655765) need all 30 steps; the test plants all three.
  *
- * @tparam MAX_INPUT_BITS: Operand magnitude bound in bits; sets the iteration count
  * @tparam SIGN_MAGNITUDE_FORMAT: Dest holds sign-magnitude Int32, so convert on entry
  * @note Leaves the result in GCD_LREG_B and clobbers GCD_LREG_A, GCD_LREG_TMP, GCD_LREG_KBIAS.
  *       No conversion back for sign-magnitude Dest: the result is non-negative, where both
@@ -139,10 +148,8 @@ inline void _record_gcd_replay_() {
  * @note Call @ref _record_gcd_replay_ before this function - the iterations run out of the
  *       replay buffer.
  */
-template <int MAX_INPUT_BITS = 31, bool SIGN_MAGNITUDE_FORMAT = false>
+template <bool SIGN_MAGNITUDE_FORMAT = false>
 inline void _calculate_gcd_sfp_rows_() {
-    static_assert(MAX_INPUT_BITS >= 2 && MAX_INPUT_BITS <= 31, "MAX_INPUT_BITS must be in [2, 31]");
-
     if constexpr (SIGN_MAGNITUDE_FORMAT) {
         TTI_SFPCAST(GCD_LREG_A, GCD_LREG_A, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC);
         TTI_SFPCAST(GCD_LREG_B, GCD_LREG_B, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC);
@@ -150,12 +157,13 @@ inline void _calculate_gcd_sfp_rows_() {
 
     lltt::replay(GCD_PROLOGUE_START, GCD_PROLOGUE_LEN);
 
-    constexpr std::uint32_t STEIN_ITERATIONS = MAX_INPUT_BITS - 1;
-    // The recorded body is an iteration pair, so the tail replay covers the last 1 or 2
-    // iterations and stops one instruction short: the final SFPIADD only updates a, which
-    // is discarded.
+    constexpr std::uint32_t STEIN_ITERATIONS = GCD_MAX_INPUT_BITS - 1;
+    // The recorded body is an iteration pair, so the tail replay covers the last 2 iterations
+    // and stops one instruction short: the final SFPIADD only updates a, which is discarded.
     constexpr std::uint32_t FULL_PAIRS = (STEIN_ITERATIONS - 1) / 2;
     constexpr std::uint32_t TAIL_LEN = GCD_STEP_INSTRS * (STEIN_ITERATIONS - 2 * FULL_PAIRS) - 1;
+    static_assert(
+        2 * FULL_PAIRS + (TAIL_LEN + 1) / GCD_STEP_INSTRS == STEIN_ITERATIONS, "replays must cover every step");
     static_assert(TAIL_LEN <= GCD_REPLAY_LEN, "tail must fit the recorded pair");
 
     for (std::uint32_t i = 0; i < FULL_PAIRS; i++) {
@@ -171,22 +179,24 @@ inline void _calculate_gcd_sfp_rows_() {
  *
  * gcd(0, b) = |b|, gcd(a, 0) = |a|, gcd(0, 0) = 0. The output tile may alias either input.
  *
- * @tparam ITERATIONS: SFP row pairs to process per face
- * @tparam MAX_INPUT_BITS: Operand magnitude bound in bits; fewer bits means fewer iterations
  * @tparam SIGN_MAGNITUDE_FORMAT: Dest holds sign-magnitude Int32 rather than two's complement
+ *         (e.g. an Int8 copy_tile through an fp32-accumulating FPU); converts both operands on load
+ * @tparam ITERATIONS: SFP row pairs to process per face
  * @tparam TILE_SHAPE: Dest tile shape, which fixes the tile stride
  * @param dst_index_in0: Dest tile index of the first operand
  * @param dst_index_in1: Dest tile index of the second operand
  * @param dst_index_out: Dest tile index the result is written to
- * @note Operand magnitudes must fit in MAX_INPUT_BITS bits; -2^31 is out of contract because
+ * @note Operand magnitudes must fit in GCD_MAX_INPUT_BITS bits; -2^31 is out of contract because
  *       Quasar SFPABS saturates it to 2^31 - 1.
- * @note Needs no init call: it enables CC and records its own replay slots on entry, and leaves
+ * @note Overwrites math-thread replay slots 0-30 on every call; re-run the init of any other
+ *       replay-buffer user afterwards. Has no init of its own, but its loads and stores rely on the
+ *       ADDR_MOD_7 that _llk_math_eltwise_sfpu_init_ programs. Enables CC on entry and leaves
  *       CC.En = 1, CC.Res = 1 (the firmware default) on exit.
+ * @note Clobbers LREG0-LREG3.
  */
 template <
-    int ITERATIONS = SFPU_ITERATIONS,
-    int MAX_INPUT_BITS = 31,
     bool SIGN_MAGNITUDE_FORMAT = false,
+    int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void calculate_gcd(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
@@ -200,10 +210,14 @@ inline void calculate_gcd(
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOAD(GCD_LREG_A, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0 /* done */, in0_offset + (d << 1));
-        TT_SFPLOAD(GCD_LREG_B, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0 /* done */, in1_offset + (d << 1));
-        _calculate_gcd_sfp_rows_<MAX_INPUT_BITS, SIGN_MAGNITUDE_FORMAT>();
-        TT_SFPSTORE(GCD_LREG_B, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0 /* done */, out_offset + (d << 1));
+        const std::uint32_t row_offset = d << 1;  // one SFP row pair = 2 Dest rows
+        TT_SFPLOAD(
+            GCD_LREG_A, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0 /* done */, in0_offset + row_offset /* dest_reg_addr */);
+        TT_SFPLOAD(
+            GCD_LREG_B, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0 /* done */, in1_offset + row_offset /* dest_reg_addr */);
+        _calculate_gcd_sfp_rows_<SIGN_MAGNITUDE_FORMAT>();
+        TT_SFPSTORE(
+            GCD_LREG_B, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0 /* done */, out_offset + row_offset /* dest_reg_addr */);
     }
 }
 
