@@ -206,6 +206,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/tilize.h
     inc/api/compute/topk.h
     inc/api/compute/transpose.h
+    inc/api/compute/triangle_solve.h
     inc/api/compute/transpose_dest.h
     inc/api/compute/transpose_wh.h
     inc/api/compute/transpose_wh_dest.h
