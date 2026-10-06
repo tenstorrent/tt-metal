@@ -119,8 +119,8 @@ inline void fds_clear_neo_status(uint32_t neo_inst) {
         TT_FDS_DISPATCH_TENSIX_TO_DISPATCH_0__REG_ADDR + (neo_inst * sizeof(uint32_t)), 0x0);
 }
 
-// Read the done status for the specified group ID: a per-lane mask, live on some chips and sticky on
-// others (see fds_write_group_status), and not gated by the enable register. Group 0 is the idle value
+// Read the done status for the specified group ID: a per-lane mask, live on some IP variants and sticky
+// on others (see fds_write_group_status), and not gated by the enable register. Group 0 is the idle value
 // on the wire, so group 0's status is the map of lanes currently carrying nothing.
 inline uint32_t fds_read_group_status(uint32_t group_id) {
     return __builtin_riscv_ttrocc_fds_intf_read(
@@ -204,7 +204,7 @@ inline uint32_t fds_read_auto_dispatch_outbox_address() {
     return __builtin_riscv_ttrocc_fds_intf_read(TT_FDS_TENSIXNEO_AUTO_DISPATCH_OUTBOX_ADDRESS_REG_ADDR);
 }
 
-// Read the go status for the specified group ID: a per-lane mask, live on some chips and sticky on others
+// Read the go status for the specified group ID: a per-lane mask, live on some IP variants and sticky on others
 inline uint32_t fds_read_group_status(uint32_t group_id) {
     return __builtin_riscv_ttrocc_fds_intf_read(
         TT_FDS_TENSIXNEO_GROUPID_STATUS_0__REG_ADDR + (group_id * sizeof(uint32_t)));

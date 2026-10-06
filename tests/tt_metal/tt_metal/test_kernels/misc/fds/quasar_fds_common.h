@@ -11,9 +11,10 @@
 
 #include "quasar_fds_epoch.h"
 
-// The wire-to-core mapping is not established, so a targeted mask cannot distinguish "wrong wire" from "no
-// transport at all". Kernels enable every lane of the register map instead (all_worker_lanes_mask and
-// dispatch_lane_mask in overlay/fds_signalling.hpp), which also bounds their scan loops.
+// Which lane carries which core is not known, so a mask naming only the expected lane could not tell
+// "wrong lane" apart from "signal never arrived". Kernels enable every lane of the register map instead
+// (all_worker_lanes_mask and dispatch_lane_mask in overlay/fds_signalling.hpp), which also bounds their
+// scan loops.
 
 // Slot 0 of every status block. Extra slots are per-kernel and documented next to the kernel that
 // writes them.
@@ -123,8 +124,8 @@ inline bool received_go(
     return false;
 }
 
-// On chips where group status is sticky, a bit stays set after its lane stops carrying group_id: writing 0
-// clears a bit and writing 1 leaves it unchanged. Clear the bits of lanes no longer carrying group_id, so the
+// On IP variants where group status is sticky, a bit stays set after its lane stops carrying group_id: writing
+// 0 clears a bit and writing 1 leaves it unchanged. Clear the bits of lanes no longer carrying group_id, so the
 // register reads as it would where status is live.
 inline void refresh_dispatch_group_status(uint32_t group_id) {
     uint32_t stale_lanes = 0;
@@ -236,7 +237,7 @@ constexpr uint32_t kTokenDelivered = 11;
 constexpr uint32_t kMismatchedGo = 2;
 constexpr uint32_t kMatchedGo = 3;
 // Where the OFFSET and ADDR forms are the same address, no outbox value can mismatch the write. Both
-// kernels then report kFormsAlias without driving anything.
+// kernels then report kFormsAlias and return without touching FDS, and the host test skips.
 constexpr bool kFormsAreOneAddress =
     TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_OFFSET == TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR;
 constexpr uint32_t kFormsAlias = 0x5A5A0062;
