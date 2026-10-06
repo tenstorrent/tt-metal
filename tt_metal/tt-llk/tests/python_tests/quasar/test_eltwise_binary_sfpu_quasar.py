@@ -9,10 +9,12 @@ import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BinarySFPUGolden,
+    BroadcastGolden,
     get_golden_generator,
 )
 from helpers.llk_params import (
     ApproximationMode,
+    BroadcastType,
     DataCopyType,
     DestAccumulation,
     DstRoundingMode,
@@ -41,6 +43,7 @@ from helpers.stimuli_generator import (
 )
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    BROADCAST_TYPE,
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
@@ -115,13 +118,16 @@ def _run_sfpu_binary_llk_golden(
     dst_rounding_mode=DstRoundingMode.Default,
     format_variant=None,
     max_ulp=None,
+    broadcast_type=BroadcastType.None_,
 ):
     """Shared driver for the LLK-golden binary SFPU ops.
 
     ``prepare_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop)``
     returns ``(src_A, tile_cnt_A, src_B)``; both operands live in ``src_A`` at
     tiles ``src0_idx`` / ``src1_idx``. ``post_check(res_tensor)`` is an optional
-    extra assertion (e.g. div's x/x special-case lanes).
+    extra assertion (e.g. div's x/x special-case lanes). ``broadcast_type``
+    COL / ROW broadcasts column 0 / row 0 of the ``src1_idx`` tile (tile layout)
+    before the elementwise golden.
     """
     src0_idx, src1_idx, dst_idx = tile_indices
     input_dimensions = [(max(src0_idx, src1_idx, dst_idx) + 1) * 32, 32]
@@ -131,10 +137,20 @@ def _run_sfpu_binary_llk_golden(
         formats, input_dimensions, src0_idx, src1_idx, mathop
     )
 
+    golden_input = src_A
+    if broadcast_type != BroadcastType.None_:
+        golden_input = src_A.flatten().clone()
+        src1_start = src1_idx * MAX_TILE_ELEMENTS
+        src1_tile = golden_input[src1_start : src1_start + MAX_TILE_ELEMENTS]
+        generate_broadcast = get_golden_generator(BroadcastGolden)
+        golden_input[src1_start : src1_start + MAX_TILE_ELEMENTS] = generate_broadcast(
+            broadcast_type, src1_tile, formats.input_format
+        ).to(golden_input.dtype)
+
     generate_golden = get_golden_generator(BinarySFPUGolden)
     golden_full = generate_golden(
         mathop,
-        src_A,
+        golden_input,
         src0_idx,
         src1_idx,
         dst_idx,
@@ -173,6 +189,7 @@ def _run_sfpu_binary_llk_golden(
             # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
             # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
             TYPECAST_FORMATS(),
+            BROADCAST_TYPE(broadcast_type),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -478,6 +495,62 @@ def test_eltwise_binary_sfpu_float_quasar(
     )
 
 
+# ===========================================================================
+# Broadcast float ops (add, sub, mul): column 0 (COL) or row 0 (ROW) of the src1
+# tile is broadcast over the whole tile, one full-tile calculate_binary_bcast call.
+# ===========================================================================
+_BCAST_OPS = [
+    ("ADD", MathOperation.SfpuElwadd),
+    ("SUB", MathOperation.SfpuElwsub),
+    ("MUL", MathOperation.SfpuElwmul),
+]
+_BCAST_TYPES = [BroadcastType.Column, BroadcastType.Row]
+
+
+@pytest.mark.quasar
+@pytest.mark.parametrize(
+    "broadcast_type", _BCAST_TYPES, ids=[f"bcast_{b.value}" for b in _BCAST_TYPES]
+)
+@pytest.mark.parametrize(
+    "binary_op, mathop", _BCAST_OPS, ids=[op for op, _ in _BCAST_OPS]
+)
+@parametrize(
+    formats_dest_acc=_get_valid_float_formats_dest_acc(),
+    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
+)
+def test_eltwise_binary_sfpu_bcast_quasar(
+    formats_dest_acc,
+    implied_math_format,
+    tile_indices,
+    binary_op,
+    mathop,
+    broadcast_type,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
+    """Binary SFPU float ADD / SUB / MUL with src1 column or row broadcast."""
+    format_variant = formats_dest_acc
+    _run_sfpu_binary_llk_golden(
+        format_variant.formats,
+        format_variant.dest_acc,
+        implied_math_format,
+        tile_indices,
+        mathop,
+        binary_op,
+        prepare_stimuli=_prepare_float_stimuli,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        format_variant=format_variant,
+        broadcast_type=broadcast_type,
+    )
+
+
 _BF16_ADD_SUB_OPS = [
     ("ADD", MathOperation.SfpuElwadd),
     ("SUB", MathOperation.SfpuElwsub),
@@ -742,6 +815,7 @@ def _run_max_min(
             # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
             # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
             TYPECAST_FORMATS(),
+            BROADCAST_TYPE(BroadcastType.None_),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt),
@@ -996,6 +1070,7 @@ def _run_quant(
             SIGN_MAGNITUDE_FORMAT(sign_magnitude),
             SFPU_DST_ROUNDING_MODE(),
             TYPECAST_FORMATS(),
+            BROADCAST_TYPE(BroadcastType.None_),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt),
