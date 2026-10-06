@@ -10,91 +10,84 @@
 #include "ckernel_defs.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 #include "sfpi.h"
 
 namespace ckernel {
 namespace sfpu {
 
-constexpr std::uint32_t INT32_SIGN_BIT = 0x80000000u;                // sign-magnitude sign bit
-constexpr std::uint32_t INT32_SMAG_MIN_MAGNITUDE_MAX = 0x7FFFFFFFu;  // largest sign-magnitude magnitude
-
-/**
- * @brief Re-encode a two's-complement int32 scalar as sign-magnitude, the Dest Int32 encoding.
- *
- * @param value: scalar as a two's-complement int32 bit pattern.
- * @return the same value as a sign-magnitude bit pattern.
- * @note INT32_MIN has no sign-magnitude encoding, so it saturates to -(2^31 - 1).
- */
-inline std::uint32_t _unary_max_min_int32_to_smag_(const std::uint32_t value) {
-    const std::int32_t v = static_cast<std::int32_t>(value);
-    if (v >= 0) {
-        return value;
-    }
-    if (value == INT32_SIGN_BIT) {
-        return INT32_SIGN_BIT | INT32_SMAG_MIN_MAGNITUDE_MAX;
-    }
-    return INT32_SIGN_BIT | static_cast<std::uint32_t>(-v);
-}
+// INT32_MIN as a bit pattern. Sign-magnitude has no encoding for it (0x80000000 is -0 there).
+constexpr std::uint32_t UNARY_MAX_MIN_INT32_MIN_BITS = 0x80000000u;
 
 /**
  * @brief Element-wise max/min of a Dest tile against one uniform scalar: out = max(x, value) or min(x, value).
  *
- * The result is always one of the two operands verbatim — no arithmetic, no rounding — ordered by the SFPU
- * total order (-NaN < -Inf < ... < -0 < +0 < ... < +Inf < +NaN).
+ * The result is always one of the two operands verbatim (no arithmetic, no rounding).
+ *
+ * Both paths are a single SFPSWAP per row: sfpi lowers min/max to SFPSWAP with the compare domain taken
+ * from the vector type (imm12 bit 0, tt_llk_quasar/instructions/assembly.yaml), so
+ *   - vFloat compares as fp32 (imm12 = 1), which orders both-negative pairs correctly and follows the
+ *     SFPU total order (-NaN < -Inf < ... < -0 < +0 < ... < +Inf < +NaN);
+ *   - vInt compares as two's-complement int32 (imm12 = 0), which is exact for every int32 pair.
  *
  * @tparam IS_MAX_OP: true selects max, false selects min.
- * @tparam FMT: math-side DataFormat. Int32 takes the sign-magnitude path; every float format takes the fp32
+ * @tparam FMT: math-side DataFormat. Int32 takes the integer path; every float format takes the fp32
  *         path, so callers may pass Float32 for any float Dest width (the DEFAULT load resolves it).
- * @tparam APPROXIMATION_MODE: accepted for ABI parity but ignored (the select is exact).
+ * @tparam APPROXIMATION_MODE: unused (the select is exact); kept so the dispatcher's
+ *         (..., APPROX, ITERATIONS) template tail matches the other Quasar SFPU kernels.
  * @tparam ITERATIONS: number of SFP row-pairs per face.
- * @param value: scalar to compare against — an fp32 bit pattern for float FMT, a two's-complement int32 for
- *        DataFormat::Int32.
- * @note Dest Int32 is sign-magnitude while SFPSWAP compares two's complement, so the scalar is re-encoded by
- *       @ref _unary_max_min_int32_to_smag_ and a negative scalar additionally needs the both-negative lanes
- *       corrected. No init call is required.
+ * @tparam SIGN_MAGNITUDE_FORMAT: Int32 only. false (default): Dest holds two's-complement int32, as
+ *         unpack-to-dest leaves an Int32 L1 tile. true: Dest holds sign-magnitude int32 (e.g. the FPU
+ *         path); the load/store convert SM <-> two's complement around the compare.
+ * @param value: scalar to compare against: an fp32 bit pattern for float FMT, a two's-complement int32
+ *        for DataFormat::Int32 (in both Dest encodings). With SIGN_MAGNITUDE_FORMAT it must not be
+ *        INT32_MIN, which has no sign-magnitude encoding.
+ * @note No init call is required.
+ * @note The SFPNOP between SFPSWAP and SFPSTORE avoids the SFPSWAP -> SFPSTORE auto-stall hardware bug
+ *       (same NOP as ckernel_sfpu_reduce.h reduce_combine and the topk SFPSTORE rule). sfpi does not
+ *       model it: without the builtin, sfpi 7.83 issues the SFPSTORE right after the SFPSWAP.
  */
-template <bool IS_MAX_OP, DataFormat FMT, bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
+template <
+    bool IS_MAX_OP,
+    DataFormat FMT,
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = SFPU_ITERATIONS,
+    bool SIGN_MAGNITUDE_FORMAT = false>
 inline void calculate_unary_max_min(const std::uint32_t value) {
     static_assert(
         FMT == DataFormat::Float16 || FMT == DataFormat::Float16_b || FMT == DataFormat::Float32 ||
             FMT == DataFormat::Tf32 || FMT == DataFormat::MxFp8R || FMT == DataFormat::MxFp8P ||
             FMT == DataFormat::Int32,
         "Unsupported DataFormat for calculate_unary_max_min().");
+    static_assert(!SIGN_MAGNITUDE_FORMAT || FMT == DataFormat::Int32, "SIGN_MAGNITUDE_FORMAT applies to Int32 only.");
 
     if constexpr (FMT == DataFormat::Int32) {
-        const sfpi::vInt s = sfpi::vInt(_unary_max_min_int32_to_smag_(value));
-        if (static_cast<std::int32_t>(value) >= 0) {
+        if constexpr (SIGN_MAGNITUDE_FORMAT) {
+            LLK_ASSERT(
+                value != UNARY_MAX_MIN_INT32_MIN_BITS,
+                "calculate_unary_max_min: INT32_MIN has no sign-magnitude encoding");
+        }
+        // SM32 makes sfpi wrap the load/store in SFPCAST SM <-> two's complement; I32 is a raw copy.
+        constexpr sfpi::DataLayout layout = SIGN_MAGNITUDE_FORMAT ? sfpi::DataLayout::SM32 : sfpi::DataLayout::I32;
+        const sfpi::vInt s = static_cast<std::int32_t>(value);
 #pragma GCC unroll 8
-            for (int d = 0; d < ITERATIONS; d++) {
-                sfpi::vInt x = sfpi::dst_reg[0];
-                // INT32 compare is exact on sign-magnitude bits when one operand is non-negative
-                x = IS_MAX_OP ? sfpi::max(x, s) : sfpi::min(x, s);
-                __builtin_rvtt_sfpnop();  // SFPSWAP -> SFPSTORE spacing
-                sfpi::dst_reg[0] = x;
-                sfpi::dst_reg++;
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vInt x = sfpi::dst_reg[0].mode<layout>();
+            x = IS_MAX_OP ? sfpi::max(x, s) : sfpi::min(x, s);
+            if constexpr (!SIGN_MAGNITUDE_FORMAT) {
+                __builtin_rvtt_sfpnop();  // SFPSWAP -> SFPSTORE spacing; SM32 puts an SFPCAST there instead
             }
-        } else {
-#pragma GCC unroll 8
-            for (int d = 0; d < ITERATIONS; d++) {
-                sfpi::vInt x = sfpi::dst_reg[0];
-                auto [lo, hi] = sfpi::min_max(x, s);
-                __builtin_rvtt_sfpnop();  // SFPSWAP -> consumer spacing
-                sfpi::vInt r = IS_MAX_OP ? hi : lo;
-                // both operands negative: INT32 compare inverts sign-magnitude order, flip the pick
-                v_if(x < 0) { r = IS_MAX_OP ? lo : hi; }
-                v_endif;
-                sfpi::dst_reg[0] = r;
-                sfpi::dst_reg++;
-            }
+            sfpi::dst_reg[0].mode<layout>() = x;
+            sfpi::dst_reg++;
         }
     } else {
         const sfpi::vFloat s = sfpi::as<sfpi::vFloat>(sfpi::vUInt(value));
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat x = sfpi::dst_reg[0];
-            x = IS_MAX_OP ? sfpi::max(x, s) : sfpi::min(x, s);  // FP32 total-order compare
-            __builtin_rvtt_sfpnop();                            // SFPSWAP -> SFPSTORE spacing
+            x = IS_MAX_OP ? sfpi::max(x, s) : sfpi::min(x, s);
+            __builtin_rvtt_sfpnop();  // SFPSWAP -> SFPSTORE spacing
             sfpi::dst_reg[0] = x;
             sfpi::dst_reg++;
         }
