@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
@@ -153,6 +154,46 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
     supported_layout();
 }
 
+uint32_t aligned_extent(const Alignment& alignment, int dim_from_end, uint32_t extent) {
+    return static_cast<int>(alignment.size()) >= dim_from_end ? round_up(extent, alignment[-dim_from_end]) : extent;
+}
+
+uint32_t shards_needed(uint32_t total_extent, uint32_t shard_extent) {
+    return shard_extent == 0 ? 0 : div_up(total_extent, shard_extent);
+}
+
+// Tile-aligned shard extent and the number of such shards covering `total_extent` when a
+// dimension is split across `divisor` cores.
+struct DimFit {
+    uint32_t shard_extent = 0;
+    uint32_t num_shards = 0;
+};
+
+DimFit fit_dim(const Alignment& alignment, int dim_from_end, uint32_t total_extent, uint32_t divisor) {
+    const uint32_t shard_extent = aligned_extent(alignment, dim_from_end, div_up(total_extent, divisor));
+    return {shard_extent, shards_needed(total_extent, shard_extent)};
+}
+
+CoreRangeSet first_n_cores(CoreRangeSet grid, uint32_t count, ShardOrientation orientation) {
+    if (count == 0 || count >= grid.num_cores()) {
+        return grid;
+    }
+    return select_from_corerangeset(grid, 0, count - 1, orientation == ShardOrientation::ROW_MAJOR);
+}
+
+CoreRange leading_block(CoreRange grid, uint32_t rows, uint32_t cols) {
+    const auto size = grid.grid_size();
+    if (rows == 0 || cols == 0) {
+        return grid;
+    }
+    rows = rows < size.y ? rows : size.y;
+    cols = cols < size.x ? cols : size.x;
+    if (rows == size.y && cols == size.x) {
+        return grid;
+    }
+    return CoreRange(grid.start_coord, CoreCoord(grid.start_coord.x + cols - 1, grid.start_coord.y + rows - 1));
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -212,37 +253,85 @@ TensorSpec TensorSpec::sharded_across_dims_except(
 }
 
 TensorSpec TensorSpec::height_sharded(CoreRangeSet grid, ShardOrientation orientation) const {
-    auto num_cores = grid.num_cores();
-    auto shard_height = div_up(physical_shape().height(), num_cores);
+    const auto alignment = get_required_shard_shape_alignment(page_config());
+    const auto fit = CMAKE_UNIQUE_NAMESPACE::fit_dim(alignment, 2, physical_shape().height(), grid.num_cores());
+    TT_FATAL(
+        fit.num_shards == grid.num_cores(),
+        "height_sharded: grid has {} cores but the data only fills {} shard(s) of height {}; size the grid to "
+        "the shards (e.g. TensorSpec::fit_grid_to_shards) before sharding.",
+        grid.num_cores(),
+        fit.num_shards,
+        fit.shard_extent);
     NdShardSpec shard_spec(
-        Shape({static_cast<uint32_t>(shard_height), static_cast<uint32_t>(physical_shape().width())}),
-        std::move(grid),
-        orientation);
+        Shape({fit.shard_extent, static_cast<uint32_t>(physical_shape().width())}), std::move(grid), orientation);
     return sharded(std::move(shard_spec), ShardShapeAlignment::REQUIRED);
 }
 
 TensorSpec TensorSpec::width_sharded(CoreRangeSet grid, ShardOrientation orientation) const {
-    auto num_cores = grid.num_cores();
-    auto shard_width = div_up(physical_shape().width(), num_cores);
+    const auto alignment = get_required_shard_shape_alignment(page_config());
+    const auto fit = CMAKE_UNIQUE_NAMESPACE::fit_dim(alignment, 1, physical_shape().width(), grid.num_cores());
+    TT_FATAL(
+        fit.num_shards == grid.num_cores(),
+        "width_sharded: grid has {} cores but the data only fills {} shard(s) of width {}; size the grid to "
+        "the shards (e.g. TensorSpec::fit_grid_to_shards) before sharding.",
+        grid.num_cores(),
+        fit.num_shards,
+        fit.shard_extent);
     NdShardSpec shard_spec(
-        Shape({static_cast<uint32_t>(physical_shape().height()), static_cast<uint32_t>(shard_width)}),
-        std::move(grid),
-        orientation);
+        Shape({static_cast<uint32_t>(physical_shape().height()), fit.shard_extent}), std::move(grid), orientation);
     return sharded(std::move(shard_spec), ShardShapeAlignment::REQUIRED);
 }
 
 TensorSpec TensorSpec::block_sharded(CoreRange grid, ShardOrientation orientation) const {
-    auto grid_size = grid.grid_size();
-    auto shard_height =
-        div_up(physical_shape().height(), orientation == ShardOrientation::ROW_MAJOR ? grid_size.y : grid_size.x);
-    auto shard_width =
-        div_up(physical_shape().width(), orientation == ShardOrientation::ROW_MAJOR ? grid_size.x : grid_size.y);
+    const auto grid_size = grid.grid_size();
+    const bool row_major = orientation == ShardOrientation::ROW_MAJOR;
+    const auto alignment = page_config().get_recommended_shard_shape_alignment(data_type());
+    const auto h =
+        CMAKE_UNIQUE_NAMESPACE::fit_dim(alignment, 2, physical_shape().height(), row_major ? grid_size.y : grid_size.x);
+    const auto w =
+        CMAKE_UNIQUE_NAMESPACE::fit_dim(alignment, 1, physical_shape().width(), row_major ? grid_size.x : grid_size.y);
+    const uint32_t needed_rows = row_major ? h.num_shards : w.num_shards;
+    const uint32_t needed_cols = row_major ? w.num_shards : h.num_shards;
+    TT_FATAL(
+        needed_rows == grid_size.y && needed_cols == grid_size.x,
+        "block_sharded: grid is {}x{} (rows x cols) but the data only fills {}x{} shards; size the grid to "
+        "the shards (e.g. TensorSpec::fit_grid_to_shards) before sharding.",
+        grid_size.y,
+        grid_size.x,
+        needed_rows,
+        needed_cols);
     NdShardSpec shard_spec(
-        Shape({static_cast<uint32_t>(shard_height), static_cast<uint32_t>(shard_width)}),
-        grid,
-        orientation,
-        ShardDistributionStrategy::GRID_2D);
+        Shape({h.shard_extent, w.shard_extent}), grid, orientation, ShardDistributionStrategy::GRID_2D);
     return sharded(std::move(shard_spec), ShardShapeAlignment::RECOMMENDED);
+}
+
+CoreRangeSet TensorSpec::fit_grid_to_shards(
+    TensorMemoryLayout memory_layout, CoreRangeSet grid, ShardOrientation orientation) const {
+    switch (memory_layout) {
+        case TensorMemoryLayout::HEIGHT_SHARDED: {
+            const auto alignment = get_required_shard_shape_alignment(page_config());
+            const auto fit = CMAKE_UNIQUE_NAMESPACE::fit_dim(alignment, 2, physical_shape().height(), grid.num_cores());
+            return CMAKE_UNIQUE_NAMESPACE::first_n_cores(std::move(grid), fit.num_shards, orientation);
+        }
+        case TensorMemoryLayout::WIDTH_SHARDED: {
+            const auto alignment = get_required_shard_shape_alignment(page_config());
+            const auto fit = CMAKE_UNIQUE_NAMESPACE::fit_dim(alignment, 1, physical_shape().width(), grid.num_cores());
+            return CMAKE_UNIQUE_NAMESPACE::first_n_cores(std::move(grid), fit.num_shards, orientation);
+        }
+        case TensorMemoryLayout::BLOCK_SHARDED: {
+            const CoreRange bbox = grid.bounding_box();
+            const auto grid_size = bbox.grid_size();
+            const bool row_major = orientation == ShardOrientation::ROW_MAJOR;
+            const auto alignment = page_config().get_recommended_shard_shape_alignment(data_type());
+            const auto h = CMAKE_UNIQUE_NAMESPACE::fit_dim(
+                alignment, 2, physical_shape().height(), row_major ? grid_size.y : grid_size.x);
+            const auto w = CMAKE_UNIQUE_NAMESPACE::fit_dim(
+                alignment, 1, physical_shape().width(), row_major ? grid_size.x : grid_size.y);
+            return CoreRangeSet(CMAKE_UNIQUE_NAMESPACE::leading_block(
+                bbox, row_major ? h.num_shards : w.num_shards, row_major ? w.num_shards : h.num_shards));
+        }
+        default: return grid;
+    }
 }
 
 TensorSpec TensorSpec::sharded(NdShardSpec nd_shard_spec, ShardShapeAlignment shard_alignment) const {

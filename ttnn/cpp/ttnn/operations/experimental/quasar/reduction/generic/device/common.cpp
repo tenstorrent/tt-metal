@@ -186,25 +186,31 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
         const auto& legacy = output_mem_config.shard_spec();
         const auto& input_nd = input_mem_config.nd_shard_spec();
         const auto& input_legacy = input_mem_config.shard_spec();
-        auto get_grid_and_orientation = [&]() -> std::pair<const CoreRangeSet&, ShardOrientation> {
+        // bool: grid inferred from the input (fallback), not set on the output config.
+        auto get_grid_and_orientation = [&]() -> std::tuple<CoreRangeSet, ShardOrientation, bool> {
             if (nd) {
-                return {nd->grid, nd->orientation};
+                return {nd->grid, nd->orientation, false};
             }
             if (legacy) {
-                return {legacy->grid, legacy->orientation};
+                return {legacy->grid, legacy->orientation, false};
             }
             if (input_nd) {
-                return {input_nd->grid, input_nd->orientation};
+                return {input_nd->grid, input_nd->orientation, true};
             }
             if (input_legacy) {
-                return {input_legacy->grid, input_legacy->orientation};
+                return {input_legacy->grid, input_legacy->orientation, true};
             }
             TT_THROW(
                 "Sharded memory layout {} requires either nd_shard_spec or shard_spec to be set "
                 "on the output memory config or the input tensor",
                 mem_layout);
         };
-        const auto& [grid, orientation] = get_grid_and_orientation();
+        const auto [raw_grid, orientation, inferred] = get_grid_and_orientation();
+
+        // Trim an inferred grid to the output's shards; an explicit grid is passed through and the
+        // builder rejects it if over-sized.
+        const CoreRangeSet grid =
+            inferred ? tensor_spec.fit_grid_to_shards(mem_layout, raw_grid, orientation) : raw_grid;
 
         // For width/height/block sharding modes, the output shard shape is fully determined
         // by the output physical shape and the core grid. Just delegate to the

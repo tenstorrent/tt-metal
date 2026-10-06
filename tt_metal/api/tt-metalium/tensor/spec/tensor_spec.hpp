@@ -54,15 +54,28 @@ public:
     /// Performs 2D height sharding for TensorSpec.
     /// This flattens the tensor into a 2D shape and splits it along the height to achieve as close to equal
     /// distribution as possible, while maintaining just 1 shard per core.
+    /// The grid must have exactly as many cores as the data makes shards; a larger grid is rejected.
+    /// Use fit_grid_to_shards to size an inferred grid down to the shards first.
     TensorSpec height_sharded(CoreRangeSet grid, ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
     /// Performs 2D width sharding for TensorSpec.
     /// This flattens the tensor into a 2D shape and splits it along the width to achieve as close to equal distribution
     /// as possible, while maintaining just 1 shard per core.
+    /// The grid must have exactly as many cores as the data makes shards; a larger grid is rejected.
+    /// Use fit_grid_to_shards to size an inferred grid down to the shards first.
     TensorSpec width_sharded(CoreRangeSet grid, ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
     /// Performs 2D block sharding for TensorSpec.
     /// This flattens the tensor into a 2D shape and splits it into 2D contiguous blocks, putting each block onto the
     /// corresponding core in 2D grid.
+    /// The grid must be exactly the rows x cols of shards the data makes; a larger grid is rejected.
+    /// Use fit_grid_to_shards to size an inferred grid down to the shards first.
     TensorSpec block_sharded(CoreRange grid, ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
+    /// Returns the leading subset of `grid` that will actually hold shards for this tensor under `memory_layout`:
+    /// the first N cores in orientation order for height/width sharding, or the leading rows x cols block for block
+    /// sharding. Use it to size an inferred grid before the matching *_sharded builder, which requires an exact fit.
+    CoreRangeSet fit_grid_to_shards(
+        TensorMemoryLayout memory_layout,
+        CoreRangeSet grid,
+        ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
 
     enum class ShardShapeAlignment {
         /// No shard shape alignment will be performed. If the shard shape is not following the alignment requirements,
