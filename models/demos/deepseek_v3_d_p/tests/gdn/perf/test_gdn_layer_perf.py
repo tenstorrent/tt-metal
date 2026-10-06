@@ -43,17 +43,19 @@ _TIMING_SAMPLES = 5
 _PERF_SKU = "bh_loudbox"
 _PERF_MARGIN = 0.03
 _LOUDBOX_LAYOUTS = ("LB-A", "LB-B")
-# Median trace wall ms per (model, layout): provisional values from the g1b.5.15 G2 arm (ABBA harness), to be replaced
-# by the five-session calibration.
+# LoudBox calibration at 010e7934525 (feature head d3641159dce + this gate), 2026-10-06: median over five sessions
+# per case (interleaved across cases, order rotated; host load average < 5, sessions above it excluded), each the
+# median of five warm 10-replay samples. Session spread <= 0.3 %. Under heavy host load (load average 7-50) sessions
+# fell into a host-stall mode of +0.1 / +0.2 ms quantized steps (tt_metal_tracker-g1b.5.9).
 _PERF_REFERENCE_MS = {
-    ("qwen38_27b", "LB-A"): 1.532,
-    ("qwen38_27b", "LB-B"): 1.935,
-    ("qwen36_35b", "LB-A"): 1.065,
-    ("qwen36_35b", "LB-B"): 1.471,
-    ("qwen38_2_4t", "LB-A"): 2.967,
-    ("qwen38_2_4t", "LB-B"): 3.645,
-    ("qwen38_flash_next", "LB-A"): 1.290,
-    ("qwen38_flash_next", "LB-B"): 1.754,
+    ("qwen38_27b", "LB-A"): 1.485,
+    ("qwen38_27b", "LB-B"): 1.779,
+    ("qwen36_35b", "LB-A"): 1.020,
+    ("qwen36_35b", "LB-B"): 1.323,
+    ("qwen38_2_4t", "LB-A"): 2.923,
+    ("qwen38_2_4t", "LB-B"): 3.472,
+    ("qwen38_flash_next", "LB-A"): 1.243,
+    ("qwen38_flash_next", "LB-B"): 1.598,
 }
 
 
