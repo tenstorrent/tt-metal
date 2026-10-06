@@ -183,3 +183,19 @@
   team: ttnn
   budget_type: merge_gate
   owner_id: U084B1CES7M # Borys Bradel
+
+# Moreh op coverage: every program factory plus small corner cases. Selection lives in the test files, as
+# @pytest.mark.merge_gate. moreh_cumsum, moreh_dot, moreh_dot_backward and moreh_bmm are left
+# out: they have a ready ttnn replacement (#58420).
+- name: "ttnn moreh ops"
+  cmd: >-
+    pytest --timeout 60 -xv -m merge_gate
+    tests/ttnn/unit_tests/operations/moreh
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+    bh_p150b_civ2_viommu:
+      timeout: 5
+  team: ttnn
+  budget_type: merge_gate
+  owner_id: U084B1CES7M # Borys Bradel
