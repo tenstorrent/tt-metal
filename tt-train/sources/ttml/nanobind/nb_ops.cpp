@@ -23,6 +23,7 @@
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/distributed/losses.hpp"
+#include "ops/distributed/rmsnorm_op.hpp"
 #include "ops/dropout_op.hpp"
 #include "ops/embedding_op.hpp"
 #include "ops/layernorm_op.hpp"
@@ -161,6 +162,13 @@ void py_module(nb::module_& m) {
             nb::arg("grad_output_type") = ttml::ops::distributed::GradOutputType::SHARDED);
         py_distributed.def(
             "broadcast", &ttml::ops::distributed::broadcast, nb::arg("tensor"), nb::arg("cluster_axis") = nb::none());
+        py_distributed.def(
+            "rmsnorm",
+            &ttml::ops::distributed::rmsnorm,
+            nb::arg("tensor"),
+            nb::arg("gamma"),
+            nb::arg("epsilon"),
+            nb::arg("cluster_axis") = nb::none());
         py_distributed.def(
             "vocab_parallel_cross_entropy_loss",
             &ttml::ops::distributed::vocab_parallel_cross_entropy_loss,
