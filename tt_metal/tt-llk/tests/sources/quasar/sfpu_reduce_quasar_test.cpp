@@ -61,13 +61,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         // Where to read from: buffer_A in L1, holding unpack_A_src, with the harness's face geometry.
         // unpack_A_dst below is what it converts to on the way into Dest.
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+        const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
             ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
 
         // Configure the unpacker, set it up for TILE_CNT tiles, then pull the whole bank into Dest.
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
-            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, params.TILE_CNT);
+            bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, params.TILE_CNT);
 
         // UNPACK is the producer in the chain.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
@@ -236,12 +236,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         // Where to write to: buffer_Res in L1, holding pack_dst, with the harness's face geometry.
         // pack_src below is the Dest-side format the packer reads.
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+        const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
             ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
 
         // Configure pack engine 0 and set it up for TILE_CNT tiles.
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, params.TILE_CNT);
+        _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, params.TILE_CNT);
 
         // PACK is the consumer at the end of the chain.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
