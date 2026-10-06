@@ -363,17 +363,17 @@ inline void _llk_pack_untilize_init_(
     // cycles to an unpacker writing the other half.
     constexpr bool l1_rows_contiguous = (full_ct_dim == block_ct_dim);
     // An 8-bit output reaches L1 in 64-datum units: a flush pads a shorter stream with zeros up to the unit.
-    const bool eight_bit_out   = IS_8BIT_FORMAT(pack_dst_format);
-    const bool row_ends_stream = !l1_rows_contiguous || ((datum_size_in_bytes(pack_src_format) == 4) && !eight_bit_out);
+    const bool src_32b            = datum_size_in_bytes(pack_src_format) == 4;
+    const bool row_ends_stream    = !l1_rows_contiguous || (src_32b && !IS_8BIT_FORMAT(pack_dst_format));
     constexpr bool odd_block_form = !l1_rows_contiguous && (block_ct_dim % 2 == 1) && (block_ct_dim > 1) && !narrow_row && !dense;
-    const bool first_tile_stream  = odd_block_form && eight_bit_out;
+    const bool first_tile_stream  = odd_block_form && IS_8BIT_FORMAT(pack_dst_format);
     constexpr bool split_row      = narrow_row && (row_num_datums > FACE_C_DIM);
     LLK_ASSERT(!split_row || (num_faces > 1), "a narrow row wider than a face needs the right faces");
     // The channel 1 Y stride field is 16 bits, and the packer keeps the channel 1 offset only within 256 KiB.
     const std::uint32_t rows_per_call = face_r_dim * ((num_faces > 2) ? 2 : 1);
     // 32-bit rows of three tiles are paced, and in the block form step L1 by CFGSHIFTMASK: packed back to back they
     // cost an unpacker writing Dest more L1 cycles than they save.
-    const bool pace = (datum_size_in_bytes(pack_src_format) == 4) && (block_ct_dim == 3) && !eight_bit_out && !split_row;
+    const bool pace = src_32b && (block_ct_dim == 3) && !split_row && !IS_8BIT_FORMAT(pack_dst_format);
     const bool l1_row_step_by_cfg =
         row_ends_stream &&
         ((pace && !l1_rows_contiguous) || (output_addr_offset > (PCK0_ADDR_CTRL_XY_REG_1_Ystride_MASK >> PCK0_ADDR_CTRL_XY_REG_1_Ystride_SHAMT)) ||
