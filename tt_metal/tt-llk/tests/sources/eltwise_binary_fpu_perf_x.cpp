@@ -180,21 +180,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            if constexpr (UNPACK_BLOCK && !REUSE && !PER_TILE_INIT && BROADCAST_TYPE == BroadcastType::NONE)
-            {
-                // round 3: one _llk_unpack_AB_block_ call per DEST section (the add_block / sub_block / mul_block form)
-                constexpr std::uint32_t TILE_STRIDE_16B = 4096 / 16;
-                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
-                {
-                    for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
-                    {
-                        const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
-                        _llk_unpack_AB_block_<BroadcastType::NONE>(
-                            PERF_ADDRESS(PERF_INPUT_A, block_start), PERF_ADDRESS(PERF_INPUT_B, block_start), block_tiles, TILE_STRIDE_16B, TILE_STRIDE_16B);
-                    }
-                }
-            }
-            else
+            // r5: the block unpack prototype (#58722, not in the tree) is left out
             {
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
