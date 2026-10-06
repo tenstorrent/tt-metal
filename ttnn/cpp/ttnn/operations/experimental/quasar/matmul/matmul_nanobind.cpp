@@ -656,7 +656,9 @@ void py_module(nb::module_& mod) {
         through the tensor accessor, so interleaved, L1-sharded and DRAM-sharded inputs and outputs all take
         the same kernels. The 1D, 2D and DRAM-sharded strategies are particular choices of
         (cores, C_slice_M_tiles, C_slice_N_tiles). Within a core the C slice's subblocks are assigned
-        round-robin to the compute threads (Quasar NEOs), which share the resident A and B slices.
+        round-robin to the compute threads (Quasar NEOs), which share the resident A and B slices; on Quasar the
+        K chunks are assigned round-robin to the reader threads and the compute threads' shares of C to the
+        writer threads (DM cores).
 
         Limits: no fused bias (applied as a separate add) or activation, no untilize, 32x32 tiles
         only; a sharded output needs batch 1 and exactly one C slice per core.
@@ -672,6 +674,10 @@ void py_module(nb::module_& mod) {
                 std::size_t,
                 std::size_t,
                 tt::tt_metal::ShardOrientation,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                std::size_t,
                 std::size_t>(),
             nb::kw_only(),
             nb::arg("cores"),
@@ -681,7 +687,11 @@ void py_module(nb::module_& mod) {
             nb::arg("subblock_M_tiles").noconvert() = 0,
             nb::arg("subblock_N_tiles").noconvert() = 0,
             nb::arg("orientation") = tt::tt_metal::ShardOrientation::ROW_MAJOR,
-            nb::arg("num_compute_threads").noconvert() = 0)
+            nb::arg("num_compute_threads").noconvert() = 0,
+            nb::arg("num_reader_threads").noconvert() = 0,
+            nb::arg("num_writer_threads").noconvert() = 0,
+            nb::arg("operand_buffer_depth").noconvert() = 0,
+            nb::arg("C_buffer_depth").noconvert() = 0)
         .def_rw("cores", &MatmulUnifiedProgramConfig::cores, R"doc(
             Cores (clusters) that take part, as a CoreRangeSet.
         )doc")
@@ -719,10 +729,32 @@ void py_module(nb::module_& mod) {
             subblocks are assigned round-robin to the threads, which share the resident A and B slices.
             0 = auto: 4 on Quasar, 1 elsewhere (Wormhole / Blackhole have one compute engine per core).
         )doc")
+        .def_rw("num_reader_threads", &MatmulUnifiedProgramConfig::num_reader_threads, R"doc(
+            Reader threads per core (Quasar DM cores), 1 to 4: thread t reads the A and B slices of every
+            num_reader_threads-th K chunk of the core's walk. More than one copies A and B even when an L1 shard
+            could be borrowed. 0 = auto: on Quasar the most of 4, 2, 1 that gets each thread at least two K chunks
+            and whose buffers fit L1 next to the minimum buffering, with no borrowed operand; else 1.
+        )doc")
+        .def_rw("num_writer_threads", &MatmulUnifiedProgramConfig::num_writer_threads, R"doc(
+            Writer threads per core (Quasar DM cores), 1, 2 or 4 and a divisor of num_compute_threads: thread t
+            writes the shares of compute threads t, t + num_writer_threads, ... 0 = auto: 2 on Quasar with an even
+            number of compute threads, else 1. Readers and writers together use at most the six DM cores of a
+            cluster.
+        )doc")
+        .def_rw("operand_buffer_depth", &MatmulUnifiedProgramConfig::operand_buffer_depth, R"doc(
+            K chunks of A and B in flight: the A and B buffers each hold this many slices, a multiple of
+            num_reader_threads. 0 = auto: two per reader thread (one when a single slice passes through), falling
+            back to one per reader thread when that does not fit next to the minimum buffering.
+        )doc")
+        .def_rw("C_buffer_depth", &MatmulUnifiedProgramConfig::C_buffer_depth, R"doc(
+            C slices in flight, 1 or 2: with 2 the writer drains one C slice while the compute packs the next.
+            0 = auto: 2 when a core produces several C slices and they fit next to the minimum buffering, else 1.
+        )doc")
         .def("__repr__", [](const MatmulUnifiedProgramConfig& config) {
             return fmt::format(
                 "MatmulUnifiedProgramConfig(cores={}, C_slice_M_tiles={}, C_slice_N_tiles={}, K_chunk_tiles={}, "
-                "subblock_M_tiles={}, subblock_N_tiles={}, orientation={}, num_compute_threads={})",
+                "subblock_M_tiles={}, subblock_N_tiles={}, orientation={}, num_compute_threads={}, "
+                "num_reader_threads={}, num_writer_threads={}, operand_buffer_depth={}, C_buffer_depth={})",
                 config.cores.str(),
                 config.C_slice_M_tiles,
                 config.C_slice_N_tiles,
@@ -730,7 +762,11 @@ void py_module(nb::module_& mod) {
                 config.subblock_M_tiles,
                 config.subblock_N_tiles,
                 config.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR ? "ROW_MAJOR" : "COL_MAJOR",
-                config.num_compute_threads);
+                config.num_compute_threads,
+                config.num_reader_threads,
+                config.num_writer_threads,
+                config.operand_buffer_depth,
+                config.C_buffer_depth);
         });
 
     ttnn::bind_function<"matmul", "ttnn.experimental.quasar.">(
