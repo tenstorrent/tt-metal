@@ -332,3 +332,33 @@ def create_bevformer_encoder_parameters(encoder, device, dtype=DEFAULT_DTYPE):
     return SimpleNamespace(
         config=config, layers=[create_bevformer_layer_parameters(layer, device, dtype) for layer in encoder.layers]
     )
+
+
+def create_perception_transformer_parameters(transformer, device, dtype=DEFAULT_DTYPE):
+    """``reference.perception_transformer.PerceptionTransformer`` as TTPerceptionTransformer takes
+    it: the encoder's parameters, the CAN-bus MLP, and per FPN level the camera embeddings plus the
+    level's embedding, ``(1, num_cams, 1, C)``."""
+    mlp = transformer.can_bus_mlp
+    level_cams_embeds = [
+        ttnn.from_torch(
+            (transformer.cams_embeds + level_embed)[None, :, None, :],
+            dtype=dtype,
+            layout=DEFAULT_LAYOUT,
+            device=device,
+        )
+        for level_embed in transformer.level_embeds
+    ]
+    return SimpleNamespace(
+        config=SimpleNamespace(
+            embed_dims=transformer.embed_dims,
+            num_cams=transformer.num_cams,
+            rotate_center=tuple(transformer.rotate_center),
+        ),
+        encoder=create_bevformer_encoder_parameters(transformer.encoder, device, dtype),
+        can_bus_mlp=SimpleNamespace(
+            linear1=linear_params(mlp[0].weight, mlp[0].bias, device, dtype),
+            linear2=linear_params(mlp[2].weight, mlp[2].bias, device, dtype),
+            norm=SimpleNamespace(**preprocess_layer_norm_parameters(mlp.norm, device=device, dtype=dtype)),
+        ),
+        level_cams_embeds=level_cams_embeds,
+    )
