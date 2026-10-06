@@ -28,9 +28,9 @@ PY
     export TT_METAL_CACHE=$O/cache_${tag}_$v TT_METAL_PROFILER_DIR=$O/profraw_${tag}_$run
     mkdir -p "$TT_METAL_CACHE" "$TT_METAL_PROFILER_DIR"
     OUT=$O/out_${tag}_${run}_$v; rm -rf "$OUT"
-    timeout -s INT -k 60 ${EB_RUN_LIMIT:-1500} python3 -m tracy -r -p --no-web-server -o "$OUT" -m pytest -p eb_prof_plugin -p no:cacheprovider -o timeout_method=thread -q -rfE $ARGS > $O/log_${tag}_${run}_$v.txt 2>&1
+    timeout -s INT -k 60 ${EB_RUN_LIMIT:-1500} python3 -m tracy -r -p --no-web-server -o "$OUT" -m pytest -p eb_prof_plugin -p no:cacheprovider -o timeout_method=thread -q -rfEs $ARGS > $O/log_${tag}_${run}_$v.txt 2>&1
     echo "--- $tag run $run $v rc=$?: $(grep -E 'passed|failed|skipped|error' $O/log_${tag}_${run}_$v.txt | tail -1)"
-    grep -E "^(FAILED|ERROR)" $O/log_${tag}_${run}_$v.txt | head -5
+    grep -E "^(FAILED|ERROR|SKIPPED)" $O/log_${tag}_${run}_$v.txt | head -6
   done
   cp $O/orig_$n "$KFILE"
   python3 /work/tests/eb_r3_ci/prof_reduce.py $O $tag 2>&1 | sed "s/^/[$tag] /"
