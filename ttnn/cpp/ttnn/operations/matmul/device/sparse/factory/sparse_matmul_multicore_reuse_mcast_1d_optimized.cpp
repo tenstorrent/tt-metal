@@ -156,6 +156,18 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     // pointing at the real sparsity tensor.
     const Tensor& in1_sparsity_tensor = use_indices ? tensor_args.optional_input_tensors.at(0).value() : sparsity;
     const MeshTensor& in1_sparsity_mesh_tensor = in1_sparsity_tensor.mesh_tensor();
+    // Per-group fused bias (indexed mode only, validated by the device op): optional_input_tensors[1] is a
+    // TILE tensor whose tile row e holds group e's [1, N] bias. The shared in1 reader fetches tile row
+    // indices[bB] for every group (BIAS_PER_GROUP) and the compute kernel adds it row-broadcast before
+    // packing, replacing the caller's separate gather + add.
+    const bool use_bias = operation_attributes.use_bias && tensor_args.optional_input_tensors.size() > 1 &&
+                          tensor_args.optional_input_tensors.at(1).has_value();
+    const MeshTensor* bias_mesh_tensor =
+        use_bias ? &tensor_args.optional_input_tensors.at(1).value().mesh_tensor() : nullptr;
+    const auto bias_data_format =
+        use_bias ? tt_metal::datatype_to_dataformat_converter(bias_mesh_tensor->dtype()) : tt::DataFormat::Float16_b;
+    const auto bias_tile = use_bias ? bias_mesh_tensor->tensor_spec().tile() : tt::tt_metal::Tile({32, 32});
+    const uint32_t bias_aligned_tile_size = tt::align(bias_tile.get_tile_size(bias_data_format), dram_alignment);
 
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config.value();
     const bool fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
@@ -221,6 +233,13 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                                          : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
     // interm0 entry size follows interm0_data_format, not the output dtype.
     const auto interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
+
+    // The fused bias add reads the partials buffer as an FPU operand (SrcA), so UnpackToDest cannot be
+    // set on it directly when bias is present. In that case the cross-block FP32 reload instead copies
+    // through a second buffer aliasing the same SRAM that does carry UnpackToDest, while the bias add
+    // keeps reading the partials buffer via SrcA. The alias reaches the compute kernel as the
+    // MM_PARTIALS_RELOAD_ALIAS define plus its own binding.
+    const bool bias_reload_alias = use_bias && fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32;
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -360,12 +379,15 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     const DFBSpecName IN1_SPARSITY_DFB{"in1_sparsity"};
     const DFBSpecName OUT_DFB{"out"};
     const DFBSpecName INTERM0_DFB{"intermed0"};
+    const DFBSpecName INTERM0_ALIAS_DFB{"intermed0_reload_alias"};
+    const DFBSpecName BIAS_DFB{"bias"};
 
     const TensorParamName IN0{"in0"};
     const TensorParamName IN1{"in1"};
     const TensorParamName SPARSITY{"sparsity"};
     const TensorParamName INDICES{"indices"};
     const TensorParamName OUTPUT{"output"};
+    const TensorParamName BIAS{"bias"};
 
     const SemaphoreSpecName IN0_SENDER_SEM{"in0_mcast_sender"};
     const SemaphoreSpecName IN0_RECEIVER_SEM{"in0_mcast_receiver"};
@@ -384,14 +406,29 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     // region it actually sits in.
     const bool separate_out_and_interm0 = interm0_data_format != output_data_format;
     const uint32_t interm0_total_size = separate_out_and_interm0 ? interm0_dfb_size : out_dfb_size;
-    // A two-member alias group has to be a strict clique, so each side names the other; when the
-    // regions are separate neither aliases anything.
-    Group<DFBSpecName> out_aliases;
-    Group<DFBSpecName> interm0_aliases;
+    // The alias group: {partials, partials reload alias?} when the output has its own region, otherwise
+    // {output, partials, partials reload alias?} because all of them sit on the one region. The group
+    // has to be a strict clique, so every member names every other one; a DFB outside the group (or a
+    // single-member group) aliases nothing.
+    Group<DFBSpecName> alias_group;
     if (!separate_out_and_interm0) {
-        out_aliases.push_back(INTERM0_DFB);
-        interm0_aliases.push_back(OUT_DFB);
+        alias_group.push_back(OUT_DFB);
     }
+    alias_group.push_back(INTERM0_DFB);
+    if (bias_reload_alias) {
+        alias_group.push_back(INTERM0_ALIAS_DFB);
+    }
+    auto alias_with_others = [&](const DFBSpecName& self) {
+        Group<DFBSpecName> others;
+        if (alias_group.size() > 1 && std::find(alias_group.begin(), alias_group.end(), self) != alias_group.end()) {
+            for (const auto& name : alias_group) {
+                if (name != self) {
+                    others.push_back(name);
+                }
+            }
+        }
+        return others;
+    };
 
     Group<DataflowBufferSpec> dataflow_buffers = {
         DataflowBufferSpec{
@@ -431,7 +468,7 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
             .num_entries = out_dfb_size / output_single_tile_size,
             .data_format_metadata = output_data_format,
             .tile_format_metadata = output_tile,
-            .advanced_options = {.alias_with = out_aliases},
+            .advanced_options = {.alias_with = alias_with_others(OUT_DFB)},
         },
         DataflowBufferSpec{
             .unique_id = INTERM0_DFB,
@@ -439,9 +476,30 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
             .num_entries = interm0_total_size / interm0_single_tile_size,
             .data_format_metadata = interm0_data_format,
             .tile_format_metadata = output_tile,
-            .advanced_options = {.alias_with = interm0_aliases},
+            .advanced_options = {.alias_with = alias_with_others(INTERM0_DFB)},
         },
     };
+    // partials alias over the same SRAM, marked UnpackToDest, for the bias reload (see above).
+    if (bias_reload_alias) {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = INTERM0_ALIAS_DFB,
+            .entry_size = interm0_single_tile_size,
+            .num_entries = interm0_total_size / interm0_single_tile_size,
+            .data_format_metadata = interm0_data_format,
+            .tile_format_metadata = output_tile,
+            .advanced_options = {.alias_with = alias_with_others(INTERM0_ALIAS_DFB)},
+        });
+    }
+    if (use_bias) {
+        // Double-buffer one bias tile row per output block to overlap the next group's read.
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = BIAS_DFB,
+            .entry_size = bias_aligned_tile_size,
+            .num_entries = 2 * out_block_w,
+            .data_format_metadata = bias_data_format,
+            .tile_format_metadata = bias_tile,
+        });
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Semaphores
@@ -485,6 +543,17 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     }
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
+    if (use_bias) {
+        // FUSE_BIAS selects the shared kernels' fused-bias path; BIAS_PER_GROUP makes the reader fetch
+        // tile row indices[bB] for every group and the compute kernel wait/pop the bias per group.
+        mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
+        mm_kernel_in1_sender_writer_defines["BIAS_PER_GROUP"] = "1";
+        mm_kernel_defines["FUSE_BIAS"] = "1";
+        mm_kernel_defines["BIAS_PER_GROUP"] = "1";
+    }
+    if (bias_reload_alias) {
+        mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS"] = "1";
+    }
 
     // Both readers take the sparsity operand, and each one's dataflow buffer and tensor accessor are
     // bound only because this define is set: a binding the host does not declare produces no dfb::/
@@ -657,10 +726,11 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     // The in1 multicast is skipped entirely (SKIP_MCAST), so the kernel's semaphore objects are
     // constructed but never used; they are still bound because the kernel constructs them
     // unconditionally. Legacy passed literal ids 0/0 into the same slots.
-    kernels.push_back(KernelSpec{
+    KernelSpec in1_sender{
         .unique_id = IN1_SENDER_WRITER,
-        .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-                  "reader_bmm_tile_layout_in1_sender_writer_padding_metal2.cpp",
+        .source =
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+            "reader_bmm_tile_layout_in1_sender_writer_padding_metal2.cpp",
         .compiler_options =
             {
                 .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_in1_sender_writer_defines),
@@ -768,7 +838,19 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                      "last_num_blocks_w_dim"},
             },
         .hw_config = in1_hw_config,
-    });
+    };
+    if (use_bias) {
+        in1_sender.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = BIAS_DFB,
+            .accessor_name = "bias",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        in1_sender.tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = BIAS, .accessor_name = "bias"});
+        // Stride 1 along N within the group's bias tile row.
+        in1_sender.compile_time_args.insert({"in3_tensor_stride_w", 1u});
+        in1_sender.runtime_arg_schema.runtime_arg_names.push_back("in3_tensor_start_tile_id");
+    }
+    kernels.push_back(std::move(in1_sender));
 
     // ---- compute ----------------------------------------------------------
     {
@@ -787,27 +869,37 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
         // When accumulating in fp32 with the K reduction split across blocks, the partials buffer
         // holds Float32 and is reloaded into DEST between blocks. Unless that reload's view is marked
         // UnpackToDest, it is routed through SrcA and rounded to TF32 (10 mantissa bits), so the fp32
-        // partial loses precision on every block boundary.
+        // partial loses precision on every block boundary. The flag goes on the reload alias when the
+        // fused bias forces a separate SrcA view of the partials buffer (see bias_reload_alias), else on
+        // the partials buffer itself.
         if (fp32_dest_acc_en) {
             const bool mark_interm0 = interm0_data_format == tt::DataFormat::Float32;
+            const DFBSpecName& marked = bias_reload_alias ? INTERM0_ALIAS_DFB : INTERM0_DFB;
             auto add_if_float32 = [&](const DFBSpecName& name, tt::DataFormat fmt) {
                 if (fmt != tt::DataFormat::Float32) {
                     return;
                 }
                 compute_hw.unpack_modes.emplace(
                     name,
-                    (mark_interm0 && name == INTERM0_DFB) ? tt::tt_metal::UnpackMode::UnpackToDest
-                                                          : tt::tt_metal::UnpackMode::UnpackToSrc);
+                    (mark_interm0 && name == marked) ? tt::tt_metal::UnpackMode::UnpackToDest
+                                                     : tt::tt_metal::UnpackMode::UnpackToSrc);
             };
             add_if_float32(IN0_DFB, in0_data_format);
             add_if_float32(IN1_DFB, in1_data_format);
             add_if_float32(INTERM0_DFB, interm0_data_format);
+            if (bias_reload_alias) {
+                add_if_float32(INTERM0_ALIAS_DFB, interm0_data_format);
+            }
+            if (use_bias) {
+                add_if_float32(BIAS_DFB, bias_data_format);
+            }
         }
 
-        kernels.push_back(KernelSpec{
+        KernelSpec compute{
             .unique_id = COMPUTE,
-            .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/"
-                      "bmm_large_block_zm_fused_bias_activation_metal2.cpp",
+            .source =
+                "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/"
+                "bmm_large_block_zm_fused_bias_activation_metal2.cpp",
             .compiler_options =
                 {
                     .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_defines),
@@ -865,7 +957,30 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                     {"get_batch_from_reader", static_cast<uint32_t>(get_batch_from_reader)},
                 },
             .hw_config = compute_hw,
-        });
+        };
+        if (bias_reload_alias) {
+            compute.dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = INTERM0_ALIAS_DFB,
+                .accessor_name = "intermed0_reload_alias",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            compute.dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = INTERM0_ALIAS_DFB,
+                .accessor_name = "intermed0_reload_alias",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        }
+        if (use_bias) {
+            compute.dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = BIAS_DFB,
+                .accessor_name = "bias",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+            compute.compile_time_args.insert({"bias_ntiles", in1_per_core_w});
+            // Broadcast row 0 of each group's bias over its M rows.
+            compute.compile_time_args.insert({"row_broadcast_bias", 1u});
+        }
+        kernels.push_back(std::move(compute));
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -901,6 +1016,9 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     if (use_indices) {
         tensor_parameters.push_back(
             TensorParameter{.unique_id = INDICES, .spec = in1_sparsity_mesh_tensor.tensor_spec()});
+    }
+    if (use_bias) {
+        tensor_parameters.push_back(TensorParameter{.unique_id = BIAS, .spec = bias_mesh_tensor->tensor_spec()});
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -987,6 +1105,10 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                  {"padded_subblock_tiles_addr_skip", last_x ? last_block_padded_subblock_tiles_addr_skip : 0u},
                  {"padded_block_tiles_w_skip", last_x ? last_block_padded_block_tiles_w_skip : 0u},
                  {"last_num_blocks_w_dim", last_x ? last_out_num_blocks_w : out_num_blocks_x}});
+            if (use_bias) {
+                // This core's first bias tile: its N offset within the group's bias tile row.
+                in1_sender_run_args.runtime_arg_values["in3_tensor_start_tile_id"][core] = per_core_N * output_idx_x;
+            }
         }
     }
 
@@ -1008,6 +1130,9 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     };
     if (use_indices) {
         run_args.tensor_args.emplace(INDICES, in1_sparsity_mesh_tensor);
+    }
+    if (use_bias) {
+        run_args.tensor_args.emplace(BIAS, *bias_mesh_tensor);
     }
 
     ProgramSpec spec{
