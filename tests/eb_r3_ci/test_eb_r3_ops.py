@@ -247,7 +247,7 @@ def test_layer_norm_sdxl_l1(device, h, w):
 
 
 # ---- bge_m3 balanced layernorm on Blackhole p100a (custom op compute.cpp: residual add, square at HiFi2), S512 ----
-@pytest.mark.parametrize("batch", [8, 16])
+@pytest.mark.parametrize("batch", [1, 8, 16, 32])
 def test_bge_balanced_layernorm(device, batch):
     from models.demos.wormhole.bge_m3.tt.custom_ops.balanced_layernorm.op import bge_balanced_layernorm
 
