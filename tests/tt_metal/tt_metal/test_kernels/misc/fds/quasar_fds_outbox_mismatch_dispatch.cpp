@@ -16,6 +16,8 @@
 #include "overlay/fds_signalling.hpp"
 #include "quasar_fds_common.h"
 
+using fds_outbox::kFormsAlias;
+using fds_outbox::kFormsAreOneAddress;
 using fds_outbox::kMatchedGo;
 using fds_outbox::kMismatchedGo;
 using fds_outbox::kTokenArmed;
@@ -29,12 +31,16 @@ constexpr uint32_t kTimeoutDelivered = 0x5A5A0008;
 
 void kernel_main() {
     constexpr uint32_t l1_address = get_named_compile_time_arg_val("l1_address");
-    constexpr uint32_t worker_mask = get_named_compile_time_arg_val("worker_mask");
+    constexpr uint32_t worker_mask = overlay::fds_signalling::all_worker_lanes_mask;
     constexpr uint32_t auto_dispatch_cycles = get_named_compile_time_arg_val("auto_dispatch_cycles");
     constexpr uint32_t poll_iterations = get_named_compile_time_arg_val("poll_iterations");
     static_assert(kTokenDelivered < kReadyTokenA, "step tokens must stay below the ready tokens");
 
     fds_kernel::status_ptr status = fds_kernel::begin_dispatch(l1_address, kNumSlots);
+    if constexpr (kFormsAreOneAddress) {
+        fds_kernel::finish(status, l1_address, kNumSlots, kFormsAlias);
+        return;
+    }
     overlay::FdsDispatch::fds_config_groupid(kTokenArmed, worker_mask, 1);
     overlay::FdsDispatch::fds_config_groupid(kTokenSilenceChecked, worker_mask, 1);
     overlay::FdsDispatch::fds_config_groupid(kTokenDelivered, worker_mask, 1);

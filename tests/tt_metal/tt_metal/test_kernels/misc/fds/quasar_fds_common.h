@@ -11,6 +11,10 @@
 
 #include "quasar_fds_epoch.h"
 
+// The wire-to-core mapping is not established, so a targeted mask cannot distinguish "wrong wire" from "no
+// transport at all". Kernels enable every lane of the register map instead (all_worker_lanes_mask and
+// dispatch_lane_mask in overlay/fds_signalling.hpp), which also bounds their scan loops.
+
 // Slot 0 of every status block. Extra slots are per-kernel and documented next to the kernel that
 // writes them.
 constexpr uint32_t kSlotResult = 0;
@@ -119,6 +123,30 @@ inline bool received_go(
     return false;
 }
 
+// On chips where group status is sticky, a bit stays set after its lane stops carrying group_id: writing 0
+// clears a bit and writing 1 leaves it unchanged. Clear the bits of lanes no longer carrying group_id, so the
+// register reads as it would where status is live.
+inline void refresh_dispatch_group_status(uint32_t group_id) {
+    uint32_t live_lanes = overlay::FdsDispatch::fds_read_group_status(group_id);
+    for (uint32_t mask = live_lanes, neo = 0; mask != 0; mask >>= 1, neo++) {
+        if ((mask & 1u) != 0 &&
+            FDS_INTF_READ(TT_FDS_DISPATCH_TENSIX_TO_DISPATCH_0__REG_ADDR + (neo * sizeof(uint32_t))) != group_id) {
+            live_lanes &= ~(uint32_t{1} << neo);
+        }
+    }
+    FDS_INTF_WRITE(TT_FDS_DISPATCH_GROUPID_STATUS_0__REG_ADDR + (group_id * sizeof(uint32_t)), live_lanes);
+}
+
+inline void refresh_worker_group_status(uint32_t group_id) {
+    uint32_t live_lanes = overlay::FdsNeo::fds_read_group_status(group_id);
+    for (uint32_t mask = live_lanes, inst = 0; mask != 0; mask >>= 1, inst++) {
+        if ((mask & 1u) != 0 && overlay::FdsNeo::fds_read_de_status(inst) != group_id) {
+            live_lanes &= ~(uint32_t{1} << inst);
+        }
+    }
+    FDS_INTF_WRITE(TT_FDS_TENSIXNEO_GROUPID_STATUS_0__REG_ADDR + (group_id * sizeof(uint32_t)), live_lanes);
+}
+
 inline bool wait_group_count_nonzero(uint32_t group_id, uint32_t poll_iterations) {
     for (uint32_t i = 0; i < poll_iterations; i++) {
         if (overlay::FdsDispatch::fds_read_group_count(group_id) != 0) {
@@ -142,6 +170,7 @@ inline bool wait_group_count(uint32_t group_id, uint32_t threshold, uint32_t pol
 
 inline bool wait_group_count_zero(uint32_t group_id, uint32_t poll_iterations, uint32_t& count) {
     for (uint32_t i = 0; i < poll_iterations; i++) {
+        refresh_dispatch_group_status(group_id);
         count = overlay::FdsDispatch::fds_read_group_count(group_id);
         if (count == 0) {
             return true;
@@ -204,6 +233,11 @@ constexpr uint32_t kTokenSilenceChecked = 10;
 constexpr uint32_t kTokenDelivered = 11;
 constexpr uint32_t kMismatchedGo = 2;
 constexpr uint32_t kMatchedGo = 3;
+// Where the OFFSET and ADDR forms are the same address, no outbox value can mismatch the write. Both
+// kernels then report kFormsAlias without driving anything.
+constexpr bool kFormsAreOneAddress =
+    TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_OFFSET == TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR;
+constexpr uint32_t kFormsAlias = 0x5A5A0062;
 }  // namespace fds_outbox
 
 // Status slots and failure codes shared by the interrupt kernels, whose protocol lives in
