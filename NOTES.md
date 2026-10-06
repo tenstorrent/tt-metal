@@ -40,3 +40,21 @@ If recovery failed or chips 16-23 stay missing: move to g15blx02 (needs an overl
 ## Light wake 21:22 UTC
 blx01 recovered (power-cycle 632, health-gate 637 OK, fabric-check 638 OK, hold 639 ended "ready for tenants").
 Resubmitted as blx01 job 640 (TAG=a, -t 600) at 21:22:37 UTC. Next: same steps as "Next" above with job 640.
+
+## Standard wake 21:26 UTC: moved to g15blx02
+Drop 2: blx01 job 640 (ours, same config) killed -9 at 21:25:17 UTC after 160 s (during warmup stage 2 capture);
+chips 16-23 (tray 3/4 in broker's numbering "trays [4]") left PCIe again; bridge resets 642/643 failed, broker escalating.
+Same config dropped twice in a row on blx01 => skipped there (charter rule). Moved to g15blx02.
+
+Warm-cache "before" (g15 job 399, bf7db12a14, 3653/3653 JIT hits): process 162 s, warmup 81.7 s =
+setup+gemma encode 16.5 | image encoder 11.6 | s1 7.9 | s1 per-token (i2v) 4.6 | upsample 0.8 | s2 8.0 |
+s2 per-token+transition+vae 8.2 | audio eager 14.3 | audio capture 9.9. gen#0 35.0 s, gen#1 6.101 s.
+=> the 530-661 s fresh-process numbers are cold JIT compile (job 621: 0/3653 hits). With a warm cache the
+whole 1-seed process is 162 s. The audio eager 211 s on blx01 was compile, not dispatch.
+
+g15 overlay: data/g15/t166/tree (cp -al of t158 models/ + the 6 t166 models files, OVERLAY_COMMIT 0ee3d31bda9).
+Job script tmp/t166/job_g15.sh (TAG=a, seeds 0-4, T2V_ONLY=1, ENCODERS=0). Output data/g15/t166/out/a/.
+Submitted g15 job 406 at 21:26:59 UTC, -t 600 (unmeasured config), queued behind ltx-host 405.
+Next on wake: section times from out/a/run.log; process wall; E2E_WALL_S per gen; framemd5 of
+out/a/ltx_av_fast_1920x1088_1.mp4 vs data/g15/out/ltx_av_fast_1920x1088_1.mp4 (job 399), and _0 too;
+then land 0ee3d31bda9 on t48; result.json with -t recommendations.
