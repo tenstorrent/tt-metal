@@ -13,12 +13,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.modules.lazy_weight import (
-    LazyWeight,
-    _auto_pad_for_sharded_tiles,
-    _from_torch_and_dump,
-    resolve_lazy_weight,
-)
+from models.common.lazy_weight import LazyWeight, _auto_pad_for_sharded_tiles, _from_torch_and_dump, resolve_lazy_weight
 
 # ============================================================================
 # Fixtures
@@ -110,7 +105,7 @@ class TestLazyWeightConstruction:
         mock_source = MagicMock()
         mock_source.shape = None
 
-        with pytest.raises(AssertionError, match="source must have a shape"):
+        with pytest.raises(AssertionError, match="source must have a shape"):  # allow-pytest.raises: pre-existing
             LazyWeight(source=mock_source)
 
     def test_post_init_validates_empty_shape(self):
@@ -118,7 +113,7 @@ class TestLazyWeightConstruction:
         mock_source = MagicMock()
         mock_source.shape = ()
 
-        with pytest.raises(AssertionError, match="source must have a shape"):
+        with pytest.raises(AssertionError, match="source must have a shape"):  # allow-pytest.raises: pre-existing
             LazyWeight(source=mock_source)
 
 
@@ -429,7 +424,7 @@ class TestPaddedShape:
             device=mock_mesh_device,
             # Missing memory_config and layout
         )
-        with pytest.raises(AssertionError, match="LazyWeight must be resolved"):
+        with pytest.raises(AssertionError, match="LazyWeight must be resolved"):  # allow-pytest.raises: pre-existing
             _ = lw.padded_shape
 
     def test_padded_shape_raises_when_device_none(self, mock_tensor, mock_memory_config, mock_mesh_mapper_config):
@@ -442,7 +437,7 @@ class TestPaddedShape:
             layout=ttnn.TILE_LAYOUT,
         )
         # First it will fail is_resolved check
-        with pytest.raises(AssertionError, match="LazyWeight must be resolved"):
+        with pytest.raises(AssertionError, match="LazyWeight must be resolved"):  # allow-pytest.raises: pre-existing
             _ = lw.padded_shape
 
     def test_padded_shape_no_padding_when_replicated(self, mock_tensor, mock_mesh_device, mock_memory_config):
@@ -514,7 +509,9 @@ class TestPaddedShape:
         )
         # Override is_resolved to return True to reach the ValueError branch
         with patch.object(lw, "is_resolved", return_value=True):
-            with pytest.raises(ValueError, match="device must be set to compute padded_shape"):
+            with pytest.raises(  # allow-pytest.raises: pre-existing
+                ValueError, match="device must be set to compute padded_shape"
+            ):
                 _ = lw.padded_shape
 
 
@@ -534,7 +531,7 @@ class TestGetDeviceWeight:
             memory_config=mock_memory_config,
             layout=ttnn.TILE_LAYOUT,
         )
-        with pytest.raises(ValueError, match="device must be provided"):
+        with pytest.raises(ValueError, match="device must be provided"):  # allow-pytest.raises: pre-existing
             lw.get_device_weight()
 
     def test_raises_when_layout_none(self, mock_tensor, mock_mesh_device, mock_memory_config):
@@ -545,7 +542,7 @@ class TestGetDeviceWeight:
             memory_config=mock_memory_config,
             layout=None,
         )
-        with pytest.raises(ValueError, match="layout must be provided"):
+        with pytest.raises(ValueError, match="layout must be provided"):  # allow-pytest.raises: pre-existing
             lw.get_device_weight()
 
     def test_raises_when_memory_config_none(self, mock_tensor, mock_mesh_device):
@@ -556,7 +553,7 @@ class TestGetDeviceWeight:
             memory_config=None,
             layout=ttnn.TILE_LAYOUT,
         )
-        with pytest.raises(ValueError, match="memory_config must be provided"):
+        with pytest.raises(ValueError, match="memory_config must be provided"):  # allow-pytest.raises: pre-existing
             lw.get_device_weight()
 
     def test_returns_cached_value_on_second_call(self, mock_tensor, mock_mesh_device, mock_memory_config):
@@ -579,7 +576,7 @@ class TestGetDeviceWeight:
         mock_ttnn_tensor = MagicMock()
         mock_mapper = MagicMock()
 
-        with patch("models.common.modules.lazy_weight.ttnn") as mock_ttnn:
+        with patch("models.common.lazy_weight.ttnn") as mock_ttnn:
             mock_ttnn.replicate_tensor_to_mesh_mapper.return_value = mock_mapper
             mock_ttnn.from_torch.return_value = mock_ttnn_tensor
 
@@ -604,7 +601,7 @@ class TestGetDeviceWeight:
         mock_ttnn_tensor = MagicMock()
         mock_mapper = MagicMock()
 
-        with patch("models.common.modules.lazy_weight.ttnn") as mock_ttnn:
+        with patch("models.common.lazy_weight.ttnn") as mock_ttnn:
             mock_ttnn.create_mesh_mapper.return_value = mock_mapper
             mock_ttnn.from_torch.return_value = mock_ttnn_tensor
 
@@ -630,7 +627,7 @@ class TestGetDeviceWeight:
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
 
-            with patch("models.common.modules.lazy_weight.ttnn") as mock_ttnn:
+            with patch("models.common.lazy_weight.ttnn") as mock_ttnn:
                 mock_ttnn.replicate_tensor_to_mesh_mapper.return_value = mock_mapper
                 mock_ttnn.from_torch.return_value = mock_ttnn_tensor
                 mock_ttnn.StorageType.HOST = ttnn.StorageType.HOST
@@ -671,7 +668,7 @@ class TestGetDeviceWeight:
             cache_path.touch()
 
             # Now patch ttnn.load_tensor for the get_device_weight call
-            with patch("models.common.modules.lazy_weight.ttnn.load_tensor") as mock_load:
+            with patch("models.common.lazy_weight.ttnn.load_tensor") as mock_load:
                 mock_load.return_value = mock_ttnn_tensor
 
                 result = lw.get_device_weight()
@@ -728,7 +725,7 @@ class TestFromTorchAndDump:
         mock_ttnn_tensor = MagicMock()
         mock_mapper = MagicMock()
 
-        with patch("models.common.modules.lazy_weight.ttnn") as mock_ttnn:
+        with patch("models.common.lazy_weight.ttnn") as mock_ttnn:
             mock_ttnn.from_torch.return_value = mock_ttnn_tensor
 
             result = _from_torch_and_dump(
@@ -754,7 +751,7 @@ class TestFromTorchAndDump:
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_file = Path(tmpdir) / "test_cache.tensorbin"
 
-            with patch("models.common.modules.lazy_weight.ttnn") as mock_ttnn:
+            with patch("models.common.lazy_weight.ttnn") as mock_ttnn:
                 mock_ttnn.from_torch.return_value = mock_ttnn_tensor
                 mock_ttnn.StorageType.HOST = ttnn.StorageType.HOST
 
@@ -782,7 +779,7 @@ class TestFromTorchAndDump:
         mock_ttnn_tensor = MagicMock()
         mock_mapper = MagicMock()
 
-        with patch("models.common.modules.lazy_weight.ttnn") as mock_ttnn:
+        with patch("models.common.lazy_weight.ttnn") as mock_ttnn:
             mock_ttnn.from_torch.return_value = mock_ttnn_tensor
 
             _from_torch_and_dump(
@@ -805,7 +802,7 @@ class TestFromTorchAndDump:
         mock_ttnn_tensor = MagicMock()
         mock_mapper = MagicMock()
 
-        with patch("models.common.modules.lazy_weight.ttnn") as mock_ttnn:
+        with patch("models.common.lazy_weight.ttnn") as mock_ttnn:
             mock_ttnn.from_torch.return_value = mock_ttnn_tensor
 
             _from_torch_and_dump(

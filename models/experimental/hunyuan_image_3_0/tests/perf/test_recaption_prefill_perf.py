@@ -55,7 +55,7 @@ from loguru import logger
 import ttnn
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.tt_dit.parallel.manager import CCLManager
-from models.common.modules.tt_ccl import get_num_links
+from models.common.tt_ccl import get_num_links
 
 from models.experimental.hunyuan_image_3_0.ref.tokenizer import HunyuanTokenizer, prepare_recaption_inputs
 from models.experimental.hunyuan_image_3_0.ttnn.attention.mask import build_attention_mask_tt
