@@ -100,16 +100,32 @@ _CACHE_HIT_IDS = [
 
 
 @pytest.mark.parametrize("shape,kwargs,dtype,layout", _CACHE_HIT, ids=_CACHE_HIT_IDS)
-def test_scatter_codegen_program_cache_hit(device, shape, kwargs, dtype, layout):
+def test_scatter_codegen_auto_routes_to_codegen(device, shape, kwargs, dtype, layout):
     x = _make_input(shape, dtype)
     xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device)
     kwargs = _materialize(shape, kwargs, dtype, layout, device)
+    device.clear_program_cache()
+    golden = ttnn.to_torch(_force_native(xt, **kwargs))
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.scatter(xt, **kwargs)
+    assert_equal(golden, ttnn.to_torch(out))
+    msg = "auto routed a supported case to native (program cache did not grow); expected codegen"
+    assert device.num_program_cache_entries() > entries_before, msg
+
+
+@pytest.mark.parametrize("shape,kwargs,dtype,layout", _CACHE_HIT, ids=_CACHE_HIT_IDS)
+def test_scatter_codegen_program_cache_hit(device, shape, kwargs, dtype, layout):
+    x = _make_input(shape, dtype)
+    xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device)
+    spec = kwargs
+    kwargs = _materialize(shape, spec, dtype, layout, device)
     golden = ttnn.to_torch(_force_native(xt, **kwargs))
     assert_equal(golden, ttnn.to_torch(_force_codegen(xt, **kwargs)))
     entries_after_miss = device.num_program_cache_entries()
     # Same spec, a distinct allocation: the cached program must rebind its Buffer*s
     # instead of reusing the first dispatch's addresses.
     yt = ttnn.from_torch(_make_input(shape, dtype), dtype=dtype, layout=layout, device=device)
+    kwargs = _materialize(shape, spec, dtype, layout, device)
     second_golden = ttnn.to_torch(_force_native(yt, **kwargs))
     assert_equal(second_golden, ttnn.to_torch(_force_codegen(yt, **kwargs)))
     msg = "second forced-codegen dispatch missed the program cache"
