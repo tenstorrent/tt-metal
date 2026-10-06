@@ -325,7 +325,9 @@ class TtMoe(LightweightModule):
                 fits a whole bf16 token plus combine_fabric2d's routing tail -- open the mesh with
                 init_helpers.moe_fabric_payload_size for that; with the model's own EMB_SIZE payload MoE runs
                 the routed expert then combine. Also needs a threshold that leaves the unified half
-                some experts. Its three global semaphores live in the mesh's TT_CCL; everything else it
+                some experts. Even when enabled, a forward only overlaps while a trace controller is
+                attached (set_trace_controller): eager it runs the routed expert then combine, since the
+                overlapped program is host-bound when dispatched op by op. Its three global semaphores live in the mesh's TT_CCL; everything else it
                 places in L1 is freed when the op returns.
         """
         super().__init__()
@@ -554,9 +556,9 @@ class TtMoe(LightweightModule):
                 f"moe_fabric_payload_size on a torus"
             )
         logger.info(
-            f"TtMoe: routed expert overlapped with combine_fabric2d: {overlap_routed_expert_with_combine} "
-            f"(axis 0 {'ring' if ring_axis_wraps else 'linear'}, fabric payload {fabric_payload} B, overlap needs "
-            f"{overlap_payload} B)"
+            f"TtMoe: routed expert overlapped with combine_fabric2d: {overlap_routed_expert_with_combine} when traced, "
+            f"never eager (axis 0 {'ring' if ring_axis_wraps else 'linear'}, fabric payload {fabric_payload} B, "
+            f"overlap needs {overlap_payload} B)"
         )
         # combine_fabric2d relays tokens between the chips of one ring, so each chip needs its own dispatch
         # group's rows of the table -- one row per ring chip -- and no other group's. Combine runs on mesh axis
@@ -672,6 +674,7 @@ class TtMoe(LightweightModule):
             self.sd_manager_id = None
 
     _dump_traced_warned = False  # see the traced-path branch below; warn once per process
+    _overlap_forward_logged = False  # the first overlapped forward logs once per process
 
     def _dump_routing(
         self,
@@ -1045,7 +1048,15 @@ class TtMoe(LightweightModule):
         # is independent of the result and can be freed here, unless the PCC check
         # needs it to compare against the bfloat16 torch reference.
         squeezed_dispatch = ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0)
-        if self.overlap_routed_expert_with_combine:
+        # Overlapped only when this forward is traced. Eager, the overlapped program costs ~2 ms of host time per
+        # call -- it is 32 per-chip programs, each carrying the routed expert's ~11k buffer bindings -- which makes
+        # an untraced prefill host-bound; a trace replays it for free. A traced model attaches its controller
+        # before the warm-up forward, so the warm-up compiles the same programs the capture records.
+        overlap_combine = self.overlap_routed_expert_with_combine and self._trace_controller is not None
+        if overlap_combine and not TtMoe._overlap_forward_logged:
+            TtMoe._overlap_forward_logged = True
+            logger.info("TtMoe: traced forward runs the routed expert overlapped with combine_fabric2d")
+        if overlap_combine:
             combined_output = self._routed_expert_and_combine(
                 squeezed_dispatch, metadata, tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets
             )
@@ -1058,7 +1069,7 @@ class TtMoe(LightweightModule):
         if DEBUG_LOGGING_ENABLED and expert_outputs is not None:
             logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
 
-        if not self.overlap_routed_expert_with_combine:
+        if not overlap_combine:
             # Add back the batch dimensions for combine
             # (experts_per_chip, max_tokens, emb_dim) -> (1, 1, experts_per_chip, max_tokens, emb_dim)
             expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
