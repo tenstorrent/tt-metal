@@ -19,8 +19,12 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 // Only modes supported are L1_TO_L1, PACK_ISOLATE and L1_CONGESTION
+#if LLK_PERF_RUN_TYPE_CONSTEXPR
 static_assert(PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE, "Math isolation not supported for this benchmark");
+#endif
+#if LLK_PERF_RUN_TYPE_CONSTEXPR
 static_assert(PERF_RUN_TYPE != PerfRunType::UNPACK_ISOLATE, "Unpack isolation not supported for this benchmark");
+#endif
 
 static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 
@@ -38,6 +42,8 @@ static_assert(FULL_CT_DIM % BLOCK_CT_DIM == 0, "FULL_CT_DIM must be divisible by
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -91,6 +97,8 @@ using namespace ckernel;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -115,11 +123,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("TILE_LOOP")
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             return;
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             if constexpr (!unpack_to_dest)
             {
@@ -177,6 +185,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -200,7 +210,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("TILE_LOOP")
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {

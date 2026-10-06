@@ -38,14 +38,16 @@ constexpr std::uint32_t PERF_ADDRESS(std::uint32_t buffer, std::uint32_t tile)
     return address / 16 - 1;                                          // Correct the L1 Address for Tensix
 }
 
-enum class PerfRunType
+// Numeric values match helpers/llk_params.py PerfRunType so the runtime
+// parameter packed from Enum.value compares equal to these enumerators.
+enum class PerfRunType : std::uint32_t
 {
-    L1_TO_L1,
-    UNPACK_ISOLATE,
-    MATH_ISOLATE,
-    PACK_ISOLATE,
-    L1_CONGESTION,
-    SFPU_ISOLATE
+    L1_TO_L1       = 1,
+    UNPACK_ISOLATE = 2,
+    MATH_ISOLATE   = 3,
+    PACK_ISOLATE   = 4,
+    L1_CONGESTION  = 5,
+    SFPU_ISOLATE   = 6
 };
 
 inline void _perf_unpack_set_valid(std::uint32_t source)

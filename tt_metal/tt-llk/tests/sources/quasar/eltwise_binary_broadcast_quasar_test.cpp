@@ -22,6 +22,8 @@
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -51,10 +53,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        else if (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             const std::uint32_t srcb_dvalids_per_tile = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : num_faces;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
@@ -96,6 +98,8 @@ using namespace ckernel;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -111,7 +115,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         // End-to-end and math-isolate runs require FPU destination ownership.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
@@ -124,10 +128,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             const std::uint32_t srcb_only_clears = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 0u : num_faces - 1u;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
@@ -141,7 +145,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
             }
         }
-        else
+        else if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             // acc_to_dest folds num_tiles_per_accum input tiles into one dest tile.
             // Blocks that overflow dest switch banks between sections.
@@ -157,9 +161,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             _llk_math_eltwise_binary_broadcast_(dest_idx);
                         }
                     }
-                    if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
+                    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                }
+            }
+        }
+        else
+        {
+            const std::uint32_t num_tiles_per_accum = INPUT_NUM_TILES_IN_BLOCK / OUTPUT_NUM_TILES_IN_BLOCK;
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
+                {
+                    for (std::uint32_t dest_idx = 0; dest_idx < OUTPUT_NUM_TILES_IN_BLOCK; ++dest_idx)
                     {
-                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                        for (std::uint32_t tile = 0; tile < num_tiles_per_accum; ++tile)
+                        {
+                            _llk_math_eltwise_binary_broadcast_(dest_idx);
+                        }
                     }
                 }
             }
@@ -179,6 +197,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -194,11 +214,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
         // PACK_ISOLATE / L1_CONGESTION: no math↔pack dest-dvalid handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        else if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
@@ -212,10 +232,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("TILE_LOOP")
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)

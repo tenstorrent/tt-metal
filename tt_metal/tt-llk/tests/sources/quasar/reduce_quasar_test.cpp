@@ -24,6 +24,8 @@
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -50,10 +52,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        else if (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
@@ -91,6 +93,8 @@ using namespace ckernel;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -112,7 +116,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         // PACK_ISOLATE measures pack alone (WH/BH style): skip FPU→PACK dest-dvalid.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
@@ -135,16 +139,52 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
                 {
                     perf_math_clear_srca_per_face_then_srcb_once(num_faces, 1 /*srcb_once_count*/);
+                }
+            }
+        }
+        else if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            if (is_int_fpu_en)
+            {
+                if constexpr (!(REDUCE_DIM == ReduceDim::REDUCE_SCALAR && POOL_TYPE == PoolType::SUM))
+                {
+                    for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+                    {
+                        for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += max_tiles_dest)
+                        {
+                            const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, max_tiles_dest);
+                            for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
+                            {
+                                _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, true /* is_int_fpu_en */>(block_tile, tensor_shape_A);
+                            }
+                            _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                        }
+                    }
+                }
+            }
+            else
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+                {
+                    for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += max_tiles_dest)
+                    {
+                        const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, max_tiles_dest);
+                        for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
+                        {
+                            _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, false /* is_int_fpu_en */>(block_tile, tensor_shape_A);
+                        }
+                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                    }
                 }
             }
         }
@@ -163,10 +203,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             {
                                 _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, true /* is_int_fpu_en */>(block_tile, tensor_shape_A);
                             }
-                            if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
-                            {
-                                _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
-                            }
                         }
                     }
                 }
@@ -181,10 +217,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                         {
                             _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, false /* is_int_fpu_en */>(block_tile, tensor_shape_A);
-                        }
-                        if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
-                        {
-                            _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
                         }
                     }
                 }
@@ -205,6 +237,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -220,11 +254,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
         // Match WH/BH PACK_ISOLATE: no math↔pack handshake; pack from whatever is in dest.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        else if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
@@ -238,8 +272,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
+        }
+        else if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += max_tiles_dest)
+                {
+                    const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, max_tiles_dest);
+                    for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
+                    {
+                        _llk_pack_(block_tile, block_start + block_tile, tensor_shape_A);
+                    }
+                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
+            }
         }
         else
         {
@@ -251,10 +300,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                     {
                         _llk_pack_(block_tile, block_start + block_tile, tensor_shape_A);
-                    }
-                    if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
-                    {
-                        _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }
                 }
             }

@@ -49,6 +49,8 @@ using namespace ckernel;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -70,7 +72,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, params.TILE_CNT);
 
         // UNPACK is the producer in the chain.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
         }
@@ -84,16 +86,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         // Skipped for MATH_ISOLATE (nothing to mock - see the note at the top) and for
         // PACK_ISOLATE, which packs whatever Dest already holds.
-        if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE && PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                {
-                    // Hand Dest to the SFPU.
-                    _llk_unpack_dest_dvalid_section_done_<dest_sync>();
-                }
+                // Hand Dest to the SFPU.
+                _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+            }
+        }
+        else if (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE && PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
             }
         }
         PROFILER_SYNC();
@@ -122,6 +128,8 @@ constexpr DataFormat REDUCE_MATH_FORMAT = static_cast<DataFormat>(MATH_FORMAT);
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -139,7 +147,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::sfpu::init_reduce<POOL_TYPE, REDUCE_MATH_FORMAT, is_fp32_dest_acc_en>();
 
         // Math is the SFPU link in the chain.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::SFPU>();
         }
@@ -152,7 +160,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("TILE_LOOP")
         // Skipped for UNPACK_ISOLATE / L1_CONGESTION (nothing to clear) and for PACK_ISOLATE.
-        if constexpr (PERF_RUN_TYPE != PerfRunType::UNPACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION && PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
@@ -186,15 +194,48 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         BLOCK_CT_DIM,
                         BLOCK_RT_DIM);
                 }
-
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                {
-                    // Hand Dest to PACK.
-                    _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
-                }
+                // Hand Dest to PACK.
+                _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
             }
 
             // Let every queue drain before this thread returns.
+            wait_sfpu_idle();
+            wait_fpu_idle();
+            wait_mop_idle();
+        }
+        else if (PERF_RUN_TYPE != PerfRunType::UNPACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION && PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (REDUCE_DIM == ckernel::ReduceDim::REDUCE_COL)
+                {
+                    for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                    {
+                        SFPU_UNARY_CALL(
+                            dest_sync,
+                            is_fp32_dest_acc_en,
+                            calculate_reduce,
+                            (POOL_TYPE, REDUCE_DIM, REDUCE_MATH_FORMAT, is_fp32_dest_acc_en, dest_sync),
+                            params.DST_INDEX + tile,
+                            VectorMode::RC_custom,
+                            1 /*block_ct_dim: unused by the column reduce*/,
+                            1 /*block_rt_dim: unused by the column reduce*/);
+                    }
+                }
+                else
+                {
+                    SFPU_UNARY_CALL(
+                        dest_sync,
+                        is_fp32_dest_acc_en,
+                        calculate_reduce,
+                        (POOL_TYPE, REDUCE_DIM, REDUCE_MATH_FORMAT, is_fp32_dest_acc_en, dest_sync),
+                        params.DST_INDEX,
+                        VectorMode::RC_custom,
+                        BLOCK_CT_DIM,
+                        BLOCK_RT_DIM);
+                }
+            }
+
             wait_sfpu_idle();
             wait_fpu_idle();
             wait_mop_idle();
@@ -215,6 +256,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -235,7 +278,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, params.TILE_CNT);
 
         // PACK is the consumer at the end of the chain.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
@@ -247,18 +290,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 _llk_pack_(params.DST_INDEX, 0 /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                {
-                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
-                    // Drain this bank's dest-waited pack before issuing the next: queuing every
-                    // LOOP_FACTOR pack into one tensix_sync makes the TILE_LOOP wall-clock read 0.
-                    ckernel::wait_pack_idle();
-                }
+                _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                // Drain this bank's dest-waited pack before issuing the next: queuing every
+                // LOOP_FACTOR pack into one tensix_sync makes the TILE_LOOP wall-clock read 0.
+                ckernel::wait_pack_idle();
+            }
+        }
+        else if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                _llk_pack_(params.DST_INDEX, 0 /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
             }
         }
         PROFILER_SYNC();

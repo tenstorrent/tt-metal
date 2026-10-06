@@ -65,6 +65,8 @@ inline std::uint32_t decompose_row(const std::uint32_t ct_dim, std::uint32_t uni
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t BLOCK_CT_DIM = params.BLOCK_CT_DIM;
     const std::uint32_t LOOP_FACTOR  = params.LOOP_FACTOR;
@@ -148,10 +150,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        else if (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // Each unit produces 4 dvalids regardless of unit_dim
             _perf_unpack_loop_set_valid<true, false>(units_per_row * 4 * LOOP_FACTOR);
@@ -194,6 +196,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t BLOCK_CT_DIM = params.BLOCK_CT_DIM;
     const std::uint32_t LOOP_FACTOR  = params.LOOP_FACTOR;
@@ -241,11 +245,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             // Intentionally empty: MATH_PACK SEMINITs to max 2, so posting one credit per unit hangs pack
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             _perf_math_loop_clear_valid<true, false>(units_per_row * 4 * LOOP_FACTOR);
         }
@@ -279,6 +283,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t BLOCK_CT_DIM = params.BLOCK_CT_DIM;
     const std::uint32_t LOOP_FACTOR  = params.LOOP_FACTOR;
@@ -353,10 +359,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         {
             START_PERF_MEASURE("TILE_LOOP")
-            if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+            if (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
             {
             }
-            else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+            else if (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
                 for (std::uint32_t i = 0; i < units_per_row * LOOP_FACTOR; i++)
                 {

@@ -829,13 +829,19 @@ class VECTOR_MODE(TemplateParameter):
 
 
 @dataclass
-class PERF_RUN_TYPE(TemplateParameter):
+class PERF_RUN_TYPE(RuntimeParameter):
+    """Compile-time when placed in templates (functional tests, speed-of-light).
+    Runtime field when placed in runtimes (perf builds)."""
+
     perf_run_type: PerfRunType
 
     def convert_to_cpp(self) -> str:
         return (
             f"\nconstexpr auto PERF_RUN_TYPE = PerfRunType::{self.perf_run_type.name};"
         )
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "PerfRunType PERF_RUN_TYPE;", "I"
 
 
 @dataclass

@@ -24,6 +24,8 @@
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -43,7 +45,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // Only the end-to-end path uses the unpack→pack dest-dvalid
             // handshake. Isolates deliberately have no consumer, so clear the
             // persisted wait mask rather than leaving UNP_DEST blocked.
-            if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+            if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
             {
                 set_up_unpack_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
             }
@@ -94,10 +96,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        else if (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             if constexpr (!unpack_to_dest)
             {
@@ -117,14 +119,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (unpack_to_dest)
         {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
             {
-                for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
-                    _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block_rt * BLOCK_CT_DIM, tensor_shape_A);
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
                     {
+                        _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block_rt * BLOCK_CT_DIM, tensor_shape_A);
                         _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+                    }
+                }
+            }
+            else
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+                {
+                    for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
+                    {
+                        _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block_rt * BLOCK_CT_DIM, tensor_shape_A);
                     }
                 }
             }
@@ -152,6 +164,8 @@ using namespace ckernel;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -166,7 +180,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             ZONE_SCOPED("INIT")
             // PACK_ISOLATE and L1_CONGESTION measure pack without the
             // FPU→PACK dest-dvalid handshake (WH/BH style).
-            if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
+            if (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
             {
                 set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
             }
@@ -180,10 +194,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         {
             ZONE_SCOPED("TILE_LOOP")
-            if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+            if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
             {
             }
-            else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+            else if (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
             {
                 const std::uint32_t src_handshake_iters = LOOP_FACTOR * BLOCK_RT_DIM * BLOCK_CT_DIM;
                 if constexpr (is_fp32_dest_acc_en)
@@ -195,7 +209,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(src_handshake_iters);
                 }
             }
-            else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+            else if (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
@@ -239,6 +253,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -252,11 +268,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Match WH/BH PACK_ISOLATE and L1_CONGESTION: no math↔pack handshake;
         // pack from whatever is in dest.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        else if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             if constexpr (unpack_to_dest)
             {
@@ -297,10 +313,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // _llk_pack_untilize_ packs one block ct_dim of tiles (one tile row) at a time.
         const std::uint32_t y_stride_external = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)

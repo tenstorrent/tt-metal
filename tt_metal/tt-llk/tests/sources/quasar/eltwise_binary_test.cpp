@@ -28,6 +28,8 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
     const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -47,10 +49,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
         set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
 
-        const auto bfd_a = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-            tensor_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
-        const auto bfd_b = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
-            tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+        const auto bfd_a =
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        const auto bfd_b =
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
         _llk_unpack_binary_operands_init_(bfd_a, bfd_b, tensor_shape, num_tiles_per_accum);
@@ -58,10 +60,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        else if (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * INPUT_TILE_CNT);
         }
@@ -99,6 +101,8 @@ using namespace ckernel;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
     const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -113,7 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         // End-to-end and math-isolate runs require FPU destination ownership.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
@@ -126,14 +130,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * INPUT_TILE_CNT);
         }
-        else
+        else if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             // acc_to_dest folds num_tiles_per_accum input tiles into one dest tile.
             const std::uint32_t num_tiles_per_accum = INPUT_NUM_TILES_IN_BLOCK / OUTPUT_NUM_TILES_IN_BLOCK;
@@ -148,9 +152,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             _llk_math_eltwise_binary_<ELTWISE_BINARY_OP>(dest_idx, tensor_shape);
                         }
                     }
-                    if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
+                    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                }
+            }
+        }
+        else
+        {
+            const std::uint32_t num_tiles_per_accum = INPUT_NUM_TILES_IN_BLOCK / OUTPUT_NUM_TILES_IN_BLOCK;
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
+                {
+                    for (std::uint32_t dest_idx = 0; dest_idx < OUTPUT_NUM_TILES_IN_BLOCK; ++dest_idx)
                     {
-                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                        for (std::uint32_t tile = 0; tile < num_tiles_per_accum; ++tile)
+                        {
+                            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP>(dest_idx, tensor_shape);
+                        }
                     }
                 }
             }
@@ -170,6 +188,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
     const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
@@ -184,25 +204,39 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         // Clear a stale FPU-to-PACK wait in modes without a math handshake.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        else if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
 
-        const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-            tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        const auto bfd_pack =
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         _llk_pack_init_(bfd_pack, tensor_shape, 1 /*num_tiles_per_pack*/);
         PROFILER_SYNC();
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
+        }
+        else if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
+                {
+                    for (std::uint32_t i = 0; i < OUTPUT_NUM_TILES_IN_BLOCK; ++i)
+                    {
+                        _llk_pack_(i, block * OUTPUT_NUM_TILES_IN_BLOCK + i, tensor_shape);
+                    }
+                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
+            }
         }
         else
         {
@@ -213,10 +247,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t i = 0; i < OUTPUT_NUM_TILES_IN_BLOCK; ++i)
                     {
                         _llk_pack_(i, block * OUTPUT_NUM_TILES_IN_BLOCK + i, tensor_shape);
-                    }
-                    if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
-                    {
-                        _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }
                 }
             }

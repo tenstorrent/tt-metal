@@ -24,6 +24,8 @@
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -40,7 +42,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // UNP_DEST and PACK share DEST. Keep them on the producer/consumer
             // chain in the congestion run as well; disabling the handshake lets
             // both threads access the same DEST section and eventually timeout.
-            if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+            if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
             {
                 set_up_unpack_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
             }
@@ -112,10 +114,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // is_fp32_dest_acc_en it also pulses SrcB because FP32 datacopy uses ELWADD.
         const std::uint32_t src_handshake_iters = LOOP_FACTOR * BLOCK_RT_DIM * BLOCK_CT_DIM;
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        else if (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             if constexpr (!unpack_to_dest)
             {
@@ -135,33 +137,50 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            if constexpr (unpack_to_dest)
             {
-                if constexpr (unpack_to_dest)
+                if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
                 {
-                    for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
+                    for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                     {
-                        _llk_unpack_tilize_set_src_offset_<UNPACKER_ENGINE_SEL>(tensor_shape, y * y_stride_external);
-                        _llk_unpack_tilize_block_(0 /*l1_tile_idx*/, y * BLOCK_CT_DIM /*dest_tile_idx*/);
-                    }
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
-                    {
+                        for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
+                        {
+                            _llk_unpack_tilize_set_src_offset_<UNPACKER_ENGINE_SEL>(tensor_shape, y * y_stride_external);
+                            _llk_unpack_tilize_block_(0 /*l1_tile_idx*/, y * BLOCK_CT_DIM /*dest_tile_idx*/);
+                        }
                         _llk_unpack_dest_dvalid_section_done_<dest_sync>();
-                    }
-                }
-                else if (tensor_shape.face_r_dim < FACE_R_DIM)
-                {
-                    for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
-                    {
-                        _llk_unpack_tilize_strided_small_faces_<UNPACKER_ENGINE_SEL>(tensor_shape, y * y_stride_external /*l1_tile_idx*/);
                     }
                 }
                 else
                 {
-                    for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
+                    for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                     {
-                        _llk_unpack_tilize_set_src_offset_<UNPACKER_ENGINE_SEL>(tensor_shape, y * y_stride_external);
-                        _llk_unpack_tilize_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/);
+                        for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
+                        {
+                            _llk_unpack_tilize_set_src_offset_<UNPACKER_ENGINE_SEL>(tensor_shape, y * y_stride_external);
+                            _llk_unpack_tilize_block_(0 /*l1_tile_idx*/, y * BLOCK_CT_DIM /*dest_tile_idx*/);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+                {
+                    if (tensor_shape.face_r_dim < FACE_R_DIM)
+                    {
+                        for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
+                        {
+                            _llk_unpack_tilize_strided_small_faces_<UNPACKER_ENGINE_SEL>(tensor_shape, y * y_stride_external /*l1_tile_idx*/);
+                        }
+                    }
+                    else
+                    {
+                        for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
+                        {
+                            _llk_unpack_tilize_set_src_offset_<UNPACKER_ENGINE_SEL>(tensor_shape, y * y_stride_external);
+                            _llk_unpack_tilize_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/);
+                        }
                     }
                 }
             }
@@ -182,6 +201,8 @@ using namespace ckernel;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -197,7 +218,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             ZONE_SCOPED("INIT")
             // Only end-to-end and math-isolate runs use the FPU→PACK
             // dest-dvalid handshake.
-            if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+            if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
                 set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
             }
@@ -211,10 +232,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         {
             ZONE_SCOPED("TILE_LOOP")
-            if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+            if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
             {
             }
-            else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+            else if (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
             {
                 // Match tilize producer: SrcA only, or SrcA+SrcB when FP32 dest uses ELWADD.
                 const std::uint32_t src_handshake_iters = LOOP_FACTOR * TILE_CNT;
@@ -231,7 +252,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(src_handshake_iters);
                 }
             }
-            else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+            else if (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
@@ -268,6 +289,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -282,11 +305,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // PACK_ISOLATE and SrcA/SrcB L1_CONGESTION have no active DEST producer,
         // so they must clear the persisted pack wait mask. UNP_DEST congestion
         // instead uses the unpack→pack chain because both threads share DEST.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION && !unpack_to_dest))
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION && !unpack_to_dest))
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION && unpack_to_dest))
+        else if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION && unpack_to_dest))
         {
             constexpr auto dest_producer = unpack_to_dest ? dest_dvalid_client::UNPACK : dest_dvalid_client::FPU;
             set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_producer, dest_dvalid_client::PACK});
@@ -302,10 +325,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("TILE_LOOP")
         const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
-        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION && !unpack_to_dest))
+        else if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION && !unpack_to_dest))
         {
             // No section_done without an active DEST producer. In SrcA/SrcB
             // congestion math only clears source dvalids; it does not produce DEST.

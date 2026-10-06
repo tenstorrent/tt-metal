@@ -31,6 +31,8 @@
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -77,7 +79,9 @@ using namespace ckernel;
 using namespace ckernel::math;
 using namespace ckernel::sfpu;
 
+#if LLK_PERF_RUN_TYPE_CONSTEXPR
 static_assert(PERF_RUN_TYPE == PerfRunType::L1_TO_L1, "max_pool_with_indices test only implements L1_TO_L1");
+#endif
 static_assert(unpack_to_dest, "max_pool_with_indices test stages its operands through Unpack-to-Dest");
 
 void run_kernel(RUNTIME_PARAMETERS params)

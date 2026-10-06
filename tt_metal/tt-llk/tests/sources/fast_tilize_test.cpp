@@ -59,6 +59,8 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #ifndef SPEED_OF_LIGHT
     const int num_faces              = params.num_faces;
     const int LOOP_FACTOR            = params.LOOP_FACTOR;
@@ -156,6 +158,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #ifndef SPEED_OF_LIGHT
     const int num_faces              = params.num_faces;
     const int LOOP_FACTOR            = params.LOOP_FACTOR;
@@ -245,6 +249,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #ifndef SPEED_OF_LIGHT
     const int num_faces              = params.num_faces;
     const int LOOP_FACTOR            = params.LOOP_FACTOR;

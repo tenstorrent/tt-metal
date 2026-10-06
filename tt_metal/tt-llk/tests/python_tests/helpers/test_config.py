@@ -82,6 +82,7 @@ from .target_config import TestTargetConfig
 from .test_variant_parameters import (
     IN_TILE_DIMS,
     NUM_FACES,
+    PERF_RUN_TYPE,
     RuntimeParameter,
     TemplateParameter,
 )
@@ -1641,6 +1642,8 @@ class TestConfig:
         for parameter in self.templates:
             header_content.append(parameter.convert_to_cpp())
 
+        header_content.extend(self._perf_run_type_bind_macros())
+
         if self.compile_time_formats:
             header_content.extend(self.generate_compile_time_data_formats())
 
@@ -1650,6 +1653,30 @@ class TestConfig:
             header_content.extend(self.runtime_arguments_struct)
 
         return "\n".join(header_content)
+
+    def _perf_run_type_bind_macros(self) -> list[str]:
+        """One name for kernels: a constexpr global, or a local copied from RuntimeParams.
+
+        Functional tests and speed-of-light leave PERF_RUN_TYPE in templates.
+        Perf builds put it in runtimes, except speed-of-light which folds runtimes
+        back into templates before this header is generated.
+        """
+        in_templates = any(isinstance(param, PERF_RUN_TYPE) for param in self.templates)
+        in_runtimes = any(isinstance(param, PERF_RUN_TYPE) for param in self.runtimes)
+        if in_templates:
+            return [
+                "#define LLK_PERF_RUN_TYPE_CONSTEXPR 1",
+                "#define LLK_BIND_PERF_RUN_TYPE(params)",
+            ]
+        if in_runtimes:
+            return [
+                "#define LLK_PERF_RUN_TYPE_CONSTEXPR 0",
+                "#define LLK_BIND_PERF_RUN_TYPE(params) const PerfRunType PERF_RUN_TYPE = params.PERF_RUN_TYPE",
+            ]
+        return [
+            "#define LLK_PERF_RUN_TYPE_CONSTEXPR 0",
+            "#define LLK_BIND_PERF_RUN_TYPE(params)",
+        ]
 
     @staticmethod
     def get_elf_text_size(elf_path: Path) -> int:

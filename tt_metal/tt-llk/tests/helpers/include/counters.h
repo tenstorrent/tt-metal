@@ -445,17 +445,26 @@ constexpr bool is_measured_thread(PerfRunType run_type)
 #endif
 }
 
-template <PerfRunType RUN_TYPE>
+// Every run type that skips the exit barrier is a measured thread. Checked on the
+// enumerators so a runtime PerfRunType can still select the barrier at run time.
+static_assert(exit_barrier_for(PerfRunType::L1_TO_L1), "L1_TO_L1 must rendezvous before freezing counters");
+static_assert(exit_barrier_for(PerfRunType::UNPACK_ISOLATE), "UNPACK_ISOLATE must rendezvous before freezing counters");
+static_assert(exit_barrier_for(PerfRunType::L1_CONGESTION), "L1_CONGESTION must rendezvous before freezing counters");
+static_assert(exit_barrier_for(PerfRunType::SFPU_ISOLATE), "SFPU_ISOLATE must rendezvous before freezing counters");
+static_assert(!exit_barrier_for(PerfRunType::MATH_ISOLATE), "MATH_ISOLATE freezes counters on the measured thread");
+static_assert(!exit_barrier_for(PerfRunType::PACK_ISOLATE), "PACK_ISOLATE freezes counters on the measured thread");
+
 struct perf_counter_scoped
 {
     std::uint32_t zone_id;
+    PerfRunType run_type;
 
     perf_counter_scoped(const perf_counter_scoped&)            = delete;
     perf_counter_scoped(perf_counter_scoped&&)                 = delete;
     perf_counter_scoped& operator=(const perf_counter_scoped&) = delete;
     perf_counter_scoped& operator=(perf_counter_scoped&&)      = delete;
 
-    inline __attribute__((always_inline)) explicit perf_counter_scoped(std::uint32_t zid) : zone_id(zid)
+    inline __attribute__((always_inline)) perf_counter_scoped(PerfRunType type, std::uint32_t zid) : zone_id(zid), run_type(type)
     {
         ckernel::fence_compiler();
         llk_barrier::rendezvous(llk_barrier::is_action_thread(), [] { arm_all_counters(); });
@@ -466,12 +475,9 @@ struct perf_counter_scoped
     {
         ckernel::fence_compiler();
         const std::uint32_t zid = zone_id;
-        static_assert(
-            exit_barrier_for(RUN_TYPE) || RUN_TYPE == PerfRunType::MATH_ISOLATE || RUN_TYPE == PerfRunType::PACK_ISOLATE,
-            "a run type that skips the exit barrier needs a measured thread in is_measured_thread() to freeze the counters");
-        if constexpr (!exit_barrier_for(RUN_TYPE))
+        if (!exit_barrier_for(run_type))
         {
-            if constexpr (is_measured_thread(RUN_TYPE))
+            if (is_measured_thread(run_type))
             {
                 freeze_and_read_all_counters(zid);
             }
@@ -491,7 +497,7 @@ struct perf_counter_scoped
 #define PERF_COUNTER_VAR_CONCAT_(a, b) a##b
 #define PERF_COUNTER_VAR_(line)        PERF_COUNTER_VAR_CONCAT_(_perf_ctr_, line)
 #define MEASURE_PERF_COUNTERS(zone_name) \
-    const llk_perf::perf_counter_scoped<PERF_RUN_TYPE> PERF_COUNTER_VAR_(__LINE__)(llk_perf::get_zone_id(llk_perf::detail::zone_name_hash(zone_name)));
+    const llk_perf::perf_counter_scoped PERF_COUNTER_VAR_(__LINE__)(PERF_RUN_TYPE, llk_perf::get_zone_id(llk_perf::detail::zone_name_hash(zone_name)));
 #else
 #define MEASURE_PERF_COUNTERS(zone_name)
 #endif

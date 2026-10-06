@@ -36,7 +36,9 @@ constexpr auto FAST_UNTILIZE_INTERNAL_DEST_SYNC = ckernel::FAST_UNTILIZE_INTERNA
 static constexpr bool DST_ACCUM_MODE = is_fp32_dest_acc_en;
 #endif
 
+#if LLK_PERF_RUN_TYPE_CONSTEXPR
 static_assert(PERF_RUN_TYPE != PerfRunType::L1_CONGESTION, "L1 congestion mode is not supported for fast_untilize");
+#endif
 static_assert(BLOCK_CT_DIM == FULL_CT_DIM, "fast_untilize_test expects one full tile row per kernel instance");
 static_assert(FULL_CT_DIM >= 2, "fast_untilize_test supports ct>=2; ct=1 uses the standard fallback path");
 
@@ -47,6 +49,8 @@ static_assert(FULL_CT_DIM >= 2, "fast_untilize_test supports ct>=2; ct=1 uses th
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const Operand& buffer_A         = params.buffer_A;
@@ -62,11 +66,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             // Keep the measured body empty, but continue to UNINIT below.
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        else if (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             _perf_unpack_loop_set_valid<true, is_fp32_dest_acc_en>(LOOP_FACTOR * FULL_RT_DIM * FULL_CT_DIM * 4);
         }
@@ -140,6 +144,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
 #endif
@@ -153,11 +159,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             // Keep the measured body empty, but continue to UNINIT below.
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        else if (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             _perf_math_loop_clear_valid<true, is_fp32_dest_acc_en>(LOOP_FACTOR * FULL_RT_DIM * FULL_CT_DIM * 4);
             PROFILER_SYNC();
@@ -165,18 +171,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (FAST_UNTILIZE_SINGLE_UNIT)
         {
             constexpr std::uint32_t unit_dim = FULL_CT_DIM;
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
             {
-                for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++)
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++)
                     {
                         _llk_math_wait_for_dest_available_<FAST_UNTILIZE_INTERNAL_DEST_SYNC>();
-                    }
-                    llk_math_fast_untilize_block<is_fp32_dest_acc_en>(0, unit_dim);
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                    {
+                        llk_math_fast_untilize_block<is_fp32_dest_acc_en>(0, unit_dim);
                         _llk_math_dest_section_done_<FAST_UNTILIZE_INTERNAL_DEST_SYNC, is_fp32_dest_acc_en>();
+                    }
+                }
+            }
+            else
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+                {
+                    for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++)
+                    {
+                        llk_math_fast_untilize_block<is_fp32_dest_acc_en>(0, unit_dim);
                     }
                 }
             }
@@ -186,20 +199,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             std::uint32_t unit_dims[MAX_UNITS_PER_ROW];
             const std::uint32_t units_per_row = ckernel::fast_untilize_decompose_row(FULL_CT_DIM, unit_dims);
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
             {
-                for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++)
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
-                    for (std::uint32_t u = 0; u < units_per_row; u++)
+                    for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++)
                     {
-                        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                        for (std::uint32_t u = 0; u < units_per_row; u++)
                         {
                             _llk_math_wait_for_dest_available_<FAST_UNTILIZE_INTERNAL_DEST_SYNC>();
-                        }
-                        llk_math_fast_untilize_block<is_fp32_dest_acc_en>(0, unit_dims[u]);
-                        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                        {
+                            llk_math_fast_untilize_block<is_fp32_dest_acc_en>(0, unit_dims[u]);
                             _llk_math_dest_section_done_<FAST_UNTILIZE_INTERNAL_DEST_SYNC, is_fp32_dest_acc_en>();
+                        }
+                    }
+                }
+            }
+            else
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+                {
+                    for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++)
+                    {
+                        for (std::uint32_t u = 0; u < units_per_row; u++)
+                        {
+                            llk_math_fast_untilize_block<is_fp32_dest_acc_en>(0, unit_dims[u]);
                         }
                     }
                 }
@@ -224,6 +247,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const Operand& buffer_Res       = params.buffer_Res;
@@ -260,7 +285,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // Keep the measured body empty, but continue to UNINIT below.
         }
@@ -268,21 +293,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             constexpr std::uint32_t unit_dim = FULL_CT_DIM;
             std::uint32_t prev_pack_unit_dim = 0;
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
             {
-                for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++)
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
-                    const std::uint32_t tile_row_offset_16B = SCALE_DATUM_SIZE(formats.pack_dst, rt * FULL_CT_DIM * TILE_R_DIM * TILE_C_DIM) / 16;
-                    const std::uint32_t chunk_address       = L1_ADDRESS(buffer_Res[0]) + tile_row_offset_16B;
+                    for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++)
+                    {
+                        const std::uint32_t tile_row_offset_16B = SCALE_DATUM_SIZE(formats.pack_dst, rt * FULL_CT_DIM * TILE_R_DIM * TILE_C_DIM) / 16;
+                        const std::uint32_t chunk_address       = L1_ADDRESS(buffer_Res[0]) + tile_row_offset_16B;
 
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                    {
                         _llk_packer_wait_for_math_done_();
-                    }
-                    ckernel::_llk_pack_fast_untilize_block_<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM>(chunk_address, unit_dim, prev_pack_unit_dim);
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                    {
+                        ckernel::_llk_pack_fast_untilize_block_<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM>(chunk_address, unit_dim, prev_pack_unit_dim);
                         _llk_pack_dest_section_done_<FAST_UNTILIZE_INTERNAL_DEST_SYNC, is_fp32_dest_acc_en>();
+                    }
+                }
+            }
+            else
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+                {
+                    for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++)
+                    {
+                        const std::uint32_t tile_row_offset_16B = SCALE_DATUM_SIZE(formats.pack_dst, rt * FULL_CT_DIM * TILE_R_DIM * TILE_C_DIM) / 16;
+                        const std::uint32_t chunk_address       = L1_ADDRESS(buffer_Res[0]) + tile_row_offset_16B;
+
+                        ckernel::_llk_pack_fast_untilize_block_<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM>(chunk_address, unit_dim, prev_pack_unit_dim);
                     }
                 }
             }
@@ -294,30 +329,49 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const std::uint32_t units_per_row         = ckernel::fast_untilize_decompose_row(FULL_CT_DIM, unit_dims);
             std::uint32_t prev_pack_unit_dim          = 0;
             const std::uint32_t output_row_stride_16B = SCALE_DATUM_SIZE(formats.pack_dst, FULL_CT_DIM * TILE_C_DIM) / 16;
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
             {
-                for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++)
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
-                    const std::uint32_t tile_row_offset_16B = SCALE_DATUM_SIZE(formats.pack_dst, rt * FULL_CT_DIM * TILE_R_DIM * TILE_C_DIM) / 16;
-                    const std::uint32_t tile_row_address    = L1_ADDRESS(buffer_Res[0]) + tile_row_offset_16B;
-                    std::uint32_t chunk_col                 = 0;
-                    for (std::uint32_t u = 0; u < units_per_row; u++)
+                    for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++)
                     {
-                        const std::uint32_t unit_dim         = unit_dims[u];
-                        const std::uint32_t chunk_offset_16B = SCALE_DATUM_SIZE(formats.pack_dst, chunk_col * TILE_C_DIM) / 16;
-                        const std::uint32_t chunk_address    = tile_row_address + chunk_offset_16B;
+                        const std::uint32_t tile_row_offset_16B = SCALE_DATUM_SIZE(formats.pack_dst, rt * FULL_CT_DIM * TILE_R_DIM * TILE_C_DIM) / 16;
+                        const std::uint32_t tile_row_address    = L1_ADDRESS(buffer_Res[0]) + tile_row_offset_16B;
+                        std::uint32_t chunk_col                 = 0;
+                        for (std::uint32_t u = 0; u < units_per_row; u++)
+                        {
+                            const std::uint32_t unit_dim         = unit_dims[u];
+                            const std::uint32_t chunk_offset_16B = SCALE_DATUM_SIZE(formats.pack_dst, chunk_col * TILE_C_DIM) / 16;
+                            const std::uint32_t chunk_address    = tile_row_address + chunk_offset_16B;
 
-                        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                        {
                             _llk_packer_wait_for_math_done_();
-                        }
-                        ckernel::_llk_pack_fast_untilize_block_strided_<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM, FULL_CT_DIM>(
-                            chunk_address, unit_dim, prev_pack_unit_dim, output_row_stride_16B);
-                        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                        {
+                            ckernel::_llk_pack_fast_untilize_block_strided_<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM, FULL_CT_DIM>(
+                                chunk_address, unit_dim, prev_pack_unit_dim, output_row_stride_16B);
                             _llk_pack_dest_section_done_<FAST_UNTILIZE_INTERNAL_DEST_SYNC, is_fp32_dest_acc_en>();
+                            chunk_col += unit_dim;
                         }
-                        chunk_col += unit_dim;
+                    }
+                }
+            }
+            else
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+                {
+                    for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++)
+                    {
+                        const std::uint32_t tile_row_offset_16B = SCALE_DATUM_SIZE(formats.pack_dst, rt * FULL_CT_DIM * TILE_R_DIM * TILE_C_DIM) / 16;
+                        const std::uint32_t tile_row_address    = L1_ADDRESS(buffer_Res[0]) + tile_row_offset_16B;
+                        std::uint32_t chunk_col                 = 0;
+                        for (std::uint32_t u = 0; u < units_per_row; u++)
+                        {
+                            const std::uint32_t unit_dim         = unit_dims[u];
+                            const std::uint32_t chunk_offset_16B = SCALE_DATUM_SIZE(formats.pack_dst, chunk_col * TILE_C_DIM) / 16;
+                            const std::uint32_t chunk_address    = tile_row_address + chunk_offset_16B;
+
+                            ckernel::_llk_pack_fast_untilize_block_strided_<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM, FULL_CT_DIM>(
+                                chunk_address, unit_dim, prev_pack_unit_dim, output_row_stride_16B);
+                            chunk_col += unit_dim;
+                        }
                     }
                 }
             }

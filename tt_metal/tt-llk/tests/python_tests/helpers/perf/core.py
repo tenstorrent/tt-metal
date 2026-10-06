@@ -831,8 +831,8 @@ class PerfConfig(TestConfig):
         # TODO Add check here for all selected runs, to see if the profiler/counter supports them
         self.run_configs = [
             (
-                templates.copy() + [PERF_RUN_TYPE(run_type)],
-                runtimes.copy(),
+                templates.copy(),
+                runtimes.copy() + [PERF_RUN_TYPE(run_type)],
                 run_type,
             )
             for run_type in _selected_run_types(run_types)
@@ -1002,6 +1002,9 @@ class PerfConfig(TestConfig):
                 else:
                     self.templates = templates
                     self.runtimes = runtimes
+                    # PERF_RUN_TYPE is per run type and was not in the constructor's
+                    # runtime list. Rebuild the struct so the header and L1 pack match.
+                    self.generate_runtime_args_struct()
                 self.generate_variant_hash()
                 self.build_elfs()
 
@@ -1021,6 +1024,7 @@ class PerfConfig(TestConfig):
             else:
                 self.templates = templates
                 self.runtimes = runtimes
+                self.generate_runtime_args_struct()
             self.generate_variant_hash()
 
             elf_dir = (

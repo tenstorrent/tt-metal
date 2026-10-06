@@ -87,6 +87,8 @@ inline void perf_binary_source_handshakes(
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #ifdef SPEED_OF_LIGHT
     constexpr ckernel::TensorShape tensor_shape = {
         static_cast<std::uint8_t>(TEST_FACE_R_DIM),
@@ -145,10 +147,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        else if (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             perf_binary_source_handshakes<true, BROADCAST_TYPE>(LOOP_FACTOR, num_total_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
         }
@@ -178,6 +180,8 @@ using namespace ckernel;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #ifdef SPEED_OF_LIGHT
     constexpr TensorShape tensor_shape = {
         static_cast<std::uint8_t>(TEST_FACE_R_DIM),
@@ -228,14 +232,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("TILE_LOOP")
 #ifdef EN_DEST_REUSE
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             perf_binary_source_handshakes<false, BROADCAST_TYPE>(LOOP_FACTOR, num_input_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
         }
-        else
+        else if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             // Seed each accumulation group without reuse, then fold the
             // remaining input tiles through the selected destination source.
@@ -243,10 +247,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; ++block)
                 {
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                    {
-                        _llk_math_wait_for_dest_available_<dest_sync>();
-                    }
+                    _llk_math_wait_for_dest_available_<dest_sync>();
 
                     _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
                         tensor_shape, ACC_TO_DEST);
@@ -277,9 +278,43 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         }
                     }
 
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t block = 0; block < num_blocks; ++block)
+                {
+                    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
+                        tensor_shape, ACC_TO_DEST);
+                    for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
                     {
-                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                        LLK_ASSERT(
+                            (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                            "Block tile index exceeds maximum destination tiles");
+                        _llk_math_eltwise_binary_<
+                            ELTWISE_BINARY_OP,
+                            BROADCAST_TYPE,
+                            dest_sync,
+                            is_fp32_dest_acc_en,
+                            MATH_FIDELITY,
+                            EltwiseBinaryReuseDestType::NONE>(tensor_shape, tile, false /* clear_fp32_dst_acc */);
+                    }
+
+                    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, REUSE_DEST_TYPE>(tensor_shape, ACC_TO_DEST);
+                    for (std::uint32_t n = 1; n < tiles_per_accumulation; ++n)
+                    {
+                        for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
+                        {
+                            LLK_ASSERT(
+                                (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                                "Block tile index exceeds maximum destination tiles");
+                            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY, REUSE_DEST_TYPE>(
+                                tensor_shape, tile, false /* clear_fp32_dst_acc */);
+                        }
                     }
                 }
             }
@@ -289,23 +324,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
         LLK_ASSERT(input_tiles_in_block % output_tiles_in_block == 0, "Input tiles must divide evenly among accumulated output tiles");
         constexpr auto REUSE_DEST_TYPE = ckernel::EltwiseBinaryReuseDestType::NONE;
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
             perf_binary_source_handshakes<false, BROADCAST_TYPE>(LOOP_FACTOR, num_input_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim);
         }
-        else
+        else if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t block = 0; block < num_blocks; ++block)
                 {
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                    {
-                        _llk_math_wait_for_dest_available_<dest_sync>();
-                    }
+                    _llk_math_wait_for_dest_available_<dest_sync>();
                     for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
                     {
                         LLK_ASSERT(
@@ -317,9 +349,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 tensor_shape, tile, false /* clear_fp32_dst_acc */);
                         }
                     }
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t block = 0; block < num_blocks; ++block)
+                {
+                    for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
                     {
-                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                        LLK_ASSERT(
+                            (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                            "Block tile index exceeds maximum destination tiles");
+                        for (std::uint32_t accumulation = 0; accumulation < tiles_per_accumulation; ++accumulation)
+                        {
+                            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY, REUSE_DEST_TYPE>(
+                                tensor_shape, tile, false /* clear_fp32_dst_acc */);
+                        }
                     }
                 }
             }
@@ -339,6 +388,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    LLK_BIND_PERF_RUN_TYPE(params);
+
 #ifdef SPEED_OF_LIGHT
     constexpr ckernel::TensorShape tensor_shape = {
         static_cast<std::uint8_t>(TEST_FACE_R_DIM),
@@ -390,19 +441,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
         }
-        else
+        else if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t block = 0; block < output_num_blocks; ++block)
                 {
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                    {
-                        _llk_packer_wait_for_math_done_();
-                    }
+                    _llk_packer_wait_for_math_done_();
                     for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
                     {
                         const std::uint32_t res_tile_idx = block * output_tiles_in_block + tile;
@@ -411,9 +459,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             "Block tile index exceeds maximum destination tiles");
                         _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(buffer_Res[res_tile_idx]));
                     }
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t block = 0; block < output_num_blocks; ++block)
+                {
+                    for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
                     {
-                        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                        const std::uint32_t res_tile_idx = block * output_tiles_in_block + tile;
+                        LLK_ASSERT(
+                            (tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                            "Block tile index exceeds maximum destination tiles");
+                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(buffer_Res[res_tile_idx]));
                     }
                 }
             }
