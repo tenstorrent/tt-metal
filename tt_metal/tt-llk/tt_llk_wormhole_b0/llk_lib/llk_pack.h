@@ -457,7 +457,7 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 #if defined(LLK_PACK_RESYNC) && LLK_PACK_RESYNC > 0
     // Experiment: every LLK_PACK_RESYNC tiles, start the tile with all four packers idle, so no DEST bank lag carries over.
     {
-        static std::uint32_t resync_count = 0;
+        static std::uint32_t resync_count = LLK_PACK_RESYNC - 1; // the first tile of the kernel resyncs too
         if (++resync_count >= LLK_PACK_RESYNC)
         {
             resync_count = 0;
