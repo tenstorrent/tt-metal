@@ -162,6 +162,25 @@ _AUDIO_T_FACTOR_ENV = "MINIMAX_H3_AUDIO_T_FACTOR"
 _DEFAULT_AUDIO_T_FACTOR = 8
 
 
+def _env_positive_int(name: str, default: int) -> int:
+    """`os.environ[name]` as a positive int, else `default`.
+
+    Raises on a value that is present but not a positive integer rather than silently falling back:
+    a typo in a tuning knob that quietly serves the default is how an unexplained measurement is
+    born.
+    """
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer, got {raw!r}") from exc
+    if value < 1:
+        raise ValueError(f"{name} must be a positive integer, got {raw!r}")
+    return value
+
+
 def _requested_audio_t_factor(audio_t_factor: int | None, default: int = _DEFAULT_AUDIO_T_FACTOR) -> tuple[int, bool]:
     """Explicit kwarg wins; else MINIMAX_H3_AUDIO_T_FACTOR; else `default`. Returns (factor, from_env)."""
     if audio_t_factor is not None:
@@ -719,7 +738,15 @@ class MiniMaxH3Pipeline:
         if vae_output_type not in ("float", "uint8", "yuv420"):
             raise ValueError(f"vae_output_type must be 'float', 'uint8' or 'yuv420', got {vae_output_type!r}")
         self.vae_output_type = vae_output_type
-        self.vae_waves_per_device = 2
+        # Units stacked into one decoder program per device. 2 is the measured optimum on this
+        # box; `MINIMAX_H3_VAE_WAVES` overrides it the way `MINIMAX_H3_DIT_FSDP` overrides the
+        # DiT shard, so the knob can be swept on a new part without editing the pipeline.
+        self.vae_waves_per_device = _env_positive_int("MINIMAX_H3_VAE_WAVES", 2)
+        # The VAE's own `profile` flag synchronizes after each decoder forward, which is what makes
+        # `device` and `readback` separable in the decode report. It is off by default because the
+        # sync also defeats the read/compute overlap -- but with it off the report charges the
+        # previous wave's compute to `readback`, so anyone reading those numbers needs this.
+        self.vae_profile = os.environ.get("MINIMAX_H3_VAE_PROFILE") == "1"
         self._video_processor = None
         self._vision_tower = None
         self._vision_config = None
@@ -761,6 +788,7 @@ class MiniMaxH3Pipeline:
             pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
             readback_uint8=self.vae_output_type == "uint8",
             waves_per_device=self.vae_waves_per_device,
+            profile=self.vae_profile,
         )
         self._vae.load_state(self._read_safetensors("vae"))
 
