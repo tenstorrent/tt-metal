@@ -129,6 +129,26 @@ def truncate_mantissa(values: torch.Tensor, keep_bits: int) -> torch.Tensor:
     return (raw & ~((1 << (FP32_MANTISSA_BITS - keep_bits)) - 1)).view(torch.float32)
 
 
+def flush_subnormals(values: torch.Tensor) -> torch.Tensor:
+    """Zero anything below `values`'s own smallest normal.
+
+    Neither the FPU nor the unpacker writes a denormal: a slot whose exponent
+    field is zero has a zero mantissa too. Keeping the subnormal instead lets a
+    value the hardware zeroed survive to the packer, which rounds it *up* onto
+    the output lattice -- so a datum the device reports as 0 comes back as the
+    output format's smallest representable value.
+
+    The threshold comes from the tensor's own dtype, so call this *after* the
+    narrowing cast. Flushing before the cast would have to be told which dtype
+    to use.
+    """
+    return torch.where(
+        values.abs() < torch.finfo(values.dtype).smallest_normal,
+        torch.zeros_like(values),
+        values,
+    )
+
+
 def as_dest_acc(dest_acc: Union[bool, DestAccumulation]) -> bool:
     """Normalise an accumulation setting to a plain bool.
 
@@ -554,11 +574,7 @@ class DataTransferBlocks(ABC):
         narrowed = values.to(format_dict[dest_format])
         if not narrowed.is_floating_point():
             return narrowed
-        return torch.where(
-            narrowed.abs() < torch.finfo(narrowed.dtype).smallest_normal,
-            torch.zeros_like(narrowed),
-            narrowed,
-        )
+        return flush_subnormals(narrowed)
 
     def pack_to_l1(
         self, tensor: torch.Tensor, l1_format: DataFormat, **geometry
@@ -790,11 +806,7 @@ class DataTransferBlocks(ABC):
             narrowed = truncated.to(torch.float16)
             # The unpacker flushes to zero once the rebiased exponent hits 0,
             # so fp16 subnormals never reach the register.
-            return torch.where(
-                narrowed.abs() < torch.finfo(torch.float16).smallest_normal,
-                torch.zeros_like(narrowed),
-                narrowed,
-            )
+            return flush_subnormals(narrowed)
         if src_format in (DataFormat.Float16_b, DataFormat.Tf32):
             # Float16_b is an alias for Tf32 here -- see SRC_STORAGE_FORMATS.
             return DataTransferBlocks._truncate_src_mantissa(values)
