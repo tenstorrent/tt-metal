@@ -715,7 +715,10 @@ inline void read_last_zone()
 #endif
 
 // Experiment: N 4-byte nops after the zone alignment (moves every measured loop by 4*N bytes).
-#if defined(LLK_ZONE_PAD) && LLK_ZONE_PAD > 0
+#if defined(LLK_ZONE_PAD_PACK) && LLK_ZONE_PAD_PACK > 0 && defined(LLK_TRISC_PACK)
+// Experiment: pad only the pack thread's zones.
+#define LLK_ZONE_PAD_NOPS() asm volatile(".option push\n\t.option norvc\n\t.rept %0\n\tnop\n\t.endr\n\t.option pop" ::"i"(LLK_ZONE_PAD_PACK))
+#elif defined(LLK_ZONE_PAD) && LLK_ZONE_PAD > 0
 #define LLK_ZONE_PAD_NOPS() asm volatile(".option push\n\t.option norvc\n\t.rept %0\n\tnop\n\t.endr\n\t.option pop" ::"i"(LLK_ZONE_PAD))
 #else
 #define LLK_ZONE_PAD_NOPS()
