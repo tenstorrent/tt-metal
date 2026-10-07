@@ -346,7 +346,7 @@ class Decoder:
             self._tr = None
         if self.out is not None:
             for t in self.out:
-                if t is not None:
+                if t is not None and t is not self.tok:  # feedback: tok is a persistent input, not a trace output
                     ttnn.deallocate(t)
             self.out = None
 
