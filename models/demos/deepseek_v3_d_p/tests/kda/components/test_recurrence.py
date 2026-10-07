@@ -436,6 +436,7 @@ def test_distributed_prefix_preserves_noncommuting_order_and_tp_lines(
         ),
         actual_start=make_actual_start(mesh_device, order[0] * 32),
         local_rows=32,
+        gather_outputs={},
     )
     carry = initial[0]
     entries = {}

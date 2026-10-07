@@ -4,6 +4,7 @@
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
+from models.demos.deepseek_v3_d_p.tt.kda.collectives import sp_all_gather
 
 
 def exchange_convolution_carry(
@@ -24,9 +25,7 @@ def exchange_convolution_carry(
     # One selection packs the outgoing and the local final history as six rows per rank, so one gather along rows
     # carries both, and one selection picks the predecessor's outgoing then the final owner's local final rows.
     histories = selections.select_outgoing_and_local_final_history(projected_qkv, width=width)
-    gathered = ttnn.all_gather(
-        histories, dim=1, cluster_axis=sequence_parallel_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+    gathered = sp_all_gather(histories, name="histories", dim=1, cluster_axis=sequence_parallel_axis)
     selected = selections.select_predecessor_and_final_history(gathered)
     # The convolution reads only the leading three predecessor rows, so it takes the packed selection as is.
     rows = selected.shape[1] // 2
