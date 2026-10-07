@@ -150,75 +150,6 @@ bool rm_fits_l1(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) 
     return rm_footprint(sizes, 1, 1) <= gate_l1_budget(input, attrs);
 }
 
-constexpr uint32_t kNumDtypes = 4;
-constexpr uint32_t kNumValues = 3;
-constexpr uint32_t kAllDtypes = (1u << kNumDtypes) - 1;
-constexpr uint32_t kBf16 = 1u << 0;
-constexpr uint32_t kI32 = 1u << 2;
-constexpr uint32_t kU32 = 1u << 3;
-constexpr uint32_t kF32 = 1u << 1;
-
-// Row = dtype (bfloat16, float32, int32, uint32), column = pad value (0, 1, 3), as packed pad words.
-constexpr std::array<std::array<uint32_t, kNumValues>, kNumDtypes> kPackedValues = {{
-    {0, 0x3F803F80, 0x40404040},
-    {0, 0x3F800000, 0x40400000},
-    {0, 1, 3},
-    {0, 1, 3},
-}};
-
-uint32_t dtype_index(DataType dtype) {
-    switch (dtype) {
-        case DataType::BFLOAT16: return 0;
-        case DataType::FLOAT32: return 1;
-        case DataType::INT32: return 2;
-        case DataType::UINT32: return 3;
-        default: return kNumDtypes;
-    }
-}
-
-using HwKey = std::array<uint32_t, 6>;
-
-struct Demotion {
-    tt::tt_metal::Layout layout;
-    tt::tt_metal::BufferType buffer;
-    HwKey hw;        // input H, input W, front/after pad on H, front/after pad on W
-    uint32_t value;  // column of kPackedValues
-    uint32_t dtypes;
-};
-
-// Unsettled: no mechanism is on record for any row; exact matches over [1,1,H,W] inputs (rank-2 [32,64] arrives
-// as [1,1,32,64]) and unit batch dims. Tile rows are covered by tile_pad_adds_no_tiles.
-constexpr std::array<Demotion, 11> kDemotions = {{
-    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 32, 0, 32, 16, 32}, 0, kAllDtypes},
-    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 32, 0, 32, 16, 32}, 2, kI32 | kU32},
-    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 32, 0, 32, 32, 32}, 0, kAllDtypes},
-    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 32, 0, 32, 32, 32}, 2, kBf16 | kI32 | kU32},
-    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 32, 0, 32, 4, 32}, 0, kAllDtypes},
-    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 32, 0, 32, 4, 32}, 2, kI32 | kU32},
-    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 32, 3, 25, 4, 6}, 0, kAllDtypes},
-    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 32, 3, 25, 4, 6}, 2, kI32 | kU32},
-    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 64, 0, 32, 4, 32}, 0, kAllDtypes},
-    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 64, 0, 32, 4, 32}, 2, kBf16 | kI32 | kU32},
-    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::L1, {8, 4, 2, 6, 4, 4}, 0, kF32},
-}};
-
-HwKey hw_key(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {
-    const auto& s = input.logical_shape();
-    return {
-        s[2],
-        s[3],
-        attrs.front_h,
-        attrs.H_out - attrs.front_h - s[2],
-        attrs.front_w,
-        attrs.W_out - attrs.front_w - s[3]};
-}
-
-bool unit_batch(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {
-    const auto& s = input.logical_shape();
-    const std::array<uint32_t, 6> batch = {s[0], s[1], attrs.N_out, attrs.C_out, attrs.front_n, attrs.front_c};
-    return batch == std::array<uint32_t, 6>{1, 1, 1, 1, 0, 0};
-}
-
 }  // namespace
 
 uint32_t tile_page_bytes(const Tensor& input) { return tile_page_bytes_as(input, input.dtype()); }
@@ -389,19 +320,7 @@ bool is_demoted(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) 
     if (attrs.fill_partial_tile) {
         return false;
     }
-    if (tile_pad_adds_no_tiles(input, attrs)) {
-        return true;
-    }
-    const uint32_t dtype = dtype_index(input.dtype());
-    if (dtype >= kNumDtypes || !unit_batch(input, attrs)) {
-        return false;
-    }
-    const HwKey key = hw_key(input, attrs);
-    const auto buffer = input.memory_config().buffer_type();
-    return std::any_of(kDemotions.begin(), kDemotions.end(), [&](const Demotion& d) {
-        return d.layout == input.layout() && d.buffer == buffer && d.hw == key && ((d.dtypes >> dtype) & 1u) != 0 &&
-               attrs.packed_pad_value == kPackedValues[dtype][d.value];
-    });
+    return tile_pad_adds_no_tiles(input, attrs);
 }
 
 bool supported_execution_controls(bool use_multicore, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
