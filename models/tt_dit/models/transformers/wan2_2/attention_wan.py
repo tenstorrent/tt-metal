@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -23,6 +25,22 @@ from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_config
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
+
+
+def ring_sdpa_env_knobs() -> dict:
+    """Sprint-7 measurement knobs for the ring SDPA (levers 4.5), read from the environment.
+
+    WAN5B_SDPA_EXP_APPROX=1   softmax exp on the SFPU approximation (program config exp_approx_mode)
+    WAN5B_SDPA_MATH_APPROX=1  math_approx_mode in the SDPA compute config
+    WAN5B_SDPA_CHUNKS=q,k     ring SDPA chunk sizes, overriding the table and the per-variant overrides
+    Unset means the production values; nothing in the default path changes. Test plumbing only.
+    """
+    chunks = os.environ.get("WAN5B_SDPA_CHUNKS")
+    return {
+        "exp_approx_mode": os.environ.get("WAN5B_SDPA_EXP_APPROX") == "1",
+        "math_approx_mode": os.environ.get("WAN5B_SDPA_MATH_APPROX") == "1",
+        "chunks": tuple(int(v) for v in chunks.split(",")) if chunks else None,
+    }
 
 
 class WanAttention(Module):
@@ -175,12 +193,16 @@ class WanAttention(Module):
             ),
             self.default_sdpa_chunk_size,
         )
+        knobs = ring_sdpa_env_knobs()
+        if knobs["chunks"] is not None:
+            ring_sdpa_chunk_size = knobs["chunks"]
+        self.ring_sdpa_chunk_size = tuple(ring_sdpa_chunk_size)
 
         self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.sdpa_worker_grid,
             q_chunk_size=ring_sdpa_chunk_size[0],
             k_chunk_size=ring_sdpa_chunk_size[1],
-            exp_approx_mode=False,  # NOTE: False is more correct
+            exp_approx_mode=knobs["exp_approx_mode"],  # NOTE: False (default) is more correct
         )
 
         self.use_exp_ring_sdpa = (
@@ -198,7 +220,7 @@ class WanAttention(Module):
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
+            math_approx_mode=knobs["math_approx_mode"],
             fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
         )
 

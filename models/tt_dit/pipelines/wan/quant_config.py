@@ -329,10 +329,13 @@ def _make_linear_compute_config(arch, lc: LinearQuantConfig):
 
 
 def _make_sdpa_compute_config(arch, sc: SDPAQuantConfig):
+    from ...models.transformers.wan2_2.attention_wan import ring_sdpa_env_knobs
+
     return ttnn.init_device_compute_kernel_config(
         arch,
         math_fidelity=sc.math_fidelity,
-        math_approx_mode=False,
+        # WAN5B_SDPA_MATH_APPROX=1 (sprint-7 measurement knob) applies under presets as well.
+        math_approx_mode=ring_sdpa_env_knobs()["math_approx_mode"],
         fp32_dest_acc_en=sc.fp32_dest_acc,
     )
 
