@@ -2803,6 +2803,14 @@ bool build_sat_placement_constraints(
             // Skip it: the unconstrained solve already yields the only (all-hosts-full) packing.
             if (k < host_seat_groups.size()) {
                 constraints.set_max_same_rank_groups_used(k);
+                log_info(
+                    tt::LogFabric,
+                    "SAT joint placement: HARD host-count cap k={} over {} single-host seat group(s) ({} mesh(es), "
+                    "capacity {}/host); seats spanning hosts are unusable while the cap holds",
+                    k,
+                    host_seat_groups.size(),
+                    pools.size(),
+                    capacity);
             }
         }
     }
@@ -3352,6 +3360,12 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
         MappingResult<MeshId, const Candidate*> r = master_solve_->next(/*drop_cap=*/false);
         if (!r.success) {
             r = master_solve_->next(/*drop_cap=*/true);
+            if (r.success) {
+                log_info(
+                    tt::LogFabric,
+                    "SAT joint placement: no placement under the HARD host-count cap at this pool size; placed with "
+                    "the cap dropped (meshes may now span more hosts / use cross-host seats)");
+            }
         }
         return r;
     };
@@ -3422,6 +3436,36 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
     }
 
     AssignedMeshes assigned = decode_sat_placement(result);
+    // Host-cap post-check against the PSD: the cap is encoded over seat groups, so re-count the hosts the chosen
+    // ASICs really sit on. With the unlabelled-seat rule in the encoder this never fires; it exists so a
+    // regression surfaces as a rejected model and a warning instead of a silent over-cap placement.
+    const std::size_t armed_cap = constraints_.max_same_rank_groups_used();
+    if (armed_cap > 0 && physical_system_descriptor_ != nullptr) {
+        std::set<std::string> hosts_used;
+        for (const PlacedMesh& placed : assigned) {
+            for (const tt::tt_metal::AsicID& asic : placed.placement.asics) {
+                hosts_used.insert(physical_system_descriptor_->get_host_name_for_asic(asic));
+            }
+        }
+        if (hosts_used.size() > armed_cap) {
+            std::string host_list;
+            for (const std::string& h : hosts_used) {
+                host_list += (host_list.empty() ? "" : ",") + h;
+            }
+            log_warning(
+                tt::LogFabric,
+                "SAT joint placement: capped solve (k={}) returned a placement spanning {} host(s) [{}]; rejecting it "
+                "and asking for the next model",
+                armed_cap,
+                hosts_used.size(),
+                host_list);
+            remember_yielded(assigned);
+            if (master_solve_ != nullptr) {
+                master_solve_->block_assigned(assigned);
+            }
+            return next();
+        }
+    }
     remember_yielded(assigned);
     if (stats_ != nullptr) {
         bool lists_complete = true;
