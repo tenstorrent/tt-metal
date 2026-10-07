@@ -226,9 +226,14 @@ void kernel_main() {
     constexpr uint32_t out_dfb_id = dfb::out;
     constexpr uint32_t mm_partials_dfb_id = dfb::intermed0;
 #ifdef ARCH_BLACKHOLE
-    // one math MOP per row of the sub block where its tile count and the k steps of a block hide the per-row work, except
-    // where a 16-bit DEST is packed to Float32 and the packer needs the FPU-idle cycles
-    constexpr bool row_mop = out_subblock_num_tiles >= 8 && in0_block_w > 1 &&
+    // one math MOP per row of the sub block above LoFi, and at LoFi from 8 tiles with two or more k steps, except where a
+    // 16-bit DEST is packed to Float32 and the packer needs the FPU-idle cycles; only the math thread reads row_mop
+#if defined(UCK_CHLKC_MATH)
+    constexpr bool row_mop_fidelity = MATH_FIDELITY != ckernel::MathFidelity::LoFi;
+#else
+    constexpr bool row_mop_fidelity = true;
+#endif
+    constexpr bool row_mop = (row_mop_fidelity || (out_subblock_num_tiles >= 8 && in0_block_w > 1)) &&
                              (DST_ACCUM_MODE || (unpack_src_format[out_dfb_id] != (uint8_t)DataFormat::Float32 &&
                                                  unpack_src_format[mm_partials_dfb_id] != (uint8_t)DataFormat::Float32));
 #else
