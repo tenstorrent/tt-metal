@@ -50,6 +50,9 @@ def test_dflash_device(mesh_device):
     Etab = ck.get("model.embed_tokens.weight").bfloat16()
     head = ck.get("lm_head.weight").bfloat16()
     hn = D.ctx_features(feats, sd)
+    sd32 = {k: (v.float() if torch.is_tensor(v) else v) for k, v in sd.items()}
+    hn32 = D.ctx_features(feats.float(), sd32)
+    E32 = Etab.float()
     rep = ttnn.ReplicateTensorToMesh(md)
     embed = ttnn.from_torch(
         Etab,
