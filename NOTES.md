@@ -49,3 +49,4 @@
   run-bg `run_ab.sh ab2` (-t 600) and writes res/ab2.marker (rc, job id, status) when the job ends.
 - Next: read res/ab2.marker + res/ab2/job.log; score PCC/PSNR per seed vs ref_t48_f6b8; decide default-on
   (>= ~20 ms e2e win, output equivalent) or keep opt-in; push.
+- ab2 = blx01 broker job 757, started 05:45:25 UTC.
