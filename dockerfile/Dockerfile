@@ -35,7 +35,7 @@
 ARG UBUNTU_VERSION=22.04
 # As of June 2026: this is where you set SMI version of Metal container image
 # for CI and things like IRD or other workflows using the dev container.
-ARG TT_SMI_VERSION=5.2.0
+ARG TT_SMI_VERSION=6.6.0
 # PYTHON_VERSION can be explicitly set or auto-detected from UBUNTU_VERSION:
 # Ubuntu 22.04 -> Python 3.10
 # Ubuntu 24.04 -> Python 3.12
