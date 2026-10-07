@@ -46,6 +46,7 @@ Evidence and commits for every item: `bringup/GUIDE_dsv4_lessons.md` (ids L-xx i
 * Rule: every new op/shape: compare against torch on >= 3 shapes incl. odd sizes, 5 repeated runs (determinism), per mesh row.
 
 ## F. PCC thresholds and chains
+* PCC is scale-invariant: always also report the best scalar alpha (output ~ alpha*reference) and rel-L2 divided by the bf16-vs-fp32 floor. MiMo: every device MoE layer was ~1.5% too small (alpha 0.974-0.993) with PCC 0.9999+.
 * Single module vs dump on real activations: >= 0.999 (layer), >= 0.9999 (router weights). Below: bisect by stage (q, scores, selected ids, output).
 * Full-depth chain has NO CPU reference (policy): per-layer teacher-forced PCC + short CPU chain + section I gates. Device chain numbers below are DSV4 priors:
 * Chained 40 layers: logits PCC 0.97-0.99 on real prompts is normal for DSV4 (0.972 first token, 0.983/0.975/0.980 TF decode steps); it drifts with depth and
