@@ -6,8 +6,13 @@
 
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/pack.h"
 #include "api/dataflow/circular_buffer.h"
 #include "eltwise_utils_common.hpp"
+
+#ifndef BINARY_NG_PRE_BLOCK_PACK
+#define BINARY_NG_PRE_BLOCK_PACK 0
+#endif
 
 // Reads `per_core_block_size` tiles from cb_pre, runs the per-operand activation chain
 // on each tile in DST, and writes the results into cb_post — i.e. produces the
@@ -39,9 +44,13 @@ ALWI void preprocess_sfpu_impl(
     tile_regs_commit();
 
     tile_regs_wait();
+#if BINARY_NG_PRE_BLOCK_PACK
+    pack_block_mop(0, cb_post.get_cb_id(), per_core_block_size);
+#else
     for (uint32_t i = 0; i < per_core_block_size; ++i) {
         pack_tile(i, cb_post.get_cb_id());
     }
+#endif
     tile_regs_release();
 
     cb_pre.pop_front(per_core_block_size);
