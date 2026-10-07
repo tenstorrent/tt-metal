@@ -124,7 +124,7 @@ def test_pack_untilize_rows(
 
 
 # narrow_row: every tile row keeps its first row_datums datums, as in the sharded row-major transpose whose output
-# width is not a multiple of 32.
+# width is not a multiple of 32. Widths 5 and 21 give rows whose byte size is mostly not a multiple of 16.
 @skip_for_wormhole
 @parametrize(
     formats=input_output_formats(
@@ -139,7 +139,7 @@ def test_pack_untilize_rows(
     ),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
     input_dimensions=[[32, 32], [64, 32], [32, 64], [32, 128]],
-    row_datums=[8, 16, 24],
+    row_datums=[5, 8, 16, 21, 24],
 )
 def test_pack_untilize_narrow_row(
     formats,

@@ -86,7 +86,7 @@ dense is used with num_faces == 2 and even block_ct_dim, where two 16x32 (or sma
  * @tparam pace: True to issue a filler before every PACR and around every row.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @param row_ends_stream: True to close every row with Last (rows not contiguous in L1, or 32-bit Dest reads).
+ * @param row_ends_stream: True to close every row with Last (rows not contiguous in L1, or 32-bit Dest reads of rows of whole 16-byte units).
  * @param l1_row_step_by_cfg: True to advance the L1 destination address per row with CFGSHIFTMASK, for row strides
  *        the channel 1 Y stride field cannot hold.
  * @param first_tile_stream: True to write the first tile of every row as its own L1 stream (Last), so that the
@@ -371,8 +371,10 @@ inline void _llk_pack_untilize_init_(
     // cycles to an unpacker writing the other half.
     constexpr bool l1_rows_contiguous = (full_ct_dim == block_ct_dim);
     // An 8-bit output reaches L1 in 64-datum units: a flush pads a shorter stream with zeros up to the unit.
+    // A stream starts on a 16-byte L1 boundary, so a narrow row of another byte size stays in one stream.
     const bool src_32b            = datum_size_in_bytes(pack_src_format) == 4;
-    const bool row_ends_stream    = !l1_rows_contiguous || (src_32b && !IS_8BIT_FORMAT(pack_dst_format));
+    const bool unaligned_narrow   = narrow_row && (output_addr_offset % 16 != 0);
+    const bool row_ends_stream    = !l1_rows_contiguous || (src_32b && !IS_8BIT_FORMAT(pack_dst_format) && !unaligned_narrow);
     constexpr bool odd_block_form = !l1_rows_contiguous && (block_ct_dim % 2 == 1) && (block_ct_dim > 1) && !narrow_row && !dense;
     const bool first_tile_stream  = odd_block_form && IS_8BIT_FORMAT(pack_dst_format);
     constexpr bool split_row      = narrow_row && (row_num_datums > FACE_C_DIM);
